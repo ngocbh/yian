@@ -35,6 +35,9 @@ export type ErrorKind = (typeof ERROR_KINDS)[number];
 /** The kinds a `ProviderError` is retryable for when the caller doesn't say. */
 const RETRYABLE_KINDS: ReadonlySet<ErrorKind> = new Set(["rate_limit", "overloaded", "server", "timeout", "connection"]);
 
+/** openai's MAX_RETRY_AFTER_DELAY: the longest retry-after, in seconds, that still allows a retry by default. */
+export const MAX_RETRY_AFTER_SECONDS = 120;
+
 // openai's MAX_RETRY_AFTER_DELAY + 1: an overflowing delay stays finite, so the default
 // 120 s refusal still applies to it.
 const OVERFLOW_RETRY_AFTER = 121;
@@ -212,7 +215,7 @@ export function errorFromResponse(
   status: number,
   headers: Headers,
   body: string,
-  { provider, maxRetryAfter = 120, now }: ErrorFromResponseOptions,
+  { provider, maxRetryAfter = MAX_RETRY_AFTER_SECONDS, now }: ErrorFromResponseOptions,
 ): ProviderError {
   const kind = kindForStatus(status, body);
   const retryAfter = parseRetryAfter(headers, now);

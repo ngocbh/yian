@@ -662,8 +662,6 @@ describe("RouteModel stream lifetime", () => {
 
 // callWithRetries
 
-afterEach(() => install(BUILTIN));
-
 const OK = new ModelResponse({
   message: new Message({ role: "assistant", parts: [new TextPart("ok")] }),
   finishReason: "stop",
@@ -681,42 +679,31 @@ function failingOnce(error: Error, after: boolean): ScriptedModel {
   return new ScriptedModel([after ? [PARTIAL, error] : [error], OK], { provider: "openai" });
 }
 
-/** A route model on `clock` whose first reply is `first`, then an SSE `ok`. */
-function routedOnce(clock: Scheduler, first: Reply, protocol: WireProtocol = sse()): RouteModel {
-  const second = protocol.framing === "sse" ? sseReply("ok") : { body: ['{"text": "ok"}\n'] };
-  return new RouteModel({ route: route(), protocol, send: fake(first, second).send, scheduler: clock });
-}
-
-/** One retry-table row: its name, whether the failure comes after partial output, and the model. */
-type Row = [name: string, after: boolean, make: (clock: Scheduler) => ChatModel];
-
-/** Return a row for `error` built by `build`, before the first event and after partial output. */
-function both(name: string, build: () => Error): Row[] {
-  return [
-    [`${name} before the first event`, false, () => failingOnce(build(), false)],
-    [`${name} after partial output`, true, () => failingOnce(build(), true)],
-  ];
-}
-
 /** A runtime's connection-refused failure, as fetch reports it. */
 function refused(): Error {
   return new TypeError("fetch failed", { cause: Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }) });
 }
 
-/** A row with the error kind its first attempt fails with. */
-type KindRow = [...Row, kind: ErrorKind];
+/** One retry-table row: its name, whether the failure comes after partial output, the model, and the error kind. */
+type Row = [name: string, after: boolean, make: (clock: Scheduler) => ChatModel, kind: ErrorKind];
 
-/** Return the rows for `error` built by `build`, before the first event and after partial output. */
-function rows(name: string, kind: ErrorKind, build: () => Error): KindRow[] {
-  return both(name, build).map(([rowName, after, make]): KindRow => [rowName, after, make, kind]);
+/** Return the rows for the error `build` makes, before the first event and after partial output. */
+function rows(name: string, kind: ErrorKind, build: () => Error): Row[] {
+  return [
+    [`${name} before the first event`, false, () => failingOnce(build(), false), kind],
+    [`${name} after partial output`, true, () => failingOnce(build(), true), kind],
+  ];
 }
 
-/** A row for a route model on the test's clock whose first reply is `first`. */
-function routed(name: string, after: boolean, kind: ErrorKind, first: Reply, protocol?: WireProtocol): KindRow {
-  return [name, after, (clock) => routedOnce(clock, first, protocol), kind];
+/** A row for a route model on the test's clock whose first reply is `first`, then an `ok` reply. */
+function routed(name: string, after: boolean, kind: ErrorKind, first: Reply, protocol: WireProtocol = sse()): Row {
+  const second = protocol.framing === "sse" ? sseReply("ok") : { body: ['{"text": "ok"}\n'] };
+  const make = (clock: Scheduler) =>
+    new RouteModel({ route: route(), protocol, send: fake(first, second).send, scheduler: clock });
+  return [name, after, make, kind];
 }
 
-const RETRIED: KindRow[] = [
+const RETRIED: Row[] = [
   ...rows("429", "rate_limit", () => statusError(429)),
   ...rows("529 overloaded", "overloaded", () => statusError(529)),
   ...rows("500", "server", () => statusError(500)),
@@ -734,7 +721,7 @@ const RETRIED: KindRow[] = [
   ["a stream with no Finish after partial output", true, () => new ScriptedModel([[PARTIAL], OK]), "incomplete"],
 ];
 
-const STOPPED: KindRow[] = [
+const STOPPED: Row[] = [
   ...rows("400", "bad_request", () => statusError(400)),
   ...rows("400 context length", "context_length", () =>
     statusError(400, {}, '{"error": {"code": "context_length_exceeded"}}'),
@@ -761,23 +748,29 @@ const STOPPED: KindRow[] = [
   ...rows("refused", "refused", () => new ProviderError("refused", "the model refused")),
 ];
 
+/** What `runOnce` saw: the reply or the error the call ended with, and each retry. */
+interface Outcome {
+  response?: ModelResponse;
+  error?: unknown;
+  retries: RetryInfo[];
+}
+
 /** Run `model` with a one-retry budget on `clock`, recording each retry. */
-async function runOnce(model: ChatModel, clock: Scheduler): Promise<{ result: unknown; retries: RetryInfo[] }> {
+async function runOnce(model: ChatModel, clock: Scheduler): Promise<Outcome> {
   const retries: RetryInfo[] = [];
   const options = { budget: 1, scheduler: clock, random: () => 0, onRetry: (retry: RetryInfo) => void retries.push(retry) };
   try {
-    return { result: await callWithRetries(model, REQUEST, options), retries };
+    return { response: await callWithRetries(model, REQUEST, options), retries };
   } catch (error) {
-    return { result: error, retries };
+    return { error, retries };
   }
 }
 
 describe("callWithRetries retry table", () => {
   test.each(RETRIED)("retried: %s", async (_name, after, make, kind) => {
     const clock = virtualScheduler(0);
-    const { result, retries } = await runOnce(make(clock), clock);
-    expect(result).toBeInstanceOf(ModelResponse);
-    expect((result as ModelResponse).message.text()).toBe("ok");
+    const { response, retries } = await runOnce(make(clock), clock);
+    expect(response?.message.text()).toBe("ok");
     expect(retries).toHaveLength(1);
     expect(retries[0]!.attempt).toBe(1);
     expect(retries[0]!.error.kind).toBe(kind);
@@ -786,17 +779,17 @@ describe("callWithRetries retry table", () => {
 
   test.each(STOPPED)("stopped: %s", async (_name, _after, make, kind) => {
     const clock = virtualScheduler(0);
-    const { result, retries } = await runOnce(make(clock), clock);
-    expect(result).toBeInstanceOf(ProviderError);
-    expect((result as ProviderError).kind).toBe(kind);
+    const { error, retries } = await runOnce(make(clock), clock);
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error).toMatchObject({ kind });
     expect(retries).toHaveLength(0);
   });
 
   test("a defect thrown mid-stream propagates at once, with no retry", async () => {
     const defect = new TypeError("adapter bug");
     const model = new ScriptedModel([[PARTIAL, defect], OK]);
-    const { result, retries } = await runOnce(model, virtualScheduler(0));
-    expect(result).toBe(defect);
+    const { error, retries } = await runOnce(model, virtualScheduler(0));
+    expect(error).toBe(defect);
     expect(retries).toHaveLength(0);
     expect(model.requests).toHaveLength(1);
   });
@@ -808,18 +801,18 @@ describe("callWithRetries retry table", () => {
     });
     const { send, sent } = fake();
     const model = new RouteModel({ route: route({ auth }), protocol: sse(), send });
-    const { result, retries } = await runOnce(model, virtualScheduler(0));
-    expect(result).toBe(failed);
+    const { error, retries } = await runOnce(model, virtualScheduler(0));
+    expect(error).toBe(failed);
     expect(retries).toHaveLength(0);
     expect(sent).toHaveLength(0);
   });
 
   test("retry-after: inf is retried with backoff", async () => {
     const clock = virtualScheduler(0);
-    const error = statusError(429, { "retry-after": "inf" });
-    expect(error.retryAfter).toBe(Infinity);
-    const { result, retries } = await runOnce(failingOnce(error, false), clock);
-    expect(result).toBeInstanceOf(ModelResponse);
+    const failure = statusError(429, { "retry-after": "inf" });
+    expect(failure.retryAfter).toBe(Infinity);
+    const { response, retries } = await runOnce(failingOnce(failure, false), clock);
+    expect(response).toEqual(OK);
     expect(retries[0]!.retryIn).toBe(0.5);
     expect(clock.now()).toBe(500);
   });
@@ -892,6 +885,7 @@ describe("callWithRetries order and hooks", () => {
     );
     expect(error).toBe(failed);
     expect(model.requests).toHaveLength(1);
+    expect(model.closed).toBe(model.requests.length);
   });
 
   test("a throw from onEvent ends the call, closes the stream and is never retried", async () => {
@@ -930,19 +924,21 @@ describe("callWithRetries order and hooks", () => {
     );
     expect(error).toBe(failed);
     expect(model.requests).toHaveLength(1);
+    expect(model.closed).toBe(model.requests.length);
   });
 
   test("the assembler's provider-less incomplete gets the model's provider", async () => {
     const model = new ScriptedModel([[PARTIAL], [PARTIAL]], { provider: "example" });
-    const { result, retries } = await runOnce(model, virtualScheduler(0));
-    expect(retries[0]!.error.kind).toBe("incomplete");
-    expect(retries[0]!.error.provider).toBe("example");
-    expect((result as ProviderError).kind).toBe("incomplete");
-    expect((result as ProviderError).provider).toBe("example");
+    const { error, retries } = await runOnce(model, virtualScheduler(0));
+    expect(retries[0]!.error).toMatchObject({ kind: "incomplete", provider: "example" });
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error).toMatchObject({ kind: "incomplete", provider: "example" });
   });
 });
 
 describe("callWithRetries budget", () => {
+  afterEach(() => install(BUILTIN));
+
   test("budget: 0 makes one attempt", async () => {
     const model = failingOnce(statusError(500), false);
     const error = await rejection(callWithRetries(model, REQUEST, { budget: 0, scheduler: virtualScheduler(0) }));
@@ -957,6 +953,7 @@ describe("callWithRetries budget", () => {
     const error = await rejection(callWithRetries(model, REQUEST, { scheduler: virtualScheduler(0) }));
     expect(error).toBe(last);
     expect(model.requests).toHaveLength(3);
+    expect(model.closed).toBe(model.requests.length);
   });
 
   test("success after retries returns the successful attempt's reply", async () => {
@@ -967,22 +964,21 @@ describe("callWithRetries budget", () => {
 });
 
 describe("callWithRetries delays", () => {
-  test("retry-after-ms: 1500 waits 1.5 s", () => {
-    expect(retryDelay(statusError(429, { "retry-after-ms": "1500" }), 0, () => 0)).toBe(1.5);
-  });
-
-  test("retry-after: 2 waits 2 s", () => {
-    expect(retryDelay(statusError(429, { "retry-after": "2" }), 3, () => 0)).toBe(2);
-  });
-
-  test("retry-after: 0 falls back to backoff", () => {
-    expect(retryDelay(statusError(429, { "retry-after": "0" }), 1, () => 0)).toBe(1);
-  });
-
-  test("a past HTTP date falls back to backoff", () => {
-    const error = statusError(429, { "retry-after": "Wed, 21 Oct 2015 07:28:00 GMT" });
-    expect(error.retryAfter!).toBeLessThan(0);
-    expect(retryDelay(error, 2, () => 0)).toBe(2);
+  const delays: [string, ProviderError, number, number][] = [
+    ["retry-after-ms: 1500 waits 1.5 s", statusError(429, { "retry-after-ms": "1500" }), 0, 1.5],
+    ["retry-after: 2 waits 2 s", statusError(429, { "retry-after": "2" }), 3, 2],
+    ["retry-after: 0 falls back to backoff", statusError(429, { "retry-after": "0" }), 1, 1],
+    ["a past HTTP date falls back to backoff", statusError(429, { "retry-after": "Wed, 21 Oct 2015 07:28:00 GMT" }), 2, 2],
+    [
+      "retry-after: 121 with x-should-retry: true falls back to backoff",
+      statusError(429, { "retry-after": "121", "x-should-retry": "true" }),
+      0,
+      0.5,
+    ],
+    ["a huge retry count stays finite", statusError(500), 5000, 8],
+  ];
+  test.each(delays)("%s", (_name, error, retries, expected) => {
+    expect(retryDelay(error, retries, () => 0)).toBe(expected);
   });
 
   test("backoff doubles from 0.5 s to a cap of 8 s, with jitter down to 0.75x", () => {
@@ -991,10 +987,6 @@ describe("callWithRetries delays", () => {
     expect(retries.map((n) => retryDelay(error, n, () => 0))).toEqual([0.5, 1, 2, 4, 8, 8]);
     const low = retries.map((n) => retryDelay(error, n, () => 1 - 2 ** -53));
     expect(low).toEqual([0.375, 0.75, 1.5, 3, 6, 6]);
-  });
-
-  test("a huge retry count stays finite", () => {
-    expect(retryDelay(statusError(500), 5000, () => 0)).toBe(8);
   });
 
   test("the virtual clock advances exactly by the delays", async () => {
@@ -1031,6 +1023,20 @@ describe("callWithRetries stops", () => {
     expect(error).toBe(reason);
     expect(model.requests).toHaveLength(1);
     expect(clock.now()).toBe(0);
+  });
+
+  test("an already aborted signal makes no attempt and rejects with its reason", async () => {
+    const controller = new AbortController();
+    const reason = new Error("stop");
+    controller.abort(reason);
+    const model = new ScriptedModel([OK]);
+    const attempts: number[] = [];
+    const error = await rejection(
+      callWithRetries(model, REQUEST, { signal: controller.signal, onAttempt: (attempt) => void attempts.push(attempt) }),
+    );
+    expect(error).toBe(reason);
+    expect(attempts).toEqual([]);
+    expect(model.requests).toHaveLength(0);
   });
 
   test("the signal reaches model.stream", async () => {

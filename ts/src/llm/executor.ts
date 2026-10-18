@@ -14,7 +14,7 @@ import { realScheduler, type Scheduler, type Send } from "../platform.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
 import { scrub } from "./auth.ts";
 import { encodeBody } from "./body.ts";
-import { errorFromResponse, ProviderError } from "./errors.ts";
+import { errorFromResponse, MAX_RETRY_AFTER_SECONDS, ProviderError } from "./errors.ts";
 import { type ChatModel, type Event, EventStream, ReplyAssembler } from "./events.ts";
 import { iterNdjson, iterSse, type SSEEvent } from "./framing.ts";
 import type { Message, Request, Response } from "./messages.ts";
@@ -24,8 +24,6 @@ import { type Exchange, openExchange } from "./transport.ts";
 // The openai and anthropic SDKs send this Accept on every request, streamed ones too.
 const DEFAULT_HEADERS = { "content-type": "application/json", accept: "application/json" };
 const MAX_ERROR_BODY = 64 * 1024;
-// openai's MAX_RETRY_AFTER_DELAY: a longer retry-after is refused when the error is built.
-const MAX_RETRY_AFTER_SECONDS = 120;
 
 /** What every wire protocol has. */
 interface ProtocolBase {
@@ -225,6 +223,8 @@ export interface CallOptions {
  */
 export function retryDelay(error: ProviderError, retries: number, random: () => number): number {
   const after = error.retryAfter;
+  // A longer retry-after is refused when the error is built, unless `x-should-retry: true`
+  // overrides the refusal; then the backoff applies instead of the long wait.
   if (after !== null && Number.isFinite(after) && after > 0 && after <= MAX_RETRY_AFTER_SECONDS) return after;
   // The exponent is capped as openai does, so a huge retry count can't overflow.
   return Math.min(0.5 * 2 ** Math.min(retries, 1000), 8) * (1 - 0.25 * random());
@@ -249,6 +249,8 @@ export async function callWithRetries(model: ChatModel, request: Request, option
   const { signal, scheduler = realScheduler, random = Math.random, onAttempt, onEvent, onRetry } = options;
   const budget = options.budget ?? current().modelRetries;
   for (let attempt = 1; ; attempt++) {
+    // Before `onAttempt`, so a stopped call never announces an attempt that won't be sent.
+    signal?.throwIfAborted();
     onAttempt?.(attempt);
     const assembler = new ReplyAssembler();
     // Set while `onEvent` runs, so a hook's error is never taken for the model's.

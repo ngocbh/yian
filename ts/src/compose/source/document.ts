@@ -21,7 +21,7 @@ import {
   YAMLError,
 } from "yaml";
 
-import { SourceRange } from "../../diagnostics.ts";
+import { reprText, SourceRange } from "../../diagnostics.ts";
 import type { Value, ValueRecord } from "../../typesys/index.ts";
 import {
   type ArcSequence,
@@ -34,16 +34,30 @@ import {
   setRecordKey,
   SourceSyntaxError,
 } from "./common.ts";
+import { nodeId, SCALAR_TAGS } from "./literals.ts";
 import {
   type AnchoredNode,
   composeFlowDocument,
   constructScalar,
   type FlowDocument,
   FlowLoaderError,
+  MAP_TAG,
+  MERGE_TAG,
   normalizeBreaks,
   resolvePlain,
   type ScalarValue,
+  SEQ_TAG,
+  STR_TAG,
 } from "./scalars.ts";
+
+/**
+ * The hint added to a YAML error at a `,`, `[`, `]`, `{` or `}` glued to a tag, which ends the
+ * tag there: a type with several arguments, or written with brackets, can't be a tag.
+ */
+export const TAG_HINT =
+  "hint: a YAML tag ends at `,`, `[`, `]`, `{` or `}`; name a type with several arguments in " +
+  "`typedefs:` and tag with its name (e.g. `Decision: Union(Buy, Sell)`, then `!Decision`), " +
+  "and write `list(str)`, not `list[str]`";
 
 /** The first key a mapping repeats among its own pairs. */
 export interface RepeatedKey {
@@ -73,10 +87,21 @@ const STYLES: Readonly<Record<Scalar.Type, ScalarStyle>> = {
 
 const NO_PARTS: readonly never[] = Object.freeze([]);
 
-/** Offsets from `start` to the exclusive `end`. */
+const CORE_TAG_PREFIX = "tag:yaml.org,2002:";
+
+// A tag running up to the end of the text before a YAML error.
+const TAG_BEFORE = /(?:^|[\s\[{,])![^\s,\[\]{}]*$/;
+
+const ONLY_SPACES = /^ *$/;
+
+/**
+ * Offsets from `start` to the exclusive `end`; `bare` says the node's own properties hold the
+ * bare tag `!`.
+ */
 interface Span {
   readonly start: number;
   readonly end: number;
+  readonly bare: boolean;
 }
 
 /** Return a composed node's span: its range, from its anchor or tag when it has one. */
@@ -130,7 +155,9 @@ export class SourceDocument {
    * Compose and construct exactly one YAML document in one pass.
    *
    * @throws SourceSyntaxError when the text holds a character YAML refuses, is not one valid
-   *   YAML document, or holds a node the flow loader can't build; `range` locates the problem.
+   *   YAML document, or holds a node the flow loader can't build or a tag that is bare or
+   *   neither local nor core; `range` locates the problem. A YAML error at a character glued
+   *   to a tag ends with `TAG_HINT`.
    */
   static parse(text: string, label = "<flow>"): SourceDocument {
     const source = normalizeBreaks(text);
@@ -150,10 +177,11 @@ export class SourceDocument {
       flow = composeFlowDocument(source);
     } catch (error) {
       if (error instanceof YAMLError) {
-        const message =
+        let message =
           error.code === "MULTIPLE_DOCS"
             ? "expected a single document in the stream, but found another document"
             : error.message;
+        if (gluedToTag(error, source)) message += "\n" + TAG_HINT;
         throw new SourceSyntaxError(message, pointRange(starts, error.pos[0]));
       }
       if (error instanceof FlowLoaderError) {
@@ -163,7 +191,7 @@ export class SourceDocument {
       }
       throw error;
     }
-    const { definitions, ids, nonTextKey } = build(flow, starts, spanOf);
+    const { definitions, ids, nonTextKey } = build(flow, source, starts, spanOf);
     return new SourceDocument(
       text,
       label,
@@ -188,10 +216,17 @@ interface Built {
  * a container's scalars are built (and their errors raised) before the containers nested in
  * it, and an alias to a container still being filled shares it. The root is definition 0.
  *
- * @throws SourceSyntaxError at a scalar the flow loader can't build, or at a list or mapping
- *   key.
+ * `source` is the normalized text the CST and `starts` index.
+ *
+ * @throws SourceSyntaxError at a scalar the flow loader can't build, at a list or mapping key,
+ *   at a bare tag or one neither local nor core, or at a core tag that can't build its node.
  */
-function build(flow: FlowDocument, starts: readonly number[], spanOf: SpanOf): Built {
+function build(
+  flow: FlowDocument,
+  source: string,
+  starts: readonly number[],
+  spanOf: SpanOf,
+): Built {
   const { document, aliasTargets } = flow;
   const ids = new Map<Node, number>();
   if (document.contents === null) {
@@ -242,16 +277,20 @@ function build(flow: FlowDocument, starts: readonly number[], spanOf: SpanOf): B
     if (known !== undefined) return known;
     const span = spanOf(node);
     const range = toRange(starts, span.start, span.end);
-    if (isScalar(node)) {
+    const at = pointRange(starts, span.start);
+    const tag = localTag(node, span, range);
+    // A local tag reads its node as if untagged.
+    const core = tag === null ? node.tag : undefined;
+    // The tag picks the constructor, as in PyYAML: `!!seq` builds a list and `!!map` a record
+    // whatever the node's kind.
+    if (isScalar(node) && core !== SEQ_TAG && core !== MAP_TAG) {
       const text = node.source;
       const plain = node.type === Scalar.PLAIN;
       let value: ScalarValue;
       try {
-        value = plain ? constructScalar(resolvePlain(text), text, true) : text;
+        value = scalarValue(text, plain, core, tag !== null);
       } catch (error) {
-        if (error instanceof FlowLoaderError) {
-          throw new SourceSyntaxError(error.message, pointRange(starts, span.start));
-        }
+        if (error instanceof FlowLoaderError) throw new SourceSyntaxError(error.message, at);
         throw error;
       }
       const id = reserve(node, value);
@@ -260,16 +299,27 @@ function build(flow: FlowDocument, starts: readonly number[], spanOf: SpanOf): B
         value,
         range,
         raw: text,
-        constructedLineRanges: null,
+        constructedLineRanges: literalLineRanges(source, starts, node, value),
         style: STYLES[node.type!],
-        tag: null,
+        tag,
       });
       return id;
     }
-    if (isSeq(node)) {
+    if (!isScalar(node) && core !== undefined && core !== SEQ_TAG && core !== MAP_TAG) {
+      const message = SCALAR_TAGS.has(core)
+        ? `expected a scalar node, but found ${nodeId(node)}`
+        : "could not determine a constructor for the tag " + reprText(core);
+      throw new SourceSyntaxError(message, at);
+    }
+    // SafeLoader's `construct_yaml_seq` and `construct_yaml_map` yield an empty container and
+    // check the node's kind only when filling it, so a mismatch comes after sibling scalars.
+    if (core === SEQ_TAG || (core !== MAP_TAG && isSeq(node))) {
       const list: Value[] = [];
       const id = reserve(node, list);
       fills.push(() => {
+        if (!isSeq(node)) {
+          throw new SourceSyntaxError(`expected a sequence node, but found ${nodeId(node)}`, at);
+        }
         const itemDefinitions: number[] = [];
         for (const item of node.items) {
           const itemId = intern(item);
@@ -281,7 +331,7 @@ function build(flow: FlowDocument, starts: readonly number[], spanOf: SpanOf): B
           value: list,
           range,
           itemDefinitions: Object.freeze(itemDefinitions),
-          tag: null,
+          tag,
         });
       });
       return id;
@@ -289,6 +339,9 @@ function build(flow: FlowDocument, starts: readonly number[], spanOf: SpanOf): B
     const record: ValueRecord = {};
     const id = reserve(node, record);
     fills.push(() => {
+      if (!isMap(node)) {
+        throw new SourceSyntaxError(`expected a mapping node, but found ${nodeId(node)}`, at);
+      }
       const arcs: MapArc[] = [];
       const effectiveIndex = new Map<string, MapOccurrence>();
       for (const pair of node.items) {
@@ -331,7 +384,7 @@ function build(flow: FlowDocument, starts: readonly number[], spanOf: SpanOf): B
         range,
         pairSequence,
         effectiveIndex,
-        tag: null,
+        tag,
       });
     });
     return id;
@@ -402,9 +455,9 @@ function firstRepeatedKey(
  * The composed tree keeps no property positions, so the CST records them. Each span of
  * properties is stored twice: under the offset where the properties end, to find an empty
  * node, and under the `tokenKey` of the token they precede, whose collection flag tells a
- * block mapping from its first key, which shares its offset. An empty node has no token, or a zero-length
- * `scalar` one before a `,` in a flow collection; eemeli places it after its properties and
- * any spaces that follow them.
+ * block mapping from its first key, which shares its offset. An empty node has no token, or a
+ * zero-length `scalar` one before a `,` in a flow collection; eemeli places it after its
+ * properties and any spaces that follow them.
  */
 function propertySpans(source: string): SpanOf {
   const byEnd = new Map<number, Span>();
@@ -449,7 +502,10 @@ function propertySpans(source: string): SpanOf {
       if (keySpan !== null && keySpan.start < token.offset) {
         const key = tokenKey(token.offset, true);
         const known = byToken.get(key);
-        if (known === undefined || known.start > keySpan.start) byToken.set(key, keySpan);
+        if (known === undefined || known.start > keySpan.start) {
+          // The key's own tag stays the key's.
+          byToken.set(key, { ...keySpan, bare: known?.bare ?? false });
+        }
       }
     }
   }
@@ -463,17 +519,18 @@ function propertySpans(source: string): SpanOf {
       ) {
         propertiesEnd--;
       }
-      return (
-        byToken.get(tokenKey(start, false)) ?? byEnd.get(propertiesEnd) ?? { start, end: start }
-      );
+      const none: Span = { start, end: start, bare: false };
+      return byToken.get(tokenKey(start, false)) ?? byEnd.get(propertiesEnd) ?? none;
     }
     // Only a token with properties has an entry.
-    let from = byToken.get(tokenKey(start, isMap(node) || isSeq(node)))?.start ?? start;
+    const own = byToken.get(tokenKey(start, isMap(node) || isSeq(node)));
+    let from = own?.start ?? start;
     // A one-pair mapping in a flow sequence, as `[&k a: 1]`, has no token, and eemeli starts
-    // it at its key, after the key's properties.
+    // it at its key, after the key's properties; a braced `{...}` mapping already starts
+    // before its key, so `Math.min` leaves it unchanged.
     const key = isMap(node) && node.flow ? node.items[0]?.key : undefined;
     if (isScalar(key)) from = Math.min(from, spanOf(key).start);
-    return { start: from, end };
+    return { start: from, end, bare: own?.bare ?? false };
   };
   return spanOf;
 }
@@ -489,13 +546,119 @@ function propertiesSpan(props: readonly CST.SourceToken[]): Span | null {
   const first = marks[0];
   const last = marks[marks.length - 1];
   if (first === undefined || last === undefined) return null;
-  return { start: first.offset, end: last.offset + last.source.length };
+  const bare = marks.some((token) => token.type === "tag" && token.source === "!");
+  return { start: first.offset, end: last.offset + last.source.length, bare };
 }
 
 /** Return the tokens after the last `:` indicator in `sep`; none without one. */
 function afterValueIndicator(sep: readonly CST.SourceToken[]): readonly CST.SourceToken[] {
   const at = sep.findLastIndex((token) => token.type === "map-value-ind");
   return at === -1 ? [] : sep.slice(at + 1);
+}
+
+/**
+ * Return a node's local tag without its `!`, or null when it has none or a core tag.
+ *
+ * @throws SourceSyntaxError over `range` at the bare tag `!`, which eemeli keeps on a scalar
+ *   but resolves away on a list or mapping, or at a tag neither local nor core.
+ */
+function localTag(node: AnchoredNode, span: Span, range: SourceRange): string | null {
+  const tag = node.tag;
+  if (isScalar(node) ? tag === "!" : span.bare) {
+    throw new SourceSyntaxError("a tag names a type, e.g. `!int`", range);
+  }
+  if (tag === undefined || tag.startsWith(CORE_TAG_PREFIX)) return null;
+  if (tag.startsWith("!")) return tag.slice(1);
+  throw new SourceSyntaxError(
+    `unknown YAML tag ${reprText(tag)}; a type tag is local, e.g. \`!int\``,
+    range,
+  );
+}
+
+/**
+ * Build a scalar's value: under the core tag `core` by that tag, else (untagged or locally
+ * tagged) a plain scalar by the table and a quoted or block one as its text.
+ *
+ * @throws FlowLoaderError when the tag can't build the text.
+ */
+function scalarValue(
+  text: string,
+  plain: boolean,
+  core: string | undefined,
+  local: boolean,
+): ScalarValue {
+  if (core !== undefined) return constructScalar(core, text, plain);
+  if (!plain) return text;
+  const resolved = resolvePlain(text);
+  // `<<` merges only as an untagged key; under a local tag it is text.
+  return constructScalar(local && resolved === MERGE_TAG ? STR_TAG : resolved, text, true);
+}
+
+/**
+ * Return the source range of each line of a literal block scalar's value, or null when the
+ * lines don't align with the text.
+ *
+ * Each constructed line must end its physical line after spaces only, the non-empty ones at
+ * one indentation, and the physical lines after the last constructed one hold only spaces.
+ * `source` is the normalized text, whose only line breaks are LF and CRLF.
+ */
+function literalLineRanges(
+  source: string,
+  starts: readonly number[],
+  node: Scalar.Parsed,
+  value: ScalarValue,
+): SourceRange[] | null {
+  if (node.type !== Scalar.BLOCK_LITERAL || value !== node.source) return null;
+  const [header, end] = node.range;
+  // The body starts after the header's line break.
+  const headerBreak = source.indexOf("\n", header);
+  if (headerBreak === -1 || headerBreak >= end) return value === "" ? [] : null;
+  // Each physical line's start and the offset before its line break.
+  const physical: [number, number][] = [];
+  for (let at = headerBreak + 1; at < end; ) {
+    const lineBreak = source.indexOf("\n", at);
+    const next = lineBreak === -1 || lineBreak >= end ? end : lineBreak;
+    const lineEnd = next > at && source[next - 1] === "\r" ? next - 1 : next;
+    physical.push([at, lineEnd]);
+    at = next + 1;
+  }
+  const lines = value.split("\n");
+  if (lines.at(-1) === "") lines.pop(); // no phantom line after the last break
+  if (lines.length > physical.length) return null;
+  const ranges: SourceRange[] = [];
+  let indent: number | null = null;
+  for (const [i, line] of lines.entries()) {
+    const [start, lineEnd] = physical[i]!;
+    const contentStart = lineEnd - line.length;
+    if (
+      contentStart < start ||
+      source.slice(contentStart, lineEnd) !== line ||
+      !ONLY_SPACES.test(source.slice(start, contentStart))
+    ) {
+      return null;
+    }
+    if (line !== "") {
+      indent ??= contentStart - start;
+      if (contentStart - start !== indent) return null;
+    }
+    ranges.push(toRange(starts, contentStart, lineEnd));
+  }
+  const rest = physical.slice(lines.length);
+  if (!rest.every(([start, lineEnd]) => ONLY_SPACES.test(source.slice(start, lineEnd)))) {
+    return null;
+  }
+  return ranges;
+}
+
+/** Say whether a YAML error is at a `,`, `[`, `]`, `{` or `}` glued to the tag before it. */
+function gluedToTag(error: YAMLError, source: string): boolean {
+  const at = error.pos[0];
+  const lineStart = source.lastIndexOf("\n", at - 1) + 1;
+  return (
+    error.code === "MISSING_CHAR" &&
+    /^[,[\]{}]$/.test(source.charAt(at)) &&
+    TAG_BEFORE.test(source.slice(lineStart, at))
+  );
 }
 
 /** Return the node `written` names: an alias's target, else `written` itself. */

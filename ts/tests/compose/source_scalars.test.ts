@@ -7,8 +7,8 @@
  * replaces Python's digit-limit tests. A literal's mapping keys must be text, local and
  * unknown tags are refused, and `! 5` is the text `"5"`. A document keeps such a key as written
  * and reports it as `nonTextKey`. Lone CRs are line breaks for both entry points. Both entry
- * points, `SourceDocument.parse` and `parseYamlLiteral`, read the shared rows; the document's
- * tag and merge rows come with the code that checks them.
+ * points, `SourceDocument.parse` and `parseYamlLiteral`, read the shared rows, explicit core
+ * tags included; the document's merge rows come with the code that checks them.
  * `test_pyyaml_globals_are_untouched` has no counterpart, since eemeli/yaml has no global
  * tables.
  */
@@ -271,6 +271,42 @@ describe.each(READERS)("both entry points: %s", (name, read) => {
     expect(read("a: x\r  y\r")).toEqual({ a: "x y" });
   });
 
+  test.each<[string, ScalarValue]>([
+    ["!!int 017", 17n],
+    ["!!float 1", 1],
+    ["!!str 1", "1"],
+    ["!!bool true", true],
+  ])("an explicit core tag reads a core form: %p", (text, expected) => {
+    expect(read("value: " + text + "\n")).toEqual({ value: expected });
+  });
+
+  test.each([
+    ["!!int 1_000", "1_000"],
+    ["!!int 1.0", "1.0"],
+    ["!!bool yes", "yes"],
+    ["!!bool |\n  true\n", "true\n"],
+    ['!!float ".inf\\n"', ".inf\n"],
+  ])("an explicit core tag rejects a non-core form: %p", (text, found) => {
+    const error = thrown(SourceSyntaxError, () => read("value: " + text + "\n"));
+
+    expect(error.message).toContain(reprText(found));
+  });
+
+  test("!!timestamp on non-date text names the text", () => {
+    const error = thrown(SourceSyntaxError, () => read("value: !!timestamp hello\n"));
+
+    expect(error.message).toBe("expected a date or timestamp, but found 'hello'");
+  });
+
+  test.each([
+    ['"2026-13-45"', "not a valid date: month must be in 1..12"],
+    ['"2026-01-01T10:00:00+05:99"', "not a valid datetime: UTC offset minutes must be under 60"],
+  ])("a quoted unbuildable date under an explicit tag gets no quoting fix: %p", (text, reason) => {
+    const error = thrown(SourceSyntaxError, () => read("value: !!timestamp " + text + "\n"));
+
+    expect(error.message).toBe(reason);
+  });
+
   test.each([
     ["2026-13-45", "not a valid date: month must be in 1..12"],
     ["2026-02-30", "not a valid date: day is out of range for month"],
@@ -362,24 +398,6 @@ describe("parseYamlLiteral", () => {
     expect(literalError('value: !!float ".nan"\n')).toBe("NaN is not a yian value");
   });
 
-  test.each<[string, ScalarValue]>([
-    ["!!int 017", 17n],
-    ["!!float 1", 1],
-    ["!!str 1", "1"],
-  ])("an explicit core tag reads a core form: %p", (text, expected) => {
-    expect(parseYamlLiteral("value: " + text + "\n")).toEqual({ value: expected });
-  });
-
-  test.each([
-    ["!!int 1_000", "1_000"],
-    ["!!int 1.0", "1.0"],
-    ["!!bool yes", "yes"],
-    ["!!bool |\n  true\n", "true\n"],
-    ['!!float ".inf\\n"', ".inf\n"],
-  ])("an explicit core tag rejects a non-core form: %p", (text, found) => {
-    expect(literalError("value: " + text + "\n")).toContain(reprText(found));
-  });
-
   test("an int of any length reads exactly", () => {
     for (const text of LONG_INTS) {
       expect(parseYamlLiteral("value: " + text + "\n")).toEqual({ value: BigInt(text) });
@@ -395,19 +413,6 @@ describe("parseYamlLiteral", () => {
       expect(literalError(text)).toBe("not a valid date: month must be in 1..12" + QUOTE_FIX);
     },
   );
-
-  test("!!timestamp on non-date text names the text", () => {
-    const message = literalError("value: !!timestamp hello\n");
-
-    expect(message).toBe("expected a date or timestamp, but found 'hello'");
-  });
-
-  test.each([
-    ['"2026-13-45"', "not a valid date: month must be in 1..12"],
-    ['"2026-01-01T10:00:00+05:99"', "not a valid datetime: UTC offset minutes must be under 60"],
-  ])("a quoted unbuildable date under an explicit tag gets no quoting fix: %p", (text, reason) => {
-    expect(literalError("value: !!timestamp " + text + "\n")).toBe(reason);
-  });
 
   test("an in-range offset builds; a one-digit offset is refused", () => {
     for (const text of ["2026-01-01T10:00:00+05:59", "2026-01-01T10:00:00-23:59"]) {

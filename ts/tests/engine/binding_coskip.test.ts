@@ -5,7 +5,7 @@
 
 import { expect, test } from "bun:test";
 
-import { bindingCoSkips } from "../../src/expr/template.ts";
+import { bindingCoSkips } from "../../src/expr/index.ts";
 
 test("a plain reference co-skips", () => {
   expect(bindingCoSkips("${a.output}")).toBe(true);

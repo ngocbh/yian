@@ -22,9 +22,9 @@ import {
   type TemplateFn,
   type TemplateParam,
 } from "../../src/expr/builtins.ts";
-import { ExpressionError, evalExpr, RequiredError, ResolveMode, resolveInRecord } from "../../src/expr/expressions.ts";
+import { evalExpr, ResolveMode, resolveInRecord } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
-import { evalBinding, promptRefs, renderTemplateRecord } from "../../src/expr/template.ts";
+import { ExpressionError, evalBinding, promptRefs, RequiredError, renderTemplateRecord } from "../../src/expr/index.ts";
 import { Type, type Value, ValueKind, type ValueRecord } from "../../src/typesys/index.ts";
 
 const REC: ValueRecord = { briefs: ["ab", "adf"], name: "zeta", sig: { value: 0.8 } };

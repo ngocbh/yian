@@ -9,8 +9,7 @@
 
 import { expect, test } from "bun:test";
 
-import { ExpressionError } from "../../src/expr/expressions.ts";
-import { checkTemplateCalls, promptRefs } from "../../src/expr/template.ts";
+import { checkTemplateCalls, ExpressionError, promptRefs } from "../../src/expr/index.ts";
 
 const UPPER = "expression function 'upper' takes (s): too many positional arguments";
 

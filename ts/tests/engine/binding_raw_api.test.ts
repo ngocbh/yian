@@ -14,8 +14,7 @@
 
 import { expect, test } from "bun:test";
 
-import { RequiredError } from "../../src/expr/expressions.ts";
-import { evalBinding, exprRefsOf } from "../../src/expr/template.ts";
+import { evalBinding, exprRefsOf, RequiredError } from "../../src/expr/index.ts";
 import type { Value, ValueRecord } from "../../src/typesys/index.ts";
 
 /** Return a `resolve` over a flat record: a path it lacks is `null`, the binding miss. */

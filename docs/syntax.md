@@ -317,6 +317,9 @@ Everywhere you wire data you use a `${...}` reference:
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is stringified.
 
+Changed (TS yian): stringified in the text form (see
+[Expressions → the `${...}` scanner](expressions.md#layer-3-the-scanner)).
+
 Prompt templates are strict: a missing reference or any span whose final value is
 null raises, even when the span is embedded in text. `:-`, `|`, and `:?` still see a
 missing or null operand, so `${note :- "none"}` renders `none` for a null `note`; only
@@ -633,6 +636,10 @@ have at most 4300 digits. A binding whose value holds a longer one fails with
 temporary inside an expression may be longer (`${10 ** n > 0}`). An int literal
 longer than 4300 digits is a load error. See
 [Types → Integer size limit](typing.md#integer-size-limit).
+
+Changed (TS yian): stringified in the text form; an int of any length is written in full (no
+digit limit), and `%` is gone (see
+[Expressions → the `${...}` scanner](expressions.md#layer-3-the-scanner)).
 
 Changed: an operator Python can't complete in a binding or an `asserts:` used to raise
 out of `run_flow`; now the run fails like any other expression error. In a prompt or a
@@ -3821,7 +3828,8 @@ One `${...}` grammar serves every context — the difference is what each contex
   inputs. `isinstance` and constructors are the exception: compute them in an input
   binding (see [Expressions → `isinstance`](expressions.md#isinstance-the-type-test)).
   A span may call only a builtin, with arguments it takes; anything else is a load
-  error at that prompt.
+  error at that prompt. Changed (TS yian): stringified in the text form (see
+  [Expressions → the `${...}` scanner](expressions.md#layer-3-the-scanner)).
 
 In every context an expression nests at most 100 levels; a deeper one is a load error
 at its field (see

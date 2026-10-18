@@ -9,8 +9,13 @@
 
 import { expect, test } from "bun:test";
 
-import { parseCondition, rewriteConditionRefs } from "../../src/expr/expressions.ts";
-import { type ConditionRead, conditionReads, rewriteConditionReads } from "../../src/expr/template.ts";
+import {
+  type ConditionRead,
+  conditionReads,
+  parseCondition,
+  rewriteConditionReads,
+  rewriteConditionRefs,
+} from "../../src/expr/index.ts";
 
 /** Return each read of `when` as `[path, escape, coSkips]`. */
 function reads(when: string): [string, number | null, boolean][] {

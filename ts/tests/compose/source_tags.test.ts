@@ -2,21 +2,19 @@
  * Local YAML tags kept by the source layer: a port of `tests/compose/test_source_tags.py`.
  *
  * The Compose-dependent tests (the signature projection, the single-node def and the compact
- * flow bindings) come with Compose. The nesting-depth and composed-node-tag tests have no
- * counterpart: the TS build walks with an explicit stack and keeps no composed tree. A space
- * inside a tag's parentheses is now a syntax error, and a tag ending at a flow indicator now
- * parses. The merge-source tag errors live in `source_document.test.ts`.
+ * flow bindings) come with Compose. The merge-source, bare-tag, unknown-tag and tag-hint
+ * errors live in `source_document.test.ts`. `test_space_ends_the_tag`: a tag written with `,`
+ * is now a YAML syntax error with the tag hint (YAML 1.2 tag syntax; `source_document.test.ts`,
+ * "the tag hint"). `test_bare_tag_check_does_not_shrink_nesting_depth` and
+ * `test_parse_leaves_the_composed_node_tags_unchanged` have no counterpart: the TS build walks
+ * with an explicit stack and keeps no composed tree.
  */
 
 import { describe, expect, test } from "bun:test";
 
-import {
-  type MapStep,
-  SourceSyntaxError,
-  type TaggedNode,
-} from "../../src/compose/source/common.ts";
+import { type MapStep, type TaggedNode } from "../../src/compose/source/common.ts";
 import { SourceCursor } from "../../src/compose/source/cursor.ts";
-import { SourceDocument, TAG_HINT } from "../../src/compose/source/document.ts";
+import { SourceDocument } from "../../src/compose/source/document.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 
 /** Return the cursor at `path` below the root of `text`'s document. */
@@ -24,17 +22,6 @@ function cur(text: string, ...path: (string | number)[]): SourceCursor {
   let cursor = SourceDocument.parse(text).root;
   for (const step of path) cursor = cursor.child(step);
   return cursor;
-}
-
-/** Return the error parsing `text` throws. */
-function refusal(text: string): SourceSyntaxError {
-  try {
-    SourceDocument.parse(text);
-  } catch (error) {
-    if (error instanceof SourceSyntaxError) return error;
-    throw error;
-  }
-  throw new Error(`expected ${JSON.stringify(text)} to be refused`);
 }
 
 /** Return the first mapping step of `node`'s path. */
@@ -140,6 +127,15 @@ describe("tagged values", () => {
     expect(document.root.value).toEqual({ "1": "one", "<<": "two" });
     expect(document.nonTextKey?.key).toBe(1n);
   });
+
+  test("tags ending at a flow indicator are two tagged empty values", () => {
+    const m = cur("m: {a: !int, b: !str}\n", "m");
+
+    expect(m.child("a").tag).toBe("int");
+    expect(m.child("a").hasValue).toBe(false);
+    expect(m.child("b").tag).toBe("str");
+    expect(m.child("b").hasValue).toBe(false);
+  });
 });
 
 describe("tags through anchors, aliases and merges", () => {
@@ -215,39 +211,6 @@ describe("value gating", () => {
 
     expect(v.tag).toBeNull();
     expect(v.hasValue).toBe(true);
-  });
-});
-
-describe("bare and unknown tags", () => {
-  test("a bare tag is an error", () => {
-    const error = refusal("a: ! x\n");
-
-    expect(error.message).toContain("names a type");
-    expect(error.range).toEqual(new SourceRange(1, 4, 1, 7));
-  });
-
-  test("a bare tag on a collection is an error", () => {
-    expect(refusal("a: ! [1]\n").message).toContain("names a type");
-  });
-
-  test("an unknown global tag is an error", () => {
-    const error = refusal("%TAG ! tag:example.com:\n---\na: !int 5\n");
-
-    expect(error.message).toContain("unknown YAML tag");
-    expect(error.range?.startLine).toBe(3);
-  });
-
-  test("tags ending at a flow indicator are two tagged empty values", () => {
-    const m = cur("m: {a: !int, b: !str}\n", "m");
-
-    expect(m.child("a").tag).toBe("int");
-    expect(m.child("a").hasValue).toBe(false);
-    expect(m.child("b").tag).toBe("str");
-    expect(m.child("b").hasValue).toBe(false);
-  });
-
-  test("an unrelated YAML error has no tag hint", () => {
-    expect(refusal("m: {a: 1, b: c: d}\n").message).not.toContain(TAG_HINT);
   });
 });
 

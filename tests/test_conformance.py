@@ -6,6 +6,7 @@ the case format and what each kind checks.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import fields, is_dataclass
 import json
 import math
@@ -1024,12 +1025,10 @@ def _run_run(case: dict, case_dir: Path) -> None:
 
 
 def _interrupted(argv: list, case_dir: Path, env: dict, stdin: str, after: str) -> tuple:
-    """Run `argv`, send it SIGINT once `after` is in its stdout or stderr, and wait for its exit.
+    """Run `argv`, send it SIGINT once `after` is in its stdout or stderr, and return
+    `(returncode, stdout, stderr)` once it exits.
 
     Fails the case when the command exits before `after` appears or 60 seconds pass first.
-
-    Returns:
-        The command's `(returncode, stdout, stderr)`.
     """
     process = subprocess.Popen(
         argv, cwd=case_dir, env=env, encoding="utf-8", stdin=subprocess.PIPE,
@@ -1044,12 +1043,19 @@ def _interrupted(argv: list, case_dir: Path, env: dict, stdin: str, after: str) 
         for char in iter(lambda: stream.read(1), ""):
             parts.append(char)
 
+    def feed() -> None:
+        # A command can exit, or stop reading, before taking all of its stdin.
+        with contextlib.suppress(BrokenPipeError):
+            process.stdin.write(stdin)
+        with contextlib.suppress(BrokenPipeError):
+            process.stdin.close()
+
     readers = [threading.Thread(target=collect, args=pair, daemon=True)
                for pair in ((process.stdout, out), (process.stderr, err))]
-    for reader in readers:
-        reader.start()
-    process.stdin.write(stdin)
-    process.stdin.close()
+    # On its own thread, so a stdin the command never reads can't block past the deadline.
+    writer = threading.Thread(target=feed, daemon=True)
+    for thread in (*readers, writer):
+        thread.start()
     try:
         deadline = time.monotonic() + 60
         while True:
@@ -1069,8 +1075,11 @@ def _interrupted(argv: list, case_dir: Path, env: dict, stdin: str, after: str) 
         # Ends a command the case gave up on; a no-op once it has exited.
         process.kill()
         process.wait()
-    for reader in readers:
-        reader.join()
+    for thread in (*readers, writer):
+        # A process the command started can hold a pipe open after the command exits.
+        thread.join(timeout=10)
+        if thread.is_alive():
+            _fail("a pipe to the command stayed open 10 seconds after it exited")
     return process.returncode, "".join(out), "".join(err)
 
 

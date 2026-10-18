@@ -1,13 +1,12 @@
 /**
  * The defaults table, `BUILTIN`, parsing and errors, the process values, recorded values and
- * resume checks, a port of `tests/engine/test_defaults.py`
- * and of `tests/test_defaults_docs.py`. Not ported:
- * `test_int_digits_cannot_exceed_the_interpreter_limit` and
- * `test_int_digits_has_no_upper_bound_without_an_interpreter_limit` (TS has no int digit
- * limit, so no `MAX_INT_DIGITS` entry), `test_memory_json_nesting_follows_value_nesting` (TS has
- * no memory JSON nesting bound), and `test_set_defaults_fixture` and
- * `test_every_test_starts_from_builtin_values` (pytest fixtures; TS tests reset with
- * `forget` or `install(BUILTIN)` instead).
+ * resume checks, a port of `tests/engine/test_defaults.py` and of `tests/test_defaults_docs.py`.
+ * Not ported: `test_int_digits_cannot_exceed_the_interpreter_limit` and
+ * `test_int_digits_has_no_upper_bound_without_an_interpreter_limit` (TS has no int digit limit,
+ * so no `MAX_INT_DIGITS` entry), `test_memory_json_nesting_follows_value_nesting` (TS has no
+ * memory JSON nesting bound), and `test_set_defaults_fixture` and
+ * `test_every_test_starts_from_builtin_values` (pytest fixtures; TS tests reset with `forget` or
+ * `install(BUILTIN)` instead).
  */
 
 import { readFileSync } from "node:fs";
@@ -176,6 +175,11 @@ describe("read", () => {
 
   test("an empty value counts as unset", () => {
     expect(readOnly({ YIAN_MAX_VALUE_NESTING: "" })).toEqual(BUILTIN);
+  });
+
+  test("processEnv reads own properties only", () => {
+    expect(processEnv("__proto__")).toBeUndefined();
+    expect(processEnv("toString")).toBeUndefined();
   });
 
   const advice = "use an integer from 1 to 100, or unset it";
@@ -376,11 +380,11 @@ describe("the process values", () => {
 
   test("a failed read is not kept", () => {
     const bad = envOf({ YIAN_MAX_VALUE_NESTING: "abc" });
-    reload(envOf({ YIAN_MAX_VALUE_NESTING: "80" }));
+    const kept = reload(envOf({ YIAN_MAX_VALUE_NESTING: "80" }));
     for (let i = 0; i < 2; i++) {
       expect(() => reload(bad)).toThrow('YIAN_MAX_VALUE_NESTING="abc" is not an integer');
     }
-    expect(current().maxValueNesting).not.toBe(80);
+    expect(current()).not.toBe(kept);
     expect(current()).toEqual(read(processEnv));
     expect(reload(envOf({ YIAN_MAX_VALUE_NESTING: "70" })).maxValueNesting).toBe(70);
   });

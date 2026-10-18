@@ -423,9 +423,10 @@ function compareText(a: string, b: string): number {
  */
 export function nonDefaults(values: Defaults): Record<string, bigint> {
   const all: Readonly<Record<string, number>> = values;
-  const changed = ENTRIES.filter((each) => all[keyOf(each.name)] !== each.default)
-    .map((each) => [each.name, BigInt(all[keyOf(each.name)]!)] as const)
-    .sort(([a], [b]) => compareText(a, b));
+  const changed = ENTRIES.flatMap((each) => {
+    const value = all[keyOf(each.name)];
+    return value === undefined || value === each.default ? [] : [[each.name, BigInt(value)] as const];
+  }).sort(([a], [b]) => compareText(a, b));
   return Object.fromEntries(changed);
 }
 
@@ -553,6 +554,7 @@ export function checkRecorded(recorded: Readonly<Record<string, bigint | number>
   for (const each of ENTRIES) {
     const now = here[keyOf(each.name)];
     const then = Object.hasOwn(recorded, each.name) ? recorded[each.name]! : each.default;
+    // Exact for every value `read` can produce: its bounds are safe integers and rounding is monotonic.
     const value = Number(then);
     if (now === value) continue;
     if (value !== each.default && !inRange(each, value)) {
@@ -589,7 +591,7 @@ export function reload(env: Env = processEnv): Defaults {
   return cached;
 }
 
-/** Make a frozen copy of `values` this process's values, with no range check; for tests and conformance. */
+/** Keep a frozen copy of `values` as this process's values, with no range check; for tests and conformance. */
 export function install(values: Defaults): void {
   cached = Object.freeze({ ...values });
 }

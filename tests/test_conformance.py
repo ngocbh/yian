@@ -22,13 +22,14 @@ from yaml.constructor import ConstructorError
 
 from yian import defaults
 from yian.compile.manifest import flow_fingerprint
-from yian.compose import load_flow
+from yian.compose import LoadError, load_flow
 from yian.compose.helpers.isinstance_types import (
     expression_trees,
     resolve_constructor_type,
     resolve_isinstance_type,
 )
 from yian.compose.source.scalars import _BOOL, _FLOAT, _INT, _NULL
+from yian.diagnostics import Diagnostic
 from yian.expr import (
     constructor_names,
     eval_binding,
@@ -428,6 +429,37 @@ def _load(text: str, case_dir: Path):
     return load_flow(text, search_paths=[case_dir], source_label="flow.yaml")
 
 
+def _diagnostic(diag: Diagnostic, case_dir: Path) -> dict:
+    """Return `diag` in the case's diagnostic form, labels inside `case_dir` made relative."""
+    frames = []
+    for frame in diag.frames:
+        label = frame.label
+        if Path(label).is_relative_to(case_dir):
+            label = Path(label).relative_to(case_dir).as_posix()
+        r = frame.range
+        entry = {"label": label, "range": [r.start_line, r.start_col, r.end_line, r.end_col]}
+        if frame.note:
+            entry["note"] = frame.note
+        frames.append(entry)
+    form = {"code": diag.code, "message": diag.message}
+    if frames:
+        form["frames"] = frames
+    if diag.notes:
+        form["notes"] = list(diag.notes)
+    return form
+
+
+def _run_load(case: dict, case_dir: Path) -> None:
+    """Load `flow` and compare `ok` or its diagnostics."""
+    try:
+        _load(case["flow"], case_dir)
+    except LoadError as exc:
+        actual = {"diagnostics": [_diagnostic(exc.diagnostic, case_dir)]}
+    else:
+        actual = "ok"
+    _compare("load", actual, case["expect"]["load"], optional_message=True)
+
+
 def _run_defaults(case: dict, case_dir: Path) -> None:
     """Read yian's defaults and compare the listed entries, or the error."""
     expect = case["expect"]
@@ -514,6 +546,7 @@ def _run_value(case: dict, case_dir: Path) -> None:
 
 
 _KINDS = {
+    "load": _run_load,
     "defaults": _run_defaults,
     "fingerprint": _run_fingerprint,
     "expr": _run_expr,

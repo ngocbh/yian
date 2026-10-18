@@ -339,7 +339,7 @@ function addArg(call: CallFrame, value: ExprNode): void {
 }
 
 /** Complete every prefix or chain frame on top of `stack` above `level` around `value`; return the result. */
-function reduce(stack: Frame[], value: ExprNode, level: number): ExprNode {
+function reduce(stack: Frame[], value: ExprNode, level: Level | 0): ExprNode {
   for (;;) {
     const top = stack.at(-1);
     if (top?.kind !== "prefix" && top?.kind !== "chain") return value;
@@ -463,6 +463,146 @@ export const EXPRESSION_KEYWORDS: ReadonlySet<string> = new Set([
   "none",
   "inf",
 ]);
+
+/**
+ * Return the index of the `}` closing a `${...}` span whose interior begins at `start` (brace
+ * depth and quote aware), or null if the span is unbalanced.
+ */
+export function findSpanEnd(s: string, start: number): number | null {
+  let depth = 1;
+  let quote: string | null = null;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (quote !== null) {
+      if (c === quote) quote = null;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+    } else if (c === "{") {
+      depth += 1;
+    } else if (c === "}") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return null;
+}
+
+/**
+ * Return the interior of `text` when the trimmed text is exactly one `${...}` span, else null.
+ *
+ * Quote aware, so `${x == "}"}` is one span and `${a} > ${b}` is not.
+ */
+export function wholeSpanInterior(text: string): string | null {
+  text = text.trim();
+  if (!text.startsWith("${")) return null;
+  const end = findSpanEnd(text, 2);
+  return end === text.length - 1 ? text.slice(2, end) : null;
+}
+
+// A character that would fuse with an unwrapped name: `not${x}` must become `not x`.
+const NAME_CHAR = /^[A-Za-z0-9_#/]/;
+
+/** Return whether `text` parses within the nesting limit (a rewrite worth suggesting). */
+function parses(text: string): boolean {
+  try {
+    rejectDeepExpression(parseRaw(text));
+  } catch (error) {
+    if (error instanceof ParseError || error instanceof ExpressionError) return false;
+    throw error;
+  }
+  return true;
+}
+
+/** Return whether `text` parses as one reference or one literal (no operator or call). */
+function isLoneAtom(text: string): boolean {
+  let tree: ExprNode;
+  try {
+    tree = parseRaw(text);
+  } catch (error) {
+    if (error instanceof ParseError) return false;
+    throw error;
+  }
+  return tree instanceof Token || (tree.data === "refcall" && callSuffixOf(tree) === undefined);
+}
+
+/**
+ * Return `text` with each `${X}` outside a string literal replaced by `X`, or `(X)` when `X` is
+ * more than one reference or literal; null when a `${` is unbalanced or spans nest deeper than
+ * `limit`. `depth` counts the spans around `text`.
+ */
+function unwrapSpans(text: string, depth = 0, limit = current().maxValueNesting): string | null {
+  if (depth > limit) return null;
+  const out: string[] = [];
+  let quote: string | null = null;
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i]!;
+    if (quote !== null) {
+      out.push(c);
+      if (c === quote) quote = null;
+      i += 1;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+      out.push(c);
+      i += 1;
+    } else if (c === "$" && text[i + 1] === "{") {
+      const end = findSpanEnd(text, i + 2);
+      let inner = end === null ? null : unwrapSpans(text.slice(i + 2, end), depth + 1, limit);
+      if (end === null || inner === null) return null;
+      inner = inner.trim();
+      let piece = isLoneAtom(inner) ? inner : `(${inner})`;
+      // As Python's `re.match`, this tests the first character of the last piece pushed.
+      if (out.length > 0 && NAME_CHAR.test(out.at(-1)!)) piece = " " + piece;
+      if (NAME_CHAR.test(text.slice(end + 1, end + 2))) piece += " ";
+      out.push(piece);
+      i = end + 1;
+    } else {
+      out.push(c);
+      i += 1;
+    }
+  }
+  return out.join("");
+}
+
+/** Return whether `text` has a `${` outside a string literal. */
+function hasSpan(text: string): boolean {
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote !== null) {
+      if (c === quote) quote = null;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+    } else if (c === "$" && text[i + 1] === "{") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Throw if the expression `text` holds a `${...}`, showing the rewrite.
+ *
+ * `${...}` marks an expression inside a YAML string, so inside an expression values are named
+ * directly and grouped with parentheses. A `${...}` inside a quoted string literal is text and
+ * allowed.
+ *
+ * @param text One expression: a span interior or a bare condition.
+ * @param options.inSpan `text` is the interior of a template span, so the rewrite is shown as
+ *   the whole fixed span (`${a :- b}`) rather than the bare expression (`a :- b`).
+ * @throws {ExpressionError} If `text` holds a `${...}` outside a string literal. The message
+ *   shows the rewrite when the unwrapped text parses.
+ */
+export function rejectNestedSpans(text: string, { inSpan = false }: { inSpan?: boolean } = {}): void {
+  if (!hasSpan(text)) return;
+  let message = "`${...}` can't appear inside an expression";
+  let rewrite = unwrapSpans(text);
+  if (rewrite !== null && parses(rewrite)) {
+    rewrite = rewrite.trim();
+    message += `; write \`${inSpan ? "${" + rewrite + "}" : rewrite}\``;
+  }
+  throw new ExpressionError(message);
+}
 
 /** Return the `call_suffix` of the refcall `node`, or undefined when it is a reference. */
 function callSuffixOf(node: Tree): Tree | undefined {
@@ -626,15 +766,14 @@ function rejectReservedReferenceRoots(tree: ExprNode): void {
  * A lone literal (a `NUMBER`, `STRING`, `BOOL`, `NULL` or `INF`) comes back as a bare `Token`,
  * since a level with one operand makes no node.
  *
- * A dotted-callee builtin call (`a.b(x)`) and a malformed `isinstance(x, T)` are rejected here.
- *
- * @throws {ExpressionError} If `text` does not parse
+ * @throws {ExpressionError} If `text` holds a `${...}` (see `rejectNestedSpans`), does not parse
  *   (`could not parse expression '<text>': unexpected <what> at line L, column C`), nests deeper
  *   than `current().maxValueNesting` levels, holds a float literal outside the double range, is a
  *   dotted-callee builtin call, calls `isinstance` with anything but a value and a bare type
  *   name, repeats a keyword argument, or uses a reserved operator word as a reference root.
  */
 export function parseExpr(text: string): ExprNode {
+  rejectNestedSpans(text);
   let tree: ExprNode;
   try {
     tree = parseRaw(text);
@@ -644,7 +783,7 @@ export function parseExpr(text: string): ExprNode {
       cause: error,
     });
   }
-  // First, so no later walk meets a tree deep enough to overflow it.
+  // First, as in Python: a too-deep expression reports the nesting limit before any other check.
   rejectDeepExpression(tree);
   rejectOverflowingFloatLiterals(tree);
   rejectDottedCallee(tree);

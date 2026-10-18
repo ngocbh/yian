@@ -3,8 +3,7 @@
  * `tests/engine/test_isinstance.py`.
  *
  * `isinstance` is a special form: the first argument is an expression, the second a bare type
- * name, never a reference. The evaluation, reference and rewrite tests land with the evaluator,
- * and the wrapped-type-name rewrite test with the `${...}` helpers.
+ * name, never a reference. The evaluation, reference and rewrite tests land with the evaluator.
  */
 
 import { expect, test } from "bun:test";
@@ -51,7 +50,12 @@ test("the second argument must be a bare type name", () => {
 });
 
 test("a not as the type name is a parse error", () => {
+  expect(() => parseExpr("isinstance(x, not)")).toThrow(ExpressionError);
   expect(() => parseExpr("isinstance(x, not)")).toThrow("could not parse expression");
+});
+
+test("a wrapped type name shows the bare one", () => {
+  expectMessage("isinstance(x, ${Buy})", "`${...}` can't appear inside an expression; write `isinstance(x, Buy)`");
 });
 
 test("isinstance has no keyword form", () => {

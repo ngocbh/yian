@@ -15,13 +15,22 @@ test("a constructor takes keywords or one value", () => {
   }
 });
 
+/** Expect `parseExpr(text)` to fail with exactly `message`. */
+function expectMessage(text: string, message: string): void {
+  let error: unknown;
+  try {
+    parseExpr(text);
+  } catch (e) {
+    error = e;
+  }
+  expect(error).toBeInstanceOf(ExpressionError);
+  expect((error as Error).message).toBe(message);
+}
+
 test("a call repeating a keyword is rejected", () => {
   const cases: [string, string][] = [
     ["Buy(action=1, action=2)", "Buy(...) repeats the keyword 'action'"],
     ['join(xs, sep=",", sep=";")', "join(...) repeats the keyword 'sep'"],
   ];
-  for (const [text, message] of cases) {
-    expect(() => parseExpr(text)).toThrow(ExpressionError);
-    expect(() => parseExpr(text)).toThrow(message);
-  }
+  for (const [text, message] of cases) expectMessage(text, message);
 });

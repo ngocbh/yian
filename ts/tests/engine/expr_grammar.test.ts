@@ -4,8 +4,8 @@
  * calls, keyword arguments, list literals, groups, coalesce/default/required, literals, token
  * positions, parse-error messages, the error classes, `iterSubtrees` order, and the checks after
  * the parse: reserved reference roots, the dotted callee, the nesting limit, float overflow and
- * the order the checks run in. Later: the nested-span tests come with the `${...}` helpers, and
- * the `scanTemplate` halves with `template.ts`.
+ * the order the checks run in; and the `${...}` helpers: a nested span's error and rewrite,
+ * `findSpanEnd` and `wholeSpanInterior`. Later: the `scanTemplate` halves come with `template.ts`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -15,11 +15,13 @@ import { ConstructorTypeError, ExpressionError, RequiredError } from "../../src/
 import {
   EXPRESSION_KEYWORDS,
   type ExprNode,
+  findSpanEnd,
   isBareName,
   iterSubtrees,
   parseExpr,
   Token,
   Tree,
+  wholeSpanInterior,
 } from "../../src/expr/grammar.ts";
 
 /** A position-blind form of `node`, as Lark's `Tree`/`Token` equality ignores positions. */
@@ -94,6 +96,8 @@ function expectMessage(text: string, message: string): void {
 }
 
 const reservedRoot = (keyword: string) => `reserved expression keyword '${keyword}' cannot be used as a reference root`;
+const nestedSpan = (rewrite: string | null) =>
+  "`${...}` can't appear inside an expression" + (rewrite === null ? "" : `; write \`${rewrite}\``);
 const DOTTED_CALLEE =
   "builtin call must have a bare callee (no dotted access before '('): a form like 'a.b(x)' is not allowed";
 
@@ -107,6 +111,11 @@ describe("references", () => {
     const t = tree("a.b.c");
     expect(iterSubtrees(t).filter((n) => n.data === "refcall")).toHaveLength(1);
     expect(plain(t)).toEqual(plain(ref("a", "b", "c")));
+  });
+
+  test("wrapped ref is rejected", () => {
+    // `${...}` marks an expression in a YAML string; inside an expression a name is bare.
+    expectMessage("${a}", nestedSpan("a"));
   });
 
   test("ref with hash, slash and item", () => {
@@ -152,6 +161,15 @@ describe("references", () => {
   test("reserved keyword cannot be the root of a dotted reference", () => {
     expectMessage("and.x", reservedRoot("and"));
     expectMessage("x + not.y", reservedRoot("not"));
+  });
+
+  test("wrapped reserved keyword is a nested-span error", () => {
+    for (const keyword of ["and", "or", "not", "in"]) {
+      for (const prefix of ["", "x :- "]) {
+        // `(not)` doesn't parse, so a wrapped `not` gets no rewrite.
+        expectMessage(`${prefix}\${${keyword}}`, nestedSpan(keyword === "not" ? null : prefix + keyword));
+      }
+    }
   });
 
   test("a not as a keyword argument's whole value is a parse error", () => {
@@ -403,6 +421,11 @@ describe("coalesce, default and required", () => {
     expect(parsed('a :? "msg"')).toEqual(plain(new Tree("required_expr", [ref("a"), new Token("STRING", '"msg"')])));
   });
 
+  test("nested default is rejected", () => {
+    // `a :- ${b}`: the default names `b` directly.
+    expectMessage("a :- ${b}", nestedSpan("a :- b"));
+  });
+
   test("default binds tighter than coalesce", () => {
     expect(parsed("a :- b | c")).toEqual(plain(new Tree("coalesce", [new Tree("default_expr", [ref("a"), ref("b")]), ref("c")])));
     expect(parsed("a :- b | c :- d")).toEqual(
@@ -619,7 +642,7 @@ describe("nesting limit", () => {
   }
 
   // kind -> a builder of an expression exactly `n` levels deep.
-  const nested: Record<string, (n: number) => string> = {
+  const nested = {
     not: (n) => "not ".repeat(n) + "true",
     neg: (n) => "-(".repeat(n) + "1" + ")".repeat(n),
     list: (n) => "[".repeat(n) + "1" + "]".repeat(n),
@@ -630,7 +653,7 @@ describe("nesting limit", () => {
     compare: (n) => "(".repeat(n - 1) + "1 == 1" + ") == true".repeat(n - 1),
     alternating,
     grouped,
-  };
+  } satisfies Record<string, (n: number) => string>;
 
   for (const [kind, build] of Object.entries(nested)) {
     test(`${kind} at the nesting limit parses`, () => {
@@ -646,8 +669,8 @@ describe("nesting limit", () => {
 
   test("the limit is current().maxValueNesting", () => {
     install({ ...BUILTIN, maxValueNesting: 5 });
-    expect(() => parseExpr(nested.not!(5))).not.toThrow();
-    expectMessage(nested.not!(6), tooDeep(5));
+    expect(() => parseExpr(nested.not(5))).not.toThrow();
+    expectMessage(nested.not(6), tooDeep(5));
   });
 
   test("a malformed too-deep expression is the parse error", () => {
@@ -706,4 +729,22 @@ describe("check order", () => {
   for (const [text, message] of cases) {
     test(text, () => expectMessage(text, message));
   }
+});
+
+describe("span helpers", () => {
+  test("findSpanEnd", () => {
+    // Quote aware: the `}` in the string literal doesn't close the span.
+    expect(findSpanEnd('x == "}"}', 0)).toBe(8);
+    expect(findSpanEnd("a{b}", 0)).toBeNull();
+    expect(findSpanEnd("a{b}}", 0)).toBe(4);
+    expect(findSpanEnd('x {"{"} }tail', 0)).toBe(8);
+  });
+
+  test("wholeSpanInterior", () => {
+    expect(wholeSpanInterior(" ${a} ")).toBe("a");
+    expect(wholeSpanInterior('${x == "}"}')).toBe('x == "}"');
+    expect(wholeSpanInterior("${a} > ${b}")).toBeNull();
+    expect(wholeSpanInterior("a")).toBeNull();
+    expect(wholeSpanInterior("${a")).toBeNull();
+  });
 });

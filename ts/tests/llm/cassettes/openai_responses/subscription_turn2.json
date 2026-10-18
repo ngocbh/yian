@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "subscription_turn2: second turn after subscription_tools: reasoning with encrypted_content, call without status, no message ids; from the #366 s2a wire inventory §9 / probe p4 section 9b second turn, streamed.",
+  "description": "subscription_turn2: the second turn after subscription_tools: the reasoning with its encrypted content, the call without status, no message ids.",
   "interactions": [
     {
       "request": {

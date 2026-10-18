@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "turn2: second turn after tools with tool result 6 (reasoning item, function_call with status, output); from the #366 s2a wire inventory §4 / probe p2 section 4a, streamed per D31 (H1: equal to the invoke-path body).",
+  "description": "turn2: the second turn after tools with tool result 6: the reasoning item, the function_call and its output. The call keeps its status: it is replayed from the item the stream finished.",
   "interactions": [
     {
       "request": {

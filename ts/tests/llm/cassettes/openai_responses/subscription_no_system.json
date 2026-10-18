@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "subscription_no_system: no system message, so the default instructions; from the #366 s2a wire inventory §9 / probe p4 section 9b (without tools), streamed.",
+  "description": "subscription_no_system: no system message, so the default instructions.",
   "interactions": [
     {
       "request": {

@@ -1,8 +1,8 @@
 /**
- * The #366 stage 2a golden scenarios for `src/llm/protocols/openai_responses.ts`, replayed from
- * streamed cassettes in `cassettes/openai_responses/` through `RouteModel` (and
- * `callWithRetries` for the retry scenarios). Each cassette's request is what yian sends today,
- * from the s2a wire inventory and probes, with the TS differences the T5-3 plan lists.
+ * Golden scenarios for `src/llm/protocols/openai_responses.ts`, replayed from streamed cassettes
+ * in `cassettes/openai_responses/` through `RouteModel` (and `callWithRetries` for the retry
+ * scenarios). Each cassette records the request the adapter must send, as today's Python yian
+ * sends it (#366), with every call streamed.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -68,15 +68,6 @@ const USAGE = new Usage({
   reasoningTokens: 30,
 });
 
-function apiKey(): Route {
-  return new Route({
-    provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    path: "responses",
-    auth: new BearerAuth("test-key-1"),
-  });
-}
-
 function subscription(residency: string | null): Route {
   return new Route({
     provider: "openai",
@@ -119,7 +110,7 @@ interface Call {
   rawArguments: string | null;
 }
 
-/** What one turn's reply must parse to; `finish` defaults to `stop`, `usage` to the probes' usage. */
+/** What one turn's reply must parse to; `finish` defaults to `stop`, `usage` to the shared `USAGE`. */
 interface Reply {
   text: string;
   parts: string[];
@@ -137,7 +128,6 @@ interface Scenario {
   route?: Route;
   /** Defaults to `gpt-5.5`. */
   model?: string;
-  subscription?: boolean;
   block?: JsonObject;
   turns: Turn[];
   /** One per turn, unless the last turn fails. */
@@ -161,12 +151,14 @@ const toolReply: Reply = {
   calls: [doubleCall],
   finish: "tool_calls",
 };
-const P3_TURN: Turn = () => request([system("You are terse."), user("Hi")]);
+const HI_TURN: Turn = () => request([system("You are terse."), user("Hi")]);
 const DOUBLE_TURN: Turn = () => request([system("You are terse."), user("Say hello.")], { tools: [DOUBLE] });
 
 /** The second turn after `tools`, its prior parsed by `parser` (the scenario's protocol by default). */
 function turn2(parser?: OpenAIResponses): Turn {
   return async (_, protocol) => {
+    // Only `tools`' reply is reused; its turn-1 user text ("Say hello.") differs from this turn's
+    // ("Double 3.") because the two requests come from separate captures.
     const prior = await priorFrom("tools", parser ?? protocol);
     const messages = [system("You are terse."), user("Double 3."), prior, toolResult("call_1", "double", "6")];
     return request(messages, { tools: [DOUBLE] });
@@ -210,7 +202,7 @@ const SCENARIOS: Record<string, Scenario> = {
     replies: [
       {
         ...hello("resp_2"),
-        // E: a flex reply keeps its cache and reasoning counts.
+        // A flex reply keeps its cache and reasoning counts.
         usage: new Usage({
           inputTokens: 21,
           outputTokens: 40,
@@ -279,19 +271,16 @@ const SCENARIOS: Record<string, Scenario> = {
   },
   subscription_plain: {
     route: subscription("us"),
-    subscription: true,
     turns: [() => request([system("You are terse."), user("Double 3.")])],
     replies: [hello("resp_2", ["reasoning", "text"])],
   },
   subscription_tools: {
     route: subscription(null),
-    subscription: true,
     turns: [() => request([user("Double 3.")], { tools: [DOUBLE] })],
     replies: [toolReply],
   },
   subscription_turn2: {
     route: subscription(null),
-    subscription: true,
     turns: [
       async (_, protocol) => {
         const prior = await priorFrom("subscription_tools", protocol);
@@ -302,13 +291,11 @@ const SCENARIOS: Record<string, Scenario> = {
   },
   subscription_turn2_multipart: {
     route: subscription(null),
-    subscription: true,
     turns: [MULTIPART_TURN2],
     replies: [hello("resp_2", ["reasoning", "text"])],
   },
   subscription_no_system: {
     route: subscription(null),
-    subscription: true,
     turns: [() => request([user("Double 3.")])],
     replies: [hello("resp_2", ["reasoning", "text"])],
   },
@@ -321,19 +308,19 @@ const SCENARIOS: Record<string, Scenario> = {
       auth: new HeaderKeyAuth("api-key", "test-key-1"),
     }),
     model: "gpt-5-codex",
-    turns: [P3_TURN],
+    turns: [HI_TURN],
     replies: [hello("resp_1")],
   },
   openrouter_codex: {
     route: bearer("openrouter", "https://openrouter.ai/api/v1"),
     model: "openai/gpt-5-codex",
-    turns: [P3_TURN],
+    turns: [HI_TURN],
     replies: [hello("resp_1")],
   },
   vllm_codex: {
     route: bearer("vllm", "http://localhost:8000/v1"),
     model: "my-codex-finetune",
-    turns: [P3_TURN],
+    turns: [HI_TURN],
     replies: [hello("resp_1")],
   },
   connection_settings: {
@@ -344,18 +331,18 @@ const SCENARIOS: Record<string, Scenario> = {
       auth: new BearerAuth("test-key-1"),
       headers: { "OpenAI-Organization": "org-test", "OpenAI-Project": "proj-test", "X-Gateway": "gateway-1" },
     }),
-    turns: [P3_TURN],
+    turns: [HI_TURN],
     replies: [hello("resp_1")],
   },
   error_429_then_200: {
     retries: true,
-    turns: [P3_TURN],
+    turns: [HI_TURN],
     replies: [hello("resp_1")],
     retried: [{ kind: "rate_limit", partial: null }],
   },
   error_400: {
     retries: true,
-    turns: [P3_TURN],
+    turns: [HI_TURN],
     replies: [],
     error: {
       kind: "bad_request",
@@ -365,7 +352,7 @@ const SCENARIOS: Record<string, Scenario> = {
   },
   retry_after_partial: {
     retries: true,
-    turns: [P3_TURN],
+    turns: [HI_TURN],
     // The result is the second attempt's.
     replies: [hello("resp_2")],
     retried: [{ kind: "server", partial: "Hello there." }],
@@ -388,28 +375,18 @@ function expectReply(response: Response, reply: Reply): void {
   expect(response.responseId).toBe(reply.responseId);
 }
 
-/** Return the error `run` rejects with, failing when it resolves. */
-async function rejection(run: () => Promise<unknown>): Promise<unknown> {
-  try {
-    await run();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected an error");
-}
-
-describe("s2a cassettes", () => {
+describe("OpenAI Responses cassettes", () => {
   for (const [name, scenario] of Object.entries(SCENARIOS)) {
     test(name, async () => {
       const cassette = loadCassette(join(DIR, `${name}.json`));
       const replay = new CassetteReplay(cassette);
-      const route = scenario.route ?? apiKey();
+      const route = scenario.route ?? bearer("openai", "https://api.openai.com/v1");
       const degraded: ReplayDegradedReason[] = [];
       const protocol = new OpenAIResponses({
         model: scenario.model ?? "gpt-5.5",
         provider: route.provider,
         block: scenario.block,
-        subscription: scenario.subscription,
+        subscription: route.auth instanceof SubscriptionAuth,
         onReplayDegraded: (reason) => degraded.push(reason),
       });
       const model = new RouteModel({ route, protocol, send: replay.send });
@@ -428,10 +405,9 @@ describe("s2a cassettes", () => {
       for (const [index, turn] of scenario.turns.entries()) {
         const req = await turn(responses, protocol);
         if (index === scenario.turns.length - 1 && scenario.error) {
-          const error = await rejection(() => call(req));
-          expect(error).toBeInstanceOf(ProviderError);
-          const { kind, retryable, message } = error as ProviderError;
-          expect({ kind, retryable, message }).toEqual(scenario.error);
+          const failed = call(req);
+          await expect(failed).rejects.toBeInstanceOf(ProviderError);
+          await expect(failed).rejects.toMatchObject(scenario.error);
           break;
         }
         responses.push(await call(req));

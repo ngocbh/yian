@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "vllm_codex: vllm routes my-codex-finetune to the Responses API by name; from the #366 s2a wire inventory §8 / probe p3 section 8, streamed per D31.",
+  "description": "vllm_codex: vLLM sends my-codex-finetune to the Responses API.",
   "interactions": [
     {
       "request": {

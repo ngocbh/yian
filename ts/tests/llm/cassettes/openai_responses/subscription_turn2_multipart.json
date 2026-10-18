@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "subscription_turn2_multipart: second turn after the multipart reply on the subscription: no ids, so no merge, phase on each message item (H1); from the #366 s2a wire inventory §4, §9 and §10 / probes p4 section 9b and p5, streamed.",
+  "description": "subscription_turn2_multipart: the second turn after the multipart reply on the subscription: no ids, so no merge; each message item carries its own phase.",
   "interactions": [
     {
       "request": {

@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "fallback_call_render: second turn with a payload-less call with a non-ASCII argument, rendered as a compact fallback item after the message items; from the #366 s2a wire inventory §4 / probe p2 section 4c shapes (compact arguments, decision 8), streamed per D31.",
+  "description": "fallback_call_render: the second turn after a tool call with no replay payload and a non-ASCII argument: the call goes after the message items, its arguments as compact JSON.",
   "interactions": [
     {
       "request": {

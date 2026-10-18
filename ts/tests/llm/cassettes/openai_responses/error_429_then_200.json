@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "error_429_then_200: a 429 rate limit, then a streamed reply; from the #366 s2a wire inventory §7 / probe p3 sections 7a and 7h, streamed per D31.",
+  "description": "error_429_then_200: a 429 rate limit, retried, then a streamed reply.",
   "interactions": [
     {
       "request": {

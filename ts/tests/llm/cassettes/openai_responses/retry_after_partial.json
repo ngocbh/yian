@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "retry_after_partial: text deltas then response.failed server_error, retried; the second attempt succeeds; from the #366 s2a wire inventory §7 / probe p3 sections 7h and 7k, streamed per D31.",
+  "description": "retry_after_partial: text deltas then response.failed with server_error, retried; the second attempt succeeds.",
   "interactions": [
     {
       "request": {

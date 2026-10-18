@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "turn2_multipart_ids: second turn after multipart, two message items with ids and phases; from the #366 s2a wire inventory §4 rules and §10 / probe p5 reply, streamed per D31.",
+  "description": "turn2_multipart_ids: the second turn after multipart: two message items, each with its id and phase.",
   "interactions": [
     {
       "request": {

@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "open_schema_strict_false: an open-schema tool with strict false; from the #366 s2a wire inventory §5 / probe p2 section 5d (input as 5a), streamed per D31.",
+  "description": "open_schema_strict_false: a tool with an open schema, sent with strict false.",
   "interactions": [
     {
       "request": {

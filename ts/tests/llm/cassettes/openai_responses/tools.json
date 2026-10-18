@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "tools: the double tool, reasoning + function_call reply; from the #366 s2a wire inventory §3 / probe p1 section 3s, streamed per D31.",
+  "description": "tools: the double tool; a reasoning + function_call reply.",
   "interactions": [
     {
       "request": {

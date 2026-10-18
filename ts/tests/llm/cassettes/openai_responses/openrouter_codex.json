@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "openrouter_codex: openrouter routes openai/gpt-5-codex to the Responses API by name; from the #366 s2a wire inventory §8 / probe p3 section 8, streamed per D31.",
+  "description": "openrouter_codex: OpenRouter sends openai/gpt-5-codex to the Responses API.",
   "interactions": [
     {
       "request": {

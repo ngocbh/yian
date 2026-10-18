@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "block_merge: the openai block (plus a null leaf, not sent, and a '__proto__' metadata key, sent as an own key), flex reply; from the #366 s2a wire inventory §6 and §10 / probes p2 section 6a and p3 usage service_tier=flex, streamed per D31.",
+  "description": "block_merge: the openai block merged into the body; its null leaf is not sent and a '__proto__' metadata key is sent as an ordinary key. The flex reply keeps its cache and reasoning counts.",
   "interactions": [
     {
       "request": {

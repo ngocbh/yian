@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "multipart: commentary message + two-part final message; from the #366 s2a wire inventory §10 / probe p5 (user 'hi'), streamed per D31.",
+  "description": "multipart: a reply with a commentary-phase message and a two-part final message.",
   "interactions": [
     {
       "request": {

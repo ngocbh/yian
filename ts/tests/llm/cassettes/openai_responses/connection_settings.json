@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "connection_settings: the #719 connection settings as route headers (organization, project, an extra header); from the #366 s2a wire inventory §1 / probe p3 messages, streamed per D31.",
+  "description": "connection_settings: the connection settings from #719 (organization, project, an extra header) sent as route headers.",
   "interactions": [
     {
       "request": {

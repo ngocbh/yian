@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "plain: system + user, reasoning + text reply; from the #366 s2a wire inventory §1-§2 / probe p1 section 2, streamed per D31.",
+  "description": "plain: system + user on the API key route; a reasoning + text reply.",
   "interactions": [
     {
       "request": {

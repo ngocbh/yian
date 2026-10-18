@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "subscription_plain: the ChatGPT subscription with residency us: instructions, store false, include; from the #366 s2a wire inventory §9 / probe p4 section 9a, streamed.",
+  "description": "subscription_plain: the ChatGPT subscription with residency us: system text in instructions, store false, include encrypted reasoning.",
   "interactions": [
     {
       "request": {

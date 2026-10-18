@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "replay_degraded: second turn after tools whose reply was parsed for another model: reasoning left out, the call in the fallback shape, no ids; from the #366 s2a wire inventory §4 / probe p2 sections 4a and 4c (compact arguments), streamed per D31.",
+  "description": "replay_degraded: the second turn after tools, whose reply was parsed for another model: the reasoning is left out and the call is sent without ids, its arguments as compact JSON.",
   "interactions": [
     {
       "request": {

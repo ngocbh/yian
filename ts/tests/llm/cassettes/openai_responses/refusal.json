@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "refusal: refusal reply, then a second turn that replays it inside its message item; from the #366 s2a wire inventory §4 rules and §10 / probe p5 refusal reply, streamed per D31.",
+  "description": "refusal: a refusal reply, then a second turn that replays the refusal inside its message item.",
   "interactions": [
     {
       "request": {

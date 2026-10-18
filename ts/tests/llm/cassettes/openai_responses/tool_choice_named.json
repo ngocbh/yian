@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "tool_choice_named: named tool choice + parallel_tool_calls false; from the #366 s2a wire inventory §5 / probe p2 section 5a, streamed per D31.",
+  "description": "tool_choice_named: a named tool choice with parallel_tool_calls false, as structured output sends it.",
   "interactions": [
     {
       "request": {

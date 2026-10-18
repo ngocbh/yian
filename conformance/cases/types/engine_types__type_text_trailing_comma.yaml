@@ -1,0 +1,9 @@
+kind: value
+# Hand-written from tests/engine/test_types.py::test_more_paren_syntax_errors: bad type text raises when the type is built.
+type: Literal(a,)
+value: 1
+expect:
+  raises:
+    class: TypeCheckError
+    message: "malformed type expression 'Literal(a,)': remove the trailing comma in Literal(...)"
+    path: []

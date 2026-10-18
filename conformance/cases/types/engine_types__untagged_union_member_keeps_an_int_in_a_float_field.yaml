@@ -1,12 +1,6 @@
 kind: value
 rules: [int-in-float]
 typedefs:
-  Buy:
-    action: Literal(buy)
-    qty: int
-  Sell:
-    action: Literal(sell)
-    price: float
   Count:
     n: int
   Score:

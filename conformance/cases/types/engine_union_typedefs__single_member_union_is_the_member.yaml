@@ -4,11 +4,6 @@ typedefs:
   Buy:
     action: Literal(buy)
     qty: int
-  Sell:
-    action: Literal(sell)
-    price: float
-  Hold:
-    action: Literal(hold)
 type: Union(Buy, Buy)
 value:
   action: sell

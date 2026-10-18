@@ -1,21 +1,9 @@
-kind: load
-flow: |
-  id: t
-  name: t
-  input:
-    n: !int
-  output: 'float(..1e999)'
-  kind: code
-  code: |
-    return 1
-env:
-  YIAN_DEFAULT_MODEL: gpt-5.5
-  YIAN_DEFAULT_PROVIDER: openai
+kind: value
+# Hand-written from tests/engine/test_types.py::test_paren_syntax_errors: bad type text raises when the type is built.
+type: float(..1e999)
+value: 1
 expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'bad type expression ''float(..1e999)'': invalid bounds in ''float(..1e999)'': float bounds require finite endpoints'
-      frames:
-      - label: flow.yaml
-        range: [5, 9, 5, 25]
+  raises:
+    class: TypeCheckError
+    message: "invalid bounds in 'float(..1e999)': float bounds require finite endpoints"
+    path: []

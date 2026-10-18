@@ -7,11 +7,6 @@ typedefs:
   Sell:
     action: Literal(sell)
     price: float
-  Count:
-    n: int
-  Score:
-    n: float
-    label: str
 type: Union(Buy, Sell)
 value:
   action: sell

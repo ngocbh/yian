@@ -1,0 +1,9 @@
+kind: value
+# Hand-written from tests/engine/test_types.py::test_paren_syntax_rejects_a_surrogate: bad type text raises when the type is built.
+type: "Literal(\"\ud800\")"
+value: 1
+expect:
+  raises:
+    class: TypeCheckError
+    message: "type expression 'Literal(\"\\ud800\")' contains a Unicode surrogate (types must be valid UTF-8 text)"
+    path: []

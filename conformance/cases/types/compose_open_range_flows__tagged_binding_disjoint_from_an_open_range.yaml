@@ -1,6 +1,5 @@
 kind: load
-flow: |2
-
+flow: |
   id: tagged_binding
   name: tagged_binding
   input:
@@ -31,4 +30,4 @@ expect:
       message: 'node ''use'' input ''x'': declared int(0..), but the value is int(..-1)'
       frames:
       - label: flow.yaml
-        range: [17, 10, 17, 31]
+        range: [16, 10, 16, 31]

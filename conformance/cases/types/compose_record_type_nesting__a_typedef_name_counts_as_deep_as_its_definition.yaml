@@ -28,7 +28,6 @@ python_flow: |
 env:
   YIAN_DEFAULT_MODEL: gpt-5.5
   YIAN_DEFAULT_PROVIDER: openai
-  YIAN_MAX_YAML_NODES: '10000000'
 expect:
   load:
     diagnostics:

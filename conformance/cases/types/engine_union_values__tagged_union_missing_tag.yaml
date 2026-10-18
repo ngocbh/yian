@@ -6,8 +6,6 @@ typedefs:
   Sell:
     action: Literal(sell)
     price: float
-  Hold:
-    action: Literal(hold)
 type: Union(Buy, Sell)
 value:
   qty: 2

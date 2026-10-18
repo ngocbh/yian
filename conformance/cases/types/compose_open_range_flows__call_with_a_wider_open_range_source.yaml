@@ -1,6 +1,5 @@
 kind: load
-flow: |2
-
+flow: |
   id: open_call
   name: open_call
   input:
@@ -42,4 +41,4 @@ expect:
       message: 'call node ''c'': binding ''t'' — child expects ''int(0..100)'', source is ''int(0..)'''
       frames:
       - label: flow.yaml
-        range: [31, 7, 32, 1]
+        range: [30, 7, 31, 1]

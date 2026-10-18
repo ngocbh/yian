@@ -1,7 +1,6 @@
 kind: value
 rules: [messages]
 typedefs:
-  Count: int(0..)
   Order:
     qty: int(1..)
     price: float(..100.0)

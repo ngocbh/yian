@@ -1,0 +1,9 @@
+kind: value
+# Hand-written from tests/engine/test_types.py::test_paren_syntax_errors: bad type text raises when the type is built.
+type: Foo(int)
+value: 1
+expect:
+  raises:
+    class: TypeCheckError
+    message: "unknown type constructor 'Foo' in 'Foo(int)'"
+    path: []

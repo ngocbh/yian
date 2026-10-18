@@ -1,6 +1,5 @@
 kind: load
-flow: |2
-
+flow: |
   id: tagged_literal
   name: tagged_literal
   nodes:
@@ -22,4 +21,4 @@ expect:
       message: '''x'': `!int(..)` is not a type (malformed type expression ''int(..)'': a range needs at least one end; write int for any int)'
       frames:
       - label: flow.yaml
-        range: [8, 10, 8, 20]
+        range: [7, 10, 7, 20]

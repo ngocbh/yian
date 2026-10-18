@@ -1,6 +1,5 @@
 kind: load
-flow: |2
-
+flow: |
   id: open_case
   name: open_case
   input:
@@ -34,4 +33,4 @@ expect:
       message: 'case node ''route'': `when: -1` is not a value of `on: ${input.n}` (`int(0..)`): -1 is below the inclusive int minimum 0'
       frames:
       - label: flow.yaml
-        range: [11, 15, 11, 17]
+        range: [10, 15, 10, 17]

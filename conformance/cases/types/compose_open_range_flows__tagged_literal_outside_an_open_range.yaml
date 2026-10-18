@@ -1,6 +1,5 @@
 kind: load
-flow: |2
-
+flow: |
   id: tagged_literal
   name: tagged_literal
   nodes:
@@ -22,4 +21,4 @@ expect:
       message: '''x'': `-1` is not a valid int(0..)'
       frames:
       - label: flow.yaml
-        range: [8, 10, 8, 22]
+        range: [7, 10, 7, 22]

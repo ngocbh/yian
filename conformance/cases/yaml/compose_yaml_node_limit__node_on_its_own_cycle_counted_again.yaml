@@ -1,0 +1,34 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  x-anchors:
+    - &M [&D [*M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M]]
+    - [*D]
+  nodes:
+    use:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: hi
+      output: str
+  output: ${use.output}
+python_flow: |
+  id: f
+  name: f
+  x-anchors:
+    - &M [&D [*M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M, *M]]
+    - [*D]
+  nodes:
+    use:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: hi
+      output: str
+  output: ${use.output}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load: ok

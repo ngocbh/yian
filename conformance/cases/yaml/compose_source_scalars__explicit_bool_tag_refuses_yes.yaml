@@ -1,0 +1,34 @@
+kind: load
+rules: [yaml]
+flow: |
+  id: p
+  name: p
+  nodes:
+    b:
+      kind: code
+      code: return 1
+  output:
+    v: !!bool yes
+    h: ${b.output}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      frames:
+      - label: flow.yaml
+        range: [8, 6, 8, 7]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        invalid YAML: expected a YAML 1.2 core boolean, but found 'yes'
+          in "<unicode string>", line 8, column 6:
+              v: !!bool yes
+                 ^
+      frames:
+      - label: flow.yaml
+        range: [8, 6, 8, 7]

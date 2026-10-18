@@ -1,0 +1,36 @@
+kind: load
+flow: |
+  id: parent
+  name: parent
+  nodes:
+    c:
+      kind: call
+      call: kid
+  output: ${c.output}
+  uses:
+    kid: child
+files:
+  child.yaml: |
+    id: child
+    name: child
+    nodes:
+      a:
+        1: x
+        kind: code
+        code: return 1
+        output: int
+    output: ${a.output}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: the key `1` was read by YAML as an integer, but names in a flow must be text. Quote it ("1") or choose another name.
+      frames:
+      - label: flow.yaml
+        range: [9, 8, 9, 13]
+        note: uses alias 'kid'
+      - label: child.yaml
+        range: [5, 5, 5, 6]

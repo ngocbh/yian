@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  nodes:
+    b:
+      kind: code
+      code: return 1
+  output:
+    ok: !bool yes
+    h: ${b.output}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''ok'': `yes` is not a valid bool; `yes` is text; write `true`'
+      frames:
+      - label: flow.yaml
+        range: [8, 7, 8, 16]

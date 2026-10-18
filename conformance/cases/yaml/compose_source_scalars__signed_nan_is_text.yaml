@@ -1,0 +1,16 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  nodes:
+    b:
+      kind: code
+      code: return 1
+  output:
+    g: -.nan
+    h: ${b.output}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load: ok

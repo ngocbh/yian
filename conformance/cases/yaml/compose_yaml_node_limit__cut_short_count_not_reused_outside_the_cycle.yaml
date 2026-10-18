@@ -1,0 +1,80 @@
+kind: load
+rules: [yaml]
+flow: |
+  id: f
+  name: f
+  x-anchors:
+    - &a0 [1]
+    - &a1 [*a0, *a0]
+    - &a2 [*a1, *a1]
+    - &a3 [*a2, *a2]
+    - &a4 [*a3, *a3]
+    - &a5 [*a4, *a4]
+    - &a6 [*a5, *a5]
+    - &a7 [*a6, *a6]
+    - &a8 [*a7, *a7]
+    - &a9 [*a8, *a8]
+    - &a10 [*a9, *a9]
+    - &a11 [*a10, *a10]
+    - &a12 [*a11, *a11]
+    - &r [*a12, &s [*r, *r, *r, *r]]
+    - &t0 [*s, *s]
+    - &t1 [*t0, *t0]
+    - &t2 [*t1, *t1]
+    - &t3 [*t2, *t2]
+    - &t4 [*t3, *t3]
+    - &t5 [*t4, *t4]
+    - &t6 [*t5, *t5]
+    - &t7 [*t6, *t6]
+    - &t8 [*t7, *t7]
+    - &t9 [*t8, *t8]
+    - &t10 [*t9, *t9]
+    - &t11 [*t10, *t10]
+    - &t12 [*t11, *t11]
+    - &t13 [*t12, *t12]
+    - &t14 [*t13, *t13]
+    - &t15 [*t14, *t14]
+    - &t16 [*t15, *t15]
+    - &t17 [*t16, *t16]
+    - &t18 [*t17, *t17]
+    - &t19 [*t18, *t18]
+    - &t20 [*t19, *t19]
+    - &t21 [*t20, *t20]
+    - &t22 [*t21, *t21]
+    - &t23 [*t22, *t22]
+    - &t24 [*t23, *t23]
+    - &t25 [*t24, *t24]
+    - &t26 [*t25, *t25]
+    - &t27 [*t26, *t26]
+    - &t28 [*t27, *t27]
+    - &t29 [*t28, *t28]
+  nodes:
+    use:
+      kind: code
+      code: return 1
+      input:
+        topic: *t29
+      output: str
+  output: ${use.output}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 4]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        invalid YAML: this list holds more than 100000 YAML nodes, counting each alias as a copy of what it names; the limit for a YAML document is 100000 (YIAN_MAX_YAML_NODES; each mapping, list, and scalar is a node)
+          in "<unicode string>", line 4, column 3:
+              - &a0 [1]
+              ^
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 4]

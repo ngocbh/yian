@@ -1,0 +1,25 @@
+kind: load
+flow: |
+  id: signal
+  name: signal
+  typedefs:
+    Signal:
+      score: float
+      tags: lst(str)
+  input:
+    s: !Signal
+  output: float
+  kind: code
+  code: |
+    return inputs["s"]["score"]
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad typedefs: typedef ''Signal'' field ''tags'': unknown type constructor ''lst'' in ''lst(str)'''
+      frames:
+      - label: flow.yaml
+        range: [6, 11, 6, 19]

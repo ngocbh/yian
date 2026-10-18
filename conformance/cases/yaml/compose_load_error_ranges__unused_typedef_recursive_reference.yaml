@@ -1,0 +1,24 @@
+kind: load
+flow: |
+  id: typedefs
+  name: typedefs
+  typedefs:
+    Tree:
+      kids: list(Tree)
+  input:
+    n: !int
+  output: int
+  kind: code
+  code: |
+    return inputs["n"]
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad typedefs: typedef ''Tree'' field ''kids'': recursive type reference: ''Tree'''
+      frames:
+      - label: flow.yaml
+        range: [5, 11, 5, 21]

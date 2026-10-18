@@ -1,0 +1,25 @@
+kind: load
+flow: |
+  id: mapped-output-range
+  name: mapped_output_range
+  nodes:
+    emit:
+      kind: code
+      code: |
+        return 1
+      output: int
+  output:
+    result: ${missing.output}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          flow output from: reference ${missing.output} uses unknown namespace 'missing'
+      frames:
+      - label: flow.yaml
+        range: [10, 3, 11, 1]

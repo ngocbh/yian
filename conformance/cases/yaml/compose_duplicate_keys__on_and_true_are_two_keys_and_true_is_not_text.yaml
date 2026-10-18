@@ -1,0 +1,24 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  x-meta:
+    on: a
+    true: b
+  nodes:
+    a:
+      kind: code
+      code: return 1
+      output: int
+  output: ${a.output}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: the key `true` was read by YAML as a boolean, but names in a flow must be text. Quote it ("true") or choose another name.
+      frames:
+      - label: flow.yaml
+        range: [5, 3, 5, 7]

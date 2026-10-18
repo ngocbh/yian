@@ -4,14 +4,19 @@
  * A cassette is a JSON file of HTTP exchanges. `CassetteReplay` replays one as a `Send` (pass
  * it to `RouteModel` or `safeFetch`) and checks each request against the recording, where
  * `CASSETTE_REDACTED` stands for "present, any value". `findSecrets` flags anything shaped like a
- * credential, so a test can refuse to commit a cassette that still holds one. `ScriptedModel` is
- * a `ChatModel` that answers from a script, for tests above the HTTP layer.
+ * credential, so a test can refuse to commit a cassette that still holds one. `CassetteRecorder`
+ * writes a cassette from real traffic with every secret replaced by `CASSETTE_REDACTED`, and
+ * `recordMode` says whether a test should record. `ScriptedModel` is a `ChatModel` that answers
+ * from a script, for tests above the HTTP layer.
  */
 
+import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 
+import type { Env } from "../defaults.ts";
 import type { Send } from "../platform.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
+import { scrub, type SecretForm, secretForms } from "./auth.ts";
 import { encodeBody } from "./body.ts";
 import {
   EventStream,
@@ -24,7 +29,7 @@ import {
   type ChatModel,
   type Event,
 } from "./events.ts";
-import { isPlainObject, ReasoningPart, Response, TextPart, ToolCallPart, type Request, typeName } from "./messages.ts";
+import { isPlainObject, put, ReasoningPart, Response, TextPart, ToolCallPart, type Request, typeName } from "./messages.ts";
 
 /** The `format` every cassette holds. */
 export const CASSETTE_FORMAT = "yian.cassette.v1";
@@ -41,7 +46,7 @@ export const CREDENTIAL_HEADERS: ReadonlySet<string> = new Set([
   "set-cookie",
   "proxy-authorization",
 ]);
-/** Headers replay never compares: the runtime or the transport sets them. */
+/** Headers a recorder never saves and replay never compares: the runtime or the transport sets them. */
 export const IGNORED_HEADERS: ReadonlySet<string> = new Set([
   "user-agent",
   "content-length",
@@ -59,6 +64,10 @@ const REQUEST_KEYS = ["method", "url", "headers", "json"];
 const RESPONSE_KEYS = ["status", "headers", "chunks", "json", "text"];
 const BODY_KEYS = ["chunks", "json", "text"];
 const MAX_DIFFS = 10;
+// Response headers a recorder saves: the ones the transport and the retry rules read.
+const SAVED_RESPONSE_HEADERS: ReadonlySet<string> = new Set(["content-type", "retry-after", "retry-after-ms", "x-should-retry"]);
+// A chunk ends after a blank line, so a recorded SSE body replays one event per chunk.
+const CHUNK = /.*?(?:\r\n\r\n|\n\n|\r\r)|.+/gs;
 // Statuses whose response can't have a body: the Response constructor throws for one.
 const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
@@ -346,6 +355,12 @@ function requestDiffs(recorded: CassetteRequest, request: ReceivedRequest): stri
   return diffs;
 }
 
+/** Return the request `input` and `init` describe, its body read as text. */
+async function receive(input: string | URL, init: RequestInit): Promise<ReceivedRequest> {
+  const body = init.body == null ? null : await new globalThis.Response(init.body).text();
+  return { method: (init.method ?? "GET").toUpperCase(), url: String(input), headers: new Headers(init.headers), body };
+}
+
 /** Build the response a recorded interaction describes, its body read one chunk per pull. */
 function replayResponse(recorded: CassetteResponse): globalThis.Response {
   let texts: string[];
@@ -396,8 +411,7 @@ export class CassetteReplay {
 
   /** Check a request against the next interaction and return its response. */
   readonly send: Send = async (input, init) => {
-    const body = init.body == null ? null : await new globalThis.Response(init.body).text();
-    const request = { method: (init.method ?? "GET").toUpperCase(), url: String(input), headers: new Headers(init.headers), body };
+    const request = await receive(input, init);
     this.requests.push(request);
     const number = this.requests.length;
     const total = this.#interactions.length;
@@ -422,6 +436,178 @@ export class CassetteReplay {
     const unused = total - this.requests.length;
     if (unused > 0) throw new Error(`${unused} of ${total} interaction(s) were not used`);
   }
+}
+
+/** One exchange a recorder saw: the request, the response's status and headers, and the body chunks read so far. */
+interface Exchange {
+  request: ReceivedRequest;
+  status: number;
+  headers: Headers;
+  chunks: Uint8Array[];
+}
+
+/**
+ * Return the base64 forms of `secret`: for each of the three byte alignments, the characters of
+ * its standard and URL-safe encoding that only the secret's bits decide, when there are 8 or
+ * more. Base64 inside a larger blob can't be replaced in place, so these are only scanned for.
+ */
+function base64Forms(secret: string): SecretForm[] {
+  const bytes = Buffer.from(secret, "utf8");
+  const forms: SecretForm[] = [];
+  for (let k = 0; k < 3; k++) {
+    const encoded = Buffer.concat([Buffer.alloc(k), bytes]).toString("base64");
+    const fragment = encoded.slice(Math.ceil((8 * k) / 6), Math.floor((8 * (k + bytes.length)) / 6));
+    if (fragment.length < 8) continue;
+    forms.push({ form: "base64", text: fragment });
+    forms.push({ form: "URL-safe base64", text: fragment.replaceAll("+", "-").replaceAll("/", "_") });
+  }
+  return forms;
+}
+
+/** Yield every string in `value` with its place; an object's keys come before its values. */
+function* strings(value: unknown, where: string): Generator<[string, string]> {
+  if (typeof value === "string") {
+    yield [where, value];
+  } else if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index++) yield* strings(value[index], `${where}[${index}]`);
+  } else if (isPlainObject(value)) {
+    // The key is never part of a place: it may be what is being reported.
+    for (const key of Object.keys(value)) yield [`${where} (a key)`, key];
+    for (const [key, item] of Object.entries(value)) yield* strings(item, `${where}.${key}`);
+  }
+}
+
+/**
+ * Pass requests to `inner` and keep a redacted copy of each exchange.
+ *
+ * The response body is teed as the caller reads it, so a stream closed early still records what
+ * was read; the runtime has already undone any content-encoding. Everything else happens in
+ * `cassette`.
+ *
+ * Replay treats `CASSETTE_REDACTED` as "any value" only when it is a whole query value, header
+ * value or JSON value. A secret inside a larger value, such as a URL path segment or
+ * `pre-<redacted>`, is still redacted but must match literally, so that cassette will not replay
+ * with a different key.
+ */
+export class CassetteRecorder {
+  readonly #inner: Send;
+  readonly #secrets: Iterable<string> | (() => Iterable<string>);
+  readonly #exchanges: Exchange[] = [];
+
+  /**
+   * @param inner The `Send` that really sends requests.
+   * @param options `secrets` are the values to redact, e.g. the API key in use, or a function
+   *   returning them, called when `cassette` runs (so `auth.credentials()` can be passed lazily).
+   */
+  constructor(inner: Send, options: { secrets: Iterable<string> | (() => Iterable<string>) }) {
+    this.#inner = inner;
+    this.#secrets = options.secrets;
+  }
+
+  /** Send a request through `inner` and return its response with the body teed. */
+  readonly send: Send = async (input, init) => {
+    const request = await receive(input, init);
+    const response = await this.#inner(input, init);
+    const exchange = { request, status: response.status, headers: response.headers, chunks: [] as Uint8Array[] };
+    this.#exchanges.push(exchange);
+    const reader = response.body?.getReader();
+    const body =
+      reader &&
+      new ReadableStream<Uint8Array>(
+        {
+          async pull(controller) {
+            const { done, value } = await reader.read();
+            if (done) return controller.close();
+            exchange.chunks.push(value);
+            controller.enqueue(value);
+          },
+          cancel: (reason) => reader.cancel(reason),
+        },
+        // No read-ahead, so only what the caller reads is recorded.
+        { highWaterMark: 0 },
+      );
+    return new globalThis.Response(body ?? null, { status: response.status, statusText: response.statusText, headers: response.headers });
+  };
+
+  /**
+   * Return the exchanges so far as a redacted `recorded` cassette.
+   *
+   * Each secret is replaced by `CASSETTE_REDACTED` in each form `secretForms` lists, in the URL,
+   * header values, JSON keys and strings and the response text. Request headers are saved by
+   * lowercase name without `IGNORED_HEADERS`, credential headers as `CASSETTE_REDACTED`; the
+   * response keeps `content-type`, `retry-after`, `retry-after-ms` and `x-should-retry`. The
+   * response text is decoded as UTF-8 with replacement and redacted whole, so a secret split
+   * across reads is caught, then saved one chunk per SSE event.
+   *
+   * @param options `description` says what the cassette exercises.
+   * @returns A `yian.cassette.v1` cassette with source `recorded`.
+   * @throws {Error} A saved string still holds a secret's form, its base64 forms included, or
+   *   something `findSecrets` flags: `the cassette still holds a credential (<form>) in
+   *   <where>`, naming the form or kind and the place, never the value.
+   * @throws {JSONDecodeError} A request body is not JSON.
+   */
+  cassette(options: { description: string }): Cassette {
+    const secrets = [...(typeof this.#secrets === "function" ? this.#secrets() : this.#secrets)].filter(Boolean);
+    const redact = (text: string) => scrub(text, secrets, CASSETTE_REDACTED);
+    const redactJson = (value: JsonValue): JsonValue => {
+      if (typeof value === "string") return redact(value);
+      if (Array.isArray(value)) return value.map(redactJson);
+      if (!isPlainObject(value)) return value;
+      const out: JsonObject = {};
+      for (const [key, item] of Object.entries(value as JsonObject)) put(out, redact(key), redactJson(item));
+      return out;
+    };
+    const saveHeaders = (headers: Headers, keep: (name: string) => boolean) => {
+      const saved: Record<string, string> = {};
+      for (const [name, raw] of headers) {
+        if (!keep(name)) continue;
+        const value = CREDENTIAL_HEADERS.has(name) ? CASSETTE_REDACTED : redact(raw);
+        // A repeated header keeps every value, joined as HTTP allows.
+        saved[name] = Object.hasOwn(saved, name) ? `${saved[name]}, ${value}` : value;
+      }
+      return saved;
+    };
+    const interactions = this.#exchanges.map(({ request, status, headers, chunks }): CassetteInteraction => {
+      const saved: CassetteRequest = {
+        method: request.method,
+        url: redact(request.url),
+        headers: saveHeaders(request.headers, (name) => !IGNORED_HEADERS.has(name)),
+      };
+      if (request.body) saved.json = redactJson(parseJson(request.body, "plain"));
+      const decoder = new TextDecoder();
+      const text = redact(chunks.map((chunk) => decoder.decode(chunk, { stream: true })).join("") + decoder.decode());
+      const response = { status, headers: saveHeaders(headers, (name) => SAVED_RESPONSE_HEADERS.has(name)), chunks: text.match(CHUNK) ?? [] };
+      return { request: saved, response };
+    });
+    const cassette: Cassette = { format: CASSETTE_FORMAT, source: "recorded", description: options.description, interactions };
+    scanCassette(cassette, secrets);
+    return cassette;
+  }
+}
+
+/** Throw if a string `cassette` saves still holds a form of a secret or a `findSecrets` shape. */
+function scanCassette(cassette: Cassette, secrets: readonly string[]): void {
+  const forms = secrets.flatMap((secret) => [...secretForms(secret), ...base64Forms(secret)]);
+  for (const [where, text] of strings(cassette.interactions, "interactions")) {
+    const found = forms.find((form) =>
+      form.ignoreCase ? text.toLowerCase().includes(form.text.toLowerCase()) : text.includes(form.text),
+    );
+    const kind = found?.form ?? findSecrets(text)[0];
+    if (kind !== undefined) throw new Error(`the cassette still holds a credential (${kind}) in ${where}`);
+  }
+}
+
+/**
+ * Return whether a test should record its cassettes rather than replay them: when `RECORD` is
+ * `1`.
+ *
+ * @param env The environment; test files pass `processEnv`.
+ * @throws {Error} `RECORD=1` while `CI` is set (non-empty): CI must never make live calls.
+ */
+export function recordMode(env: Env): boolean {
+  if (env("RECORD") !== "1") return false;
+  if (env("CI")) throw new Error("RECORD=1 is refused when CI is set: CI only replays cassettes");
+  return true;
 }
 
 /** One scripted reply: a `Response`, the events to stream with errors at their positions, or an error. */

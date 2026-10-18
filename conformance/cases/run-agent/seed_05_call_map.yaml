@@ -172,8 +172,8 @@ host:
             format: yian.message.v1
             role: assistant
             parts: [{type: text, text: "Both closed near 102 [1][2]."}]
-# The output compares ints and floats by value, so it is shared; the trace, which keeps
-# kinds, is only in `python_expect`.
+# The output holds no float, so it is shared; the trace, which keeps kinds, is only in
+# `python_expect`.
 expect:
   output:
     status: succeeded
@@ -215,7 +215,8 @@ python_expect:
           - {topic: BETA, as_of: "2026-01-15"}
         prune_ids: []
     # The MAP's generated fan-out START (value `{}`) and fan-in END, which commits the list
-    # to the MAP, wrap the per-item children; `docs/` names neither, nor gives their ids.
+    # to the MAP, wrap the per-item children; `docs/` mentions the fan-out/fan-in boundaries but
+    # gives neither their ids nor their values.
     - [node_started, research_each/__start__]
     - [node_succeeded, research_each/__start__, {value: {}}]
     - [node_started, "research_each#0/__start__"]

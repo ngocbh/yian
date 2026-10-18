@@ -104,8 +104,8 @@ host:
             format: yian.message.v1
             role: assistant
             parts: [{type: text, text: "ACME closed near 102 [1][2]."}]
-# The output compares ints and floats by value, so it is shared; the trace, which keeps
-# kinds, is only in `python_expect`.
+# The output holds no float, so it is shared; the trace, which keeps kinds, is only in
+# `python_expect`.
 expect:
   output:
     status: succeeded

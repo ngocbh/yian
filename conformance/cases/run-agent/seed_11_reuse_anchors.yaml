@@ -53,7 +53,8 @@ flow: |
   output: ${judge.output}
 # The merged `llm_config` names `anthropic` with no model, and run start needs one, so
 # `run.llm_config` gives it; the node's own provider and `anthropic` block win over that layer.
-# The key makes the recorded connection source `environment`, which the trace pins.
+# With no saved login, Python records a non-OpenAI provider's connection as from the environment
+# with no endpoint, key or no key; the key is set so a real run could authenticate.
 env: {ANTHROPIC_API_KEY: "<key:1>"}
 inputs: {topic: ACME}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: anthropic, model: claude-opus-4-8}}
@@ -79,8 +80,9 @@ host:
             parts: [{type: text, text: ACME grows while rivals gain.}]
 expect:
   output: {status: succeeded, output: ACME grows while rivals gain.}
-  # An Anthropic key from the environment records no endpoint (null), unlike OpenAI's, whose
-  # endpoint is its API URL; `docs/` doesn't give the connection's fields.
+  # For a provider other than OpenAI, Python records `source: environment` and `endpoint: null`
+  # (src/yian/llm_clients/connection.py); `docs/` doesn't give these fields, and TS has to
+  # record the same.
   trace:
     - - run_started
       - null

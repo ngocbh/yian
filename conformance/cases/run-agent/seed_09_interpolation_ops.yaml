@@ -37,8 +37,9 @@ flow: |
 # The flow names no provider or model, so `run.llm_config` gives both; run start resolves
 # them, and the key makes the recorded connection source `environment`, which the trace pins.
 env: {OPENAI_API_KEY: "<key:1>"}
-# `as_of` is given, so the `|` chain stops there and the prompt doesn't read the clock.
-inputs: {topic: ACME, as_of: "2026-01-15"}
+# `as_of` is omitted and `fallback_date` given, so the `|` chain falls through to it and the
+# prompt doesn't read the clock.
+inputs: {topic: ACME, fallback_date: "2026-01-15"}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
 host:
   models:
@@ -76,7 +77,7 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {topic: ACME, as_of: "2026-01-15"}
+      - inputs: {topic: ACME, fallback_date: "2026-01-15"}
         learnable: false
         num_workers: 0
         effective_llm_by_static_path:
@@ -85,8 +86,8 @@ expect:
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
     - [node_started, __start__]
-    # The omitted Optional `fallback_date` has no default, so it is absent here.
-    - [node_succeeded, __start__, {value: {topic: ACME, as_of: "2026-01-15"}}]
+    # The omitted Optional `as_of` has no default, so it is absent here.
+    - [node_succeeded, __start__, {value: {topic: ACME, fallback_date: "2026-01-15"}}]
     - [node_started, brief]
     - [node_succeeded, brief, {value: ACME held steady into mid-January.}]
     - [node_started, __end__]

@@ -30,7 +30,10 @@ export const MERGE_TAG = "tag:yaml.org,2002:merge";
 export const SEQ_TAG = "tag:yaml.org,2002:seq";
 export const MAP_TAG = "tag:yaml.org,2002:map";
 
-/** The eemeli/yaml options the flow loader parses with: every scalar stays text for the table below. */
+/**
+ * The eemeli/yaml options the flow loader parses with: every scalar stays text for the
+ * table below.
+ */
 export const FLOW_OPTIONS = {
   version: "1.2",
   schema: "failsafe",
@@ -46,16 +49,26 @@ export type ScalarValue = string | bigint | number | boolean | null;
 // where Python's `$` would match before it.
 const BOOL = /^(?:true|True|TRUE|false|False|FALSE)$/;
 const INT = /^(?:[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)$/;
-const FLOAT =
-  /^(?:[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$/;
+const FLOAT = new RegExp(
+  "^(?:[-+]?(?:\\.[0-9]+|[0-9]+(?:\\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?" +
+    "|[-+]?\\.(?:inf|Inf|INF)" +
+    "|\\.(?:nan|NaN|NAN))$",
+);
 const NULL = /^(?:~|null|Null|NULL|)$/;
 const MERGE = /^<<$/;
-// PyYAML's implicit resolver pattern for unquoted timestamps.
-const TIMESTAMP =
-  /^(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}(?:[Tt]|[ \t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]*)?(?:[ \t]*(?:Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)$/;
-// PyYAML's timestamp constructor pattern; the group captures the time, if any.
-const TIMESTAMP_PARTS =
-  /^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}((?:[Tt]|[ \t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]*)?(?:[ \t]*(?:Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)?$/;
+// PyYAML's timestamp patterns share the time and offset after the date.
+const TIME =
+  "(?:[Tt]|[ \\t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]*)?" +
+  "(?:[ \\t]*(?:Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?";
+// PyYAML's implicit resolver pattern for unquoted timestamps; a date alone needs a 2-digit
+// month and day.
+const TIMESTAMP = new RegExp(
+  "^(?:[0-9]{4}-[0-9]{2}-[0-9]{2}" +
+    "|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}" + TIME + ")$",
+);
+// PyYAML's timestamp constructor pattern, where the month and day take 1 or 2 digits; the
+// group captures the time, if any.
+const TIMESTAMP_PARTS = new RegExp("^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}(" + TIME + ")?$");
 
 // Each pattern's first characters are exactly its PyYAML first-character bucket, so this
 // ordered list is the same table; int precedes float because the float pattern also
@@ -69,7 +82,10 @@ const IMPLICIT: readonly (readonly [RegExp, string])[] = [
   [TIMESTAMP, TIMESTAMP_TAG],
 ];
 
-/** A YAML node the flow loader refuses; `node` is the node at fault, or `null` when the caller knows it. */
+/**
+ * A YAML node the flow loader refuses; `node` is the node at fault, or `null` when the
+ * caller knows it.
+ */
 export class FlowLoaderError extends RangeError {
   override name = "FlowLoaderError";
   readonly node: Node | null;
@@ -80,7 +96,10 @@ export class FlowLoaderError extends RangeError {
   }
 }
 
-/** A plain scalar whose resolved tag can't build its text; quoting keeps it as text. `reason` omits the text. */
+/**
+ * A plain scalar whose resolved tag can't build its text; quoting keeps it as text.
+ * `reason` omits the text.
+ */
 export class ScalarValueError extends FlowLoaderError {
   override name = "ScalarValueError";
   readonly reason: string;
@@ -139,7 +158,8 @@ export function constructScalar(tag: string, text: string, plain: boolean): Scal
       if (lowered === ".nan") throw refuse("NaN is not a yian value");
       const value = Number(text);
       if (!Number.isFinite(value)) throw refuse("number is too large for a float");
-      return value === 0 ? 0 : value; // `-0.0` reads as 0
+      // yian has no negative zero, so `-0.0` and `-1e-400` read as 0.
+      return value === 0 ? 0 : value;
     }
     case TIMESTAMP_TAG: {
       const match = TIMESTAMP_PARTS.exec(text);

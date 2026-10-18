@@ -3,7 +3,7 @@
  * `tests/compose/test_source_scalars.py`.
  *
  * TS-era differences: dates stay text, checked with yian's date grammar; `.nan` and an
- * overflowing float are refused; ints are `bigint` of any length, so an int of any length
+ * overflowing float are refused; ints are `bigint`, so 'an int of any length reads exactly'
  * replaces Python's digit-limit tests. The `SourceDocument` rows come with `document.ts`.
  * `test_pyyaml_globals_are_untouched` has no counterpart, since eemeli/yaml has no global
  * tables.
@@ -74,7 +74,10 @@ const ROWS: [string, ScalarValue][] = [
 ];
 
 /** Return the error `run` throws, failing unless it is an instance of `kind`. */
-function thrown<T extends Error>(kind: abstract new (...args: never[]) => T, run: () => unknown): T {
+function thrown<T extends Error>(
+  kind: abstract new (...args: never[]) => T,
+  run: () => unknown,
+): T {
   try {
     run();
   } catch (error) {
@@ -93,23 +96,23 @@ describe("readPlainScalar", () => {
     ["NONE", "NONE"],
     ["tRUE", "tRUE"],
     ["<<", "<<"],
-  ])("readPlainScalar follows the table: %p", (text, expected) => {
+  ])("follows the table: %p", (text, expected) => {
     expect(readPlainScalar(text)).toBe(expected);
   });
 
-  test.each([".nan", ".NaN", ".NAN"])("readPlainScalar refuses NaN: %p", (text) => {
+  test.each([".nan", ".NaN", ".NAN"])("refuses NaN: %p", (text) => {
     const error = thrown(SourceSyntaxError, () => readPlainScalar(text));
     expect(error.message).toBe("NaN is not a yian value");
     expect(error.range).toBeNull();
   });
 
-  test.each(["1e400", "-1e400"])("readPlainScalar refuses an overflowing float: %p", (text) => {
+  test.each(["1e400", "-1e400"])("refuses an overflowing float: %p", (text) => {
     const error = thrown(SourceSyntaxError, () => readPlainScalar(text));
     expect(error.message).toBe("number is too large for a float");
   });
 
   test.each(["a: b", "[1]", "{a: 1}", "- x", "a #b", "&a", "*a", "!x", "|", "hello world", "1\n"])(
-    "readPlainScalar keeps YAML structure as text: %p",
+    "keeps YAML structure as text: %p",
     (text) => {
       expect(readPlainScalar(text)).toBe(text);
     },
@@ -119,7 +122,7 @@ describe("readPlainScalar", () => {
     ["2026-13-45", "not a valid date: month must be in 1..12"],
     // YAML's spaced offset is not in yian's datetime grammar.
     ["2026-01-01 10:00:00 +05:00", DATETIME_MSG],
-  ])("readPlainScalar rejects an unbuildable form: %p", (text, message) => {
+  ])("rejects an unbuildable form: %p", (text, message) => {
     // The inline-call error adds the quoting fix and must not echo the value.
     expect(thrown(SourceSyntaxError, () => readPlainScalar(text)).message).toBe(message);
   });
@@ -164,7 +167,7 @@ describe("constructScalar", () => {
     [FLOAT_TAG, "1", true, 1],
     [STR_TAG, "1", false, "1"],
     [NULL_TAG, "x", true, null],
-  ])("constructScalar under an explicit tag reads a core form: %p %p", (tag, text, plain, expected) => {
+  ])("under an explicit tag reads a core form: %p %p", (tag, text, plain, expected) => {
     expect(constructScalar(tag, text, plain)).toBe(expected);
   });
 
@@ -174,7 +177,7 @@ describe("constructScalar", () => {
     [BOOL_TAG, "yes"],
     [BOOL_TAG, "true\n"],
     [FLOAT_TAG, ".inf\n"],
-  ])("constructScalar under an explicit tag rejects a non-core form: %p %p", (tag, found) => {
+  ])("under an explicit tag rejects a non-core form: %p %p", (tag, found) => {
     const error = thrown(FlowLoaderError, () => constructScalar(tag, found, true));
     expect(error).not.toBeInstanceOf(ScalarValueError);
     expect(error.message).toContain(reprText(found));

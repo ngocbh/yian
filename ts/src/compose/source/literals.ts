@@ -24,7 +24,6 @@ import {
  *   impossible date; the message is the reason, without the text or the quoting fix.
  */
 export function readPlainScalar(text: string): ScalarValue {
-  if (text.includes("\n")) return text; // one line only
   const tag = resolvePlain(text);
   if (tag === MERGE_TAG) return text; // `<<` merges only as a mapping key; as a value it is text
   try {

@@ -1,0 +1,13 @@
+kind: value
+# TS refuses text holding a lone surrogate at any depth; Python yian accepts it here.
+rules: [numbers]
+type: list(str)
+value: [a, "\uD800"]
+expect:
+  raises:
+    class: TypeCheckError
+    message: text holding a lone surrogate is not a yian value
+    path: [1]
+python_expect:
+  value: [a, "\uD800"]
+  kind: list[str]

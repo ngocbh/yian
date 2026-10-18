@@ -1,0 +1,14 @@
+kind: value
+rules: [messages]
+type: datetime
+value: 20200101T000000
+expect:
+  raises:
+    class: TypeCheckError
+    message: '"20200101T000000" does not match declared type datetime: datetime must look like 2026-05-21T14:30[:00][Z|+07:00]'
+    path: []
+python_expect:
+  raises:
+    class: TypeCheckError
+    message: '''20200101T000000'' does not match declared type datetime: datetime must look like 2026-05-21T14:30[:00][Z|+07:00]'
+    path: []

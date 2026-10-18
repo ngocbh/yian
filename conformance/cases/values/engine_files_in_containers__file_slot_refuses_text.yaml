@@ -1,0 +1,14 @@
+kind: value
+rules: [messages]
+type: file
+value: f
+expect:
+  raises:
+    class: TypeCheckError
+    message: '"f" does not match declared type file'
+    path: []
+python_expect:
+  raises:
+    class: TypeCheckError
+    message: '''f'' does not match declared type file'
+    path: []

@@ -1,0 +1,8 @@
+kind: value
+type: date
+value: 5
+expect:
+  raises:
+    class: TypeCheckError
+    message: 5 does not match declared type date
+    path: []

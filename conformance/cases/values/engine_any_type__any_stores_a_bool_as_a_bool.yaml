@@ -1,0 +1,6 @@
+kind: value
+type: Any
+value: true
+expect:
+  value: true
+  kind: bool

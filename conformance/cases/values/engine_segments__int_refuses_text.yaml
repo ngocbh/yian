@@ -1,0 +1,14 @@
+kind: value
+rules: [messages]
+type: int
+value: not-an-int
+expect:
+  raises:
+    class: TypeCheckError
+    message: '"not-an-int" does not match declared type int'
+    path: []
+python_expect:
+  raises:
+    class: TypeCheckError
+    message: '''not-an-int'' does not match declared type int'
+    path: []

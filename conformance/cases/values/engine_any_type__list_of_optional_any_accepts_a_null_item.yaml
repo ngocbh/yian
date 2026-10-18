@@ -1,0 +1,6 @@
+kind: value
+type: list(Optional(Any))
+value: [1, null]
+expect:
+  value: [1, null]
+  kind: list[Any]

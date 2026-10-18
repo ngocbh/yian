@@ -1,0 +1,8 @@
+kind: value
+type: list(Any)
+value: [1, null]
+expect:
+  raises:
+    class: TypeCheckError
+    message: None does not match declared type Any
+    path: [1]

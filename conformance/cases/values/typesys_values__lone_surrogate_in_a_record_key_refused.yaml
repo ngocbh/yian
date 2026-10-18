@@ -1,0 +1,17 @@
+kind: value
+# A record key holding a lone surrogate is refused at its record's path; Python yian accepts it.
+rules: [numbers]
+type: object
+value:
+  ok: 1
+  "\uDC00": 2
+expect:
+  raises:
+    class: TypeCheckError
+    message: text holding a lone surrogate is not a yian value
+    path: []
+python_expect:
+  value:
+    ok: 1
+    "\uDC00": 2
+  kind: object

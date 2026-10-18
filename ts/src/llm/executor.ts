@@ -4,9 +4,9 @@
  * becomes a body and the reply's frames become events) and the transport, making one
  * attempt per call. `callWithRetries` is the one retry loop above it.
  *
- * A status error is scrubbed of the credentials the route sent, in its message and its
- * `stack`; the transport scrubs its own errors, and the AGENT scrubs every error a call
- * raises.
+ * A status error, and a `ProviderError` from parsing, is scrubbed of the credentials the
+ * route sent, in its message and its `stack`; the transport scrubs its own errors, and the
+ * AGENT scrubs every error a call raises.
  */
 
 import { current } from "../defaults.ts";
@@ -85,7 +85,8 @@ export class RouteModel implements ChatModel {
    * body with `content-type` and `accept` of `application/json`, overridden by the route's
    * headers, then by the auth headers, case-insensitively. A non-2xx reply throws a
    * `ProviderError` built from at most 64 KiB of its body; a 2xx reply's frames go to the
-   * protocol, and a `ProviderError` from parsing that names no provider gets the route's.
+   * protocol, and a `ProviderError` from parsing that names no provider gets the route's;
+   * the status error and the parse error are both scrubbed of the route's credentials.
    * Closing the stream aborts the request.
    *
    * Errors: a `TypeError` for a body that isn't JSON or an invalid header value, before
@@ -129,7 +130,8 @@ export class RouteModel implements ChatModel {
     } catch (error) {
       // Protocol parsers don't know the route.
       if (error instanceof ProviderError && error.provider === null) error.provider = route.provider;
-      throw error;
+      // Provider text, SSE error events included, may echo a credential the protocol never holds.
+      throw error instanceof ProviderError ? scrubbed(error, route.auth.credentials()) : error;
     } finally {
       // `body.return()` releases nothing before the body's first read.
       exchange.abort();

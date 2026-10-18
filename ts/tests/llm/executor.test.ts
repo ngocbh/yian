@@ -564,6 +564,35 @@ describe("RouteModel reply", () => {
     expect(error.provider).toBe("other");
   });
 
+  test("a parse error echoing the key is rebuilt without it, keeping its fields", async () => {
+    const { send } = fake(sseReply("a"));
+    const protocol: SseProtocol = {
+      ...sse(),
+      async *parse() {
+        throw new ProviderError("server", `openai stream failed (server): bad key ${KEY}`, { retryable: false });
+      },
+    };
+    const error = (await rejection(drain(model(send, protocol, { auth: new BearerAuth(KEY) }).stream(REQUEST)))) as ProviderError;
+    expect(error).toBeInstanceOf(ProviderError);
+    expectScrubbed(error, KEY);
+    expect(error.message).toBe("openai stream failed (server): bad key [REDACTED]");
+    expect(error.kind).toBe("server");
+    expect(error.retryable).toBe(false);
+    expect(error.provider).toBe("openai");
+  });
+
+  test("a parse error without a credential is rethrown as the same object", async () => {
+    const { send } = fake(sseReply("a"));
+    const failure = new ProviderError("server", "openai stream failed (server): overloaded");
+    const protocol: SseProtocol = {
+      ...sse(),
+      async *parse() {
+        throw failure;
+      },
+    };
+    expect(await rejection(drain(model(send, protocol, { auth: new BearerAuth(KEY) }).stream(REQUEST)))).toBe(failure);
+  });
+
   test("an adapter defect propagates unchanged", async () => {
     const { send, sent } = fake(sseReply("a"));
     const defect = new TypeError("adapter bug");

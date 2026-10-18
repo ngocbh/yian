@@ -314,10 +314,12 @@ const ENV_READ: Lint = {
   name: "only defaults.ts reads the process environment",
   files: (path) => path !== "defaults.ts",
   // `Bun.env` counts here too, since platform.ts may reference Bun but not read the environment.
-  // A computed key on `process` counts whatever it names, as it hides which property it reads.
+  // A computed key on `process` counts whatever it names, as it hides which property it reads,
+  // and a property named `process` (`child.process.env`) counts too.
   // Blind spots, all deliberate dodges: an alias (`const p = process; p.env`,
-  // `import * as p from "node:process"`), `globalThis["process"]`,
-  // `(await import("node:process")).env`.
+  // `import * as p from "node:process"`, `export * from "node:process"`),
+  // `globalThis["process"]`, `(await import("node:process")).env`, and a destructure nesting
+  // braces before `env` (`const { a: { b }, env } = process`).
   find: (file) => {
     const blanked = blank(file.text);
     const imports = importStatements(file.text)
@@ -325,8 +327,8 @@ const ENV_READ: Lint = {
       .filter(({ start, end }) => /(?<![\w$])env(?![\w$])/.test(blanked.slice(start, end)))
       .map(({ start, end, line }) => ({ line, text: file.text.slice(start, end).replace(/\s+/g, " ") }));
     const reads = inCode(
-      /(?<![\w$])(?:(?:process\s*\??\.|import\s*\.\s*meta\s*\.|Deno\s*\.|Bun\s*\.)\s*env(?![\w$])|process\s*\[)|\{[^{}]*(?<![\w$.])env(?![\w$])[^{}]*\}\s*=\s*process(?![\w$])/g,
-    )(file);
+      /(?<![\w$])(?:(?:process\s*\??\.|import\s*\.\s*meta\s*\.|Deno\s*\.|Bun\s*\.)\s*env(?![\w$])|process\s*\[)|\{[^{}]*(?<![\w$.])env(?![\w$])[^{}]*\}\s*=\s*(?:globalThis\s*\??\.\s*)?process(?![\w$])/g,
+    )(file).map((hit) => ({ ...hit, text: hit.text.replace(/\s+/g, " ") }));
     return [...reads, ...imports].sort((a, b) => a.line - b.line);
   },
   fix:
@@ -768,6 +770,8 @@ describe("lint snippets", () => {
       'import { argv, env as vars } from "process";',
       'export { env } from "node:process";',
       'import {\n  env,\n} from "node:process";',
+      "const { env: vars } = globalThis.process;",
+      "const {\n  argv,\n  env,\n} = process;",
     ];
     expect(hits(ENV_READ, forms.join("\n"))).toEqual([
       "runtime/log.ts:1: process.env",
@@ -782,6 +786,8 @@ describe("lint snippets", () => {
       'runtime/log.ts:10: import { argv, env as vars } from "process"',
       'runtime/log.ts:11: export { env } from "node:process"',
       'runtime/log.ts:14: import { env, } from "node:process"',
+      "runtime/log.ts:15: { env: vars } = globalThis.process",
+      "runtime/log.ts:16: { argv, env, } = process",
     ]);
     expect(hits(ENV_READ, "const a = process.env.YIAN_X;", "platform.ts")).toEqual(["platform.ts:1: process.env"]);
   });

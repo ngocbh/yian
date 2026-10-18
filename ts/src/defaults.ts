@@ -554,7 +554,8 @@ export function checkRecorded(recorded: Readonly<Record<string, bigint | number>
   for (const each of ENTRIES) {
     const now = here[keyOf(each.name)];
     const then = Object.hasOwn(recorded, each.name) ? recorded[each.name]! : each.default;
-    // Exact for every value `read` can produce: its bounds are safe integers and rounding is monotonic.
+    // Exact for any safe integer, which covers every value `read` accepts; a larger recorded
+    // value rounds to at least 2^53 in magnitude, outside every range, so it is still invalid.
     const value = Number(then);
     if (now === value) continue;
     if (value !== each.default && !inRange(each, value)) {

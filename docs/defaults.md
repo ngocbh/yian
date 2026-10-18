@@ -20,8 +20,8 @@ a frozen `Defaults` with one lower-case attribute per entry
 (`current().max_total_nodes`), and `ENTRIES` lists each entry with its range.
 
 Changed (TS yian): `current()` comes from `ts/src/defaults.ts` and has one camelCase key
-per entry (`current().maxTotalNodes`). It reads an injected environment (`Env`), the
-process environment by default; `read(env)` returns the values a given one sets.
+per entry (`current().maxTotalNodes`). It reads the process environment (`processEnv`);
+`read(env)` takes any `Env` accessor and returns the values it sets.
 
 ## Setting a value
 
@@ -55,6 +55,7 @@ Changed (TS yian): the message quotes the value as JSON text
 (`YIAN_MAX_VALUE_NESTING="abc" is not an integer; use an integer from 1 to 100, or unset it`),
 and a long value is cut by code points. An entry with no maximum accepts values up to
 9,007,199,254,740,991 (JavaScript's largest safe integer), not any value of up to 18 digits.
+`DefaultsError` and `DefaultsMismatchError` are `RangeError`s.
 
 ## Runs record the values they started with
 

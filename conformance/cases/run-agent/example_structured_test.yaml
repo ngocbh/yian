@@ -1,6 +1,7 @@
 # From examples/structured-test.yaml.
 # Record, int, Literal and list AGENT outputs each read their JSON carrier; the flow bundles all
 # four.
+# The header names Ollama, but the flow sets no provider; the run gives OpenAI, as elsewhere.
 kind: run
 flow: |
   # structured-test — exercise structured AGENT output across shapes on a local Ollama model.

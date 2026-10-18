@@ -22,6 +22,7 @@ import {
   type Definition,
   SourceSyntaxError,
 } from "../../src/compose/source/common.ts";
+import { SourceCursor } from "../../src/compose/source/cursor.ts";
 import {
   type NonTextKey,
   SourceDocument,
@@ -58,6 +59,17 @@ test("a document has private retained slots", () => {
   expect(() => {
     (document as { label: string }).label = "other.yaml";
   }).toThrow(TypeError);
+});
+
+test("root is a cursor at the root definition", () => {
+  const document = SourceDocument.parse("a: 1\n");
+  const root = document.root;
+
+  expect(root).toBeInstanceOf(SourceCursor);
+  expect(root.document).toBe(document);
+  expect(root._definition).toBe(0);
+  expect(root.path).toEqual([]);
+  expect(root.value).toEqual({ a: 1n });
 });
 
 /** Return the definition at `path` (mapping keys and list indexes) in `text`'s document. */
@@ -699,9 +711,11 @@ describe("merges", () => {
   });
 
   test("a mapping that merges itself keeps its own pairs", () => {
-    expect(SourceDocument.parse("root: &root\n  <<: *root\n  value: local\n")._value).toEqual({
-      root: { value: "local" },
-    });
+    const document = SourceDocument.parse("root: &root\n  <<: *root\n  value: local\n");
+    const occurrences = document.root.child("root").mappingOccurrences();
+
+    expect(document._value).toEqual({ root: { value: "local" } });
+    expect(occurrences.map((cursor) => cursor.value)).toEqual(["local", "local"]);
   });
 
   test("a local tag on a merge source is an error over the source", () => {

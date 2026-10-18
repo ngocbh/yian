@@ -30,11 +30,13 @@ import {
   freezeValue,
   type MapArc,
   type MapOccurrence,
+  type OccurrencePath,
   type ScalarDef,
   type ScalarStyle,
   setRecordKey,
   SourceSyntaxError,
 } from "./common.ts";
+import { SourceCursor } from "./cursor.ts";
 import {
   collectionTagError,
   isMergeKey,
@@ -187,6 +189,22 @@ export class SourceDocument {
     this._rootDefinition = 0;
     this._value = definitions[this._rootDefinition]!.value;
     Object.freeze(this);
+  }
+
+  /** A cursor at the document root. */
+  get root(): SourceCursor {
+    return SourceCursor._physical(this, this._rootDefinition);
+  }
+
+  /**
+   * @internal Replay an occurrence path from the root, one step at a time.
+   *
+   * @throws SourceAccessError when a step doesn't fit the document.
+   */
+  _resolveOccurrence(path: OccurrencePath): SourceCursor {
+    let cursor = this.root;
+    for (const step of path) cursor = cursor._descendOccurrenceStep(step);
+    return cursor;
   }
 
   /**
@@ -517,8 +535,10 @@ function build(
         throw new SourceSyntaxError(`expected a mapping node, but found ${nodeId(node)}`, at);
       }
       // Flattened first, so every merge error comes before any pair is interned.
-      const { sequence: pairSequence, summary } = arcRope(flatten(node));
-      const { order, last } = summary;
+      const {
+        sequence: pairSequence,
+        summary: { order, last },
+      } = arcRope(flatten(node));
       // A repeated key keeps its first position and takes the last value, as in SafeLoader.
       for (const key of order) {
         setRecordKey(record, key, values[last.get(key)!.arc.valueDefinition]!);

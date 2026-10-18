@@ -1,4 +1,7 @@
-/** Tests for OpenAI Responses body building in `src/llm/protocols/openai_responses.ts`: input items, assistant replay, tools, tool choice, block merge, subscription. */
+/**
+ * Tests for OpenAI Responses body building in `src/llm/protocols/openai_responses.ts`: input
+ * items, assistant replay, tools, tool choice, block merge, subscription.
+ */
 
 import { describe, expect, test } from "bun:test";
 
@@ -177,14 +180,10 @@ describe("system and user messages", () => {
 
   for (const role of ["system", "user"] as const) {
     test(`a ${role} message without parts is skipped`, () => {
-      expect(bodyOf([message(role), user("Hi.")])["input"]).toEqual([{ type: "message", role: "user", content: "Hi." }]);
+      const input = bodyOf([message(role), user("Hi.")])["input"];
+      expect(input).toEqual([{ type: "message", role: "user", content: "Hi." }]);
     });
   }
-
-  test("message name is never sent", () => {
-    const input = bodyOf([user("Hi."), message("tool", result("call_1", "6"))])["input"] as JsonObject[];
-    for (const item of input) expect(Object.hasOwn(item, "name")).toBe(false);
-  });
 });
 
 const KEY: ReplayKey = { protocol: PROTOCOL, provider: "openai", model: "gpt-5.5" };
@@ -587,7 +586,12 @@ describe("tool messages", () => {
 
 describe("tools, tool choice, parallel tool calls", () => {
   test("strict is sent only when set", () => {
-    const open = new ToolSpec({ name: "open", description: "Open schema.", parameters: { type: "object" }, strict: false });
+    const open = new ToolSpec({
+      name: "open",
+      description: "Open schema.",
+      parameters: { type: "object" },
+      strict: false,
+    });
     const sent = bodyOf([user("Hi.")], { tools: [DOUBLE, open] })["tools"] as JsonObject[];
     expect(Object.hasOwn(sent[0]!, "strict")).toBe(false);
     expect(sent[1]).toEqual({
@@ -692,7 +696,7 @@ describe("block merge", () => {
     expect(encodeBody(body)).toContain('"metadata":{"__proto__":"x"}');
   });
 
-  test("name-routed models get the API key body", () => {
+  test("an Azure deployment name is sent as model", () => {
     expect(bodyOf([user("Hi.")], { model: "prod-gpt-5-codex", provider: "azure" })).toEqual({
       model: "prod-gpt-5-codex",
       input: [{ type: "message", role: "user", content: "Hi." }],

@@ -74,7 +74,10 @@ export class OpenAIResponses implements SseProtocol {
   readonly provider: string;
   /** The account id for replay records, or `null`. */
   readonly account: string | null;
-  /** Whether the subscription's rules apply: `store: false`, system text in `instructions`, encrypted reasoning, no message ids. */
+  /**
+   * Whether the subscription's rules apply: `store: false`, system text in `instructions`,
+   * encrypted reasoning, no message ids.
+   */
   readonly subscription: boolean;
   // Copied so later changes to the caller's block cannot change future bodies.
   readonly #block: JsonObject | null;
@@ -110,14 +113,14 @@ export class OpenAIResponses implements SseProtocol {
     if (choice instanceof NamedTool) body["tool_choice"] = { type: "function", name: choice.name };
     else if (choice !== null) body["tool_choice"] = choice;
     if (request.parallelToolCalls !== null) body["parallel_tool_calls"] = request.parallelToolCalls;
-    if (this.#block && Object.keys(this.#block).length > 0) mergeRequestBody(body, this.#block);
+    if (this.#block) mergeRequestBody(body, this.#block);
     if (this.subscription) {
       // Applied after the block so it cannot switch them off: the backend keeps no state, so
       // every turn must carry the full, replayable conversation.
       body["store"] = false;
       body["stream"] = true;
       const include = body["include"];
-      const asked = Array.isArray(include) ? include.filter((each) => typeof each === "string") : [];
+      const asked = Array.isArray(include) ? include : [];
       body["include"] = [...new Set([...asked, ENCRYPTED_REASONING])];
       body["instructions"] = instructions.join("\n\n") || DEFAULT_INSTRUCTIONS;
       delete body["previous_response_id"];

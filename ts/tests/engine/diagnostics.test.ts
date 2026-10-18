@@ -455,6 +455,7 @@ describe("ResolverTable", () => {
     expect(table.has(firstNew)).toBe(true);
     expect(table.has(secondNew)).toBe(true);
     expect(table.has(new OriginRef("missing"))).toBe(false);
+    expect(table.has("call/a" as unknown as OriginRef)).toBe(false);
     expect(table.resolve(firstNew)).toBe(firstFrame);
     expect(table.resolve(secondNew)).toBe(secondFrame);
     expect(table.resolve(new OriginRef("missing"))).toBeNull();

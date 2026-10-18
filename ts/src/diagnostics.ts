@@ -443,7 +443,7 @@ export class ResolverTable {
       if (!(newOrigin instanceof OriginRef)) {
         throw new TypeError("resolver table new origin must be an OriginRef");
       }
-      if (typeof (delegate as Partial<OriginResolver> | null)?.resolve !== "function") {
+      if (typeof delegate?.resolve !== "function") {
         throw new TypeError("resolver table delegate must implement resolve");
       }
       if (!(oldOrigin instanceof OriginRef)) {

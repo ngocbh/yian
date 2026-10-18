@@ -1,12 +1,17 @@
 /**
  * `isinstance(x, T)` in the expression language: the parse tests of
  * `tests/engine/test_isinstance.py`, the `expr_refs`/`condition_refs`/`rewrite_*` parts of
- * `test_reference_walks_skip_the_type_name` and `test_rewrites_leave_the_type_name_alone`, and
- * `test_isinstance_subject_is_the_tested_expression`.
+ * `test_reference_walks_skip_the_type_name` and `test_rewrites_leave_the_type_name_alone`,
+ * `test_isinstance_subject_is_the_tested_expression`, and an `isinstanceTypeNames` test.
  *
  * `isinstance` is a special form: the first argument is an expression, the second a bare type
- * name, never a reference. The evaluation and inference tests land with the evaluator, and the
- * template parts of the walk and rewrite tests with `template.ts` (T2-5).
+ * name, never a reference.
+ *
+ * Left for later: the evaluation tests and the inference test
+ * (`test_infer_expr_type_gives_bool_without_looking_up_the_type_name`) land with the evaluator;
+ * the co-skip, flow-callee and prompt-function tests and the template parts of the walk and
+ * rewrite tests with `template.ts`; the tracing test with `lineage.ts`; the node, case and loop
+ * tests (from `test_a_node_starts_with_an_empty_type_table` on) with compose and `run.ts`.
  */
 
 import { expect, test } from "bun:test";
@@ -16,6 +21,7 @@ import {
   ExpressionError,
   exprRefs,
   isinstanceSubject,
+  isinstanceTypeNames,
   rewriteConditionRefs,
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
@@ -117,4 +123,10 @@ test("isinstanceSubject is the tested expression", () => {
     if (subject === null) expect(found).toBeNull();
     else expect(plain(found!)).toEqual(plain(parseExpr(subject)));
   }
+});
+
+test("isinstanceTypeNames lists each type name once, in source order", () => {
+  expect(isinstanceTypeNames(parseExpr("isinstance(x, Buy) or isinstance(y, int)"))).toEqual(["Buy", "int"]);
+  expect(isinstanceTypeNames(parseExpr("isinstance(x, Buy) and not isinstance(y.z, Buy)"))).toEqual(["Buy"]);
+  expect(isinstanceTypeNames(parseExpr("x"))).toEqual([]);
 });

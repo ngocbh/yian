@@ -5,9 +5,11 @@
  * `test_a_name_absent_from_the_type_table_is_an_unknown_function` and
  * `test_a_builtin_type_name_is_not_a_conversion`.
  *
- * The evaluation and inference tests land with the evaluator; the template and binding tests
- * (`binding_co_skips`, `eval_binding`, `prompt_refs`) with `template.ts` (T2-5) and `bind_params`
- * with the binder (T3).
+ * Left for later: the evaluation tests (call shape, positional and keyword forms, larger
+ * expressions, the `eval_expr` halves of the two tests above) and the static inference tests land
+ * with the evaluator; the route and feedback tests with `lineage.ts`; the embedded-span, co-skip,
+ * flow-callee (`test_a_typedef_name_is_not_a_flow_callee`) and prompt tests with `template.ts`;
+ * the binder tests with `nodes/binding.ts`.
  */
 
 import { afterEach, expect, test } from "bun:test";

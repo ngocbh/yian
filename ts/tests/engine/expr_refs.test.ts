@@ -13,6 +13,7 @@ import { expect, test } from "bun:test";
 import { exprRefs } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 
+/** Return the reference paths `parseExpr(text)` reads. */
 function refs(text: string): string[] {
   return exprRefs(parseExpr(text));
 }

@@ -3,9 +3,9 @@
  * `parseCondition` tests of `tests/engine/test_condition_calls.py`, and the builtin registry's
  * argument binder (`bindArguments`) and `registerTemplateFn`.
  *
- * The `load_flow`/`run_flow` half (from `_load_error` on) lands with compose and `run.ts` (T3/T4).
- * `test_a_builtin_without_a_readable_signature_is_not_arity_checked` has no counterpart: every
- * registered function declares its `params`.
+ * Left for later: the `load_flow`/`run_flow` half (from `_load_error` on) lands with compose and
+ * `run.ts`. `test_a_builtin_without_a_readable_signature_is_not_arity_checked` has no
+ * counterpart: every registered function declares its `params`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -125,7 +125,8 @@ test("builtin calls that bind parse", () => {
 test("a registered builtin is accepted", () => {
   standIn("shout", [{ name: "s" }, { name: "times", default: 1 }]);
   parseCondition("shout(s, times=2) == 'AA'");
-  expect(() => parseCondition("shout(s, 2, 3) == 'AA'")).toThrow(
+  expectMessage(
+    "shout(s, 2, 3) == 'AA'",
     "expression function 'shout' takes (s, times=1): too many positional arguments",
   );
 });

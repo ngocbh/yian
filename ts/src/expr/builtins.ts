@@ -54,6 +54,8 @@ export function registerTemplateFn(name: string, fn: TemplateFn): void {
     const where = `expression function ${reprText(name)}, default of ${reprText(p.name)}`;
     return { name: p.name, default: fromHost(p.default, where) };
   });
+  // The stored entry carries the normalized params; `call` stays a method call on the host's
+  // object, so `this` inside it is still that object.
   TEMPLATE_FNS.set(name, { params, call: (...args) => fn.call(...args) });
 }
 

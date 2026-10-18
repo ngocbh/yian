@@ -4,8 +4,8 @@
  * that a whole-span condition reads as its bare spelling, and the error a `${...}` nested inside
  * an expression raises and the rewrite it shows.
  *
- * The template tests land with `template.ts` (T2-5), the load and run tests with compose and
- * `run.ts` (T3/T4).
+ * Left for later: the template-span tests land with `template.ts`; the binding, case, assert,
+ * loop and prompt load tests and the run tests with compose and `run.ts`.
  */
 
 import { expect, test } from "bun:test";

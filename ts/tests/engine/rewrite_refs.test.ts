@@ -5,8 +5,9 @@
  * `rewriteExprRefs(text, rename)` reparses one unified `${...}` expression and splices each
  * reference-leaf path through `rename(path)` (a new path, or `null` to keep), leaving every
  * operator, literal, builtin callee and whitespace verbatim. `rewriteConditionRefs` wraps it for
- * the two condition spellings (bare and whole-span). The `rewrite_template_refs` tests land with
- * `template.ts` (T2-5).
+ * the two condition spellings (bare and whole-span).
+ *
+ * Left for later: the `rewrite_template_refs` tests land with `template.ts`.
  */
 
 import { expect, test } from "bun:test";

@@ -178,7 +178,7 @@ export function checkJsonValue(value: unknown, path: string): JsonValue {
   return root[0]!;
 }
 
-/** Return a deep copy of a value `checkJsonValue` accepted; its nesting limit bounds the recursion. */
+/** Return a deep copy of a JSON value; it recurses once per nesting level, so callers bound the depth (as `checkJsonValue` does). */
 export function copyJson<T extends JsonValue>(value: T): T {
   if (Array.isArray(value)) return value.map(copyJson) as T;
   if (typeof value !== "object" || value === null) return value;

@@ -11,7 +11,8 @@ providers` lists the providers and their login kinds; each prints text or, with
 `--json`, one `yian.cli.v1` document.
 
 `yian check FLOW...` loads flows without running them and reports each as text or, with
-`--json`, as one `yian.cli.v1` document.
+`--json`, as one `yian.cli.v1` document. `yian skills check DIR...` does the same for
+skill directories.
 
 `yian run FLOW.yaml` loads a Compose flow, gathers fresh inputs from flags and an
 available interactive prompt, selects and reports a durable run-log path, and drives
@@ -55,6 +56,7 @@ from yian.cli.auth import providers as _providers
 from yian.cli.run import check as _check
 from yian.cli.run import err_console
 from yian.cli.run import run as _run
+from yian.cli.run import skills_check as _skills_check
 from yian.cli.utils import print_json
 from yian.defaults import DefaultsError, current
 
@@ -102,6 +104,10 @@ app.command("providers")(_providers)
 config_app = typer.Typer(name="config", no_args_is_help=True, help="Check an llm_config layer.")
 config_app.command("check")(_config_check)
 app.add_typer(config_app, name="config")
+
+skills_app = typer.Typer(name="skills", no_args_is_help=True, help="Check skill directories.")
+skills_app.command("check")(_skills_check)
+app.add_typer(skills_app, name="skills")
 
 
 def main() -> None:

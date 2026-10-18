@@ -33,6 +33,8 @@ not a hard override): they fill only the fields an agent and its enclosing flow 
 
 `yian check FLOW...` loads each flow as `yian run` would, runs nothing, and reports each
 as text or, with `--json`, as one `yian.cli.v1` document.
+
+`yian skills check DIR...` loads each skill directory and reports each the same way.
 """
 
 from __future__ import annotations
@@ -69,10 +71,11 @@ from yian.compose.build.pipeline import ComposedFlow
 from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
 from yian.compose.parse.file import parse_source_document
-from yian.compose.skills import default_skill_roots, load_skills
+from yian.compose.skills import default_skill_roots, load_skill_dir, load_skills
 from yian.defaults import current
 from yian.diagnostics import Diagnostic
 from yian.memory.contracts import MemoryOperationError
+from yian.skills.catalog import SkillError
 from yian.run import (
     RunResult,
     _resume_flow_controlled,
@@ -2337,4 +2340,39 @@ def check(
                 err_console.print(Text(f"{result['path']}:", style="red"), soft_wrap=True)
                 render_diagnostic(diagnostic)
     if any(diagnostic is not None for _, diagnostic in results):
+        raise typer.Exit(code=1)
+
+
+def skills_check(
+    directories: List[str] = typer.Argument(..., help="Paths to skill directories."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print one yian.cli.v1 JSON document on stdout."
+    ),
+) -> None:
+    """Load each skill directory and report whether it holds a valid SKILL.md.
+
+    Two directories with one skill name are not reported; that is the caller's concern.
+    """
+    results = []
+    for arg in directories:
+        try:
+            skill = load_skill_dir(arg)
+        except (SkillError, OSError) as err:
+            error = {"code": "skill.invalid", "message": str(err)}
+            results.append({"path": arg, "ok": False, "error": error})
+        else:
+            results.append(
+                {"path": arg, "ok": True, "name": skill.name, "description": skill.description}
+            )
+    if json_output:
+        print_json({"skills": results})
+    else:
+        for result in results:
+            if result["ok"]:
+                console.print(Text(f"{result['path']}: ok ({result['name']})"), soft_wrap=True)
+            else:
+                err_console.print(
+                    Text(f"{result['path']}: {result['error']['message']}"), soft_wrap=True
+                )
+    if not all(result["ok"] for result in results):
         raise typer.Exit(code=1)

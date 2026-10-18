@@ -6,7 +6,8 @@
     {"$ref": "#/$defs/error_document"},
     {"$ref": "#/$defs/check_document"},
     {"$ref": "#/$defs/config_document"},
-    {"$ref": "#/$defs/providers_document"}
+    {"$ref": "#/$defs/providers_document"},
+    {"$ref": "#/$defs/skills_document"}
   ],
   "$defs": {
     "format": {
@@ -155,6 +156,46 @@
       "properties": {
         "format": {"$ref": "#/$defs/format"},
         "providers": {"type": "array", "items": {"$ref": "#/$defs/provider"}}
+      }
+    },
+    "skill_result": {
+      "description": "One skill directory `yian skills check` loaded; path is the argument exactly as given.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["path", "ok", "name", "description"],
+          "properties": {
+            "path": {"type": "string"},
+            "ok": {"const": true},
+            "name": {"type": "string"},
+            "description": {"type": "string"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["path", "ok", "error"],
+          "properties": {
+            "path": {"type": "string"},
+            "ok": {"const": false},
+            "error": {
+              "type": "object",
+              "required": ["code", "message"],
+              "properties": {
+                "code": {"const": "skill.invalid"},
+                "message": {"type": "string"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "skills_document": {
+      "description": "`yian skills check --json`: one result per skill directory argument, in argument order. Two directories with one skill name are not reported.",
+      "type": "object",
+      "required": ["format", "skills"],
+      "properties": {
+        "format": {"$ref": "#/$defs/format"},
+        "skills": {"type": "array", "items": {"$ref": "#/$defs/skill_result"}}
       }
     }
   }

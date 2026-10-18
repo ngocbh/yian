@@ -9,8 +9,8 @@
  * fingerprints and `logJson` the same layout for run-log lines, with ints of any size and floats
  * marked by `.0`. Both write infinity as yian's tag, escape records shaped like the tag, and
  * write any depth. Like `JSON.stringify` they write only an object's own enumerable string keys
- * and an array's indices; they refuse what isn't canonical JSON, with Python yian's wording where
- * Python has the rule.
+ * and an array's indices, but an object with symbol keys is refused; they refuse what isn't
+ * canonical JSON, with Python yian's wording where Python has the rule.
  *
  * It imports nothing from yian, so the `llm/` leaf can use it.
  */
@@ -340,8 +340,8 @@ function logNumber(n: number | bigint): string {
 
 /**
  * Return `root` as compact key-sorted JSON, writing each finite number with `number`. Like
- * `JSON.stringify` it writes an object's own enumerable string keys and an array's indices;
- * other input that isn't JSON is refused.
+ * `JSON.stringify` it writes an object's own enumerable string keys and an array's indices; an
+ * object with symbol keys, and other input that isn't JSON, is refused.
  */
 function write(root: unknown, number: (n: number | bigint) => string): string {
   let out = "";

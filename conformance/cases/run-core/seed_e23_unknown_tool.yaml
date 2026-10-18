@@ -21,5 +21,6 @@ run: {run_id: r1, num_workers: 0}
 expect:
   raises:
     class: ValueError
+    # The empty list reads `[]` in both languages, so the message needs no `messages` rule.
     message: "TOOL node 'fetch' names tool 'nonesuch_tool', which isn't in this run's tools; known tools: []"
   trace: []

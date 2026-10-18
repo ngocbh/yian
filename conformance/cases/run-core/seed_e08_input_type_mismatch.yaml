@@ -36,7 +36,9 @@ flow: |
       prompt: "Write a one-line note on ${topic} over ${window} days. No advice."
 
   output: ${note.output}
-# Run start resolves the AGENT's provider, so it needs one and a key; no model is called.
+# Run start resolves the AGENT's llm_config (provider and model, from `run.llm_config`) before
+# any node runs; no model is called. The key makes the recorded connection source
+# `environment`, which the trace pins.
 env: {OPENAI_API_KEY: "<key:1>"}
 inputs: {topic: X, window: soon}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}

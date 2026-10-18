@@ -33,10 +33,14 @@ flow: |
       output: str
       prompt: "Rate ${topic}."
   output: ${note.output}
+# The provider is set so the case pins only the tool-grant check, whatever order run start
+# checks in.
+env: {OPENAI_API_KEY: "<key:1>"}
 inputs: {topic: X}
-run: {run_id: r1, num_workers: 0}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
 expect:
   raises:
     class: ValueError
+    # The empty list reads `[]` in both languages, so the message needs no `messages` rule.
     message: "AGENT node 'note' grants unknown tool or group 'web_search'; tool groups in this run: []"
   trace: []

@@ -1,0 +1,28 @@
+kind: fingerprint
+flow: |
+  id: lookup-one
+  name: lookup_one
+  input:
+    q: !str
+  nodes:
+    find:
+      kind: tool
+      tool_id: lookup
+      input:
+        q: ${input.q}
+  output: ${find.output}
+other: |
+  id: lookup-one
+  name: lookup_one
+  input:
+    q: !str
+  nodes:
+    # A comment changes the text, not the flow.
+    find:
+      kind: tool
+      tool_id: lookup
+      input:
+        q: ${input.q}
+  output: ${find.output}
+expect:
+  fingerprint: same

@@ -17,7 +17,18 @@ flow: |
       output: str
       llm_config: {provider: openai, model: gpt-5.5}
       prompt: "Write about ${found}."
-  output: ${write.output}
+    review:
+      kind: agent
+      input:
+        found: ${check.output}
+      output: str
+      llm_config: {provider: openai, model: !str "${check.output}"}
+      prompt: "Review ${found}."
+  output:
+    write: ${write.output}
+    review: ${review.output}
+# The recorded connections carry the key's hash, which the trace leaves out.
+env: {OPENAI_API_KEY: "<key:1>"}
 inputs: {x: a}
 run: {run_id: r1, num_workers: 0}
 host:
@@ -47,7 +58,17 @@ expect:
           write:
             provider: openai
             model: gpt-5.5
-            _connection: {method: api_key, source: missing, endpoint: "https://api.openai.com/v1"}
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+        call_time_llm:
+          agents: {review: {}}
+          selection:
+            defaults: {}
+            provider_models: {}
+            connections:
+              openai: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+            api_endpoint: "https://api.openai.com/v1"
+            stray_model: false
+            host: null
     - [node_started, __start__]
     - [node_succeeded, __start__, {value: {x: a}}]
     - [node_started, check]

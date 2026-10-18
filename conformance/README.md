@@ -94,7 +94,8 @@ Every case runs in a new temporary directory, the *case directory*:
 
 Keys marked required must be present. In a `load`, `expr`, `value`, `defaults` or `fingerprint`
 case, `expect` and `python_expect` hold the results under Checks: exactly one group where it
-says "or".
+says "or". A `run`, `resume` or `backward` case's `expect` has exactly one of `raises` and
+`output`.
 
 | Kind | Keys | Checks |
 |---|---|---|
@@ -128,6 +129,7 @@ runner always gives the run a log file in the case directory, and projects it to
 
 `expect.output` is `{status: succeeded, output: <value>}` or `{status: failed, failure:
 <failure>}`. `expect.raises` is the host error the run raised instead (the log may not exist).
+When the run raised before creating its log, its trace is `[]`.
 
 ### `resume`
 
@@ -304,10 +306,12 @@ For example:
 - [node_started, fetch]
 - [node_step, fetch, {step: {event: failed, attempt: 1, error: {type: TransientToolError, message: busy}, retry_in: 0.5}}]
 - [node_succeeded, fetch, {value: F1}]
-- [node_failed, place, {failure: {code: node.execute, message: rejected, node: place, frames: [{label: flow.yaml, range: [12, 3, 16, 1]}]}}]
+- [node_failed, place, {failure: {code: node.execute, message: rejected, node: place, frames: [{label: flow.yaml, range: [12, 3, 12, 8]}]}}]
 ```
 
-- Values are plain values: a typed value's kind tag is dropped.
+- Values are plain values: `run_started.inputs` and `node_succeeded.value` are recorded
+  typed, and are written without the kind tag (a file as `{uri, mime, name}`); every other
+  value (seeds, captures, feedback) is recorded plain already.
 - `defaults`, `effective_llm_by_static_path` and `call_time_llm` are left out when empty or
   absent.
 - Dropped: the envelope (`schema`, `run_id`, `seq`); from `run_started`, `flow_fingerprint`,
@@ -315,13 +319,19 @@ For example:
   `memory_stacks`; `topology_digest`; and every `evidence` field (the model and tool evaluation
   evidence, whose shape is implementation-specific).
 - Failures: `node_failed.failure`, `node_routed.terminal_failure` and a backward failure's
-  `cause` (when it is a node failure, with `trace`) are in failure form. `cause_type` and
-  `traceback` are dropped at every depth.
-- In `forward_capture`, a route's `value_json` text is read as JSON (codec form); everything else
-  is kept as recorded (expressions, spans, sources).
-- Every `_connection` object (in `effective_llm_by_static_path`, `call_time_llm` and
-  `effective_llm_config` steps) keeps only `method`, `source` and `endpoint`; key hashes and
-  store paths are dropped.
+  `cause` (when it is a node failure, with `trace`) are in failure form. A backward failure
+  (`backward_finished.outcome.failure`) leaves out `cause_type` and `traceback`. Nothing else
+  is removed, and values the flow produced or received are never rewritten. A memory record's
+  `failure` is a memory operation failure, `{stage, code, message, retryable}`, kept as
+  recorded.
+- In `forward_capture`, a route's `value_json` text is read as JSON (codec form), and
+  `node_data.effective_llm_config` is cut as below; everything else is kept as recorded
+  (expressions, spans, sources).
+- A connection record keeps only `method`, `source` and `endpoint` (key hashes and store
+  paths are dropped). The connection records are: the `_connection` of the LLM configs in
+  `run_started.effective_llm_by_static_path`, in an `effective_llm_config` step, and in a
+  `forward_capture`'s `node_data.effective_llm_config`; and each entry of
+  `run_started.call_time_llm.selection.connections`.
 - In TOOL steps, `retry_in` is a float, and a `failed` step's error type goes through the
   error-class table.
 

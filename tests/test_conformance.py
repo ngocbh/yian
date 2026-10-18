@@ -172,8 +172,8 @@ _SECRET = re.compile(r"<key:([0-9]+)>")
 _ENV_SUFFIXES = ("_API_KEY", "_BASE_URL", "_ENDPOINT", "_API_VERSION")
 _TOOL_ERRORS = {
     error.__name__: error
-    for error in (PermanentToolError, ReportedToolError, ToolCheckError, TimeoutError,
-                  ConnectionError)
+    for error in (PermanentToolError, TransientToolError, ReportedToolError, ToolCheckError,
+                  TimeoutError, ConnectionError)
 }
 
 
@@ -245,8 +245,11 @@ def _check_host(host: object, kind: str) -> None:
         raise ValueError("`host.human` maps node ids to lists of answers")
     if "human" in host and "ask_user" in tools:
         raise ValueError("a case with `host.human` declares no `ask_user` tool")
-    if not isinstance(host.get("jitter", []), list):
-        raise ValueError("`host.jitter` must be a list")
+    jitter = host.get("jitter", [])
+    if not isinstance(jitter, list) or any(
+        type(draw) not in (int, float) or not 0 <= draw < 1 for draw in jitter
+    ):
+        raise ValueError("`host.jitter` must be a list of numbers in [0, 1)")
 
 
 def _check(case: dict) -> dict:
@@ -598,10 +601,15 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
                for node, answers in host.get("human", {}).items()}
 
     def take(label: str, what: str) -> object:
-        if not scripts.get(label):
+        if label not in scripts:
+            tool, node = label.rsplit(".", 1)
+            problems.append(f"`{tool}` has no list for node {node!r}")
+        elif not scripts[label]:
             problems.append(f"{what} found `{label}` used up")
-            raise RuntimeError(f"`{label}` is used up")
-        return scripts[label].pop(0)
+        else:
+            return scripts[label].pop(0)
+        # Permanent, so a TOOL node doesn't retry the overrun.
+        raise PermanentToolError(f"`{label}` is used up")
 
     def record(name: str, args: dict, ctx: ToolContext) -> None:
         calls.setdefault(name, []).append(
@@ -616,11 +624,9 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
             if "return" in entry:
                 return entry["return"]
             error = entry["raise"]
-            if error["class"] == "TransientToolError":
-                raise TransientToolError(error["message"], retry_after=error.get("retry_after"))
-            raise _TOOL_ERRORS.get(error["class"], type(error["class"], (Exception,), {}))(
-                error["message"]
-            )
+            cls = _TOOL_ERRORS.get(error["class"]) or type(error["class"], (Exception,), {})
+            extra = {"retry_after": error["retry_after"]} if "retry_after" in error else {}
+            raise cls(error["message"], **extra)
         return on_invoke
 
     tools = {}
@@ -646,7 +652,7 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
         patch.setattr(tool_node, "_jitter", lambda: take("host.jitter", "a backoff draw"))
 
     def check() -> None:
-        left = [f"`{label}` has {len(script)} entries left"
+        left = [f"`{label}` has {len(script)} {'entry' if len(script) == 1 else 'entries'} left"
                 for label, script in scripts.items() if script]
         if problems or left:
             pytest.fail("\n".join(problems + left), pytrace=False)
@@ -710,26 +716,27 @@ _TRACE = {
     **dict.fromkeys(("backward_started", "backward_ready", "backward_finished"), (None, None)),
 }
 _LEFT_OUT_WHEN_EMPTY = {"defaults", "effective_llm_by_static_path", "call_time_llm"}
+_FAILURE_FIELDS = {"node_failed": "failure", "node_routed": "terminal_failure"}
 
 
-def _scrub(value: object) -> object:
-    """Return `value` without `cause_type` and `traceback`, each `_connection` cut to three fields.
+def _cut(connection: dict) -> dict:
+    """Return a connection record with only its `method`, `source` and `endpoint`."""
+    return {name: connection[name] for name in ("method", "source", "endpoint")
+            if name in connection}
 
-    Both apply at every depth; a `_connection` keeps `method`, `source` and `endpoint`.
-    """
-    if isinstance(value, list):
-        return [_scrub(item) for item in value]
-    if not isinstance(value, dict):
-        return value
-    return {
-        key: ({name: item[name] for name in ("method", "source", "endpoint") if name in item}
-              if key == "_connection" else _scrub(item))
-        for key, item in value.items() if key not in ("cause_type", "traceback")
-    }
+
+def _llm(config: dict | None) -> dict | None:
+    """Return an LLM config with its `_connection` cut, when it has one."""
+    if config is None or config.get("_connection") is None:
+        return config
+    return {**config, "_connection": _cut(config["_connection"])}
 
 
 def _capture(capture: dict) -> dict:
-    """Return a `forward_capture` with each route's `value_json` text read as JSON."""
+    """Return a `forward_capture` with each route's `value_json` text read as JSON.
+
+    Its `node_data.effective_llm_config` has its connection cut.
+    """
     def route(node: dict | None) -> dict | None:
         if node is None:
             return None
@@ -738,7 +745,10 @@ def _capture(capture: dict) -> dict:
                 "children": [route(child) for child in node["children"]],
                 "snapshot": route(node["snapshot"])}
 
-    return {**capture, "route": route(capture["route"]),
+    data = capture["node_data"]
+    if data is not None and "effective_llm_config" in data:
+        data = {**data, "effective_llm_config": _llm(data["effective_llm_config"])}
+    return {**capture, "route": route(capture["route"]), "node_data": data,
             "items": [{**item, "capture": _capture(item["capture"])}
                       for item in capture["items"]]}
 
@@ -762,28 +772,45 @@ def _trace(log_path: Path, flow) -> list:
         if kind == "run_started":
             pool = payload["initial_pool"]
             payload["inputs"] = pool["store"][pool["start_id"]]["value"]
+            payload["effective_llm_by_static_path"] = {
+                path: _llm(config)
+                for path, config in payload["effective_llm_by_static_path"].items()
+            }
+            call_time = payload.get("call_time_llm")
+            if call_time is not None:
+                selection = call_time["selection"]
+                payload["call_time_llm"] = {**call_time, "selection": {
+                    **selection, "connections": {provider: _cut(connection) for provider,
+                                                 connection in selection["connections"].items()}
+                }}
         if kind == "node_succeeded":
             payload["value"] = payload["value"]["value"]
             if payload["commit_target"] == node:
                 del payload["commit_target"]
-        # A memory record's `failure` is a memory operation failure, kept as recorded.
-        for key in ("failure", "terminal_failure"):
-            if kind.startswith("node_") and payload.get(key) is not None:
-                payload[key] = failure(payload[key])
+        key = _FAILURE_FIELDS.get(kind)
+        if key is not None and payload[key] is not None:
+            payload[key] = failure(payload[key])
         if payload.get("forward_capture") is not None:
             payload["forward_capture"] = _capture(payload["forward_capture"])
-        if kind == "node_step" and "retry_in" in payload["step"]:
-            payload["step"] = {**payload["step"], "retry_in": float(payload["step"]["retry_in"])}
-        # A backward failure's `cause` is a node failure when it has a `trace`.
-        backward = (payload.get("outcome") or {}).get("failure") or {}
-        if isinstance(backward.get("cause"), dict) and "trace" in backward["cause"]:
-            payload["outcome"] = {**payload["outcome"],
-                                  "failure": {**backward, "cause": failure(backward["cause"])}}
-        payload = _scrub({
+        if kind == "node_step":
+            step = payload["step"] = dict(payload["step"])
+            if "retry_in" in step:
+                step["retry_in"] = float(step["retry_in"])
+            if "effective_llm_config" in step:
+                step["effective_llm_config"] = _llm(step["effective_llm_config"])
+        backward = payload["outcome"]["failure"] if kind == "backward_finished" else None
+        if backward is not None:
+            backward = {key: value for key, value in backward.items()
+                        if key not in ("cause_type", "traceback")}
+            # A backward failure's `cause` is a node failure when it has a `trace`.
+            if isinstance(backward["cause"], dict) and "trace" in backward["cause"]:
+                backward["cause"] = failure(backward["cause"])
+            payload["outcome"] = {**payload["outcome"], "failure": backward}
+        payload = {
             key: value for key, value in payload.items()
             if (kept is None or key in kept) and value is not None
             and not (key in _LEFT_OUT_WHEN_EMPTY and not value)
-        })
+        }
         entries.append([kind, node, payload] if payload else [kind, node])
     return entries
 
@@ -817,21 +844,20 @@ def _run_run(case: dict, case_dir: Path) -> None:
 
         if "raises" in expect:
             _expect_raises(expect["raises"], start)
-            check()
         else:
-            result = start()
-            check()
-            _compare_output(result, flow, expect["output"])
-    if "trace" in expect:
-        _compare("trace", _trace(case_dir / "run.jsonl", flow), expect["trace"])
-    if "events" in expect:
-        _compare("events", [_event(event, flow) for event in events], expect["events"],
-                 by_value=True)
-    if "stream" in expect:
-        _compare("stream", [_fields(chunk, flow) for chunk in chunks], expect["stream"],
-                 by_value=True)
-    if "tool_calls" in expect:
-        _compare("tool_calls", calls, expect["tool_calls"], by_value=True)
+            _compare_output(start(), flow, expect["output"])
+        if "trace" in expect:
+            _compare("trace", _trace(case_dir / "run.jsonl", flow), expect["trace"])
+        if "events" in expect:
+            _compare("events", [_event(event, flow) for event in events], expect["events"],
+                     by_value=True)
+        if "stream" in expect:
+            _compare("stream", [_fields(chunk, flow) for chunk in chunks], expect["stream"],
+                     by_value=True)
+        if "tool_calls" in expect:
+            _compare("tool_calls", calls, expect["tool_calls"], by_value=True)
+        # Last: a leftover entry usually follows from a divergence the comparisons show.
+        check()
 
 
 _KINDS = {

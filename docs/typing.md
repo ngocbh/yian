@@ -279,7 +279,8 @@ member's field): an `int` filling a `float` slot widens; a file's JSON form fill
 
 Changed (TS yian): an `int` filling a `float` slot stays an int at any depth. A `float`
 slot given an int stores kind `int`, a `list(float)` keeps its int items, and a record's
-`float` field keeps the int; slots only check.
+`float` field keeps the int; slots only check. Likewise `buildValue` infers a list of ints
+and floats as `list(float)` with its ints kept (`[1, 2.5]`, where Python stores `[1.0, 2.5]`).
 
 Changed (TS yian): `buildValue` walks its whole value as a JSON value (files kept) and refuses
 a part that isn't one; Python's `build_value` doesn't walk, and its `canonical_typed` runs

@@ -803,7 +803,11 @@ export class TypedValue {
  *
  * @throws RangeError listing the missing and extra keys, each sorted.
  */
-export function requireFields(record: ValueRecord, expected: readonly string[], label: string): void {
+export function requireFields(
+  record: ValueRecord,
+  expected: readonly string[],
+  label: string,
+): void {
   const actual = Object.keys(record);
   const missing = expected.filter((key) => !Object.hasOwn(record, key)).sort(compareCodeUnits);
   const extra = actual.filter((key) => !expected.includes(key)).sort(compareCodeUnits);

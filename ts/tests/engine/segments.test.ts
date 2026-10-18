@@ -13,8 +13,8 @@
  * `runtime/log.py::_decode_typed` with `ANY_VALUE_ADAPTER`'s strict check, tested there through
  * the log reader), "fromWire accepts a list[float] holding an int", "toWire writes a nested
  * FileRef as its mapping", the frozen-carrier row, "unwraps a TypedValue", "a record keeps the
- * value's key order", "a record stores a __proto__ field as data", and the rows for `-0`, NaN, lone surrogates and other non-JSON
- * parts at the build boundary.
+ * value's key order", "a record stores a __proto__ field as data", and the rows for `-0`, NaN,
+ * lone surrogates and other non-JSON parts at the build boundary.
  *
  * Not ported: checks of Python's carrier subclasses (`type(back) is IntegerValue`); TS has one
  * `TypedValue` class, so a round trip checks the kind and the JS type of the value.

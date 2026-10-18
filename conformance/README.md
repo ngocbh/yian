@@ -128,9 +128,10 @@ runner always gives the run a log file in the case directory, and projects it to
 | `llm_config` | the run's `llm_config` layer (its `headers` included) | none |
 | `context` | `present`: tools get a host context object | none |
 
-`expect.output` is `{status: succeeded, output: <value>}` or `{status: failed, failure:
-<failure>}`. `expect.raises` is the host error the run raised instead (the log may not exist).
-When the run raised before creating its log, its trace is `[]`.
+`expect.output` is `{status: succeeded, output: <value>}`, the output in data form (a file as
+`{uri, mime, name}`), or `{status: failed, failure: <failure>}`. `expect.raises` is the host
+error the run raised instead (the log may not exist). When the run raised before creating its
+log, its trace is `[]`.
 
 ### `resume`
 
@@ -176,27 +177,28 @@ stored value and `expect.kind` its storage kind (`int`, `list[str]`, `object`, .
 ### `defaults`
 
 Reads yian's defaults from `env`. `expect.defaults` maps entry names (as in `docs/defaults.md`,
-`MAX_TOTAL_NODES`) to their values; entries not listed aren't compared. `expect.raises` is the
-error for a bad variable.
+`MAX_TOTAL_NODES`) to their values; entries not listed aren't compared, and an entry the
+implementation doesn't define fails the case. `expect.raises` is the error for a bad variable.
 
 ### `fingerprint`
 
 Loads `flow` twice and `other` once. The two loads of `flow` must have the same fingerprint, and
 `expect.fingerprint` says whether `other`'s is the `same` or `different`. A case never states a
-hash. Both runners load `other` as written, so a pair with CODE bodies is in TS form and carries
-`rules: [code]`.
+hash. `python_flow` is not a key of a `fingerprint` case: both runners load `flow` and `other` as
+written, so a pair with CODE bodies is in TS form and carries `rules: [code]`.
 
 ### `cli`
 
 Runs the `yian` command with `args` (the arguments after `yian`) in the case directory, with
 `HOME` set to an empty `home/` directory there, `PATH`, `COLUMNS=1000`, the `env` variables
-(the runner doesn't set `YIAN_AUTH_FILE`, so unless `env` does, its default under `HOME`
-applies), and `stdin` (absent: empty; never a terminal). `expect.exit` is the exit code. In
-stdout and stderr the case directory's path is replaced by `<tmp>` and spaces at line ends are
-removed; then `stdout` and `stderr` are compared exactly when present. `json` is stdout read as
-one JSON document, and `json_lines` stdout read as one JSON document per non-empty line, both
-in codec form. A command that names a generated path (`yian run` names its new run log on
-stderr) is checked without `stderr`, or given the path (`--log`).
+and no other variables (the Python runner adds `PYTHONPATH`, to find yian; the runner doesn't
+set `YIAN_AUTH_FILE`, so unless `env` does, its default under `HOME` applies), and `stdin` (absent: empty; never a terminal). `expect.exit` is
+the exit code. In stdout and stderr the case directory's path, and its resolved real path, are
+replaced by `<tmp>`, and spaces at line ends are removed; then `stdout` and `stderr` are
+compared exactly when present. `json` is stdout read as one JSON document, and `json_lines`
+stdout read as one JSON document per non-empty line, both in codec form. A command that names a
+generated path (`yian run` names its new run log on stderr) is checked without `stderr`, or
+given the path (`--log`).
 
 ## The host, as data
 
@@ -209,7 +211,8 @@ A case can't hold code, so its host is declared under `host`.
   message: <text>, retry_after: <seconds>}}` (`retry_after` only for `TransientToolError`). The
   classes are `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolCheckError`,
   `TimeoutError` and `ConnectionError`; any other name raises a plain error with that class name.
-  A call after the last entry fails the case, and so does an entry left unused.
+  A call after the last entry fails the case before any result is compared, since it is the
+  case's own error; an entry left unused fails it after the comparisons.
 - **`human`**: `{<node id>: [<answer>, ...]}`, the answers the run's `ask_user` tool gives to the
   calling node, in order; the same rules when they run out or are left over. A case with `human`
   doesn't declare a tool named `ask_user`.
@@ -264,15 +267,25 @@ mapping that leaves out `message` doesn't compare it. Cases use this for text th
 writes (a syntax error) and for `cli` documents, whose message text isn't part of the contract.
 
 **Failure**: a node or run failure in diagnostic form, as `diagnose(failure)` resolves it, plus
-the failing node: `{code, message, node, frames, notes}`.
+the failing node: `{code, message, node, frames, notes}`, with `node` null for a run-level
+failure.
 
 **Raises**: `{class, message}`, plus `path` for a `TypeCheckError` (a list of field names and
 list indexes, `[]` at the root). `class` is the error's class name, read through the error-class
 table.
 
-**Error-class table.** Class names that differ between implementations are compared through one
-table, used for `raises` and for the error type in TOOL steps. It maps each implementation's name
-to the case name. The Python names are the case names.
+**Error-class table.** Class names are compared through one table, used for `raises` and for the
+error type in TOOL steps. It maps each implementation's name to the case name; the Python names
+are the case names.
+
+- The tool classes `PermanentToolError`, `TransientToolError`, `ReportedToolError`,
+  `ToolCheckError`, `TimeoutError` and `ConnectionError`, and yian's own classes `LoadError`,
+  `FlowValidationError`, `ExpressionError`, `RequiredError`, `ConstructorTypeError`,
+  `TypeCheckError`, `IntTooLongError`, `DefaultsError` and `DefaultsMismatchError`, have the same
+  name in both implementations.
+- Any other class compares by its name as given, a stub's declared class included.
+- A row mapping a TS class to a different case name is added by the change that introduces that
+  TS class; rows are only added.
 
 **Data form** of an event, stream chunk or `ask_user` request: a mapping of its fields by their
 snake_case names, at every depth of yian's own structures (never inside a value the flow
@@ -289,7 +302,7 @@ only; lists and tuples as lists, sets as sorted lists, a failure in failure form
 The trace is the run log projected to what both implementations must agree on. Each record
 becomes one entry `[<kind>, <node>, <payload>]`, in log order. `node` is null for a run-level
 record. In a payload, a top-level field that is null is left out (nested values are kept as
-they are, except in `forward_capture`, below), and an empty payload is left out.
+they are, except as the rules below say), and an empty payload is left out.
 
 | Record | Node | Payload fields |
 |---|---|---|
@@ -303,7 +316,9 @@ they are, except in `forward_capture`, below), and an empty payload is left out.
 | `node_expanded` | `spawner_id` | `seed`, `prune_ids`, `forward_capture` |
 | `node_failed` | the failure's node | `failure`, `forward_capture` |
 | `memory_commit_requested`, `_succeeded`, `_failed` | null | `memory`, `commit_id`, `attempt_id`, `mutations`, `failure` |
-| `backward_started`, `_ready`, `_finished` | null | every recorded field |
+| `backward_started` | null | `attempt_id`, `feedback` |
+| `backward_ready` | null | `attempt_id`, `root_result`, `attributed_results`, `proposals` |
+| `backward_finished` | null | `attempt_id`, `outcome`, `attributed_results` |
 
 For example:
 
@@ -327,22 +342,30 @@ For example:
 - Failures: `node_failed.failure`, `node_routed.terminal_failure` and a backward failure's
   `cause` (when it is a node failure, with `trace`) are in failure form. A backward failure
   (`backward_finished.outcome.failure`) leaves out `cause_type` and `traceback`. Nothing else
-  is removed, and values the flow produced or received are never rewritten. A memory record's
-  `failure` is a memory operation failure, `{stage, code, message, retryable}`, kept as
-  recorded.
+  is removed, and values the flow produced or received are never rewritten, except by
+  placeholders. A memory record's `failure` is a memory operation failure, `{stage, code,
+  message, retryable}`, kept as recorded.
 - In `forward_capture`, a route (and each route nested in its `children` and `snapshot`)
-  leaves out every field equal to its empty value (null, `[]`, `0`, `""`), except `kind` and
-  `expression`, which always stay, and its `value_json` text is read as JSON (codec form). The
+  leaves out `expression` and `result_type`, because they are text each implementation spells
+  its own way (a literal's JSON text, markers for values JSON can't hold); its structure stays.
+  It also leaves out every other field equal to its empty value (null, `[]`, `0`, `""`), except
+  `kind`, which always stays, and its `value_json` text is read as JSON (codec form). The
   capture leaves out `evaluated_keys`, `items`, `input_names` and `variable_names` when they
   are `[]`, and `node_data` when it is null or `{}`; `bound_inputs` is kept as recorded, even
-  when empty. `node_data.effective_llm_config` is cut as below; everything else is kept as
-  recorded (expressions, sources, spans). A route's `spans` are offsets in code points into
-  its result text (the text its `value_json` holds).
-- A connection record keeps only `method`, `source` and `endpoint` (key hashes and store
-  paths are dropped). The connection records are: the `_connection` of the LLM configs in
-  `run_started.effective_llm_by_static_path`, in an `effective_llm_config` step, and in a
-  `forward_capture`'s `node_data.effective_llm_config`; and each entry of
-  `run_started.call_time_llm.selection.connections`.
+  when empty. Each `items` entry is `{index, capture}`, and its `capture` is projected by these
+  same rules. `node_data.effective_llm_config` is projected as below; everything else is kept
+  as recorded (sources, spans). A route's `spans` are offsets in code points into its result
+  text (the text its `value_json` holds).
+- An agent's LLM config (each value of `run_started.effective_llm_by_static_path` and of
+  `run_started.call_time_llm.agents`, the config of an `effective_llm_config` step, and a
+  `forward_capture`'s `node_data.effective_llm_config`) keeps its `llm_config` fields (keys
+  not starting with `_`), `_header_names`, `_host_key`, and `_connection` cut to `method`,
+  `source` and `endpoint` (key hashes and store paths are dropped); any other `_` key is
+  dropped.
+- `call_time_llm` keeps only `agents`: its `selection` is dropped, because its fields are
+  internal and its effect is recorded in each call-time agent's `effective_llm_config` step.
+- The backward records' nested structures are kept as recorded, except the backward failure
+  above.
 - In TOOL steps, `retry_in` is a float, and a `failed` step's error type goes through the
   error-class table.
 
@@ -353,8 +376,10 @@ run's own id. Every occurrence inside a text value is replaced, so a call id `<r
 becomes `<id:1>/fetch`; mapping keys are left alone. The ids are collected from every
 projection, expected or not, and numbered in order of first appearance (by position, within one
 text), walking the trace, then the events, stream, tool calls (tools in sorted order), output and
-backward outcomes, with lists in order and mapping keys in sorted order. A `raises` expectation
-is compared as is; a case whose error names the run id gives `run_id`.
+backward outcomes, with lists in order and mapping keys in sorted order; projections added later
+are walked after the backward outcomes. Since replacement is textual, the TS runner's id source
+makes ids that can't occur in other text (UUIDs, for example). A `raises` expectation is compared
+as is; a case whose error names the run id gives `run_id`.
 
 **Pooled runs.** When the run's `num_workers` isn't 0, the trace, events, stream and each tool's
 calls are first grouped: run-level entries first, then each node's entries, nodes in sorted

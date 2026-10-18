@@ -30,7 +30,6 @@ expect:
           bound_inputs: {}
           route:
             kind: record
-            expression: "{}"
           scope: {static_path: [__start__], flow_path: [], occurrence_path: [], boundary: start}
           node_data: {input_output_paths: {}}
     - [node_started, c]
@@ -41,7 +40,6 @@ expect:
           bound_inputs: {}
           route:
             kind: record
-            expression: "{}"
           scope: {static_path: [c], flow_path: [], occurrence_path: [], boundary: null}
     - [node_started, __end__]
     - - node_succeeded
@@ -54,8 +52,6 @@ expect:
             children:
               - kind: source
                 source: {run_id: r1, execution_seq: 3, path: []}
-                expression: c.output
-            expression: "{result: c.output}"
             names: [result]
           evaluated_keys: [result]
           scope: {static_path: [__end__], flow_path: [], occurrence_path: [], boundary: end}

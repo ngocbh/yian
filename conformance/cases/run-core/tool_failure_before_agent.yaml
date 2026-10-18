@@ -59,16 +59,7 @@ expect:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
-        call_time_llm:
-          agents: {review: {}}
-          selection:
-            defaults: {}
-            provider_models: {}
-            connections:
-              openai: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
-            api_endpoint: "https://api.openai.com/v1"
-            stray_model: false
-            host: null
+        call_time_llm: {agents: {review: {}}}
     - [node_started, __start__]
     - [node_succeeded, __start__, {value: {x: a}}]
     - [node_started, check]

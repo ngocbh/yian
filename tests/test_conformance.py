@@ -121,7 +121,8 @@ _KIND_KEYS = {
     "expr": {"expr", "template", "values", "item", "mode", "typedefs", "env"},
     "value": {"type", "typedefs", "value", "env"},
     "defaults": {"env"},
-    "fingerprint": _FLOW | {"other"},
+    # Both runners load `flow` and `other` as written, so there is no `python_flow`.
+    "fingerprint": _FLOW - {"python_flow"} | {"other"},
     "cli": _FLOW | {"args", "stdin"},
 }
 _REQUIRED = {
@@ -581,8 +582,8 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
 
     `tools` holds a stub per `host.tools` entry and `ask_user` for `host.human`; each call is
     recorded in `calls`, by tool, and takes its script's next entry, as each TOOL backoff takes
-    the next `host.jitter` draw. `check()` fails the case when a script ran out or has entries
-    left.
+    the next `host.jitter` draw. `check()` fails the case when a script ran out, and
+    `check(left=True)` also when one has entries left.
     """
     host = case.get("host", {})
     calls: dict = {}
@@ -640,11 +641,13 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
         scripts["host.jitter"] = list(host["jitter"])
         patch.setattr(tool_node, "_jitter", lambda: take("host.jitter", "a backoff draw"))
 
-    def check() -> None:
-        left = [f"`{label}` has {len(script)} {'entry' if len(script) == 1 else 'entries'} left"
-                for label, script in scripts.items() if script]
-        if problems or left:
-            _fail("\n".join(problems + left))
+    def check(left: bool = False) -> None:
+        leftovers = [
+            f"`{label}` has {len(script)} {'entry' if len(script) == 1 else 'entries'} left"
+            for label, script in scripts.items() if left and script
+        ]
+        if problems or leftovers:
+            _fail("\n".join(problems + leftovers))
 
     return tools, calls, check
 
@@ -669,7 +672,8 @@ def _data(value: object, flow) -> object:
     if isinstance(value, (list, tuple)):
         return [_data(item, flow) for item in value]
     if isinstance(value, (set, frozenset)):
-        return sorted(_data(item, flow) for item in value)
+        return sorted((_data(item, flow) for item in value),
+                      key=lambda item: _utf16(item) if isinstance(item, str) else item)
     if isinstance(value, dict):
         return {key: _data(item, flow) for key, item in value.items()}
     return value
@@ -687,7 +691,7 @@ def _event(event: object, flow) -> list:
 
 
 # The README's trace table: record kind -> (the payload field naming the node, the payload
-# fields kept); `None` keeps every field.
+# fields kept).
 _TRACE = {
     "run_started": (None, ("inputs", "learnable", "num_workers", "defaults",
                            "effective_llm_by_static_path", "call_time_llm")),
@@ -702,7 +706,9 @@ _TRACE = {
         ("memory_commit_requested", "memory_commit_succeeded", "memory_commit_failed"),
         (None, ("memory", "commit_id", "attempt_id", "mutations", "failure")),
     ),
-    **dict.fromkeys(("backward_started", "backward_ready", "backward_finished"), (None, None)),
+    "backward_started": (None, ("attempt_id", "feedback")),
+    "backward_ready": (None, ("attempt_id", "root_result", "attributed_results", "proposals")),
+    "backward_finished": (None, ("attempt_id", "outcome", "attributed_results")),
 }
 _LEFT_OUT_WHEN_EMPTY = {"defaults", "effective_llm_by_static_path", "call_time_llm"}
 _CAPTURE_LEFT_OUT_WHEN_EMPTY = {"evaluated_keys", "items", "node_data", "input_names",
@@ -716,17 +722,26 @@ def _cut(connection: dict) -> dict:
             if name in connection}
 
 
-def _cut_llm(config: dict | None) -> None:
-    """Cut the `_connection` of an LLM config, when it has one."""
-    if config and config.get("_connection") is not None:
-        config["_connection"] = _cut(config["_connection"])
+def _llm(config: dict) -> dict:
+    """Return an agent's LLM config projected to the trace.
+
+    Its `llm_config` fields (keys not starting with `_`), `_header_names` and `_host_key` stay,
+    and its `_connection` is cut; any other `_` key is dropped.
+    """
+    kept = {key: value for key, value in config.items()
+            if not key.startswith("_") or key in ("_header_names", "_host_key")}
+    if config.get("_connection") is not None:
+        kept["_connection"] = _cut(config["_connection"])
+    return kept
 
 
 def _capture(capture: dict) -> dict:
     """Return a `forward_capture` projected to the trace, changing it in place."""
     def route(node: dict) -> dict:
+        # `expression` and `result_type` are text each implementation spells its own way.
         lean = {key: value for key, value in node.items()
-                if key in ("kind", "expression") or value not in (None, [], 0, "")}
+                if key not in ("expression", "result_type")
+                and (key == "kind" or value not in (None, [], 0, ""))}
         if "value_json" in lean:
             lean["value_json"] = json.loads(lean["value_json"])
         if "children" in lean:
@@ -735,8 +750,9 @@ def _capture(capture: dict) -> dict:
             lean["snapshot"] = route(lean["snapshot"])
         return lean
 
-    if capture["node_data"]:
-        _cut_llm(capture["node_data"].get("effective_llm_config"))
+    data = capture["node_data"]
+    if data and data.get("effective_llm_config") is not None:
+        data["effective_llm_config"] = _llm(data["effective_llm_config"])
     capture["route"] = route(capture["route"])
     for item in capture["items"]:
         item["capture"] = _capture(item["capture"])
@@ -763,11 +779,16 @@ def _trace(lines: list, flow) -> list:
         if kind == "run_started":
             pool = payload["initial_pool"]
             payload["inputs"] = pool["store"][pool["start_id"]]["value"]
-            for config in payload["effective_llm_by_static_path"].values():
-                _cut_llm(config)
+            payload["effective_llm_by_static_path"] = {
+                path: _llm(config)
+                for path, config in payload["effective_llm_by_static_path"].items()
+            }
             if payload.get("call_time_llm") is not None:
-                connections = payload["call_time_llm"]["selection"]["connections"]
-                connections.update({name: _cut(value) for name, value in connections.items()})
+                # `selection` is internal; its effect is each agent's `effective_llm_config` step.
+                agents = payload["call_time_llm"]["agents"]
+                payload["call_time_llm"] = {
+                    "agents": {path: _llm(config) for path, config in agents.items()}
+                }
         if kind == "node_succeeded":
             payload["value"] = payload["value"]["value"]
             if payload["commit_target"] == node:
@@ -781,7 +802,8 @@ def _trace(lines: list, flow) -> list:
             step = payload["step"]
             if "retry_in" in step:
                 step["retry_in"] = float(step["retry_in"])
-            _cut_llm(step.get("effective_llm_config"))
+            if step.get("effective_llm_config") is not None:
+                step["effective_llm_config"] = _llm(step["effective_llm_config"])
         backward = payload["outcome"]["failure"] if kind == "backward_finished" else None
         if backward is not None:
             backward.pop("cause_type", None)
@@ -791,7 +813,7 @@ def _trace(lines: list, flow) -> list:
                 backward["cause"] = failure(backward["cause"])
         payload = {
             key: value for key, value in payload.items()
-            if (kept is None or key in kept) and value is not None
+            if key in kept and value is not None
             and not (key in _LEFT_OUT_WHEN_EMPTY and not value)
         }
         entries.append([kind, node, payload] if payload else [kind, node])
@@ -801,7 +823,7 @@ def _trace(lines: list, flow) -> list:
 def _output(result: RunResult, flow) -> dict:
     """Return `result` in the form of `expect.output`."""
     if result.status == "succeeded":
-        return {"status": "succeeded", "output": result.output}
+        return {"status": "succeeded", "output": _data(result.output, flow)}
     return {"status": result.status, "failure": _failure(result.failure, flow)}
 
 
@@ -957,6 +979,8 @@ def _run_run(case: dict, case_dir: Path) -> None:
                 _fail(f"backward call {index + 1} appended {len(after) - before} "
                       "`backward_finished` records, not one")
             outcomes.append(after[-1][2]["outcome"])
+        # A call past a script's end is the case's own error, whatever it made differ.
+        check()
         text = log.read_text(encoding="utf-8") if log.exists() else ""
         lines = text.splitlines()
         actual = {
@@ -982,7 +1006,7 @@ def _run_run(case: dict, case_dir: Path) -> None:
                 _compare(name, actual[name], expect[name],
                          by_value=name not in ("trace", "backward"))
         # Last: a leftover entry usually follows from a divergence the comparisons show.
-        check()
+        check(left=True)
 
 
 def _run_cli(case: dict, case_dir: Path) -> None:

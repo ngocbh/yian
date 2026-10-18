@@ -1,4 +1,4 @@
-/** Tests for OpenAI Responses body building in `src/llm/protocols/openai_responses.ts`: input items, tools, tool choice, block merge, subscription. */
+/** Tests for OpenAI Responses body building in `src/llm/protocols/openai_responses.ts`: input items, assistant replay, tools, tool choice, block merge, subscription. */
 
 import { describe, expect, test } from "bun:test";
 
@@ -8,14 +8,20 @@ import {
   Message,
   NamedTool,
   type Part,
+  ReasoningPart,
+  RefusalPart,
+  type ReplayDegradedReason,
+  type ReplayKey,
+  replayRecord,
   Request,
   type Role,
   TextPart,
+  ToolCallPart,
   type ToolChoice,
   ToolResultPart,
   ToolSpec,
 } from "../../src/llm/messages.ts";
-import { OpenAIResponses } from "../../src/llm/protocols/openai_responses.ts";
+import { OpenAIResponses, PROTOCOL } from "../../src/llm/protocols/openai_responses.ts";
 import { type JsonObject, type JsonValue, parseJson } from "../../src/typesys/json.ts";
 
 const DOUBLE = new ToolSpec({
@@ -43,6 +49,8 @@ function result(callId: string, content: string, isError = false): ToolResultPar
 interface BodyOptions {
   model?: string;
   provider?: string;
+  account?: string | null;
+  onReplayDegraded?: (reason: ReplayDegradedReason) => void;
   subscription?: boolean;
   block?: JsonObject | null;
   tools?: ToolSpec[];
@@ -54,8 +62,10 @@ function bodyOf(messages: Message[], options: BodyOptions = {}): JsonObject {
   const protocol = new OpenAIResponses({
     model: options.model ?? "gpt-5.5",
     provider: options.provider ?? "openai",
+    account: options.account,
     block: options.block,
     subscription: options.subscription,
+    onReplayDegraded: options.onReplayDegraded,
   });
   return protocol.buildBody(
     new Request({
@@ -174,6 +184,394 @@ describe("system and user messages", () => {
   test("message name is never sent", () => {
     const input = bodyOf([user("Hi."), message("tool", result("call_1", "6"))])["input"] as JsonObject[];
     for (const item of input) expect(Object.hasOwn(item, "name")).toBe(false);
+  });
+});
+
+const KEY: ReplayKey = { protocol: PROTOCOL, provider: "openai", model: "gpt-5.5" };
+const REASONING_ITEM: JsonObject = {
+  id: "rs_1",
+  type: "reasoning",
+  summary: [{ type: "summary_text", text: "Thinking about it." }],
+  encrypted_content: "ENC-CONTINUATION-1",
+};
+const CALL_ITEM: JsonObject = {
+  id: "fc_1",
+  type: "function_call",
+  name: "double",
+  arguments: '{"value": 3}',
+  call_id: "call_1",
+  status: "completed",
+};
+
+/** Return a replay record for `fields`, keyed to the default protocol object unless `key` is given. */
+function record(fields: JsonObject, key: ReplayKey = KEY): JsonObject {
+  return replayRecord(key, fields);
+}
+
+function assistant(...parts: Part[]): Message {
+  return message("assistant", ...parts);
+}
+
+function reasoning(item: JsonObject = REASONING_ITEM): ReasoningPart {
+  return new ReasoningPart("Thinking about it.", record({ item }));
+}
+
+function call(id: string, args: JsonObject, item: JsonObject | null = null): ToolCallPart {
+  return new ToolCallPart({ id, name: "double", arguments: args, providerPayload: item ? record({ item }) : null });
+}
+
+/** A text part with a record of `fields`, or no payload when `fields` is absent. */
+function text(value: string, fields?: JsonObject): TextPart {
+  return new TextPart(value, fields ? record({ annotations: [], ...fields }) : null);
+}
+
+function outputText(value: string, annotations: JsonValue[] = []): JsonObject {
+  return { type: "output_text", text: value, annotations };
+}
+
+function refusal(value: string): JsonObject {
+  return { type: "refusal", refusal: value };
+}
+
+function assistantItem(content: JsonObject[], id?: string, phase?: string): JsonObject {
+  const item: JsonObject = { type: "message", role: "assistant", content };
+  if (id !== undefined) item["id"] = id;
+  if (phase !== undefined) item["phase"] = phase;
+  return item;
+}
+
+function fallback(callId: string, args: string, name = "double"): JsonObject {
+  return { type: "function_call", name, arguments: args, call_id: callId };
+}
+
+function withoutStatus(item: JsonObject): JsonObject {
+  const { status: _, ...rest } = item;
+  return rest;
+}
+
+/** Return the input items after the leading user message. */
+function replayed(messages: Message[], options: BodyOptions = {}): JsonValue[] {
+  return (bodyOf([user("Hi."), ...messages], options)["input"] as JsonValue[]).slice(1);
+}
+
+describe("assistant messages: reasoning", () => {
+  test("a reasoning item is replayed without null members at any depth", () => {
+    const item: JsonObject = {
+      ...REASONING_ITEM,
+      status: null,
+      summary: [{ type: "summary_text", text: "Thinking about it.", extra: null }],
+    };
+    expect(replayed([assistant(reasoning(item))])).toEqual([REASONING_ITEM]);
+  });
+
+  test("reasoning without payload is dropped", () => {
+    expect(replayed([assistant(new ReasoningPart("Thinking."))])).toEqual([]);
+  });
+});
+
+describe("assistant messages: tool calls", () => {
+  test("a call item is replayed", () => {
+    expect(replayed([assistant(call("call_1", { value: 3n }, CALL_ITEM))])).toEqual([CALL_ITEM]);
+  });
+
+  test("a call without payload uses the fallback shape with compact non-ASCII arguments", () => {
+    const greet = new ToolCallPart({ id: "call_1", name: "greet", arguments: { name: "Bùi" } });
+    expect(replayed([assistant(greet)])).toEqual([fallback("call_1", '{"name":"Bùi"}', "greet")]);
+  });
+
+  test("a fallback call with unparsed arguments sends the raw text", () => {
+    const raw = new ToolCallPart({ id: "call_1", name: "double", arguments: null, rawArguments: '{"value": 3' });
+    expect(replayed([assistant(raw)])).toEqual([fallback("call_1", '{"value": 3')]);
+  });
+
+  test("fallback calls go after the message's other items", () => {
+    const message = assistant(call("call_2", { value: 4n }), reasoning(), text("Let me check.", { id: "msg_1" }));
+    expect(replayed([message])).toEqual([
+      REASONING_ITEM,
+      assistantItem([outputText("Let me check.")], "msg_1"),
+      fallback("call_2", '{"value":4}'),
+    ]);
+  });
+
+  test("a fallback call whose call id is already in input is skipped", () => {
+    const sent = call("call_1", { value: 3n }, CALL_ITEM);
+    const duplicate = call("call_1", { value: 3n });
+    expect(replayed([assistant(sent, duplicate)])).toEqual([CALL_ITEM]);
+    // An earlier message's replayed call counts too.
+    expect(replayed([assistant(sent), assistant(duplicate)])).toEqual([CALL_ITEM]);
+  });
+
+  test("only the first of two fallback calls sharing a call id is sent", () => {
+    const first = call("call_1", { value: 3n });
+    const second = call("call_1", { value: 4n });
+    expect(replayed([assistant(first, second)])).toEqual([fallback("call_1", '{"value":3}')]);
+    expect(replayed([assistant(first), assistant(second)])).toEqual([fallback("call_1", '{"value":3}')]);
+  });
+});
+
+describe("assistant messages: message items", () => {
+  test("a text part becomes a message item with its id and annotations", () => {
+    const annotation: JsonObject = { type: "url_citation", url: "https://x.test", start_index: 0n };
+    const part = text("Hello there.", { id: "msg_1", annotations: [annotation] });
+    expect(replayed([assistant(part)])).toEqual([assistantItem([outputText("Hello there.", [annotation])], "msg_1")]);
+  });
+
+  test("annotations are sent without null members", () => {
+    const annotation: JsonObject = { type: "url_citation", title: null, url: "https://x.test" };
+    const part = text("Hello.", { id: "msg_1", annotations: [annotation] });
+    expect(replayed([assistant(part)])).toEqual([
+      assistantItem([outputText("Hello.", [{ type: "url_citation", url: "https://x.test" }])], "msg_1"),
+    ]);
+  });
+
+  test("a text part without payload has no id", () => {
+    expect(replayed([assistant(text("Hello."))])).toEqual([assistantItem([outputText("Hello.")])]);
+  });
+
+  test("an empty text part is rendered like any other", () => {
+    expect(replayed([assistant(text("", { id: "msg_1" }))])).toEqual([assistantItem([outputText("")], "msg_1")]);
+  });
+
+  test("parts sharing a message id merge and phase takes the last non-null value", () => {
+    const items = replayed([
+      assistant(
+        text("Let me check.", { id: "msg_1", phase: "commentary" }),
+        text("Part A.", { id: "msg_2", phase: "final_answer" }),
+        text("Part B.", { id: "msg_2" }),
+      ),
+    ]);
+    expect(items).toEqual([
+      assistantItem([outputText("Let me check.")], "msg_1", "commentary"),
+      assistantItem([outputText("Part A."), outputText("Part B.")], "msg_2", "final_answer"),
+    ]);
+  });
+
+  test("a merge scans all earlier items and updates phase", () => {
+    const later = text("B.", { id: "msg_1", phase: "final_answer" });
+    const message = assistant(text("A.", { id: "msg_1" }), reasoning(), later);
+    expect(replayed([message])).toEqual([
+      assistantItem([outputText("A."), outputText("B.")], "msg_1", "final_answer"),
+      REASONING_ITEM,
+    ]);
+  });
+
+  test("a merge reaches an earlier assistant message", () => {
+    const [first, second] = [assistant(text("A.", { id: "msg_1" })), assistant(text("B.", { id: "msg_1" }))];
+    const items = replayed([first, user("More."), second]);
+    expect(items).toEqual([
+      assistantItem([outputText("A."), outputText("B.")], "msg_1"),
+      { type: "message", role: "user", content: "More." },
+    ]);
+  });
+
+  test("a merge only targets message items", () => {
+    // A reasoning item with the same id is not a message to merge into.
+    const items = replayed([assistant(reasoning(), text("A.", { id: "rs_1" }))]);
+    expect(items).toEqual([REASONING_ITEM, assistantItem([outputText("A.")], "rs_1")]);
+  });
+
+  test("a refusal round-trips inside its message item", () => {
+    const part = new RefusalPart("I can't help with that.", record({ id: "msg_1", phase: "final_answer" }));
+    expect(replayed([assistant(part)])).toEqual([
+      assistantItem([refusal("I can't help with that.")], "msg_1", "final_answer"),
+    ]);
+  });
+
+  test("a refusal merges with text of the same message", () => {
+    const message = assistant(text("Partly.", { id: "msg_1" }), new RefusalPart("No more.", record({ id: "msg_1" })));
+    expect(replayed([message])).toEqual([assistantItem([outputText("Partly."), refusal("No more.")], "msg_1")]);
+  });
+
+  test("reasoning and a call round-trip into input", () => {
+    const body = bodyOf(
+      [
+        system("You are terse."),
+        user("Double 3."),
+        assistant(reasoning(), call("call_1", { value: 3n }, CALL_ITEM)),
+        message("tool", result("call_1", "6")),
+      ],
+      { tools: [DOUBLE] },
+    );
+    expect(body).toEqual({
+      model: "gpt-5.5",
+      input: [
+        { type: "message", role: "system", content: "You are terse." },
+        { type: "message", role: "user", content: "Double 3." },
+        REASONING_ITEM,
+        CALL_ITEM,
+        { type: "function_call_output", call_id: "call_1", output: "6" },
+      ],
+      stream: true,
+      tools: [{ type: "function", name: "double", description: "Double an integer.", parameters: DOUBLE.parameters }],
+    });
+  });
+});
+
+/** Payload overrides for `mixed`'s parts. */
+interface MixedPayloads {
+  reasoning?: JsonObject;
+  text?: JsonObject;
+  refusal?: JsonObject;
+  call?: JsonObject;
+}
+
+const TEXT_FIELDS: JsonObject = { id: "msg_1", phase: "final_answer", annotations: [{ type: "x" }] };
+
+/** An assistant message with one part of each kind, each with a usable record for `key` unless overridden. */
+function mixed(payloads: MixedPayloads = {}, key: ReplayKey = KEY): Message {
+  return assistant(
+    new ReasoningPart("r", payloads.reasoning ?? record({ item: REASONING_ITEM }, key)),
+    new TextPart("Hello.", payloads.text ?? record(TEXT_FIELDS, key)),
+    new RefusalPart("No.", payloads.refusal ?? record({ id: "msg_1" }, key)),
+    new ToolCallPart({
+      id: "call_1",
+      name: "double",
+      arguments: { value: 3n },
+      providerPayload: payloads.call ?? record({ item: CALL_ITEM }, key),
+    }),
+  );
+}
+
+const OWN: JsonValue[] = [
+  REASONING_ITEM,
+  assistantItem([outputText("Hello.", [{ type: "x" }]), refusal("No.")], "msg_1", "final_answer"),
+  CALL_ITEM,
+];
+const NEUTRAL: JsonValue[] = [
+  assistantItem([outputText("Hello.")]),
+  assistantItem([refusal("No.")]),
+  fallback("call_1", '{"value":3}'),
+];
+
+/** Render `messages` and return the items and the reasons passed to `onReplayDegraded`. */
+function degraded(messages: Message[], options: BodyOptions = {}): [JsonValue[], ReplayDegradedReason[]] {
+  const reasons: ReplayDegradedReason[] = [];
+  const items = replayed(messages, { ...options, onReplayDegraded: (reason) => reasons.push(reason) });
+  return [items, reasons];
+}
+
+describe("assistant messages: replay records", () => {
+  test("usable records render the message from them, signalling nothing", () => {
+    expect(degraded([mixed()])).toEqual([OWN, []]);
+  });
+
+  const other = (change: Partial<ReplayKey>) => record(TEXT_FIELDS, { ...KEY, ...change });
+  const unusable: [string, MixedPayloads, ReplayDegradedReason][] = [
+    ["another protocol", { text: other({ protocol: "anthropic_messages" }) }, "other_protocol"],
+    ["another provider", { text: other({ provider: "azure" }) }, "other_provider"],
+    ["another model", { text: other({ model: "gpt-5" }) }, "other_model"],
+    ["an account the key lacks", { text: other({ account: "acct_1" }) }, "other_account"],
+    ["an unknown version", { text: { ...record(TEXT_FIELDS), v: 2n } }, "unknown_version"],
+    ["a malformed envelope", { text: { ...record(TEXT_FIELDS), provider: 5n } }, "malformed"],
+    ["an unknown field", { refusal: record({ id: "msg_1", annotations: [] }) }, "unknown_field"],
+    [
+      "a reasoning item of the wrong type",
+      { reasoning: record({ item: { ...REASONING_ITEM, type: "message" } }) },
+      "malformed",
+    ],
+    ["a reasoning record without an item", { reasoning: record({}) }, "malformed"],
+    ["a call item of the wrong type", { call: record({ item: { ...CALL_ITEM, type: "reasoning" } }) }, "malformed"],
+    ["a call item for another call id", { call: record({ item: { ...CALL_ITEM, call_id: "call_2" } }) }, "malformed"],
+    ["a non-string id", { text: record({ ...TEXT_FIELDS, id: 5n }) }, "malformed"],
+    ["non-array annotations", { text: record({ ...TEXT_FIELDS, annotations: "x" }) }, "malformed"],
+  ];
+  for (const [name, payloads, reason] of unusable) {
+    test(`a record with ${name} renders the whole message neutrally and signals ${reason} once`, () => {
+      expect(degraded([mixed(payloads)])).toEqual([NEUTRAL, [reason]]);
+    });
+  }
+
+  test("a key with an account refuses records without one", () => {
+    const keyed = { ...KEY, account: "acct_1" };
+    const message = mixed({ text: record(TEXT_FIELDS) }, keyed);
+    expect(degraded([message], { account: "acct_1" })).toEqual([NEUTRAL, ["other_account"]]);
+  });
+
+  test("a matching record with an account replays", () => {
+    const message = mixed({}, { ...KEY, account: "acct_1" });
+    expect(degraded([message], { account: "acct_1" })).toEqual([OWN, []]);
+  });
+
+  test("the signal names the first unusable part's reason", () => {
+    const message = mixed({
+      text: record(TEXT_FIELDS, { ...KEY, model: "gpt-5" }),
+      call: { ...record({ item: CALL_ITEM }), v: 2n },
+    });
+    expect(degraded([message])).toEqual([NEUTRAL, ["other_model"]]);
+  });
+
+  test("each degraded message signals once", () => {
+    const bad = mixed({ text: record(TEXT_FIELDS, { ...KEY, model: "gpt-5" }) });
+    const [, reasons] = degraded([bad, mixed(), bad]);
+    expect(reasons).toEqual(["other_model", "other_model"]);
+  });
+
+  test("parts without payloads render neutrally and signal nothing", () => {
+    const calls = call("call_1", { value: 3n });
+    const bare = assistant(new ReasoningPart("r"), text("Hello."), new RefusalPart("No."), calls);
+    expect(degraded([bare])).toEqual([NEUTRAL, []]);
+  });
+
+  test("without a callback an unusable record still renders neutrally", () => {
+    expect(replayed([mixed({ text: record(TEXT_FIELDS, { ...KEY, model: "gpt-5" }) })])).toEqual(NEUTRAL);
+  });
+
+  test("a throwing callback propagates from buildBody", () => {
+    const message = mixed({ text: record(TEXT_FIELDS, { ...KEY, model: "gpt-5" }) });
+    const onReplayDegraded = () => {
+      throw new Error("stop");
+    };
+    expect(() => bodyOf([user("Hi."), message], { onReplayDegraded })).toThrow("stop");
+  });
+
+  test("a bigint and a number version are both accepted", () => {
+    const withNumber = { ...record({ item: CALL_ITEM }), v: 1 };
+    expect(degraded([mixed({ call: withNumber })])).toEqual([OWN, []]);
+    expect(record({})["v"]).toBe(1n);
+  });
+});
+
+describe("subscription assistant messages", () => {
+  test("message ids are omitted, so parts never merge", () => {
+    const message = assistant(
+      text("Part A.", { id: "msg_2", phase: "final_answer" }),
+      text("Part B.", { id: "msg_2", phase: "final_answer" }),
+    );
+    expect(replayed([message], { subscription: true })).toEqual([
+      assistantItem([outputText("Part A.")], undefined, "final_answer"),
+      assistantItem([outputText("Part B.")], undefined, "final_answer"),
+    ]);
+  });
+
+  test("status is dropped from replayed calls", () => {
+    const items = replayed([assistant(call("call_1", { value: 3n }, CALL_ITEM))], { subscription: true });
+    expect(items).toEqual([withoutStatus(CALL_ITEM)]);
+  });
+
+  test("encrypted reasoning is replayed", () => {
+    expect(degraded([mixed()], { subscription: true })).toEqual([
+      [
+        REASONING_ITEM,
+        assistantItem([outputText("Hello.", [{ type: "x" }])], undefined, "final_answer"),
+        assistantItem([refusal("No.")]),
+        withoutStatus(CALL_ITEM),
+      ],
+      [],
+    ]);
+  });
+
+  const { encrypted_content: _, ...plain } = REASONING_ITEM;
+  const unencrypted = [plain, { ...plain, encrypted_content: "" }, { ...plain, encrypted_content: null }];
+  for (const item of unencrypted) {
+    const shown = JSON.stringify(item["encrypted_content"]);
+    test(`reasoning without encrypted content renders the message neutrally without a signal (${shown})`, () => {
+      expect(degraded([mixed({ reasoning: record({ item }) })], { subscription: true })).toEqual([NEUTRAL, []]);
+    });
+  }
+
+  test("reasoning without encrypted content and an unusable later record signals the record's reason", () => {
+    const message = mixed({ reasoning: record({ item: plain }), call: { ...record({ item: CALL_ITEM }), v: 2n } });
+    expect(degraded([message], { subscription: true })).toEqual([NEUTRAL, ["unknown_version"]]);
   });
 });
 

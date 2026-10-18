@@ -1,10 +1,10 @@
 /**
- * Provider-neutral messages with a stable JSON shape.
+ * Provider-neutral messages, requests and replies, with a stable JSON shape.
  *
  * A `Message` holds typed parts; `Message.toJSON` writes the `yian.message.v1` JSON shape and
  * `Message.fromJSON` reads it back strictly. Every class checks its values on construction, so
- * an invalid message cannot exist: opaque provider data and tool-call arguments must be plain
- * JSON within yian's nesting limit. The check walks values iteratively, so a deep value throws
+ * an invalid message cannot exist: opaque provider data, tool-call arguments and tool parameters
+ * must be plain JSON within yian's nesting limit. The check walks values iteratively, so a deep value throws
  * `MessageFormatError`, never `RangeError`. Fields are camelCase; JSON keys are snake_case.
  */
 
@@ -194,11 +194,35 @@ function optionalString(value: unknown, path: string): string | null {
   return value === null || value === undefined ? null : checkString(value, path);
 }
 
-/** Return a copy of `value` if it is a JSON object, or `null` when it is `null` or `undefined`. */
-function optionalObject(value: unknown, path: string): JsonObject | null {
-  if (value === null || value === undefined) return null;
+/** Return a copy of `value` if it is a JSON object. */
+function checkObject(value: unknown, path: string): JsonObject {
   if (!isPlainObject(value)) throw new MessageFormatError(path, `expected an object, got ${typeName(value)}`);
   return checkJsonValue(value, path) as JsonObject;
+}
+
+/** Return a copy of `value` as `checkObject` does, or `null` when it is `null` or `undefined`. */
+function optionalObject(value: unknown, path: string): JsonObject | null {
+  return value === null || value === undefined ? null : checkObject(value, path);
+}
+
+/** Return `value` if it is a boolean, or `null` when it is `null` or `undefined`. */
+function optionalBoolean(value: unknown, path: string): boolean | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "boolean") throw new MessageFormatError(path, `expected boolean, got ${typeName(value)}`);
+  return value;
+}
+
+/** Return `value` if it is a safe-integer `number`. */
+function checkInteger(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    throw new MessageFormatError(path, `expected integer, got ${typeName(value)}`);
+  }
+  return value;
+}
+
+/** Return `value` as `checkInteger` does, or `null` when it is `null` or `undefined`. */
+function optionalInteger(value: unknown, path: string): number | null {
+  return value === null || value === undefined ? null : checkInteger(value, path);
 }
 
 /**
@@ -676,5 +700,132 @@ export class Message {
   /** Return the tool-call parts in order. */
   toolCalls(): ToolCallPart[] {
     return this.parts.filter((part) => part instanceof ToolCallPart);
+  }
+}
+
+/** Token counts for one model call. */
+export class Usage {
+  /** Prompt tokens. */
+  readonly inputTokens: number;
+  /** Completion tokens. */
+  readonly outputTokens: number;
+  /** Their total, as the provider reports it. */
+  readonly totalTokens: number;
+  /** Prompt tokens read from the provider's cache. */
+  readonly cacheReadTokens: number | null;
+  /** Prompt tokens written to the cache. */
+  readonly cacheCreationTokens: number | null;
+  /** Output tokens spent on reasoning. */
+  readonly reasoningTokens: number | null;
+
+  constructor(options: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    cacheReadTokens?: number | null;
+    cacheCreationTokens?: number | null;
+    reasoningTokens?: number | null;
+  }) {
+    this.inputTokens = checkInteger(options.inputTokens, "input_tokens");
+    this.outputTokens = checkInteger(options.outputTokens, "output_tokens");
+    this.totalTokens = checkInteger(options.totalTokens, "total_tokens");
+    this.cacheReadTokens = optionalInteger(options.cacheReadTokens, "cache_read_tokens");
+    this.cacheCreationTokens = optionalInteger(options.cacheCreationTokens, "cache_creation_tokens");
+    this.reasoningTokens = optionalInteger(options.reasoningTokens, "reasoning_tokens");
+  }
+}
+
+/** A tool the model may call. */
+export class ToolSpec {
+  /** The tool name. */
+  readonly name: string;
+  /** What the tool does, for the model. */
+  readonly description: string;
+  /** The JSON Schema of its arguments; checked and copied like a payload. */
+  readonly parameters: JsonObject;
+  /** Ask the provider to enforce the schema; `null` leaves it to the provider. */
+  readonly strict: boolean | null;
+
+  constructor(options: { name: string; description: string; parameters: JsonObject; strict?: boolean | null }) {
+    this.name = checkString(options.name, "name");
+    this.description = checkString(options.description, "description");
+    this.strict = optionalBoolean(options.strict, "strict");
+    this.parameters = checkObject(options.parameters, "parameters");
+  }
+}
+
+/** A tool choice that forces one named tool. */
+export class NamedTool {
+  /** The tool the model must call. */
+  readonly name: string;
+
+  constructor(name: string) {
+    this.name = checkString(name, "name");
+  }
+}
+
+/** `auto`, `required`, `none`, a `NamedTool`, or `null` to leave the choice to the provider. */
+export type ToolChoice = "auto" | "required" | "none" | NamedTool | null;
+
+const TOOL_CHOICES: ReadonlySet<unknown> = new Set(["auto", "required", "none"]);
+
+/** One model call's input. */
+export class Request {
+  /** The conversation, a frozen copy of the array given. */
+  readonly messages: readonly Message[];
+  /** Tools the model may call, a frozen copy of the array given. */
+  readonly tools: readonly ToolSpec[];
+  /** How the model may use the tools. */
+  readonly toolChoice: ToolChoice;
+  /** Whether the model may call several tools in one turn; `null` leaves the provider default. */
+  readonly parallelToolCalls: boolean | null;
+
+  constructor(options: {
+    messages: readonly Message[];
+    tools?: readonly ToolSpec[];
+    toolChoice?: ToolChoice;
+    parallelToolCalls?: boolean | null;
+  }) {
+    this.messages = frozenArray(options.messages, "messages", (item) => item instanceof Message, "a Message");
+    this.tools = frozenArray(options.tools ?? [], "tools", (item) => item instanceof ToolSpec, "a ToolSpec");
+    const choice: unknown = options.toolChoice ?? null;
+    if (!(choice === null || choice instanceof NamedTool || TOOL_CHOICES.has(choice))) {
+      throw new MessageFormatError("tool_choice", "expected auto, required, none, a NamedTool or null");
+    }
+    this.toolChoice = choice as ToolChoice;
+    this.parallelToolCalls = optionalBoolean(options.parallelToolCalls, "parallel_tool_calls");
+  }
+}
+
+/** One model call's reply. */
+export class Response {
+  /** The assistant message. */
+  readonly message: Message;
+  /** Token counts, when the provider reported them. */
+  readonly usage: Usage | null;
+  /** `stop`, `length`, `tool_calls`, `content_filter` or other provider text. */
+  readonly finishReason: string | null;
+  /** The provider's id for the reply. */
+  readonly responseId: string | null;
+
+  constructor(options: {
+    message: Message;
+    usage?: Usage | null;
+    finishReason?: string | null;
+    responseId?: string | null;
+  }) {
+    const message: unknown = options.message;
+    if (!(message instanceof Message)) {
+      throw new MessageFormatError("message", `expected a Message, got ${typeName(message)}`);
+    }
+    if (message.role !== "assistant") throw new MessageFormatError("message.role", "expected assistant");
+    this.message = message;
+    const usage = options.usage ?? null;
+    if (!(usage === null || usage instanceof Usage)) {
+      throw new MessageFormatError("usage", `expected a Usage, got ${typeName(usage)}`);
+    }
+    this.usage = usage;
+    this.finishReason = optionalString(options.finishReason, "finish_reason");
+    this.responseId = optionalString(options.responseId, "response_id");
   }
 }

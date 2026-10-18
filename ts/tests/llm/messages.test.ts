@@ -1,5 +1,5 @@
 /**
- * Messages: the stable JSON shape, strict decoding and construction checks, a port of
+ * Messages, requests and replies: the stable JSON shape, strict decoding and construction checks, a port of
  * `tests/llm/test_messages.py`, plus JavaScript's own values: ints of any size, `-0`, a
  * `"__proto__"` key, non-plain objects, `undefined` and array holes.
  */
@@ -14,11 +14,16 @@ import {
   MediaPart,
   Message,
   MessageFormatError,
+  NamedTool,
   ReasoningPart,
   RefusalPart,
+  Request,
+  Response,
   TextPart,
   ToolCallPart,
   ToolResultPart,
+  ToolSpec,
+  Usage,
 } from "../../src/llm/messages.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 
@@ -611,5 +616,169 @@ describe("helpers", () => {
 
   test("toolCalls()", () => {
     expect(fullMessage().toolCalls().map((call) => call.id)).toEqual(["call_1", "call_2", "call_3"]);
+  });
+});
+
+describe("tool specs", () => {
+  test("NaN in parameters is refused", () => {
+    expect(formatError(() => new ToolSpec({ name: "f", description: "d", parameters: { a: NaN } })).message).toBe(
+      "parameters.a: float is not finite",
+    );
+  });
+
+  test("parameters must be an object", () => {
+    expect(formatError(() => new ToolSpec({ name: "f", description: "d", parameters: bad(null) })).message).toBe(
+      "parameters: expected an object, got null",
+    );
+    expect(formatError(() => new ToolSpec({ name: "f", description: "d", parameters: bad([]) })).message).toBe(
+      "parameters: expected an object, got array",
+    );
+  });
+
+  test("parameters are copied", () => {
+    const parameters = { type: "object", properties: {} as Data };
+    const spec = new ToolSpec({ name: "f", description: "d", parameters });
+    parameters.properties["x"] = {};
+    expect(spec.parameters).toEqual({ type: "object", properties: {} });
+  });
+
+  test("the nesting limit applies to parameters", () => {
+    install({ ...BUILTIN, maxValueNesting: 3 });
+    new ToolSpec({ name: "f", description: "d", parameters: { a: [{}] } });
+    expect(formatError(() => new ToolSpec({ name: "f", description: "d", parameters: { a: [[{}]] } })).path).toBe(
+      "parameters.a[0][0]",
+    );
+  });
+
+  test("a description with an unpaired surrogate", () => {
+    const error = formatError(() => new ToolSpec({ name: "f", description: "x\ud800", parameters: {} }));
+    expect([error.path, error.reason]).toEqual(["description", "string has an unpaired surrogate"]);
+  });
+
+  test("strict is a boolean, null when absent", () => {
+    expect(new ToolSpec({ name: "f", description: "d", parameters: {} }).strict).toBeNull();
+    expect(new ToolSpec({ name: "f", description: "d", parameters: {}, strict: true }).strict).toBe(true);
+    expect(formatError(() => new ToolSpec({ name: "f", description: "d", parameters: {}, strict: bad(1) })).message).toBe(
+      "strict: expected boolean, got number",
+    );
+  });
+});
+
+describe("requests and replies", () => {
+  const hello = () => new Message({ role: "user", parts: [new TextPart("hi")] });
+
+  test("request defaults", () => {
+    const message = hello();
+    const request = new Request({ messages: [message] });
+    expect(request.messages).toEqual([message]);
+    expect(request.tools).toEqual([]);
+    expect(request.toolChoice).toBeNull();
+    expect(request.parallelToolCalls).toBeNull();
+  });
+
+  test("a request with tools and a named tool", () => {
+    const spec = new ToolSpec({ name: "f", description: "does f", parameters: { type: "object" }, strict: true });
+    const request = new Request({ messages: [], tools: [spec], toolChoice: new NamedTool("f") });
+    expect(request.tools).toEqual([spec]);
+    expect(request.toolChoice).toEqual(new NamedTool("f"));
+  });
+
+  test("a request's arrays are copied and frozen", () => {
+    const messages = [hello()];
+    const request = new Request({ messages });
+    messages.push(hello());
+    expect(request.messages).toHaveLength(1);
+    expect(Object.isFrozen(request.messages)).toBe(true);
+    expect(Object.isFrozen(request.tools)).toBe(true);
+  });
+
+  test("a request refuses a non-message", () => {
+    expect(formatError(() => new Request({ messages: bad([hello(), { role: "user" }]) })).message).toBe(
+      "messages[1]: expected a Message, got object",
+    );
+    expect(formatError(() => new Request({ messages: bad(hello()) })).message).toBe(
+      "messages: expected an array, got Message",
+    );
+    expect(formatError(() => new Request({ messages: bad([hello(), , hello()]) })).path).toBe("messages[1]");
+  });
+
+  test("a request refuses a non-tool-spec", () => {
+    expect(formatError(() => new Request({ messages: [], tools: bad([{ name: "f" }]) })).message).toBe(
+      "tools[0]: expected a ToolSpec, got object",
+    );
+    expect(formatError(() => new Request({ messages: [], tools: bad("f") })).message).toBe(
+      "tools: expected an array, got string",
+    );
+  });
+
+  for (const choice of ["auto", "required", "none", new NamedTool("f"), null] as const) {
+    test(`a request accepts the tool choice ${JSON.stringify(choice)}`, () => {
+      expect(new Request({ messages: [], toolChoice: choice }).toolChoice).toEqual(choice);
+    });
+  }
+
+  for (const choice of ["any", "Auto", { name: "f" }, 1, true]) {
+    test(`a request refuses the tool choice ${JSON.stringify(choice)}`, () => {
+      expect(formatError(() => new Request({ messages: [], toolChoice: bad(choice) })).message).toBe(
+        "tool_choice: expected auto, required, none, a NamedTool or null",
+      );
+    });
+  }
+
+  test("parallelToolCalls", () => {
+    expect(new Request({ messages: [], parallelToolCalls: true }).parallelToolCalls).toBe(true);
+    expect(new Request({ messages: [], parallelToolCalls: false }).parallelToolCalls).toBe(false);
+    expect(new Request({ messages: [] }).parallelToolCalls).toBeNull();
+    expect(formatError(() => new Request({ messages: [], parallelToolCalls: bad("yes") })).message).toBe(
+      "parallel_tool_calls: expected boolean, got string",
+    );
+  });
+
+  test("a response's message must be an assistant message", () => {
+    expect(formatError(() => new Response({ message: hello() })).message).toBe("message.role: expected assistant");
+    expect(formatError(() => new Response({ message: bad({ role: "assistant" }) })).message).toBe(
+      "message: expected a Message, got object",
+    );
+  });
+
+  test("response and usage", () => {
+    const usage = new Usage({ inputTokens: 1, outputTokens: 2, totalTokens: 3, cacheReadTokens: 1 });
+    const response = new Response({
+      message: new Message({ role: "assistant", parts: [] }),
+      usage,
+      finishReason: "stop",
+    });
+    expect(response.usage).toBe(usage);
+    expect(response.usage!.reasoningTokens).toBeNull();
+    expect(response.usage!.cacheCreationTokens).toBeNull();
+    expect(response.finishReason).toBe("stop");
+    expect(response.responseId).toBeNull();
+    expect(new Response({ message: new Message({ role: "assistant", parts: [] }) }).usage).toBeNull();
+  });
+
+  const USAGE_CASES: [Data, string, string][] = [
+    [{ inputTokens: 1.5 }, "input_tokens", "number"],
+    [{ outputTokens: true }, "output_tokens", "boolean"],
+    [{ totalTokens: null }, "total_tokens", "null"],
+    [{ totalTokens: "3" }, "total_tokens", "string"],
+    [{ cacheReadTokens: 1n }, "cache_read_tokens", "bigint"],
+    [{ cacheCreationTokens: false }, "cache_creation_tokens", "boolean"],
+    [{ cacheCreationTokens: 1.5 }, "cache_creation_tokens", "number"],
+    [{ reasoningTokens: "0" }, "reasoning_tokens", "string"],
+    [{ inputTokens: 2 ** 53 }, "input_tokens", "number"],
+  ];
+  for (const [fields, path, type] of USAGE_CASES) {
+    test(`Usage refuses a non-integer ${path} (${type})`, () => {
+      const error = formatError(() => new Usage({ inputTokens: 1, outputTokens: 2, totalTokens: 3, ...fields }));
+      expect([error.path, error.reason]).toEqual([path, `expected integer, got ${type}`]);
+    });
+  }
+
+  test("Usage allows absent or null optional counts and integral floats", () => {
+    const usage = new Usage({ inputTokens: 1.0, outputTokens: 0, totalTokens: 0, cacheCreationTokens: 4, reasoningTokens: null });
+    expect(usage.inputTokens).toBe(1);
+    expect(usage.cacheCreationTokens).toBe(4);
+    expect(usage.reasoningTokens).toBeNull();
+    expect(usage.cacheReadTokens).toBeNull();
   });
 });

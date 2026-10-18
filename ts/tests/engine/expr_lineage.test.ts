@@ -8,8 +8,11 @@
  * `hasFeedback` checks, a scalar route lifting a projected selection, a traced resolver that
  * doesn't return `ResolvedValue`, and interpolation spans counting code points.
  *
- * Left for later: the tests that run a registered builtin's temporary through a traced
- * `evalBinding`.
+ * Changed: an infinite temporary has a codec snapshot (`{"$float":"inf"}`), where Python's JSON
+ * has none; `a deep temporary keeps a complete snapshot` (10,000 levels) replaces
+ * `test_unrepresentable_temporary_does_not_prevent_the_outer_call`, since a snapshot here has no
+ * recursion limit; builtin results are copied by host intake, so Python's `is` checks are
+ * `toEqual`; the two hand-built accepted-shape tests gain one row each through `evalBinding`.
  *
  * Not ported:
  * - The MAP and WAIT capture tests (`test_reserved_map_over_uses_the_same_capture_path`,
@@ -406,6 +409,27 @@ describe("accepted result shape validates unavailable temporary routes", () => {
     }
     expect(() => routeFeedback(route, feedback, () => null)).toThrow(/requires a recorded object$/);
   });
+
+  test("through evalBinding", () => {
+    const calls: null[] = [];
+    standIn(
+      "accepted_temporary",
+      () => {
+        calls.push(null);
+        return FILE;
+      },
+      [],
+    );
+    const traced = evalBinding("${accepted_temporary()}", nothing, { trace: true });
+    const handBuilt = ValueRoute.literal(FILE).with({ kind: "opaque", expression: "accepted_temporary()" });
+    const value = { uri: "file:///tmp/example.txt" };
+    const feedback = { uri: "Check the URI." };
+    const routed = routeFeedback(traced.route, feedback, () => null, { recordedValue: value });
+    expect(routed.contributions).toEqual([]);
+    expect(routed.stopped.map((stop) => stop.feedback)).toEqual([feedback]);
+    expect(routed.stopped).toEqual(routeFeedback(handBuilt, feedback, () => null, { recordedValue: value }).stopped);
+    expect(calls).toEqual([null]);
+  });
 });
 
 describe("accepted projected value stops at a bounded ancestor", () => {
@@ -494,6 +518,32 @@ describe("bounded projected lists compose before opaque stopping", () => {
       RangeError,
     );
   });
+
+  test("through evalBinding", () => {
+    let raw: unknown = { files: [FILE] };
+    const path = [...Array.from({ length: 40 }, () => "nested"), "files"];
+    for (let i = 0; i < 40; i++) raw = { nested: raw };
+    const calls: null[] = [];
+    standIn(
+      "bounded_files",
+      () => {
+        calls.push(null);
+        return raw;
+      },
+      [],
+    );
+    const opaque = evalBinding("${bounded_files()}", nothing, { trace: true }).route;
+    const handBuilt = ValueRoute.literal(raw).with({ kind: "opaque", expression: "bounded_files()" });
+    const value = [{ uri: "file:///tmp/x" }];
+    const feedback = [{ uri: "Review." }];
+    const routed = routeFeedback(opaque.project(path), feedback, () => null, { recordedValue: value });
+    expect(routed.contributions).toEqual([]);
+    expect(routed.stopped.map((stop) => stop.feedback)).toEqual([feedback]);
+    expect(routed.stopped).toEqual(
+      routeFeedback(handBuilt.project(path), feedback, () => null, { recordedValue: value }).stopped,
+    );
+    expect(calls).toEqual([null]);
+  });
 });
 
 test("routed feedback is frozen", () => {
@@ -552,6 +602,9 @@ class Sources {
   }
 }
 
+/** A traced resolver that resolves nothing. */
+const nothing = (): ResolvedValue => new ResolvedValue(null, false);
+
 // Each registration's previous entry (or its absence), put back after the test, as Python's
 // `monkeypatch.setitem` does.
 const saved: [string, TemplateFn | undefined][] = [];
@@ -568,6 +621,28 @@ afterEach(() => {
     else TEMPLATE_FNS.set(name, fn);
   }
   saved.length = 0;
+});
+
+test("an infinite temporary keeps a valid final interpolation", () => {
+  const calls: null[] = [];
+  standIn(
+    "score",
+    () => {
+      calls.push(null);
+      return Infinity;
+    },
+    [],
+  );
+  const traced = evalBinding("score: ${score()}", nothing, { trace: true });
+  expect(traced.value).toBe("score: Infinity");
+  expect(traced.route.valueJson).toBe('"score: Infinity"');
+  const opaque = traced.route.children[0]!;
+  expect(opaque.kind).toBe("opaque");
+  expect(opaque.valueJson).toBe('{"$float":"inf"}');
+  expect(opaque.resultType).toBeNull();
+  expect(calls).toEqual([null]);
+  const stopped = routeFeedback(traced.route, "Check the score.", () => null).stopped;
+  expect(stopped[0]!.context.at(-1)!.result).toBe(Infinity);
 });
 
 test("direct projection lifts feedback into source shape", () => {
@@ -823,6 +898,152 @@ test("composed item route projects fields and preserves null presence", () => {
   );
 });
 
+test("a file temporary preserves interpolation and projection", () => {
+  const calls: string[] = [];
+  standIn(
+    "temporary",
+    () => {
+      calls.push("temporary");
+      return FILE;
+    },
+    [],
+  );
+  const untraced = evalBinding("value=${temporary()}", () => null);
+  expect(untraced).toBe('value={"uri":"file:///tmp/x","mime":null,"name":null}');
+  expect(calls).toEqual(["temporary"]);
+  const traced = evalBinding("value=${temporary()}", nothing, { trace: true });
+  expect(traced.value).toBe(untraced);
+  const routed = routeFeedback(traced.route, "Shorten.", () => null);
+  expect(routed.contributions).toEqual([]);
+  const detail = routed.stopped[0]!.context.at(-1)!;
+  expect(detail.resultJson).toBeNull();
+  expect(detail.resultType).toBe("file");
+  expect(routed.stopped[0]!.context[0]!.result).toBe(untraced);
+  expect(calls).toEqual(["temporary", "temporary"]);
+
+  standIn("record", () => ({ answer: "ok", temporary: FILE }), []);
+  const projected = evalBinding("${record().answer}", nothing, { trace: true });
+  expect(projected.value).toBe("ok");
+  const stopped = routeFeedback(projected.route, "Explain.", () => null).stopped;
+  expect(stopped[0]!.context.at(-1)!.result).toBe("ok");
+});
+
+test("routes keep opaque snapshots", () => {
+  const produced = { tags: ["original", "other"] };
+  standIn("snapshot", () => produced, []);
+  const result = evalBinding("${snapshot()}", nothing, { trace: true });
+  const encoding = JSON.stringify(result.route);
+  produced.tags.push("later");
+  const stopped = routeFeedback(result.route, { tags: ["Bad.", null] }, () => null).stopped;
+  expect(stopped[0]!.context.at(-1)!.result).toEqual({ tags: ["original", "other"] });
+  expect(JSON.stringify(result.route)).toBe(encoding);
+  expect(Object.isFrozen(result.route)).toBe(true);
+  expect(routeFeedback(result.route, {}, () => null).stopped).toEqual([]);
+  expect(routeFeedback(result.route, { tags: [null, null] }, () => null).stopped).toEqual([]);
+  const short = thrown(() => routeFeedback(result.route, { tags: ["Too short."] }, () => null));
+  expect(short).toBeInstanceOf(RangeError);
+  expect((short as Error).message).toMatch(/exactly 2/);
+});
+
+test("opaque stops preserve concat and interpolation context", () => {
+  const calls: string[] = [];
+  standIn(
+    "reorder",
+    (values) => {
+      calls.push("call");
+      return [...(values as Value[])].reverse();
+    },
+    [{ name: "values" }],
+  );
+  const sources = new Sources({ items: ["one", "two"], count: 2n });
+  const concatenated = sources.evaluate("reorder(items) + items");
+  const routed = sources.feedback(concatenated, ["First.", null, "Second.", null]);
+  expect(routed.stopped.map((stop) => stop.feedback)).toEqual([["First.", null]]);
+  expect(routed.stopped.map((stop) => stop.context[0]!.positions)).toEqual([[[0], [1]]]);
+  expect(messages(routed)).toEqual([[sources.identities.items!, ["Second.", null]]]);
+  expect(calls).toEqual(["call"]);
+  const shortCircuit = sources.evaluate("count or reorder(items)");
+  expect(sources.feedback(shortCircuit, "Note.").stopped).toEqual([]);
+  expect(calls).toEqual(["call"]);
+  const interpolated = evalBinding("items=${reorder(items)}", sources.resolve, { trace: true });
+  const stopped = sources.feedback(interpolated, "Note.").stopped[0]!;
+  expect(stopped.feedback).toBe("Note.");
+  expect(stopped.context[0]!.span).toEqual([6, 19]);
+  expect(stopped.context[0]!.result).toBe('items=["two","one"]');
+  expect(calls).toEqual(["call", "call"]);
+});
+
+test("a deep temporary keeps a complete snapshot", () => {
+  const calls: string[] = [];
+  standIn(
+    "nested",
+    () => {
+      calls.push("nested");
+      return nested("leaf", 10_000);
+    },
+    [],
+  );
+  standIn(
+    "ignore",
+    () => {
+      calls.push("ignore");
+      return "ok";
+    },
+    [{ name: "value" }],
+  );
+  expect(evalBinding("${ignore(nested())}", () => null)).toBe("ok");
+  const traced = evalBinding("${ignore(nested())}", nothing, { trace: true });
+  expect(traced.value).toBe("ok");
+  expect(traced.route.children[0]!.valueJson).not.toBeNull();
+  const stopped = routeFeedback(traced.route, "Feedback.", () => null).stopped;
+  expect(stopped[0]!.context.at(-1)!.result).toBe("ok");
+  expect(calls).toEqual(["nested", "ignore", "nested", "ignore"]);
+});
+
+test("unavailable snapshots keep container structure", () => {
+  const calls: string[] = [];
+  standIn(
+    "temporary_list",
+    () => {
+      calls.push("call");
+      return [FILE];
+    },
+    [],
+  );
+  const expected = 'items=[{"uri":"file:///tmp/x","mime":null,"name":null}]';
+  const result = evalBinding("items=${temporary_list() + []}", nothing, { trace: true });
+  expect(result.value).toBe(expected);
+  const routed = routeFeedback(result.route, "Shorten.", () => null);
+  expect(routed.contributions).toEqual([]);
+  expect(routed.stopped.map((stop) => stop.feedback)).toEqual(["Shorten."]);
+  expect(routed.stopped[0]!.context[0]!.result).toBe(expected);
+  expect(calls).toEqual(["call"]);
+});
+
+test("unavailable snapshot projects available fields and composed items", () => {
+  const itemValue = { answer: "ok", temporary: FILE };
+  const plain = evalBinding("${item.answer}", nothing, { item: itemValue, trace: true });
+  expect(plain.value).toBe("ok");
+  expect(routeFeedback(plain.route, "Shorten.", () => null).contributions).toEqual([]);
+
+  const calls: string[] = [];
+  standIn(
+    "temporary_list",
+    () => {
+      calls.push("call");
+      return [itemValue];
+    },
+    [],
+  );
+  const over = evalBinding("${temporary_list() + []}", nothing, { trace: true });
+  const item = new ResolvedValue((over.value as Value[])[0]!, true, over.route.project([0]));
+  const projected = evalBinding("${item.answer}", nothing, { item, trace: true });
+  expect(projected.value).toBe("ok");
+  const stopped = routeFeedback(projected.route, "Shorten.", () => null).stopped;
+  expect(stopped.map((stop) => stop.feedback)).toEqual([[{ answer: "Shorten." }]]);
+  expect(calls).toEqual(["call"]);
+});
+
 test("structural routes retain selection and position context", () => {
   const sources = new Sources({ left: ["a"], right: ["b", "c"], record: { tags: ["x", "y"] } });
   const combined = sources.evaluate("left + right");
@@ -875,10 +1096,33 @@ test("structural routes retain selection and position context", () => {
   expect(direct.context.at(-1)!.sources[0]!.path).toEqual(["tags"]);
 });
 
+test.each(["Note.", null] as FeedbackValue[])(
+  "a deep temporary composes with text or absent feedback (%p)",
+  (feedback) => {
+    const calls: string[] = [];
+    standIn(
+      "deep",
+      () => {
+        calls.push("call");
+        return nested(1n, 10_000);
+      },
+      [],
+    );
+    expect(Array.isArray(evalBinding("${deep() + []}", () => null))).toBe(true);
+    const traced = evalBinding("${deep() + []}", nothing, { trace: true });
+    expect(Array.isArray(traced.value)).toBe(true);
+    const routed = routeFeedback(traced.route, feedback, () => null);
+    expect(routed.contributions).toEqual([]);
+    expect(routed.stopped.map((stop) => stop.feedback)).toEqual(feedback === null ? [] : [feedback]);
+    expect(JSON.stringify(traced.route)).toBeTruthy();
+    expect(calls).toEqual(["call", "call"]);
+  },
+);
+
 test("a plain item has no route to follow", () => {
   const item = { answer: "ok" };
   expect(evalBinding("${item.answer}", () => null, { item })).toBe("ok");
-  const traced = evalBinding("${item.answer}", () => new ResolvedValue(null, false), { item, trace: true });
+  const traced = evalBinding("${item.answer}", nothing, { item, trace: true });
   expect(traced.value).toBe("ok");
   const routed = routeFeedback(traced.route, "Note.", () => null);
   expect(routed.contributions).toEqual([]);
@@ -887,10 +1131,43 @@ test("a plain item has no route to follow", () => {
 
 test("a sourced item read projects its source", () => {
   const item = new ResolvedValue({ answer: "ok" }, true, new SourceRef("run", 7, ["items", 0]));
-  const traced = evalBinding("${item.answer}", () => new ResolvedValue(null, false), { item, trace: true });
+  const traced = evalBinding("${item.answer}", nothing, { item, trace: true });
   expect(traced.value).toBe("ok");
   expect(traced.route.source).toEqual(new SourceRef("run", 7, ["items", 0, "answer"]));
 });
+
+test.each([
+  ["list", 33],
+  ["record", 40],
+] as ["list" | "record", number][])(
+  "JSON-compatible nested results keep complete feedback shape: %s",
+  (container, depth) => {
+    let value: unknown = "leaf";
+    let feedback: FeedbackValue = "Explain.";
+    for (let i = 0; i < depth; i++) {
+      value = container === "list" ? [value] : { child: value };
+      feedback = container === "list" ? [feedback] : { child: feedback };
+    }
+    const calls: string[] = [];
+    standIn(
+      "nested",
+      () => {
+        calls.push("call");
+        return value;
+      },
+      [],
+    );
+    const traced = evalBinding("${nested()}", nothing, { trace: true });
+    expect(traced.value).toEqual(value as Value);
+    validateFeedback(feedback, traced.value);
+    const stopped = routeFeedback(traced.route, feedback, () => null).stopped;
+    expect(stopped).toHaveLength(1);
+    expect(stopped[0]!.feedback).toEqual(feedback);
+    expect(stopped[0]!.context.at(-1)!.result).toEqual(value);
+    expect(stopped[0]!.context.at(-1)!.resultType).toBeNull();
+    expect(calls).toEqual(["call"]);
+  },
+);
 
 test("a traced resolver must return ResolvedValue", () => {
   const resolve = (() => 1n) as unknown as (path: string) => ResolvedValue;

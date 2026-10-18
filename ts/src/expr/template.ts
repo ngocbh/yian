@@ -45,8 +45,8 @@
  * `TracedValue`), `builtins` (`TEMPLATE_FNS`), `grammar` (`parseExpr`, `findSpanEnd`,
  * `rejectNestedSpans`, `iterSubtrees`, `callSuffixOf`, `wholeSpanInterior`, `ExprNode`, `Token`,
  * `Tree`), `typesys` (`writeAsText`), `typesys/json` (`logJson`) and `diagnostics` (`reprText`,
- * `compareCodeUnits`). Never imports: `nodes`, `compile`, `compose`, `runtime`, or the pool (pool-agnostic via
- * `resolve`).
+ * `compareCodeUnits`). Never imports: `nodes`, `compile`, `compose`, `runtime`, or the pool
+ * (pool-agnostic via `resolve`).
  */
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";

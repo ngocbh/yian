@@ -15,7 +15,10 @@
  * `toEqual`; `opaque stops preserve concat and interpolation context` evaluates
  * `reorder(items) + items` for Python's `reorder(items) * count`, so it has one stop instead of
  * two; `unavailable snapshot projects available fields and composed items` composes with `+ []`
- * and projects item 0, for Python's `* 2` and item 1.
+ * and projects item 0, for Python's `* 2` and item 1; `accepted projected value stops at a
+ * bounded ancestor` and `projected partial container uses recorded operation positions` build
+ * their opaque route by hand (`ValueRoute.literal(x).with({kind: "opaque"})`, the route the
+ * evaluator records for a builtin call), so they don't check Python's single builtin call.
  *
  * Not ported:
  * - The MAP and WAIT capture tests (`test_reserved_map_over_uses_the_same_capture_path`,

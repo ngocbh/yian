@@ -2,7 +2,7 @@
  * One unified `${...}` expression engine and the template scanner that hosts it, as Python's
  * `yian.expr`.
  *
- * The engine is four layers, all pool-agnostic (they take a `resolve` callable):
+ * The engine is four layers, all pool-agnostic (none reads the pool directly):
  * - `grammar` (`parseExpr`): parse only, one grammar for every `${...}` construct (references,
  *   arithmetic, boolean, coalesce/default/required, builtin calls). An expression nests at most
  *   as deep as a value, `current().maxValueNesting` levels.

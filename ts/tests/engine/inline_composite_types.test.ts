@@ -1,6 +1,8 @@
 /**
  * Canonical type labels, a port of the label tests of
- * `tests/engine/test_inline_composite_types.py`; inline input inference comes later.
+ * `tests/engine/test_inline_composite_types.py`. Later: inline input inference, with
+ * `test_inline_type_copy_preserves_bounded_nested_validation` (it builds values on the
+ * inferred copy).
  */
 
 import { describe, expect, test } from "bun:test";

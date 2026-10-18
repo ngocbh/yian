@@ -1,14 +1,18 @@
 /**
  * Messages that show a value or key stay within the shown-value cap (200), a port of the
- * `value_repr` tests of `tests/engine/test_bounded_value_messages.py`.
+ * `value_repr` and unknown-record-field tests of `tests/engine/test_bounded_value_messages.py`.
  *
  * Also here: `test_long_ints.py::test_value_repr_of_a_small_int`, and the path renderings of
  * `test_nonfinite_values.py::test_reject_nonfinite_names_where_and_path`. The spelling,
  * placeholder and bounded-rendering rows are TS-only: a message shows a value in its text form
  * (JSON style, JS number spelling), not Python's `repr`.
  *
- * Later: the unknown-field and unknown-input message rows (with the write boundary and
- * bindings) and the rows that run a flow (with the runner); the configured-cap rows
+ * The unknown-field rows check `buildValueAs`;
+ * `test_record_sorts_mixed_unknown_keys_by_type_without_crashing` keeps its two long names (a
+ * record key is always a string, so the int and broken-repr keys have no TS counterpart).
+ *
+ * Later: the unknown-input message row (with bindings) and the rows that run a flow (with the
+ * runner); the configured-cap rows
  * (`test_value_repr_follows_the_configured_cap`, `test_value_repr_raises_a_bad_defaults_variable`)
  * once `defaults.ts` lands.
  *
@@ -19,9 +23,19 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { FileRef, renderValuePath, shownText, valueRepr } from "../../src/typesys/values.ts";
+import {
+  buildValueAs,
+  FileRef,
+  renderValuePath,
+  shownText,
+  Type,
+  TypeCheckError,
+  ValueKind,
+  valueRepr,
+} from "../../src/typesys/values.ts";
 
 const CAP = 200;
+const MESSAGE_BOUND = 1200;
 
 class Foo {}
 
@@ -119,5 +133,44 @@ describe("renderValuePath", () => {
     expect(shown.startsWith("k0.k1.k2.")).toBe(true);
     expect(shown.endsWith(".k998.k999")).toBe(true);
     expect(shown.slice(2 * CAP, 2 * CAP + 1)).toBe("…");
+  });
+});
+
+describe("unknown record fields", () => {
+  const record = new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map([["a", Type.scalar(ValueKind.INTEGER)]]),
+    required: new Set(["a"]),
+  });
+
+  /** Return the `TypeCheckError` `buildValueAs(record, value)` throws. */
+  function buildError(value: unknown): TypeCheckError {
+    try {
+      buildValueAs(record, value);
+    } catch (error) {
+      expect(error).toBeInstanceOf(TypeCheckError);
+      return error as TypeCheckError;
+    }
+    throw new Error("buildValueAs did not throw");
+  }
+
+  test("a record lists many unknown fields within the cap", () => {
+    const value: Record<string, bigint> = {};
+    for (let i = 0; i < 200_000; i++) value[`key${i}`] = BigInt(i);
+    value["a"] = 1n;
+    const error = buildError(value);
+    expect(error.message.startsWith("record has unknown fields: [")).toBe(true);
+    expect(error.message.length).toBeLessThanOrEqual(MESSAGE_BOUND);
+    expect(error.path).toEqual(["key0"]);
+  });
+
+  test("a record sorts long unknown names past the cap", () => {
+    // Equal up to the cap, so a sort on the cut text could not order them.
+    const later = "x".repeat(300) + "b";
+    const earlier = "x".repeat(300) + "a";
+    const error = buildError({ a: 1n, [later]: 1n, [earlier]: 2n });
+    expect(error.message.startsWith("record has unknown fields: ['xxx")).toBe(true);
+    expect(error.message.length).toBeLessThanOrEqual(MESSAGE_BOUND);
+    expect(error.path).toEqual([earlier]);
   });
 });

@@ -1,22 +1,25 @@
 /**
- * Files inside typed containers, a port of the overlap tests and the `field_of` table of
- * `tests/engine/test_files_in_containers.py`, with `FileRef` constructor refusals
- * (`RangeError`, as pydantic's `ValidationError` is a `ValueError`).
+ * Files inside typed containers, a port of the value checks (`buildValueAs`), the overlap
+ * tests and the `field_of` table of `tests/engine/test_files_in_containers.py`, with `FileRef`
+ * constructor refusals (`RangeError`, as pydantic's `ValidationError` is a `ValueError`).
+ * Where Python checks that a value is kept with `is`, these tests use `toBe`.
  *
- * Later: value checks and file normalization (with the write boundary) and flow runs (with the
- * runner).
+ * Later: file normalization (`normalizeFiles`) and flow runs (with the runner).
  *
  * Not ported: the `field_of` rows on dict subclasses, `defaultdict` and a `FileRef` subclass; a
- * record is a plain object and a dotted read gives its own keys.
+ * record is a plain object and a dotted read gives its own keys. The tuple in
+ * `test_an_object_without_files_is_stored_as_given` is a list here (no tuples in TS).
  */
 
 import { describe, expect, test } from "bun:test";
 
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import {
+  buildValueAs,
   FileRef,
   fieldOf,
   Type,
+  TypeCheckError,
   typesOverlap,
   type Value,
   ValueKind,
@@ -41,6 +44,119 @@ const t = (text: string): Type => typeFor(text, REGISTRY);
 const FILE = Type.scalar(ValueKind.FILE);
 const OBJECT = Type.scalar(ValueKind.OBJECT);
 const ANY = Type.scalar(ValueKind.ANY);
+const REF = new FileRef({ uri: "f" });
+
+/** A fresh copy of a file's JSON form, `{uri: "f", mime: null, name: null}`. */
+function form(): Value {
+  return { uri: "f", mime: null, name: null };
+}
+
+/** Return the `TypeCheckError` `run` throws. */
+function typeCheckError(run: () => unknown): TypeCheckError {
+  try {
+    run();
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    return error as TypeCheckError;
+  }
+  throw new Error("expected a TypeCheckError");
+}
+
+describe("a file slot reads the JSON form", () => {
+  test("a file slot reads the JSON form", () => {
+    const typed = buildValueAs(FILE, form());
+    expect(typed.kind).toBe(ValueKind.FILE);
+    expect(typed.value).toEqual(REF);
+    expect(typed.value).toBeInstanceOf(FileRef);
+  });
+
+  test("a file slot keeps a FileRef", () => {
+    const typed = buildValueAs(FILE, REF);
+    expect(typed.kind).toBe(ValueKind.FILE);
+    expect(typed.value).toBe(REF);
+  });
+
+  test("the JSON form keeps its mime and name", () => {
+    const value = { uri: "f", mime: "text/plain", name: "a.txt" };
+    expect(buildValueAs(FILE, value).value).toEqual(new FileRef(value));
+  });
+
+  test.each<[string, Value, Value]>([
+    ["list(file)", [form(), REF], [REF, REF]],
+    ["Rec", { f: form(), n: 1n }, { f: REF, n: 1n }],
+    ["Optional(file)", null, null],
+    ["list(Optional(file))", [form(), null], [REF, null]],
+    ["list(Rec)", [{ f: form(), n: 1n }], [{ f: REF, n: 1n }]],
+  ])("a nested file slot reads the JSON form: %s", (declared, value, expected) => {
+    expect(buildValueAs(t(declared), value).toObject()).toEqual(expected);
+  });
+
+  test.each<[string, Value]>([
+    ["a missing mime", { uri: "f", name: null }],
+    ["an extra size", { uri: "f", mime: null, name: null, size: 1n }],
+    ["an int uri", { uri: 1n, mime: null, name: null }],
+    ["an int mime", { uri: "f", mime: 2n, name: null }],
+  ])("a file slot rejects a record that is not the JSON form: %s", (_id, value) => {
+    expect(typeCheckError(() => buildValueAs(FILE, value)).message).toContain(
+      "does not match declared type file",
+    );
+    const error = typeCheckError(() => buildValueAs(t("list(file)"), [value]));
+    expect(error.message).toContain("does not match declared type file");
+    expect(error.path).toEqual([0]);
+  });
+});
+
+describe("an object slot reads a nested file as its mapping", () => {
+  test("an object reads a nested file as its mapping", () => {
+    expect(buildValueAs(OBJECT, { f: REF }).value).toEqual({ f: form() });
+  });
+
+  test("a list of objects reads a nested file as its mapping", () => {
+    const flat = buildValueAs(ValueKind.LIST_OBJECT, [{ f: REF }, { g: [REF] }]);
+    const refined = buildValueAs(t("list(object)"), [{ f: REF }]);
+    expect(flat.value).toEqual([{ f: form() }, { g: [form()] }]);
+    expect(refined.value).toEqual([{ f: form() }]);
+  });
+
+  test("an object field reads a nested file as its mapping", () => {
+    expect(buildValueAs(t("Box"), { x: { f: REF } }).value).toEqual({ x: { f: form() } });
+  });
+
+  test("an object without files is stored as given", () => {
+    const value = { items: [1n, 2n], nested: { a: [3n] } };
+    const stored = buildValueAs(OBJECT, value).value as Record<string, Value>;
+    expect(stored).toBe(value);
+    expect(stored["items"]).toBe(value.items);
+  });
+
+  test("reading nested files leaves the given object unchanged", () => {
+    const value = { f: REF, keep: { a: 1n } };
+    const stored = buildValueAs(OBJECT, value).value as Record<string, Value>;
+    expect(value).toEqual({ f: REF, keep: { a: 1n } });
+    expect(value.f).toBe(REF);
+    expect(stored["keep"]).toBe(value.keep);
+  });
+
+  test.each<[string, Type, Value]>([
+    ["object holding a file", OBJECT, REF],
+    ["list(object) holding a file", t("list(object)"), [REF]],
+    ["Any holding a file", ANY, REF],
+    ["Any holding a nested file", ANY, { f: REF }],
+    ["list(Any) holding a file", t("list(Any)"), [REF]],
+    ["list(Any) holding a nested file", t("list(Any)"), [{ f: REF }]],
+  ])("a file where no file position reads it still fails: %s", (_id, declared, value) => {
+    typeCheckError(() => buildValueAs(declared, value));
+  });
+
+  test("an object holding itself still fails", () => {
+    const cyclic: Record<string, Value> = {};
+    cyclic["self"] = cyclic;
+    cyclic["f"] = REF;
+    expect(typeCheckError(() => buildValueAs(OBJECT, cyclic)).message).toBe(
+      "value contains itself",
+    );
+  });
+});
 
 describe("untagged unions whose members can share a file", () => {
   test.each([

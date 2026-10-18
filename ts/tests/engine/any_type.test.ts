@@ -1,20 +1,37 @@
 /**
- * The `Any` type's shape, labels, overlap, parsing, typedefs and resolution, a port of those
- * tests of `tests/engine/test_any_type.py`. Later: the value tests and value halves (with
- * `buildValueAs`), the compatibility, proof and field-read tests (with the compile checks and
- * node contracts), the `requires_file`/`has_file` tests, and the flow loading tests.
+ * The `Any` type's shape, labels, overlap, parsing, typedefs and resolution, and the values
+ * `Any`, `object` and the list kinds take at the write boundary (`buildValueAs`) and through
+ * the wire, a port of those tests of `tests/engine/test_any_type.py`. The non-JSON rows use JS
+ * values (`Date`, `Map`, `Set`, `Uint8Array`, a class instance, `undefined`) for Python's.
+ *
+ * TS-only: `-0`, NaN and lone surrogates inside `object` and `Any` values.
+ *
+ * Later: the compatibility, proof and field-read tests (with the compile checks and node
+ * contracts), the `requires_file`/`has_file` tests, and the flow loading tests.
+ *
+ * Not ported: the tuple rows, `test_any_path_unwraps_a_str_subclass_key`, and the non-text key
+ * rows (`test_object_rejects_a_non_text_key`,
+ * `test_flat_list_of_objects_rejects_a_non_text_key_at_the_item` and the `{1: "a"}` rows): TS
+ * has no tuples, and a record key is always an exact string.
+ * `test_any_reports_the_first_bad_part_in_order` uses a second non-JSON part for the int key.
  */
 
 import { describe, expect, test } from "bun:test";
 
+import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { parseType, readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import {
+  buildValueAs,
   canonicalTypeLabel,
   canonicalUnionOrder,
+  FileRef,
+  type StorageKind,
   Type,
   TypeCheckError,
+  TypedValue,
   typeEquals,
   typesOverlap,
+  type Value,
   ValueKind,
 } from "../../src/typesys/values.ts";
 
@@ -191,5 +208,243 @@ describe("Any in untagged unions", () => {
     expect(typedefsError(typedefs)).toBe(
       `typedef 'W': ${overlap("Union(A, B)", "A", "B", true)}`,
     );
+  });
+});
+
+/** Return the `TypeCheckError` `run` throws. */
+function typeCheckError(run: () => unknown): TypeCheckError {
+  try {
+    run();
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    return error as TypeCheckError;
+  }
+  throw new Error("expected a TypeCheckError");
+}
+
+/** Return `leaf` wrapped in `n` lists. */
+function nest(n: number, leaf: Value = 1n): Value {
+  let value = leaf;
+  for (let i = 0; i < n; i++) value = [value];
+  return value;
+}
+
+/** Return `value` with each scalar replaced by its JS type, keeping lists and records. */
+function jsTypes(value: Value): unknown {
+  if (Array.isArray(value)) return value.map(jsTypes);
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, jsTypes(item)]));
+  }
+  return value === null ? "null" : typeof value;
+}
+
+class Foo {}
+
+describe("Any values", () => {
+  test.each<[string, Value, StorageKind]>([
+    ["text", "hello", ValueKind.STRING],
+    ["an int", 3n, ValueKind.INTEGER],
+    ["a long int", 2n ** 80n, ValueKind.INTEGER],
+    ["a float", 2.5, ValueKind.NUMBER],
+    ["a bool", true, ValueKind.BOOLEAN],
+    ["a record", { a: [1n, null] }, ValueKind.OBJECT],
+    ["a mixed list", [1n, "two", null], ValueKind.LIST_ANY],
+    ["ints and floats", [1n, 2.5], ValueKind.LIST_ANY],
+    ["a bool and an int", [true, 1n], ValueKind.LIST_ANY],
+  ])("Any stores a JSON value in its natural kind: %s", (_id, value, kind) => {
+    const typed = buildValueAs(ANY, value);
+    expect(typed.kind).toBe(kind);
+    expect(typed.value).toEqual(value);
+  });
+
+  test("Any keeps list items as given", () => {
+    const ints = buildValueAs(ANY, [1n, 2.5]).value as Value[];
+    const bools = buildValueAs(ANY, [true, 1n]).value as Value[];
+    expect(typeof ints[0]).toBe("bigint");
+    expect(typeof bools[0]).toBe("boolean");
+    expect(typeof bools[1]).toBe("bigint");
+  });
+
+  test("Any accepts a bare value kind", () => {
+    const typed = buildValueAs(ValueKind.ANY, "hello");
+    expect([typed.kind, typed.value]).toEqual([ValueKind.STRING, "hello"]);
+  });
+
+  test.each<[string, unknown, string, (string | number)[]]>([
+    // The message names yian's `None`, as Python's does.
+    ["null", null, "None does not match declared type Any", []],
+    ["a Set", new Set([1n, 2n]), "<Set object> is not a JSON value", []],
+    ["bytes", new Uint8Array([120]), "<Uint8Array object> is not a JSON value", []],
+    ["a Date", new Date(0), "<Date object> is not a JSON value", []],
+    ["a Map", new Map(), "<Map object> is not a JSON value", []],
+    ["undefined", undefined, "undefined is not a JSON value", []],
+    [
+      "a file",
+      new FileRef({ uri: "f" }),
+      '{"uri":"f","mime":null,"name":null} is not a JSON value',
+      [],
+    ],
+    ["a class instance", new Foo(), "<Foo object> is not a JSON value", []],
+    ["a nested Set", { a: new Set([1n]) }, "<Set object> is not a JSON value", ["a"]],
+    ["a Set in a list", { a: [1n, new Set([2n])] }, "<Set object> is not a JSON value", ["a", 1]],
+  ])("Any rejects a non-JSON value at its path: %s", (_id, value, message, path) => {
+    const error = typeCheckError(() => buildValueAs(ANY, value));
+    expect(error.message).toBe(message);
+    expect(error.path).toEqual(path);
+  });
+
+  test("Any leaves the nesting limit to the boundaries", () => {
+    expect(buildValueAs(ANY, nest(150)).value).toEqual(nest(150));
+  });
+
+  test("Any ends a cyclic value", () => {
+    const cyclic: Record<string, Value> = {};
+    cyclic["self"] = { items: [1n, cyclic] };
+    const error = typeCheckError(() => buildValueAs(ANY, cyclic));
+    expect(error.message).toBe("value contains itself");
+    expect(error.path).toEqual(["self", "items", 1]);
+  });
+
+  test("Any accepts a shared value that is not a cycle", () => {
+    const shared = [1n, 2n];
+    expect(buildValueAs(ANY, { a: shared, b: shared }).value).toEqual({
+      a: [1n, 2n],
+      b: [1n, 2n],
+    });
+  });
+
+  test("Any reports the first bad part in order", () => {
+    const error = typeCheckError(() =>
+      buildValueAs(ANY, { a: [1n, new Set([2n])], b: new Map() }),
+    );
+    expect(error.message).toBe("<Set object> is not a JSON value");
+    expect(error.path).toEqual(["a", 1]);
+  });
+
+  test("Optional(Any) accepts null", () => {
+    const typed = buildValueAs(OPTIONAL_ANY, null);
+    expect([typed.kind, typed.value]).toEqual([ValueKind.NONE, null]);
+  });
+
+  test.each<[string, unknown, (string | number)[]]>([
+    ["a Set", { a: new Set([1n, 2n]) }, ["a"]],
+    ["a class instance", { a: new Foo() }, ["a"]],
+    ["a Date", { d: new Date(0) }, ["d"]],
+  ])("object rejects a non-JSON member: %s", (_id, value, path) => {
+    const error = typeCheckError(() => buildValueAs(ValueKind.OBJECT, value));
+    expect(error.message).toContain("is not a JSON value");
+    expect(error.path).toEqual(path);
+  });
+
+  test("object accepts JSON members", () => {
+    const value = { a: null, b: [1n, { c: "d" }] };
+    const typed = buildValueAs(ValueKind.OBJECT, value);
+    expect(typed.kind).toBe(ValueKind.OBJECT);
+    expect(typed.value).toBe(value);
+  });
+
+  test("an elementless list(Any) checks its items are JSON values", () => {
+    expect(buildValueAs(ValueKind.LIST_ANY, [1n, null, "x"]).value).toEqual([1n, null, "x"]);
+    const error = typeCheckError(() => buildValueAs(ValueKind.LIST_ANY, [new Set([1n])]));
+    expect(error.message).toContain("is not a JSON value");
+    expect(error.path).toEqual([0]);
+  });
+
+  test("a record with a required Any field rejects null", () => {
+    expect(typeCheckError(() => buildValueAs(rec({ v: ANY }), { v: null })).path).toEqual(["v"]);
+  });
+
+  test("a record with an Optional(Any) field accepts absence and null", () => {
+    const record = new Type({
+      kind: ValueKind.OBJECT,
+      fields: new Map([["v", OPTIONAL_ANY]]),
+      required: new Set(),
+    });
+    expect(buildValueAs(record, {}).value).toEqual({});
+    expect(buildValueAs(record, { v: null }).value).toEqual({ v: null });
+  });
+
+  test("list(Any) rejects a null item and list(Optional(Any)) accepts it", () => {
+    const error = typeCheckError(() => buildValueAs(typeFor("list(Any)", new Map()), [1n, null]));
+    expect(error.path).toEqual([1]);
+    const typed = buildValueAs(typeFor("list(Optional(Any))", new Map()), [1n, null]);
+    expect([typed.kind, typed.value]).toEqual([ValueKind.LIST_ANY, [1n, null]]);
+  });
+
+  test("the issue examples pass", () => {
+    const text = buildValueAs(typeFor("Any", new Map()), "hello");
+    expect([text.kind, text.value]).toEqual([ValueKind.STRING, "hello"]);
+    const list = buildValueAs(typeFor("list(Any)", new Map()), [1n, "two"]);
+    expect([list.kind, list.value]).toEqual([ValueKind.LIST_ANY, [1n, "two"]]);
+  });
+
+  test.each(["list(list(int))", "list(Any)"])(
+    "a refined list names its declared type: %s",
+    (text) => {
+      const error = typeCheckError(() => buildValueAs(typeFor(text, new Map()), 3n));
+      expect(error.message).toBe(`3 is not a list for declared ${text}`);
+    },
+  );
+
+  test.each<[string, Value]>([
+    ["text", "hello"],
+    ["an int", 3n],
+    ["a long int", 2n ** 80n],
+    ["a float", 2.5],
+    ["a bool", true],
+    ["a record", { a: [1n, null, 2.5, true] }],
+    ["a mixed list", [1n, "two", null]],
+    ["ints and floats", [1n, 2.5]],
+    ["a bool and a record", [true, { b: [1n, 2.0] }]],
+  ])("an Any value round-trips through the wire: %s", (_id, value) => {
+    const typed = buildValueAs(ANY, value);
+    const decoded = TypedValue.fromWire(parseJson(logJson(typed.toWire()), "codec"));
+    expect(decoded.kind).toBe(typed.kind);
+    expect(decoded.value).toEqual(typed.value);
+    expect(jsTypes(decoded.value)).toEqual(jsTypes(typed.value));
+  });
+});
+
+describe("TS-only: -0, NaN and lone surrogates in object and Any values", () => {
+  test.each([ValueKind.OBJECT, ValueKind.ANY])(
+    "%s turns -0 into 0, copying only what changes",
+    (kind) => {
+      const keep = { x: 1n };
+      const value = { a: { n: -0 }, keep };
+      const built = buildValueAs(kind, value).value as Record<string, Record<string, Value>>;
+      expect(Object.is(built["a"]!["n"], 0)).toBe(true);
+      expect(built["keep"]).toBe(keep);
+      expect(Object.is(value.a.n, -0)).toBe(true);
+    },
+  );
+
+  test.each<[string, ValueKind, unknown, string, (string | number)[]]>([
+    ["NaN inside Any", ValueKind.ANY, { a: [NaN] }, "NaN is not a yian value", ["a", 0]],
+    ["NaN inside object", ValueKind.OBJECT, { a: NaN }, "NaN is not a yian value", ["a"]],
+    [
+      "a lone surrogate inside Any",
+      ValueKind.ANY,
+      ["\ud800"],
+      "text holding a lone surrogate is not a yian value",
+      [0],
+    ],
+    [
+      "a lone surrogate key inside object",
+      ValueKind.OBJECT,
+      { a: { "\udc00": 1n } },
+      "text holding a lone surrogate is not a yian value",
+      ["a"],
+    ],
+    [
+      "a lone surrogate key at Any's root",
+      ValueKind.ANY,
+      { "\ud800": 1n },
+      "text holding a lone surrogate is not a yian value",
+      [],
+    ],
+  ])("refuses %s", (_id, kind, value, message, path) => {
+    const error = typeCheckError(() => buildValueAs(kind, value));
+    expect(error.message).toBe(message);
+    expect(error.path).toEqual(path);
   });
 });

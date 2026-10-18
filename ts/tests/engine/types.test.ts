@@ -1,12 +1,20 @@
 /**
  * The `Type` vocabulary's shape checks, levels and labels, the type-text parser,
  * `formatTypeExpr`, the bracket-spelling error, typedef names, and `resolveType`/`typeFor`, a
- * port of those tests of `tests/engine/test_types.py`. Later: the value halves and value
- * tests (with `buildValueAs`, including the widening half of
- * `test_union_member_value_widens_its_float_fields`), the pool write test, `test_public_exports`,
- * and `test_bounded_type_defaults_preserve_compatible_integer_payloads` (with the loader).
- * `test_type_for_preserves_its_public_keyword_name` is not ported (TypeScript has no keyword
- * arguments); `test_is_shadow_guard` checks the private guard through `readTypedefs`.
+ * port of those tests of `tests/engine/test_types.py`, with its write-boundary value tests
+ * (`buildValueAs`): bounded numbers, float widening at any depth and the end-to-end check.
+ *
+ * Also here: the build half of
+ * `test_type_to_schema.py::test_large_numeric_schema_bounds_match_resolved_type` (its schema
+ * half comes with `typeToSchema`).
+ *
+ * Later: the widening half of `test_union_member_value_widens_its_float_fields` (with union
+ * values), the pool write test, `test_public_exports`, and
+ * `test_bounded_type_defaults_preserve_compatible_integer_payloads` (with the loader).
+ *
+ * Not ported: `test_type_for_preserves_its_public_keyword_name` (TypeScript has no keyword
+ * arguments) and `test_record_stores_a_tuple_field_as_a_list` (no tuples in TS);
+ * `test_is_shadow_guard` checks the private guard through `readTypedefs`.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -28,6 +36,7 @@ import {
 import {
   type Bounds,
   boundText,
+  buildValueAs,
   canonicalTypeLabel,
   canonicalUnionOrder,
   listKindForElement,
@@ -1213,5 +1222,108 @@ describe("typedef names", () => {
   // `String` was the old engine's name, no longer a scalar keyword.
   test.each(["ANY", "String", "Rating"])("%p loads", (name) => {
     expect(readTypedefs({ [name]: "int" }).has(name)).toBe(true);
+  });
+});
+
+/** Return the `TypeCheckError` `run` throws. */
+function typeCheckError(run: () => unknown): TypeCheckError {
+  try {
+    run();
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    return error as TypeCheckError;
+  }
+  throw new Error("expected a TypeCheckError");
+}
+
+/** Return what a slot of `typ` stores for `value`: an int in a `float` slot widens. */
+function stored(typ: Type, value: bigint | number): bigint | number {
+  return typ.kind === ValueKind.NUMBER ? Number(value) : value;
+}
+
+describe("bounded numeric values", () => {
+  test.each<[string, Bounds, unknown[], unknown[]]>([
+    ["int(1..12)", [1n, 12n], [1n, 4n, 12n], [0n, 13n, true, 1.5, "4"]],
+    ["float(-0.5..1.0)", [-0.5, 1.0], [-0.5, 0n, 1.0], [-0.6, 1.1, true, "0"]],
+  ])("%s validates inclusive values", (expression, bounds, accepted, rejected) => {
+    const typ = typeFor(expression, EMPTY);
+    expect(typ.bounds).toEqual(bounds);
+    typ.validateShape();
+    for (const value of accepted as (bigint | number)[]) {
+      expect(buildValueAs(typ, value).toObject()).toBe(stored(typ, value));
+    }
+    for (const value of rejected) typeCheckError(() => buildValueAs(typ, value));
+  });
+
+  test.each<[string, (bigint | number)[], (bigint | number)[]]>([
+    ["int(-12..-1)", [-12n, -4n, -1n], [-13n, 0n]],
+    ["int(+4..4)", [4n], [3n, 5n]],
+    ["float(-0.25..+0.25)", [-0.25, 0n, 0.25], [-0.251, 0.251]],
+    ["float(2..2)", [2n, 2.0], [1.9, 2.1]],
+  ])("%s takes signed and equal endpoints", (expression, accepted, rejected) => {
+    const typ = typeFor(expression, EMPTY);
+    for (const value of accepted) {
+      expect(buildValueAs(typ, value).toObject()).toBe(stored(typ, value));
+    }
+    // A two-sided range admits neither infinity; NaN is never a value.
+    for (const value of [...rejected, Infinity, -Infinity, NaN]) {
+      typeCheckError(() => buildValueAs(typ, value));
+    }
+  });
+
+  test("large integer bounds remain exact", () => {
+    const large = 10n ** 400n;
+    const typ = typeFor(`int(${-large}..${large})`, EMPTY);
+    typ.validateShape();
+    expect(typ.bounds).toEqual([-large, large]);
+    for (const value of [-large, 0n, large]) {
+      expect(buildValueAs(typ, value).toObject()).toBe(value);
+    }
+    typeCheckError(() => buildValueAs(typ, large + 1n));
+  });
+
+  test.each<[string, bigint, bigint, bigint]>([
+    ["int", 10n ** 400n, 10n ** 400n + 2n, 10n ** 400n + 3n],
+    ["float", 2n ** 53n, 2n ** 53n + 2n, 2n ** 53n + 4n],
+    ["float", -(2n ** 53n + 2n), -(2n ** 53n), -(2n ** 53n + 4n)],
+  ])("%s ends %s..%s are exact", (kind, lower, upper, outside) => {
+    const typ = typeFor(`${kind}(${lower}..${upper})`, EMPTY);
+    typ.validateShape();
+    for (const value of [lower, upper]) {
+      expect(buildValueAs(typ, value).toObject()).toBe(stored(typ, value));
+    }
+    typeCheckError(() => buildValueAs(typ, outside));
+  });
+});
+
+describe("float widening", () => {
+  test("a float slot widens an int at any depth", () => {
+    const reg = readTypedefs({
+      Point: { x: "float", xs: "list(float)" },
+      Wrap: { inner: "Point" },
+    });
+    expect(buildValueAs(typeFor("float", reg), 1n).toObject()).toBe(1);
+    const point = buildValueAs(typeFor("Point", reg), { x: 1n, xs: [1n, 2n] }).toObject();
+    expect(point).toEqual({ x: 1, xs: [1, 2] });
+    const nested = buildValueAs(typeFor("Wrap", reg), { inner: { x: 1n, xs: [] } }).toObject();
+    expect(nested).toEqual({ inner: { x: 1, xs: [] } });
+    const items = buildValueAs(typeFor("list(Point)", reg), [{ x: 1n, xs: [2n] }]).toObject();
+    expect(items).toEqual([{ x: 1, xs: [2] }]);
+  });
+});
+
+describe("write boundary", () => {
+  test("end to end", () => {
+    expect(buildValueAs(typeFor("Action", REG), "Approve").value).toBe("Approve");
+    typeCheckError(() => buildValueAs(typeFor("Action", REG), "approve"));
+    expect(
+      buildValueAs(typeFor("Rating", REG), { value: 0.8, confidence: 0.9 }).kind,
+    ).toBe(ValueKind.OBJECT);
+    expect(
+      buildValueAs(typeFor("List(Rating)", REG), [{ value: 0.1, confidence: 0.2 }]).kind,
+    ).toBe(ValueKind.LIST_OBJECT);
+    expect(
+      buildValueAs(typeFor("Prices", REG), { closes: [1.0, 2.0], last: 2.0 }).kind,
+    ).toBe(ValueKind.OBJECT);
   });
 });

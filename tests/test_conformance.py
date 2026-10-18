@@ -13,8 +13,11 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
+import time
 from typing import NoReturn
 
 import pytest
@@ -123,7 +126,7 @@ _KIND_KEYS = {
     "defaults": {"env"},
     # Both runners load `flow` and `other` as written: no `python_flow` or `python_files`.
     "fingerprint": _FLOW - {"python_flow", "python_files"} | {"other"},
-    "cli": _FLOW | {"args", "stdin"},
+    "cli": _FLOW | {"args", "stdin", "signal"},
 }
 _REQUIRED = {
     "load": ("flow",), "run": ("flow",), "resume": ("flow",), "backward": ("flow", "backward"),
@@ -294,6 +297,12 @@ def _check(case: dict) -> dict:
         for index, entry in enumerate(case["backward"]):
             _keys(f"backward[{index}]", entry, {"feedback", "api_key", "headers"},
                   required=("feedback",))
+    if "signal" in case:
+        _keys("signal", case["signal"], {"name", "after"}, required=("name", "after"))
+        if case["signal"]["name"] != "SIGINT":
+            raise ValueError("`signal.name` must be SIGINT")
+        if not isinstance(case["signal"]["after"], str) or not case["signal"]["after"]:
+            raise ValueError("`signal.after` must be non-empty text")
     if "host" in case:
         _check_host(case["host"], kind)
     run = case.get("run", {})
@@ -1009,17 +1018,76 @@ def _run_run(case: dict, case_dir: Path) -> None:
         check(left=True)
 
 
+def _interrupted(argv: list, case_dir: Path, env: dict, stdin: str, after: str) -> tuple:
+    """Run `argv`, send it SIGINT once `after` is in its stdout or stderr, and wait for its exit.
+
+    Fails the case when the command exits before `after` appears or 60 seconds pass first.
+
+    Returns:
+        The command's `(returncode, stdout, stderr)`.
+    """
+    process = subprocess.Popen(
+        argv, cwd=case_dir, env=env, encoding="utf-8", stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        # A shell can start background jobs with SIGINT ignored, and the child would keep that.
+        preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+    )
+    out, err = [], []
+
+    def collect(stream, parts: list) -> None:
+        # One character at a time, so text is seen as soon as it is written.
+        for char in iter(lambda: stream.read(1), ""):
+            parts.append(char)
+
+    readers = [threading.Thread(target=collect, args=pair, daemon=True)
+               for pair in ((process.stdout, out), (process.stderr, err))]
+    for reader in readers:
+        reader.start()
+    process.stdin.write(stdin)
+    process.stdin.close()
+    try:
+        deadline = time.monotonic() + 60
+        while True:
+            # Taken before looking: once both readers are done, all the output is in.
+            finished = not any(reader.is_alive() for reader in readers)
+            if any(after in "".join(parts) for parts in (out, err)):
+                break
+            if finished:
+                _fail(f"the command exited before {after!r} appeared\n--- stdout\n"
+                      f"{''.join(out)}--- stderr\n{''.join(err)}")
+            if time.monotonic() > deadline:
+                _fail(f"{after!r} didn't appear within 60 seconds")
+            time.sleep(0.02)
+        process.send_signal(signal.SIGINT)
+        process.wait(timeout=120)
+    finally:
+        # Ends a command the case gave up on; a no-op once it has exited.
+        process.kill()
+        process.wait()
+    for reader in readers:
+        reader.join()
+    return process.returncode, "".join(out), "".join(err)
+
+
 def _run_cli(case: dict, case_dir: Path) -> None:
-    """Run `yian` with `args` in the case directory; compare its exit code and output."""
+    """Run `yian` with `args` in the case directory; compare its exit code and output.
+
+    With `signal`, the command is sent the signal once `signal.after` appears in its output.
+    """
     (case_dir / "home").mkdir()
     env = {"PATH": os.environ["PATH"], "HOME": str(case_dir / "home"), "COLUMNS": "1000",
            "PYTHONPATH": os.pathsep.join(sys.path), **case.get("env", {})}
     command = "import sys; sys.argv[0] = 'yian'; from yian.cli import main; main()"
-    done = subprocess.run(
-        [sys.executable, "-c", command, *case.get("args", [])],
-        cwd=case_dir, input=case.get("stdin", ""), capture_output=True, encoding="utf-8",
-        timeout=120, env=env,
-    )
+    argv = [sys.executable, "-c", command, *case.get("args", [])]
+    if "signal" in case:
+        returncode, out, err = _interrupted(argv, case_dir, env, case.get("stdin", ""),
+                                            case["signal"]["after"])
+    else:
+        done = subprocess.run(
+            argv, cwd=case_dir, input=case.get("stdin", ""), capture_output=True,
+            encoding="utf-8", timeout=120, env=env,
+        )
+        returncode, out, err = done.returncode, done.stdout, done.stderr
 
     def normal(text: str) -> str:
         # Longest first: the resolved path can hold the given one (`/private/var` on macOS).
@@ -1036,14 +1104,16 @@ def _run_cli(case: dict, case_dir: Path) -> None:
         except ValueError as error:  # JSONDecodeError is a ValueError
             _fail(f"stdout is not a JSON document ({error})\n--- stdout\n{stdout}")
 
-    stdout, stderr = normal(done.stdout), normal(done.stderr)
+    stdout, stderr = normal(out), normal(err)
     _check_secrets(case, {"stdout": stdout, "stderr": stderr, **{
         str(path.relative_to(case_dir)): path.read_text(encoding="utf-8")
         for path in case_dir.rglob("*.jsonl")
     }})
     expect = case["expect"]
-    if not _same(done.returncode, expect["exit"]):
-        _fail(f"exit {done.returncode}, expected {expect['exit']}\n--- stdout\n{stdout}"
+    if returncode < 0:
+        _fail(f"died from signal {-returncode}\n--- stdout\n{stdout}--- stderr\n{stderr}")
+    if not _same(returncode, expect["exit"]):
+        _fail(f"exit {returncode}, expected {expect['exit']}\n--- stdout\n{stdout}"
               f"--- stderr\n{stderr}")
     for name, text in (("stdout", stdout), ("stderr", stderr)):
         if name in expect and text != expect[name]:

@@ -111,7 +111,7 @@ says "or". A `run`, `resume` or `backward` case's `expect` has exactly one of `r
 | `value` | `type` and `value` (required), `typedefs`, `env` | `expect.value` and `expect.kind`, or `expect.raises` |
 | `defaults` | `env` | `expect.defaults` or `expect.raises` |
 | `fingerprint` | `flow` and `other` (required), `files`, `env` | `expect.fingerprint` |
-| `cli` | `flow`, `files`, `env`, `args`, `stdin` | `expect.exit`, then `stdout`, `stderr`, `json`, `json_lines` when present |
+| `cli` | `flow`, `files`, `env`, `args`, `stdin`, `signal` | `expect.exit`, then `stdout`, `stderr`, `json`, `json_lines` when present |
 
 ### `load`
 
@@ -204,6 +204,14 @@ stdout read as one JSON document per non-empty line, both in codec form. A comma
 generated path (`yian run` names its new run log on stderr) is checked without `stderr`, or
 given the path (`--log`).
 
+`signal: {name: SIGINT, after: <text>}` interrupts the command: the runner starts it, sends the
+signal once `after` appears in what it has written to stdout or stderr so far, then waits for it
+to exit. The case fails if the command exits before `after` appears, if 60 seconds pass first,
+or if the command dies from the signal instead of exiting (yian handles SIGINT and exits 130).
+The command starts with SIGINT's default disposition: a shell can start background jobs with it
+ignored, so a runner resets it in the child (libuv resets dispositions; a runner on another
+spawn checks its own). SIGINT is the only signal so far.
+
 ## The host, as data
 
 A case can't hold code, so its host is declared under `host`.
@@ -249,8 +257,8 @@ uses it:
 
 Not in the format yet (each comes as an addition when a case needs it): file values in
 `values`/`item`, output schemas for stub tools, `files` for the `other` flow of a fingerprint
-case, a clock for `system.now`, signals for `cli` (Ctrl-C, SIGTERM), and stub HTTP servers for
-`cli` commands that call providers.
+case, a clock for `system.now`, signals other than SIGINT, and stub HTTP servers for `cli`
+commands that call providers.
 
 ## Forms
 

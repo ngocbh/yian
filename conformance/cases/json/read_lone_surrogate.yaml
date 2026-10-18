@@ -1,0 +1,8 @@
+kind: json
+rules: [numbers]
+read: '["\ud800"]'
+mode: plain
+expect:
+  raises:
+    class: JSONDecodeError
+    message: 'string has an unpaired surrogate: line 1 column 2 (char 1)'

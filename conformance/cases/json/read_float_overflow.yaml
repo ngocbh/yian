@@ -1,0 +1,8 @@
+kind: json
+rules: [numbers]
+read: '[1e400]'
+mode: plain
+expect:
+  raises:
+    class: JSONDecodeError
+    message: 'number is too large for a float: line 1 column 2 (char 1)'

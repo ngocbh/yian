@@ -1,0 +1,9 @@
+kind: json
+# Positions count UTF-16 code units: the emoji is two.
+rules: [numbers, columns]
+read: "\"\U0001F600\" x"
+mode: plain
+expect:
+  raises:
+    class: JSONDecodeError
+    message: 'Extra data: line 1 column 6 (char 5)'

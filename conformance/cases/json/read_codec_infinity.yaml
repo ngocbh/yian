@@ -1,0 +1,7 @@
+kind: json
+# `nan` is not a tag value, so the third object reads as a record.
+rules: [numbers, infinity]
+read: '[{"$float": "inf"}, {"$float": "-inf"}, {"$float": "nan"}]'
+mode: codec
+expect:
+  value: [{$float: inf}, {$float: -inf}, {$float: nan}]

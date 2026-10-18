@@ -1,0 +1,6 @@
+kind: json
+rules: [canonical]
+write: [56, {d: true, "10": null, "1": []}]
+form: canonical
+expect:
+  text: '[56,{"1":[],"10":null,"d":true}]'

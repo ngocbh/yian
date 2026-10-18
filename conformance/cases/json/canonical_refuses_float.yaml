@@ -1,0 +1,6 @@
+kind: json
+rules: [canonical]
+write: [1.5]
+form: canonical
+expect:
+  raises: {class: TypeError, message: JCS numbers are ints within ±(2^53-1)}

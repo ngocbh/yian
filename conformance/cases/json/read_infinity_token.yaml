@@ -1,0 +1,8 @@
+kind: json
+rules: [numbers, infinity]
+read: '-Infinity'
+mode: codec
+expect:
+  raises:
+    class: JSONDecodeError
+    message: '-Infinity is not JSON: line 1 column 1 (char 0)'

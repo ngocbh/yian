@@ -1223,6 +1223,22 @@ function orderedMemberLabels(members: readonly Type[]): [Type, string, string][]
   return labelled.sort(([, , a], [, , b]) => compareCodeUnits(a, b));
 }
 
+/** Return the member whose single-value tag field `field` equals `tag`, or `null`. */
+function memberWithTag(members: readonly Type[], field: string, tag: unknown): Type | null {
+  const index = tagIndex(members, field, tag);
+  return index === null ? null : members[index]!;
+}
+
+/**
+ * Return the index of the member whose tag field `field` equals `tag`, or `null`; a non-string
+ * tag finds no member.
+ */
+function tagIndex(members: readonly Type[], field: string, tag: unknown): number | null {
+  if (typeof tag !== "string") return null;
+  const index = members.findIndex((member) => member.fields!.get(field)!.tags!.has(tag));
+  return index === -1 ? null : index;
+}
+
 /** Whether `null` satisfies `typ`. */
 function admitsNone(typ: Type): boolean {
   return typ.nullable || typ.kind === ValueKind.NONE;
@@ -1628,8 +1644,8 @@ function inferList(items: Value[]): TypedValue {
  *
  * @throws TypeCheckError at the failing value's path when the value does not satisfy
  *   `declared`: a wrong scalar, a non-member variant tag, an out-of-range number, a record
- *   with missing or unknown fields, a bad list element, or a part that is not a JSON value
- *   where one is required.
+ *   with missing or unknown fields, a union value with a missing or unknown tag or matching no
+ *   member, a bad list element, or a part that is not a JSON value where one is required.
  */
 export function buildValueAs(declared: ValueKind | Type, value: unknown): TypedValue {
   const typ = declared instanceof Type ? declared : Type.scalar(declared);
@@ -1669,7 +1685,7 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
 
   if (value === null && typ.nullable) return new TypedValue(ValueKind.NONE, null);
 
-  if (typ.variants !== undefined) throw new Error("union values can't be built yet");
+  if (typ.variants !== undefined) return buildForUnion(typ, value, path);
 
   if (typ.tags !== undefined) {
     if (typeof value !== "string" || !typ.tags.has(value)) {
@@ -1732,6 +1748,88 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
   }
 
   return buildScalarOrList(typ.kind, value, path);
+}
+
+/**
+ * Check `value` against the member of the union `typ` it belongs to, at `path`, and return it
+ * stored as an object.
+ *
+ * A tagged union selects the member by its first tag field; an untagged union takes the first
+ * member the value satisfies.
+ *
+ * @throws TypeCheckError when the value is not a record, its tag is missing or unknown, or it
+ *   fails the selected member (or every member, a `NoUnionMember`).
+ */
+function buildForUnion(typ: Type, value: unknown, path: ValuePath): TypedValue {
+  if (!isRecord(value)) {
+    throw new TypeCheckError(`${valueRepr(value)} is not an object for a union type`, { path });
+  }
+  const members = typ.variants!;
+  const tagged = taggedMember(members, value);
+  if (tagged !== null) {
+    const [field, member] = tagged;
+    const expected = pythonList(tagValues(members, field));
+    if (!Object.hasOwn(value, field)) {
+      throw new TypeCheckError(
+        `missing tag field ${reprText(field)} (expected one of ${expected})`,
+        { path: [...path, field] },
+      );
+    }
+    if (member === null) {
+      throw new TypeCheckError(
+        `${valueRepr(value[field])} is not a tag of the union (expected one of ${expected})`,
+        { path: [...path, field] },
+      );
+    }
+    return buildForType(member, value, path);
+  }
+  const reasons: string[] = [];
+  for (const member of members) {
+    try {
+      return buildForType(member, value, path);
+    } catch (error) {
+      if (!(error instanceof TypeCheckError)) throw error;
+      // A nested union contributes its summary, so the message stays bounded.
+      const reason = error instanceof NoUnionMember ? error.summary : error.message;
+      reasons.push(`${canonicalTypeLabel(member)}: ${reason}`);
+    }
+  }
+  const summary = `value matches no member of ${canonicalTypeLabel(typ)}`;
+  throw new NoUnionMember(`${summary}: ${reasons.join("; ")}`, summary, path);
+}
+
+/**
+ * Return a tagged union's first tag field and the member `value`'s tag selects (`null` when
+ * that field is missing or holds an unknown tag), or `null` when the members share no tag
+ * field (an untagged union).
+ */
+function taggedMember(
+  members: readonly Type[],
+  value: ValueRecord,
+): [string, Type | null] | null {
+  const tagFields = membersTagFields(members);
+  if (tagFields.length === 0) return null;
+  const field = tagFields[0]!;
+  const member = Object.hasOwn(value, field) ? memberWithTag(members, field, value[field]) : null;
+  return [field, member];
+}
+
+/** Return the sorted values of one tag field across union members. */
+function tagValues(members: readonly Type[], field: string): string[] {
+  return members.map((member) => singleTag(member.fields!.get(field)!)!).sort(compareCodeUnits);
+}
+
+/**
+ * A value matches no member of an untagged union; `summary` is the message without the
+ * per-member reasons. Its `name` stays `TypeCheckError`, so it reads as that class.
+ */
+class NoUnionMember extends TypeCheckError {
+  readonly summary: string;
+
+  constructor(message: string, summary: string, path: ValuePath) {
+    super(message, { path });
+    this.summary = summary;
+  }
 }
 
 /**

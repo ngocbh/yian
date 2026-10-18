@@ -1,6 +1,10 @@
 /**
- * The union refinement's shape, tag fields, order, labels and overlap, a port of those tests
- * of `tests/engine/test_union_values.py`; value checks and the member helpers come later.
+ * The union refinement's shape, tag fields, order, labels, overlap and value checks
+ * (`buildValueAs`), a port of those tests of `tests/engine/test_union_values.py`.
+ *
+ * TS-only: a no-member error still reads as class `TypeCheckError` (`error.name`).
+ *
+ * Later: the member helpers (`unionField`, `unionMemberForTag`, `restrictUnion`).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -8,9 +12,11 @@ import { describe, expect, test } from "bun:test";
 import { compareCodeUnits } from "../../src/diagnostics.ts";
 import {
   type Bounds,
+  buildValueAs,
   canonicalTypeLabel,
   canonicalUnionOrder,
   Type,
+  TypeCheckError,
   typesOverlap,
   unionTagFields,
   ValueKind,
@@ -241,6 +247,17 @@ describe("typesOverlap", () => {
   });
 });
 
+/** Return the `TypeCheckError` `run` throws. */
+function typeCheckError(run: () => unknown): TypeCheckError {
+  try {
+    run();
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    return error as TypeCheckError;
+  }
+  throw new Error("expected a TypeCheckError");
+}
+
 function deepUntaggedUnion(depth: number): Type {
   let typ = union([rec({ a: STR }), rec({ b: INT })]);
   for (let level = 0; level < depth; level++) {
@@ -249,17 +266,120 @@ function deepUntaggedUnion(depth: number): Type {
   return typ;
 }
 
-describe("union labels and order", () => {
-  test("a deep untagged union labels in linear work", () => {
-    // Python counts the nodes labelled; an exponential walk of depth 100 would not finish.
-    const depth = 100;
-    const typ = deepUntaggedUnion(depth);
-    const start = performance.now();
-    const label = canonicalTypeLabel(typ);
-    expect(performance.now() - start).toBeLessThan(1000);
-    expect(label.split("Union(").length - 1).toBe(depth + 1);
+describe("buildValueAs", () => {
+  test("a tagged union accepts each member", () => {
+    expect(buildValueAs(U, { action: "buy", qty: 2n }).toObject()).toEqual({
+      action: "buy",
+      qty: 2n,
+    });
+    expect(buildValueAs(U, { action: "sell", price: 1.5 }).kind).toBe(ValueKind.OBJECT);
   });
 
+  test("a tagged union missing its tag", () => {
+    const error = typeCheckError(() => buildValueAs(U, { qty: 2n }));
+    expect(error.message).toBe("missing tag field 'action' (expected one of ['buy', 'sell'])");
+    expect(error.path).toEqual(["action"]);
+  });
+
+  test("a tagged union with an unknown tag", () => {
+    const error = typeCheckError(() => buildValueAs(U, { action: "hold" }));
+    expect(error.message).toBe(
+      `"hold" is not a tag of the union (expected one of ['buy', 'sell'])`,
+    );
+    expect(error.path).toEqual(["action"]);
+  });
+
+  test("a non-string tag value is not a tag", () => {
+    expect(typeCheckError(() => buildValueAs(U, { action: ["buy"] })).path).toEqual(["action"]);
+  });
+
+  test("a tagged union checks the member record", () => {
+    let error = typeCheckError(() => buildValueAs(U, { action: "sell", price: 1.0, qty: 2n }));
+    expect(error.message).toContain("unknown fields: ['qty']");
+    expect(error.path).toEqual(["qty"]);
+
+    error = typeCheckError(() => buildValueAs(U, { action: "sell", qty: 2n }));
+    expect(error.path).toEqual(["price"]);
+  });
+
+  test("a union rejects a non-record at the root", () => {
+    expect(typeCheckError(() => buildValueAs(U, "buy")).path).toEqual([]);
+    expect(typeCheckError(() => buildValueAs(UNTAGGED, 3n)).path).toEqual([]);
+  });
+
+  test("an Optional union accepts null", () => {
+    expect(buildValueAs(optional(U), null).toObject()).toBeNull();
+    typeCheckError(() => buildValueAs(U, null));
+  });
+
+  test("an untagged union picks the matching member", () => {
+    expect(buildValueAs(UNTAGGED, { text: "hi" }).toObject()).toEqual({ text: "hi" });
+    expect(buildValueAs(UNTAGGED, { name: "f", input: {} }).toObject()).toEqual({
+      name: "f",
+      input: {},
+    });
+  });
+
+  test("an untagged union matching no member", () => {
+    const error = typeCheckError(() => buildValueAs(UNTAGGED, { text: 3n }));
+    const callLabel = canonicalTypeLabel(call);
+    const textLabel = canonicalTypeLabel(text);
+    expect(error.message).toBe(
+      `value matches no member of ${canonicalTypeLabel(UNTAGGED)}: ` +
+        `${callLabel}: record missing required fields: ['input', 'name']; ` +
+        `${textLabel}: 3 does not match declared type str`,
+    );
+    expect(error.path).toEqual([]);
+    expect(error.name).toBe("TypeCheckError");
+  });
+
+  test("an untagged no-match message does not nest member messages", () => {
+    const inner = union([rec({ a: STR }), rec({ b: INT })]);
+    const outer = union([rec({ wrap: inner }), rec({ c: BOOL })]);
+    const error = typeCheckError(() => buildValueAs(outer, { wrap: { a: 1n } }));
+    const wrapLabel = canonicalTypeLabel(rec({ wrap: inner }));
+    const cLabel = canonicalTypeLabel(rec({ c: BOOL }));
+    expect(error.message).toBe(
+      `value matches no member of ${canonicalTypeLabel(outer)}: ` +
+        `${wrapLabel}: value matches no member of ${canonicalTypeLabel(inner)}; ` +
+        `${cLabel}: record missing required fields: ['c']`,
+    );
+    expect(error.path).toEqual([]);
+  });
+
+  test("a deep untagged union labels and checks in linear work", () => {
+    // Python counts calls to its private label function, which TS can't monkeypatch; a time
+    // bound stands in. An exponential walk of depth 30 would take minutes, not seconds.
+    const depth = 30;
+    const typ = deepUntaggedUnion(depth);
+    let start = performance.now();
+    const label = canonicalTypeLabel(typ);
+    expect(performance.now() - start).toBeLessThan(2000);
+    expect(label.split("Union(").length - 1).toBe(depth + 1);
+    start = performance.now();
+    const error = typeCheckError(() => buildValueAs(typ, { inner: 3n }));
+    expect(performance.now() - start).toBeLessThan(2000);
+    expect(error.message).toStartWith("value matches no member of ");
+  });
+
+  test("a list of a union", () => {
+    const typ = new Type({ kind: ValueKind.LIST_OBJECT, element: U });
+    const stored = buildValueAs(typ, [
+      { action: "buy", qty: 1n },
+      { action: "sell", price: 2.0 },
+    ]);
+    expect(stored.kind).toBe(ValueKind.LIST_OBJECT);
+    const error = typeCheckError(() =>
+      buildValueAs(typ, [
+        { action: "buy", qty: 1n },
+        { action: "buy", qty: "x" },
+      ]),
+    );
+    expect(error.path).toEqual([1, "qty"]);
+  });
+});
+
+describe("union labels and order", () => {
   test("a union label lists members in canonical order", () => {
     expect(canonicalTypeLabel(union([sell, buy]))).toBe(
       `Union(${canonicalTypeLabel(buy)},${canonicalTypeLabel(sell)})`,

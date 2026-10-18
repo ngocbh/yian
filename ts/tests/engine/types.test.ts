@@ -8,8 +8,7 @@
  * `test_type_to_schema.py::test_large_numeric_schema_bounds_match_resolved_type` (its schema
  * half comes with `typeToSchema`).
  *
- * Later: the widening half of `test_union_member_value_widens_its_float_fields` (with union
- * values), the pool write test, `test_public_exports`, and
+ * Later: the pool write test, `test_public_exports`, and
  * `test_bounded_type_defaults_preserve_compatible_integer_payloads` (with the loader).
  *
  * Not ported: `test_type_for_preserves_its_public_keyword_name` (TypeScript has no keyword
@@ -1167,15 +1166,17 @@ describe("typeFor", () => {
     expect(canonicalTypeLabel(union)).toBe('Union({"a":int,"b":str},{"a":int(1..2)})');
   });
 
-  test("a registry of union members with float fields resolves", () => {
+  test("a union member value widens its float fields", () => {
     const reg = readTypedefs({
       Buy: { action: "Literal(buy)", qty: "int" },
       Sell: { action: "Literal(sell)", price: "float" },
       Count: { n: "int" },
       Score: { n: "float", label: "str" },
     });
-    expect(typeFor("Union(Buy, Sell)", reg).variants).toHaveLength(2);
-    expect(typeFor("Union(Count, Score)", reg).variants).toHaveLength(2);
+    const tagged = buildValueAs(typeFor("Union(Buy, Sell)", reg), { action: "sell", price: 3n });
+    expect((tagged.toObject() as Record<string, unknown>)["price"]).toBe(3);
+    const untagged = buildValueAs(typeFor("Union(Count, Score)", reg), { n: 3n, label: "x" });
+    expect((untagged.toObject() as Record<string, unknown>)["n"]).toBe(3);
   });
 });
 

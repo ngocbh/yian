@@ -8,15 +8,17 @@
  * the TS-era rules: the number model (an int is a `bigint` at any size, `/` always gives a
  * correctly rounded float), the operator table, and the messages.
  *
- * Left for later: the builtin tests land with the call support and the shipped builtins
- * (`builtins.ts`), and `test_binding_default_ref` and `test_nested_default_span_rejected` with
- * `template.ts`. Python's `%` formatting, repetition, overflow and digit-limit tests become the
+ * Calls run through stand-in builtins registered for one test each. Left for later: the tests of
+ * the shipped builtins (`upper`, `join`, `render_as_json`, their null and type rules) land with
+ * them in `builtins.ts`, and `test_binding_default_ref` and `test_nested_default_span_rejected`
+ * with `template.ts`. Python's `%` formatting, repetition, overflow and digit-limit tests become the
  * TS-era tables below; `_Boom` (a value whose negation raises) has no counterpart, since a value
  * is plain data.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
+import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import {
   ExpressionError,
   evalExpr,
@@ -67,6 +69,24 @@ function expectMessage(text: string, message: string, resolve?: (path: string) =
   expect(error).toBeInstanceOf(ExpressionError);
   expect(error.message).toBe(message);
 }
+
+// Each registration's previous entry (or its absence), put back after the test, as Python's
+// `monkeypatch.setitem` does.
+const saved: [string, TemplateFn | undefined][] = [];
+
+/** Register a stand-in builtin `name` taking `params` and running `call`, for this test only. */
+function standIn(name: string, params: TemplateParam[], call: (...args: Value[]) => unknown): void {
+  saved.push([name, TEMPLATE_FNS.get(name)]);
+  registerTemplateFn(name, { params, call });
+}
+
+afterEach(() => {
+  for (const [name, fn] of saved.reverse()) {
+    if (fn === undefined) TEMPLATE_FNS.delete(name);
+    else TEMPLATE_FNS.set(name, fn);
+  }
+  saved.length = 0;
+});
 
 // An int's digits at the shown-value cap: 199 characters and an ellipsis.
 const BIG_SHOWN = "1" + "0".repeat(198) + "…";
@@ -230,6 +250,20 @@ test("required short-circuits its message", () => {
 });
 
 // --------------------------------------------------------------------------------------- //
+// Builtin dispatch through TEMPLATE_FNS
+// --------------------------------------------------------------------------------------- //
+
+test("dotted access on a builtin call's result", () => {
+  // The builtin returns a record; `.k` reads its field.
+  standIn("identity", [{ name: "v" }], (v) => v);
+  expect(evaluate("identity(d).k", fromRecord({ d: { k: "v" } }))).toBe("v");
+});
+
+test("an unknown builtin raises", () => {
+  expectMessage("no_such_fn(x)", "unknown expression function 'no_such_fn'", fromRecord({ x: 1n }));
+});
+
+// --------------------------------------------------------------------------------------- //
 // `item` scope (MAP-body-local)
 // --------------------------------------------------------------------------------------- //
 
@@ -364,9 +398,126 @@ describe("tokens", () => {
     expect(() => evalExpr(new Token("WEIRD", "x"), resolve)).toThrow("unexpected token WEIRD 'x'");
     expect(() => evalExpr(new Tree("weird", []), resolve)).toThrow("unsupported expression node 'weird'");
   });
+});
 
-  test("a call is not evaluated yet", () => {
-    expect(errorOf("upper(x)").message).toBe("expression calls are not supported yet");
+describe("calls", () => {
+  /** Register `f(a, b="B", c="C")`, returning its arguments as a list, and record each call's. */
+  function recordingF(): Value[][] {
+    const calls: Value[][] = [];
+    standIn("f", [{ name: "a" }, { name: "b", default: "B" }, { name: "c", default: "C" }], (...args) => {
+      calls.push(args);
+      return args;
+    });
+    return calls;
+  }
+
+  test("keyword arguments reach their parameter and defaults fill in", () => {
+    const calls = recordingF();
+    expect(evaluate('f(1, c="z")')).toEqual([1n, "B", "z"]);
+    expect(evaluate("f(b=2, a=1)")).toEqual([1n, 2n, "C"]);
+    expect(calls).toEqual([
+      [1n, "B", "z"],
+      [1n, 2n, "C"],
+    ]);
+  });
+
+  test("a builtin sees ints as bigints and floats as numbers", () => {
+    const calls = recordingF();
+    evaluate("f(1, 2.5, x)", fromRecord({ x: 10n ** 30n }));
+    expect(calls).toEqual([[1n, 2.5, 10n ** 30n]]);
+    expect(calls[0]!.map((arg) => typeof arg)).toEqual(["bigint", "number", "bigint"]);
+  });
+
+  test("a default written as a JS number reaches the builtin as an int", () => {
+    const calls: Value[][] = [];
+    standIn("render_as_json", [{ name: "value" }, { name: "indent", default: 2 }], (...args) => {
+      calls.push(args);
+      return "";
+    });
+    evaluate("render_as_json(1)");
+    expect(calls).toEqual([[1n, 2n]]);
+  });
+
+  test("arguments that don't bind fail the call at evaluation", () => {
+    recordingF();
+    // `parseExpr` doesn't check calls (`parseCondition` does), so the binding fails here.
+    expectMessage("f(1, 2, 3, 4)", "expression function 'f' failed: too many positional arguments");
+    expectMessage("f(b=1)", "expression function 'f' failed: missing a required argument: 'a'");
+    expectMessage("f(1, d=2)", "expression function 'f' failed: got an unexpected keyword argument 'd'");
+    standIn("g", [{ name: "a" }], () => null);
+    expectMessage("g(1, 2, 3)", "expression function 'g' failed: too many positional arguments");
+  });
+
+  test("an error thrown by a builtin names the builtin", () => {
+    standIn("boom", [], () => {
+      throw new TypeError("it broke");
+    });
+    expectMessage("boom()", "expression function 'boom' failed: it broke");
+  });
+
+  test("a thrown non-Error shows in its string form", () => {
+    standIn("boom", [], () => {
+      throw "plain text";
+    });
+    expectMessage("boom()", "expression function 'boom' failed: plain text");
+    standIn("boom", [], () => {
+      throw 42;
+    });
+    expectMessage("boom()", "expression function 'boom' failed: 42");
+  });
+
+  test("an ExpressionError thrown by a builtin passes through unchanged", () => {
+    const thrown = new ExpressionError("upper() got null");
+    standIn("boom", [], () => {
+      throw thrown;
+    });
+    expect(errorOf("boom()")).toBe(thrown);
+  });
+
+  test("an argument's own error is not wrapped", () => {
+    recordingF();
+    expectMessage("f(1 / 0)", "division by zero: 1 / 0");
+  });
+
+  test.each([
+    ["3 reads as 3n", 3, 3n],
+    ["2.5 stays a float", 2.5, 2.5],
+    ["text stays text", "text", "text"],
+    ["a list reads item by item", [1, [2.5, null]], [1n, [2.5, null]]],
+    ["a record reads field by field", { a: 1 }, { a: 1n }],
+    ["undefined reads as null", undefined, null],
+  ] as [string, unknown, Value][])("a result of %s", (_label, result, expected) => {
+    standIn("f", [], () => result);
+    expect(evaluate("f()")).toEqual(expected);
+  });
+
+  test("a result that is no yian value fails the call", () => {
+    const cases: [unknown, string][] = [
+      [NaN, "result: NaN is not a yian value"],
+      [[undefined], "result at [0]: undefined is not a yian value; use null"],
+      [new Date(0), "result: Date is not a yian value"],
+    ];
+    for (const [result, message] of cases) {
+      standIn("f", [], () => result);
+      expectMessage("f()", `expression function 'f' failed: ${message}`);
+    }
+  });
+
+  test("a strict miss on a call result's field names the call", () => {
+    standIn("identity", [{ name: "v" }], (v) => v);
+    const error = errorOf("identity(d).nope.k", fromRecord({ d: { k: 1n } }), ResolveMode.STRICT_RAISE);
+    expect(error).toBeInstanceOf(ExpressionError);
+    expect(error.message).toBe("unresolved reference ${identity(...).nope.k} in expression");
+    expect(evaluate("identity(d).nope", fromRecord({ d: { k: 1n } }))).toBeNull();
+  });
+
+  test("a strict miss in an argument raises", () => {
+    standIn("identity", [{ name: "v" }], (v) => v);
+    expect(errorOf("identity(d)", undefined, ResolveMode.STRICT_RAISE).message).toBe(
+      "unresolved reference ${d} in expression",
+    );
+    // In the non-strict modes the builtin gets null.
+    expect(evaluate("identity(d)")).toBeNull();
   });
 });
 
@@ -628,6 +779,16 @@ describe("expressions at the nesting limit evaluate and walk", () => {
     expect(evaluate(text, resolve)).toBe(1n);
     expect(exprRefs(parseExpr(text))).toEqual(["x"]);
     expect(rewriteExprRefs(text, () => "y")).toBe("-(".repeat(100) + "y" + ")".repeat(100));
+  });
+
+  test("100 nested calls", () => {
+    standIn("identity", [{ name: "v" }], (v) => v);
+    for (const open of ["identity(", "identity(v="]) {
+      const text = open.repeat(100) + "x" + ")".repeat(100);
+      expect(evaluate(text, resolve)).toBe(1n);
+      expect(exprRefs(parseExpr(text))).toEqual(["x"]);
+      expect(rewriteExprRefs(text, () => "y")).toBe(open.repeat(100) + "y" + ")".repeat(100));
+    }
   });
 
   test("100 levels of not, minus and comparisons", () => {

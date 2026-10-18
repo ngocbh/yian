@@ -12,14 +12,24 @@
  * `types` table every evaluation entry point accepts, and a constructor `T(x)` /
  * `T(a=..., b=...)` checks (or builds and checks) a value of that type.
  *
- * So far this holds the error family, the condition parse with its call check, the evaluator
- * (`evalExpr`) without calls, and the static reference walkers and rewriters. Calls and type
- * inference land here later, and value tracing with `lineage.ts`.
+ * Value tracing lands here later, with `lineage.ts`.
  */
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
-import { BUILTIN_TYPE_NAMES, FileRef, type Type, type Value } from "../typesys/index.ts";
-import { fieldOf, isRecord, valueRepr } from "../typesys/values.ts";
+import {
+  BUILTIN_TYPE_NAMES,
+  buildValueAs,
+  FileRef,
+  normalizeFiles,
+  Type,
+  TypeCheckError,
+  unionField,
+  type Value,
+  ValueKind,
+  type ValueRecord,
+  type VariablePool,
+} from "../typesys/index.ts";
+import { fieldOf, fileFieldType, fromHost, isRecord, valueRepr } from "../typesys/values.ts";
 import { bindArguments, TEMPLATE_FNS, type TemplateFn } from "./builtins.ts";
 // grammar.ts imports this module too, so its exports are used only inside functions here.
 import {
@@ -99,6 +109,45 @@ export function constructorShapeError(name: string, callSuffix: Tree): string | 
     );
   }
   return null;
+}
+
+/**
+ * Resolve a `${path}` reference against the pool.
+ *
+ * @returns The value, or `null` for a miss.
+ * @throws {ExpressionError} If a dotted segment of `path` is empty.
+ */
+export function resolveReference(path: string, pool: VariablePool): Value {
+  const parts = path.trim().split(".");
+  if (parts.some((part) => !part)) throw new ExpressionError(`invalid variable path: '\${${path}}'`);
+  const [head, ...rest] = parts;
+  return pool.resolve(head!, rest);
+}
+
+/**
+ * Resolve a `${path}` against a node's bound input record (dotted walk).
+ *
+ * Bare local-input refs only. A missing input, a dotted miss, or a `null` step gives `null`,
+ * which gives `when:` its missing-is-falsy behavior. Compose rejects undeclared names
+ * everywhere, and field reads a known type can't have in bindings, CASE conditions, LOOP
+ * predicates, and flow outputs. Asserts check less (a node assert's reads of its inputs and a
+ * flow assert's `${input.X.f}` check only the head name), so there a `null` can also be a
+ * misspelled field.
+ *
+ * The head is read only as an own field of `record`, and each step through `fieldOf`, so a
+ * path never reaches a JS property such as `constructor`.
+ *
+ * @throws {ExpressionError} If a dotted segment of `path` is empty.
+ */
+export function resolveInRecord(path: string, record: ValueRecord): Value {
+  const parts = path
+    .trim()
+    .split(".")
+    .map((part) => part.trim());
+  if (parts.some((part) => !part)) throw new ExpressionError(`invalid variable path: '\${${path}}'`);
+  let value = fieldOf(record, parts[0]!)[1];
+  for (const step of parts.slice(1)) value = fieldOf(value, step)[1];
+  return value;
 }
 
 /**
@@ -303,6 +352,94 @@ function parameterList(fn: TemplateFn): string {
  */
 export function conditionRefs(expression: string): string[] {
   return exprRefs(parseCondition(expression));
+}
+
+/**
+ * Parse and evaluate a `when:`/`asserts:` expression on the unified engine, resolving each
+ * reference via `resolve` and each `isinstance` type name via `types`; the result is a boolean.
+ *
+ * Runs `evalExpr` in `CONDITION_FALSY` mode: a missing reference is `null` and so falsy through
+ * comparisons, which lets a CASE's `else:` route handle absent values. The truthiness fold of
+ * `and`/`or` becomes a plain boolean here, so a predicate always gives `true` or `false`.
+ */
+function evaluate(
+  expression: string,
+  resolve: (path: string) => Value,
+  types: ReadonlyMap<string, Type> | null,
+): boolean {
+  const tree = parseCondition(expression, types ?? new Map());
+  return truthy(evalExpr(tree, resolve, { mode: ResolveMode.CONDITION_FALSY, types }));
+}
+
+/**
+ * Evaluate a `when:` boolean expression against the variable pool.
+ *
+ * Parses and folds the expression on the one unified engine (comparisons, arithmetic over
+ * references and literals, `and` / `or` / `not`) and gives a single boolean. This is the public
+ * pool-based path; record-scoped CASE and LOOP predicates use `evaluateWhenRecord`.
+ *
+ * The value may be written two ways, which evaluate identically: a bare expression `a > 5` or a
+ * whole `${a > 5}`. A bare reference with no comparison operator is a truthiness test, not an
+ * error.
+ *
+ * Example: `evaluateWhen("score.output >= 0.5 and flag.output", pool)`.
+ *
+ * @param expression The `when:` source: any expression the grammar accepts, in either spelling.
+ * @param pool The variable pool each reference resolves against; a miss is a falsy `null`.
+ * @param types The type table `isinstance(x, T)` and a constructor look `T` up in; `null` means
+ *   no types.
+ * @returns The truth value of the expression.
+ * @throws {ExpressionError} If the expression is malformed, references an invalid path, applies
+ *   an operator to operand kinds it doesn't take, or names a type absent from `types`. A call to
+ *   a function that isn't a builtin, or to a builtin with arguments it doesn't take, throws even
+ *   where `and`/`or` would not evaluate the call.
+ */
+export function evaluateWhen(
+  expression: string,
+  pool: VariablePool,
+  types: ReadonlyMap<string, Type> | null = null,
+): boolean {
+  return evaluate(expression, (path) => resolveReference(path, pool), types);
+}
+
+/**
+ * Return the first assert expression in `exprs` that is false against `pool`, else `null`.
+ *
+ * A helper for callers that evaluate several pool-scoped expressions, each in the
+ * `when:`/`asserts:` boolean grammar.
+ */
+export function firstFailingAssert(exprs: Iterable<string>, pool: VariablePool): string | null {
+  for (const expr of exprs) {
+    if (!evaluateWhen(expr, pool)) return expr;
+  }
+  return null;
+}
+
+/**
+ * Evaluate a strict-CASE `when:` against the node's bound input record.
+ *
+ * `name` / `name.path` resolve against `record` (`resolveInRecord`); a miss is `null`, compared
+ * as a plain value: `==` and ordered comparisons against a non-null value are `false`, and `!=`
+ * is `true`. A bare `name` miss is falsy, which gives `when:` its missing-is-falsy behavior. A
+ * `null` left side of `in`/`not in` is an ordinary value (`miss in [...]` is `false`); a `null`
+ * right side throws, since `null` is no container. Pool namespaces are not in scope (they belong
+ * in the node's input `from:` bindings).
+ *
+ * Unlike the strict prompt render, which throws on the same dotted miss, `when:` stays falsy so
+ * the CASE's `else:` route can fire.
+ *
+ * @param types The type table `isinstance(x, T)` and a constructor look `T` up in; `null` means
+ *   no types.
+ * @throws {ExpressionError} As `evaluateWhen` does: a call to a function that isn't a builtin,
+ *   or to a builtin with arguments it doesn't take, throws even where `and`/`or` would not
+ *   evaluate the call.
+ */
+export function evaluateWhenRecord(
+  expression: string,
+  record: ValueRecord,
+  types: ReadonlyMap<string, Type> | null = null,
+): boolean {
+  return evaluate(expression, (path) => resolveInRecord(path, record), types);
 }
 
 // --------------------------------------------------------------------------------------- //
@@ -664,15 +801,29 @@ class EvalExpr {
   /**
    * A `refcall` is a bare `NAME` and `trailer`s (a reference), or a `NAME`, a `call_suffix`
    * and trailing `trailer`s (a call, with dotted access on its result).
+   *
+   * A call is `isinstance(x, T)`, a `T(...)` constructor, or a builtin. A `.field` walk on its
+   * result that misses is `MISSING`, the same as a reference's dotted miss, so every value
+   * consumer treats the two alike (strict throws, the others read `null`).
    */
   refcall(node: Tree): Walked {
     const children = node.children;
     const name = String(children[0]);
-    if (callSuffixOf(node) === undefined) {
+    const callSuffix = callSuffixOf(node);
+    if (callSuffix === undefined) {
       const segments = children.slice(1).map((c) => String((c as Tree).children[0])); // each trailer's NAME
       return this.reference([name, ...segments].join("."));
     }
-    throw new ExpressionError("expression calls are not supported yet");
+    let value: Walked;
+    if (name === ISINSTANCE) value = this.isinstanceCall(callSuffix);
+    else if (this.isConstructor(name)) value = this.construct(name, callSuffix);
+    else value = this.callBuiltin(name, callSuffix);
+    const after = children.filter((c): c is Tree => c instanceof Tree && c.data === "trailer");
+    for (const trailer of after) value = this.dottedStep(value, String(trailer.children[0]));
+    if (value === MISSING) {
+      this.#missPath = `${name}(...)` + after.map((trailer) => `.${String(trailer.children[0])}`).join("");
+    }
+    return value;
   }
 
   /**
@@ -708,6 +859,120 @@ class EvalExpr {
     if (value === MISSING) return MISSING;
     const stepped = fieldOf(value, step)[1];
     return stepped === null ? MISSING : stepped;
+  }
+
+  /**
+   * `isinstance(x, T)`: whether the value of `x` satisfies the type named `T`.
+   *
+   * `T` is looked up in the type table, never resolved as a reference. The check is the
+   * variable pool's write-boundary check (`buildValueAs`), so a value passes exactly when it
+   * could be written to a slot of type `T`. A missing `x` is checked as `null` in the
+   * non-strict modes and throws in `STRICT_RAISE`.
+   *
+   * @throws {ExpressionError} If `T` is not in the type table.
+   */
+  isinstanceCall(callSuffix: Tree): boolean {
+    const typeName = isinstanceTypeName(callSuffix);
+    const typ = this.#types?.get(typeName);
+    if (typ === undefined) throw new ExpressionError(`isinstance: unknown type ${reprText(typeName)}`);
+    const value = this.asValue(this.walk((callSuffix.children[0] as Tree).children[0]!));
+    try {
+      buildValueAs(typ, value);
+    } catch (error) {
+      if (error instanceof TypeCheckError) return false;
+      throw error;
+    }
+    return true;
+  }
+
+  /**
+   * Whether a call to `name` is a `T(...)` constructor.
+   *
+   * A builtin wins over a type of the same name, and a builtin type name (`int`) is never a
+   * constructor, even when an `isinstance` put it in the table.
+   */
+  isConstructor(name: string): boolean {
+    return (
+      name !== ISINSTANCE &&
+      !TEMPLATE_FNS.has(name) &&
+      !BUILTIN_TYPE_NAMES.has(name) &&
+      this.#types !== null &&
+      this.#types.has(name)
+    );
+  }
+
+  /**
+   * `T(x)` checks the value of `x` against `T`; `T(a=..., b=...)` builds a record.
+   *
+   * The keyword form's record holds exactly the given fields. Either value is checked with the
+   * variable pool's write-boundary check and given back with only its file and object
+   * representation read as `T` reads it (`normalizeFiles`), so it is exactly what `!T ${x}`
+   * delivers. A missing `x` is checked as `null` in the non-strict modes and throws in
+   * `STRICT_RAISE`.
+   *
+   * @throws {ExpressionError} If the call mixes keyword and positional arguments or has several
+   *   positional ones (compose rejects this at load).
+   * @throws {ConstructorTypeError} If the value does not fit `T`.
+   */
+  construct(name: string, callSuffix: Tree): Value {
+    const shapeError = constructorShapeError(name, callSuffix);
+    if (shapeError !== null) throw new ExpressionError(shapeError);
+    const args = callSuffix.children as Tree[];
+    let value: Value;
+    if (args.length === 1 && args[0]!.children.length === 1) {
+      value = this.asValue(this.walk(args[0]!.children[0]!));
+    } else {
+      // `fromEntries` defines each field as an own property, so a `__proto__` keyword is data.
+      value = Object.fromEntries(
+        args.map((arg) => [String(arg.children[0]), this.asValue(this.walk(arg.children[1]!))]),
+      ) as ValueRecord;
+    }
+    const typ = this.#types!.get(name)!;
+    try {
+      buildValueAs(typ, value);
+    } catch (error) {
+      if (error instanceof TypeCheckError) {
+        throw new ConstructorTypeError(`${name}(...): ${error.message}`, { cause: error });
+      }
+      throw error;
+    }
+    return normalizeFiles(typ, value);
+  }
+
+  /**
+   * Run a builtin call through `TEMPLATE_FNS`.
+   *
+   * The arguments are evaluated in source order (a keyword argument carries a leading `NAME`),
+   * bound to the builtin's parameters with `bindArguments`, and passed in parameter order. The
+   * result is read as a host value: a top-level `undefined` is `null`, anything else goes
+   * through `fromHost`.
+   *
+   * @throws {ExpressionError} If `callee` is no builtin, or the call fails: arguments that don't
+   *   bind, an error the builtin throws, or a result that is no yian value
+   *   (`expression function 'f' failed: <message>`). An `ExpressionError` the builtin throws
+   *   passes through unchanged.
+   */
+  callBuiltin(callee: string, callSuffix: Tree): Value {
+    const fn = TEMPLATE_FNS.get(callee);
+    if (fn === undefined) throw new ExpressionError(unknownFunctionMessage(callee));
+    const positional: Value[] = [];
+    const keywords = new Map<string, Value>();
+    for (const arg of callSuffix.children as Tree[]) {
+      const kids = arg.children;
+      if (kids.length === 2) keywords.set(String(kids[0]), this.asValue(this.walk(kids[1]!)));
+      else positional.push(this.asValue(this.walk(kids[0]!)));
+    }
+    const failed = (message: string, cause?: unknown) =>
+      new ExpressionError(`expression function ${reprText(callee)} failed: ${message}`, { cause });
+    const bound = bindArguments(fn, positional, keywords);
+    if (typeof bound === "string") throw failed(bound);
+    try {
+      const result = fn.call(...bound);
+      return result === undefined ? null : fromHost(result, "result");
+    } catch (error) {
+      if (error instanceof ExpressionError) throw error;
+      throw failed(error instanceof Error ? error.message : String(error), error);
+    }
   }
 
   // --- coalesce / default / required (short-circuit) --- //
@@ -842,9 +1107,11 @@ class EvalExpr {
  * @returns The value: `null`, a boolean, a `bigint`, a number, text, a list, a record or a file
  *   (`FileRef`).
  * @throws {RequiredError} When a `head :? message` head misses or is `null`.
- * @throws {ExpressionError} On an unsupported node, a call, arithmetic or ordering over operand
- *   kinds the operator doesn't take (`null` included), a zero divisor, a NaN result, an int too
- *   large for the runtime, or a strict-mode miss.
+ * @throws {ConstructorTypeError} When a `T(...)` constructor's value does not fit `T`.
+ * @throws {ExpressionError} On an unsupported node, a call to an unknown function or one that
+ *   fails, an `isinstance` type absent from `types`, arithmetic or ordering over operand kinds
+ *   the operator doesn't take (`null` included), a zero divisor, a NaN result, an int too large
+ *   for the runtime, or a strict-mode miss.
  */
 export function evalExpr(
   tree: ExprNode,
@@ -856,6 +1123,106 @@ export function evalExpr(
   }: { item?: Value; mode?: ResolveMode; types?: ReadonlyMap<string, Type> | null } = {},
 ): Value {
   return new EvalExpr(resolve, item, mode, types).eval(tree);
+}
+
+// --------------------------------------------------------------------------------------- //
+// Conservative compile-time type inference over the unified expression tree.
+// --------------------------------------------------------------------------------------- //
+
+// The nodes whose value is always a boolean.
+const BOOLEAN_NODES: ReadonlySet<string> = new Set([
+  "compare",
+  "compare_in",
+  "compare_notin",
+  "negate",
+  "and_expr",
+  "or_expr",
+]);
+
+/**
+ * Return the statically proven type of one parsed expression, if any.
+ *
+ * Inference is deliberately conservative: literal tokens, exact references, comparisons,
+ * boolean combinators, and `isinstance(x, T)` have fixed result types, and a `T(...)`
+ * constructor has type `T` (its value is checked against `T`), with field reads on the result
+ * typed through `T`. Other forms stay unknown until their runtime value semantics can be
+ * modeled without guessing. Reference and constructor lookup are injected so this
+ * source-neutral expression layer knows nothing of a flow graph or compose document.
+ *
+ * Example: `inferExprType(parseExpr("answer == 42"), () => Type.scalar(ValueKind.INTEGER))`
+ * gives `Type.scalar(ValueKind.BOOLEAN)`.
+ *
+ * @param tree A tree or token from `parseExpr`.
+ * @param refTypeFn Resolves one dotted reference path to its known type, or gives `null` when
+ *   the type is not statically known. Anything it throws propagates unchanged.
+ * @param typeFn Resolves a constructor name to its type, or gives `null` for a name that is no
+ *   constructor; `null` leaves every constructor unknown.
+ * @returns The proven expression type, or `null` when inference is inconclusive.
+ */
+export function inferExprType(
+  tree: ExprNode,
+  refTypeFn: (path: string) => Type | null,
+  typeFn: ((name: string) => Type | null) | null = null,
+): Type | null {
+  if (tree instanceof Token) {
+    switch (tree.type) {
+      case "NUMBER":
+        return Type.scalar(tree.value.includes(".") ? ValueKind.NUMBER : ValueKind.INTEGER);
+      case "STRING":
+        return Type.scalar(ValueKind.STRING);
+      case "BOOL":
+        return Type.scalar(ValueKind.BOOLEAN);
+      case "NULL":
+        return Type.scalar(ValueKind.NONE);
+      case "INF":
+        return Type.scalar(ValueKind.NUMBER);
+    }
+    return null;
+  }
+  if (tree.data === "refcall") {
+    const children = tree.children;
+    const name = String(children[0]);
+    if (callSuffixOf(tree) !== undefined) {
+      // `parseExpr` rejects dotted access on an `isinstance(...)` result.
+      if (name === ISINSTANCE) return Type.scalar(ValueKind.BOOLEAN);
+      let typ = typeFn === null || TEMPLATE_FNS.has(name) ? null : typeFn(name);
+      for (const child of children) {
+        if (!(child instanceof Tree) || child.data !== "trailer") continue;
+        if (typ === null) return null;
+        typ = fieldReadType(typ, String(child.children[0]));
+      }
+      return typ;
+    }
+    const segments = children.slice(1).map((c) => String((c as Tree).children[0]));
+    return refTypeFn([name, ...segments].join("."));
+  }
+  return BOOLEAN_NODES.has(tree.data) ? Type.scalar(ValueKind.BOOLEAN) : null;
+}
+
+/**
+ * Return the type of reading field `name` on a value of type `typ`, if proven.
+ *
+ * A record's field is `Optional` when the record is, or the field is not required; a union's
+ * field is the members' shared type when every member has it; a file's `uri`, `mime` or `name`
+ * is its `fileFieldType`, `Optional` when the file is.
+ */
+function fieldReadType(typ: Type, name: string): Type | null {
+  let field: Type;
+  if (typ.variants !== undefined) {
+    const read = unionField(typ, name);
+    if (read.kind !== "read" || read.type === null) return null;
+    field = read.type;
+  } else if (typ.fields !== undefined && typ.fields.has(name)) {
+    field = typ.fields.get(name)!;
+    if (!typ.required?.has(name)) field = field.replace({ nullable: true });
+  } else if (typ.fields === undefined && typ.kind === ValueKind.FILE) {
+    const fileField = fileFieldType(name);
+    if (fileField === null) return null;
+    field = fileField;
+  } else {
+    return null;
+  }
+  return typ.nullable ? field.replace({ nullable: true }) : field;
 }
 
 /**

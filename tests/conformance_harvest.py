@@ -38,7 +38,7 @@ import inspect
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import sys
 import tempfile
@@ -1222,8 +1222,9 @@ class _Test:
 class _Harvest:
     """A harvest session's state: what it wrote, the test running now and its noted texts."""
 
-    def __init__(self, config: pytest.Config, out: Path) -> None:
-        """Start a harvest writing under `out`."""
+    def __init__(self, config: pytest.Config, out: Path,
+                 code: dict[str, str] | None = None) -> None:
+        """Start a harvest writing under `out`, translating CODE bodies by the table `code`."""
         self.config, self.out = config, out
         self.index = _Index(out / "cases")
         self.start_env = dict(os.environ)
@@ -1257,7 +1258,7 @@ class _Harvest:
         self.jitter = tool_node._jitter
         self.backward = RunResult.backward
         # The `--harvest-code` table: TS bodies by the key of the Python body each replaces.
-        self.code: dict[str, str] = {}
+        self.code = code or {}
 
 
 def _new_report(path: str) -> dict:
@@ -2114,38 +2115,51 @@ def _fitted(span: str, body: str) -> str | None:
         "\n" * pad)
 
 
+def _reads_as(text: str, start: int, end: int, value: str) -> bool:
+    """Return whether the `code:` scalar at `start` in `text` reads as `value` within `end`.
+
+    Trailing line breaks don't count, and the scalar may stop before blank text up to `end`.
+    """
+    found = [scalar for scalar in _code_scalars(text) if scalar.start == start]
+    return (bool(found) and found[0].value.rstrip("\n") == value.rstrip("\n")
+            and found[0].end <= end and not text[found[0].end:end].strip())
+
+
 def _translate(text: str, depth: int, table: dict[str, str]) -> tuple[str, dict, set]:
     """Return a flow text with its CODE in TS form, and the bodies and references left.
 
     `depth` is how many directories below the case directory the text's file sits. A reference
     into `_FIXTURE_MODULES` to a function the fixture exports becomes `./fixtures/<file>:<name>`
     (`../` once per level of `depth`), and an inline body whose key is in `table` takes the TS
-    body there, when it fits (`_fitted`); no line below either moves. The bodies left are by
-    key, the references left as written.
+    body there, when it fits (`_fitted`); no line below either moves. Each replacement must read
+    back as its TS form, or it is left. The bodies left are by key, the references as written.
     """
-    untranslated, unported, done = {}, set(), set()
-    # From the end, so each span's indexes still hold.
-    for scalar in reversed(_code_scalars(text)):
-        # An alias's node is found again at the same span.
-        if scalar.start in done:
-            continue
-        done.add(scalar.start)
+    untranslated, unported = {}, set()
+    # From the end, so each span's indexes still hold; an alias's node is found again at its
+    # anchor's span, which is replaced once.
+    scalars = sorted({scalar.start: scalar for scalar in _code_scalars(text)}.values(),
+                     key=lambda scalar: scalar.start, reverse=True)
+    for scalar in scalars:
         span = text[scalar.start:scalar.end]
-        if _REFERENCE_RE.fullmatch(scalar.value):
+        reference = _REFERENCE_RE.fullmatch(scalar.value)
+        if reference:
             module, _, name = scalar.value.partition(":")
             file = _FIXTURE_MODULES.get(module)
-            if file is None or name not in _exported(file):
-                unported.add(scalar.value)
-                continue
+            value = (f"{'../' * depth or './'}fixtures/{file}:{name}"
+                     if file is not None and name in _exported(file) else None)
             # A reference written as a block keeps the block's lines.
-            new = f"{'../' * depth or './'}fixtures/{file}:{name}" + "\n" * span.count("\n")
+            new = None if value is None else value + "\n" * span.count("\n")
         else:
-            key = _code_key(scalar.value)
-            new = _fitted(span, table[key]) if key in table else None
-            if new is None:
-                untranslated[key] = scalar.value
-                continue
-        text = text[:scalar.start] + new + text[scalar.end:]
+            value = table.get(_code_key(scalar.value))
+            new = None if value is None else _fitted(span, value)
+        candidate = None if new is None else text[:scalar.start] + new + text[scalar.end:]
+        if candidate is not None and _reads_as(candidate, scalar.start, scalar.start + len(new),
+                                               value):
+            text = candidate
+        elif reference:
+            unported.add(scalar.value)
+        else:
+            untranslated[_code_key(scalar.value)] = scalar.value
     return text, untranslated, unported
 
 
@@ -2168,7 +2182,8 @@ def _ts_code(case: dict, table: dict[str, str]) -> tuple[dict, dict, set]:
         if flow != case["flow"]:
             case = case | {"flow": flow, "python_flow": case["flow"]}
     if "files" in case:
-        files = {path: translate(text, path.count("/")) for path, text in case["files"].items()}
+        files = {path: translate(text, len(PurePosixPath(path).parent.parts))
+                 for path, text in case["files"].items()}
         if files != case["files"]:
             case = case | {"files": files, "python_files": case["files"]}
     return case, untranslated, unported
@@ -2472,11 +2487,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--harvest-out", metavar="DIR",
                      help="record conformance case candidates under DIR")
     parser.addoption("--harvest-code", metavar="FILE",
-                     help="translate the CODE bodies keyed in FILE (YAML: key to TS body)")
+                     help="translate the CODE bodies keyed in FILE (YAML: quoted key to TS body)")
 
 
 def _code_table(path: str) -> dict[str, str]:
     """Return the `--harvest-code` table at `path`: a YAML mapping of body key to TS body.
+
+    A key is quoted: unquoted hex digits can read as a number.
 
     Raises `pytest.UsageError` for a file that can't be read or holds anything else.
     """
@@ -2486,7 +2503,8 @@ def _code_table(path: str) -> dict[str, str]:
         raise pytest.UsageError(f"--harvest-code {path}: {exc}") from None
     if not isinstance(table, dict) or not all(
             isinstance(key, str) and isinstance(body, str) for key, body in table.items()):
-        raise pytest.UsageError(f"--harvest-code {path}: not a mapping of key to TS body")
+        raise pytest.UsageError(f"--harvest-code {path}: not a mapping of key to TS body "
+                                "(quote the keys)")
     return table
 
 
@@ -2509,8 +2527,7 @@ def pytest_configure(config: pytest.Config) -> None:
     # A harvest killed between a write and its rename leaves the temporary file.
     for leftover in [*Path(out).glob("cases/*/*.yaml.tmp"), *Path(out).glob("report/*.json.tmp")]:
         leftover.unlink()
-    _STATE = _Harvest(config, Path(out))
-    _STATE.code = table
+    _STATE = _Harvest(config, Path(out), table)
     entries = {
         "eval_expr": (eval_expr, _record_eval_expr),
         "eval_binding": (eval_binding, _record_eval_binding),

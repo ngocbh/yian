@@ -3420,6 +3420,31 @@ def test_translate_code() -> None:
     one = "nodes:\n  b: {kind: code, code: return 1}\n"
     assert harvest._translate(one, 0, {_code_hash("return 1"): "const a = 1;\nreturn a;"}) == (
         one, {_code_hash("return 1"): "return 1"}, set())
+    # A block refuses a longer body, and a body that wouldn't read back as written is refused.
+    left = {_code_hash("a = 1\nreturn a\n"): "a = 1\nreturn a\n"}
+    for body in ("const a = 1;\nconst b = a;\nreturn b;", "  return 1;\nreturn 2;"):
+        assert harvest._translate(tail, 0, {_code_hash("a = 1\nreturn a\n"): body}) == (
+            tail, left, set()), body
+    # Python reads a raw U+0085 in a double-quoted scalar as a line break.
+    assert harvest._translate(one, 0, {_code_hash("return 1"): "return '\x85';"})[0] == one
+    # An alias names its anchor's scalar, which is replaced once, in text order.
+    aliased = ("nodes:\n  a: &b {kind: code, code: tests.seeds.fns:echo_value}\n"
+               "  c: {kind: code, code: tests.seeds.fns:const_one}\n  d: *b\n")
+    assert harvest._translate(aliased, 0, {}) == (
+        "nodes:\n  a: &b {kind: code, code: ./fixtures/seeds.ts:echo_value}\n"
+        "  c: {kind: code, code: ./fixtures/seeds.ts:const_one}\n  d: *b\n", {}, set())
+
+    # A case's files name the fixture from their own directory; only a changed text keeps its
+    # Python form.
+    plain = "id: p\nnodes:\n  t: {kind: tool, tool: x}\n"
+    case = {"kind": "load", "flow": plain, "files": {"lib/child.yaml": child, "p.yaml": plain}}
+    translated, untranslated, unported = harvest._ts_code(case, {})
+    assert translated == case | {"files": {
+        "lib/child.yaml": child.replace("tests.seeds.fns:", "../fixtures/seeds.ts:"),
+        "p.yaml": plain}, "python_files": case["files"]}
+    assert (untranslated, unported) == ({}, set())
+    assert harvest._ts_code({"kind": "load", "files": {"p.yaml": plain}}, {})[0] == {
+        "kind": "load", "files": {"p.yaml": plain}}
 
 
 def test_seeds_fixture_exports_every_seed_function() -> None:

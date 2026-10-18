@@ -408,6 +408,50 @@ export const BUILTIN: Defaults = Object.freeze(
   Object.fromEntries(ENTRIES.map((each) => [keyOf(each.name), each.default])),
 ) as Defaults;
 
+const NAMES: ReadonlySet<string> = new Set(ENTRIES.map((each) => each.name));
+
+/** Compare two texts by UTF-16 code units, for sorting. */
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * Return the values in `values` that differ from the built-in ones.
+ *
+ * @param values The values to compare with `BUILTIN`.
+ * @returns Entry name to value, sorted by name; values are `bigint`s so a run log records integers.
+ */
+export function nonDefaults(values: Defaults): Record<string, bigint> {
+  const all: Readonly<Record<string, number>> = values;
+  const changed = ENTRIES.filter((each) => all[keyOf(each.name)] !== each.default)
+    .map((each) => [each.name, BigInt(all[keyOf(each.name)]!)] as const)
+    .sort(([a], [b]) => compareText(a, b));
+  return Object.fromEntries(changed);
+}
+
+/**
+ * Return the built-in values overlaid with a run's recorded values.
+ *
+ * @param recorded Entry name to value, as a run recorded it; only own keys count.
+ * @returns The values the run started with, frozen.
+ * @throws {DefaultsMismatchError} If a recorded name is not an entry.
+ */
+export function fromRecorded(recorded: Readonly<Record<string, bigint | number>>): Defaults {
+  const unknown = unknownNames(recorded);
+  if (unknown.length > 0) throw new DefaultsMismatchError(unknown.join("\n"));
+  const values: Record<string, number> = { ...BUILTIN };
+  for (const [name, value] of Object.entries(recorded)) values[keyOf(name)] = Number(value);
+  return Object.freeze(values) as Defaults;
+}
+
+/** Describe each recorded name that is not an entry, sorted by name. */
+function unknownNames(recorded: Readonly<Record<string, bigint | number>>): string[] {
+  return Object.keys(recorded)
+    .filter((name) => !NAMES.has(name))
+    .sort(compareText)
+    .map((name) => `this run started with YIAN_${name}, which this version of yian does not know`);
+}
+
 /** An environment variable holds a value its entry does not accept. */
 export class DefaultsError extends RangeError {
   override name = "DefaultsError";
@@ -421,6 +465,14 @@ export class DefaultsMismatchError extends RangeError {
 const CANONICAL_INT = /^(?:0|-?[1-9][0-9]*)$/;
 // Counted in code points, so a cut never splits a surrogate pair.
 const SHOWN_CHARS = 40;
+
+/** Return whether `value` is an integer `each` accepts from the environment. */
+function inRange(each: Entry, value: number): boolean {
+  return (
+    Number.isInteger(value) &&
+    (value === each.noLimit || (each.minimum <= value && value <= (each.maximum ?? Number.MAX_SAFE_INTEGER)))
+  );
+}
 
 /** Describe the values `each` accepts. */
 function rangeText(each: Entry): string {
@@ -448,9 +500,7 @@ function parse(each: Entry, raw: string): number {
   // Rounding is monotonic and every bound is an exact double, so a text above
   // `Number.MAX_SAFE_INTEGER` rounds to at least 2^53 (or `Infinity`) and is refused.
   const value = Number(raw);
-  const inRange =
-    value === each.noLimit || (each.minimum <= value && value <= (each.maximum ?? Number.MAX_SAFE_INTEGER));
-  if (!inRange) throw fail("out of range");
+  if (!inRange(each, value)) throw fail("out of range");
   return value;
 }
 
@@ -474,4 +524,77 @@ export function read(env: Env): Defaults {
     values[keyOf(each.name)] = raw ? parse(each, raw) : each.default;
   }
   return Object.freeze(values) as Defaults;
+}
+
+let cached: Defaults | undefined;
+
+/**
+ * Return this process's values, reading `processEnv` on the first call.
+ *
+ * A failed read is not kept, so every call throws until the environment is fixed.
+ *
+ * @returns The values in effect for this process.
+ * @throws {DefaultsError} If a variable holds a value its entry does not accept.
+ */
+export function current(): Defaults {
+  return (cached ??= read(processEnv));
+}
+
+/**
+ * Check that a run's recorded values equal the ones in effect now.
+ *
+ * @param recorded Entry name to value, as the run recorded it; only own keys count.
+ * @throws {DefaultsMismatchError} Naming every recorded name that is not an entry and every
+ *   variable whose value differs, in one message.
+ */
+export function checkRecorded(recorded: Readonly<Record<string, bigint | number>>): void {
+  const here: Readonly<Record<string, number>> = current();
+  const problems = unknownNames(recorded);
+  for (const each of ENTRIES) {
+    const now = here[keyOf(each.name)];
+    const then = Object.hasOwn(recorded, each.name) ? recorded[each.name]! : each.default;
+    const value = Number(then);
+    if (now === value) continue;
+    if (value !== each.default && !inRange(each, value)) {
+      // Advising `set YIAN_X=<then>` would name a value the variable refuses.
+      problems.push(
+        `this run recorded an invalid value ${each.variable}=${String(then)}; ` +
+          `${each.variable} accepts ${rangeText(each)}`,
+      );
+    } else if (value === each.default) {
+      problems.push(
+        `${each.variable} is ${now} here, but this run started with the default ${String(then)}; ` +
+          `unset ${each.variable} to resume it`,
+      );
+    } else {
+      problems.push(
+        `${each.variable} is ${now} here, but this run started with ${String(then)}; ` +
+          `set ${each.variable}=${String(then)} to resume it`,
+      );
+    }
+  }
+  if (problems.length > 0) throw new DefaultsMismatchError(problems.join("\n"));
+}
+
+/**
+ * Drop this process's values, read `env` and keep the result; for tests and conformance.
+ *
+ * @param env The environment to read.
+ * @returns The new values.
+ * @throws {DefaultsError} If a variable holds a value its entry does not accept; then no values are kept.
+ */
+export function reload(env: Env = processEnv): Defaults {
+  cached = undefined;
+  cached = read(env);
+  return cached;
+}
+
+/** Make a frozen copy of `values` this process's values, with no range check; for tests and conformance. */
+export function install(values: Defaults): void {
+  cached = Object.freeze({ ...values });
+}
+
+/** Drop this process's values so the next `current()` reads again; for tests and conformance. */
+export function forget(): void {
+  cached = undefined;
 }

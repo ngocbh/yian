@@ -1,5 +1,6 @@
 /**
- * The defaults table, `BUILTIN`, parsing and errors, a port of `tests/engine/test_defaults.py`
+ * The defaults table, `BUILTIN`, parsing and errors, the process values, recorded values and
+ * resume checks, a port of `tests/engine/test_defaults.py`
  * and of `tests/test_defaults_docs.py`. Not ported:
  * `test_int_digits_cannot_exceed_the_interpreter_limit` and
  * `test_int_digits_has_no_upper_bound_without_an_interpreter_limit` (TS has no int digit
@@ -11,9 +12,26 @@
 
 import { readFileSync } from "node:fs";
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { BUILTIN, type Defaults, DefaultsError, ENTRIES, type Entry, read } from "../../src/defaults.ts";
+import {
+  BUILTIN,
+  checkRecorded,
+  current,
+  type Defaults,
+  DefaultsError,
+  DefaultsMismatchError,
+  ENTRIES,
+  type Entry,
+  type Env,
+  forget,
+  fromRecorded,
+  install,
+  nonDefaults,
+  processEnv,
+  read,
+  reload,
+} from "../../src/defaults.ts";
 
 const TS_ONLY = [
   "MODEL_RETRIES",
@@ -36,11 +54,28 @@ function camel(name: string): string {
   return head + rest.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join("");
 }
 
+/** Return an environment holding only `vars`. */
+function envOf(vars: Readonly<Record<string, string>>): Env {
+  return (name) => (Object.hasOwn(vars, name) ? vars[name] : undefined);
+}
+
 /** Return the values read from an environment holding only `values`. */
 function readOnly(values: Readonly<Record<string, string>>): Defaults {
-  const env = (name: string) => (Object.hasOwn(values, name) ? values[name] : undefined);
-  return read(env);
+  return read(envOf(values));
 }
+
+/** Return the `DefaultsMismatchError` `run` throws. */
+function mismatch(run: () => unknown): DefaultsMismatchError {
+  try {
+    run();
+  } catch (error) {
+    expect(error).toBeInstanceOf(DefaultsMismatchError);
+    return error as DefaultsMismatchError;
+  }
+  throw new Error("no DefaultsMismatchError");
+}
+
+const UNKNOWN = "this run started with YIAN_NOT_AN_ENTRY, which this version of yian does not know";
 
 /** Return whether `entry`'s variable accepts the text `value`. */
 function accepts(entry: Entry, value: string): boolean {
@@ -289,5 +324,134 @@ describe("docs/defaults.md", () => {
 
   test("the TS yian table lists the TS-only entries in order", () => {
     expect(tableRows("TS yian variable")).toEqual(TS_ONLY.map((name) => expectedRow(entryNamed(name))));
+  });
+});
+
+describe("recorded values", () => {
+  test("nonDefaults lists only changed values as bigints, sorted by name", () => {
+    const values = readOnly({
+      YIAN_MAX_VALUE_NESTING: "80",
+      YIAN_AGENT_RETRIES: "5",
+      YIAN_MAX_TOTAL_NODES: "10000",
+    });
+    const changed = nonDefaults(values);
+    expect(changed).toEqual({ AGENT_RETRIES: 5n, MAX_VALUE_NESTING: 80n });
+    expect(Object.keys(changed)).toEqual(["AGENT_RETRIES", "MAX_VALUE_NESTING"]);
+    expect(Object.values(changed).map((value) => typeof value)).toEqual(["bigint", "bigint"]);
+    expect(nonDefaults(BUILTIN)).toEqual({});
+  });
+
+  test("fromRecorded overlays built-ins", () => {
+    expect(fromRecorded({ MAX_TOTAL_NODES: 5000n })).toEqual({ ...BUILTIN, maxTotalNodes: 5000 });
+    expect(fromRecorded({ MAX_TOTAL_NODES: 5000 })).toEqual({ ...BUILTIN, maxTotalNodes: 5000 });
+    expect(fromRecorded({})).toEqual(BUILTIN);
+    expect(Object.isFrozen(fromRecorded({}))).toBe(true);
+    expect(mismatch(() => fromRecorded({ NOT_AN_ENTRY: 1n })).message).toBe(UNKNOWN);
+  });
+
+  test("a recorded __proto__ is an unknown name", () => {
+    const recorded = JSON.parse('{"__proto__": 1, "MAX_TOTAL_NODES": 5000}') as Record<string, number>;
+    expect(mismatch(() => fromRecorded(recorded)).message).toBe(
+      "this run started with YIAN___proto__, which this version of yian does not know",
+    );
+  });
+});
+
+describe("the process values", () => {
+  beforeEach(() => install(BUILTIN));
+  afterEach(forget);
+
+  const UNSET_TOTAL =
+    "YIAN_MAX_TOTAL_NODES is 20000 here, but this run started with the default 10000; " +
+    "unset YIAN_MAX_TOTAL_NODES to resume it";
+
+  test("current() reads once", () => {
+    expect(current()).toEqual(BUILTIN);
+    expect(reload(envOf({ YIAN_MAX_VALUE_NESTING: "80" })).maxValueNesting).toBe(80);
+    expect(current().maxValueNesting).toBe(80);
+    expect(current()).toBe(current());
+    forget();
+    expect(current()).toEqual(read(processEnv));
+  });
+
+  test("a failed read is not kept", () => {
+    const bad = envOf({ YIAN_MAX_VALUE_NESTING: "abc" });
+    reload(envOf({ YIAN_MAX_VALUE_NESTING: "80" }));
+    for (let i = 0; i < 2; i++) {
+      expect(() => reload(bad)).toThrow('YIAN_MAX_VALUE_NESTING="abc" is not an integer');
+    }
+    expect(current().maxValueNesting).not.toBe(80);
+    expect(current()).toEqual(read(processEnv));
+    expect(reload(envOf({ YIAN_MAX_VALUE_NESTING: "70" })).maxValueNesting).toBe(70);
+  });
+
+  test("install skips the range check and keeps a frozen copy", () => {
+    const values = { ...BUILTIN, maxValueNesting: 200_000 };
+    install(values);
+    Object.assign(values, { maxValueNesting: 1 });
+    expect(current().maxValueNesting).toBe(200_000);
+    expect(current().maxTotalNodes).toBe(10_000);
+    expect(Object.isFrozen(current())).toBe(true);
+  });
+
+  test("checkRecorded", () => {
+    checkRecorded({});
+    checkRecorded({ MAX_TOTAL_NODES: 10_000n });
+
+    reload(envOf({ YIAN_MAX_TOTAL_NODES: "20000" }));
+    checkRecorded({ MAX_TOTAL_NODES: 20_000n });
+    checkRecorded({ MAX_TOTAL_NODES: 20_000 });
+    const error = mismatch(() => checkRecorded({ MAX_TOTAL_NODES: 5000n }));
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error.name).toBe("DefaultsMismatchError");
+    expect(error.message).toBe(
+      "YIAN_MAX_TOTAL_NODES is 20000 here, but this run started with 5000; set YIAN_MAX_TOTAL_NODES=5000 to resume it",
+    );
+    expect(mismatch(() => checkRecorded({})).message).toBe(UNSET_TOTAL);
+
+    reload(envOf({ YIAN_MAX_TOTAL_NODES: "20000", YIAN_AGENT_RETRIES: "4" }));
+    expect(mismatch(() => checkRecorded({})).message.split("\n")).toEqual([
+      UNSET_TOTAL,
+      "YIAN_AGENT_RETRIES is 4 here, but this run started with the default 2; unset YIAN_AGENT_RETRIES to resume it",
+    ]);
+
+    expect(mismatch(() => checkRecorded({ NOT_AN_ENTRY: 1n })).message).toContain("YIAN_NOT_AN_ENTRY");
+  });
+
+  test("checkRecorded reports unknown names and differences together", () => {
+    reload(envOf({ YIAN_MAX_TOTAL_NODES: "20000" }));
+    const error = mismatch(() => checkRecorded({ NOT_AN_ENTRY: 1n, AGENT_RETRIES: 0n, ANOTHER: 1n }));
+    expect(error.message.split("\n")).toEqual([
+      "this run started with YIAN_ANOTHER, which this version of yian does not know",
+      UNKNOWN,
+      UNSET_TOTAL,
+      "YIAN_AGENT_RETRIES is 2 here, but this run started with 0; set YIAN_AGENT_RETRIES=0 to resume it",
+    ]);
+    expect(error.message).not.toContain("resumed here");
+  });
+
+  test("checkRecorded reports an out-of-range value as invalid", () => {
+    const message = mismatch(() => checkRecorded({ MAX_VALUE_NESTING: 150n })).message;
+    expect(message).toBe(
+      "this run recorded an invalid value YIAN_MAX_VALUE_NESTING=150; " +
+        "YIAN_MAX_VALUE_NESTING accepts an integer from 1 to 100",
+    );
+    expect(message).not.toContain("set YIAN_MAX_VALUE_NESTING=150");
+  });
+
+  test("checkRecorded prints a recorded value as recorded", () => {
+    expect(mismatch(() => checkRecorded({ MAX_TOTAL_NODES: 10n ** 21n })).message).toBe(
+      "this run recorded an invalid value YIAN_MAX_TOTAL_NODES=1000000000000000000000; " +
+        "YIAN_MAX_TOTAL_NODES accepts an integer from 1 to 9007199254740991",
+    );
+    expect(mismatch(() => checkRecorded({ AGENT_RETRIES: 1.5 })).message).toBe(
+      "this run recorded an invalid value YIAN_AGENT_RETRIES=1.5; " +
+        "YIAN_AGENT_RETRIES accepts an integer from 0 to 9007199254740991",
+    );
+  });
+
+  test("checkRecorded accepts an out-of-range value in effect", () => {
+    install({ ...BUILTIN, maxValueNesting: 150 });
+    checkRecorded({ MAX_VALUE_NESTING: 150n });
   });
 });

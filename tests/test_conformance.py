@@ -2196,7 +2196,7 @@ def test_resume(tmp_path):
 
 
 def test_harvest_records_runs(tmp_path: Path) -> None:
-    """Serial runs become `run-core` cases; pooled runs, hosts, secrets and machine paths skip."""
+    """Runs become `run-core` cases; hosts, secrets and machine paths skip."""
     # The harvesting shell's own key.
     done, out = _harvest(tmp_path, _RUN_TESTS, X_API_KEY="sk-shell-key-0123456789")
     assert "13 passed" in done.stdout, done.stdout + done.stderr
@@ -2204,10 +2204,11 @@ def test_harvest_records_runs(tmp_path: Path) -> None:
              for path in sorted((out / "cases").glob("*/*.yaml"))}
     # A load whose run is written is no case of its own; one whose run isn't stays.
     assert sorted(cases) == [
-        "load-core/sample__pooled.yaml", "run-core/sample__failed__2.yaml",
+        "load-core/sample__shell_key.yaml", "run-core/sample__failed__2.yaml",
         "run-core/sample__keyed__2.yaml", "run-core/sample__nested__2.yaml",
-        "run-core/sample__raises__2.yaml", "run-core/sample__resume__2.yaml",
-        "run-core/sample__run__2.yaml", "run-core/sample__shared_key__2.yaml",
+        "run-core/sample__pooled__2.yaml", "run-core/sample__raises__2.yaml",
+        "run-core/sample__resume__2.yaml", "run-core/sample__run__2.yaml",
+        "run-core/sample__shared_key__2.yaml",
     ]
     env = {"YIAN_DEFAULT_MODEL": "gpt-5.5", "YIAN_DEFAULT_PROVIDER": "openai"}
     run = cases["run-core/sample__run__2.yaml"]
@@ -2235,6 +2236,9 @@ def test_harvest_records_runs(tmp_path: Path) -> None:
         },
     }
     assert run["flow"].startswith("id: echo\n")
+    # A pooled run runs with the default workers; its three replays agree, so its trace stays.
+    pooled = cases["run-core/sample__pooled__2.yaml"]
+    assert pooled["run"] == {"run_id": "r1"} and pooled["expect"]["trace"]
     failure = cases["run-core/sample__failed__2.yaml"]["expect"]["output"]
     assert failure["status"] == "failed" and failure["failure"]["node"] == "__start__"
     raises = cases["run-core/sample__raises__2.yaml"]
@@ -2265,12 +2269,10 @@ def test_harvest_records_runs(tmp_path: Path) -> None:
         "tests": {"passed": 13, "failed": 0, "skipped": 0},
         # The nested test's inner load and run aren't recorded.
         "records": {"load_flow": 13, "run_flow": 13, "resume_flow": 1},
-        "written": {"run-core": 7, "load-core": 1},
-        # The loads of the shell key, secret, tools and tmp_path tests hold the pooled
-        # test's load text.
-        "duplicates": 4,
-        "skips": {"pooled run": ["test_pooled"],
-                  "secret in inputs": ["test_shell_key", "test_secret"],
+        "written": {"run-core": 8, "load-core": 1},
+        # The loads of the secret, tools and tmp_path tests hold the shell key test's load text.
+        "duplicates": 3,
+        "skips": {"secret in inputs": ["test_shell_key", "test_secret"],
                   "host: tools": ["test_tools"],
                   "machine path": ["test_tmp_path"], "child_resolver": ["test_unknown_flow"],
                   "flow text unknown": ["test_unknown_flow"],
@@ -2488,7 +2490,197 @@ def test_harvest_records_models(tmp_path: Path) -> None:
     assert report["tests"] == {"passed": 10, "failed": 0, "skipped": 0}
     assert report["written"] == {"run-agent": 7, "load-agent": 2}
     assert report["skips"] == {
-        "model: structured call raised ValidationError, its reply isn't visible": [
+        "model: structured call raised ValidationError (a binding's errors can't be scripted)": [
             "test_structured_raises"],
         "model: AIMessage with list content": ["test_list_content"],
     }
+
+
+_POOLED_TESTS = '''
+import json
+
+from langchain_core.messages import AIMessage
+
+import yian.llm_clients as llm_clients
+from yian import load_flow
+from yian.run import run_flow
+
+PAIR = """\\
+id: pair
+name: pair
+nodes:
+  a:
+    kind: agent
+    output: str
+    llm_config: {provider: openai, model: gpt-5.5}
+    prompt: Write a.
+  b:
+    kind: agent
+    output: str
+    llm_config: {provider: openai, model: gpt-5.5}
+    prompt: Write b.
+output:
+  a: ${a.output}
+  b: ${b.output}
+"""
+
+ECHO = """\\
+id: echo
+name: echo
+input:
+  q: !str
+nodes: {}
+output: ${input.q}
+"""
+
+WRITE = """\\
+id: write
+name: write
+nodes:
+  write:
+    kind: agent
+    output: str
+    llm_config: {provider: openai, model: gpt-5.5}
+    prompt: Write.
+output: ${write.output}
+"""
+
+GATE = """\\
+id: gate
+name: gate
+input:
+  n: !int
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "input.n > 5 or input.n < 0"
+        then: big
+    else: small
+  big: {kind: code, code: "return 'big'", output: str}
+  small: {kind: code, code: "return 'small'", output: str}
+output: ${big.output | small.output}
+"""
+
+FEEDBACK = json.dumps({"input_feedback": {}, "self_feedback": [], "variable_feedback": {}})
+
+
+class Shout:
+    """A chat model replying with its last message in capitals, whichever thread calls it."""
+
+    def invoke(self, messages):
+        return AIMessage(messages[-1].content.upper())
+
+
+class Fake:
+    """A chat model serving `replies` in order."""
+
+    def __init__(self, replies):
+        self.replies = list(replies)
+
+    def invoke(self, messages):
+        return AIMessage(self.replies.pop(0))
+
+
+def test_pooled_agents(monkeypatch):
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: Shout())
+    result = run_flow(load_flow(PAIR), {}, run_id="r1")
+    assert result.output == {"a": "WRITE A.", "b": "WRITE B."}
+
+
+def test_pooled_failed():
+    assert run_flow(load_flow(ECHO), {}, run_id="r1").status == "failed"
+
+
+def test_backward(monkeypatch):
+    fake = Fake(["hello", FEEDBACK])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: fake)
+    result = run_flow(load_flow(WRITE), {}, run_id="r1", num_workers=0, learnable=True)
+    # Called after the run returned: it still joins the run's record.
+    assert result.backward("Shorter.", api_key="sk-backward-key-0001").status == "succeeded"
+    assert fake.replies == []
+
+
+def test_backward_unrecorded(monkeypatch):
+    fake = Fake(["hello", FEEDBACK])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: fake)
+    result = run_flow(load_flow(WRITE), {}, run_id="r1", num_workers=0, learnable=True,
+                      tools={"noop": lambda: None})
+    assert result.backward("Shorter.").status == "succeeded"
+
+
+def test_or_case():
+    assert run_flow(load_flow(GATE), {"n": 7}, run_id="r1", num_workers=0).output == "big"
+'''
+
+
+def test_harvest_records_backward_and_pooled(tmp_path: Path) -> None:
+    """Pooled runs replay thrice; backward calls join their run; `and`/`or` runs are flagged."""
+    done, out = _harvest(tmp_path, _POOLED_TESTS)
+    assert _summary(done) == "5 passed", done.stdout + done.stderr
+    cases = {path.relative_to(out / "cases").as_posix(): _read(path)
+             for path in sorted((out / "cases").glob("*/*.yaml"))}
+    assert sorted(cases) == [
+        "backward/sample__backward__2.yaml", "load-agent/sample__backward_unrecorded.yaml",
+        "run-agent/sample__pooled_agents__2.yaml", "run-core/sample__or_case__2.yaml",
+        "run-core/sample__pooled_failed__2.yaml",
+    ]
+    pooled = cases["run-agent/sample__pooled_agents__2.yaml"]
+    assert pooled["run"] == {"run_id": "r1"}
+    assert sorted(pooled["host"]["models"]) == ["a", "b"]
+    # Three equal replays of a run that succeeded keep its trace and events.
+    assert pooled["expect"]["output"] == {"status": "succeeded",
+                                          "output": {"a": "WRITE A.", "b": "WRITE B."}}
+    assert pooled["expect"]["trace"] and pooled["expect"]["events"]
+    # A pooled run that failed keeps only its output.
+    failed = cases["run-core/sample__pooled_failed__2.yaml"]
+    assert list(failed["expect"]) == ["output"]
+    assert failed["expect"]["output"]["status"] == "failed"
+
+    backward = cases["backward/sample__backward__2.yaml"]
+    assert backward["kind"] == "backward"
+    assert backward["run"] == {"run_id": "r1", "num_workers": 0, "learnable": True}
+    assert backward["backward"] == [{"feedback": "Shorter.", "api_key": "<key:1>"}]
+    models = backward["host"]["models"]["write"]
+    assert [len(models[consumer]) for consumer in ("agent", "backward")] == [1, 1]
+    assert json.loads(models["backward"][0]["reply"]["parts"][0]["text"]) == {
+        "input_feedback": {}, "self_feedback": [], "variable_feedback": {}}
+    assert [entry["status"] for entry in backward["expect"]["backward"]] == ["succeeded"]
+    assert [entry[0] for entry in backward["expect"]["trace"]][-3:] == [
+        "backward_started", "backward_ready", "backward_finished"]
+    for name, case in cases.items():
+        case_dir = tmp_path / "replay" / name
+        case_dir.mkdir(parents=True)
+        _check_results(case, results(case, case_dir))
+
+    report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
+    assert report["tests"] == {"passed": 5, "failed": 0, "skipped": 0}
+    assert report["written"] == {"run-agent": 1, "run-core": 2, "backward": 1, "load-agent": 1}
+    assert report["skips"] == {"host: tools": ["test_backward_unrecorded"]}
+    assert report["flags"] == {
+        "pooled: trace dropped": ["run-core/sample__pooled_failed__2"],
+        "pooled: events dropped": ["run-core/sample__pooled_failed__2"],
+        "uses and/or": ["run-core/sample__or_case__2"],
+    }
+
+
+def test_harvest_records_jitter_draws(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Draws through a wrapped `_jitter` during a recorded call go to its `host.jitter`."""
+    from tests import conformance_harvest as harvest
+
+    state = harvest._Harvest(None, tmp_path)
+    monkeypatch.setattr(harvest, "_STATE", state)
+    module = harvest._Watched("tool_node")
+    draws = iter([0.5, 0.25, 0.75, 1.0, 0.125])
+    module._jitter = lambda: next(draws)
+    # Outside any recorded call, a draw goes nowhere.
+    assert module._jitter() == 0.5
+    call = state.active = harvest._Call("run_flow")
+    assert [module._jitter() for _ in range(2)] == [0.25, 0.75]
+    assert call.jitter == [0.25, 0.75] and call.host_skip is None
+    # A draw outside [0, 1) can't be a case's; it is still the test's.
+    assert module._jitter() == 1.0
+    assert call.host_skip == "jitter: draw 1.0 outside [0, 1)"
+    assert module._jitter() == 0.125
+    assert call.jitter == [0.25, 0.75, 0.125]
+    assert call.host_skip == "jitter: draw 1.0 outside [0, 1)"

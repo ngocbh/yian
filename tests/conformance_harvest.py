@@ -4,9 +4,9 @@ A pytest plugin: while each test runs, it records the engine calls whose inputs 
 data (flow loads, runs, resumes, backward passes, expressions, templates, values and defaults).
 The model calls a run makes through `llm_clients.model_from_config`, whatever a test patched it
 with, become the run's `host.models`. Each passing test's calls become candidates; a candidate is
-replayed through the conformance runner (`tests/test_conformance.py`) to get its `expect`, and
-written as a case file under `<out>/cases/<group>/<name>.yaml`, deduplicated by content. Run it
-with:
+replayed through the conformance runner (`tests/test_conformance.py`) to get its `expect` (three
+times for a pooled run), and written as a case file under `<out>/cases/<group>/<name>.yaml`,
+deduplicated by content. Run it with:
 
     PYTHONPATH=src python -m pytest -p tests.conformance_harvest --harvest-out DIR tests
 
@@ -41,7 +41,8 @@ from yian.compose import LoadError, load_flow
 from yian.expr.expressions import ResolveMode, eval_expr, evaluate_when_record
 from yian.expr.grammar import parse_expr
 from yian.expr.template import eval_binding, render_template_record
-from yian.run import resume_flow, run_flow
+from yian.nodes.tool import node as tool_node
+from yian.run import RunResult, resume_flow, run_flow
 from yian.typesys.types import read_typedefs, type_for
 from yian.typesys.values import ValueKind, build_value_as
 
@@ -203,7 +204,7 @@ _WORKTREE = Path(__file__).parent.parent
 _YIAN_DIR = os.path.dirname(yian.__file__) + os.sep
 # Calls from these files are the engine's own or the harvest's, never a test's.
 _NOT_TEST = {runner.__file__, __file__}
-_GROUPS = {"value": "values", "defaults": "defaults", "run": "run-core"}
+_GROUPS = {"value": "values", "defaults": "defaults", "run": "run-core", "backward": "backward"}
 # A top-level `uses:` key; the flow text can't be read as plain YAML (tags), so it's matched.
 # One the match misses (an indented document, flow style) leaves the replay without the
 # child's files, so the replay differs and the candidate is rejected.
@@ -219,6 +220,8 @@ _INPUT_KEYS = ("flow", "files", "env", "inputs", "run", "host", "backward", "val
                "value")
 # Results a run case leaves out of its `expect` when they are empty.
 _LEFT_OUT_WHEN_EMPTY = ("stream", "tool_calls")
+# The results a pooled run's case keeps only when its three replays agree on them.
+_POOLED_RESULTS = ("trace", "events", "stream", "tool_calls", "backward")
 # The harvest's state while it runs, None when the plugin is off.
 _STATE: _Harvest | None = None
 
@@ -323,6 +326,12 @@ def _trees(case: dict) -> list:
     return [runner.parse_expr(case["expr"])]
 
 
+def _uses_and_or(tree: object) -> bool:
+    """Return whether the expression tree `tree` uses `and` or `or`."""
+    return isinstance(tree, Tree) and any(node.data in ("or_expr", "and_expr")
+                                          for node in tree.iter_subtrees())
+
+
 def _and_or(case: dict) -> bool:
     """Return whether an `expr` case's expressions use `and` or `or`."""
     try:
@@ -330,9 +339,7 @@ def _and_or(case: dict) -> bool:
     except Exception:
         # Text that doesn't parse holds no `and`/`or` the replay would reach.
         return False
-    return any(isinstance(tree, Tree) and any(node.data in ("or_expr", "and_expr")
-                                              for node in tree.iter_subtrees())
-               for tree in trees)
+    return any(_uses_and_or(tree) for tree in trees)
 
 
 def _check_types(case: dict, types: dict | None) -> None:
@@ -569,18 +576,16 @@ def _record_run_flow(arguments: dict):
     for host in _RUN_HOSTS:
         if arguments[host]:
             raise _Skip(f"host: {host}")
-    # A pooled run's trace and events can depend on timing, which one replay can't rule out.
-    if arguments["num_workers"] != 0:
-        raise _Skip("pooled run")
     held = _STATE.flows.get(id(arguments["flow"]))
     if held is None:
         raise _Skip("flow text unknown")
     _, load, load_call = held
     call = _STATE.active
     load_call.runs.append(call)
-    keys: dict = {}
+    # The run's replay loads the flow too.
+    call.and_or = load_call.and_or
     case = {"kind": "run", **{key: load[key] for key in ("flow", "files") if key in load},
-            **_env(models=True, keys=keys)}
+            **_env(models=True, keys=call.keys)}
     inputs = _plain(arguments["inputs"], "inputs")
     if inputs != {}:
         case["inputs"] = inputs
@@ -590,23 +595,32 @@ def _record_run_flow(arguments: dict):
         run["context"] = "present"
     config = run.get("llm_config")
     if isinstance(config, dict):
-        headers = config["headers"] if isinstance(config.get("headers"), dict) else {}
-        # The key and header values the run sends are secrets: the case holds placeholders.
-        for holder, name in [(config, "api_key"), *((headers, name) for name in headers)]:
-            if isinstance(holder.get(name), str):
-                call.secrets.add(holder[name])
-                holder[name] = _keyed(holder[name], keys)
+        _hide_keys(config, call)
     if run:
         case["run"] = run
 
     def finish(outcome: tuple) -> tuple:
-        if call.model_skip:
-            raise _Skip(call.model_skip)
-        models = {"host": {"models": call.models}} if call.models else {}
-        return case | models, _result(
+        kind, value = outcome
+        if kind == "value":
+            # So a backward call on the result, during the test, joins this record.
+            _STATE.results[id(value)] = (value, call)
+        return case, _result(
             outcome, lambda result: {"output": runner._output(result, arguments["flow"])})
 
     return finish
+
+
+def _hide_keys(mapping: dict, call: _Call) -> None:
+    """Replace `mapping`'s `api_key` value and `headers` values by `<key:N>` in `call`'s numbering.
+
+    They are the secrets a run or backward call sends: the case holds placeholders, and `call`
+    notes the secrets.
+    """
+    headers = mapping["headers"] if isinstance(mapping.get("headers"), dict) else {}
+    for holder, name in [(mapping, "api_key"), *((headers, name) for name in headers)]:
+        if isinstance(holder.get(name), str):
+            call.secrets.add(holder[name])
+            holder[name] = _keyed(holder[name], call.keys)
 
 
 def _record_resume_flow(arguments: dict):
@@ -638,9 +652,9 @@ def _taken(tools: list, schema: type | None, messages: list) -> tuple | None:
             raise _Skip(f"model: {key[1]} call")
         return call, key, _model_data(runner._v1_request, messages, tools, schema)
     except _Skip as skip:
-        _skip_models(call, str(skip))
+        _skip_host(call, str(skip))
     except Exception as exc:
-        _skip_models(call, _harvest_error(exc))
+        _skip_host(call, _harvest_error(exc))
     return None
 
 
@@ -652,10 +666,10 @@ def _add_entry(taken: tuple | None, entry) -> None:
     try:
         recorded = {**entry(), "request": request}
     except _Skip as skip:
-        _skip_models(call, str(skip))
+        _skip_host(call, str(skip))
         return
     except Exception as exc:
-        _skip_models(call, _harvest_error(exc))
+        _skip_host(call, _harvest_error(exc))
         return
     with _STATE.lock:
         # A call ending after its run did (a thread the test left running) would change a case
@@ -664,14 +678,14 @@ def _add_entry(taken: tuple | None, entry) -> None:
             call.models.setdefault(node, {}).setdefault(consumer, []).append(recorded)
 
 
-def _skip_models(call: _Call, reason: str) -> None:
-    """Note why a model call of `call`'s run can't be recorded, unless one already is.
+def _skip_host(call: _Call, reason: str) -> None:
+    """Note why a host call of `call`'s run can't be recorded, unless one already is.
 
-    Nothing is noted once the run has ended.
+    A host call is a model call or a backoff draw. Nothing is noted once the run has ended.
     """
     with _STATE.lock:
         if _STATE.active is call:
-            call.model_skip = call.model_skip or reason
+            call.host_skip = call.host_skip or reason
 
 
 def _model_data(convert, *args: object) -> object:
@@ -801,8 +815,8 @@ class _Proxy:
             elif taken is not None:
                 # A binding validates the reply itself, so its error may be a rejected reply the
                 # recorder never sees, not a provider failure: no entry can stand for it.
-                _skip_models(taken[0], f"model: structured call raised {type(exc).__name__}, "
-                                       "its reply isn't visible")
+                _skip_host(taken[0], f"model: structured call raised {type(exc).__name__} "
+                                     "(a binding's errors can't be scripted)")
             raise
         _add_entry(taken, lambda: _reply(result) if self._schema is None
                    else _structured_reply(result))
@@ -825,7 +839,7 @@ def _streamed(taken: tuple | None, stream):
     except GeneratorExit:
         # An interrupted reply: the replay can't cut its stream at the same chunk.
         if taken is not None:
-            _skip_models(taken[0], "model: stream closed early")
+            _skip_host(taken[0], "model: stream closed early")
         raise
     except Exception as exc:
         _add_entry(taken, lambda: {"chunks": _chunks(seen), "raise": _error(exc)})
@@ -850,8 +864,32 @@ def _factory(original):
     return model_from_config
 
 
+def _draws(original):
+    """Return the backoff draw `original` wrapped to add each draw to the active record's jitter.
+
+    A draw outside `[0, 1)` can't be a `host.jitter` entry: it skips the record's run.
+    """
+    def _jitter() -> object:
+        draw = original()
+        state = _STATE
+        call = state.active if state is not None else None
+        if call is None:
+            return draw
+        if type(draw) in (int, float) and 0 <= draw < 1:
+            with state.lock:
+                # As a model call's entry: a draw after the run ended changes nothing.
+                if state.active is call:
+                    call.jitter.append(draw)
+        else:
+            _skip_host(call, f"jitter: draw {draw!r} outside [0, 1)")
+        return draw
+
+    _jitter.harvest_wraps = original
+    return _jitter
+
+
 # What a value assigned to a watched module's name is wrapped with, by name.
-_WATCHED = {"model_from_config": _factory}
+_WATCHED = {"model_from_config": _factory, "_jitter": _draws}
 
 
 class _Watched(ModuleType):
@@ -947,9 +985,18 @@ class _Call:
         self.secrets: set[str] = set()
         # For a load, the records of the runs of its flow.
         self.runs: list[_Call] = []
-        # For a run, its model calls as `host.models`, and why one can't be recorded.
+        # For a run, its model calls as `host.models` and backoff draws as `host.jitter`, and
+        # why one can't be recorded.
         self.models: dict = {}
-        self.model_skip: str | None = None
+        self.jitter: list = []
+        self.host_skip: str | None = None
+        # For a run, its case's secret numbering, and its result's backward calls as the
+        # case's `backward` entries with their outcomes.
+        self.keys: dict = {}
+        self.backward: list = []
+        self.outcomes: list = []
+        # Whether a load or run evaluated an expression using `and` or `or`.
+        self.and_or = False
         self.written = False
 
 
@@ -1016,6 +1063,69 @@ def _entry(entry: str, original, recorder):
             _end_record()
 
     return wrapper
+
+
+def _noting_and_or(original):
+    """Return `eval_expr` wrapped to note, on the active record, a tree using `and` or `or`."""
+    @functools.wraps(original)
+    def wrapper(*args: object, **kwargs: object) -> object:
+        state = _STATE
+        call = state.active if state is not None else None
+        tree = args[0] if args else kwargs.get("tree")
+        if call is not None and not call.and_or and _uses_and_or(tree):
+            call.and_or = True
+        return original(*args, **kwargs)
+
+    return wrapper
+
+
+def _backward_entry(call: _Call, feedback: object, api_key: object, headers: object) -> dict:
+    """Return a backward call's `backward` entry, its secrets as `<key:N>` in `call`'s numbering."""
+    entry = {"feedback": _plain(feedback, "feedback")}
+    for name, value in (("api_key", api_key), ("headers", headers)):
+        if value is not None:
+            entry[name] = _plain(value, name)
+    _hide_keys(entry, call)
+    return entry
+
+
+def _backward(original):
+    """Return `RunResult.backward` wrapped to add a test's call to its result's run record.
+
+    A call from a test's code, on a result whose run has a record that isn't skipped, while no
+    other record is active, adds its entry and its outcome's `status` (or its error as
+    `raises`) to that record, which is active while the call runs, so its model calls are the
+    run's. Other calls record nothing.
+    """
+    @functools.wraps(original)
+    def backward(self: RunResult, feedback: object = None, *, api_key: object = None,
+                 headers: object = None) -> object:
+        state, call = _STATE, None
+        if _maps(sys._getframe(1)):
+            with state.lock:
+                held = state.results.get(id(self))
+                if held is not None and held[1].skip is None and state.active is None:
+                    call = state.active = held[1]
+        if call is None:
+            return original(self, feedback, api_key=api_key, headers=headers)
+        try:
+            try:
+                call.backward.append(_backward_entry(call, feedback, api_key, headers))
+            except _Skip as skip:
+                call.skip = str(skip)
+            except Exception as exc:
+                call.skip = _harvest_error(exc)
+            try:
+                outcome = original(self, feedback, api_key=api_key, headers=headers)
+            except Exception as exc:
+                call.outcomes.append({"raises": runner._raised(exc)})
+                raise
+            call.outcomes.append({"status": outcome.status})
+            return outcome
+        finally:
+            _end_record()
+
+    return backward
 
 
 def _mapper(original, remember):
@@ -1086,8 +1196,10 @@ class _Harvest:
         self.trees: dict = {}
         self.types: dict = {}
         self.registries: dict = {}
-        # Each flow the test loaded, with its load case and record, so a run of it can claim it.
+        # Each flow the test loaded, with its load case and record, so a run of it can claim it;
+        # each result a recorded run gave, with the run's record, so a backward call joins it.
         self.flows: dict = {}
+        self.results: dict = {}
         self.remaining: dict[str, int] = {}
         self.reports: dict[str, dict] = {}
         # Files pytest's own selection narrowed, whose reports aren't written.
@@ -1096,13 +1208,18 @@ class _Harvest:
         self.deselecting = False
         self.replaced: list = []
         self.paths: set | None = None
-        # The seats of the runner's model replay, for the session; and the model factory.
+        # The seats of the runner's model replay, for the session; and the originals wrapped.
         self.patch = pytest.MonkeyPatch()
         self.factory = llm_clients.model_from_config
+        self.jitter = tool_node._jitter
+        self.backward = RunResult.backward
 
 
 def _new_report(path: str) -> dict:
-    """Return an empty report for the test file `path`."""
+    """Return an empty report for the test file `path`.
+
+    Its `skips` list the tests by reason, its `flags` the cases written by flag.
+    """
     return {"file": path, "tests": {"passed": 0, "failed": 0, "skipped": 0}, "records": {},
             "written": {}, "duplicates": 0, "skips": {}, "flags": {}}
 
@@ -1149,19 +1266,22 @@ def _agreed(case: dict, results: dict) -> dict:
 
     That is their `expect`, with a load error cut to its first diagnostic's code, message and
     frame ranges, and a run's cut to its `raises` or `output`, a failure to its code, message,
-    node and frame ranges.
+    node and frame ranges, and its backward outcomes to their `status` or `raises`.
     """
     agreed = _expect(case, results)
     load = agreed.get("load")
     if isinstance(load, dict):
         agreed["load"] = _cut_diagnostic(load["diagnostics"][0], ("code", "message"))
-    if case["kind"] == "run":
-        # The test's own call gives no trace, events or stream.
-        agreed = {key: agreed[key] for key in ("raises", "output") if key in agreed}
+    if case["kind"] in ("run", "backward"):
+        # The test's own calls give no trace, events or stream, and backward only a status.
+        agreed = {key: agreed[key] for key in ("raises", "output", "backward") if key in agreed}
         output = agreed.get("output")
         if output is not None and output["status"] == "failed":
             agreed["output"] = {"status": "failed", "failure": _cut_diagnostic(
                 output["failure"], ("code", "message", "node"))}
+        if "backward" in agreed:
+            agreed["backward"] = [outcome if "raises" in outcome else {"status": outcome["status"]}
+                                  for outcome in agreed["backward"]]
     return agreed
 
 
@@ -1200,53 +1320,96 @@ def _group(case: dict) -> str:
     """Return the group a case is written in."""
     if case["kind"] == "load":
         return "load-agent" if _AGENT.search(case["flow"]) else "load-core"
-    if case.get("host", {}).get("models"):
+    if case["kind"] == "run" and case.get("host", {}).get("models"):
         return "run-agent"
     return _GROUPS.get(case["kind"]) or ("templates" if "template" in case else "expr")
 
 
-def _expected(state: _Harvest, call: _Call) -> tuple[str, str]:
-    """Return a recorded call's group and case file text, its `expect` from the runner."""
+def _completed(call: _Call) -> tuple[dict, dict]:
+    """Return a recorded call's case and result, a run's with its host and backward calls.
+
+    They are added after the test: a backward call can come after its run returned.
+    """
+    case, result = call.case, call.result
+    host = {key: value for key, value in (("models", call.models), ("jitter", call.jitter))
+            if value}
+    if host:
+        case = case | {"host": host}
+    if call.backward:
+        case = case | {"kind": "backward", "backward": call.backward}
+        result = result | {"backward": call.outcomes}
+    return case, result
+
+
+def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
+    """Return a recorded call's group, case file text (its `expect` from the runner) and flags.
+
+    A pooled run is replayed three times, and its output or error must agree in each; its
+    trace, events, stream, tool calls and backward outcomes are kept only when the three are
+    equal and the run succeeded, each one dropped giving a `pooled: <result> dropped` flag. A
+    load or run that evaluated `and` or `or` is flagged `uses and/or`.
+    """
     if call.skip:
         raise _Skip(call.skip)
-    case = call.case
+    if call.host_skip:
+        raise _Skip(call.host_skip)
+    case, result = _completed(call)
     _scan_secrets(case, call.secrets)
     # Python's `and`/`or` give an operand, not a bool, and that decides conditions too.
     if case["kind"] == "expr" and _and_or(case):
         raise _Skip(_HELD)
-    actual = _replay(state, case)
-    if actual.get("left"):
-        raise _Skip("replay left script entries")
-    # A run's output is a host value, whose numbers the runner compares by value.
-    if not runner._same(_agreed(case, actual), _agreed(case, call.result),
-                        by_value=case["kind"] == "run"):
-        raise _Skip("replay differs")
-    expect = _expect(case, actual)
+    is_run = case["kind"] in ("run", "backward")
+    pooled = is_run and case.get("run", {}).get("num_workers", _RUN_DEFAULTS["num_workers"]) != 0
+    replays = [_replay(state, case) for _ in range(3 if pooled else 1)]
+    for actual in replays:
+        if actual.get("left"):
+            raise _Skip("replay left script entries")
+        # A run's output is a host value, whose numbers the runner compares by value.
+        if not runner._same(_agreed(case, actual), _agreed(case, result), by_value=is_run):
+            raise _Skip("replay differs")
+    expect = _expect(case, replays[0])
+    flags = ["uses and/or"] if call.and_or else []
+    if pooled:
+        # When a pooled run fails, siblings racing the failure make its trace depend on timing
+        # across processes, even when three replays in one process agree.
+        succeeded = expect.get("output", {}).get("status") == "succeeded"
+        for key in _POOLED_RESULTS:
+            if key in expect and not (succeeded and all(
+                    runner._same(actual[key], expect[key]) for actual in replays[1:])):
+                del expect[key]
+                flags.append(f"pooled: {key} dropped")
     text = _written({**case, "expect": expect})
     if any(path in text for path in _machine_paths(state)):
         raise _Skip("machine path")
-    return _group(case), text
+    return _group(case), text, flags
 
 
 def _write(state: _Harvest, report: dict, call: _Call, path: str, test_id: str,
            number: int) -> None:
-    """Write a recorded call's case as the test's `number`th record, counting it in `report`."""
-    group, text = _expected(state, call)
-    done = state.index.write(group, _case_name(path, test_id, number), text)
+    """Write a recorded call's case as the test's `number`th record, counting it in `report`.
+
+    A case written is listed under each of its flags; a duplicate's are its holder's.
+    """
+    group, text, flags = _expected(state, call)
+    name = _case_name(path, test_id, number)
+    done = state.index.write(group, name, text)
     if done == "collision":
-        done = state.index.write(group, _case_name(path, test_id, number, salted=True), text)
+        name = _case_name(path, test_id, number, salted=True)
+        done = state.index.write(group, name, text)
     if done == "collision":
         raise _Skip("name collision")
     if done == "duplicate":
         report["duplicates"] += 1
-    else:
-        report["written"][group] = report["written"].get(group, 0) + 1
+        return
+    report["written"][group] = report["written"].get(group, 0) + 1
+    for flag in flags:
+        report["flags"].setdefault(flag, []).append(f"{group}/{name}")
 
 
 def _end_test(state: _Harvest) -> _Test:
     """Return the running test, leaving no test running and no texts noted."""
     test, state.test = state.test, None
-    for table in (state.trees, state.types, state.registries, state.flows):
+    for table in (state.trees, state.types, state.registries, state.flows, state.results):
         table.clear()
     return test
 
@@ -1308,8 +1471,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     """With `--harvest-out`, wrap the entry points and text helpers in every yian module.
 
-    The model factory is wrapped, and so is each one a test assigns; the runner's seats name
-    each model call's node and consumer.
+    `RunResult.backward` is wrapped. The model factory and the TOOL backoff draw are wrapped,
+    and so is each one a test assigns; the runner's seats name each model call's node and
+    consumer.
     """
     global _STATE
     out = config.getoption("harvest_out")
@@ -1328,13 +1492,18 @@ def pytest_configure(config: pytest.Config) -> None:
         "resume_flow": (resume_flow, _record_resume_flow),
     }
     for entry, (original, recorder) in entries.items():
-        _replace(original, _entry(entry, original, recorder), _STATE.replaced)
+        # yian's own `eval_expr` calls pass through the entry's wrapper too.
+        called = _noting_and_or(original) if entry == "eval_expr" else original
+        _replace(original, _entry(entry, called, recorder), _STATE.replaced)
     for original, remember in ((parse_expr, _remember_tree), (type_for, _remember_type),
                                (read_typedefs, _remember_typedefs)):
         _replace(original, _mapper(original, remember), _STATE.replaced)
     runner._seated(_STATE.patch)
-    llm_clients.__class__ = _Watched
+    RunResult.backward = _backward(_STATE.backward)
+    for module in (llm_clients, tool_node):
+        module.__class__ = _Watched
     llm_clients.model_from_config = _factory(_STATE.factory)
+    tool_node._jitter = _draws(_STATE.jitter)
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
@@ -1344,8 +1513,11 @@ def pytest_unconfigure(config: pytest.Config) -> None:
         return
     for module, name, original in _STATE.replaced:
         setattr(module, name, original)
-    llm_clients.__class__ = ModuleType
+    RunResult.backward = _STATE.backward
+    for module in (llm_clients, tool_node):
+        module.__class__ = ModuleType
     llm_clients.model_from_config = _STATE.factory
+    tool_node._jitter = _STATE.jitter
     _STATE.patch.undo()
     _STATE = None
 

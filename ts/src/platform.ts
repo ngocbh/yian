@@ -165,21 +165,14 @@ export function sqliteErrorCode(error: unknown): number | undefined {
 /** Why `lockFile` refused a path. */
 export type FileLockReason = "busy" | "unsafe" | "not-private" | "changed";
 
-const lockMessages: Record<FileLockReason, string> = {
-  busy: "is locked by another holder",
-  unsafe: "is not a regular file with one link",
-  "not-private": "is not private to its owner",
-  changed: "was replaced while being locked",
-};
-
-/** `lockFile` refused `path` for `reason`. */
+/** `lockFile` refused `path` for `reason`; the message reads "lock file <path> <detail>". */
 export class FileLockError extends Error {
   override name = "FileLockError";
   readonly path: string;
   readonly reason: FileLockReason;
 
-  constructor(path: string, reason: FileLockReason, options?: ErrorOptions) {
-    super(`lock file ${path} ${lockMessages[reason]}`, options);
+  constructor(path: string, reason: FileLockReason, detail: string, options?: ErrorOptions) {
+    super(`lock file ${path} ${detail}`, options);
     this.path = path;
     this.reason = reason;
   }
@@ -197,10 +190,14 @@ function errnoCode(error: unknown): unknown {
   return (error as NodeJS.ErrnoException | null)?.code;
 }
 
-/** Return whether `error` is SQLite's BUSY or LOCKED result. */
-function isBusy(error: unknown): boolean {
-  const code = sqliteErrorCode(error);
-  return code !== undefined && ((code & 0xff) === 5 || (code & 0xff) === 6);
+const SQLITE_BUSY = 5;
+const SQLITE_LOCKED = 6;
+const SQLITE_CANTOPEN = 14;
+const SQLITE_NOTADB = 26;
+
+/** Return the SQLite primary result code `error` carries, or 255 for any other value. */
+function primaryCode(error: unknown): number {
+  return (sqliteErrorCode(error) ?? -1) & 0xff;
 }
 
 /**
@@ -235,23 +232,31 @@ export function lockFile(path: string, { private: isPrivate = false }: { private
     }
   }
   const before = fs.lstatSync(path, { bigint: true });
-  if (!before.isFile() || (isPrivate && before.nlink !== 1n)) throw new FileLockError(path, "unsafe");
+  if (!before.isFile()) throw new FileLockError(path, "unsafe", "is not a regular file");
+  if (isPrivate && before.nlink !== 1n) throw new FileLockError(path, "unsafe", "has more than one link");
+  // `getuid` exists only on POSIX, like the `flock` this lock replaces.
   if (isPrivate && (before.uid !== BigInt(process.getuid!()) || (before.mode & 0o077n) !== 0n)) {
-    throw new FileLockError(path, "not-private");
+    throw new FileLockError(path, "not-private", "is not private to its owner");
   }
   const db = openSqlite(path);
   try {
     db.exec("PRAGMA busy_timeout = 0");
     // An in-memory rollback journal keeps the lock from ever creating a sibling file;
-    // `OFF` is silently ignored by some builds. This step usually reports a holder.
+    // `OFF` is silently ignored by some builds. With a holder present, this pragma
+    // (not BEGIN) is usually what fails busy, hence the catch around every step.
     db.exec("PRAGMA journal_mode = MEMORY");
     db.exec("BEGIN EXCLUSIVE");
     const after = fs.lstatSync(path, { bigint: true });
-    if (after.dev !== before.dev || after.ino !== before.ino) throw new FileLockError(path, "changed");
+    if (after.dev !== before.dev || after.ino !== before.ino) {
+      throw new FileLockError(path, "changed", "was replaced while being locked");
+    }
   } catch (error) {
     // Close on every failure, so a caller polling a busy lock leaks nothing.
     db.close();
-    if (isBusy(error)) throw new FileLockError(path, "busy", { cause: error });
+    const code = primaryCode(error);
+    if (code === SQLITE_BUSY || code === SQLITE_LOCKED) {
+      throw new FileLockError(path, "busy", "is locked by another holder", { cause: error });
+    }
     throw error;
   }
   return { path, release: () => db.close(), [Symbol.dispose]: () => db.close() };
@@ -276,12 +281,12 @@ export function isLocked(path: string): boolean {
   try {
     db = openSqlite(path, { readonly: true });
     db.exec("PRAGMA busy_timeout = 0");
-    db.prepare("SELECT count(*) AS n FROM sqlite_master").get();
+    db.prepare("SELECT count(*) FROM sqlite_master").get();
     return false;
   } catch (error) {
-    if (isBusy(error)) return true;
-    const code = (sqliteErrorCode(error) ?? 0) & 0xff;
-    if (code === 14 || code === 26) return false;
+    const code = primaryCode(error);
+    if (code === SQLITE_BUSY || code === SQLITE_LOCKED) return true;
+    if (code === SQLITE_CANTOPEN || code === SQLITE_NOTADB) return false;
     throw error;
   } finally {
     db?.close();

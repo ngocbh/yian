@@ -315,7 +315,7 @@ describe("lockFile", () => {
 
   test("private refuses a 0644 file and a second hard link; without it both lock", () => {
     const shared = path.join(dir, "shared");
-    fs.writeFileSync(shared, "", { mode: 0o644 });
+    fs.writeFileSync(shared, "");
     fs.chmodSync(shared, 0o644);
     expect(lockError(() => lockFile(shared, { private: true }), shared).reason).toBe("not-private");
     const linked = path.join(dir, "linked");
@@ -376,7 +376,7 @@ describe("isLocked", () => {
     fs.writeFileSync(file, "", { mode: 0o600 });
     const reader = open(file, { readonly: true });
     reader.exec("BEGIN");
-    reader.prepare("SELECT count(*) AS n FROM sqlite_master").get();
+    reader.prepare("SELECT count(*) FROM sqlite_master").get();
     expect(isLocked(file)).toBe(false);
     reader.exec("COMMIT");
   });

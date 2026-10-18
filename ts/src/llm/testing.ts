@@ -151,7 +151,12 @@ function quoted(names: readonly string[]): string {
 }
 
 /** Throw unless `data` is a plain object with every required key and no others. */
-function checkKeys(data: unknown, where: string, required: readonly string[], allowed: readonly string[]): asserts data is Record<string, unknown> {
+function checkKeys(
+  data: unknown,
+  where: string,
+  required: readonly string[],
+  allowed: readonly string[],
+): asserts data is Record<string, unknown> {
   if (!isPlainObject(data)) throw new TypeError(`${where}: expected an object, got ${typeName(data)}`);
   for (const key of required) {
     if (!Object.hasOwn(data, key)) throw new TypeError(`${where}: missing '${key}'`);
@@ -446,18 +451,151 @@ interface Exchange {
   chunks: Uint8Array[];
 }
 
+/** The values a recorder redacts, or a function returning them, called when a cassette is built. */
+export type RecorderSecrets = Iterable<string> | (() => Iterable<string>);
+
+/**
+ * Pass requests to `inner` and keep a redacted copy of each exchange.
+ *
+ * The response body is teed as the caller reads it, so a stream closed early still records what
+ * was read; the runtime has already undone any content-encoding. Everything else happens in
+ * `cassette`.
+ *
+ * Replay treats `CASSETTE_REDACTED` as "any value" only when it is a whole query value, header
+ * value or JSON value. A secret inside a larger value, such as a URL path segment or
+ * `pre-<redacted>`, or in a JSON key, is still redacted but must match literally, so that
+ * cassette will not replay with a different key.
+ */
+export class CassetteRecorder {
+  readonly #inner: Send;
+  readonly #secrets: readonly string[] | (() => Iterable<string>);
+  readonly #exchanges: Exchange[] = [];
+
+  /**
+   * @param inner The `Send` that really sends requests.
+   * @param options `secrets` are the values to redact, e.g. the API key in use: an iterable,
+   *   copied now, or a function, called each time `cassette` runs (so `auth.credentials()` can be
+   *   passed lazily). Empty values are ignored.
+   */
+  constructor(inner: Send, options: { secrets: RecorderSecrets }) {
+    this.#inner = inner;
+    // Copied, so a generator still yields its secrets on a second `cassette()`.
+    this.#secrets = typeof options.secrets === "function" ? options.secrets : [...options.secrets];
+  }
+
+  /** Send a request through `inner`, its body as the text read, and return the response with the body teed. */
+  readonly send: Send = async (input, init) => {
+    const request = await receive(input, init);
+    // The body read for the record is what goes on, so a stream body isn't sent used up.
+    const response = await this.#inner(input, { ...init, body: request.body ?? undefined });
+    const exchange: Exchange = { request, status: response.status, headers: response.headers, chunks: [] };
+    this.#exchanges.push(exchange);
+    const reader = response.body?.getReader();
+    const body =
+      reader &&
+      new ReadableStream<Uint8Array>(
+        {
+          async pull(controller) {
+            const { done, value } = await reader.read();
+            if (done) return controller.close();
+            exchange.chunks.push(value);
+            controller.enqueue(value);
+          },
+          cancel: (reason) => reader.cancel(reason),
+        },
+        // No read-ahead, so only what the caller reads is recorded.
+        { highWaterMark: 0 },
+      );
+    const { status, statusText, headers } = response;
+    return new globalThis.Response(body ?? null, { status, statusText, headers });
+  };
+
+  /**
+   * Return the exchanges so far as a redacted `recorded` cassette.
+   *
+   * Each secret is replaced by `CASSETTE_REDACTED` in each form `secretForms` lists, in the URL,
+   * header values, JSON keys and strings and the response text. Request headers are saved by
+   * lowercase name without `IGNORED_HEADERS`, credential headers as `CASSETTE_REDACTED`; the
+   * response keeps `content-type`, `retry-after`, `retry-after-ms` and `x-should-retry`. The
+   * response text is decoded as UTF-8 with replacement and redacted whole, so a secret split
+   * across reads is caught, then saved one chunk per SSE event.
+   *
+   * @param options `description` says what the cassette exercises.
+   * @returns A `yian.cassette.v1` cassette with source `recorded`.
+   * @throws {Error} A saved string, the description included, still holds a secret's form, its
+   *   base64 forms included, or something `findSecrets` flags: `the cassette still holds a
+   *   credential (<form>) in <where>`, naming the form or kind and the place, never the value.
+   * @throws {JSONDecodeError} A request body is not JSON.
+   */
+  cassette(options: { description: string }): Cassette {
+    const secrets = [...(typeof this.#secrets === "function" ? this.#secrets() : this.#secrets)].filter(Boolean);
+    const interactions = this.#exchanges.map(({ request, status, headers, chunks }): CassetteInteraction => {
+      const saved: CassetteRequest = {
+        method: request.method,
+        url: redact(request.url, secrets),
+        headers: saveHeaders(request.headers, (name) => !IGNORED_HEADERS.has(name), secrets),
+      };
+      if (request.body) saved.json = redactJson(parseJson(request.body, "plain"), secrets);
+      const text = redact(new TextDecoder().decode(Buffer.concat(chunks)), secrets);
+      const response = {
+        status,
+        headers: saveHeaders(headers, (name) => SAVED_RESPONSE_HEADERS.has(name), secrets),
+        chunks: text.match(CHUNK) ?? [],
+      };
+      return { request: saved, response };
+    });
+    const cassette: Cassette = { format: CASSETTE_FORMAT, source: "recorded", description: options.description, interactions };
+    scanCassette(cassette, secrets);
+    return cassette;
+  }
+}
+
+/** Return `text` with each of `secrets`, in each of its forms, replaced by `CASSETTE_REDACTED`. */
+function redact(text: string, secrets: readonly string[]): string {
+  return scrub(text, secrets, CASSETTE_REDACTED);
+}
+
+/** Return `value` with `secrets` redacted in every string and key. */
+function redactJson(value: JsonValue, secrets: readonly string[]): JsonValue {
+  if (typeof value === "string") return redact(value, secrets);
+  if (Array.isArray(value)) return value.map((item) => redactJson(item, secrets));
+  if (!isPlainObject(value)) return value;
+  const out: JsonObject = {};
+  for (const [key, item] of Object.entries(value as JsonObject)) put(out, redact(key, secrets), redactJson(item, secrets));
+  return out;
+}
+
+/** Save the headers `keep` accepts by lowercase name, credential headers as `CASSETTE_REDACTED`, others redacted. */
+function saveHeaders(headers: Headers, keep: (name: string) => boolean, secrets: readonly string[]): Record<string, string> {
+  const saved: Record<string, string> = {};
+  for (const [name, raw] of headers) {
+    if (!keep(name)) continue;
+    const value = CREDENTIAL_HEADERS.has(name) ? CASSETTE_REDACTED : redact(raw, secrets);
+    // A repeated header keeps every value, joined as HTTP allows.
+    saved[name] = Object.hasOwn(saved, name) ? `${saved[name]}, ${value}` : value;
+  }
+  return saved;
+}
+
+// Shorter base64 fragments would match too much unrelated text.
+const MIN_BASE64_FRAGMENT = 8;
+
 /**
  * Return the base64 forms of `secret`: for each of the three byte alignments, the characters of
- * its standard and URL-safe encoding that only the secret's bits decide, when there are 8 or
- * more. Base64 inside a larger blob can't be replaced in place, so these are only scanned for.
+ * its standard and URL-safe encoding that only the secret's bits decide, when there are
+ * `MIN_BASE64_FRAGMENT` or more. Base64 inside a larger blob can't be replaced in place, so
+ * these are only scanned for.
  */
 function base64Forms(secret: string): SecretForm[] {
   const bytes = Buffer.from(secret, "utf8");
   const forms: SecretForm[] = [];
-  for (let k = 0; k < 3; k++) {
-    const encoded = Buffer.concat([Buffer.alloc(k), bytes]).toString("base64");
-    const fragment = encoded.slice(Math.ceil((8 * k) / 6), Math.floor((8 * (k + bytes.length)) / 6));
-    if (fragment.length < 8) continue;
+  for (let pad = 0; pad < 3; pad++) {
+    const encoded = Buffer.concat([Buffer.alloc(pad), bytes]).toString("base64");
+    // Character i holds bits [6i, 6i + 6); keep those wholly inside the secret's bits.
+    const start = Math.ceil((8 * pad) / 6);
+    const end = Math.floor((8 * (pad + bytes.length)) / 6);
+    const fragment = encoded.slice(start, end);
+    if (fragment.length < MIN_BASE64_FRAGMENT) continue;
     forms.push({ form: "base64", text: fragment });
     forms.push({ form: "URL-safe base64", text: fragment.replaceAll("+", "-").replaceAll("/", "_") });
   }
@@ -477,118 +615,11 @@ function* strings(value: unknown, where: string): Generator<[string, string]> {
   }
 }
 
-/**
- * Pass requests to `inner` and keep a redacted copy of each exchange.
- *
- * The response body is teed as the caller reads it, so a stream closed early still records what
- * was read; the runtime has already undone any content-encoding. Everything else happens in
- * `cassette`.
- *
- * Replay treats `CASSETTE_REDACTED` as "any value" only when it is a whole query value, header
- * value or JSON value. A secret inside a larger value, such as a URL path segment or
- * `pre-<redacted>`, is still redacted but must match literally, so that cassette will not replay
- * with a different key.
- */
-export class CassetteRecorder {
-  readonly #inner: Send;
-  readonly #secrets: Iterable<string> | (() => Iterable<string>);
-  readonly #exchanges: Exchange[] = [];
-
-  /**
-   * @param inner The `Send` that really sends requests.
-   * @param options `secrets` are the values to redact, e.g. the API key in use, or a function
-   *   returning them, called when `cassette` runs (so `auth.credentials()` can be passed lazily).
-   */
-  constructor(inner: Send, options: { secrets: Iterable<string> | (() => Iterable<string>) }) {
-    this.#inner = inner;
-    this.#secrets = options.secrets;
-  }
-
-  /** Send a request through `inner` and return its response with the body teed. */
-  readonly send: Send = async (input, init) => {
-    const request = await receive(input, init);
-    const response = await this.#inner(input, init);
-    const exchange = { request, status: response.status, headers: response.headers, chunks: [] as Uint8Array[] };
-    this.#exchanges.push(exchange);
-    const reader = response.body?.getReader();
-    const body =
-      reader &&
-      new ReadableStream<Uint8Array>(
-        {
-          async pull(controller) {
-            const { done, value } = await reader.read();
-            if (done) return controller.close();
-            exchange.chunks.push(value);
-            controller.enqueue(value);
-          },
-          cancel: (reason) => reader.cancel(reason),
-        },
-        // No read-ahead, so only what the caller reads is recorded.
-        { highWaterMark: 0 },
-      );
-    return new globalThis.Response(body ?? null, { status: response.status, statusText: response.statusText, headers: response.headers });
-  };
-
-  /**
-   * Return the exchanges so far as a redacted `recorded` cassette.
-   *
-   * Each secret is replaced by `CASSETTE_REDACTED` in each form `secretForms` lists, in the URL,
-   * header values, JSON keys and strings and the response text. Request headers are saved by
-   * lowercase name without `IGNORED_HEADERS`, credential headers as `CASSETTE_REDACTED`; the
-   * response keeps `content-type`, `retry-after`, `retry-after-ms` and `x-should-retry`. The
-   * response text is decoded as UTF-8 with replacement and redacted whole, so a secret split
-   * across reads is caught, then saved one chunk per SSE event.
-   *
-   * @param options `description` says what the cassette exercises.
-   * @returns A `yian.cassette.v1` cassette with source `recorded`.
-   * @throws {Error} A saved string still holds a secret's form, its base64 forms included, or
-   *   something `findSecrets` flags: `the cassette still holds a credential (<form>) in
-   *   <where>`, naming the form or kind and the place, never the value.
-   * @throws {JSONDecodeError} A request body is not JSON.
-   */
-  cassette(options: { description: string }): Cassette {
-    const secrets = [...(typeof this.#secrets === "function" ? this.#secrets() : this.#secrets)].filter(Boolean);
-    const redact = (text: string) => scrub(text, secrets, CASSETTE_REDACTED);
-    const redactJson = (value: JsonValue): JsonValue => {
-      if (typeof value === "string") return redact(value);
-      if (Array.isArray(value)) return value.map(redactJson);
-      if (!isPlainObject(value)) return value;
-      const out: JsonObject = {};
-      for (const [key, item] of Object.entries(value as JsonObject)) put(out, redact(key), redactJson(item));
-      return out;
-    };
-    const saveHeaders = (headers: Headers, keep: (name: string) => boolean) => {
-      const saved: Record<string, string> = {};
-      for (const [name, raw] of headers) {
-        if (!keep(name)) continue;
-        const value = CREDENTIAL_HEADERS.has(name) ? CASSETTE_REDACTED : redact(raw);
-        // A repeated header keeps every value, joined as HTTP allows.
-        saved[name] = Object.hasOwn(saved, name) ? `${saved[name]}, ${value}` : value;
-      }
-      return saved;
-    };
-    const interactions = this.#exchanges.map(({ request, status, headers, chunks }): CassetteInteraction => {
-      const saved: CassetteRequest = {
-        method: request.method,
-        url: redact(request.url),
-        headers: saveHeaders(request.headers, (name) => !IGNORED_HEADERS.has(name)),
-      };
-      if (request.body) saved.json = redactJson(parseJson(request.body, "plain"));
-      const decoder = new TextDecoder();
-      const text = redact(chunks.map((chunk) => decoder.decode(chunk, { stream: true })).join("") + decoder.decode());
-      const response = { status, headers: saveHeaders(headers, (name) => SAVED_RESPONSE_HEADERS.has(name)), chunks: text.match(CHUNK) ?? [] };
-      return { request: saved, response };
-    });
-    const cassette: Cassette = { format: CASSETTE_FORMAT, source: "recorded", description: options.description, interactions };
-    scanCassette(cassette, secrets);
-    return cassette;
-  }
-}
-
 /** Throw if a string `cassette` saves still holds a form of a secret or a `findSecrets` shape. */
 function scanCassette(cassette: Cassette, secrets: readonly string[]): void {
   const forms = secrets.flatMap((secret) => [...secretForms(secret), ...base64Forms(secret)]);
-  for (const [where, text] of strings(cassette.interactions, "interactions")) {
+  const saved: [string, string][] = [["description", cassette.description], ...strings(cassette.interactions, "interactions")];
+  for (const [where, text] of saved) {
     const found = forms.find((form) =>
       form.ignoreCase ? text.toLowerCase().includes(form.text.toLowerCase()) : text.includes(form.text),
     );

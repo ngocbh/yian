@@ -17,7 +17,7 @@ import { collect, type Event, EventStream, Finish, PartDone, ReasoningDelta, Tex
 import { RouteModel, type SseProtocol } from "../../src/llm/executor.ts";
 import { Message, ReasoningPart, RefusalPart, Request, Response, TextPart, ToolCallPart, Usage } from "../../src/llm/messages.ts";
 import { Route } from "../../src/llm/route.ts";
-import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
+import { JSONDecodeError, type JsonObject, type JsonValue } from "../../src/typesys/json.ts";
 import {
   type Cassette,
   CASSETTE_REDACTED,
@@ -456,7 +456,11 @@ describe("CassetteRecorder", () => {
     const { request, response } = interaction!;
 
     expect(request.method).toBe("POST");
-    expect(request.headers).toEqual({ "content-type": "application/json", accept: "application/json", "x-api-key": CASSETTE_REDACTED });
+    expect(request.headers).toEqual({
+      "content-type": "application/json",
+      accept: "application/json",
+      "x-api-key": CASSETTE_REDACTED,
+    });
     expect(queryKey(request.url)).toBe(CASSETTE_REDACTED);
     expect(request.json).toEqual({ model: "m", note: CASSETTE_REDACTED });
     expect(response.status).toBe(200);
@@ -464,7 +468,7 @@ describe("CassetteRecorder", () => {
     expect(response.headers).toEqual({ "content-type": "text/event-stream", "retry-after": "1" });
     expect(dump(cassette)).not.toContain(KEY);
     expect(findSecrets(dump(cassette))).toEqual([]);
-    new CassetteReplay(JSON.parse(dump(cassette)) as Cassette);
+    expect(() => new CassetteReplay(JSON.parse(dump(cassette)) as Cassette)).not.toThrow();
   });
 
   test("a recorded cassette replays with a different key", async () => {
@@ -481,45 +485,111 @@ describe("CassetteRecorder", () => {
 
   test("redacts percent, plus and JSON-escaped secrets, and other header values", async () => {
     const secret = "abc+def/ghi= " + "x".repeat(16);
+    const percent = encodeURIComponent(secret);
+    const plus = percent.replaceAll("%20", "+");
     // A JSON encoder may escape "/" as "\/"; JSON.stringify does not, so do it by hand.
-    const echo = JSON.stringify({ echo: secret }).replaceAll("/", "\\/");
-    const recorder = new CassetteRecorder(inner([echo], { "content-type": "application/json" }).send, { secrets: [secret] });
-    const url = `${BASE}/responses?${new URLSearchParams({ key: secret })}`;
+    const echo = JSON.stringify({ echo: secret, percent, plus }).replaceAll("/", "\\/");
+    const recorder = new CassetteRecorder(inner([echo]).send, { secrets: [secret] });
+    const url = `${BASE}/files/${percent}/x?${new URLSearchParams({ key: secret })}`;
     const init = { method: "POST", headers: { "x-note": `note ${secret}` }, body: JSON.stringify({ note: secret }) };
-    expect(await (await safeFetch(url, init, recorder.send)).json()).toEqual({ echo: secret });
+    expect(await (await safeFetch(url, init, recorder.send)).json()).toEqual({ echo: secret, percent, plus });
     const [interaction] = recorder.cassette({ description: "encoded secrets" }).interactions;
     const { request, response } = interaction!;
 
+    expect(request.url).toStartWith(`${BASE}/files/<redacted>/x?`);
     expect(queryKey(request.url)).toBe(CASSETTE_REDACTED);
+    for (const form of [secret, percent, plus]) expect(request.url).not.toContain(form);
     expect(request.headers!["x-note"]).toBe("note <redacted>");
     expect(request.json).toEqual({ note: CASSETTE_REDACTED });
-    expect(response.chunks).toEqual(['{"echo":"<redacted>"}']);
-    const dumped = dump(interaction);
-    const percent = encodeURIComponent(secret);
-    for (const form of [secret, percent, percent.replaceAll("%20", "+"), secret.replaceAll("/", "\\/")]) {
-      expect(dumped).not.toContain(form);
-      expect(request.url + response.chunks!.join("")).not.toContain(form);
+    expect(response.chunks).toEqual(['{"echo":"<redacted>","percent":"<redacted>","plus":"<redacted>"}']);
+  });
+
+  test("redacts a JSON key; replay matches such a key only literally", async () => {
+    const recorder = new CassetteRecorder(inner(["ok"]).send, { secrets: [KEY] });
+    const body = (key: string) => JSON.stringify({ [key]: 1, note: key });
+    await (await safeFetch(`${BASE}/responses`, { method: "POST", body: body(KEY) }, recorder.send)).text();
+    const cassette = recorder.cassette({ description: "keys" });
+    expect(cassette.interactions[0]!.request.json).toEqual({ [CASSETTE_REDACTED]: 1n, note: CASSETTE_REDACTED });
+
+    // `<redacted>` stands for any value, never any key, as in Python.
+    const replay = new CassetteReplay(cassette);
+    const error = await rejection(safeFetch(`${BASE}/responses`, { method: "POST", body: body(OTHER_KEY) }, replay.send));
+    expect((error as Error).message).toBe(
+      "request 1 does not match the cassette:\n  body <redacted>: missing\n  body " + OTHER_KEY + ": unexpected",
+    );
+  });
+
+  test("empty secrets are ignored", async () => {
+    const recorder = new CassetteRecorder(inner([`{"echo": "${KEY}"}`]).send, { secrets: ["", KEY] });
+    await (await safeFetch(`${BASE}/responses`, {}, recorder.send)).text();
+    expect(recorder.cassette({ description: "empty" }).interactions[0]!.response.chunks).toEqual(['{"echo": "<redacted>"}']);
+  });
+
+  test("an iterable's secrets are copied, so each cassette is redacted", async () => {
+    function* secrets() {
+      yield KEY;
     }
+    const recorder = new CassetteRecorder(inner([`{"echo": "${KEY}"}`]).send, { secrets: secrets() });
+    await (await safeFetch(`${BASE}/responses`, {}, recorder.send)).text();
+    for (let call = 0; call < 2; call++) {
+      expect(recorder.cassette({ description: "twice" }).interactions[0]!.response.chunks).toEqual(['{"echo": "<redacted>"}']);
+    }
+  });
+
+  test("a stream request body reaches inner and the cassette", async () => {
+    const received: string[] = [];
+    const send: Send = async (_, init) => {
+      received.push(await new globalThis.Response(init.body).text());
+      return new globalThis.Response("ok");
+    };
+    const recorder = new CassetteRecorder(send, { secrets: [] });
+    const body = new globalThis.Response('{"a": 1}').body!;
+    await (await safeFetch(`${BASE}/responses`, { method: "POST", body }, recorder.send)).text();
+
+    expect(received).toEqual(['{"a": 1}']);
+    expect(recorder.cassette({ description: "stream" }).interactions[0]!.request.json).toEqual({ a: 1n });
+  });
+
+  test("a 204 records no chunks and replays with no body", async () => {
+    const recorder = new CassetteRecorder(async () => new globalThis.Response(null, { status: 204 }), { secrets: [] });
+    expect((await safeFetch(`${BASE}/responses`, {}, recorder.send)).status).toBe(204);
+    const cassette = recorder.cassette({ description: "no content" });
+    expect(cassette.interactions[0]!.response).toEqual({ status: 204, headers: {}, chunks: [] });
+
+    const reply = await safeFetch(`${BASE}/responses`, {}, new CassetteReplay(cassette).send);
+    expect(reply.status).toBe(204);
+    expect(reply.body).toBeNull();
+  });
+
+  test("a request body that isn't JSON makes cassette() throw", async () => {
+    const recorder = new CassetteRecorder(inner(["ok"]).send, { secrets: [] });
+    await (await safeFetch(`${BASE}/responses`, { method: "POST", body: "not json" }, recorder.send)).text();
+    expect(thrown(() => recorder.cassette({ description: "text body" }))).toBeInstanceOf(JSONDecodeError);
+  });
+
+  test("the value scan covers the description", async () => {
+    const recorder = new CassetteRecorder(inner(["ok"]).send, { secrets: [KEY] });
+    await (await safeFetch(`${BASE}/responses`, {}, recorder.send)).text();
+    const error = thrown(() => recorder.cassette({ description: `recorded with ${KEY}` }));
+    expect(error.message).toBe("the cassette still holds a credential (plain) in description");
   });
 
   test("redacts \\u-escaped secrets", async () => {
     const quoted = 'pa"ss\\wörd-' + "y".repeat(16);
     const escapedKey = unicodeEscaped(KEY);
-    const reply = `{"a": "${escapedKey}", "b": "${unicodeEscaped(KEY, true)}", "c": ${asciiJson(quoted)}, "d": ${JSON.stringify(quoted)}}`;
-    const recorder = new CassetteRecorder(inner([reply]).send, { secrets: [KEY, quoted] });
+    const echo =
+      `{"a": "${escapedKey}", "b": "${unicodeEscaped(KEY, true)}", ` +
+      `"c": ${asciiJson(quoted)}, "d": ${JSON.stringify(quoted)}}`;
+    const recorder = new CassetteRecorder(inner([echo]).send, { secrets: [KEY, quoted] });
     const args = `{"key": "${escapedKey}", "other": ${asciiJson(quoted)}}`;
     const init = { method: "POST", body: JSON.stringify({ arguments: args }) };
-    expect(await (await safeFetch(`${BASE}/responses`, init, recorder.send)).json()).toEqual({ a: KEY, b: KEY, c: quoted, d: quoted });
+    const reply = await safeFetch(`${BASE}/responses`, init, recorder.send);
+    expect(await reply.json()).toEqual({ a: KEY, b: KEY, c: quoted, d: quoted });
     const cassette = recorder.cassette({ description: "escaped secrets" });
     const { request, response } = cassette.interactions[0]!;
 
     expect(response.chunks).toEqual(['{"a": "<redacted>", "b": "<redacted>", "c": "<redacted>", "d": "<redacted>"}']);
     expect(request.json).toEqual({ arguments: '{"key": "<redacted>", "other": "<redacted>"}' });
-    const saved = response.chunks!.join("") + (request.json as { arguments: string }).arguments;
-    for (const secret of [KEY, quoted]) {
-      const forms = [secret, JSON.stringify(secret).slice(1, -1), asciiJson(secret).slice(1, -1), unicodeEscaped(secret), unicodeEscaped(secret, true)];
-      for (const form of forms) expect(saved).not.toContain(form);
-    }
     expect(findSecrets(dump(cassette))).toEqual([]);
   });
 
@@ -566,7 +636,6 @@ describe("CassetteRecorder", () => {
 
         const error = thrown(() => recorder.cassette({ description: "base64" }));
         expect(error.message).toBe(`the cassette still holds a credential (${form}) in interactions[0].response.chunks[0]`);
-        expect(error.message).not.toContain(blob.slice(4, 12));
       });
     }
   }
@@ -586,7 +655,6 @@ describe("CassetteRecorder", () => {
 
     const error = thrown(() => recorder.cassette({ description: "jwt" }));
     expect(error.message).toBe("the cassette still holds a credential (jwt) in interactions[0].response.chunks[0]");
-    expect(error.message).not.toContain("eyJ");
   });
 });
 

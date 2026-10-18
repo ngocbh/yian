@@ -2024,13 +2024,20 @@ def _code_scalars(text: str) -> list[_CodeScalar]:
     except yaml.YAMLError:
         return []
     found = []
-    # An alias shares its anchor's node, so a recursive one would walk forever.
-    seen = set()
+    # An alias shares its anchor's node, so a recursive one would walk forever; a node already
+    # on the path is skipped, while a reused one elsewhere is walked again.
+    path = set()
 
     def walk(node: yaml.Node | None, node_id: str | None) -> None:
-        if id(node) in seen:
+        if id(node) in path:
             return
-        seen.add(id(node))
+        path.add(id(node))
+        try:
+            visit(node, node_id)
+        finally:
+            path.discard(id(node))
+
+    def visit(node: yaml.Node | None, node_id: str | None) -> None:
         if isinstance(node, yaml.SequenceNode):
             for item in node.value:
                 walk(item, None)

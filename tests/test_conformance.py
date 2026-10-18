@@ -3310,6 +3310,9 @@ def test_harvest_code_scalars() -> None:
     # A recursive alias is walked once.
     assert found("a: &x\n  b: *x\n") == []
     assert found("nodes:\n  c: &x {kind: code, code: r, again: *x}\n") == [("c", "r", "r", 2, 2)]
+    # A reused alias that isn't recursive is walked each time.
+    assert found("nodes:\n  a: &x {kind: code, code: r}\n  b: *x\n") == [
+        ("a", "r", "r", 2, 2), ("b", "r", "r", 2, 2)]
     # Not CODE, or not text to compose.
     assert found("nodes:\n  t: {kind: tool, code: x}\n") == []
     assert found("nodes: [\n") == []

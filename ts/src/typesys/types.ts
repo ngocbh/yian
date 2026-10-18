@@ -13,6 +13,7 @@ import {
   type Bounds,
   BUILTIN_CONSTANTS,
   boundText,
+  IDENTIFIER_PATTERN,
   literalLabel,
   NAME_PATTERN,
   TypeCheckError,
@@ -160,13 +161,24 @@ export function encodesAsUtf8(text: string): boolean {
 export function parseType(text: string): TypeExpr {
   const src = text.trim();
   if (hasUnquotedBracket(src)) throw bracketError(src);
+  checkEncodable(src);
+  return new TypeParser(src).parse();
+}
+
+/** Reject type text `src` holding a lone Unicode surrogate. */
+function checkEncodable(src: string): void {
   if (!encodesAsUtf8(src)) {
     throw new TypeCheckError(
       `type expression ${reprText(src)} contains a Unicode surrogate ` +
         "(types must be valid UTF-8 text)",
     );
   }
-  return new TypeParser(src).parse();
+}
+
+/** The `malformed type expression` error for `src`, with an optional `detail`. */
+function malformedError(src: string, detail = ""): TypeCheckError {
+  const suffix = detail ? `: ${detail}` : "";
+  return new TypeCheckError(`malformed type expression ${reprText(src)}${suffix}`);
 }
 
 /** Explain that types use parentheses, showing `src` in that spelling when it parses. */
@@ -250,30 +262,36 @@ interface Token {
   readonly text: string;
 }
 
+/** Split `src` into `pattern`'s tokens, or return `null` where no token matches. */
+function tokenize(pattern: RegExp, src: string): Token[] | null {
+  const tokens: Token[] = [];
+  for (let pos = 0; pos < src.length; pos = pattern.lastIndex) {
+    pattern.lastIndex = pos;
+    const groups = pattern.exec(src)?.groups;
+    if (groups === undefined) return null;
+    const kind = TOKEN_KINDS.find((name) => groups[name] !== undefined)!;
+    tokens.push({ kind, text: groups[kind]! });
+  }
+  return tokens;
+}
+
 /** Recursive-descent parser for the parenthesized type grammar. */
 class TypeParser {
   private readonly src: string;
-  private readonly tokens: Token[] = [];
+  private readonly tokens: Token[];
   private index = 0;
   private depth = 0;
   private readonly maxDepth = typeNestingLimit();
 
   constructor(src: string) {
     this.src = src;
-    let pos = 0;
-    while (pos < src.length) {
-      TYPE_TOKEN.lastIndex = pos;
-      const match = TYPE_TOKEN.exec(src);
-      if (match === null) {
-        // An unclosed quote often means a `{...}` mapping's comma split the type.
-        if (this.opensUnclosed()) this.unbalanced();
-        this.malformed();
-      }
-      const groups = match.groups!;
-      const kind = TOKEN_KINDS.find((name) => groups[name] !== undefined)!;
-      this.tokens.push({ kind, text: groups[kind]! });
-      pos = TYPE_TOKEN.lastIndex;
+    const tokens = tokenize(TYPE_TOKEN, src);
+    if (tokens === null) {
+      // An unclosed quote often means a `{...}` mapping's comma split the type.
+      if (this.opensUnclosed()) this.unbalanced();
+      this.malformed();
     }
+    this.tokens = tokens;
   }
 
   parse(): TypeExpr {
@@ -305,8 +323,7 @@ class TypeParser {
   }
 
   private malformed(detail = ""): never {
-    const suffix = detail ? `: ${detail}` : "";
-    throw new TypeCheckError(`malformed type expression ${reprText(this.src)}${suffix}`);
+    throw malformedError(this.src, detail);
   }
 
   /** Whether the text opens more parentheses than it closes. */
@@ -566,7 +583,7 @@ const ESCAPES: ReadonlyMap<string, string> = new Map([
  */
 function decodeQuoted(text: string, src: string): string {
   const fail = (detail: string): never => {
-    throw new TypeCheckError(`malformed type expression ${reprText(src)}: ${detail}`);
+    throw malformedError(src, detail);
   };
   const body = text.slice(1, -1);
   if (/[\n\r]/.test(body)) fail("a quoted Literal member can't hold a line break");
@@ -617,11 +634,11 @@ function checkLiteralTag(value: string, src: string): void {
   }
 }
 
-// Python's decimal literals: `1.` and `.5` are floats. Signs are separate tokens, since
-// the bracket spelling reads them as unary operators.
+// Python's decimal literals (`1.` and `.5` are floats) and identifiers. Signs are separate
+// tokens, since the bracket spelling reads them as unary operators.
 const LEGACY_TOKEN = new RegExp(
   String.raw`\s*(?:(?<number>(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)` +
-    `|(?<name>${NAME_PATTERN})|(?<string>${QUOTED})` +
+    `|(?<name>${IDENTIFIER_PATTERN})|(?<string>${QUOTED})` +
     String.raw`|(?<punct>[[\],|+-]))`,
   "uy",
 );
@@ -645,12 +662,7 @@ type LegacyNode =
  */
 function parseLegacyType(text: string): TypeExpr {
   const src = text.trim();
-  if (!encodesAsUtf8(src)) {
-    throw new TypeCheckError(
-      `type expression ${reprText(src)} contains a Unicode surrogate ` +
-        "(types must be valid UTF-8 text)",
-    );
-  }
+  checkEncodable(src);
   return typeFromLegacy(legacySyntax(src), src);
 }
 
@@ -659,16 +671,12 @@ function parseLegacyType(text: string): TypeExpr {
  * (JSON escapes), `None`/`True`/`False`, unary signs, subscripts, list displays and `|`.
  */
 function legacySyntax(src: string): LegacyNode {
+  // Closures rather than a class: the grammar is a handful of rules over shared state,
+  // used once per call.
   const malformed = (): never => {
-    throw new TypeCheckError(`malformed type expression ${reprText(src)}`);
+    throw malformedError(src);
   };
-  const tokens: Token[] = [];
-  for (let pos = 0; pos < src.length; pos = LEGACY_TOKEN.lastIndex) {
-    LEGACY_TOKEN.lastIndex = pos;
-    const groups = LEGACY_TOKEN.exec(src)?.groups ?? malformed();
-    const kind = TOKEN_KINDS.find((name) => groups[name] !== undefined)!;
-    tokens.push({ kind, text: groups[kind]! });
-  }
+  const tokens = tokenize(LEGACY_TOKEN, src) ?? malformed();
   let index = 0;
   let depth = 0;
   const peek = (): string | null => tokens[index]?.text ?? null;
@@ -693,7 +701,9 @@ function legacySyntax(src: string): LegacyNode {
   const atom = (): LegacyNode => {
     const { kind, text } = next();
     if (kind === "name") {
-      return BUILTIN_CONSTANTS.has(text) ? { kind: "constant", value: text } : { kind, id: text };
+      // Python reads identifiers in NFKC form, so `ｓｔｒ` is `str`.
+      const id = text.normalize("NFKC");
+      return BUILTIN_CONSTANTS.has(id) ? { kind: "constant", value: id } : { kind, id };
     }
     if (kind === "string") return { kind, value: decodeQuoted(text, src) };
     if (kind === "number") {
@@ -733,12 +743,10 @@ function legacySyntax(src: string): LegacyNode {
 
 /** Convert one node of bracket-spelled type text into a `TypeExpr`. */
 function typeFromLegacy(node: LegacyNode, src: string): TypeExpr {
-  const malformed = (detail = ""): TypeCheckError =>
-    new TypeCheckError(`malformed type expression ${reprText(src)}${detail}`);
   if (node.kind === "constant" && node.value === "None") return { kind: "scalar", name: "None" };
   if (node.kind === "name") return namedType(node.id);
   if (node.kind === "subscript") {
-    if (node.base.kind !== "name") throw malformed();
+    if (node.base.kind !== "name") throw malformedError(src);
     const ctor = node.base.id;
     const sl = node.slice;
     const elts = sl.kind === "tuple" ? sl.items : [sl];
@@ -746,10 +754,11 @@ function typeFromLegacy(node: LegacyNode, src: string): TypeExpr {
       case "int":
       case "float": {
         if (sl.kind !== "tuple" || sl.items.length !== 2) {
-          throw malformed(`: ${rangeNeedsDots(ctor)}`);
+          throw malformedError(src, rangeNeedsDots(ctor));
         }
         const low = numericEndpoint(sl.items[0]!, src);
-        return rangeType(ctor, [low, numericEndpoint(sl.items[1]!, src)], src);
+        const high = numericEndpoint(sl.items[1]!, src);
+        return rangeType(ctor, [low, high], src);
       }
       case "list":
       case "List":
@@ -775,9 +784,9 @@ function typeFromLegacy(node: LegacyNode, src: string): TypeExpr {
   }
   if (node.kind === "bar") {
     const operands = node.operands.map((operand) => legacyLabel(operand, src)).join(", ");
-    throw malformed(`: use Union(${operands}) (| is not a type operator)`);
+    throw malformedError(src, `use Union(${operands}) (| is not a type operator)`);
   }
-  throw malformed();
+  throw malformedError(src);
 }
 
 /** Spell one `A | B` operand in the parenthesized syntax, or as written if it is no type. */
@@ -826,7 +835,8 @@ function numericEndpoint(node: LegacyNode, src: string): bigint | number {
   }
   if (!negative) return node.value;
   // `-0.0` is stored as `0`, so a -0 end never reaches a manifest or fingerprint.
-  return typeof node.value === "bigint" || node.value !== 0 ? -node.value : 0;
+  const value = -node.value;
+  return value === 0 ? 0 : value;
 }
 
 /** Read the members of a bracket-spelled `Literal[...]`. */

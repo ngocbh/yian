@@ -582,8 +582,9 @@ function pythonFloatRepr(x: number): string {
  */
 export const NAME_PATTERN = "[\\p{L}\\p{Nl}\\p{No}_][\\p{L}\\p{N}_]*";
 const NAME_TOKEN = new RegExp(`^(?:${NAME_PATTERN})$`, "u");
-// Python's `str.isidentifier()`.
-const IDENTIFIER = /^[\p{XID_Start}_]\p{XID_Continue}*$/u;
+/** Python's identifier, as `str.isidentifier()` checks it. Use it with the `u` flag. */
+export const IDENTIFIER_PATTERN = "[\\p{XID_Start}_]\\p{XID_Continue}*";
+const IDENTIFIER = new RegExp(`^(?:${IDENTIFIER_PATTERN})$`, "u");
 
 /** Names the type parser reads as constants, never as `Literal` members. */
 export const BUILTIN_CONSTANTS: ReadonlySet<string> = new Set(["True", "False", "None"]);

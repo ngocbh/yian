@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { reprText } from "../../src/diagnostics.ts";
 import {
   formatTypeExpr,
   legacyRespelling,
@@ -821,23 +822,18 @@ describe("bracket spelling", () => {
     ["int[00, 2]", "int(0..2)"],
     // Python keeps the sign: `float(-0.0..1)`.
     ["float[-0.0, 1]", "float(0.0..1)"],
+    // Python reads identifiers in NFKC form.
+    ["Optional[ｓｔｒ]", "Optional(str)"],
+    ["Optional[℘]", "Optional(℘)"],
+    // Python refuses a keyword as a name: `malformed type expression 'Literal[if, b]'`.
+    ["Literal[if, b]", "Literal(if, b)"],
   ])("is an error showing the parenthesized spelling: %p", (text, spelled) => {
     expect(parseError(text)).toBe(`types use parentheses: \`${spelled}\``);
+    expect(legacyRespelling(text)).toBe(spelled);
   });
 
-  test("text that is no type still says types use parentheses", () => {
-    // Python appends the `SyntaxError` detail.
-    expect(parseError("list[")).toBe(bracketError(malformed("list[")));
-  });
-
-  test("a single endpoint hint uses the range spelling", () => {
-    expect(parseError("int[1]")).toBe(bracketError(malformed("int[1]", RANGE_NEEDS_DOTS)));
-    expect(parseError("int[1,]")).toBe(bracketError(malformed("int[1,]", RANGE_NEEDS_DOTS)));
-  });
-
-  test("deep nesting is a type error", () => {
+  test("bracket nesting is capped at 100 levels", () => {
     const deep = "Optional[".repeat(300) + "str" + "]".repeat(300);
-    expect(parseError(deep)).toStartWith("types use parentheses, not brackets (");
     // Python reports the `SyntaxError` of its parser's own limit.
     expect(parseError(deep)).toBe(
       bracketError(
@@ -909,18 +905,40 @@ describe("bracket spelling", () => {
     ["A[1][2]", malformed("A[1][2]")],
     ["A[1], B", malformed("A[1], B")],
     ["int[1, 2, 3]", malformed("int[1, 2, 3]", RANGE_NEEDS_DOTS)],
+    ["int[1]", malformed("int[1]", RANGE_NEEDS_DOTS)],
+    ["int[1,]", malformed("int[1,]", RANGE_NEEDS_DOTS)],
+    // Python crashes here with an uncaught `UnicodeEncodeError` from `tokenize`.
+    [
+      "Optional[\ud800]",
+      String.raw`type expression 'Optional[\ud800]' contains a Unicode surrogate ` +
+        "(types must be valid UTF-8 text)",
+    ],
   ])("explains why %p has no parenthesized spelling", (text, detail) => {
     expect(parseError(text)).toBe(bracketError(detail));
   });
 
   test.each([
     // Python appends the `SyntaxError` detail here.
+    "list[",
     "A[]",
     "int[01, 2]",
+    "Optional[²]",
     // Python reads `0x10` as 16 and respells `int(16..20)`.
     "int[0x10, 20]",
+    // Python: `invalid bounds in 'int[1_000, 2]': type bounds must be ordered ...`.
+    "int[1_000, 2]",
+    // Python: `numeric bounds require literal endpoints in 'int[1j, 2]'`.
+    "int[1j, 2]",
+    // Python respells `Literal(a)`.
+    "Literal[r'a']",
+    // Python respells `Literal(ab)`.
+    'Literal["a" "b"]',
+    // Python respells `object`.
+    "dict[1:2]",
+    // Python respells `int(1..2)`.
+    "int[(1), 2]",
   ])("text that fails the syntax pass is malformed: %p", (text) => {
-    expect(parseError(text)).toBe(bracketError(malformed(text)));
+    expect(parseError(text)).toBe(bracketError(`malformed type expression ${reprText(text)}`));
   });
 
   test("an operand that is no type is printed as written", () => {
@@ -932,20 +950,5 @@ describe("bracket spelling", () => {
           "-A[1], None, True, Infinity) (| is not a type operator)",
       ),
     );
-  });
-
-  test("a raw lone surrogate is refused", () => {
-    // Python crashes here with an uncaught `UnicodeEncodeError` from `tokenize`.
-    expect(parseError("Optional[\ud800]")).toBe(
-      bracketError(
-        String.raw`type expression 'Optional[\ud800]' contains a Unicode surrogate ` +
-          "(types must be valid UTF-8 text)",
-      ),
-    );
-  });
-
-  test("legacyRespelling spells bracket text with parentheses", () => {
-    expect(legacyRespelling("Optional[str]")).toBe("Optional(str)");
-    expect(legacyRespelling("dict[str, int]")).toBe("object");
   });
 });

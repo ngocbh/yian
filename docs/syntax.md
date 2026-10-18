@@ -767,6 +767,15 @@ destination slot, which checks the value at run time (`mode: !Mode ${input.s}`, 
 `Mode: Literal(a, b)` is named in `typedefs:`), or route the call under a `case` on
 `isinstance(input.s, Mode)`.
 
+Changed (TS yian): integer range ends have no digit limit; whitespace in type text is
+JavaScript whitespace, and names follow the JavaScript engine's Unicode tables; labels sort
+record keys, `Literal` tags and union members by UTF-16 code units; a `-0.0` end reads as
+`0.0`. Type text in the old bracket spelling (`Optional[str]`) still fails with the
+parenthesized spelling, but for text that isn't a type either the message leaves out Python's
+syntax-error detail, and the TS reader doesn't take Python-only forms (hex or underscore
+numbers, joined or prefixed strings, parenthesized groups, attributes, calls, slices, comments)
+or more than 100 levels, and it reads Python keywords used as names.
+
 Name reusable types in `typedefs:`:
 
 ```yaml
@@ -782,6 +791,10 @@ typedefs:
 `Literal` tags and record field names are non-empty text. `Literal("", a)`, an empty
 field name (`"": int`), or a lone surrogate such as `"\uD800"` fails the load, the same
 way wherever the type appears: in `typedefs:`, a tag, or an `output:` type.
+Changed (TS yian): a quoted `Literal` member reads JSON escapes in either quote style
+(`\"`, `\'`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`, `\uXXXX`, where an escaped surrogate
+pair is one character); any other backslash escape, or a line break inside the quotes, is an
+error.
 
 Every typedef is checked when the flow loads, even one nothing uses. A record can't
 contain itself, directly or through other typedefs. A mistake fails at the typedef

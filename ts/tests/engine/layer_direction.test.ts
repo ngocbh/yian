@@ -22,9 +22,12 @@ describe("blank", () => {
       "   comment */ const b = `t ${a} u`;",
       "const r = /[\"']/g; const s = 'q';",
     ].join("\n");
-    const blanked = blank(text);
-    expect(blanked.length).toBe(text.length);
-    expect(newlines(blanked)).toEqual(newlines(text));
+    for (const sample of [text, text.replaceAll("\n", "\r\n")]) {
+      const blanked = blank(sample);
+      expect(blanked.length).toBe(sample.length);
+      expect(newlines(blanked)).toEqual(newlines(sample));
+      expect([...blanked.matchAll(/\r/g)].map((m) => m.index)).toEqual([...sample.matchAll(/\r/g)].map((m) => m.index));
+    }
   });
 
   test("blanks comments and the contents of strings, templates and regex literals", () => {
@@ -35,6 +38,9 @@ describe("blank", () => {
   });
 
   test("regex literals with quotes or slashes open no string or comment", () => {
+    expect(blank("x = /[/]'/; y = 'z';")).toBe("x = /    /; y = ' ';");
+    expect(blank("x = /\\/\\//; y = 'z';")).toBe("x = /    /; y = ' ';");
+    expect(blank("return /'/; y = 'z';")).toBe("return / /; y = ' ';");
     for (const regex of ["/[\"']/", "/[\\]\"']/", "/\\/\\//"]) {
       const text = `const r = ${regex};\nimport { a } from "./a.ts";`;
       expect(importStatements(text).map((i) => i.specifier)).toEqual(["./a.ts"]);
@@ -44,9 +50,18 @@ describe("blank", () => {
   });
 
   test("a slash after an operand is division", () => {
-    for (const code of ["x = a / b / c;", "y = a[0]! / 2 / 3;", "z = i++ / n / m;", "w = (x) / 2 / 3;"]) {
+    for (const code of [
+      "x = a / b / c;",
+      "y = a[0]! / 2 / 3;",
+      "z = i++ / n / m;",
+      "w = (x) / 2 / 3;",
+      "v = 10 / 2 / 3;",
+      "u = obj.return / 2 / 3;",
+      "t = a.of / 2 / 3;",
+    ]) {
       expect(blank(code)).toBe(code);
     }
+    expect(blank("s = `a` / 2 / 3;")).toBe("s = ` ` / 2 / 3;");
   });
 
   test("comment openers inside a string start no comment", () => {
@@ -112,6 +127,17 @@ describe("importStatements", () => {
     expect(found[0]!.line).toBe(5);
     expect(found[0]!.specifier).toBe("./ab.ts");
     expect(text.slice(found[0]!.start, found[0]!.end)).toBe('import {\n  a,\n  b,\n} from "./ab.ts"');
+  });
+
+  test("a semicolon-less export does not swallow the next import", () => {
+    const text = 'export { a }\nimport { b } from "./b.ts";';
+    const found = importStatements(text);
+    expect(found).toHaveLength(1);
+    expect(text.slice(found[0]!.start, found[0]!.end)).toBe('import { b } from "./b.ts"');
+  });
+
+  test("an import method on an object is no import", () => {
+    expect(importStatements('foo.import("./no.ts");')).toEqual([]);
   });
 
   test("two statements on one line give two entries", () => {

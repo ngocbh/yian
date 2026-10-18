@@ -70,7 +70,8 @@ export function blank(text: string): string {
         } else if (IDENTIFIER.test(c)) {
           let j = i;
           while (j + 1 < text.length && IDENTIFIER.test(text[j + 1]!)) j++;
-          regexOk = REGEX_KEYWORDS.has(text.slice(i, j + 1));
+          // After `.` the word is a property name (`obj.return / 2`), not a keyword.
+          regexOk = text[i - 1] !== "." && REGEX_KEYWORDS.has(text.slice(i, j + 1));
           i = j;
         } else if (c === ")" || c === "]") {
           regexOk = false;
@@ -149,20 +150,27 @@ export function blank(text: string): string {
 // `import`/`export ... from "x"`, side-effect `import "x"`, and `import("x")`; the
 // keyword guard keeps a semicolon-less `export { a }` from swallowing the next import.
 const IMPORT =
-  /(?<![\w$.])(?:(?:import|export)(?![\w$])(?:(?!(?<![\w$])(?:import|export)(?![\w$]))[\w$\s{},*])*?(?<![\w$])from\s*|import\s*(?:\(\s*)?)(["'])[^"'\n]*\1/g;
+  /(?<![\w$.])(?:(?:import|export)(?![\w$])(?:(?!(?<![\w$])(?:import|export)(?![\w$]))[\w$\s{},*])*?(?<![\w$])from\s*|import\s*(?:\(\s*)?)(["'])([^"'\n]*)\1/g;
+
+/** One import or re-export found by `importStatements`. */
+export interface ImportStatement {
+  start: number;
+  end: number;
+  line: number;
+  specifier: string;
+}
 
 /**
  * Return each import or re-export in `text`: its span from the keyword to the
  * specifier's closing quote, the 1-based line of the specifier, and the specifier.
+ *
+ * Only quoted specifiers count; a backtick one (`` import(`./x.ts`) ``) isn't recognized.
  */
-export function importStatements(
-  text: string,
-): { start: number; end: number; line: number; specifier: string }[] {
-  const found: { start: number; end: number; line: number; specifier: string }[] = [];
+export function importStatements(text: string): ImportStatement[] {
+  const found: ImportStatement[] = [];
   for (const match of blank(text).matchAll(IMPORT)) {
     const end = match.index + match[0].length;
-    // The blanked specifier holds no quotes, so its opener is the last one before the closer.
-    const open = match.index + match[0].lastIndexOf(match[1]!, match[0].length - 2);
+    const open = end - 2 - match[2]!.length;
     found.push({
       start: match.index,
       end,

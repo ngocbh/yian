@@ -3028,6 +3028,227 @@ def test_harvest_drops_changed_requests(tmp_path: Path) -> None:
     assert report["flags"] == {"shims: request dropped": ["run-agent/sample__flag__2"]}
 
 
+_UNSHIMMABLE_TESTS = '''
+import pytest
+
+from yian import load_flow
+from yian.compose import LoadError
+from yian.expr import eval_expr, parse_expr, render_template_record
+from yian.expr.expressions import ExpressionError
+from yian.run import run_flow
+from yian.typesys.types import type_for
+from yian.typesys.values import build_value_as
+
+TODAY = """\\
+id: today
+name: today
+nodes:
+  c:
+    kind: code
+    input:
+      d: ${system.today}
+    output: str
+    code: return inputs["d"]
+output: ${c.output}
+"""
+
+BOOM = """\\
+id: boom
+name: boom
+nodes:
+  c:
+    kind: code
+    output: int
+    code: |
+      raise ValueError("boom")
+      return 1
+output: ${c.output}
+"""
+
+
+def test_infinite():
+    assert build_value_as(type_for("float", {}), float("inf")).value == float("inf")
+
+
+def test_digits(monkeypatch):
+    monkeypatch.setenv("YIAN_MAX_INT_DIGITS", "10")
+    with pytest.raises(ExpressionError, match="larger than yian allows"):
+        render_template_record("${12345678901}", {})
+
+
+def test_today():
+    load_flow(TODAY)
+
+
+def test_yaml():
+    with pytest.raises(LoadError, match="invalid YAML"):
+        load_flow("id: [")
+
+
+def test_code():
+    assert run_flow(load_flow(BOOM), {}, run_id="r1", num_workers=0).status == "failed"
+
+
+def test_digit():
+    assert eval_expr(parse_expr("\\u0661 + 1"), lambda path: None) == 2
+'''
+
+
+def test_harvest_tags_unshimmable_rules(tmp_path: Path) -> None:
+    """A case touching a rule no shim covers carries it, `python_expect` and a review flag."""
+    done, out = _harvest(tmp_path, _UNSHIMMABLE_TESTS)
+    assert _summary(done) == "6 passed", done.stdout + done.stderr
+    cases = {path.relative_to(out / "cases").as_posix(): _read(path)
+             for path in sorted((out / "cases").glob("*/*.yaml"))}
+    tagged = {"values/sample__infinite": "infinity", "templates/sample__digits": "numbers",
+              "load-core/sample__today": "dates", "load-core/sample__yaml": "yaml",
+              "run-core/sample__code__2": "code", "expr/sample__digit": "text"}
+    assert sorted(cases) == sorted(f"{name}.yaml" for name in tagged)
+    for name, rule in tagged.items():
+        case = cases[f"{name}.yaml"]
+        assert case["rules"] == [rule], name
+        # No shim changes these: the TS expectation is written by hand.
+        assert case["python_expect"] == case["expect"], name
+        case_dir = tmp_path / "replay" / name
+        case_dir.mkdir(parents=True)
+        _check_results(case, results(case, case_dir))
+    assert cases["values/sample__infinite.yaml"]["value"] == {"$float": "inf"}
+    assert cases["templates/sample__digits.yaml"]["env"] == {"YIAN_MAX_INT_DIGITS": "10"}
+    assert cases["run-core/sample__code__2.yaml"]["expect"]["output"]["failure"]["node"] == "c"
+
+    report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
+    assert report["skips"] == {}
+    assert report["flags"] == {f"needs TS expect: {rule}": [name]
+                               for name, rule in tagged.items()}
+
+
+def test_harvest_flags_arithmetic_at_load(tmp_path: Path,
+                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """A load or run whose arithmetic TS rejects at load is flagged, with no tag of its own."""
+    from tests import conformance_harvest as harvest
+
+    state = harvest._Harvest(None, tmp_path)
+    monkeypatch.setattr(harvest, "_STATE", state)
+
+    def noting(state: object, case: dict, shims: tuple = ()) -> tuple:
+        return {"load": "ok"}, frozenset({"printf"} if shims else ())
+
+    monkeypatch.setattr(harvest, "_replay", noting)
+    for kind, flags in (("load", ["needs TS expect: arithmetic"]), ("expr", [])):
+        call = harvest._Call("load_flow")
+        call.case, call.result, call.skip = {"kind": kind, "flow": "id: f\n"}, {"load": "ok"}, None
+        _, text, written = harvest._expected(state, call)
+        assert written == flags
+        assert "rules" not in yaml.load(text, Loader=_CaseLoader)
+
+
+def test_harvest_unshimmable_llm() -> None:
+    """Structured model calls are the `llm` rule's, by their request, consumer or events."""
+    from tests import conformance_harvest as harvest
+
+    def run(consumer: str = "agent", text: str = "Write.", **request: object) -> dict:
+        message = {"role": "user", "parts": [{"type": "text", "text": text}]}
+        entry = {"reply": {"role": "assistant", "parts": []},
+                 "request": {"messages": [message], **request}}
+        return {"kind": "run", "flow": "id: f\n", "host": {"models": {"n": {consumer: [entry]}}}}
+
+    plain = {"output": {"status": "succeeded", "output": "x"}}
+    assert harvest._unshimmable(run(), plain, frozenset()) == set()
+    for case in (run(schema={"type": "object"}), run("structured_retry"),
+                 run(text="Respond with ONLY a JSON object matching this JSON schema: {}"),
+                 run(text="Your previous output was invalid: no JSON.")):
+        assert harvest._unshimmable(case, plain, frozenset()) == {"llm"}
+    events = [["ModelCallStarted", {"node_id": "n", "purpose": "structured_native"}]]
+    assert harvest._unshimmable(run(), plain | {"events": events}, frozenset()) == {"llm"}
+    events = [["ModelCallStarted", {"node_id": "n", "purpose": "chat"}]]
+    assert harvest._unshimmable(run(), plain | {"events": events}, frozenset()) == set()
+
+
+_CODE_FLOW = '''\
+id: f
+name: f
+nodes:
+  pick:
+    kind: code
+    code: m:pick
+  body:
+    kind: code
+    code: |
+      x = 1
+      return x
+  other:
+    kind: tool
+output: ${body.output}
+'''
+
+
+def test_harvest_unshimmable_code() -> None:
+    """Failures of CODE nodes and frames on a `code:` line are the `code` rule's."""
+    from tests import conformance_harvest as harvest
+
+    def load_error(line: int, label: str = "flow.yaml", message: str = "bad") -> dict:
+        frame = {"label": label, "range": [line, 5, line, 9]}
+        return {"load": {"diagnostics": [{"code": "compose.load", "message": message,
+                                          "frames": [frame]}]}}
+
+    def failed(node: str) -> dict:
+        return {"output": {"status": "failed", "failure": {
+            "code": "node.execute", "message": "ValueError: no", "node": node}}}
+
+    load = {"kind": "load", "flow": _CODE_FLOW}
+    for line in (6, 9, 10, 11):
+        assert harvest._unshimmable(load, load_error(line), frozenset()) == {"code"}, line
+    for line in (5, 8, 12, 13):
+        assert harvest._unshimmable(load, load_error(line), frozenset()) == set(), line
+    assert harvest._unshimmable(load, load_error(3, message="node 'pick': bad `code:` value"),
+                                frozenset()) == {"code"}
+    # The Python form is what Python ran.
+    both = {"kind": "load", "flow": "id: f\n", "python_flow": _CODE_FLOW}
+    assert harvest._unshimmable(both, load_error(6), frozenset()) == {"code"}
+    # Another label reads the file of that name.
+    child = {"kind": "load", "flow": "id: f\nuses: [lib/child.yaml]\n",
+             "files": {"lib/child.yaml": _CODE_FLOW}}
+    assert harvest._unshimmable(child, load_error(6, "lib/child.yaml"), frozenset()) == {"code"}
+    assert harvest._unshimmable(child, load_error(6, "other.yaml"), frozenset()) == set()
+
+    run = {"kind": "run", "flow": _CODE_FLOW}
+    for node in ("pick", "body", "loop/pick#2", "pick#1/x"):
+        assert harvest._unshimmable(run, failed(node), frozenset()) == {"code"}, node
+    for node in ("other", "loop/other#2", "picked"):
+        assert harvest._unshimmable(run, failed(node), frozenset()) == set(), node
+    trace = {"trace": [["node_failed", "body", {"failure": failed("body")["output"]["failure"]}]]}
+    assert harvest._unshimmable(run, trace, frozenset()) == {"code"}
+
+
+def test_harvest_code_scalars() -> None:
+    """`_code_scalars` finds the `code:` values of CODE mappings, with their ids and spans."""
+    from tests import conformance_harvest as harvest
+
+    def found(text: str) -> list:
+        return [(scalar.node, scalar.value, text[scalar.start:scalar.end], scalar.start_line,
+                 scalar.end_line) for scalar in harvest._code_scalars(text)]
+
+    assert found(_CODE_FLOW) == [
+        ("pick", "m:pick", "m:pick", 6, 6),
+        ("body", "x = 1\nreturn x\n", "|\n      x = 1\n      return x\n", 9, 11)]
+    flow = ("nodes:\n"
+            "  a: {kind: code, code: 'return 1'}\n"
+            "  outer:\n"
+            "    kind: loop\n"
+            "    nodes:\n"
+            "      inner:\n"
+            "        code: return 2\n"
+            "        kind: code\n"
+            "    steps: [{kind: code, code: return 3}]\n")
+    assert found(flow) == [("a", "return 1", "'return 1'", 2, 2),
+                           ("inner", "return 2", "return 2", 7, 7),
+                           (None, "return 3", "return 3", 9, 9)]
+    # Not CODE, or not text to compose.
+    assert found("nodes:\n  t: {kind: tool, code: x}\n") == []
+    assert found("nodes: [\n") == []
+    assert found("") == []
+
+
 def _install_shims(patch: pytest.MonkeyPatch, *names: str) -> None:
     """Install the harvest's shims named in `names`, given in install order, through `patch`."""
     from tests import conformance_harvest as harvest

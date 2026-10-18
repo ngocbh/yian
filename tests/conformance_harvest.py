@@ -7,8 +7,10 @@ with, become the run's `host.models`. Each passing test's calls become candidate
 replayed through the conformance runner (`tests/test_conformance.py`), plain and with every TS-rule
 shim on (three times each for a pooled run). The shimmed outcome is its `expect`; when that
 differs, the plain one is its `python_expect` and the rules whose shims change it are its `rules`.
-It is written as a case file under `<out>/cases/<group>/<name>.yaml`, deduplicated by content.
-Run it with:
+A rule no shim can follow (huge ints, infinity, dates, YAML, structured model calls, CODE, some
+text rules) is added to `rules` by what the case holds, with `python_expect` even when equal,
+and flagged `needs TS expect: <rule>`: its TS expectation is written by hand. It is written as a
+case file under `<out>/cases/<group>/<name>.yaml`, deduplicated by content. Run it with:
 
     PYTHONPATH=src python -m pytest -p tests.conformance_harvest --harvest-out DIR tests
 
@@ -2014,6 +2016,188 @@ def _without_requests(case: dict, notes: frozenset) -> dict:
     return case | {"host": host | {"models": models}}
 
 
+class _CodeScalar(NamedTuple):
+    """A CODE node's `code:` value in a flow text.
+
+    `node` is the node's id when its mapping sits under `nodes:`, else None; `value` the
+    scalar's text; `start` and `end` its half-open span as indexes into the flow text; and
+    `start_line` and `end_line` the 1-based lines, as frames count them, of its first and last
+    characters.
+    """
+
+    node: str | None
+    value: str
+    start: int
+    end: int
+    start_line: int
+    end_line: int
+
+
+def _code_scalars(text: str) -> list[_CodeScalar]:
+    """Return the `code:` scalars of the mappings with `kind: code` in a flow text, in order.
+
+    The text is composed with yian's loader; a text that doesn't compose has none.
+    """
+    try:
+        root = yaml.compose(text, Loader=_FlowLoader)
+    except yaml.YAMLError:
+        return []
+    found = []
+
+    def walk(node: yaml.Node | None, node_id: str | None) -> None:
+        if isinstance(node, yaml.SequenceNode):
+            for item in node.value:
+                walk(item, None)
+        if not isinstance(node, yaml.MappingNode):
+            return
+        fields = {key.value: value for key, value in node.value
+                  if isinstance(key, yaml.ScalarNode)}
+        kind, code = fields.get("kind"), fields.get("code")
+        if (isinstance(kind, yaml.ScalarNode) and kind.value == "code"
+                and isinstance(code, yaml.ScalarNode)):
+            start, end = code.start_mark, code.end_mark
+            # A block scalar's end mark is at the start of the line after its last one.
+            last = end.line if end.column or end.line == start.line else end.line - 1
+            found.append(_CodeScalar(node_id, code.value, start.index, end.index,
+                                     start.line + 1, last + 1))
+        for key, value in node.value:
+            if key.value == "nodes" and isinstance(value, yaml.MappingNode):
+                for child_key, child in value.value:
+                    walk(child, child_key.value if isinstance(child_key, yaml.ScalarNode)
+                         else None)
+            else:
+                walk(value, None)
+
+    walk(root, None)
+    return found
+
+
+_INFINITY_TEXTS = ("non-finite number", "numbers must be finite", "int is too large for float",
+                   "Result too large", "Numerical result out of range", "finite number")
+_LONG_INT_TEXTS = ("IntTooLongError", "<int with", "larger than yian allows")
+_INF_SPELLING = re.compile(r"\.(?:inf|Inf|INF)\b")
+# Candidates only: `float()` decides which are numbers and which overflow.
+_FLOAT_LITERAL = re.compile(r"[0-9.]+[eE][-+]?[0-9]+|[0-9]+\.[0-9]*")
+_DATES = re.compile(r"\bsystem\.(?:now|today)\b")
+_STRUCTURED_PROMPTS = ("Respond with ONLY a JSON object matching this JSON schema",
+                       "Your previous output was invalid:")
+# `\d` is Unicode category Nd: Python's expression lexer reads any decimal digit as a number;
+# U+001C-U+001F and U+0085 are whitespace to Python, and U+FEFF is a BOM.
+_TEXT_CHARS = re.compile(r"(?![0-9])\d|[\x1c-\x1f\x85\ufeff]")
+# The arithmetic shim's notes for what TS rejects at load, where both operand types are known.
+_LOAD_ARITHMETIC = frozenset({"repetition", "printf", "operand-kinds"})
+
+
+def _floats(value: object):
+    """Yield every float in the case value `value`."""
+    if type(value) is float:
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from _floats(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _floats(item)
+
+
+def _diagnostics(expect: dict) -> list:
+    """Return the diagnostics in an `expect`: a load's, a run's failure and `node_failed`'s."""
+    load = expect.get("load")
+    found = list(load["diagnostics"]) if isinstance(load, dict) else []
+    failure = expect.get("output", {}).get("failure")
+    if failure:
+        found.append(failure)
+    found += [entry[2]["failure"] for entry in expect.get("trace", [])
+              if entry[0] == "node_failed" and len(entry) > 2 and "failure" in entry[2]]
+    return found
+
+
+def _labelled(case: dict, label: str) -> str | None:
+    """Return the text Python ran under a frame's `label`: the flow, or the one file so named."""
+    if label == "flow.yaml":
+        return case.get("python_flow", case.get("flow"))
+    files = case.get("python_files", case.get("files", {}))
+    named = [text for path, text in files.items() if Path(path).name == Path(label).name]
+    return named[0] if len(named) == 1 else None
+
+
+def _overflows(literal: str) -> bool:
+    """Return whether the number text `literal` reads as an infinite float."""
+    try:
+        return math.isinf(float(literal))
+    except ValueError:
+        return False
+
+
+def _on_code_line(case: dict, frame: dict) -> bool:
+    """Return whether a frame of Python's outcome is on a line holding a `code:` value."""
+    text = _labelled(case, frame["label"])
+    first, _, last, _ = frame["range"]
+    return text is not None and any(scalar.start_line <= last and first <= scalar.end_line
+                                    for scalar in _code_scalars(text))
+
+
+def _unshimmable(case: dict, py: dict, notes: frozenset) -> set[str]:
+    """Return the rules no shim covers that a case touches, by what it holds.
+
+    `py` is the case's plain outcome and `notes` what the shims noted in its replays. The
+    signals are loose: a rule found where it changes nothing only adds the case to the review
+    list.
+    """
+    flows = [case.get(key) for key in ("flow", "python_flow")]
+    flows += [text for key in ("files", "python_files") for text in case.get(key, {}).values()]
+    flows = [text for text in flows if isinstance(text, str)]
+    texts = flows + [case[key] for key in ("expr", "template") if isinstance(case.get(key), str)]
+    outcome = list(_texts(py))
+    rules = set()
+
+    if (any(math.isinf(x) for part in (case, py) for x in _floats(part))
+            or any(_INF_SPELLING.search(text) for text in texts)
+            or any(_overflows(literal) for text in texts
+                   for literal in _FLOAT_LITERAL.findall(text))
+            or any(part in text for text in outcome for part in _INFINITY_TEXTS)
+            or "infinity" in notes):
+        rules.add("infinity")
+
+    if (any(part in text for text in outcome for part in _LONG_INT_TEXTS)
+            or "YIAN_MAX_INT_DIGITS" in case.get("env", {}) or "intake" in notes):
+        rules.add("numbers")
+
+    if any(_DATES.search(text) for text in texts):
+        rules.add("dates")
+
+    diagnostics = _diagnostics(py)
+    if (any(diagnostic["message"].startswith("invalid YAML:") for diagnostic in diagnostics)
+            or any(text.startswith("\ufeff") for text in flows)):
+        rules.add("yaml")
+
+    entries = [(consumer, entry)
+               for consumers in case.get("host", {}).get("models", {}).values()
+               for consumer, script in consumers.items() for entry in script]
+    prompts = [part.get("text", "") for _, entry in entries
+               for message in entry.get("request", {}).get("messages", [])
+               for part in message.get("parts", []) if part.get("type") == "text"]
+    if (any(consumer == "structured_retry" or "schema" in entry.get("request", {})
+            for consumer, entry in entries)
+            or any(prompt.startswith(_STRUCTURED_PROMPTS) for prompt in prompts)
+            or any(len(event) > 1 and str(event[1].get("purpose", "")).startswith("structured_")
+                   for event in py.get("events", []))):
+        rules.add("llm")
+
+    code_ids = {scalar.node for text in flows for scalar in _code_scalars(text) if scalar.node}
+    failed = [diagnostic["node"] for diagnostic in diagnostics if diagnostic.get("node")]
+    frames = [frame for diagnostic in diagnostics for frame in diagnostic.get("frames", [])]
+    if (any(segment.split("#", 1)[0] in code_ids
+            for node in failed for segment in node.split("/"))
+            or any(_on_code_line(case, frame) for frame in frames)
+            or any("`code:`" in diagnostic["message"] for diagnostic in diagnostics)):
+        rules.add("code")
+
+    if any(_TEXT_CHARS.search(text) for text in texts):
+        rules.add("text")
+    return rules
+
+
 def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
     """Return a recorded call's group, case file text (its `expect` from the runner) and flags.
 
@@ -2026,7 +2210,9 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
     runs succeeded and the replays of each are equal, each one dropped giving a
     `pooled: <result> dropped` flag. A model entry whose request the shims change loses its
     `request` (flag `shims: request dropped`). A load or run that evaluated `and` or `or` is
-    flagged `uses and/or`.
+    flagged `uses and/or`. Each rule `_unshimmable` finds joins `rules` and is flagged
+    `needs TS expect: <rule>`; a load, run or backward pass whose arithmetic TS rejects at load
+    (repetition, `%` on text, operand kinds) is flagged `needs TS expect: arithmetic`.
     """
     if call.skip:
         raise _Skip(call.skip)
@@ -2056,6 +2242,8 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
         if not runner._same(_agreed(case, actual), _agreed(case, shimmed[0]), by_value=is_run):
             raise _Skip("shims: replays differ")
     py, ts = _expect(case, replays[0]), _expect(case, shimmed[0])
+    # Before a pooled result or a request is dropped: either may hold a rule's signal.
+    unshimmable = _unshimmable(case, py, notes)
     flags = ["uses and/or"] if call.and_or else []
     if pooled:
         # When a pooled run fails, siblings racing the failure make its trace depend on timing
@@ -2082,6 +2270,10 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
                 rules.add(shim.rule)
         if not rules:
             raise _Skip("shims: no single shim changes the outcome")
+    rules |= unshimmable
+    flags += [f"needs TS expect: {rule}" for rule in sorted(unshimmable)]
+    if case["kind"] in ("load", "run", "backward") and notes & _LOAD_ARITHMETIC:
+        flags.append("needs TS expect: arithmetic")
     written = {**case, "expect": ts}
     if rules:
         written |= {"rules": sorted(rules), "python_expect": py}

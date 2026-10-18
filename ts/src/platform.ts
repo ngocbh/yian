@@ -514,7 +514,9 @@ type TransformSync = typeof import("amaro").transformSync;
 /**
  * A CODE body amaro can't strip: a syntax error, or TypeScript that strip-only mode
  * doesn't support, such as `enum`. `message` is amaro's; `line` and `column` are
- * 1-based in the body, and `column` counts UTF-16 code units.
+ * 1-based in the body, and `column` counts UTF-16 code units. A position past the
+ * end of the body (an unclosed construct) is reported at the end of the last
+ * non-blank line.
  */
 export class TypeStripError extends SyntaxError {
   override name = "TypeStripError";
@@ -549,13 +551,15 @@ function isAmaroError(error: unknown): error is AmaroError {
 /** Return how many display columns amaro gives the code point `ch`. */
 function displayWidth(ch: string, transformSync: TransformSync): number {
   if (ch >= " " && ch <= "~") return 1;
-  // The `)` always fails, at the column the comment before it ends on.
+  // The `)` always fails, at the column the comment before it ends on; the 4 is the
+  // columns of `/*` and `*/`.
   try {
     transformSync(`/*${ch}*/)`, { mode: "strip-only" });
   } catch (error) {
-    if (isAmaroError(error)) return error.startColumn - 4;
+    if (!isAmaroError(error)) throw error;
+    return error.startColumn - 4;
   }
-  return 1;
+  throw new Error("unreachable: ')' always fails");
 }
 
 /** Return the UTF-16 index in `line` of amaro's 0-based display column `column`. */
@@ -572,16 +576,14 @@ function utf16Index(line: string, column: number, transformSync: TransformSync):
 }
 
 /** Return `error`, from stripping the wrapped `body`, as a `TypeStripError` in body coordinates. */
-function typeStripError(error: AmaroError, body: string, transformSync: TransformSync): TypeStripError {
+function toTypeStripError(error: AmaroError, body: string, transformSync: TransformSync): TypeStripError {
   const lines = body.split(/\r\n|\r|\n/);
   if (error.startLine > lines.length) {
     // An unclosed construct is reported at the wrapper's closing `}`; Python reports it
-    // on the last line with text.
+    // on the last line with text, which such an error always has.
     let last = lines.length - 1;
-    while (last >= 0 && lines[last]!.trim() === "") last--;
-    return last < 0
-      ? new TypeStripError(error.message, 1, 1)
-      : new TypeStripError(error.message, last + 1, lines[last]!.length + 1);
+    while (last > 0 && lines[last]!.trim() === "") last--;
+    return new TypeStripError(error.message, last + 1, lines[last]!.length + 1);
   }
   const column = error.startLine === 1 ? Math.max(0, error.startColumn - STRIP_PREFIX.length) : error.startColumn;
   return new TypeStripError(
@@ -605,8 +607,8 @@ function typeStripError(error: AmaroError, body: string, transformSync: Transfor
  * errors appear only then, with no position: `let inputs = 1`, `delete inputs`,
  * `import.meta`, and `arguments = 1` (strict mode).
  *
- * Async because amaro (about 3.6 MB, a 10–40 ms import) loads on first use; the
- * literal `import()` still lets `bun build --compile` bundle it.
+ * Async because amaro is large and slow to import, so it loads on first use through
+ * a literal `import()`, which `bun build --compile` still bundles.
  */
 export async function stripTypes(body: string): Promise<string> {
   // The module cache makes every call after the first cheap.
@@ -618,6 +620,6 @@ export async function stripTypes(body: string): Promise<string> {
     return code.slice(STRIP_PREFIX.length, code.length - STRIP_SUFFIX.length);
   } catch (error) {
     if (!isAmaroError(error)) throw error;
-    throw typeStripError(error, body, transformSync);
+    throw toTypeStripError(error, body, transformSync);
   }
 }

@@ -750,9 +750,11 @@ describe("stripTypes", () => {
     ["\tconst x: = 1;", 1, 11],
     ["const s = '中'; const x: = 1;", 1, 25],
     ["let a = 1;\rconst x: = 1;", 2, 10],
+    ["let a = 1;\r\nconst x: = 1;", 2, 10],
     ["enum E { A }", 1, 1],
     ["return (\n", 1, 9],
     ["let a = 1;\nreturn (\n\n", 2, 9],
+    ["let a = 1;\r\nreturn (\r\n", 2, 9],
     ["/* open", 1, 8],
   ])("%j fails at line %d, column %d", async (body, line, column) => {
     const error = await stripError(body);

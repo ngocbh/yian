@@ -14,13 +14,13 @@ import {
   secretForms,
 } from "../../src/llm/auth.ts";
 
-/** Return a source yielding `values` in turn, and a list recording each call. */
-function countingSource<T>(...values: T[]): [() => T, number[]] {
-  const calls: number[] = [];
+/** Return a source yielding `values` in turn, and a counter of its calls. */
+function countingSource<T>(...values: T[]): [() => T, { count: number }] {
+  const calls = { count: 0 };
   const pending = [...values];
   return [
     () => {
-      calls.push(1);
+      calls.count++;
       return pending.shift()!;
     },
     calls,
@@ -100,15 +100,15 @@ describe("callable keys", () => {
     test(`${name} resolves on every call`, async () => {
       const [source, calls] = countingSource("k1", "k2", "k1");
       const auth = make(source);
-      expect(calls).toEqual([]);
+      expect(calls.count).toBe(0);
       expect(auth.credentials()).toEqual([]);
       expect(await auth.headers()).toEqual(render("k1"));
       expect(await auth.headers()).toEqual(render("k2"));
       expect(await auth.headers()).toEqual(render("k1"));
-      expect(calls).toHaveLength(3);
+      expect(calls.count).toBe(3);
       // In first-seen order with no duplicates, and listing never calls the source.
       expect(auth.credentials()).toEqual(["k1", "k2"]);
-      expect(calls).toHaveLength(3);
+      expect(calls.count).toBe(3);
     });
   }
 
@@ -125,7 +125,7 @@ describe("callable keys", () => {
     expect((await auth.headers()).Authorization).toBe("Bearer t1");
     expect((await auth.headers()).Authorization).toBe("Bearer t2");
     expect(auth.credentials()).toEqual(["t1", "a1", "t2"]);
-    expect(calls).toHaveLength(2);
+    expect(calls.count).toBe(2);
   });
 
   for (const bad of [null, undefined, 42, ""]) {
@@ -219,6 +219,14 @@ describe("secretForms", () => {
     ]);
   });
 
+  test("a value with a lone surrogate has no percent or plus form", () => {
+    expect(secretForms("a\ud800")).toEqual([
+      { form: "plain", text: "a\ud800" },
+      { form: "JSON-escaped", text: "a\\ud800" },
+      { form: "\\u-escaped", text: "\\u0061\\ud800", ignoreCase: true },
+    ]);
+  });
+
   test("a JSON-escaped form that is also the all-\\u form compares case-insensitively", () => {
     expect(secretForms("é").filter(({ text }) => text === "\\u00e9")).toEqual([
       { form: "JSON-escaped", text: "\\u00e9", ignoreCase: true },
@@ -257,5 +265,6 @@ describe("scrub", () => {
   test("uses a custom marker, literally", () => {
     expect(scrub("key sk-1", ["sk-1"], "<redacted>")).toBe("key <redacted>");
     expect(scrub("key sk-1", ["sk-1"], "$&")).toBe("key $&");
+    expect(scrub("\\u0073\\u006B\\u0031", ["sk1"], "$&")).toBe("$&");
   });
 });

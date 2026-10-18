@@ -183,6 +183,13 @@ export class SubscriptionAuth implements Auth {
 /** The marker `scrub` puts in place of a credential. */
 export const REDACTED = "[REDACTED]";
 
+/** One form a secret may take in text: its name, its text, and whether to compare it case-insensitively. */
+export interface SecretForm {
+  form: string;
+  text: string;
+  ignoreCase?: boolean;
+}
+
 /** Percent-encode `value` as Python's `quote(value, safe="")` does: all but `A-Za-z0-9_.-~`. */
 function percentEncode(value: string): string {
   return encodeURIComponent(value).replace(
@@ -211,8 +218,8 @@ function unicodeEscape(value: string): string {
  * @param value The secret.
  * @returns The forms, plain first.
  */
-export function secretForms(value: string): { form: string; text: string; ignoreCase?: boolean }[] {
-  const candidates: { form: string; text: string; ignoreCase?: boolean }[] = [{ form: "plain", text: value }];
+export function secretForms(value: string): SecretForm[] {
+  const candidates: SecretForm[] = [{ form: "plain", text: value }];
   // encodeURIComponent throws on a lone surrogate, which no request could send encoded.
   if (value.isWellFormed()) {
     const percent = percentEncode(value);
@@ -228,10 +235,10 @@ export function secretForms(value: string): { form: string; text: string; ignore
   }
   candidates.push({ form: "\\u-escaped", text: unicodeEscape(value), ignoreCase: true });
 
-  const forms = new Map<string, { form: string; text: string; ignoreCase?: boolean }>();
+  const forms = new Map<string, SecretForm>();
   for (const candidate of candidates) {
     const first = forms.get(candidate.text);
-    if (!first) forms.set(candidate.text, { ...candidate });
+    if (!first) forms.set(candidate.text, candidate);
     else if (candidate.ignoreCase) first.ignoreCase = true;
   }
   return [...forms.values()];
@@ -249,13 +256,14 @@ export function secretForms(value: string): { form: string; text: string; ignore
  * @returns The scrubbed text.
  */
 export function scrub(text: string, credentials: Iterable<string>, marker: string = REDACTED): string {
-  const forms: { text: string; ignoreCase?: boolean }[] = [];
-  for (const value of credentials) {
+  const forms: SecretForm[] = [];
+  for (const value of new Set(credentials)) {
     if (value) forms.push(...secretForms(value));
   }
   forms.sort((a, b) => b.text.length - a.text.length);
   for (const form of forms) {
     // split/join and a replacer function keep `$` in the marker literal.
+    // Escaping only `\` is safe: an ignoreCase form is always a run of `\uXXXX` escapes.
     text = form.ignoreCase
       ? text.replace(new RegExp(form.text.replaceAll("\\", "\\\\"), "gi"), () => marker)
       : text.split(form.text).join(marker);

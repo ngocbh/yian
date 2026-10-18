@@ -30,7 +30,10 @@ import {
   type ParsedNode,
   parseDocument,
   type ParseOptions,
+  type Scalar,
   type YAMLError,
+  type YAMLMap,
+  type YAMLSeq,
 } from "yaml";
 
 import { current } from "../../defaults.ts";
@@ -130,7 +133,7 @@ export class ScalarValueError extends FlowLoaderError {
 /** One composed flow document and where each of its aliases points. */
 export interface FlowDocument {
   readonly document: Document.Parsed;
-  readonly aliasTargets: ReadonlyMap<Alias, Node>;
+  readonly aliasTargets: ReadonlyMap<Alias, Scalar.Parsed | YAMLMap.Parsed | YAMLSeq.Parsed>;
 }
 
 /**
@@ -157,8 +160,8 @@ export type FlowParseOptions = Pick<ParseOptions, "lineCounter" | "keepSourceTok
 export function composeFlowDocument(text: string, options: FlowParseOptions = {}): FlowDocument {
   const document = parseDocument(text, { ...FLOW_OPTIONS, ...options });
   const limits = current();
-  const anchors = new Map<string, ParsedNode>();
-  const aliasTargets = new Map<Alias, Node>();
+  const anchors = new Map<string, Scalar.Parsed | YAMLMap.Parsed | YAMLSeq.Parsed>();
+  const aliasTargets = new Map<Alias, Scalar.Parsed | YAMLMap.Parsed | YAMLSeq.Parsed>();
   // The check runs on the composed tree: eemeli catches its own stack overflow
   // (RESOURCE_EXHAUSTION) far deeper than the limit and keeps the levels above it, and the
   // order check below puts the nesting error first when it comes first in the text.

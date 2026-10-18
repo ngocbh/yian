@@ -406,6 +406,13 @@ describe("parseYamlLiteral", () => {
     expect(literalError("value: <<\n")).toBe(noConstructor(MERGE_TAG));
   });
 
+  test.each(["[!!seq {a: 1}, 2026-13-45]", "[!!seq 1, 2026-13-45]"])(
+    "a !!seq node of the wrong kind is refused after its sibling scalars: %p",
+    (text) => {
+      expect(literalError(text)).toBe("not a valid date: month must be in 1..12" + QUOTE_FIX);
+    },
+  );
+
   test("aliases", () => {
     const shared = parseYamlLiteral("{a: &x [1], b: *x}");
     expect(shared).toEqual({ a: [1n], b: [1n] });

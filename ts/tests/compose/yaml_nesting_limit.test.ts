@@ -152,7 +152,7 @@ describe("aliases", () => {
 
     expect(aliasTargets.size).toBe(1);
     expect(isAlias(alias)).toBe(true);
-    expect(aliasTargets.get(alias as Alias)).toBe(second);
+    expect<Node | undefined>(aliasTargets.get(alias as Alias)).toBe(second);
   });
 
   test("resolve an alias inside its own anchored node to that node", () => {
@@ -160,7 +160,7 @@ describe("aliases", () => {
     const [alias] = (document.contents as YAMLSeq<Node>).items;
 
     expect(isAlias(alias)).toBe(true);
-    expect(aliasTargets.get(alias as Alias)).toBe(document.contents as Node);
+    expect<Node | undefined>(aliasTargets.get(alias as Alias)).toBe(document.contents as Node);
   });
 
   test("resolve an alias used as a mapping key", () => {
@@ -170,7 +170,7 @@ describe("aliases", () => {
     const key = (mapping as YAMLMap<Node, Node>).items[0]?.key;
 
     expect(isAlias(key)).toBe(true);
-    expect(aliasTargets.get(key as Alias)).toBe(scalar);
+    expect<Node | undefined>(aliasTargets.get(key as Alias)).toBe(scalar);
   });
 });
 

@@ -12,6 +12,8 @@
  * A call without an id gets one (`yian_call_<n>`). The finish is held until the stream ends, so
  * the usage chunk that follows it is read. Reasoning parts carry replay records naming the wire
  * field they came from, so only reasoning this route parsed from `reasoning_content` is echoed.
+ * DeepSeek requires every earlier turn's `reasoning_content` when the request sends tools, so on
+ * a tool request a turn with no reasoning to echo sends `reasoning_content: ""`.
  * A reply that failed, was filtered, ran out of capacity or ended early raises `ProviderError`.
  * An error message holds the provider's text uncapped; `RouteModel` scrubs it of the route's
  * credentials and then caps it.
@@ -112,7 +114,10 @@ interface CallPiece {
 
 /** The request rules that differ between Chat Completions routes. */
 export interface ChatOptions {
-  /** Send earlier assistant reasoning back as `reasoning_content` (DeepSeek). */
+  /**
+   * Send earlier assistant reasoning back as `reasoning_content` (DeepSeek), and `""` for a turn
+   * with none when the request sends tools.
+   */
   readonly echoReasoningContent: boolean;
   /** Send `reasoning_split: true`, so reasoning arrives apart from the text (MiniMax M2). */
   readonly reasoningSplit: boolean;
@@ -161,7 +166,8 @@ export interface OpenAIChatOptions {
   block?: JsonObject | null;
   /**
    * Called once per assistant message, on a route that echoes reasoning, holding a reasoning
-   * record that can't be used.
+   * record that can't be used. The message is still sent, with `reasoning_content: ""` when the
+   * request sends tools and nothing else is echoed.
    */
   onReplayDegraded?: (reason: ReplayDegradedReason) => void;
 }
@@ -198,12 +204,14 @@ export class OpenAIChat implements SseProtocol {
    *
    * On a route that echoes reasoning, an assistant message holding a reasoning record that
    * can't be used is sent without that reasoning, and `onReplayDegraded` is called once for it;
-   * a throw from the callback propagates.
+   * a throw from the callback propagates. When such a request sends tools, an assistant message
+   * with no reasoning to echo is sent with `reasoning_content: ""` (tools added only by the
+   * provider block don't count).
    *
    * @throws {TypeError} If a message holds a media part or a part its role cannot carry.
    */
   buildBody(request: Request): JsonObject {
-    const body: JsonObject = { model: this.model, messages: this.#messages(request.messages), stream: true };
+    const body: JsonObject = { model: this.model, messages: this.#messages(request), stream: true };
     if (this.options.streamUsage) body["stream_options"] = { include_usage: true };
     if (request.tools.length > 0) body["tools"] = request.tools.map(tool);
     const choice = request.toolChoice;
@@ -388,14 +396,17 @@ export class OpenAIChat implements SseProtocol {
   }
 
   /** Render the conversation as chat messages, in order. */
-  #messages(messages: readonly Message[]): JsonObject[] {
+  #messages(request: Request): JsonObject[] {
+    // DeepSeek refuses a request with tools unless every earlier assistant turn carries
+    // `reasoning_content`; without tools it ignores the field.
+    const requireReasoning = this.options.echoReasoningContent && request.tools.length > 0;
     const rendered: JsonObject[] = [];
-    for (const message of messages) {
+    for (const message of request.messages) {
       if (message.role === "system" || message.role === "user") {
         const item = inputMessage(message);
         if (item !== null) rendered.push(item);
       } else if (message.role === "assistant") {
-        rendered.push(this.#assistant(message));
+        rendered.push(this.#assistant(message, requireReasoning));
       } else {
         for (const part of message.parts) {
           if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
@@ -412,9 +423,11 @@ export class OpenAIChat implements SseProtocol {
    * Render an assistant message: its text parts joined with newlines, its calls valid first
    * (LangChain's order), and on an echo route the reasoning parsed from `reasoning_content`.
    *
-   * Refusals are not sent. `content` is `null` when the message has calls and no text.
+   * Refusals are not sent. `content` is `null` when the message has calls and no text. With
+   * `requireReasoning`, a message with no reasoning to echo sends `reasoning_content: ""`, never
+   * reasoning another route wrote.
    */
-  #assistant(message: Message): JsonObject {
+  #assistant(message: Message, requireReasoning: boolean): JsonObject {
     const texts: string[] = [];
     const validCalls: JsonObject[] = [];
     const invalidCalls: JsonObject[] = [];
@@ -445,7 +458,7 @@ export class OpenAIChat implements SseProtocol {
     const content = texts.join("\n");
     const rendered: JsonObject = { role: "assistant", content: content === "" && calls.length > 0 ? null : content };
     if (calls.length > 0) rendered["tool_calls"] = calls;
-    if (reasoning.length > 0) rendered["reasoning_content"] = reasoning.join("");
+    if (reasoning.length > 0 || requireReasoning) rendered["reasoning_content"] = reasoning.join("");
     return rendered;
   }
 }

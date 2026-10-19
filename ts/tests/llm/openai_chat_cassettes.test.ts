@@ -360,6 +360,18 @@ const SCENARIOS: Record<string, Scenario> = {
     replies: [itIs6],
     degraded: ["other_model"],
   },
+  deepseek_chat_tools_turn2: {
+    provider: "deepseek",
+    model: "deepseek-chat",
+    turns: [TOOLS_TURN, ([first]) => request([...TOOLS, first!.message, toolResult("call_1", "6")], { tools: [DOUBLE] })],
+    replies: [toolCall([doubleCall]), itIs6],
+  },
+  deepseek_other_provider_turn2: {
+    provider: "deepseek",
+    turns: [toolsTurn2("xai_tools", new OpenAIChat({ model: "grok-4", provider: "xai" }))],
+    replies: [itIs6],
+    degraded: ["other_provider"],
+  },
   deepseek_tool_choice_suppressed: {
     provider: "deepseek",
     turns: [ANSWER_TURN],

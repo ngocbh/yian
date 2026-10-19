@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "deepseek_replay_degraded: the second turn after a deepseek-reasoner tool call, sent to deepseek-v4-pro: the reasoning is left out, the call and tool result stay.",
+  "description": "deepseek_replay_degraded: the second turn after a deepseek-reasoner tool call, sent to deepseek-v4-pro with tools: the reasoning is left out and reasoning_content is \"\", the call and tool result stay.",
   "interactions": [
     {
       "request": {
@@ -35,7 +35,8 @@
                     "arguments": "{\"value\":3}"
                   }
                 }
-              ]
+              ],
+              "reasoning_content": ""
             },
             {
               "role": "tool",

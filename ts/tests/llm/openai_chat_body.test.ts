@@ -625,3 +625,69 @@ describe("reasoning echo", () => {
     expect([rendered, reasons]).toEqual([[{ role: "assistant", content: "Hi." }], []]);
   });
 });
+
+describe("reasoning echo on a request with tools", () => {
+  const field = { field: "reasoning_content" };
+  const tools = [DOUBLE];
+  const callTurn = (...parts: Part[]) => assistant(...parts, call("call_1", { value: 3n }));
+  const callSent = (extra: JsonObject = {}): JsonObject => ({
+    role: "assistant",
+    content: null,
+    tool_calls: [{ type: "function", id: "call_1", function: { name: "double", arguments: '{"value":3}' } }],
+    ...extra,
+  });
+
+  // Each turn has no reasoning DeepSeek can take back: it gets `""` with tools, nothing without.
+  const empty: [string, Message, ReplayDegradedReason[]][] = [
+    ["a turn with no reasoning part (another provider's, or deepseek-chat's)", callTurn(), []],
+    ["a turn whose reasoning part has no payload", callTurn(thought("Bare.", null)), []],
+    ["a turn whose record is from another wire field", callTurn(thought("Other.", record({ field: "reasoning" }))), []],
+    [
+      "a turn whose record is from another model",
+      callTurn(thought("Other model.", record(field, { ...KEY, model: "deepseek-v4-pro" }))),
+      ["other_model"],
+    ],
+    [
+      "a turn whose record is from another provider",
+      callTurn(thought("Other provider.", record(field, { protocol: PROTOCOL, provider: "xai", model: "grok-4" }))),
+      ["other_provider"],
+    ],
+    ["a turn whose record is malformed", callTurn(thought("Bad.", record({}))), ["malformed"]],
+  ];
+  for (const [name, turn, reasons] of empty) {
+    test(`${name} gets reasoning_content "" with tools`, () => {
+      expect(echoed([turn], { tools })).toEqual([[callSent({ reasoning_content: "" })], reasons]);
+    });
+    test(`${name} gets no reasoning_content without tools`, () => {
+      expect(echoed([turn])).toEqual([[callSent()], reasons]);
+    });
+  }
+
+  test("a usable record is echoed unchanged with tools", () => {
+    const turn = callTurn(thought("Need the tool."));
+    expect(echoed([turn], { tools })).toEqual([[callSent({ reasoning_content: "Need the tool." })], []]);
+  });
+
+  test("a usable record beside an unusable one echoes only the usable text", () => {
+    const other = thought("Other model.", record(field, { ...KEY, model: "deepseek-v4-pro" }));
+    const turn = callTurn(other, thought("Kept."));
+    expect(echoed([turn], { tools })).toEqual([[callSent({ reasoning_content: "Kept." })], ["other_model"]]);
+  });
+
+  test("every earlier assistant turn gets one, text turns too", () => {
+    const messages = [user("Double 3."), callTurn(), message("tool", result("call_1", "6")), assistant(new TextPart("6."))];
+    expect(echoed(messages, { tools })).toEqual([
+      [
+        { role: "user", content: "Double 3." },
+        callSent({ reasoning_content: "" }),
+        { role: "tool", tool_call_id: "call_1", content: "6" },
+        { role: "assistant", content: "6.", reasoning_content: "" },
+      ],
+      [],
+    ]);
+  });
+
+  test("an echo-off route with tools sends no reasoning_content", () => {
+    expect(sent([callTurn(thought("A."))], { tools })).toEqual([callSent()]);
+  });
+});

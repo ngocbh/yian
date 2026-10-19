@@ -1,0 +1,45 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "error_400_context: HTTP 400 prompt is too long: context_length, not retried.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-api-key": "<redacted>",
+          "anthropic-version": "2023-06-01"
+        },
+        "json": {
+          "model": "claude-sonnet-4-5",
+          "max_tokens": 64000,
+          "messages": [
+            {
+              "role": "user",
+              "content": "Say hello."
+            }
+          ],
+          "system": "You are terse.",
+          "stream": true
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "json": {
+          "type": "error",
+          "error": {
+            "type": "invalid_request_error",
+            "message": "prompt is too long: 250000 tokens > 200000 maximum"
+          },
+          "request_id": "req_1"
+        }
+      }
+    }
+  ]
+}

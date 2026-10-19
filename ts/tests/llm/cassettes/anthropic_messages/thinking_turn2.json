@@ -1,0 +1,104 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "thinking_turn2: thinking on; turn 2 replays thinking and redacted thinking, signed, before text and tool_use.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-api-key": "<redacted>",
+          "anthropic-version": "2023-06-01"
+        },
+        "json": {
+          "model": "claude-sonnet-4-5",
+          "max_tokens": 64000,
+          "messages": [
+            {
+              "role": "user",
+              "content": "Double 3."
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "thinking",
+                  "thinking": "Let me think.",
+                  "signature": "SIG-1"
+                },
+                {
+                  "type": "redacted_thinking",
+                  "data": "REDACTED-DATA-1"
+                },
+                {
+                  "type": "text",
+                  "text": "Hello there."
+                },
+                {
+                  "type": "tool_use",
+                  "id": "toolu_01",
+                  "name": "double",
+                  "input": {
+                    "value": 3
+                  }
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "tool_result",
+                  "content": "6",
+                  "tool_use_id": "toolu_01",
+                  "is_error": false
+                }
+              ]
+            }
+          ],
+          "system": "You are terse.",
+          "stream": true,
+          "tools": [
+            {
+              "name": "double",
+              "input_schema": {
+                "properties": {
+                  "value": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "value"
+                ],
+                "type": "object"
+              },
+              "description": "Double an integer."
+            }
+          ],
+          "thinking": {
+            "type": "enabled",
+            "budget_tokens": 2048
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_2\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-sonnet-4-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 12, \"output_tokens\": 1, \"cache_read_input_tokens\": 100, \"cache_creation_input_tokens\": 30}}}\n\n",
+          "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n",
+          "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"The a\"}}\n\n",
+          "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"nswer is 6.\"}}\n\n",
+          "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\n",
+          "event: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"input_tokens\": 12, \"output_tokens\": 40, \"cache_read_input_tokens\": 100, \"cache_creation_input_tokens\": 30}}\n\n",
+          "event: message_stop\ndata: {\"type\": \"message_stop\"}\n\n"
+        ]
+      }
+    }
+  ]
+}

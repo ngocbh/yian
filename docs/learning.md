@@ -299,9 +299,9 @@ a missing parent directory, `EIO` when the lock fails. Bad provenance throws `Ty
 so a profile directory written by Python opens in TS and continues. Each log line is exactly
 what Python's `json.dumps(sort_keys=True)` writes. A whole-number JS `number` in provenance is
 written as a float (`2.0`); pass `2n` for an int. TS locks `.<name>.lock` with SQLite, not
-`flock`, so Python's and TS's locks don't see each other. Don't let Python yian and TS yian
-write the same profile at the same time: both could pass the compare-and-set, and one update
-would be lost.
+`flock`, so the lock file must stay an empty regular file, and Python's and TS's locks don't
+see each other. Don't let Python yian and TS yian write the same profile at the same time: both
+could pass the compare-and-set, and one update would be lost.
 
 ## Compute first, then commit
 

@@ -1661,8 +1661,8 @@ Changed (TS yian): `SQLiteStorage` keeps the same file, table, and single-owner 
 state envelope is version 3 (Python's is 2). A `.sqlite` file written by Python yian fails to
 open with `storage.version` and is never read; there is no importer, so start with a fresh
 file. The state may hold `Infinity` and `-Infinity`, stored with yian's JSON tag
-`{"$float":"inf"}`. NaN fails with `storage.invalid_state`, `-0` is stored as `0`, ints are
-`bigint`, and the state has no depth limit. JS can't fork a live process, so there is no fork
+`{"$float":"inf"}`. NaN fails with `storage.invalid_state`, `-0` is stored as `0`, and ints are
+`bigint`. JS can't fork a live process, so there is no fork
 check and no `storage.forked`. The path must be a string.
 
 Application-specific implementations use the source-neutral `Memory` and

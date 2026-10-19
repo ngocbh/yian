@@ -44,8 +44,8 @@
  *
  * ```python
  * """Write the FileMarkdownStore golden files with Python yian; print them as JSON {relative path: text}."""
- * import json, os, sys, tempfile
- * from yian.memory.storage import FileMarkdownStore, markdown_version
+ * import json, os, shutil, sys, tempfile
+ * from yian.memory.storage import FileMarkdownStore
  *
  * root = tempfile.mkdtemp()
  * store = FileMarkdownStore(os.path.join(root, "ada.md"))
@@ -70,6 +70,7 @@
  *         full = os.path.join(dirpath, name)
  *         with open(full, encoding="utf-8", newline="") as handle:
  *             files[os.path.relpath(full, root)] = handle.read()
+ * shutil.rmtree(root)
  * json.dump(dict(sorted(files.items())), sys.stdout, ensure_ascii=True, indent=1)
  * ```
  *

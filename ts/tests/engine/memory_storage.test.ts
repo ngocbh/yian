@@ -61,7 +61,8 @@
  *   `fs.statSync`, just before SQLite opens, where Python patches `sqlite3.connect`.
  *
  * Not ported: `test_envelope_depth_rejection_preserves_old_state_and_usable_handle` and
- * `test_maximum_valid_envelope_depth_roundtrips` (TS has no memory JSON nesting limit);
+ * `test_maximum_valid_envelope_depth_roundtrips` (TS has no 128-level memory JSON limit; a deep
+ * state is a later round-trip test, once the copy no longer recurses);
  * `test_shared_connection_serializes_threads` (JS runs one thread, so there is no per-handle lock);
  * `test_postfork_guard_precedes_python_lock_and_sqlite` (JS can't fork a live process, so there is no
  * fork guard); Python's exception classes (the `KeyboardInterrupt` and `SystemExit` rows are a plain

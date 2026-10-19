@@ -3,24 +3,26 @@
  * `tests/engine/test_loop_node.py`.
  *
  * Ported: `test_loop_is_a_spawner_kind`, `test_compiled_loop_origin_is_self`,
- * `test_should_stop_is_the_max_iters_budget` and `test_should_stop_without_max_never_stops`.
- *
- * Changed: `NodeKind` is a const object of strings, so a member is its value and has no `.value`;
- * a trait is read on an instance, not the class. The child is a stub object.
- *
- * TS-only: the other traits (`kind`, `isLoop`, `growDepthDelta`) on an instance; `exceptionCode`
- * classifies `LoopMaxExceeded` as `loop.max_exceeded` and defers a plain `Error` to
- * `node.execute`; `skippedOutputTarget()` is the origin id on a node built with `originId`; a baked
- * LOOP's `run` rejects as not ported yet.
- *
- * Covered elsewhere: `test_node_origin_id_defaults_none` (`base_node.test.ts`).
- *
- * Later (T3-8, respawn): `test_respawn_preserves_assertion_carriers`,
+ * `test_respawn_preserves_assertion_carriers`,
  * `test_respawn_preserves_the_full_output_contract_carrier`,
  * `test_respawn_preserves_the_derived_base_memory_scope`,
  * `test_respawn_defaults_omitted_fields_from_the_carried_record`,
  * `test_partial_respawn_requires_the_carried_record`,
- * `test_respawn_keeps_a_null_omitted_value_as_its_default` and `test_total_respawn_keeps_params`.
+ * `test_respawn_keeps_a_null_omitted_value_as_its_default`, `test_total_respawn_keeps_params`,
+ * `test_should_stop_is_the_max_iters_budget` and `test_should_stop_without_max_never_stops`.
+ *
+ * Changed: `NodeKind` is a const object of strings, so a member is its value and has no `.value`;
+ * a trait is read on an instance, not the class. The child is a stub object, in place of
+ * `_child_flow()`. Python ints in carried values are `bigint`.
+ *
+ * TS-only: the other traits (`kind`, `isLoop`, `growDepthDelta`) on an instance; `exceptionCode`
+ * classifies `LoopMaxExceeded` as `loop.max_exceeded` and defers a plain `Error` to
+ * `node.execute`; `skippedOutputTarget()` is the origin id on a node built with `originId` and on a
+ * respawned driver; a baked LOOP's `run` rejects as not ported yet; `respawn` refuses an execution
+ * scope of another class and one that doesn't end in the driver's position, and moves a scope that
+ * does to index `k`.
+ *
+ * Covered elsewhere: `test_node_origin_id_defaults_none` (`base_node.test.ts`).
  *
  * Later (T4-10): `test_run_grows_iteration_zero_with_next_driver_when_continue`,
  * `test_run_commits_seed_when_while_predicate_false`,
@@ -37,8 +39,38 @@
 
 import { expect, test } from "bun:test";
 
+import { OriginRef } from "../../src/diagnostics.ts";
+import { MemoryScope } from "../../src/memory/contracts.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
+import {
+  Assertion,
+  ContractOrigins,
+  ExecutionPosition,
+  ExecutionScope,
+  Parameter,
+  ValueContract,
+} from "../../src/nodes/contracts.ts";
 import { LoopMaxExceeded, LoopNode } from "../../src/nodes/loop/node.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
+
+/** A `while` driver `loop` over a stub body, guarded at 3 runs. */
+function whileLoop(): LoopNode {
+  return new LoopNode("loop", { flowId: "body", child: {}, predicateKind: "while", predicate: "${x}", maxIters: 3 });
+}
+
+/** A `times` loop `lp` whose body returns only `n` of its carried `n` and `person`. */
+function partialLoop(): LoopNode {
+  const node = new LoopNode("lp", {
+    flowId: "f",
+    child: {},
+    predicateKind: "times",
+    times: 1,
+    maxIters: 1,
+    returnedFields: ["n"],
+  });
+  node.params = [new Parameter("n"), new Parameter("person")];
+  return node;
+}
 
 test("loop is a spawner kind", () => {
   const node = new LoopNode("lp", { flowId: "f", child: {} });
@@ -56,6 +88,139 @@ test("compiled loop origin is self", () => {
   });
   expect(node.originId).toBe("lp");
   expect(node.iteration).toBe(0);
+});
+
+test("respawn preserves assertion carriers", () => {
+  const node = whileLoop();
+  const origin = new OriginRef("nodes/loop/asserts/0");
+  node.preAsserts = [new Assertion("x > 0", "x must be positive", { origin })];
+
+  const clone = node.respawn(1);
+
+  expect(clone.preAsserts).toEqual(node.preAsserts);
+  expect(clone.preAsserts).not.toBe(node.preAsserts);
+  expect(clone.preAsserts[0]!.origin).toBe(origin);
+});
+
+test("respawn preserves the full output contract carrier", () => {
+  const node = whileLoop();
+  const origins = new ContractOrigins({
+    default: new OriginRef("nodes/loop/output"),
+    entries: [[["answer"], new OriginRef("nodes/loop/output/answer")]],
+  });
+  const contract = new ValueContract(
+    new Type({
+      kind: ValueKind.OBJECT,
+      fields: new Map([["answer", Type.scalar(ValueKind.INTEGER)]]),
+      required: new Set(["answer"]),
+    }),
+    origins,
+  );
+  node.outputContract = contract;
+
+  const clone = node.respawn(1);
+
+  expect(clone.outputContract).toBe(contract);
+  expect((clone.outputContract as ValueContract).origins).toBe(origins);
+  expect((clone.outputContract as ValueContract).type).toBe(contract.type);
+});
+
+test("respawn preserves the derived base memory scope", () => {
+  const node = whileLoop();
+  node.memoryScope = new MemoryScope(["loop"], { memories: ["outer"] });
+
+  const clone = node.respawn(1);
+
+  expect(clone.memoryScope).toBe(node.memoryScope);
+});
+
+test("respawn defaults omitted fields from the carried record", () => {
+  const node = partialLoop();
+  const originParams = node.params;
+  const originSnapshot = [...node.params!];
+
+  const clone = node.respawn(1, { n: 1n, person: { name: "A" } });
+
+  const byName = new Map(clone.params!.map((param) => [param.name, param]));
+  expect(byName.get("person")!.hasDefault).toBe(true);
+  expect(byName.get("person")!.default).toEqual({ name: "A" });
+  expect(byName.get("person")!.required).toBe(false);
+  expect(byName.get("n")!.hasDefault).toBe(false);
+  expect(clone.returnedFields).toEqual(["n"]);
+  expect(node.params).toBe(originParams);
+  expect(node.params).toEqual(originSnapshot);
+  expect(node.params!.every((param) => param.hasDefault === false)).toBe(true);
+});
+
+test("partial respawn requires the carried record", () => {
+  const respawn = () => partialLoop().respawn(1);
+  expect(respawn).toThrow(RangeError);
+  expect(respawn).toThrow(new RangeError("loop 'lp' returns a subset of its record; respawn needs the carried record"));
+});
+
+test("respawn keeps a null omitted value as its default", () => {
+  const clone = partialLoop().respawn(1, { n: 1n, person: null });
+  const person = clone.params!.find((param) => param.name === "person")!;
+  expect(person.hasDefault).toBe(true);
+  expect(person.default).toBeNull();
+});
+
+test("total respawn keeps params", () => {
+  const node = new LoopNode("lp", { flowId: "f", child: {}, predicateKind: "times", times: 1, maxIters: 1 });
+  node.params = [new Parameter("n"), new Parameter("person")];
+
+  const clone = node.respawn(1, { n: 1n, person: { name: "A" } });
+
+  expect(clone.params).toBe(node.params);
+  expect(clone.returnedFields).toBeNull();
+});
+
+test("a respawned driver is named for its origin and targets it", () => {
+  const clone = whileLoop().respawn(2).respawn(3);
+  expect(clone.id).toBe("loop~3");
+  expect(clone.iteration).toBe(3);
+  expect(clone.originId).toBe("loop");
+  expect(clone.skippedOutputTarget()).toBe("loop");
+});
+
+test("respawn moves a scope that ends in the driver's position to index k", () => {
+  const node = whileLoop();
+  const outer = new ExecutionPosition("call", ["c"]);
+  node.executionScope = new ExecutionScope(["c", "loop"], {
+    flowPath: ["c"],
+    occurrencePath: [outer, new ExecutionPosition("loop_driver", ["c", "loop"], 0)],
+  });
+
+  const scope = node.respawn(2).executionScope!;
+
+  expect(scope).toBeInstanceOf(ExecutionScope);
+  expect(scope.staticPath).toEqual(["c", "loop"]);
+  expect(scope.flowPath).toEqual(["c"]);
+  expect(scope.boundary).toBeNull();
+  expect(scope.occurrencePath[0]).toBe(outer);
+  expect(scope.occurrencePath[1]).toEqual(new ExecutionPosition("loop_driver", ["c", "loop"], 2));
+});
+
+test("respawn refuses an execution scope of another class", () => {
+  class Subscope extends ExecutionScope {}
+  const node = whileLoop();
+  node.executionScope = new Subscope(["loop"], { occurrencePath: [new ExecutionPosition("loop_driver", ["loop"], 0)] });
+  expect(() => node.respawn(1)).toThrow(TypeError);
+  expect(() => node.respawn(1)).toThrow(new TypeError("loop execution scope must be an ExecutionScope"));
+});
+
+test("respawn refuses a scope that doesn't end in the driver's position", () => {
+  const node = whileLoop();
+  for (const occurrencePath of [
+    [],
+    [new ExecutionPosition("loop_driver", ["loop"], 1)],
+    [new ExecutionPosition("loop_body", ["loop"], 0)],
+    [new ExecutionPosition("loop_driver", ["other"], 0)],
+  ]) {
+    node.executionScope = new ExecutionScope(["loop"], { occurrencePath });
+    expect(() => node.respawn(1)).toThrow(RangeError);
+    expect(() => node.respawn(1)).toThrow(new RangeError("loop scope must end in its current driver position"));
+  }
 });
 
 test("should stop is the max iters budget", () => {

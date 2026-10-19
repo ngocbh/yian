@@ -28,7 +28,7 @@
 
 import { type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
 import type { FeedbackValue } from "../../expr/index.ts";
-import { isRecord } from "../../typesys/values.ts";
+import { isRecord, normalizeFiles, type Value } from "../../typesys/values.ts";
 import {
   type BackwardContext,
   BackwardResult,
@@ -37,7 +37,15 @@ import {
   parseNamedCondition,
   projectStructuralFeedback,
 } from "../base.ts";
-import { iterOriginCarrier, type OriginMapper, type Parameter, rewriteOriginCarrier } from "../contracts.ts";
+import {
+  ExecutionPosition,
+  ExecutionScope,
+  isExactly,
+  iterOriginCarrier,
+  type OriginMapper,
+  Parameter,
+  rewriteOriginCarrier,
+} from "../contracts.ts";
 
 /**
  * The while/until runaway guard tripped (the loop would start more than `max` body runs).
@@ -251,6 +259,118 @@ export class LoopNode extends Node {
   shouldStop(iteration: number): boolean {
     if (this.maxIters === null) return false;
     return iteration >= this.maxIters;
+  }
+
+  /**
+   * Return a fresh driver clone for iteration `k` at id `` `${originId}~${k}` ``.
+   *
+   * The clone carries the same baked fields and the origin id, so it attributes its grow and
+   * commit to the compiled loop and self-prunes (`id !== originId`). Pure: no engine state.
+   *
+   * A total loop shares the origin's `params`. For a partial loop (`returnedFields` set), each
+   * carried field the body omits gets a `Parameter` default holding its value in `carried`, read
+   * through the body's typed input of that name (`childInputs`) so an omitted file stays a
+   * `FileRef`; the next driver then binds the merged record. `carried` is the JSON-decoded
+   * growth-seed record that seeds the body's START, so live growth and durable replay merge
+   * identically. The origin, origin context, memory scope, output contract, asserts and type
+   * table are copied; the execution scope moves to iteration `k`.
+   *
+   * @param k The clone's iteration index.
+   * @param carried The record this iteration's body was seeded with; required when
+   *   `returnedFields` is set.
+   * @returns The driver for iteration `k`.
+   * @throws RangeError when `returnedFields` is set and `carried` is `null`, or the execution
+   *   scope doesn't end in this driver's position.
+   * @throws TypeError when the execution scope isn't an `ExecutionScope`.
+   */
+  respawn(k: number, carried: Readonly<Record<string, unknown>> | null = null): LoopNode {
+    const originId = this.originId ?? this.id;
+    if (this.returnedFields !== null && carried === null) {
+      throw new RangeError(
+        `loop ${reprText(originId)} returns a subset of its record; respawn needs the carried record`,
+      );
+    }
+    const clone = new LoopNode(`${originId}~${k}`, {
+      flowId: this.flowId,
+      flowVersion: this.flowVersion,
+      child: this.child,
+      childInputs: this.childInputs,
+      predicateKind: this.predicateKind,
+      predicate: this.predicate,
+      times: this.times,
+      maxIters: this.maxIters,
+      title: this.title,
+      iteration: k,
+      originId,
+      returnedFields: this.returnedFields,
+    });
+    clone.origin = this.origin;
+    // Keep only the enclosing ancestry: `failureTrace()` appends this driver's authored origin, so
+    // copying that origin into the context would duplicate it on every later iteration.
+    clone.originContext = this.originContext;
+    clone.memoryScope = this.memoryScope;
+    if (this.executionScope !== null) {
+      const scope = this.executionScope;
+      if (!isExactly(scope, ExecutionScope)) throw new TypeError("loop execution scope must be an ExecutionScope");
+      const { staticPath, flowPath, occurrencePath, boundary } = scope;
+      new ExecutionScope(staticPath, { flowPath, occurrencePath, boundary });
+      const current = new ExecutionPosition("loop_driver", staticPath, this.iteration);
+      const last = occurrencePath.at(-1);
+      if (
+        last === undefined ||
+        last.kind !== current.kind ||
+        last.index !== current.index ||
+        last.staticPath.length !== current.staticPath.length ||
+        last.staticPath.some((segment, i) => segment !== current.staticPath[i])
+      ) {
+        throw new RangeError("loop scope must end in its current driver position");
+      }
+      clone.executionScope = new ExecutionScope(staticPath, {
+        flowPath,
+        occurrencePath: [...occurrencePath.slice(0, -1), new ExecutionPosition("loop_driver", staticPath, k)],
+        boundary,
+      });
+    }
+    if (this.returnedFields === null) {
+      clone.params = this.params;
+    } else {
+      const returned = this.returnedFields;
+      const record = carried!;
+      clone.params = (this.params ?? []).map((param) =>
+        Object.hasOwn(record, param.name) && !returned.includes(param.name)
+          ? new Parameter(param.name, {
+              contract: param.contract,
+              coerceStrings: param.coerceStrings,
+              origin: param.origin,
+              defaultOrigin: param.defaultOrigin,
+              required: false,
+              hasDefault: true,
+              default: this.carriedValue(param.name, record[param.name]),
+            })
+          : param,
+      );
+    }
+    clone.outputContract = this.outputContract;
+    clone.preAsserts = [...this.preAsserts];
+    clone.postAsserts = [...this.postAsserts];
+    clone.types = this.types;
+    return clone;
+  }
+
+  /**
+   * Read a JSON-decoded carried field as the body's typed input `name` reads it.
+   *
+   * The driver's own params have no contract, so the body's START parameter gives the field's
+   * type; a `file` position turns the file's JSON form back into a `FileRef`. An untyped or
+   * unknown field is returned as given.
+   */
+  private carriedValue(name: string, value: unknown): unknown {
+    for (const parameter of this.childInputs) {
+      if (parameter.name === name && parameter.contract !== null) {
+        return normalizeFiles(parameter.contract.type, value as Value);
+      }
+    }
+    return value;
   }
 
   /** The loop policy; not ported yet. */

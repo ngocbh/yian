@@ -10,9 +10,11 @@
  * `isinstance` is a special form: the first argument is an expression, the second a bare type
  * name looked up in the type table (`types`, a `Map`), never a reference.
  *
- * Ported: the CASE half of `test_a_node_starts_with_an_empty_type_table`.
+ * Ported: the CASE half of `test_a_node_starts_with_an_empty_type_table`, and
+ * `test_loop_respawn_copies_the_type_table`.
  *
- * Later (T3-8, LOOP): `test_loop_respawn_copies_the_type_table`.
+ * Changed: `test_loop_respawn_copies_the_type_table` sets the type table on a hand-built
+ * `LoopNode` instead of a loaded flow's driver.
  *
  * Later (T4-9): `test_case_forward_routes_with_its_type_table`.
  *
@@ -49,6 +51,7 @@ import {
   scanTemplate,
 } from "../../src/expr/template.ts";
 import { Case, CaseNode } from "../../src/nodes/case/node.ts";
+import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { fieldOf } from "../../src/typesys/values.ts";
 
@@ -345,4 +348,11 @@ test("traced isinstance records one route over the first argument", () => {
 test("a node starts with an empty type table", () => {
   const node = new CaseNode("route", [new Case("s", { when: "isinstance(order, Sell)" })]);
   expect(node.types).toEqual(new Map());
+});
+
+test("loop respawn copies the type table", () => {
+  const loopTypes = new Map([["Running", new Type({ kind: ValueKind.STRING, tags: new Set(["running"]) })]]);
+  const driver = new LoopNode("loop", { flowId: "body", child: {}, predicate: "isinstance(state, Running)" });
+  driver.types = new Map(loopTypes);
+  expect(driver.respawn(1).types).toEqual(loopTypes);
 });

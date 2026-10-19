@@ -1,4 +1,4 @@
-# Shared text: the template scanner quotes the template as written (templates/engine_template_scanner__unbalanced_span_raises).
+# Shared text: the template scanner quotes the template as written.
 kind: load
 flow: |
   id: f

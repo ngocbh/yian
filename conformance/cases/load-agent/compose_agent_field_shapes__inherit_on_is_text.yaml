@@ -1,4 +1,4 @@
-# the rejected value is spelled in the text form: `"on"` in TS, Python's repr in python_expect.
+# TS spells the rejected value in the text form (rules: messages); Python's repr in python_expect.
 kind: load
 rules: [messages]
 flow: |

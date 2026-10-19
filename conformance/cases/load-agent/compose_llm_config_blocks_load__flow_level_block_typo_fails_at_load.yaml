@@ -5,7 +5,7 @@ flow: |
   name: f
   llm_config:
     provider: anthropic
-    anthropic: {max_tokns: 100, metadata: {user_id: sk-sentinel-91c4d07e}}
+    anthropic: {max_tokns: 100}
   nodes:
     a: {kind: agent, prompt: hi}
   output: ${a.output}

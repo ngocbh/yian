@@ -6,7 +6,7 @@ flow: |
   defs:
     sub:
       llm_config:
-        qwen-cn: {thinking_budget: "sk-sentinel-91c4d07e"}
+        qwen-cn: {thinking_budget: "x"}
       nodes:
         a: {kind: agent, prompt: hi}
       output: ${a.output}

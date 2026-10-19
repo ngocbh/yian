@@ -9,7 +9,7 @@ flow: |
       prompt: hi
       llm_config:
         provider: openai
-        openai: {text: {format: {type: text}}, user: sk-sentinel-91c4d07e}
+        openai: {text: {format: {type: text}}}
   output: ${a.output}
 expect:
   load:

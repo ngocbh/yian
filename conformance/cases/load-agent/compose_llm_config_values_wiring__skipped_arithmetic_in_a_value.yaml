@@ -3,7 +3,6 @@ flow: |
   id: f
   name: f
   input: {go: !bool }
-
   nodes:
     gate:
       kind: case
@@ -33,4 +32,4 @@ expect:
       message: 'node ''chat'' llm_config: ${pick.output + "x"} does arithmetic on pick.output, which is null when node ''pick'' is skipped; give it a default with :-, e.g. (pick.output :- <default>)'
       frames:
       - label: flow.yaml
-        range: [25, 25, 25, 47]
+        range: [24, 25, 24, 47]

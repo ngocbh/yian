@@ -7,6 +7,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { encodeBody } from "../../src/llm/body.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
 import {
   collect,
   type Event,
@@ -177,6 +178,23 @@ async function parse(items: (JsonObject | SSEEvent)[], protocol = route()): Prom
   return out;
 }
 
+/** Return the events parsed before the failure and the `ProviderError`; fail the test if none is thrown. */
+async function failing(items: (JsonObject | SSEEvent)[], protocol = route()): Promise<[Event[], ProviderError]> {
+  const out: Event[] = [];
+  try {
+    for await (const event of protocol.parse(frames(items))) out.push(event);
+  } catch (error) {
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).provider).toBeNull();
+    return [out, error as ProviderError];
+  }
+  throw new Error("expected a ProviderError");
+}
+
+async function failure(items: (JsonObject | SSEEvent)[], protocol = route()): Promise<ProviderError> {
+  return (await failing(items, protocol))[1];
+}
+
 async function collected(items: (JsonObject | SSEEvent)[], protocol = route()): Promise<Response> {
   return collect(await parse(items, protocol));
 }
@@ -226,11 +244,11 @@ const TEXT_PART = new TextPart("Hello there.");
 const CALL_PART = new ToolCallPart({ id: "toolu_01", name: "double", arguments: { value: 3n } });
 
 /** Return the one tool call a reply with a `tool_use` start of `input` and `deltas` gives. */
-async function callOf(input: JsonValue | undefined, deltas: string[] | null): Promise<ToolCallPart> {
+async function callOf(input: JsonValue | undefined, deltas: string[] = []): Promise<ToolCallPart> {
   const block: JsonObject = { type: "tool_use", id: "toolu_01", name: "double" };
   if (input !== undefined) block["input"] = input;
   const body = [blockStart(0n, block)];
-  for (const piece of deltas ?? []) body.push(blockDelta(0n, { type: "input_json_delta", partial_json: piece }));
+  for (const piece of deltas) body.push(blockDelta(0n, { type: "input_json_delta", partial_json: piece }));
   body.push(blockStop(0n));
   const [part] = await partsOf(reply(body, "tool_use"));
   return part as ToolCallPart;
@@ -342,7 +360,7 @@ describe("deltas and parts", () => {
 
   test("a text start with null text opens nothing", async () => {
     const out = await parse(reply([blockStart(0n, { type: "text", text: null }), blockStop(0n)]));
-    expect(out).toEqual([...END]);
+    expect(out).toEqual(END);
   });
 
   test("a thinking start with text and a signature", async () => {
@@ -462,6 +480,14 @@ describe("deltas and parts", () => {
     const out = await parse(reply([blockStart(0n, TEXT), blockStop(0n)]).map(untyped));
     expect(out).toEqual([new TextDelta(0, "Hello there."), new PartDone(0, TEXT_PART), ...END]);
   });
+
+  test("an untyped frame with an error object is an error event whatever its SSE event name", async () => {
+    const data = encodeBody({ error: { type: "overloaded_error", message: "Busy." } });
+    const frame = new SSEEvent({ data, event: "message" });
+    const error = await failure([start(), frame, messageDelta(), STOP]);
+    expect(error.kind).toBe("overloaded");
+    expect(error.message).toBe("anthropic stream failed (overloaded): Busy.");
+  });
 });
 
 describe("tool calls", () => {
@@ -481,10 +507,10 @@ describe("tool calls", () => {
   });
 
   test("with no input_json_delta the start input is the arguments", async () => {
-    expect((await callOf(undefined, null)).arguments).toEqual({});
-    expect((await callOf({ value: 3n }, null)).arguments).toEqual({ value: 3n });
+    expect((await callOf(undefined)).arguments).toEqual({});
+    expect((await callOf({ value: 3n })).arguments).toEqual({ value: 3n });
     for (const input of ["x", [1n], 5n, null] as JsonValue[]) {
-      const part = await callOf(input, null);
+      const part = await callOf(input);
       expect(part.arguments).toBeNull();
       expect(part.rawArguments).toBe(encodeBody(input));
     }
@@ -596,6 +622,13 @@ describe("usage", () => {
 });
 
 describe("finish", () => {
+  test("a message_delta without a stop_reason has no reason", async () => {
+    const error = await failure([start(), { type: "message_delta", delta: {} }, STOP]);
+    expect(error.kind).toBe("incomplete");
+    const out = await parse([start(), messageDelta("max_tokens"), { type: "message_delta", delta: {} }, STOP]);
+    expect(out.at(-1)).toEqual(finish("length"));
+  });
+
   test("a later null stop_reason doesn't clear an earlier one", async () => {
     const out = await parse([start(), messageDelta("max_tokens"), messageDelta(null), STOP]);
     expect(out.at(-1)).toEqual(finish("length"));

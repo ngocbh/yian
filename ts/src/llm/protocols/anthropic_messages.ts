@@ -104,7 +104,8 @@ const REQUIRED_SIGNATURE =
   "anthropic needs its signed thinking to continue a tool call with thinking on; finish the tool turn on the " +
   "original model or turn thinking off in the anthropic block";
 
-// The string field each delta type carries; other delta types (`citations_delta`) are ignored.
+// The string field each delta type carries; other delta types (`citations_delta`) are ignored. Read
+// before the block lookup, so a delta's field is checked and unknown deltas skipped in one place.
 const DELTA_FIELDS: ReadonlyMap<string, string> = new Map([
   ["text_delta", "text"],
   ["thinking_delta", "thinking"],
@@ -290,9 +291,10 @@ export class AnthropicMessages implements SseProtocol {
       const data = eventData(frame.data, provider);
       if (!isPlainObject(data)) continue;
       const rawType = data["type"];
-      const type = typeof rawType === "string" && rawType ? rawType : frame.event;
-      // A proxy may send the error object without a type.
-      if (type === "error" || (type === null && isPlainObject(data["error"]))) throw this.#streamFailure(data["error"]);
+      const typed = typeof rawType === "string" && rawType !== "";
+      const type = typed ? rawType : frame.event;
+      // A proxy may send the error object without a type, under any SSE event name.
+      if (type === "error" || (!typed && isPlainObject(data["error"]))) throw this.#streamFailure(data["error"]);
       if (type === "message_stop") break;
       const invalid = () => new ProviderError("protocol", `invalid ${type} in ${provider} stream event`);
       if (type === "message_start") {
@@ -351,10 +353,9 @@ export class AnthropicMessages implements SseProtocol {
             yield new ToolCallDelta({ index: block.index!, id: null, name: null, arguments: piece });
           }
         } else {
-          const index = blocks.get(wireIndex)?.index ?? null;
-          if (index === null || !open.has(index)) continue;
-          yield new PartDone(index, this.#part(open.get(index)!));
-          open.delete(index);
+          const block = blocks.get(wireIndex);
+          if (block?.index == null || !open.delete(block.index)) continue;
+          yield new PartDone(block.index, this.#part(block));
         }
       }
     }
@@ -367,7 +368,8 @@ export class AnthropicMessages implements SseProtocol {
     }
     // Counted first, so usage that can't be read fails before any part is done.
     const counts = usage === null ? null : usageOf(usage, provider);
-    for (const index of [...open.keys()].sort((a, b) => a - b)) yield new PartDone(index, this.#part(open.get(index)!));
+    // Parts open in index order and a Map keeps insertion order, so this is index order.
+    for (const [index, block] of open) yield new PartDone(index, this.#part(block));
     if (counts !== null) yield new UsageReport(counts);
     const fields: JsonObject = {};
     if (responseId !== null) fields["response_id"] = responseId;
@@ -725,7 +727,7 @@ function mergeUsage(merged: JsonObject | null, usage: JsonValue | undefined, pro
   if (!isPlainObject(cacheCreation) || !isPlainObject(outputDetails)) {
     throw new ProviderError("protocol", `${provider} response usage details are not objects`);
   }
-  const notInt = `${provider} response usage has a count that is not an int`;
+  const notInt = notIntMessage(provider);
   for (const key of ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]) {
     tokenCount(usage[key], notInt);
   }
@@ -748,7 +750,7 @@ function ephemeralKeys(cacheCreation: JsonObject): string[] {
  * @throws {ProviderError} A sum is past `Number.MAX_SAFE_INTEGER` (kind `protocol`).
  */
 function usageOf(usage: JsonObject, provider: string): Usage {
-  const notInt = `${provider} response usage has a count that is not an int`;
+  const notInt = notIntMessage(provider);
   const cacheCreation = (usage["cache_creation"] ?? {}) as JsonObject;
   const outputDetails = (usage["output_tokens_details"] ?? {}) as JsonObject;
   let breakdown = 0;
@@ -771,6 +773,11 @@ function usageOf(usage: JsonObject, provider: string): Usage {
     if (error instanceof MessageFormatError) throw new ProviderError("protocol", notInt);
     throw error;
   }
+}
+
+/** Return the error message for a usage count that is not an int. */
+function notIntMessage(provider: string): string {
+  return `${provider} response usage has a count that is not an int`;
 }
 
 /** Return a usage count as a number, `null` when it is `null` or absent; throw `notInt` otherwise. */

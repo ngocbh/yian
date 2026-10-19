@@ -1369,6 +1369,19 @@ describe("request", () => {
     });
   }
 
+  test("integers in data are bigints", async () => {
+    const server = await localServer((res) => {
+      res.writeHead(200);
+      res.end('{"expires_in": 3600, "ratio": 1.5}');
+    });
+    try {
+      const response = await request("GET", server.url, { headers: {}, timeoutMs: 1000 });
+      expect(response.data).toEqual({ expires_in: 3600n, ratio: 1.5 });
+    } finally {
+      await server.close();
+    }
+  });
+
   test("a non-JSON body gives null data and keeps the status", async () => {
     const server = await localServer((res) => {
       res.writeHead(500);

@@ -1,8 +1,8 @@
 /**
  * Input-size caps come from `defaults`; mirrors `tests/test_input_caps_defaults.py`.
  *
- * Holds the base URL, skill, question option, auth store and auth response rows; the other rows come with their
- * modules.
+ * Holds the base URL, skill, question option, auth store and auth response rows; the other rows
+ * come with their modules.
  */
 
 import { afterEach, expect, test } from "bun:test";

@@ -1,10 +1,10 @@
 /**
  * Authentication HTTP requests with a capped, secret-safe result.
  *
- * One total timer covers the whole exchange, and redirects are never followed. Failures stay
- * distinguishable for callers that report them: they are `shortRequest`'s, a `ProviderError` of
- * kind `timeout` for an exhausted deadline, `protocol` for a body over the limit and
- * `connection` or `timeout` for a network failure, and a caller abort rejects with its reason.
+ * One total timer covers the whole exchange, and redirects are never followed. Failures are
+ * `shortRequest`'s, so callers can tell them apart: a `ProviderError` of kind `timeout` when the
+ * time runs out, `protocol` for a body over the limit, `connection` or `timeout` for a network
+ * failure; a caller abort rejects with its reason.
  */
 
 import { current } from "../../defaults.ts";
@@ -66,7 +66,7 @@ export async function request(method: string, url: string, options: HttpRequestO
   try {
     data = reply.json();
   } catch (error) {
-    if (!(error instanceof ProviderError)) throw error;
+    if (!(error instanceof ProviderError && error.kind === "protocol")) throw error;
     data = null;
   }
   return new HttpResponse(reply.status, data);

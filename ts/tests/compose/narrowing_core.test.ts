@@ -127,7 +127,6 @@ import {
   type Env,
   envReadType,
   envUnsatisfiable,
-  Exact,
   type Fact,
   guardedReadTypes,
   guardEnv,
@@ -135,9 +134,6 @@ import {
   impossibleCheckMessage,
   impossibleChecks,
   ImpossibleReason,
-  intersectFacts,
-  isinstanceFact,
-  Members,
   NOT_NARROWABLE,
   type NarrowedRead,
   narrowedReadError,
@@ -146,16 +142,23 @@ import {
   neverValue,
   notIsinstanceFact,
   tagFact,
-  unionFacts,
   unresolvedType,
 } from "../../src/compose/helpers/narrowing_facts.ts";
 import * as narrowingFacts from "../../src/compose/helpers/narrowing_facts.ts";
 import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
 import { readType } from "../../src/compose/helpers/types.ts";
 import { CaseDescriptor, searchedParamGuards } from "../../src/compose/nodes/case.ts";
-import { forget } from "../../src/defaults.ts";
 import * as narrowing from "../../src/compose/validate/narrowing.ts";
-import { Narrowing, type Views } from "../../src/compose/validate/narrowing.ts";
+import {
+  Exact,
+  intersectFacts,
+  isinstanceFact,
+  Members,
+  Narrowing,
+  unionFacts,
+  type Views,
+} from "../../src/compose/validate/narrowing.ts";
+import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { parseCondition } from "../../src/expr/index.ts";
 import { isExactly, ValueContract } from "../../src/nodes/contracts.ts";

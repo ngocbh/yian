@@ -60,6 +60,22 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - `SourceCatalog` turns an opaque origin into a diagnostic frame by replaying the occurrence
   path it kept.
 
+## Compose
+
+- `src/compose/helpers/errors.ts` holds `LoadError`, the one error a load throws. It carries one
+  `Diagnostic`, whose code is always `compose.load`, and is frozen.
+- Build it with a `LoadDiagnostics` from the document: `LoadDiagnostics.fromDocument(document)`,
+  then `.error(message, { range, cause })`; `.prepend` returns a fresh error with an outer frame
+  before the inner ones.
+- Messages keep Python's wording: names and source text go through `reprText`, lists of names
+  and values through the text form (`writeAsText`).
+- Every value written in a flow file goes through `checkWrittenValue`
+  (`src/compose/helpers/value_nesting.ts`) before anything reads it: it refuses a value nested
+  past the value limit and, a TS-only rule, text or a record key holding a lone surrogate, as a
+  located `LoadError`. `checkEnvValues` does the same for `env:`, and also refuses a value that
+  holds itself through an alias.
+- `src/compose/helpers/` reads documents through `compose/source` and never imports `yaml`.
+
 ## Skills
 
 - `src/skills/` is a leaf: it holds `Skill`, the `load_skill` tool and the system-message

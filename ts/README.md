@@ -239,8 +239,15 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - `src/memory/contracts.ts` holds the memory identities that compile records (`DeclSite`,
   `MemoryDecl`, `MemorySpec`, `MemoryStack`, `MemoryScope`), the declaration check
   `checkMemoryDeclaration`, the setup and operation failures, recorded snapshots, and the host
-  memory objects (`Memory`, `MemorySession`, `isMemory`). `src/memory/index.ts` re-exports the
-  public names.
+  memory objects (`Memory`, `MemorySession`, `isMemory`), and the learning result carriers
+  (`MemoryMutation`, `LearningFailure`, `PolicyCommitOutcome`, `LearningResult`).
+  `src/memory/index.ts` re-exports the public names; the mutation batch check `validateMutations`
+  is exported from `memory/contracts.ts` only, as Python keeps `_validate_mutations` private.
+- The learning result carriers are frozen and hold their nested carriers by reference (checked by
+  exact class), where Python copies them.
+- Changed: a mutation payload and a snapshot envelope's export have no checked depth limit (Python
+  bounds both at the value nesting limit plus 28); a payload deep enough to overflow the stack
+  throws the engine's RangeError.
 - A config or snapshot is a deep-frozen copy whose keys are inserted in code-unit order; JS still
   lists integer-like keys (`"9"`, `"10"`) first, in numeric order.
 - The declarations are frozen, so `rewriteMemoryDeclOrigins` returns rebuilt declarations and
@@ -250,8 +257,22 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - A host memory is any object with `openRun({ snapshot })` and `reset()` (`isMemory` checks it, as
   Python's `isinstance(value, Memory)`); both are synchronous, and a session has no `with` form:
   the caller calls `close()` in `finally`.
-- The recall, learning evidence, learning and session conversation contracts, the session's
-  recall, learn and commit methods, and the built-in backends are not ported yet.
+- The recall, learning evidence and session conversation contracts, the session's recall, learn
+  and commit methods, and the built-in backends are not ported yet.
+
+## Runtime
+
+- `src/runtime/common.ts` holds `NodeState`, the scheduler states runtime modules share.
+- `src/runtime/contracts.ts` holds the forward captures (`BackwardCapture`, `ForwardCapture`) and
+  the backward outcomes (`BackwardAttribution`, `AttributedBackwardResult`, `MemoryProposal`,
+  `BackwardFailure`, `BackwardOutcome`). They are frozen: JSON values are deep-frozen copies made
+  once by the constructor, with no copy on read, and frozen carriers are kept by reference.
+- `validateRoute` and `validateSource` check a `ValueRoute` or `SourceRef` at the durable capture
+  boundary; `validateRoute(route, { deep: false })` skips the children and snapshot already
+  checked, so a tree built bottom-up checks each node once.
+- Route and source numbers (sequences, sizes, spans, path indexes) are safe-integer `number`s,
+  never `bigint`.
+- A `SourceRef` compares by identity: key maps and sets by `sourceKey(ref)`.
 
 ## Compile
 

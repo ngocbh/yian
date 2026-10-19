@@ -6,10 +6,12 @@
  * Python import paths), and the per-declaration shape check `checkMemoryDeclaration`, with the
  * built-in types' config tables. It also holds the frozen identity values compile records:
  * declaration sites, declarations and their origin rewrite, node scopes with their occurrence
- * paths, memory specs and stacks, and the setup error; and the host memory objects (`Memory` and
- * its run `MemorySession`), their typed failures and their recorded snapshots. It imports only
- * `diagnostics` and `defaults`. The recall, learning and conversation contracts and the session's
- * recall, learn and commit methods are not ported yet.
+ * paths, memory specs and stacks, and the setup error; the host memory objects (`Memory` and its
+ * run `MemorySession`), their typed failures and their recorded snapshots; and the learning result
+ * carriers (`MemoryMutation` with its batch check `validateMutations`, `LearningFailure`,
+ * `PolicyCommitOutcome`, `LearningResult`), frozen and holding their carriers by reference. It
+ * imports only `diagnostics` and `defaults`. The recall, learning evidence and conversation
+ * contracts and the session's recall, learn and commit methods are not ported yet.
  */
 
 import { current } from "../defaults.ts";
@@ -59,6 +61,11 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
+/** Whether `value` is an instance of exactly `cls`, not of a subclass. */
+function isExactly<T>(value: unknown, cls: abstract new (...args: never[]) => T): value is T {
+  return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === cls.prototype;
+}
+
 /**
  * Return a frozen copy of one path whose components are non-empty strings.
  *
@@ -74,7 +81,13 @@ function requirePath(value: unknown, name: string, allowEmpty = false): readonly
 }
 
 /** Validate and copy one JSON value into frozen containers; see `freezeJsonObject`. */
-function freezeJson(value: unknown, name: string, active: Set<object>, nesting: number, limit: number): JsonValue {
+function freezeJson(
+  value: unknown,
+  name: string,
+  active: Set<object> = new Set(),
+  nesting = 0,
+  limit = Number.POSITIVE_INFINITY,
+): JsonValue {
   if (value === null || typeof value === "boolean" || typeof value === "bigint") return value;
   if (typeof value === "string") return requireString(value, name, false);
   if (typeof value === "number") {
@@ -730,9 +743,7 @@ function requireDecls(decls: unknown): asserts decls is readonly MemoryDecl[] {
   if (!isPlainArray(decls)) throw new TypeError("memories must be an array");
   for (const decl of decls) {
     // Exact, because the rewrite rebuilds a `MemoryDecl` and would drop a subclass.
-    if (typeof decl !== "object" || decl === null || Object.getPrototypeOf(decl) !== MemoryDecl.prototype) {
-      throw new TypeError("memories items must be exact MemoryDecl values");
-    }
+    if (!isExactly(decl, MemoryDecl)) throw new TypeError("memories items must be exact MemoryDecl values");
   }
 }
 
@@ -918,6 +929,189 @@ export class MemoryOperationFailure {
     this.code = requireString(code, "code");
     this.message = requireString(message, "message");
     this.retryable = requireBoolean(retryable, "retryable");
+    Object.freeze(this);
+  }
+}
+
+/** One JSON mutation a memory proposed. Frozen. */
+export class MemoryMutation {
+  readonly mutationId: string;
+  /** The deep-frozen payload snapshot; any depth. */
+  readonly payload: JsonValue;
+
+  /**
+   * Validate the id and snapshot the payload.
+   *
+   * @throws TypeError when `mutationId` isn't a string or `payload` holds a non-JSON value.
+   * @throws RangeError for an empty `mutationId`, a lone surrogate, a non-finite number or a cycle.
+   */
+  constructor(mutationId: string, payload: unknown) {
+    this.mutationId = requireString(mutationId, "mutation_id");
+    this.payload = freezeJson(payload, "payload");
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Return a frozen copy of one mutation batch in its order; the mutations are kept by reference.
+ *
+ * @throws TypeError when `mutations` isn't an array or an item isn't exactly a `MemoryMutation`.
+ * @throws RangeError when two mutations share an id.
+ */
+export function validateMutations(mutations: unknown): readonly MemoryMutation[] {
+  if (!isPlainArray(mutations)) throw new TypeError("mutations must be an array");
+  for (const mutation of mutations) {
+    if (!isExactly(mutation, MemoryMutation)) throw new TypeError("mutations items must be MemoryMutation values");
+  }
+  const checked = mutations as MemoryMutation[];
+  requireUnique(checked.map((mutation) => mutation.mutationId), "mutation IDs");
+  return Object.freeze([...checked]);
+}
+
+const LEARNING_OPERATIONS = ["learn", "commit"] as const;
+
+/** The memory operation a learning failure came from. */
+export type LearningOperation = (typeof LEARNING_OPERATIONS)[number];
+
+/** One memory's learn or commit failure in a run result. Frozen. */
+export class LearningFailure {
+  readonly memory: string;
+  readonly operation: LearningOperation;
+  readonly failure: MemoryOperationFailure;
+
+  /**
+   * Require an exact attribution and one `MemoryOperationFailure`, kept by reference.
+   *
+   * @throws TypeError when `memory` or `operation` isn't a string or `failure` isn't exactly a
+   *   `MemoryOperationFailure`.
+   * @throws RangeError for an empty string, a lone surrogate, or an unknown operation.
+   */
+  constructor(memory: string, operation: LearningOperation, failure: MemoryOperationFailure) {
+    this.memory = requireString(memory, "memory");
+    requireString(operation, "operation");
+    if (!LEARNING_OPERATIONS.includes(operation)) throw new RangeError("operation must be 'learn' or 'commit'");
+    this.operation = operation;
+    if (!isExactly(failure, MemoryOperationFailure)) throw new TypeError("failure must be a MemoryOperationFailure");
+    this.failure = failure;
+    Object.freeze(this);
+  }
+}
+
+const POLICY_COMMIT_STATUSES = ["unrequested", "unknown", "succeeded", "failed"] as const;
+
+/** One memory's commit disposition. */
+export type PolicyCommitStatus = (typeof POLICY_COMMIT_STATUSES)[number];
+
+/** One memory's confirmed or still-unresolved commit disposition. Frozen. */
+export class PolicyCommitOutcome {
+  readonly memory: string;
+  readonly status: PolicyCommitStatus;
+  /** The commit's protocol identity once requested; `null` when unrequested. */
+  readonly commitId: string | null;
+  /** Required only for a confirmed failed commit; its stage and retryability are the backend's. */
+  readonly failure: MemoryOperationFailure | null;
+
+  /**
+   * Validate the identities and the status's optional fields; `failure` is kept by reference.
+   *
+   * @throws TypeError when a string field isn't a string or `failure` is neither `null` nor exactly
+   *   a `MemoryOperationFailure`.
+   * @throws RangeError for an empty string, a lone surrogate, an unknown status, commit data on an
+   *   unrequested policy, a requested policy without `commitId`, or a failure on any status but
+   *   `failed` (or none on `failed`).
+   */
+  constructor(
+    memory: string,
+    status: PolicyCommitStatus,
+    options: { commitId?: string | null; failure?: MemoryOperationFailure | null } = {},
+  ) {
+    const { commitId = null, failure = null } = options;
+    this.memory = requireString(memory, "memory");
+    requireString(status, "status");
+    if (!POLICY_COMMIT_STATUSES.includes(status)) throw new RangeError("invalid policy commit status");
+    this.status = status;
+    this.commitId = commitId === null ? null : requireString(commitId, "commit_id");
+    if (failure !== null && !isExactly(failure, MemoryOperationFailure)) {
+      throw new TypeError("failure must be a MemoryOperationFailure or null");
+    }
+    this.failure = failure;
+    if (status === "unrequested") {
+      if (commitId !== null || failure !== null) throw new RangeError("unrequested policy cannot carry commit data");
+    } else if (commitId === null) {
+      throw new RangeError("requested policy requires commit_id");
+    }
+    if ((status === "failed") !== (failure !== null)) {
+      throw new RangeError("only failed policy commits require a failure");
+    }
+    Object.freeze(this);
+  }
+}
+
+const LEARNING_STATUSES = ["succeeded", "failed", "incomplete"] as const;
+
+/** How a run's learning ended. */
+export type LearningStatus = (typeof LEARNING_STATUSES)[number];
+
+/**
+ * A run's learning completion, kept apart from backend retryability hints. Frozen.
+ *
+ * `succeeded` requires no failures and only succeeded policies; `failed` requires at least one
+ * failure; `incomplete` infers nothing from the known dispositions.
+ */
+export class LearningResult {
+  readonly status: LearningStatus;
+  /** Failures unique by memory and operation, in supplied order. */
+  readonly failures: readonly LearningFailure[];
+  /** Commit outcomes unique by memory key, in supplied order; the run layout owns membership. */
+  readonly policies: readonly PolicyCommitOutcome[];
+
+  /**
+   * Validate the supplied dispositions; the arrays are copied and their carriers kept by reference.
+   *
+   * @throws TypeError when `status` isn't a string, an array isn't an array, or an item isn't
+   *   exactly a `LearningFailure` or `PolicyCommitOutcome`.
+   * @throws RangeError for an empty or unknown status, a lone surrogate, a repeated failure
+   *   attribution or memory key, or dispositions the status doesn't allow.
+   */
+  constructor(
+    status: LearningStatus,
+    options: { failures?: readonly LearningFailure[]; policies?: readonly PolicyCommitOutcome[] } = {},
+  ) {
+    const { failures = [], policies = [] } = options;
+    requireString(status, "status");
+    if (!LEARNING_STATUSES.includes(status)) {
+      throw new RangeError("learning status must be 'succeeded', 'failed', or 'incomplete'");
+    }
+    this.status = status;
+    if (!isPlainArray(failures)) throw new TypeError("learning failures must be an array");
+    const attributions = new Set<string>();
+    for (const failure of failures) {
+      if (!isExactly(failure, LearningFailure)) throw new TypeError("failures items must be LearningFailure values");
+      // The operation is "learn" or "commit", so the key can't collide across memories.
+      const attribution = `${failure.operation}:${failure.memory}`;
+      if (attributions.has(attribution)) throw new RangeError("learning failure attribution must be unique");
+      attributions.add(attribution);
+    }
+    if (!isPlainArray(policies)) throw new TypeError("learning policies must be an array");
+    const names = new Set<string>();
+    for (const policy of policies) {
+      if (!isExactly(policy, PolicyCommitOutcome)) {
+        throw new TypeError("policies items must be PolicyCommitOutcome values");
+      }
+      if (names.has(policy.memory)) throw new RangeError("learning memory keys must be unique");
+      names.add(policy.memory);
+    }
+    this.failures = Object.freeze([...failures]);
+    this.policies = Object.freeze([...policies]);
+    if (status === "succeeded" && failures.length > 0) {
+      throw new RangeError("succeeded learning cannot carry failures");
+    }
+    if (status === "succeeded" && policies.some((policy) => policy.status !== "succeeded")) {
+      throw new RangeError("succeeded learning requires succeeded policies");
+    }
+    if (status === "failed" && failures.length === 0) {
+      throw new RangeError("failed learning requires at least one failure");
+    }
     Object.freeze(this);
   }
 }

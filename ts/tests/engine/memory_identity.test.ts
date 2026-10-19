@@ -6,10 +6,11 @@
  * `test_memory_decl_origins_traverse_and_rewrite_shared_carriers_once`,
  * `test_memory_spec_requires_sorted_owners_and_derived_eligibility`,
  * `test_memory_stack_requires_locator_and_unique_keys`,
- * `test_snapshot_envelope_names_its_memory_key` and
- * `test_package_docstring_and_exports_describe_keyed_memories`; plus a lone-surrogate node id, a
- * compiled spec whose key and config the declaration check would refuse, and a snapshot deeper than
- * the value nesting limit.
+ * `test_snapshot_envelope_names_its_memory_key`, `test_learning_carriers_name_their_memory_key`,
+ * the `BackwardFailure` line of `test_backward_failure_and_commit_records_name_their_memory_key`
+ * and `test_package_docstring_and_exports_describe_keyed_memories`; plus a lone-surrogate node
+ * id, a compiled spec whose key and config the declaration check would refuse, and a snapshot
+ * deeper than the value nesting limit.
  *
  * Changed: sites sort with `DeclSite.compare` (Python sorts by `DeclSite.sort_key()`; the order
  * message names `DeclSite.compare`), and equal sites compare 0. A declaration's config is its
@@ -26,9 +27,8 @@
  * and rewrite (`memory declaration origin must be an OriginRef or None`), since a frozen
  * `MemoryDecl` checked its origin when built.
  *
- * Left for later: `test_learning_carriers_name_their_memory_key` and
- * `test_backward_failure_and_commit_records_name_their_memory_key`, with the learning carriers and
- * the runtime log.
+ * Later (T4-2): the commit-record half of
+ * `test_backward_failure_and_commit_records_name_their_memory_key`, with the runtime log.
  */
 
 import { expect, test } from "bun:test";
@@ -38,15 +38,29 @@ import { OriginRef } from "../../src/diagnostics.ts";
 import {
   DeclSite,
   iterMemoryDeclOrigins,
+  LearningFailure,
+  LearningResult,
   MemoryDecl,
+  MemoryOperationFailure,
   MemorySnapshotEnvelope,
   MemorySpec,
   MemoryStack,
+  PolicyCommitOutcome,
   rewriteMemoryDeclOrigins,
 } from "../../src/memory/contracts.ts";
 import * as memoryPackage from "../../src/memory/index.ts";
 // Unused on purpose: the typecheck fails if the facade stops exporting one of these types.
-import type { JsonObject, JsonScalar, JsonValue, Memory, MemorySession } from "../../src/memory/index.ts";
+import type {
+  JsonObject,
+  JsonScalar,
+  JsonValue,
+  LearningOperation,
+  LearningStatus,
+  Memory,
+  MemorySession,
+  PolicyCommitStatus,
+} from "../../src/memory/index.ts";
+import { BackwardFailure } from "../../src/runtime/contracts.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
@@ -319,6 +333,26 @@ test("a snapshot envelope takes a snapshot deeper than the value nesting limit",
   expect(new MemorySnapshotEnvelope("notes", deep).snapshot).toEqual(deep);
 });
 
+// test_learning_carriers_name_their_memory_key
+test("learning carriers name their memory key", () => {
+  const cause = new MemoryOperationFailure("commit", "declined", "Declined.", true);
+  const failure = new LearningFailure("notes", "commit", cause);
+  const outcome = new PolicyCommitOutcome("notes", "failed", { commitId: "c", failure: cause });
+  expect([failure.memory, outcome.memory]).toEqual(["notes", "notes"]);
+  const result = new LearningResult("failed", { failures: [failure], policies: [outcome] });
+  expect(result.policies[0]!.memory).toBe("notes");
+  expectError(
+    () => new LearningResult("failed", { failures: [failure], policies: [outcome, outcome] }),
+    RangeError,
+    "learning memory keys must be unique",
+  );
+});
+
+// test_backward_failure_and_commit_records_name_their_memory_key (the BackwardFailure line)
+test("a backward failure names its memory key", () => {
+  expect(new BackwardFailure("commit", "declined", "", { memory: "notes" }).memory).toBe("notes");
+});
+
 // test_package_docstring_and_exports_describe_keyed_memories
 test("the package doc and exports describe keyed memories", () => {
   const source = readFileSync(new URL("../../src/memory/index.ts", import.meta.url), "utf8");
@@ -332,8 +366,11 @@ test("the package doc and exports describe keyed memories", () => {
   expect(Object.keys(memoryPackage)).toEqual([
     "BUILTIN_MEMORY_CONFIG_KEYS",
     "DeclSite",
+    "LearningFailure",
+    "LearningResult",
     "MEMORY_IDENTIFIER_PATTERN",
     "MemoryDecl",
+    "MemoryMutation",
     "MemoryOccurrenceKind",
     "MemoryOccurrenceSegment",
     "MemoryOperationError",
@@ -343,6 +380,7 @@ test("the package doc and exports describe keyed memories", () => {
     "MemorySnapshotEnvelope",
     "MemorySpec",
     "MemoryStack",
+    "PolicyCommitOutcome",
     "checkMemoryDeclaration",
     "isMemory",
   ]);

@@ -1205,6 +1205,13 @@ ordinary messages. These tuples are batches; positional lists inside them remain
 structured messages. Node self/variable channels contain ordered text messages
 and remain attributed to their own occurrences, rather than becoming root channels.
 
+Changed (TS yian): `BackwardOutcome`, `LearningResult` and `PolicyCommitOutcome` hold
+the frozen values they were given, where Python copies them; these classes,
+`BackwardFailure` and `LearningFailure` are frozen. Feedback batches, `failures` and
+`policies` are arrays, not tuples; `nodeStartedSeq` is a `number`. Captures, attributed
+results and mutation payloads return their stored frozen values, not fresh copies; copy one
+before you modify it.
+
 `result.backward()` with no external feedback skips unreached AGENT backward
 model calls. It still presents accepted history to every enabled memory key,
 including keys with empty or unexecuted histories. With effective feedback,

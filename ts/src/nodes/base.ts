@@ -361,6 +361,23 @@ export function validateInputOutputPaths(data: Readonly<Record<string, unknown>>
 }
 
 /**
+ * Return a frozen copy of `failure`, checked by `Failure`'s constructor, whose trace holds plain
+ * `OriginRef`s. `BackwardContext` and the runtime's `BackwardFailure` use it.
+ *
+ * @throws TypeError or RangeError when a field breaks `Failure`'s contract, such as a trace that
+ *   isn't an array of `OriginRef`s.
+ */
+export function retainFailure(failure: Failure): Failure {
+  // Rebuilt once to check the trace with Failure's own errors, as Python's `__post_init__`,
+  // before its items are copied without subclass state.
+  const checked = new Failure(failure);
+  const trace = checked.trace.map((origin) => Object.freeze(new OriginRef(origin.key)));
+  const retained = new Failure({ ...checked, trace });
+  Object.freeze(retained.trace);
+  return Object.freeze(retained);
+}
+
+/**
  * Detached forward material and attribution supplied to one backward hook. Frozen.
  *
  * Input declarations stay separate from recorded values: an early binding failure has
@@ -443,13 +460,7 @@ export class BackwardContext {
     validateDeclaredNames(variableNames, "variable_names");
     if (failure !== null) {
       if (!isExactly(failure, Failure)) throw new TypeError("failure must be a Failure or null");
-      // Rebuilt once to check the trace with Failure's own errors, as Python's `__post_init__`,
-      // before its items are copied.
-      const checked = new Failure(failure);
-      const trace = checked.trace.map((origin) => Object.freeze(new OriginRef(origin.key)));
-      failure = new Failure({ ...checked, trace });
-      Object.freeze(failure.trace);
-      Object.freeze(failure);
+      failure = retainFailure(failure);
     }
     if (scope !== null && !isExactly(scope, ExecutionScope)) {
       throw new TypeError("scope must be an ExecutionScope or null");

@@ -1,5 +1,5 @@
 /**
- * Memory identity values and the memory JSON snapshot, from
+ * Memory identity values, the memory JSON snapshot and the learning result carriers, from
  * `tests/engine/test_memory_contracts.py`:
  * `test_identity_values_are_frozen_structured_products`, `test_memory_scope_has_no_boundary`,
  * `test_identity_values_reject_ambiguous_paths_and_indices`,
@@ -7,17 +7,28 @@
  * `test_memory_decls_preserve_origin_and_isolate_canonical_json`,
  * `test_json_contracts_reject_non_exact_or_non_finite_values`, `test_json_contracts_reject_cycles`,
  * `test_scope_carries_a_root_relative_path_and_memory_keys`, the declaration rows of
- * `test_memory_strings_must_have_a_canonical_utf8_representation`, the declaration half of
- * `test_json_scalar_identity_preserves_exact_types_at_every_depth`,
+ * `test_memory_strings_must_have_a_canonical_utf8_representation`, the declaration and mutation
+ * thirds of `test_json_scalar_identity_preserves_exact_types_at_every_depth`, the mutation half of
+ * `test_context_episode_and_mutation_keep_json_snapshots`, the `MemoryMutation`, `MemoryProposal`,
+ * `LearningFailure` and `BackwardFailure` rows of
+ * `test_episodes_contexts_mutations_and_failures_name_the_memory_key`,
+ * `test_learning_result_keeps_primary_independent_failure_attribution`,
+ * `test_policy_commit_outcome_keeps_protocol_identity_and_backend_hints`,
+ * `test_learning_completion_is_independent_of_retryability_and_policy_confirmation`,
+ * `test_policy_commit_outcome_rejects_inconsistent_optional_fields`,
+ * `test_policy_commit_outcome_requires_exact_valid_unicode_identities`, the rows without forgery of
+ * `test_learning_result_revalidates_exact_nested_policy_carriers`,
  * `test_memory_errors_expose_typed_fields_and_origin`, the `Memory` half of
  * `test_protocols_accept_narrow_structural_implementations`, the scope row of
  * `test_nested_memory_carriers_reject_forged_subclass_values` and the subclass row of
- * `test_memory_origins_revalidate_subclass_keys_without_losing_identity`, the memory package and
- * `contracts.ts` halves of `test_frame_types_are_gone` and
+ * `test_memory_origins_revalidate_subclass_keys_without_losing_identity`, the memory package,
+ * `contracts.ts` and `runtime/contracts.ts` rows of `test_frame_types_are_gone` and
  * `test_importing_memory_contracts_does_not_load_heavy_backends`; plus JavaScript's own
  * values (a `"__proto__"` key, a null-prototype object, a repeated subtree, an array hole), the
- * value nesting limit, the occurrence nesting order and the operation failure's field checks
- * (Python pins those through the learning outcome and backward records).
+ * value nesting limit, the occurrence nesting order, the operation failure's field checks
+ * (Python pins those through the learning outcome and backward records), `validateMutations`, a
+ * mutation's id and payload checks (a payload deeper than the value nesting limit is kept), and
+ * each learning carrier's field checks in Python's order.
  *
  * Changed: the JSON tests build a custom-type `MemoryDecl`, as Python's `_decl` does. The non-exact
  * rows are JavaScript's (a `Map`, a `Date`, an own symbol key, a class instance, an array subclass
@@ -34,7 +45,12 @@
  * that it imports only `./contracts.ts` (the layer-direction test pins `contracts.ts` to
  * `diagnostics` and `defaults`), where Python imports the package in a fresh interpreter. Python's
  * `ValueError` is `RangeError`; a frozen field throws `TypeError` where Python raises
- * `FrozenInstanceError`.
+ * `FrozenInstanceError`. A mutation's payload is its deep-frozen snapshot, so editing it throws
+ * `TypeError` (Python returns a fresh copy); Python's int payloads are `bigint`s. The learning
+ * carriers keep their nested carriers by reference: where Python asserts a copied policy `is not`
+ * the one passed in, the test checks that it is the same frozen value. The policy outcome's
+ * optional fields are an options object (`{ commitId, failure }`), and the learning result's arrays
+ * are `{ failures, policies }`. The identity rows check only the error class, as Python does.
  *
  * Not ported: the tuple and bytes rows and the list-for-tuple path row (TS has only arrays and no
  * bytes in a config); `test_memory_json_rejects_nesting_beyond_the_memory_limit` (its carriers
@@ -43,13 +59,16 @@
  * `test_memory_origins_revalidate_subclass_keys_without_losing_identity` (a JS subclass can't skip
  * its base constructor, so no carrier holds an unvalidated segment or origin);
  * `test_memory_operation_error_survives_copy_and_pickle` (no `copy` or `pickle`); dataclass `==`
- * and `hash` (Bun's `toEqual` replaces equality); the `runtime/contracts.ts` and `MemorySession`
- * rows of `test_frame_types_are_gone` (the runtime contracts aren't ported, and `MemorySession` is
- * an interface, with no runtime members to check).
+ * and `hash` (Bun's `toEqual` replaces equality); the `MemorySession` row of
+ * `test_frame_types_are_gone` (`MemorySession` is an interface, with no runtime members to check);
+ * the forged rows of
+ * `test_learning_result_revalidates_exact_nested_policy_carriers` (Python's `object.__setattr__`
+ * on a frozen dataclass; a TS carrier is frozen by its constructor, so none holds an unchecked
+ * `commitId` or `retryable`).
  *
- * Left for later: the recall, learning evidence, learning and conversation tests, with their
- * carriers (`MemoryEpisode`, `LearnContext` and the rest), and the `recall`, `learn` and `commit`
- * rows of `test_protocols_accept_narrow_structural_implementations`.
+ * Left for later: the recall, learning evidence and conversation tests, with their carriers
+ * (`MemoryEpisode`, `LearnContext` and the rest); and the `recall`, `learn` and `commit` rows of
+ * `test_protocols_accept_narrow_structural_implementations`.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -62,8 +81,11 @@ import {
   DeclSite,
   isMemory,
   type JsonObject,
+  LearningFailure,
+  LearningResult,
   type Memory,
   MemoryDecl,
+  MemoryMutation,
   MemoryOccurrenceKind,
   MemoryOccurrenceSegment,
   MemoryOperationError,
@@ -71,8 +93,13 @@ import {
   MemoryScope,
   type MemorySession,
   MemorySetupError,
+  PolicyCommitOutcome,
+  type PolicyCommitStatus,
+  validateMutations,
 } from "../../src/memory/contracts.ts";
 import * as memoryPackage from "../../src/memory/index.ts";
+import * as runtimeContracts from "../../src/runtime/contracts.ts";
+import { BackwardFailure, MemoryProposal } from "../../src/runtime/contracts.ts";
 import { importStatements } from "./source_scan.ts";
 
 /** Build a custom-type declaration, so the built-in key allowlist does not apply. */
@@ -447,12 +474,13 @@ test("a scope carries a root-relative path and memory keys", () => {
   );
 });
 
-// test_frame_types_are_gone (the memory package and contracts.ts halves)
+// test_frame_types_are_gone (the memory package, contracts.ts and runtime/contracts.ts rows)
 test("the frame types are gone", () => {
   for (const name of ["MemoryFrame", "MemoryFrameRef", "MemoryFrameSpec", "MemoryOccurrenceRef", "MemoryOwner"]) {
     expect(name in memoryPackage).toBe(false);
     expect(name in contracts).toBe(false);
   }
+  expect("FrameProposal" in runtimeContracts).toBe(false);
 });
 
 // test_importing_memory_contracts_does_not_load_heavy_backends
@@ -462,5 +490,281 @@ test("the memory package imports only its contracts", () => {
   const source = readFileSync(new URL("../../src/memory/index.ts", import.meta.url), "utf8");
   expect(new Set(importStatements(source).map((statement) => statement.specifier))).toEqual(
     new Set(["./contracts.ts"]),
+  );
+});
+
+// test_context_episode_and_mutation_keep_json_snapshots (the mutation half)
+test("a mutation keeps a frozen JSON snapshot", () => {
+  const payload: { add: { id: string; text: string }[] } = { add: [{ id: "lesson", text: "remember" }] };
+  const mutation = new MemoryMutation("m1", payload);
+  payload.add.length = 0;
+  expect(() => {
+    (mutation.payload as { add: unknown[] }).add.push("changed");
+  }).toThrow(TypeError);
+  expect(mutation.payload).toEqual({ add: [{ id: "lesson", text: "remember" }] });
+  expect(Object.isFrozen(mutation)).toBe(true);
+  expect(Object.isFrozen(mutation.payload)).toBe(true);
+});
+
+// test_json_scalar_identity_preserves_exact_types_at_every_depth (the mutation third)
+test("mutation JSON scalars keep their exact types at every depth", () => {
+  for (const [value, type] of [
+    [true, "boolean"],
+    [1n, "bigint"],
+    [1, "number"],
+  ] as const) {
+    const payload = new MemoryMutation("same", [value, { value }]).payload as readonly [unknown, { value: unknown }];
+    expect(typeof payload[0]).toBe(type);
+    expect(typeof payload[1].value).toBe(type);
+    expect(payload[0]).toBe(value);
+    expect(payload[1].value).toBe(value);
+  }
+});
+
+test("a mutation checks its id and payload", () => {
+  let deep: unknown = {};
+  for (let i = 0; i < 150; i++) deep = { d: deep };
+  expect(new MemoryMutation("deep", deep).payload).toEqual(deep as JsonObject);
+  expect(new MemoryMutation("scalar", "text").payload).toBe("text");
+  expectError(
+    () => new MemoryMutation("m", { x: Number.POSITIVE_INFINITY }),
+    RangeError,
+    "payload.x JSON number must be finite",
+  );
+  expectError(() => new MemoryMutation("m", Number.NaN), RangeError, "payload JSON number must be finite");
+  expectError(() => new MemoryMutation("", {}), RangeError, "mutation_id must be non-empty");
+  expectError(() => new MemoryMutation("\ud800", {}), RangeError, "Unicode surrogate is not valid canonical JSON");
+  expectError(() => new MemoryMutation(1 as never, {}), TypeError, "mutation_id must be a string");
+  expectError(() => new MemoryMutation("m", new Map()), TypeError, "payload must contain exact JSON values");
+});
+
+test("validateMutations keeps an array of unique mutations by reference", () => {
+  const a = new MemoryMutation("a", 1n);
+  const b = new MemoryMutation("b", 2n);
+  const input = [a, b];
+  const checked = validateMutations(input);
+  expect(checked).not.toBe(input);
+  expect(Object.isFrozen(checked)).toBe(true);
+  expect(checked[0]).toBe(a);
+  expect(checked[1]).toBe(b);
+  expect(validateMutations([])).toEqual([]);
+  class SubMutation extends MemoryMutation {}
+  expectError(() => validateMutations(new Set([a])), TypeError, "mutations must be an array");
+  const item = "mutations items must be MemoryMutation values";
+  expectError(() => validateMutations([a, { mutationId: "x", payload: 1n }]), TypeError, item);
+  expectError(() => validateMutations([new SubMutation("s", 1n)]), TypeError, item);
+  expectError(() => validateMutations([a, new MemoryMutation("a", {})]), RangeError, "mutation IDs must be unique");
+});
+
+// test_episodes_contexts_mutations_and_failures_name_the_memory_key (the mutation, proposal and
+// failure rows)
+test("mutations, proposals and failures name the memory key", () => {
+  const mutation = new MemoryMutation("m1", { add: 1n });
+  expect([mutation.mutationId, mutation.payload]).toEqual(["m1", { add: 1n }]);
+  expect("frameRef" in mutation).toBe(false);
+  const proposal = new MemoryProposal("notes", [mutation]);
+  expect(proposal.memory).toBe("notes");
+  expect(proposal.mutations).toEqual([mutation]);
+  expectError(
+    () => new MemoryProposal("notes", [mutation, new MemoryMutation("m1", {})]),
+    RangeError,
+    "mutation IDs must be unique",
+  );
+  const cause = new MemoryOperationFailure("learn", "notes.failed", "boom", false);
+  expect(new LearningFailure("notes", "learn", cause).memory).toBe("notes");
+  expect("frameRef" in new LearningFailure("notes", "commit", cause)).toBe(false);
+  expect("frameRef" in new BackwardFailure("learn", "x", "y", { memory: "notes" })).toBe(false);
+});
+
+test("a learning failure checks its attribution and failure", () => {
+  const cause = new MemoryOperationFailure("learn", "busy", "try later", true);
+  const failure = new LearningFailure("notes", "learn", cause);
+  expect([failure.memory, failure.operation]).toEqual(["notes", "learn"]);
+  expect(failure.failure).toBe(cause);
+  expect(Object.isFrozen(failure)).toBe(true);
+  class SubFailure extends MemoryOperationFailure {}
+  const operation = "operation must be 'learn' or 'commit'";
+  expectError(() => new LearningFailure("notes", "other" as never, cause), RangeError, operation);
+  expectError(() => new LearningFailure("", "learn", cause), RangeError, "memory must be non-empty");
+  expectError(() => new LearningFailure(1 as never, "learn", cause), TypeError, "memory must be a string");
+  expectError(() => new LearningFailure("notes", "" as never, cause), RangeError, "operation must be non-empty");
+  expectError(() => new LearningFailure("notes", 1 as never, cause), TypeError, "operation must be a string");
+  const message = "failure must be a MemoryOperationFailure";
+  expectError(() => new LearningFailure("notes", "learn", { ...cause } as never), TypeError, message);
+  expectError(() => new LearningFailure("notes", "learn", new SubFailure("learn", "c", "m", true)), TypeError, message);
+});
+
+// test_learning_result_keeps_primary_independent_failure_attribution
+test("a learning result keeps primary, independent failure attribution", () => {
+  const busy = new MemoryOperationFailure("learn", "busy", "try later", true);
+  const rejected = new MemoryOperationFailure("commit", "rejected", "not applied", false);
+  const retryable = new LearningFailure("reflective", "learn", busy);
+  const final = new LearningFailure("profile", "commit", rejected);
+  expect(new LearningResult("succeeded").failures).toEqual([]);
+  expect(new LearningResult("failed", { failures: [final] }).status).toBe("failed");
+  const result = new LearningResult("incomplete", { failures: [retryable, final] });
+  expect(result.failures).toEqual([retryable, final]);
+  expect(result.failures[0]).toBe(retryable);
+  expect(new LearningResult("failed", { failures: [retryable] }).failures).toEqual([retryable]);
+  expect(new LearningResult("incomplete", { failures: [final] }).failures).toEqual([final]);
+});
+
+// test_policy_commit_outcome_keeps_protocol_identity_and_backend_hints
+test.each<[PolicyCommitStatus, string | null, boolean]>([
+  ["unrequested", null, false],
+  ["unknown", "commit-1", false],
+  ["succeeded", "commit-1", false],
+  ["failed", "commit-1", true],
+])("a %s policy commit outcome keeps its identity and backend hints", (status, commitId, hasFailure) => {
+  const failure = hasFailure ? new MemoryOperationFailure("backend-stage", "retry", "Try later.", true) : null;
+  const outcome = new PolicyCommitOutcome("history", status, { commitId, failure });
+  expect([outcome.memory, outcome.status, outcome.commitId, outcome.failure]).toEqual([
+    "history",
+    status,
+    commitId,
+    failure,
+  ]);
+  expect(outcome.failure).toBe(failure);
+  expect(() => {
+    (outcome as { status: string }).status = "succeeded";
+  }).toThrow(TypeError);
+});
+
+// test_learning_completion_is_independent_of_retryability_and_policy_confirmation
+test("learning completion is independent of retryability and policy confirmation", () => {
+  const cause = new MemoryOperationFailure("backend", "busy", "Retry.", true);
+  const failure = new LearningFailure("history", "commit", cause);
+  const succeeded = new PolicyCommitOutcome("history", "succeeded", { commitId: "commit-1" });
+  const pending = new PolicyCommitOutcome("other", "unrequested");
+  expect(new LearningResult("failed", { failures: [failure] }).failures).toEqual([failure]);
+  expect(new LearningResult("incomplete").policies).toEqual([]);
+  expect(new LearningResult("incomplete", { policies: [succeeded, pending] }).policies).toEqual([succeeded, pending]);
+  expect(new LearningResult("incomplete", { policies: [succeeded] }).status).toBe("incomplete");
+  expect(new LearningResult("succeeded", { policies: [succeeded] }).policies).toEqual([succeeded]);
+  expectError(
+    () => new LearningResult("succeeded", { policies: [pending] }),
+    RangeError,
+    "succeeded learning requires succeeded policies",
+  );
+  expectError(() => new LearningResult("failed"), RangeError, "failed learning requires at least one failure");
+  expectError(
+    () => new LearningResult("incomplete", { policies: [succeeded, succeeded] }),
+    RangeError,
+    "learning memory keys must be unique",
+  );
+});
+
+// test_policy_commit_outcome_rejects_inconsistent_optional_fields
+test.each<[string, string | null, boolean, string]>([
+  ["unrequested", "commit-1", false, "unrequested policy cannot carry commit data"],
+  ["unrequested", null, true, "unrequested policy cannot carry commit data"],
+  ["unknown", null, false, "requested policy requires commit_id"],
+  ["unknown", "commit-1", true, "only failed policy commits require a failure"],
+  ["succeeded", null, false, "requested policy requires commit_id"],
+  ["succeeded", "commit-1", true, "only failed policy commits require a failure"],
+  ["failed", null, true, "requested policy requires commit_id"],
+  ["failed", "commit-1", false, "only failed policy commits require a failure"],
+  ["other", null, false, "invalid policy commit status"],
+])("a %s policy commit outcome with commit id %p and failure %p is refused", (status, commitId, withFailure, text) => {
+  const failure = withFailure ? new MemoryOperationFailure("backend", "error", "Failed.", false) : null;
+  expectError(() => new PolicyCommitOutcome("history", status as never, { commitId, failure }), RangeError, text);
+});
+
+// test_policy_commit_outcome_requires_exact_valid_unicode_identities
+test.each(
+  (["memory", "status", "commit_id"] as const).flatMap((field) =>
+    (
+      [
+        ["", RangeError],
+        ["\ud800", RangeError],
+        [1, TypeError],
+        [true, TypeError],
+      ] as const
+    ).map(([invalid, cls]) => [field, invalid, cls] as const),
+  ),
+)("a policy commit outcome refuses %s %p", (field, invalid, cls) => {
+  const values: Record<string, unknown> = { memory: "history", status: "unknown", commit_id: "commit-1" };
+  values[field] = invalid;
+  const { memory, status, commit_id: commitId } = values as { memory: never; status: never; commit_id: never };
+  expect(() => new PolicyCommitOutcome(memory, status, { commitId })).toThrow(cls);
+});
+
+test("a policy commit outcome refuses a failure that isn't a MemoryOperationFailure", () => {
+  const failure = new MemoryOperationFailure("backend", "failed", "Failed.", true);
+  expectError(
+    () => new PolicyCommitOutcome("history", "failed", { commitId: "c", failure: { ...failure } as never }),
+    TypeError,
+    "failure must be a MemoryOperationFailure or null",
+  );
+});
+
+// test_learning_result_revalidates_exact_nested_policy_carriers (the rows without forgery)
+test("a learning result checks its exact nested policy carriers", () => {
+  const first = new PolicyCommitOutcome("second", "unknown", { commitId: "commit-2" });
+  const second = new PolicyCommitOutcome("first", "unrequested");
+  const policies = [first, second];
+  const result = new LearningResult("incomplete", { failures: [], policies });
+  expect(result.policies).toEqual([first, second]);
+  expect(result.policies).not.toBe(policies);
+  expect(result.policies[0]).toBe(first);
+  expect(Object.isFrozen(result.policies[0])).toBe(true);
+  expect(Object.isFrozen(result.policies)).toBe(true);
+  expect(Object.isFrozen(result.failures)).toBe(true);
+  expect(Object.isFrozen(result)).toBe(true);
+  expectError(
+    () => new LearningResult("incomplete", { policies: new Set([first]) as never }),
+    TypeError,
+    "learning policies must be an array",
+  );
+  class PolicySubclass extends PolicyCommitOutcome {}
+  expectError(
+    () => new LearningResult("incomplete", { policies: [new PolicySubclass("history", "unrequested")] }),
+    TypeError,
+    "policies items must be PolicyCommitOutcome values",
+  );
+});
+
+test("a learning result checks its status and failures in Python's order", () => {
+  const cause = new MemoryOperationFailure("learn", "busy", "try later", true);
+  const a = new LearningFailure("notes", "learn", cause);
+  expectError(
+    () => new LearningResult("other" as never),
+    RangeError,
+    "learning status must be 'succeeded', 'failed', or 'incomplete'",
+  );
+  expectError(() => new LearningResult(1 as never), TypeError, "status must be a string");
+  expectError(
+    () => new LearningResult("failed", { failures: new Set([a]) as never }),
+    TypeError,
+    "learning failures must be an array",
+  );
+  expectError(
+    () => new LearningResult("failed", { failures: [{ ...a }] as never }),
+    TypeError,
+    "failures items must be LearningFailure values",
+  );
+  expectError(
+    () => new LearningResult("failed", { failures: [a, new LearningFailure("notes", "learn", cause)] }),
+    RangeError,
+    "learning failure attribution must be unique",
+  );
+  expect(
+    new LearningResult("failed", { failures: [a, new LearningFailure("notes", "commit", cause)] }).failures,
+  ).toHaveLength(2);
+  expectError(
+    () => new LearningResult("succeeded", { failures: [a] }),
+    RangeError,
+    "succeeded learning cannot carry failures",
+  );
+  // One loop per array, class then uniqueness, so the repeat is found before the stranger.
+  expectError(
+    () => new LearningResult("failed", { failures: [a, a, { ...a }] as never }),
+    RangeError,
+    "learning failure attribution must be unique",
+  );
+  expectError(
+    () => new LearningResult("incomplete", { policies: [new PolicyCommitOutcome("x", "unrequested"), {}] as never }),
+    TypeError,
+    "policies items must be PolicyCommitOutcome values",
   );
 });

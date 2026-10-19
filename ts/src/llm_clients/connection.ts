@@ -109,6 +109,7 @@ export function missingModelMessage(
   const { strayModel = false, label = null } = options;
   let agent: string | null;
   if (label !== null) {
+    // Python's `label[:1].upper()` takes the first code point; `slice(0, 1)` would split a surrogate pair.
     const [first = "", ...rest] = label;
     agent = first.toUpperCase() + rest.join("");
   } else if (path) {
@@ -147,7 +148,7 @@ export function missingModelMessage(
 export class ConnectionSnapshot {
   readonly defaults: Readonly<Defaults>;
   readonly providerModels: Readonly<Record<string, string>>;
-  readonly connections: Readonly<Record<string, Connection>>;
+  readonly connections: Readonly<Record<string, Readonly<Connection>>>;
   readonly apiEndpoint: string;
   readonly strayModel: boolean;
 
@@ -160,7 +161,9 @@ export class ConnectionSnapshot {
   }) {
     this.defaults = Object.freeze(structuredClone(fields.defaults));
     this.providerModels = Object.freeze(structuredClone(fields.providerModels));
-    this.connections = Object.freeze(structuredClone(fields.connections));
+    const connections = structuredClone(fields.connections) as Record<string, Connection>;
+    for (const connection of Object.values(connections)) Object.freeze(connection);
+    this.connections = Object.freeze(connections);
     this.apiEndpoint = fields.apiEndpoint ?? OPENAI_API_ENDPOINT;
     this.strayModel = fields.strayModel ?? false;
     Object.freeze(this);
@@ -674,11 +677,16 @@ function checkHostHeaders(raw: Readonly<AgentConfig>, names: readonly string[]):
     const expected = byLowerCase(names);
     const listed = [...expected.keys()].sort(compareCodeUnits).map((name) => expected.get(name)!);
     throw new AuthError(
-      `This run's ${String(raw["provider"])} connection headers ${listed.join(", ")} came from the host's ` +
+      `This run's ${pythonText(raw["provider"])} connection headers ${listed.join(", ")} came from the host's ` +
         "llm_config.headers and are not recorded; pass headers to resume_flow or RunResult.backward",
     );
   }
   throw new AuthError(`llm_config.headers must have the header names this run recorded for the host key: ${diff}`);
+}
+
+/** Return `value` as Python's f-string shows it for a provider: `null` and `undefined` as `None`. */
+function pythonText(value: unknown): string {
+  return value === null || value === undefined ? "None" : String(value);
 }
 
 /** Return `names` keyed by their lowercase form; a later name wins a clash. */
@@ -744,11 +752,12 @@ export function splitModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LL
   }
   const recordedNames = pop(raw, HEADER_NAMES_KEY) ?? null;
   const headerNames = recordedNames === null ? null : validateHeaderNames(recordedNames, raw["provider"]);
-  if (Object.hasOwn(raw, HOST_KEY_MARKER)) {
-    if (pop(raw, HOST_KEY_MARKER) !== true) throw new RangeError("Invalid internal host key marker");
+  const marker = pop(raw, HOST_KEY_MARKER);
+  if (marker !== undefined) {
+    if (marker !== true) throw new RangeError("Invalid internal host key marker");
     if (raw["api_key"] === undefined || raw["api_key"] === null) {
       throw new AuthError(
-        `This run's ${String(raw["provider"])} API key came from the host's llm_config.api_key and is not ` +
+        `This run's ${pythonText(raw["provider"])} API key came from the host's llm_config.api_key and is not ` +
           "recorded; pass api_key to resume_flow or RunResult.backward",
       );
     }
@@ -764,6 +773,7 @@ export function splitModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LL
     validated.provider === "azure" &&
     validated.baseUrl !== null &&
     connection.source === "store" &&
+    // `validateConnection` requires a saved Azure login to record its endpoint as a string.
     azureResourceEndpoint(validated.baseUrl) !== azureResourceEndpoint(connection.endpoint as string)
   ) {
     // The saved key belongs to one resource; never send it to another.
@@ -877,7 +887,7 @@ export function legacyConnectionConfig(config: Readonly<AgentConfig>): AgentConf
     if (Object.hasOwn(result, field) && result[field] === null) delete result[field];
   }
   const provider = result["provider"];
-  if (provider === "openai" && !Object.hasOwn(result, "_connection")) {
+  if (provider === "openai" && result["_connection"] === undefined) {
     result["_connection"] = {
       method: "api_key",
       source: "legacy_environment",
@@ -888,8 +898,8 @@ export function legacyConnectionConfig(config: Readonly<AgentConfig>): AgentConf
   } else if (
     typeof provider === "string" &&
     KEYED.has(provider) &&
-    !Object.hasOwn(result, "_connection") &&
-    !Object.hasOwn(result, HOST_KEY_MARKER)
+    result["_connection"] === undefined &&
+    result[HOST_KEY_MARKER] === undefined
   ) {
     result["_connection"] = structuredClone(ENVIRONMENT_CONNECTION);
   }

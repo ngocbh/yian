@@ -266,6 +266,12 @@ test("legacy adds environment connection except host key and keyless", () => {
   expect(legacyConnectionConfig({ provider: "anthropic", model: "m", _connection: STORE })["_connection"]).toEqual(
     STORE,
   );
+  // An `undefined` value is an absent key.
+  const pinned = legacyConnectionConfig({ provider: "openai", model: "m", _connection: undefined });
+  expect((pinned["_connection"] as Connection).source).toBe("legacy_environment");
+  expect(
+    legacyConnectionConfig({ provider: "anthropic", model: "m", [HOST_KEY_MARKER]: undefined })["_connection"],
+  ).toEqual(ENVIRONMENT);
 });
 
 test("azure resource endpoint", () => {
@@ -327,6 +333,23 @@ describe("split model config rejects malformed header names", () => {
   });
 });
 
+test("split model config reads an undefined marker as absent and names a missing provider None", () => {
+  const [validated] = splitModelConfig({ provider: "anthropic", model: "m", [HOST_KEY_MARKER]: undefined });
+  expect(validated.provider).toBe("anthropic");
+  const error = thrown(() => splitModelConfig({ model: "m", [HOST_KEY_MARKER]: true }));
+  expect(error).toBeInstanceOf(AuthError);
+  expect(error.message).toStartWith("This run's None API key");
+});
+
+test("snapshot connections are frozen copies", () => {
+  const snapshot = new ConnectionSnapshot({ defaults: {}, providerModels: {}, connections: { anthropic: ENVIRONMENT } });
+  expect(() => {
+    (snapshot.connections["anthropic"] as Connection).source = "store";
+  }).toThrow(TypeError);
+  expect(snapshot.connections["anthropic"]!.source).toBe("environment");
+  expect(ENVIRONMENT.source).toBe("environment");
+});
+
 test("split model config refuses header names without the marker", () => {
   const { [HOST_KEY_MARKER]: _marker, ...unmarked } = MARKED;
   const error = rangeError(() =>
@@ -369,23 +392,27 @@ describe("TS additions", () => {
     );
   });
 
+  const subscription = {
+    provider: "openai",
+    model: "m",
+    openai: { temperature: 0.2 },
+    _connection: {
+      ...OPENAI_STORE,
+      method: "subscription",
+      endpoint: "https://chatgpt.com/backend-api/codex",
+    },
+  };
+
+  test("checkModelConfig checks the block against the API the connection reaches", () => {
+    expect(rangeError(() => checkModelConfig(subscription)).message).toContain("`openai.temperature`");
+    // A host key sends the same agent to the Responses API, which accepts the block.
+    checkModelConfig({ ...subscription, api_key: "host-key" });
+  });
+
   test("refusedBlock names the block only when the block alone was refused", () => {
     expect(refusedBlock({ provider: "anthropic", model: 1n })).toBe("");
     expect(refusedBlock({ provider: "azure", model: "m" })).toBe("");
     expect(refusedBlock({ model: "m" })).toBe("");
-    const subscription = {
-      provider: "openai",
-      model: "m",
-      openai: { temperature: 0.2 },
-      _connection: {
-        ...OPENAI_STORE,
-        method: "subscription",
-        endpoint: "https://chatgpt.com/backend-api/codex",
-      },
-    };
-    expect(rangeError(() => checkModelConfig(subscription)).message).toContain("`openai.temperature`");
     expect(refusedBlock(subscription)).toBe(".openai");
-    // A host key sends the same agent to the Responses API, which accepts the block.
-    checkModelConfig({ ...subscription, api_key: "host-key" });
   });
 });

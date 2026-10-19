@@ -71,8 +71,14 @@ test.each([
   ["anthropic", "claude-sonnet-4-5"],
 ])("a host key marker without the key fails before the environment (%s)", (provider, model) => {
   const marked = { provider, model, _host_key: true };
-  expect(() => splitModelConfig(marked)).toThrow(AuthError);
-  expect(() => splitModelConfig(marked)).toThrow(/llm_config\.api_key/);
+  let error: unknown;
+  try {
+    splitModelConfig(marked);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(AuthError);
+  expect((error as AuthError).message).toMatch(/llm_config\.api_key/);
   const [validated] = splitModelConfig({ ...marked, api_key: SENTINEL });
   expect(validated.apiKey).toBe(SENTINEL);
   expect(() => splitModelConfig({ ...marked, _host_key: "yes", api_key: SENTINEL })).toThrow(/marker/);

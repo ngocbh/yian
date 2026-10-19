@@ -2069,6 +2069,8 @@ block, including inside the free-form mappings `openrouter.provider` and
 `vllm.chat_template_kwargs`, which Python yian passes through. A whole number given for
 a float field stays an int and is sent as written (`temperature: 1` sends `1`), as
 everywhere in TS yian (see [Types → Two constructors](typing.md#two-constructors-infer-vs-check)).
+Choice values in these errors are spelled in the text form: `Input should be "auto" or
+"standard_only"`.
 
 | Provider | API yian calls | Reference |
 | --- | --- | --- |

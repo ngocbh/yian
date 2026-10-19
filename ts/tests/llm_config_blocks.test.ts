@@ -287,8 +287,8 @@ describe("TS additions", () => {
         loc: ["provider"],
         type: "literal_error",
         msg:
-          "Input should be 'openai', 'xai', 'deepseek', 'qwen', 'qwen-cn', 'glm', 'glm-cn', 'minimax', " +
-          "'minimax-cn', 'openrouter', 'vllm', 'ollama', 'anthropic', 'google' or 'azure'",
+          'Input should be "openai", "xai", "deepseek", "qwen", "qwen-cn", "glm", "glm-cn", "minimax", ' +
+          '"minimax-cn", "openrouter", "vllm", "ollama", "anthropic", "google" or "azure"',
       },
     ]);
   });

@@ -151,9 +151,21 @@ describe("value pass", () => {
     });
     expect(value(s, { three: "c", two: "a", one: "a" })).toEqual({ three: "c", two: "a", one: "a" });
     expect(issues(s, { three: "d", two: 1n, one: "A" })).toEqual([
-      { loc: ["three"], type: "literal_error", msg: "Input should be 'a', 'b' or 'c'" },
-      { loc: ["two"], type: "literal_error", msg: "Input should be 'a' or 'b'" },
-      { loc: ["one"], type: "literal_error", msg: "Input should be 'a'" },
+      { loc: ["three"], type: "literal_error", msg: 'Input should be "a", "b" or "c"' },
+      { loc: ["two"], type: "literal_error", msg: 'Input should be "a" or "b"' },
+      { loc: ["one"], type: "literal_error", msg: 'Input should be "a"' },
+    ]);
+  });
+
+  test("a literal choice holding a quote is JSON-escaped, in the message and the union label", () => {
+    const s = schema({
+      v: { kind: "literal", values: ['say "hi"', "b"] },
+      u: { kind: "union", members: [{ kind: "bool" }, { kind: "literal", values: ['a"b'] }] },
+    });
+    expect(issues(s, { v: "c", u: 1n })).toEqual([
+      { loc: ["v"], type: "literal_error", msg: 'Input should be "say \\"hi\\"" or "b"' },
+      { loc: ["u", "bool"], type: "bool_type", msg: "Input should be a valid boolean" },
+      { loc: ["u", 'literal["a\\"b"]'], type: "literal_error", msg: 'Input should be "a\\"b"' },
     ]);
   });
 
@@ -260,7 +272,7 @@ describe("value pass", () => {
       { loc: ["keep", "float"], type: "float_type", msg: "Input should be a valid number" },
       { loc: ["keep", "str"], type: "string_type", msg: "Input should be a valid string" },
       { loc: ["think", "bool"], type: "bool_type", msg: "Input should be a valid boolean" },
-      { loc: ["think", "literal['low','high']"], type: "literal_error", msg: "Input should be 'low' or 'high'" },
+      { loc: ["think", 'literal["low","high"]'], type: "literal_error", msg: 'Input should be "low" or "high"' },
     ]);
   });
 
@@ -1335,9 +1347,9 @@ describe("Ollama chat block", () => {
     expect(checkBlock(OllamaChatBlock, { think: 1n }).issues).toEqual([
       { loc: ["think", "bool"], type: "bool_type", msg: "Input should be a valid boolean" },
       {
-        loc: ["think", "literal['low','medium','high','max']"],
+        loc: ["think", 'literal["low","medium","high","max"]'],
         type: "literal_error",
-        msg: "Input should be 'low', 'medium', 'high' or 'max'",
+        msg: 'Input should be "low", "medium", "high" or "max"',
       },
     ]);
   });

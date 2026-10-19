@@ -180,9 +180,9 @@ function checkBounds(bounds: Options<"int"> | Options<"float">, value: bigint | 
   return ok(value);
 }
 
-/** Return pydantic's list of literal choices: `'a', 'b' or 'c'`. */
+/** Return a list of literal choices spelled as JSON strings: `"a", "b" or "c"`. */
 export function choices(values: readonly string[]): string {
-  const quoted = values.map((v) => `'${v}'`);
+  const quoted = values.map((v) => JSON.stringify(v));
   return quoted.length > 1 ? `${quoted.slice(0, -1).join(", ")} or ${quoted.at(-1)!}` : quoted.join("");
 }
 
@@ -261,13 +261,13 @@ function checkUnion(members: readonly Field[], value: unknown, loc: Loc): Checke
   return { value: null, issues };
 }
 
-/** Return pydantic's label for a union member, e.g. `list[str]` or `literal['a','b']`. */
+/** Return the label for a union member, e.g. `list[str]` or `literal["a","b"]`. */
 function label(field: Field): string {
   switch (field.kind) {
     case "list":
       return `list[${label(field.item)}]`;
     case "literal":
-      return `literal[${field.values.map((v) => `'${v}'`).join(",")}]`;
+      return `literal[${field.values.map((v) => JSON.stringify(v)).join(",")}]`;
     default:
       return field.kind;
   }

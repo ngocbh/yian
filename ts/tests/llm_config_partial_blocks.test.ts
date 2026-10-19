@@ -69,7 +69,7 @@ describe("partialBlockProblems", () => {
 
     expect(problems("anthropic", tree)).toEqual([
       "`anthropic.max_tokens`: Input should be a valid integer",
-      "`anthropic.service_tier`: Input should be 'auto' or 'standard_only'",
+      '`anthropic.service_tier`: Input should be "auto" or "standard_only"',
     ]);
   });
 

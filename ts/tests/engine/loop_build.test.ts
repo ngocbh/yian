@@ -52,8 +52,9 @@
  * `input:` text, its typed nodes as producers with their output contracts), where Python loads a
  * flow whose def is the body. The merged-contract rows give the context a test-local
  * `bindingContractReader` typing the omitted fields' seeds (the loader's reader is T3-17's);
- * without one an omitted untagged seed stays opaque, as Python's literal seed does (so a `while:`
- * reading it is checked on the carried type alone). The predicate rows whose Python flow has an
+ * without one an untagged seed stays opaque, as Python's literal seed does, so a `while:` reading
+ * it gets no seed type: none of its checks is reported impossible and none narrows a read, and a
+ * plain field read is walked on the carried record. The predicate rows whose Python flow has an
  * inline `nodes:` body call a def built by hand that returns what that body returns, and put the
  * flow's typedefs in the context's registry. The typed-seed rows of
  * `test_predicate_impossible_on_the_seed_and_the_body_is_rejected` assemble the flow

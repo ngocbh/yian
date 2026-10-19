@@ -13,7 +13,8 @@
  * TS-only: `nullableAt` on a record field, a path through a union, a missing field or a scalar,
  * and the null type; `loopEntryInputs` relaxing only the parameters under a `while:` path, keeping
  * their origins, and returning an unchanged parameter as is; `carriedFieldTypes` on an exact
- * record, a partly typed record (its opaque fields skipped) and anything else.
+ * record, a partly typed record (its opaque fields skipped) and anything else; `whileNonNullPaths`
+ * giving a path checked twice once and in order, and nothing for a condition that doesn't parse.
  *
  * Later (T3-19): `test_until_null_check_narrows_neither_the_seed_nor_a_returned_field`,
  * `test_null_check_under_or_narrows_nothing`,

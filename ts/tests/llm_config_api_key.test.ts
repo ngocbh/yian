@@ -1,10 +1,10 @@
 /**
  * Mirrors `tests/test_llm_config_api_key.py`: the 4 `LLMConfig` tests, the empty-key test without
- * its `model_from_config` half (that half goes with the factory). `split_model_config`,
- * `resolve_model_config`, `connection_credentials` and `validate_connection` go with
- * `connection.ts`; the client tests with the factory. The `redact_key(s)` text tests are here, in
- * `describe("redact")`, with the text half of the `scrub_key(s)` chain tests; the exception-walk
- * tests go with `scrubError` in `llm/errors.ts`.
+ * its `model_from_config` half (that half goes with the factory), and the host-key marker test
+ * through `splitModelConfig`. `resolve_model_config`, `connection_credentials` and
+ * `validate_connection` go with `connection.ts`; the client tests with the factory. The
+ * `redact_key(s)` text tests are here, in `describe("redact")`, with the text half of the
+ * `scrub_key(s)` chain tests; the exception-walk tests go with `scrubError` in `llm/errors.ts`.
  */
 
 import { inspect } from "node:util";
@@ -12,7 +12,9 @@ import { inspect } from "node:util";
 import { describe, expect, test } from "bun:test";
 
 import { REDACTED as AUTH_REDACTED } from "../src/llm/auth.ts";
+import { AuthError } from "../src/llm_clients/auth/common.ts";
 import { LLMConfig } from "../src/llm_clients/config.ts";
+import { splitModelConfig } from "../src/llm_clients/connection.ts";
 import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
 import { REDACTED, redactKey, redactKeys } from "../src/llm_clients/redact.ts";
 
@@ -62,6 +64,18 @@ test.each([
 
 test("an empty key is rejected instead of falling back", () => {
   expect(thrown({ provider: "google", api_key: "" }).message).toContain("api_key");
+});
+
+test.each([
+  ["vllm", "served-model"],
+  ["anthropic", "claude-sonnet-4-5"],
+])("a host key marker without the key fails before the environment (%s)", (provider, model) => {
+  const marked = { provider, model, _host_key: true };
+  expect(() => splitModelConfig(marked)).toThrow(AuthError);
+  expect(() => splitModelConfig(marked)).toThrow(/llm_config\.api_key/);
+  const [validated] = splitModelConfig({ ...marked, api_key: SENTINEL });
+  expect(validated.apiKey).toBe(SENTINEL);
+  expect(() => splitModelConfig({ ...marked, _host_key: "yes", api_key: SENTINEL })).toThrow(/marker/);
 });
 
 describe("redact", () => {

@@ -1,7 +1,8 @@
 /**
- * Mirrors `tests/test_llm_config_base_url.py`: the `LLMConfig`, `host_only_field_error` and
- * `pop_host_credentials` tests; `check_model_config` goes with `connection.ts`; the client and
- * redirect tests go with the factory.
+ * Mirrors `tests/test_llm_config_base_url.py`: the `LLMConfig`, `host_only_field_error`,
+ * `pop_host_credentials` and `check_model_config` tests, and the `splitModelConfig` half of the
+ * pinned-connection test; the client and redirect tests go with the factory, the
+ * `resolve_model_config` tests with `connection.ts`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -15,6 +16,7 @@ import {
   popApiKey,
   popHostCredentials,
 } from "../src/llm_clients/config.ts";
+import { checkModelConfig, splitModelConfig } from "../src/llm_clients/connection.ts";
 import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
 
 const SENTINEL = "sk-sentinel-7d1f3b20";
@@ -199,6 +201,44 @@ test("popHostCredentials takes the url only with the layer's key", () => {
   expect(error.message).toContain("https");
   expect(error.message).not.toContain("gateway.example.com");
   expect(error.message).not.toContain(SENTINEL);
+});
+
+test("azure config without base_url fails the model check", () => {
+  expect(() => checkModelConfig({ provider: "azure", model: "gpt-4o" })).toThrow(/set llm_config\.base_url/);
+  expect(() => checkModelConfig({ provider: "azure", model: "gpt-4o", api_key: SENTINEL })).toThrow(
+    /set llm_config\.base_url/,
+  );
+  const [validated] = checkModelConfig({ provider: "azure", model: "gpt-4o", base_url: AZURE_RESOURCE });
+  expect(validated.baseUrl).toBe(AZURE_RESOURCE);
+});
+
+test("a base_url must match its pinned connection", () => {
+  // What resolving a host OpenAI key with this base_url records.
+  const resolved = {
+    provider: "openai",
+    model: "gpt-5.4",
+    base_url: AZURE_V1,
+    api_key: SENTINEL,
+    _connection: { method: "api_key", source: "host", credential_id: null, endpoint: AZURE_V1, store_path: null },
+  };
+  const [validated, connection] = splitModelConfig(resolved);
+  expect([validated.baseUrl, connection!.endpoint]).toEqual([AZURE_V1, AZURE_V1]);
+  const moved = { ...resolved, _connection: { ...resolved._connection, endpoint: "https://api.openai.com/v1" } };
+  const stored = {
+    ...resolved,
+    _connection: {
+      method: "api_key",
+      source: "environment",
+      credential_id: "a".repeat(64),
+      endpoint: AZURE_V1,
+      store_path: null,
+    },
+  };
+  for (const config of [moved, stored]) {
+    const error = caught(() => splitModelConfig(config));
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error.message).toContain("host connection endpoint");
+  }
 });
 
 describe("TS additions", () => {

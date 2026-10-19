@@ -5,12 +5,20 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { HostConnection } from "../src/llm_clients/config.ts";
+import { AuthError } from "../src/llm_clients/auth/common.ts";
+import { azureResourceEndpoint, HostConnection, LLMConfig } from "../src/llm_clients/config.ts";
 import {
+  blockProblem,
+  checkModelConfig,
   type Connection,
   ConnectionSnapshot,
+  HOST_KEY_MARKER,
   headerNameDiff,
   keyIdentity,
+  legacyConnectionConfig,
+  legacyConnectionMap,
+  refusedBlock,
+  splitModelConfig,
   validateConnection,
 } from "../src/llm_clients/connection.ts";
 
@@ -30,6 +38,7 @@ const ENVIRONMENT: Connection = {
 };
 const OPENAI_STORE: Connection = { ...STORE, endpoint: "https://api.openai.com/v1" };
 const HEADER_VALUE = "gw-token-3f9a20c1";
+const MARKED = { provider: "anthropic", model: "m", [HOST_KEY_MARKER]: true, api_key: "k" };
 
 /** Return `base` with `changes` applied. */
 function withChanges(base: object, changes: Record<string, unknown>): Record<string, unknown> {
@@ -214,4 +223,169 @@ test("an OpenAI endpoint must spell its scheme and host as urlsplit reads them",
   }
   const upper = { ...OPENAI_STORE, endpoint: "HTTPS://API.example/v1" };
   expect(validateConnection(upper)).toEqual(upper);
+});
+
+test("split and layer accept non-OpenAI metadata", () => {
+  expect(splitModelConfig({ provider: "anthropic", model: "m", _connection: STORE })[1]).toEqual(STORE);
+  rangeError(() => splitModelConfig({ provider: "ollama", model: "m", _connection: STORE }));
+
+  expect(
+    rangeError(() =>
+      splitModelConfig({
+        provider: "azure",
+        model: "deployment",
+        base_url: "https://r.openai.azure.com/",
+        _connection: withChanges(STORE, { endpoint: "https://other.openai.azure.com/" }),
+      }),
+    ).message,
+  ).toMatch(/another Azure resource/);
+  const [, metadata] = splitModelConfig({
+    provider: "azure",
+    model: "deployment",
+    base_url: "https://r.openai.azure.com",
+    _connection: withChanges(STORE, { endpoint: "https://r.openai.azure.com/openai/v1/" }),
+  });
+  expect(metadata!.endpoint).toBe("https://r.openai.azure.com/openai/v1/");
+});
+
+test("legacy adds environment connection except host key and keyless", () => {
+  expect(legacyConnectionConfig({ provider: "anthropic", model: "m" })).toEqual({
+    provider: "anthropic",
+    model: "m",
+    _connection: ENVIRONMENT,
+  });
+  expect(
+    Object.hasOwn(
+      legacyConnectionConfig({ provider: "anthropic", model: "m", [HOST_KEY_MARKER]: true }),
+      "_connection",
+    ),
+  ).toBe(false);
+  expect(Object.hasOwn(legacyConnectionConfig({ provider: "ollama", model: "m" }), "_connection")).toBe(false);
+  const openai = legacyConnectionConfig({ provider: "openai", model: "m" });
+  expect((openai["_connection"] as Connection).source).toBe("legacy_environment");
+  expect(legacyConnectionConfig({ provider: "anthropic", model: "m", _connection: STORE })["_connection"]).toEqual(
+    STORE,
+  );
+});
+
+test("azure resource endpoint", () => {
+  for (const url of [
+    "https://r.openai.azure.com/",
+    "https://r.openai.azure.com/openai",
+    "https://r.openai.azure.com/openai/v1/",
+  ]) {
+    expect(azureResourceEndpoint(url)).toBe("https://r.openai.azure.com");
+  }
+});
+
+test("split model config needs the recorded headers", () => {
+  const names = ["X-Gateway", "X-Trace"];
+  let error = thrown(() => splitModelConfig({ ...MARKED, _header_names: names }));
+  expect(error).toBeInstanceOf(AuthError);
+  expect(error.message).toContain("X-Gateway");
+  expect(error.message).toContain("X-Trace");
+  expect(error.message).toContain("resume_flow");
+  error = thrown(() =>
+    splitModelConfig({
+      ...MARKED,
+      _header_names: names,
+      headers: { "X-Gateway": HEADER_VALUE, "X-Other": HEADER_VALUE },
+    }),
+  );
+  expect(error).toBeInstanceOf(AuthError);
+  expect(error.message).toContain("X-Trace");
+  expect(error.message).toContain("X-Other");
+  expect(error.message).not.toContain(HEADER_VALUE);
+  error = thrown(() => splitModelConfig({ ...MARKED, headers: { "X-Gateway": HEADER_VALUE } }));
+  expect(error).toBeInstanceOf(AuthError);
+  expect(error.message).toContain("X-Gateway");
+
+  // Names compare without case.
+  const [validated] = splitModelConfig({
+    ...MARKED,
+    _header_names: names,
+    headers: { "x-gateway": HEADER_VALUE, "X-TRACE": "t" },
+  });
+  expect(validated.headers).toEqual({ "x-gateway": HEADER_VALUE, "X-TRACE": "t" });
+});
+
+describe("split model config rejects malformed header names", () => {
+  const rows: [string, unknown][] = [
+    ["empty", []],
+    ["unsorted", ["X-Trace", "X-Gateway"]],
+    ["case-duplicate", ["X-Gateway", "x-gateway"]],
+    ["not-a-token", ["bad name"]],
+    ["refused", ["Authorization"]],
+    ["not-a-list", "X-Gateway"],
+    ["not-text", [1n]],
+  ];
+  test.each(rows)("%s", (_id, names) => {
+    const error = rangeError(() =>
+      splitModelConfig({ ...MARKED, _header_names: names, headers: { "X-Gateway": "v" } }),
+    );
+    expect(error.message).toContain("_header_names");
+  });
+});
+
+test("split model config refuses header names without the marker", () => {
+  const { [HOST_KEY_MARKER]: _marker, ...unmarked } = MARKED;
+  const error = rangeError(() =>
+    splitModelConfig({ ...unmarked, _header_names: ["X-Gateway"], headers: { "X-Gateway": "v" } }),
+  );
+  expect(error.message).toContain("_header_names");
+});
+
+test("split carries headers beside the key", () => {
+  const config = new LLMConfig({
+    provider: "anthropic",
+    model: "m",
+    api_key: "k",
+    headers: { "X-Gateway": HEADER_VALUE },
+  });
+  const [validated] = splitModelConfig(config);
+  expect(validated.headers).toEqual({ "X-Gateway": HEADER_VALUE });
+  expect(validated.apiKey).toBe("k");
+});
+
+test("a legacy connection map pins each agent and leaves its input alone", () => {
+  const effective = { o: { provider: "openai", model: "m" }, a: { provider: "anthropic", model: "m" } };
+  const pinned = legacyConnectionMap(effective);
+  expect((pinned["o"]!["_connection"] as Connection).source).toBe("legacy_environment");
+  expect(pinned["a"]!["_connection"]).toEqual(ENVIRONMENT);
+  expect(effective).toEqual({ o: { provider: "openai", model: "m" }, a: { provider: "anthropic", model: "m" } });
+});
+
+describe("TS additions", () => {
+  test("blockProblem moves one leading key path and keeps the rest whole", () => {
+    const extra = "Extra inputs are not permitted";
+    expect(blockProblem("node 'chat' llm_config", "openai", `\`openai.temperature\`: ${extra}`, " in 'sub'")).toBe(
+      `node 'chat' llm_config.openai.temperature in 'sub': ${extra}`,
+    );
+    const several = `\`openai.temperature\`: ${extra}; \`openai.top_p\`: ${extra}`;
+    expect(blockProblem("llm_config", "openai", several)).toBe(`llm_config.openai: ${several}`);
+    expect(blockProblem("llm_config", "", "`openai.temperature`: bad")).toBe("llm_config: `openai.temperature`: bad");
+    expect(blockProblem("llm_config", "openai", "no path here", " in 'sub'")).toBe(
+      "llm_config.openai in 'sub': no path here",
+    );
+  });
+
+  test("refusedBlock names the block only when the block alone was refused", () => {
+    expect(refusedBlock({ provider: "anthropic", model: 1n })).toBe("");
+    expect(refusedBlock({ provider: "azure", model: "m" })).toBe("");
+    expect(refusedBlock({ model: "m" })).toBe("");
+    const subscription = {
+      provider: "openai",
+      model: "m",
+      openai: { temperature: 0.2 },
+      _connection: {
+        ...OPENAI_STORE,
+        method: "subscription",
+        endpoint: "https://chatgpt.com/backend-api/codex",
+      },
+    };
+    expect(rangeError(() => checkModelConfig(subscription)).message).toContain("`openai.temperature`");
+    expect(refusedBlock(subscription)).toBe(".openai");
+    // A host key sends the same agent to the Responses API, which accepts the block.
+    checkModelConfig({ ...subscription, api_key: "host-key" });
+  });
 });

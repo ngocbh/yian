@@ -16,8 +16,17 @@ import { isAbsolute } from "node:path";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { isList, isRecord, valueRepr } from "../typesys/values.ts";
 import { AuthError } from "./auth/common.ts";
-import { azureResourceEndpoint, type HostConnection, SUPPORTED_LLM_PROVIDERS, validateBaseUrl } from "./config.ts";
+import {
+  AZURE_NEEDS_BASE_URL,
+  azureResourceEndpoint,
+  type HostConnection,
+  LLMConfig,
+  RETIRED_LLM_CONFIG_KEYS,
+  SUPPORTED_LLM_PROVIDERS,
+  validateBaseUrl,
+} from "./config.ts";
 import { validateHeaderName, validateOrganization } from "./connection_settings.ts";
+import { blockSchema, checkBlock, type Issue } from "./provider_blocks.ts";
 
 /** The OpenAI API endpoint used when nothing configures another. */
 export const OPENAI_API_ENDPOINT = "https://api.openai.com/v1";
@@ -698,4 +707,198 @@ export function headerNameDiff(expected: Iterable<string>, given: Iterable<strin
   if (missing.length > 0) details.push(`missing ${missing.join(", ")}`);
   if (extra.length > 0) details.push(`not recorded ${extra.join(", ")}`);
   return details.length > 0 ? details.join("; ") : null;
+}
+
+/** Remove `key` from `raw` and return its value; `undefined` when absent. */
+function pop(raw: AgentConfig, key: string): unknown {
+  const value = raw[key];
+  delete raw[key];
+  return value;
+}
+
+/**
+ * Validate public fields separately from host-owned connection metadata, and return the validated
+ * fields with the pinned connection, if any.
+ *
+ * `config` holds yian values (ints as `bigint`, as YAML and run records give them); host configs go
+ * through `fromHost` at the host entry points (`runFlow`, the factory, memory). A config marked
+ * with `HOST_KEY_MARKER` needs its `api_key`, and `headers` with exactly the recorded
+ * `HEADER_NAMES_KEY` names (none when absent), compared without case; both are popped from the
+ * validated fields. `config` is not mutated.
+ *
+ * Throws `AuthError` if the config carries `HOST_KEY_MARKER` but no `api_key`, or its headers do
+ * not have the recorded names. Throws `RangeError` if a public field or the metadata is invalid,
+ * the header names are malformed or appear without the marker, an OpenAI `base_url` differs from
+ * the endpoint of its pinned host connection, or an Azure `base_url` names another resource than
+ * its saved login.
+ */
+export function splitModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LLMConfig, Connection | null] {
+  let raw: AgentConfig;
+  if (config instanceof LLMConfig) {
+    raw = Object.fromEntries(Object.entries(config.dump()).filter(([, value]) => value !== null));
+    // Dumps leave the key and header values out; carry them across explicitly.
+    if (config.apiKey !== null) raw["api_key"] = config.apiKey;
+    if (config.headers !== null) raw["headers"] = config.headers;
+  } else {
+    raw = Object.fromEntries(Object.entries(config));
+  }
+  const recordedNames = pop(raw, HEADER_NAMES_KEY) ?? null;
+  const headerNames = recordedNames === null ? null : validateHeaderNames(recordedNames, raw["provider"]);
+  if (Object.hasOwn(raw, HOST_KEY_MARKER)) {
+    if (pop(raw, HOST_KEY_MARKER) !== true) throw new RangeError("Invalid internal host key marker");
+    if (raw["api_key"] === undefined || raw["api_key"] === null) {
+      throw new AuthError(
+        `This run's ${String(raw["provider"])} API key came from the host's llm_config.api_key and is not ` +
+          "recorded; pass api_key to resume_flow or RunResult.backward",
+      );
+    }
+    checkHostHeaders(raw, headerNames ?? []);
+  } else if (headerNames !== null) {
+    throw new RangeError(`Internal ${HEADER_NAMES_KEY} needs the host key marker`);
+  }
+  const metadata = pop(raw, "_connection") ?? null;
+  const validated = new LLMConfig(raw);
+  if (metadata === null) return [validated, null];
+  const connection = validateConnection(metadata, validated.provider);
+  if (
+    validated.provider === "azure" &&
+    validated.baseUrl !== null &&
+    connection.source === "store" &&
+    azureResourceEndpoint(validated.baseUrl) !== azureResourceEndpoint(connection.endpoint as string)
+  ) {
+    // The saved key belongs to one resource; never send it to another.
+    throw new RangeError("llm_config.base_url names another Azure resource than its saved login");
+  }
+  if (
+    validated.provider === "openai" &&
+    validated.baseUrl !== null &&
+    (connection.source !== "host" || connection.endpoint !== validated.baseUrl)
+  ) {
+    // A base_url serves only the host key; it must match the pinned route.
+    throw new RangeError("llm_config.base_url must match its host connection endpoint");
+  }
+  return [validated, connection];
+}
+
+/**
+ * Validate a resolved config as the factory does, without building a model, and return the
+ * validated public fields with the pinned connection, if any.
+ *
+ * `config` holds yian values (ints as `bigint`); host configs go through `fromHost` at the host
+ * entry points (`runFlow`, the factory, memory).
+ *
+ * Throws `AuthError` if the config carries `HOST_KEY_MARKER` but no `api_key`. Throws `RangeError`
+ * if a field is invalid, the connection rejects a set field, an `azure` config has no `base_url`,
+ * or the provider's block does not fit the API the call actually reaches (e.g. an `openai` block
+ * with `temperature` on a ChatGPT subscription connection).
+ */
+export function checkModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LLMConfig, Connection | null] {
+  const [validated, connection] = splitModelConfig(config);
+  if (validated.provider === "azure" && validated.baseUrl === null) throw new RangeError(AZURE_NEEDS_BASE_URL);
+  if (validated.provider !== null) checkProviderBlock(validated, validated.provider, connection);
+  return [validated, connection];
+}
+
+/**
+ * Return `.<provider>` when `checkModelConfig` refused only the provider's block, else `""`.
+ *
+ * Its fields and connection are checked first and an Azure config needs a `base_url`; a config that
+ * passes those was refused for its block alone. Never throws for a refused config.
+ */
+export function refusedBlock(config: Readonly<AgentConfig>): string {
+  let validated: LLMConfig;
+  try {
+    [validated] = splitModelConfig(config);
+  } catch (error) {
+    // What `splitModelConfig` throws for a refused config; anything else is a bug to surface.
+    if (error instanceof RangeError || error instanceof AuthError) return "";
+    throw error;
+  }
+  if (validated.provider === null || (validated.provider === "azure" && validated.baseUrl === null)) return "";
+  return `.${validated.provider}`;
+}
+
+const LEADING_KEY_PATH = /^`[^`.]+\.([^`]+)`: ([\s\S]*)$/;
+
+/**
+ * Name a provider block's problem under `where`, giving its key path once.
+ *
+ * A single problem that opens with its backticked key path and a colon, such as
+ * `` `openai.temperature`: ... ``, reads `<where>.openai.temperature<callsite>: ...`. Any other
+ * reads `<where>.<block><callsite>: <message>`, or `<where><callsite>: <message>` when `block` is
+ * empty. `where` names the layer, such as `node 'chat' llm_config`; `block` is the block refused,
+ * such as `openai`; `callsite` follows the field, such as `` in 'sub'``.
+ */
+export function blockProblem(where: string, block: string, message: string, callsite = ""): string {
+  const match = LEADING_KEY_PATH.exec(message);
+  // Several problems are joined with "; "; moving the first one's path would misname the rest.
+  if (block && match !== null && !match[2]!.includes("; `")) {
+    return `${where}.${block}.${match[1]}${callsite}: ${match[2]}`;
+  }
+  return `${where}${block ? `.${block}` : ""}${callsite}: ${message}`;
+}
+
+/**
+ * Check the provider's block against the schema of the API the call reaches.
+ *
+ * Load time checks a block against the provider's usual API; the connection can route the call to
+ * a narrower one (the ChatGPT subscription endpoint), known only here. Throws `RangeError` if the
+ * block has a key or value that API refuses; the message is the block schema's own and never
+ * echoes values.
+ */
+function checkProviderBlock(validated: LLMConfig, provider: string, connection: Connection | null): void {
+  const schema = blockSchema(provider, connection, validated.apiKey);
+  const { issues } = checkBlock(schema, validated.blockFor(provider));
+  if (issues.length > 0) throw new RangeError(issues.map((issue) => blockErrorText(provider, issue)).join("; "));
+}
+
+/** Return one block validation issue as text naming its key path, without the input. */
+function blockErrorText(provider: string, issue: Issue): string {
+  if (issue.type === "value_error") return issue.error!;
+  return `\`${provider}.${issue.loc.join(".")}\`: ${issue.msg}`;
+}
+
+/**
+ * Pin an old record to its original route without I/O, and return the pinned copy; `config` is
+ * not mutated.
+ *
+ * An old OpenAI record gets its legacy environment API-key route. Another keyed provider's record,
+ * unless its key came from the host, gets the environment connection: those records always read the
+ * provider's key variable.
+ */
+export function legacyConnectionConfig(config: Readonly<AgentConfig>): AgentConfig {
+  const result = structuredClone(config) as AgentConfig;
+  // Old records serialized every optional public field, including these empty retired defaults
+  // (sandbox/cwd, and the keys now written in provider blocks). As nulls they configured nothing;
+  // a set one still fails validation.
+  const nullable = [...RETIRED_LLM_CONFIG_KEYS];
+  if (result["provider"] !== "codex") nullable.push("sandbox", "cwd");
+  for (const field of nullable) {
+    if (Object.hasOwn(result, field) && result[field] === null) delete result[field];
+  }
+  const provider = result["provider"];
+  if (provider === "openai" && !Object.hasOwn(result, "_connection")) {
+    result["_connection"] = {
+      method: "api_key",
+      source: "legacy_environment",
+      credential_id: null,
+      endpoint: OPENAI_API_ENDPOINT,
+      store_path: null,
+    };
+  } else if (
+    typeof provider === "string" &&
+    KEYED.has(provider) &&
+    !Object.hasOwn(result, "_connection") &&
+    !Object.hasOwn(result, HOST_KEY_MARKER)
+  ) {
+    result["_connection"] = structuredClone(ENVIRONMENT_CONNECTION);
+  }
+  return result;
+}
+
+/** Adapt a recorded effective map at the host replay boundary; `effective` is not mutated. */
+export function legacyConnectionMap(
+  effective: Readonly<Record<string, Readonly<AgentConfig>>>,
+): Record<string, AgentConfig> {
+  return Object.fromEntries(Object.entries(effective).map(([path, config]) => [path, legacyConnectionConfig(config)]));
 }

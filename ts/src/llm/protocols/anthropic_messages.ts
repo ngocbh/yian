@@ -9,14 +9,30 @@
  * signature only to the provider, model and account that wrote it. Tool ids the API refuses are
  * hashed to ones it accepts, the same on the call and its result. Tools are sent with their
  * schema as `input_schema`, and a tool choice only with tools. Every call streams.
+ *
+ * Replies stream text, thinking and tool calls as deltas; each content block becomes a part,
+ * with dense part indexes in the order the blocks open. Thinking parts carry replay records
+ * holding their signature or redacted data. Usage merges across `message_start` and
+ * `message_delta`, and the finish comes at `message_stop` or the end of the stream. A reply that
+ * failed, was refused, paused or ended early raises `ProviderError`; an error message holds the
+ * provider's text uncapped, which `RouteModel` scrubs of the route's credentials and then caps.
  */
 
 import { createHash } from "node:crypto";
 
-import type { JsonObject, JsonValue } from "../../typesys/json.ts";
-import { mergeRequestBody } from "../body.ts";
-import { ProviderError } from "../errors.ts";
-import type { Event } from "../events.ts";
+import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
+import { encodeBody, mergeRequestBody } from "../body.ts";
+import { type ErrorKind, kindForStatus, ProviderError } from "../errors.ts";
+import {
+  type Event,
+  Finish,
+  parseArguments,
+  PartDone,
+  ReasoningDelta,
+  TextDelta,
+  ToolCallDelta,
+  UsageReport,
+} from "../events.ts";
 import type { SseProtocol } from "../executor.ts";
 import type { SSEEvent } from "../framing.ts";
 import {
@@ -24,18 +40,21 @@ import {
   isPlainObject,
   MediaPart,
   type Message,
+  MessageFormatError,
   NamedTool,
   type Part,
   ReasoningPart,
   readReplayRecord,
   type ReplayDegradedReason,
   type ReplayKey,
+  replayRecord,
   type Request,
   TextPart,
   type ToolChoice,
   ToolCallPart,
   ToolResultPart,
   type ToolSpec,
+  Usage,
 } from "../messages.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
@@ -84,6 +103,42 @@ const REASONING_FIELDS = ["signature", "redacted"];
 const REQUIRED_SIGNATURE =
   "anthropic needs its signed thinking to continue a tool call with thinking on; finish the tool turn on the " +
   "original model or turn thinking off in the anthropic block";
+
+// The string field each delta type carries; other delta types (`citations_delta`) are ignored.
+const DELTA_FIELDS: ReadonlyMap<string, string> = new Map([
+  ["text_delta", "text"],
+  ["thinking_delta", "thinking"],
+  ["signature_delta", "signature"],
+  ["input_json_delta", "partial_json"],
+]);
+// Stop reasons that mean the reply failed; any other reason is passed through.
+const FAILED_STOP: ReadonlyMap<string, ErrorKind> = new Map<string, ErrorKind>([
+  ["refusal", "refused"],
+  ["pause_turn", "incomplete"],
+  ["model_context_window_exceeded", "context_length"],
+]);
+// Error event types; `invalid_request_error` is read from its message, any other type is a server error.
+const STREAM_ERROR_KINDS: ReadonlyMap<string, ErrorKind> = new Map<string, ErrorKind>([
+  ["overloaded_error", "overloaded"],
+  ["rate_limit_error", "rate_limit"],
+  ["api_error", "server"],
+  ["timeout_error", "timeout"],
+  ["authentication_error", "auth"],
+  ["permission_error", "permission"],
+  ["billing_error", "quota"],
+  ["not_found_error", "not_found"],
+  ["request_too_large", "bad_request"],
+]);
+
+/**
+ * A content block being streamed. `index` is its part index, `null` for a text block until its
+ * first text; a call's `args` is its joined `partial_json`, `null` until the first piece.
+ */
+type Block =
+  | { kind: "text"; index: number | null; text: string }
+  | { kind: "thinking"; index: number | null; text: string; signature: string }
+  | { kind: "redacted"; index: number | null; data: string }
+  | { kind: "call"; index: number | null; id: string; name: string; args: string | null; input: JsonValue | undefined };
 
 /** A turn after merging: consecutive system texts, a user turn's blocks, or an assistant message. */
 type Turn =
@@ -186,12 +241,173 @@ export class AnthropicMessages implements SseProtocol {
   }
 
   /**
-   * Turn a streamed reply's events into stream events. Not implemented yet.
+   * Turn a streamed reply's events into stream events.
    *
-   * @throws {Error} Always.
+   * The event type is the data's `type`, else the SSE `event` field; `ping`, unknown events,
+   * empty data and non-object data are skipped. Each `text`, `thinking`, `redacted_thinking` and
+   * `tool_use` block opens a part, with dense indexes in the order they open; a text block opens
+   * at its first text, so an empty one opens none. Other block types open nothing, and deltas or
+   * stops for them, or for an index never started, are ignored. Text and thinking stream as
+   * deltas, a call as one `ToolCallDelta` with its id and name, then its `partial_json` pieces;
+   * a `signature_delta` replaces the thinking's signature. A call's arguments are its joined
+   * pieces read by `parseArguments` (not repaired), else its start `input`. The last string stop
+   * reason wins, and usage merges key by key across `message_start` and `message_delta`, a
+   * `null` value replacing nothing.
+   *
+   * @param frames The reply's server-sent events, in order.
+   * @returns The deltas, a `PartDone` at each block's stop (a thinking part with a record of its
+   *   non-empty signature, a redacted one of its non-empty data), then at `message_stop` or the
+   *   end of the stream a `PartDone` for each part still open in index order, `UsageReport` when
+   *   any usage came, and `Finish`: `length` for `max_tokens`, `tool_calls` for any other reason
+   *   when a call came, `stop` for `end_turn`, `stop_sequence` and `tool_use`, else the reason.
+   *   Nothing after `message_stop` is read.
+   * @throws {ProviderError} For an error event (kind from its type), a `refusal` (`refused`),
+   *   `pause_turn` (`incomplete`) or `model_context_window_exceeded` (`context_length`) stop
+   *   reason, a stream that ends with no stop reason (`incomplete`, retryable), or an event that
+   *   is not JSON or holds a field or usage that cannot be read (`protocol`). The message holds
+   *   the provider's text uncapped.
    */
-  async *parse(_frames: AsyncIterable<SSEEvent>): AsyncGenerator<Event> {
-    throw new Error("not implemented");
+  async *parse(frames: AsyncIterable<SSEEvent>): AsyncGenerator<Event> {
+    const provider = this.provider;
+    // The started blocks by wire index; a block type that opens no part has none.
+    const blocks = new Map<bigint, Block>();
+    // The opened parts not yet done, by part index.
+    const open = new Map<number, Block>();
+    let count = 0;
+    const openPart = (block: Block): number => {
+      block.index = count++;
+      open.set(block.index, block);
+      return block.index;
+    };
+    let calls = false;
+    let stopReason: string | null = null;
+    let usage: JsonObject | null = null;
+    let responseId: string | null = null;
+    let responseModel: string | null = null;
+    for await (const frame of frames) {
+      // Some gateways send keep-alive frames with empty data.
+      if (frame.data === "") continue;
+      const data = eventData(frame.data, provider);
+      if (!isPlainObject(data)) continue;
+      const rawType = data["type"];
+      const type = typeof rawType === "string" && rawType ? rawType : frame.event;
+      // A proxy may send the error object without a type.
+      if (type === "error" || (type === null && isPlainObject(data["error"]))) throw this.#streamFailure(data["error"]);
+      if (type === "message_stop") break;
+      const invalid = () => new ProviderError("protocol", `invalid ${type} in ${provider} stream event`);
+      if (type === "message_start") {
+        const message = data["message"];
+        if (!isPlainObject(message)) throw invalid();
+        if (typeof message["id"] === "string") responseId = message["id"];
+        if (typeof message["model"] === "string") responseModel = message["model"];
+        usage = mergeUsage(usage, message["usage"], provider);
+      } else if (type === "message_delta") {
+        const delta = data["delta"];
+        if (!isPlainObject(delta)) throw invalid();
+        const reason = delta["stop_reason"];
+        if (typeof reason === "string") stopReason = reason;
+        else if (reason !== undefined && reason !== null) throw invalid();
+        usage = mergeUsage(usage, data["usage"], provider);
+      } else if (type === "content_block_start" || type === "content_block_delta" || type === "content_block_stop") {
+        const wireIndex = data["index"];
+        if (typeof wireIndex !== "bigint") throw invalid();
+        if (type === "content_block_start") {
+          const content = data["content_block"];
+          if (!isPlainObject(content)) throw invalid();
+          const block = startBlock(content, invalid);
+          if (block === null) continue;
+          blocks.set(wireIndex, block);
+          if (block.kind === "text") {
+            if (block.text) yield new TextDelta(openPart(block), block.text);
+          } else if (block.kind === "thinking") {
+            const index = openPart(block);
+            if (block.text) yield new ReasoningDelta(index, block.text);
+          } else if (block.kind === "redacted") {
+            openPart(block);
+          } else {
+            calls = true;
+            yield new ToolCallDelta({ index: openPart(block), id: block.id, name: block.name, arguments: "" });
+          }
+        } else if (type === "content_block_delta") {
+          const delta = data["delta"];
+          if (!isPlainObject(delta)) throw invalid();
+          const deltaType = delta["type"];
+          const field = typeof deltaType === "string" ? DELTA_FIELDS.get(deltaType) : undefined;
+          if (field === undefined) continue;
+          const piece = delta[field];
+          if (typeof piece !== "string") throw invalid();
+          const block = blocks.get(wireIndex);
+          if (deltaType === "text_delta" && block?.kind === "text") {
+            if (!piece) continue;
+            block.text += piece;
+            yield new TextDelta(block.index ?? openPart(block), piece);
+          } else if (deltaType === "thinking_delta" && block?.kind === "thinking") {
+            block.text += piece;
+            if (piece) yield new ReasoningDelta(block.index!, piece);
+          } else if (deltaType === "signature_delta" && block?.kind === "thinking") {
+            block.signature = piece;
+          } else if (deltaType === "input_json_delta" && block?.kind === "call") {
+            block.args = (block.args ?? "") + piece;
+            yield new ToolCallDelta({ index: block.index!, id: null, name: null, arguments: piece });
+          }
+        } else {
+          const index = blocks.get(wireIndex)?.index ?? null;
+          if (index === null || !open.has(index)) continue;
+          yield new PartDone(index, this.#part(open.get(index)!));
+          open.delete(index);
+        }
+      }
+    }
+    if (stopReason === null) {
+      throw new ProviderError("incomplete", `${provider} stream ended before a complete response`, { retryable: true });
+    }
+    const failed = FAILED_STOP.get(stopReason);
+    if (failed !== undefined) {
+      throw new ProviderError(failed, `${provider} response did not complete (${stopReason})`);
+    }
+    // Counted first, so usage that can't be read fails before any part is done.
+    const counts = usage === null ? null : usageOf(usage, provider);
+    for (const index of [...open.keys()].sort((a, b) => a - b)) yield new PartDone(index, this.#part(open.get(index)!));
+    if (counts !== null) yield new UsageReport(counts);
+    const fields: JsonObject = {};
+    if (responseId !== null) fields["response_id"] = responseId;
+    if (responseModel !== null) fields["response_model"] = responseModel;
+    const providerPayload = replayRecord(this.#key, fields);
+    let reason = stopReason;
+    // `max_tokens` says the calls may be cut short, so `length` wins over them.
+    if (stopReason === "max_tokens") reason = "length";
+    else if (calls) reason = "tool_calls";
+    else if (stopReason === "end_turn" || stopReason === "stop_sequence" || stopReason === "tool_use") reason = "stop";
+    yield new Finish({ reason, responseId, protocol: PROTOCOL, providerPayload });
+  }
+
+  /**
+   * Build a streamed block's part: a thinking part with a record of its signature, a redacted
+   * one of its data, each only when non-empty; text and calls carry no payload.
+   */
+  #part(block: Block): Part {
+    if (block.kind === "text") return new TextPart(block.text);
+    if (block.kind === "thinking") {
+      const record = block.signature ? replayRecord(this.#key, { signature: block.signature }) : null;
+      return new ReasoningPart(block.text, record);
+    }
+    if (block.kind === "redacted") {
+      return new ReasoningPart("", block.data ? replayRecord(this.#key, { redacted: block.data }) : null);
+    }
+    const [args, rawArguments] = block.args === null ? startInput(block.input) : parseArguments(block.args);
+    return new ToolCallPart({ id: block.id, name: block.name, arguments: args, rawArguments });
+  }
+
+  /** Return the error for an error event's error object; its kind from its type. */
+  #streamFailure(error: JsonValue | undefined): ProviderError {
+    const body = isPlainObject(error) ? error : {};
+    const message = typeof body["message"] === "string" ? body["message"] : "";
+    const type = body["type"];
+    const kind =
+      type === "invalid_request_error"
+        ? kindForStatus(400, message)
+        : ((typeof type === "string" ? STREAM_ERROR_KINDS.get(type) : undefined) ?? "server");
+    return new ProviderError(kind, `${this.provider} stream failed (${kind}): ${message || "no message"}`);
   }
 
   /**
@@ -450,6 +666,118 @@ function degradedTurnStart(rendered: JsonObject[], degraded: Map<JsonObject, str
 function hasBlock(turn: JsonObject, ...types: string[]): boolean {
   const content = turn["content"];
   return Array.isArray(content) && content.some((block) => types.includes((block as JsonObject)["type"] as string));
+}
+
+/** Parse one event's JSON, throwing a `ProviderError` that does not echo it. */
+function eventData(data: string, provider: string): JsonValue {
+  try {
+    return parseJson(data, "plain");
+  } catch (error) {
+    if (error instanceof JSONDecodeError) throw new ProviderError("protocol", `invalid JSON in ${provider} stream event`);
+    throw error;
+  }
+}
+
+/**
+ * Return the block a `content_block_start` opens, or `null` for a block type that opens no part.
+ *
+ * @throws {ProviderError} From `invalid`, when a field the block needs is missing or not a string.
+ */
+function startBlock(content: JsonObject, invalid: () => ProviderError): Block | null {
+  // An optional field may be absent or `null`, which is empty.
+  const string = (key: string, optional: boolean): string => {
+    const value = content[key];
+    if (typeof value === "string") return value;
+    if (optional && (value === undefined || value === null)) return "";
+    throw invalid();
+  };
+  const type = content["type"];
+  if (type === "text") return { kind: "text", index: null, text: string("text", true) };
+  if (type === "thinking") {
+    return { kind: "thinking", index: null, text: string("thinking", true), signature: string("signature", true) };
+  }
+  if (type === "redacted_thinking") return { kind: "redacted", index: null, data: string("data", false) };
+  if (type !== "tool_use") return null;
+  const id = string("id", false);
+  const name = string("name", false);
+  if (!id || !name) throw invalid();
+  return { kind: "call", index: null, id, name, args: null, input: content["input"] };
+}
+
+/** Return a call's arguments from its start `input`: missing is `{}`, an object as sent, anything else invalid. */
+function startInput(input: JsonValue | undefined): [JsonObject | null, string | null] {
+  if (input === undefined) return [{}, null];
+  return isPlainObject(input) ? [input, null] : [null, encodeBody(input)];
+}
+
+/**
+ * Merge an event's `usage` into the usage so far, key by key; a `null` value replaces nothing
+ * and a nested object replaces whole. A `usage` that is not an object is ignored.
+ *
+ * @returns The merged usage, or `merged` when there is nothing to merge.
+ * @throws {ProviderError} The event's details are not objects, or a count is not an int within
+ *   `Number.MAX_SAFE_INTEGER` (kind `protocol`).
+ */
+function mergeUsage(merged: JsonObject | null, usage: JsonValue | undefined, provider: string): JsonObject | null {
+  if (!isPlainObject(usage)) return merged;
+  const cacheCreation = usage["cache_creation"] ?? {};
+  const outputDetails = usage["output_tokens_details"] ?? {};
+  if (!isPlainObject(cacheCreation) || !isPlainObject(outputDetails)) {
+    throw new ProviderError("protocol", `${provider} response usage details are not objects`);
+  }
+  const notInt = `${provider} response usage has a count that is not an int`;
+  for (const key of ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]) {
+    tokenCount(usage[key], notInt);
+  }
+  for (const key of ephemeralKeys(cacheCreation)) tokenCount(cacheCreation[key], notInt);
+  tokenCount(outputDetails["thinking_tokens"], notInt);
+  const out: JsonObject = { ...merged };
+  for (const [key, value] of Object.entries(usage)) if (value !== null) out[key] = value;
+  return out;
+}
+
+/** Return the keys of `cache_creation` that count cache writes by time to live. */
+function ephemeralKeys(cacheCreation: JsonObject): string[] {
+  return Object.keys(cacheCreation).filter((key) => key.startsWith("ephemeral_") && key.endsWith("_input_tokens"));
+}
+
+/**
+ * Return the token counts of the merged usage. Input counts cache reads and writes; cache writes
+ * are the sum of the `cache_creation` breakdown when above zero, else `cache_creation_input_tokens`.
+ *
+ * @throws {ProviderError} A sum is past `Number.MAX_SAFE_INTEGER` (kind `protocol`).
+ */
+function usageOf(usage: JsonObject, provider: string): Usage {
+  const notInt = `${provider} response usage has a count that is not an int`;
+  const cacheCreation = (usage["cache_creation"] ?? {}) as JsonObject;
+  const outputDetails = (usage["output_tokens_details"] ?? {}) as JsonObject;
+  let breakdown = 0;
+  for (const key of ephemeralKeys(cacheCreation)) breakdown += tokenCount(cacheCreation[key], notInt) ?? 0;
+  const cacheRead = tokenCount(usage["cache_read_input_tokens"], notInt);
+  const cacheWrite = breakdown > 0 ? breakdown : tokenCount(usage["cache_creation_input_tokens"], notInt);
+  const inputTokens = (tokenCount(usage["input_tokens"], notInt) ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
+  const outputTokens = tokenCount(usage["output_tokens"], notInt) ?? 0;
+  try {
+    return new Usage({
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      cacheReadTokens: cacheRead,
+      cacheCreationTokens: cacheWrite,
+      reasoningTokens: tokenCount(outputDetails["thinking_tokens"], notInt),
+    });
+  } catch (error) {
+    // `Usage` refuses a sum past `Number.MAX_SAFE_INTEGER`, which `Number` arithmetic rounds.
+    if (error instanceof MessageFormatError) throw new ProviderError("protocol", notInt);
+    throw error;
+  }
+}
+
+/** Return a usage count as a number, `null` when it is `null` or absent; throw `notInt` otherwise. */
+function tokenCount(value: JsonValue | undefined, notInt: string): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "bigint" || !Number.isSafeInteger(Number(value))) throw new ProviderError("protocol", notInt);
+  return Number(value);
 }
 
 /** Return the text of `blocks` when they are one text block, else `null`. */

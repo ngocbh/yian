@@ -883,14 +883,16 @@ function valueCases(descriptors: ReadonlyMap<string, NodeDescriptor>, read: Read
 // ---------- Passes not ported yet ----------
 //
 // Every placeholder, by owner. Kind 1 is a stub in its owner's sub-block below: the owner deletes
-// the stub (and its sub-block's local type aliases) and imports the port under its import slot,
-// keeping the sub-block header. Kind 2 is a pipeline helper stubbed at its Python position: the
+// the stub and imports the port under its import slot, keeping the sub-block header. A local type
+// alias is replaced by a `type` import of the same name under that slot, never just deleted, since
+// other owners' stubs use the shared ones: `TypeFn` (T3-13), `Narrowing` (T3-20), `LocalInput`
+// (T3-19) and `LoweredAsserts` (T3-20). Kind 2 is a pipeline helper stubbed at its Python position: the
 // owner ports its body in place, adding the private helpers named beside it. Kind 3 is a `const`
 // inside `assemble`: the owner replaces that line. Until then a placeholder returns nothing,
 // except as noted; "throws" means `Error("<python name> is not ported yet (T3-xx)")`.
 //
-//   T3-13  constructorTypeFn (1): returns `() => null`. T3-13's merge or T3-17, whichever edits
-//          this file first, swaps it for the import, with `TypeFn`.
+//   T3-13  constructorTypeFn (1): returns `() => null`. T3-13 swaps it for the import, with
+//          `TypeFn`, if this file exists when it merges; otherwise T3-17 does.
 //   T3-15  splitTypedLlmConfig (2): returns the descriptors.
 //   T3-17  extractInlineBodies (1): returns `[nodesCursor, new Map()]`.
 //          readValueEntry (1): throws.
@@ -909,8 +911,9 @@ function valueCases(descriptors: ReadonlyMap<string, NodeDescriptor>, read: Read
 //          registerInlineBodies (2): returns the descriptors.
 //          inferDataEdges, hostControlEdges, inferOrderingEdges (1): return `[]`.
 //          stampInlineCallOrigins (2).
-//          synthesizeBoundaryGraph (1): returns `[new Map(), [], new Map()]`, so
-//            `ComposedFlow.input` throws until it is ported.
+//          synthesizeBoundaryGraph (1, `lowered` positional with a default, then `{ record }`):
+//            returns `[new Map(), [], new Map()]`, so `ComposedFlow.input` throws until it is
+//            ported.
 //          synthWires (3, `ReadonlySet<string>`, reads `QPARAM`): `new Set()`.
 //   T3-18  checkWrittenValues, stampToolInputTypes, checkWiringParity, validateReferences,
 //          validateHumanQuestions, checkReservedSources, rejectCycles, checkCaseHandles (1).
@@ -943,7 +946,9 @@ function constructorTypeFn(registry: TypeRegistry): TypeFn {
 
 // T3-17: compose/desugar/*.ts, compose/edges/*.ts, compose/build/{boundary,inline_inputs}.ts
 
+/** Python's `compose.desugar.inline_bodies.InlineBody`; not ported yet. */
 type InlineBody = unknown;
+/** Python's `compose.desugar.value_entries.ValueEntryDescriptor`; not ported yet. */
 type ValueEntryDescriptor = NodeDescriptor;
 
 /** Python's `compose.desugar.inline_bodies.extract_inline_bodies`; not ported yet. */
@@ -997,6 +1002,7 @@ function desugarInlineCalls(
     diagnostics?: LoadDiagnostics | null;
   } = {},
 ): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown, assertsSection: Assertion[]] {
+  // The raw items stand in for the carriers until the port lands.
   return [new Map(descriptors), outputsSection, (options.assertsSection ?? []) as Assertion[]];
 }
 
@@ -1067,7 +1073,8 @@ function synthesizeBoundaryGraph(
   outputs: readonly FlowOutput[],
   nodeIds: ReadonlySet<string>,
   bodyEdges: readonly Edge[],
-  options: { lowered?: LoweredAsserts | null; record: boolean },
+  lowered: LoweredAsserts | null = null,
+  options: { record: boolean },
 ): [nodes: Map<string, Node>, edges: Edge[], wiring: Map<string, Map<string, unknown>>] {
   return [new Map(), [], new Map()];
 }
@@ -1164,6 +1171,7 @@ function checkCaseHandles(
 
 // T3-19: compose/validate/{typed_bindings,call_types,loop_types,llm_config_sources}.ts
 
+/** Python's `compose.validate.typed_bindings.LocalInput`; not ported yet. */
 type LocalInput = unknown;
 
 /** Python's `compose.validate.typed_bindings.check_typed_inputs`; not ported yet. */
@@ -1256,7 +1264,9 @@ interface Narrowing {
   /** Nodes a topological order could not reach, on or after a cycle; they get no facts. */
   readonly unordered: ReadonlySet<string>;
 }
+/** Python's `compose.validate.asserts.LoweredAsserts`; not ported yet. */
 type LoweredAsserts = unknown;
+/** Python's `compose.validate.skips.SkipModel`; not ported yet. */
 type SkipModel = unknown;
 /** One searched `when:` as authored: its index, text, origin and range. */
 type SearchedWhen = readonly [index: number, when: unknown, origin: OriginRef | null, range: SourceRange | null];

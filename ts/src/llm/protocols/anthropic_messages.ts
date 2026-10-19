@@ -182,10 +182,8 @@ export class AnthropicMessages implements SseProtocol {
     for (const [i, turn] of turns.entries()) {
       if (turn.role === "system") {
         const content = systemContent(turn.texts);
-        // `pending.length > 0` keeps a run of held messages together, as LangChain's
-        // `pending_system` check does, when a skipped empty assistant message sits between them.
         if (i === 0) system = content;
-        else if (inPlace && (pending.length > 0 || rendered.at(-1)?.["role"] === "user")) pending.push(content);
+        else if (inPlace && rendered.at(-1)?.["role"] === "user") pending.push(content);
         else system = this.#hoist(system, content);
         continue;
       }
@@ -325,6 +323,7 @@ function isSendable(block: JsonObject): boolean {
 function tool(spec: ToolSpec): JsonObject {
   const combinators = ["oneOf", "anyOf"].filter((key) => Object.hasOwn(spec.parameters, key));
   if (combinators.length > 0) {
+    // Python's repr quotes (tool names the API accepts hold no quote or escape).
     throw new TypeError(
       `tool '${spec.name}' has a top-level ${combinators.join("/")} in its parameters, which the Anthropic API ` +
         "does not support",

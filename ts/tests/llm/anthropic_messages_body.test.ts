@@ -281,6 +281,18 @@ describe("system messages", () => {
     });
   }
 
+  test("system messages around a skipped empty assistant message stay in place together", () => {
+    const messages = [user("Hi."), system("S1."), assistant(), system("S2."), assistant(text("Ok."))];
+    const [body, warnings] = warned(messages, "claude-opus-5-5");
+    expect(body["messages"]).toEqual([
+      { role: "user", content: "Hi." },
+      { role: "system", content: "S1." },
+      { role: "system", content: "S2." },
+      { role: "assistant", content: "Ok." },
+    ]);
+    expect(warnings).toEqual([]);
+  });
+
   test("a later system message is not kept in place on claude-sonnet-4-5", () => {
     const [body, warnings] = warned([user("Hi."), system("Late."), assistant(text("Ok."))], SONNET);
     expect(body["messages"]).toEqual([
@@ -559,8 +571,8 @@ describe("tools", () => {
   });
 
   test("tool parameters are copied", () => {
-    const [tool] = bodyOf([user("Hi.")], { tools: [DOUBLE] })["tools"] as JsonObject[];
-    ((tool!["input_schema"] as JsonObject)["required"] as JsonValue[]).push("x");
+    const [rendered] = bodyOf([user("Hi.")], { tools: [DOUBLE] })["tools"] as JsonObject[];
+    ((rendered!["input_schema"] as JsonObject)["required"] as JsonValue[]).push("x");
     expect(DOUBLE.parameters["required"]).toEqual(["value"]);
   });
 
@@ -589,8 +601,8 @@ describe("tools", () => {
       properties: { value: { anyOf: [{ type: "integer" }, { type: "string" }] }, kind: { oneOf: [{ const: "a" }] } },
     };
     const pick = new ToolSpec({ name: "pick", description: "Pick.", parameters });
-    const [tool] = bodyOf([user("Hi.")], { tools: [pick] })["tools"] as JsonObject[];
-    expect(tool!["input_schema"]).toEqual(parameters);
+    const [rendered] = bodyOf([user("Hi.")], { tools: [pick] })["tools"] as JsonObject[];
+    expect(rendered!["input_schema"]).toEqual(parameters);
   });
 });
 
@@ -632,8 +644,8 @@ describe("tool choice and parallel tool calls", () => {
     test(`parallelToolCalls ${parallelToolCalls} is set on a choice`, () => {
       const forced = bodyOf([user("Hi.")], { tools: [DOUBLE], toolChoice: new NamedTool("double"), parallelToolCalls });
       expect(forced["tool_choice"]).toEqual({ type: "tool", name: "double", disable_parallel_tool_use: disable });
-      const any = bodyOf([user("Hi.")], { tools: [DOUBLE], toolChoice: "required", parallelToolCalls });
-      expect(any["tool_choice"]).toEqual({ type: "any", disable_parallel_tool_use: disable });
+      const required = bodyOf([user("Hi.")], { tools: [DOUBLE], toolChoice: "required", parallelToolCalls });
+      expect(required["tool_choice"]).toEqual({ type: "any", disable_parallel_tool_use: disable });
     });
 
     test(`parallelToolCalls ${parallelToolCalls} is not set on none`, () => {

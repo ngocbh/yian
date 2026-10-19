@@ -81,8 +81,12 @@ const PRINTABLE_RUNS = `
  */
 let runStarts: number[] | undefined;
 
-/** Return whether Python 3.12 counts code point `cp` as printable. */
-function isPrintable(cp: number): boolean {
+/**
+ * Return whether Python 3.12 counts code point `cp` as printable, as `str.isprintable` does
+ * for one character: no control, format, surrogate, private-use or unassigned code point, and
+ * no separator but the ASCII space.
+ */
+export function isPrintable(cp: number): boolean {
   if (runStarts === undefined) {
     runStarts = [];
     let start = 0;

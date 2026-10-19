@@ -442,13 +442,15 @@ class AuthStore:
         with self._directory() as directory:
             if directory is None:
                 return
-            for name in (self.path.name, self.path.name + ".lock"):
+
+            def exists(name):
                 try:
                     os.stat(name, dir_fd=directory, follow_symlinks=False)
-                    break
                 except FileNotFoundError:
-                    pass
-            else:
+                    return False
+                return True
+
+            if not (exists(self.path.name) or exists(self.path.name + ".lock")):
                 return
             # Unlinking the lock file would let a waiter and a newcomer lock
             # different files, so only the store goes.
@@ -457,7 +459,8 @@ class AuthStore:
                     os.unlink(self.path.name, dir_fd=directory)
                 except FileNotFoundError:
                     pass
-                os.fsync(directory)
+                else:
+                    os.fsync(directory)
 
     def credentials(
         self,

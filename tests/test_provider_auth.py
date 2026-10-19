@@ -263,30 +263,25 @@ def test_delete_without_store_or_lock_creates_nothing(tmp_path):
     assert os.listdir(empty) == []
 
 
-@pytest.mark.parametrize("cancel", [False, True])
-def test_delete_lock_wait_is_bounded_and_cancellable(tmp_path, cancel):
-    clock = FakeClock()
+def test_delete_store_without_its_lock_file(tmp_path):
     path = tmp_path / "auth" / "auth.json"
     AuthStore(path).save("openai", ApiKeyCredentials("key"), "model")
+    lock = path.with_suffix(".json.lock")
+    lock.unlink()
+    AuthStore(path).delete()
+    assert not path.exists()
+    assert lock.exists()
 
-    def check():
-        if cancel and clock.now >= 1000.2:
-            raise Cancelled
 
-    with path.with_suffix(".json.lock").open("rb") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        store = AuthStore(
-            path,
-            monotonic=clock,
-            sleep=clock.sleep,
-            check_stopped=check,
-            lock_timeout=0.5,
-        )
-        with pytest.raises(
-            Cancelled if cancel else AuthError, match=None if cancel else "Timed out"
-        ):
-            store.delete()
-    assert AuthStore(path).selection().model == "model"
+def test_delete_removes_a_symlink_without_following_it(tmp_path):
+    path = tmp_path / "auth" / "auth.json"
+    AuthStore(path).save("openai", ApiKeyCredentials("key"), "model")
+    other = path.with_name("other.json")
+    path.rename(other)
+    path.symlink_to(other)
+    AuthStore(path).delete()
+    assert not path.is_symlink()
+    assert other.exists()
 
 
 @pytest.mark.parametrize("saved", [False, True])
@@ -993,8 +988,13 @@ def test_browser_listener_is_closed_when_user_cancels():
         check.bind(("127.0.0.1", 1455))
 
 
+@pytest.mark.parametrize(
+    "operation",
+    [lambda store: store.save("openai", ApiKeyCredentials("new"), "new"), AuthStore.delete],
+    ids=["save", "delete"],
+)
 @pytest.mark.parametrize("cancel", [False, True])
-def test_lock_wait_is_bounded_and_cancellable(tmp_path, cancel):
+def test_lock_wait_is_bounded_and_cancellable(tmp_path, cancel, operation):
     clock = FakeClock()
     path = tmp_path / "auth" / "auth.json"
     AuthStore(path).save("openai", ApiKeyCredentials("key"), "model")
@@ -1015,7 +1015,7 @@ def test_lock_wait_is_bounded_and_cancellable(tmp_path, cancel):
         with pytest.raises(
             Cancelled if cancel else AuthError, match=None if cancel else "Timed out"
         ):
-            store.save("openai", ApiKeyCredentials("new"), "model")
+            operation(store)
     assert AuthStore(path).selection().model == "model"
 
 

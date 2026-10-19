@@ -810,7 +810,7 @@ subscription doesn't offer fails with `auth.failed` and saves nothing. The login
 becomes the default when the file has no default.
 
 SIGTERM or SIGINT stops the sign-in: nothing is saved, no further line is written,
-and the command exits 130. A SIGTERM that comes before the `code` line, while the
+and the command exits 130. A signal that comes before the `code` line, while the
 command starts, may end the process by the signal instead; nothing is saved either way.
 A signal that comes after the login is saved doesn't undo it; `done` is still written.
 A second signal kills the process. The command exits 0 after `done`, 1 after an error,

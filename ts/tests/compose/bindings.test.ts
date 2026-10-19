@@ -1,11 +1,10 @@
 /**
- * The kind-blind binding-field walk: a port of `tests/compose/test_bindings.py`. The agent, tool,
- * human_input, wait and case rows use the real `AgentDescriptor`, `ToolDescriptor`,
- * `HumanInputDescriptor`, `WaitDescriptor` and `CaseDescriptor`; each other row uses a stand-in of
- * the kind Python uses (`standIn` for the kinds whose only binding field is `inputs`, test-local
- * `StandInCall` and `StandInMap` for the kinds with a scalar `over`), since those kinds aren't
- * ported yet. Every row passes an explicit `bindingFields` table built from the classes'
- * `bindingFields`.
+ * The kind-blind binding-field walk: a port of `tests/compose/test_bindings.py`. The rows use the
+ * real `AgentDescriptor`, `ToolDescriptor`, `HumanInputDescriptor`, `WaitDescriptor`,
+ * `CaseDescriptor`, `CallDescriptor` and `MapDescriptor` with the registered `BINDING_FIELDS`, as
+ * Python does; the loop half of `test_human_input_and_loop_inputs_rewritten` uses a stand-in
+ * (`standIn("loop")`, whose only binding field is `inputs`), registered with `withKinds`, since
+ * the loop kind isn't ported yet.
  *
  * TS-only: `mapBindingSources` hands the mapper a `ValueTemplate` whole, in a record field and in
  * a scalar field, and `keyless` drops the field and key.
@@ -14,49 +13,18 @@
 import { describe, expect, test } from "bun:test";
 
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
-import { NodeDescriptor, type NodeDescriptorFields } from "../../src/compose/nodes/base.ts";
 import { keyless, mapBindingSources, mapBindingStrings } from "../../src/compose/nodes/bindings.ts";
+import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
-import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
+import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { WaitDescriptor } from "../../src/compose/nodes/wait.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { ValueTemplate } from "../../src/nodes/contracts.ts";
-import { standIn } from "./stand_ins.ts";
-
-/** A `call` stand-in with the scalar `over` binding field beside `inputs`. */
-class StandInCall extends NodeDescriptor {
-  static override readonly kind: string = "call";
-  static override readonly bindingFields: readonly string[] = ["inputs", "over"];
-  readonly over: unknown;
-
-  constructor(fields: NodeDescriptorFields & { over?: unknown }) {
-    super(fields);
-    this.over = fields.over ?? null;
-  }
-}
-
-/** A `map` stand-in: Python's `MapDescriptor` subclasses `CallDescriptor`. */
-class StandInMap extends StandInCall {
-  static override readonly kind = "map";
-}
+import { standIn, withKinds } from "./stand_ins.ts";
 
 const StandInLoop = standIn("loop", { bindingFields: ["inputs"] });
-
-const CLASSES: readonly DescriptorClass[] = [
-  AgentDescriptor,
-  ToolDescriptor,
-  HumanInputDescriptor,
-  StandInLoop,
-  WaitDescriptor,
-  CaseDescriptor,
-  StandInCall,
-  StandInMap,
-];
-const bindingFields: ReadonlyMap<string, readonly string[]> = new Map(
-  CLASSES.map((cls) => [cls.kind, cls.bindingFields]),
-);
 
 function up(_field: string, _key: string, value: string): string {
   return value.toUpperCase();
@@ -65,7 +33,7 @@ function up(_field: string, _key: string, value: string): string {
 describe("mapBindingStrings", () => {
   test("agent inputs rewritten, non-strings left", () => {
     const desc = new AgentDescriptor({ id: "a", inputs: { x: "${src}", n: 5 } });
-    const out = mapBindingStrings(desc, up, { bindingFields });
+    const out = mapBindingStrings(desc, up);
     expect(out.inputs).toEqual({ x: "${SRC}", n: 5 });
     // A fresh descriptor (not the same object): a rewrite happened.
     expect(out).not.toBe(desc);
@@ -73,28 +41,29 @@ describe("mapBindingStrings", () => {
 
   test("tool inputs rewritten", () => {
     const desc = new ToolDescriptor({ id: "t", toolId: "fetch", inputs: { url: "${u}", n: 3 } });
-    const out = mapBindingStrings(desc, up, { bindingFields });
+    const out = mapBindingStrings(desc, up);
     expect(out.inputs).toEqual({ url: "${U}", n: 3 });
   });
 
   test("call inputs and over rewritten", () => {
-    const desc = new StandInCall({ id: "c", inputs: { seed: "${s}" }, over: "${xs}" });
-    const out = mapBindingStrings(desc, up, { bindingFields });
+    const desc = new CallDescriptor({ id: "c", call: "sub", inputs: { seed: "${s}" }, over: "${xs}" });
+    const out = mapBindingStrings(desc, up);
     expect(out.inputs).toEqual({ seed: "${S}" });
     expect(out.over).toBe("${XS}");
     expect(out.kind).toBe("call");
   });
 
   test("map kind inputs and over rewritten", () => {
-    const desc = new StandInMap({ id: "m", inputs: { seed: "${s}" }, over: "${xs}" });
-    const out = mapBindingStrings(desc, up, { bindingFields });
+    const desc = new MapDescriptor({ id: "m", call: "sub", inputs: { seed: "${s}" }, over: "${xs}" });
+    const out = mapBindingStrings(desc, up);
     expect(out.inputs).toEqual({ seed: "${S}" });
     expect(out.over).toBe("${XS}");
-    expect(out).toBeInstanceOf(StandInMap);
+    expect(out).toBeInstanceOf(MapDescriptor);
+    expect(out.kind).toBe("map");
   });
 
   test("the mapper distinguishes an input key from the scalar field", () => {
-    const desc = new StandInMap({ id: "m", inputs: { over: "${input_value}" }, over: "${items}" });
+    const desc = new MapDescriptor({ id: "m", call: "sub", inputs: { over: "${input_value}" }, over: "${items}" });
     const sites: [string, string, string][] = [];
     mapBindingStrings(
       desc,
@@ -102,7 +71,6 @@ describe("mapBindingStrings", () => {
         sites.push([field, key, value]);
         return value;
       },
-      { bindingFields },
     );
     expect(sites).toEqual([
       ["inputs", "over", "${input_value}"],
@@ -111,8 +79,8 @@ describe("mapBindingStrings", () => {
   });
 
   test("call over null left untouched", () => {
-    const desc = new StandInCall({ id: "c", inputs: {}, over: null });
-    const out = mapBindingStrings(desc, up, { bindingFields });
+    const desc = new CallDescriptor({ id: "c", call: "sub", inputs: {}, over: null });
+    const out = mapBindingStrings(desc, up);
     expect(out.over).toBeNull();
   });
 
@@ -122,7 +90,7 @@ describe("mapBindingStrings", () => {
       new CaseDescriptor({ id: "k", on: "${sel}", cases: [] }),
       new WaitDescriptor({ id: "w", until: "${t}" }),
     ]) {
-      expect(mapBindingStrings(desc, up, { bindingFields })).toBe(desc);
+      expect(mapBindingStrings(desc, up)).toBe(desc);
     }
   });
 
@@ -131,7 +99,7 @@ describe("mapBindingStrings", () => {
       new HumanInputDescriptor({ id: "h", inputs: { q: "${qs}" }, prompt: "hi" }),
       new StandInLoop({ id: "l", inputs: { q: "${qs}" } }),
     ]) {
-      const out = mapBindingStrings(desc, up, { bindingFields });
+      const out = withKinds([StandInLoop], () => mapBindingStrings(desc, up));
       expect(out.inputs).toEqual({ q: "${QS}" });
       expect(out).not.toBe(desc);
     }
@@ -148,7 +116,6 @@ describe("mapBindingStrings", () => {
         sites.push([field, key, value]);
         return value.toUpperCase();
       },
-      { bindingFields },
     );
     expect(out.inputs["x"]).toEqual(new ValueTemplate({ a: "${SRC}", b: [1n, "${OTHER}"] }, [[["a"], origin]]));
     expect(sites).toEqual([
@@ -162,7 +129,7 @@ describe("mapBindingSources", () => {
   test("a ValueTemplate is passed whole, in a record field and a scalar field", () => {
     const inner = new ValueTemplate({ a: "${src}" });
     const items = new ValueTemplate(["${xs}"]);
-    const desc = new StandInCall({ id: "c", inputs: { x: inner, n: 5 }, over: items });
+    const desc = new CallDescriptor({ id: "c", call: "sub", inputs: { x: inner, n: 5 }, over: items });
     const sites: [string, string, unknown][] = [];
     const out = mapBindingSources(
       desc,
@@ -170,7 +137,6 @@ describe("mapBindingSources", () => {
         sites.push([field, key, source]);
         return "${replaced}";
       },
-      { bindingFields },
     );
     expect(sites).toHaveLength(2);
     expect(sites[0]?.[2]).toBe(inner);
@@ -190,7 +156,6 @@ describe("keyless", () => {
     const out = mapBindingStrings(
       desc,
       keyless((value) => value.toUpperCase()),
-      { bindingFields },
     );
     expect(out.inputs).toEqual({ x: "${SRC}" });
     expect(keyless((value) => `<${value}>`)("inputs", "x", "v")).toBe("<v>");

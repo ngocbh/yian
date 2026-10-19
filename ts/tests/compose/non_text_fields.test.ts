@@ -9,7 +9,9 @@
  * text is pydantic's. The null and text `node_name:` rows, the null optional flow field rows and
  * the null and text `on:` rows check the parsed value, where Python loads the flow.
  * `test_text_code_and_tool_id_still_load` assembles the root flow with `assembleText`, where
- * Python loads it.
+ * Python loads it. The call and map rows of `test_non_text_call_is_a_load_error` and
+ * `test_null_call_is_empty` parse the flow's nodes, where Python loads it; the parse half of
+ * `test_text_call_still_loads` checks the parsed `call:`.
  *
  * The `llm_config` rows (`test_non_text_llm_config_field_is_a_load_error`,
  * `test_nested_llm_config_text_field`, `test_other_llm_config_errors_are_unchanged`) load the node
@@ -22,9 +24,11 @@
  * Dropped: the date rows (TS reads an unquoted date as text) and
  * `test_not_text_detail_reads_the_first_string_error` (`not_text_detail` reads a pydantic error).
  *
- * Later (T3-16): the `call:` and loop rows (`test_non_text_call_is_a_load_error`,
- * `test_null_call_is_empty`, `test_text_call_still_loads`), and the while and until rows of
- * `test_already_located_fields_are_unchanged`. Later (T3-20): its then and else rows.
+ * Later (T3-16, the loop kind): the loop rows of `test_non_text_call_is_a_load_error`,
+ * `test_null_call_is_empty` and `test_text_call_still_loads`, and the while and until rows of
+ * `test_already_located_fields_are_unchanged`. Later (T3-22): the load half of
+ * `test_text_call_still_loads`. Later (T3-20): the then and else rows of
+ * `test_already_located_fields_are_unchanged`.
  * Later (T3-18, T3-22): the unresolved-reference error of `test_null_case_on_is_absent`. Later
  * (T3-22): the loading of `test_text_case_on_still_loads`.
  * Later (T3-17): the inline-body rows of `test_code_in_def_compact_merge_and_inline_body` and
@@ -39,6 +43,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { notTextError } from "../../src/compose/nodes/base.ts";
+import type { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import type { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { parseFile } from "../../src/compose/parse/file.ts";
 import { forget } from "../../src/defaults.ts";
@@ -201,6 +206,37 @@ nodes:
     output: str
     code: "return 'c'"
 output: \${b.output | c.output}
+`;
+}
+
+/** The fields each composite kind needs before its `call:`, so only `call:` is wrong. */
+const CALL_HEADS: ReadonlyMap<string, string> = new Map([
+  ["call", ""],
+  ["map", "    over: ${input.xs}\n"],
+]);
+
+/** A flow whose `kind` node `a` has `call: <v>`, beside a `defs:` entry `body`. */
+function callFlow(kind: string, v: string): string {
+  return `id: f
+name: f
+input:
+  xs: !list(int)
+defs:
+  body:
+    input:
+      v: !int
+    nodes:
+      one:
+        kind: code
+        output: {v: int}
+        code: "return {'v': 1}"
+    output: \${one.output}
+nodes:
+  a:
+    kind: ${kind}
+${CALL_HEADS.get(kind)!}    call: ${v}
+    input: {v: 1}
+output: \${a.output}
 `;
 }
 
@@ -396,6 +432,34 @@ describe("parseNodes", () => {
     expect(startLine(error)).toBe(lineOf(text, "on: "));
   });
 
+  describe.each([...CALL_HEADS.keys()])("%s", (kind) => {
+    test.each(NON_TEXT)("non-text call is a load error: %s", (value, phrase) => {
+      const text = callFlow(kind, value);
+
+      const error = loadError(() => nodesOf(text));
+
+      expect(error.message).toContain(
+        `node 'a' (kind=${kind}): \`call:\` must be text, but YAML read it as ${phrase}; put it in quotes`,
+      );
+      expect(startLine(error)).toBe(lineOf(text, "call: "));
+    });
+
+    test("null call is empty", () => {
+      const text = callFlow(kind, "null");
+
+      const error = loadError(() => nodesOf(text));
+
+      expect(error.message).toContain(
+        `node 'a' (kind=${kind}): \`call:\` must be text, but it is empty; write the text`,
+      );
+      expect(startLine(error)).toBe(lineOf(text, "call: "));
+    });
+
+    test("text call still parses", () => {
+      expect((nodesOf(callFlow(kind, "body")).get("a") as CallDescriptor).call).toBe("body");
+    });
+  });
+
   test("null case on is absent", () => {
     // `on: null` is the searched form.
     expect((nodesOf(caseOn("null"), []).get("a") as CaseDescriptor).on).toBeNull();
@@ -468,10 +532,13 @@ describe("parseNodes", () => {
 
   test.each([
     "load-core/compose_non_text_fields__node_asserts_holding_a_number",
+    "load-core/compose_non_text_fields__non_text_call_on_a_call_node",
+    "load-core/compose_non_text_fields__non_text_call_on_a_map_node",
     "load-core/compose_non_text_fields__non_text_case_on",
     "load-core/compose_non_text_fields__non_text_code",
     "load-core/compose_non_text_fields__non_text_node_name",
     "load-core/compose_non_text_fields__non_text_tool_id",
+    "load-core/compose_non_text_fields__null_call",
     "load-core/compose_non_text_fields__null_tool_id",
   ])("case %s", (id) => runCase({ id, call: parsedNodes }));
 });

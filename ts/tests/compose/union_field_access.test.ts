@@ -3,8 +3,17 @@
  * `tests/compose/test_union_field_access.py::test_shared_walk_allows_member_only_fields_when_asked`,
  * `::test_member_only_hint_names_the_union_root` and
  * `::test_shared_field_one_member_does_not_require_reads_as_optional` and
- * `::test_human_input_answer_schema_for_a_union_is_one_object_entry`. `typeFor` stands in for
- * compose's `read_type`.
+ * `::test_human_input_answer_schema_for_a_union_is_one_object_entry`; and the child-signature
+ * rows `::test_tag_field_reads_as_the_merged_literal`,
+ * `::test_shared_field_of_one_type_reads_as_that_type`,
+ * `::test_shared_field_optional_in_one_member_reads_as_optional`,
+ * `::test_shared_field_through_an_optional_union_reads_as_optional` and
+ * `::test_shared_field_of_differing_types_is_untyped_and_loads` (the signature, not the load);
+ * and `::test_map_over_a_union_output_gives_a_list_of_objects`. `typeFor` stands in for compose's
+ * `read_type`. The child-signature rows build the child with `handChild` (a producer `d` of the
+ * given type and a record output), where Python loads a flow; the MAP row builds a
+ * `MapDescriptor` over a hand-built child returning its `Decision` producer, where Python loads a
+ * flow whose def is that child.
  *
  * TS-only: the member-only fix hints, which Python checks only through flows the loader builds
  * (a tag comparison hint read from the local path, through a union root and below a shared
@@ -12,13 +21,17 @@
  * shared-field walk (continuing into a nested union, stopping at an untyped shared field, and
  * reading below a merged `Literal` field), and reading below a file field.
  *
- * Later: the rest needs compose and the runtime.
+ * Later: `::test_loop_carrying_a_union_keeps_the_non_record_error` (T3-16, the loop kind); the
+ * rest needs compose and the runtime.
  */
 
 import { expect, test } from "bun:test";
 
 import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
+import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { answerSchema } from "../../src/compose/nodes/human_input.ts";
+import { MapDescriptor } from "../../src/compose/nodes/map.ts";
+import { childSignature } from "../../src/compose/nodes/resolver.ts";
 import {
   isExactly,
   outputContractFieldError,
@@ -27,6 +40,7 @@ import {
 } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
+import { handChild, parametersFromYaml } from "./declarations.ts";
 
 const DECISION_TYPEDEFS = {
   Buy: { action: "Literal(buy)", qty: "int" },
@@ -174,4 +188,79 @@ test("a shared field one member does not require reads as optional", () => {
   expect(isExactly(projected, ValueContract)).toBe(true);
   const optionalText = new Type({ kind: ValueKind.STRING, nullable: true });
   expect(typeEquals((projected as ValueContract).type, optionalText)).toBe(true);
+});
+
+const TRADE_TYPEDEFS = {
+  Buy: { action: "Literal(buy)", qty: "int", note: "str" },
+  Hold: { action: "Literal(hold)", note: "str" },
+  Sell: { action: "Literal(sell)", qty: "int", price: "float", note: "str" },
+  Decision: "Union(Buy, Hold, Sell)",
+};
+
+/**
+ * Return the contract of output field `name` of a child whose producer `d` is typed `output`
+ * over `typedefs` and whose record output reads `source` (`null` when untyped).
+ */
+function outputField(
+  name: string,
+  source: string,
+  options: { output?: string; typedefs?: Readonly<Record<string, unknown>> } = {},
+): ValueContract | null {
+  const { output = "Decision", typedefs = TRADE_TYPEDEFS } = options;
+  const child = handChild({
+    producers: { d: new ValueContract(typeFor(output, readTypedefs(typedefs))) },
+    output: { [name]: source },
+  });
+  const contract = childSignature(child).output;
+  if (isExactly(contract, PartialRecordContract)) {
+    return contract.fields.find(([field]) => field === name)![1];
+  }
+  expect(isExactly(contract, ValueContract)).toBe(true);
+  return new ValueContract((contract as ValueContract).type.fields!.get(name)!);
+}
+
+test("a tag field reads as the merged literal", () => {
+  const contract = outputField("a", "${d.output.action}");
+  const merged = new Type({ kind: ValueKind.STRING, tags: new Set(["buy", "hold", "sell"]) });
+  expect(typeEquals(contract!.type, merged)).toBe(true);
+});
+
+test("a shared field of one type reads as that type", () => {
+  const contract = outputField("n", "${d.output.note}");
+  expect(typeEquals(contract!.type, Type.scalar(ValueKind.STRING))).toBe(true);
+});
+
+test("a shared field optional in one member reads as optional", () => {
+  const typedefs = { ...TRADE_TYPEDEFS, Hold: { action: "Literal(hold)", note: "Optional(str)" } };
+  const contract = outputField("n", "${d.output.note}", { typedefs });
+  expect(typeEquals(contract!.type, new Type({ kind: ValueKind.STRING, nullable: true }))).toBe(true);
+});
+
+test("a shared field through an optional union reads as optional", () => {
+  const contract = outputField("n", "${d.output.note}", { output: "Optional(Decision)" });
+  expect(typeEquals(contract!.type, new Type({ kind: ValueKind.STRING, nullable: true }))).toBe(true);
+});
+
+test("a shared field of differing types is untyped", () => {
+  const typedefs = {
+    A: { kind: "Literal(a)", v: "int" },
+    B: { kind: "Literal(b)", v: "str" },
+    AB: "Union(A, B)",
+  };
+  expect(outputField("v", "${d.output.v}", { output: "AB", typedefs })).toBeNull();
+});
+
+test("a map over a union output gives a list of objects", () => {
+  const each = handChild({
+    inputs: parametersFromYaml("input:\n  v: !str\n", new Map()),
+    producers: { inner: new ValueContract(typeFor("Decision", readTypedefs(TRADE_TYPEDEFS))) },
+    output: "${inner.output}",
+  });
+  const desc = new MapDescriptor({ id: "m", call: "each", over: "${input.xs}", inputs: { v: "${item}" } });
+
+  const contract = desc.build(new BuildContext({ registry: new Map(), resolver: () => each })).node
+    .outputContract as ValueContract;
+
+  expect(contract.type.kind).toBe(ValueKind.LIST_OBJECT);
+  expect(contract.type.element!.variants).toBeDefined();
 });

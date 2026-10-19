@@ -6,8 +6,11 @@
  * `fileOf`, which parses its top level; `caseText` and `caseDocument`, which read a conformance
  * case's flow as text or as a parsed document; and the harvested-case harness built on them
  * (`loadError`, `cursorAt`, `caseRegistry`, `CaseRow`, `runCase`, `TextCaseRow`, `runTextCase`,
- * `inputsAt`, `variablesAt`, `parsedNodes`, `assembled`, `assembleText`), which makes the loader's
- * call on a case and compares the result with the case's `expect`.
+ * `inputsAt`, `variablesAt`, `parsedNodes`, `assembled`, `assembledWith`, `assembleText`), which
+ * makes the loader's call on a case and compares the result with the case's `expect`; and
+ * `handChild`, a child flow built by hand (START, producers with given output contracts, END)
+ * where a case's `defs:` entry would be loaded, for the rows that read a child's signature or
+ * build a CALL or MAP over one (`assembledWith` and `assembleText`'s `children`).
  */
 
 import { readFileSync } from "node:fs";
@@ -16,7 +19,8 @@ import { fileURLToPath } from "node:url";
 
 import { expect } from "bun:test";
 
-import { assemble, type CallableScope, type ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { CompiledFlow, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { assemble, type CallableScope, ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import { boundaryFieldRanges } from "../../src/compose/helpers/source.ts";
 import { readSourceFlowInputs, readSourceParameters } from "../../src/compose/helpers/types.ts";
@@ -27,7 +31,11 @@ import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { reload } from "../../src/defaults.ts";
-import type { Parameter } from "../../src/nodes/contracts.ts";
+import { Node } from "../../src/nodes/base.ts";
+import { CodeNode } from "../../src/nodes/code/node.ts";
+import { Binding, type OutputContract, type Parameter } from "../../src/nodes/contracts.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
+import { StartNode } from "../../src/nodes/start/node.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { type Case, prepare, readCase } from "../conformance.ts";
 import { withKinds } from "./stand_ins.ts";
@@ -58,6 +66,50 @@ export function parametersFromYaml(
     declarationLabel: requireDefault ? "variable" : "input",
     requireDefault,
   });
+}
+
+/**
+ * Build a child flow by hand, standing in for a `defs:` entry the loader would compose: START over
+ * `inputs`, one producer per entry of `producers`, and an END returning `output`.
+ *
+ * @param options.inputs The child's parameters, e.g. from `parametersFromYaml` over the def's
+ *   `input:` text (default none).
+ * @param options.producers Node id to producer: an output contract (or `null`) becomes a CODE node
+ *   `return null` carrying that contract, as the def's typed node would; a `Node` is used as is
+ *   (default none).
+ * @param options.output A source or `Binding` for a value END (its output named `result`, as
+ *   the loader names it), a record of them for a record END, or `null` for a value END with no
+ *   output.
+ */
+export function handChild(options: {
+  inputs?: readonly Parameter[];
+  producers?: Readonly<Record<string, OutputContract | Node | null>>;
+  output: string | Binding | Readonly<Record<string, string | Binding>> | null;
+}): ComposedFlow {
+  const { inputs = [], producers = {}, output } = options;
+  const nodes = new Map<string, Node>([[START_ID, new StartNode(START_ID, { params: inputs })]]);
+  for (const [id, producer] of Object.entries(producers)) {
+    if (producer instanceof Node) {
+      nodes.set(id, producer);
+      continue;
+    }
+    const node = new CodeNode(id, { code: "return null" });
+    node.outputContract = producer;
+    nodes.set(id, node);
+  }
+  let outputs: FlowOutput[];
+  if (output === null) {
+    nodes.set(END_ID, EndNode.value(END_ID, { outputName: null }));
+    outputs = [];
+  } else if (typeof output === "string" || output instanceof Binding) {
+    nodes.set(END_ID, EndNode.value(END_ID, { outputName: "result" }));
+    outputs = [new FlowOutput("result", output)];
+  } else {
+    const entries = Object.entries(output);
+    nodes.set(END_ID, EndNode.record(END_ID, { outputNames: entries.map(([name]) => name) }));
+    outputs = entries.map(([name, binding]) => new FlowOutput(name, binding));
+  }
+  return new ComposedFlow(new CompiledFlow(nodes, [], { outputs }));
 }
 
 /**
@@ -195,25 +247,31 @@ export const variablesAt =
 export const parsedNodes: CaseCall = (document) =>
   parseNodes(flowNodesCursor(document, parseFile(document).nodes));
 
+/** Child flows by callable name, standing in for the `defs:` entries the loader would compose. */
+export type ChildFlows = Readonly<Record<string, ComposedFlow>>;
+
+/** Return a scope `resolve` that hands back `children[flowId]`, else throws (no loader yet). */
+function resolveFrom(children: ChildFlows = {}): CallableScope["resolve"] {
+  return (flowId) => {
+    if (Object.hasOwn(children, flowId)) return children[flowId]!;
+    throw new Error("child flows load in T3-22");
+  };
+}
+
 /**
  * Assemble the root flow of `document` as the loader calls `assemble` on it, with a scope whose
- * catalog is `builder`; the loader's `uses:` aliases, flow `llm_config:` and root memories are
- * left out.
+ * catalog is `builder` and which resolves a callable through `resolve` (default: none resolves);
+ * the loader's `uses:` aliases, flow `llm_config:` and root memories are left out.
  */
 function assembleRoot(
   document: SourceDocument,
   registry: TypeRegistry,
   builder: SourceCatalogBuilder,
+  resolve: CallableScope["resolve"] = resolveFrom(),
 ): ComposedFlow {
   const file = parseFile(document);
   const root = document.root;
-  const scope: CallableScope = {
-    catalogBuilder: builder,
-    resolve: () => {
-      throw new Error("child flows load in T3-22");
-    },
-    registerPrivate: () => {},
-  };
+  const scope: CallableScope = { catalogBuilder: builder, resolve, registerPrivate: () => {} };
   // A compact flow (no `nodes:`) lends its top-level `output:` to its one synthesized node, so the
   // loader locates the flow's `asserts:` and `output:` only in a full flow.
   const childOf = (key: string, flowOnly = false) =>
@@ -243,18 +301,32 @@ export const assembled: CaseCall = (document, registry, _diagnostics, builder) =
   assembleRoot(document, registry, builder);
 
 /**
+ * Assemble the case's root flow as `assembled` does, with a scope that resolves a callable named
+ * in `children` to that hand-built flow, for a case whose CALL, MAP or LOOP calls a `defs:` entry.
+ */
+export const assembledWith =
+  (children: ChildFlows): CaseCall =>
+  (document, registry, _diagnostics, builder) =>
+    assembleRoot(document, registry, builder, resolveFrom(children));
+
+/**
  * Assemble flow `text`'s root as `assembled` does, returning the flow and the catalog builder
  * its origins resolve through (`builder.freeze()` or `builder.resolveRegistered(origin)`).
  *
  * @param label The file name diagnostics name (default `flow.yaml`).
+ * @param options.children Hand-built child flows the scope resolves by name, as `assembledWith`'s.
  */
 export function assembleText(
   text: string,
   label = "flow.yaml",
+  options: { children?: ChildFlows } = {},
 ): { flow: ComposedFlow; builder: SourceCatalogBuilder } {
   const document = parseSourceDocument(text, label);
   const builder = new SourceCatalogBuilder();
-  return { flow: assembleRoot(document, caseRegistry(document), builder), builder };
+  return {
+    flow: assembleRoot(document, caseRegistry(document), builder, resolveFrom(options.children)),
+    builder,
+  };
 }
 
 /**

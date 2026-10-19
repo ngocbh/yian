@@ -6,15 +6,17 @@
  * TS-only: `inf` is an expression keyword, so it is a rejected node id too.
  *
  * Changed: `test_agent_knobs_parse`, `test_code_parses`, `test_tool_parses`,
- * `test_seed_11_anchored_nodes_parse`, `test_case_searched_parses` and `test_case_on_parses` read
- * seeds 14, 01, 08, 11, 02 and 06 through the conformance cases `load-agent/seed_14_agent_tools`,
+ * `test_seed_11_anchored_nodes_parse`, `test_case_searched_parses`, `test_case_on_parses`,
+ * `test_call_ref_form_parses` and `test_call_map_form_parses` read seeds 14, 01, 08, 11, 02, 06,
+ * 04 and 05 through the conformance cases `load-agent/seed_14_agent_tools`,
  * `load-agent/seed_01_structured_agent`, `load-leaves/seed_08_tool_news`,
- * `load-core/seed_11_reuse_anchors`, `load-case/seed_02_case` and `load-case/seed_06_case_on`;
+ * `load-core/seed_11_reuse_anchors`, `load-case/seed_02_case`, `load-case/seed_06_case_on`,
+ * `load-map-call/seed_04_call` and `load-map-call/seed_05_call_map`;
  * seed 01's CODE reference is the TS form (`./fixtures/seeds.ts:one_line_summary`).
  * `test_case_carries_no_inputs` also pins that a CASE has no authored local, so no `inf` name.
+ * `test_map_without_over_is_loud` and `test_over_on_kind_call_is_loud` pin the whole message,
+ * where Python checks that it names the field.
  *
- * Later (T3-16): `test_call_ref_form_parses`, `test_call_map_form_parses`,
- * `test_map_without_over_is_loud`, `test_over_on_kind_call_is_loud`.
  * Later (T3-17): `test_hyphenated_node_in_inline_body_rejected`.
  * Later (T3-22): `test_hyphenated_single_node_def_rejected_but_multi_node_def_name_loads`.
  *
@@ -30,6 +32,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
+import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
@@ -271,6 +274,54 @@ gate:
     expect(loadError(() => nodes(text)).message).toBe(
       "node 'gate' (kind=case): field 'inputs' is not allowed " +
         "(allowed: cases, depends_on, else, env, kind, node_name, on, output, runs_after)",
+    );
+  });
+});
+
+describe("call", () => {
+  test("call ref form parses", () => {
+    // seed 04: a plain `call` is a single application
+    const { text, label } = caseText("load-map-call/seed_04_call");
+    const node = nodesOf(text, [], label).get("research") as CallDescriptor;
+
+    expect(node).toBeInstanceOf(CallDescriptor);
+    expect(node.kind).toBe("call");
+    expect(node.call).toBe("research-one");
+    expect(node.inputs).toEqual({ topic: "${input.topic}" });
+    expect(node.over).toBeNull();
+    expect(node.parallel).toBe(false);
+  });
+
+  test("call map form parses", () => {
+    // seed 05: a `map` (kind: map and over:) is List.map
+    const { text, label } = caseText("load-map-call/seed_05_call_map");
+    const node = nodesOf(text, [], label).get("research_each") as CallDescriptor;
+
+    expect(node).toBeInstanceOf(CallDescriptor);
+    expect(node.kind).toBe("map");
+    expect(node.call).toBe("research-one");
+    expect(node.over).toBe("${input.topics}");
+    expect(node.inputs).toEqual({ topic: "${item}", as_of: '${input.as_of:-"2026-01-01"}' });
+    expect(node.parallel).toBe(true);
+    expect(node.nodeName).toBe("Research each topic");
+  });
+
+  test("map without over is loud", () => {
+    // `over:` is the iteration source: a `kind: map` without it is incomplete.
+    expect(loadError(() => nodes("\nn:\n  kind: map\n  call: child\n")).message).toBe(
+      "node 'n' (kind=map): missing required field 'over'",
+    );
+  });
+
+  test("over on kind call is loud", () => {
+    // `over:` and `parallel:` are MAP-only; `kind: call` rejects them (use `map`).
+    const allowed = "(allowed: asserts, call, depends_on, env, input, kind, node_name, runs_after)";
+
+    expect(loadError(() => nodes("\nn:\n  kind: call\n  call: child\n  over: ${input.xs}\n")).message).toBe(
+      `node 'n' (kind=call): field 'over' is not allowed ${allowed}`,
+    );
+    expect(loadError(() => nodes("\nn:\n  kind: call\n  call: child\n  parallel: true\n")).message).toBe(
+      `node 'n' (kind=call): field 'parallel' is not allowed ${allowed}`,
     );
   });
 });

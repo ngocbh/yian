@@ -30,6 +30,7 @@ import {
   jsTypeName,
   setField,
   shownText,
+  typeEquals,
   valueRepr,
   writeAsText,
 } from "../typesys/values.ts";
@@ -756,6 +757,36 @@ export class PartialRecordContract {
 
 /** The closed compiled output-contract sum: exact value or partial record. */
 export type OutputContract = ValueContract | PartialRecordContract;
+
+/** Whether two origins are both absent or have the same key. */
+function sameOrigin(a: OriginRef | null, b: OriginRef | null): boolean {
+  return a === null || b === null ? a === b : a.key === b.key;
+}
+
+/**
+ * Whether two output contracts are equal, as Python's dataclass `==` compares them: `null` only
+ * equals `null`; two exact `ValueContract`s by `typeEquals` and the same origins (default, then
+ * each entry's path and origin key, in order); two `PartialRecordContract`s field by field, in
+ * order.
+ */
+export function sameOutputContract(a: OutputContract | null, b: OutputContract | null): boolean {
+  if (a === null || b === null) return a === b;
+  if (isExactly(a, ValueContract) && isExactly(b, ValueContract)) {
+    return (
+      typeEquals(a.type, b.type) &&
+      sameOrigin(a.origins.default, b.origins.default) &&
+      sameItems(a.origins.entries, b.origins.entries, ([pathA, originA], [pathB, originB]) => {
+        return sameItems(pathA, pathB) && sameOrigin(originA, originB);
+      })
+    );
+  }
+  if (isExactly(a, PartialRecordContract) && isExactly(b, PartialRecordContract)) {
+    return sameItems(a.fields, b.fields, ([nameA, contractA], [nameB, contractB]) => {
+      return nameA === nameB && sameOutputContract(contractA, contractB);
+    });
+  }
+  return false;
+}
 
 /**
  * Return an exact whole-value type, validating either contract arm's shapes.

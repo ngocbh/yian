@@ -435,8 +435,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `llmConfigLabel`, `wiresLlmConfig`, `llmValueTypes`, `callTime` and `hostCredentials` aren't
   identity.
 - In `typesCompatible` and `typeRelation`, an open numeric end is `null`.
-- Compare positions and scopes with `sameExecutionPosition`/`sameExecutionScope`, and arrays with
-  `sameItems` (`src/nodes/contracts.ts`).
+- Compare positions and scopes with `sameExecutionPosition`/`sameExecutionScope`, output contracts
+  with `sameOutputContract`, and arrays with `sameItems` (`src/nodes/contracts.ts`).
 
 ## Commands
 

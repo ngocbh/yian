@@ -8,7 +8,7 @@
  * `test_when_on_case_node_points_at_cases_entries` runs on the real `case` kind. The harvested
  * `compose_node_when_hint__when_on_*` cases of the registered kinds are pinned.
  *
- * Later (T3-16): the sweep's rows and pinned cases for the call, map and loop kinds.
+ * Later (T3-16, the loop kind): the sweep's loop row and its pinned case.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -63,9 +63,11 @@ output: \${x.output}
 
 test.each<CaseRow>([
   { id: "load-core/compose_node_when_hint__when_on_an_agent_node", call: parsedNodes },
+  { id: "load-core/compose_node_when_hint__when_on_a_call_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_case_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_code_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_human_input_node", call: parsedNodes },
+  { id: "load-core/compose_node_when_hint__when_on_a_map_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_tool_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_wait_node", call: parsedNodes },
 ])("parseNodes: $id", runCase);

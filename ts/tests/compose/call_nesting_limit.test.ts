@@ -4,10 +4,12 @@
  * `originChildren()`).
  *
  * TS-only: direct rows for `resolveChild`, which Python tests only through `load_flow`: a
- * `LoadError` from the resolver passes through; another error becomes `could not resolve`; the
+ * `LoadError` from the resolver passes through; another error becomes `could not resolve`, and so
+ * does a `null` resolver (Python's tail is CPython's `'NoneType' object is not callable`); the
  * check before resolving with the count at the limit; the check after resolving with a deep fake
- * child; `callNestingScope` restores the count after a throw; and the limit follows
- * `YIAN_MAX_CALL_NESTING`.
+ * child; `callNestingScope` restores the count after a throw; the limit follows
+ * `YIAN_MAX_CALL_NESTING`; and a MAP build whose child already nests at the limit fails, since a
+ * MAP resolves its child through `resolveChild` as a CALL does.
  *
  * Later (they need the loader): `test_chain_at_the_limit_loads_runs_and_resumes`,
  * `test_chain_past_the_limit_is_located_at_the_root_call`,
@@ -26,12 +28,15 @@
  * `test_imports_and_a_calling_defs_chain_count_apart`,
  * `test_imports_at_the_limit_over_defs_at_the_limit_load` and
  * `test_long_cross_file_cycle_reports_the_depth_limit` (T3-22); `test_inline_bodies_count` and
- * `test_call_directive_counts` (T3-17); `test_map_and_loop_bodies_count` (T3-16).
+ * `test_call_directive_counts` (T3-17); `test_map_and_loop_bodies_count` (T3-16, the loop
+ * kind; T3-22 and T4 for its load and run).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
+import { BuildContext } from "../../src/compose/nodes/base.ts";
+import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import {
   callNesting,
   callNestingScope,
@@ -75,7 +80,7 @@ function chain(levels: number): FakeFlow {
 
 /** Return a resolved child whose compiled flow nests `levels` bodies. */
 function resolved(levels: number): ResolvedChild {
-  return { compiled: chain(levels) as unknown as CompiledFlow };
+  return { compiled: chain(levels) as unknown as CompiledFlow, input: [] };
 }
 
 /** Return the error `fn` throws. */
@@ -166,6 +171,14 @@ describe("resolveChild", () => {
     expect((error as LoadError).message).toBe("call node 'n': could not resolve callable 'c': gone");
   });
 
+  test("a null resolver can't resolve the callable", () => {
+    const error = thrown(() => resolveChild("c", "child", null));
+    expect(error).toBeInstanceOf(LoadError);
+    expect((error as LoadError).message).toBe(
+      "call node 'c': could not resolve callable 'child': no child resolver was given",
+    );
+  });
+
   test("a child label names the callable", () => {
     const error = thrown(() =>
       resolveChild(
@@ -230,6 +243,19 @@ describe("resolveChild", () => {
       "more than 3 levels deep, past the call nesting limit of 3",
     );
   });
+});
+
+test("a map whose child already nests at the limit fails", () => {
+  const desc = new MapDescriptor({ id: "m", call: "c", over: "${input.xs}" });
+  const ctx = new BuildContext({ registry: new Map(), resolver: () => resolved(50) });
+
+  const error = thrown(() => desc.build(ctx));
+
+  expect(error).toBeInstanceOf(LoadError);
+  expect((error as LoadError).message).toBe(
+    "call node 'm': calling callable 'c' nests calls 51 levels deep, past the call nesting " +
+      "limit of 50 (each call, map, or loop body is a level); flatten the chain",
+  );
 });
 
 describe("callNestingScope", () => {

@@ -2125,7 +2125,9 @@ A few providers need a note:
     `provider.quota`. Thinking goes back with its signature only to the provider, model,
     and account that wrote it. With `thinking: {type: enabled}`, continuing a tool loop
     whose first reply's signed thinking can't go back (after a model or provider switch)
-    fails before sending, naming the fix.
+    fails before sending, naming the fix. An assistant turn goes back block by block in
+    the order received, several text blocks join with a newline in the node's text, and
+    cache writes count the TTL breakdown.
 
 - `ollama` takes what the Ollama client sends: `think` (`true`, `false`, or a level),
   `options` (`temperature`, `num_ctx`, …), `keep_alive`, `logprobs`, and

@@ -1,0 +1,46 @@
+kind: load
+flow: |2
+
+  id: na
+  name: na
+  input:
+    v: !int
+  nodes:
+    x:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:double
+      input:
+        n: ${input.v}
+      output: int
+      asserts:
+        - "nope > 0"
+        - "input.v > 0"
+  output: ${x.output}
+python_flow: |2
+
+  id: na
+  name: na
+  input:
+    v: !int
+  nodes:
+    x:
+      kind: code
+      code: tests.engine._compose_codefns:double
+      input:
+        n: ${input.v}
+      output: int
+      asserts:
+        - "nope > 0"
+        - "input.v > 0"
+  output: ${x.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'x' assert: ${nope} is not a declared input or `${output}`
+          node 'x' assert: ${input.v} — node asserts are node-local; use `${name}` (a declared input) or `${output}`
+      frames:
+      - label: flow.yaml
+        range: [14, 9, 14, 19]

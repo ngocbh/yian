@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    qs: !list(object)
+  nodes:
+    ask:
+      kind: human_input
+      input: {qs: "${input.qs}"}
+      questions: 5
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''ask'' (kind=human_input): `questions:` must be a list of questions (each item `- question: ...`) or exactly `${name}` naming a declared input, got int 5'
+      frames:
+      - label: flow.yaml
+        range: [9, 16, 9, 17]

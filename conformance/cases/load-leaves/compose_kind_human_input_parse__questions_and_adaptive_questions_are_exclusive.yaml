@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    ask:
+      kind: human_input
+      questions:
+        - question: Pick
+          header: H
+          options: [a, b]
+      adaptive_questions:
+        prompt: author questions
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''ask'' (kind=human_input): `questions:` and `adaptive_questions:` are mutually exclusive'
+      frames:
+      - label: flow.yaml
+        range: [11, 7, 12, 1]

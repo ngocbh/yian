@@ -1,0 +1,19 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    ask:
+      kind: human_input
+      adaptive_questions:
+        prompt: Ask
+        bogus: 1
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''ask'' (kind=human_input): `adaptive_questions:` field ''bogus'' is not allowed (allowed: llm_config, prompt, retries)'
+      frames:
+      - label: flow.yaml
+        range: [8, 7, 8, 12]

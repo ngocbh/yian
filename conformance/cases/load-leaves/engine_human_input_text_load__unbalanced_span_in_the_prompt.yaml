@@ -1,0 +1,28 @@
+# The quoted `${` and template are source text as written (shared, as the templates scanner cases are).
+kind: load
+flow: |
+  id: f
+  name: f
+  input: {proj: !str }
+  nodes:
+    ask:
+      kind: human_input
+      input: {proj: '${input.proj}'}
+      prompt: "x ${proj"
+      questions:
+        - question: "${proj}"
+          header: Framework
+          options:
+            - label: "${proj}"
+              description: "${proj}"
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'ask' prompt: unbalanced '${' in template 'x ${proj'
+      frames:
+      - label: flow.yaml
+        range: [8, 13, 8, 23]

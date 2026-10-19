@@ -1,0 +1,28 @@
+kind: load
+flow: |2
+
+  id: sysf
+  name: sysf
+  input:
+    age: !int
+
+  nodes:
+    echo:
+      kind: code
+      input:
+        age: ${input.age}
+      output: int
+      code: |
+        return inputs["age"]
+  output: ${echo.output}
+
+  asserts:
+    - "system.run_id != null"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'assert ''system.run_id != null'': the `system` namespace is not allowed in asserts (it is ambient — there is no producer to draw an edge from; move the check into a body node)'
+      frames:
+      - label: flow.yaml
+        range: [18, 5, 18, 28]

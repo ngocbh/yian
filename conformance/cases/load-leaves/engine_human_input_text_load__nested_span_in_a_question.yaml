@@ -1,0 +1,27 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input: {proj: !str }
+  nodes:
+    ask:
+      kind: human_input
+      input: {proj: '${input.proj}'}
+      prompt: "${proj}"
+      questions:
+        - question: "${upper(${proj})}"
+          header: Framework
+          options:
+            - label: "${proj}"
+              description: "${proj}"
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'ask' questions[0].question: `${...}` can't appear inside an expression; write `${upper(proj)}`
+      frames:
+      - label: flow.yaml
+        range: [10, 19, 10, 38]

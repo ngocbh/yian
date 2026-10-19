@@ -5,6 +5,8 @@
  * from the status (and, for quota, content filters, overload and context overflow, the
  * body) and whose `retryable` flag follows the openai SDK's `_should_retry`.
  * `parseRetryAfter` reads the server's requested delay the way that SDK does.
+ * `scrubError` rewrites an error, its causes and its group members with a text redactor,
+ * so a credential a provider echoed never reaches a log or a trace.
  */
 
 import { redirectDetail } from "../platform.ts";
@@ -308,10 +310,8 @@ function jsonDetail(body: string): string | null {
   } catch {
     return null;
   }
-  if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
-  const error = data["error"];
-  const isObject = typeof error === "object" && error !== null && !Array.isArray(error);
-  for (const candidate of [isObject ? error["message"] : undefined, data["message"], data["detail"], error]) {
+  const error = field(data, "error");
+  for (const candidate of [field(error, "message"), field(data, "message"), field(data, "detail"), error]) {
     if (typeof candidate === "string" && candidate.trim()) return candidate;
   }
   return null;
@@ -323,4 +323,68 @@ export function capDetail(text: string): string {
   if (text.length <= MAX_DETAIL_CHARS) return text;
   const points = Array.from(text);
   return points.length > MAX_DETAIL_CHARS ? points.slice(0, MAX_DETAIL_CHARS).join("") + "…" : text;
+}
+
+/**
+ * Redact an error graph with `redact` and return `error`.
+ *
+ * A string is returned redacted. Any other non-null object is rewritten in place: its
+ * `message`, `stack` and `cause` when they are strings, and string members of an `errors`
+ * array; then the same for each object reached through `cause` or an `errors` array
+ * (`AggregateError`), each once. A property assignment can't set (a getter-only `message`)
+ * becomes an own data property when the object is extensible, else it is skipped, as on a
+ * frozen error. Anything else is returned unchanged. It never throws: a throwing getter,
+ * proxy trap or `redact` only skips that property, and the error is never replaced.
+ */
+export function scrubError<T>(error: T, redact: (text: string) => string): T {
+  if (typeof error === "string") {
+    try {
+      return redact(error) as T;
+    } catch {
+      return error;
+    }
+  }
+  if (typeof error !== "object" || error === null) return error;
+  const seen = new Set<object>();
+  // A stack instead of recursion, so a deep cause chain can't overflow.
+  const pending: object[] = [error];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    // The message first: the stack is read after it, in case reading one rebuilds the other.
+    for (const name of ["message", "stack", "cause"]) redactProperty(current, name, redact);
+    const cause = readProperty(current, "cause");
+    if (typeof cause === "object" && cause !== null) pending.push(cause);
+    const errors = readProperty(current, "errors");
+    if (!Array.isArray(errors)) continue;
+    for (let i = 0; i < errors.length; i++) {
+      redactProperty(errors, i, redact);
+      const member = readProperty(errors, i);
+      if (typeof member === "object" && member !== null) pending.push(member);
+    }
+  }
+  return error;
+}
+
+/** Return `target[name]`, or `undefined` when reading it throws. */
+function readProperty(target: object, name: PropertyKey): unknown {
+  try {
+    return Reflect.get(target, name);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Replace string `target[name]` with its redaction; a throw or an unsettable property skips it. */
+function redactProperty(target: object, name: PropertyKey, redact: (text: string) => string): void {
+  try {
+    const value = Reflect.get(target, name);
+    if (typeof value !== "string") return;
+    const redacted = redact(value);
+    if (redacted === value || Reflect.set(target, name, redacted) || !Object.isExtensible(target)) return;
+    Object.defineProperty(target, name, { value: redacted, writable: true, enumerable: false, configurable: true });
+  } catch {
+    // Scrubbing must neither stop the walk nor replace the error it was given.
+  }
 }

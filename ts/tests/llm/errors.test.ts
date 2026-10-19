@@ -1,4 +1,4 @@
-/** Tests for provider errors in `src/llm/errors.ts`: status mapping, retry policy, retry-after parsing, messages. */
+/** Tests for provider errors in `src/llm/errors.ts`: status mapping, retry policy, retry-after parsing, messages, scrubbing. */
 
 import { describe, expect, test } from "bun:test";
 
@@ -9,8 +9,10 @@ import {
   kindForStatus,
   parseRetryAfter,
   ProviderError,
+  scrubError,
   type ErrorKind,
 } from "../../src/llm/errors.ts";
+import { REDACTED, redactKeys } from "../../src/llm_clients/redact.ts";
 
 /** Return the error for a reply from provider `p` with `status`, header record `headers` and `body`. */
 function reply(status: number, headers: Record<string, string> = {}, body = "", maxRetryAfter?: number | null) {
@@ -510,5 +512,108 @@ describe("message", () => {
     expect(reply(302, { Location: "/steal?token=abc" }).message.endsWith(": redirect to a relative Location")).toBe(
       true,
     );
+  });
+});
+
+describe("scrubError", () => {
+  const KEY = "sk-sentinel-scrub-zqxw";
+  const redact = (text: string) => redactKeys(text, [KEY]);
+
+  test("rewrites the stack along with the message", () => {
+    const error = new Error(`bad key ${KEY}`);
+    expect(error.stack).toContain(KEY);
+    expect(scrubError(error, redact)).toBe(error);
+    expect(error.message).toBe(`bad key ${REDACTED}`);
+    for (const text of [error.stack!, String(error), error.message]) expect(text).not.toContain(KEY);
+    expect(error.stack).toContain(REDACTED);
+  });
+
+  test("a cause cycle terminates", () => {
+    const first = new Error(`first ${KEY}`);
+    const second = new Error(`second ${KEY}`, { cause: first });
+    first.cause = second;
+    scrubError(first, redact);
+    expect([first.message, second.message]).toEqual([`first ${REDACTED}`, `second ${REDACTED}`]);
+  });
+
+  test("a string cause and string errors members are redacted", () => {
+    const member = new Error(`member ${KEY}`);
+    const error = new AggregateError([`text ${KEY}`, member, 5], `group ${KEY}`, { cause: `cause ${KEY}` });
+    scrubError(error, redact);
+    expect(error.cause).toBe(`cause ${REDACTED}`);
+    expect(error.errors).toEqual([`text ${REDACTED}`, member, 5]);
+    expect(member.message).toBe(`member ${REDACTED}`);
+    expect(error.message).toBe(`group ${REDACTED}`);
+  });
+
+  test("a thrown string returns redacted", () => {
+    expect(scrubError(`thrown ${KEY}`, redact)).toBe(`thrown ${REDACTED}`);
+  });
+
+  test("null and numbers are returned unchanged", () => {
+    expect(scrubError(null, redact)).toBe(null);
+    expect(scrubError(undefined, redact)).toBe(undefined);
+    expect(scrubError(42, redact)).toBe(42);
+  });
+
+  test("a frozen error is left as is without throwing", () => {
+    const error = Object.freeze(new Error(`frozen ${KEY}`));
+    expect(scrubError(error, redact)).toBe(error);
+    expect(error.message).toBe(`frozen ${KEY}`);
+  });
+
+  test("a getter-only message on an extensible object is replaced by an own property", () => {
+    const error: { message: string } = Object.create({
+      get message() {
+        return `getter ${KEY}`;
+      },
+    });
+    scrubError(error, redact);
+    expect(error.message).toBe(`getter ${REDACTED}`);
+    expect(Object.getOwnPropertyDescriptor(error, "message")).toEqual({
+      value: `getter ${REDACTED}`,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  });
+
+  test("a throwing redactor leaves the error and doesn't throw", () => {
+    const boom = () => {
+      throw new Error("redactor failed");
+    };
+    const error = new Error(`kept ${KEY}`, { cause: `cause ${KEY}` });
+    expect(scrubError(error, boom)).toBe(error);
+    expect(error.message).toBe(`kept ${KEY}`);
+    expect(error.cause).toBe(`cause ${KEY}`);
+    expect(scrubError(`thrown ${KEY}`, boom)).toBe(`thrown ${KEY}`);
+  });
+
+  test("a throwing getter doesn't stop the walk", () => {
+    const deepest = new Error(`deepest ${KEY}`);
+    const broken = Object.defineProperty(new Error("broken", { cause: deepest }), "message", {
+      get() {
+        throw new Error("no message");
+      },
+    });
+    scrubError(new Error(`top ${KEY}`, { cause: broken }), redact);
+    expect(deepest.message).toBe(`deepest ${REDACTED}`);
+  });
+
+  test("a ProviderError keeps its class and fields", () => {
+    const error = new ProviderError("auth", `rejected ${KEY}`, { status: 401, provider: "openai" });
+    expect(scrubError(error, redact)).toBe(error);
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error.message).toBe(`rejected ${REDACTED}`);
+    expect([error.kind, error.status, error.retryable, error.provider]).toEqual(["auth", 401, false, "openai"]);
+  });
+
+  test("a 10 000-deep cause chain doesn't overflow", () => {
+    const deepest = new Error(`deepest ${KEY}`);
+    let top = deepest;
+    for (let i = 0; i < 10_000; i++) top = new Error(`wrap ${KEY}`, { cause: top });
+    scrubError(top, redact);
+    expect(top.message).toBe(`wrap ${REDACTED}`);
+    expect(deepest.message).toBe(`deepest ${REDACTED}`);
   });
 });

@@ -1490,6 +1490,8 @@ def _ts_value_repr(value: object) -> str:
 # a quoted key, `x['k']`) and as `", ".join` of text-form names gives one (`["a", "b"]`).
 _QUOTED = r"'(?:[^'\\\n]|\\.)*'" "|" r'"(?:[^"\\\n]|\\.)*"'
 _NAME_LIST = re.compile(rf"\[(?:{_QUOTED})(?:, (?:{_QUOTED}))*\]")
+
+
 def _ts_names(text: str) -> str:
     """Return `text` with each bracketed list of quoted texts written as compact JSON.
 
@@ -1497,7 +1499,8 @@ def _ts_names(text: str) -> str:
     `["a","b"]`, and a quoted key `x['my key']` reads `x["my key"]`, as TS writes them
     (decision 43). A list holding anything but texts is left alone, but a list of texts
     nested in another list or a mapping is converted alone (`{'k': ['a']}` reads
-    `{'k': ["a"]}`). Not matched: a list cut by `shown_text`. Converted too: such a list
+    `{'k': ["a"]}`). Not matched: a list cut by `shown_text`, and names joined without
+    brackets by Python's own `", ".join(repr(...))`. Converted too: such a list
     inside a text value or source text the message quotes. Review `messages` cases by hand.
     """
     def write(match: re.Match) -> str:
@@ -1513,16 +1516,17 @@ def _ts_names(text: str) -> str:
 def _ts_messages(value: object) -> object:
     """Return a runner result with `_ts_names` applied to the text of each error in it.
 
-    An error is a mapping with a text `message` beside a `class` (a raise) or a `code` (a
+    An error is a mapping with a text `message` beside a `class` (a raise) or a text `code` (a
     failure or a diagnostic); its `notes` and its frames' `note`s are converted too. Values
-    a flow or a tool returned are left alone, even a record with a `message` field.
+    a flow or a tool returned are left alone, unless shaped like an error.
     """
     if isinstance(value, list):
         return [_ts_messages(item) for item in value]
     if not isinstance(value, dict):
         return value
     converted = {key: _ts_messages(item) for key, item in value.items()}
-    if isinstance(value.get("message"), str) and ("class" in value or "code" in value):
+    if isinstance(value.get("message"), str) and (
+            "class" in value or isinstance(value.get("code"), str)):
         converted["message"] = _ts_names(value["message"])
         if isinstance(value.get("notes"), list):
             converted["notes"] = [_ts_names(note) if isinstance(note, str) else note

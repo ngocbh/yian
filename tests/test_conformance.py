@@ -3880,6 +3880,8 @@ def test_shim_ts_names() -> None:
         ("names [\"it's\", 'b']", "names [\"it's\",\"b\"]"),
         (r"keys ['a\nb', 'é']", 'keys ["a\\nb","é"]'),
         ("[1, 'a'] ('a',) {'a': 1} [] ['a',]", "[1, 'a'] ('a',) {'a': 1} [] ['a',]"),
+        # A nested list of texts is converted on its own.
+        ("[['a'], ['b', 'c']] {'k': ['a']}", '[["a"], ["b","c"]] {\'k\': ["a"]}'),
         ("no list here: 'a', 'b'", "no list here: 'a', 'b'"),
     ]
     assert [harvest._ts_names(text) for text, _ in rows] == [text for _, text in rows]
@@ -3895,14 +3897,14 @@ def test_shim_ts_messages() -> None:
         "load": {"diagnostics": [{"code": "c", "message": py, "notes": [py, 1],
                                   "frames": [{"label": "f", "note": py}, {"label": "g"}]}]},
         "trace": [["node_failed", "n", {"failure": {"code": "c", "message": py, "node": "n"}}]],
-        "output": {"status": "succeeded", "output": {"message": py, "notes": [py]}},
+        "output": {"status": "succeeded", "output": {"message": py, "notes": [py], "code": 404}},
     }
     assert harvest._ts_messages(result) == {
         "raises": {"class": "ValueError", "message": ts},
         "load": {"diagnostics": [{"code": "c", "message": ts, "notes": [ts, 1],
                                   "frames": [{"label": "f", "note": ts}, {"label": "g"}]}]},
         "trace": [["node_failed", "n", {"failure": {"code": "c", "message": ts, "node": "n"}}]],
-        "output": {"status": "succeeded", "output": {"message": py, "notes": [py]}},
+        "output": {"status": "succeeded", "output": {"message": py, "notes": [py], "code": 404}},
     }
 
 

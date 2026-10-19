@@ -7,6 +7,8 @@
  */
 
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { getEventListeners } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
@@ -144,11 +146,11 @@ export function tick(): Promise<void> {
 
 /** A fresh fake terminal: its input, output and the `Terminal` over them. */
 function setup(
-  options: { tty?: boolean; columns?: number; throwOn?: number } & Pick<TerminalOptions, "onStop"> = {},
+  options: { tty?: boolean; columns?: number; throwOn?: number } & Pick<TerminalOptions, "onStop" | "onActive"> = {},
 ): { input: FakeInput; output: FakeOutput; terminal: Terminal; view: () => Screen; exitHooks: number } {
   const input = new FakeInput({ tty: options.tty });
   const output = new FakeOutput({ columns: options.columns, throwOn: options.throwOn });
-  const terminal = new Terminal({ input, output, onStop: options.onStop });
+  const terminal = new Terminal({ input, output, onStop: options.onStop, onActive: options.onActive });
   const exitHooks = process.listenerCount("exit");
   return { input, output, terminal, view: () => screen(output.text, output.columns), exitHooks };
 }
@@ -398,6 +400,322 @@ async function aLongLineRedrawsWithoutStaleRows(): Promise<void> {
   assert.deepEqual(view().rows, ["above", "? Name: ok"]);
 }
 
+async function aChoiceMovesWithWraparoundAndReturnsTheTitle(): Promise<void> {
+  const { input, output, terminal, view, exitHooks } = setup();
+  const answer = terminal.askChoice("Pick", ["a", "b", "c"], { initial: "b" });
+  await tick();
+  assert.deepEqual(view().rows, ["? Pick (Use arrow keys)", "   a", " » b", "   c"]);
+  assert.ok(view().modes.includes("?25l"));
+  input.write(DOWN + DOWN);
+  await tick();
+  assert.deepEqual(view().rows, ["? Pick (Use arrow keys)", " » a", "   b", "   c"]);
+  input.write(UP);
+  await tick();
+  assert.deepEqual(view().rows.slice(1), ["   a", "   b", " » c"]);
+  input.write("j");
+  await tick();
+  assert.deepEqual(view().rows.slice(1), [" » a", "   b", "   c"]);
+  input.write("j" + "j" + "k" + "\t");
+  await tick();
+  assert.deepEqual(view().rows.slice(1), ["   a", " » b", "   c"]);
+  input.write(ENTER);
+  assert.equal(await answer, "b");
+  assert.deepEqual(view().rows, ["? Pick b"]);
+  assertRestored(input, output, exitHooks);
+}
+
+async function equalTitlesMapBackByIndex(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.askChoice("Pick", ["same", "same", "other"]);
+  input.write(DOWN);
+  await tick();
+  assert.deepEqual(view().rows.slice(1), ["   same", " » same", "   other"]);
+  input.write(ENTER);
+  assert.equal(await answer, "same");
+  assert.deepEqual(view().rows, ["? Pick same"]);
+}
+
+async function concurrentPromptsDrawOneAfterTheOther(): Promise<void> {
+  const active: boolean[] = [];
+  const { input, output, terminal, view, exitHooks } = setup({ onActive: (on) => active.push(on) });
+  const first = terminal.askText("First:");
+  const second = terminal.askChoice("Second", ["x", "y"]);
+  await tick();
+  assert.deepEqual(view().rows, ["? First:"]);
+  input.write("one");
+  await tick();
+  assert.deepEqual(view().rows, ["? First: one"]);
+  input.write(ENTER);
+  assert.equal(await first, "one");
+  await tick();
+  assert.deepEqual(view().rows, ["? First: one", "? Second (Use arrow keys)", " » x", "   y"]);
+  input.write(DOWN + ENTER);
+  assert.equal(await second, "y");
+  assert.deepEqual(view().rows, ["? First: one", "? Second y"]);
+  assert.deepEqual(active, [true, false, true, false]);
+  assert.deepEqual(input.rawCalls, [true, false, true, false]);
+  assert.equal(input.isRaw, false);
+  assert.equal(process.listenerCount("exit"), exitHooks);
+  assert.deepEqual(screen(output.text).modes.slice(-2).sort(), ["?2004l", "?25h"]);
+}
+
+async function typeaheadInOneChunkAnswersQueuedPrompts(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const first = terminal.askText("First:");
+  const second = terminal.askText("Second:");
+  input.write("a\r\nb\r\n");
+  assert.equal(await first, "a");
+  assert.equal(await second, "b");
+  assert.deepEqual(view().rows, ["? First: a", "? Second: b"]);
+}
+
+async function anAlreadyAbortedSignalThrowsWithoutDrawing(): Promise<void> {
+  const { output, terminal } = setup();
+  const reason = new Error("stopped");
+  await assert.rejects(terminal.askText("Name:", { signal: AbortSignal.abort(reason) }), (error) => error === reason);
+  await assert.rejects(
+    terminal.askChoice("Pick", ["a"], { signal: AbortSignal.abort(reason) }),
+    (error) => error === reason,
+  );
+  assert.equal(output.text, "");
+}
+
+async function aQueuedPromptWhoseSignalAbortsNeverDraws(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const controller = new AbortController();
+  const reason = new Error("stopped");
+  const first = terminal.askText("First:");
+  const second = terminal.askText("Second:", { signal: controller.signal });
+  const third = terminal.askText("Third:");
+  await tick();
+  controller.abort(reason);
+  await assert.rejects(second, (error) => error === reason);
+  await tick();
+  assert.deepEqual(view().rows, ["? First:"]);
+  input.write("1" + ENTER);
+  assert.equal(await first, "1");
+  await tick();
+  assert.deepEqual(view().rows, ["? First: 1", "? Third:"]);
+  input.write("3" + ENTER);
+  assert.equal(await third, "3");
+  assert.deepEqual(view().rows, ["? First: 1", "? Third: 3"]);
+}
+
+async function anActivePromptWhoseSignalAbortsThrowsTheReason(): Promise<void> {
+  const stops: string[] = [];
+  const { input, output, terminal, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
+  const controller = new AbortController();
+  const reason = new Error("stopped");
+  const answer = terminal.askChoice("Pick", ["a", "b"], { signal: controller.signal });
+  await tick();
+  controller.abort(reason);
+  await assert.rejects(answer, (error) => error === reason);
+  assertRestored(input, output, exitHooks);
+  assert.deepEqual(stops, []);
+  // The terminal stays open: the next prompt runs.
+  const next = terminal.askText("Next:");
+  input.write("ok" + ENTER);
+  assert.equal(await next, "ok");
+}
+
+async function aWidgetErrorAfterTheAbortThrowsTheReason(): Promise<void> {
+  // Write 1 sets the modes, write 2 draws the frame; the abort ends the widget and write 3, the
+  // collapsed line, throws.
+  const { input, output, terminal, exitHooks } = setup({ throwOn: 3 });
+  const controller = new AbortController();
+  const reason = new Error("stopped");
+  const answer = terminal.askText("Name:", { signal: controller.signal });
+  await tick();
+  controller.abort(reason);
+  await assert.rejects(answer, (error) => error === reason);
+  assert.equal(output.writes, 4);
+  assertRestored(input, output, exitHooks);
+}
+
+async function promptsOnOneSignalLeaveNoAbortListeners(): Promise<void> {
+  const { input, terminal } = setup();
+  const controller = new AbortController();
+  for (let i = 0; i < 20; i++) {
+    const answer = terminal.askText("Name:", { signal: controller.signal });
+    input.write(`${i}` + ENTER);
+    assert.equal(await answer, `${i}`);
+  }
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+}
+
+/** None of the terminal's listeners are on `input`, and it is paused. */
+function assertDetached(input: FakeInput): void {
+  for (const event of ["keypress", "end", "error"]) assert.equal(input.listenerCount(event), 0, event);
+  assert.equal(input.isPaused(), true);
+}
+
+async function closeEndsTheActivePromptAndRefusesLaterOnes(): Promise<void> {
+  const stops: string[] = [];
+  const active: boolean[] = [];
+  const { input, output, terminal, exitHooks } = setup({
+    onStop: (reason) => stops.push(reason),
+    onActive: (on) => active.push(on),
+  });
+  const answer = terminal.askText("Name:");
+  const queued = terminal.askChoice("Pick", ["a"]);
+  input.write("ab");
+  await tick();
+  terminal.close();
+  assert.equal(await answer, null);
+  assert.equal(await queued, null);
+  assertRestored(input, output, exitHooks);
+  assertDetached(input);
+  const drawn = output.text;
+  assert.equal(await terminal.askText("Again:"), null);
+  assert.equal(await terminal.askChoice("Again", ["a"]), null);
+  assert.equal(output.text, drawn);
+  assert.deepEqual(stops, []);
+  assert.deepEqual(active, [true, false]);
+}
+
+async function closeWithNoActivePromptDetachesAndPauses(): Promise<void> {
+  const { input, terminal } = setup();
+  const answer = terminal.askText("Name:");
+  input.write("x" + ENTER);
+  assert.equal(await answer, "x");
+  assert.ok(input.listenerCount("keypress") > 0);
+  terminal.close();
+  assertDetached(input);
+  assert.equal(await terminal.askText("Again:"), null);
+}
+
+async function afterCtrlCAQueuedPromptReturnsNull(): Promise<void> {
+  const stops: string[] = [];
+  const controller = new AbortController();
+  const { input, output, terminal, view } = setup({
+    onStop: (reason) => {
+      stops.push(reason);
+      controller.abort(new Error("stopped"));
+    },
+  });
+  const answer = terminal.askText("Name:", { signal: controller.signal });
+  const queued = terminal.askText("Queued:", { signal: controller.signal });
+  const plain = terminal.askChoice("Plain", ["a"]);
+  await tick();
+  input.write(CTRL_C);
+  assert.equal(await answer, null);
+  assert.equal(await queued, null);
+  assert.equal(await plain, null);
+  assert.deepEqual(stops, ["interrupt"]);
+  assert.deepEqual(view().rows, ["? Name:"]);
+  assertDetached(input);
+  assert.ok(!output.text.includes("Queued"));
+}
+
+async function anUnusedTerminalTouchesNothing(): Promise<void> {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+  const before = input.eventNames();
+  const terminal = new Terminal({ input, output });
+  input.write("typed");
+  await tick();
+  assert.deepEqual(input.eventNames(), before);
+  assert.equal(input.readableFlowing, null);
+  assert.equal(String(input.read()), "typed");
+  assert.equal(output.text, "");
+  assert.ok(terminal instanceof Terminal);
+}
+
+async function anInputThatAlreadyEndedGivesEofAtTheFirstPrompt(): Promise<void> {
+  const stops: string[] = [];
+  const { input, terminal } = setup({ tty: false, onStop: (reason) => stops.push(reason) });
+  input.end();
+  input.resume();
+  await new Promise((resolve) => input.once("end", resolve));
+  await tick();
+  assert.deepEqual(stops, []);
+  assert.equal(await terminal.askText("Name:"), null);
+  assert.deepEqual(stops, ["eof"]);
+  for (const event of ["keypress", "end", "error"]) assert.equal(input.listenerCount(event), 0, event);
+}
+
+async function anInputErrorEndsTheActivePromptAsEndOfInput(): Promise<void> {
+  const stops: string[] = [];
+  const { input, output, terminal, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
+  const answer = terminal.askText("Name:");
+  input.write("ab");
+  await tick();
+  input.destroy(new Error("EIO"));
+  assert.equal(await answer, null);
+  assert.deepEqual(stops, ["eof"]);
+  assertRestored(input, output, exitHooks);
+  for (const event of ["keypress", "end", "error"]) assert.equal(input.listenerCount(event), 0, event);
+}
+
+async function aThrowingOnActiveStillRestoresTheTerminal(): Promise<void> {
+  const active: boolean[] = [];
+  const { input, output, terminal, exitHooks } = setup({
+    onActive: (on) => {
+      active.push(on);
+      throw new Error("the handler broke");
+    },
+  });
+  const answer = terminal.askText("Name:");
+  input.write("x" + ENTER);
+  assert.equal(await answer, "x");
+  assert.deepEqual(active, [true, false]);
+  assertRestored(input, output, exitHooks);
+}
+
+/** A spawned child's exit, waited for at most 10 s with its stdin kept open; what it printed. */
+async function runChild(send: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "child"], { stdio: "pipe" });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  child.stdin.on("error", () => {});
+  const exited = new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => resolve(code));
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), 10_000);
+  });
+  try {
+    // Never ended: the child must exit on its own with its stdin still open.
+    child.stdin.write(send);
+    const code = await Promise.race([exited, limit]);
+    assert.notEqual(code, "timeout", `the child didn't exit within 10 s; stdout: ${stdout}; stderr: ${stderr}`);
+    return { code: code as number | null, stdout, stderr };
+  } finally {
+    clearTimeout(timer);
+    child.kill("SIGKILL");
+    await exited.catch(() => {});
+    child.stdin.destroy();
+  }
+}
+
+/** The child side: one `askText` on the process's own stdin and stderr, then `close()`. */
+async function child(): Promise<void> {
+  const terminal = new Terminal();
+  const answer = await terminal.askText("Name:");
+  console.log(String(answer));
+  terminal.close();
+}
+
+async function aChildExitsOnItsOwnAfterAnAnswerWithStdinOpen(): Promise<void> {
+  const { code, stdout, stderr } = await runChild("answer\n");
+  assert.equal(code, 0, stderr);
+  assert.equal(stdout, "answer\n");
+}
+
+async function aChildExitsOnItsOwnAfterCtrlCWithStdinOpen(): Promise<void> {
+  const { code, stdout, stderr } = await runChild(CTRL_C);
+  assert.equal(code, 0, stderr);
+  assert.equal(stdout, "null\n");
+}
+
 /** The scenarios by name, in the order `main` runs them. */
 export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "typing a line returns it": typingALineReturnsIt,
@@ -416,6 +734,24 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "wide characters redraw without stale rows": wideCharactersRedrawWithoutStaleRows,
   "wide characters at a wrap boundary start the next row": wideCharactersAtAWrapBoundaryStartTheNextRow,
   "a long line redraws without stale rows": aLongLineRedrawsWithoutStaleRows,
+  "a choice moves with wraparound and returns the title": aChoiceMovesWithWraparoundAndReturnsTheTitle,
+  "equal titles map back by index": equalTitlesMapBackByIndex,
+  "concurrent prompts draw one after the other": concurrentPromptsDrawOneAfterTheOther,
+  "typeahead in one chunk answers queued prompts": typeaheadInOneChunkAnswersQueuedPrompts,
+  "an already-aborted signal throws without drawing": anAlreadyAbortedSignalThrowsWithoutDrawing,
+  "a queued prompt whose signal aborts never draws": aQueuedPromptWhoseSignalAbortsNeverDraws,
+  "an active prompt whose signal aborts throws the reason": anActivePromptWhoseSignalAbortsThrowsTheReason,
+  "a widget error after the abort throws the reason": aWidgetErrorAfterTheAbortThrowsTheReason,
+  "prompts on one signal leave no abort listeners": promptsOnOneSignalLeaveNoAbortListeners,
+  "close ends the active prompt and refuses later ones": closeEndsTheActivePromptAndRefusesLaterOnes,
+  "close with no active prompt detaches and pauses": closeWithNoActivePromptDetachesAndPauses,
+  "after Ctrl-C a queued prompt returns null": afterCtrlCAQueuedPromptReturnsNull,
+  "an unused terminal touches nothing": anUnusedTerminalTouchesNothing,
+  "an input that already ended gives EOF at the first prompt": anInputThatAlreadyEndedGivesEofAtTheFirstPrompt,
+  "an input error ends the active prompt as end of input": anInputErrorEndsTheActivePromptAsEndOfInput,
+  "a throwing onActive still restores the terminal": aThrowingOnActiveStillRestoresTheTerminal,
+  "a child exits on its own after an answer with stdin open": aChildExitsOnItsOwnAfterAnAnswerWithStdinOpen,
+  "a child exits on its own after Ctrl-C with stdin open": aChildExitsOnItsOwnAfterCtrlCWithStdinOpen,
 };
 
 /** Run every scenario, printing `{"name", "ok", "error"?}` per line; return how many failed. */
@@ -436,6 +772,7 @@ async function main(): Promise<number> {
 
 // `import.meta.main` doesn't exist on Node 22.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  if (process.argv[2] === "child") await child();
   // No process.exit: a leaked listener or timer then shows as a hang.
-  process.exitCode = (await main()) ? 1 : 0;
+  else process.exitCode = (await main()) ? 1 : 0;
 }

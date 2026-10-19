@@ -27,6 +27,8 @@ export interface TerminalOptions {
   output?: Output;
   /** Called once when Ctrl-C ("interrupt") or the end of input ("eof") closes the terminal. */
   onStop?: (reason: "interrupt" | "eof") => void;
+  /** Called with true when a prompt turn takes the terminal and false when it gives it back. */
+  onActive?: (active: boolean) => void;
 }
 
 /** A prompt ended because the terminal closed (Ctrl-C, end of input, or close()). */
@@ -53,8 +55,11 @@ interface Key {
   paste: boolean;
 }
 
+/** How a widget or a turn ended without an answer: a stop, or its signal aborted. */
+type Ending = StopReason | "aborted";
+
 /** How a widget ended. */
-type Outcome<T> = { value: T } | { stop: StopReason } | { error: unknown };
+type Outcome<T> = { value: T } | { stop: Ending } | { error: unknown };
 
 /** One prompt's state and drawing; the key loop owns the terminal around it. */
 interface Widget<T> {
@@ -192,9 +197,63 @@ function textWidget(options: {
 }
 
 /**
- * The host's terminal for a run's prompts. Each prompt takes the terminal for its widget and gives
- * it back restored; Ctrl-C or the end of input closes the terminal, so every later prompt gets no
- * answer.
+ * A picker over `titles`, answering the chosen index, so equal titles stay apart. `indicator`
+ * draws `●`/`○` before each title.
+ */
+function selectWidget(options: {
+  label: string;
+  titles: readonly string[];
+  initial?: number;
+  indicator?: boolean;
+  mark?: string;
+}): Widget<number> {
+  const mark = options.mark ?? "?";
+  const count = options.titles.length;
+  let index = options.initial ?? 0;
+  const row = (title: string, i: number): string => {
+    if (i !== index) return `   ${options.indicator ? "○ " : ""}${title}`;
+    return ` ${style("1;36", "»")} ${style("36", `${options.indicator ? "● " : ""}${title}`)}`;
+  };
+  return {
+    lines: () => [
+      `${style("1;36", mark)} ${style("1", options.label)} ${style("2", "(Use arrow keys)")}`,
+      ...options.titles.map(row),
+    ],
+    cursor: () => null,
+    key(key) {
+      if (key.name === "return" || key.name === "enter") return { value: index };
+      if (key.ctrl || key.meta) return undefined;
+      if (key.name === "up" || key.name === "k") index = (index - 1 + count) % count;
+      else if (key.name === "down" || key.name === "j") index = (index + 1) % count;
+      return undefined;
+    },
+    done: (outcome) => collapsed(mark, options.label, "value" in outcome ? options.titles[outcome.value]! : ""),
+  };
+}
+
+/** One prompt turn: its signal, how it ended without an answer, and the active widget's wakeup. */
+interface Turn {
+  signal: AbortSignal | undefined;
+  /** The first way the turn ended without an answer; later ones don't replace it. */
+  ending: Ending | undefined;
+  /** Ends the active widget once `ending` is set; a no-op while no widget runs. */
+  wake: () => void;
+}
+
+/** Runs one widget inside a turn: its answer, or a throw when it stops, fails or the turn aborts. */
+type RunWidget = <T>(widget: Widget<T>) => Promise<T>;
+
+/** Run `action`, dropping what it throws: a cleanup step or host hook never replaces an outcome. */
+function quietly(action: () => unknown): void {
+  try {
+    action();
+  } catch {}
+}
+
+/**
+ * The host's terminal for a run's prompts. Prompts take turns in one FIFO: each turn waits for the
+ * ones before it, takes the terminal for its widgets and gives it back restored. Ctrl-C, the end of
+ * input or `close()` closes the terminal, so every queued and later prompt gets no answer.
  *
  * @example
  * const terminal = new Terminal({ onStop: () => controller.abort() });
@@ -204,6 +263,7 @@ export class Terminal {
   readonly #input: Input;
   readonly #output: Output;
   readonly #onStop: TerminalOptions["onStop"];
+  readonly #onActive: TerminalOptions["onActive"];
   #attached = false;
   #closed = false;
   #stopNotified = false;
@@ -213,6 +273,10 @@ export class Terminal {
   #buffer: Key[] = [];
   /** The active widget's key and end handlers. */
   #active: { key: (key: Key) => void; end: () => void } | undefined;
+  /** The turn holding the terminal. */
+  #turn: Turn | undefined;
+  /** Settles once every turn queued so far has finished. */
+  #tail: Promise<void> = Promise.resolve();
   /** The last key was a `return`, so an `enter` now is the `\n` of the same `\r\n`. */
   #afterReturn = false;
   #pasting = false;
@@ -222,6 +286,7 @@ export class Terminal {
     this.#input = options.input ?? process.stdin;
     this.#output = options.output ?? process.stderr;
     this.#onStop = options.onStop;
+    this.#onActive = options.onActive;
   }
 
   /** A free-text or hidden prompt; null when the user cancels or the terminal is closed. */
@@ -229,12 +294,38 @@ export class Terminal {
     label: string,
     options: { initial?: string; secret?: boolean; signal?: AbortSignal } = {},
   ): Promise<string | null> {
-    if (this.#closed) return null;
-    const outcome = await this.#run(
-      textWidget({ label, initial: options.initial, mask: options.secret }),
-      options.signal,
+    const ended = await this.#runTurn(options.signal, (run) =>
+      run(textWidget({ label, initial: options.initial, mask: options.secret })),
     );
-    return "value" in outcome ? outcome.value : null;
+    return "value" in ended ? ended.value : null;
+  }
+
+  /** A single choice among strings; null when cancelled or closed. */
+  async askChoice(
+    label: string,
+    choices: readonly string[],
+    options: { initial?: string; signal?: AbortSignal } = {},
+  ): Promise<string | null> {
+    const initial = options.initial === undefined ? 0 : Math.max(0, choices.indexOf(options.initial));
+    const ended = await this.#runTurn(options.signal, (run) => run(selectWidget({ label, titles: choices, initial })));
+    return "value" in ended ? choices[ended.value]! : null;
+  }
+
+  /**
+   * Close the terminal: the active prompt ends, queued and later prompts are refused, listeners
+   * detach, input pauses.
+   */
+  close(): void {
+    this.#closed = true;
+    const turn = this.#turn;
+    if (turn !== undefined) {
+      // The turn's own cleanup detaches and pauses, outside any key dispatch.
+      turn.ending ??= "closed";
+      turn.wake();
+    } else if (this.#attached) {
+      this.#detach();
+      quietly(() => this.#input.pause());
+    }
   }
 
   /** Normalize one keypress and hand it to the active widget, or buffer it for the next one. */
@@ -290,13 +381,95 @@ export class Terminal {
   }
 
   /**
-   * Run `widget` on the terminal until it ends: draw it, feed it keys, collapse it, and restore the
-   * terminal on every outcome. Ctrl-C or the end of input closes the terminal and then calls
-   * `onStop`; an error, or `signal`'s reason when it aborts first, is thrown.
+   * Run `fn` as one turn of the FIFO: wait for the turns before it, take the terminal (raw mode,
+   * listeners, input flowing), let `fn` run widgets, then restore the terminal on every outcome.
+   * Returns `fn`'s value, or the stop that ended the turn (Ctrl-C, end of input, a closed
+   * terminal); throws `signal`'s reason when it aborted first, else `fn`'s error.
    */
-  async #run<T>(widget: Widget<T>, signal?: AbortSignal): Promise<{ value: T } | { stop: StopReason }> {
+  async #runTurn<R>(
+    signal: AbortSignal | undefined,
+    fn: (run: RunWidget) => Promise<R>,
+  ): Promise<{ value: R } | { stop: StopReason }> {
+    if (this.#closed) return { stop: "closed" };
     signal?.throwIfAborted();
+    const ahead = this.#tail;
+    const { promise: finished, resolve: release } = Promise.withResolvers<void>();
+    // The turn behind this one waits for the one ahead too, even when this one leaves early.
+    this.#tail = ahead.then(() => finished);
+    const turn: Turn = { signal, ending: undefined, wake: () => {} };
+    const { promise: queuedAbort, resolve: leaveQueue } = Promise.withResolvers<void>();
+    const onAbort = (): void => {
+      // A queued turn whose signal aborts after the terminal closed is refused as closed.
+      turn.ending ??= this.#turn !== turn && this.#closed ? "closed" : "aborted";
+      leaveQueue();
+      turn.wake();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     const input = this.#input;
+    const output = this.#output;
+    const wasRaw = input.isRaw === true;
+    const setsRaw = input.isTTY === true && typeof input.setRawMode === "function";
+    // A `process.exit()` elsewhere skips the `finally` below.
+    const onExit = (): void => {
+      quietly(() => input.setRawMode!(false));
+      quietly(() => output.write(SHOW_CURSOR + PASTE_OFF));
+    };
+    let started = false;
+    let result: { value: R } | { error: unknown } | undefined;
+    try {
+      await Promise.race([ahead, queuedAbort]);
+      if (turn.ending === undefined && this.#closed) turn.ending = "closed";
+      if (turn.ending === undefined) {
+        started = true;
+        this.#turn = turn;
+        quietly(() => this.#onActive?.(true));
+        this.#attach();
+        if (setsRaw) {
+          process.once("exit", onExit);
+          input.setRawMode!(true);
+        }
+        input.resume();
+        result = { value: await fn((widget) => this.#runWidget(widget, turn)) };
+      }
+    } catch (error) {
+      result = { error };
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+      if (started) {
+        this.#turn = undefined;
+        // Each step runs on its own, cooked mode first, so a failing one never skips the rest.
+        // Pausing here, in a promise continuation rather than inside the key dispatch, keeps a
+        // piped stdin from being restarted by its read-ahead.
+        if (setsRaw) quietly(() => input.setRawMode!(wasRaw));
+        quietly(() => output.write(SHOW_CURSOR + PASTE_OFF));
+        quietly(() => process.removeListener("exit", onExit));
+        quietly(() => input.pause());
+        if (this.#closed) quietly(() => this.#detach());
+        quietly(() => this.#onActive?.(false));
+      }
+    }
+    const ending = turn.ending;
+    // After the restore, so a handler that prints or exits never meets a raw terminal; before the
+    // turns behind are released, so they see what `onStop` did.
+    if ((ending === "interrupt" || ending === "eof") && !this.#stopNotified) {
+      this.#stopNotified = true;
+      quietly(() => this.#onStop?.(ending));
+    }
+    release();
+    if (ending !== undefined && ending !== "aborted") return { stop: ending };
+    if (signal?.aborted) throw signal.reason;
+    if (result !== undefined && "value" in result) return result;
+    throw result!.error;
+  }
+
+  /**
+   * Run `widget` inside `turn` until it ends: draw it, feed it keys, collapse it. Ctrl-C or the end
+   * of input records the turn's stop and closes the terminal; the turn restores everything after.
+   */
+  async #runWidget<T>(widget: Widget<T>, turn: Turn): Promise<T> {
+    const stopped = (): unknown =>
+      turn.ending === "aborted" ? turn.signal!.reason : new TerminalStopped(turn.ending!);
+    if (turn.ending !== undefined) throw stopped();
     const output = this.#output;
     let outcome: Outcome<T> | undefined;
     const { promise: settled, resolve: settle } = Promise.withResolvers<void>();
@@ -305,9 +478,17 @@ export class Terminal {
       if (outcome !== undefined) return;
       outcome = ended;
       this.#active = undefined;
-      if ("stop" in ended) this.#closed = true;
+      turn.wake = () => {};
       settle();
     };
+    const stop = (reason: "interrupt" | "eof"): void => {
+      if (turn.ending === undefined) {
+        turn.ending = reason;
+        this.#closed = true;
+      }
+      finish({ stop: turn.ending });
+    };
+    turn.wake = () => finish({ stop: turn.ending! });
     // Rows from the frame's top to where the cursor was left, so the next draw starts there.
     let cursorRow = 0;
     const erase = (): string => `\r${cursorRow > 0 ? `${ESC}${cursorRow}A` : ""}${ESC}J`;
@@ -331,68 +512,31 @@ export class Terminal {
     };
     const feed = (key: Key): void => {
       try {
-        if (key.ctrl && key.name === "c") return finish({ stop: "interrupt" });
+        if (key.ctrl && key.name === "c") return stop("interrupt");
         const ended = widget.key(key);
-        if (ended !== undefined) return finish(ended);
+        if (ended !== undefined) return "value" in ended ? finish(ended) : stop(ended.stop);
         draw();
       } catch (error) {
         finish({ error });
       }
     };
-    const onAbort = (): void => finish({ error: signal!.reason });
-    const wasRaw = input.isRaw === true;
-    const setsRaw = input.isTTY === true && typeof input.setRawMode === "function";
-    // A `process.exit()` elsewhere skips the `finally` below.
-    const onExit = (): void => {
-      try {
-        input.setRawMode!(false);
-      } catch {}
-      try {
-        output.write(SHOW_CURSOR + PASTE_OFF);
-      } catch {}
-    };
     try {
-      this.#attach();
-      if (setsRaw) {
-        process.once("exit", onExit);
-        input.setRawMode!(true);
-      }
-      output.write(PASTE_ON + (widget.cursor() === null ? HIDE_CURSOR : ""));
+      output.write(PASTE_ON + (widget.cursor() === null ? HIDE_CURSOR : SHOW_CURSOR));
       draw();
-      this.#active = { key: feed, end: () => finish({ stop: "eof" }) };
-      signal?.addEventListener("abort", onAbort, { once: true });
-      input.resume();
+      this.#active = { key: feed, end: () => stop("eof") };
       while (outcome === undefined && this.#buffer.length > 0) feed(this.#buffer.shift()!);
-      if (outcome === undefined && this.#ended) finish({ stop: "eof" });
+      if (outcome === undefined && this.#ended) stop("eof");
       await settled;
       output.write(erase() + widget.done(outcome!) + "\r\n");
     } catch (error) {
       finish({ error });
     } finally {
       this.#active = undefined;
-      signal?.removeEventListener("abort", onAbort);
-      // Each step runs on its own, cooked mode first, so a failing one never skips the rest. Their
-      // errors are dropped: the outcome recorded before them is what the prompt reports.
-      const step = (action: () => unknown): void => {
-        try {
-          action();
-        } catch {}
-      };
-      if (setsRaw) step(() => input.setRawMode!(wasRaw));
-      step(() => output.write(SHOW_CURSOR + PASTE_OFF));
-      step(() => process.removeListener("exit", onExit));
-      step(() => input.pause());
-      if (this.#closed) this.#detach();
+      turn.wake = () => {};
     }
     const ended = outcome!;
-    // After the restore, so a handler that prints or exits never meets a raw terminal.
-    if ("stop" in ended && ended.stop !== "closed" && !this.#stopNotified) {
-      this.#stopNotified = true;
-      try {
-        this.#onStop?.(ended.stop);
-      } catch {}
-    }
+    if ("value" in ended) return ended.value;
     if ("error" in ended) throw ended.error;
-    return ended;
+    throw stopped();
   }
 }

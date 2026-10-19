@@ -18,6 +18,7 @@ import {
 } from "../../src/llm/executor.ts";
 import { SSEEvent } from "../../src/llm/framing.ts";
 import { Message, Request, Response as ModelResponse, TextPart } from "../../src/llm/messages.ts";
+import { OpenAIResponses } from "../../src/llm/protocols/openai_responses.ts";
 import { type Cassette, CassetteReplay, ScriptedModel } from "../../src/llm/testing.ts";
 import { Route } from "../../src/llm/route.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
@@ -562,6 +563,107 @@ describe("RouteModel reply", () => {
     };
     const error = (await rejection(drain(model(send, protocol).stream(REQUEST)))) as ProviderError;
     expect(error.provider).toBe("other");
+  });
+
+  test("a parse error echoing the key is rebuilt without it, keeping its fields", async () => {
+    const { send } = fake(sseReply("a"));
+    const protocol: SseProtocol = {
+      ...sse(),
+      async *parse() {
+        throw new ProviderError("server", `openai stream failed (server): bad key ${KEY}`, { retryable: false });
+      },
+    };
+    const error = (await rejection(drain(model(send, protocol, { auth: new BearerAuth(KEY) }).stream(REQUEST)))) as ProviderError;
+    expect(error).toBeInstanceOf(ProviderError);
+    expectScrubbed(error, KEY);
+    expect(error.stack).toContain("[REDACTED]");
+    expect(error.message).toBe("openai stream failed (server): bad key [REDACTED]");
+    expect(error.kind).toBe("server");
+    expect(error.retryable).toBe(false);
+    expect(error.provider).toBe("openai");
+  });
+
+  describe("a parse error echoing the key across the 2,000-code-point cap holds no part of it", () => {
+    const text = "x".repeat(2000 - KEY.length + 1) + KEY;
+
+    /** Check that no prefix of `KEY` long enough to identify it is left in `error`. */
+    const expectNoPrefix = (error: ProviderError): void => {
+      expect(error).toBeInstanceOf(ProviderError);
+      expect(error.message).not.toContain(KEY.slice(0, 8));
+      expect(error.stack ?? "").not.toContain(KEY.slice(0, 8));
+      expect(error.provider).toBe("openai");
+    };
+
+    test("from a protocol that leaves the text uncapped", async () => {
+      const { send } = fake(sseReply("a"));
+      const protocol: SseProtocol = {
+        ...sse(),
+        async *parse() {
+          throw new ProviderError("server", text);
+        },
+      };
+      const auth = new BearerAuth(KEY);
+      expectNoPrefix((await rejection(drain(model(send, protocol, { auth }).stream(REQUEST)))) as ProviderError);
+    });
+
+    test("from an OpenAI Responses error event", async () => {
+      const { send } = fake(sseReply(JSON.stringify({ type: "error", code: "server_error", message: text })));
+      const protocol = new OpenAIResponses({ model: "gpt-5.5", provider: "openai" });
+      const auth = new BearerAuth(KEY);
+      const error = (await rejection(drain(model(send, protocol, { auth }).stream(REQUEST)))) as ProviderError;
+      expectNoPrefix(error);
+      expect(error.message).toStartWith("openai stream failed (server): xxx");
+      expect(error.message).toEndWith("…");
+      expect(error.kind).toBe("server");
+    });
+  });
+
+  test("a long parse error is capped at 2,000 code points, keeping its fields", async () => {
+    const { send } = fake(sseReply("a"));
+    const protocol: SseProtocol = {
+      ...sse(),
+      async *parse() {
+        throw new ProviderError("server", "😀".repeat(2500), { retryable: false });
+      },
+    };
+    const error = (await rejection(drain(model(send, protocol).stream(REQUEST)))) as ProviderError;
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error.message).toBe("😀".repeat(2000) + "…");
+    expect(error.stack ?? "").not.toContain("😀".repeat(2001));
+    expect(error.kind).toBe("server");
+    expect(error.retryable).toBe(false);
+    expect(error.provider).toBe("openai");
+  });
+
+  test("a long item error from OpenAI Responses is capped", async () => {
+    install({ ...BUILTIN, maxValueNesting: 3 });
+    const long = "k".repeat(3000);
+    const item = { type: "reasoning", id: "rs_1", summary: [], x: { [long]: { deep: [] } } };
+    const event = { type: "response.output_item.done", output_index: 0, item };
+    const { send } = fake(sseReply(JSON.stringify(event)));
+    const protocol = new OpenAIResponses({ model: "gpt-5.5", provider: "openai" });
+    let error: ProviderError;
+    try {
+      error = (await rejection(drain(model(send, protocol).stream(REQUEST)))) as ProviderError;
+    } finally {
+      install(BUILTIN);
+    }
+    expect(error.kind).toBe("protocol");
+    expect(error.message).toStartWith("openai response has an invalid reasoning item: ");
+    expect(Array.from(error.message)).toHaveLength(2001);
+    expect(error.message).toEndWith("…");
+  });
+
+  test("a parse error without a credential is rethrown as the same object", async () => {
+    const { send } = fake(sseReply("a"));
+    const failure = new ProviderError("server", "openai stream failed (server): overloaded");
+    const protocol: SseProtocol = {
+      ...sse(),
+      async *parse() {
+        throw failure;
+      },
+    };
+    expect(await rejection(drain(model(send, protocol, { auth: new BearerAuth(KEY) }).stream(REQUEST)))).toBe(failure);
   });
 
   test("an adapter defect propagates unchanged", async () => {

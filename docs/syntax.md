@@ -2070,6 +2070,16 @@ A few providers need a note:
   and `max_output_tokens`. The block is checked against that narrower schema when the
   run starts, and a block that sets either fails before the first node, naming the
   agent.
+
+    Changed (TS yian): on the Responses API, a reply that fails, stops early for any
+    reason but `max_output_tokens`, or ends without its final event fails the model call.
+    A content-filter stop is `provider.refused`. `insufficient_quota`, and the ChatGPT
+    plan errors the stream reports (`usage_limit_reached`, `usage_not_included`), are
+    `provider.quota`. A rate-limit or server error in the stream is retried, as is a
+    reply that ends without its final event; an unknown error code counts as a server
+    error. Reasoning sent back on the next turn is left out when it came from another
+    provider, model, or account.
+
 - `google` uses the REST names and enum spellings: camelCase keys and upper-case
   levels, such as `google: {generationConfig: {thinkingConfig: {thinkingLevel: HIGH}}}`.
 - `anthropic` with `thinking` on (any `type` other than `disabled`) gets structured

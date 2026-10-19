@@ -1,0 +1,48 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "error_400: a 400 JSON error, not retried.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/responses",
+        "headers": {
+          "authorization": "<redacted>",
+          "accept": "application/json",
+          "content-type": "application/json"
+        },
+        "json": {
+          "input": [
+            {
+              "content": "You are terse.",
+              "role": "system",
+              "type": "message"
+            },
+            {
+              "content": "Hi",
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "model": "gpt-5.5",
+          "stream": true
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "json": {
+          "error": {
+            "message": "Invalid value: 'foo'.",
+            "type": "invalid_request_error",
+            "param": "input",
+            "code": "invalid_value"
+          }
+        }
+      }
+    }
+  ]
+}

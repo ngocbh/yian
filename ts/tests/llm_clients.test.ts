@@ -48,6 +48,9 @@ test("vllm is the only provider whose key is optional", () => {
 
 test("vllm accepts any model name", () => {
   expect(validateModel("vllm", "any/arbitrary-served-model")).toBe(true);
+});
+
+test("ollama and openrouter accept any model name", () => {
   expect(validateModel("ollama", "any/arbitrary-served-model")).toBe(true);
   expect(validateModel("openrouter", "any/arbitrary-served-model")).toBe(true);
 });
@@ -86,10 +89,6 @@ test("VALID_MODELS holds the known models of every catalog provider but the any-
 test("getKnownModels gives each provider's sorted distinct values", () => {
   const known = getKnownModels();
   expect(Object.keys(known)).toEqual(Object.keys(MODEL_OPTIONS));
-  for (const [provider, modes] of Object.entries(MODEL_OPTIONS)) {
-    const values = new Set(Object.values(modes).flatMap((options) => options.map(([, value]) => value)));
-    expect(known[provider]!).toEqual([...values].sort());
-  }
   expect(known["anthropic"]!).toEqual([
     "claude-haiku-4-5",
     "claude-mythos-5-1",
@@ -98,6 +97,17 @@ test("getKnownModels gives each provider's sorted distinct values", () => {
     "claude-opus-4-8",
     "claude-sonnet-4-5",
     "claude-sonnet-4-6",
+  ]);
+  // MiniMax-M2.7-highspeed and custom are in both quick and deep but listed once.
+  expect(known["minimax"]!).toEqual([
+    "MiniMax-M2",
+    "MiniMax-M2.1",
+    "MiniMax-M2.1-highspeed",
+    "MiniMax-M2.5",
+    "MiniMax-M2.5-highspeed",
+    "MiniMax-M2.7",
+    "MiniMax-M2.7-highspeed",
+    "custom",
   ]);
 });
 

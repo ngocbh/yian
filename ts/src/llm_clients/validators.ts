@@ -6,7 +6,7 @@ import { getKnownModels } from "./model_catalog.ts";
 
 // Self-hosted / aggregator providers serve arbitrary model names, so we don't
 // constrain them to a catalog.
-const ANY_MODEL_PROVIDERS: readonly string[] = Object.freeze(["ollama", "openrouter", "vllm"]);
+const ANY_MODEL_PROVIDERS: readonly string[] = ["ollama", "openrouter", "vllm"];
 
 /** Provider to its known model ids, for every catalog provider that is not an any-model one. */
 export const VALID_MODELS: Readonly<Record<string, readonly string[]>> = Object.freeze(

@@ -1,13 +1,13 @@
 /**
- * Mirrors `tests/test_provider_auth.py`: the credential values, the store, `isAuthFailure` and
- * `request`. The OAuth flow, refresh HTTP and model-catalog tests go with `auth/openai.ts`, as
- * does `test_refresh_is_serialized_across_processes`.
+ * Mirrors `tests/test_provider_auth.py`: the credential values, the store, `isAuthFailure`,
+ * `request`, and `OpenAIAuth`'s sign-in flows, refresh and model catalogs.
  */
 
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -25,6 +25,7 @@ import {
   ProviderSelection,
 } from "../src/llm_clients/auth/common.ts";
 import { request } from "../src/llm_clients/auth/http.ts";
+import { type AuthRequest, OpenAIAuth } from "../src/llm_clients/auth/openai.ts";
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import { lockFile, realScheduler, type Scheduler, virtualScheduler } from "../src/platform.ts";
 import { parseJson } from "../src/typesys/json.ts";
@@ -1490,4 +1491,813 @@ describe("request", () => {
     }
     expect(JSON.stringify(response)).toBe('{"status":200}');
   });
+});
+
+/** An unsigned JWT whose payload names `account` in OpenAI's auth claim, plus `claims`. */
+function jwt(account: string | null = "account-test", claims: Record<string, unknown> = {}): string {
+  const value = { "https://api.openai.com/auth": { chatgpt_account_id: account }, ...claims };
+  return `header.${Buffer.from(JSON.stringify(value)).toString("base64url")}.signature`;
+}
+
+/** A token endpoint payload for `account`, with integers as `bigint`s as `request` decodes them. */
+function tokens(account = "account-test", overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return { access_token: jwt(account), refresh_token: "refresh-secret", expires_in: 3600n, ...overrides };
+}
+
+/** A fake `AuthRequest` that records each call and replies from a queue. */
+class FakeHttp {
+  readonly calls: [string, string, Parameters<AuthRequest>[2]][] = [];
+  /** The clock reading at each call, when `clock` is set. */
+  readonly times: number[] = [];
+  clock: Scheduler | undefined;
+  readonly #responses: unknown[];
+
+  constructor(...responses: unknown[]) {
+    this.#responses = responses;
+  }
+
+  readonly request: AuthRequest = async (method, url, options) => {
+    this.calls.push([method, url, options]);
+    if (this.clock) this.times.push(this.clock.now());
+    return this.#responses.shift() as HttpResponse;
+  };
+}
+
+/** Return a never-settling promise, like a host that never answers. */
+function never(): Promise<never> {
+  return new Promise(() => {});
+}
+
+/** An `awaitCallback` answering with `query` and, unless `query` names one, the sent state. */
+function callbackWith(urls: string[], query: string): (redirectUri: string) => string {
+  return (redirectUri) => {
+    const state = new URL(urls[0]!).searchParams.get("state")!;
+    return redirectUri + "?" + query + (query.includes("state") ? "" : "&state=" + state);
+  };
+}
+
+const GATEWAY = "gw-SENTINEL-token-9876";
+const ORG = "org-SENTINEL-1234";
+const PROJECT = "proj_SENTINEL-5678";
+
+/** Check the error and its cause chain for every setting value. */
+function assertNoSettings(error: unknown): void {
+  for (let link = error; link !== undefined; link = (link as Error).cause) {
+    const texts = [String(link), (link as Error).message, (link as Error).stack ?? "", inspect(link)];
+    for (const value of [GATEWAY, ORG, PROJECT]) {
+      for (const text of texts) expect(text).not.toContain(value);
+    }
+  }
+}
+
+const OLD = () =>
+  new OAuthCredentials({
+    accessToken: "old",
+    refreshToken: "old-refresh",
+    expiresAt: 1000,
+    accountId: "acct",
+    residency: "eu",
+  });
+const SUBSCRIPTION = () =>
+  new OAuthCredentials({ accessToken: "access", refreshToken: "refresh", expiresAt: 9000, accountId: "acct" });
+
+describe("OpenAIAuth", () => {
+  test("device protocol uses JSON polls and server PKCE", async () => {
+    const scheduler = virtualScheduler(1_000_000);
+    const http = new FakeHttp(
+      new HttpResponse(200, { device_auth_id: "device-id", user_code: "ABC-DEF", interval: "2" }),
+      new HttpResponse(403, { error: "pending" }),
+      new HttpResponse(404, {}),
+      new HttpResponse(200, { authorization_code: "auth-code", code_verifier: "server-verifier" }),
+      new HttpResponse(200, tokens()),
+    );
+    const display: [string, string][] = [];
+    const auth = new OpenAIAuth({ request: http.request, scheduler });
+    const credentials = await auth.deviceLogin((url, code) => void display.push([url, code]));
+    expect(display).toEqual([["https://auth.openai.com/codex/device", "ABC-DEF"]]);
+    expect(credentials.accountId).toBe("account-test");
+    expect(credentials.expiresAt).toBe(scheduler.now() / 1000 + 3600);
+    expect(scheduler.now()).toBe(1_004_000);
+    expect(http.calls[0]![2].jsonBody).toEqual({ client_id: "app_EMoamEEZ73f0CkXaXp7hrann" });
+    expect(http.calls[1]![2].jsonBody).toEqual({ device_auth_id: "device-id", user_code: "ABC-DEF" });
+    expect(http.calls.at(-1)![2].form).toEqual({
+      grant_type: "authorization_code",
+      code: "auth-code",
+      code_verifier: "server-verifier",
+      client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+      redirect_uri: "https://auth.openai.com/deviceauth/callback",
+    });
+    expect(http.calls.map(([method, url]) => [method, url])).toEqual([
+      ["POST", "https://auth.openai.com/api/accounts/deviceauth/usercode"],
+      ["POST", "https://auth.openai.com/api/accounts/deviceauth/token"],
+      ["POST", "https://auth.openai.com/api/accounts/deviceauth/token"],
+      ["POST", "https://auth.openai.com/api/accounts/deviceauth/token"],
+      ["POST", "https://auth.openai.com/oauth/token"],
+    ]);
+    expect(http.calls[0]![2].headers).toEqual({ "User-Agent": "yian", "Content-Type": "application/json" });
+    expect(http.calls.at(-1)![2].headers).toEqual({
+      "User-Agent": "yian",
+      "Content-Type": "application/x-www-form-urlencoded",
+    });
+    expect(http.calls[0]![2].timeoutMs).toBe(30_000);
+    expect(inspect(credentials)).not.toContain("refresh-secret");
+  });
+
+  test("browser login validates state and uses PKCE", async () => {
+    const http = new FakeHttp(new HttpResponse(200, tokens()));
+    const urls: string[] = [];
+    const auth = new OpenAIAuth({ request: http.request });
+    const credentials = await auth.browserLogin((url) => void urls.push(url), {
+      awaitCallback: callbackWith(urls, "code=browser-code"),
+    });
+    const url = new URL(urls[0]!);
+    expect(url.origin + url.pathname).toBe("https://auth.openai.com/oauth/authorize");
+    const query = url.searchParams;
+    expect([...query.keys()]).toEqual([
+      "response_type",
+      "client_id",
+      "redirect_uri",
+      "scope",
+      "code_challenge",
+      "code_challenge_method",
+      "id_token_add_organizations",
+      "codex_cli_simplified_flow",
+      "state",
+      "originator",
+    ]);
+    const form = http.calls[0]![2].form!;
+    const verifier = form.code_verifier!;
+    expect(query.get("code_challenge")).toBe(createHash("sha256").update(verifier).digest("base64url"));
+    expect(query.get("code_challenge_method")).toBe("S256");
+    expect(query.get("redirect_uri")).toBe("http://localhost:1455/auth/callback");
+    expect(query.get("scope")).toBe("openid profile email offline_access");
+    expect(query.get("client_id")).toBe("app_EMoamEEZ73f0CkXaXp7hrann");
+    expect(query.get("originator")).toBe("yian");
+    expect(query.get("state")).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(verifier).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(form).toEqual({
+      grant_type: "authorization_code",
+      code: "browser-code",
+      code_verifier: verifier,
+      client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+      redirect_uri: "http://localhost:1455/auth/callback",
+    });
+    expect(credentials.accountId).toBe("account-test");
+  });
+
+  test("browser state mismatch never exchanges the code", async () => {
+    const http = new FakeHttp();
+    const error = await rejected(
+      new OpenAIAuth({ request: http.request }).browserLogin(() => {}, {
+        awaitCallback: (uri) => uri + "?code=secret-code&state=wrong",
+      }),
+    );
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toMatch(/state/);
+    expect(http.calls).toEqual([]);
+  });
+
+  const invalidCallbacks: [string, (urls: string[]) => (uri: string) => unknown, string][] = [
+    ["state=bad", (urls) => callbackWith(urls, "state=bad"), "OpenAI login state did not match"],
+    [
+      "state=bad&state=also-bad",
+      (urls) => callbackWith(urls, "state=bad&state=also-bad"),
+      "OpenAI login state did not match",
+    ],
+    ["error=denied", (urls) => callbackWith(urls, "error=denied"), "OpenAI browser authorization was denied"],
+    [
+      "code=one&code=two",
+      (urls) => callbackWith(urls, "code=one&code=two"),
+      "OpenAI callback did not include an authorization code",
+    ],
+    ["empty code", (urls) => callbackWith(urls, "code="), "OpenAI callback did not include an authorization code"],
+    ["no code", (urls) => callbackWith(urls, "other=1"), "OpenAI callback did not include an authorization code"],
+    [
+      "another host",
+      (urls) => (uri) => callbackWith(urls, "code=c")(uri).replace("localhost", "127.0.0.1"),
+      "OpenAI returned an invalid callback location",
+    ],
+    [
+      "another scheme",
+      (urls) => (uri) => callbackWith(urls, "code=c")(uri).replace("http:", "https:"),
+      "OpenAI returned an invalid callback location",
+    ],
+    [
+      "another path",
+      (urls) => (uri) => callbackWith(urls, "code=c")(uri).replace("/auth/callback", "/auth/callbackx"),
+      "OpenAI returned an invalid callback location",
+    ],
+    ["null", () => () => null, "OpenAI returned an invalid browser callback"],
+    ["0", () => () => 0, "OpenAI returned an invalid browser callback"],
+  ];
+  for (const [label, makeCallback, message] of invalidCallbacks) {
+    test(`browser callback rejects invalid or denied responses: ${label}`, async () => {
+      const http = new FakeHttp();
+      const urls: string[] = [];
+      const error = await rejected(
+        new OpenAIAuth({ request: http.request }).browserLogin((url) => void urls.push(url), {
+          awaitCallback: makeCallback(urls) as (uri: string) => string,
+        }),
+      );
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe(message);
+      expect(http.calls).toEqual([]);
+    });
+  }
+
+  test("refresh preserves missing metadata and rejects an account switch", async () => {
+    const http = new FakeHttp(new HttpResponse(200, { access_token: "new", expires_in: 3600 }));
+    const auth = new OpenAIAuth({ request: http.request, scheduler: virtualScheduler(1_000_000) });
+    const updated = await auth.refresh(OLD());
+    expect(updated).toBeInstanceOf(OAuthCredentials);
+    const { accessToken, refreshToken, expiresAt, accountId, residency } = updated;
+    const fields = [accessToken, refreshToken, expiresAt, accountId, residency];
+    expect(fields).toEqual(["new", "old-refresh", 4600, "acct", "eu"]);
+    expect(http.calls[0]![2].form).toEqual({
+      grant_type: "refresh_token",
+      refresh_token: "old-refresh",
+      client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+    });
+    expect(http.calls[0]![1]).toBe("https://auth.openai.com/oauth/token");
+    const error = await rejected(
+      new OpenAIAuth({ request: new FakeHttp(new HttpResponse(200, tokens("different"))).request }).refresh(OLD()),
+    );
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toMatch(/account/);
+  });
+
+  const invalidExpiries: [string, unknown][] = [
+    ["10n ** 1000n", 10n ** 1000n],
+    ["NaN", NaN],
+    ["Infinity", Infinity],
+    ["true", true],
+    ['{"$float": "inf"}', { $float: "inf" }],
+    ["a string", "3600"],
+    ["null", null],
+    ["0", 0n],
+    ["-1", -1n],
+  ];
+  for (const [label, expiry] of invalidExpiries) {
+    test(`an invalid expiry is rejected: ${label}`, async () => {
+      const http = new FakeHttp(new HttpResponse(200, tokens("account-test", { expires_in: expiry })));
+      const previous = new OAuthCredentials({
+        accessToken: "old",
+        refreshToken: "refresh",
+        expiresAt: 1000,
+        accountId: "account-test",
+      });
+      const error = await rejected(new OpenAIAuth({ request: http.request }).refresh(previous));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("OpenAI returned invalid credential expiry");
+    });
+  }
+
+  describe("account metadata", () => {
+    /** Refresh `OLD()` with `data` and return the result or the error. */
+    async function refreshWith(data: Record<string, unknown>): Promise<OAuthCredentials | Error> {
+      const auth = new OpenAIAuth({ request: new FakeHttp(new HttpResponse(200, data)).request });
+      try {
+        return await auth.refresh(OLD());
+      } catch (error) {
+        return error as Error;
+      }
+    }
+
+    test("an id token and access token naming different accounts are refused", async () => {
+      const error = await refreshWith(tokens("acct", { id_token: jwt("other") }));
+      expect(error).toBeInstanceOf(AuthError);
+      expect((error as Error).message).toBe("OpenAI refresh changed account identity");
+    });
+
+    test("a non-text account is refused", async () => {
+      for (const token of [jwt(""), jwt("acct", { chatgpt_account_id: 5 })]) {
+        const error = await refreshWith({ access_token: token, expires_in: 3600n });
+        expect(error).toBeInstanceOf(AuthError);
+        expect((error as Error).message).toBe("OpenAI returned invalid account metadata");
+      }
+    });
+
+    test("a top-level account wins over the auth claim", async () => {
+      const result = await refreshWith({ access_token: jwt("other", { chatgpt_account_id: "acct" }) });
+      expect((result as OAuthCredentials).accountId).toBe("acct");
+    });
+
+    test("organizations[0].id is used only when both chatgpt ids are absent", async () => {
+      const fallback = await refreshWith({ access_token: jwt(null, { organizations: [{ id: "acct" }] }) });
+      expect((fallback as OAuthCredentials).accountId).toBe("acct");
+      const ignored = await refreshWith({ access_token: jwt("acct", { organizations: [{ id: "org-other" }] }) });
+      expect((ignored as OAuthCredentials).accountId).toBe("acct");
+      const switched = await refreshWith({ access_token: jwt(null, { organizations: [{ id: "org-other" }] }) });
+      expect((switched as Error).message).toBe("OpenAI refresh changed account identity");
+    });
+
+    test("residency is read from either claim and no_constraint clears it", async () => {
+      const cleared = await refreshWith({ access_token: jwt("acct", { chatgpt_compute_residency: "no_constraint" }) });
+      expect((cleared as OAuthCredentials).residency).toBeNull();
+      const auth = { chatgpt_account_id: "acct", chatgpt_compute_residency: "us" };
+      const fromAuth = await refreshWith({ access_token: jwt(null, { "https://api.openai.com/auth": auth }) });
+      expect((fromAuth as OAuthCredentials).residency).toBe("us");
+      const kept = await refreshWith({ access_token: jwt("acct") });
+      expect((kept as OAuthCredentials).residency).toBe("eu");
+    });
+
+    test("tokens that aren't JWTs keep the previous account on refresh and fail a login", async () => {
+      const kept = await refreshWith({ access_token: "opaque.token", refresh_token: "r2" });
+      expect((kept as OAuthCredentials).accountId).toBe("acct");
+      expect((kept as OAuthCredentials).refreshToken).toBe("r2");
+      const urls: string[] = [];
+      const http = new FakeHttp(new HttpResponse(200, { access_token: "opaque", refresh_token: "r" }));
+      const error = await rejected(
+        new OpenAIAuth({ request: http.request }).browserLogin((url) => void urls.push(url), {
+          awaitCallback: callbackWith(urls, "code=c"),
+        }),
+      );
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("Invalid subscription credentials");
+    });
+  });
+
+  test("API key validation lists models through the official endpoint", async () => {
+    const data = [{ id: "z-model" }, { id: "a-model" }, { id: "z-model" }];
+    const http = new FakeHttp(new HttpResponse(200, { data }));
+    const models = await new OpenAIAuth({ request: http.request }).apiModels(new ApiKeyCredentials("secret"));
+    expect(models).toEqual(["a-model", "z-model"]);
+    expect(Object.isFrozen(models)).toBe(true);
+    expect(http.calls[0]!.slice(0, 2)).toEqual(["GET", "https://api.openai.com/v1/models"]);
+    expect(http.calls[0]![2].headers.Authorization).toBe("Bearer secret");
+  });
+
+  test("API key validation sends organization, project and headers", async () => {
+    const http = new FakeHttp(new HttpResponse(200, { data: [{ id: "m" }] }));
+    const credentials = new ApiKeyCredentials("secret", { "X-Gateway": GATEWAY });
+    const auth = new OpenAIAuth({ request: http.request });
+    expect(await auth.apiModels(credentials, { organization: ORG, project: PROJECT })).toEqual(["m"]);
+    expect(http.calls[0]![2].headers).toEqual({
+      "User-Agent": "yian",
+      "X-Gateway": GATEWAY,
+      "OpenAI-Organization": ORG,
+      "OpenAI-Project": PROJECT,
+      Authorization: "Bearer secret",
+    });
+  });
+
+  test("an organization mismatch is an HTTP error without values", async () => {
+    const body = { error: { code: "mismatched_organization", message: `${ORG} ${PROJECT}` } };
+    const http = new FakeHttp(new HttpResponse(401, body));
+    const credentials = new ApiKeyCredentials("secret", { "X-Gateway": GATEWAY });
+    const error = await rejected(
+      new OpenAIAuth({ request: http.request }).apiModels(credentials, { organization: ORG, project: PROJECT }),
+    );
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toBe("OpenAI authentication request failed (HTTP 401)");
+    assertNoSettings(error);
+    expect(http.calls).toHaveLength(1);
+  });
+
+  const invalidSettings: [string, ApiKeyCredentials, { organization?: unknown; project?: unknown }][] = [
+    ["organization with a space", new ApiKeyCredentials("secret"), { organization: ORG + " x" }],
+    ["empty project", new ApiKeyCredentials("secret"), { project: "" }],
+    ["number organization", new ApiKeyCredentials("secret"), { organization: 5 }],
+    // OpenAI takes these through organization / project, not as headers.
+    ["OpenAI-Organization header", new ApiKeyCredentials("secret", { "OpenAI-Organization": ORG }), {}],
+    ["openai-project header", new ApiKeyCredentials("secret", { "openai-project": PROJECT }), {}],
+  ];
+  for (const [label, credentials, settings] of invalidSettings) {
+    test(`invalid connection settings are refused before any request: ${label}`, async () => {
+      const http = new FakeHttp();
+      const error = await rejected(new OpenAIAuth({ request: http.request }).apiModels(credentials, settings));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toStartWith("Invalid OpenAI connection settings");
+      expect(error.cause).toBeUndefined();
+      assertNoSettings(error);
+      expect(http.calls).toEqual([]);
+    });
+  }
+
+  test("a transport error never echoes connection settings or chains its cause", async () => {
+    const broken: AuthRequest = () => {
+      throw new Error(`${GATEWAY} ${ORG} ${PROJECT} sensitive-token-in-url`);
+    };
+    const credentials = new ApiKeyCredentials("secret", { "X-Gateway": GATEWAY });
+    const auth = new OpenAIAuth({ request: broken });
+    const error = await rejected(auth.apiModels(credentials, { organization: ORG, project: PROJECT }));
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toBe("OpenAI authentication request failed");
+    expect(error.cause).toBeUndefined();
+    assertNoSettings(error);
+    expect(error.stack).not.toContain("sensitive");
+    const asyncError = await rejected(
+      new OpenAIAuth({ request: async () => Promise.reject(new Error("sensitive-token-in-url")) }).apiModels(
+        new ApiKeyCredentials("key"),
+      ),
+    );
+    expect(asyncError.message).toBe("OpenAI authentication request failed");
+    expect(asyncError.cause).toBeUndefined();
+  });
+
+  test("the subscription catalog uses account routing and visibility order", async () => {
+    const http = new FakeHttp(
+      new HttpResponse(200, {
+        models: [
+          { slug: "third", visibility: "list", priority: 3n },
+          { slug: "hidden", visibility: "hide", priority: 0n },
+          { slug: "first", visibility: "list", priority: 1n },
+          { slug: "unavailable", visibility: "none", priority: -1n },
+          { slug: "first", visibility: "list", priority: 2n },
+        ],
+      }),
+    );
+    const credentials = new OAuthCredentials({
+      accessToken: "access",
+      refreshToken: "refresh",
+      expiresAt: 9000,
+      accountId: "acct",
+      residency: "eu",
+    });
+    const models = await new OpenAIAuth({ request: http.request }).subscriptionModels(credentials);
+    expect(models).toEqual(["first", "third"]);
+    expect(Object.isFrozen(models)).toBe(true);
+    expect(http.calls[0]!.slice(0, 2)).toEqual([
+      "GET",
+      "https://chatgpt.com/backend-api/codex/models?client_version=0.155.1",
+    ]);
+    expect(http.calls[0]![2].headers).toEqual({
+      "User-Agent": "yian",
+      Authorization: "Bearer access",
+      "ChatGPT-Account-Id": "acct",
+      originator: "yian",
+      "x-openai-internal-codex-residency": "eu",
+    });
+    for (const clientVersion of ["", "1 2", null, 5]) {
+      const error = await rejected(
+        new OpenAIAuth({ request: new FakeHttp().request }).subscriptionModels(credentials, { clientVersion }),
+      );
+      expect(error).toBeInstanceOf(RangeError);
+      expect(error.message).toBe("Invalid model catalog client version");
+    }
+  });
+
+  const malformedCatalogs: [string, "api" | "subscription", unknown, string][] = [
+    ["empty api list", "api", { data: [] }, "OpenAI returned an invalid or empty model list"],
+    ["empty api id", "api", { data: [{ id: "" }] }, "OpenAI returned an invalid or empty model list"],
+    ["empty models", "subscription", { models: [] }, "OpenAI returned no available subscription models"],
+    [
+      "only hidden models",
+      "subscription",
+      { models: [{ slug: "hidden", visibility: "hide", priority: 0n }] },
+      "OpenAI returned no available subscription models",
+    ],
+    [
+      "boolean priority",
+      "subscription",
+      { models: [{ slug: "bad", visibility: "list", priority: true }] },
+      "OpenAI returned an invalid subscription model list",
+    ],
+    [
+      "float priority",
+      "subscription",
+      { models: [{ slug: "bad", visibility: "list", priority: 1.5 }] },
+      "OpenAI returned an invalid subscription model list",
+    ],
+    [
+      "unknown visibility",
+      "subscription",
+      { models: [{ slug: "bad", visibility: "public", priority: 1n }] },
+      "OpenAI returned an invalid subscription model list",
+    ],
+  ];
+  for (const [label, kind, payload, message] of malformedCatalogs) {
+    test(`a model catalog rejects malformed or empty lists: ${label}`, async () => {
+      const auth = new OpenAIAuth({ request: new FakeHttp(new HttpResponse(200, payload)).request });
+      const error = await rejected(
+        kind === "api" ? auth.apiModels(new ApiKeyCredentials("key")) : auth.subscriptionModels(SUBSCRIPTION()),
+      );
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe(message);
+    });
+  }
+
+  for (const method of ["api", "subscription", "refresh", "device"] as const) {
+    test(`HTTP failures do not echo secrets or fall back: ${method}`, async () => {
+      const http = new FakeHttp(new HttpResponse(401, { error: "secret-do-not-print" }));
+      const auth = new OpenAIAuth({ request: http.request });
+      const error = await rejected(
+        method === "api"
+          ? auth.apiModels(new ApiKeyCredentials("key"))
+          : method === "subscription"
+            ? auth.subscriptionModels(SUBSCRIPTION())
+            : method === "refresh"
+              ? auth.refresh(SUBSCRIPTION())
+              : auth.deviceLogin(() => {}),
+      );
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toMatch(/HTTP 401/);
+      expect(error.message).not.toContain("secret");
+      expect(http.calls).toHaveLength(1);
+    });
+  }
+
+  test("cancellation comes before the network", async () => {
+    const controller = new AbortController();
+    const reason = new Error("stopped by host");
+    controller.abort(reason);
+    const http = new FakeHttp();
+    const auth = new OpenAIAuth({ request: http.request, signal: controller.signal });
+    expect(await rejected(auth.deviceLogin(() => {}))).toBe(reason);
+    expect(await rejected(auth.browserLogin(() => {}, { awaitCallback: (uri) => uri }))).toBe(reason);
+    expect(await rejected(auth.refresh(SUBSCRIPTION()))).toBe(reason);
+    expect(http.calls).toEqual([]);
+  });
+
+  for (const cancel of [false, true]) {
+    test(`device polling has a bounded cancellable wait: ${cancel ? "cancel" : "timeout"}`, async () => {
+      const scheduler = virtualScheduler(1_000_000);
+      const http = new FakeHttp(
+        new HttpResponse(200, { device_auth_id: "id", usercode: "code", interval: "5" }),
+        new HttpResponse(404, {}),
+      );
+      const controller = new AbortController();
+      const reason = new Error("stopped by host");
+      if (cancel) void scheduler.sleep(500).then(() => controller.abort(reason));
+      const auth = new OpenAIAuth({ request: http.request, scheduler, signal: controller.signal });
+      const error = await rejected(auth.deviceLogin(() => {}, { timeoutMs: 1000 }));
+      if (cancel) {
+        expect(error).toBe(reason);
+      } else {
+        expect(error).toBeInstanceOf(AuthError);
+        expect(error.message).toBe("OpenAI login timed out");
+      }
+      expect(http.calls).toHaveLength(2);
+      expect(scheduler.now()).toBeLessThanOrEqual(1_001_000);
+    });
+  }
+
+  const badIntervals: [string, unknown][] = [
+    ['"nan"', "nan"],
+    ['"inf"', "inf"],
+    ['"infinity"', "infinity"],
+    ["true", true],
+    ['"1__0"', "1__0"],
+    ['"_1"', "_1"],
+    ['"1_"', "1_"],
+    ['""', ""],
+    ['"0x10"', "0x10"],
+    ["[]", []],
+    ['{"$float": "inf"}', { $float: "inf" }],
+    ["null", null],
+    ["10n ** 400n", 10n ** 400n],
+  ];
+  for (const [label, interval] of badIntervals) {
+    test(`device login rejects a non-finite or non-numeric interval: ${label}`, async () => {
+      const http = new FakeHttp(new HttpResponse(200, { device_auth_id: "id", user_code: "code", interval }));
+      const display: string[] = [];
+      const error = await rejected(
+        new OpenAIAuth({ request: http.request }).deviceLogin((_url, code) => void display.push(code)),
+      );
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("OpenAI returned an invalid device polling interval");
+      expect(http.calls).toHaveLength(1);
+      expect(display).toEqual([]);
+    });
+  }
+
+  for (const [interval, gapMs] of [
+    ["0.5", 1000],
+    ["1_0", 10_000],
+    [" 2.5e0 ", 2500],
+    [3n, 3000],
+    [1.5, 1500],
+  ] as const) {
+    test(`device polling interval ${JSON.stringify(String(interval))} waits ${gapMs} ms`, async () => {
+      const scheduler = virtualScheduler(1_000_000);
+      const http = new FakeHttp(
+        new HttpResponse(200, { device_auth_id: "id", user_code: "code", interval }),
+        new HttpResponse(403, {}),
+        new HttpResponse(200, { authorization_code: "c", code_verifier: "v" }),
+        new HttpResponse(200, tokens()),
+      );
+      http.clock = scheduler;
+      await new OpenAIAuth({ request: http.request, scheduler }).deviceLogin(() => {});
+      expect(http.times[2]! - http.times[1]!).toBe(gapMs);
+    });
+  }
+
+  test("a huge device interval doesn't overflow the sleep; the login times out", async () => {
+    const scheduler = virtualScheduler(1_000_000);
+    const http = new FakeHttp(
+      new HttpResponse(200, { device_auth_id: "id", user_code: "code", interval: 1e306 }),
+      new HttpResponse(404, {}),
+    );
+    const error = await rejected(
+      new OpenAIAuth({ request: http.request, scheduler }).deviceLogin(() => {}, { timeoutMs: 5000 }),
+    );
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toBe("OpenAI login timed out");
+    expect(scheduler.now()).toBe(1_005_000);
+  });
+
+  const invalidDeviceData: [string, Record<string, unknown>][] = [
+    ["missing device_auth_id", { user_code: "code" }],
+    ["user_code with a space", { device_auth_id: "id", user_code: "AB CD" }],
+    ["user_code null beside usercode", { device_auth_id: "id", user_code: null, usercode: "X" }],
+    ["number device_auth_id", { device_auth_id: 5n, user_code: "code" }],
+  ];
+  for (const [label, data] of invalidDeviceData) {
+    test(`invalid device authorization data is refused: ${label}`, async () => {
+      const http = new FakeHttp(new HttpResponse(200, data));
+      const error = await rejected(new OpenAIAuth({ request: http.request }).deviceLogin(() => {}));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("OpenAI returned invalid device authorization data");
+      expect(http.calls).toHaveLength(1);
+    });
+  }
+
+  test("usercode is accepted when user_code is absent", async () => {
+    const http = new FakeHttp(
+      new HttpResponse(200, { device_auth_id: "id", usercode: "X-Y" }),
+      new HttpResponse(200, { authorization_code: "c", code_verifier: "v" }),
+      new HttpResponse(200, tokens()),
+    );
+    const display: string[] = [];
+    await new OpenAIAuth({ request: http.request }).deviceLogin((_url, code) => void display.push(code));
+    expect(display).toEqual(["X-Y"]);
+    expect(http.calls[1]![2].jsonBody).toEqual({ device_auth_id: "id", user_code: "X-Y" });
+  });
+
+  test("a failed poll and a missing authorization code are refused", async () => {
+    const failed = new FakeHttp(
+      new HttpResponse(200, { device_auth_id: "id", user_code: "code" }),
+      new HttpResponse(500, { error: "boom" }),
+    );
+    const error = await rejected(new OpenAIAuth({ request: failed.request }).deviceLogin(() => {}));
+    expect(error.message).toBe("OpenAI authentication request failed (HTTP 500)");
+    const missing = new FakeHttp(
+      new HttpResponse(200, { device_auth_id: "id", user_code: "code" }),
+      new HttpResponse(200, { code_verifier: "v" }),
+    );
+    const missingError = await rejected(new OpenAIAuth({ request: missing.request }).deviceLogin(() => {}));
+    expect(missingError).toBeInstanceOf(AuthError);
+    expect(missingError.message).toBe("OpenAI returned invalid authorization data");
+    expect(missing.calls).toHaveLength(2);
+  });
+
+  test("the request timeout and the login timeout are checked", async () => {
+    for (const requestTimeoutMs of [0, -1, NaN, Infinity]) {
+      const error = thrown(() => new OpenAIAuth({ requestTimeoutMs }));
+      expect(error).toBeInstanceOf(RangeError);
+      expect(error.message).toBe("Invalid authentication request timeout");
+    }
+    const http = new FakeHttp();
+    const auth = new OpenAIAuth({ request: http.request, requestTimeoutMs: 1 });
+    for (const timeoutMs of [0, NaN, Infinity]) {
+      for (const login of [
+        auth.deviceLogin(() => {}, { timeoutMs }),
+        auth.browserLogin(() => {}, { awaitCallback: (uri) => uri, timeoutMs }),
+      ]) {
+        const error = await rejected(login);
+        expect(error).toBeInstanceOf(RangeError);
+        expect(error.message).toBe("Invalid authentication timeout");
+      }
+    }
+    expect(http.calls).toEqual([]);
+  });
+
+  class SubResponse extends HttpResponse {}
+  const invalidResponses: [string, unknown, string][] = [
+    ["a plain object", { status: 200, data: { data: [{ id: "m" }] } }, "returned an invalid response"],
+    ["a subclass", new SubResponse(200, { data: [{ id: "m" }] }), "returned an invalid response"],
+    ["undefined", undefined, "returned an invalid response"],
+    ["status 99", new HttpResponse(99, {}), "returned an invalid response"],
+    ["status 600", new HttpResponse(600, {}), "returned an invalid response"],
+    ["status 1.5", new HttpResponse(1.5, {}), "returned an invalid response"],
+    ["an array body", new HttpResponse(200, [{ id: "m" }]), "returned malformed data"],
+    ["a null body", new HttpResponse(200, null), "returned malformed data"],
+  ];
+  for (const [label, response, message] of invalidResponses) {
+    test(`a response that isn't an HttpResponse with a valid status is refused: ${label}`, async () => {
+      const auth = new OpenAIAuth({ request: async () => response as HttpResponse });
+      const error = await rejected(auth.apiModels(new ApiKeyCredentials("key")));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe(`OpenAI authentication ${message}`);
+    });
+  }
+
+  test("the deadline aborts an in-flight request", async () => {
+    const scheduler = virtualScheduler(1_000_000);
+    const signals: (AbortSignal | undefined)[] = [];
+    const auth = new OpenAIAuth({
+      request: (_method, _url, options) => {
+        signals.push(options.signal);
+        return never();
+      },
+      scheduler,
+    });
+    const urls: string[] = [];
+    const error = await rejected(
+      auth.browserLogin((url) => void urls.push(url), { awaitCallback: callbackWith(urls, "code=c"), timeoutMs: 1000 }),
+    );
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toBe("OpenAI browser login timed out");
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(signals[0]!.reason).toBe(error);
+    expect(scheduler.now()).toBe(1_001_000);
+  });
+
+  test("host callbacks are bounded by the deadline", async () => {
+    const scheduler = virtualScheduler(1_000_000);
+    const http = new FakeHttp(new HttpResponse(200, { device_auth_id: "id", user_code: "code" }));
+    const auth = new OpenAIAuth({ request: http.request, scheduler });
+    for (const login of [
+      auth.browserLogin(() => {}, { awaitCallback: never, timeoutMs: 1000 }),
+      auth.browserLogin(never, { awaitCallback: (uri) => uri, timeoutMs: 1000 }),
+    ]) {
+      const error = await rejected(login);
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("OpenAI browser login timed out");
+    }
+    const error = await rejected(auth.deviceLogin(never, { timeoutMs: 1000 }));
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toBe("OpenAI login timed out");
+    expect(http.calls).toHaveLength(1);
+  });
+
+  test("a stop while openUrl hangs rejects with the reason", async () => {
+    const controller = new AbortController();
+    const reason = new Error("stopped by host");
+    const auth = new OpenAIAuth({ request: new FakeHttp().request, signal: controller.signal });
+    const error = await rejected(
+      auth.browserLogin(
+        () => {
+          setTimeout(() => controller.abort(reason), 0);
+          return never();
+        },
+        { awaitCallback: (uri) => uri },
+      ),
+    );
+    expect(error).toBe(reason);
+  });
+
+  for (const phase of ["headers", "body", "idle_headers", "idle_body"] as const) {
+    for (const cancel of [false, true]) {
+      const label = `${phase}, ${cancel ? "cancel" : "timeout"}`;
+      test(`http trickle respects the deadline, cancellation, and closes the socket: ${label}`, async () => {
+        const controller = new AbortController();
+        const reason = new Error("stopped by host");
+        let peerClosed!: () => void;
+        const closed = new Promise<void>((resolve) => (peerClosed = resolve));
+        const serverErrors: unknown[] = [];
+        const timers: ReturnType<typeof setInterval>[] = [];
+        const server = net.createServer((socket) => {
+          socket.on("error", () => {});
+          socket.on("close", () => peerClosed());
+          let received = "";
+          socket.on("data", (chunk) => {
+            if (received.includes("\r\n\r\n")) return;
+            received += chunk.toString("latin1");
+            if (!received.includes("\r\n\r\n")) return;
+            const head = phase.endsWith("headers")
+              ? "HTTP/1.1 200 OK\r\nX-Slow: "
+              : "HTTP/1.1 200 OK\r\nContent-Length: 4096\r\n\r\n";
+            socket.write(head, () => {
+              if (cancel) controller.abort(reason);
+            });
+            if (phase.startsWith("idle")) return;
+            let sent = 0;
+            const timer = setInterval(() => {
+              if (sent++ >= 20 || socket.destroyed) return clearInterval(timer);
+              socket.write(" ");
+            }, 50);
+            timers.push(timer);
+          });
+        });
+        server.on("error", (error) => serverErrors.push(error));
+        await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+        const { port } = server.address() as AddressInfo;
+        try {
+          const auth = new OpenAIAuth({
+            request: (method, _url, options) => request(method, `http://127.0.0.1:${port}/`, options),
+            requestTimeoutMs: 250,
+            signal: controller.signal,
+            scheduler: realScheduler,
+          });
+          const start = performance.now();
+          const error = await rejected(auth.apiModels(new ApiKeyCredentials("test-only-key")));
+          if (cancel) {
+            expect(error).toBe(reason);
+          } else {
+            expect(error).toBeInstanceOf(AuthError);
+            expect(error.message).toBe("OpenAI authentication request failed");
+          }
+          expect(performance.now() - start).toBeLessThan(700);
+          const peer = await Promise.race([closed.then(() => true), Bun.sleep(1000).then(() => false)]);
+          expect(peer).toBe(true);
+        } finally {
+          for (const timer of timers) clearInterval(timer);
+          await new Promise((resolve) => server.close(resolve));
+        }
+        expect(serverErrors).toEqual([]);
+      });
+    }
+  }
 });

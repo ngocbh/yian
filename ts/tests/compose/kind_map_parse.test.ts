@@ -6,10 +6,12 @@
  *
  * Changed: Python compares the descriptor to a `MapDescriptor` with the parse metadata and the
  * compiler-owned `child_label` and `call_site` excluded; TS compares its class and fields. The
- * requires-over row pins the whole message, where Python matches a fragment.
+ * requires-over row pins the whole message and its range (the node body), where Python matches a
+ * fragment.
  *
  * TS-only: an unquoted `over:` starting with `call(` passes the parse (the loader lifts the
- * directive later, so even an unbalanced one passes here), while a quoted one is text and fails.
+ * directive later, so even an unbalanced one passes here), while a quoted one is text and fails at
+ * the `over:` value.
  *
  * Pinned at the end (`parsedNodes`): the harvested `over:` literal cases of
  * `tests/compose/test_map_wait_source_types.py`, which has no TS mirror;
@@ -53,10 +55,14 @@ function fieldsOf(desc: CallDescriptor): Record<string, unknown> {
   return fields;
 }
 
+/** Return the cursor over node `fan` of a map whose `over:` is written `over`. */
+function overReader(over: string): SourceCursor {
+  return readerFor(`nodes:\n  fan:\n    kind: map\n    call: child_flow\n    over: ${over}\n`, "fan");
+}
+
 /** Parse node `fan` of a map whose `over:` is written `over`. */
 function parseOver(over: string): MapDescriptor {
-  const text = `nodes:\n  fan:\n    kind: map\n    call: child_flow\n    over: ${over}\n`;
-  return MapDescriptor.parse("fan", readerFor(text, "fan"));
+  return MapDescriptor.parse("fan", overReader(over));
 }
 
 test("map parse matches the descriptor and records ranges", () => {
@@ -79,9 +85,12 @@ test("map parse matches the descriptor and records ranges", () => {
 test("map parse requires over", () => {
   const flow = "nodes:\n  fan:\n    kind: map\n    call: child_flow\n    inputs:\n      x: ${item}\n";
 
-  const error = loadError(() => MapDescriptor.parse("fan", readerFor(flow, "fan")));
+  const cursor = readerFor(flow, "fan");
+
+  const error = loadError(() => MapDescriptor.parse("fan", cursor));
 
   expect(error.message).toBe("node 'fan' (kind=map): missing required field 'over'");
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(cursor.range!);
 });
 
 test("map parse records parallel", () => {
@@ -99,12 +108,15 @@ test("an unquoted call( over passes the parse", () => {
 });
 
 test("a quoted call( over is text", () => {
-  const error = loadError(() => parseOver('"call(g)"'));
+  const cursor = overReader('"call(g)"');
+
+  const error = loadError(() => MapDescriptor.parse("fan", cursor));
 
   expect(error.message).toBe(
     "node 'fan' (kind=map): `over:` must be a list, but YAML read it as text; " +
       "write a list, or a reference such as `over: ${input.items}`",
   );
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(cursor.rangeOf("over")!);
 });
 
 // ---------- harvested conformance cases ----------

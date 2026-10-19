@@ -6,7 +6,8 @@
  *
  * Changed: Python compares the descriptor to a `CallDescriptor` with the parse metadata and the
  * compiler-owned `child_label` and `call_site` excluded; TS compares its class and fields. The
- * requires-call and asserts rows pin the whole message, where Python matches a fragment.
+ * requires-call and asserts rows pin the whole message and its range (the node body; the
+ * `asserts:` value), where Python matches a fragment.
  *
  * The harvested cases whose error the CALL parse raises are pinned in the TS mirrors of the Python
  * files they come from: `non_text_fields.test.ts` (`call:`), `node_input_shape.test.ts`
@@ -56,8 +57,6 @@ test("call parse matches the descriptor and records ranges", () => {
     fieldsOf(new CallDescriptor({ id: "step", call: "child_flow", inputs: { x: "${input.x}" } })),
   );
   expect(desc.kind).toBe("call");
-  expect(desc.over).toBeNull();
-  expect(desc.parallel).toBe(false);
   expect(desc.range).toBeInstanceOf(SourceRange);
   expect(desc.fieldRanges.get(siteKey("field", "call"))).toBeInstanceOf(SourceRange);
   expect(desc.fieldRanges.get(siteKey("field", "inputs"))).toBeInstanceOf(SourceRange);
@@ -66,15 +65,21 @@ test("call parse matches the descriptor and records ranges", () => {
 test("call parse requires call", () => {
   const flow = "nodes:\n  step:\n    kind: call\n    inputs:\n      x: ${input.x}\n";
 
-  const error = loadError(() => CallDescriptor.parse("step", readerFor(flow, "step")));
+  const cursor = readerFor(flow, "step");
+
+  const error = loadError(() => CallDescriptor.parse("step", cursor));
 
   expect(error.message).toBe("node 'step' (kind=call): missing required field 'call'");
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(cursor.range!);
 });
 
 test("call parse rejects non-string asserts", () => {
   const flow = "nodes:\n  step:\n    kind: call\n    call: child_flow\n    asserts:\n      - 5\n";
 
-  const error = loadError(() => CallDescriptor.parse("step", readerFor(flow, "step")));
+  const cursor = readerFor(flow, "step");
+
+  const error = loadError(() => CallDescriptor.parse("step", cursor));
 
   expect(error.message).toBe("node 'step' (kind=call): `asserts:` must be a list of strings");
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(cursor.rangeOf("asserts")!);
 });

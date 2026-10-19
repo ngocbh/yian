@@ -5,14 +5,15 @@
  * `inputs` as the parse phase does: the registered `AgentDescriptor`, `CodeDescriptor`,
  * `ToolDescriptor`, `HumanInputDescriptor`, `CallDescriptor` and `MapDescriptor` for `agent`,
  * `code`, `tool`, `human_input`, `call` and `map`, a stand-in's template `parse` for `loop`, not
- * yet ported. The harvested `whole_reference_input_{agent,call,code}` cases are pinned at the end. A text value is spelled by
- * `valueRepr` (`"abc"` and `true` where Python shows `'abc'` and `True`).
+ * yet ported. The harvested `whole_reference_input_{agent,call,code}` cases are pinned at the
+ * end. A text value is spelled by `valueRepr` (`"abc"` and `true` where Python shows `'abc'` and
+ * `True`).
  *
  * Dropped: the date row of `test_non_mapping_input_is_a_load_error` (TS reads an unquoted date
  * as text).
  *
  * Later (T3-22): `test_non_mapping_input_in_a_defs_body_is_located` (the `defs entry` prefix)
- * and the load half of `test_null_or_empty_mapping_input_still_loads`. Later (T3-16):
+ * and the load half of `test_null_or_empty_mapping_input_still_loads`. Later (T3-22, T4):
  * `test_listed_carried_fields_load_and_run`. Later (T3-17):
  * `test_inline_loop_whole_reference_keeps_its_message`.
  */

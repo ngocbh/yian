@@ -600,16 +600,13 @@ test("sameOutputContract compares value contracts by type and origins", () => {
 test("sameOutputContract compares partial records field by field, and null only equals null", () => {
   const int = new ValueContract(INT);
   const partial = (fields: readonly (readonly [string, ValueContract | null])[]) => new PartialRecordContract(fields);
-  const aIntB = partial([
-    ["a", int],
-    ["b", null],
-  ]);
   /** The record `{a: first, b: untyped}`. */
   const withA = (first: ValueContract | null) =>
     partial([
       ["a", first],
       ["b", null],
     ]);
+  const aIntB = withA(int);
 
   expect(sameOutputContract(aIntB, withA(new ValueContract(INT)))).toBe(true);
   expect(

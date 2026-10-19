@@ -5,9 +5,10 @@
  * Ported: the call and map rows of `test_child_label_is_not_authorable`, through `parseNodes` with
  * the registered kinds; the TS message names the field and lists the allowed keys.
  *
- * Pinned at the end (`parsedNodes`): `load-map-call/engine_inline_composite_bodies__llm_config_on_an_inline_{call,map}`,
- * whose body-key check reaches `llm_config:`, the second key, before the inline `nodes:` key and
- * before the missing-`call:` check.
+ * Pinned at the end (`parsedNodes`):
+ * `load-map-call/engine_inline_composite_bodies__llm_config_on_an_inline_{call,map}`, whose
+ * body-key check reaches `llm_config:`, the second key, before the inline `nodes:` key and before
+ * the missing-`call:` check.
  *
  * Later (T3-16, the loop kind): the loop row of `test_child_label_is_not_authorable` and
  * `load-map-call/engine_inline_composite_bodies__llm_config_on_an_inline_loop`.
@@ -39,7 +40,8 @@
  * `test_callable_scope_reports_unregistered_private_prefix_without_exposing_id`,
  * `test_callable_scope_eager_def_can_resolve_pre_registered_private`.
  *
- * Later (T3-17, T3-22, loads only): `test_load_translates_recursive_inline_preflight_access_to_load_error`,
+ * Later (T3-17, T3-22, loads only):
+ * `test_load_translates_recursive_inline_preflight_access_to_load_error`,
  * `test_loader_allows_private_callable_prefix_in_graph_node_id`,
  * `test_inline_body_shape_matrix_flows_through_loader`,
  * `test_inline_body_non_text_input_key_fails_at_the_key_through_loader`,

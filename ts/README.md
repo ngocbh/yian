@@ -132,6 +132,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   (`src/llm/transport.ts`). An adapter's `ProviderError` holds the provider's text uncapped;
   `RouteModel` scrubs it of the route's credentials, then caps it. `shortRequest` is for model
   listing and sign-in.
+- `scrubError(error, redact)` in `src/llm/errors.ts` rewrites an error's `message`, `stack`,
+  `cause` chain and `AggregateError.errors` in place with a text redactor (`llm/` can't import
+  `llm_clients/`, so callers pass `(text) => redactKeys(text, secrets)`); it never throws.
 - Retries happen above the call: `callWithRetries` retries a retryable `ProviderError`, before or
   after partial output, up to `MODEL_RETRIES` times, calling `onRetry` before each wait.
 - `src/llm/structured.ts` chooses how a structured call is sent per route, model and schema (a
@@ -156,7 +159,11 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - `layers.ts`: resolves one agent's `llm_config` layers into its effective config, and checks
   layers and complete selections. It reads no environment or saved settings.
 - `redact.ts`: `redactKey`/`redactKeys` remove keys and their masked echoes (`sk-abc****wxyz`)
-  from provider text.
+  from provider text. `connection.ts`'s `scrubCallCredentials(error, config, {env, sent})` scrubs
+  an error of everything `callCredentials` lists plus what the route sent.
+- `model_catalog.ts`: Python's static model catalog (`MODEL_OPTIONS`, `getKnownModels`);
+  `validators.ts`: `validateModel`, whether a model is in the catalog (any model for ollama,
+  openrouter and vllm).
 - `auth/common.ts`: `AuthError`, the credential classes and `ProviderSelection`.
 - `auth/store.ts`: `AuthStore`, the saved-login file in Python's format. Reads are sync. `save`,
   `remove` and `setDefault` are async and hold `<path>.lock` through `waitForLock`; `credentials`

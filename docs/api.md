@@ -355,7 +355,8 @@ run before appending any record.
   ChatGPT subscription model refuse it, since they send no API key.
 
   Changed (TS yian): a saved subscription's account id is scrubbed from errors too,
-  and `ANTHROPIC_AUTH_TOKEN` isn't read. [Installation](installation.md#ts-environment)
+  and `ANTHROPIC_AUTH_TOKEN` isn't read. Scrubbing rewrites an error's `message`, its
+  `stack` and every `cause`, and the members of an `AggregateError`. [Installation](installation.md#ts-environment)
   lists the variables TS yian reads, its base URL variables included; an empty
   variable counts as unset.
 - `memory` — one backend per declared memory key, normally the
@@ -1105,10 +1106,10 @@ is for debugging only; don't branch on it.
 | `provider.auth` | An AGENT's model build or model call failed on its credentials (see below). | Ask the user to fix the connection (`yian auth <provider>`, or the right key). | After the credentials are fixed; or at once if the token refresh request itself failed (a network error or a 5xx) |
 | `agent.output_invalid` (TS yian) | An AGENT's structured reply still breaks its `output:` type after its `retries:` corrections. | Loosen the type or improve the prompt. | Sometimes: model replies vary |
 | `provider.rate_limit` (TS yian) | The provider refused the model call for its rate limit (HTTP 429), and yian's model-call retries ran out or the provider forbade a retry. | Wait, then run again; lower concurrency. | Yes, later |
-| `provider.quota` (TS yian) | The provider refused the call because the account's quota or credit is used up (OpenAI's `insufficient_quota`). | Ask the user to add credit or change plan. | After the quota is restored |
+| `provider.quota` (TS yian) | The provider refused the call because the account's quota or credit is used up (OpenAI's `insufficient_quota`, or ChatGPT's `usage_limit_reached` or `usage_not_included`). | Ask the user to add credit or change plan. | After the quota is restored |
 | `provider.unavailable` (TS yian) | The provider was unreachable or failing (a 5xx or overloaded reply, a timeout, a dropped connection, or a reply cut short), and yian's model-call retries ran out or the provider forbade a retry. | Run again later, or switch provider. | Yes, later |
 | `provider.context_length` (TS yian) | The request is longer than the model's context window. | Shorten the inputs or history, or pick a model with a larger window. | No |
-| `provider.refused` (TS yian) | The model declined to answer: a refusal or a content filter stopped the reply. | Read `failure.message`; change the input. | Rarely |
+| `provider.refused` (TS yian) | The model declined to answer: a refusal or a content filter stopped the reply, or the provider's content filter rejected the request (an HTTP 4xx naming `content_filter`, `content_policy_violation` or `ResponsibleAIPolicyViolation`). | Read `failure.message`; change the input. | Rarely |
 | `condition.evaluate` (TS yian) | A LOOP `while:`/`until:`, a CASE `when:`, or an `asserts:` condition can't be evaluated (an error, as opposed to evaluating false). | Fix the flow or its inputs. | No |
 
 Changed (TS yian): the codes marked (TS yian) exist only in TS yian; Python yian
@@ -1131,7 +1132,9 @@ couldn't supply them:
   new run can help without changing the credentials;
 - the provider answered HTTP 401 or 403, or 400 naming `API_KEY_INVALID` (Gemini's
   invalid key). Another provider's missing key is `provider.auth` only when the
-  provider answers 401 or 403.
+  provider answers 401 or 403. Changed (TS yian): a 4xx that yian reads as a
+  content-filter refusal, such as OpenRouter's 403 content-policy reply, is
+  `provider.refused`, not `provider.auth`.
 
 Typed-output correction retries stop at once on it. A TOOL node's or a granted tool's
 own 401 is `node.execute`. An agent that resolves its `llm_config` when it runs and

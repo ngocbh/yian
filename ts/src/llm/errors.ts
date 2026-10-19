@@ -2,9 +2,11 @@
  * Provider errors: one error class, a kind per failure, and openai's retry policy.
  *
  * `errorFromResponse` turns a non-2xx HTTP reply into a `ProviderError` whose kind comes
- * from the status (and, for quota, overload and context overflow, the body) and whose
- * `retryable` flag follows the openai SDK's `_should_retry`. `parseRetryAfter` reads the
- * server's requested delay the way that SDK does.
+ * from the status (and, for quota, content filters, overload and context overflow, the
+ * body) and whose `retryable` flag follows the openai SDK's `_should_retry`.
+ * `parseRetryAfter` reads the server's requested delay the way that SDK does.
+ * `scrubError` rewrites an error, its causes and its group members with a text redactor,
+ * so a credential a provider echoed never reaches a log or a trace.
  */
 
 import { redirectDetail } from "../platform.ts";
@@ -51,7 +53,13 @@ const CONTEXT_PHRASES = [
   // Ollama's own prompt-too-long text, and llama-server's, which Ollama passes through.
   "longer than the context length",
   "exceeds the available context size",
+  // Anthropic's "input length and `max_tokens` exceed context limit".
+  "exceed context limit",
 ];
+// OpenAI's insufficient_quota, and ChatGPT's usage-limit codes on its 429s.
+const QUOTA_CODES = ["insufficient_quota", "usage_limit_reached", "usage_not_included"];
+// OpenAI's and Azure's content-filter codes, and OpenRouter's moderation error type.
+const CONTENT_FILTER_CODES = ["content_filter", "content_policy_violation", "ResponsibleAIPolicyViolation"];
 const MAX_DETAIL_CHARS = 2000;
 
 // RFC 5322 dates as HTTP sends them: `[Day, ]D[D] Mon YYYY HH:MM[:SS] zone`.
@@ -165,8 +173,12 @@ function parseHttpDate(text: string): number | null {
 /**
  * Return the error kind for an HTTP `status` and, where it matters, its `body`:
  *
+ * - A 4xx whose JSON `error.code`, `error.innererror.code` or `error.metadata.error_type`
+ *   is "content_filter", "content_policy_violation" or "ResponsibleAIPolicyViolation":
+ *   refused.
  * - 401 auth, 402 quota, 403 permission, 404 not found, 408 timeout.
- * - 429: quota when the body says "insufficient_quota", else rate limit.
+ * - 429: quota when the body says "insufficient_quota", "usage_limit_reached" or
+ *   "usage_not_included", else rate limit.
  * - 529, or a 503 whose body says "overloaded": overloaded.
  * - Any other 5xx: server.
  * - 3xx: redirect.
@@ -174,11 +186,12 @@ function parseHttpDate(text: string): number | null {
  * - A 400, 413 or 422 whose body names a context overflow ("context_length_exceeded",
  *   "prompt is too long", "maximum context length", Gemini's "exceeds the maximum
  *   number of tokens allowed", Ollama's "longer than the context length", or llama-server's
- *   "exceeds the available context size"): context length.
+ *   "exceeds the available context size", or Anthropic's "exceed context limit"): context length.
  * - Any other 4xx: bad request.
  * - Anything else: protocol.
  */
 export function kindForStatus(status: number, body: string): ErrorKind {
+  if (status >= 400 && status < 500 && isContentFilter(body)) return "refused";
   const lowered = body.toLowerCase();
   switch (status) {
     case 401:
@@ -192,7 +205,7 @@ export function kindForStatus(status: number, body: string): ErrorKind {
     case 408:
       return "timeout";
     case 429:
-      return lowered.includes("insufficient_quota") ? "quota" : "rate_limit";
+      return QUOTA_CODES.some((code) => lowered.includes(code)) ? "quota" : "rate_limit";
     case 529:
       return "overloaded";
   }
@@ -206,6 +219,31 @@ export function kindForStatus(status: number, body: string): ErrorKind {
   if (status >= 400 && status < 500) return "bad_request";
   // A 1xx or 2xx never reaches here from the executor; treat it as a broken reply.
   return "protocol";
+}
+
+/** Return whether a JSON error body names a content-filter code in one of the fields providers use. */
+function isContentFilter(body: string): boolean {
+  let data;
+  try {
+    data = parseJson(body, "plain");
+  } catch {
+    return false;
+  }
+  const error = field(data, "error");
+  const codes = [
+    field(error, "code"),
+    field(field(error, "innererror"), "code"),
+    field(field(error, "metadata"), "error_type"),
+  ];
+  // Exact strings only: OpenRouter's `error.code` is a number, and a code in message text doesn't count.
+  return codes.some((code) => typeof code === "string" && CONTENT_FILTER_CODES.includes(code));
+}
+
+/** Return member `name` of `value` when `value` is a JSON object, else `undefined`. */
+function field(value: unknown, name: string): unknown {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)[name]
+    : undefined;
 }
 
 /** Options for `errorFromResponse`. */
@@ -222,7 +260,8 @@ export interface ErrorFromResponseOptions {
  * Build the error for a non-2xx HTTP reply; `body` must already be stripped of
  * credentials. The kind comes from `kindForStatus`. `retryable` follows openai's
  * `_should_retry`: a finite retry-after over `maxRetryAfter` refuses, then
- * `x-should-retry` decides, then a quota error refuses, then 408, 409, 429 and 5xx retry.
+ * `x-should-retry` decides, then a quota or refused error refuses, then 408, 409, 429 and 5xx
+ * retry.
  */
 export function errorFromResponse(
   status: number,
@@ -255,7 +294,7 @@ function isRetryable(
   const shouldRetry = headers.get("x-should-retry");
   if (shouldRetry === "true") return true;
   if (shouldRetry === "false") return false;
-  if (kind === "quota") return false;
+  if (kind === "quota" || kind === "refused") return false;
   return [408, 409, 429].includes(status) || status >= 500;
 }
 
@@ -272,10 +311,8 @@ function jsonDetail(body: string): string | null {
   } catch {
     return null;
   }
-  if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
-  const error = data["error"];
-  const isObject = typeof error === "object" && error !== null && !Array.isArray(error);
-  for (const candidate of [isObject ? error["message"] : undefined, data["message"], data["detail"], error]) {
+  const error = field(data, "error");
+  for (const candidate of [field(error, "message"), field(data, "message"), field(data, "detail"), error]) {
     if (typeof candidate === "string" && candidate.trim()) return candidate;
   }
   return null;
@@ -287,4 +324,87 @@ export function capDetail(text: string): string {
   if (text.length <= MAX_DETAIL_CHARS) return text;
   const points = Array.from(text);
   return points.length > MAX_DETAIL_CHARS ? points.slice(0, MAX_DETAIL_CHARS).join("") + "…" : text;
+}
+
+/**
+ * Redact an error graph with `redact` and return `error`.
+ *
+ * A string is returned redacted. Any other non-null object is rewritten in place: its
+ * `message`, `stack` and `cause` when they are strings, and string members of an `errors`
+ * array; then the same for each object reached through `cause` or an `errors` array
+ * (`AggregateError`), each once. A property assignment can't set (a getter-only `message`)
+ * becomes an own data property when the object is extensible, else it is skipped, as on a
+ * frozen error. Anything else is returned unchanged. It never throws: a throwing getter,
+ * proxy trap or `redact` only skips that property, and the error is never replaced.
+ */
+export function scrubError<T>(error: T, redact: (text: string) => string): T {
+  if (typeof error === "string") {
+    try {
+      return redact(error) as T;
+    } catch {
+      return error;
+    }
+  }
+  if (typeof error !== "object" || error === null) return error;
+  const seen = new Set<object>();
+  // A stack instead of recursion, so a deep cause chain can't overflow.
+  const pending: object[] = [error];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    // The message first: the stack is read after it, in case reading one rebuilds the other.
+    redactProperty(current, "message", redact);
+    redactProperty(current, "stack", redact);
+    const cause = redactProperty(current, "cause", redact);
+    if (typeof cause === "object" && cause !== null) pending.push(cause);
+    const errors = readProperty(current, "errors");
+    const count = arrayLength(errors);
+    for (let i = 0; i < count; i++) {
+      const member = redactProperty(errors as unknown[], i, redact);
+      if (typeof member === "object" && member !== null) pending.push(member);
+    }
+  }
+  return error;
+}
+
+/** Return `target[name]`, or `undefined` when reading it throws. */
+function readProperty(target: object, name: PropertyKey): unknown {
+  try {
+    return Reflect.get(target, name);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Return the length of `value` when it is an array and the length is a non-negative safe integer, else 0. */
+function arrayLength(value: unknown): number {
+  try {
+    const length: unknown = Array.isArray(value) ? value.length : 0;
+    // A Proxy's `length` trap can return anything; a Symbol or a throwing `valueOf` would throw
+    // in the loop's comparison, and Infinity would never end it.
+    return Number.isSafeInteger(length) && (length as number) > 0 ? (length as number) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Read `target[name]` once, replace it with its redaction when it is a string, and return the
+ * value read (`undefined` when reading throws). A throw or an unsettable property skips the write.
+ */
+function redactProperty(target: object, name: PropertyKey, redact: (text: string) => string): unknown {
+  let value: unknown;
+  try {
+    value = Reflect.get(target, name);
+    if (typeof value !== "string") return value;
+    const redacted = redact(value);
+    if (redacted === value) return value;
+    if (Reflect.set(target, name, redacted)) return value;
+    if (!Object.isExtensible(target)) return value;
+    Object.defineProperty(target, name, { value: redacted, writable: true, enumerable: false, configurable: true });
+  } catch {
+    // Scrubbing must neither stop the walk nor replace the error it was given.
+  }
+  return value;
 }

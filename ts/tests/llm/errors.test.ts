@@ -1,4 +1,4 @@
-/** Tests for provider errors in `src/llm/errors.ts`: status mapping, retry policy, retry-after parsing, messages. */
+/** Tests for provider errors in `src/llm/errors.ts`: status mapping, retry policy, retry-after parsing, messages, scrubbing. */
 
 import { describe, expect, test } from "bun:test";
 
@@ -9,8 +9,10 @@ import {
   kindForStatus,
   parseRetryAfter,
   ProviderError,
+  scrubError,
   type ErrorKind,
 } from "../../src/llm/errors.ts";
+import { REDACTED, redactKeys } from "../../src/llm_clients/redact.ts";
 
 /** Return the error for a reply from provider `p` with `status`, header record `headers` and `body`. */
 function reply(status: number, headers: Record<string, string> = {}, body = "", maxRetryAfter?: number | null) {
@@ -131,6 +133,75 @@ describe("kinds", () => {
     expect(err.kind).toBe("auth");
     expect(err.retryable).toBe(false);
     expect(err.message).toBe("google returned HTTP 400 (auth): API key not valid. Please pass a valid API key.");
+  });
+
+  test.each(["usage_limit_reached", "usage_not_included", "insufficient_quota"])(
+    "a 429 naming %s is quota, retried only on x-should-retry",
+    (code) => {
+      const body = JSON.stringify({ error: { code } });
+      expect(kindForStatus(429, body)).toBe("quota");
+      const err = reply(429, {}, body);
+      expect(err.kind).toBe("quota");
+      expect(err.retryable).toBe(false);
+      expect(reply(429, { "x-should-retry": "true" }, body).retryable).toBe(true);
+    },
+  );
+
+  test("a plain 429 is rate_limit", () => {
+    expect(kindForStatus(429, '{"error": {"code": "rate_limit_exceeded"}}')).toBe("rate_limit");
+  });
+
+  const contentFilters: [string, number, unknown][] = [
+    ["error.code content_filter", 400, { error: { code: "content_filter", message: "filtered" } }],
+    [
+      "Azure's content_filter with an innererror",
+      400,
+      { error: { code: "content_filter", innererror: { code: "ResponsibleAIPolicyViolation" } } },
+    ],
+    [
+      "Azure's innererror alone",
+      400,
+      { error: { code: "invalid_request", innererror: { code: "ResponsibleAIPolicyViolation" } } },
+    ],
+    [
+      "OpenRouter's metadata.error_type",
+      403,
+      { error: { code: 403, message: "flagged", metadata: { error_type: "content_policy_violation" } } },
+    ],
+  ];
+
+  test.each(contentFilters)("a content-filter 4xx is refused: %s", (_name, status, data) => {
+    const body = JSON.stringify(data);
+    expect(kindForStatus(status, body)).toBe("refused");
+    const err = reply(status, {}, body);
+    expect(err.kind).toBe("refused");
+    expect(err.retryable).toBe(false);
+  });
+
+  test("a content-filter 429 is refused, retried only on x-should-retry", () => {
+    const body = JSON.stringify({ error: { code: "content_filter" } });
+    const err = reply(429, {}, body);
+    expect(err.kind).toBe("refused");
+    expect(err.retryable).toBe(false);
+    expect(reply(429, { "x-should-retry": "true" }, body).retryable).toBe(true);
+  });
+
+  test("content_filter only in the message text, or a non-JSON body, stays bad_request", () => {
+    expect(kindForStatus(400, '{"error": {"message": "blocked by content_filter"}}')).toBe("bad_request");
+    expect(kindForStatus(400, "content_filter")).toBe("bad_request");
+  });
+
+  test("Anthropic's input-plus-max_tokens 400 is context_length", () => {
+    const body = JSON.stringify({
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message:
+          "input length and `max_tokens` exceed context limit: 188240 + 21333 > 200000, decrease input length or `max_tokens` and try again",
+      },
+    });
+    expect(kindForStatus(400, body)).toBe("context_length");
+    expect(reply(400, {}, body).retryable).toBe(false);
   });
 
   test("an unexpected status is a protocol error", () => {
@@ -449,5 +520,151 @@ describe("message", () => {
     expect(reply(302, { Location: "/steal?token=abc" }).message.endsWith(": redirect to a relative Location")).toBe(
       true,
     );
+  });
+});
+
+describe("scrubError", () => {
+  const KEY = "sk-sentinel-scrub-zqxw";
+  const redact = (text: string) => redactKeys(text, [KEY]);
+
+  test("rewrites the stack along with the message, across the graph", () => {
+    const member = new Error(`member ${KEY}`);
+    const group = new AggregateError([member], `group ${KEY}`);
+    const inner = new ProviderError("auth", `inner ${KEY}`);
+    inner.cause = group;
+    const error = new Error(`bad key ${KEY}`, { cause: inner });
+    const graph = [error, inner, group, member];
+    // Reading each stack first builds it while the message still holds the key.
+    for (const each of graph) expect(each.stack).toContain(KEY);
+    expect(scrubError(error, redact)).toBe(error);
+    expect(error.message).toBe(`bad key ${REDACTED}`);
+    for (const each of graph) {
+      for (const text of [each.stack!, String(each), each.message]) expect(text).not.toContain(KEY);
+      expect(each.stack).toContain(REDACTED);
+    }
+  });
+
+  test("a cause cycle terminates", () => {
+    const first = new Error(`first ${KEY}`);
+    const second = new Error(`second ${KEY}`, { cause: first });
+    first.cause = second;
+    scrubError(first, redact);
+    expect([first.message, second.message]).toEqual([`first ${REDACTED}`, `second ${REDACTED}`]);
+  });
+
+  test("a string cause and string errors members are redacted", () => {
+    const member = new Error(`member ${KEY}`);
+    const error = new AggregateError([`text ${KEY}`, member, 5], `group ${KEY}`, { cause: `cause ${KEY}` });
+    scrubError(error, redact);
+    expect(error.cause).toBe(`cause ${REDACTED}`);
+    expect(error.errors).toEqual([`text ${REDACTED}`, member, 5]);
+    expect(member.message).toBe(`member ${REDACTED}`);
+    expect(error.message).toBe(`group ${REDACTED}`);
+  });
+
+  test("a thrown string returns redacted", () => {
+    expect(scrubError(`thrown ${KEY}`, redact)).toBe(`thrown ${REDACTED}`);
+  });
+
+  test("null and numbers are returned unchanged", () => {
+    expect(scrubError(null, redact)).toBe(null);
+    expect(scrubError(undefined, redact)).toBe(undefined);
+    expect(scrubError(42, redact)).toBe(42);
+  });
+
+  test("a frozen error is left as is without throwing", () => {
+    const error = Object.freeze(new Error(`frozen ${KEY}`));
+    expect(scrubError(error, redact)).toBe(error);
+    expect(error.message).toBe(`frozen ${KEY}`);
+  });
+
+  test("a getter-only message on an extensible object is replaced by an own property", () => {
+    const error: { message: string } = Object.create({
+      get message() {
+        return `getter ${KEY}`;
+      },
+    });
+    scrubError(error, redact);
+    expect(error.message).toBe(`getter ${REDACTED}`);
+    expect(Object.getOwnPropertyDescriptor(error, "message")).toEqual({
+      value: `getter ${REDACTED}`,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  });
+
+  test("a throwing redactor leaves the error and doesn't throw", () => {
+    const boom = () => {
+      throw new Error("redactor failed");
+    };
+    const error = new Error(`kept ${KEY}`, { cause: `cause ${KEY}` });
+    expect(scrubError(error, boom)).toBe(error);
+    expect(error.message).toBe(`kept ${KEY}`);
+    expect(error.cause).toBe(`cause ${KEY}`);
+    expect(scrubError(`thrown ${KEY}`, boom)).toBe(`thrown ${KEY}`);
+  });
+
+  test("a throwing getter doesn't stop the walk", () => {
+    const deepest = new Error(`deepest ${KEY}`);
+    const broken = Object.defineProperty(new Error("broken", { cause: deepest }), "message", {
+      get() {
+        throw new Error("no message");
+      },
+    });
+    scrubError(new Error(`top ${KEY}`, { cause: broken }), redact);
+    expect(deepest.message).toBe(`deepest ${REDACTED}`);
+  });
+
+  test("a revoked Proxy as errors doesn't throw", () => {
+    const { proxy, revoke } = Proxy.revocable<unknown[]>([], {});
+    revoke();
+    const error = Object.assign(new Error(`revoked ${KEY}`), { errors: proxy });
+    expect(scrubError(error, redact)).toBe(error);
+    expect(error.message).toBe(`revoked ${REDACTED}`);
+  });
+
+  test("an errors Proxy whose length trap throws doesn't throw", () => {
+    const errors = new Proxy([`member ${KEY}`], {
+      get(target, name, receiver) {
+        if (name === "length") throw new Error("no length");
+        return Reflect.get(target, name, receiver);
+      },
+    });
+    const error = Object.assign(new Error(`trapped ${KEY}`), { errors });
+    expect(scrubError(error, redact)).toBe(error);
+    expect(error.message).toBe(`trapped ${REDACTED}`);
+  });
+
+  test.each([
+    ["a Symbol", Symbol("length")],
+    ["Infinity", Infinity],
+    ["a throwing valueOf", { valueOf: () => { throw new Error("no number"); } }],
+    ["a negative number", -1],
+  ])("an errors Proxy whose length is %s doesn't throw or hang", (_, length) => {
+    const errors = new Proxy([`member ${KEY}`], {
+      get: (target, name, receiver) => (name === "length" ? length : Reflect.get(target, name, receiver)),
+    });
+    const error = Object.assign(new Error(`odd length ${KEY}`), { errors });
+    expect(scrubError(error, redact)).toBe(error);
+    expect(error.message).toBe(`odd length ${REDACTED}`);
+  }, 1000);
+
+  test("a ProviderError keeps its class and fields", () => {
+    const error = new ProviderError("auth", `rejected ${KEY}`, { status: 401, provider: "openai" });
+    expect(scrubError(error, redact)).toBe(error);
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error.message).toBe(`rejected ${REDACTED}`);
+    expect([error.kind, error.status, error.retryable, error.provider]).toEqual(["auth", 401, false, "openai"]);
+  });
+
+  // 100 000, not 10 000: Bun's stack survives a recursive walk 10 000 deep.
+  test("a 100 000-deep cause chain doesn't overflow", () => {
+    const deepest = new Error(`deepest ${KEY}`);
+    let top = deepest;
+    for (let i = 0; i < 100_000; i++) top = new Error(`wrap ${KEY}`, { cause: top });
+    scrubError(top, redact);
+    expect(top.message).toBe(`wrap ${REDACTED}`);
+    expect(deepest.message).toBe(`deepest ${REDACTED}`);
   });
 });

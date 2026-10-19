@@ -11,13 +11,14 @@ import { fileURLToPath } from "node:url";
 
 import { RedirectError, realScheduler, safeFetch, type Scheduler, type Send, USER_AGENT, virtualScheduler } from "../../src/platform.ts";
 import { type Auth, BearerAuth, HeaderKeyAuth, REDACTED } from "../../src/llm/auth.ts";
-import { type ErrorKind, errorFromResponse, ProviderError } from "../../src/llm/errors.ts";
+import { type ErrorKind, errorFromResponse, ProviderError, scrubError } from "../../src/llm/errors.ts";
 import { type ChatModel, collect, Finish, TextDelta } from "../../src/llm/events.ts";
 import { callWithRetries, type RetryInfo, RouteModel, type SseProtocol } from "../../src/llm/executor.ts";
 import { Message, Request, Response as ModelResponse, TextPart } from "../../src/llm/messages.ts";
 import { Route } from "../../src/llm/route.ts";
 import { CASSETTE_REDACTED, CassetteRecorder, ScriptedModel } from "../../src/llm/testing.ts";
 import { openExchange, shortRequest } from "../../src/llm/transport.ts";
+import { redactKeys } from "../../src/llm_clients/redact.ts";
 
 // The "/" gives the key a JSON-escaped form (`\/`) that differs from the plain one.
 const KEY = "sk-test/key-0123456789abcdef";
@@ -415,6 +416,31 @@ async function redaction(): Promise<void> {
   });
 }
 
+/** `scrubError` leaves no form of the key in a message, stack, cause or `AggregateError` member. */
+async function scrubbedErrors(): Promise<void> {
+  const masked = `${KEY.slice(0, 8)}****${KEY.slice(-4)}`;
+  const echo = `plain ${KEY}, escaped ${ESCAPED_KEY}, masked ${masked}`;
+  const member = new Error(`member: ${echo}`);
+  const group = new AggregateError([member, `string member: ${echo}`], `group: ${echo}`, { cause: `string cause: ${echo}` });
+  const inner = new ProviderError("auth", `inner: ${echo}`);
+  inner.cause = group;
+  const outer = new Error(`outer: ${echo}`, { cause: inner });
+  const graph = [outer, inner, group, member];
+  // Reading each stack first builds it while the message still holds the key.
+  for (const error of graph) assert.ok(error.stack?.includes(KEY), `${error.name}'s stack holds the key before scrubbing`);
+
+  assert.equal(scrubError(outer, (text) => redactKeys(text, [KEY])), outer);
+  const texts: string[] = [group.cause as string, group.errors[1] as string];
+  for (const error of graph) {
+    assert.ok(error.message.includes(REDACTED), error.message);
+    texts.push(error.message, error.stack ?? "", String(error));
+  }
+  for (const text of texts) {
+    for (const form of [KEY, ESCAPED_KEY, masked]) assert.ok(!text.includes(form), `holds ${form}: ${text}`);
+  }
+  assert.ok(inner instanceof ProviderError && inner.kind === "auth");
+}
+
 /** The scenarios by name, in the order `main` runs them. */
 export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "redirects, every client": redirects,
@@ -423,6 +449,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "241 s of silence fails": silence,
   "retry table": retryTable,
   redaction,
+  scrubbedErrors,
 };
 
 /** Run every scenario, printing `{"name", "ok", "error"?}` per line; return how many failed. */

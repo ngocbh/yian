@@ -7,7 +7,7 @@
  * layer's `iter_flow_origins` and `rewrite_flow_origins` in Python; here they call the node's own
  * `iterLocalOrigins` and `rewriteLocalOrigins`. Python's bare `Node` is a minimal subclass.
  *
- * Changed (local half): the CALL and MAP rows of
+ * Changed (local half): the CALL, MAP and LOOP rows of
  * `test_each_composite_exposes_its_signature_and_baked_child` check the driver's own hooks over a
  * stub child: `iterLocalOrigins` yields the cached `childInputs` signature after the base's
  * origins, `originChildren()` returns the baked child, and `rewriteLocalOrigins` on a shallow
@@ -22,8 +22,6 @@
  * a shallow node copy leaves the original unchanged and keeps shared carriers shared; a shallow
  * copy validates its assertions and runs; and `failureTrace`.
  *
- * Later (T3-8, LOOP): the LOOP row of `test_each_composite_exposes_its_signature_and_baked_child`.
- *
  * Later (T3-10): the 24 compile tests, and the composite rows' recursion into the child flow and
  * alias identity.
  */
@@ -35,6 +33,7 @@ import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { Assertion, ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 
@@ -219,6 +218,18 @@ for (const [label, make] of [
     "map",
     (child: object, signature: Parameter) => new MapNode("map", { flowId: "child", child, childInputs: [signature] }),
   ],
+  [
+    "loop",
+    (child: object, signature: Parameter) =>
+      new LoopNode("loop", {
+        flowId: "child",
+        child,
+        childInputs: [signature],
+        predicateKind: "times",
+        times: 1,
+        maxIters: 1,
+      }),
+  ],
 ] as const) {
   test(`each composite exposes its signature and baked child (${label}, local half)`, () => {
     const signature = new Parameter("item", { origin: origin("signature") });
@@ -234,9 +245,9 @@ for (const [label, make] of [
     copy.rewriteLocalOrigins((o) => origin(`mapped/${o.key}`));
 
     expect([...copy.iterLocalOrigins()].map((o) => o.key)).toEqual(["mapped/driver", "mapped/signature"]);
-    expect(copy.childInputs[0]).not.toBe(signature);
+    expect(copy.childInputs![0]).not.toBe(signature);
     expect([...driver.iterLocalOrigins()].map((o) => o.key)).toEqual(["driver", "signature"]);
-    expect(driver.childInputs[0]).toBe(signature);
+    expect(driver.childInputs![0]).toBe(signature);
     expect(signature.origin).toEqual(origin("signature"));
   });
 }

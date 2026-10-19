@@ -5,7 +5,7 @@
  * Ported: `test_case_rejects_a_non_origin_predicate_carrier`.
  *
  * Ported (adapted): `test_map_over_accepts_a_binding_carrier`,
- * `test_unbaked_composite_is_a_setup_fault` (the CALL and MAP rows),
+ * `test_unbaked_composite_is_a_setup_fault`,
  * `test_case_without_predicate_is_a_setup_fault`,
  * `test_case_with_non_string_predicate_is_a_setup_fault` and
  * `test_map_over_not_a_list_message_is_byte_identical`.
@@ -18,8 +18,6 @@
  *
  * TS-only: `test_map_over_not_a_list_message_is_byte_identical` also checks the error's `origin`
  * (the carrier's, else `null`).
- *
- * Later (T3-8, LOOP): the LOOP row of `test_unbaked_composite_is_a_setup_fault`.
  *
  * Later (T4-9): `test_case_predicate_failure_selects_the_active_ordered_origin` and
  * `test_source_free_case_predicate_failure_falls_back_to_the_node_origin`.
@@ -35,6 +33,7 @@ import { BindingError } from "../../src/nodes/binding.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { Assertion, Binding } from "../../src/nodes/contracts.ts";
+import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 
@@ -49,6 +48,7 @@ test("map over accepts a binding carrier", () => {
 for (const [label, make, inputs] of [
   ["call", () => new CallNode("call", { flowId: "child" }), {}],
   ["map", () => new MapNode("map", { flowId: "child" }), { over: [] }],
+  ["loop", () => new LoopNode("loop", { flowId: "child", predicate: "true", maxIters: 1 }), {}],
 ] as const) {
   test(`unbaked composite is a setup fault (${label})`, async () => {
     // A missing compiled child is malformed setup, not expected node rejection.

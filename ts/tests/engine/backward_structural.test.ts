@@ -4,7 +4,8 @@
  * `Node` is a minimal subclass), `test_case_backward_inventory_excludes_generated_control_inputs`,
  * `test_list_end_keeps_whole_list_text_unchanged_and_records_each_output_position`,
  * `test_failed_boundaries_forward_text_only_when_inputs_and_layout_were_captured`,
- * `test_successful_null_output_is_a_bare_contributor_but_zero_output_has_none`.
+ * `test_successful_null_output_is_a_bare_contributor_but_zero_output_has_none`,
+ * `test_stopped_loop_failure_does_not_route_an_unaccepted_carried_output`.
  *
  * Changed: `test_structural_output_paths_must_exist_in_the_available_accepted_output` builds an
  * END in Python; here a fake whose `backward` calls `projectStructuralFeedback`, as END, START and
@@ -14,10 +15,11 @@
  * public `names`, `mode` and `n` (Python's private `_names`, `_mode`, `_n`).
  * `test_end_projects_its_zero_one_and_many_output_layouts` appends an END's extra assertion param
  * by replacing `params`, which TS types as read-only.
+ * `test_stopping_loop_projects_all_carried_fields_without_reevaluating_predicate` builds the
+ * stopped driver's output, the carried record, by hand, since LOOP's body isn't ported yet; its
+ * predicate doesn't parse, so backward would throw if it evaluated it (Python's monkeypatch). The
+ * params are emptied by assigning `[]`.
  *
- * Later (T3-8, LOOP):
- * `test_stopping_loop_projects_all_carried_fields_without_reevaluating_predicate`,
- * `test_stopped_loop_failure_does_not_route_an_unaccepted_carried_output`.
  * Later (T3-9, T4-x): `test_agent_capture_keeps_variable_inventory_separate_from_delivered_inputs`.
  * Later (T4-x): `test_input_inventory_capture_preserves_canonical_parameter_setup_faults`,
  * `test_static_backward_capture_and_names_are_detached_for_the_actual_invocation`,
@@ -44,6 +46,7 @@ import { applyDefaults } from "../../src/nodes/binding.ts";
 import { CaseNode } from "../../src/nodes/case/node.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
+import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 
 /** A backward context over the node's declared inputs and captured layout. */
@@ -225,6 +228,26 @@ test("end backward uses captured layout after live node fields change", () => {
   expect(context.nodeData).toEqual({ input_output_paths: { result: [] } });
 });
 
+test("stopping loop projects all carried fields without reevaluating predicate", () => {
+  // A predicate that doesn't parse: evaluating it in backward would throw.
+  const node = new LoopNode("loop", {
+    flowId: "body",
+    predicate: "${unparseable",
+    maxIters: 2,
+    childInputs: [new Parameter("value")],
+  });
+  node.params = [new Parameter("value"), new Parameter("carried_only")];
+  const inputs = { value: 7n, carried_only: ["kept"] };
+  const context = contextFor(node, inputs, { ...inputs });
+
+  node.params = [];
+  const result = node.backward(context, [{ carried_only: ["Review."] }]);
+  expect(result.inputFeedback).toEqual({ carried_only: [["Review."]] });
+  validateBackwardResult(result, context);
+  const continuing = new BackwardContext(inputs, { inputNames: context.inputNames, nodeData: context.nodeData });
+  expect(node.backward(continuing, ["Growth is handled by its connections."])).toEqual(new BackwardResult());
+});
+
 test.each([
   ["START", new StartNode("start", { params: [new Parameter("value")] })],
   ["list END", EndNode.list("end", { n: 1 })],
@@ -253,4 +276,18 @@ test("successful null output is a bare contributor but zero output has none", ()
     result: ["Review null."],
   });
   expect(zero.backward(contextFor(zero, {}, null), ["Review null."])).toEqual(new BackwardResult());
+});
+
+test("stopped loop failure does not route an unaccepted carried output", () => {
+  const node = new LoopNode("loop", { flowId: "body", predicate: "false", maxIters: 2 });
+  node.params = [new Parameter("value")];
+  const context = new BackwardContext(
+    { value: 1n },
+    {
+      inputNames: ["value"],
+      nodeData: node.captureBackwardContext(),
+      failure: new Failure({ code: "assertion.failed", message: "Stopped output was rejected.", nodeId: node.id }),
+    },
+  );
+  expect(node.backward(context, ["Review the loop."])).toEqual(new BackwardResult());
 });

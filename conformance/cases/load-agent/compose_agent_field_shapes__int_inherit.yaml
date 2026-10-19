@@ -1,0 +1,18 @@
+kind: load
+flow: |
+  id: shapes
+  name: shapes
+  nodes:
+    a:
+      kind: agent
+      prompt: Help the user.
+      llm_config: {inherit: 0, model: m}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'': llm_config `inherit:` must be true or false, got 0'
+      frames:
+      - label: flow.yaml
+        range: [7, 17, 7, 39]

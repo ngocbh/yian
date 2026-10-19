@@ -1,0 +1,23 @@
+kind: load
+flow: |
+  id: inline-policy
+  name: inline_policy
+  nodes:
+    wrapper:
+      kind: call
+      long_term_memory: reflective
+      nodes:
+        answer:
+          kind: agent
+          prompt: answer
+          output: str
+      output: ${answer.output}
+  output: ${wrapper.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''wrapper'' (kind=call): field ''long_term_memory'' is not allowed (allowed: asserts, call, depends_on, env, input, kind, node_name, runs_after)'
+      frames:
+      - label: flow.yaml
+        range: [6, 23, 6, 33]

@@ -1,0 +1,21 @@
+kind: load
+flow: |
+  id: d
+  name: d
+  defs:
+    body:
+      llm_config: {provider: openai, project: proj-abc}
+      nodes:
+        nested: {kind: agent, prompt: hi}
+      output: ${nested.output}
+  nodes:
+    child: {kind: call, call: body}
+  output: ${child.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''body'': llm_config.project goes wherever the host''s api_key is sent; pass it with that key in the run''s llm_config, or save it with the login by `yian auth`, not in a flow file'
+      frames:
+      - label: flow.yaml
+        range: [5, 17, 5, 54]

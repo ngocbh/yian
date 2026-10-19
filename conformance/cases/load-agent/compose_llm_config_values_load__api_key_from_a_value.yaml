@@ -1,0 +1,28 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    m: !str
+    p: !str
+    t: !float
+    u: !str
+    i: !bool
+    a: !object
+    cfg: !object
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config:
+        provider: openai
+        api_key: ${input.u}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'': llm_config.api_key is a host credential; pass it in the run''s llm_config, not in a flow file'
+      frames:
+      - label: flow.yaml
+        range: [17, 16, 17, 26]

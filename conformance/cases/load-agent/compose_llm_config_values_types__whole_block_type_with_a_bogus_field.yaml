@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    BadBlock: {bogus: int}
+  input:
+    b: !BadBlock
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {anthropic: '${input.b}'}
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''chat'' llm_config.anthropic: its type declares `bogus`, which is not a field of the anthropic block'
+      frames:
+      - label: flow.yaml
+        range: [11, 29, 11, 41]

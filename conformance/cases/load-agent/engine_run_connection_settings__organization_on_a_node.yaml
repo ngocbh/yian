@@ -1,0 +1,15 @@
+kind: load
+flow: |
+  id: routed
+  name: routed
+  nodes:
+    agent: {kind: agent, prompt: hi, llm_config: {provider: openai, organization: org-abc}}
+  output: ${agent.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''agent'': llm_config.organization goes wherever the host''s api_key is sent; pass it with that key in the run''s llm_config, or save it with the login by `yian auth`, not in a flow file'
+      frames:
+      - label: flow.yaml
+        range: [4, 48, 4, 89]

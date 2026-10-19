@@ -1,0 +1,28 @@
+# the rejected value is spelled in the text form: `"on"` in TS, Python's repr in python_expect.
+kind: load
+rules: [messages]
+flow: |
+  id: shapes
+  name: shapes
+  nodes:
+    a:
+      kind: agent
+      prompt: Help the user.
+      llm_config: {inherit: on}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'': llm_config `inherit:` must be true or false, got "on"; `on` is text; write `true`'
+      frames:
+      - label: flow.yaml
+        range: [7, 17, 7, 30]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'': llm_config `inherit:` must be true or false, got ''on''; `on` is text; write `true`'
+      frames:
+      - label: flow.yaml
+        range: [7, 17, 7, 30]

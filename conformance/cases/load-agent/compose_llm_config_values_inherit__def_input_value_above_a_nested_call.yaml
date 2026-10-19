@@ -1,0 +1,29 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    inner:
+      nodes:
+        a: {kind: agent, prompt: Go.}
+      output: ${a.output}
+    outer:
+      input: {m: !str }
+      llm_config: {model: '${input.m}'}
+      nodes:
+        i: {kind: call, call: inner, input: {}}
+      output: ${i.output}
+  nodes:
+    o:
+      kind: call
+      call: outer
+      input: {m: x}
+  output: ${o.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''outer'' llm_config.model (called by node ''o''): agent ''o/i/a'' in a child flow would inherit this value, which is read only when the flow runs; pass it to the child as an input and write `${input.model}` in the child''s llm_config'
+      frames:
+      - label: flow.yaml
+        range: [10, 25, 10, 37]

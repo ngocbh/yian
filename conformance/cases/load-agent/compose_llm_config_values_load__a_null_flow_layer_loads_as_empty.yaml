@@ -1,0 +1,18 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    m: !str
+    p: !str
+    t: !float
+    u: !str
+    i: !bool
+    a: !object
+    cfg: !object
+  llm_config: null
+  nodes:
+    a: {kind: agent, prompt: Go.}
+  output: ${a.output}
+expect:
+  load: ok

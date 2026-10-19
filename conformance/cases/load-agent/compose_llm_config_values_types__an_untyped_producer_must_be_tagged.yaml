@@ -1,0 +1,21 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    pick:
+      kind: code
+      code: return "gpt-x"
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {model: '${pick.output}'}
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''chat'' llm_config.model: the value''s type isn''t known; tag it with the type it holds, e.g. `model: !str ${...}`'
+      frames:
+      - label: flow.yaml
+        range: [10, 25, 10, 41]

@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    a:
+      kind: agent
+      prompt: hi
+      output: {k: {k: {k: {k: int}}}}
+  output: ${a.output}
+env:
+  YIAN_MAX_AGENT_OUTPUT_NESTING: '3'
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'': this AGENT''s `output:` nests 4 levels, deeper than 3, the limit for a model''s structured reply (each record and list is a level); flatten it, or build the deeper value in a CODE node'
+      frames:
+      - label: flow.yaml
+        range: [7, 13, 7, 36]

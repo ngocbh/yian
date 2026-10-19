@@ -1,0 +1,37 @@
+kind: load
+flow: |
+  id: root
+  name: root
+  input:
+    x: !str
+  nodes:
+    a: {kind: call, call: lib, input: {x: "${input.x}"}}
+  output: {y: "${input.x}"}
+  uses:
+    lib: lib
+files:
+  lib.yaml: |
+    id: lib
+    name: lib
+    long_term_memory: {notes: episodic}
+    llm_config: {provider: openai, model: fake-model}
+    input:
+      x: !str
+    nodes:
+      ask:
+        kind: agent
+        long_term_memory: {notes: reflective}
+        prompt: hi
+        output: str
+    output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'memory ''lib.notes'' is declared with different type or config at lib: root and lib: root AGENT ''ask'''
+      frames:
+      - label: lib.yaml
+        range: [3, 20, 3, 25]
+      notes:
+      - 'also declared at lib: root AGENT ''ask'''
+      - related declaration at lib.yaml:10:24

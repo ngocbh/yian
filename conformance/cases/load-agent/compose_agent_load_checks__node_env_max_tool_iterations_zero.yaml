@@ -1,0 +1,19 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      output: str
+      env: {max_tool_iterations: 0}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'': `env.max_tool_iterations` must be a positive int or -1 (no cap), got 0'
+      frames:
+      - label: flow.yaml
+        range: [8, 10, 8, 34]

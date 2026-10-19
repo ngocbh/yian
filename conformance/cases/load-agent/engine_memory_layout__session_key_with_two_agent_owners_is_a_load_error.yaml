@@ -1,0 +1,27 @@
+kind: load
+flow: |
+  id: pair
+  name: pair
+  nodes:
+    left:
+      kind: agent
+      long_term_memory: session
+      prompt: hi
+      output: str
+    right:
+      kind: agent
+      long_term_memory: session
+      prompt: hi
+      output: str
+  output: ${[left.output, right.output]}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'session memory ''session'' has more than one owner: root AGENT ''left'', root AGENT ''right''; give each AGENT its own session memory'
+      frames:
+      - label: flow.yaml
+        range: [6, 23, 6, 30]
+      notes:
+      - also owned at root AGENT 'right'
+      - related declaration at flow.yaml:11:23

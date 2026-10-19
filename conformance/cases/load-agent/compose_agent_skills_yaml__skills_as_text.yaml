@@ -1,0 +1,19 @@
+kind: load
+flow: |
+  id: skills
+  name: skills
+  nodes:
+    review:
+      kind: agent
+      prompt: Review the change.
+      skills: code-review
+      output: str
+  output: ${review.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''review'' (kind=agent): `skills:` must be a list of skill names or `all`'
+      frames:
+      - label: flow.yaml
+        range: [7, 13, 7, 24]

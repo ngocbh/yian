@@ -1,0 +1,17 @@
+kind: load
+flow: |
+  id: inline-policy
+  name: inline_policy
+  nodes:
+    wrapper:
+      kind: call
+      nodes:
+        answer:
+          kind: agent
+          long_term_memory: reflective
+          prompt: answer
+          output: str
+      output: ${answer.output}
+  output: ${wrapper.output}
+expect:
+  load: ok

@@ -1,0 +1,31 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  llm_config: {model: '${input.nope}'}
+  nodes:
+    pick:
+      kind: agent
+      prompt: Pick a model.
+      output: str
+      llm_config: {model: m0}
+    open:
+      kind: agent
+      input: {x: '${pick.output}'}
+      prompt: Go ${x}.
+    fixed:
+      kind: agent
+      input: {x: '${open.output}'}
+      prompt: Go ${x}.
+      llm_config: {model: m1}
+  output: ${fixed.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'open' llm_config: reference ${input.nope} points to unknown flow input 'nope'
+      frames:
+      - label: flow.yaml
+        range: [3, 21, 3, 36]

@@ -1,0 +1,19 @@
+kind: load
+flow: |
+  id: steer
+  name: steer
+  nodes:
+    chat:
+      kind: agent
+      prompt: Help the user.
+      steerable: yes please
+      output: str
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''chat'' (kind=agent): `steerable:` must be true or false'
+      frames:
+      - label: flow.yaml
+        range: [7, 16, 7, 26]

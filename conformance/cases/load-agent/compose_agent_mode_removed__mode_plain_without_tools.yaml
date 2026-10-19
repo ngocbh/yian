@@ -1,0 +1,18 @@
+kind: load
+flow: |
+  id: removed
+  name: removed
+  nodes:
+    chat:
+      kind: agent
+      prompt: Help the user.
+      mode: plain
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''chat'': `mode:` was removed: an AGENT with tools runs the tool loop, one without tools makes a single call; delete this line'
+      frames:
+      - label: flow.yaml
+        range: [7, 5, 7, 9]

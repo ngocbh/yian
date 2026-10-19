@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    s: !str
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: ${input.s}
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''chat'' llm_config: must be a record of llm_config''s fields, but the value is str'
+      frames:
+      - label: flow.yaml
+        range: [9, 17, 9, 27]

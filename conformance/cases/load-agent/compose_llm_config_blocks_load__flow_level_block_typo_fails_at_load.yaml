@@ -1,0 +1,18 @@
+# No `message`: it is pydantic's text (with a versioned URL), which yian doesn't write.
+kind: load
+flow: |
+  id: f
+  name: f
+  llm_config:
+    provider: anthropic
+    anthropic: {max_tokns: 100, metadata: {user_id: sk-sentinel-91c4d07e}}
+  nodes:
+    a: {kind: agent, prompt: hi}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 6, 1]

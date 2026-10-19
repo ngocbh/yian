@@ -1,0 +1,19 @@
+kind: load
+flow: |
+  id: skills
+  name: skills
+  nodes:
+    review:
+      kind: agent
+      prompt: Review the change.
+      skills: [Code_Review]
+      output: str
+  output: ${review.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''review'': invalid skill name ''Code_Review'': use 1-64 lowercase letters, digits, and single hyphens'
+      frames:
+      - label: flow.yaml
+        range: [7, 13, 7, 26]

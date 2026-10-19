@@ -1,0 +1,13 @@
+kind: load
+flow: |
+  id: removed
+  name: removed
+  nodes:
+    chat:
+      kind: agent
+      prompt: Help the user.
+      steerable: true
+      output: str
+  output: ${chat.output}
+expect:
+  load: ok

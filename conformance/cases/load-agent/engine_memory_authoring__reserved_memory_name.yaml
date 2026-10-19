@@ -1,0 +1,31 @@
+kind: load
+flow: |
+  id: memory-root
+  name: memory_root
+  long_term_memory: {name: reflective}
+  nodes:
+    echo:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input: {topic: hello}
+      output: str
+  output: ${echo.output}
+python_flow: |
+  id: memory-root
+  name: memory_root
+  long_term_memory: {name: reflective}
+  nodes:
+    echo:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input: {topic: hello}
+      output: str
+  output: ${echo.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'long_term_memory name ''name'' is reserved (reserved: config, name, type)'
+      frames:
+      - label: flow.yaml
+        range: [3, 19, 3, 37]

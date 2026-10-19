@@ -1,0 +1,36 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input: {go: !bool }
+
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.go}
+          then: pick
+      else: other
+    pick:
+      kind: code
+      output: str
+      code: |
+        return "gpt-x"
+    other:
+      kind: code
+      output: str
+      code: |
+        return "no"
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {model: '${pick.output + "x"}'}
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''chat'' llm_config: ${pick.output + "x"} does arithmetic on pick.output, which is null when node ''pick'' is skipped; give it a default with :-, e.g. (pick.output :- <default>)'
+      frames:
+      - label: flow.yaml
+        range: [25, 25, 25, 47]

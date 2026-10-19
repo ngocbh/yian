@@ -1,0 +1,30 @@
+# Shared text: the template scanner quotes the template as written (templates/engine_template_scanner__unbalanced_span_raises).
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    m: !str
+    p: !str
+    t: !float
+    u: !str
+    i: !bool
+    a: !object
+    cfg: !object
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config:
+        model: 'a${b'
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'a' llm_config: unbalanced '${' in template 'a${b'
+      frames:
+      - label: flow.yaml
+        range: [16, 14, 16, 20]

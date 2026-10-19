@@ -1,0 +1,14 @@
+kind: load
+flow: |
+  id: reply
+  name: reply
+  input:
+    name: !str
+    title: !str
+    message: !str
+  output: str
+  kind: agent
+  system_prompt: "You are ${name}, ${title}. Speak as ${name} in the first person."
+  prompt: ${message}
+expect:
+  load: ok

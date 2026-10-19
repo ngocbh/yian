@@ -1,0 +1,27 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input: {proj: !str }
+  nodes:
+    up:
+      kind: code
+      output: int
+      code: "return 1"
+    ask:
+      kind: human_input
+      input:
+        proj: "${input.nope}"
+      adaptive_questions:
+        prompt: "Q ${proj}"
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'ask' input 'proj' from: reference ${input.nope} points to unknown flow input 'nope'
+      frames:
+      - label: flow.yaml
+        range: [12, 13, 12, 28]

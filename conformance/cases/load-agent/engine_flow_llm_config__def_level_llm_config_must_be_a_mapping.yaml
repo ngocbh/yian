@@ -1,0 +1,21 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    sub:
+      llm_config: gpt-5
+      nodes:
+        a: {kind: agent, prompt: hi}
+      output: ${a.output}
+  nodes:
+    s: {kind: call, call: sub}
+  output: ${s.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''sub'': llm_config must be a mapping'
+      frames:
+      - label: flow.yaml
+        range: [5, 17, 5, 22]

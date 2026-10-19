@@ -1,0 +1,18 @@
+kind: load
+flow: |
+  id: removed
+  name: removed
+  nodes:
+    chat:
+      kind: agent
+      prompt: Help the user.
+      tools: [builtin_tools]
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''chat'': builtin_tools belonged to the removed native Codex integration. Remove it and grant registered Yian tools explicitly.'
+      frames:
+      - label: flow.yaml
+        range: [7, 12, 7, 27]

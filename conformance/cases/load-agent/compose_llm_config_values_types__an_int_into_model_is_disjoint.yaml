@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    i: !int
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {model: '${input.i}'}
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''chat'' llm_config.model: must be str, but the value is int'
+      frames:
+      - label: flow.yaml
+        range: [9, 25, 9, 37]

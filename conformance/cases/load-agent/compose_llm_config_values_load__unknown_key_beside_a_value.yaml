@@ -1,0 +1,28 @@
+# No `message`: it is pydantic's text (with a versioned URL), which yian doesn't write.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    m: !str
+    p: !str
+    t: !float
+    u: !str
+    i: !bool
+    a: !object
+    cfg: !object
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config:
+        provider: ${input.p}
+        temparature: 1
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      frames:
+      - label: flow.yaml
+        range: [17, 20, 17, 21]

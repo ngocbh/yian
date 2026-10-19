@@ -15,16 +15,30 @@
  *
  * Changed: `test_referenced_hyphenated_node_names_the_id_not_split_refs` reads its flow through
  * `parseFile`, `flowNodesCursor` and `parseNodes`, where Python loads it.
+ *
+ * The harvested cases whose error `parseNodes` raises are pinned at the end, with
+ * `load-core/engine_author_id_ban__author_id_with_hash_is_loud` (from
+ * `tests/engine/test_author_id_ban.py`) and the e10 and e42 seeds; the e10 row registers the
+ * nine `ALL_KIND_NAMES` stand-ins, since its message lists them.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
+import { forget } from "../../src/defaults.ts";
 import { reprText } from "../../src/diagnostics.ts";
-import { loadError, nodesOf } from "../compose/declarations.ts";
-import { StandInAgent, StandInCode, standIn, withKinds } from "../compose/stand_ins.ts";
+import { loadError, nodesOf, runTextCase } from "../compose/declarations.ts";
+import {
+  ALL_KIND_NAMES,
+  StandInAgent,
+  StandInCode,
+  standIn,
+  withKinds,
+} from "../compose/stand_ins.ts";
+
+afterEach(() => forget());
 
 /** Parse a bare `nodes:`-body mapping with `kinds` registered. */
 function nodes(yamlText: string, kinds: readonly DescriptorClass[] = []) {
@@ -282,3 +296,12 @@ fetch:
     });
   });
 });
+
+test.each([
+  ["load-core/engine_author_id_ban__author_id_with_hash_is_loud", []],
+  ["load-core/engine_node_parse__hyphenated_node_id", []],
+  ["load-core/seed_e10_unknown_node_kind", ALL_KIND_NAMES.map((kind) => standIn(kind))],
+  ["load-core/seed_e42_removed_model_kind", []],
+] as const)("parseNodes: %s", (id, kinds) =>
+  runTextCase({ id, call: (text, label) => nodesOf(text, kinds, label) }),
+);

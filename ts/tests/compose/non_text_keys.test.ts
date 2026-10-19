@@ -3,22 +3,30 @@
  * `tests/compose/test_non_text_keys.py`, through `parseSourceDocument` (and `parseFile` +
  * `parseNodes` for the quoted-key row).
  *
- * Dropped: the date key rows (`2026-10-13` and `2026-10-13 10:00:00` are text in TS) and the
- * `!!binary` rows (the TS YAML layer refuses `!!binary`).
+ * Dropped: the date key rows (`2026-10-13` and `2026-10-13 10:00:00` are text in TS; their
+ * harvested cases check they parse, rule `dates`) and the `!!binary` rows (the TS YAML layer
+ * refuses `!!binary`).
+ *
+ * The harvested `yaml/compose_non_text_keys__*` cases are pinned at the end; the child-file case
+ * parses the child file.
  *
  * Later (T3-16): `test_case_on_needs_no_exemption`. Later (T3-22):
- * `test_the_flow_loads_with_text_names_everywhere`, `test_a_child_flow_file_reports_its_own_key`,
- * and the loading halves of `test_a_quoted_key_follows_the_usual_name_rules` and
+ * `test_the_flow_loads_with_text_names_everywhere`, the loading of
+ * `test_a_child_flow_file_reports_its_own_key`, and the loading halves of
+ * `test_a_quoted_key_follows_the_usual_name_rules` and
  * `test_words_yaml_1_1_read_as_booleans_are_text_keys`; here a quoted key and a YAML 1.1 word
  * parse with no error.
  */
 
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 
 import { parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
+import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
-import { loadError, nodesOf } from "./declarations.ts";
+import { loadError, nodesOf, runTextCase } from "./declarations.ts";
 import { StandInCode, standIn } from "./stand_ins.ts";
+
+afterEach(() => forget());
 
 const SITES = [
   "field",
@@ -234,3 +242,16 @@ test.each([
     new SourceRange(lineNumber, column, lineNumber, column + 1),
   );
 });
+
+test.each([
+  { id: "yaml/compose_non_text_keys__a_child_flow_file_reports_its_own_key", file: "child.yaml" },
+  { id: "yaml/compose_non_text_keys__boolean_key_as_a_node_id" },
+  { id: "yaml/compose_non_text_keys__date_key_in_a_record_literal" },
+  { id: "yaml/compose_non_text_keys__datetime_key" },
+  { id: "yaml/compose_non_text_keys__float_key_as_a_typedef_field" },
+  { id: "yaml/compose_non_text_keys__hex_key_is_shown_as_written" },
+  { id: "yaml/compose_non_text_keys__integer_key_as_a_flow_input" },
+  { id: "yaml/compose_non_text_keys__integer_key_in_a_tagged_value" },
+  { id: "yaml/compose_non_text_keys__null_key_in_an_x_block" },
+  { id: "yaml/compose_non_text_keys__one_then_true_reports_the_non_text_key" },
+])("parseSourceDocument: $id", (row) => runTextCase({ ...row, call: parseSourceDocument }));

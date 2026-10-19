@@ -15,18 +15,24 @@
  * it through `test_the_example_entry_loads`), and `exampleType` and `containsItself` called
  * directly.
  *
+ * The harvested `load-case/compose_value_entry_parse__*` cases are pinned at the end; each fails
+ * at its first entry, so no stand-in is registered.
+ *
  * Later (T3-22): `test_the_example_entry_loads`, which loads the example through `loadFlow`.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { containsItself, exampleType, parseNodes } from "../../src/compose/parse/nodes.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
+import { forget } from "../../src/defaults.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
-import { loadError } from "./declarations.ts";
+import { loadError, nodesOf, runTextCase } from "./declarations.ts";
 import { StandInCode, standIn, withKinds } from "./stand_ins.ts";
+
+afterEach(() => forget());
 
 const NODE_OR_VALUE =
   "node 'x': an entry in `nodes:` is a node or a value; add `kind:` for a node, " +
@@ -262,3 +268,13 @@ describe("exampleType and containsItself", () => {
     expect(containsItself("x")).toBe(false);
   });
 });
+
+test.each([
+  "load-case/compose_value_entry_parse__an_empty_entry_shows_a_null_tag",
+  "load-case/compose_value_entry_parse__an_untagged_block_list_shows_a_placeholder",
+  "load-case/compose_value_entry_parse__an_untagged_int_shows_its_tag",
+  "load-case/compose_value_entry_parse__an_untagged_list_shows_its_tag",
+  "load-case/compose_value_entry_parse__an_untagged_mixed_list_shows_list_of_any",
+  "load-case/compose_value_entry_parse__an_untagged_quoted_text_shows_its_tag",
+  "load-case/compose_value_entry_parse__reserved_ids_apply_to_a_tagged_entry",
+])("parseNodes: %s", (id) => runTextCase({ id, call: (text, label) => nodesOf(text, [], label) }));

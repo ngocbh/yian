@@ -5,13 +5,17 @@
  * `inputs:`/`outputs:` at the top level, in a node body or in a `defs:` entry is a located load
  * error naming the retirement; `input:`/`output:` is the only spelling. Python reaches the node
  * and def rows through `load_flow`; the error comes from the parse step, so TS calls `parseFile`.
+ * The harvested cases are pinned at the end.
  */
 
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 
-import { parseFile } from "../../src/compose/parse/file.ts";
+import { parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
-import { loadError } from "../compose/declarations.ts";
+import { forget } from "../../src/defaults.ts";
+import { loadError, runTextCase } from "../compose/declarations.ts";
+
+afterEach(() => forget());
 
 const NEW_ONLY = `
 id: f
@@ -172,3 +176,10 @@ output: \${c.output}
     /defs entry 'child'.*'outputs'.*rename the key/,
   );
 });
+
+test.each([
+  "load-case/engine_compose_dual_arm__legacy_def_inputs_key_is_rejected",
+  "load-case/engine_compose_dual_arm__legacy_node_inputs_key_is_rejected",
+])("parseFile: %s", (id) =>
+  runTextCase({ id, call: (text, label) => parseFile(parseSourceDocument(text, label)) }),
+);

@@ -36,7 +36,7 @@ import { siteKey } from "../../src/compose/nodes/base.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
-import { caseDocument, loadError, nodesOf } from "../compose/declarations.ts";
+import { caseDocument, caseText, loadError, nodesOf } from "../compose/declarations.ts";
 import { ALL_KIND_NAMES, StandInCode, standIn, withKinds } from "../compose/stand_ins.ts";
 
 afterEach(() => forget());
@@ -46,7 +46,7 @@ const KINDS = [StandInCode, ...ALL_KIND_NAMES.filter((k) => k !== "code").map((k
 
 /** The flow text of conformance case `id`. */
 function seed(id: string): () => string {
-  return () => caseDocument(id).case_["flow"] as string;
+  return () => caseText(id).text;
 }
 
 test.each([

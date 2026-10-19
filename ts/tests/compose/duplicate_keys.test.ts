@@ -8,13 +8,18 @@
  *
  * Later (T3-22): the compiled-nodes check of `test_merged_keys_may_be_overridden`, which loads
  * the flow; its `parseFile` half is here.
+ *
+ * The harvested `yaml/compose_duplicate_keys__*` cases are pinned at the end.
  */
 
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 
 import { parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
-import { loadError } from "./declarations.ts";
+import { forget } from "../../src/defaults.ts";
+import { loadError, runTextCase } from "./declarations.ts";
+
+afterEach(() => forget());
 
 const NODE_ID = `id: f
 name: f
@@ -159,3 +164,10 @@ output: \${a.output}
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(5);
   expect(SourceDocument.parse(text).root.child("x-meta").value).toEqual({ on: "a", true: "b" });
 });
+
+test.each([
+  "yaml/compose_duplicate_keys__on_and_true_are_two_keys_and_true_is_not_text",
+  "yaml/compose_duplicate_keys__repeated_node_id",
+  "yaml/compose_duplicate_keys__same_integer_keys_fail_as_non_text_first",
+  "yaml/compose_duplicate_keys__shared_anchor_reports_once_at_the_definition",
+])("parseSourceDocument: %s", (id) => runTextCase({ id, call: parseSourceDocument }));

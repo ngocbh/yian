@@ -9,6 +9,9 @@
  * text is pydantic's. The null and text `node_name:` rows and the null optional flow field rows
  * check the parsed value, where Python loads the flow.
  *
+ * The harvested `load-core/compose_non_text_fields__*` cases are pinned at the end of each block,
+ * by the call that raises their error; the inline-body ones are Later (T3-17).
+ *
  * Dropped: the date rows (TS reads an unquoted date as text) and
  * `test_not_text_detail_reads_the_first_string_error` (`not_text_detail` reads a pydantic error).
  *
@@ -25,13 +28,16 @@
  * `test_non_list_def_asserts_is_a_load_error`, `test_null_def_asserts_loads`).
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { notTextError } from "../../src/compose/nodes/base.ts";
-import { parseFile } from "../../src/compose/parse/file.ts";
-import { loadError, nodesOf } from "./declarations.ts";
+import { parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
+import { forget } from "../../src/defaults.ts";
+import { loadError, nodesOf, runTextCase } from "./declarations.ts";
 import { ALL_KIND_NAMES, StandInCode, standIn } from "./stand_ins.ts";
+
+afterEach(() => forget());
 
 test("notTextError names the field", () => {
   expect(notTextError("prompt", 5n)).toBe(
@@ -251,6 +257,19 @@ describe("parseFile", () => {
       "missing required top-level key 'nodes'",
     );
   });
+
+  test.each([
+    "load-core/compose_non_text_fields__missing_nodes_keeps_the_schema_error",
+    "load-core/compose_non_text_fields__non_text_compact_id",
+    "load-core/compose_non_text_fields__non_text_compact_kind",
+    "load-core/compose_non_text_fields__non_text_flow_assert",
+    "load-core/compose_non_text_fields__non_text_flow_version",
+    "load-core/compose_non_text_fields__null_compact_id",
+    "load-core/compose_non_text_fields__null_compact_kind",
+    "load-core/compose_non_text_fields__null_flow_id",
+  ])("case %s", (id) =>
+    runTextCase({ id, call: (text, label) => parseFile(parseSourceDocument(text, label)) }),
+  );
 });
 
 describe("parseNodes", () => {
@@ -303,4 +322,11 @@ describe("parseNodes", () => {
     expect(error.message).toContain("`asserts:` must be a list of strings");
     expect(startLine(error)).toBe(lineOf(text, "asserts: "));
   });
+
+  test.each([
+    ["load-core/compose_non_text_fields__non_text_kind", ALL_KINDS],
+    ["load-core/compose_non_text_fields__null_kind", []],
+  ] as const)("case %s", (id, kinds) =>
+    runTextCase({ id, call: (text, label) => nodesOf(text, kinds, label) }),
+  );
 });

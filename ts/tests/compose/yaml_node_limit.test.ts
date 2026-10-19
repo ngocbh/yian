@@ -5,18 +5,22 @@
  * Every mapping, list, and scalar node (mapping keys included) counts once per place it
  * appears, so an alias, and a `<<:` merge source, counts every node it names again. The
  * `load_flow` cases, with their frames, come with the loader; here each text is composed
- * directly, and the error node's line stands in for the frame's line.
+ * directly, and the error node's line stands in for the frame's line. The harvested cases are
+ * pinned at the end through `parseSourceDocument`, with the TS message (the cases leave Python's
+ * out).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { isAlias, isMap, isNode, isSeq, type Node, type YAMLSeq } from "yaml";
 
+import { parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { SourceSyntaxError } from "../../src/compose/source/common.ts";
 import { SourceDocument } from "../../src/compose/source/document.ts";
 import { parseYamlLiteral, readPlainScalar } from "../../src/compose/source/literals.ts";
 import { composeFlowDocument, FlowLoaderError } from "../../src/compose/source/scalars.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
 import { isRecord } from "../../src/typesys/index.ts";
+import { runTextCase } from "./declarations.ts";
 
 const MAX_YAML_NODES = BUILTIN.maxYamlNodes;
 
@@ -436,3 +440,20 @@ function overNodeLimit(text: string): boolean {
   }
   return false;
 }
+
+/** The TS message for a `kind` holding more YAML nodes than the default limit. */
+function nodeLimitMessage(kind: string): string {
+  return (
+    `invalid YAML: this ${kind} holds more than 100000 YAML nodes, counting each alias as a ` +
+    "copy of what it names; the limit for a YAML document is 100000 (YIAN_MAX_YAML_NODES; each " +
+    "mapping, list, and scalar is a node)"
+  );
+}
+
+test.each([
+  ["yaml/compose_yaml_node_limit__cut_short_count_not_reused_outside_the_cycle", "list"],
+  ["yaml/compose_yaml_node_limit__doubling_aliases_fail_fast", "list"],
+  ["yaml/compose_yaml_node_limit__exponential_nodes_inside_a_cycle", "mapping"],
+])("parseSourceDocument: %s", (id, kind) => {
+  runTextCase({ id, call: parseSourceDocument, message: nodeLimitMessage(kind) });
+});

@@ -12,16 +12,23 @@
  *
  * Later (T3-22): `test_compact_code_runs`, `test_compact_record_output_runs`, which run flows,
  * and the compiled-nodes check of `test_full_form_flow_id_may_keep_hyphens`.
+ *
+ * The harvested cases whose error `parseFile` raises are pinned at the end, with
+ * `load-types/compose_tagged_inputs__compact_input_list_shows_the_tagged_spelling` (from
+ * `tests/compose/test_tagged_inputs.py`).
  */
 
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 
 import { siteKey } from "../../src/compose/nodes/base.ts";
 import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
+import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
-import { loadError } from "../compose/declarations.ts";
+import { loadError, runTextCase } from "../compose/declarations.ts";
 import { StandInCode, withKinds } from "../compose/stand_ins.ts";
+
+afterEach(() => forget());
 
 const COMPACT_CODE = `
 id: echo_one
@@ -178,3 +185,12 @@ output: \${greet.output}
   expect(f.id).toBe("hello-agent");
   expect(Object.keys(f.nodes)).toEqual(["greet"]);
 });
+
+test.each([
+  "load-core/engine_compact__compact_digit_id_rejected_without_parser_dump",
+  "load-core/engine_compact__compact_model_kind_is_removed",
+  "load-core/engine_compact__compact_rejects_non_leaf_kind",
+  "load-types/compose_tagged_inputs__compact_input_list_shows_the_tagged_spelling",
+])("parseFile: %s", (id) =>
+  runTextCase({ id, call: (text, label) => parseFile(parseSourceDocument(text, label)) }),
+);

@@ -15,6 +15,9 @@
  *
  * TS-only: the messages of the schema rows, whose Python text is pydantic's except for a text
  * field read as non-text, and the tagged recursive-alias row.
+ *
+ * Held here until T3-22: the harvested cases at the end, whose error `parseSourceDocument` or
+ * `parseFile` raises, each group under a comment naming the Python file it comes from.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -23,7 +26,7 @@ import { LoadError } from "../../src/compose/helpers/errors.ts";
 import { ComposeFile, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
-import { caseDocument, loadError } from "../compose/declarations.ts";
+import { caseDocument, loadError, runTextCase, type TextCaseRow } from "../compose/declarations.ts";
 
 afterEach(() => forget());
 
@@ -190,3 +193,41 @@ test("a flow parses an optional version", () => {
 test("a flow's version defaults to null", () => {
   expect(parseFile("id: x\nname: x\nnodes:\n  a: {kind: code, code: m:f}\n").version).toBeNull();
 });
+
+// ---------- harvested cases ----------
+
+test.each<Omit<TextCaseRow, "call">>([
+  // tests/compose/test_unbuildable_scalars.py
+  { id: "yaml/compose_unbuildable_scalars__a_case_when" },
+  { id: "yaml/compose_unbuildable_scalars__a_uses_file", file: "child.yaml" },
+  { id: "yaml/compose_unbuildable_scalars__day_out_of_range" },
+  { id: "yaml/compose_unbuildable_scalars__hour_out_of_range" },
+  { id: "yaml/compose_unbuildable_scalars__month_out_of_range" },
+  { id: "yaml/compose_unbuildable_scalars__offset_minutes_out_of_range" },
+  { id: "yaml/compose_unbuildable_scalars__tagged_input_default" },
+  { id: "yaml/compose_unbuildable_scalars__year_zero" },
+  // tests/engine/test_long_int_literals.py
+  { id: "yaml/engine_long_int_literals__long_int_literal" },
+  // tests/engine/test_limit_overrides.py; the case leaves out Python's message.
+  {
+    id: "load-core/engine_limit_overrides__yaml_nesting_follows_the_variable",
+    message:
+      "invalid YAML: this list nests deeper than 5 levels, the limit for a YAML document " +
+      "(each mapping and list is a level; a yian value nests at most 4); flatten it",
+  },
+  // tests/engine/test_uses_files.py
+  { id: "load-core/engine_uses_files__malformed_external_child", file: "child.yaml" },
+  // A sample case of the case format, with no Python test.
+  { id: "yaml/unclosed_flow_sequence" },
+])("parseSourceDocument: $id", (row) => runTextCase({ ...row, call: parseSourceDocument }));
+
+test.each([
+  // tests/engine/test_surface_vocab_golden.py
+  "load-core/engine_surface_vocab_golden__legacy_inputs_section",
+  // tests/seeds/errors/
+  "load-core/seed_e09_unknown_top_level_key",
+  // tests/engine/test_memory_authoring.py
+  "load-agent/engine_memory_authoring__retired_memory_policy_at_the_root",
+])("parseFile: %s", (id) =>
+  runTextCase({ id, call: (text, label) => parseFile(parseSourceDocument(text, label)) }),
+);

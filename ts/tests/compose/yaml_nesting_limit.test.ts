@@ -2,8 +2,9 @@
  * YAML nested past the loader's limit is a located error: a port of
  * `tests/compose/test_yaml_nesting_limit.py`.
  *
- * The `load_flow` cases come with the loader. TS-era additions: the first problem in the
- * text wins over a later one, and aliases resolve in the composed tree.
+ * The `load_flow` cases come with the loader; the harvested one is pinned at the end through
+ * `parseSourceDocument`, with the TS message (the case leaves Python's out). TS-era additions:
+ * the first problem in the text wins over a later one, and aliases resolve in the composed tree.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -18,6 +19,7 @@ import {
   type YAMLSeq,
 } from "yaml";
 
+import { parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { SourceSyntaxError } from "../../src/compose/source/common.ts";
 import { SourceDocument } from "../../src/compose/source/document.ts";
 import { parseYamlLiteral } from "../../src/compose/source/literals.ts";
@@ -25,6 +27,7 @@ import { composeFlowDocument, FlowLoaderError } from "../../src/compose/source/s
 import { BUILTIN, install } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import type { Value } from "../../src/typesys/index.ts";
+import { runTextCase } from "./declarations.ts";
 
 const MAX_YAML_NESTING = BUILTIN.maxYamlNesting;
 const MAX_VALUE_NESTING = BUILTIN.maxValueNesting;
@@ -248,4 +251,14 @@ test("the options reach the parser", () => {
   composeFlowDocument("a: 1\nb: 2\n", { lineCounter });
 
   expect(lineCounter.linePos(5)).toEqual({ line: 2, col: 1 });
+});
+
+test("parseSourceDocument: yaml/compose_yaml_nesting_limit__600_levels_is_located", () => {
+  runTextCase({
+    id: "yaml/compose_yaml_nesting_limit__600_levels_is_located",
+    call: parseSourceDocument,
+    message:
+      "invalid YAML: this list nests deeper than 200 levels, the limit for a YAML document " +
+      "(each mapping and list is a level; a yian value nests at most 100); flatten it",
+  });
 });

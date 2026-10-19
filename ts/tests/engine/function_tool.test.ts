@@ -1349,6 +1349,15 @@ describe("tool() results", () => {
     );
     expect(thrown.message).toBe("tool 'x' result: the output validator threw: bad");
     expect(thrown.cause).toBe("bad");
+    // A thrown value `String` can't convert is named by its type.
+    const bare = Object.create(null) as object;
+    const opaque = await checkFailure(
+      handReturning(() => {
+        throw bare;
+      }),
+    );
+    expect(opaque.message).toBe("tool 'x' result: the output validator threw: object");
+    expect(opaque.cause).toBe(bare);
     const none = await checkFailure(handReturning(() => undefined));
     expect(none.message).toBe("tool 'x' result: the output validator returned undefined, not a Standard Schema result");
   });

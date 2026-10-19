@@ -813,7 +813,14 @@ export class ToolSet {
         if (error instanceof ToolCheckError) throw error;
         // `execute` has run, so a retry would repeat it: any other throw here, from the validator
         // or from reading its result, fails the call for good.
-        const message = error instanceof Error ? error.message : String(error);
+        let message: string;
+        try {
+          message = error instanceof Error ? error.message : String(error);
+        } catch {
+          // A thrown value `String` can't convert (a null-prototype object) must not escape as a
+          // retried TypeError.
+          message = jsTypeName(error);
+        }
         throw new ToolCheckError(`${where}: the output validator threw: ${message}`, { cause: error });
       }
       // The validator's output is what yian records, so it must be a yian value too.

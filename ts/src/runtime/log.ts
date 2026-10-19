@@ -23,7 +23,7 @@ import {
   validateMutations,
 } from "../memory/contracts.ts";
 import { BackwardResult, copyBackwardValue, retainFailure } from "../nodes/base.ts";
-import { comparePaths, isExactly } from "../nodes/contracts.ts";
+import { comparePaths, isExactly, sameItems } from "../nodes/contracts.ts";
 import { type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import {
   buildValue,
@@ -208,8 +208,9 @@ export class RunStartedRecord {
    * copied into frozen arrays that hold the given carriers. JSON fields keep `±Infinity` and read
    * `-0` back as `0`.
    *
-   * @throws TypeError when the fingerprint isn't a string, `numWorkers` isn't a safe integer,
-   *   `learnable` isn't a boolean, the memory fields aren't arrays of exactly their carrier
+   * @throws TypeError when the fingerprint isn't a string, the wiring override, the agent
+   *   configuration or one agent's configuration isn't a JSON object, `numWorkers` isn't a safe
+   *   integer, `learnable` isn't a boolean, the memory fields aren't arrays of exactly their carrier
    *   class, `defaults` isn't a plain object of `bigint`s, or `callTimeLlm` or one of its parts
    *   isn't a plain object.
    * @throws RangeError when the fingerprint isn't 64 lowercase hex digits, `numWorkers` is
@@ -230,14 +231,21 @@ export class RunStartedRecord {
       callTimeLlm = null,
     } = fields;
     this.flowFingerprint = requireSha256(fields.flowFingerprint, "flow_fingerprint");
-    const pool = encodePool(decodePool(fields.initialPool));
-    this.initialPool = freezeParsed(pool as unknown as JsonObject) as unknown as PoolWire;
-    this.startWiringOverride = freezeParsed(
-      canonicalCopy(jsonPart(fields.startWiringOverride, [], "mapping")) as JsonObject,
-    );
-    this.effectiveLlmByStaticPath = freezeParsed(
-      canonicalCopy(jsonPart(fields.effectiveLlmByStaticPath, [], "mapping")) as JsonObject,
-    ) as Readonly<Record<string, Readonly<JsonObject>>>;
+    // Decoding only validates: a decoded pool writes back exactly this canonical copy.
+    const pool = canonicalCopy(fields.initialPool);
+    VariablePool.fromWire(pool);
+    this.initialPool = freezeParsed(pool) as unknown as PoolWire;
+    const wiring = canonicalCopy(jsonPart(fields.startWiringOverride, [], "mapping"));
+    if (!isRecord(wiring)) throw new TypeError("start_wiring_override must be a mapping");
+    this.startWiringOverride = freezeParsed(wiring);
+    const llm = canonicalCopy(jsonPart(fields.effectiveLlmByStaticPath, [], "mapping"));
+    if (!isRecord(llm)) throw new TypeError("effective_llm_by_static_path must be a mapping");
+    for (const [path, config] of Object.entries(llm)) {
+      if (!isRecord(config)) {
+        throw new TypeError(`effective_llm_by_static_path value for ${reprText(path)} must be a mapping`);
+      }
+    }
+    this.effectiveLlmByStaticPath = freezeParsed(llm) as Readonly<Record<string, Readonly<JsonObject>>>;
     this.numWorkers = validatedCount(fields.numWorkers, "num_workers");
     [this.memories, this.memoryStacks, this.memorySnapshots] = validatedRunMemoryConfiguration(
       memories,
@@ -545,11 +553,8 @@ function validatedAttemptId(attemptId: unknown): number {
  */
 function validatedAttributedResults(results: unknown): readonly AttributedBackwardResult[] {
   if (!isList(results)) throw new TypeError("attributed_results must be an array");
-  const items = [...results];
-  if (!items.every((item) => isExactly(item, AttributedBackwardResult))) {
-    throw new TypeError("attributed_results require exact AttributedBackwardResult values");
-  }
-  return Object.freeze(items);
+  const message = "attributed_results require exact AttributedBackwardResult values";
+  return exactItems(results, AttributedBackwardResult, message);
 }
 
 /** Start one backward attempt with detached ordinary root feedback. Frozen. */
@@ -606,11 +611,7 @@ export class BackwardReadyRecord {
     this.rootResult = rootResult;
     this.attributedResults = validatedAttributedResults(attributedResults);
     if (!isList(proposals)) throw new TypeError("proposals must be an array");
-    const items = [...proposals];
-    if (!items.every((proposal) => isExactly(proposal, MemoryProposal))) {
-      throw new TypeError("proposals require exact MemoryProposal values");
-    }
-    this.proposals = Object.freeze(items);
+    this.proposals = exactItems(proposals, MemoryProposal, "proposals require exact MemoryProposal values");
     Object.freeze(this);
   }
 }
@@ -824,6 +825,22 @@ function validatedCapture(capture: unknown): ForwardCapture | null {
   return capture;
 }
 
+/**
+ * Return a frozen copy of `items` when each is exactly a `cls` instance, kept by reference.
+ *
+ * @throws TypeError with `message` otherwise.
+ */
+function exactItems<T>(
+  items: readonly unknown[],
+  cls: abstract new (...args: never[]) => T,
+  message: string,
+): readonly T[] {
+  // Spread, so a hole of a sparse array reads as `undefined` and is refused.
+  const copy = [...items];
+  if (!copy.every((item) => isExactly(item, cls))) throw new TypeError(message);
+  return Object.freeze(copy as T[]);
+}
+
 /** Whether `items` are in strictly increasing order by `compare`: sorted and unique. */
 function strictlyIncreasing<T>(items: readonly T[], compare: (a: T, b: T) => number): boolean {
   return items.every((item, index) => index === 0 || compare(items[index - 1]!, item) < 0);
@@ -853,36 +870,31 @@ function validatedRunMemoryConfiguration(
   if (!isList(memories) || !isList(stacks) || !isList(snapshots)) {
     throw new TypeError("memories, memory_stacks and memory_snapshots must be arrays when recorded");
   }
-  const specs = [...memories];
-  if (!specs.every((spec) => isExactly(spec, MemorySpec))) {
-    throw new TypeError("memories items must be MemorySpec values");
-  }
+  const specs = exactItems(memories, MemorySpec, "memories items must be MemorySpec values");
   const keys = specs.map((spec) => spec.key);
   if (!strictlyIncreasing(keys, compareCodeUnits)) throw new RangeError("memories keys must be sorted and unique");
-  const envelopes = [...snapshots];
-  if (!envelopes.every((snapshot) => isExactly(snapshot, MemorySnapshotEnvelope))) {
-    throw new TypeError("memory_snapshots items must be MemorySnapshotEnvelope values");
-  }
+  const envelopes = exactItems(
+    snapshots,
+    MemorySnapshotEnvelope,
+    "memory_snapshots items must be MemorySnapshotEnvelope values",
+  );
   const snapshotKeys = envelopes.map((snapshot) => snapshot.memory);
   if (!strictlyIncreasing(snapshotKeys, compareCodeUnits)) {
     throw new RangeError("memory_snapshots memory keys must be sorted and unique");
   }
-  if (snapshotKeys.length !== keys.length || snapshotKeys.some((key, index) => key !== keys[index])) {
+  if (!sameItems(snapshotKeys, keys)) {
     throw new RangeError("memory_snapshots memory keys must equal memories keys");
   }
-  const keyStacks = [...stacks];
-  if (!keyStacks.every((stack) => isExactly(stack, MemoryStack))) {
-    throw new TypeError("memory_stacks items must be MemoryStack values");
-  }
+  const keyStacks = exactItems(stacks, MemoryStack, "memory_stacks items must be MemoryStack values");
   if (!strictlyIncreasing(keyStacks.map((stack) => stack.locator), comparePaths)) {
     throw new RangeError("memory_stacks locators must be sorted and unique");
   }
   const known = new Set(keys);
-  const unknown = [...new Set(keyStacks.flatMap((stack) => stack.memories))].filter((key) => !known.has(key));
-  if (unknown.length > 0) {
-    throw new RangeError(`memory_stacks name unknown memory keys: ${writeAsText(unknown.sort(compareCodeUnits))}`);
+  const unknownKeys = [...new Set(keyStacks.flatMap((stack) => stack.memories))].filter((key) => !known.has(key));
+  if (unknownKeys.length > 0) {
+    throw new RangeError(`memory_stacks name unknown memory keys: ${writeAsText(unknownKeys.sort(compareCodeUnits))}`);
   }
-  return [Object.freeze(specs), Object.freeze(keyStacks), Object.freeze(envelopes)];
+  return [specs, keyStacks, envelopes];
 }
 
 /**

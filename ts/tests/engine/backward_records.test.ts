@@ -61,8 +61,7 @@ function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeErro
   } catch (error) {
     caught = error;
   }
-  expect(caught).toBeInstanceOf(cls);
-  expect((caught as Error).constructor).toBe(cls);
+  expect((caught as Error | undefined)?.constructor).toBe(cls);
   expect((caught as Error).message).toBe(message);
 }
 

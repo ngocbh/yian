@@ -18,10 +18,12 @@
  * rows (an unknown reason, an empty or repeated node id, a non-text message; no node ids is
  * valid); a failure without a node id, an evidence or capture of another class, a bad worker
  * count, digest, commit target, handle, spawner id, typed-value wire or envelope seq, refused by
- * the record's constructor; a bad flow fingerprint, run-start worker count, initial pool or start
- * wiring override, commit identity, mutation batch or failure, and a backward carrier of another
- * class, refused by the run-start, memory-commit and backward records; `RUN_RECORD_TYPES`;
- * carriers held by reference and failures and values held as frozen copies.
+ * the record's constructor; a bad flow fingerprint, run-start worker count or initial pool, a
+ * start wiring override holding NaN, a wiring override, agent configuration or one agent's
+ * configuration that isn't a JSON object, a bad commit identity, mutation batch or failure, and
+ * a backward carrier of another class, refused by the run-start, memory-commit and backward
+ * records; `RUN_RECORD_TYPES`; carriers held by reference and failures and values held as
+ * frozen copies.
  *
  * Changed:
  * - `test_encode_validates_programmatically_constructed_envelopes`: the record's constructor
@@ -550,6 +552,24 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
     () => runStarted({ startWiringOverride: { x: [NaN] } }),
     TypeCheckError,
     "NaN is not a yian value",
+  ],
+  [
+    "a start wiring override that isn't an object",
+    () => runStarted({ startWiringOverride: [] as never }),
+    TypeError,
+    "start_wiring_override must be a mapping",
+  ],
+  [
+    "an agent configuration that isn't an object",
+    () => runStarted({ effectiveLlmByStaticPath: "openai" as never }),
+    TypeError,
+    "effective_llm_by_static_path must be a mapping",
+  ],
+  [
+    "one agent's configuration that isn't an object",
+    () => runStarted({ effectiveLlmByStaticPath: { agent: ["openai"] as never } }),
+    TypeError,
+    "effective_llm_by_static_path value for 'agent' must be a mapping",
   ],
   [
     "an empty commit memory",

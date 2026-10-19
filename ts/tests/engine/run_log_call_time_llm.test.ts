@@ -7,7 +7,7 @@
  * each message and class pinned; Python matches `call_time_llm` only).
  *
  * TS-only: the copy is deep-frozen with its keys in code-unit order, `-0` becomes `0`; omitted, the
- * field is `null`; the NaN row's `cause` is the value layer's `TypeCheckError`.
+ * field is `null`; a NaN refusal's `cause` is the value layer's `TypeCheckError`.
  *
  * Changed:
  * - `test_the_schema_stays_nine`: TS writes schema 10, so the constant is 10 (its encoded half
@@ -132,6 +132,14 @@ test.each<[string, unknown, new (...args: never[]) => Error, string]>([
     "RunStarted call_time_llm: NaN is not a yian value",
   ],
 ])("a malformed record is rejected: %s", (_name, value, cls, message) => {
-  const caught = expectError(() => record(value), cls, message);
-  if (message.endsWith("NaN is not a yian value")) expect(caught.cause).toBeInstanceOf(TypeCheckError);
+  expectError(() => record(value), cls, message);
+});
+
+test("a NaN in the record keeps the value layer's error as its cause", () => {
+  const caught = expectError(
+    () => record({ ...CALL_TIME, agents: { chat: { temperature: NaN } } }),
+    RangeError,
+    "RunStarted call_time_llm: NaN is not a yian value",
+  );
+  expect(caught.cause).toBeInstanceOf(TypeCheckError);
 });

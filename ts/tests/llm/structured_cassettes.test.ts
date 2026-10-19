@@ -11,7 +11,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { BearerAuth, SubscriptionAuth } from "../../src/llm/auth.ts";
-import { callWithRetries, RouteModel } from "../../src/llm/executor.ts";
+import type { ErrorKind } from "../../src/llm/errors.ts";
+import { callWithRetries, type RetryInfo, RouteModel } from "../../src/llm/executor.ts";
 import { Message, Request, TextPart } from "../../src/llm/messages.ts";
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { OpenAIResponses } from "../../src/llm/protocols/openai_responses.ts";
@@ -125,67 +126,75 @@ interface Scenario {
   block?: JsonObject;
   /** The retry budget `callWithRetries` gets; 0 when absent. */
   budget?: number;
+  /** The kinds of the errors `callWithRetries` retried, in order; none when absent. */
+  retried?: ErrorKind[];
 }
 
-const responses = (schema: string, expected: Expected, block?: JsonObject): Scenario => ({
-  family: "responses",
-  provider: "openai",
-  model: "gpt-5.5",
-  schema,
-  strategy: "forced_tool",
-  expected,
-  block,
-});
-const chat = (provider: string, model: string, strategy: Strategy, expected: Expected = { value: REC }): Scenario => ({
-  family: "chat",
-  provider,
-  model,
-  schema: "corpus:Rec",
-  strategy,
-  expected,
-});
+/** A scenario on `family`'s route to `provider`, `extra` adding its block, budget or retries. */
+const scenario = (
+  family: Scenario["family"],
+  provider: string,
+  model: string,
+  schema: string,
+  strategy: Strategy,
+  expected: Expected,
+  extra: Partial<Scenario> = {},
+): Scenario => ({ family, provider, model, schema, strategy, expected, ...extra });
 
 const SCENARIOS: Record<string, Scenario> = {
-  r_forced_closed: responses("corpus:Rec", { value: REC }),
+  r_forced_closed: scenario("responses", "openai", "gpt-5.5", "corpus:Rec", "forced_tool", { value: REC }),
   // The open schema's tool is sent with `strict: false`.
-  r_forced_open: responses("corpus:Open", { value: OPEN }),
-  r_union: responses("corpus:Union", { value: UNION }),
+  r_forced_open: scenario("responses", "openai", "gpt-5.5", "corpus:Open", "forced_tool", { value: OPEN }),
+  r_union: scenario("responses", "openai", "gpt-5.5", "corpus:Union", "forced_tool", { value: UNION }),
   // The block's `text.verbosity` is sent and no `text.format` joins it.
-  r_block_text: responses("corpus:Rec", { value: REC }, { text: { verbosity: "low" } }),
-  r_no_call: responses("corpus:Rec", MISSING),
-  r_two_calls: responses("corpus:Rec", { value: { answer: "first", score: 1n } }),
-  r_other_tool_first: responses("corpus:Rec", { value: REC }),
-  r_invalid_then_valid: responses("corpus:Rec", { value: REC }),
+  r_block_text: scenario("responses", "openai", "gpt-5.5", "corpus:Rec", "forced_tool", { value: REC }, {
+    block: { text: { verbosity: "low" } },
+  }),
+  r_no_call: scenario("responses", "openai", "gpt-5.5", "corpus:Rec", "forced_tool", MISSING),
+  r_two_calls: scenario("responses", "openai", "gpt-5.5", "corpus:Rec", "forced_tool", {
+    value: { answer: "first", score: 1n },
+  }),
+  r_other_tool_first: scenario("responses", "openai", "gpt-5.5", "corpus:Rec", "forced_tool", { value: REC }),
+  r_invalid_then_valid: scenario("responses", "openai", "gpt-5.5", "corpus:Rec", "forced_tool", { value: REC }),
   // The arguments come back as sent: the caller validates them.
-  r_bad_args: responses("corpus:Rec", { value: { answer: "x", score: "notint" } }),
+  r_bad_args: scenario("responses", "openai", "gpt-5.5", "corpus:Rec", "forced_tool", {
+    value: { answer: "x", score: "notint" },
+  }),
   // The schema's description is the tool's.
-  r_reflection: responses("corpus:_ReflectionResponse", {
+  r_reflection: scenario("responses", "openai", "gpt-5.5", "corpus:_ReflectionResponse", "forced_tool", {
     value: { actions: [{ action: "add", lesson_id: null, text: "be terse" }] },
   }),
-  sub_forced_closed: { ...responses("corpus:Rec", { value: REC }), family: "subscription" },
-  sub_forced_open: { ...responses("corpus:Open", { value: OPEN }), family: "subscription" },
-  x_forced_closed: chat("xai", "grok-4", "forced_tool"),
+  sub_forced_closed: scenario("subscription", "openai", "gpt-5.5", "corpus:Rec", "forced_tool", { value: REC }),
+  sub_forced_open: scenario("subscription", "openai", "gpt-5.5", "corpus:Open", "forced_tool", { value: OPEN }),
+  x_forced_closed: scenario("chat", "xai", "grok-4", "corpus:Rec", "forced_tool", { value: REC }),
   // Chat Completions sends the open schema's tool with no `strict`.
-  x_forced_open: { ...chat("xai", "grok-4", "forced_tool", { value: OPEN }), schema: "corpus:Open" },
-  x_union: { ...chat("xai", "grok-4", "forced_tool", { value: UNION }), schema: "corpus:Union" },
-  x_no_call: chat("xai", "grok-4", "forced_tool", MISSING),
+  x_forced_open: scenario("chat", "xai", "grok-4", "corpus:Open", "forced_tool", { value: OPEN }),
+  x_union: scenario("chat", "xai", "grok-4", "corpus:Union", "forced_tool", { value: UNION }),
+  x_no_call: scenario("chat", "xai", "grok-4", "corpus:Rec", "forced_tool", MISSING),
   // No `tool_choice`, `parallel_tool_calls: false`.
-  ds_reasoner_unforced: chat("deepseek", "deepseek-reasoner", "unforced_tool"),
-  ds_chat_forced: chat("deepseek", "deepseek-chat", "forced_tool"),
+  ds_reasoner_unforced: scenario("chat", "deepseek", "deepseek-reasoner", "corpus:Rec", "unforced_tool", {
+    value: REC,
+  }),
+  ds_chat_forced: scenario("chat", "deepseek", "deepseek-chat", "corpus:Rec", "forced_tool", { value: REC }),
   // MiniMax's route sends `reasoning_split: true`.
-  mm_m27_unforced: chat("minimax", "MiniMax-M2.7", "unforced_tool"),
+  mm_m27_unforced: scenario("chat", "minimax", "MiniMax-M2.7", "corpus:Rec", "unforced_tool", { value: REC }),
   // The model name decides, whatever the route.
-  vllm_ds_name: chat("vllm", "deepseek-reasoner", "unforced_tool"),
-  or_ds_prefixed: chat("openrouter", "deepseek/deepseek-r1", "forced_tool"),
+  vllm_ds_name: scenario("chat", "vllm", "deepseek-reasoner", "corpus:Rec", "unforced_tool", { value: REC }),
+  or_ds_prefixed: scenario("chat", "openrouter", "deepseek/deepseek-r1", "corpus:Rec", "forced_tool", {
+    value: REC,
+  }),
   // A MiniMax model off MiniMax's route sends no `reasoning_split`.
-  qwen_minimax_name: chat("qwen", "MiniMax-M2.5", "unforced_tool"),
+  qwen_minimax_name: scenario("chat", "qwen", "MiniMax-M2.5", "corpus:Rec", "unforced_tool", { value: REC }),
   // Truncated arguments leave the call unparsed.
-  chat_invalid_args: chat("xai", "grok-4", "forced_tool", MISSING),
-  chat_other_tool_first: chat("xai", "grok-4", "forced_tool"),
+  chat_invalid_args: scenario("chat", "xai", "grok-4", "corpus:Rec", "forced_tool", MISSING),
+  chat_other_tool_first: scenario("chat", "xai", "grok-4", "corpus:Rec", "forced_tool", { value: REC }),
   // `[1, 2]` is no JSON object.
-  chat_nonobject_args: chat("xai", "grok-4", "forced_tool", MISSING),
+  chat_nonobject_args: scenario("chat", "xai", "grok-4", "corpus:Rec", "forced_tool", MISSING),
   // The first attempt's stream is cut short; the retry's reply is parsed.
-  x_stream_retry: { ...chat("xai", "grok-4", "forced_tool"), budget: 1 },
+  x_stream_retry: scenario("chat", "xai", "grok-4", "corpus:Rec", "forced_tool", { value: REC }, {
+    budget: 1,
+    retried: ["incomplete"],
+  }),
 };
 
 /** Build a scenario's model, as the Responses and Chat cassette tests build theirs. */
@@ -218,14 +227,14 @@ function buildModel(scenario: Scenario, send: Send): RouteModel {
   return new RouteModel({ route, protocol: new OpenAIResponses({ model, provider, block, subscription }), send });
 }
 
-/** Return what `fn` throws, or `undefined`. */
-function thrown(fn: () => unknown): unknown {
+/** Return the error `run` throws, failing when it returns. */
+function thrown(run: () => unknown): Error {
   try {
-    fn();
+    run();
   } catch (error) {
-    return error;
+    return error as Error;
   }
-  return undefined;
+  throw new Error("expected an error");
 }
 
 const REQUEST = new Request({
@@ -235,40 +244,48 @@ const REQUEST = new Request({
   ],
 });
 
-describe("structured output cassettes", () => {
-  test.each(Object.entries(SCENARIOS))("%s", async (name, scenario) => {
-    const cassette = loadCassette(join(DIR, `${name}.json`));
-    const replay = new CassetteReplay(cassette);
-    const model = buildModel(scenario, replay.send);
+/** Replay a scenario's cassette: check the plan's strategy, the retries, and what the reply parses to. */
+async function runScenario(name: string, scenario: Scenario): Promise<void> {
+  const cassette = loadCassette(join(DIR, `${name}.json`));
+  const replay = new CassetteReplay(cassette);
+  const model = buildModel(scenario, replay.send);
 
-    const plan = planStructured(structuredTarget(model), SCHEMAS[scenario.schema]!);
-    expect(plan.strategy).toBe(scenario.strategy);
-    const response = await callWithRetries(model, plan.apply(REQUEST), {
-      budget: scenario.budget ?? 0,
-      scheduler: virtualScheduler(),
-      random: () => 0,
-    });
-    replay.assertDone();
-
-    const { expected } = scenario;
-    if ("value" in expected) {
-      expect(plan.parse(response)).toEqual(expected.value);
-    } else {
-      const error = thrown(() => plan.parse(response)) as Error;
-      expect(error).toBeInstanceOf(expected.error);
-      expect(error.name).toBe(expected.error.name);
-      expect(error.message).toBe(expected.message);
-    }
-
-    // CassetteReplay checks that every recorded header was sent; this checks the reverse.
-    replay.requests.forEach((received, index) => {
-      const recorded = Object.keys(cassette.interactions[index]!.request.headers ?? {}).map((each) =>
-        each.toLowerCase(),
-      );
-      const sent = [...received.headers.keys()].filter((each) => !IGNORED_HEADERS.has(each));
-      expect(sent.filter((each) => !recorded.includes(each))).toEqual([]);
-    });
+  const plan = planStructured(structuredTarget(model), SCHEMAS[scenario.schema]!);
+  expect(plan.strategy).toBe(scenario.strategy);
+  const retried: RetryInfo[] = [];
+  const response = await callWithRetries(model, plan.apply(REQUEST), {
+    budget: scenario.budget ?? 0,
+    scheduler: virtualScheduler(),
+    random: () => 0,
+    onRetry: (retry) => void retried.push(retry),
   });
+  replay.assertDone();
+  expect(retried.map((retry) => retry.error.kind)).toEqual(scenario.retried ?? []);
+
+  const { expected } = scenario;
+  if ("value" in expected) {
+    expect(plan.parse(response)).toEqual(expected.value);
+  } else {
+    const error = thrown(() => plan.parse(response));
+    expect(error).toBeInstanceOf(expected.error);
+    expect(error.name).toBe(expected.error.name);
+    expect(error.message).toBe(expected.message);
+  }
+
+  // CassetteReplay checks that every recorded header was sent; this checks the reverse.
+  replay.requests.forEach((received, index) => {
+    const recorded = Object.keys(cassette.interactions[index]!.request.headers ?? {}).map((each) =>
+      each.toLowerCase(),
+    );
+    const sent = [...received.headers.keys()].filter((each) => !IGNORED_HEADERS.has(each));
+    expect(sent.filter((each) => !recorded.includes(each))).toEqual([]);
+  });
+}
+
+describe("structured output cassettes", () => {
+  for (const [name, scenario] of Object.entries(SCENARIOS)) {
+    test(name, () => runScenario(name, scenario));
+  }
 
   test("every cassette file belongs to a scenario and loads", () => {
     const names = readdirSync(DIR)

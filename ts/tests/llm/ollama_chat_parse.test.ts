@@ -215,6 +215,16 @@ describe("deltas and parts", () => {
     ]);
   });
 
+  test("a whitespace-only piece opens its part", async () => {
+    const lines = [oChunk("\n\n"), oDone()];
+    expect(await parse(lines)).toEqual([
+      new TextDelta(0, "\n\n"),
+      new PartDone(0, new TextPart("\n\n")),
+      new UsageReport(USAGE),
+      finish("stop"),
+    ]);
+  });
+
   test("a done line's thinking, content and call are emitted before its finish", async () => {
     const done = oDone({
       message: { role: "assistant", content: "Hi", thinking: "Hmm", tool_calls: [wireCall()] },
@@ -279,6 +289,9 @@ describe("tool calls", () => {
     expect(await partsOf(empty)).toEqual([callPart("yian_call_0"), callPart("yian_call_1")]);
     const taken = [oChunk("", { toolCalls: [wireCall("yian_call_1"), wireCall("yian_call_1")] }), oDone()];
     expect(await partsOf(taken)).toEqual([callPart("yian_call_1"), callPart("yian_call_1_1")]);
+    // A server id equal to an id generated earlier in the reply is taken too.
+    const generated = [oChunk("", { toolCalls: [wireCall(), wireCall("yian_call_0")] }), oDone()];
+    expect(await partsOf(generated)).toEqual([callPart("yian_call_0"), callPart("yian_call_1")]);
   });
 
   test("object arguments are kept as sent, string values and a functionName key untouched", async () => {

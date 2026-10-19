@@ -49,8 +49,10 @@
  * a shallow node copy leaves the original unchanged and keeps shared carriers shared; a shallow
  * copy validates its assertions and runs; a payload is shared by identity between the original
  * and the rewritten copy; `rewriteFlowOrigins` on a `CompiledFlow` keeps `flowId` and
- * `flowLlmValueTypes` and rewrites a `Binding` `flowLlmConfig`'s origin; and the flow APIs'
- * argument checks (`iterFlowOrigins` rejects a non-flow eagerly).
+ * `flowLlmValueTypes` and rewrites a `Binding` `flowLlmConfig`'s origin; a compiled flow's slots
+ * come in order (memories, `flowLlmConfig`, wiring, outputs, nodes); a `FlowOutput` or a node
+ * shared by two flows is rewritten once and stays shared; and the flow APIs' argument checks
+ * (`iterFlowOrigins` rejects a non-flow eagerly).
  *
  * Later (T3-9): `test_agent_variable_origins_rewrite_shared_carriers_once`.
  *
@@ -467,6 +469,43 @@ test("iter flow origins reaches every slot once and is repeatable", () => {
   expect(new Set(keys(first))).toEqual(expected);
   expect(first.length).toBe(expected.size);
   expect(keys(first)).not.toContain("payload/not-provenance");
+  expect(keys(first)).toEqual([
+    "root/wiring",
+    "root/output",
+    "root/body/node",
+    "root/body/output",
+    "root/body/output/leaf",
+    "root/body/parameter/contract",
+    "root/body/parameter/contract/leaf",
+    "root/body/parameter",
+    "root/body/parameter/default",
+    "root/body/pre",
+    "root/body/post",
+    "root/call/node",
+    "child/signature/contract",
+    "child/signature/contract/leaf",
+    "child/signature/parameter",
+    "child/signature/parameter/default",
+    "child/wiring",
+    "child/output",
+    "child/start/node",
+    "child/body/node",
+    "child/end/node",
+    "root/map/node",
+    "root/loop/node",
+  ]);
+});
+
+test("a compiled flow yields memories, llm config, wiring, outputs, then nodes", () => {
+  const node = new BareNode("only", { origin: origin("node") });
+  const flow = new CompiledFlow(new Map([["only", node]]), [], {
+    memories: [sharedDecl(origin("memory"))],
+    flowLlmConfig: new Binding("${__start__.output.llm}", { origin: origin("llm") }),
+    wiring: new Map([["only", new Map([["value", new Binding(1n, { origin: origin("wiring") })]])]]),
+    outputs: [new FlowOutput("result", new Binding("${only.output}", { origin: origin("output") }))],
+  });
+
+  expect(keys(iterFlowOrigins(flow))).toEqual(["memory", "llm", "wiring", "output", "node"]);
 });
 
 test("parameter origins follow the carrier's canonical order", () => {
@@ -589,6 +628,58 @@ test("shared memory decl origin traverses and rewrites once", () => {
   expect(shared.origin).toEqual(origin("policy/shared"));
 });
 
+test("a FlowOutput shared by two flows is rewritten once and stays shared", () => {
+  const shared = new FlowOutput("result", new Binding("${x.output}", { origin: origin("output") }));
+  const child = new CompiledFlow(new Map(), [], { outputs: [shared] });
+  const flow = new CompiledFlow(new Map([["call", new CallNode("call", { flowId: "child", child })]]), [], {
+    wiring: new Map([["call", new Map()]]),
+    outputs: [shared],
+  });
+  const calls: string[] = [];
+
+  const rewritten = rewriteFlowOrigins(flow, (o) => {
+    calls.push(o.key);
+    return origin(`mapped/${o.key}`);
+  });
+
+  const rewrittenChild = (rewritten.nodes.get("call") as CallNode).child as CompiledFlow;
+  expect(calls).toEqual(["output"]);
+  expect(rewritten.outputs[0]).toBe(rewrittenChild.outputs[0]!);
+  expect(rewritten.outputs[0]).not.toBe(shared);
+  expect(rewritten.outputs[0]!.binding.origin).toEqual(origin("mapped/output"));
+  expect(shared.binding.origin).toEqual(origin("output"));
+});
+
+test("a node shared by two flows is rewritten once", () => {
+  const node = new BareNode("shared", { origin: origin("shared/node") });
+  const child = new Flow(new Map([["shared", node]]), [], {
+    wiring: new Map([["shared", new Map()]]),
+    startId: "shared",
+    endId: "shared",
+  });
+  const call = new CallNode("call", { flowId: "child", child });
+  const flow = new Flow(
+    new Map<string, Node>([
+      ["call", call],
+      ["shared", node],
+    ]),
+    [],
+    { wiring: new Map([["call", new Map()], ["shared", new Map()]]), startId: "call", endId: "shared" },
+  );
+  const calls: string[] = [];
+
+  const rewritten = rewriteFlowOrigins(flow, (o) => {
+    calls.push(o.key);
+    return origin(`mapped/${o.key}`);
+  });
+
+  expect(calls).toEqual(["shared/node"]);
+  const rewrittenChild = (rewritten.nodes.get("call") as CallNode).child as Flow;
+  expect(rewrittenChild.nodes.get("shared")).toBe(rewritten.nodes.get("shared")!);
+  expect(rewritten.nodes.get("shared")!.origin).toEqual(origin("mapped/shared/node"));
+  expect(node.origin).toEqual(origin("shared/node"));
+});
+
 test("source-free memory decl adds no origin", () => {
   expect([...iterFlowOrigins(aliasedFlow(sharedDecl(null)))]).toEqual([]);
 });
@@ -601,7 +692,7 @@ test("memory decl origin rebase routes the single shared site", () => {
     text: "long_term_memory: reflective\n",
     range: new SourceRange(1, 19, 1, 29),
   });
-  const resolver = { resolve: (o: OriginRef) => (o === shared.origin ? frame : null) };
+  const resolver = { resolve: (o: OriginRef) => (o.key === shared.origin!.key ? frame : null) };
 
   const mapped: OriginRef[] = [];
   const [rebased, table] = rebaseFlowOrigins(
@@ -655,6 +746,7 @@ test("rewrite flow origins is a pure alias-preserving graph copy", () => {
 
   expect(rewritten).not.toBe(flow);
   expect([...iterFlowOrigins(flow)]).toEqual(before);
+  expect(keys(calls)).toEqual(keys(before));
   expect(new Set(keys(calls))).toEqual(expected);
   expect(calls.length).toBe(expected.size);
   expect(new Set(keys(iterFlowOrigins(rewritten)))).toEqual(new Set([...expected].map((k) => `mapped/${k}`)));
@@ -802,13 +894,19 @@ test("invalid mutable node origin fails before iteration or mapping (flow half)"
 
 test("invalid child is rejected before copying or mapping", () => {
   // Structural child errors win over any copy or mapper call.
-  const flow = soloFlow(new CallNode("call", { flowId: "invalid", child: {} }));
+  const driver = new CallNode("call", { flowId: "invalid", child: {} });
+  driver.origin = origin("call");
+  const flow = soloFlow(driver);
   const calls: OriginRef[] = [];
   const mapper = (o: OriginRef) => {
     calls.push(o);
     return o;
   };
 
+  // Traversal is lazy: the call returns, and only draining reaches the bad child.
+  expect(() => iterFlowOrigins(flow)).not.toThrow();
+  const pending = iterFlowOrigins(flow);
+  expect(() => [...pending]).toThrow(new TypeError("node 'call' origin child must be a Flow, got Object"));
   expect(() => [...iterFlowOrigins(flow)]).toThrow(TypeError);
   expect(() => [...iterFlowOrigins(flow)]).toThrow("node 'call' origin child must be a Flow, got Object");
   expect(() => rewriteFlowOrigins(flow, mapper)).toThrow(TypeError);
@@ -850,11 +948,12 @@ test("rewrite flow origins propagates mapper exceptions", () => {
   const binding = new Binding(1n, { origin: origin("binding") });
   const flow = soloFlow(new BareNode("only"), new Map([["value", binding]]));
 
-  expect(() =>
+  const rewrite = () =>
     rewriteFlowOrigins(flow, () => {
       throw new MappingError("cannot rewrite");
-    }),
-  ).toThrow(MappingError);
+    });
+  expect(rewrite).toThrow(MappingError);
+  expect(rewrite).toThrow("cannot rewrite");
 
   expect(flow.wiring.get("only")!.get("value")).toBe(binding);
   expect(binding.origin).toEqual(origin("binding"));
@@ -891,6 +990,7 @@ test("rebase maps equal origins once and routes the exact old identity", () => {
   expect(mapped.length).toBe(1);
   expect(mapped[0]).toBe(old);
   const before = [...iterFlowOrigins(flow)];
+  expect(before.length).toBe(2);
   expect(before[0]).toBe(old);
   expect(before[1]).toBe(node.origin!);
   expect(keys(iterFlowOrigins(rebased))).toEqual(["scope/~opaque/key", "scope/~opaque/key"]);

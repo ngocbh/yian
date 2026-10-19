@@ -6,7 +6,7 @@
  * children through source-neutral hooks. This module joins those responsibilities without
  * importing Compose, resolving a source, or inspecting arbitrary semantic payloads.
  *
- * Knows about:   compile/model, nodes, memory contracts and diagnostics.
+ * Knows about:   compile/model, nodes, memory contracts, typesys and diagnostics.
  * Never imports: compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
@@ -228,8 +228,8 @@ function rewriteFlowOriginGraph(
     flow.outputs = flow.outputs.map((output) => {
       const done = seen.get(output);
       if (done !== undefined) return done as FlowOutput;
-      const binding = rewriteOriginCarrier(output.binding, mapper, seen);
-      const rebuilt = binding === output.binding ? output : new FlowOutput(output.name, binding);
+      // Memoized so a FlowOutput shared by two flows stays one object, as Python's in-place rewrite keeps it.
+      const rebuilt = new FlowOutput(output.name, rewriteOriginCarrier(output.binding, mapper, seen));
       seen.set(output, rebuilt);
       return rebuilt;
     });

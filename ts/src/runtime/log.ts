@@ -11,6 +11,8 @@
  * Never imports: state, trace, engine, run, compile, compose, or the CLI.
  */
 
+import fs from "node:fs";
+
 import { compareCodeUnits, Failure, OriginRef, reprText } from "../diagnostics.ts";
 import {
   type FeedbackValue,
@@ -46,6 +48,7 @@ import {
   type VisibleInteraction,
 } from "../memory/contracts.ts";
 import { BackwardResult, copyBackwardValue, retainFailure } from "../nodes/base.ts";
+import { type FileLock, FileLockError, isLocked, lockFile } from "../platform.ts";
 import {
   comparePaths,
   ExecutionPosition,
@@ -1129,6 +1132,323 @@ export function decodeRecord(data: string | Uint8Array): RecordEnvelope {
   }
   const payload = wireObject(envelope["payload"], "run-record envelope payload");
   return new RecordEnvelope(SCHEMA_VERSION, runId, seq, recordFromPayload(kind, payload));
+}
+
+/**
+ * An ordered, append-only owner of validated record envelopes for one run.
+ *
+ * `close` must be idempotent. An engine borrows a log and never closes it; the run boundary or
+ * the direct caller owns it (`using`).
+ */
+export interface RunLog {
+  /** The sole non-empty run id this log accepts. */
+  readonly runId: string;
+  /** The durable JSONL path, or `null` for a process-local log. */
+  readonly path: string | null;
+  /** The zero-based sequence the next successful append receives. */
+  readonly nextSequence: number;
+  /** Iterate the validated envelopes in contiguous sequence order. */
+  [Symbol.iterator](): Iterator<RecordEnvelope>;
+  /** Return the validated envelopes in sequence order, as a fresh frozen array. */
+  records(): readonly RecordEnvelope[];
+  /** Validate `record`, append it under `nextSequence`, and return its retained envelope. */
+  append(record: RunRecord): RecordEnvelope;
+  /** Release owned resources; repeated calls do nothing. */
+  close(): void;
+  /** Close the log. */
+  [Symbol.dispose](): void;
+}
+
+/**
+ * A process-local, ordered authority for one run's canonical records.
+ *
+ * The log retains the codec round trip of every appended record. Closing refuses later appends
+ * but keeps the records iterable, so a caller can inspect a completed result after disposing it.
+ */
+export class MemoryRunLog implements RunLog {
+  /** The sole run id this log accepts. */
+  readonly runId: string;
+  /** Always `null`: this log has no durable file. */
+  readonly path = null;
+  #records: RecordEnvelope[] = [];
+  #closed = false;
+
+  /**
+   * Create an empty, zero-based log for one run id.
+   *
+   * @throws RangeError when `runId` isn't a non-empty string or holds a lone surrogate.
+   */
+  constructor(runId: string) {
+    this.runId = validatedRunId(runId);
+  }
+
+  /**
+   * Reopen a detached canonical prefix without renumbering its records; the next append gets
+   * the sequence after the last record.
+   *
+   * @throws RangeError when `records` isn't a non-empty array, or its envelopes don't share one
+   *   run id with contiguous sequences from 0.
+   * @throws TypeError when an item isn't exactly a `RecordEnvelope`.
+   */
+  static fromRecords(records: readonly RecordEnvelope[]): MemoryRunLog {
+    if (!Array.isArray(records) || records.length === 0) {
+      throw new RangeError("reopening requires a nonempty record array");
+    }
+    if (!records.every((envelope) => isExactly(envelope, RecordEnvelope))) {
+      throw new TypeError("reopening requires exact RecordEnvelope values");
+    }
+    const canonical = records.map((envelope) => decodeRecord(encodeRecord(envelope)));
+    const runId = canonical[0]!.runId;
+    if (canonical.some((envelope, sequence) => envelope.runId !== runId || envelope.seq !== sequence)) {
+      throw new RangeError("reopened prefix must have one run and contiguous sequences");
+    }
+    const log = new MemoryRunLog(runId);
+    log.#records = canonical;
+    return log;
+  }
+
+  /** The sequence the next successful append receives. */
+  get nextSequence(): number {
+    return this.#records.length;
+  }
+
+  /** Iterate the records retained when the iteration starts. */
+  [Symbol.iterator](): Iterator<RecordEnvelope> {
+    return [...this.#records][Symbol.iterator]();
+  }
+
+  records(): readonly RecordEnvelope[] {
+    return Object.freeze([...this.#records]);
+  }
+
+  /**
+   * Append `record` under `nextSequence` and return its retained envelope.
+   *
+   * @throws Error when the log is closed.
+   * @throws RangeError, TypeError the envelope's and the codec's errors; the log is unchanged.
+   */
+  append(record: RunRecord): RecordEnvelope {
+    if (this.#closed) throw new Error("run log is closed");
+    const [, retained] = canonicalEnvelope(record, this.runId, this.nextSequence);
+    this.#records.push(retained);
+    return retained;
+  }
+
+  close(): void {
+    this.#closed = true;
+  }
+
+  [Symbol.dispose](): void {
+    this.close();
+  }
+}
+
+const UTF8_ENCODER = new TextEncoder();
+
+/**
+ * An exclusively locked, append-and-fsync JSONL log for one run.
+ *
+ * Built only by `create` or `resume`. The log holds the non-blocking exclusive lock on its
+ * sibling `<path>.lock` for its whole life, and keeps its validated records in memory, so they
+ * stay iterable after `close`.
+ */
+export class JsonlRunLog implements RunLog {
+  /** The sole run id this log accepts. */
+  readonly runId: string;
+  /** The JSONL path, as given to `create` or `resume`. */
+  readonly path: string;
+  readonly #fd: number;
+  readonly #lock: FileLock;
+  readonly #records: RecordEnvelope[];
+  #prefixSize: number;
+  #closed = false;
+  /**
+   * The error of the failed append that poisoned the log, or `null`. The error is wrapped as
+   * `{ error }` so even a thrown `undefined` poisons the log.
+   */
+  #failure: { error: unknown } | null = null;
+
+  /** Adopt a locked descriptor and its validated complete prefix of `prefixSize` bytes. */
+  private constructor(
+    path: string,
+    runId: string,
+    fd: number,
+    lock: FileLock,
+    records: RecordEnvelope[],
+    prefixSize: number,
+  ) {
+    this.path = path;
+    this.runId = runId;
+    this.#fd = fd;
+    this.#lock = lock;
+    this.#records = records;
+    this.#prefixSize = prefixSize;
+  }
+
+  /**
+   * Create a new owner-only (0600) log at `path` and lock it. An existing path is never replaced.
+   * A failure after the file is created closes it and releases the lock; the empty file stays.
+   *
+   * @throws RangeError when `runId` isn't a non-empty string or holds a lone surrogate; nothing
+   *   is created then.
+   * @throws Error `run log <path> is locked by another writer (is the run still active?)`, with
+   *   the busy `FileLockError` as `cause`.
+   * @throws the `fs` error (`code` `EEXIST` for an existing path) and other `lockFile` errors.
+   */
+  static create(path: string, runId: string): JsonlRunLog {
+    const canonicalRunId = validatedRunId(runId);
+    const { O_CREAT, O_EXCL, O_RDWR } = fs.constants;
+    const fd = fs.openSync(path, O_RDWR | O_CREAT | O_EXCL, 0o600);
+    let lock: FileLock | undefined;
+    try {
+      // The open's mode is masked by the umask.
+      fs.fchmodSync(fd, 0o600);
+      lock = lockRunLog(path, fd);
+      return new JsonlRunLog(path, canonicalRunId, fd, lock, [], 0);
+    } catch (error) {
+      releaseAfterFailure(fd, lock);
+      throw error;
+    }
+  }
+
+  /**
+   * Lock, repair and reopen the existing log at `path`.
+   *
+   * The lock is taken before the first read. Bytes after the last newline are never records,
+   * even when they form valid JSON; they are truncated and synced only after the complete lines
+   * decode as a non-empty log, so a rejected file is left unchanged. Any failure closes the file
+   * and releases the lock.
+   *
+   * @throws RangeError when the file holds no complete line (`cannot resume an empty run log:
+   *   <path>`) or a complete line isn't a valid record, or the records don't share one run id with
+   *   contiguous sequences from 0 (the message names `path`, the line and its seq).
+   * @throws Error the busy message, as `create`; `run log <path> was replaced while being opened`
+   *   when `path` stops naming the opened file before the lock is taken.
+   * @throws the `fs` error (`code` `ENOENT` for a missing log, which creates no lock file) and
+   *   other `lockFile` errors.
+   */
+  static resume(path: string): JsonlRunLog {
+    const fd = fs.openSync(path, fs.constants.O_RDWR);
+    let lock: FileLock | undefined;
+    try {
+      lock = lockRunLog(path, fd);
+      const data = fs.readFileSync(fd);
+      const completeEnd = data.lastIndexOf(0x0a) + 1;
+      const records = decodeCompletePrefix(data.subarray(0, completeEnd), path);
+      if (records.length === 0) throw new RangeError(`cannot resume an empty run log: ${path}`);
+      if (completeEnd !== data.length) {
+        fs.ftruncateSync(fd, completeEnd);
+        fs.fsyncSync(fd);
+      }
+      return new JsonlRunLog(path, records[0]!.runId, fd, lock, records, completeEnd);
+    } catch (error) {
+      releaseAfterFailure(fd, lock);
+      throw error;
+    }
+  }
+
+  /** The sequence the next successful append receives. */
+  get nextSequence(): number {
+    return this.#records.length;
+  }
+
+  /** Iterate the records retained when the iteration starts. */
+  [Symbol.iterator](): Iterator<RecordEnvelope> {
+    return [...this.#records][Symbol.iterator]();
+  }
+
+  records(): readonly RecordEnvelope[] {
+    return Object.freeze([...this.#records]);
+  }
+
+  /**
+   * Append `record` as one complete line under `nextSequence`, and retain it only after the
+   * file is synced.
+   *
+   * A failed write or sync truncates the file back to the prior complete prefix and syncs it,
+   * and poisons the log: every later append throws, and the lock stays held until `close`.
+   *
+   * @throws Error `run log is closed`; `run log <path> refuses appends after a failed append`,
+   *   with the failed append's error as `cause`; `short run-log write: wrote K of N bytes` when
+   *   a write makes no progress.
+   * @throws RangeError, TypeError the envelope's and the codec's errors, before anything is
+   *   written; they don't poison the log.
+   * @throws the `fs` error of a failed write or sync, or, when the rollback fails too,
+   *   `AggregateError` `run log <path> append failed and its rollback also failed` holding that
+   *   error and the rollback's errors.
+   */
+  append(record: RunRecord): RecordEnvelope {
+    if (this.#closed) throw new Error("run log is closed");
+    if (this.#failure !== null) {
+      throw new Error(`run log ${this.path} refuses appends after a failed append`, { cause: this.#failure.error });
+    }
+    const [line, retained] = canonicalEnvelope(record, this.runId, this.nextSequence);
+    const bytes = UTF8_ENCODER.encode(`${line}\n`);
+    try {
+      for (let written = 0; written < bytes.length; ) {
+        const count = fs.writeSync(this.#fd, bytes, written, bytes.length - written, this.#prefixSize + written);
+        // A write that makes no progress would loop forever.
+        if (count === 0) throw new Error(`short run-log write: wrote ${written} of ${bytes.length} bytes`);
+        written += count;
+      }
+      fs.fsyncSync(this.#fd);
+    } catch (error) {
+      // Poisoned even after a clean rollback: the failed append ends the run as a host error.
+      // A failed rollback can leave the line on disk: a resume drops a partial line but keeps a
+      // complete one, even though its fsync failed.
+      this.#failure = { error };
+      const rollbackErrors = rollbackAppend(this.#fd, this.#prefixSize);
+      if (rollbackErrors.length > 0) {
+        throw new AggregateError(
+          [error, ...rollbackErrors],
+          `run log ${this.path} append failed and its rollback also failed`,
+        );
+      }
+      throw error;
+    }
+    this.#records.push(retained);
+    this.#prefixSize += bytes.length;
+    return retained;
+  }
+
+  /** Close the file and release the lock once; the records stay iterable. */
+  close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    release(this.#fd, this.#lock);
+  }
+
+  [Symbol.dispose](): void {
+    this.close();
+  }
+}
+
+/**
+ * Read a run log's complete prefix: every newline-terminated record, without taking the writer's
+ * lock and without changing the file. An incomplete last line is ignored; an empty file or one
+ * without a complete line gives no records.
+ *
+ * @throws RangeError when a complete line isn't a valid record, or the records don't share one
+ *   run id with contiguous sequences from 0; the message names `path`, the line and its seq.
+ */
+export function readRunLog(path: string): RecordEnvelope[] {
+  const data = fs.readFileSync(path);
+  return decodeCompletePrefix(data.subarray(0, data.lastIndexOf(0x0a) + 1), path);
+}
+
+/**
+ * Return whether a writer (in any process) holds the lock of the log at `path`, following
+ * symlinks to the log; a missing log gives `false`.
+ */
+export function isRunLogLocked(path: string): boolean {
+  let real: string;
+  try {
+    real = fs.realpathSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return false;
+    throw error;
+  }
+  return isLocked(`${real}.lock`);
 }
 
 /** Return a failure's wire object, shared by the failure-bearing records. */
@@ -2352,4 +2672,139 @@ function wireInt(value: unknown, label: string): number {
   const number = Number(value);
   if (!Number.isSafeInteger(number)) throw new RangeError(`${label} must be a safe integer`);
   return number;
+}
+
+/**
+ * Return `runId` when it is a non-empty string fit for an envelope.
+ *
+ * @throws RangeError when it isn't a non-empty string or holds a lone surrogate.
+ */
+function validatedRunId(runId: unknown): string {
+  if (typeof runId !== "string" || !runId) throw new RangeError("run log run_id must be a non-empty string");
+  if (!runId.isWellFormed()) throw new RangeError("Unicode surrogate is not valid canonical JSON");
+  return runId;
+}
+
+/**
+ * Decode every newline-terminated record in `data` and check their shared identity.
+ *
+ * Errors name `path`, the 1-based line and the expected seq, so a damaged log can be located
+ * without bisecting it.
+ *
+ * @throws RangeError when `data` doesn't end in a newline, a line isn't a valid record (the
+ *   decoder's error as `cause`), or a seq or run id doesn't match.
+ */
+function decodeCompletePrefix(data: Uint8Array, path: string): RecordEnvelope[] {
+  if (data.length === 0) return [];
+  // Callers pass bytes up to the last newline; the loop below relies on it.
+  if (data[data.length - 1] !== 0x0a) throw new RangeError(`run log ${path} is not newline terminated`);
+  const records: RecordEnvelope[] = [];
+  let runId: string | null = null;
+  for (let start = 0, sequence = 0; start < data.length; sequence++) {
+    const end = data.indexOf(0x0a, start);
+    const where = `run log ${path} line ${sequence + 1} (seq ${sequence})`;
+    let envelope: RecordEnvelope;
+    try {
+      envelope = decodeRecord(data.subarray(start, end));
+    } catch (error) {
+      if (error instanceof JSONDecodeError || error instanceof TypeError || error instanceof RangeError) {
+        throw new RangeError(`${where}: ${error.message}`, { cause: error });
+      }
+      throw error;
+    }
+    if (envelope.seq !== sequence) {
+      throw new RangeError(`${where}: run-log sequence mismatch: expected ${sequence}, found ${envelope.seq}`);
+    }
+    runId ??= envelope.runId;
+    if (envelope.runId !== runId) {
+      throw new RangeError(
+        `${where}: run-log run_id mismatch: expected ${reprText(runId)}, found ${reprText(envelope.runId)}`,
+      );
+    }
+    records.push(envelope);
+    start = end + 1;
+  }
+  return records;
+}
+
+/**
+ * Take the writer's lock on the log at `path`, opened as `fd`, without waiting. The lock is the
+ * sibling `<real>.lock` of the log's resolved path, so every symlink to the log shares it, as
+ * Python's flock on the file does.
+ *
+ * @throws Error naming the log and the likely cause when another writer holds it, with the busy
+ *   `FileLockError` as `cause`; `run log <path> was replaced while being opened` when the
+ *   resolved path no longer names `fd`'s file once locked (the lock is released then). The `fs`
+ *   errors and other `lockFile` errors propagate.
+ */
+function lockRunLog(path: string, fd: number): FileLock {
+  const real = fs.realpathSync(path);
+  let lock: FileLock;
+  try {
+    lock = lockFile(`${real}.lock`);
+  } catch (error) {
+    if (error instanceof FileLockError && error.reason === "busy") {
+      throw new Error(`run log ${path} is locked by another writer (is the run still active?)`, { cause: error });
+    }
+    throw error;
+  }
+  try {
+    const opened = fs.fstatSync(fd, { bigint: true });
+    const resolved = fs.statSync(real, { bigint: true });
+    if (opened.dev !== resolved.dev || opened.ino !== resolved.ino) {
+      throw new Error(`run log ${path} was replaced while being opened`);
+    }
+    return lock;
+  } catch (error) {
+    try {
+      lock.release();
+    } catch {
+      // The identity error explains the failure; a release error would mask it.
+    }
+    throw error;
+  }
+}
+
+/**
+ * Return a record's canonical line under `runId` and `seq`, and the envelope decoded from it.
+ * A log retains the decoded line, so a live run sees exactly what a resumed run reads back.
+ *
+ * @throws RangeError, TypeError the envelope's and the codec's errors.
+ */
+function canonicalEnvelope(record: RunRecord, runId: string, seq: number): [string, RecordEnvelope] {
+  const line = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, seq, record));
+  return [line, decodeRecord(line)];
+}
+
+/**
+ * Truncate `fd` back to `prefixSize` bytes, then sync it, attempting both; return their errors.
+ */
+function rollbackAppend(fd: number, prefixSize: number): unknown[] {
+  const errors: unknown[] = [];
+  for (const operation of [() => fs.ftruncateSync(fd, prefixSize), () => fs.fsyncSync(fd)]) {
+    try {
+      operation();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
+}
+
+/** Release `fd` and `lock` after a failed `create` or `resume`, ignoring release errors. */
+function releaseAfterFailure(fd: number, lock: FileLock | undefined): void {
+  try {
+    release(fd, lock);
+  } catch {
+    // The caller rethrows the error that explains the failure; a release error would mask it.
+  }
+}
+
+/** Close `fd` and release `lock` (when taken); the release runs even when the close throws. */
+function release(fd: number, lock: FileLock | undefined): void {
+  try {
+    fs.closeSync(fd);
+  } finally {
+    lock?.release();
+  }
 }

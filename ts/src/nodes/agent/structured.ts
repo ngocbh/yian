@@ -113,7 +113,7 @@ function anySchema(): JsonObject {
  * @throws RangeError when `typ` has no structured mapping (`NONE`, `FILE`), so a new
  *   `ValueKind` is loud, or a scalar's bounds are malformed.
  */
-function schemaFor(typ: Type, defs: Defs, position: string, closed: boolean): JsonObject {
+function schemaFor(typ: Type, defs: Defs, position: string, closed = false): JsonObject {
   const schema = nonNullSchema(typ, defs, position, closed);
   return typ.nullable ? orNull(schema) : schema;
 }
@@ -133,9 +133,10 @@ function nonNullSchema(typ: Type, defs: Defs, position: string, closed: boolean)
   if (kind === ValueKind.OBJECT && typ.variants !== undefined) {
     const names = memberNames(typ, position);
     return {
-      anyOf: typ.variants.map((member, index) =>
-        define(defs, names[index]!, recordSchema(member, defs, names[index]!, true)),
-      ),
+      anyOf: typ.variants.map((member, index) => {
+        const name = names[index]!;
+        return define(defs, name, recordSchema(member, defs, name, true));
+      }),
     };
   }
   if (kind === ValueKind.OBJECT) {
@@ -189,16 +190,17 @@ function nested(position: string, segment: string): string {
  * each member after its tag (`buy`, `sell`); otherwise the members are `Member1`, `Member2`, ...
  */
 function memberNames(typ: Type, position: string): string[] {
-  const variants = typ.variants ?? [];
   const [tagField] = unionTagFields(typ);
-  let tags =
-    tagField === undefined
-      ? []
-      : variants.map((member) => [...member.fields!.get(tagField)!.tags!][0]!);
-  if (tags.length === 0 || !tags.every((tag) => IDENTIFIER.test(tag))) {
-    tags = variants.map((_, index) => `Member${index + 1}`);
-  }
-  return tags.map((tag) => nested(position, tag));
+  const tags = typ.variants!.map((member) =>
+    tagField === undefined ? undefined : [...member.fields!.get(tagField)!.tags!][0]!,
+  );
+  const named = tags.every((tag) => tag !== undefined && IDENTIFIER.test(tag));
+  return tags.map((tag, index) => nested(position, named ? tag! : `Member${index + 1}`));
+}
+
+/** Return the name of the record at `position`: its title, and its `$defs` key unnormalized. */
+function recordName(position: string): string {
+  return position || "Record";
 }
 
 /** Whether `typ` is a record with fields, whose schema is a `$ref` to its own definition. */
@@ -222,7 +224,7 @@ function isRecord(typ: Type): boolean {
  *   inside it; `""` is the schema root, titled `Record`.
  * @param closed Whether the record and the records inside it reject unknown fields.
  */
-function recordSchema(typ: Type, defs: Defs, position: string, closed: boolean): JsonObject {
+function recordSchema(typ: Type, defs: Defs, position: string, closed = false): JsonObject {
   const properties: JsonObject = {};
   const required: string[] = [];
   for (const [name, sub] of typ.fields ?? []) {
@@ -234,7 +236,7 @@ function recordSchema(typ: Type, defs: Defs, position: string, closed: boolean):
     }
     setField(properties, name, titled(schema, name, sub));
   }
-  const schema: JsonObject = { properties, title: position || "Record", type: "object" };
+  const schema: JsonObject = { properties, title: recordName(position), type: "object" };
   if (required.length > 0) schema.required = required;
   if (closed) schema.additionalProperties = false;
   return schema;
@@ -245,8 +247,9 @@ function recordSchema(typ: Type, defs: Defs, position: string, closed: boolean):
  * definition that wants the same key is shared.
  */
 function define(defs: Defs, position: string, schema: JsonObject): JsonObject {
-  const key = (position || "Record").replace(/[^A-Za-z0-9_-]/gu, "_");
-  // Key order doesn't matter (Python compares dicts); the text sorts keys.
+  const key = recordName(position).replace(/[^A-Za-z0-9_-]/gu, "_");
+  // Key order doesn't matter (Python compares dicts); the text sorts keys. Unlike Python, an
+  // int and a float bound of equal value differ here, which only costs a separate definition.
   const text = logJson(schema);
   let index = defs.findIndex((definition) => definition.key === key && definition.text === text);
   if (index < 0) index = defs.push({ key, schema, text, refs: [] }) - 1;
@@ -270,14 +273,15 @@ function definitions(defs: Defs): JsonObject {
   const suffixes = new Map<string, number>();
   const $defs: JsonObject = {};
   for (const definition of defs) {
-    let key = definition.key;
-    if (counts.get(key)! > 1) {
-      let suffix = suffixes.get(definition.key) ?? 0;
+    const wanted = definition.key;
+    let key = wanted;
+    if (counts.get(wanted)! > 1) {
+      let suffix = suffixes.get(wanted) ?? 0;
       do {
         suffix += 1;
-        key = `${definition.key}__${suffix}`;
+        key = `${wanted}__${suffix}`;
       } while (taken.has(key));
-      suffixes.set(definition.key, suffix);
+      suffixes.set(wanted, suffix);
       taken.add(key);
     }
     for (const ref of definition.refs) ref.$ref = `#/$defs/${key}`;
@@ -294,7 +298,7 @@ function titled(schema: JsonObject, name: string, sub: Type): JsonObject {
 /** Return a root schema wrapping `typ` as its one required property `field`. */
 function wrapper(title: string, field: string, typ: Type, defs: Defs): JsonObject {
   const properties: JsonObject = {};
-  setField(properties, field, titled(schemaFor(typ, defs, "", false), field, typ));
+  setField(properties, field, titled(schemaFor(typ, defs, ""), field, typ));
   return { properties, required: [field], title, type: "object" };
 }
 
@@ -317,7 +321,7 @@ export function typeToSchema(typ: Type): JsonObject | null {
   const defs: Defs = [];
   let schema: JsonObject;
   if (isRecord(typ) && !typ.nullable) {
-    schema = recordSchema(typ, defs, "", false);
+    schema = recordSchema(typ, defs, "");
   } else if (isListKind(typ.kind)) {
     schema = wrapper("ListWrapper", "items", typ, defs);
   } else {

@@ -1010,8 +1010,12 @@ describe("TS-only", () => {
   describe("$defs keys and clashes", () => {
     const P = { x: "int" };
     const Q = { y: "str" };
-    const DEF_X = `{"properties":{"x":{"title":"X","type":"integer"}},"required":["x"],"type":"object"`;
-    const DEF_Y = `{"properties":{"y":{"title":"Y","type":"string"}},"required":["y"],"type":"object"`;
+    /** The JSON text of P's definition titled `title`. */
+    const defX = (title: string) =>
+      `{"properties":{"x":{"title":"X","type":"integer"}},"required":["x"],"title":"${title}","type":"object"}`;
+    /** The JSON text of Q's definition titled `title`. */
+    const defY = (title: string) =>
+      `{"properties":{"y":{"title":"Y","type":"string"}},"required":["y"],"title":"${title}","type":"object"}`;
 
     test("a key replaces each code point outside [A-Za-z0-9_-] with _; the title stays raw", () => {
       // Python's capture.
@@ -1037,7 +1041,7 @@ describe("TS-only", () => {
       expectSchema(
         t("C", readTypedefs({ P, Q, I: { b: "Q" }, C: { a_b: "P", a: "I" } })),
         parseJson(
-          `{"$defs":{"a":{"properties":{"b":{"$ref":"#/$defs/a_b__2"}},"required":["b"],"title":"a","type":"object"},"a_b__1":${DEF_X},"title":"a_b"},"a_b__2":${DEF_Y},"title":"a_b"}},"properties":{"a_b":{"$ref":"#/$defs/a_b__1"},"a":{"$ref":"#/$defs/a"}},"required":["a_b","a"],"title":"Record","type":"object"}`,
+          `{"$defs":{"a":{"properties":{"b":{"$ref":"#/$defs/a_b__2"}},"required":["b"],"title":"a","type":"object"},"a_b__1":${defX("a_b")},"a_b__2":${defY("a_b")}},"properties":{"a_b":{"$ref":"#/$defs/a_b__1"},"a":{"$ref":"#/$defs/a"}},"required":["a_b","a"],"title":"Record","type":"object"}`,
           "plain",
         ),
       );
@@ -1048,7 +1052,7 @@ describe("TS-only", () => {
       expectSchema(
         t("C", readTypedefs({ P, I: { b: "P" }, C: { a_b: "P", a: "I" } })),
         parseJson(
-          `{"$defs":{"a":{"properties":{"b":{"$ref":"#/$defs/a_b"}},"required":["b"],"title":"a","type":"object"},"a_b":${DEF_X},"title":"a_b"}},"properties":{"a_b":{"$ref":"#/$defs/a_b"},"a":{"$ref":"#/$defs/a"}},"required":["a_b","a"],"title":"Record","type":"object"}`,
+          `{"$defs":{"a":{"properties":{"b":{"$ref":"#/$defs/a_b"}},"required":["b"],"title":"a","type":"object"},"a_b":${defX("a_b")}},"properties":{"a_b":{"$ref":"#/$defs/a_b"},"a":{"$ref":"#/$defs/a"}},"required":["a_b","a"],"title":"Record","type":"object"}`,
           "plain",
         ),
       );
@@ -1076,7 +1080,7 @@ describe("TS-only", () => {
       expectSchema(
         t("C", readTypedefs({ P, C: { "a/b": "P", a_b: "P" } })),
         parseJson(
-          `{"$defs":{"a_b__1":${DEF_X},"title":"a/b"},"a_b__2":${DEF_X},"title":"a_b"}},"properties":{"a/b":{"$ref":"#/$defs/a_b__1"},"a_b":{"$ref":"#/$defs/a_b__2"}},"required":["a/b","a_b"],"title":"Record","type":"object"}`,
+          `{"$defs":{"a_b__1":${defX("a/b")},"a_b__2":${defX("a_b")}},"properties":{"a/b":{"$ref":"#/$defs/a_b__1"},"a_b":{"$ref":"#/$defs/a_b__2"}},"required":["a/b","a_b"],"title":"Record","type":"object"}`,
           "plain",
         ),
       );
@@ -1087,7 +1091,7 @@ describe("TS-only", () => {
       expectSchema(
         t("Optional(C)", readTypedefs({ P, C: { Record: "P" } })),
         parseJson(
-          `{"$defs":{"Record__1":${DEF_X},"title":"Record"},"Record__2":{"properties":{"Record":{"$ref":"#/$defs/Record__1"}},"required":["Record"],"title":"Record","type":"object"}},"properties":{"value":{"anyOf":[{"$ref":"#/$defs/Record__2"},{"type":"null"}]}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
+          `{"$defs":{"Record__1":${defX("Record")},"Record__2":{"properties":{"Record":{"$ref":"#/$defs/Record__1"}},"required":["Record"],"title":"Record","type":"object"}},"properties":{"value":{"anyOf":[{"$ref":"#/$defs/Record__2"},{"type":"null"}]}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
           "plain",
         ),
       );
@@ -1109,7 +1113,7 @@ describe("TS-only", () => {
       const defs = obj(schema.$defs);
       expect(Object.hasOwn(defs, "__proto__")).toBe(true);
       expect(Object.getPrototypeOf(defs)).toBe(Object.prototype);
-      expect(defs.__proto__).toStrictEqual(parseJson(`${DEF_X},"title":"__proto__"}`, "plain"));
+      expect(defs.__proto__).toStrictEqual(parseJson(defX("__proto__"), "plain"));
     });
   });
 

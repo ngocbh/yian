@@ -14,7 +14,7 @@
 
 import { createHash } from "node:crypto";
 
-import { Failure, reprText } from "../diagnostics.ts";
+import { compareCodeUnits, Failure, reprText } from "../diagnostics.ts";
 import {
   type FeedbackValue,
   hasFeedback,
@@ -28,7 +28,13 @@ import {
   validateFeedback,
   type ValueRoute,
 } from "../expr/lineage.ts";
-import { MemoryEpisodeStatus, MemoryMutation } from "../memory/index.ts";
+import {
+  LearningFailure,
+  LearningResult,
+  MemoryEpisodeStatus,
+  MemoryMutation,
+  PolicyCommitOutcome,
+} from "../memory/index.ts";
 import {
   type BackwardContext,
   BackwardResult,
@@ -39,9 +45,21 @@ import {
 import { isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
 import { type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
 import { isList, isRecord } from "../typesys/values.ts";
-import { AttributedBackwardResult, BackwardAttribution, sameBackwardAttribution } from "./contracts.ts";
 import {
+  AttributedBackwardResult,
+  BackwardAttribution,
+  BackwardFailure,
+  BackwardOutcome,
+  sameBackwardAttribution,
+} from "./contracts.ts";
+import {
+  BackwardFinishedRecord,
+  BackwardReadyRecord,
+  BackwardStartedRecord,
   canonicalSeed,
+  MemoryCommitFailedRecord,
+  MemoryCommitRequestedRecord,
+  MemoryCommitSucceededRecord,
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
@@ -547,6 +565,269 @@ export function validateAttributedBackward(
   if (!sameBackwardResult(rootResult, projectRootBackward(trace, pending, rootInputs, directRoot))) {
     throw new RangeError("backward root result must match the accepted START and source-zero projection");
   }
+}
+
+/** A commit observation: the memory commit succeeded or failed. */
+export type CommitObservation = MemoryCommitSucceededRecord | MemoryCommitFailedRecord;
+
+/** Accepted computation and commit facts for one explicit attempt. Frozen. */
+export class BackwardAttempt {
+  /** The attempt's accepted start. */
+  readonly started: BackwardStartedRecord;
+  /** The attempt's accepted Ready, once computed. */
+  readonly ready: BackwardReadyRecord | null;
+  /** The attempt's accepted closing record, once closed. */
+  readonly finished: BackwardFinishedRecord | null;
+  /** The accepted commit requests, in order. */
+  readonly requests: readonly MemoryCommitRequestedRecord[];
+  /** The accepted commit observations, in order. */
+  readonly observations: readonly CommitObservation[];
+
+  /**
+   * Require exact record classes of this attempt; the records are held by reference and the
+   * arrays copied and frozen.
+   *
+   * @param options Each record defaults to `null`, each array to empty.
+   * @throws TypeError when a record isn't exactly its class, or a commit array isn't an array.
+   * @throws RangeError when a record belongs to another attempt.
+   */
+  constructor(
+    started: BackwardStartedRecord,
+    options: {
+      ready?: BackwardReadyRecord | null;
+      finished?: BackwardFinishedRecord | null;
+      requests?: readonly MemoryCommitRequestedRecord[];
+      observations?: readonly CommitObservation[];
+    } = {},
+  ) {
+    const { ready = null, finished = null, requests = [], observations = [] } = options;
+    const records: [unknown, abstract new (...args: never[]) => { readonly attemptId: number }][] = [
+      [started, BackwardStartedRecord],
+      [ready, BackwardReadyRecord],
+      [finished, BackwardFinishedRecord],
+    ];
+    for (const [record, carrier] of records) {
+      if (record === null && carrier !== BackwardStartedRecord) continue;
+      if (!isExactly(record, carrier)) throw new TypeError("backward attempt requires exact accepted records");
+      if (record.attemptId !== started.attemptId) throw new RangeError("backward attempt record identities disagree");
+    }
+    const commits = [
+      [requests, [MemoryCommitRequestedRecord]],
+      [observations, [MemoryCommitSucceededRecord, MemoryCommitFailedRecord]],
+    ] as const;
+    for (const [items, carriers] of commits) {
+      if (!isList(items)) throw new TypeError("backward commit records must be arrays");
+      for (const record of items) {
+        if (!carriers.some((carrier) => isExactly(record, carrier))) {
+          throw new TypeError("backward commit requires an exact accepted record");
+        }
+        if (record.attemptId !== started.attemptId) throw new RangeError("backward commit attempt identities disagree");
+      }
+    }
+    this.started = started;
+    this.ready = ready;
+    this.finished = finished;
+    this.requests = Object.freeze([...requests]);
+    this.observations = Object.freeze([...observations]);
+    Object.freeze(this);
+  }
+}
+
+/** The failure of an attempt that stopped before it finished. */
+function interruptedFailure(): BackwardFailure {
+  return new BackwardFailure("backward", "backward.interrupted", "backward attempt interrupted before completion");
+}
+
+/** Project each memory in `memoryOrder` from the attempt's accepted requests and observations. */
+function policyOutcomes(memoryOrder: readonly string[], attempt: BackwardAttempt): readonly PolicyCommitOutcome[] {
+  const requests = new Map(attempt.requests.map((record) => [record.memory, record]));
+  const observations = new Map(attempt.observations.map((record) => [record.memory, record]));
+  const outcomes = memoryOrder.map((name) => {
+    const request = requests.get(name);
+    const observation = observations.get(name);
+    if (request === undefined) return new PolicyCommitOutcome(name, "unrequested");
+    const commitId = request.commitId;
+    if (observation === undefined) return new PolicyCommitOutcome(name, "unknown", { commitId });
+    if (isExactly(observation, MemoryCommitFailedRecord)) {
+      return new PolicyCommitOutcome(name, "failed", { commitId, failure: observation.failure });
+    }
+    return new PolicyCommitOutcome(name, "succeeded", { commitId });
+  });
+  return Object.freeze(outcomes);
+}
+
+/**
+ * The learning result of the current attempt's accepted prefix, or `null` without memories.
+ *
+ * Each failed commit is a failure, after `learnerFailure` when given; with no failure the status
+ * is `succeeded` when `succeeded` is set, else `incomplete`.
+ */
+export function prefixLearning(
+  backward: RuntimeBackwardState,
+  options: { succeeded?: boolean; learnerFailure?: LearningFailure | null } = {},
+): LearningResult | null {
+  const { succeeded = false, learnerFailure = null } = options;
+  if (backward.memoryOrder.length === 0) return null;
+  const policies = backward.policyOutcomes;
+  const failures = policies
+    .filter((item) => item.status === "failed")
+    .map((item) => new LearningFailure(item.memory, "commit", item.failure!));
+  if (learnerFailure !== null) failures.unshift(learnerFailure);
+  const status = failures.length > 0 ? "failed" : succeeded ? "succeeded" : "incomplete";
+  return new LearningResult(status, { failures, policies });
+}
+
+/**
+ * Immutable accepted backward attempt history and per-memory dispositions. Frozen.
+ *
+ * `memoryOrder` shares the RunStarted authority root. Completed proposals remain inspectable;
+ * only new records can advance an attempt. No prefix view resumes work or invokes a callback.
+ */
+export class RuntimeBackwardState {
+  /** Recorded memory keys in table order. */
+  readonly memoryOrder: readonly string[];
+  /** Accepted attempt history; a later start never inherits earlier proposals. */
+  readonly attempts: readonly BackwardAttempt[];
+
+  /**
+   * Refuse a malformed key order and impossible accepted-history shapes; the arrays are copied
+   * and frozen, the attempts held by reference.
+   *
+   * @throws TypeError when `memoryOrder` isn't an array of non-empty strings, `attempts` isn't an
+   *   array, or an attempt isn't exactly a `BackwardAttempt`.
+   * @throws RangeError when the keys aren't sorted and unique, or the attempts break the start,
+   *   request or observation order.
+   */
+  constructor(memoryOrder: readonly string[] = [], attempts: readonly BackwardAttempt[] = []) {
+    if (!isList(memoryOrder) || memoryOrder.some((key) => typeof key !== "string" || !key)) {
+      throw new TypeError("backward memory order must be an array of non-empty strings");
+    }
+    if (!sameItems(memoryOrder, [...new Set<string>(memoryOrder)].sort(compareCodeUnits))) {
+      throw new RangeError("backward memory order must be sorted and unique");
+    }
+    if (!isList(attempts)) throw new TypeError("backward history must be an array");
+    attempts.forEach((attempt, index) => {
+      if (!isExactly(attempt, BackwardAttempt)) throw new TypeError("backward history requires exact attempt states");
+      if (attempt.started.attemptId !== index + 1) {
+        throw new RangeError("backward attempt IDs must follow accepted start order");
+      }
+      if (index < attempts.length - 1 && attempt.finished === null) {
+        throw new RangeError("an unfinished attempt cannot precede another start");
+      }
+      const { requests, observations } = attempt;
+      const requested = requests.map((record) => record.memory);
+      if (!sameItems(requested, memoryOrder.slice(0, requests.length))) {
+        throw new RangeError("backward requests must follow recorded memory order");
+      }
+      if (observations.length > requests.length || requests.length > observations.length + 1) {
+        throw new RangeError("backward requests and observations must alternate");
+      }
+      observations.forEach((observation, resultIndex) => {
+        const request = requests[resultIndex]!;
+        if (observation.memory !== request.memory || observation.commitId !== request.commitId) {
+          throw new RangeError("backward observation must match its accepted request");
+        }
+        if (isExactly(observation, MemoryCommitFailedRecord) && resultIndex < requests.length - 1) {
+          throw new RangeError("a failed commit cannot be followed by another request");
+        }
+      });
+      if (requests.length > 0 && attempt.ready === null) {
+        throw new RangeError("backward requests require accepted Ready proposals");
+      }
+    });
+    this.memoryOrder = Object.freeze([...memoryOrder]);
+    this.attempts = Object.freeze([...attempts]);
+    Object.freeze(this);
+  }
+
+  /** The most recently accepted attempt, including a closed one. */
+  get current(): BackwardAttempt | null {
+    return this.attempts.at(-1) ?? null;
+  }
+
+  /** The current attempt's exact accepted submission. */
+  get started(): BackwardStartedRecord | null {
+    return this.current?.started ?? null;
+  }
+
+  /** Completed results and proposals, without treating them as resumable. */
+  get ready(): BackwardReadyRecord | null {
+    return this.current?.ready ?? null;
+  }
+
+  /** The accepted closing record, if this attempt was closed. */
+  get finished(): BackwardFinishedRecord | null {
+    return this.current?.finished ?? null;
+  }
+
+  /** Whether any attempt has an accepted commit request, whatever was observed later. */
+  get everRequested(): boolean {
+    return this.attempts.some((attempt) => attempt.requests.length > 0);
+  }
+
+  /** The attempt id folded into the current attempt's commit ids. */
+  get commitAttemptKey(): number | null {
+    return this.current?.started.attemptId ?? null;
+  }
+
+  /** Each configured memory's disposition from the current attempt's requests and observations. */
+  get policyOutcomes(): readonly PolicyCommitOutcome[] {
+    const current = this.current;
+    if (current === null) {
+      return Object.freeze(this.memoryOrder.map((name) => new PolicyCommitOutcome(name, "unrequested")));
+    }
+    return policyOutcomes(this.memoryOrder, current);
+  }
+
+  /**
+   * Whether a new attempt may start; the terminal and learn gates stay with the run state.
+   *
+   * Any finished attempt, whatever its outcome or commit requests, admits a later start. Only an
+   * unfinished attempt blocks one.
+   */
+  get canStart(): boolean {
+    return this.current === null || this.finished !== null;
+  }
+
+  /** The accepted Finished outcome, or the interruption derived without appending anything. */
+  get outcome(): BackwardOutcome | null {
+    const current = this.current;
+    if (current === null) return null;
+    if (current.finished !== null) return current.finished.outcome;
+    return new BackwardOutcome("failed", {
+      feedback: current.ready?.rootResult ?? null,
+      failure: interruptedFailure(),
+      learning: prefixLearning(this),
+    });
+  }
+}
+
+/**
+ * A state over history whose one changed attempt the reducer already checked, sharing
+ * `backward`'s memory order.
+ */
+function withAttempts(backward: RuntimeBackwardState, attempts: readonly BackwardAttempt[]): RuntimeBackwardState {
+  // Rechecking every earlier attempt on each record would make the Nth attempt cost O(N) and a
+  // replayed log O(N^2), so the constructor is skipped.
+  const state = Object.create(RuntimeBackwardState.prototype) as RuntimeBackwardState;
+  Object.assign(state, { memoryOrder: backward.memoryOrder, attempts: Object.freeze([...attempts]) });
+  return Object.freeze(state);
+}
+
+/**
+ * Return each recorded memory's batch in table order, empty ones included.
+ *
+ * @throws RangeError when the proposals don't name the recorded memories in table order.
+ */
+export function proposalBatches(
+  backward: RuntimeBackwardState,
+  ready: BackwardReadyRecord,
+): (readonly MemoryMutation[])[] {
+  const memories = ready.proposals.map((proposal) => proposal.memory);
+  if (!sameItems(memories, backward.memoryOrder)) {
+    throw new RangeError("memory proposals must cover the complete recorded memory table in order");
+  }
+  return ready.proposals.map((proposal) => proposal.mutations);
 }
 
 /**

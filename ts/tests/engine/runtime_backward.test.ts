@@ -18,6 +18,11 @@
  * form; `materializeContext`'s shape and `bigint` integers; `ContextCache.lookup` looking a source
  * up once and not caching a failure; `takeMessages` order.
  *
+ * TS-only, backward attempt state: one refusal per `BackwardAttempt` and `RuntimeBackwardState`
+ * rule; the getters on empty, unfinished and finished histories; the interrupted outcome an
+ * unfinished attempt derives, with `prefixLearning`'s statuses and failure order; and
+ * `proposalBatches`' table order.
+ *
  * Later (T4-6, with the engine): `test_terminal_trace_keeps_actual_root_writer_until_quiescence`,
  * `test_root_inventory_is_retained_without_running_capture_or_defaults`,
  * `test_terminal_trace_append_rejection_leaves_all_indexes_unchanged` and
@@ -34,21 +39,45 @@ import { expect, test } from "bun:test";
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import { type FeedbackValue, RouteContext, SourceRef, sourceKey, ValueRoute } from "../../src/expr/lineage.ts";
-import { MemoryScope } from "../../src/memory/contracts.ts";
-import { BackwardContext, BackwardResult, Node, NodeKind } from "../../src/nodes/base.ts";
-import { AttributedBackwardResult, BackwardAttribution, ForwardCapture } from "../../src/runtime/contracts.ts";
 import {
+  LearningFailure,
+  LearningResult,
+  MemoryMutation,
+  MemoryOperationFailure,
+  MemoryScope,
+  PolicyCommitOutcome,
+} from "../../src/memory/contracts.ts";
+import { BackwardContext, BackwardResult, Node, NodeKind } from "../../src/nodes/base.ts";
+import {
+  AttributedBackwardResult,
+  BackwardAttribution,
+  BackwardFailure,
+  BackwardOutcome,
+  ForwardCapture,
+  MemoryProposal,
+} from "../../src/runtime/contracts.ts";
+import {
+  BackwardAttempt,
   BackwardMessage,
   ContextCache,
   contextualTransfers,
   materializeContext,
+  prefixLearning,
+  proposalBatches,
+  RuntimeBackwardState,
   seedBackward,
   takeMessages,
   validateAttributedBackward,
 } from "../../src/runtime/learning.ts";
 import {
+  BackwardFinishedRecord,
+  BackwardReadyRecord,
+  BackwardStartedRecord,
   canonicalTyped,
   encodePool,
+  MemoryCommitFailedRecord,
+  MemoryCommitRequestedRecord,
+  MemoryCommitSucceededRecord,
   NodeStartedRecord,
   NodeSucceededRecord,
   RecordEnvelope,
@@ -561,3 +590,358 @@ test("takeMessages pops one source's messages sorted by order", () => {
   expect(Object.isFrozen(message([0]))).toBe(true);
 });
 
+// TS-only: backward attempt state.
+
+const MUTATIONS = [new MemoryMutation("m", { note: "Raise v." })];
+const OPERATION_FAILURE = new MemoryOperationFailure("commit", "memory.unavailable", "Down.", true);
+
+/** An accepted start of attempt `id`. */
+function started(id = 1): BackwardStartedRecord {
+  return new BackwardStartedRecord(id, "Too low.");
+}
+
+/** A Ready of attempt `id` with an empty root result and one proposal per memory in `memories`. */
+function ready(id = 1, memories: string[] = ["a", "b"]): BackwardReadyRecord {
+  const proposals = memories.map((memory) => new MemoryProposal(memory, memory === "a" ? MUTATIONS : []));
+  return new BackwardReadyRecord(id, new BackwardResult(), [], proposals);
+}
+
+/** A commit request for `memory` in attempt `id`. */
+function requested(memory: string, id = 1): MemoryCommitRequestedRecord {
+  return new MemoryCommitRequestedRecord(memory, `commit-${memory}`, [], id);
+}
+
+/** A succeeded commit for `memory` in attempt `id`. */
+function succeeded(memory: string, id = 1): MemoryCommitSucceededRecord {
+  return new MemoryCommitSucceededRecord(memory, `commit-${memory}`, id);
+}
+
+/** A failed commit for `memory` in attempt `id`. */
+function failed(memory: string, id = 1): MemoryCommitFailedRecord {
+  return new MemoryCommitFailedRecord(memory, `commit-${memory}`, OPERATION_FAILURE, id);
+}
+
+/** The failure of an interrupted attempt. */
+const INTERRUPTED = new BackwardFailure(
+  "backward",
+  "backward.interrupted",
+  "backward attempt interrupted before completion",
+);
+
+/** A Finished of attempt `id` that interrupted before Ready. */
+function interruptedFinish(id = 1): BackwardFinishedRecord {
+  return new BackwardFinishedRecord(id, new BackwardOutcome("failed", { failure: INTERRUPTED }));
+}
+
+test.each<[string, () => unknown, ErrorClass, string]>([
+  [
+    "a started record of another class",
+    () => new BackwardAttempt({ ...started() } as BackwardStartedRecord),
+    TypeError,
+    "backward attempt requires exact accepted records",
+  ],
+  [
+    "a Ready of another class",
+    () => new BackwardAttempt(started(), { ready: started() as unknown as BackwardReadyRecord }),
+    TypeError,
+    "backward attempt requires exact accepted records",
+  ],
+  [
+    "a Finished of another class",
+    () => new BackwardAttempt(started(), { finished: ready() as unknown as BackwardFinishedRecord }),
+    TypeError,
+    "backward attempt requires exact accepted records",
+  ],
+  [
+    "a Ready of another attempt",
+    () => new BackwardAttempt(started(), { ready: ready(2) }),
+    RangeError,
+    "backward attempt record identities disagree",
+  ],
+  [
+    "a Finished of another attempt",
+    () => new BackwardAttempt(started(), { finished: interruptedFinish(2) }),
+    RangeError,
+    "backward attempt record identities disagree",
+  ],
+  [
+    "requests that aren't an array",
+    () => new BackwardAttempt(started(), { requests: new Set([requested("a")]) as never }),
+    TypeError,
+    "backward commit records must be arrays",
+  ],
+  [
+    "observations that aren't an array",
+    () => new BackwardAttempt(started(), { observations: new Set([succeeded("a")]) as never }),
+    TypeError,
+    "backward commit records must be arrays",
+  ],
+  [
+    "a request of another class",
+    () => new BackwardAttempt(started(), { requests: [succeeded("a") as unknown as MemoryCommitRequestedRecord] }),
+    TypeError,
+    "backward commit requires an exact accepted record",
+  ],
+  [
+    "an observation of another class",
+    () => new BackwardAttempt(started(), { observations: [requested("a") as unknown as MemoryCommitFailedRecord] }),
+    TypeError,
+    "backward commit requires an exact accepted record",
+  ],
+  [
+    "a request of another attempt",
+    () => new BackwardAttempt(started(), { requests: [requested("a", 2)] }),
+    RangeError,
+    "backward commit attempt identities disagree",
+  ],
+  [
+    "an observation of another attempt",
+    () => new BackwardAttempt(started(), { observations: [failed("a", 2)] }),
+    RangeError,
+    "backward commit attempt identities disagree",
+  ],
+])("BackwardAttempt refuses %s", (_label, fn, cls, message) => {
+  expectError(fn, cls, message);
+});
+
+test("BackwardAttempt holds its records by reference in frozen arrays", () => {
+  const records = [requested("a")];
+  const attempt = new BackwardAttempt(started(), { ready: ready(), requests: records });
+  records.push(requested("b"));
+  expect(attempt.requests).toHaveLength(1);
+  expect(attempt.requests[0]).toBe(records[0]!);
+  expect(attempt.finished).toBeNull();
+  expect(attempt.observations).toEqual([]);
+  expect(Object.isFrozen(attempt)).toBe(true);
+  expect(Object.isFrozen(attempt.requests)).toBe(true);
+});
+
+test.each<[string, () => unknown, ErrorClass, string]>([
+  [
+    "a memory order that isn't an array",
+    () => new RuntimeBackwardState(new Set(["a"]) as never),
+    TypeError,
+    "backward memory order must be an array of non-empty strings",
+  ],
+  [
+    "an empty memory key",
+    () => new RuntimeBackwardState([""]),
+    TypeError,
+    "backward memory order must be an array of non-empty strings",
+  ],
+  [
+    "a memory key that isn't text",
+    () => new RuntimeBackwardState([1 as unknown as string]),
+    TypeError,
+    "backward memory order must be an array of non-empty strings",
+  ],
+  [
+    "a repeated memory key",
+    () => new RuntimeBackwardState(["a", "a"]),
+    RangeError,
+    "backward memory order must be sorted and unique",
+  ],
+  [
+    "a history that isn't an array",
+    () => new RuntimeBackwardState([], new Set() as never),
+    TypeError,
+    "backward history must be an array",
+  ],
+  [
+    "an attempt of another class",
+    () => new RuntimeBackwardState([], [{ ...new BackwardAttempt(started()) } as BackwardAttempt]),
+    TypeError,
+    "backward history requires exact attempt states",
+  ],
+  [
+    "an attempt id out of start order",
+    () => new RuntimeBackwardState([], [new BackwardAttempt(started(2))]),
+    RangeError,
+    "backward attempt IDs must follow accepted start order",
+  ],
+  [
+    "an unfinished attempt before another start",
+    () => new RuntimeBackwardState([], [new BackwardAttempt(started(1)), new BackwardAttempt(started(2))]),
+    RangeError,
+    "an unfinished attempt cannot precede another start",
+  ],
+  [
+    "requests out of memory order",
+    () =>
+      new RuntimeBackwardState(["a", "b"], [
+        new BackwardAttempt(started(), { ready: ready(), requests: [requested("b")] }),
+      ]),
+    RangeError,
+    "backward requests must follow recorded memory order",
+  ],
+  [
+    "two requests without an observation",
+    () =>
+      new RuntimeBackwardState(["a", "b"], [
+        new BackwardAttempt(started(), { ready: ready(), requests: [requested("a"), requested("b")] }),
+      ]),
+    RangeError,
+    "backward requests and observations must alternate",
+  ],
+  [
+    "an observation without a request",
+    () => new RuntimeBackwardState(["a", "b"], [new BackwardAttempt(started(), { observations: [succeeded("a")] })]),
+    RangeError,
+    "backward requests and observations must alternate",
+  ],
+  [
+    "an observation of another commit",
+    () =>
+      new RuntimeBackwardState(["a", "b"], [
+        new BackwardAttempt(started(), {
+          ready: ready(),
+          requests: [requested("a")],
+          observations: [new MemoryCommitSucceededRecord("a", "other", 1)],
+        }),
+      ]),
+    RangeError,
+    "backward observation must match its accepted request",
+  ],
+  [
+    "a request after a failed commit",
+    () =>
+      new RuntimeBackwardState(["a", "b"], [
+        new BackwardAttempt(started(), {
+          ready: ready(),
+          requests: [requested("a"), requested("b")],
+          observations: [failed("a")],
+        }),
+      ]),
+    RangeError,
+    "a failed commit cannot be followed by another request",
+  ],
+  [
+    "a request without Ready",
+    () => new RuntimeBackwardState(["a", "b"], [new BackwardAttempt(started(), { requests: [requested("a")] })]),
+    RangeError,
+    "backward requests require accepted Ready proposals",
+  ],
+])("RuntimeBackwardState refuses %s", (_label, fn, cls, message) => {
+  expectError(fn, cls, message);
+});
+
+test("an empty history starts nothing and leaves every memory unrequested", () => {
+  const state = new RuntimeBackwardState(["a", "b"]);
+  expect(state.memoryOrder).toEqual(["a", "b"]);
+  expect(state.attempts).toEqual([]);
+  expect(state.current).toBeNull();
+  expect(state.started).toBeNull();
+  expect(state.ready).toBeNull();
+  expect(state.finished).toBeNull();
+  expect(state.everRequested).toBe(false);
+  expect(state.commitAttemptKey).toBeNull();
+  expect(state.policyOutcomes).toEqual([
+    new PolicyCommitOutcome("a", "unrequested"),
+    new PolicyCommitOutcome("b", "unrequested"),
+  ]);
+  expect(state.canStart).toBe(true);
+  expect(state.outcome).toBeNull();
+  expect(prefixLearning(state)).toEqual(new LearningResult("incomplete", { policies: state.policyOutcomes }));
+  expect(prefixLearning(new RuntimeBackwardState())).toBeNull();
+  expect(Object.isFrozen(state)).toBe(true);
+  expect(Object.isFrozen(state.memoryOrder)).toBe(true);
+});
+
+test("an unfinished attempt reads its records and derives the interrupted outcome with prefix learning", () => {
+  const attempt = new BackwardAttempt(started(), {
+    ready: ready(),
+    requests: [requested("a"), requested("b")],
+    observations: [succeeded("a")],
+  });
+  const state = new RuntimeBackwardState(["a", "b"], [attempt]);
+  expect(state.current).toBe(attempt);
+  expect(state.started).toBe(attempt.started);
+  expect(state.ready).toBe(attempt.ready);
+  expect(state.finished).toBeNull();
+  expect(state.everRequested).toBe(true);
+  expect(state.commitAttemptKey).toBe(1);
+  expect(state.canStart).toBe(false);
+  const policies = [
+    new PolicyCommitOutcome("a", "succeeded", { commitId: "commit-a" }),
+    new PolicyCommitOutcome("b", "unknown", { commitId: "commit-b" }),
+  ];
+  expect(state.policyOutcomes).toEqual(policies);
+  const learning = new LearningResult("incomplete", { policies });
+  const feedback = attempt.ready!.rootResult;
+  expect(state.outcome).toEqual(new BackwardOutcome("failed", { feedback, failure: INTERRUPTED, learning }));
+  expect(state.outcome!.feedback).toBe(attempt.ready!.rootResult);
+});
+
+test("prefix learning succeeds only when asked and every memory is confirmed", () => {
+  const attempt = new BackwardAttempt(started(), {
+    ready: ready(1, ["a"]),
+    requests: [requested("a")],
+    observations: [succeeded("a")],
+  });
+  const state = new RuntimeBackwardState(["a"], [attempt]);
+  const policies = [new PolicyCommitOutcome("a", "succeeded", { commitId: "commit-a" })];
+  expect(prefixLearning(state, { succeeded: true })).toEqual(new LearningResult("succeeded", { policies }));
+  expect(prefixLearning(state)).toEqual(new LearningResult("incomplete", { policies }));
+});
+
+test("an interrupted attempt before Ready has no feedback", () => {
+  const state = new RuntimeBackwardState(["a"], [new BackwardAttempt(started())]);
+  const outcome = state.outcome!;
+  expect(outcome.feedback).toBeNull();
+  expect(outcome.failure!.code).toBe("backward.interrupted");
+  const policies = [new PolicyCommitOutcome("a", "unrequested")];
+  expect(outcome.learning).toEqual(new LearningResult("incomplete", { policies }));
+});
+
+test("a failed commit fails the prefix learning, after a learner failure", () => {
+  const attempt = new BackwardAttempt(started(), {
+    ready: ready(),
+    requests: [requested("a")],
+    observations: [failed("a")],
+  });
+  const state = new RuntimeBackwardState(["a", "b"], [attempt]);
+  const policies = [
+    new PolicyCommitOutcome("a", "failed", { commitId: "commit-a", failure: OPERATION_FAILURE }),
+    new PolicyCommitOutcome("b", "unrequested"),
+  ];
+  const commitFailure = new LearningFailure("a", "commit", OPERATION_FAILURE);
+  expect(state.outcome!.learning).toEqual(new LearningResult("failed", { failures: [commitFailure], policies }));
+  const learnerFailure = new LearningFailure("b", "learn", OPERATION_FAILURE);
+  expect(prefixLearning(state, { learnerFailure })).toEqual(
+    new LearningResult("failed", { failures: [learnerFailure, commitFailure], policies }),
+  );
+});
+
+test("a finished history admits a start and keeps the accepted outcome", () => {
+  const first = new BackwardAttempt(started(1), {
+    ready: ready(1),
+    requests: [requested("a")],
+    observations: [failed("a")],
+    finished: interruptedFinish(1),
+  });
+  const second = new BackwardAttempt(started(2), { finished: interruptedFinish(2) });
+  const state = new RuntimeBackwardState(["a", "b"], [first, second]);
+  expect(state.current).toBe(second);
+  expect(state.finished).toBe(second.finished);
+  expect(state.ready).toBeNull();
+  expect(state.everRequested).toBe(true);
+  expect(state.commitAttemptKey).toBe(2);
+  expect(state.canStart).toBe(true);
+  expect(state.outcome).toBe(second.finished!.outcome);
+  expect(state.policyOutcomes.map((policy) => policy.status)).toEqual(["unrequested", "unrequested"]);
+});
+
+test("proposalBatches returns each memory's batch in table order and refuses another order", () => {
+  const state = new RuntimeBackwardState(["a", "b"]);
+  const batches = proposalBatches(state, ready());
+  expect(batches).toHaveLength(2);
+  expect(batches[0]).toEqual(MUTATIONS);
+  expect(batches[1]).toEqual([]);
+  for (const memories of [["b", "a"], ["a"], ["a", "b", "c"]]) {
+    expectError(
+      () => proposalBatches(state, ready(1, memories)),
+      RangeError,
+      "memory proposals must cover the complete recorded memory table in order",
+    );
+  }
+});

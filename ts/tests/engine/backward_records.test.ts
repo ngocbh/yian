@@ -66,6 +66,12 @@
  * the own keys of a constructed `TraceDelta`, in camelCase, where Python reads the dataclass
  * fields.
  *
+ * Ported, after rewrite: `test_backward_state_revalidates_exact_memory_order` builds
+ * `RuntimeBackwardState` directly (Python replaces an engine's state): the unsorted order is a
+ * `RangeError`, and the `list_order` row refuses a memory order that isn't an array (a `Set`),
+ * since the order is an array in TS. Not ported: the `string_subclass` row (TS text has no
+ * subclasses).
+ *
  * Later (T4-4 to T4-8): `test_historical_backward_prepares_recorded_schema_bytes` and the
  * prepare, append, reduce and replay tests (with the reducer, the runtime log and the engine).
  */
@@ -110,6 +116,7 @@ import {
   type RunRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
+import { RuntimeBackwardState } from "../../src/runtime/learning.ts";
 import { TraceDelta } from "../../src/runtime/trace.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 
@@ -912,6 +919,20 @@ test("sameBackwardOutcome compares status, feedback, failure and learning", () =
   expect(sameBackwardOutcome(base, succeeded({ learning: null }))).toBe(false);
   expect(sameBackwardOutcome(succeeded({ learning: null }), base)).toBe(false);
   expect(sameBackwardOutcome(failed(), failed({ learning: new LearningResult("incomplete") }))).toBe(false);
+});
+
+test("backward state revalidates the exact memory order", () => {
+  expectError(
+    () => new RuntimeBackwardState(new Set(["alpha", "beta"]) as never),
+    TypeError,
+    "backward memory order must be an array of non-empty strings",
+  );
+  expectError(
+    () => new RuntimeBackwardState(["beta", "alpha"]),
+    RangeError,
+    "backward memory order must be sorted and unique",
+  );
+  expect(new RuntimeBackwardState(["alpha", "beta"]).memoryOrder).toEqual(["alpha", "beta"]);
 });
 
 test("the post-terminal trace delta validation covers the closed field inventory", () => {

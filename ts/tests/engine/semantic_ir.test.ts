@@ -360,13 +360,13 @@ test("wiring identity uses the source and ignores the binding origin", () => {
   const fingerprints = flows.map(flowFingerprint);
   const digests = flows.map(expansionDigest);
 
-  expect(manifests[1]).toEqual(manifests[0]!);
-  expect(manifests[2]).toEqual(manifests[0]!);
+  expect(manifests[1]).toEqual(manifests[0]);
+  expect(manifests[2]).toEqual(manifests[0]);
   expect(new Set(fingerprints).size).toBe(1);
   expect(new Set(digests).size).toBe(1);
-  expect(flowManifest(changed)).not.toEqual(manifests[0]!);
-  expect(flowFingerprint(changed)).not.toBe(fingerprints[0]!);
-  expect(expansionDigest(changed)).not.toBe(digests[0]!);
+  expect(flowManifest(changed)).not.toEqual(manifests[0]);
+  expect(flowFingerprint(changed)).not.toBe(fingerprints[0]);
+  expect(expansionDigest(changed)).not.toBe(digests[0]);
 });
 
 test("a partial output contract is manifested without origins", () => {
@@ -377,15 +377,14 @@ test("a partial output contract is manifested without origins", () => {
       ["opaque", null],
     ]);
 
-  const [first, sameSemantics, changedType] = [
-    partial(ValueKind.INTEGER, "first"),
-    partial(ValueKind.INTEGER, "second"),
-    partial(ValueKind.STRING, "first"),
-  ].map((contract) => {
+  const withContract = (contract: PartialRecordContract) => {
     const flow = manifestFragment("value");
     flow.nodes.get("entry")!.outputContract = contract;
     return flow;
-  }) as [Flow, Flow, Flow];
+  };
+  const first = withContract(partial(ValueKind.INTEGER, "first"));
+  const sameSemantics = withContract(partial(ValueKind.INTEGER, "second"));
+  const changedType = withContract(partial(ValueKind.STRING, "first"));
 
   const firstManifest = flowManifest(first);
   expect(((firstManifest.nodes as JsonObject).entry as JsonObject).output_type).toEqual({
@@ -416,11 +415,11 @@ test("flow output identity uses the source and ignores the binding origin", () =
   const manifests = flows.map(flowManifest);
   const fingerprints = flows.map(flowFingerprint);
 
-  expect(manifests[1]).toEqual(manifests[0]!);
-  expect(manifests[2]).toEqual(manifests[0]!);
+  expect(manifests[1]).toEqual(manifests[0]);
+  expect(manifests[2]).toEqual(manifests[0]);
   expect(new Set(fingerprints).size).toBe(1);
-  expect(flowManifest(changed)).not.toEqual(manifests[0]!);
-  expect(flowFingerprint(changed)).not.toBe(fingerprints[0]!);
+  expect(flowManifest(changed)).not.toEqual(manifests[0]);
+  expect(flowFingerprint(changed)).not.toBe(fingerprints[0]);
 });
 
 test.each([
@@ -456,8 +455,9 @@ test.each([
     (flow.wiring.get("terminal") as Map<string, unknown>).set("result", "bypass");
   } else {
     const output = Object.assign(Object.create(FlowOutput.prototype), { name: "result", binding: "bypass" });
-    flow = manifestCompiledOutput("value");
-    (flow as CompiledFlow).outputs = [output];
+    const compiled = manifestCompiledOutput("value");
+    compiled.outputs = [output];
+    flow = compiled;
   }
 
   expectError(() => flowManifest(flow), TypeError, `${path}: expected Binding, got string`);
@@ -526,6 +526,7 @@ test("wrapped wiring keeps its source text and identity", () => {
 
   expect(wrappedManifest).toEqual(rawManifest);
   expect(flowFingerprint(wrapped)).toBe(flowFingerprint(raw));
+  // The manifest text JSON-escapes the source's quotes.
   expect(rendered).toContain(JSON.stringify(firstSource).slice(1, -1));
   expect(rendered).not.toContain("credential");
   expect(flowFingerprint(changed)).not.toBe(flowFingerprint(wrapped));

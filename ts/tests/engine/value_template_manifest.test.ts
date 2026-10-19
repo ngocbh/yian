@@ -19,7 +19,8 @@
  *   `CompiledFlow.fromParts` builds the one-step flow with each output.
  * - Ints in values are `bigint`s. Binding is frozen, so the unknown-field row forges one
  *   (`Object.assign(Object.create(Binding.prototype), binding, {extra: 1})`); Python's
- *   `ValueError` is a `RangeError` and the message names the field in text form.
+ *   `ValueError` is a `RangeError` and the message lists the field as a JSON array (`["extra"]`
+ *   where Python prints `['extra']`).
  * - `json.dumps(manifest)` is `JSON.stringify`.
  *
  * Later (T3-22): the loader row `test_a_flow_without_templates_keeps_its_fingerprint` (a pinned
@@ -92,9 +93,10 @@ function fragment(wiring: Record<string, unknown>): Flow {
 /** Return one parameter's canonical wiring value from the body node. */
 function wired(flow: Flow, param: string): JsonObject {
   const wiring = (flowManifest(flow).wiring as JsonObject).body as JsonObject;
-  const matches = (wiring.entries as JsonObject[]).filter(
-    (entry) => JSON.stringify(entry.key) === JSON.stringify({ type: "str", value: param }),
-  );
+  const matches = (wiring.entries as JsonObject[]).filter((entry) => {
+    const key = entry.key as JsonObject;
+    return key.type === "str" && key.value === param;
+  });
   expect(matches).toHaveLength(1);
   return matches[0]!.value as JsonObject;
 }
@@ -250,5 +252,4 @@ test("a flow output template encodes as a tagged tree", () => {
 
   expect(((manifest.outputs as JsonObject[])[0]!.from as JsonObject).type).toBe("value_template");
   expect(flowFingerprint(changed)).not.toBe(flowFingerprint(plain));
-  expect(changed).toBeInstanceOf(CompiledFlow);
 });

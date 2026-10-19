@@ -16,8 +16,9 @@
  *   the fingerprint" is "a rebuild has the same fingerprint".
  *
  * Later (T3-22): `test_renamespacing_keeps_the_binding_contract` (compile expansion's
- * re-namespacing), `test_flow_origin_traversal_reaches_the_binding_contract`,
- * `test_call_expansion_keeps_a_typed_child_binding` (CALL expansion of a loaded parent) and
+ * re-namespacing), `test_flow_origin_traversal_reaches_the_binding_contract` (origin traversal of
+ * a loaded typed flow), `test_call_expansion_keeps_a_typed_child_binding` (CALL expansion of a
+ * loaded parent) and
  * `test_record_typed_binding_is_never_hashed` (expansion of a loaded parent; its run half is T4,
  * and Python's hashability has no TS counterpart).
  */

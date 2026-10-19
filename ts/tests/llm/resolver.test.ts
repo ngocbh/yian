@@ -15,13 +15,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import type { Env } from "../../src/defaults.ts";
 import { collect } from "../../src/llm/events.ts";
 import { Message, Request, TextPart } from "../../src/llm/messages.ts";
 import { type Cassette, CassetteReplay, IGNORED_HEADERS, loadCassette } from "../../src/llm/testing.ts";
-import { ApiKeyCredentials, AuthError, OAuthCredentials } from "../../src/llm_clients/auth/common.ts";
+import { ApiKeyCredentials, AuthError, isAuthFailure, OAuthCredentials } from "../../src/llm_clients/auth/common.ts";
 import { AuthStore } from "../../src/llm_clients/auth/store.ts";
 import { LLMConfig } from "../../src/llm_clients/config.ts";
 import {
@@ -32,7 +32,7 @@ import {
   OPENAI_API_ENDPOINT,
   resolveModelConfig,
 } from "../../src/llm_clients/connection.ts";
-import { accountHash, chatModelFromConfig, prefersResponses } from "../../src/llm_clients/factory.ts";
+import { accountHash, chatModelFromConfig, prefersResponses, warnOnce } from "../../src/llm_clients/factory.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 
@@ -83,6 +83,18 @@ const REQUESTS: Record<string, Request> = {
   "openai_chat/azure_ad_token": HI,
   "openai_chat/azure_connection_settings": HI,
   "openai_chat/azure_block_merge": HI,
+  "anthropic_messages/plain": PLAIN,
+  "anthropic_messages/custom_base_url": PLAIN,
+  "anthropic_messages/connection_settings": PLAIN,
+  "anthropic_messages/block_sampling": PLAIN,
+  "anthropic_messages/error_401": PLAIN,
+  "gemini/plain": PLAIN,
+  "gemini/custom_base_url": PLAIN,
+  "gemini/block_merge": PLAIN,
+  "gemini/error_400_api_key_invalid": PLAIN,
+  "ollama_chat/plain": PLAIN,
+  "ollama_chat/custom_base_url": PLAIN,
+  "ollama_chat/block_merge": PLAIN,
 };
 
 /** A login saved into the case's store before the config is resolved. */
@@ -111,6 +123,8 @@ interface Edit {
   headers?: Record<string, string | null>;
   /** Top-level body fields to set. */
   json?: JsonObject;
+  /** Top-level body fields to remove. */
+  omit?: string[];
 }
 
 /** A model that builds and answers. */
@@ -246,6 +260,17 @@ const AZURE_NO_VERSION: Failed = {
   message: "provider azure needs OPENAI_API_VERSION, the Azure OpenAI API version (for example 2025-03-01-preview)",
   at: "build",
 };
+
+const ANTHROPIC = { provider: "anthropic", model: "claude-sonnet-4-5" };
+const GOOGLE = { provider: "google", model: "gemini-2.5-flash" };
+const OLLAMA = { provider: "ollama", model: "qwen3" };
+const xApiKey = (key: string) => ({ "x-api-key": key });
+const googKey = (key: string) => ({ "x-goog-api-key": key });
+
+/** The built expectation of the Anthropic route sending `key`, whose account is the key's. */
+function anthropicKey(key: string): Built {
+  return sends("anthropic", "claude-sonnet-4-5", xApiKey(key), { account: accountHash(key) });
+}
 
 /** Resolve the default config against the saved subscription, then give it a host key. */
 function hostKeyOnSubscription({ env }: Setup): AgentConfig {
@@ -881,6 +906,246 @@ const CASES: Case[] = [
     golden: "openai_responses/vllm_codex",
     expect: blockOnResponses("vllm", "my-codex-finetune"),
   },
+  {
+    name: "anthropic host key",
+    config: { ...ANTHROPIC, api_key: HOST_KEY },
+    env: { ANTHROPIC_API_KEY: ENV_KEY },
+    golden: "anthropic_messages/plain",
+    expect: anthropicKey(HOST_KEY),
+  },
+  {
+    name: "anthropic saved key",
+    config: {},
+    saved: { provider: "anthropic", credentials: new ApiKeyCredentials(SAVED_KEY), model: "claude-sonnet-4-5" },
+    env: { ANTHROPIC_API_KEY: ENV_KEY },
+    golden: "anthropic_messages/plain",
+    expect: anthropicKey(SAVED_KEY),
+  },
+  {
+    name: "anthropic ANTHROPIC_API_KEY",
+    config: ANTHROPIC,
+    env: { ANTHROPIC_API_KEY: ENV_KEY },
+    golden: "anthropic_messages/plain",
+    expect: anthropicKey(ENV_KEY),
+  },
+  {
+    name: "anthropic ANTHROPIC_BASE_URL",
+    config: ANTHROPIC,
+    env: { ANTHROPIC_API_KEY: ENV_KEY, ANTHROPIC_BASE_URL: "https://proxy.example/anthropic" },
+    golden: "anthropic_messages/plain",
+    edit: { url: "https://proxy.example/anthropic/v1/messages" },
+    expect: anthropicKey(ENV_KEY),
+  },
+  {
+    name: "anthropic ANTHROPIC_BASE_URL empty",
+    config: ANTHROPIC,
+    env: { ANTHROPIC_API_KEY: ENV_KEY, ANTHROPIC_BASE_URL: "" },
+    golden: "anthropic_messages/plain",
+    expect: anthropicKey(ENV_KEY),
+  },
+  {
+    name: "anthropic config base_url beside ANTHROPIC_BASE_URL",
+    config: { ...ANTHROPIC, api_key: HOST_KEY, base_url: "https://gateway.example.com/anthropic" },
+    env: { ANTHROPIC_BASE_URL: "https://proxy.example/anthropic" },
+    golden: "anthropic_messages/custom_base_url",
+    expect: anthropicKey(HOST_KEY),
+  },
+  {
+    name: "anthropic host key with headers",
+    config: { ...ANTHROPIC, api_key: HOST_KEY, headers: { "X-Gateway": "team-a", "x-request-source": "yian" } },
+    env: {},
+    golden: "anthropic_messages/connection_settings",
+    expect: anthropicKey(HOST_KEY),
+  },
+  {
+    name: "anthropic host key with a block",
+    config: { ...ANTHROPIC, api_key: HOST_KEY, anthropic: { temperature: 0.5, top_k: 40n } },
+    env: {},
+    golden: "anthropic_messages/block_sampling",
+    expect: anthropicKey(HOST_KEY),
+  },
+  {
+    name: "anthropic key missing",
+    config: ANTHROPIC,
+    env: { ANTHROPIC_API_KEY: "" },
+    golden: "anthropic_messages/plain",
+    expect: missingKey("anthropic", "ANTHROPIC_API_KEY"),
+  },
+  {
+    name: "google host key",
+    config: { ...GOOGLE, api_key: HOST_KEY },
+    env: { GOOGLE_API_KEY: ENV_KEY },
+    golden: "gemini/plain",
+    expect: sends("google", "gemini-2.5-flash", googKey(HOST_KEY)),
+  },
+  {
+    name: "google saved key",
+    config: {},
+    saved: { provider: "google", credentials: new ApiKeyCredentials(SAVED_KEY), model: "gemini-2.5-flash" },
+    env: { GOOGLE_API_KEY: ENV_KEY },
+    golden: "gemini/plain",
+    expect: sends("google", "gemini-2.5-flash", googKey(SAVED_KEY)),
+  },
+  {
+    name: "google GOOGLE_API_KEY before GEMINI_API_KEY",
+    config: GOOGLE,
+    env: { GOOGLE_API_KEY: ENV_KEY, GEMINI_API_KEY: "test-gemini-key" },
+    golden: "gemini/plain",
+    expect: sends("google", "gemini-2.5-flash", googKey(ENV_KEY)),
+  },
+  {
+    name: "google only GEMINI_API_KEY",
+    config: GOOGLE,
+    env: { GEMINI_API_KEY: ENV_KEY },
+    golden: "gemini/plain",
+    expect: sends("google", "gemini-2.5-flash", googKey(ENV_KEY)),
+  },
+  {
+    name: "google empty GOOGLE_API_KEY falls to GEMINI_API_KEY",
+    config: GOOGLE,
+    env: { GOOGLE_API_KEY: "", GEMINI_API_KEY: ENV_KEY },
+    golden: "gemini/plain",
+    expect: sends("google", "gemini-2.5-flash", googKey(ENV_KEY)),
+  },
+  {
+    name: "google models/ prefix dropped",
+    config: { ...GOOGLE, model: "models/gemini-2.5-flash" },
+    env: { GOOGLE_API_KEY: ENV_KEY },
+    golden: "gemini/plain",
+    // The config's model as written is not a catalog id, so it warns, as in Python.
+    expect: {
+      ...sends("google", "gemini-2.5-flash", googKey(ENV_KEY)),
+      warnings: [unknownModel("google", "models/gemini-2.5-flash")],
+    },
+  },
+  {
+    name: "google tunedModels/ keeps its collection",
+    config: { ...GOOGLE, model: "tunedModels/x" },
+    env: { GOOGLE_API_KEY: ENV_KEY },
+    golden: "gemini/plain",
+    edit: {
+      url: "https://generativelanguage.googleapis.com/v1beta/tunedModels/x:streamGenerateContent?alt=sse",
+    },
+    expect: sends("google", "tunedModels/x", googKey(ENV_KEY), { warns: true }),
+  },
+  {
+    name: "google config base_url is the API root",
+    config: { ...GOOGLE, api_key: HOST_KEY, base_url: "https://gateway.example.com/gemini" },
+    env: {},
+    golden: "gemini/custom_base_url",
+    expect: sends("google", "gemini-2.5-flash", googKey(HOST_KEY)),
+  },
+  {
+    name: "google host key with a block",
+    config: {
+      ...GOOGLE,
+      api_key: HOST_KEY,
+      google: {
+        generationConfig: {
+          thinkingConfig: { thinkingBudget: 1024n, includeThoughts: true },
+          maxOutputTokens: 512n,
+          topK: 40n,
+          temperature: 0.5,
+          stopSequences: ["STOP"],
+          topP: null,
+        },
+        safetySettings: [{ category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" }],
+        serviceTier: "flex",
+      },
+    },
+    env: {},
+    golden: "gemini/block_merge",
+    // The golden's `seed` is a field `checkModelConfig` refuses in a google block.
+    edit: { omit: ["seed"] },
+    expect: sends("google", "gemini-2.5-flash", googKey(HOST_KEY)),
+  },
+  {
+    name: "google key missing names GOOGLE_API_KEY",
+    config: GOOGLE,
+    env: { GOOGLE_API_KEY: "", GEMINI_API_KEY: "" },
+    golden: "gemini/plain",
+    expect: missingKey("google", "GOOGLE_API_KEY"),
+  },
+  {
+    name: "ollama OLLAMA_BASE_URL unset",
+    config: OLLAMA,
+    env: {},
+    golden: "ollama_chat/plain",
+    expect: sends("ollama", "qwen3", {}),
+  },
+  {
+    name: "ollama OLLAMA_BASE_URL empty",
+    config: OLLAMA,
+    env: { OLLAMA_BASE_URL: "" },
+    golden: "ollama_chat/plain",
+    expect: sends("ollama", "qwen3", {}),
+  },
+  {
+    name: "ollama a config api_key and OLLAMA_API_KEY are never sent",
+    config: { ...OLLAMA, api_key: HOST_KEY },
+    env: { OLLAMA_API_KEY: ENV_KEY },
+    golden: "ollama_chat/plain",
+    expect: sends("ollama", "qwen3", {}),
+  },
+  {
+    name: "ollama OLLAMA_BASE_URL LAN http",
+    config: OLLAMA,
+    env: { OLLAMA_BASE_URL: "http://gpu-box:11434" },
+    golden: "ollama_chat/custom_base_url",
+    expect: sends("ollama", "qwen3", {}),
+  },
+  {
+    name: "ollama OLLAMA_BASE_URL with /v1 stripped",
+    config: OLLAMA,
+    env: { OLLAMA_BASE_URL: "http://localhost:11500/v1" },
+    golden: "ollama_chat/custom_base_url",
+    edit: { url: "http://localhost:11500/api/chat" },
+    expect: sends("ollama", "qwen3", {}),
+  },
+  {
+    name: "ollama OLLAMA_BASE_URL scheme-less",
+    config: OLLAMA,
+    env: { OLLAMA_BASE_URL: "gpu-box:11434" },
+    golden: "ollama_chat/custom_base_url",
+    expect: sends("ollama", "qwen3", {}),
+  },
+  {
+    name: "ollama OLLAMA_BASE_URL userinfo sent as Basic auth",
+    config: OLLAMA,
+    env: { OLLAMA_BASE_URL: "http://u:test-pass-1@gpu-box:11434" },
+    golden: "ollama_chat/custom_base_url",
+    edit: { headers: { authorization: "<redacted>" } },
+    expect: sends("ollama", "qwen3", { authorization: "Basic dTp0ZXN0LXBhc3MtMQ==" }),
+  },
+  {
+    name: "ollama with a block",
+    config: {
+      ...OLLAMA,
+      ollama: {
+        options: { num_ctx: 8192n, temperature: 0.6, stop: ["X"], seed: null },
+        keep_alive: -1n,
+        think: false,
+        logprobs: true,
+        top_logprobs: 2n,
+      },
+    },
+    env: {},
+    golden: "ollama_chat/block_merge",
+    expect: sends("ollama", "qwen3", {}),
+  },
+  {
+    name: "ollama malformed OLLAMA_BASE_URL",
+    config: OLLAMA,
+    env: { OLLAMA_BASE_URL: "gpu-box" },
+    golden: "ollama_chat/plain",
+    expect: {
+      error: RangeError,
+      message:
+        "OLLAMA_BASE_URL must be an http:// or https:// URL of a host, an optional port, and a path, " +
+        "without a query or fragment",
+      at: "build",
+    },
+  },
 ];
 
 let home: string;
@@ -892,6 +1157,21 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
+
+/**
+ * Return the case's environment (`vars` and an auth file in `home`, changeable through the
+ * returned map) and store, with `saved` saved into it.
+ */
+async function caseSetup(vars: Record<string, string>, saved?: Login): Promise<Setup & { vars: Map<string, string> }> {
+  const map = new Map(Object.entries({ ...vars, YIAN_AUTH_FILE: join(home, "auth.json") }));
+  const env: Env = (name) => map.get(name);
+  const store = new AuthStore(null, { env });
+  if (saved) {
+    const { provider = "openai", credentials, model, endpoint, organization, project } = saved;
+    await store.save(provider, credentials, model, { endpoint, organization, project });
+  }
+  return { env, store, vars: map };
+}
 
 /** Return the golden cassette, deep-copied, with `edit` applied to its one request. */
 function editedGolden(golden: string, edit: Edit = {}): Cassette {
@@ -905,19 +1185,14 @@ function editedGolden(golden: string, edit: Edit = {}): Cassette {
     else headers[name] = value;
   }
   if (edit.json !== undefined) Object.assign(request.json as JsonObject, structuredClone(edit.json));
+  for (const name of edit.omit ?? []) delete (request.json as JsonObject)[name];
   return cassette;
 }
 
 describe("chatModelFromConfig", () => {
   for (const each of CASES) {
     test(each.name, async () => {
-      const vars = new Map(Object.entries({ ...each.env, YIAN_AUTH_FILE: join(home, "auth.json") }));
-      const env: Env = (name) => vars.get(name);
-      const store = new AuthStore(null, { env });
-      if (each.saved) {
-        const { provider = "openai", credentials, model, endpoint, organization, project } = each.saved;
-        await store.save(provider, credentials, model, { endpoint, organization, project });
-      }
+      const { env, store, vars } = await caseSetup(each.env, each.saved);
       const config = typeof each.config === "function" ? await each.config({ env, store }) : each.config;
       const cassette = editedGolden(each.golden, each.edit);
       const replay = new CassetteReplay(cassette);
@@ -967,6 +1242,118 @@ describe("chatModelFromConfig", () => {
       expect(names.sort()).toEqual(recorded.filter((name) => !IGNORED_HEADERS.has(name)).sort());
     });
   }
+});
+
+describe("anthropic connection headers", () => {
+  const config = { ...ANTHROPIC, api_key: HOST_KEY, headers: { "X-Gateway": "gateway-secret-1" } };
+
+  test("ride on the auth, leaving only the API version in the route headers", async () => {
+    const { env } = await caseSetup({});
+    const model = await chatModelFromConfig(config, { env });
+    expect({ ...model.route.headers }).toEqual({ "anthropic-version": "2023-06-01" });
+  });
+
+  test("are scrubbed from an error body", async () => {
+    const { env } = await caseSetup({});
+    const cassette = editedGolden("anthropic_messages/error_401", { headers: { "x-gateway": "gateway-secret-1" } });
+    const body = cassette.interactions[0]!.response.json as { error: { message: string } };
+    body.error.message = "unknown gateway gateway-secret-1";
+    const replay = new CassetteReplay(cassette);
+    const model = await chatModelFromConfig(config, { env, send: replay.send, scheduler: virtualScheduler() });
+    const error = await collect(model.stream(PLAIN)).then(
+      () => null,
+      (thrown: unknown) => thrown,
+    );
+    expect((error as Error).message).toBe("anthropic returned HTTP 401 (auth): unknown gateway [REDACTED]");
+    replay.assertDone();
+  });
+});
+
+describe("google auth failure", () => {
+  test("a 400 naming API_KEY_INVALID only in its details is an auth failure", async () => {
+    const { env } = await caseSetup({});
+    const replay = new CassetteReplay(editedGolden("gemini/error_400_api_key_invalid"));
+    const model = await chatModelFromConfig(
+      { ...GOOGLE, api_key: HOST_KEY },
+      { env, send: replay.send, scheduler: virtualScheduler() },
+    );
+    const error = await collect(model.stream(PLAIN)).then(
+      () => null,
+      (thrown: unknown) => thrown,
+    );
+    expect(error).not.toBeNull();
+    expect(isAuthFailure(error)).toBe(true);
+    replay.assertDone();
+  });
+});
+
+describe("unknown-model warning", () => {
+  /** Build `config` (sending nothing) and return the `onWarning` texts. */
+  async function warningsFor(config: AgentConfig, vars: Record<string, string>, saved?: Login): Promise<string[]> {
+    const { env } = await caseSetup(vars, saved);
+    const warnings: string[] = [];
+    await chatModelFromConfig(config, { env, onWarning: (message) => void warnings.push(message) });
+    return warnings;
+  }
+
+  test("an unknown xai model gets Python's text", async () => {
+    const warnings = await warningsFor({ provider: "xai", model: "grok-resolver-unknown" }, { XAI_API_KEY: ENV_KEY });
+    expect(warnings).toEqual([
+      "Model 'grok-resolver-unknown' is not in the known model list for provider 'xai'. Continuing anyway.",
+    ]);
+  });
+
+  test("a known model doesn't warn", async () => {
+    expect(await warningsFor({ provider: "google", model: "gemini-2.5-pro" }, { GOOGLE_API_KEY: ENV_KEY })).toEqual([]);
+  });
+
+  const quiet: [string, AgentConfig, Record<string, string>][] = [
+    ["azure", { ...AZURE, model: "resolver-unknown-deploy" }, { ...AZURE_ENV, AZURE_OPENAI_API_KEY: ENV_KEY }],
+    ["openrouter", { provider: "openrouter", model: "resolver/unknown" }, { OPENROUTER_API_KEY: ENV_KEY }],
+    ["vllm", { provider: "vllm", model: "resolver-unknown" }, {}],
+    ["ollama", { provider: "ollama", model: "resolver-unknown" }, {}],
+  ];
+  for (const [provider, config, vars] of quiet) {
+    test(`${provider} never warns`, async () => expect(await warningsFor(config, vars)).toEqual([]));
+  }
+
+  test("the subscription never warns", async () => {
+    const config = { provider: "openai", model: "resolver-unknown-gpt" };
+    expect(await warningsFor(config, {}, { ...SUBSCRIPTION, model: "resolver-unknown-gpt" })).toEqual([]);
+  });
+
+  test("the default onWarning emits each text once", async () => {
+    const emit = spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      const { env } = await caseSetup({ XAI_API_KEY: ENV_KEY });
+      const config = { provider: "xai", model: "grok-resolver-default-warning" };
+      await chatModelFromConfig(config, { env });
+      await chatModelFromConfig(config, { env });
+      expect(emit.mock.calls.map((args) => [...args])).toEqual([[unknownModel("xai", "grok-resolver-default-warning"), "RuntimeWarning"]]);
+    } finally {
+      emit.mockRestore();
+    }
+  });
+});
+
+describe("warnOnce", () => {
+  test("emits a text only when the seen-set lacks it, then adds it", () => {
+    const emit = spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      const seen = new Set<string>(["already seen"]);
+      warnOnce(seen, "first");
+      warnOnce(seen, "first");
+      warnOnce(seen, "already seen");
+      warnOnce(seen, "second");
+      expect(emit.mock.calls.map((args) => [...args])).toEqual([
+        ["first", "RuntimeWarning"],
+        ["second", "RuntimeWarning"],
+      ]);
+      expect([...seen]).toEqual(["already seen", "first", "second"]);
+    } finally {
+      emit.mockRestore();
+    }
+  });
 });
 
 describe("prefersResponses", () => {

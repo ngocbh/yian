@@ -6,22 +6,29 @@
  * plugin loading and no SDK. The environment is read only through the injected `env` (default
  * `processEnv`), at build: what `connection.ts` reads for the snapshot and credentials;
  * `OPENAI_BASE_URL` for a host key on a pinned subscription connection; each Chat Completions
- * vendor's key variable (`getApiKeyEnv`) and `VLLM_BASE_URL`; and `AZURE_OPENAI_AD_TOKEN`,
- * `AZURE_OPENAI_API_KEY` and `OPENAI_API_VERSION` for Azure. An empty value counts as unset.
+ * vendor's key variable (`getApiKeyEnv`) and `VLLM_BASE_URL`; `AZURE_OPENAI_AD_TOKEN`,
+ * `AZURE_OPENAI_API_KEY` and `OPENAI_API_VERSION` for Azure; `ANTHROPIC_API_KEY` and
+ * `ANTHROPIC_BASE_URL`; `GOOGLE_API_KEY` and `GEMINI_API_KEY`; and `OLLAMA_BASE_URL`. An empty
+ * value counts as unset.
  */
 
 import { type Env, processEnv } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
 import {
   type Auth,
+  BasicAuth,
   BearerAuth,
   ExtraHeadersAuth,
   HeaderKeyAuth,
+  NoAuth,
   type Secret,
   SubscriptionAuth,
 } from "../llm/auth.ts";
 import { RouteModel } from "../llm/executor.ts";
 import type { ReplayDegradedReason } from "../llm/messages.ts";
+import { AnthropicMessages } from "../llm/protocols/anthropic_messages.ts";
+import { Gemini } from "../llm/protocols/gemini.ts";
+import { OllamaChat } from "../llm/protocols/ollama_chat.ts";
 import { OpenAIChat } from "../llm/protocols/openai_chat.ts";
 import { OpenAIResponses } from "../llm/protocols/openai_responses.ts";
 import { Route } from "../llm/route.ts";
@@ -35,7 +42,7 @@ import {
   type Credentials,
   OAuthCredentials,
 } from "./auth/common.ts";
-import { azureResourceEndpoint, LLMConfig, SUPPORTED_LLM_PROVIDERS } from "./config.ts";
+import { azureResourceEndpoint, LLMConfig, splitOllamaBaseUrl, SUPPORTED_LLM_PROVIDERS } from "./config.ts";
 import {
   checkModelConfig,
   type Connection,
@@ -212,6 +219,14 @@ function withHeaders(auth: Auth, headers: Record<string, string>): Auth {
   return Object.keys(headers).length > 0 ? new ExtraHeadersAuth(auth, headers) : auth;
 }
 
+/** The error for `provider` with no key, naming the environment `variable` to set. */
+function missingKey(provider: string, variable: string): RangeError {
+  return new RangeError(
+    `API key for provider '${provider}' is not set. Please set the ${variable} environment ` +
+      `variable (e.g. add ${variable}=your_key to your .env file).`,
+  );
+}
+
 /** Build the OpenAI API-key route: Responses with a bearer key. */
 function openaiModel(resolved: Resolved, wiring: Wiring): RouteModel {
   const route = new Route({
@@ -265,12 +280,7 @@ function vendorModel(provider: string, resolved: Resolved, wiring: Wiring): Rout
   const { model, block } = resolved;
   const variable = getApiKeyEnv(provider)!;
   const key = resolved.keyAtBuild ?? (wiring.env(variable) || null);
-  if (key === null && !OPTIONAL_API_KEY_PROVIDERS.has(provider)) {
-    throw new RangeError(
-      `API key for provider '${provider}' is not set. Please set the ${variable} environment ` +
-        `variable (e.g. add ${variable}=your_key to your .env file).`,
-    );
-  }
+  if (key === null && !OPTIONAL_API_KEY_PROVIDERS.has(provider)) throw missingKey(provider, variable);
   const envBaseUrl = provider === "vllm" ? wiring.env("VLLM_BASE_URL") : undefined;
   const responses = routedToResponses(provider, model, block);
   const route = new Route({
@@ -353,6 +363,105 @@ function azureModel(resolved: Resolved, wiring: Wiring): RouteModel {
 }
 
 /**
+ * Build the Anthropic route: `v1/messages` with the key as `x-api-key` and the API version as a
+ * route header.
+ *
+ * The key is the resolved one, else a non-empty `ANTHROPIC_API_KEY`; the base URL the resolved
+ * one, else a non-empty `ANTHROPIC_BASE_URL` as written, else `https://api.anthropic.com`. The
+ * replay account is the key's, so thinking replays across Claude models on one account. Throws
+ * `RangeError` naming `ANTHROPIC_API_KEY` if no key is found.
+ */
+function anthropicModel(resolved: Resolved, wiring: Wiring): RouteModel {
+  const { env } = wiring;
+  const key = resolved.keyAtBuild ?? (env("ANTHROPIC_API_KEY") || null);
+  if (key === null) throw missingKey("anthropic", "ANTHROPIC_API_KEY");
+  const route = new Route({
+    provider: "anthropic",
+    baseUrl: resolved.baseUrl ?? (env("ANTHROPIC_BASE_URL") || "https://api.anthropic.com"),
+    path: "v1/messages",
+    auth: withHeaders(new HeaderKeyAuth("x-api-key", key), resolved.secretHeaders),
+    headers: { "anthropic-version": "2023-06-01" },
+  });
+  const protocol = new AnthropicMessages({
+    model: resolved.model,
+    provider: "anthropic",
+    account: accountHash(key),
+    block: resolved.block,
+    onReplayDegraded: wiring.onReplayDegraded,
+  });
+  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+}
+
+/**
+ * Return the Gemini API path that streams `model`, and the id the protocol and its records use.
+ *
+ * One leading `models/` is dropped, as google-genai does; an id in `tunedModels/` keeps that
+ * collection. The rest is percent-encoded, so it stays one path segment.
+ */
+function geminiPath(model: string): [path: string, id: string] {
+  const id = model.startsWith("models/") ? model.slice("models/".length) : model;
+  const tuned = id.startsWith("tunedModels/");
+  const collection = tuned ? "tunedModels" : "models";
+  const name = tuned ? id.slice("tunedModels/".length) : id;
+  return [`v1beta/${collection}/${encodeURIComponent(name)}:streamGenerateContent`, id];
+}
+
+/**
+ * Build the Gemini Developer API route: the model's `streamGenerateContent` with `alt=sse` and
+ * the key as `x-goog-api-key`, never in the query.
+ *
+ * The key is the resolved one, else a non-empty `GOOGLE_API_KEY`, else a non-empty
+ * `GEMINI_API_KEY`; the base URL (the API root) the resolved one, else
+ * `https://generativelanguage.googleapis.com`. Throws `RangeError` naming `GOOGLE_API_KEY` if no
+ * key is found.
+ */
+function googleModel(resolved: Resolved, wiring: Wiring): RouteModel {
+  const { env } = wiring;
+  const key = resolved.keyAtBuild ?? (env("GOOGLE_API_KEY") || env("GEMINI_API_KEY") || null);
+  if (key === null) throw missingKey("google", "GOOGLE_API_KEY");
+  const [path, id] = geminiPath(resolved.model);
+  const route = new Route({
+    provider: "google",
+    baseUrl: resolved.baseUrl ?? "https://generativelanguage.googleapis.com",
+    path,
+    query: { alt: "sse" },
+    auth: withHeaders(new HeaderKeyAuth("x-goog-api-key", key), resolved.secretHeaders),
+  });
+  const protocol = new Gemini({
+    model: id,
+    provider: "google",
+    block: resolved.block,
+    onReplayDegraded: wiring.onReplayDegraded,
+  });
+  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+}
+
+/**
+ * Build the native Ollama route: `api/chat` at a non-empty `OLLAMA_BASE_URL`, split by
+ * `splitOllamaBaseUrl`, else at `http://localhost:11434`.
+ *
+ * Only the user name and password written in `OLLAMA_BASE_URL` are sent, as Basic auth; a config
+ * key is accepted and never sent. Throws `RangeError` if `OLLAMA_BASE_URL` is malformed.
+ */
+function ollamaModel(resolved: Resolved, wiring: Wiring): RouteModel {
+  const value = wiring.env("OLLAMA_BASE_URL");
+  const [baseUrl, credentials] = value ? splitOllamaBaseUrl(value) : ["http://localhost:11434", null];
+  const route = new Route({
+    provider: "ollama",
+    baseUrl,
+    path: "api/chat",
+    auth: credentials === null ? new NoAuth() : new BasicAuth(...credentials),
+  });
+  const protocol = new OllamaChat({
+    model: resolved.model,
+    provider: "ollama",
+    block: resolved.block,
+    onReplayDegraded: wiring.onReplayDegraded,
+  });
+  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+}
+
+/**
  * Build the ChatGPT subscription route: Responses at the connection's endpoint, its credentials
  * read once here (for the replay account) and again on every request.
  */
@@ -402,14 +511,15 @@ async function subscriptionModel(
  * `onWarning("Model '<model>' is not in the known model list for provider '<p>'. Continuing
  * anyway.")` (default: `process.emitWarning`, once per text per process); the subscription never
  * warns. A Chat Completions vendor's or Azure deployment's model that `prefersResponses` goes to
- * the Responses API.
+ * the Responses API. Ollama sends only the credentials written in `OLLAMA_BASE_URL`, never a key.
  *
  * `send` and `scheduler` go to the model's transport (`scheduler` also to the credential store),
  * `signal` to every credential read, and `onReplayDegraded` to the protocol.
  *
  * Throws `RangeError` if `checkModelConfig` rejects the config (e.g. a block the API it reaches
- * refuses), the provider has no route yet, a vendor key is missing, Azure has no credential or
- * no `OPENAI_API_VERSION`, or a model routed to the Responses API has a Chat Completions block;
+ * refuses), a vendor, Anthropic or Google key is missing, `OLLAMA_BASE_URL` is malformed, Azure
+ * has no credential or no `OPENAI_API_VERSION`, or a model routed to the Responses API has a Chat
+ * Completions block;
  * `AuthError` if a pinned login changed or was removed,
  * an OpenAI key is missing or changed, or saved header names differ from the recorded ones; a
  * `TypeCheckError` for a record that holds a non-yian value.
@@ -497,6 +607,8 @@ export async function chatModelFromConfig(
   }
   if (provider === "openai") return openaiModel(resolved, wiring);
   if (provider === "azure") return azureModel(resolved, wiring);
-  if (OPENAI_COMPATIBLE.includes(provider)) return vendorModel(provider, resolved, wiring);
-  throw new RangeError(`chatModelFromConfig does not route provider ${provider} yet`);
+  if (provider === "anthropic") return anthropicModel(resolved, wiring);
+  if (provider === "google") return googleModel(resolved, wiring);
+  if (provider === "ollama") return ollamaModel(resolved, wiring);
+  return vendorModel(provider, resolved, wiring);
 }

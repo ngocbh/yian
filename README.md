@@ -127,9 +127,11 @@ Run logs can contain inputs, model/tool/human data, outputs, memory snapshots,
 configuration, and tracebacks. Treat them as sensitive. See [The `yian`
 CLI](docs/cli.md) for input behavior, diagnostics, concurrency, and recovery.
 
-`yian check FLOW...`, `yian skills check DIR...`, `yian config check`, and
-`yian providers` check a setup without running a flow. With `--json`, these commands
-and `yian run` write one `yian.cli.v1` JSON document on stdout; see
+`yian check FLOW...`, `yian skills check DIR...`, and `yian config check` check a
+setup without running a flow; `yian providers` and `yian models` list the providers
+and the models a login or a key offers. With `--json`, these commands,
+`yian auth --remove`, and `yian run` write one `yian.cli.v1` JSON document on stdout,
+and device sign-in writes JSON lines; see
 [Machine-readable output](docs/cli.md#machine-readable-output).
 
 For an interactive flow-backed chat:

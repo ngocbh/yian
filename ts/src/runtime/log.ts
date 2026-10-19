@@ -1229,10 +1229,7 @@ export class MemoryRunLog implements RunLog {
    */
   append(record: RunRecord): RecordEnvelope {
     if (this.#closed) throw new Error("run log is closed");
-    // The retained envelope is the decoded line, so a live run sees exactly what a resumed run
-    // reads back.
-    const line = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, this.runId, this.nextSequence, record));
-    const retained = decodeRecord(line);
+    const [, retained] = canonicalEnvelope(record, this.runId, this.nextSequence);
     this.#records.push(retained);
     return retained;
   }
@@ -1265,6 +1262,8 @@ export class JsonlRunLog implements RunLog {
   readonly #records: RecordEnvelope[];
   #prefixSize: number;
   #closed = false;
+  /** The error of the failed append that poisoned the log, or `null`. */
+  #failure: { error: unknown } | null = null;
 
   /** Adopt a locked descriptor and its validated complete prefix of `prefixSize` bytes. */
   private constructor(
@@ -1304,7 +1303,7 @@ export class JsonlRunLog implements RunLog {
       lock = lockRunLog(path);
       return new JsonlRunLog(path, canonicalRunId, fd, lock, [], 0);
     } catch (error) {
-      release(fd, lock);
+      releaseAfterFailure(fd, lock);
       throw error;
     }
   }
@@ -1339,7 +1338,7 @@ export class JsonlRunLog implements RunLog {
       }
       return new JsonlRunLog(path, records[0]!.runId, fd, lock, records, completeEnd);
     } catch (error) {
-      release(fd, lock);
+      releaseAfterFailure(fd, lock);
       throw error;
     }
   }
@@ -1362,23 +1361,46 @@ export class JsonlRunLog implements RunLog {
    * Append `record` as one complete line under `nextSequence`, and retain it only after the
    * file is synced.
    *
-   * @throws Error when the log is closed, or a write makes no progress.
+   * A failed write or sync truncates the file back to the prior complete prefix and syncs it,
+   * and poisons the log: every later append throws, and the lock stays held until `close`.
+   *
+   * @throws Error `run log is closed`; `run log <path> refuses appends after a failed append`,
+   *   with the failed append's error as `cause`; `short run-log write: wrote K of N bytes` when
+   *   a write makes no progress.
    * @throws RangeError, TypeError the envelope's and the codec's errors, before anything is
-   *   written.
-   * @throws the `fs` error of a failed write or sync.
+   *   written; they don't poison the log.
+   * @throws the `fs` error of a failed write or sync, or, when the rollback fails too,
+   *   `AggregateError` `run log <path> append failed and its rollback also failed` holding that
+   *   error and the rollback's errors.
    */
   append(record: RunRecord): RecordEnvelope {
     if (this.#closed) throw new Error("run log is closed");
-    const line = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, this.runId, this.nextSequence, record));
-    const retained = decodeRecord(line);
-    const bytes = UTF8_ENCODER.encode(`${line}\n`);
-    for (let written = 0; written < bytes.length; ) {
-      const count = fs.writeSync(this.#fd, bytes, written, bytes.length - written, this.#prefixSize + written);
-      // A write that makes no progress would loop forever.
-      if (count === 0) throw new Error(`short run-log write: wrote ${written} of ${bytes.length} bytes`);
-      written += count;
+    if (this.#failure !== null) {
+      throw new Error(`run log ${this.path} refuses appends after a failed append`, { cause: this.#failure.error });
     }
-    fs.fsyncSync(this.#fd);
+    const [line, retained] = canonicalEnvelope(record, this.runId, this.nextSequence);
+    const bytes = UTF8_ENCODER.encode(`${line}\n`);
+    try {
+      for (let written = 0; written < bytes.length; ) {
+        const count = fs.writeSync(this.#fd, bytes, written, bytes.length - written, this.#prefixSize + written);
+        // A write that makes no progress would loop forever.
+        if (count === 0) throw new Error(`short run-log write: wrote ${written} of ${bytes.length} bytes`);
+        written += count;
+      }
+      fs.fsyncSync(this.#fd);
+    } catch (error) {
+      // Poisoned even after a clean rollback: the failed append ends the run as a host error,
+      // and a failed rollback leaves a tail only a resume repairs.
+      this.#failure = { error };
+      const rollbackErrors = rollbackAppend(this.#fd, this.#prefixSize);
+      if (rollbackErrors.length > 0) {
+        throw new AggregateError(
+          [error, ...rollbackErrors],
+          `run log ${this.path} append failed and its rollback also failed`,
+        );
+      }
+      throw error;
+    }
     this.#records.push(retained);
     this.#prefixSize += bytes.length;
     return retained;
@@ -2704,6 +2726,41 @@ function lockRunLog(path: string): FileLock {
       throw new Error(`run log ${path} is locked by another writer (is the run still active?)`, { cause: error });
     }
     throw error;
+  }
+}
+
+/**
+ * Return a record's canonical line under `runId` and `seq`, and the envelope decoded from it.
+ * A log retains the decoded line, so a live run sees exactly what a resumed run reads back.
+ *
+ * @throws RangeError, TypeError the envelope's and the codec's errors.
+ */
+function canonicalEnvelope(record: RunRecord, runId: string, seq: number): [string, RecordEnvelope] {
+  const line = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, seq, record));
+  return [line, decodeRecord(line)];
+}
+
+/**
+ * Truncate `fd` back to `prefixSize` bytes, then sync it, attempting both; return their errors.
+ */
+function rollbackAppend(fd: number, prefixSize: number): unknown[] {
+  const errors: unknown[] = [];
+  for (const operation of [() => fs.ftruncateSync(fd, prefixSize), () => fs.fsyncSync(fd)]) {
+    try {
+      operation();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
+}
+
+/** Release `fd` and `lock` after a failed `create` or `resume`, ignoring release errors. */
+function releaseAfterFailure(fd: number, lock: FileLock | undefined): void {
+  try {
+    release(fd, lock);
+  } catch {
+    // The caller rethrows the error that explains the failure; a release error would mask it.
   }
 }
 

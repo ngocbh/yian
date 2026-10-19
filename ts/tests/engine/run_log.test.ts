@@ -2,7 +2,7 @@
  * In-memory and locked JSONL run logs, the run-log reader and the schema checks: a port of
  * `tests/engine/test_run_log.py`.
  *
- * Ported: `test_memory_log_orders_records_and_retains_a_canonical_copy`,
+ * Ported: `test_schema_version_is_nine`, `test_memory_log_orders_records_and_retains_a_canonical_copy`,
  * `test_memory_log_reopening_rejects_invalid_prefix_coordinates` (the empty, gap, duplicate and
  * foreign rows), `test_memory_log_rejects_invalid_run_ids`, `test_prefix_identity_rejects_corruption`,
  * `test_schema_check_does_not_weaken_payload_validation`,
@@ -14,11 +14,21 @@
  * `test_jsonl_resume_rejects_identity_mismatches_and_releases_lock`,
  * `test_jsonl_resume_leaves_a_rejected_file_unchanged`,
  * `test_jsonl_resume_rejects_an_empty_file_and_releases_lock`,
- * `test_jsonl_close_is_idempotent_keeps_cache_and_releases_lock` and
- * `test_jsonl_context_releases_lock_when_the_body_raises` (`using`). Each rejection is pinned with
- * its class and message; Python's `ValueError` is a `RangeError` and its `RuntimeError` an `Error`,
- * and a run id that isn't text is a `RangeError` as in Python. A free lock is probed with
- * `isLocked(<log>.lock)`, where Python takes the `flock` itself.
+ * `test_jsonl_close_is_idempotent_keeps_cache_and_releases_lock`,
+ * `test_jsonl_context_releases_lock_when_the_body_raises` (`using`),
+ * `test_jsonl_append_uses_one_complete_write_flush_and_fsync`,
+ * `test_jsonl_append_and_cache_are_isolated_from_caller_mutation`,
+ * `test_jsonl_never_exposes_its_retained_mutable_payload`, `test_append_rollback_preserves_log`,
+ * `test_invalid_append_retains_the_prior_complete_prefix`,
+ * `test_write_failure_rolls_back_to_the_prior_complete_prefix`,
+ * `test_fsync_failure_rolls_back_and_syncs_the_prior_complete_prefix`,
+ * `test_short_write_is_an_append_failure_and_rolls_back` and
+ * `test_tail_repair_failure_releases_the_lock`. Each rejection is pinned with its class and
+ * message; Python's `ValueError` is a `RangeError` and its `RuntimeError` an `Error`, and a run id
+ * that isn't text is a `RangeError` as in Python. A free lock is probed with
+ * `isLocked(<log>.lock)`, where Python takes the `flock` itself. A failed write or sync is
+ * injected with a spy on the `fs` operation, filtered to the log's descriptor, where Python wraps
+ * the file object.
  *
  * TS-only: a run id holding a lone surrogate (also refused by `create` before any file exists); a
  * record appended while iterating doesn't show in that iteration, and `records()` is a fresh
@@ -26,14 +36,17 @@
  * memory log unchanged; resuming a missing log throws `ENOENT` and creates no lock file;
  * `isRunLogLocked`; the reader `readRunLog` (a complete prefix read without the lock, an
  * incomplete tail ignored and left in place, an empty file, a corrupt line named by path, line and
- * seq, a line that isn't UTF-8).
+ * seq, a line that isn't UTF-8); a failed resume whose descriptor close also fails throws the
+ * original error; a write that fails and whose rollback truncate also fails.
  *
  * Changed:
+ * - `test_schema_version_is_nine`: `SCHEMA_VERSION` is 10.
  * - `MemoryRunLog._from_records` is `MemoryRunLog.fromRecords`, and Python's "tuple" reads
  *   "array".
- * - `test_memory_log_reopens_a_detached_prefix_at_the_next_sequence` and
- *   `test_memory_log_never_exposes_its_retained_mutable_payload`: records are frozen, so a
- *   reader's edit throws `TypeError` where Python edits a private copy.
+ * - `test_memory_log_reopens_a_detached_prefix_at_the_next_sequence`,
+ *   `test_memory_log_never_exposes_its_retained_mutable_payload` and
+ *   `test_jsonl_never_exposes_its_retained_mutable_payload`: records are frozen, so a reader's
+ *   edit throws `TypeError` where Python edits a private copy.
  * - `test_memory_log_reopening_revalidates_exact_envelope_authority`: the `record` row is the
  *   `NodeStartedRecord` constructor's rejection, and the `envelope` row (a `RecordEnvelope`
  *   subclass) is a `TypeError`.
@@ -50,6 +63,8 @@
  *   in the test's runtime and matches the busy message.
  * - `test_jsonl_create_is_exclusive_and_preserves_an_existing_file`: the error's `code` is
  *   `EEXIST` (Python's `FileExistsError`).
+ * - `test_jsonl_resume_empty_error_names_the_log` and
+ *   `test_jsonl_resume_rejects_an_empty_file_and_releases_lock` are one test.
  * - `test_jsonl_resume_truncates_and_syncs_every_incomplete_tail`: one `ftruncateSync` and one
  *   `fsyncSync`; TS has no buffered flush to count.
  * - `test_jsonl_create_releases_lock_when_file_adoption_fails`: TS adopts no file object, so the
@@ -57,12 +72,23 @@
  *   and leaves the empty file.
  * - Python refuses entering a closed log with `with`; TS `using` has no enter step, so there is
  *   nothing to refuse.
+ * - `test_jsonl_append_uses_one_complete_write_flush_and_fsync`: one `writeSync` and one
+ *   `fsyncSync`; there is no flush.
+ * - A failed append poisons the log: every later append throws `run log <path> refuses appends
+ *   after a failed append` with the original error as `cause`, while the lock stays held until
+ *   `close()`. Python retries in place, so `test_append_rollback_preserves_log` appends its third
+ *   record after a fresh resume, and the failure tests also check the poisoned error.
+ * - `test_append_rollback_preserves_log`: every sync fails, so the rollback's sync fails too and
+ *   the error is an `AggregateError` of both, where Python adds a note.
+ * - `test_invalid_append_retains_the_prior_complete_prefix`: the record is refused by
+ *   `RecordEnvelope`, before any write, and doesn't poison the log.
+ * - `test_short_write_is_an_append_failure_and_rolls_back`: a short write is completed by writing
+ *   the rest, so the append succeeds; a write of 0 bytes after a partial one is the failure.
  *
- * Not ported: `test_schema_version_is_nine` (`SCHEMA_VERSION` is 10, pinned in
- * `run_log_call_time_llm.test.ts`); the list and tuple-subclass rows of the reopening-coordinates
- * test (a TS prefix is an array); the forgery rows of the envelope-authority and schema-check tests
- * (`object.__setattr__`; a frozen TS envelope refuses the edit). The append and rollback tests come
- * later in this file.
+ * Not ported: the list and tuple-subclass rows of the reopening-coordinates test (a TS prefix is
+ * an array); the forgery rows of the envelope-authority and schema-check tests
+ * (`object.__setattr__`; a frozen TS envelope refuses the edit);
+ * `test_flush_failure_rolls_back_to_the_prior_complete_prefix` (there is no flush).
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -137,6 +163,49 @@ function isDescriptorOf(fd: unknown, file: string): boolean {
   return open.dev === named.dev && open.ino === named.ino;
 }
 
+type FsOperation = "writeSync" | "fsyncSync" | "ftruncateSync" | "closeSync";
+
+/**
+ * Replace `fs[name]`: a call on a descriptor of `file` runs `onLog(real, args)`, where `real`
+ * calls the original operation; every other call (the lock's own) goes to the original.
+ */
+function spyOnLog(name: FsOperation, file: string, onLog: (real: (...args: any[]) => any, args: any[]) => unknown) {
+  const original = fs[name] as (...args: unknown[]) => unknown;
+  const real = (...args: unknown[]) => Reflect.apply(original, fs, args);
+  return spyOn(fs as any, name).mockImplementation((...args: any[]) =>
+    isDescriptorOf(args[0], file) ? onLog(real, args) : real(...args),
+  );
+}
+
+/**
+ * Assert `append` throws, leaving the file's bytes, the records and `nextSequence` at the prior
+ * complete prefix, and return the thrown error.
+ */
+function expectAppendFailure(log: JsonlRunLog, file: string, append: () => unknown): unknown {
+  const bytes = fs.readFileSync(file);
+  const records = log.records();
+  const sequence = log.nextSequence;
+  let caught: unknown;
+  try {
+    append();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeDefined();
+  expect(fs.readFileSync(file)).toEqual(bytes);
+  expect(log.records()).toEqual(records);
+  expect(log.nextSequence).toBe(sequence);
+  return caught;
+}
+
+/** Assert `log` refuses appends with `cause` as the reason, and still holds its lock. */
+function expectPoisoned(log: JsonlRunLog, file: string, cause: unknown): void {
+  const message = `run log ${file} refuses appends after a failed append`;
+  const error = expectError(() => log.append(new NodeStartedRecord("late")), Error, message);
+  expect(error.cause).toBe(cause);
+  expect(isRunLogLocked(file)).toBe(true);
+}
+
 /** Return the node ids of `records`, which are all `node_started`. */
 function nodeIds(records: Iterable<RecordEnvelope>): string[] {
   return [...records].map((envelope) => (envelope.record as NodeStartedRecord).nodeId);
@@ -150,6 +219,10 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("the schema version is 10", () => {
+  expect(SCHEMA_VERSION).toBe(10);
 });
 
 test.each([7, 8])("retired schema %d record is rejected by name", (schema) => {
@@ -460,12 +533,14 @@ function busyMessage(file: string): string {
 
 test("resuming a missing log throws ENOENT and creates no lock file", () => {
   const file = path.join(dir, "missing.jsonl");
-  const error = expectError(
-    () => JsonlRunLog.resume(file),
-    Error,
-    `ENOENT: no such file or directory, open '${file}'`,
-  ) as NodeJS.ErrnoException;
-  expect(error.code).toBe("ENOENT");
+  let caught: NodeJS.ErrnoException | undefined;
+  try {
+    JsonlRunLog.resume(file);
+  } catch (error) {
+    caught = error as NodeJS.ErrnoException;
+  }
+  expect(caught?.code).toBe("ENOENT");
+  expect(caught?.path).toBe(file);
   expect(fs.readdirSync(dir)).toEqual([]);
 });
 
@@ -722,8 +797,8 @@ test("jsonl create releases its descriptor when adoption fails: a busy lock", ()
     closeSpy.mockRestore();
     holder.release();
   }
-  expect((error.cause as FileLockError).reason).toBe("busy");
   expect(error.cause).toBeInstanceOf(FileLockError);
+  expect((error.cause as FileLockError).reason).toBe("busy");
   expect(closed).toHaveLength(1);
   expect(fs.readFileSync(file, "utf8")).toBe("");
   expectUnlocked(file);
@@ -770,4 +845,249 @@ test("isRunLogLocked reports whether a writer holds the log", () => {
   }
   expect(isRunLogLocked(file)).toBe(false);
   expect(fs.existsSync(`${file}.lock`)).toBe(true);
+});
+
+test("a failed resume whose descriptor close also fails throws the original error", () => {
+  const file = path.join(dir, "empty.jsonl");
+  fs.writeFileSync(file, "");
+  const spy = spyOnLog("closeSync", file, (real, args) => {
+    real(...args);
+    throw new Error("close failed");
+  });
+  try {
+    expectError(() => JsonlRunLog.resume(file), RangeError, `cannot resume an empty run log: ${file}`);
+  } finally {
+    spy.mockRestore();
+  }
+  expectUnlocked(file);
+});
+
+test("jsonl append uses one complete write and one fsync", () => {
+  const file = path.join(dir, "run.jsonl");
+  const log = JsonlRunLog.create(file, "run");
+  const writes: string[] = [];
+  let fsyncs = 0;
+  const writeSpy = spyOnLog("writeSync", file, (real, args) => {
+    const [, buffer, offset, length] = args as [number, Uint8Array, number, number];
+    writes.push(Buffer.from(buffer.subarray(offset, offset + length)).toString("utf8"));
+    return real(...args);
+  });
+  const fsyncSpy = spyOnLog("fsyncSync", file, (real, args) => {
+    fsyncs++;
+    return real(...args);
+  });
+  let envelope: RecordEnvelope;
+  try {
+    envelope = log.append(new NodeStartedRecord("work"));
+  } finally {
+    writeSpy.mockRestore();
+    fsyncSpy.mockRestore();
+    log.close();
+  }
+  expect(envelope.seq).toBe(0);
+  expect(writes).toEqual([`${wireLine()}\n`]);
+  expect(fsyncs).toBe(1);
+});
+
+test("jsonl append and cache are isolated from caller mutation", () => {
+  const file = path.join(dir, "run.jsonl");
+  const seed = { items: [1n] };
+  {
+    using log = JsonlRunLog.create(file, "run");
+    const envelope = log.append(new NodeExpandedRecord("each", seed, [], DIGEST));
+    seed.items.push(2n);
+    expect(seedOf(envelope)).toEqual({ items: [1n] });
+    expect(seedOf([...log][0]!)).toEqual({ items: [1n] });
+  }
+  using resumed = JsonlRunLog.resume(file);
+  expect(seedOf([...resumed][0]!)).toEqual({ items: [1n] });
+});
+
+test("a jsonl log never exposes its retained mutable payload", () => {
+  const file = path.join(dir, "run.jsonl");
+  const log = JsonlRunLog.create(file, "run");
+  const appended = log.append(new NodeExpandedRecord("each", { items: [{ value: 1n }] }, [], DIGEST));
+  const durable = fs.readFileSync(file, "utf8");
+
+  expect(() => seedOf(appended).items.push({ from: "append" })).toThrow(TypeError);
+  const iterated = log[Symbol.iterator]().next().value!;
+  expect(() => {
+    seedOf(iterated).items[0].value = 99n;
+  }).toThrow(TypeError);
+  expect(() => seedOf(log.records()[0]!).items.push({ from: "records" })).toThrow(TypeError);
+
+  expect(seedOf(log[Symbol.iterator]().next().value!)).toEqual({ items: [{ value: 1n }] });
+  expect(seedOf(log.records()[0]!)).toEqual({ items: [{ value: 1n }] });
+  expect(fs.readFileSync(file, "utf8")).toBe(durable);
+  log.close();
+
+  using resumed = JsonlRunLog.resume(file);
+  expect(seedOf(resumed[Symbol.iterator]().next().value!)).toEqual({ items: [{ value: 1n }] });
+  expect(fs.readFileSync(file, "utf8")).toBe(durable);
+});
+
+test("an append rollback preserves the log", () => {
+  const file = path.join(dir, "rollback.jsonl");
+  const prefix = `${wireLine()}\n`;
+  fs.writeFileSync(file, prefix);
+  const log = JsonlRunLog.resume(file);
+  log.append(new NodeStartedRecord("second"));
+  const failure = new Error("fsync failed");
+  const spy = spyOnLog("fsyncSync", file, () => {
+    throw failure;
+  });
+  try {
+    const error = expectAppendFailure(log, file, () => log.append(new NodeStartedRecord("third")));
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).message).toBe(`run log ${file} append failed and its rollback also failed`);
+    expect((error as AggregateError).errors).toEqual([failure, failure]);
+    expectPoisoned(log, file, failure);
+  } finally {
+    spy.mockRestore();
+  }
+  log.close();
+  expect(fs.readFileSync(file, "utf8").startsWith(prefix)).toBe(true);
+  using resumed = JsonlRunLog.resume(file);
+  expect(nodeIds(resumed)).toEqual(["work", "second"]);
+  expect(resumed.append(new NodeStartedRecord("third")).seq).toBe(2);
+});
+
+test("an invalid append retains the prior complete prefix and doesn't poison the log", () => {
+  const file = path.join(dir, "run.jsonl");
+  using log = baselineLog(file);
+  const error = expectAppendFailure(log, file, () => log.append({ nodeId: "x" } as never));
+  expect((error as Error).constructor).toBe(TypeError);
+  expect((error as Error).message).toBe("unsupported run record: Object");
+  expect(log.append(new NodeStartedRecord("second")).seq).toBe(1);
+});
+
+test("a write failure rolls back to the prior complete prefix", () => {
+  const file = path.join(dir, "run.jsonl");
+  using log = baselineLog(file);
+  const failure = new Error("write failed");
+  const spy = spyOnLog("writeSync", file, (real, args) => {
+    const [fd, buffer, offset, length, position] = args;
+    real(fd, buffer, offset, Math.max(1, Math.floor(length / 2)), position);
+    throw failure;
+  });
+  try {
+    expect(expectAppendFailure(log, file, () => log.append(new NodeStartedRecord("second")))).toBe(failure);
+    expectPoisoned(log, file, failure);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test("an fsync failure rolls back and syncs the prior complete prefix", () => {
+  const file = path.join(dir, "run.jsonl");
+  using log = baselineLog(file);
+  const failure = new Error("fsync failed");
+  let calls = 0;
+  const spy = spyOnLog("fsyncSync", file, (real, args) => {
+    calls++;
+    if (calls === 1) throw failure;
+    return real(...args);
+  });
+  try {
+    expect(expectAppendFailure(log, file, () => log.append(new NodeStartedRecord("second")))).toBe(failure);
+    expectPoisoned(log, file, failure);
+  } finally {
+    spy.mockRestore();
+  }
+  expect(calls).toBe(2);
+});
+
+test("a short write is completed by writing the rest", () => {
+  const file = path.join(dir, "run.jsonl");
+  using log = baselineLog(file);
+  const prefix = fs.readFileSync(file, "utf8");
+  let calls = 0;
+  const spy = spyOnLog("writeSync", file, (real, args) => {
+    calls++;
+    const [fd, buffer, offset, length, position] = args;
+    return real(fd, buffer, offset, calls === 1 ? length - 1 : length, position);
+  });
+  try {
+    expect(log.append(new NodeStartedRecord("second")).seq).toBe(1);
+  } finally {
+    spy.mockRestore();
+  }
+  expect(calls).toBe(2);
+  expect(log.nextSequence).toBe(2);
+  expect(fs.readFileSync(file, "utf8")).toBe(`${prefix}${wireLine({ seq: 1, nodeId: "second" })}\n`);
+});
+
+test("a write of 0 bytes after a partial write is an append failure and rolls back", () => {
+  const file = path.join(dir, "run.jsonl");
+  using log = baselineLog(file);
+  const total = wireLine({ seq: 1, nodeId: "second" }).length + 1;
+  const half = Math.floor(total / 2);
+  let calls = 0;
+  const spy = spyOnLog("writeSync", file, (real, args) => {
+    calls++;
+    const [fd, buffer, offset, , position] = args;
+    return calls === 1 ? real(fd, buffer, offset, half, position) : 0;
+  });
+  try {
+    const error = expectAppendFailure(log, file, () => log.append(new NodeStartedRecord("second"))) as Error;
+    expect(error.constructor).toBe(Error);
+    expect(error.message).toBe(`short run-log write: wrote ${half} of ${total} bytes`);
+    expectPoisoned(log, file, error);
+  } finally {
+    spy.mockRestore();
+  }
+  expect(calls).toBe(2);
+});
+
+test("a write failure whose rollback truncate also fails is an AggregateError and poisons the log", () => {
+  const file = path.join(dir, "run.jsonl");
+  const log = baselineLog(file);
+  const records = log.records();
+  const writeFailure = new Error("write failed");
+  const truncateFailure = new Error("ftruncate failed");
+  const writeSpy = spyOnLog("writeSync", file, (real, args) => {
+    const [fd, buffer, offset, length, position] = args;
+    real(fd, buffer, offset, Math.floor(length / 2), position);
+    throw writeFailure;
+  });
+  const truncateSpy = spyOnLog("ftruncateSync", file, () => {
+    throw truncateFailure;
+  });
+  try {
+    const error = expectError(
+      () => log.append(new NodeStartedRecord("second")),
+      AggregateError,
+      `run log ${file} append failed and its rollback also failed`,
+    ) as AggregateError;
+    expect(error.errors).toEqual([writeFailure, truncateFailure]);
+    expect(error.errors[0]).toBe(writeFailure);
+    expect(error.errors[1]).toBe(truncateFailure);
+    expect(log.records()).toEqual(records);
+    expect(log.nextSequence).toBe(1);
+    expectPoisoned(log, file, writeFailure);
+  } finally {
+    writeSpy.mockRestore();
+    truncateSpy.mockRestore();
+  }
+  log.close();
+  expectUnlocked(file);
+});
+
+test("a tail repair failure releases the lock", () => {
+  const file = path.join(dir, "run.jsonl");
+  fs.writeFileSync(file, `${wireLine()}\npartial`);
+  const failure = new Error("repair fsync failed");
+  const spy = spyOnLog("fsyncSync", file, () => {
+    throw failure;
+  });
+  let caught: unknown;
+  try {
+    JsonlRunLog.resume(file);
+  } catch (error) {
+    caught = error;
+  } finally {
+    spy.mockRestore();
+  }
+  expect(caught).toBe(failure);
+  expectUnlocked(file);
 });

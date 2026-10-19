@@ -11,7 +11,8 @@
  *
  * Knows about: the MCP SDK client (`@modelcontextprotocol/client`, imported when a server opens),
  * `defaults`, `platform` (the version), `tools/context`, `tools/errors`, `tools/function_tools`,
- * `tools/types` (the output schema check), `llm/body` (exact JSON writes), typesys and diagnostics.
+ * `tools/types` (the output schema check), `llm/body` (exact JSON writes), `llm/errors` and
+ * `llm/auth` (scrubbing the server's secrets from errors), typesys and diagnostics.
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
@@ -21,7 +22,9 @@ import type * as Sdk from "@modelcontextprotocol/client";
 
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
+import { scrub } from "../llm/auth.ts";
 import { encodeBody } from "../llm/body.ts";
+import { scrubError } from "../llm/errors.ts";
 import { VERSION } from "../platform.ts";
 import { type JsonObject, parseJson } from "../typesys/json.ts";
 import {
@@ -30,6 +33,7 @@ import {
   isRecord,
   jsTypeName,
   renderValuePath,
+  type Type,
   TypeCheckError,
   writeAsText,
 } from "../typesys/values.ts";
@@ -389,8 +393,11 @@ interface Generation {
   /** `"host"`, or the token of the run that opened the server, once its tools are listed. */
   owner: string | undefined;
   tools: readonly FunctionTool[] | undefined;
-  /** Each listed tool's `outputSchema`, by name, for the check of its results. */
-  outputSchemas: ReadonlyMap<string, JsonObject>;
+  /**
+   * The type of each tool that listed an `outputSchema`, by name, for the check of its results;
+   * `null` when the schema is too deep or unsupported, which skips the check.
+   */
+  outputTypes: ReadonlyMap<string, Type | null>;
   /** The longest wait for one call in seconds, read when the server opened. */
   callTimeout: number;
   /** Whether `close()` ran on this connection. */
@@ -421,12 +428,18 @@ export class McpServer {
   private readonly spec: McpServerSpec;
   /** The connection from `open()` until `close()`; a later open replaces it. */
   private generation: Generation | undefined;
-  /** Whether `close()` ran since the last `open()`, so a call fails as closed, not as never opened. */
+  /**
+   * Whether `close()` ran, or the last `open()` failed, since the last `open()` began, so a call
+   * fails as closed, not as never opened.
+   */
   private closeRequested = false;
+  /** The texts scrubbed from every error `open()` and a call throw. */
+  private readonly secrets: readonly string[];
 
   /** Keep a spec `mcpServer` checked; build a server with `mcpServer`, not this constructor. */
   constructor(spec: McpServerSpec) {
     this.spec = spec;
+    this.secrets = secretsOf(spec);
     if (spec.label !== undefined) this.label = spec.label;
     // As Python's POSIX `os.path.basename`: a command ending in `/` keeps the whole command.
     else if (spec.command !== undefined) this.label = spec.command.split("/").pop() || spec.command;
@@ -524,7 +537,7 @@ export class McpServer {
       transport: undefined,
       owner: undefined,
       tools: undefined,
-      outputSchemas: new Map(),
+      outputTypes: new Map(),
       callTimeout: 0,
       closed: false,
       gone: false,
@@ -536,10 +549,20 @@ export class McpServer {
       await this.connect(generation, owner, signal);
     } catch (error) {
       await this.shutdown(generation);
-      if (this.generation === generation) this.generation = undefined;
-      throw error;
+      // As a close: a tool kept from an earlier connection then fails as closed.
+      if (this.generation === generation) {
+        this.generation = undefined;
+        this.closeRequested = true;
+      }
+      throw this.scrubbed(error);
     }
     return this;
+  }
+
+  /** Scrub this server's secrets from `error`'s message, stack and causes, in place. */
+  private scrubbed<T>(error: T): T {
+    if (this.secrets.length === 0) return error;
+    return scrubError(error, (text) => scrub(text, this.secrets));
   }
 
   /**
@@ -606,11 +629,11 @@ export class McpServer {
       );
       check();
       generation.tools = listed.tools;
-      generation.outputSchemas = listed.outputSchemas;
+      generation.outputTypes = listed.outputTypes;
       generation.owner = owner;
     } catch (error) {
       const tail = generation.transport?.stderrTail() ?? "";
-      const late = `MCP server '${label}' didn't start within ${connectTimeout} s` + tail;
+      const late = `MCP server '${label}' didn't start within ${secondsText(connectTimeout)} s` + tail;
       if (timedOut) throw new McpConnectError(late);
       if (generation.closed) throw new McpConnectError(`MCP server '${label}' was closed while starting`);
       if (signal?.aborted) throw signal.reason;
@@ -651,6 +674,7 @@ export class McpServer {
   /**
    * Call the server's tool `tool.name` with the checked `args` and return its result as a yian
    * value: the structured content when the server sent it, else the content rendered as text.
+   * Every error it throws has this server's secrets scrubbed.
    *
    * @throws {ToolCheckError} An argument is `Infinity`, which JSON can't carry; nothing is sent.
    * @throws {Error} The server was never opened.
@@ -663,11 +687,21 @@ export class McpServer {
    * @throws {McpCallCancelled} `ctx.signal` aborted before or while the call waited.
    */
   private async callTool(tool: ListedTool, args: Record<string, unknown>, ctx: ToolContext<unknown>): Promise<unknown> {
+    try {
+      return await this.sendCall(tool, args, ctx);
+    } catch (error) {
+      throw this.scrubbed(error);
+    }
+  }
+
+  /** The body of `callTool`, before scrubbing. */
+  private async sendCall(tool: ListedTool, args: Record<string, unknown>, ctx: ToolContext<unknown>): Promise<unknown> {
     const { name, inputSchema } = tool;
     const path = infinityPath(args);
     if (path !== null) {
-      const at = path.length > 0 ? ` at ${renderValuePath(path)}` : "";
-      throw new ToolCheckError(`tool call '${name}' arguments${at}: Infinity can't be sent to an MCP server`);
+      throw new ToolCheckError(
+        `tool call '${name}' arguments at ${renderValuePath(path)}: Infinity can't be sent to an MCP server`,
+      );
     }
     // The connection this call goes to; a later open replaces it.
     const generation = this.generation;
@@ -702,8 +736,9 @@ export class McpServer {
       ctx.signal.removeEventListener("abort", onAbort);
       generation.calls.delete(call);
     }
-    const outputSchema = generation.outputSchemas.get(name);
-    if (outputSchema !== undefined) this.checkOutput(name, outputSchema, result as CallResult);
+    // `undefined`: the tool listed no `outputSchema`; `null`: one yian can't read as a type.
+    const outputType = generation.outputTypes.get(name);
+    if (outputType !== undefined) this.checkOutput(name, outputType, result as CallResult);
     return resultValue(result as CallResult);
   }
 
@@ -718,7 +753,9 @@ export class McpServer {
     const sdk = generation.sdk!;
     if (error instanceof sdk.SdkError) {
       if (error.code === sdk.SdkErrorCode.RequestTimeout) {
-        return new McpTimeoutError(`MCP server '${label}' tool '${name}' timed out after ${generation.callTimeout} s`);
+        return new McpTimeoutError(
+          `MCP server '${label}' tool '${name}' timed out after ${secondsText(generation.callTimeout)} s`,
+        );
       }
       if (error.code === sdk.SdkErrorCode.ConnectionClosed || error.code === sdk.SdkErrorCode.NotConnected) {
         return this.closedError(generation);
@@ -742,19 +779,19 @@ export class McpServer {
   }
 
   /**
-   * Check a non-error result of the tool `name`, which listed `outputSchema`, as the registry
-   * checks a declared output: its structured content must be there and fit the schema read open.
+   * Check a non-error result of the tool `name`, which listed an `outputSchema` read open as
+   * `type`, as the registry checks a declared output: its structured content must be there and fit
+   * the type; a `null` type checks only that the content is a yian value.
    *
    * @throws {McpToolError} The structured content is missing, or isn't a yian value or doesn't
-   *   fit the schema (the `TypeCheckError` is the `cause`).
+   *   fit the type (the `TypeCheckError` is the `cause`).
    */
-  private checkOutput(name: string, outputSchema: JsonObject, result: CallResult): void {
+  private checkOutput(name: string, type: Type | null, result: CallResult): void {
     if (result.isError) return;
     const failed = `MCP server '${this.label}' tool '${name}' failed`;
     if (result.structuredContent == null) throw new McpToolError(`${failed} (no structured content)`);
     try {
       const value = fromHost(result.structuredContent, `MCP server '${this.label}' tool '${name}' structured content`);
-      const type = inputTypeFromJsonSchema(outputSchema);
       if (type !== null) buildValueAs(type, value);
     } catch (error) {
       if (error instanceof TypeCheckError) throw new McpToolError(`${failed} (TypeCheckError)`, { cause: error });
@@ -768,6 +805,40 @@ function cancelledError(name: string): McpCallCancelled {
   return new McpCallCancelled(`MCP call to '${name}' cancelled by a run stop`);
 }
 
+/** `seconds` as Python's `:g` prints it: six significant digits, `0.5`, `300`, `1e-05`. */
+function secondsText(seconds: number): string {
+  const [mantissa, exponentText] = seconds.toExponential(5).split("e") as [string, string];
+  const exponent = Number(exponentText);
+  const trim = (digits: string) => (digits.includes(".") ? digits.replace(/\.?0+$/, "") : digits);
+  if (exponent < -4 || exponent >= 6) {
+    return `${trim(mantissa)}e${exponent < 0 ? "-" : "+"}${String(Math.abs(exponent)).padStart(2, "0")}`;
+  }
+  return trim(seconds.toFixed(5 - exponent));
+}
+
+/**
+ * The texts scrubbed from a server's errors: every non-empty `headers` value, and the token after
+ * its scheme word (`Bearer abc` gives `abc` too, since a server may echo the bare token); the
+ * `env` values and the URL's query-parameter values of 8 or more characters. Shorter ones, like
+ * `DEBUG=1`, would garble messages and are rarely secrets; the default environment's values
+ * (`HOME`, `PATH`) never count.
+ */
+function secretsOf(spec: McpServerSpec): string[] {
+  const secrets: string[] = [];
+  for (const value of Object.values(spec.headers ?? {})) {
+    if (value === "") continue;
+    secrets.push(value);
+    const token = /^\S+\s+(\S.*)$/.exec(value)?.[1];
+    if (token !== undefined) secrets.push(token);
+  }
+  const long = (value: string) => value.length >= 8;
+  secrets.push(...Object.values(spec.env ?? {}).filter(long));
+  if (spec.url !== undefined && URL.canParse(spec.url)) {
+    secrets.push(...[...new URL(spec.url).searchParams.values()].filter(long));
+  }
+  return secrets;
+}
+
 /** An error's class name, as Python's `type(error).__name__`. */
 function errorName(error: unknown): string {
   return error instanceof Error ? error.name : jsTypeName(error);
@@ -779,9 +850,15 @@ function errorName(error: unknown): string {
  */
 function infinityPath(args: unknown): (string | number)[] | null {
   const stack: [unknown, (string | number)[]][] = [[args, []]];
+  // A host may call `execute` directly with a cyclic record; each container is walked once.
+  const seen = new Set<object>();
   while (stack.length > 0) {
     const [value, path] = stack.pop()!;
     if (value === Infinity || value === -Infinity) return path;
+    if (typeof value === "object" && value !== null) {
+      if (seen.has(value)) continue;
+      seen.add(value);
+    }
     // Pushed in reverse, so entries pop in order.
     if (Array.isArray(value)) {
       for (let i = value.length - 1; i >= 0; i--) stack.push([value[i], [...path, i]]);
@@ -855,7 +932,8 @@ export interface ListOptions {
  * List the server's tools and wrap each in a `FunctionTool`. A server that declares no `tools`
  * capability lists none, and gets no `tools/list` request.
  *
- * @returns The tools, frozen and in listing order, and each listed `outputSchema` by tool name.
+ * @returns The tools, frozen and in listing order, and the type of each listed `outputSchema`
+ *   read open (`null` when too deep or unsupported), by tool name.
  * @throws {McpConnectError} The server lists more than 100 pages, a tool twice, a tool whose input
  *   schema's type is not `"object"` or a tool `FunctionTool` refuses; or `concurrencySafe` names
  *   a tool it doesn't list.
@@ -863,10 +941,10 @@ export interface ListOptions {
 export async function listAll(
   lister: ToolLister,
   options: ListOptions,
-): Promise<{ tools: readonly FunctionTool[]; outputSchemas: Map<string, JsonObject> }> {
+): Promise<{ tools: readonly FunctionTool[]; outputTypes: Map<string, Type | null> }> {
   const { label, concurrencySafe, call, signal, timeout } = options;
   const tools: FunctionTool[] = [];
-  const outputSchemas = new Map<string, JsonObject>();
+  const outputTypes = new Map<string, Type | null>();
   const seen = new Set<string>();
   // As OpenCode does: the SDK would answer for such a server itself, with a `console.debug` line.
   if (lister.getServerCapabilities()?.tools) {
@@ -900,13 +978,13 @@ export async function listAll(
             execute: (args, ctx) => call(listed, args, ctx),
           }),
         );
+        if (isRecord(outputSchema)) outputTypes.set(name as string, inputTypeFromJsonSchema(outputSchema));
       } catch (error) {
         throw new McpConnectError(`MCP server '${label}' tool ${shown} is unusable: ${(error as Error).message}`, {
           cause: error,
         });
       }
       seen.add(name as string);
-      if (isRecord(outputSchema)) outputSchemas.set(name as string, outputSchema as JsonObject);
     }
   }
   if (typeof concurrencySafe !== "boolean") {
@@ -917,7 +995,7 @@ export async function listAll(
       );
     }
   }
-  return { tools: Object.freeze(tools), outputSchemas };
+  return { tools: Object.freeze(tools), outputTypes };
 }
 
 /** What `resultValue` reads from a `tools/call` result. */

@@ -178,7 +178,8 @@ describe("tools that break their output schema", () => {
     expect(error).toBeInstanceOf(McpToolError);
     expect(error.message).toBe(message);
     expect(await tools().invoke("add_tool", {})).toBe("added");
-    // Let the list_changed notification arrive before the next call.
+    // The notification arrived before the response; this gives the SDK's async cache eviction time
+    // to finish, so the next call runs after it.
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect((await rejection(tools().invoke("no_structured", {}))).message).toBe(message);
   });

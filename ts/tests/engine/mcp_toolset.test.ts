@@ -1,15 +1,30 @@
 /**
  * `ToolSet` takes an open MCP server as a tool group, a port of `tests/engine/test_mcp_toolset.py`
- * (construction, `expand` and invoke rows) with a fake open server. The `McpServerClosed` row and
- * the import-without-the-SDK row land with the MCP client; the exports row is the
- * `tools/index.ts` exports row in `tool_errors.test.ts`.
+ * (construction, `expand` and invoke rows) with a fake open server, and
+ * `test_a_dead_server_is_rejected` with both a fake and a real server. The import-without-the-SDK
+ * row lands with the Node built scenarios; the exports row is the `tools/index.ts` exports row in
+ * `tool_errors.test.ts`.
  */
 
-import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, describe, expect, test } from "bun:test";
 
 import { FunctionTool } from "../../src/tools/function_tools.ts";
-import { McpServer, type McpServerSpec, mcpServer } from "../../src/tools/mcp.ts";
+import { McpServer, McpServerClosed, type McpServerSpec, mcpServer } from "../../src/tools/mcp.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
+import { killMarkers, stdioOptions, strayProcesses } from "./mcp_helpers.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-mcp-toolset-"));
+const marker = join(dir, "marker");
+
+afterAll(() => {
+  killMarkers([marker]);
+  rmSync(dir, { recursive: true, force: true });
+  expect(strayProcesses()).toEqual([]);
+});
 
 /** Build a `FunctionTool` named `name`, as a server would list it. */
 function serverTool(name: string): FunctionTool {
@@ -137,4 +152,23 @@ describe("an MCP server in a ToolSet", () => {
       `tools["fake"]: MCP server 'quitter' is closed`,
     );
   });
+
+  test(
+    "test_a_dead_server_is_rejected with a real server",
+    async () => {
+      await using quitter = await mcpServer({ ...stdioOptions("--marker", marker), label: "quitter" }).open();
+      let error: unknown;
+      try {
+        await new ToolSet({ fake: quitter }).invoke("exit_now", {});
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(McpServerClosed);
+      expect(thrown(() => new ToolSet({ fake: quitter }), RangeError)).toBe(
+        `tools["fake"]: MCP server 'quitter' is closed`,
+      );
+    },
+    // Opening spawns a process; the default 5 s is too tight on a loaded machine.
+    15_000,
+  );
 });

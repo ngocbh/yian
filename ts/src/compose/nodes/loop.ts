@@ -15,7 +15,7 @@
  * body's inputs read that way, and `carriedFieldTypes` gives the carried record's proven field
  * types.
  *
- * Knows about: diagnostics, the LOOP runtime node, node contracts, typesys, compose helpers,
+ * Knows about: diagnostics, expr, the LOOP runtime node, node contracts, typesys, compose helpers,
  * `base.ts` and `resolver.ts`.
  * Never imports: compose/parse, the runtime engine or the CLI.
  */
@@ -169,7 +169,7 @@ export class LoopDescriptor extends NodeDescriptor {
         );
       }
     }
-    // After both type checks, so a flow Python refuses gets Python's error.
+    // After both predicate type checks, so a predicate Python refuses gets Python's error.
     for (const [key] of PREDICATE_EXAMPLES) {
       const value = fields[this.keywordRemap.get(key)!];
       if (typeof value === "string") {

@@ -2,7 +2,9 @@
  * Tests for Ollama reply parsing in `src/llm/protocols/ollama_chat.ts`: NDJSON lines into deltas,
  * thinking and content pieces joined into one reasoning and one text part, tool calls with their
  * ids and arguments, the `done` line's finish reason and usage, the message record, ignored
- * fields, the skipped `load` line, the end of the reply, truncation and cancellation.
+ * fields, the skipped `load` line, the end of the reply, truncation, stream error lines, shape and
+ * usage errors, the provider name in error messages, cancellation, and the round trip back through
+ * `buildBody`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -20,12 +22,16 @@ import {
   UsageReport,
 } from "../../src/llm/events.ts";
 import {
+  Message,
   type Part,
   ReasoningPart,
+  type ReplayDegradedReason,
   type ReplayKey,
   replayRecord,
+  Request,
   TextPart,
   ToolCallPart,
+  ToolResultPart,
   Usage,
 } from "../../src/llm/messages.ts";
 import { OllamaChat, PROTOCOL } from "../../src/llm/protocols/ollama_chat.ts";
@@ -95,15 +101,22 @@ async function parse(lines: JsonValue[], protocol = ollama()): Promise<Event[]> 
   return out;
 }
 
-/** Return the `ProviderError` parsing `lines` throws; fail the test if none is thrown. */
-async function failure(lines: JsonValue[]): Promise<ProviderError> {
+/** Return the events parsing `lines` yields and the `ProviderError` it then throws. */
+async function failing(lines: JsonValue[], protocol = ollama()): Promise<[Event[], ProviderError]> {
+  const out: Event[] = [];
   try {
-    await parse(lines);
+    for await (const event of protocol.parse(frames(lines))) out.push(event);
   } catch (error) {
     expect(error).toBeInstanceOf(ProviderError);
-    return error as ProviderError;
+    expect((error as ProviderError).provider).toBeNull();
+    return [out, error as ProviderError];
   }
   throw new Error("expected a ProviderError");
+}
+
+/** Return the `ProviderError` parsing `lines` throws; fail the test if none is thrown. */
+async function failure(lines: JsonValue[], protocol = ollama()): Promise<ProviderError> {
+  return (await failing(lines, protocol))[1];
 }
 
 async function partsOf(lines: JsonValue[]): Promise<readonly Part[]> {
@@ -446,13 +459,19 @@ describe("the load line and the end of the reply", () => {
     expect(closed).toBe(true);
   });
 
-  test("a reply that ends before its done line is incomplete and retryable", async () => {
+  test("a reply that ends before its done line is incomplete and retryable, its deltas yielded", async () => {
     const load = oDone({ done_reason: "load", message: { role: "assistant", content: "" } });
-    for (const lines of [[oChunk("Hi")], [], [load]]) {
-      const error = await failure(lines);
+    const cases: [JsonValue[], Event[]][] = [
+      [[oChunk("Hi")], [new TextDelta(0, "Hi")]],
+      [[], []],
+      [[load], []],
+    ];
+    for (const [lines, events] of cases) {
+      const [out, error] = await failing(lines);
       expect(error.kind).toBe("incomplete");
       expect(error.retryable).toBe(true);
       expect(error.message).toBe("ollama stream ended before a complete response");
+      expect(out).toEqual(events);
     }
   });
 
@@ -461,6 +480,160 @@ describe("the load line and the end of the reply", () => {
       const error = await failure([oChunk("Hi"), line, oDone()]);
       expect(error.kind).toBe("protocol");
       expect(error.message).toBe("ollama stream line is not a JSON object");
+    }
+  });
+});
+
+describe("stream errors", () => {
+  test("an error line first raises a retryable server error, nothing yielded", async () => {
+    const [out, error] = await failing([{ error: "model runner crashed" }, oChunk("Hi"), oDone()]);
+    expect(error.kind).toBe("server");
+    expect(error.retryable).toBe(true);
+    expect(error.message).toBe("ollama stream failed (server): model runner crashed");
+    expect(out).toEqual([]);
+  });
+
+  test("an error line after text raises after the text's delta", async () => {
+    const [out, error] = await failing([oChunk("Hi"), { error: "model runner crashed" }, oDone()]);
+    expect([error.kind, error.retryable]).toEqual(["server", true]);
+    expect(error.message).toBe("ollama stream failed (server): model runner crashed");
+    expect(out).toEqual([new TextDelta(0, "Hi")]);
+  });
+
+  test("an error that isn't a string is its JSON", async () => {
+    const cases: [JsonValue, string][] = [
+      [{ message: "x" }, '{"message":"x"}'],
+      [5n, "5"],
+      [["a"], '["a"]'],
+      [false, "false"],
+    ];
+    for (const [value, text] of cases) {
+      expect((await failure([{ error: value }])).message).toBe(`ollama stream failed (server): ${text}`);
+    }
+  });
+
+  test("an empty or blank error is no message", async () => {
+    for (const value of ["", "  "]) {
+      expect((await failure([{ error: value }])).message).toBe("ollama stream failed (server): no message");
+    }
+  });
+
+  test("the message is the provider's text uncapped", async () => {
+    const text = "x".repeat(3000);
+    expect((await failure([oChunk("Hi"), { error: text }])).message).toBe(`ollama stream failed (server): ${text}`);
+  });
+
+  test("a null error reads as absent", async () => {
+    expect(await parse([{ ...oChunk("Hi"), error: null }, oDone()])).toEqual(await parse([oChunk("Hi"), oDone()]));
+  });
+});
+
+describe("shape errors", () => {
+  const INVALID_MESSAGE = "ollama stream line has an invalid message";
+
+  /** Expect `line` after a text chunk to be a protocol error with `text`, after the text's delta. */
+  async function invalid(text: string, line: JsonValue): Promise<void> {
+    const [out, error] = await failing([oChunk("Hi"), line, oDone()]);
+    expect(error.kind).toBe("protocol");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toBe(text);
+    expect(out).toEqual([new TextDelta(0, "Hi")]);
+  }
+
+  test("a message that isn't an object", async () => {
+    for (const message of ["x", [1n], 3n, true] as JsonValue[]) {
+      await invalid(INVALID_MESSAGE, { ...oChunk(), message });
+    }
+  });
+
+  test("content or thinking that is neither a string nor null", async () => {
+    for (const value of [5n, 1.5, true, {}, ["a"]] as JsonValue[]) {
+      await invalid(INVALID_MESSAGE, { ...oChunk(), message: { role: "assistant", content: value } });
+      await invalid(INVALID_MESSAGE, { ...oChunk(), message: { role: "assistant", thinking: value } });
+    }
+  });
+
+  test("a load line with content that isn't a string is a shape error, not skipped", async () => {
+    await invalid(INVALID_MESSAGE, oDone({ done_reason: "load", message: { role: "assistant", content: 5n } }));
+  });
+
+  test("tool_calls that isn't a list", async () => {
+    for (const toolCalls of [{}, "x", 3n, true] as JsonValue[]) {
+      await invalid(INVALID_MESSAGE, oChunk("", { toolCalls: toolCalls as JsonValue[] }));
+    }
+  });
+
+  test("a call or its function that isn't an object", async () => {
+    for (const entry of ["x", 3n, null, [wireCall()]] as JsonValue[]) {
+      await invalid(INVALID_MESSAGE, oChunk("", { toolCalls: [entry] }));
+    }
+    for (const fn of ["double", 3n, null, [{ name: "double" }]] as JsonValue[]) {
+      await invalid(INVALID_MESSAGE, oChunk("", { toolCalls: [{ function: fn }] }));
+    }
+    await invalid(INVALID_MESSAGE, oChunk("", { toolCalls: [{ id: "call_a" }] }));
+  });
+
+  test("a call id that is present, not null and not a string", async () => {
+    for (const id of [5n, true, {}, ["call_a"]] as JsonValue[]) {
+      await invalid(INVALID_MESSAGE, oChunk("", { toolCalls: [{ ...wireCall(), id }] }));
+    }
+  });
+
+  test("a call with a missing, empty or non-string name names its position among the calls", async () => {
+    for (const fn of [{ arguments: {} }, { name: "" }, { name: null }, { name: 5n }] as JsonValue[]) {
+      const [out, error] = await failing([
+        oChunk("", { toolCalls: [wireCall()] }),
+        oChunk("", { toolCalls: [wireCall(), { function: fn }] }),
+        oDone(),
+      ]);
+      expect([error.kind, error.retryable]).toEqual(["protocol", false]);
+      expect(error.message).toBe("ollama tool call 2 has no name");
+      expect(out).toEqual([callDelta(0, "yian_call_0"), callDelta(1, "yian_call_1")]);
+    }
+  });
+
+  test("a done_reason that is neither a string nor null", async () => {
+    for (const reason of [5n, true, {}, ["stop"]] as JsonValue[]) {
+      await invalid("ollama stream line has an invalid done_reason", oDone({ done_reason: reason }));
+    }
+  });
+});
+
+describe("usage errors", () => {
+  const NOT_INT = "ollama response usage has a count that is not an int";
+  const FIELDS = ["prompt_eval_count", "eval_count", "prompt_eval_cached_count"];
+
+  test.each(FIELDS)("a %s that isn't a safe int", async (field) => {
+    for (const count of [1.5, "3", true, -1.5, 2n ** 53n] as JsonValue[]) {
+      const [out, error] = await failing([oChunk("Hi"), oDone({ [field]: count })]);
+      expect(error.kind).toBe("protocol");
+      expect(error.retryable).toBe(false);
+      expect(error.message).toBe(NOT_INT);
+      expect(out).toEqual([new TextDelta(0, "Hi")]);
+    }
+  });
+
+  test("a total past 2^53 - 1 is a protocol error before any part is done", async () => {
+    const [out, error] = await failing([oChunk("Hi"), oDone({ prompt_eval_count: 2n ** 53n - 1n, eval_count: 1n })]);
+    expect([error.kind, error.retryable, error.message]).toEqual(["protocol", false, NOT_INT]);
+    expect(out).toEqual([new TextDelta(0, "Hi")]);
+  });
+});
+
+describe("the provider name in error messages", () => {
+  test("a protocol for provider ollama-lan names it in every error", async () => {
+    const lan = new OllamaChat({ model: MODEL, provider: "ollama-lan" });
+    const cases: [JsonValue[], string][] = [
+      [[{ error: "boom" }], "ollama-lan stream failed (server): boom"],
+      [[oChunk("Hi")], "ollama-lan stream ended before a complete response"],
+      [["x"], "ollama-lan stream line is not a JSON object"],
+      [[{ ...oChunk(), message: "x" }], "ollama-lan stream line has an invalid message"],
+      [[oChunk("", { toolCalls: [{ function: {} }] })], "ollama-lan tool call 0 has no name"],
+      [[oDone({ done_reason: 5n })], "ollama-lan stream line has an invalid done_reason"],
+      [[oDone({ eval_count: 1.5 })], "ollama-lan response usage has a count that is not an int"],
+    ];
+    for (const [lines, text] of cases) {
+      expect((await failure(lines, lan)).message).toBe(text);
     }
   });
 });
@@ -485,5 +658,63 @@ describe("cancellation", () => {
     }
     expect(closed).toBe(true);
     expect(pulled).toBe(1);
+  });
+});
+
+describe("round trip", () => {
+  const ASK = new Message({ role: "user", parts: [new TextPart("Double 3 and 4.")] });
+  const RESULTS = new Message({
+    role: "tool",
+    parts: [
+      new ToolResultPart({ callId: "call_a", name: "double", content: "6", isError: false }),
+      new ToolResultPart({ callId: "call_b", name: "double", content: "8", isError: false }),
+    ],
+  });
+  const REPLY = [
+    oChunk("", { thinking: "Two calls." }),
+    oChunk("Sure."),
+    oChunk("", { toolCalls: [wireCall("call_a"), wireCall("call_b", { value: 4n })] }),
+    oDone(),
+  ];
+
+  /** Return a protocol for `model`, pushing each degraded reason to `reasons`. */
+  function protocolFor(model: string, reasons: ReplayDegradedReason[] = []): OllamaChat {
+    return new OllamaChat({ model, provider: "ollama", onReplayDegraded: (reason) => reasons.push(reason) });
+  }
+
+  /** Return the messages `protocol` sends for the reply parsed by `parser`, between the ask and results. */
+  async function sent(protocol: OllamaChat, parser: OllamaChat): Promise<JsonValue> {
+    const reply = (await collect(parser.parse(frames(REPLY)))).message;
+    return protocol.buildBody(new Request({ messages: [ASK, reply, RESULTS] }))["messages"]!;
+  }
+
+  const SENT_CALLS: JsonValue[] = [
+    { id: "call_a", function: { name: "double", arguments: { value: 3n } } },
+    { id: "call_b", function: { name: "double", arguments: { value: 4n } } },
+  ];
+  const SENT_ASK: JsonObject = { role: "user", content: "Double 3 and 4." };
+  const SENT_RESULTS: JsonObject[] = [
+    { role: "tool", content: "6", tool_name: "double", tool_call_id: "call_a" },
+    { role: "tool", content: "8", tool_name: "double", tool_call_id: "call_b" },
+  ];
+
+  test("a reply with thinking, text and two calls goes back whole, with the same call ids", async () => {
+    const reasons: ReplayDegradedReason[] = [];
+    expect(await sent(protocolFor(MODEL, reasons), protocolFor(MODEL))).toEqual([
+      SENT_ASK,
+      { role: "assistant", content: "Sure.", thinking: "Two calls.", tool_calls: SENT_CALLS },
+      ...SENT_RESULTS,
+    ]);
+    expect(reasons).toEqual([]);
+  });
+
+  test("a reply parsed for another model goes back with no thinking and reports other_model", async () => {
+    const reasons: ReplayDegradedReason[] = [];
+    expect(await sent(protocolFor(MODEL, reasons), protocolFor("llama3.2"))).toEqual([
+      SENT_ASK,
+      { role: "assistant", content: "Sure.", tool_calls: SENT_CALLS },
+      ...SENT_RESULTS,
+    ]);
+    expect(reasons).toEqual(["other_model"]);
   });
 });

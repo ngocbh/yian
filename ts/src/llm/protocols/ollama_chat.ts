@@ -235,8 +235,13 @@ export class OllamaChat implements NdjsonProtocol {
    *   replay record), `UsageReport` unless every count is 0 or missing, and `Finish`: `length` for
    *   `done_reason: "length"`, else `tool_calls` when a call came, else `stop` for `stop`, a
    *   missing, `null` or empty reason, else the reason as given, with a record of the model.
-   * @throws {ProviderError} For a line that is not a JSON object or a count that is not an int
-   *   (`protocol`), or a reply that ends with no `done` line (`incomplete`, retryable).
+   * @throws {ProviderError} For a line holding a non-`null` `error` (`server`, retryable; its
+   *   message the error text as given, `no message` when that is blank, or the JSON of a value
+   *   that is not a string); a line that is not a JSON object, a `message` that is not an object,
+   *   `content` or `thinking` neither a string nor `null`, `tool_calls` not a list, a call or its
+   *   `function` not an object, a call id neither a string nor `null`, a call with no name, a
+   *   `done_reason` neither a string nor `null`, or a count that is not an int (`protocol`); or a
+   *   reply that ends with no `done` line (`incomplete`, retryable).
    */
   async *parse(frames: AsyncIterable<JsonValue>): AsyncGenerator<Event> {
     const provider = this.provider;
@@ -250,12 +255,21 @@ export class OllamaChat implements NdjsonProtocol {
     let responseModel: string | null = null;
     for await (const line of frames) {
       if (!isPlainObject(line)) throw new ProviderError("protocol", `${provider} stream line is not a JSON object`);
-      const message = (line["message"] ?? {}) as JsonObject;
-      const content = (message["content"] ?? null) as string | null;
-      const thinking = (message["thinking"] ?? null) as string | null;
-      const toolCalls = (message["tool_calls"] ?? []) as JsonValue[];
+      const error = line["error"] ?? null;
+      if (error !== null) throw this.#streamFailure(error);
+      const message = line["message"] ?? {};
+      if (!isPlainObject(message)) throw invalidMessage(provider);
+      const content = message["content"] ?? null;
+      const thinking = message["thinking"] ?? null;
+      const toolCalls = message["tool_calls"] ?? [];
+      if (!isStringOrNull(content) || !isStringOrNull(thinking) || !Array.isArray(toolCalls)) {
+        throw invalidMessage(provider);
+      }
       const done = line["done"] === true;
-      const doneReason = (line["done_reason"] ?? null) as string | null;
+      const doneReason = line["done_reason"] ?? null;
+      if (!isStringOrNull(doneReason)) {
+        throw new ProviderError("protocol", `${provider} stream line has an invalid done_reason`);
+      }
       // Ollama sends this for a request with no messages, which only loads the model.
       if (done && doneReason === "load" && (content ?? "").trim() === "") continue;
       if (typeof line["model"] === "string") responseModel = line["model"];
@@ -274,7 +288,7 @@ export class OllamaChat implements NdjsonProtocol {
         yield kind === "text" ? new TextDelta(open.index, piece) : new ReasoningDelta(open.index, piece);
       }
       for (const entry of toolCalls) {
-        const { id: wireId, name, args, rawArguments } = readCall(entry);
+        const { id: wireId, name, args, rawArguments } = readCall(entry, calls, provider);
         const id = callId(wireId, calls++, taken);
         const index = parts.push({ kind: "call", id, name, args, rawArguments }) - 1;
         yield new ToolCallDelta({ index, id, name, arguments: rawArguments ?? encodeBody(args) });
@@ -291,6 +305,15 @@ export class OllamaChat implements NdjsonProtocol {
       return;
     }
     throw new ProviderError("incomplete", `${provider} stream ended before a complete response`, { retryable: true });
+  }
+
+  /**
+   * Return the error for a line's `error`: kind `server`, its message the text as given, `no
+   * message` when that is blank, or the JSON of a value that is not a string.
+   */
+  #streamFailure(error: JsonValue): ProviderError {
+    const text = typeof error !== "string" ? encodeBody(error) : error.trim() === "" ? "no message" : error;
+    return new ProviderError("server", `${this.provider} stream failed (server): ${text}`);
   }
 
   /** Build a streamed part; only a reasoning part carries a record, of the key alone. */
@@ -351,16 +374,35 @@ function wrongPart(part: Part, role: string): string {
   return `the ollama_chat route cannot send a ${part.constructor.name} in ${article} ${role} message`;
 }
 
+/** Return whether `value` is a string or `null`. */
+function isStringOrNull(value: JsonValue): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+/** Return the error for a line whose `message` has a bad shape. */
+function invalidMessage(provider: string): ProviderError {
+  return new ProviderError("protocol", `${provider} stream line has an invalid message`);
+}
+
 /**
  * Read a `tool_calls` entry: its id (`null` when missing or empty), name, and arguments: an
  * object as sent, a string through `parseArguments`, `{}` when missing, else `null` with the raw
  * JSON.
+ *
+ * @param n The call's position among the reply's calls, for the error message.
+ * @throws {ProviderError} When the entry or its `function` is not an object, its id is neither a
+ *   string nor `null`, or its name is missing, empty or not a string (kind `protocol`).
  */
-function readCall(entry: JsonValue): WireCall {
-  const call = entry as JsonObject;
-  const fn = call["function"] as JsonObject;
-  const id = ((call["id"] ?? null) as string | null) || null;
-  const name = fn["name"] as string;
+function readCall(entry: JsonValue, n: number, provider: string): WireCall {
+  if (!isPlainObject(entry)) throw invalidMessage(provider);
+  const fn = entry["function"];
+  const rawId = entry["id"] ?? null;
+  if (!isPlainObject(fn) || !isStringOrNull(rawId)) throw invalidMessage(provider);
+  const id = rawId || null;
+  const name = fn["name"];
+  if (typeof name !== "string" || name === "") {
+    throw new ProviderError("protocol", `${provider} tool call ${n} has no name`);
+  }
   const value = fn["arguments"] ?? null;
   if (value === null) return { id, name, args: {}, rawArguments: null };
   if (isPlainObject(value)) return { id, name, args: value, rawArguments: null };

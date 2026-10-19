@@ -207,7 +207,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   Carriers and payloads stay shared, so change a copy by reassigning a field or, on a
   `CompiledFlow`, through `addSubgraph`/`removeSubgraph`.
 - `rewriteFlowOrigins` and `rebaseFlowOrigins` return a rewritten copy and never touch the input;
-  payloads aren't walked.
+  a payload stays shared, except that the records and lists around a nested binding are rebuilt.
 - In `typesCompatible` and `typeRelation`, an open numeric end is `null`.
 - Compare positions and scopes with `sameExecutionPosition`/`sameExecutionScope`, and arrays with
   `sameItems` (`src/nodes/contracts.ts`).

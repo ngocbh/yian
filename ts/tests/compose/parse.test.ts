@@ -1,6 +1,6 @@
 /**
  * The parse phase's `nodes:` mapping pass: a port of `tests/compose/test_parse.py`, with the real
- * `agent` and `code` kinds, and stand-ins for the case and map kinds (`StandInCase`, `standIn`).
+ * `agent`, `code` and `case` kinds, and a stand-in for the map kind (`standIn`).
  *
  * Changed: `test_case_rejects_numeric_key` asserts "field '1' is not allowed", since TS keeps the
  * key `1` as the text written. Python compares the descriptor to an `AgentDescriptor` with
@@ -16,12 +16,13 @@ import { afterEach, expect, test } from "bun:test";
 
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { siteKey } from "../../src/compose/nodes/base.ts";
+import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { flowNodesCursor } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { loadError, nodesOf, runTextCase } from "./declarations.ts";
-import { StandInCase, standIn, withKinds } from "./stand_ins.ts";
+import { standIn, withKinds } from "./stand_ins.ts";
 
 afterEach(() => forget());
 
@@ -115,8 +116,9 @@ test("case on key is text", () => {
   const nodes = SourceDocument.parse(source).root.child("nodes");
   const route = nodes.child("route");
 
-  const desc = withKinds([StandInCase], () => parseNodes(nodes).get("route")!) as StandInCase;
+  const desc = parseNodes(nodes).get("route") as CaseDescriptor;
 
+  expect(desc).toBeInstanceOf(CaseDescriptor);
   expect(desc.on).toBe("${score.output}");
   expect(route.has("on")).toBe(true);
 });
@@ -132,7 +134,7 @@ test("case rejects numeric key", () => {
   const nodes = SourceDocument.parse(source).root.child("nodes");
   const route = nodes.child("route");
 
-  const error = loadError(() => withKinds([StandInCase], () => parseNodes(nodes)));
+  const error = loadError(() => parseNodes(nodes));
 
   // TS keeps the key `1` as the text written, so the message quotes it where Python's int key
   // reads `field 1`.

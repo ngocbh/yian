@@ -10,9 +10,12 @@
  * The harvested `yaml/compose_non_text_keys__*` cases are pinned at the end; the child-file case
  * parses the child file.
  *
- * Later (T3-16): `test_case_on_needs_no_exemption`. Later (T3-22):
- * `test_the_flow_loads_with_text_names_everywhere`, the loading of
- * `test_a_child_flow_file_reports_its_own_key`, and the loading halves of
+ * Changed: `test_case_on_needs_no_exemption` parses the flow's nodes with the real `case` kind,
+ * where Python loads it.
+ *
+ * Later (T3-22): `test_the_flow_loads_with_text_names_everywhere`, the loading of
+ * `test_case_on_needs_no_exemption` and of `test_a_child_flow_file_reports_its_own_key`, and the
+ * loading halves of
  * `test_a_quoted_key_follows_the_usual_name_rules` and
  * `test_words_yaml_1_1_read_as_booleans_are_text_keys`; here a quoted key and a YAML 1.1 word
  * parse with no error.
@@ -20,6 +23,7 @@
 
 import { afterEach, expect, test } from "bun:test";
 
+import type { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
@@ -163,6 +167,29 @@ test("a quoted key follows the usual name rules", () => {
 
   expect(error.diagnostic.message).not.toContain("names in a flow must be text");
   expect(error.diagnostic.message).toContain("_1");
+});
+
+test("case on needs no exemption", () => {
+  const text = `id: f
+name: f
+input:
+  x: !str
+nodes:
+  route:
+    kind: case
+    on: \${input.x}
+    cases:
+      - when: a
+        then: done
+    else: done
+  done:
+    kind: code
+    code: return 1
+    output: int
+output: \${done.output}
+`;
+
+  expect((nodesOf(text, [StandInCode]).get("route") as CaseDescriptor).on).toBe("${input.x}");
 });
 
 test.each(["yes", "on", "off", "no"])("yaml 1.1 boolean words are text keys: %s", (key) => {

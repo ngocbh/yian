@@ -675,7 +675,7 @@ export class AssertionStageError extends Error {
 
 /**
  * The capabilities a node's `run` and `forward` receive, as one object. The evaluator passes
- * only what the node's traits ask for.
+ * every node its own `signal`, plus only what the node's traits ask for.
  */
 export interface NodeCaps {
   /** The node's own abort signal; a node that blocks cooperatively stops when it aborts. */

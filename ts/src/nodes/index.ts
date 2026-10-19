@@ -9,12 +9,13 @@
  * contract also owns detached backward context and feedback results; execution scopes carry
  * authored locations independently of memory declarations.
  *
- * `base.ts` owns the `Node` base class and its results, `contracts.ts` the semantic carriers, and
- * `binding.ts` the binder. This index re-exports Python's `__all__` and nothing else: no node kind,
- * and none of the binder; their callers import the module that defines them.
+ * `base.ts` owns the `Node` base class and its results, `contracts.ts` the semantic carriers,
+ * `binding.ts` the binder, and `ids.ts` the deterministic child ids. This index re-exports
+ * Python's `__all__` and nothing else: no node kind, none of the binder and none of the ids; their
+ * callers import the module that defines them.
  *
- * Knows about: `diagnostics`, `expr`, `memory/contracts`, `typesys`, and peer node modules.
- * Never imports: `compile`, `compose`, `runtime`, the package-root run boundary, or the CLI.
+ * Knows about: diagnostics, expr, memory contracts, typesys, and peer node modules.
+ * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
 export type { NodeResult } from "./base.ts";

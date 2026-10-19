@@ -27,7 +27,7 @@
  * `test_capture_includes_materialized_reserved_values_from_node_hooks`,
  * `test_per_item_wrapper_capture_includes_defaults_before_body_and_asserts`,
  * `test_map_wrapper_capture_includes_valid_defaults_and_item_routes`) wait for the runtime's
- * `evalNode`.
+ * `evalNode`; the first also waits for the WAIT and MAP nodes, and the last for the MAP node.
  *
  * Not ported: `test_bind_params_rejects_noncanonical_containers` has no counterpart: both of
  * its rows are tuples, and TS has only arrays.

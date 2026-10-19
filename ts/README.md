@@ -133,8 +133,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   every read.
 - `src/nodes/base.ts` holds `Node`. `run(inputs, caps)` is async and resolves to one `Output`,
   `Route` or `Grow`; a kind's `forward(inputs, caps)` may return the result or a promise. The
-  capabilities are one `NodeCaps` object (`signal`, `bindItem`, `steps`); every node gets its own
-  `caps.signal`.
+  capabilities are one `NodeCaps` object (`signal`, `bindItem`, `steps`). `signal` is optional
+  in the type; the runtime's evaluator gives every node its own (the evaluator is not ported
+  yet).
 - `BackwardContext` and `BackwardResult` deep-copy and deep-freeze their values once, in the
   constructor: read them, and copy before you change one (unlike `BindingCapture.boundInputs`,
   which gives a fresh copy per read).

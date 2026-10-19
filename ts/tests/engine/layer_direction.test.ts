@@ -189,6 +189,17 @@ const RULES: Rule[] = [
     },
   },
   {
+    name: "tools imports no engine or front-end layer",
+    files: below("tools"),
+    forbid: ["nodes", "compile", "compose", "runtime", "run", "cli"],
+    why: "tools must not import nodes, compile, compose, runtime, run, or cli",
+    samples: {
+      file: "tools/registry.ts",
+      bad: ["nodes", "nodes/contracts", "compile", "compose", "compose/skills", "runtime", "run", "cli"],
+      good: ["tools/context", "skills/tool", "typesys", "llm/messages", "defaults", "diagnostics"],
+    },
+  },
+  {
     name: "memory never imports engine, host or cli layers",
     files: below("memory"),
     forbid: ["runtime", "compose", "compile", "run", "memory_host", "cli", "index"],

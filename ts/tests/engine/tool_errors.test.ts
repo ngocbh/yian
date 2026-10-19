@@ -1,9 +1,10 @@
 /**
  * TOOL retry defaults, the errors a host tool throws to steer retries, their brands, and
- * `ToolContext`, a port of `tests/engine/test_tool_errors.py`. Not ported:
- * `test_tool_errors_are_public` (the package exports land with `tools/index.ts`) and
- * `test_function_tool_awaitable_result_raises_a_tool_check_error` (a `FunctionTool`'s execute may
- * return a Promise, so an async result is not an error in TS).
+ * `ToolContext`, a port of `tests/engine/test_tool_errors.py`, and the exports of `tools/index.ts`
+ * (`test_tool_errors_are_public`, and `test_tool_names_are_exported_from_yian_and_yian_tools` and
+ * `test_yian_tools_exports_the_mcp_api` for `tools/index.ts`; the package root doesn't exist yet).
+ * Not ported: `test_function_tool_awaitable_result_raises_a_tool_check_error` (a `FunctionTool`'s
+ * execute may return a Promise, so an async result is not an error in TS).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -23,6 +24,17 @@ import {
   type ToolErrorKind,
   TransientToolError,
 } from "../../src/tools/errors.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
+import * as tools from "../../src/tools/index.ts";
+import type {
+  AskUserHandler,
+  AskUserRequest,
+  McpServerOptions,
+  ToolEntry,
+  ToolErrorKind as IndexToolErrorKind,
+} from "../../src/tools/index.ts";
+import * as mcp from "../../src/tools/mcp.ts";
+import * as registry from "../../src/tools/registry.ts";
 
 /** Return an environment holding only `vars`. */
 function envOf(vars: Readonly<Record<string, string>>): Env {
@@ -201,4 +213,50 @@ test("ToolContext is frozen and keeps its fields", () => {
   expect(ctx.node).toBe("place");
   expect(ctx.context).toBe(app);
   expect(ctx.signal).toBe(signal);
+});
+
+test("tools/index.ts exports the tools API, the same objects as its modules'", () => {
+  const expected: Record<string, unknown> = {
+    ToolContext,
+    PermanentToolError,
+    ReportedToolError,
+    TransientToolError,
+    ToolCheckError,
+    TOOL_ERROR,
+    toolErrorKinds,
+    isPermanentToolError,
+    isTransientToolError,
+    isReportedToolError,
+    isToolCheckError,
+    FunctionTool,
+    TOOL_REGISTRY: registry.TOOL_REGISTRY,
+    ToolSet: registry.ToolSet,
+    registerTool: registry.registerTool,
+    registeredTools: registry.registeredTools,
+    resolveTools: registry.resolveTools,
+    invokeTool: registry.invokeTool,
+    invokeToolTrusted: registry.invokeToolTrusted,
+    mcpServer: mcp.mcpServer,
+    McpServer: mcp.McpServer,
+    McpError: mcp.McpError,
+    McpConnectError: mcp.McpConnectError,
+    McpToolError: mcp.McpToolError,
+    McpRequestError: mcp.McpRequestError,
+    McpInvalidRequestError: mcp.McpInvalidRequestError,
+    McpTimeoutError: mcp.McpTimeoutError,
+    McpTransportError: mcp.McpTransportError,
+    McpServerClosed: mcp.McpServerClosed,
+    McpCallCancelled: mcp.McpCallCancelled,
+    isMcpError: mcp.isMcpError,
+  };
+  // Exactly these names: no translator, no `ask_user` id, no `isFunctionTool` or `isMcpServer`.
+  expect(Object.keys(tools).sort()).toEqual(Object.keys(expected).sort());
+  const exported = tools as Record<string, unknown>;
+  expect(Object.keys(expected).filter((name) => exported[name] !== expected[name])).toEqual([]);
+  // The type exports, checked by `tsc`.
+  const kind: IndexToolErrorKind = "permanent" satisfies ToolErrorKind;
+  const handler: AskUserHandler = (request: AskUserRequest) => request.question;
+  const entry: ToolEntry = handler;
+  const options: McpServerOptions = { command: "echo" };
+  expect([kind, typeof entry, options.command]).toEqual(["permanent", "function", "echo"]);
 });

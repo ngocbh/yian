@@ -26,11 +26,18 @@
  * original errors; an async `forward` that throws after an `await` rejects (a `NodeBodyError` under
  * `runForEvaluator`), and its `Output` gets the post-asserts.
  *
- * Later (T3-8 / T4-x): `test_runtime_does_not_drive_backward`,
- * `test_wrapper_delegates_to_real_code_node_forward`, `test_wrapper_delegates_for_grow_kind`,
+ * Ported (half): `test_wrapper_delegates_for_grow_kind`'s check that `CallNode` doesn't override
+ * `run`.
+ *
+ * Later (T3-8, CodeNode): `test_wrapper_delegates_to_real_code_node_forward`'s check that
+ * `CodeNode` doesn't override `run`.
+ *
+ * Later (T4-6 / T4-9 / T4-10): `test_runtime_does_not_drive_backward`,
  * `test_eval_node_no_longer_has_first_failing_assert`,
  * `test_eval_node_does_not_fire_when_run_bypasses_firing` and
- * `test_eval_node_fires_via_wrapper_positive_control`.
+ * `test_eval_node_fires_via_wrapper_positive_control` (T4-6); the forward half of
+ * `test_wrapper_delegates_to_real_code_node_forward` (T4-9); the forward half of
+ * `test_wrapper_delegates_for_grow_kind` (T4-10).
  */
 
 import { expect, test } from "bun:test";
@@ -54,6 +61,7 @@ import {
   Route,
 } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
+import { CallNode } from "../../src/nodes/call/node.ts";
 import { Assertion, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 
@@ -454,4 +462,9 @@ test("run rejects with the original errors", async () => {
   expect(await rejection(new ThrowNode("n", "boom").run({}))).toBe("boom");
   expect(await rejection(bound.run({}))).toBeInstanceOf(BindingError);
   expect(await rejection(asserted.run({ x: 5n }))).toBeInstanceOf(NodeAssertFailed);
+});
+
+test("wrapper delegates for grow kind (CallNode inherits run)", () => {
+  const node = new CallNode("r", { flowId: "c", child: {}, childInputs: [] });
+  expect(node.run).toBe(Node.prototype.run);
 });

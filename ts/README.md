@@ -157,6 +157,14 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   use no ES `#` members (a copy never ran the constructor, so it has no private brand) and no
   instance field that captures `this` (an arrow-function field or a bound callback would stay
   bound to the original); use TS `private` and prototype methods.
+- Each kind lives in `src/nodes/<kind>/node.ts` (start, end, case, call, map, loop so far) as a
+  `Node` subclass; import it from that file. There is no per-kind index, and, as Python's
+  `yian.nodes`, `src/nodes/index.ts` exports no kind. START's and END's bodies run. The other
+  kinds hold their data, checks and load-time hooks (origins, setup and condition checks, MAP's
+  `over` binding, backward layouts, LOOP `respawn`); their `forward` throws "not ported yet".
+- Counts on nodes (LOOP `times`, `maxIters` and `iteration`, END `n`) are safe-integer `number`s,
+  not `bigint`. END keeps its mode in public `mode`, `names` and `n` fields, and `EndNode.list`
+  replaces Python's `list_`. A CASE branch is a frozen `Case`: an origin rewrite rebuilds it.
 
 ## Memory
 

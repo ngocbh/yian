@@ -19,7 +19,7 @@ import { JSONDecodeError } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { FileRef, Type, TypeCheckError, TypedValue, ValueKind } from "../../src/typesys/values.ts";
 
-// The START node's id; the `nodes/` port will pin it to `StartNode.ID`.
+// The START node's id; `boundary_ids.test.ts` pins the pool's default to `StartNode.ID`.
 const START_ID = "__start__";
 
 describe("VariablePool reads and writes", () => {

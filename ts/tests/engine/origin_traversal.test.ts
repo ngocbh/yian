@@ -7,18 +7,34 @@
  * layer's `iter_flow_origins` and `rewrite_flow_origins` in Python; here they call the node's own
  * `iterLocalOrigins` and `rewriteLocalOrigins`. Python's bare `Node` is a minimal subclass.
  *
+ * Changed (local half): the CALL, MAP and LOOP rows of
+ * `test_each_composite_exposes_its_signature_and_baked_child` check the driver's own hooks over a
+ * stub child: `iterLocalOrigins` yields the cached `childInputs` signature after the base's
+ * origins, `originChildren()` returns the baked child, and `rewriteLocalOrigins` on a shallow
+ * copy maps the signature and leaves the original unchanged.
+ *
+ * Changed: `test_case_predicate_origins_traverse_and_rewrite_by_arm_identity` goes through the
+ * compile layer's flow traversal in Python; here it calls the CASE's own hooks, rewriting a
+ * shallow copy: a `Case` shared by two arms is visited and rebuilt once, and the original's
+ * `cases` and `Case`s are unchanged.
+ *
  * TS-only: the local traversal order with shared carriers yielded once; `rewriteLocalOrigins` on
  * a shallow node copy leaves the original unchanged and keeps shared carriers shared; a shallow
  * copy validates its assertions and runs; and `failureTrace`.
  *
- * Later (T3-10): the 25 compile tests.
+ * Later (T3-10): the 24 compile tests, and the composite rows' recursion into the child flow and
+ * alias identity.
  */
 
 import { expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { CallNode } from "../../src/nodes/call/node.ts";
+import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { Assertion, ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { LoopNode } from "../../src/nodes/loop/node.ts";
+import { MapNode } from "../../src/nodes/map/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 
 /** A minimal concrete node; the base hooks are the subject. Its body lets a copy run. */
@@ -58,8 +74,8 @@ function richNode(): { node: BareNode; contract: ValueContract; shared: Assertio
 }
 
 /** Return a shallow copy of `node`: the same prototype, its own fields copied. */
-function shallowCopy(node: BareNode): BareNode {
-  return Object.assign(Object.create(Object.getPrototypeOf(node)) as BareNode, node);
+function shallowCopy<N extends Node>(node: N): N {
+  return Object.assign(Object.create(Object.getPrototypeOf(node)) as N, node);
 }
 
 test("generated origin context is not local authored provenance", () => {
@@ -191,4 +207,75 @@ test("failure trace rejects malformed ancestry", () => {
   const forged = Object.create(OriginRef.prototype) as OriginRef;
   node.originContext = [forged];
   expect(() => node.failureTrace()).toThrow(RangeError);
+});
+
+for (const [label, make] of [
+  [
+    "call",
+    (child: object, signature: Parameter) => new CallNode("call", { flowId: "child", child, childInputs: [signature] }),
+  ],
+  [
+    "map",
+    (child: object, signature: Parameter) => new MapNode("map", { flowId: "child", child, childInputs: [signature] }),
+  ],
+  [
+    "loop",
+    (child: object, signature: Parameter) =>
+      new LoopNode("loop", {
+        flowId: "child",
+        child,
+        childInputs: [signature],
+        predicateKind: "times",
+        times: 1,
+        maxIters: 1,
+      }),
+  ],
+] as const) {
+  test(`each composite exposes its signature and baked child (${label}, local half)`, () => {
+    const signature = new Parameter("item", { origin: origin("signature") });
+    const child = {};
+    const driver = make(child, signature);
+    driver.origin = origin("driver");
+
+    expect([...driver.iterLocalOrigins()].map((o) => o.key)).toEqual(["driver", "signature"]);
+    expect(driver.originChildren()).toEqual([child]);
+    expect(driver.originChildren()[0]).toBe(child);
+
+    const copy = shallowCopy(driver);
+    copy.rewriteLocalOrigins((o) => origin(`mapped/${o.key}`));
+
+    expect([...copy.iterLocalOrigins()].map((o) => o.key)).toEqual(["mapped/driver", "mapped/signature"]);
+    expect(copy.childInputs[0]).not.toBe(signature);
+    expect([...driver.iterLocalOrigins()].map((o) => o.key)).toEqual(["driver", "signature"]);
+    expect(driver.childInputs[0]).toBe(signature);
+    expect(signature.origin).toEqual(origin("signature"));
+  });
+}
+
+test("case predicate origins traverse and rewrite by arm identity", () => {
+  // Ordered CASE sites participate in rewrites without double-mapping aliases.
+  const shared = new Case("first", { when: "false", origin: origin("case/shared") });
+  const second = new Case("second", { when: "true", origin: origin("case/second") });
+  const node = new CaseNode("case", [shared, shared, second]);
+  const cases = node.cases;
+
+  expect([...node.iterLocalOrigins()].map((o) => o.key)).toEqual(["case/shared", "case/second"]);
+
+  const calls: string[] = [];
+  const copy = shallowCopy(node);
+  copy.rewriteLocalOrigins((o) => {
+    calls.push(o.key);
+    return origin(`mapped/${o.key}`);
+  });
+
+  const rewritten = copy.cases;
+  expect(rewritten[0]).toBe(rewritten[1]);
+  expect(rewritten[0]!.origin).toEqual(origin("mapped/case/shared"));
+  expect(rewritten[2]!.origin).toEqual(origin("mapped/case/second"));
+  expect(calls).toEqual(["case/shared", "case/second"]);
+  expect(shared.origin).toEqual(origin("case/shared"));
+  expect(node.cases).toBe(cases);
+  expect(node.cases[0]).toBe(shared);
+  expect(node.cases[1]).toBe(shared);
+  expect(node.cases[2]).toBe(second);
 });

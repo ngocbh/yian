@@ -28,6 +28,7 @@ Design section 4.4 explains the harvest; `conformance/README.md` defines the cas
 
 from __future__ import annotations
 
+import ast
 from collections import Counter
 from collections.abc import Callable, Collection
 import dataclasses
@@ -1485,42 +1486,70 @@ def _ts_value_repr(value: object) -> str:
     return shown_text(text)
 
 
-# The `value_repr` callers that pass it a name or a key, as `(path under src/yian, co_qualname)`.
-# Design 3.2.8 keeps Python's repr for a name, so a message quoting one reads as in Python.
-# The `_json_value_error` entry also covers its two value sites, which show only non-JSON values
-# (no TS counterpart).
-_NAME_CALLERS = frozenset({
-    ("nodes/binding.py", "check_input_names.<locals>.<genexpr>"),
-    ("nodes/contracts.py", "validate_output_contract.<locals>.<genexpr>"),
-    ("typesys/values.py", "_build_for_type.<locals>.<genexpr>"),
-    ("typesys/values.py", "reject_non_text_keys"),
-    ("typesys/values.py", "plain_containers"),
-    ("typesys/values.py", "_json_value_error"),
-    ("typesys/values.py", "_dict_children"),
-    ("typesys/values.py", "_nesting_segment"),
-})
+# A bracketed list of one or more quoted texts, as Python's repr writes a list of names (and
+# a quoted key, `x['k']`) and as `", ".join` of text-form names gives one (`["a", "b"]`).
+_QUOTED = r"'(?:[^'\\\n]|\\.)*'" "|" r'"(?:[^"\\\n]|\\.)*"'
+_NAME_LIST = re.compile(rf"\[(?:{_QUOTED})(?:, (?:{_QUOTED}))*\]")
+# The result keys holding yian-written text.
+_MESSAGE_KEYS = frozenset({"message", "note", "notes"})
 
 
-def _from_name_caller() -> bool:
-    """Return whether the first calling frame outside this file is one of `_NAME_CALLERS`."""
-    frame = sys._getframe(1)
-    # Skip this file's frames, so a key-order wrapper in between doesn't hide the caller.
-    while frame.f_code.co_filename == __file__:
-        frame = frame.f_back
-    code = frame.f_code
-    path = code.co_filename.removeprefix(_YIAN_DIR).replace(os.sep, "/")
-    return (path, code.co_qualname) in _NAME_CALLERS
+def _ts_names(text: str) -> str:
+    """Return `text` with each bracketed list of quoted texts written as compact JSON.
+
+    So `unknown key(s) ['max_items']` reads `unknown key(s) ["max_items"]`, `["a", "b"]` reads
+    `["a","b"]`, and a quoted key `x['my key']` reads `x["my key"]`, as TS writes them
+    (decision 43). A list holding anything but texts is left alone. Not matched: a list cut by
+    `shown_text`. Converted too: such a list inside a text value the message quotes.
+    """
+    def write(match: re.Match) -> str:
+        try:
+            names = ast.literal_eval(match.group(0))
+        except (SyntaxError, ValueError):
+            return match.group(0)
+        return _ts_json(names)
+
+    return _NAME_LIST.sub(write, text)
+
+
+def _ts_messages(value: object) -> object:
+    """Return a runner result with `_ts_names` applied to its `message`, `note` and `notes` texts."""
+    if isinstance(value, list):
+        return [_ts_messages(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    converted = {}
+    for key, item in value.items():
+        if key in _MESSAGE_KEYS and isinstance(item, str):
+            converted[key] = _ts_names(item)
+        elif key in _MESSAGE_KEYS and isinstance(item, list):
+            converted[key] = [_ts_names(text) if isinstance(text, str) else text for text in item]
+        else:
+            converted[key] = _ts_messages(item)
+    return converted
 
 
 def _install_messages(patch: pytest.MonkeyPatch, case: dict) -> None:
-    """Show values in yian's messages in the text form, and names with Python's repr."""
+    """Show values, names and lists of names in yian's messages in the text form.
+
+    `value_repr` is the text form at every call, names included. Most lists of names are
+    written by Python's own list repr (`f"{sorted(names)}"`), so the replay's results go through
+    `_ts_messages` too.
+    """
     original = typesys_values.value_repr
 
     @functools.wraps(original)
     def messages_value_repr(value: object) -> str:
-        return original(value) if _from_name_caller() else _ts_value_repr(value)
+        return _ts_value_repr(value)
 
     _patch_held(patch, original, messages_value_repr)
+    results = runner.results
+
+    @functools.wraps(results)
+    def ts_results(*args: object, **kwargs: object) -> dict:
+        return _ts_messages(results(*args, **kwargs))
+
+    patch.setattr(runner, "results", ts_results)
 
 
 def _ordering(original):

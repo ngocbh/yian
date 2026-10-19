@@ -2260,7 +2260,10 @@ def test_harvest_records_runs(tmp_path: Path) -> None:
     raises = cases["run-core/sample__raises__2.yaml"]
     assert "run" in raises and "run_id" not in raises["run"]
     assert raises["expect"]["raises"] == {"class": "ValueError",
-                                          "message": "unknown input 'nope'; declared inputs: q"}
+                                          "message": 'unknown input "nope"; declared inputs: q'}
+    # The name is in the text form in TS (decision 43); Python's repr is the Python wording.
+    assert raises["rules"] == ["messages"]
+    assert raises["python_expect"]["raises"]["message"] == "unknown input 'nope'; declared inputs: q"
     # Raised before the run started: no events, which the case checks.
     assert raises["expect"]["events"] == []
     keyed = cases["run-core/sample__keyed__2.yaml"]
@@ -3811,7 +3814,7 @@ def test_shim_value_repr() -> None:
 
 
 def test_shim_value_repr_through_yian() -> None:
-    """Under `messages`, yian's messages show values in the text form and names as Python does."""
+    """Under `messages`, yian's messages show values, names included, in the text form."""
     from tests import conformance_harvest as harvest
     from yian.expr import expressions
     from yian.nodes.binding import check_input_names
@@ -3821,12 +3824,13 @@ def test_shim_value_repr_through_yian() -> None:
 
     record = Type(kind=ValueKind.OBJECT, fields={"a": Type.scalar(ValueKind.INTEGER)},
                   required=frozenset({"a"}))
+    # The name sites, which call `value_repr` too, show each name in the text form.
     names = [
-        (lambda: check_input_names([Parameter("a")], {"zz": 1}), "unknown input 'zz'"),
+        (lambda: check_input_names([Parameter("a")], {"zz": 1}), 'unknown input "zz"'),
         (lambda: validate_output_contract(PartialRecordContract((("a", None),)),
-                                          {"a": 1, "zz": 2}), "unknown fields: ['zz']"),
-        (lambda: build_value_as(record, {"a": 1, "zz": 2}), "unknown fields: ['zz']"),
-        (lambda: reject_non_text_keys({None: 1}, "input 'x'"), "must be text, got None"),
+                                          {"a": 1, "zz": 2}), 'unknown fields: ["zz"]'),
+        (lambda: build_value_as(record, {"a": 1, "zz": 2}), 'unknown fields: ["zz"]'),
+        (lambda: reject_non_text_keys({None: 1}, "input 'x'"), "must be text, got null"),
     ]
 
     def raised(call) -> str:
@@ -3864,23 +3868,37 @@ def test_shim_value_repr_through_yian() -> None:
     assert values.value_repr is original and expressions.value_repr is original
 
 
-def test_shim_value_repr_name_sites() -> None:
-    """Each of the `messages` shim's name sites is one code object that calls `value_repr`."""
-    import types
-
+def test_shim_ts_names() -> None:
+    """`_ts_names` writes each bracketed list of quoted texts in a message as compact JSON."""
     from tests import conformance_harvest as harvest
-    import yian
 
-    root = Path(yian.__file__).parent
-    for path, qualname in harvest._NAME_CALLERS:
-        source = root / path
-        stack = [compile(source.read_text(encoding="utf-8"), str(source), "exec")]
-        found = 0
-        while stack:
-            code = stack.pop()
-            stack += [const for const in code.co_consts if isinstance(const, types.CodeType)]
-            found += code.co_qualname == qualname and "value_repr" in code.co_names
-        assert found == 1, (path, qualname)
+    rows = [
+        ("unknown key(s) ['max_items']", 'unknown key(s) ["max_items"]'),
+        ("missing=['mime', 'name'], extra=[]", 'missing=["mime","name"], extra=[]'),
+        ('record has unknown fields: ["a", "b"]', 'record has unknown fields: ["a","b"]'),
+        ("output at x['my key'][1]: bad", 'output at x["my key"][1]: bad'),
+        ("names [\"it's\", 'b']", "names [\"it's\",\"b\"]"),
+        (r"keys ['a\nb', 'é']", 'keys ["a\\nb","é"]'),
+        ("[1, 'a'] ('a',) {'a': 1} [] ['a',]", "[1, 'a'] ('a',) {'a': 1} [] ['a',]"),
+        ("no list here: 'a', 'b'", "no list here: 'a', 'b'"),
+    ]
+    assert [harvest._ts_names(text) for text, _ in rows] == [text for _, text in rows]
+
+
+def test_shim_messages_replay(tmp_path: Path) -> None:
+    """A replay under `messages` writes a Python list of names in its messages as JSON."""
+    from tests import conformance_harvest as harvest
+
+    state = harvest._Harvest(None, tmp_path)
+    case = {"kind": "value", "typedefs": {"R": {"a": "int", "b": "int"}}, "type": "R", "value": {}}
+
+    def message(*shims: str) -> str:
+        results, notes = harvest._replay(state, case, shims)
+        assert notes == frozenset()
+        return results["raises"]["message"]
+
+    assert message("messages") == 'record missing required fields: ["a","b"]'
+    assert message() == "record missing required fields: ['a', 'b']"
 
 
 def _shim_outcome(expr: str, values: dict) -> tuple[str, set]:

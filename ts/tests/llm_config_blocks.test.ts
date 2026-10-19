@@ -1,12 +1,11 @@
 /**
- * Mirrors `tests/test_llm_config_blocks.py`: the `LLMConfig` block tests. The cascade merge tests
- * come with the next change to `config.ts` (`mergeLlmConfig`); the 3 `validate_layer` tests go
- * with `layers.ts`.
+ * Mirrors `tests/test_llm_config_blocks.py`: the `LLMConfig` block tests and the cascade merge
+ * tests; the 3 `validate_layer` tests go with `layers.ts`.
  */
 
 import { describe, expect, test } from "bun:test";
 
-import { LLM_CONFIG_KEYS, LLMConfig, SUPPORTED_LLM_PROVIDERS } from "../src/llm_clients/config.ts";
+import { LLM_CONFIG_KEYS, LLMConfig, mergeLlmConfig, SUPPORTED_LLM_PROVIDERS } from "../src/llm_clients/config.ts";
 import { type Issue, PROVIDER_BLOCKS, ValidationError } from "../src/llm_clients/provider_blocks.ts";
 import { fromHost } from "../src/typesys/values.ts";
 
@@ -141,6 +140,98 @@ test.each([
   [{ google: { safetySettings: [{ category: SENTINEL, threshold: "OFF" }] } }],
 ])("errors do not echo block values %#", (data) => {
   expect(error(data)).not.toContain(SENTINEL);
+});
+
+// -- cascade merge ----------------------------------------------------------------
+
+test("blocks merge per field", () => {
+  const specific = { anthropic: { temperature: 0.2 } };
+  const base = { anthropic: { max_tokens: 8000n, temperature: 1.0 }, provider: "anthropic" };
+  expect(mergeLlmConfig(specific, base)).toEqual({
+    provider: "anthropic",
+    anthropic: { max_tokens: 8000n, temperature: 0.2 },
+  });
+});
+
+test("nested block values are replaced whole", () => {
+  const specific = { anthropic: { thinking: { type: "adaptive" } } };
+  const base = { anthropic: { thinking: { type: "enabled", budget_tokens: 2048n }, top_k: 5n } };
+  expect(mergeLlmConfig(specific, base)).toEqual({ anthropic: { thinking: { type: "adaptive" }, top_k: 5n } });
+});
+
+test("null block fields are dropped", () => {
+  const specific = { openai: { temperature: null, top_p: 0.5 } };
+  const base = { openai: { temperature: 0.7, user: null } };
+  const merged = mergeLlmConfig(specific, base);
+  expect(merged).toEqual({ openai: { temperature: 0.7, top_p: 0.5 } });
+  expect(Object.keys(merged["openai"] as object)).toEqual(["temperature", "top_p"]);
+});
+
+test("a null block keeps the base block", () => {
+  const base = { openai: { temperature: 0.7 } };
+  expect(mergeLlmConfig({ openai: null }, base)).toEqual(base);
+});
+
+test("a non-record specific block replaces whole", () => {
+  expect(mergeLlmConfig({ openai: "high" }, { openai: { temperature: 0.7 } })).toEqual({ openai: "high" });
+});
+
+test("a non-record base block is kept for validation", () => {
+  // A malformed host block must reach validation, not be hidden by an authored one.
+  expect(mergeLlmConfig({ openai: { temperature: 0.7 } }, { openai: "high" })).toEqual({ openai: "high" });
+});
+
+test("_connection is replaced whole", () => {
+  const specific = { _connection: { method: "api_key" } };
+  const base = { _connection: { method: "subscription", source: "store" } };
+  expect(mergeLlmConfig(specific, base)).toEqual(specific);
+});
+
+test("a dash block merges across layers", () => {
+  const specific = { "qwen-cn": { enable_thinking: false } };
+  const base = { "qwen-cn": { enable_thinking: true, thinking_budget: 512n } };
+  expect(mergeLlmConfig(specific, base)).toEqual({ "qwen-cn": { enable_thinking: false, thinking_budget: 512n } });
+});
+
+test("merge does not mutate its inputs", () => {
+  const specific = { openai: { reasoning: { effort: "low" }, top_p: null }, model: "m" };
+  const base = { openai: { reasoning: { summary: "auto" }, temperature: 0.2 }, model: null };
+  const snapshot = structuredClone([specific, base]);
+  const merged = mergeLlmConfig(specific, base);
+  (merged["openai"] as Record<string, unknown>)["temperature"] = 1.5;
+  expect([specific, base]).toEqual(snapshot);
+});
+
+const LAYERS: readonly Record<string, unknown>[] = [
+  {},
+  { provider: "openai", model: null },
+  { openai: null },
+  { openai: { temperature: 0.2, user: null } },
+  { openai: { reasoning: { effort: "high" }, temperature: null } },
+  { openai: { reasoning: { summary: "auto" }, top_p: 0.5 } },
+  { openai: {} },
+  { openai: "not-a-block" },
+  { openai: ["also", "not"] },
+  { anthropic: { thinking: { type: "enabled", budget_tokens: 2048n } } },
+  { anthropic: { thinking: { type: "adaptive" }, max_tokens: 100n } },
+  { "qwen-cn": { enable_thinking: true }, _connection: { method: "api_key" } },
+  { "qwen-cn": { enable_thinking: null, top_k: 4n }, _connection: { method: "x" } },
+  { temperature: 0.3, model: "m" },
+];
+
+test("merge is associative over every triple of layers", () => {
+  let checked = 0;
+  for (const host of LAYERS) {
+    for (const flow of LAYERS) {
+      for (const node of LAYERS) {
+        const left = mergeLlmConfig(node, mergeLlmConfig(flow, host));
+        const right = mergeLlmConfig(mergeLlmConfig(node, flow), host);
+        expect(left).toEqual(right);
+        checked += 1;
+      }
+    }
+  }
+  expect(checked).toBe(2744);
 });
 
 describe("TS additions", () => {
@@ -314,5 +405,52 @@ describe("TS additions", () => {
       anthropic: { max_tokens: 8000n, temperature: 0.5 },
     });
     expect(new LLMConfig(config.dump()).dump()).toEqual(config.dump());
+  });
+
+  test("undefined values are unset in both layers", () => {
+    const merged = mergeLlmConfig(
+      { model: undefined, openai: { top_p: undefined, user: "u" } },
+      { model: "m", openai: { temperature: 0.2, user: undefined }, project: undefined },
+    );
+    expect(merged).toEqual({ model: "m", openai: { temperature: 0.2, user: "u" } });
+    expect(Object.keys(merged)).toEqual(["model", "openai"]);
+    expect(Object.keys(merged["openai"] as object)).toEqual(["temperature", "user"]);
+  });
+
+  test("both non-record blocks: the specific one wins", () => {
+    expect(mergeLlmConfig({ openai: "high" }, { openai: ["low"] })).toEqual({ openai: "high" });
+  });
+
+  test("merged blocks are new records and other values are shared", () => {
+    const connection = { method: "api_key" };
+    const block = { temperature: 0.2 };
+    const merged = mergeLlmConfig({ _connection: connection }, { openai: block });
+    expect(merged["_connection"]).toBe(connection);
+    expect(merged["openai"]).not.toBe(block);
+    expect(merged["openai"]).toEqual(block);
+  });
+
+  test("toString and __proto__ layer keys are replaced whole and stay own data keys", () => {
+    const specific = Object.fromEntries([
+      ["toString", { b: 2n }],
+      ["__proto__", { y: 2n }],
+    ]);
+    const base = Object.fromEntries([
+      ["toString", { a: 1n }],
+      ["__proto__", { x: 1n }],
+    ]);
+    const merged = mergeLlmConfig(specific, base);
+    expect(Object.getPrototypeOf(merged)).toBe(Object.prototype);
+    for (const [key, value] of [
+      ["toString", { b: 2n }],
+      ["__proto__", { y: 2n }],
+    ] as const) {
+      const descriptor = Object.getOwnPropertyDescriptor(merged, key);
+      expect(descriptor?.value).toEqual(value);
+      expect(descriptor?.writable && descriptor.enumerable && descriptor.configurable).toBe(true);
+    }
+    expect(Object.keys(merged)).toEqual(["toString", "__proto__"]);
+    // A base-only key is copied as an own key too.
+    expect(Object.hasOwn(mergeLlmConfig({}, base), "__proto__")).toBe(true);
   });
 });

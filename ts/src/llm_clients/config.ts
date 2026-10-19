@@ -12,7 +12,7 @@ import { current } from "../defaults.ts";
 import { isRecord } from "../typesys/index.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { validateHeaderName, validateHeaders, validateOrganization } from "./connection_settings.ts";
-import { blockSchema, checkBlock, choices, type Issue, ValidationError } from "./provider_blocks.ts";
+import { blockSchema, checkBlock, choices, type Issue, PROVIDER_BLOCKS, ValidationError } from "./provider_blocks.ts";
 
 // One provider vocabulary shared by the validated config carrier and the factory that consumes it.
 /** Every provider an `llm_config` may name, in Python yian's order. */
@@ -467,4 +467,247 @@ export class LLMConfig {
     for (const [key, block] of this.#blocks) dumped[key] = structuredClone(block);
     return dumped;
   }
+}
+
+/** Return `url` without its trailing slashes. */
+function stripTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === "/") end -= 1;
+  return url.slice(0, end);
+}
+
+/**
+ * Return the base Azure resource URL, without an OpenAI-v1 suffix or a trailing slash.
+ *
+ * Some Azure portals hand out the `.../openai/v1` (OpenAI-compatible) surface, but the Azure
+ * client appends its own `/openai/deployments/...` path, so that suffix yields a 404 ("Resource
+ * not found"). Strips one `/openai/v1` or `/openai` suffix, and the slashes around it.
+ */
+export function azureResourceEndpoint(url: string): string {
+  let base = stripTrailingSlashes(url);
+  for (const suffix of ["/openai/v1", "/openai"]) {
+    if (base.endsWith(suffix)) {
+      base = base.slice(0, -suffix.length);
+      break;
+    }
+  }
+  return stripTrailingSlashes(base);
+}
+
+// The connection settings `popHostCredentials` takes with the host key.
+const CONNECTION_SETTINGS = ["organization", "project", "headers"] as const;
+
+// Fields only the host's run layer may set. Authored layers reach the recorded effective map, a
+// flow-level base_url could send the host key elsewhere, and connection settings go wherever that
+// key goes. Each message starts with `llm_config.`: the AGENT load check swaps that for its own
+// prefix.
+const HOST_ONLY_FIELDS: ReadonlyMap<string, string> = new Map([
+  ["api_key", "llm_config.api_key is a host credential; pass it in the run's llm_config, not in a flow file"],
+  [
+    "base_url",
+    "llm_config.base_url decides where the host's api_key is sent; pass it with that key in the run's " +
+      "llm_config, not in a flow file. A flow file sets base_url only beside provider: azure, as the Azure " +
+      "resource endpoint",
+  ],
+  ...CONNECTION_SETTINGS.map(
+    (field) =>
+      [
+        field,
+        `llm_config.${field} goes wherever the host's api_key is sent; pass it with that key in the run's ` +
+          "llm_config, or save it with the login by `yian auth`, not in a flow file",
+      ] as const,
+  ),
+]);
+
+/**
+ * Return why an authored `llm_config` layer may not be used, or `null`.
+ *
+ * Gives the message for the first host-only field the layer sets (`api_key`, `base_url`,
+ * `organization`, `project`, `headers`; a `null` value counts). A `base_url` beside
+ * `provider: azure` is allowed: it is the Azure resource endpoint, and the Azure key comes from
+ * the environment, which flow code can already read, while a host `api_key` for Azure must bring
+ * its own `base_url` (see `popHostCredentials`). A non-record has no host-only field.
+ */
+export function hostOnlyFieldError(config: unknown): string | null {
+  if (!isRecord(config)) return null;
+  for (const [field, message] of HOST_ONLY_FIELDS) {
+    if (field === "base_url" && own(config, "provider") === "azure") continue;
+    if (has(config, field)) return message;
+  }
+  return null;
+}
+
+/** Whether Python would read `value` as false: unset, `false`, `""`, zero, or an empty list or record. */
+function isFalsy(value: unknown): boolean {
+  if (value === undefined || value === null || value === false || value === "" || value === 0n || value === 0) {
+    return true;
+  }
+  if (Array.isArray(value)) return value.length === 0;
+  return isRecord(value) && Object.values(value).every((item) => item === undefined);
+}
+
+/**
+ * Remove a host `api_key` from one mutable config layer and return it validated, or `null` when the
+ * layer has none.
+ *
+ * The layer must name its `provider`, so the key authenticates only that provider. Errors never
+ * echo the key. Throws `RangeError` if `provider` is missing, or `ValidationError` if the key is
+ * empty or not a string or `provider` is unsupported.
+ */
+export function popApiKey(config: Record<string, unknown>): string | null {
+  const raw = own(config, "api_key");
+  delete config["api_key"];
+  if (raw === null || raw === undefined) return null;
+  const provider = own(config, "provider");
+  if (isFalsy(provider)) {
+    throw new RangeError("llm_config.api_key needs llm_config.provider, so the key goes only to that provider");
+  }
+  return new LLMConfig({ provider, api_key: raw }).apiKey;
+}
+
+/**
+ * The credential and connection settings taken from a host `llm_config` layer. Instances are
+ * frozen; the key and header values never show in `JSON.stringify` or `inspect`.
+ *
+ * Fields: `apiKey` (the host key), `baseUrl` (where the key is sent), `organization` and
+ * `project` (OpenAI ids sent with the key), and `headers` (extra request headers sent with the
+ * key; values are secrets). Each is `null` when unset.
+ */
+export class HostConnection {
+  readonly baseUrl: string | null;
+  readonly organization: string | null;
+  readonly project: string | null;
+  // Private, so JSON.stringify, inspect and spreads never show the secrets.
+  readonly #apiKey: string | null;
+  readonly #headers: Readonly<Record<string, string>> | null;
+
+  constructor(
+    fields: {
+      apiKey?: string | null;
+      baseUrl?: string | null;
+      organization?: string | null;
+      project?: string | null;
+      headers?: Readonly<Record<string, string>> | null;
+    } = {},
+  ) {
+    this.baseUrl = fields.baseUrl ?? null;
+    this.organization = fields.organization ?? null;
+    this.project = fields.project ?? null;
+    this.#apiKey = fields.apiKey ?? null;
+    this.#headers = fields.headers ? Object.freeze({ ...fields.headers }) : null;
+    Object.freeze(this);
+  }
+
+  /** The host key, or `null`. */
+  get apiKey(): string | null {
+    return this.#apiKey;
+  }
+
+  /** A frozen copy of the extra request headers, or `null`. */
+  get headers(): Readonly<Record<string, string>> | null {
+    return this.#headers === null ? null : Object.freeze({ ...this.#headers });
+  }
+}
+
+/**
+ * Remove a host `api_key` and the connection it goes with from one mutable config layer.
+ *
+ * Taking them from the same layer is what binds the connection to the key: a base_url decides
+ * where the key is sent, and the organization, project and headers go wherever it is sent, so each
+ * is accepted only beside that key and the layer's `provider`. For `provider: azure` without a
+ * key, `base_url` is the resource endpoint the environment key goes to; it stays in the layer as an
+ * ordinary setting. An Azure key needs a `base_url` beside it, so it is never sent to an endpoint
+ * another layer names. `api_key`, `organization`, `project` and `headers` are removed even when
+ * `null`, and `base_url` unless it is a keyless Azure endpoint. Errors never echo the URL, a
+ * header value or the key.
+ *
+ * Returns the validated key and settings, each `null` when the layer has none (an empty `headers`
+ * record too). Throws `RangeError` if the key lacks `provider` (see `popApiKey`), an Azure key has
+ * no `base_url`, or a keyless Azure `base_url` fails `validateBaseUrl`; throws `ValidationError`
+ * if the key is invalid, the layer has a non-Azure `base_url` or a connection setting but no
+ * `api_key`, or a value is not allowed (see `LLMConfig`).
+ */
+export function popHostCredentials(config: Record<string, unknown>): HostConnection {
+  const apiKey = popApiKey(config);
+  const settings: Record<string, unknown> = {};
+  for (const field of CONNECTION_SETTINGS) {
+    const value = own(config, field);
+    delete config[field];
+    if (value !== null && value !== undefined) settings[field] = value;
+  }
+  const provider = own(config, "provider");
+  if (apiKey === null && provider === "azure") {
+    const endpoint = own(config, "base_url");
+    if (endpoint !== null && endpoint !== undefined) validateBaseUrl(endpoint);
+    // Validation names the first setting that needs a key.
+    if (Object.keys(settings).length > 0) new LLMConfig({ provider, ...settings });
+    return new HostConnection();
+  }
+  const baseUrl = own(config, "base_url");
+  delete config["base_url"];
+  const noBaseUrl = baseUrl === null || baseUrl === undefined;
+  if (noBaseUrl && apiKey !== null && provider === "azure") {
+    throw new RangeError(
+      "llm_config.api_key for provider azure needs llm_config.base_url in the same config, " +
+        "since it decides where that key is sent",
+    );
+  }
+  if (apiKey === null && noBaseUrl && Object.keys(settings).length === 0) return new HostConnection();
+  const validated = new LLMConfig({ provider, api_key: apiKey, base_url: baseUrl, ...settings });
+  return new HostConnection({
+    apiKey: validated.apiKey,
+    baseUrl: validated.baseUrl,
+    organization: validated.organization,
+    project: validated.project,
+    headers: validated.headers,
+  });
+}
+
+/** Return a provider block record without its unset fields; any other value unchanged. */
+function unsetDropped(key: string, value: unknown): unknown {
+  if (Object.hasOwn(PROVIDER_BLOCKS, key) && isRecord(value)) {
+    return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== null && item !== undefined));
+  }
+  return value;
+}
+
+/**
+ * Merge two fill-the-gap layers into a new record, without mutating either input.
+ *
+ * A set value in `specific` (the higher-precedence layer, e.g. a node's own `llm_config`) wins;
+ * `base` (e.g. the enclosing flow's) fills every remaining field. `null` and `undefined` mean
+ * unset at every layer, matching the optional `LLMConfig` fields' fallback. A provider block (a key
+ * of `PROVIDER_BLOCKS`, e.g. `openai`) merges per block field when both layers set it to a record:
+ * `specific`'s set fields win, `base` fills the rest, and a value inside a field (e.g.
+ * `thinking: {...}`) is replaced whole. A block that is not a record is kept over the other
+ * layer's block, whichever layer sets it (the `specific` one when both do), so it reaches
+ * validation instead of being hidden. Every other key, `_connection` included, is replaced whole.
+ * Dropping unset values keeps the merge associative, so a cascade can be grouped without changing
+ * its result. Block records in the result are new; other values are shared with the inputs.
+ *
+ * Example: `mergeLlmConfig({anthropic: {output_config: {effort: "high"}}}, {provider: "anthropic",
+ * anthropic: {max_tokens: 8000n, output_config: {effort: "low"}}})` gives `{provider: "anthropic",
+ * anthropic: {max_tokens: 8000n, output_config: {effort: "high"}}}`.
+ */
+export function mergeLlmConfig(
+  specific: Readonly<Record<string, unknown>>,
+  base: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  // A Map, then Object.fromEntries, so keys such as `__proto__` stay own data keys.
+  const out = new Map<string, unknown>();
+  for (const [key, value] of Object.entries(base)) {
+    if (value !== null && value !== undefined) out.set(key, unsetDropped(key, value));
+  }
+  for (const [key, value] of Object.entries(specific)) {
+    if (value === null || value === undefined) continue;
+    const current = out.get(key);
+    if (Object.hasOwn(PROVIDER_BLOCKS, key) && current !== undefined) {
+      if (!isRecord(value)) out.set(key, value);
+      else if (isRecord(current)) out.set(key, { ...current, ...(unsetDropped(key, value) as object) });
+      // Otherwise the base block is not a record and stays for validation to refuse.
+    } else {
+      out.set(key, unsetDropped(key, value));
+    }
+  }
+  return Object.fromEntries(out);
 }

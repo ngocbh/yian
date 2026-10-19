@@ -6,8 +6,9 @@
  * checkpoint to a validated view; the codecs (`conversationViewToJson`, `conversationViewFromJson`,
  * `conversationCheckpointToJson`, `conversationCheckpointFromJson`) write and read frozen wire JSON
  * whose counters are `bigint`s; and the digests (`conversationContentDigest`, `checkpointDigest`)
- * are SHA-256 hex of `logJson` text. They differ from Python yian's digests only for floats and
- * astral key order, which is fine because TS stores are read only by TS.
+ * are SHA-256 hex of `logJson` text. They differ from Python yian's digests only for floats, astral
+ * key order and records shaped like the codec's `$float`/`$record` tags, which is fine because TS
+ * stores are read only by TS.
  *
  * Knows about: `memory/contracts` and `typesys/json`.
  * Never imports: any other yian module.
@@ -168,6 +169,7 @@ function array(value: unknown): readonly JsonValue[] {
  * @throws RangeError when it's beyond the safe integer range.
  */
 function counter(value: unknown, name: string): number {
+  // Same rule as runtime/log.ts's wireInt, which this leaf can't import.
   if (typeof value !== "bigint") throw new TypeError(`${name} must be an integer`);
   const number = Number(value);
   if (!Number.isSafeInteger(number)) throw new RangeError(`${name} must be a safe integer`);
@@ -242,9 +244,9 @@ function completionFromJson(value: unknown): ConversationCompletion {
  * @example `conversationViewFromJson(conversationViewToJson(view))` equals `view`.
  */
 export function conversationViewToJson(view: ConversationView): JsonObject {
-  const value = requireView(view);
-  validateView(value);
-  return viewWire(viewJson(value));
+  requireView(view);
+  validateView(view);
+  return wire(viewJson(view));
 }
 
 /**
@@ -434,7 +436,8 @@ function operation(entry: ConversationApplied): [ConversationInvocation, number]
   return [new ConversationInvocation(runId, startSequence), ordinal];
 }
 
-// Python keys its dicts by invocation and ordinal tuples; JSON text keys equal values alike.
+// Python keys its dicts by invocation and ordinal tuples; JSON text gives equal values equal keys,
+// and an operation key is its canonical `operationId`.
 function invocationKey(invocation: ConversationInvocation): string {
   return JSON.stringify([invocation.runId, invocation.startSequence]);
 }
@@ -450,6 +453,7 @@ function validateView(view: ConversationView): void {
   let previousOrdinal = -1;
   const seen = new Set<string>();
   const operations = new Map<string, number>();
+  const positive: string[] = [];
   const lastOrdinals = new Map<string, number>();
   for (const [index, entry] of view.applied.entries()) {
     const [invocation, ordinal] = operation(entry);
@@ -467,19 +471,21 @@ function validateView(view: ConversationView): void {
     expectedDigest = entry.afterDigest;
     previousInvocation = invocation;
     previousOrdinal = ordinal;
-    operations.set(operationKey(invocation, ordinal), index);
+    operations.set(entry.operationId, index);
+    if (ordinal > 0) positive.push(entry.operationId);
     lastOrdinals.set(invocationKey(invocation), ordinal);
   }
   if (expectedDigest !== conversationContentDigest(view)) {
     throw new RangeError("ledger final digest does not match conversation content");
   }
-  validateHistory(view, operations, lastOrdinals);
+  validateHistory(view, operations, positive, lastOrdinals);
 }
 
 /** Account for every non-admission operation using retained actual evidence. */
 function validateHistory(
   view: ConversationView,
   operations: ReadonlyMap<string, number>,
+  positive: readonly string[],
   lastOrdinals: ReadonlyMap<string, number>,
 ): void {
   const claimed = new Set<string>();
@@ -501,7 +507,9 @@ function validateHistory(
     if (position <= previous) throw new RangeError("effects must retain accepted request order");
     previous = position;
     const key = invocationKey(effect.invocation);
-    effectsByInvocation.set(key, [...(effectsByInvocation.get(key) ?? []), effect]);
+    const list = effectsByInvocation.get(key);
+    if (list) list.push(effect);
+    else effectsByInvocation.set(key, [effect]);
     for (const ordinal of effect.observationOrdinals) claim(effect.invocation, ordinal);
   }
 
@@ -521,9 +529,7 @@ function validateHistory(
     }
   }
 
-  // An identity is the JSON text of [run_id, start_sequence, ordinal].
-  const expected = [...operations.keys()].filter((identity) => (JSON.parse(identity) as number[])[2]! > 0);
-  if (claimed.size !== expected.length || !expected.every((identity) => claimed.has(identity))) {
+  if (claimed.size !== positive.length || !positive.every((identity) => claimed.has(identity))) {
     throw new RangeError("every positive operation must have retained effect or closure evidence");
   }
   if (view.items.length > 0 && view.effects.length === 0) {
@@ -560,8 +566,7 @@ export function advanceConversation(before: ConversationView, checkpoint: Conver
   ) {
     throw conflict("checkpoint does not name the current predecessor");
   }
-  // Equal to Python's compact `json.dumps` of the same parts.
-  const operationId = JSON.stringify([stamp.invocation.runId, stamp.invocation.startSequence, stamp.ordinal]);
+  const operationId = operationKey(stamp.invocation, stamp.ordinal);
   if (before.applied.some((entry) => entry.operationId === operationId)) {
     throw conflict("checkpoint operation has already been applied");
   }
@@ -657,6 +662,7 @@ export function advanceConversation(before: ConversationView, checkpoint: Conver
     after.closedInvocations,
     [...before.applied, sealed],
   );
+  // Prove the successor encodes, as Python does, before returning it.
   conversationViewToJson(result);
   return result;
 }

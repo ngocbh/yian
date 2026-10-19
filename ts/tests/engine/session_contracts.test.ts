@@ -91,7 +91,9 @@
  * symbol key. A conflict's message is checked too. Where Python compares the input view against a
  * `_copy_conversation_view` copy, the test compares its wire's `logJson` text before and after; the
  * host-fault row spies on `crypto.createHash` (Python patches `hashlib.sha256`). The deep row
- * compares `logJson` text, not `toEqual`.
+ * compares `logJson` text, not `toEqual`. The view decoder's freeze paths read
+ * `conversation wire.<field>`, where Python's read `conversation wire.baseline.<field>` (its
+ * admission-wrapper reservation, dropped).
  *
  * Not ported (conversation): the wire-nesting tests
  * `test_wire_nesting_is_checked_before_fold_and_encoder_return` (`:1055`),
@@ -1064,8 +1066,8 @@ function viewText(value: ConversationView): string {
   return logJson(conversationViewToJson(value));
 }
 
-/** Assert that `fn` throws a non-retryable `session.conflict` with `message`. */
-function expectConflict(fn: () => unknown, message: string): void {
+/** Assert that `fn` throws a non-retryable `MemoryOperationError` with `stage`, `code` and `message`. */
+function expectOperationError(fn: () => unknown, stage: string, code: string, message: string): void {
   let caught: unknown;
   try {
     fn();
@@ -1074,12 +1076,7 @@ function expectConflict(fn: () => unknown, message: string): void {
   }
   expect(caught).toBeInstanceOf(MemoryOperationError);
   const error = caught as MemoryOperationError;
-  expect([error.stage, error.code, error.retryable, error.message]).toEqual([
-    "conversation",
-    "session.conflict",
-    false,
-    message,
-  ]);
+  expect([error.stage, error.code, error.retryable, error.message]).toEqual([stage, code, false, message]);
 }
 
 function nextStamp(revision: number, ordinal = 0, runId = "next", startSequence = 1): ConversationStamp {
@@ -1172,7 +1169,12 @@ test("admission advances the revision once", () => {
       conversationContentDigest(after),
     ),
   ]);
-  expectConflict(() => advanceConversation(after, checkpoint), "checkpoint does not name the current predecessor");
+  expectOperationError(
+    () => advanceConversation(after, checkpoint),
+    "conversation",
+    "session.conflict",
+    "checkpoint does not name the current predecessor",
+  );
 });
 
 // test_request_appends_new_items_and_pending_effect
@@ -1220,8 +1222,10 @@ test.each<ConversationTurnStatus>(["failed", "interrupted"])("closing as %s keep
   expect(after.effects).toEqual(before.effects);
   expect(after.items).toEqual(before.items);
   expect(after.closedInvocations).toEqual([new ConversationCompletion(invocation(), 2, status)]);
-  expectConflict(
+  expectOperationError(
     () => advanceConversation(before, new ConversationClosed(stamp(2, 2), "completed")),
+    "conversation",
+    "session.conflict",
     "successful closure cannot leave pending effects",
   );
   expect(before.closedInvocations).toEqual([]);
@@ -1233,7 +1237,12 @@ test("a transition refuses a skipped ordinal", () => {
   const before = admitted();
   const event = new ConversationEffectRequested(stamp(2, 1), "model", {}, []);
   const original = viewText(before);
-  expectConflict(() => advanceConversation(before, event), "checkpoint must be the current invocation's next ordinal");
+  expectOperationError(
+    () => advanceConversation(before, event),
+    "conversation",
+    "session.conflict",
+    "checkpoint must be the current invocation's next ordinal",
+  );
   expect(viewText(before)).toBe(original);
   expect(event.stamp.ordinal).toBe(2);
 });
@@ -1425,7 +1434,7 @@ test.each([
   }
   const original = viewText(before);
   const originalEvent = logJson(conversationCheckpointToJson(event));
-  expectConflict(() => advanceConversation(before, event), message);
+  expectOperationError(() => advanceConversation(before, event), "conversation", "session.conflict", message);
   expect(viewText(before)).toBe(original);
   expect(logJson(conversationCheckpointToJson(event))).toBe(originalEvent);
 });
@@ -1661,19 +1670,11 @@ test.each([0, 1, 2])("the checkpoint codec refuses retired native state without 
   else if (index === 1) wire.kind = "native_session";
   else wire.reference = { provider: "codex", session_id: "thread" };
   const original = thaw(wire);
-  let caught: unknown;
-  try {
-    conversationCheckpointFromJson(wire);
-  } catch (error) {
-    caught = error;
-  }
-  expect(caught).toBeInstanceOf(MemoryOperationError);
-  const error = caught as MemoryOperationError;
-  expect([error.stage, error.code, error.retryable, error.message]).toEqual([
+  expectOperationError(
+    () => conversationCheckpointFromJson(wire),
     "snapshot",
     "session.unsupported_history",
-    false,
     "Native session history is unsupported; use fresh SessionMemory.",
-  ]);
+  );
   expect(wire).toEqual(original);
 });

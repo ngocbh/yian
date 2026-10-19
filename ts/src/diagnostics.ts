@@ -571,6 +571,19 @@ export class Failure {
   }
 }
 
+/** Whether two failures have the same code, message, node id, trace origin keys in order, cause type and traceback. */
+export function sameFailure(a: Failure, b: Failure): boolean {
+  return (
+    a.code === b.code &&
+    a.message === b.message &&
+    a.nodeId === b.nodeId &&
+    a.trace.length === b.trace.length &&
+    a.trace.every((origin, i) => origin.key === b.trace[i]!.key) &&
+    a.causeType === b.causeType &&
+    a.traceback === b.traceback
+  );
+}
+
 /** A resolved source frame ready for a format-neutral diagnostic renderer. */
 export class DiagnosticFrame {
   /** Human-facing source name, such as a path or notebook cell. */

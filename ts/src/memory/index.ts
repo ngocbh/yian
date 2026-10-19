@@ -15,14 +15,16 @@
  * failures, recorded snapshots, the host memory objects (`Memory`, its run `MemorySession`,
  * and `isMemory`, which stands in for Python's `isinstance` check against the runtime-checkable
  * `Memory` protocol), and the learning results (`MemoryMutation`, `LearningFailure`,
- * `PolicyCommitOutcome`, `LearningResult`), and the visible evidence of one node outcome
+ * `PolicyCommitOutcome`, `LearningResult`), the visible evidence of one node outcome
  * (`EvaluationEvidence`, `MemorySection`, and the `VisibleInteraction` carriers
  * `ModelTextInteraction`, `ModelValueInteraction`, `ToolCallInteraction`,
- * `ToolResultInteraction`). The declaration origin traversal and rewrite and the mutation batch
- * check `validateMutations` aren't re-exported (Python keeps them out of `__all__`); their callers
- * import `contracts.ts`. `storage/sqlite.ts` and `storage/markdown.ts` are ported: private adapters the
- * facade doesn't re-export, as Python's `memory/__init__.py` doesn't. The recall and learning contexts, the
- * episodes and the session conversation contracts, and the conversation, session, summary and
+ * `ToolResultInteraction`), and the learning inputs (`MemoryEpisode` with its
+ * `MemoryEpisodeStatus`, and `LearnContext`). The declaration origin traversal and rewrite, the
+ * mutation batch check `validateMutations` and the feedback snapshot `freezeFeedback` aren't
+ * re-exported (Python keeps them out of `__all__`), nor are the `same*` value comparisons; their
+ * callers import `contracts.ts`. `storage/sqlite.ts` and `storage/markdown.ts` are ported: private
+ * adapters the facade doesn't re-export, as Python's `memory/__init__.py` doesn't. The recall
+ * context and the session conversation contracts, and the conversation, session, summary and
  * backend modules are not ported yet.
  *
  * Knows about: `diagnostics` and `defaults`, through `contracts.ts`; `storage/` also knows
@@ -48,10 +50,13 @@ export {
   DeclSite,
   EvaluationEvidence,
   isMemory,
+  LearnContext,
   LearningFailure,
   LearningResult,
   MEMORY_IDENTIFIER_PATTERN,
   MemoryDecl,
+  MemoryEpisode,
+  MemoryEpisodeStatus,
   MemoryMutation,
   MemoryOccurrenceKind,
   MemoryOccurrenceSegment,

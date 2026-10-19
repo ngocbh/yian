@@ -11,9 +11,13 @@
  * carriers (`MemoryMutation` with its batch check `validateMutations`, `LearningFailure`,
  * `PolicyCommitOutcome`, `LearningResult`), frozen and holding their carriers by reference; and
  * the visible evidence accepted with a node outcome (`EvaluationEvidence`, with its recalled
- * `MemorySection` values and the visible model and tool interactions), whose JSON follows the
- * yian value number rule. It imports only `diagnostics` and `defaults`. The recall and learning
- * contexts, the episodes, the conversation contracts and the session's recall, learn and commit
+ * `MemorySection` values and the visible model and tool interactions), the accepted episodes
+ * (`MemoryEpisode`) and one memory's learning batch (`LearnContext`, with its feedback snapshot
+ * `freezeFeedback`), whose JSON follows the yian value number rule; and the value comparisons of
+ * the scope, operation failure and learning carriers (`sameMemoryScope`,
+ * `sameMemoryOperationFailure`, `sameMemoryMutation`, `sameLearningFailure`,
+ * `samePolicyCommitOutcome`, `sameLearningResult`). It imports only `diagnostics` and `defaults`.
+ * The recall context, the conversation contracts and the session's recall, learn and commit
  * methods are not ported yet.
  */
 
@@ -22,7 +26,7 @@ import { compareCodeUnits, OriginRef, reprText } from "../diagnostics.ts";
 
 /**
  * One JSON scalar: an int is a `bigint`, a float a `number`, finite except in the evidence values,
- * which may hold `±Infinity`.
+ * the episodes and the learn feedback, which may hold `±Infinity`.
  */
 export type JsonScalar = null | boolean | bigint | number | string;
 /** One JSON value. */
@@ -67,9 +71,16 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
+// Local copies of nodes/contracts.ts's isExactly and sameItems: this module imports only
+// diagnostics and defaults, so it can't import nodes/contracts.ts.
 /** Whether `value` is an instance of exactly `cls`, not of a subclass. */
 function isExactly<T>(value: unknown, cls: abstract new (...args: never[]) => T): value is T {
   return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === cls.prototype;
+}
+
+/** Whether two arrays have equal items in order, by `same`. */
+function sameItems<T>(a: readonly T[], b: readonly T[], same: (x: T, y: T) => boolean = (x, y) => x === y): boolean {
+  return a.length === b.length && a.every((item, i) => same(item, b[i]!));
 }
 
 /**
@@ -89,7 +100,9 @@ function requirePath(value: unknown, name: string, allowEmpty = false): readonly
 /**
  * Validate and copy one JSON value into frozen containers; see `freezeJsonObject`. With
  * `valueNumbers`, numbers follow the yian value rule: NaN refused, `±Infinity` kept, `-0` copied
- * as `0`.
+ * as `0`. With `memo`, a container already frozen through the same memo returns its copy, so a
+ * repeated subtree is shared; a memo is for unlimited nesting, since a cached copy isn't measured
+ * against `limit` again.
  */
 function freezeJson(
   value: unknown,
@@ -98,6 +111,7 @@ function freezeJson(
   nesting = 0,
   limit = Number.POSITIVE_INFINITY,
   valueNumbers = false,
+  memo: Map<object, JsonValue> | null = null,
 ): JsonValue {
   if (value === null || typeof value === "boolean" || typeof value === "bigint") return value;
   if (typeof value === "string") return requireString(value, name, false);
@@ -116,33 +130,41 @@ function freezeJson(
       `${name} nests deeper than ${limit} levels, the limit for a yian value (each record and list is a level)`,
     );
   }
+  // A memo holds only finished copies, so a container on the active path is never found here.
+  const cached = memo?.get(value);
+  if (cached !== undefined) return cached;
   // Only the containers on the current path count, so a subtree reached twice is not a cycle.
   if (active.has(value)) throw new RangeError(`${name} contains a circular JSON value`);
   active.add(value);
+  let frozen: JsonValue;
   try {
     if (array) {
       const items: JsonValue[] = [];
       // By index, so a hole reads `undefined` and is refused.
       for (let i = 0; i < value.length; i++) {
-        items.push(freezeJson(value[i], `${name}[${i}]`, active, nesting + 1, limit, valueNumbers));
+        items.push(freezeJson(value[i], `${name}[${i}]`, active, nesting + 1, limit, valueNumbers, memo));
       }
-      return Object.freeze(items);
+      frozen = Object.freeze(items);
+    } else {
+      if (Object.getOwnPropertySymbols(value).length > 0) {
+        throw new TypeError(`${name} JSON object keys must be strings`);
+      }
+      const keys = Object.keys(value);
+      for (const key of keys) requireString(key, `${name} JSON object key`, false);
+      const entries = keys
+        .sort(compareCodeUnits)
+        .map(
+          (key) =>
+            [key, freezeJson(value[key], `${name}.${key}`, active, nesting + 1, limit, valueNumbers, memo)] as const,
+        );
+      // `Object.fromEntries` defines own data properties, so a `__proto__` key stays data.
+      frozen = Object.freeze(Object.fromEntries(entries));
     }
-    if (Object.getOwnPropertySymbols(value).length > 0) {
-      throw new TypeError(`${name} JSON object keys must be strings`);
-    }
-    const keys = Object.keys(value);
-    for (const key of keys) requireString(key, `${name} JSON object key`, false);
-    const entries = keys
-      .sort(compareCodeUnits)
-      .map(
-        (key) => [key, freezeJson(value[key], `${name}.${key}`, active, nesting + 1, limit, valueNumbers)] as const,
-      );
-    // `Object.fromEntries` defines own data properties, so a `__proto__` key stays data.
-    return Object.freeze(Object.fromEntries(entries));
   } finally {
     active.delete(value);
   }
+  memo?.set(value, frozen);
+  return frozen;
 }
 
 /**
@@ -643,6 +665,13 @@ export class DeclSite {
   }
 }
 
+/** Closed set of authoritative episode outcomes. */
+export const MemoryEpisodeStatus = { SUCCEEDED: "succeeded", FAILED: "failed" } as const;
+/** One authoritative episode outcome. */
+export type MemoryEpisodeStatus = (typeof MemoryEpisodeStatus)[keyof typeof MemoryEpisodeStatus];
+
+const EPISODE_STATUSES: readonly unknown[] = Object.values(MemoryEpisodeStatus);
+
 /** Closed set of dynamic occurrence segments. */
 export const MemoryOccurrenceKind = { MAP_ITEM: "map_item", LOOP_ITERATION: "loop_iteration" } as const;
 /** One dynamic occurrence segment kind. */
@@ -693,6 +722,21 @@ function requireOccurrencePath(value: unknown): readonly MemoryOccurrenceSegment
 }
 
 /**
+ * Require the innermost occurrence segment, if any, to strictly contain `staticPath`.
+ *
+ * @throws RangeError when it doesn't.
+ */
+function requireOccurrenceContains(
+  occurrencePath: readonly MemoryOccurrenceSegment[],
+  staticPath: readonly string[],
+): void {
+  const inner = occurrencePath.at(-1)?.staticPath;
+  if (inner !== undefined && !isStrictPrefix(staticPath, inner)) {
+    throw new RangeError("the innermost occurrence segment must contain the scoped node");
+  }
+}
+
+/**
  * The memory keys and occurrence path carried by one compiled node. Frozen.
  *
  * `staticPath` is the node's root-relative locator. `memories` lists the keys the node recalls and
@@ -721,12 +765,22 @@ export class MemoryScope {
     this.memories = requirePath(memories, "memories", true);
     requireUnique(this.memories, "memories");
     this.occurrencePath = requireOccurrencePath(occurrencePath);
-    const inner = this.occurrencePath.at(-1)?.staticPath;
-    if (inner !== undefined && !isStrictPrefix(this.staticPath, inner)) {
-      throw new RangeError("the innermost occurrence segment must contain the scoped node");
-    }
+    requireOccurrenceContains(this.occurrencePath, this.staticPath);
     Object.freeze(this);
   }
+}
+
+/** Whether two scopes have the same static path, memories and occurrence segments (kind, path, index). */
+export function sameMemoryScope(a: MemoryScope, b: MemoryScope): boolean {
+  return (
+    sameItems(a.staticPath, b.staticPath) &&
+    sameItems(a.memories, b.memories) &&
+    sameItems(
+      a.occurrencePath,
+      b.occurrencePath,
+      (x, y) => x.kind === y.kind && x.index === y.index && sameItems(x.staticPath, y.staticPath),
+    )
+  );
 }
 
 /** One memory's recalled text, shown to an AGENT as its own section. Frozen. */
@@ -795,7 +849,7 @@ export class ToolCallInteraction {
    */
   constructor(name: string, args: unknown) {
     this.name = requireString(name, "name");
-    this.arguments = freezeJsonObject(args, "arguments", { limitNesting: false, valueNumbers: true });
+    this.arguments = freezeValueObject(args, "arguments");
     Object.freeze(this);
   }
 }
@@ -831,6 +885,22 @@ const VISIBLE_INTERACTION_CLASSES = [
   ToolCallInteraction,
   ToolResultInteraction,
 ] as const;
+
+/**
+ * Return a frozen copy of one interaction array; the interactions are kept by reference.
+ *
+ * @throws TypeError when `value` isn't an array or an item isn't exactly one of the visible
+ *   interaction classes.
+ */
+function requireInteractions(value: unknown): readonly VisibleInteraction[] {
+  if (!isPlainArray(value)) throw new TypeError("interactions must be an array");
+  for (const interaction of value) {
+    if (!VISIBLE_INTERACTION_CLASSES.some((cls) => isExactly<VisibleInteraction>(interaction, cls))) {
+      throw new TypeError("interactions items must be VisibleInteraction values");
+    }
+  }
+  return Object.freeze([...(value as VisibleInteraction[])]);
+}
 
 /** Source-neutral visible evidence accepted with one node outcome. Frozen. */
 export class EvaluationEvidence {
@@ -872,7 +942,7 @@ export class EvaluationEvidence {
     this.boundInputs =
       boundInputs === null
         ? null
-        : freezeJsonObject(boundInputs, "bound_inputs", { limitNesting: false, valueNumbers: true });
+        : freezeValueObject(boundInputs, "bound_inputs");
     if ((baseSystemPrompt === null) !== (prompt === null)) {
       throw new RangeError("base_system_prompt and prompt must both be present or absent");
     }
@@ -897,15 +967,212 @@ export class EvaluationEvidence {
     }
     if (!ordered) throw new RangeError("memory_sections must follow scope.memories order");
     this.memorySections = Object.freeze([...memorySections]);
-
-    if (!isPlainArray(interactions)) throw new TypeError("interactions must be an array");
-    for (const interaction of interactions) {
-      if (!VISIBLE_INTERACTION_CLASSES.some((cls) => isExactly<VisibleInteraction>(interaction, cls))) {
-        throw new TypeError("interactions items must be VisibleInteraction values");
-      }
-    }
-    this.interactions = Object.freeze([...interactions]);
+    this.interactions = requireInteractions(interactions);
     Object.freeze(this);
+  }
+}
+
+/** Copy one exact JSON object at any depth under the yian value number rule. */
+function freezeValueObject(value: unknown, name: string): JsonObject {
+  return freezeJsonObject(value, name, { limitNesting: false, valueNumbers: true });
+}
+
+/**
+ * One reducer-accepted source-neutral execution episode. Frozen.
+ *
+ * Its JSON (`inputs`, `output`, `failure`) is deep-frozen, at any depth, under the yian value
+ * number rule.
+ */
+export class MemoryEpisode {
+  readonly runId: string;
+  /**
+   * The physical accepted node-start record, or `null`; independent of episode order and of the
+   * outcome record's position. Host-created episodes may omit it, and source coordinate zero is
+   * valid.
+   */
+  readonly executionSeq: number | null;
+  readonly occurrencePath: readonly MemoryOccurrenceSegment[];
+  readonly ownerStaticPath: readonly string[];
+  readonly status: MemoryEpisodeStatus;
+  /** The visible node inputs, or `null` when binding or safe capture was unavailable. */
+  readonly inputs: JsonObject | null;
+  /** The success output; `null` on a failed episode. */
+  readonly output: JsonValue;
+  /** The failure data, present exactly on a failed episode. */
+  readonly failure: JsonObject | null;
+  /** The AGENT's base system prompt; present exactly when `prompt` is. */
+  readonly baseSystemPrompt: string | null;
+  readonly prompt: string | null;
+  readonly memorySections: readonly MemorySection[];
+  readonly interactions: readonly VisibleInteraction[];
+
+  /**
+   * Validate one accepted success or failure episode and snapshot its JSON, in Python's order:
+   * run id, execution sequence, occurrence path, owner path, status, outcome shape, inputs,
+   * output, failure, prompts, sections, interactions. The arrays are copied and their carriers
+   * kept by reference.
+   *
+   * @throws TypeError for a field of the wrong type: an execution sequence that isn't a safe
+   *   integer `number` or `null`, an unknown status, inputs that aren't an exact JSON object or
+   *   `null`, a non-JSON value, or an item that isn't exactly a segment, `MemorySection` or visible
+   *   interaction.
+   * @throws RangeError for an empty run id or owner path, a negative execution sequence, segments
+   *   that don't nest or contain the owner, failure data on a succeeded episode (or output, or no
+   *   failure, on a failed one), NaN, a cycle, a lone surrogate, or one prompt without the other.
+   */
+  constructor(
+    runId: string,
+    occurrencePath: readonly MemoryOccurrenceSegment[],
+    ownerStaticPath: readonly string[],
+    status: MemoryEpisodeStatus,
+    inputs: unknown,
+    options: {
+      output?: unknown;
+      failure?: unknown;
+      interactions?: readonly VisibleInteraction[];
+      baseSystemPrompt?: string | null;
+      prompt?: string | null;
+      memorySections?: readonly MemorySection[];
+      executionSeq?: number | null;
+    } = {},
+  ) {
+    const {
+      output = null,
+      failure = null,
+      interactions = [],
+      baseSystemPrompt = null,
+      prompt = null,
+      memorySections = [],
+      executionSeq = null,
+    } = options;
+    this.runId = requireString(runId, "run_id");
+    if (executionSeq !== null) {
+      if (!Number.isSafeInteger(executionSeq)) throw new TypeError("execution_seq must be an integer or null");
+      if (executionSeq < 0) throw new RangeError("execution_seq must be non-negative");
+    }
+    this.executionSeq = executionSeq;
+    this.occurrencePath = requireOccurrencePath(occurrencePath);
+    this.ownerStaticPath = requirePath(ownerStaticPath, "owner_static_path");
+    requireOccurrenceContains(this.occurrencePath, this.ownerStaticPath);
+    if (!EPISODE_STATUSES.includes(status)) throw new TypeError("status must be a MemoryEpisodeStatus");
+    this.status = status;
+
+    if (status === MemoryEpisodeStatus.SUCCEEDED && failure !== null) {
+      throw new RangeError("a succeeded episode cannot carry failure data");
+    }
+    if (status === MemoryEpisodeStatus.FAILED) {
+      if (failure === null) throw new RangeError("a failed episode must carry failure data");
+      if (output !== null) throw new RangeError("a failed episode cannot carry output data");
+    }
+
+    if (inputs !== null && !isPlainObject(inputs)) throw new TypeError("inputs must be an exact JSON object or null");
+    this.inputs = inputs === null ? null : freezeValueObject(inputs, "inputs");
+    this.output = freezeEvidenceJson(output, "output");
+    this.failure = failure === null ? null : freezeValueObject(failure, "failure");
+    if ((baseSystemPrompt === null) !== (prompt === null)) {
+      throw new RangeError("base_system_prompt and prompt must both be present or absent");
+    }
+    this.baseSystemPrompt =
+      baseSystemPrompt === null ? null : requireString(baseSystemPrompt, "base_system_prompt", false);
+    this.prompt = prompt === null ? null : requireString(prompt, "prompt", false);
+    if (!isPlainArray(memorySections)) throw new TypeError("memory_sections must be an array");
+    for (const section of memorySections) {
+      if (!isExactly(section, MemorySection)) throw new TypeError("memory_sections items must be MemorySection values");
+    }
+    this.memorySections = Object.freeze([...memorySections]);
+    this.interactions = requireInteractions(interactions);
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Validate and snapshot feedback items as a learning context names them: each a deep-frozen copy
+ * under the yian value number rule, at any depth.
+ *
+ * @param memo Copies shared across calls: a container already frozen through it returns its copy,
+ *   so a subtree repeated within or across the calls is one shared object.
+ * @param firstIndex The context index of the first item, so errors name `feedback[firstIndex + i]`.
+ * @returns A frozen array of one copy per item.
+ * @throws TypeError when an item holds a non-JSON value; the message names `feedback[i]`.
+ * @throws RangeError for NaN or a cycle, with a message naming `feedback[i]`, or for a lone
+ *   surrogate, with the canonical JSON message.
+ */
+export function freezeFeedback(
+  entries: Iterable<unknown>,
+  memo: Map<object, JsonValue>,
+  firstIndex = 0,
+): readonly JsonValue[] {
+  return Object.freeze(
+    Array.from(entries, (item, index) =>
+      freezeJson(item, `feedback[${firstIndex + index}]`, new Set(), 0, Number.POSITIVE_INFINITY, true, memo),
+    ),
+  );
+}
+
+/**
+ * Check a learning context's run id, memory key and episodes, in that order, and return them with
+ * the episodes copied into a frozen array.
+ *
+ * @throws TypeError when an id isn't a string, `episodes` isn't an array, or an episode isn't
+ *   exactly a `MemoryEpisode`.
+ * @throws RangeError when an id is empty or holds a lone surrogate, or an episode belongs to
+ *   another run.
+ */
+function learnIdentity(
+  runId: unknown,
+  memory: unknown,
+  episodes: unknown,
+): [string, string, readonly MemoryEpisode[]] {
+  const run = requireString(runId, "run_id");
+  const key = requireString(memory, "memory");
+  if (!isPlainArray(episodes)) throw new TypeError("episodes must be an array");
+  for (const episode of episodes) {
+    if (!isExactly(episode, MemoryEpisode)) throw new TypeError("episodes items must be MemoryEpisode values");
+    if (episode.runId !== run) throw new RangeError("episode run_id must match the learning context");
+  }
+  return [run, key, Object.freeze([...(episodes as MemoryEpisode[])])];
+}
+
+/** One memory's ordered learning batch. Frozen. */
+export class LearnContext {
+  readonly runId: string;
+  readonly memory: string;
+  /** The memory's episodes, kept by reference. */
+  readonly episodes: readonly MemoryEpisode[];
+  /** Deep-frozen feedback copies in their reserved downstream-feedback order. */
+  readonly feedback: readonly JsonValue[];
+
+  /**
+   * Validate the run id, memory key and episodes, then snapshot `feedback` with a fresh memo, so a
+   * subtree repeated within it is shared.
+   *
+   * @throws TypeError when an id isn't a string, `episodes` or `feedback` isn't an array, an
+   *   episode isn't exactly a `MemoryEpisode`, or a feedback item holds a non-JSON value.
+   * @throws RangeError when an id is empty or holds a lone surrogate, an episode belongs to
+   *   another run, or a feedback item holds NaN, a lone surrogate or a cycle.
+   */
+  constructor(runId: string, memory: string, episodes: readonly MemoryEpisode[], feedback: readonly unknown[] = []) {
+    [this.runId, this.memory, this.episodes] = learnIdentity(runId, memory, episodes);
+    if (!isPlainArray(feedback)) throw new TypeError("feedback must be an array");
+    this.feedback = freezeFeedback(feedback, new Map());
+    Object.freeze(this);
+  }
+
+  /**
+   * @internal A context over feedback `freezeFeedback` already returned, stored as given; run,
+   * memory and episodes checked as the constructor does. Learning's owner contexts use it.
+   */
+  static fromFrozen(
+    runId: string,
+    memory: string,
+    episodes: readonly MemoryEpisode[],
+    frozen: readonly JsonValue[],
+  ): LearnContext {
+    const [run, key, checked] = learnIdentity(runId, memory, episodes);
+    // Built without the constructor, which would freeze the feedback again; fields in its order.
+    const context = Object.create(LearnContext.prototype) as LearnContext;
+    Object.assign(context, { runId: run, memory: key, episodes: checked, feedback: frozen });
+    return Object.freeze(context);
   }
 }
 
@@ -1141,6 +1408,11 @@ export class MemoryOperationFailure {
   }
 }
 
+/** Whether two operation failures have the same stage, code, message and retry flag. */
+export function sameMemoryOperationFailure(a: MemoryOperationFailure, b: MemoryOperationFailure): boolean {
+  return a.stage === b.stage && a.code === b.code && a.message === b.message && a.retryable === b.retryable;
+}
+
 /** One JSON mutation a memory proposed. Frozen. */
 export class MemoryMutation {
   readonly mutationId: string;
@@ -1158,6 +1430,29 @@ export class MemoryMutation {
     this.payload = freezeJson(payload, "payload");
     Object.freeze(this);
   }
+}
+
+/**
+ * Whether two JSON values are equal: the same type at each node (a `bigint` never equals a
+ * `number`), arrays item by item, records by key set and values.
+ */
+function sameJson(a: JsonValue, b: JsonValue): boolean {
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return a === b;
+  const aArray = Array.isArray(a);
+  if (aArray || Array.isArray(b)) {
+    return aArray && Array.isArray(b) && sameItems(a as readonly JsonValue[], b as readonly JsonValue[], sameJson);
+  }
+  const x = a as JsonObject;
+  const y = b as JsonObject;
+  const keys = Object.keys(x);
+  return (
+    keys.length === Object.keys(y).length && keys.every((key) => Object.hasOwn(y, key) && sameJson(x[key]!, y[key]!))
+  );
+}
+
+/** Whether two mutations have the same id and equal payloads. */
+export function sameMemoryMutation(a: MemoryMutation, b: MemoryMutation): boolean {
+  return a.mutationId === b.mutationId && sameJson(a.payload, b.payload);
 }
 
 /**
@@ -1203,6 +1498,11 @@ export class LearningFailure {
     this.failure = failure;
     Object.freeze(this);
   }
+}
+
+/** Whether two learning failures have the same memory, operation and failure. */
+export function sameLearningFailure(a: LearningFailure, b: LearningFailure): boolean {
+  return a.memory === b.memory && a.operation === b.operation && sameMemoryOperationFailure(a.failure, b.failure);
 }
 
 const POLICY_COMMIT_STATUSES = ["unrequested", "unknown", "succeeded", "failed"] as const;
@@ -1253,6 +1553,16 @@ export class PolicyCommitOutcome {
     }
     Object.freeze(this);
   }
+}
+
+/** Whether two commit outcomes have the same memory, status, commit id and failure (both null or equal). */
+export function samePolicyCommitOutcome(a: PolicyCommitOutcome, b: PolicyCommitOutcome): boolean {
+  return (
+    a.memory === b.memory &&
+    a.status === b.status &&
+    a.commitId === b.commitId &&
+    (a.failure === null ? b.failure === null : b.failure !== null && sameMemoryOperationFailure(a.failure, b.failure))
+  );
 }
 
 const LEARNING_STATUSES = ["succeeded", "failed", "incomplete"] as const;
@@ -1322,6 +1632,15 @@ export class LearningResult {
     }
     Object.freeze(this);
   }
+}
+
+/** Whether two learning results have the same status, and equal failures and policies in order. */
+export function sameLearningResult(a: LearningResult, b: LearningResult): boolean {
+  return (
+    a.status === b.status &&
+    sameItems(a.failures, b.failures, sameLearningFailure) &&
+    sameItems(a.policies, b.policies, samePolicyCommitOutcome)
+  );
 }
 
 /** Typed ordinary failure raised by a memory or session operation. */

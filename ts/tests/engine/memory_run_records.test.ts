@@ -2,8 +2,10 @@
  * Run-record contracts for source-neutral memory evidence: a port of
  * `tests/engine/test_memory_run_records.py`. Ported: the evidence carriers,
  * `test_source_neutral_carriers_are_defensive_and_frozen` and
- * `test_evidence_requires_coherent_prompts_and_ordered_scope_sections`, and the evidence line of
- * `test_memory_scope_requires_unique_keys_and_nested_occurrences`. Python's `ValueError` is a
+ * `test_evidence_requires_coherent_prompts_and_ordered_scope_sections`, the evidence line of
+ * `test_memory_scope_requires_unique_keys_and_nested_occurrences`, and
+ * `test_episode_accepts_binding_failure_and_typed_visible_material` (its keyword arguments are the
+ * episode's options object). Python's `ValueError` is a
  * `RangeError` here; a frozen field throws `TypeError` where Python raises `FrozenInstanceError`.
  *
  * TS-only: one row per carrier and evidence message with its class, in Python's check order; an
@@ -89,6 +91,8 @@ import {
   DeclSite,
   EvaluationEvidence,
   type JsonObject,
+  MemoryEpisode,
+  MemoryEpisodeStatus,
   MemoryMutation,
   MemoryOccurrenceSegment,
   MemoryOperationFailure,
@@ -434,6 +438,20 @@ test("bound inputs deeper than the value nesting limit are kept", () => {
   let deep: JsonObject = {};
   for (let i = 0; i <= current().maxValueNesting; i++) deep = { d: deep };
   expect(new EvaluationEvidence(null, deep, null, null).boundInputs).toEqual(deep);
+});
+
+// test_episode_accepts_binding_failure_and_typed_visible_material
+test("an episode accepts a binding failure and typed visible material", () => {
+  const episode = new MemoryEpisode("run", [], ["flow", "agent"], MemoryEpisodeStatus.FAILED, null, {
+    failure: { code: "binding.evaluate" },
+    baseSystemPrompt: null,
+    prompt: null,
+    memorySections: [new MemorySection("reflective", "memory")],
+    interactions: [new ModelTextInteraction("visible")],
+  });
+  expect(episode.inputs).toBeNull();
+  expect(episode.memorySections).toEqual([new MemorySection("reflective", "memory")]);
+  expect(episode.interactions).toEqual([new ModelTextInteraction("visible")]);
 });
 
 const ROOT = new DeclSite([], ["root"], null);

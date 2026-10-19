@@ -338,6 +338,13 @@ reject a later attempt: the built-in `EpisodicMemory` and `ReflectiveMemory`
 fail `learn` with a `stale_generation` code once their memory has moved past
 the run's snapshot.
 
+Changed (TS yian): the commit-ID digest input is yian's run-log canonical JSON
+(`logJson`), not Python's sorted compact `json.dumps`. The two texts differ only
+for floats, for objects shaped like the codec's escapes (`{"$record": ...}`,
+`{"$float": "inf"}`), and for the order of keys holding characters outside the
+Basic Multilingual Plane; elsewhere the IDs match. A run log never spans both
+implementations, so the prefix stays `ac-memory-v3`.
+
 ## Durable feedback and recovery
 
 Use a JSONL run log when feedback may arrive in a later process:

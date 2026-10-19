@@ -30,8 +30,10 @@
  *
  * which refused every forbidden row below with `config<path> contains forbidden private key
  * '<key>'` (for example `config.storage ... 'path'`, `config.databases[0] ... 'uri'`,
- * `config.10 ... 'token'` for `{"9": {"api_key": 1}, "10": {"token": 1}}`) and accepted
- * `path_style`, `url`, `max_items`, `authors`, `sigma` and `storage_class`.
+ * `config.10 ... 'token'` for `{"9": {"api_key": 1}, "10": {"token": 1}}`,
+ * `config.webhook ... 'my_signature'`, `config.x²Storage ... 'path'`, `config ... 'paẞword'`) and
+ * accepted `path_style`, `url`, `max_items`, `authors`, `sigma`, `storage_class`, `my_signature`
+ * and `apı_key`.
  */
 
 import { expect, test } from "bun:test";
@@ -87,7 +89,7 @@ test.each(["storage", "store", "path"])("location key %p is banned", (key) => {
 });
 
 test("the first location key in the caller's order is reported", () => {
-  expect(() => checkMemoryDeclaration("notes", "vector", { path: 1n, storage: 2n })).toThrow("config key 'path'");
+  expect(() => checkMemoryDeclaration("notes", "vector", { storage: 1n, path: 2n })).toThrow("config key 'storage'");
 });
 
 // test_api_key_anywhere_is_rejected
@@ -131,11 +133,16 @@ test.each<[string, Record<string, unknown>, string | null]>([
   ["python_plugin.classes", { python_plugin: { classes: 1n } }, "config.python_plugin contains forbidden private key 'classes'"],
   // Webhook fields.
   ["webhook.url", { webhook: { url: 1n } }, "config.webhook contains forbidden private key 'url'"],
+  ["webhook.my_signature", { webhook: { my_signature: 1n } }, "config.webhook contains forbidden private key 'my_signature'"],
   // Case, camel and punctuation normalization.
   ["apiKey", { apiKey: 1n }, "config contains forbidden private key 'apiKey'"],
   ["API-Key", { "API-Key": 1n }, "config contains forbidden private key 'API-Key'"],
   ["APIKey", { APIKey: 1n }, "config contains forbidden private key 'APIKey'"],
   ["clientSecret", { clientSecret: 1n }, "config contains forbidden private key 'clientSecret'"],
+  // Python's `isdigit` takes `²`, so `S` after it starts a `storage` token.
+  ["x²Storage.path", { "x²Storage": { path: 1n } }, "config.x²Storage contains forbidden private key 'path'"],
+  // Python's `casefold` gives `ss` for `ẞ` and keeps `ı`.
+  ["paẞword", { "paẞword": 1n }, "config contains forbidden private key 'paẞword'"],
   // Python sorts "10" before "9"; JS enumeration would reach 'api_key' first.
   ["integer-like keys", { "9": { api_key: 1n }, "10": { token: 1n } }, "config.10 contains forbidden private key 'token'"],
   // Allowed keys.
@@ -145,6 +152,8 @@ test.each<[string, Record<string, unknown>, string | null]>([
   ["authors", { authors: 1n }, null],
   ["sigma", { sigma: 1n }, null],
   ["storage_class", { storage_class: 1n }, null],
+  ["a top-level my_signature", { my_signature: 1n }, null],
+  ["apı_key", { "apı_key": 1n }, null],
 ])("private keys: %s", (_name, config, message) => {
   if (message === null) checkMemoryDeclaration("n", "vector", config);
   else expectError(() => checkMemoryDeclaration("n", "vector", config), RangeError, message);

@@ -4,18 +4,19 @@
  * `test_json_contracts_reject_cycles`, the declaration rows of
  * `test_memory_strings_must_have_a_canonical_utf8_representation`, and the declaration half of
  * `test_json_scalar_identity_preserves_exact_types_at_every_depth`; plus JavaScript's own values (a
- * `"__proto__"` key, a repeated subtree, an array hole) and the value nesting limit.
+ * `"__proto__"` key, a null-prototype object, a repeated subtree, an array hole) and the value
+ * nesting limit.
  *
  * Changed: the non-exact rows are JavaScript's (a `Map`, a `Date`, an own symbol key, a class
- * instance, a top-level array). The scalar identity test checks that `true`, `1n` and `1` all pass
+ * instance, an array subclass for `_ListSubclass`, a top-level array for `_DictSubclass`), each
+ * with its exact class and message. The scalar identity test checks that `true`, `1n` and `1` all pass
  * at every depth and that a built-in rule tells them apart. A memory config nests at most
  * `maxValueNesting` levels (memory JSON nesting doesn't exist here), with that limit's message.
  * Python's `ValueError` is `RangeError`.
  *
  * Ported by the next commits: the rest of the declaration, identity and host-object tests.
  *
- * Not ported: the tuple, bytes and subclass rows (TS has only arrays and no exact-type
- * subclasses of a plain object); `test_memory_json_rejects_nesting_beyond_the_memory_limit` (its
+ * Not ported: the tuple and bytes rows (TS has only arrays and no bytes in a config); `test_memory_json_rejects_nesting_beyond_the_memory_limit` (its
  * carriers aren't ported; the nesting test below replaces it for declarations).
  *
  * Left for later: the recall, learning and conversation tests, with their carriers.
@@ -49,24 +50,25 @@ class Point {
   x = 1n;
 }
 
+class Items extends Array<unknown> {}
+
 // test_json_contracts_reject_non_exact_or_non_finite_values
-test.each<[string, unknown]>([
-  ["a Map in an array", { array: [new Map()] }],
-  ["a Date", { date: new Date(0) }],
-  ["NaN", { nan: Number.NaN }],
-  ["Infinity", { infinity: Number.POSITIVE_INFINITY }],
-  ["a symbol key", { [Symbol("key")]: 1n }],
-  ["a class instance", { point: new Point() }],
-  ["a top-level array", [1n]],
-])("JSON contracts reject %s", (_name, config) => {
-  expect(() => check(config)).toThrow(/JSON|json|finite|key/);
+test.each<[string, unknown, typeof TypeError | typeof RangeError, string]>([
+  ["a Map in an array", { array: [new Map()] }, TypeError, "config.array[0] must contain exact JSON values"],
+  ["a Date", { date: new Date(0) }, TypeError, "config.date must contain exact JSON values"],
+  ["NaN", { nan: Number.NaN }, RangeError, "config.nan JSON number must be finite"],
+  ["Infinity", { infinity: Number.POSITIVE_INFINITY }, RangeError, "config.infinity JSON number must be finite"],
+  ["a symbol key", { [Symbol("key")]: 1n }, TypeError, "config JSON object keys must be strings"],
+  ["a class instance", { point: new Point() }, TypeError, "config.point must contain exact JSON values"],
+  ["an array subclass", { a: Items.from([1n]) }, TypeError, "config.a must contain exact JSON values"],
+  ["a top-level array", [1n], TypeError, "config must be an exact JSON object"],
+])("JSON contracts reject %s", (_name, config, cls, message) => {
+  expectError(() => check(config), cls, message);
 });
 
-test("the JSON errors name the path and keep Python's classes", () => {
-  expectError(() => check({ a: [new Map()] }), TypeError, "config.a[0] must contain exact JSON values");
-  expectError(() => check([1n]), TypeError, "config must be an exact JSON object");
-  expectError(() => check({ [Symbol("key")]: 1n }), TypeError, "config JSON object keys must be strings");
-  expectError(() => check({ a: Number.NaN }), RangeError, "config.a JSON number must be finite");
+test("a null-prototype object is a JSON object", () => {
+  check(Object.assign(Object.create(null), { a: 1n }));
+  check({ a: Object.assign(Object.create(null), { b: 1n }) });
 });
 
 // test_json_contracts_reject_cycles
@@ -106,7 +108,6 @@ test("a __proto__ key stays a data key", () => {
   const config = { ["__proto__"]: 1n };
   expect(Object.hasOwn(config, "__proto__")).toBe(true);
   check(config);
-  expect(Object.getPrototypeOf(config)).toBe(Object.prototype);
   // The snapshot's key list holds it, so a built-in type reports it as unknown.
   expect(() => checkMemoryDeclaration("notes", "episodic", config)).toThrow("unknown key(s) ['__proto__']");
 });

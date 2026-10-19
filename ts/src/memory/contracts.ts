@@ -33,20 +33,6 @@ function requireString(value: unknown, name: string, nonempty = true): string {
   return value;
 }
 
-/**
- * Return a frozen copy of one path whose components are non-empty strings.
- *
- * @throws TypeError when `value` isn't an array or a component isn't a string.
- * @throws RangeError when the path is empty and `allowEmpty` isn't set, or a component is empty
- *   or holds a lone surrogate.
- */
-function requirePath(value: unknown, name: string, allowEmpty = false): readonly string[] {
-  if (!Array.isArray(value)) throw new TypeError(`${name} must be an array`);
-  if (!allowEmpty && value.length === 0) throw new RangeError(`${name} must be non-empty`);
-  for (const part of value as unknown[]) requireString(part, `${name} components`);
-  return Object.freeze([...(value as string[])]);
-}
-
 /** Whether `value` is a plain array (not a subclass). */
 function isPlainArray(value: unknown): value is unknown[] {
   return Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype;
@@ -57,6 +43,20 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null) return false;
   const proto: unknown = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Return a frozen copy of one path whose components are non-empty strings.
+ *
+ * @throws TypeError when `value` isn't an array or a component isn't a string.
+ * @throws RangeError when the path is empty and `allowEmpty` isn't set, or a component is empty
+ *   or holds a lone surrogate.
+ */
+function requirePath(value: unknown, name: string, allowEmpty = false): readonly string[] {
+  if (!isPlainArray(value)) throw new TypeError(`${name} must be an array`);
+  if (!allowEmpty && value.length === 0) throw new RangeError(`${name} must be non-empty`);
+  for (const part of value) requireString(part, `${name} components`);
+  return Object.freeze([...(value as string[])]);
 }
 
 /** Validate and copy one JSON value into frozen containers; see `freezeJsonObject`. */
@@ -249,7 +249,22 @@ const PRIVATE_PYTHON_FIELDS = withHighConfidencePlurals(["class", "import", "mod
 const ALNUM = /^[\p{L}\p{N}]$/u;
 const UPPER = /^\p{Uppercase}$/u;
 const LOWER = /^\p{Lowercase}$/u;
-const DIGIT = /^\p{Nd}$/u;
+// `isdigit` is `\p{Nd}` plus Numeric_Type=Digit (superscripts, circled digits), pinned from CPython
+// 3.12's `[c for c in map(chr, range(0x110000)) if c.isdigit() and not c.isdecimal()]`.
+const DIGIT =
+  /^[\p{Nd}\u{B2}-\u{B3}\u{B9}\u{1369}-\u{1371}\u{19DA}\u{2070}\u{2074}-\u{2079}\u{2080}-\u{2089}\u{2460}-\u{2468}\u{2474}-\u{247C}\u{2488}-\u{2490}\u{24EA}\u{24F5}-\u{24FD}\u{24FF}\u{2776}-\u{277E}\u{2780}-\u{2788}\u{278A}-\u{2792}\u{10A40}-\u{10A43}\u{10E60}-\u{10E68}\u{11052}-\u{1105A}\u{1F100}-\u{1F10A}]$/u;
+
+/**
+ * Return one code point folded as Python's `str.casefold` does, for the private-key vocabularies.
+ * Upper-then-lower case differs from `casefold` only for `ı` (U+0131, kept), `ẞ` (U+1E9E, `ss`)
+ * and Cherokee letters; Cherokee folds to non-ASCII either way, so the ASCII vocabularies match
+ * the same keys.
+ */
+function casefold(ch: string): string {
+  if (ch === "\u0131") return ch;
+  if (ch === "\u1E9E") return "ss";
+  return ch.toUpperCase().toLowerCase();
+}
 
 /** Return one case-, camel- and punctuation-neutral authored key: `apiKey` and `API-Key` give `api_key`. */
 function normalizeConfigKey(value: string): string {
@@ -272,8 +287,7 @@ function normalizeConfigKey(value: string): string {
     ) {
       normalized.push("_");
     }
-    // Python's `casefold`.
-    normalized.push(ch.toUpperCase().toLowerCase());
+    normalized.push(casefold(ch));
   }
   return normalized.join("").replace(/^_+|_+$/g, "");
 }

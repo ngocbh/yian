@@ -26,7 +26,11 @@
  * `test_output_contract_resolution_validates_embedded_reference_contracts`,
  * `test_output_contract_resolution_rebases_nested_origins`,
  * `test_output_contract_projection_propagates_optional_field_path` and
- * `test_output_contract_resolution_projects_proven_partial_record_fields`; and the CASE edge row
+ * `test_output_contract_resolution_projects_proven_partial_record_fields`; the child-signature rows
+ * `test_child_signature_prefixes_multi_output_contract_origins`,
+ * `test_child_signature_retains_partial_contract_when_one_field_is_opaque`,
+ * `test_child_signature_keeps_nested_partial_output_opaque_at_record_field` and
+ * `test_child_signature_rejects_contradictory_declared_output_evidence`; and the CASE edge row
  * `test_case_edge_inference_reads_wrapped_lowered_wiring`.
  *
  * TS-only: the `compose/helpers/output_contracts.ts` rows Python covers only through `load_flow`:
@@ -50,6 +54,8 @@
  *   list, and a forged origin is made with `Object.create(OriginRef.prototype)`, its key error a
  *   `RangeError`. The messages read `node origin_context ...`.
  * - The bad-splice row also checks the adjacency index is unchanged.
+ * - The child-signature rows build their child with `handChild` (CODE producers carrying the
+ *   contracts, outputs as `FlowOutput`s), where Python passes a `SimpleNamespace` over bare nodes.
  * - The CASE edge row builds an `on:` `CaseDescriptor` whose `onOrigin` wraps the `__on` wiring
  *   in a `Binding`, where Python calls `_data_edges`, which stays module-private.
  * - Binding, Assertion and FlowOutput are frozen, so `object.__setattr__(carrier, ...)` is a forged
@@ -61,8 +67,7 @@
  * Later (T3-14…T3-22): the compose/load rows
  * (`test_loaded_compose_flow_has_only_canonical_binding_storage`,
  * `test_boundary_reads_wrapped_output_but_preserves_it_in_end_wiring` and
- * `test_reference_validation_checks_a_wrapped_flow_output`); the child-signature rows
- * (`test_child_signature_*`); the CALL/LOOP
+ * `test_reference_validation_checks_a_wrapped_flow_output`); the CALL/LOOP
  * type-check and composite-builder rows (`test_call_type_*`, `test_loop_type_check_*` and
  * `test_composite_builders_preserve_or_deliberately_wrap_child_contract`); inline binding type
  * inference (`test_inline_binding_type_inference_reads_one_carrier_layer`); and edge inference
@@ -91,6 +96,7 @@ import {
 } from "../../src/compose/helpers/output_contracts.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
+import { ChildSignature, childSignature } from "../../src/compose/nodes/resolver.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { parseExpr } from "../../src/expr/index.ts";
 import { Token, Tree } from "../../src/expr/grammar.ts";
@@ -110,6 +116,7 @@ import { StartNode } from "../../src/nodes/start/node.ts";
 import { Type, ValueKind } from "../../src/typesys/index.ts";
 import { typeEquals } from "../../src/typesys/values.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
+import { handChild } from "../compose/declarations.ts";
 
 /** A minimal concrete node; the base fields are the subject. */
 class BareNode extends Node {
@@ -964,4 +971,90 @@ test("CASE edge inference reads wrapped lowered wiring", () => {
   expect(data.map((edge) => [edge.from, edge.to, edge.inputGroup, edge.optional])).toEqual([
     ["producer", "gate", "__on", false],
   ]);
+});
+
+test("childSignature prefixes multi-output contract origins", () => {
+  // A record codomain retains each field contract under its output name.
+  const alpha = new ValueContract(
+    new Type({ kind: ValueKind.OBJECT, fields: new Map([["leaf", STR]]), required: new Set(["leaf"]) }),
+    new ContractOrigins({ default: origin("alpha-root"), entries: [[["leaf"], origin("alpha-leaf")]] }),
+  );
+  const beta = new ValueContract(INT, new ContractOrigins({ default: origin("beta-root") }));
+  const loaded = handChild({
+    producers: { alpha_node: alpha, beta_node: beta },
+    output: { beta: "${beta_node.output}", alpha: "${alpha_node.output}" },
+  });
+
+  const output = childSignature(loaded).output;
+
+  expect(isExactly(output, ValueContract)).toBe(true);
+  const contract = output as ValueContract;
+  expect(contract.type.kind).toBe(ValueKind.OBJECT);
+  expect([...contract.type.fields!.keys()]).toEqual(["beta", "alpha"]);
+  expect(typeEquals(contract.type.fields!.get("beta")!, beta.type)).toBe(true);
+  expect(typeEquals(contract.type.fields!.get("alpha")!, alpha.type)).toBe(true);
+  expect(contract.origins).toStrictEqual(
+    new ContractOrigins({
+      entries: [
+        [["alpha"], origin("alpha-root")],
+        [["alpha", "leaf"], origin("alpha-leaf")],
+        [["beta"], origin("beta-root")],
+      ],
+    }),
+  );
+});
+
+test("childSignature retains a partial contract when one field is opaque", () => {
+  // Declared output shape and proven siblings form one partial codomain.
+  const loaded = handChild({
+    producers: { step: new ValueContract(INT) },
+    output: { n: "${step.output + 1}", done: "${false}" },
+  });
+
+  const signature = childSignature(loaded);
+
+  expect(isExactly(signature.output, PartialRecordContract)).toBe(true);
+  const output = signature.output as PartialRecordContract;
+  expect(output.names).toEqual(["n", "done"]);
+  expect(output.fields[0]).toEqual(["n", null]);
+  expect(output.fields[1]![1]).not.toBeNull();
+  expect(signature.outputNames).toEqual(["n", "done"]);
+  expect(signature.declaredOutputs[0]).toEqual(["n", null]);
+  expect(signature.declaredOutputs[1]![0]).toBe("done");
+  expect(typeEquals((signature.declaredOutputs[1]![1] as ValueContract).type, Type.scalar(ValueKind.BOOLEAN))).toBe(
+    true,
+  );
+});
+
+test("childSignature keeps a nested partial output opaque at a record field", () => {
+  // A root partial can't falsely become an exact nested field contract.
+  const nested = new PartialRecordContract([
+    ["n", new ValueContract(INT)],
+    ["note", null],
+  ]);
+  const loaded = handChild({
+    producers: { inner: nested },
+    output: { nested: "${inner.output}", done: "${false}" },
+  });
+
+  const signature = childSignature(loaded);
+
+  expect(signature.declaredOutputs[0]![0]).toBe("nested");
+  expect(signature.declaredOutputs[0]![1]).toBe(nested);
+  expect(isExactly(signature.output, PartialRecordContract)).toBe(true);
+  const output = signature.output as PartialRecordContract;
+  expect(output.fields[0]).toEqual(["nested", null]);
+  expect(output.fields[1]![0]).toBe("done");
+  expect(output.fields[1]![1]).not.toBeNull();
+});
+
+test("childSignature rejects contradictory declared output evidence", () => {
+  // The exported signature can't carry two incompatible output authorities.
+  const boolean = new ValueContract(Type.scalar(ValueKind.BOOLEAN));
+
+  expectError(
+    () => new ChildSignature({ inputs: [], output: boolean, declaredOutputs: [["result", null]] }),
+    RangeError,
+    "child output contract contradicts its declared output evidence",
+  );
 });

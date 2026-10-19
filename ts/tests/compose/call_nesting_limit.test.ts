@@ -4,7 +4,8 @@
  * `originChildren()`).
  *
  * TS-only: direct rows for `resolveChild`, which Python tests only through `load_flow`: a
- * `LoadError` from the resolver passes through; another error becomes `could not resolve`; the
+ * `LoadError` from the resolver passes through; another error becomes `could not resolve`, and so
+ * does a `null` resolver (Python's tail is CPython's `'NoneType' object is not callable`); the
  * check before resolving with the count at the limit; the check after resolving with a deep fake
  * child; `callNestingScope` restores the count after a throw; and the limit follows
  * `YIAN_MAX_CALL_NESTING`.
@@ -75,7 +76,7 @@ function chain(levels: number): FakeFlow {
 
 /** Return a resolved child whose compiled flow nests `levels` bodies. */
 function resolved(levels: number): ResolvedChild {
-  return { compiled: chain(levels) as unknown as CompiledFlow };
+  return { compiled: chain(levels) as unknown as CompiledFlow, input: [] };
 }
 
 /** Return the error `fn` throws. */
@@ -164,6 +165,15 @@ describe("resolveChild", () => {
       }),
     );
     expect((error as LoadError).message).toBe("call node 'n': could not resolve callable 'c': gone");
+  });
+
+  test("a null resolver can't resolve the callable", () => {
+    const error = thrown(() => resolveChild("c", "child", null));
+    expect(error).toBeInstanceOf(LoadError);
+    expect((error as LoadError).message).toStartWith("call node 'c': could not resolve callable 'child': ");
+    expect((error as LoadError).message).toBe(
+      "call node 'c': could not resolve callable 'child': no child resolver was given",
+    );
   });
 
   test("a child label names the callable", () => {

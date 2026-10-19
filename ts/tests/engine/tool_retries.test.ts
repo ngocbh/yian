@@ -8,7 +8,8 @@
  * just `'call'`.
  *
  * TS-only: `hostToolCall()` names the tool, the inputs, their proven types and the output type;
- * the traits read on an instance (`needsTools`, `needsSteps`); `run` rejects as not ported yet.
+ * the node's kind, title and traits read on an instance (`needsTools`, `needsSteps`); `run`
+ * rejects as not ported yet.
  *
  * Later (T4-11): `test_retries_zero_fails_as_before_and_records_no_step`,
  * `test_two_failures_then_success_records_each_attempt`,
@@ -72,7 +73,7 @@ test("hostToolCall names the tool, the inputs, their proven types and the output
   expect(bare.outputType).toBeNull();
 });
 
-test("a TOOL node needs the run's tools and its durable steps", () => {
+test("a TOOL node's kind, title and traits", () => {
   const node = new ToolNode("call", { toolId: "flaky", title: "Call" });
   expect(node.kind).toBe(NodeKind.TOOL);
   expect(node.title).toBe("Call");

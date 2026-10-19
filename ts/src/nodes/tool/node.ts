@@ -4,9 +4,11 @@
  * No LLM in the loop (distinct from an AGENT node's tool loop). The node's `input:` entries are
  * bindings like any other kind's, resolved by the engine's bind seam, so the tool sees only its
  * own record, never the live pool. An optional `output:` declaration sets the node's output
- * contract, which the engine checks against the tool's return value on every call. With
- * `retries:` a failed call is tried again after a backoff, each retried attempt recorded as a
- * node step; the call and its retries come with the body.
+ * contract, which the engine checks against the tool's return value on every call. `retries:`
+ * is how many times a failed call may be tried again.
+ *
+ * Only the node's shell is here. Its body (the call, its retries with backoff, and each retried
+ * attempt recorded as a node step) is not ported yet and comes with `forward`.
  *
  * Knows about:   nodes/base, nodes/contracts, defaults, diagnostics and typesys.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.

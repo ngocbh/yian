@@ -3,6 +3,9 @@
  *
  * Ported: `test_tool_node_retries_defaults_to_the_tool_retries_default`.
  *
+ * Changed: the test also sets `YIAN_TOOL_RETRIES=3`, so the node is shown to read the default
+ * rather than hard-code the built-in 0.
+ *
  * Later (T3-15, T3-22): `test_retries_loads_onto_the_node`,
  * `test_omitted_retries_uses_the_default` and `test_bad_retries_is_a_load_error_at_its_line`
  * need the loader.
@@ -13,10 +16,17 @@
 
 import { expect, test } from "bun:test";
 
-import { current } from "../../src/defaults.ts";
+import { current, forget, reload } from "../../src/defaults.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 
 test("tool node retries defaults to the tool retries default", () => {
   expect(new ToolNode("t", { toolId: "x" }).retries).toBe(current().toolRetries);
   expect(new ToolNode("t", { toolId: "x", retries: 4 }).retries).toBe(4);
+  try {
+    reload((name) => (name === "YIAN_TOOL_RETRIES" ? "3" : undefined));
+    expect(new ToolNode("t", { toolId: "x" }).retries).toBe(3);
+    expect(new ToolNode("t", { toolId: "x", retries: 4 }).retries).toBe(4);
+  } finally {
+    forget();
+  }
 });

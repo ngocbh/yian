@@ -1105,10 +1105,10 @@ is for debugging only; don't branch on it.
 | `provider.auth` | An AGENT's model build or model call failed on its credentials (see below). | Ask the user to fix the connection (`yian auth <provider>`, or the right key). | After the credentials are fixed; or at once if the token refresh request itself failed (a network error or a 5xx) |
 | `agent.output_invalid` (TS yian) | An AGENT's structured reply still breaks its `output:` type after its `retries:` corrections. | Loosen the type or improve the prompt. | Sometimes: model replies vary |
 | `provider.rate_limit` (TS yian) | The provider refused the model call for its rate limit (HTTP 429), and yian's model-call retries ran out or the provider forbade a retry. | Wait, then run again; lower concurrency. | Yes, later |
-| `provider.quota` (TS yian) | The provider refused the call because the account's quota or credit is used up (OpenAI's `insufficient_quota`). | Ask the user to add credit or change plan. | After the quota is restored |
+| `provider.quota` (TS yian) | The provider refused the call because the account's quota or credit is used up (OpenAI's `insufficient_quota`, or ChatGPT's `usage_limit_reached` or `usage_not_included`). | Ask the user to add credit or change plan. | After the quota is restored |
 | `provider.unavailable` (TS yian) | The provider was unreachable or failing (a 5xx or overloaded reply, a timeout, a dropped connection, or a reply cut short), and yian's model-call retries ran out or the provider forbade a retry. | Run again later, or switch provider. | Yes, later |
 | `provider.context_length` (TS yian) | The request is longer than the model's context window. | Shorten the inputs or history, or pick a model with a larger window. | No |
-| `provider.refused` (TS yian) | The model declined to answer: a refusal or a content filter stopped the reply. | Read `failure.message`; change the input. | Rarely |
+| `provider.refused` (TS yian) | The model declined to answer: a refusal or a content filter stopped the reply, or the provider's content filter rejected the request (an HTTP 4xx naming `content_filter`, `content_policy_violation` or `ResponsibleAIPolicyViolation`). | Read `failure.message`; change the input. | Rarely |
 | `condition.evaluate` (TS yian) | A LOOP `while:`/`until:`, a CASE `when:`, or an `asserts:` condition can't be evaluated (an error, as opposed to evaluating false). | Fix the flow or its inputs. | No |
 
 Changed (TS yian): the codes marked (TS yian) exist only in TS yian; Python yian

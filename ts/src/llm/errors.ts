@@ -2,9 +2,9 @@
  * Provider errors: one error class, a kind per failure, and openai's retry policy.
  *
  * `errorFromResponse` turns a non-2xx HTTP reply into a `ProviderError` whose kind comes
- * from the status (and, for quota, overload and context overflow, the body) and whose
- * `retryable` flag follows the openai SDK's `_should_retry`. `parseRetryAfter` reads the
- * server's requested delay the way that SDK does.
+ * from the status (and, for quota, content filters, overload and context overflow, the
+ * body) and whose `retryable` flag follows the openai SDK's `_should_retry`.
+ * `parseRetryAfter` reads the server's requested delay the way that SDK does.
  */
 
 import { redirectDetail } from "../platform.ts";
@@ -51,7 +51,13 @@ const CONTEXT_PHRASES = [
   // Ollama's own prompt-too-long text, and llama-server's, which Ollama passes through.
   "longer than the context length",
   "exceeds the available context size",
+  // Anthropic's "input length and `max_tokens` exceed context limit".
+  "exceed context limit",
 ];
+// OpenAI's insufficient_quota, and ChatGPT's usage-limit codes on its 429s.
+const QUOTA_CODES = ["insufficient_quota", "usage_limit_reached", "usage_not_included"];
+// OpenAI's and Azure's content-filter codes, and OpenRouter's moderation error type.
+const CONTENT_FILTER_CODES = ["content_filter", "content_policy_violation", "ResponsibleAIPolicyViolation"];
 const MAX_DETAIL_CHARS = 2000;
 
 // RFC 5322 dates as HTTP sends them: `[Day, ]D[D] Mon YYYY HH:MM[:SS] zone`.
@@ -165,8 +171,12 @@ function parseHttpDate(text: string): number | null {
 /**
  * Return the error kind for an HTTP `status` and, where it matters, its `body`:
  *
+ * - A 4xx whose JSON `error.code`, `error.innererror.code` or `error.metadata.error_type`
+ *   is "content_filter", "content_policy_violation" or "ResponsibleAIPolicyViolation":
+ *   refused.
  * - 401 auth, 402 quota, 403 permission, 404 not found, 408 timeout.
- * - 429: quota when the body says "insufficient_quota", else rate limit.
+ * - 429: quota when the body says "insufficient_quota", "usage_limit_reached" or
+ *   "usage_not_included", else rate limit.
  * - 529, or a 503 whose body says "overloaded": overloaded.
  * - Any other 5xx: server.
  * - 3xx: redirect.
@@ -174,11 +184,12 @@ function parseHttpDate(text: string): number | null {
  * - A 400, 413 or 422 whose body names a context overflow ("context_length_exceeded",
  *   "prompt is too long", "maximum context length", Gemini's "exceeds the maximum
  *   number of tokens allowed", Ollama's "longer than the context length", or llama-server's
- *   "exceeds the available context size"): context length.
+ *   "exceeds the available context size", or Anthropic's "exceed context limit"): context length.
  * - Any other 4xx: bad request.
  * - Anything else: protocol.
  */
 export function kindForStatus(status: number, body: string): ErrorKind {
+  if (status >= 400 && status < 500 && isContentFilter(body)) return "refused";
   const lowered = body.toLowerCase();
   switch (status) {
     case 401:
@@ -192,7 +203,7 @@ export function kindForStatus(status: number, body: string): ErrorKind {
     case 408:
       return "timeout";
     case 429:
-      return lowered.includes("insufficient_quota") ? "quota" : "rate_limit";
+      return QUOTA_CODES.some((code) => lowered.includes(code)) ? "quota" : "rate_limit";
     case 529:
       return "overloaded";
   }
@@ -206,6 +217,31 @@ export function kindForStatus(status: number, body: string): ErrorKind {
   if (status >= 400 && status < 500) return "bad_request";
   // A 1xx or 2xx never reaches here from the executor; treat it as a broken reply.
   return "protocol";
+}
+
+/** Return whether a JSON error body names a content-filter code in one of the fields providers use. */
+function isContentFilter(body: string): boolean {
+  let data;
+  try {
+    data = parseJson(body, "plain");
+  } catch {
+    return false;
+  }
+  const error = field(data, "error");
+  const codes = [
+    field(error, "code"),
+    field(field(error, "innererror"), "code"),
+    field(field(error, "metadata"), "error_type"),
+  ];
+  // Exact strings only: OpenRouter's `error.code` is a number, and a code in message text doesn't count.
+  return codes.some((code) => typeof code === "string" && CONTENT_FILTER_CODES.includes(code));
+}
+
+/** Return member `name` of `value` when `value` is a JSON object, else `undefined`. */
+function field(value: unknown, name: string): unknown {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)[name]
+    : undefined;
 }
 
 /** Options for `errorFromResponse`. */

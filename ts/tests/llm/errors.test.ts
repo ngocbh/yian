@@ -133,6 +133,67 @@ describe("kinds", () => {
     expect(err.message).toBe("google returned HTTP 400 (auth): API key not valid. Please pass a valid API key.");
   });
 
+  test.each(["usage_limit_reached", "usage_not_included", "insufficient_quota"])(
+    "a 429 naming %s is quota, retried only on x-should-retry",
+    (code) => {
+      const body = JSON.stringify({ error: { code } });
+      expect(kindForStatus(429, body)).toBe("quota");
+      const err = reply(429, {}, body);
+      expect(err.kind).toBe("quota");
+      expect(err.retryable).toBe(false);
+      expect(reply(429, { "x-should-retry": "true" }, body).retryable).toBe(true);
+    },
+  );
+
+  test("a plain 429 is rate_limit", () => {
+    expect(kindForStatus(429, '{"error": {"code": "rate_limit_exceeded"}}')).toBe("rate_limit");
+  });
+
+  const contentFilters: [string, number, unknown][] = [
+    ["error.code content_filter", 400, { error: { code: "content_filter", message: "filtered" } }],
+    [
+      "Azure's content_filter with an innererror",
+      400,
+      { error: { code: "content_filter", innererror: { code: "ResponsibleAIPolicyViolation" } } },
+    ],
+    [
+      "Azure's innererror alone",
+      400,
+      { error: { code: "invalid_request", innererror: { code: "ResponsibleAIPolicyViolation" } } },
+    ],
+    [
+      "OpenRouter's metadata.error_type",
+      403,
+      { error: { code: 403, message: "flagged", metadata: { error_type: "content_policy_violation" } } },
+    ],
+  ];
+
+  test.each(contentFilters)("a content-filter 4xx is refused: %s", (_name, status, data) => {
+    const body = JSON.stringify(data);
+    expect(kindForStatus(status, body)).toBe("refused");
+    const err = reply(status, {}, body);
+    expect(err.kind).toBe("refused");
+    expect(err.retryable).toBe(false);
+  });
+
+  test("content_filter only in the message text, or a non-JSON body, stays bad_request", () => {
+    expect(kindForStatus(400, '{"error": {"message": "blocked by content_filter"}}')).toBe("bad_request");
+    expect(kindForStatus(400, "content_filter")).toBe("bad_request");
+  });
+
+  test("Anthropic's input-plus-max_tokens 400 is context_length", () => {
+    const body = JSON.stringify({
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message:
+          "input length and `max_tokens` exceed context limit: 188240 + 21333 > 200000, decrease input length or `max_tokens` and try again",
+      },
+    });
+    expect(kindForStatus(400, body)).toBe("context_length");
+    expect(reply(400, {}, body).retryable).toBe(false);
+  });
+
   test("an unexpected status is a protocol error", () => {
     expect(kindForStatus(200, "")).toBe("protocol");
     expect(kindForStatus(101, "")).toBe("protocol");

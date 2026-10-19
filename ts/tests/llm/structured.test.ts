@@ -38,13 +38,13 @@ import type { JsonObject } from "../../src/typesys/json.ts";
 
 /** Python's `type_to_schema(...).model_json_schema()` for the cases below: ints are `bigint`s. */
 const SCHEMAS: Record<string, JsonObject> = {
-  "s5:Rec": {
+  "corpus:Rec": {
     properties: { answer: { title: "Answer", type: "string" }, score: { title: "Score", type: "integer" } },
     required: ["answer", "score"],
     title: "Record",
     type: "object",
   },
-  "s5:Bounded": {
+  "corpus:Bounded": {
     properties: {
       answer: { title: "Answer", type: "string" },
       score: { maximum: 10n, minimum: 0n, title: "Score", type: "integer" },
@@ -53,7 +53,7 @@ const SCHEMAS: Record<string, JsonObject> = {
     title: "Record",
     type: "object",
   },
-  "s5:Open": {
+  "corpus:Open": {
     properties: {
       answer: { title: "Answer", type: "string" },
       data: { additionalProperties: true, title: "Data", type: "object" },
@@ -62,7 +62,7 @@ const SCHEMAS: Record<string, JsonObject> = {
     title: "Record",
     type: "object",
   },
-  "s5:Union": {
+  "corpus:Union": {
     $defs: {
       buy: {
         additionalProperties: false,
@@ -126,10 +126,10 @@ const SCHEMAS: Record<string, JsonObject> = {
   },
 };
 
-const REC = SCHEMAS["s5:Rec"]!;
-const BOUNDED = SCHEMAS["s5:Bounded"]!;
-const OPEN = SCHEMAS["s5:Open"]!;
-const UNION = SCHEMAS["s5:Union"]!;
+const REC = SCHEMAS["corpus:Rec"]!;
+const BOUNDED = SCHEMAS["corpus:Bounded"]!;
+const OPEN = SCHEMAS["corpus:Open"]!;
+const UNION = SCHEMAS["corpus:Union"]!;
 
 /** Return a target on OpenAI's Responses with `fields` over it. */
 function target(fields: Partial<StructuredTarget> = {}): StructuredTarget {
@@ -294,7 +294,7 @@ describe("planStructured: Anthropic Messages (rows 2-5)", () => {
     expect(m["additionalProperties"]).toBe(true);
   });
 
-  test.each(["s5:Rec", "s5:Union"])("row 3: thinking with the closed %s sends the Anthropic output schema", (key) => {
+  test.each(["corpus:Rec", "corpus:Union"])("row 3: thinking with the closed %s sends the Anthropic output schema", (key) => {
     const schema = SCHEMAS[key]!;
     const plan = planStructured(anthropic("claude-opus-5-5", { thinking: { type: "adaptive" } }), schema);
     const name = schema["title"] as string;

@@ -17,7 +17,7 @@ import {
   moveAzureKeywords,
   strictJsonSchema,
 } from "../../src/llm/json_schema.ts";
-import type { JsonObject } from "../../src/typesys/json.ts";
+import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
 
 /** A schema Python's `type_to_schema(...).model_json_schema()` emits, and its `has_open_schema`. */
 interface Fixture {
@@ -27,7 +27,8 @@ interface Fixture {
 
 /**
  * Python's schemas for the open-schema test's types (`open_schema_test:*`), the Azure keyword test's
- * types (`azure_test:*`) and the structured-output corpus (`s5:*`): ints are `bigint`s, floats numbers.
+ * types (`azure_test:*`) and the record, bounded, open, union, reflection and other schemas Python's
+ * `type_to_schema` builds (`corpus:*`): ints are `bigint`s, floats numbers.
  */
 const FIXTURES: Record<string, Fixture> = {
   "open_schema_test:object": {
@@ -559,7 +560,7 @@ const FIXTURES: Record<string, Fixture> = {
       type: "object",
     },
   },
-  "s5:Rec": {
+  "corpus:Rec": {
     open: false,
     schema: {
       properties: { answer: { title: "Answer", type: "string" }, score: { title: "Score", type: "integer" } },
@@ -568,7 +569,7 @@ const FIXTURES: Record<string, Fixture> = {
       type: "object",
     },
   },
-  "s5:Bounded": {
+  "corpus:Bounded": {
     open: false,
     schema: {
       properties: {
@@ -580,7 +581,7 @@ const FIXTURES: Record<string, Fixture> = {
       type: "object",
     },
   },
-  "s5:Open": {
+  "corpus:Open": {
     open: true,
     schema: {
       properties: {
@@ -592,7 +593,7 @@ const FIXTURES: Record<string, Fixture> = {
       type: "object",
     },
   },
-  "s5:Union": {
+  "corpus:Union": {
     open: false,
     schema: {
       $defs: {
@@ -620,7 +621,7 @@ const FIXTURES: Record<string, Fixture> = {
       type: "object",
     },
   },
-  "s5:_ReflectionResponse": {
+  "corpus:_ReflectionResponse": {
     open: false,
     schema: {
       $defs: {
@@ -647,7 +648,7 @@ const FIXTURES: Record<string, Fixture> = {
       type: "object",
     },
   },
-  "s5:int(0..10)": {
+  "corpus:int(0..10)": {
     open: false,
     schema: {
       properties: { value: { maximum: 10n, minimum: 0n, title: "Value", type: "integer" } },
@@ -656,7 +657,7 @@ const FIXTURES: Record<string, Fixture> = {
       type: "object",
     },
   },
-  "s5:Nested (nullable+list of records, float, date, bool)": {
+  "corpus:Nested (nullable+list of records, float, date, bool)": {
     open: false,
     schema: {
       $defs: {
@@ -685,7 +686,7 @@ const FIXTURES: Record<string, Fixture> = {
       type: "object",
     },
   },
-  "s5:Opt (optional field)": {
+  "corpus:Opt (optional field)": {
     open: false,
     schema: {
       properties: {
@@ -697,7 +698,7 @@ const FIXTURES: Record<string, Fixture> = {
       type: "object",
     },
   },
-  "s5:list(int)": {
+  "corpus:list(int)": {
     open: false,
     schema: {
       properties: { items: { items: { type: "integer" }, title: "Items", type: "array" } },
@@ -706,7 +707,7 @@ const FIXTURES: Record<string, Fixture> = {
       type: "object",
     },
   },
-  "s5:Any": {
+  "corpus:Any": {
     open: true,
     schema: {
       properties: {
@@ -727,7 +728,7 @@ const FIXTURES: Record<string, Fixture> = {
       type: "object",
     },
   },
-  "s5:object": {
+  "corpus:object": {
     open: true,
     schema: {
       properties: { value: { additionalProperties: true, title: "Value", type: "object" } },
@@ -736,7 +737,7 @@ const FIXTURES: Record<string, Fixture> = {
       type: "object",
     },
   },
-  "s5:list(Any)": {
+  "corpus:list(Any)": {
     open: true,
     schema: {
       properties: {
@@ -760,7 +761,7 @@ const FIXTURES: Record<string, Fixture> = {
       type: "object",
     },
   },
-  "s5:Union(Inner, Opt) untagged": {
+  "corpus:Union(Inner, Opt) untagged": {
     open: false,
     schema: {
       $defs: {
@@ -790,9 +791,9 @@ const FIXTURES: Record<string, Fixture> = {
   },
 };
 
-/** Python's `convert_to_openai_tool(...)["function"]` for the schemas the structured-output plan names. */
+/** Python's `convert_to_openai_tool(...)["function"]` for the `corpus:*` fixtures. */
 const FUNCTION_TOOLS: Record<string, { name: string; description: string; parameters: JsonObject }> = {
-  "s5:Rec": {
+  "corpus:Rec": {
     name: "Record",
     description: "",
     parameters: {
@@ -801,7 +802,7 @@ const FUNCTION_TOOLS: Record<string, { name: string; description: string; parame
       type: "object",
     },
   },
-  "s5:Bounded": {
+  "corpus:Bounded": {
     name: "Record",
     description: "",
     parameters: {
@@ -810,7 +811,7 @@ const FUNCTION_TOOLS: Record<string, { name: string; description: string; parame
       type: "object",
     },
   },
-  "s5:Open": {
+  "corpus:Open": {
     name: "Record",
     description: "",
     parameters: {
@@ -819,7 +820,7 @@ const FUNCTION_TOOLS: Record<string, { name: string; description: string; parame
       type: "object",
     },
   },
-  "s5:Union": {
+  "corpus:Union": {
     name: "ScalarWrapper",
     description: "",
     parameters: {
@@ -853,7 +854,7 @@ const FUNCTION_TOOLS: Record<string, { name: string; description: string; parame
       type: "object",
     },
   },
-  "s5:_ReflectionResponse": {
+  "corpus:_ReflectionResponse": {
     name: "_ReflectionResponse",
     description: "Strict structured result from one reflective model call.",
     parameters: {
@@ -879,7 +880,7 @@ const FUNCTION_TOOLS: Record<string, { name: string; description: string; parame
       type: "object",
     },
   },
-  "s5:Nested (nullable+list of records, float, date, bool)": {
+  "corpus:Nested (nullable+list of records, float, date, bool)": {
     name: "Record",
     description: "",
     parameters: {
@@ -903,7 +904,7 @@ const FUNCTION_TOOLS: Record<string, { name: string; description: string; parame
       type: "object",
     },
   },
-  "s5:Union(Inner, Opt) untagged": {
+  "corpus:Union(Inner, Opt) untagged": {
     name: "ScalarWrapper",
     description: "",
     parameters: {
@@ -936,7 +937,7 @@ const FUNCTION_TOOLS: Record<string, { name: string; description: string; parame
   },
 };
 
-/** Python's `_const_as_enum` of `s5:Union`: each `kind` const becomes a one-value enum, appended last. */
+/** Python's `_const_as_enum` of `corpus:Union`: each `kind` const becomes a one-value enum, appended last. */
 const G_UNION: JsonObject = {
   $defs: {
     buy: {
@@ -960,16 +961,16 @@ const G_UNION: JsonObject = {
   type: "object",
 };
 
-/** openai's `to_strict_json_schema` of the schemas the structured-output plan names. */
+/** openai's `to_strict_json_schema` of the `corpus:*` fixtures. */
 const STRICT: Record<string, JsonObject> = {
-  "s5:Rec": {
+  "corpus:Rec": {
     properties: { answer: { title: "Answer", type: "string" }, score: { title: "Score", type: "integer" } },
     required: ["answer", "score"],
     title: "Record",
     type: "object",
     additionalProperties: false,
   },
-  "s5:Bounded": {
+  "corpus:Bounded": {
     properties: {
       answer: { title: "Answer", type: "string" },
       score: { maximum: 10n, minimum: 0n, title: "Score", type: "integer" },
@@ -979,7 +980,7 @@ const STRICT: Record<string, JsonObject> = {
     type: "object",
     additionalProperties: false,
   },
-  "s5:Union": {
+  "corpus:Union": {
     $defs: {
       buy: {
         additionalProperties: false,
@@ -1002,7 +1003,7 @@ const STRICT: Record<string, JsonObject> = {
     type: "object",
     additionalProperties: false,
   },
-  "s5:_ReflectionResponse": {
+  "corpus:_ReflectionResponse": {
     $defs: {
       _ReflectionAction: {
         additionalProperties: false,
@@ -1157,7 +1158,7 @@ const MOVED: Record<string, JsonObject | null> = {
     type: "object",
     additionalProperties: false,
   },
-  "s5:_ReflectionResponse": {
+  "corpus:_ReflectionResponse": {
     $defs: {
       _ReflectionAction: {
         additionalProperties: false,
@@ -1188,16 +1189,16 @@ const MOVED: Record<string, JsonObject | null> = {
   },
 };
 
-/** anthropic's `transform_schema` of the schemas the structured-output plan names, with notes spelled as JSON. */
+/** anthropic's `transform_schema` of the `corpus:*` fixtures, with notes spelled as JSON. */
 const ANTHROPIC: Record<string, JsonObject> = {
-  "s5:Rec": {
+  "corpus:Rec": {
     type: "object",
     title: "Record",
     properties: { answer: { type: "string", title: "Answer" }, score: { type: "integer", title: "Score" } },
     additionalProperties: false,
     required: ["answer", "score"],
   },
-  "s5:Bounded": {
+  "corpus:Bounded": {
     type: "object",
     title: "Record",
     properties: {
@@ -1207,7 +1208,7 @@ const ANTHROPIC: Record<string, JsonObject> = {
     additionalProperties: false,
     required: ["answer", "score"],
   },
-  "s5:Union": {
+  "corpus:Union": {
     $defs: {
       buy: {
         type: "object",
@@ -1236,7 +1237,7 @@ const ANTHROPIC: Record<string, JsonObject> = {
     additionalProperties: false,
     required: ["value"],
   },
-  "s5:_ReflectionResponse": {
+  "corpus:_ReflectionResponse": {
     $defs: {
       _ReflectionAction: {
         type: "object",
@@ -1264,14 +1265,14 @@ const ANTHROPIC: Record<string, JsonObject> = {
     additionalProperties: false,
     required: ["actions"],
   },
-  "s5:object": {
+  "corpus:object": {
     type: "object",
     title: "ScalarWrapper",
     properties: { value: { type: "object", title: "Value", properties: {}, additionalProperties: false } },
     additionalProperties: false,
     required: ["value"],
   },
-  "s5:Open": {
+  "corpus:Open": {
     type: "object",
     title: "Record",
     properties: {
@@ -1342,14 +1343,14 @@ describe("functionTool", () => {
   });
 
   test("keeps the root's key order and the dereferenced definition's", () => {
-    const tool = functionTool(FIXTURES["s5:Union"]!.schema, null);
-    expect(encodeBody(tool.parameters)).toBe(encodeBody(FUNCTION_TOOLS["s5:Union"]!.parameters));
+    const tool = functionTool(FIXTURES["corpus:Union"]!.schema, null);
+    expect(encodeBody(tool.parameters)).toBe(encodeBody(FUNCTION_TOOLS["corpus:Union"]!.parameters));
   });
 
   test("passes strict through", () => {
-    expect(functionTool(FIXTURES["s5:Rec"]!.schema, false).strict).toBe(false);
-    expect(functionTool(FIXTURES["s5:Rec"]!.schema, true).strict).toBe(true);
-    expect(functionTool(FIXTURES["s5:Rec"]!.schema, null).strict).toBeNull();
+    expect(functionTool(FIXTURES["corpus:Rec"]!.schema, false).strict).toBe(false);
+    expect(functionTool(FIXTURES["corpus:Rec"]!.schema, true).strict).toBe(true);
+    expect(functionTool(FIXTURES["corpus:Rec"]!.schema, null).strict).toBeNull();
   });
 
   test("gives an empty name and description when the root has neither", () => {
@@ -1473,7 +1474,7 @@ describe("constAsEnum", () => {
   });
 
   test("turns the tagged union's consts into enums, appended last", () => {
-    const result = constAsEnum(FIXTURES["s5:Union"]!.schema);
+    const result = constAsEnum(FIXTURES["corpus:Union"]!.schema);
     expect(encodeBody(result)).toBe(encodeBody(G_UNION));
   });
 
@@ -1496,12 +1497,13 @@ describe("strictJsonSchema", () => {
   });
 
   test("closes the root, keeps the closed members, their $defs and the bare refs", () => {
-    const union = FIXTURES["s5:Union"]!.schema;
+    const union = FIXTURES["corpus:Union"]!.schema;
     expectSame(strictJsonSchema(union), { ...union, additionalProperties: false });
   });
 
   test("drops null defaults and requires every property", () => {
-    const action = (STRICT["s5:_ReflectionResponse"]!["$defs"] as JsonObject)["_ReflectionAction"] as JsonObject;
+    const strict = strictJsonSchema(FIXTURES["corpus:_ReflectionResponse"]!.schema);
+    const action = (strict["$defs"] as JsonObject)["_ReflectionAction"] as JsonObject;
     expect(action["required"]).toEqual(["action", "lesson_id", "text"]);
     expect(encodeBody(action)).not.toContain("default");
   });
@@ -1679,7 +1681,7 @@ describe("moveAzureKeywords", () => {
   });
 
   test("the reflection response's minItems moves into the description", () => {
-    const actions = properties("s5:_ReflectionResponse")["actions"] as JsonObject;
+    const actions = properties("corpus:_ReflectionResponse")["actions"] as JsonObject;
     expect(actions["minItems"]).toBeUndefined();
     expect(actions["description"]).toBe("{minItems: 1}");
   });
@@ -1695,6 +1697,10 @@ describe("moveAzureKeywords", () => {
       description: "{minLength: 1}",
     });
     expectSame(moveAzureKeywords({ type: "string", description: null, minLength: 1n }), {
+      type: "string",
+      description: "{minLength: 1}",
+    });
+    expectSame(moveAzureKeywords({ type: "string", description: 5n, minLength: 1n }), {
       type: "string",
       description: "{minLength: 1}",
     });
@@ -1732,7 +1738,7 @@ describe("anthropicOutputSchema", () => {
 
   const noType = "Schema must have a 'type', 'anyOf', 'oneOf', or 'allOf' field.";
 
-  test.each(["s5:Any", "s5:list(Any)", "open_schema_test:D", "open_schema_test:elementless list"])(
+  test.each(["corpus:Any", "corpus:list(Any)", "open_schema_test:D", "open_schema_test:elementless list"])(
     "%s has a type-less subschema",
     (name) => {
       const error = thrown(() => anthropicOutputSchema(FIXTURES[name]!.schema));
@@ -1776,13 +1782,16 @@ describe("anthropicOutputSchema", () => {
     expectSame(anthropicOutputSchema(schema), { $defs: { A: { type: "string" } }, $ref: "#/$defs/A" });
   });
 
-  test("keeps a supported string format, notes another and drops an empty one", () => {
+  test("keeps a supported string format, notes another and drops a falsy one", () => {
     expectSame(anthropicOutputSchema({ type: "string", format: "date" }), { type: "string", format: "date" });
     expectSame(anthropicOutputSchema({ type: "string", format: "regex", description: "d" }), {
       type: "string",
       description: 'd\n\n{format: "regex"}',
     });
-    expectSame(anthropicOutputSchema({ type: "string", format: "" }), { type: "string" });
+    for (const format of ["", null, false, 0n, 0, [], {}] as JsonValue[]) {
+      expectSame(anthropicOutputSchema({ type: "string", format }), { type: "string" });
+    }
+    expectSame(anthropicOutputSchema({ type: "string", format: 1n }), { type: "string", description: "{format: 1}" });
   });
 
   test("keeps a minItems of 0 or 1 and notes another, re-added last", () => {

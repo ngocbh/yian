@@ -228,7 +228,7 @@ export function strictJsonSchema(schema: JsonObject): JsonObject {
 
 /** Make `node`, the subschema of `root` at `path`, strict in place, and return it. */
 function makeStrict(node: JsonValue, path: string, root: JsonObject): JsonObject {
-  const object = schemaAt(node, path);
+  const object = expectSchema(node, path);
   for (const key of ["$defs", "definitions"]) {
     const map = object[key];
     if (isPlainObject(map)) for (const name of Object.keys(map)) makeStrict(map[name]!, `${path}/${key}/${name}`, root);
@@ -279,10 +279,21 @@ function strictRefTarget(ref: JsonValue, root: JsonObject): JsonObject {
   return node;
 }
 
-/** Return `value`, the subschema at `path`, when it is an object. */
-function schemaAt(value: JsonValue, path: string): JsonObject {
+/**
+ * Return `value` when it is an object, such as a schema or a `$defs` or `properties` map.
+ *
+ * @throws {TypeError} `expected a JSON Schema object at <path>` otherwise.
+ */
+function expectSchema(value: JsonValue, path: string): JsonObject {
   if (!isPlainObject(value)) throw new TypeError(`expected a JSON Schema object at ${path}`);
   return value;
+}
+
+/** Return whether `value` is falsy in Python: `null`, `false`, a zero, `""`, `[]` or `{}`. */
+function isFalsy(value: JsonValue): boolean {
+  if (Array.isArray(value)) return value.length === 0;
+  if (isPlainObject(value)) return Object.keys(value).length === 0;
+  return value === null || value === false || value === "" || value === 0 || value === 0n;
 }
 
 /** Return the `{key: value, …}` note for keywords moved into a description, values as JSON, in key order. */
@@ -320,9 +331,9 @@ export const AZURE_STRICT_UNSUPPORTED: readonly string[] = [
  * descriptions, or `null` when it has none.
  *
  * Each subschema loses the `AZURE_STRICT_UNSUPPORTED` keywords it holds and states them, in that
- * list's order, as a `{key: <JSON value>, …}` note: its `description` when it has none (or `""`),
- * else after the description and a blank line. It visits the root and the subschemas under
- * `properties`, `$defs`, `items`, `prefixItems`, `additionalProperties`, `anyOf`, `oneOf` and
+ * list's order, as a `{key: <JSON value>, …}` note: its `description` when that is absent, empty or
+ * not a string, else after the description and a blank line. It visits the root and the subschemas
+ * under `properties`, `$defs`, `items`, `prefixItems`, `additionalProperties`, `anyOf`, `oneOf` and
  * `allOf`, so a property named like a keyword is kept. Ported from yian's
  * `azure_client._strict_schema_without`.
  *
@@ -374,9 +385,10 @@ const ANTHROPIC_STRING_FORMATS = new Set([
  * alone (its siblings dropped) or `anyOf` (from `anyOf`, else `oneOf`), `allOf` or `type`, then
  * an array `enum`, `description` and `title`. An `object` gets its rebuilt `properties` (`{}` when
  * absent), `additionalProperties: false` (an open object is closed) and its `required`; a
- * `string` keeps a supported `format`; an `array` keeps its rebuilt `items` and a `minItems` of 0
- * or 1. Every other keyword is stated in the description as a `{key: <JSON value>, …}` note, in
- * the schema's key order, after the description and a blank line when there is a string one.
+ * `string` keeps a supported `format` and drops a falsy one (as Python does); an `array` keeps
+ * its rebuilt `items` and a `minItems` of 0 or 1. Every other keyword is stated in the description
+ * as a `{key: <JSON value>, …}` note, in the schema's key order, after the description and a blank
+ * line when there is a string one.
  * Ported from the anthropic SDK's `lib/_parse/_transform.py` (`transform_schema`).
  *
  * @param schema The JSON schema; it is not changed.
@@ -392,7 +404,7 @@ export function anthropicOutputSchema(schema: JsonObject): JsonObject {
 /** Return `anthropicOutputSchema` of `schema`, the subschema at `path`. */
 function anthropicSchema(schema: JsonValue, path: string): JsonObject {
   const out: JsonObject = {};
-  const src: JsonObject = { ...schemaAt(schema, path) };
+  const src: JsonObject = { ...expectSchema(schema, path) };
   /** Remove `key` from `src` and return its value, `null` when absent (Python's `pop(key, None)`). */
   const take = (key: string): JsonValue => {
     const value = src[key] ?? null;
@@ -401,7 +413,7 @@ function anthropicSchema(schema: JsonValue, path: string): JsonObject {
   };
   const defs = take("$defs");
   if (defs !== null) {
-    const map = schemaAt(defs, `${path}/$defs`);
+    const map = expectSchema(defs, `${path}/$defs`);
     const result: JsonObject = {};
     for (const name of Object.keys(map)) put(result, name, anthropicSchema(map[name]!, `${path}/$defs/${name}`));
     out["$defs"] = result;
@@ -427,31 +439,44 @@ function anthropicSchema(schema: JsonValue, path: string): JsonObject {
   if (description !== null) out["description"] = description;
   const title = take("title");
   if (title !== null) out["title"] = title;
-  if (type === "object") {
-    const properties = schemaAt(take("properties") ?? {}, `${path}/properties`);
-    const result: JsonObject = {};
-    for (const key of Object.keys(properties)) {
-      put(result, key, anthropicSchema(properties[key]!, `${path}/properties/${key}`));
+  switch (type) {
+    case "object": {
+      const properties = expectSchema(take("properties") ?? {}, `${path}/properties`);
+      const result: JsonObject = {};
+      for (const key of Object.keys(properties)) {
+        put(result, key, anthropicSchema(properties[key]!, `${path}/properties/${key}`));
+      }
+      out["properties"] = result;
+      take("additionalProperties");
+      out["additionalProperties"] = false;
+      const required = take("required");
+      if (required !== null) out["required"] = required;
+      break;
     }
-    out["properties"] = result;
-    take("additionalProperties");
-    out["additionalProperties"] = false;
-    const required = take("required");
-    if (required !== null) out["required"] = required;
-  } else if (type === "string") {
-    // An unsupported format goes back into `src`, last, to be noted with the other keywords.
-    const format = take("format");
-    if (typeof format === "string" && ANTHROPIC_STRING_FORMATS.has(format)) out["format"] = format;
-    else if (format !== null && format !== "") src["format"] = format;
-  } else if (type === "array") {
-    const items = take("items");
-    if (items !== null) out["items"] = anthropicSchema(items, `${path}/items`);
-    const minItems = take("minItems");
-    const numeric = typeof minItems === "bigint" || typeof minItems === "number";
-    if (numeric && (Number(minItems) === 0 || Number(minItems) === 1)) out["minItems"] = minItems;
-    else if (minItems !== null) src["minItems"] = minItems;
-  } else if (type !== null && type !== "boolean" && type !== "integer" && type !== "number" && type !== "null") {
-    throw new TypeError(`unsupported JSON Schema type ${encodeBody(type)}`);
+    case "string": {
+      // An unsupported format goes back into `src`, last, to be noted with the other keywords.
+      const format = take("format");
+      if (typeof format === "string" && ANTHROPIC_STRING_FORMATS.has(format)) out["format"] = format;
+      else if (!isFalsy(format)) src["format"] = format;
+      break;
+    }
+    case "array": {
+      const items = take("items");
+      if (items !== null) out["items"] = anthropicSchema(items, `${path}/items`);
+      const minItems = take("minItems");
+      const numeric = typeof minItems === "bigint" || typeof minItems === "number";
+      if (numeric && (Number(minItems) === 0 || Number(minItems) === 1)) out["minItems"] = minItems;
+      else if (minItems !== null) src["minItems"] = minItems;
+      break;
+    }
+    case null:
+    case "boolean":
+    case "integer":
+    case "number":
+    case "null":
+      break;
+    default:
+      throw new TypeError(`unsupported JSON Schema type ${encodeBody(type)}`);
   }
   if (Object.keys(src).length > 0) {
     const prefix = typeof description === "string" ? `${description}\n\n` : "";

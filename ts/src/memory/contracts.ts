@@ -9,15 +9,21 @@
  * paths, memory specs and stacks, and the setup error; the host memory objects (`Memory` and its
  * run `MemorySession`), their typed failures and their recorded snapshots; and the learning result
  * carriers (`MemoryMutation` with its batch check `validateMutations`, `LearningFailure`,
- * `PolicyCommitOutcome`, `LearningResult`), frozen and holding their carriers by reference. It
- * imports only `diagnostics` and `defaults`. The recall, learning evidence and conversation
- * contracts and the session's recall, learn and commit methods are not ported yet.
+ * `PolicyCommitOutcome`, `LearningResult`), frozen and holding their carriers by reference; and
+ * the visible evidence accepted with a node outcome (`EvaluationEvidence`, with its recalled
+ * `MemorySection` values and the visible model and tool interactions), whose JSON follows the
+ * yian value number rule. It imports only `diagnostics` and `defaults`. The recall and learning
+ * contexts, the episodes, the conversation contracts and the session's recall, learn and commit
+ * methods are not ported yet.
  */
 
 import { current } from "../defaults.ts";
 import { compareCodeUnits, OriginRef, reprText } from "../diagnostics.ts";
 
-/** One JSON scalar: an int is a `bigint`, a float a finite `number`. */
+/**
+ * One JSON scalar: an int is a `bigint`, a float a `number`, finite except in the evidence values,
+ * which may hold `±Infinity`.
+ */
 export type JsonScalar = null | boolean | bigint | number | string;
 /** One JSON value. */
 export type JsonValue = JsonScalar | readonly JsonValue[] | JsonObject;
@@ -80,19 +86,28 @@ function requirePath(value: unknown, name: string, allowEmpty = false): readonly
   return Object.freeze([...(value as string[])]);
 }
 
-/** Validate and copy one JSON value into frozen containers; see `freezeJsonObject`. */
+/**
+ * Validate and copy one JSON value into frozen containers; see `freezeJsonObject`. With
+ * `valueNumbers`, numbers follow the yian value rule: NaN refused, `±Infinity` kept, `-0` copied
+ * as `0`.
+ */
 function freezeJson(
   value: unknown,
   name: string,
   active: Set<object> = new Set(),
   nesting = 0,
   limit = Number.POSITIVE_INFINITY,
+  valueNumbers = false,
 ): JsonValue {
   if (value === null || typeof value === "boolean" || typeof value === "bigint") return value;
   if (typeof value === "string") return requireString(value, name, false);
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new RangeError(`${name} JSON number must be finite`);
-    return value;
+    if (!valueNumbers) {
+      if (!Number.isFinite(value)) throw new RangeError(`${name} JSON number must be finite`);
+      return value;
+    }
+    if (Number.isNaN(value)) throw new RangeError(`${name} JSON number must not be NaN`);
+    return Object.is(value, -0) ? 0 : value;
   }
   const array = isPlainArray(value);
   if (!array && !isPlainObject(value)) throw new TypeError(`${name} must contain exact JSON values`);
@@ -109,7 +124,7 @@ function freezeJson(
       const items: JsonValue[] = [];
       // By index, so a hole reads `undefined` and is refused.
       for (let i = 0; i < value.length; i++) {
-        items.push(freezeJson(value[i], `${name}[${i}]`, active, nesting + 1, limit));
+        items.push(freezeJson(value[i], `${name}[${i}]`, active, nesting + 1, limit, valueNumbers));
       }
       return Object.freeze(items);
     }
@@ -120,7 +135,9 @@ function freezeJson(
     for (const key of keys) requireString(key, `${name} JSON object key`, false);
     const entries = keys
       .sort(compareCodeUnits)
-      .map((key) => [key, freezeJson(value[key], `${name}.${key}`, active, nesting + 1, limit)] as const);
+      .map(
+        (key) => [key, freezeJson(value[key], `${name}.${key}`, active, nesting + 1, limit, valueNumbers)] as const,
+      );
     // `Object.fromEntries` defines own data properties, so a `__proto__` key stays data.
     return Object.freeze(Object.fromEntries(entries));
   } finally {
@@ -132,15 +149,26 @@ function freezeJson(
  * Validate and snapshot one exact JSON object: `null`, booleans, `bigint` ints, finite `number`
  * floats, well-formed strings, plain arrays and plain objects with string keys, copied into frozen
  * arrays and frozen objects whose keys are inserted in code-unit order. With `limitNesting` (the
- * default, for configs) it nests at most `current().maxValueNesting` container levels.
+ * default, for configs) it nests at most `current().maxValueNesting` container levels. With
+ * `valueNumbers` (for evidence values) numbers follow the yian value rule instead: NaN refused,
+ * `±Infinity` kept, `-0` copied as `0`.
  *
  * @throws TypeError when `value` isn't a plain object, holds a non-JSON value, or has a symbol key.
- * @throws RangeError for a non-finite number, a lone surrogate, a cycle, or nesting past the limit.
+ * @throws RangeError for a refused number, a lone surrogate, a cycle, or nesting past the limit.
  */
-function freezeJsonObject(value: unknown, name: string, options: { limitNesting?: boolean } = {}): JsonObject {
+function freezeJsonObject(
+  value: unknown,
+  name: string,
+  options: { limitNesting?: boolean; valueNumbers?: boolean } = {},
+): JsonObject {
   if (!isPlainObject(value)) throw new TypeError(`${name} must be an exact JSON object`);
   const limit = (options.limitNesting ?? true) ? current().maxValueNesting : Number.POSITIVE_INFINITY;
-  return freezeJson(value, name, new Set(), 0, limit) as JsonObject;
+  return freezeJson(value, name, new Set(), 0, limit, options.valueNumbers ?? false) as JsonObject;
+}
+
+/** Validate and copy one evidence JSON value at any depth under the yian value number rule. */
+function freezeEvidenceJson(value: unknown, name: string): JsonValue {
+  return freezeJson(value, name, new Set(), 0, Number.POSITIVE_INFINITY, true);
 }
 
 /** Return `vocabulary` with the predictable plural form of each term added. */
@@ -634,14 +662,14 @@ export class MemoryOccurrenceSegment {
    * Validate the occurrence kind, authored path and index; `staticPath` is copied.
    *
    * @throws TypeError for an unknown kind, a path that isn't an array of strings, or an index
-   *   that isn't an integer `number`.
+   *   that isn't a safe integer `number`.
    * @throws RangeError for an empty path or component, a lone surrogate, or a negative index.
    */
   constructor(kind: MemoryOccurrenceKind, staticPath: readonly string[], index: number) {
     if (!OCCURRENCE_KINDS.includes(kind)) throw new TypeError("kind must be a MemoryOccurrenceKind");
     this.kind = kind;
     this.staticPath = requirePath(staticPath, "static_path");
-    if (!Number.isInteger(index)) throw new TypeError("index must be an integer");
+    if (!Number.isSafeInteger(index)) throw new TypeError("index must be an integer");
     if (index < 0) throw new RangeError("index must be non-negative");
     this.index = index;
     Object.freeze(this);
@@ -697,6 +725,186 @@ export class MemoryScope {
     if (inner !== undefined && !isStrictPrefix(this.staticPath, inner)) {
       throw new RangeError("the innermost occurrence segment must contain the scoped node");
     }
+    Object.freeze(this);
+  }
+}
+
+/** One memory's recalled text, shown to an AGENT as its own section. Frozen. */
+export class MemorySection {
+  readonly memory: string;
+  readonly text: string;
+
+  /**
+   * Require a non-empty memory key and a text.
+   *
+   * @throws TypeError when a field isn't a string.
+   * @throws RangeError when `memory` is empty or a string holds a lone surrogate.
+   */
+  constructor(memory: string, text: string) {
+    this.memory = requireString(memory, "memory");
+    this.text = requireString(text, "text", false);
+    Object.freeze(this);
+  }
+}
+
+/** One visible free-text model response. Frozen. */
+export class ModelTextInteraction {
+  readonly text: string;
+
+  /**
+   * Require the visible text, without provider metadata.
+   *
+   * @throws TypeError when `text` isn't a string.
+   * @throws RangeError when it holds a lone surrogate.
+   */
+  constructor(text: string) {
+    this.text = requireString(text, "text", false);
+    Object.freeze(this);
+  }
+}
+
+/** One visible structured model response. Frozen. */
+export class ModelValueInteraction {
+  /** The deep-frozen response; any depth. */
+  readonly value: JsonValue;
+
+  /**
+   * Validate and copy the response under the yian value number rule.
+   *
+   * @throws TypeError when `value` holds a non-JSON value.
+   * @throws RangeError for NaN, a lone surrogate or a cycle.
+   */
+  constructor(value: unknown) {
+    this.value = freezeEvidenceJson(value, "value");
+    Object.freeze(this);
+  }
+}
+
+/** One visible tool call: its name and JSON arguments. Frozen. */
+export class ToolCallInteraction {
+  readonly name: string;
+  /** The deep-frozen arguments, keys in code-unit order; any depth. */
+  readonly arguments: JsonObject;
+
+  /**
+   * Validate the name, then copy the arguments under the yian value number rule.
+   *
+   * @throws TypeError when `name` isn't a string, `arguments` isn't an exact JSON object or holds a
+   *   non-JSON value.
+   * @throws RangeError for an empty name, NaN, a lone surrogate or a cycle.
+   */
+  constructor(name: string, args: unknown) {
+    this.name = requireString(name, "name");
+    this.arguments = freezeJsonObject(args, "arguments", { limitNesting: false, valueNumbers: true });
+    Object.freeze(this);
+  }
+}
+
+/** One visible tool result paired with its tool name. Frozen. */
+export class ToolResultInteraction {
+  readonly name: string;
+  readonly text: string;
+
+  /**
+   * Require a non-empty name and the visible result text.
+   *
+   * @throws TypeError when a field isn't a string.
+   * @throws RangeError when `name` is empty or a string holds a lone surrogate.
+   */
+  constructor(name: string, text: string) {
+    this.name = requireString(name, "name");
+    this.text = requireString(text, "text", false);
+    Object.freeze(this);
+  }
+}
+
+/** One visible model or tool interaction. */
+export type VisibleInteraction =
+  | ModelTextInteraction
+  | ModelValueInteraction
+  | ToolCallInteraction
+  | ToolResultInteraction;
+
+const VISIBLE_INTERACTION_CLASSES = [
+  ModelTextInteraction,
+  ModelValueInteraction,
+  ToolCallInteraction,
+  ToolResultInteraction,
+] as const;
+
+/** Source-neutral visible evidence accepted with one node outcome. Frozen. */
+export class EvaluationEvidence {
+  /** The node's memory scope, or `null` when the node has none. */
+  readonly scope: MemoryScope | null;
+  /** The deep-frozen bound inputs, or `null` when binding or safe capture was unavailable. */
+  readonly boundInputs: JsonObject | null;
+  /** The AGENT's base system prompt; present exactly when `prompt` is. */
+  readonly baseSystemPrompt: string | null;
+  readonly prompt: string | null;
+  /** The recalled sections, unique by memory and in `scope.memories` order. */
+  readonly memorySections: readonly MemorySection[];
+  readonly interactions: readonly VisibleInteraction[];
+
+  /**
+   * Validate the visible inputs, prompts, sections and interactions, in that order; the arrays are
+   * copied and their carriers kept by reference, and `boundInputs` is copied under the yian value
+   * number rule, at any depth.
+   *
+   * @throws TypeError for a `scope` that isn't exactly a `MemoryScope`, `boundInputs` that aren't
+   *   an exact JSON object, a prompt that isn't a string, an array that isn't an array, or an item
+   *   that isn't exactly a `MemorySection` or one of the visible interactions.
+   * @throws RangeError for a bad JSON value, one prompt without the other, a lone surrogate, or
+   *   sections that repeat a memory, name one outside `scope.memories` or leave its order.
+   */
+  constructor(
+    scope: MemoryScope | null,
+    boundInputs: unknown,
+    baseSystemPrompt: string | null,
+    prompt: string | null,
+    memorySections: readonly MemorySection[] = [],
+    interactions: readonly VisibleInteraction[] = [],
+  ) {
+    if (scope !== null && !isExactly(scope, MemoryScope)) throw new TypeError("scope must be a MemoryScope or null");
+    this.scope = scope;
+    if (boundInputs !== null && !isPlainObject(boundInputs)) {
+      throw new TypeError("bound_inputs must be an exact JSON object or null");
+    }
+    this.boundInputs =
+      boundInputs === null
+        ? null
+        : freezeJsonObject(boundInputs, "bound_inputs", { limitNesting: false, valueNumbers: true });
+    if ((baseSystemPrompt === null) !== (prompt === null)) {
+      throw new RangeError("base_system_prompt and prompt must both be present or absent");
+    }
+    this.baseSystemPrompt =
+      baseSystemPrompt === null ? null : requireString(baseSystemPrompt, "base_system_prompt", false);
+    this.prompt = prompt === null ? null : requireString(prompt, "prompt", false);
+
+    if (!isPlainArray(memorySections)) throw new TypeError("memory_sections must be an array");
+    const stackPositions = new Map((scope?.memories ?? []).map((key, index) => [key, index]));
+    const seen = new Set<string>();
+    let previous = -1;
+    let ordered = true;
+    for (const section of memorySections) {
+      if (!isExactly(section, MemorySection)) throw new TypeError("memory_sections items must be MemorySection values");
+      if (seen.has(section.memory)) throw new RangeError("memory_sections memory values must be unique");
+      const position = stackPositions.get(section.memory);
+      if (position === undefined) throw new RangeError("memory_sections memories must appear in scope.memories");
+      seen.add(section.memory);
+      // Checked after the loop, as Python does, so a later unknown or repeated section wins.
+      if (position < previous) ordered = false;
+      previous = position;
+    }
+    if (!ordered) throw new RangeError("memory_sections must follow scope.memories order");
+    this.memorySections = Object.freeze([...memorySections]);
+
+    if (!isPlainArray(interactions)) throw new TypeError("interactions must be an array");
+    for (const interaction of interactions) {
+      if (!VISIBLE_INTERACTION_CLASSES.some((cls) => isExactly<VisibleInteraction>(interaction, cls))) {
+        throw new TypeError("interactions items must be VisibleInteraction values");
+      }
+    }
+    this.interactions = Object.freeze([...interactions]);
     Object.freeze(this);
   }
 }

@@ -1,7 +1,9 @@
 /**
- * Route validation and backward context reads: the `validated` column of
- * `test_route_errors_on_multi_error_trees` and `test_downstream_context_reads_are_unaliased` of
- * `tests/engine/test_route_chain_costs.py`. Python's `ValueError` is a `RangeError` here.
+ * Route validation, route payloads and backward context reads: the `validated`, `encoded` and
+ * `decoded` columns of `test_route_errors_on_multi_error_trees`, the round-trip half of
+ * `test_route_encode_and_decode_check_each_node_once` (concat-64, concat-256, scalar-256) and
+ * `test_downstream_context_reads_are_unaliased` of `tests/engine/test_route_chain_costs.py`.
+ * Python's `ValueError` is a `RangeError` here.
  *
  * TS-only: one row per message `validateRoute` and `validateSource` can reach, with its class; a
  * `bigint` sequence is refused; `deep: false` skips a bad child and a bad snapshot's own fields
@@ -11,18 +13,18 @@
  *
  * Changed: reads return the frozen copy the constructor made, not a fresh copy per read, so the
  * test checks that a shared subtree is copied once, that the caller's objects aren't aliased, and
- * that the stored value is frozen.
+ * that the stored value is frozen. The balanced concat trees are built by a local helper (the
+ * evaluator's `balancedConcat` is private), and a round trip goes through the run-log JSON.
  *
  * Not ported: Python's "route <field> must be a tuple" and span pair-length checks, since
  * `ValueRoute` and `SourceRef` copy every array field into an array and rebuild spans as pairs;
- * the long-int rows of `tests/engine/test_long_int_old_logs.py`, since TS ints have no digit limit.
+ * the long-int rows of `tests/engine/test_long_int_old_logs.py`, since TS ints have no digit limit;
+ * the call-counting half of `test_route_encode_and_decode_check_each_node_once`, since it
+ * monkeypatches a module export, which ESM forbids (the decoder's `deep: false` structure is
+ * reviewed instead).
  *
- * Later (T4-2): the `encoded` and `decoded` columns of `test_route_errors_on_multi_error_trees`
- * wait for the route payloads of `runtime/log.ts`.
- *
- * Later (T4-x / T4-8): the other 7 run flows or encode route payloads:
+ * Later (T4-x / T4-8): the 6 tests that run flows:
  * `test_backward_results_match_the_recorded_results`,
- * `test_route_encode_and_decode_check_each_node_once`,
  * `test_run_and_resume_route_checks_grow_linearly`, `test_backward_lookups_grow_near_linearly`,
  * `test_backward_context_copies_grow_near_linearly`, `test_backward_freeze_work_grows_near_linearly`
  * and `test_backward_peak_memory_grows_near_linearly`.
@@ -33,7 +35,8 @@ import { expect, test } from "bun:test";
 import { type RouteKind, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
 import { BackwardContext } from "../../src/nodes/base.ts";
 import { validateRoute, validateSource } from "../../src/runtime/contracts.ts";
-import { JSONDecodeError } from "../../src/typesys/json.ts";
+import { routeFromPayload, routePayload } from "../../src/runtime/log.ts";
+import { JSONDecodeError, logJson, parseJson } from "../../src/typesys/json.ts";
 
 /** One valid source leaf shared by the route error trees. */
 const SOURCE = new ValueRoute("source", { source: new SourceRef("run", 1) });
@@ -56,41 +59,117 @@ function forged(kind: string, fields: Record<string, unknown> = {}): ValueRoute 
 /** A source route whose expression is not a string. */
 const BAD = forged("source", { source: new SourceRef("run", 1), expression: 5 });
 
+/** A route payload as a mutable object: nested payloads and arrays are `any`. */
+type Payload = Record<string, any>;
+
+/** Return `route`'s payload as a mutable object. */
+function payloadOf(route: ValueRoute): Payload {
+  return routePayload(route) as Payload;
+}
+
+/** A record with duplicate names whose first child has a non-string expression. */
+function duplicateNamesAndBadChild(): [ValueRoute, Payload] {
+  const tree = new ValueRoute("record", { children: [BAD, SOURCE], names: ["a", "a"] });
+  const payload = payloadOf(new ValueRoute("record", { children: [SOURCE, SOURCE], names: ["a", "b"] }));
+  payload.names = ["a", "a"];
+  payload.children[0].expression = 5n;
+  return [tree, payload];
+}
+
+/** A source route carrying a child whose expression is not a string. */
+function headErrorAndBadChild(): [ValueRoute, Payload] {
+  const tree = new ValueRoute("source", { source: new SourceRef("run", 1), children: [BAD] });
+  const payload = payloadOf(SOURCE);
+  payload.children = [{ ...payloadOf(SOURCE), expression: 5n }];
+  return [tree, payload];
+}
+
+/** An interpolation with misordered spans over a scalar whose snapshot holds a source. */
+function badSpansAndBadChildSnapshot(): [ValueRoute, Payload] {
+  const child = new ValueRoute("scalar", { children: [SOURCE], resultType: "Thing", snapshot: SOURCE });
+  const tree = new ValueRoute("interpolation", { children: [child], valueJson: '"ab"', spans: [[2, 1]] });
+  const validChild = new ValueRoute("scalar", { children: [SOURCE], valueJson: "1" });
+  const payload = payloadOf(
+    new ValueRoute("interpolation", { children: [validChild], valueJson: '"ab"', spans: [[0, 1]] }),
+  );
+  payload.spans = [[2n, 1n]];
+  Object.assign(payload.children[0], { value_json: null, result_type: "Thing", snapshot: payloadOf(SOURCE) });
+  return [tree, payload];
+}
+
+/** A scalar whose list snapshot contains a source route with an empty run id. */
+function snapshotWithInvalidSource(): [ValueRoute, Payload] {
+  const snapshot = new ValueRoute("list", { children: [new ValueRoute("source", { source: new SourceRef("", 1) })] });
+  const tree = new ValueRoute("scalar", { children: [SOURCE], resultType: "Thing", snapshot });
+  const validSnapshot = new ValueRoute("list", { children: [ValueRoute.literal(1n)] });
+  const payload = payloadOf(
+    new ValueRoute("scalar", { children: [SOURCE], resultType: "Thing", snapshot: validSnapshot }),
+  );
+  payload.snapshot.children[0] = payloadOf(SOURCE);
+  payload.snapshot.children[0].source.run_id = "";
+  return [tree, payload];
+}
+
 test.each([
   [
     "duplicate names and a bad child",
-    new ValueRoute("record", { children: [BAD, SOURCE], names: ["a", "a"] }),
-    TypeError,
-    "route expression must be a string",
+    duplicateNamesAndBadChild,
+    [TypeError, "route expression must be a string"],
+    [TypeError, "route expression must be a string"],
+    [TypeError, "route expression must be a string"],
   ],
   [
     "a head error and a bad child",
-    new ValueRoute("source", { source: new SourceRef("run", 1), children: [BAD] }),
-    RangeError,
-    "route source cannot carry children",
+    headErrorAndBadChild,
+    [RangeError, "route source cannot carry children"],
+    [RangeError, "route source cannot carry children"],
+    // The decoder checks each child before its parent.
+    [TypeError, "route expression must be a string"],
   ],
   [
     "bad spans and a bad child snapshot",
-    new ValueRoute("interpolation", {
-      children: [new ValueRoute("scalar", { children: [SOURCE], resultType: "Thing", snapshot: SOURCE })],
-      valueJson: '"ab"',
-      spans: [[2, 1]],
-    }),
-    RangeError,
-    "partial snapshot cannot contain source routes",
+    badSpansAndBadChildSnapshot,
+    [RangeError, "partial snapshot cannot contain source routes"],
+    [RangeError, "partial snapshot cannot contain source routes"],
+    [RangeError, "partial snapshot cannot contain source routes"],
   ],
   [
     "a snapshot with an invalid source",
-    new ValueRoute("scalar", {
-      children: [SOURCE],
-      resultType: "Thing",
-      snapshot: new ValueRoute("list", { children: [new ValueRoute("source", { source: new SourceRef("", 1) })] }),
-    }),
-    RangeError,
-    "source run_id must be non-empty",
+    snapshotWithInvalidSource,
+    [RangeError, "source run_id must be non-empty"],
+    [RangeError, "source run_id must be non-empty"],
+    [RangeError, "source run_id must be non-empty"],
   ],
-] as [string, ValueRoute, unknown, string][])("route errors on multi-error trees: %s", (_name, tree, cls, message) => {
-  expect(raised(() => validateRoute(tree))).toEqual([cls, message]);
+] as [string, () => [ValueRoute, Payload], [unknown, string], [unknown, string], [unknown, string]][])(
+  "route errors on multi-error trees: %s",
+  (_name, build, validated, encoded, decoded) => {
+    const [tree, payload] = build();
+    expect(raised(() => validateRoute(tree))).toEqual(validated);
+    expect(raised(() => routePayload(tree))).toEqual(encoded);
+    expect(raised(() => routeFromPayload(payload))).toEqual(decoded);
+  },
+);
+
+/** A balanced `concat` route over `leaves` one-item source lists, as a traced `+` chain records it. */
+function concatTree(leaves: number): ValueRoute {
+  const build = (low: number, high: number): ValueRoute => {
+    if (high - low === 1) return new ValueRoute("source", { source: new SourceRef("run", low) });
+    const middle = low + Math.floor((high - low) / 2);
+    return new ValueRoute("concat", {
+      children: [build(low, middle), build(middle, high)],
+      sizes: [middle - low, high - middle],
+    });
+  };
+  return build(0, leaves);
+}
+
+test.each([
+  ["concat-64", concatTree(64)],
+  ["concat-256", concatTree(256)],
+  ["scalar-256", new ValueRoute("scalar", { children: Array(256).fill(SOURCE), valueJson: "256" })],
+] as [string, ValueRoute][])("a route round trips through its payload: %s", (_name, tree) => {
+  const payload = parseJson(logJson(routePayload(tree)), "codec");
+  expect(routeFromPayload(payload)).toEqual(tree);
 });
 
 test.each([

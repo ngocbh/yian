@@ -1,6 +1,7 @@
 /**
  * Mirrors `tests/test_provider_auth.py`: the credential values, the store, `isAuthFailure`,
- * `request`, and `OpenAIAuth`'s sign-in flows, refresh and model catalogs.
+ * `request`, and `OpenAIAuth`'s sign-in flows, refresh and model catalogs; and the scenarios of
+ * `auth_both_runtimes.ts`, on Bun and, with `YIAN_TEST_NODE`, built on Node.
  */
 
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
@@ -19,6 +20,7 @@ import { ProviderError } from "../src/llm/errors.ts";
 import {
   ApiKeyCredentials,
   AuthError,
+  type Credentials,
   HttpResponse,
   isAuthFailure,
   OAuthCredentials,
@@ -29,6 +31,7 @@ import { type AuthRequest, OpenAIAuth } from "../src/llm_clients/auth/openai.ts"
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import { lockFile, realScheduler, type Scheduler, virtualScheduler } from "../src/platform.ts";
 import { parseJson } from "../src/typesys/json.ts";
+import { SCENARIOS } from "./auth_both_runtimes.ts";
 
 const PLATFORM_URL = pathToFileURL(join(import.meta.dir, "..", "src", "platform.ts")).href;
 
@@ -832,6 +835,203 @@ describe("AuthStore", () => {
     expect(refreshed[0]!.accessToken).toBe("old");
     expect(results.every((result) => (result as OAuthCredentials).accessToken === "new")).toBe(true);
     expect(store.selection()).toEqual(selection);
+  });
+
+  /** Return a promise and the function that resolves it. */
+  function gate(): [Promise<void>, () => void] {
+    let open!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return [opened, open];
+  }
+
+  /** Return a promise that rejects with `signal.reason` once `signal` aborts. */
+  function aborted(signal: AbortSignal): Promise<never> {
+    return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+  }
+
+  /** Return the access token of each resolved `credentials` result. */
+  function accessTokens(results: Credentials[]): string[] {
+    return results.map((result) => (result as OAuthCredentials).accessToken);
+  }
+
+  test("a refresh slower than the lock timeout doesn't fail parallel callers", async () => {
+    const scheduler = virtualScheduler(1_000_000);
+    const store = new AuthStore(file, { scheduler, lockTimeoutMs: 300 });
+    const selection = await store.save("openai", oauth("old", "old-refresh", 900), "model");
+    let calls = 0;
+    const refresh = async () => {
+      calls++;
+      await scheduler.sleep(1000);
+      return oauth("new", "new-refresh", 5000);
+    };
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => store.credentials("openai", selection.credentialId, { refresh })),
+    );
+    expect(accessTokens(results)).toEqual(Array(5).fill("new"));
+    expect(calls).toBe(1);
+  });
+
+  test("a joiner whose signal aborts rejects with its reason and leaves the flight to the others", async () => {
+    const store = new AuthStore(file, { scheduler: fixedClock(1_000_000) });
+    const selection = await store.save("openai", oauth("old", "old-refresh", 900), "model");
+    const [entered, enter] = gate();
+    const [finished, finish] = gate();
+    let calls = 0;
+    const refresh = async () => {
+      calls++;
+      enter();
+      await finished;
+      return oauth("new", "new-refresh", 5000);
+    };
+    const controller = new AbortController();
+    const reason = new Error("stopped");
+    const leader = store.credentials("openai", selection.credentialId, { refresh });
+    const joiner = new AuthStore(file, { scheduler: fixedClock(1_000_000), signal: controller.signal }).credentials(
+      "openai",
+      selection.credentialId,
+      { refresh },
+    );
+    const others = Array.from({ length: 3 }, () => store.credentials("openai", selection.credentialId, { refresh }));
+    await entered;
+    controller.abort(reason);
+    expect(await rejected(joiner)).toBe(reason);
+    finish();
+    expect(accessTokens(await Promise.all([leader, ...others]))).toEqual(Array(4).fill("new"));
+    expect(calls).toBe(1);
+  });
+
+  test("a stopped leader rejects with its reason and one joiner refreshes for the rest", async () => {
+    const store = new AuthStore(file, { scheduler: fixedClock(1_000_000) });
+    const selection = await store.save("openai", oauth("old", "old-refresh", 900), "model");
+    const controller = new AbortController();
+    const reason = new Error("stopped");
+    const [entered, enter] = gate();
+    const calls: string[] = [];
+    const leader = new AuthStore(file, { scheduler: fixedClock(1_000_000), signal: controller.signal }).credentials(
+      "openai",
+      selection.credentialId,
+      {
+        refresh: () => {
+          calls.push("leader");
+          enter();
+          return aborted(controller.signal);
+        },
+      },
+    );
+    const refresh = async () => {
+      calls.push("joiner");
+      return oauth("new", "new-refresh", 5000);
+    };
+    const joiners = Array.from({ length: 4 }, () => store.credentials("openai", selection.credentialId, { refresh }));
+    await entered;
+    controller.abort(reason);
+    expect(await rejected(leader)).toBe(reason);
+    expect(accessTokens(await Promise.all(joiners))).toEqual(Array(4).fill("new"));
+    expect(calls).toEqual(["leader", "joiner"]);
+  });
+
+  test("a failed refresh is shared, and a later call refreshes again", async () => {
+    const store = new AuthStore(file, { scheduler: fixedClock(1_000_000) });
+    const selection = await store.save("openai", oauth("old", "old-refresh", 900), "model");
+    const failure = new Error("refresh failed");
+    let calls = 0;
+    const refresh = async () => {
+      calls++;
+      await realScheduler.sleep(50);
+      if (calls === 1) throw failure;
+      return oauth("new", "new-refresh", 5000);
+    };
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, () => store.credentials("openai", selection.credentialId, { refresh })),
+    );
+    expect(results.every((result) => result.status === "rejected" && result.reason === failure)).toBe(true);
+    expect(calls).toBe(1);
+    const later = (await store.credentials("openai", selection.credentialId, { refresh })) as OAuthCredentials;
+    expect(later.accessToken).toBe("new");
+    expect(calls).toBe(2);
+  });
+
+  test("a flight is per store path, provider and credential id", async () => {
+    const clock = fixedClock(1_000_000);
+    const other = join(tmp, "other", "auth.json");
+    const first = new AuthStore(file, { scheduler: clock });
+    const second = new AuthStore(other, { scheduler: clock });
+    const [firstSelection, secondSelection] = await Promise.all([
+      first.save("openai", oauth("old", "old-refresh", 900), "model"),
+      second.save("openai", oauth("old", "old-refresh", 900), "model"),
+    ]);
+    // Each refresh waits until both have started, so they finish only if they run in parallel.
+    const [firstStarted, startFirst] = gate();
+    const [secondStarted, startSecond] = gate();
+    const both = Promise.all([firstStarted, secondStarted]);
+    const parallel = await Promise.all([
+      first.credentials("openai", firstSelection.credentialId, {
+        refresh: async () => {
+          startFirst();
+          await both;
+          return oauth("first", "r", 5000);
+        },
+      }),
+      second.credentials("openai", secondSelection.credentialId, {
+        refresh: async () => {
+          startSecond();
+          await both;
+          return oauth("second", "r", 5000);
+        },
+      }),
+    ]);
+    expect(accessTokens(parallel)).toEqual(["first", "second"]);
+
+    // Two providers on one path: each gets its own refresh, one after the other under the lock.
+    const store = new AuthStore(join(tmp, "providers", "auth.json"), { scheduler: clock });
+    const a = await store.save("a", oauth("old", "r", 900), "model");
+    const b = await store.save("b", oauth("old", "r", 900), "model");
+    const providers = await Promise.all([
+      store.credentials("a", a.credentialId, { refresh: async () => oauth("new-a", "r", 5000) }),
+      store.credentials("b", b.credentialId, { refresh: async () => oauth("new-b", "r", 5000) }),
+    ]);
+    expect(accessTokens(providers)).toEqual(["new-a", "new-b"]);
+
+    // A caller pinned to another credential id of the same provider never receives this login.
+    const original = await first.save("openai", oauth("old", "old-refresh", 900), "model");
+    const [entered, enter] = gate();
+    const [finished, finish] = gate();
+    const pinnedFirst = first.credentials("openai", original.credentialId, {
+      refresh: async () => {
+        enter();
+        await finished;
+        return oauth("pinned", "r", 5000);
+      },
+    });
+    await entered;
+    // Written beside the held lock, so the next caller pins the replacement's credential id.
+    const replacement = await second.save("openai", oauth("old", "old-refresh", 900), "model");
+    writeRaw(file, fs.readFileSync(other));
+    let replacementCalls = 0;
+    const pinnedReplacement = first.credentials("openai", replacement.credentialId, {
+      refresh: async () => {
+        replacementCalls++;
+        return oauth("replacement", "r", 5000);
+      },
+    });
+    finish();
+    expect(((await pinnedFirst) as OAuthCredentials).accessToken).toBe("pinned");
+    expect((await rejected(pinnedReplacement)).message).toBe("The saved connection changed");
+    expect(replacementCalls).toBe(0);
+  });
+
+  test("without a refresh, parallel callers each fail on an expired token", async () => {
+    const store = new AuthStore(file, { scheduler: fixedClock(1_000_000) });
+    const selection = await store.save("openai", oauth("old", "old-refresh", 900), "model");
+    const errors = await Promise.all(
+      Array.from({ length: 5 }, () => rejected(store.credentials("openai", selection.credentialId))),
+    );
+    expect(errors.map((error) => error.message)).toEqual(
+      Array(5).fill("Subscription credentials expired; sign in again"),
+    );
+    expect(new Set(errors).size).toBe(5);
   });
 
   test("the store saves each credential kind", async () => {
@@ -2511,4 +2711,55 @@ describe("browser callback listener", () => {
     }
     await expectCallbackPortFree();
   });
+});
+
+const BUILT = join(import.meta.dir, "..", "dist", "tests", "auth_both_runtimes.js");
+
+/**
+ * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
+ * value that can't run, a Node older than the `engines` floor, or a missing build
+ * fails the whole file, so a typo can't pass as a run with the Node case skipped.
+ * A copy of `tests/engine/platform.test.ts`'s: importing a test file would run its tests.
+ */
+const NODE = ((): string | undefined => {
+  const node = process.env.YIAN_TEST_NODE;
+  if (!node) return undefined;
+  let version: string;
+  try {
+    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
+  } catch (error) {
+    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
+  }
+  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18)) {
+    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
+  }
+  if (!fs.existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
+  return node;
+})();
+
+describe("the cross-process scenarios", () => {
+  for (const [name, run] of Object.entries(SCENARIOS)) test(name, run, 20_000);
+
+  test.skipIf(!NODE)(
+    "all pass on Node, built",
+    () => {
+      const result = spawnSync(NODE!, [BUILT], { encoding: "utf8", timeout: 60_000 });
+      const context = `signal: ${result.signal}\nstderr: ${result.stderr}\nstdout: ${result.stdout}`;
+      expect(result.stdout.trim(), context).not.toBe("");
+      const lines = result.stdout.trim().split("\n").map((line) => {
+        let parsed: { name?: unknown; ok?: unknown; error?: string };
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          throw new Error(`not a JSON line: ${line}\n${context}`);
+        }
+        return parsed;
+      });
+      expect(lines.map((line) => line.name)).toEqual(Object.keys(SCENARIOS));
+      for (const line of lines) expect(line, line.error).toEqual({ name: line.name, ok: true });
+      expect(result.status, context).toBe(0);
+    },
+    90_000,
+  );
 });

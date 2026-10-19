@@ -35,6 +35,30 @@ const MALFORMED = "Credential storage is malformed; reconnect after repairing it
 /** Saved logins by provider, in file order. */
 type Providers = Map<string, [ProviderSelection, Credentials | null]>;
 
+/**
+ * How a refresh flight ended: its credentials, the locked section's error, or `stopped` when the
+ * leader's own store signal aborted it.
+ */
+type Outcome = { credentials: Credentials } | { error: unknown } | { stopped: true };
+
+// Refreshes in flight in this process, keyed by store path, provider and expected credential id,
+// so parallel callers share one refresh and a joiner only receives the login it pinned.
+const flights = new Map<string, Promise<Outcome>>();
+
+/** Resolve with `outcome`, or reject with `signal.reason` once `signal` aborts first. */
+function joined(outcome: Promise<Outcome>, signal: AbortSignal | undefined): Promise<Outcome> {
+  if (signal === undefined) return outcome;
+  return new Promise((resolve, reject) => {
+    signal.throwIfAborted();
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    void outcome.then((value) => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(value);
+    });
+  });
+}
+
 /** The open store directory and the identity its descriptor had when checked. */
 interface Directory {
   fd: number;
@@ -560,6 +584,21 @@ export class AuthStore {
     return this.#update(provider, false);
   }
 
+  /** Start the refresh flight `key` running `locked`, registered until it settles. */
+  #lead(key: string, locked: () => Promise<Credentials>): Promise<Outcome> {
+    const flight = locked()
+      .then(
+        (credentials): Outcome => ({ credentials }),
+        (error: unknown): Outcome =>
+          this.#signal?.aborted && error === this.#signal.reason ? { stopped: true } : { error },
+      )
+      .finally(() => {
+        if (flights.get(key) === flight) flights.delete(key);
+      });
+    flights.set(key, flight);
+    return flight;
+  }
+
   /**
    * Resolve a pinned connection, refreshing expiring subscription tokens under the lock.
    *
@@ -567,6 +606,12 @@ export class AuthStore {
    * without the lock. Otherwise this takes the lock, reloads, and, unless another caller has
    * refreshed meanwhile, saves and returns `refresh(current)`, which must keep the account id and
    * be fresh. `refresh`'s own errors propagate unchanged.
+   *
+   * Parallel calls in this process for the same store path, provider and credential id share one
+   * refresh flight: the first runs it, the others wait for its credentials or rethrow its error
+   * (a failed refresh is not retried). A waiting caller has no timeout of its own: it waits until
+   * the flight settles or its store signal aborts. If the leader's signal aborts, the leader
+   * rejects with its reason and the waiting callers start over.
    *
    * @throws AuthError The saved login is no longer `expectedCredentialId`, has no credential, has
    *   expired without a `refresh`, the refresh is refused, or storage fails.
@@ -594,7 +639,7 @@ export class AuthStore {
       const [, saved] = pinned(this.#load(directory)[1]);
       if (fresh(saved)) return saved;
       // A saved login means the directory exists.
-      return await this.#locked(async () => {
+      const locked = () => this.#locked(async () => {
         const [defaultProvider, providers] = this.#load(directory!);
         const [selection, credentials] = pinned(providers);
         if (fresh(credentials)) return credentials;
@@ -616,6 +661,19 @@ export class AuthStore {
         this.#write(directory!, defaultProvider, providers);
         return checked;
       });
+      // Without a refresh the locked section only returns a fresh token or fails: nothing to share.
+      if (refresh === undefined) return await locked();
+      const key = [this.path, provider, expectedCredentialId].join("\0");
+      for (;;) {
+        const existing = flights.get(key);
+        const flight = existing ?? this.#lead(key, locked);
+        const outcome = existing === undefined ? await flight : await joined(flight, this.#signal);
+        if ("credentials" in outcome) return outcome.credentials;
+        // Never refresh again after a failure: a refresh that timed out may have rotated the
+        // token, and reusing the old one can revoke the login.
+        if ("error" in outcome) throw outcome.error;
+        if (existing === undefined) throw this.#signal!.reason;
+      }
     } finally {
       if (directory !== null) closeFd(directory.fd);
     }

@@ -5,6 +5,11 @@
  * Ported: the call and map rows of `test_child_label_is_not_authorable`, through `parseNodes` with
  * the registered kinds; the TS message names the field and lists the allowed keys.
  *
+ * TS-only: a CALL or MAP descriptor built with `childLabel: "inline body of node 'each'"` over a
+ * hand-built child names the body by that label, reproducing the message composition of
+ * `test_inline_map_output_error_uses_friendly_child_label` (a MAP over a body with no output) and
+ * of an undeclared argument of an inline call (the inline body itself is T3-17's).
+ *
  * Pinned at the end (`parsedNodes`):
  * `load-map-call/engine_inline_composite_bodies__llm_config_on_an_inline_{call,map}`, whose
  * body-key check reaches `llm_config:`, the second key, before the inline `nodes:` key and before
@@ -91,9 +96,14 @@
 
 import { expect, test } from "bun:test";
 
+import { BuildContext } from "../../src/compose/nodes/base.ts";
+import { CallDescriptor } from "../../src/compose/nodes/call.ts";
+import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
-import { type CaseRow, loadError, parsedNodes, runCase } from "../compose/declarations.ts";
+import { ValueContract } from "../../src/nodes/contracts.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { type CaseRow, handChild, loadError, parsedNodes, runCase } from "../compose/declarations.ts";
 
 test.each([
   ["call", "call: named", "asserts, call, depends_on, env, input, kind, node_name, runs_after"],
@@ -113,6 +123,43 @@ test.each([
     `node 'composite' (kind=${kind}): field 'child_label' is not allowed (allowed: ${allowed})`,
   );
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(nodes.child("composite").rangeOf("child_label")!);
+});
+
+/** A build context resolving every callable to a body whose node `constant` is typed `str`. */
+function bodyContext(output: string | null): BuildContext {
+  const body = handChild({ producers: { constant: new ValueContract(Type.scalar(ValueKind.STRING)) }, output });
+  return new BuildContext({ registry: new Map(), resolver: () => body });
+}
+
+test("an inline map output error uses the friendly child label", () => {
+  const desc = new MapDescriptor({
+    id: "each",
+    call: "inline-body",
+    over: "${input.items}",
+    childLabel: "inline body of node 'each'",
+  });
+
+  const error = loadError(() => desc.build(bodyContext(null)));
+
+  expect(error.message).toBe(
+    "map node 'each': inline body of node 'each' must declare a non-empty `output:`; " +
+      "a mapped call (over:) returns a list of the child's results",
+  );
+});
+
+test("an inline call's undeclared argument names the body by its child label", () => {
+  const desc = new CallDescriptor({
+    id: "each",
+    call: "inline-body",
+    inputs: { topic: "${input.topic}" },
+    childLabel: "inline body of node 'each'",
+  });
+
+  const error = loadError(() => desc.build(bodyContext("${constant.output}")));
+
+  expect(error.message).toBe(
+    "call node 'each': binding 'topic' is not a declared input of inline body of node 'each'",
+  );
 });
 
 // ---------- harvested conformance cases ----------

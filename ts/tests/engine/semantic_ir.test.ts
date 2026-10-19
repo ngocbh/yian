@@ -30,7 +30,8 @@
  * `test_child_signature_prefixes_multi_output_contract_origins`,
  * `test_child_signature_retains_partial_contract_when_one_field_is_opaque`,
  * `test_child_signature_keeps_nested_partial_output_opaque_at_record_field` and
- * `test_child_signature_rejects_contradictory_declared_output_evidence`; and the CASE edge row
+ * `test_child_signature_rejects_contradictory_declared_output_evidence`; the CALL and MAP halves of
+ * `test_composite_builders_preserve_or_deliberately_wrap_child_contract`; and the CASE edge row
  * `test_case_edge_inference_reads_wrapped_lowered_wiring`.
  *
  * TS-only: the `compose/helpers/output_contracts.ts` rows Python covers only through `load_flow`:
@@ -54,8 +55,9 @@
  *   list, and a forged origin is made with `Object.create(OriginRef.prototype)`, its key error a
  *   `RangeError`. The messages read `node origin_context ...`.
  * - The bad-splice row also checks the adjacency index is unchanged.
- * - The child-signature rows build their child with `handChild` (CODE producers carrying the
- *   contracts, outputs as `FlowOutput`s), where Python passes a `SimpleNamespace` over bare nodes.
+ * - The child-signature and composite-builder rows build their child with `handChild` (CODE
+ *   producers carrying the contracts, outputs as `FlowOutput`s), where Python passes a
+ *   `SimpleNamespace` over bare nodes.
  * - The CASE edge row builds an `on:` `CaseDescriptor` whose `onOrigin` wraps the `__on` wiring
  *   in a `Binding`, where Python calls `_data_edges`, which stays module-private.
  * - Binding, Assertion and FlowOutput are frozen, so `object.__setattr__(carrier, ...)` is a forged
@@ -67,11 +69,11 @@
  * Later (T3-14…T3-22): the compose/load rows
  * (`test_loaded_compose_flow_has_only_canonical_binding_storage`,
  * `test_boundary_reads_wrapped_output_but_preserves_it_in_end_wiring` and
- * `test_reference_validation_checks_a_wrapped_flow_output`); the CALL/LOOP
- * type-check and composite-builder rows (`test_call_type_*`, `test_loop_type_check_*` and
- * `test_composite_builders_preserve_or_deliberately_wrap_child_contract`); inline binding type
- * inference (`test_inline_binding_type_inference_reads_one_carrier_layer`); and edge inference
- * (`test_data_edge_inference_is_identical_for_raw_and_wrapped_sources` and
+ * `test_reference_validation_checks_a_wrapped_flow_output`); the CALL/LOOP type-check rows
+ * (`test_call_type_*` and `test_loop_type_check_*`); the LOOP half of
+ * `test_composite_builders_preserve_or_deliberately_wrap_child_contract` (T3-16, the loop kind);
+ * inline binding type inference (`test_inline_binding_type_inference_reads_one_carrier_layer`);
+ * and edge inference (`test_data_edge_inference_is_identical_for_raw_and_wrapped_sources` and
  * `test_producer_scan_unwraps_exactly_one_carrier_layer`).
  */
 
@@ -95,7 +97,9 @@ import {
   templateContract,
 } from "../../src/compose/helpers/output_contracts.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
+import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
+import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ChildSignature, childSignature } from "../../src/compose/nodes/resolver.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { parseExpr } from "../../src/expr/index.ts";
@@ -1057,4 +1061,24 @@ test("childSignature rejects contradictory declared output evidence", () => {
     RangeError,
     "child output contract contradicts its declared output evidence",
   );
+});
+
+test("composite builders preserve or deliberately wrap the child contract", () => {
+  // CALL keeps the child's contract; MAP makes a new list contract with only the default origin.
+  const contract = new ValueContract(
+    new Type({ kind: ValueKind.OBJECT, fields: new Map([["state", INT]]), required: new Set(["state"]) }),
+    new ContractOrigins({ default: origin("child-root"), entries: [[["state"], origin("child-state")]] }),
+  );
+  const child = handChild({ producers: { producer: contract }, output: "${producer.output}" });
+  const ctx = new BuildContext({ registry: new Map(), resolver: () => child });
+
+  const call = new CallDescriptor({ id: "call", call: "child" }).build(ctx).node;
+  const mapped = new MapDescriptor({ id: "mapped", call: "child", over: "${input.items}" }).build(ctx).node;
+
+  expect(call.outputContract).toBe(contract);
+  expect(isExactly(mapped.outputContract, ValueContract)).toBe(true);
+  const listed = mapped.outputContract as ValueContract;
+  expect(listed).not.toBe(contract);
+  expect(listed.type.element).toBe(contract.type);
+  expect(listed.origins).toStrictEqual(new ContractOrigins({ default: origin("child-root") }));
 });

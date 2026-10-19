@@ -8,9 +8,12 @@
  * `::test_shared_field_of_one_type_reads_as_that_type`,
  * `::test_shared_field_optional_in_one_member_reads_as_optional`,
  * `::test_shared_field_through_an_optional_union_reads_as_optional` and
- * `::test_shared_field_of_differing_types_is_untyped_and_loads` (the signature, not the load).
- * `typeFor` stands in for compose's `read_type`. The child-signature rows build the child with
- * `handChild` (a producer `d` of the given type and a record output), where Python loads a flow.
+ * `::test_shared_field_of_differing_types_is_untyped_and_loads` (the signature, not the load);
+ * and `::test_map_over_a_union_output_gives_a_list_of_objects`. `typeFor` stands in for compose's
+ * `read_type`. The child-signature rows build the child with `handChild` (a producer `d` of the
+ * given type and a record output), where Python loads a flow; the MAP row builds a
+ * `MapDescriptor` over a hand-built child returning its `Decision` producer, where Python loads a
+ * flow whose def is that child.
  *
  * TS-only: the member-only fix hints, which Python checks only through flows the loader builds
  * (a tag comparison hint read from the local path, through a union root and below a shared
@@ -18,15 +21,16 @@
  * shared-field walk (continuing into a nested union, stopping at an untyped shared field, and
  * reading below a merged `Literal` field), and reading below a file field.
  *
- * Later: `::test_map_over_a_union_output_gives_a_list_of_objects` and
- * `::test_loop_carrying_a_union_keeps_the_non_record_error` (T3-16, the MAP and LOOP readers);
- * the rest needs compose and the runtime.
+ * Later: `::test_loop_carrying_a_union_keeps_the_non_record_error` (T3-16, the loop kind); the
+ * rest needs compose and the runtime.
  */
 
 import { expect, test } from "bun:test";
 
 import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
+import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { answerSchema } from "../../src/compose/nodes/human_input.ts";
+import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { childSignature } from "../../src/compose/nodes/resolver.ts";
 import {
   isExactly,
@@ -36,7 +40,7 @@ import {
 } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
-import { handChild } from "./declarations.ts";
+import { handChild, parametersFromYaml } from "./declarations.ts";
 
 const DECISION_TYPEDEFS = {
   Buy: { action: "Literal(buy)", qty: "int" },
@@ -244,4 +248,19 @@ test("a shared field of differing types is untyped", () => {
     AB: "Union(A, B)",
   };
   expect(outputField("v", "${d.output.v}", { output: "AB", typedefs })).toBeNull();
+});
+
+test("a map over a union output gives a list of objects", () => {
+  const each = handChild({
+    inputs: parametersFromYaml("input:\n  v: !str\n", new Map()),
+    producers: { inner: new ValueContract(typeFor("Decision", readTypedefs(TRADE_TYPEDEFS))) },
+    output: "${inner.output}",
+  });
+  const desc = new MapDescriptor({ id: "m", call: "each", over: "${input.xs}", inputs: { v: "${item}" } });
+
+  const contract = desc.build(new BuildContext({ registry: new Map(), resolver: () => each })).node
+    .outputContract as ValueContract;
+
+  expect(contract.type.kind).toBe(ValueKind.LIST_OBJECT);
+  expect(contract.type.element!.variants).toBeDefined();
 });

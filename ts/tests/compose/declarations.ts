@@ -6,10 +6,11 @@
  * `fileOf`, which parses its top level; `caseText` and `caseDocument`, which read a conformance
  * case's flow as text or as a parsed document; and the harvested-case harness built on them
  * (`loadError`, `cursorAt`, `caseRegistry`, `CaseRow`, `runCase`, `TextCaseRow`, `runTextCase`,
- * `inputsAt`, `variablesAt`, `parsedNodes`, `assembled`, `assembleText`), which makes the loader's
- * call on a case and compares the result with the case's `expect`; and `handChild`, a child flow
- * built by hand (START, producers with given output contracts, END) where a case's `defs:` entry
- * would be loaded, for the rows that read a child's signature.
+ * `inputsAt`, `variablesAt`, `parsedNodes`, `assembled`, `assembledWith`, `assembleText`), which
+ * makes the loader's call on a case and compares the result with the case's `expect`; and
+ * `handChild`, a child flow built by hand (START, producers with given output contracts, END)
+ * where a case's `defs:` entry would be loaded, for the rows that read a child's signature or
+ * build a CALL or MAP over one (`assembledWith` and `assembleText`'s `children`).
  */
 
 import { readFileSync } from "node:fs";
@@ -246,25 +247,31 @@ export const variablesAt =
 export const parsedNodes: CaseCall = (document) =>
   parseNodes(flowNodesCursor(document, parseFile(document).nodes));
 
+/** Child flows by callable name, standing in for the `defs:` entries the loader would compose. */
+export type ChildFlows = Readonly<Record<string, ComposedFlow>>;
+
+/** Return a scope `resolve` that hands back `children[flowId]`, else throws (no loader yet). */
+function resolveFrom(children: ChildFlows = {}): CallableScope["resolve"] {
+  return (flowId) => {
+    if (Object.hasOwn(children, flowId)) return children[flowId]!;
+    throw new Error("child flows load in T3-22");
+  };
+}
+
 /**
  * Assemble the root flow of `document` as the loader calls `assemble` on it, with a scope whose
- * catalog is `builder`; the loader's `uses:` aliases, flow `llm_config:` and root memories are
- * left out.
+ * catalog is `builder` and which resolves a callable through `resolve` (default: none resolves);
+ * the loader's `uses:` aliases, flow `llm_config:` and root memories are left out.
  */
 function assembleRoot(
   document: SourceDocument,
   registry: TypeRegistry,
   builder: SourceCatalogBuilder,
+  resolve: CallableScope["resolve"] = resolveFrom(),
 ): ComposedFlow {
   const file = parseFile(document);
   const root = document.root;
-  const scope: CallableScope = {
-    catalogBuilder: builder,
-    resolve: () => {
-      throw new Error("child flows load in T3-22");
-    },
-    registerPrivate: () => {},
-  };
+  const scope: CallableScope = { catalogBuilder: builder, resolve, registerPrivate: () => {} };
   // A compact flow (no `nodes:`) lends its top-level `output:` to its one synthesized node, so the
   // loader locates the flow's `asserts:` and `output:` only in a full flow.
   const childOf = (key: string, flowOnly = false) =>
@@ -294,18 +301,32 @@ export const assembled: CaseCall = (document, registry, _diagnostics, builder) =
   assembleRoot(document, registry, builder);
 
 /**
+ * Assemble the case's root flow as `assembled` does, with a scope that resolves a callable named
+ * in `children` to that hand-built flow, for a case whose CALL, MAP or LOOP calls a `defs:` entry.
+ */
+export const assembledWith =
+  (children: ChildFlows): CaseCall =>
+  (document, registry, _diagnostics, builder) =>
+    assembleRoot(document, registry, builder, resolveFrom(children));
+
+/**
  * Assemble flow `text`'s root as `assembled` does, returning the flow and the catalog builder
  * its origins resolve through (`builder.freeze()` or `builder.resolveRegistered(origin)`).
  *
  * @param label The file name diagnostics name (default `flow.yaml`).
+ * @param options.children Hand-built child flows the scope resolves by name, as `assembledWith`'s.
  */
 export function assembleText(
   text: string,
   label = "flow.yaml",
+  options: { children?: ChildFlows } = {},
 ): { flow: ComposedFlow; builder: SourceCatalogBuilder } {
   const document = parseSourceDocument(text, label);
   const builder = new SourceCatalogBuilder();
-  return { flow: assembleRoot(document, caseRegistry(document), builder), builder };
+  return {
+    flow: assembleRoot(document, caseRegistry(document), builder, resolveFrom(options.children)),
+    builder,
+  };
 }
 
 /**

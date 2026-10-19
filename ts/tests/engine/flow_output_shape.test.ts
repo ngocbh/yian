@@ -4,21 +4,25 @@
  *
  * Ported: `test_child_signature_of_a_one_field_record_is_its_exact_record`,
  * `test_child_signature_of_a_value_output_is_the_value_contract`,
- * `test_child_signature_of_an_empty_record_is_the_empty_record_contract` and
- * `test_direct_child_signature_must_say_it_returns_a_record`.
+ * `test_child_signature_of_an_empty_record_is_the_empty_record_contract`,
+ * `test_direct_child_signature_must_say_it_returns_a_record`, the contract half of
+ * `test_map_over_a_one_field_record_def_returns_a_list_of_records` and
+ * `test_map_over_a_def_without_fields_is_rejected` (absent, empty record).
  *
  * Changed: the child-signature rows build the child with `handChild` (a `step` producer typed
  * `str`), where Python loads a flow; the empty-record row compares with `sameOutputContract`
- * (Python's dataclass `==`). Python's `ValueError` is a `RangeError`.
+ * (Python's dataclass `==`). Python's `ValueError` is a `RangeError`. The MAP rows build a
+ * `MapDescriptor` over that hand-built child, where Python loads a flow whose def is the child,
+ * and pin the whole message, where Python matches a fragment.
+ *
+ * Pinned at the end (`assembledWith`, the def built by hand):
+ * `load-core/engine_flow_output_shape__map_over_a_def_without_output`.
  *
  * TS-only: `ChildSignature`'s constructor errors, which no Python test reaches: a non-contract
  * output, a non-array `declaredOutputs`, a malformed pair, an empty or duplicate name, a
  * non-contract declared output; and the form with no declared evidence, which skips the check.
  *
- * Later (T3-16, the MAP and LOOP readers):
- * `test_map_over_a_one_field_record_def_returns_a_list_of_records` (its contract half),
- * `test_map_over_a_def_without_fields_is_rejected`,
- * `test_loop_body_with_an_empty_record_output_is_rejected` and
+ * Later (T3-16, the loop kind): `test_loop_body_with_an_empty_record_output_is_rejected` and
  * `test_loop_value_body_re_exporting_an_empty_record_is_rejected`.
  *
  * Later (T3-17, T3-18, T3-22, T4): `test_flow_result_follows_the_output_shape` (T3-17, T4);
@@ -42,10 +46,12 @@
 import { expect, test } from "bun:test";
 
 import { combineOutputContracts } from "../../src/compose/helpers/output_contracts.ts";
+import { BuildContext } from "../../src/compose/nodes/base.ts";
+import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ChildSignature, childSignature } from "../../src/compose/nodes/resolver.ts";
 import { isExactly, type OutputContract, sameOutputContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
-import { handChild } from "../compose/declarations.ts";
+import { assembledWith, type CaseRow, handChild, loadError, runCase } from "../compose/declarations.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 
@@ -186,3 +192,39 @@ test("a ChildSignature with no declared evidence skips the evidence check", () =
   expect(Object.isFrozen(sig)).toBe(true);
   expect(Object.isFrozen(sig.inputs)).toBe(true);
 });
+
+/** Build the MAP `each` over `items`, calling `child` (a def built by hand). */
+function buildMap(child: ReturnType<typeof handChild>) {
+  const desc = new MapDescriptor({ id: "each", call: "child", over: "${input.items}" });
+  return desc.build(new BuildContext({ registry: new Map(), resolver: () => child }));
+}
+
+test("a map over a one-field record def returns a list of records", () => {
+  const contract = buildMap(shapeChild({ order: "${step.output}" })).node.outputContract as ValueContract;
+
+  expect(contract.type.kind).toBe(ValueKind.LIST_OBJECT);
+  const fields = contract.type.element!.fields!;
+  expect([...fields.keys()]).toEqual(["order"]);
+  expect(typeEquals(fields.get("order")!, STR)).toBe(true);
+});
+
+test.each([
+  ["absent", null],
+  ["empty record", {}],
+])("a map over a def without fields is rejected: %s", (_name, output) => {
+  const error = loadError(() => buildMap(shapeChild(output)));
+
+  expect(error.message).toBe(
+    "map node 'each': callable 'child' must declare a non-empty `output:`; " +
+      "a mapped call (over:) returns a list of the child's results",
+  );
+});
+
+// ---------- harvested conformance cases ----------
+
+test.each<CaseRow>([
+  {
+    id: "load-core/engine_flow_output_shape__map_over_a_def_without_output",
+    call: assembledWith({ child: shapeChild(null) }),
+  },
+])("assemble: $id", runCase);

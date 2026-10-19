@@ -54,6 +54,13 @@
  * with the memory run log: the records, the envelope's payload and the replayed record are
  * frozen, so each edit throws `TypeError` where Python edits a private copy.
  *
+ * TS-only: `sameBackwardAttribution`, `sameAttributedBackwardResult`, `sameBackwardFailure` and
+ * `sameBackwardOutcome` are true for separately built equal carriers (including two backward
+ * failures built from one `Failure` cause, whose retained causes are different objects) and false
+ * for each differing field, with a both-null and a one-null row for each nullable field (an
+ * attribution's nullable fields are null together, on a root seed; an outcome's failure is null
+ * exactly on success).
+ *
  * Later (T4-3 to T4-8): `test_historical_backward_prepares_recorded_schema_bytes` and the
  * prepare, append, reduce and replay tests (with the reducer, the runtime log and the engine).
  */
@@ -61,7 +68,7 @@
 import { expect, test } from "bun:test";
 
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
-import { SourceRef } from "../../src/expr/lineage.ts";
+import { type FeedbackValue, SourceRef } from "../../src/expr/lineage.ts";
 import {
   LearningFailure,
   LearningResult,
@@ -77,6 +84,10 @@ import {
   BackwardFailure,
   BackwardOutcome,
   MemoryProposal,
+  sameAttributedBackwardResult,
+  sameBackwardAttribution,
+  sameBackwardFailure,
+  sameBackwardOutcome,
 } from "../../src/runtime/contracts.ts";
 import {
   BackwardFinishedRecord,
@@ -710,4 +721,182 @@ test.each<["failed" | "routed", string | null, typeof TypeError | typeof RangeEr
   wire["payload"][field]["node_id"] = nodeId;
   const message = `node_${kind} payload ${field} node_id must be a non-empty string`;
   expectError(() => decodeRecord(logJson(wire)), cls, message);
+});
+
+test("sameBackwardAttribution compares sender by key, input, indexes and parents", () => {
+  const transfer = (
+    sender = new SourceRef("run", 3),
+    inputName = "text",
+    messageIndex = 1,
+    contributionIndex = 2,
+    parents = [0, 2],
+  ) => new BackwardAttribution(sender, inputName, messageIndex, contributionIndex, parents);
+  const root = () => new BackwardAttribution(null, null, 0, null, []);
+  const base = transfer();
+
+  expect(sameBackwardAttribution(base, transfer())).toBe(true);
+  // Both null: two root seeds have no sender, input name or contribution index.
+  expect(sameBackwardAttribution(root(), root())).toBe(true);
+  // One null: a root seed against a transfer, for the sender, input name and contribution index.
+  expect(sameBackwardAttribution(root(), base)).toBe(false);
+  expect(sameBackwardAttribution(base, root())).toBe(false);
+  expect(sameBackwardAttribution(base, transfer(new SourceRef("run", 4)))).toBe(false);
+  expect(sameBackwardAttribution(base, transfer(new SourceRef("other", 3)))).toBe(false);
+  expect(sameBackwardAttribution(base, transfer(undefined, "other"))).toBe(false);
+  expect(sameBackwardAttribution(base, transfer(undefined, undefined, 0))).toBe(false);
+  expect(sameBackwardAttribution(base, transfer(undefined, undefined, undefined, 3))).toBe(false);
+  expect(sameBackwardAttribution(base, transfer(undefined, undefined, undefined, undefined, [0]))).toBe(false);
+  expect(sameBackwardAttribution(base, transfer(undefined, undefined, undefined, undefined, [0, 3]))).toBe(false);
+  expect(sameBackwardAttribution(base, transfer(undefined, undefined, undefined, undefined, [0, 2, 3]))).toBe(false);
+});
+
+test("sameAttributedBackwardResult compares source by key, feedback, attributions, result and invoked", () => {
+  const transfer = (parents = [0]) => new BackwardAttribution(new SourceRef("run", 3), "text", 0, 0, parents);
+  const fields = {
+    source: new SourceRef("run", 1),
+    feedback: ["Review.", { title: "Shorter." }] as FeedbackValue[],
+    attribution: [new BackwardAttribution(null, null, 0, null, []), transfer()],
+    result: result(),
+  };
+  const build = (changed: Partial<typeof fields> = {}) => {
+    const { source, feedback, attribution, result } = { ...fields, ...changed };
+    return new AttributedBackwardResult(source, feedback, attribution, result, true);
+  };
+  const base = build();
+  const unreached = (source = new SourceRef("run", 1)) =>
+    new AttributedBackwardResult(source, [], [], new BackwardResult(), false);
+
+  expect(
+    sameAttributedBackwardResult(
+      base,
+      build({
+        source: new SourceRef("run", 1),
+        feedback: ["Review.", { title: "Shorter." }],
+        attribution: [new BackwardAttribution(null, null, 0, null, []), transfer()],
+        result: result(),
+      }),
+    ),
+  ).toBe(true);
+  expect(sameAttributedBackwardResult(unreached(), unreached())).toBe(true);
+  expect(sameAttributedBackwardResult(base, build({ source: new SourceRef("run", 2) }))).toBe(false);
+  expect(sameAttributedBackwardResult(base, build({ source: new SourceRef("other", 1) }))).toBe(false);
+  expect(sameAttributedBackwardResult(base, build({ feedback: ["Review.", { title: "Longer." }] }))).toBe(false);
+  expect(sameAttributedBackwardResult(base, build({ feedback: [{ title: "Shorter." }, "Review."] }))).toBe(false);
+  expect(sameAttributedBackwardResult(base, build({ attribution: [fields.attribution[0]!, transfer([1])] }))).toBe(
+    false,
+  );
+  expect(sameAttributedBackwardResult(base, build({ attribution: [transfer(), fields.attribution[0]!] }))).toBe(false);
+  expect(sameAttributedBackwardResult(base, build({ result: new BackwardResult({ selfFeedback: ["Other."] }) }))).toBe(
+    false,
+  );
+  // An unreached occurrence has no messages, so invoked can't differ alone.
+  expect(sameAttributedBackwardResult(unreached(), base)).toBe(false);
+  expect(sameAttributedBackwardResult(unreached(), unreached(new SourceRef("run", 2)))).toBe(false);
+});
+
+test("sameBackwardFailure compares every field and the cause by value", () => {
+  type Options = NonNullable<ConstructorParameters<typeof BackwardFailure>[3]>;
+  const scope = (index = 2) =>
+    new ExecutionScope(["each", "agent"], {
+      flowPath: ["each"],
+      occurrencePath: [new ExecutionPosition("map_item", ["each"], index)],
+    });
+  const forward = (message = "Failed.") =>
+    new Failure({
+      code: "node.execute",
+      message,
+      nodeId: "agent",
+      trace: [new OriginRef("agent.prompt")],
+      causeType: "Error",
+      traceback: "forward traceback",
+    });
+  const memoryCause = (retryable = true) =>
+    new MemoryOperationFailure("backend-stage", "backend.failed", "Retry later.", retryable);
+  const options = (): Options => ({
+    scope: scope(),
+    runId: "run",
+    nodeId: "each/2/agent",
+    nodeStartedSeq: 7,
+    memory: "history",
+    cause: forward(),
+    causeType: "MemoryOperationError",
+    traceback: "backward traceback",
+  });
+  const failure = (changed: Options = {}, stage = "learn", code = "memory.learn", message = "Could not propose.") =>
+    new BackwardFailure(stage, code, message, { ...options(), ...changed });
+  const base = failure();
+
+  const cause = forward();
+  const [first, second] = [failure({ cause }), failure({ cause })];
+  expect(first.cause).not.toBe(second.cause);
+  expect(sameBackwardFailure(first, second)).toBe(true);
+  expect(sameBackwardFailure(base, failure())).toBe(true);
+  expect(sameBackwardFailure(failure({ cause: memoryCause() }), failure({ cause: memoryCause() }))).toBe(true);
+  const bare = new BackwardFailure("learn", "memory.learn", "Could not propose.");
+  expect(sameBackwardFailure(bare, new BackwardFailure("learn", "memory.learn", "Could not propose."))).toBe(true);
+
+  expect(sameBackwardFailure(base, failure({}, "commit"))).toBe(false);
+  expect(sameBackwardFailure(base, failure({}, undefined, "memory.commit"))).toBe(false);
+  expect(sameBackwardFailure(base, failure({}, undefined, undefined, ""))).toBe(false);
+  expect(sameBackwardFailure(base, failure({ scope: scope(3) }))).toBe(false);
+  expect(sameBackwardFailure(base, failure({ cause: forward("Other.") }))).toBe(false);
+  expect(sameBackwardFailure(failure({ cause: memoryCause() }), failure({ cause: memoryCause(false) }))).toBe(false);
+  expect(sameBackwardFailure(base, failure({ cause: memoryCause() }))).toBe(false);
+  expect(sameBackwardFailure(failure({ cause: memoryCause() }), base)).toBe(false);
+  const changed: [keyof Options, Options[keyof Options]][] = [
+    ["runId", "other"],
+    ["nodeId", "each/3/agent"],
+    ["nodeStartedSeq", 8],
+    ["memory", "store"],
+    ["causeType", "Error"],
+    ["traceback", "other traceback"],
+  ];
+  for (const [field, value] of changed) {
+    expect(sameBackwardFailure(base, failure({ [field]: value }))).toBe(false);
+  }
+  const nullable: (keyof Options)[] = [
+    "scope",
+    "runId",
+    "nodeId",
+    "nodeStartedSeq",
+    "memory",
+    "cause",
+    "causeType",
+    "traceback",
+  ];
+  for (const field of nullable) {
+    expect(sameBackwardFailure(failure({ [field]: null }), failure({ [field]: null }))).toBe(true);
+    expect(sameBackwardFailure(base, failure({ [field]: null }))).toBe(false);
+    expect(sameBackwardFailure(failure({ [field]: null }), base)).toBe(false);
+  }
+});
+
+test("sameBackwardOutcome compares status, feedback, failure and learning", () => {
+  const learning = (commitId = "commit-1") =>
+    new LearningResult("succeeded", { policies: [new PolicyCommitOutcome("history", "succeeded", { commitId })] });
+  const failure = (message = "Could not propose.") =>
+    new BackwardFailure("learn", "memory.learn", message, { cause: MEMORY_CAUSE });
+  type Options = NonNullable<ConstructorParameters<typeof BackwardOutcome>[1]>;
+  const succeeded = (changed: Options = {}) =>
+    new BackwardOutcome("succeeded", { feedback: result(), learning: learning(), ...changed });
+  const failed = (changed: Options = {}) =>
+    new BackwardOutcome("failed", { feedback: result(), failure: failure(), learning: learning(), ...changed });
+  const base = succeeded();
+
+  expect(sameBackwardOutcome(base, succeeded())).toBe(true);
+  expect(sameBackwardOutcome(failed(), failed())).toBe(true);
+  expect(sameBackwardOutcome(base, failed())).toBe(false);
+  expect(sameBackwardOutcome(base, succeeded({ feedback: new BackwardResult() }))).toBe(false);
+  expect(sameBackwardOutcome(succeeded({ feedback: null }), succeeded({ feedback: null }))).toBe(true);
+  expect(sameBackwardOutcome(base, succeeded({ feedback: null }))).toBe(false);
+  expect(sameBackwardOutcome(succeeded({ feedback: null }), base)).toBe(false);
+  expect(sameBackwardOutcome(failed(), failed({ failure: failure("Other.") }))).toBe(false);
+  // Both null on success; a failure is present exactly when the status is failed, so one null
+  // comes with a status change.
+  expect(sameBackwardOutcome(failed(), base)).toBe(false);
+  expect(sameBackwardOutcome(base, succeeded({ learning: learning("commit-2") }))).toBe(false);
+  expect(sameBackwardOutcome(succeeded({ learning: null }), succeeded({ learning: null }))).toBe(true);
+  expect(sameBackwardOutcome(base, succeeded({ learning: null }))).toBe(false);
+  expect(sameBackwardOutcome(succeeded({ learning: null }), base)).toBe(false);
+  expect(sameBackwardOutcome(failed(), failed({ learning: new LearningResult("incomplete") }))).toBe(false);
 });

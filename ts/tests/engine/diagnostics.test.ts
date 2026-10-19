@@ -1,6 +1,9 @@
 /**
  * Contracts for source-neutral diagnostic values and origin resolution, a port of
  * `tests/engine/test_diagnostics.py`, plus the text helpers yian's messages need.
+ *
+ * TS-only: `sameFailure` is true for separately built equal failures (origins compared by key) and
+ * false for each differing field, with a both-null and a one-null row for each nullable field.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -20,6 +23,7 @@ import {
   type OriginResolver,
   ResolverTable,
   reprText,
+  sameFailure,
   SourceRange,
 } from "../../src/diagnostics.ts";
 import { importStatements } from "./source_scan.ts";
@@ -432,6 +436,37 @@ describe("Failure", () => {
       "traceback",
     ]);
     expect(Object.keys(full.toJSON().trace[0]!)).toEqual(["key"]);
+  });
+
+  test("sameFailure compares every field, origins by key in order", () => {
+    type Fields = ConstructorParameters<typeof Failure>[0];
+    const fields: Fields = {
+      code: "node.execute",
+      message: "boom",
+      nodeId: "review",
+      trace: [new OriginRef("root:call"), new OriginRef("child:node")],
+      causeType: "Error",
+      traceback: "Traceback ...",
+    };
+    const failure = (changed: Partial<Fields> = {}) => new Failure({ ...fields, ...changed });
+    const base = failure();
+
+    expect(sameFailure(base, failure({ trace: [new OriginRef("root:call"), new OriginRef("child:node")] }))).toBe(true);
+    expect(sameFailure(base, failure({ code: "contract.input" }))).toBe(false);
+    expect(sameFailure(base, failure({ message: "" }))).toBe(false);
+    expect(sameFailure(base, failure({ nodeId: "other" }))).toBe(false);
+    expect(sameFailure(base, failure({ nodeId: null }))).toBe(false);
+    expect(sameFailure(failure({ nodeId: null }), failure({ nodeId: null }))).toBe(true);
+    const reversed = [new OriginRef("child:node"), new OriginRef("root:call")];
+    expect(sameFailure(base, failure({ trace: reversed }))).toBe(false);
+    expect(sameFailure(base, failure({ trace: [new OriginRef("root:call")] }))).toBe(false);
+    expect(sameFailure(base, failure({ trace: [] }))).toBe(false);
+    expect(sameFailure(base, failure({ causeType: "TypeError" }))).toBe(false);
+    expect(sameFailure(base, failure({ causeType: null }))).toBe(false);
+    expect(sameFailure(failure({ causeType: null }), failure({ causeType: null }))).toBe(true);
+    expect(sameFailure(base, failure({ traceback: "other" }))).toBe(false);
+    expect(sameFailure(base, failure({ traceback: null }))).toBe(false);
+    expect(sameFailure(failure({ traceback: null }), failure({ traceback: null }))).toBe(true);
   });
 });
 

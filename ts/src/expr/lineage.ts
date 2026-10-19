@@ -652,6 +652,22 @@ export function validateFeedback(
 }
 
 /**
+ * Whether two feedback values are equal: strings and `null` by `===`, arrays item by item, records
+ * by the same key set and equal values.
+ */
+export function sameFeedback(a: FeedbackValue, b: FeedbackValue): boolean {
+  if (a === null || b === null || typeof a === "string" || typeof b === "string") return a === b;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => sameFeedback(x, b[i]!));
+  }
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((key) => Object.hasOwn(b, key) && sameFeedback(a[key]!, b[key]!))
+  );
+}
+
+/**
  * Return whether validated feedback contains any supplied string, including the empty string.
  *
  * @param feedback One ordinary feedback value. Its container shape must already have been

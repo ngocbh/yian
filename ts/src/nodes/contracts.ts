@@ -111,6 +111,11 @@ export function sameItems<T>(
   return a.length === b.length && a.every((item, i) => same(item, b[i]!));
 }
 
+/** Whether two nullable values are both `null`, or both present and equal by `same`. */
+export function sameOptional<T>(a: T | null, b: T | null, same: (x: T, y: T) => boolean): boolean {
+  return a === null ? b === null : b !== null && same(a, b);
+}
+
 /** Copy `entries` of `(path, origin)` pairs into frozen arrays. */
 function freezeEntries(
   entries: readonly (readonly [ValuePath, OriginRef])[],

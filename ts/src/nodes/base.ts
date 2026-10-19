@@ -36,6 +36,7 @@ import {
   validateFeedback,
 } from "../expr/index.ts";
 import { evaluateWhenRecord } from "../expr/expressions.ts";
+import { sameFeedback } from "../expr/lineage.ts";
 import type { MemoryScope } from "../memory/contracts.ts";
 import type { Skill } from "../skills/catalog.ts";
 import type { ToolSet } from "../tools/registry.ts";
@@ -227,6 +228,16 @@ export class BackwardResult {
     this.variableFeedback = copyBackwardValue(variables, "variable_feedback") as typeof this.variableFeedback;
     Object.freeze(this);
   }
+}
+
+/** Whether two results have equal input, self and variable feedback channels. */
+export function sameBackwardResult(a: BackwardResult, b: BackwardResult): boolean {
+  // Each channel is a record of arrays, itself a feedback value.
+  return (
+    sameFeedback(a.inputFeedback as FeedbackValue, b.inputFeedback as FeedbackValue) &&
+    sameFeedback(a.selfFeedback as FeedbackValue, b.selfFeedback as FeedbackValue) &&
+    sameFeedback(a.variableFeedback as FeedbackValue, b.variableFeedback as FeedbackValue)
+  );
 }
 
 /**

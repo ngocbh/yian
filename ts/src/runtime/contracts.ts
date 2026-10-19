@@ -9,22 +9,33 @@
  * Never imports: runtime log, state, trace, engine or run, compile, compose, or the CLI.
  */
 
-import { Failure } from "../diagnostics.ts";
-import { type FeedbackValue, type RouteKind, SourceRef, ValueRoute, validateFeedback } from "../expr/lineage.ts";
+import { Failure, sameFailure } from "../diagnostics.ts";
+import {
+  type FeedbackValue,
+  type RouteKind,
+  SourceRef,
+  sameFeedback,
+  sourceKey,
+  ValueRoute,
+  validateFeedback,
+} from "../expr/lineage.ts";
 import {
   LearningResult,
   type MemoryMutation,
   MemoryOperationFailure,
+  sameLearningResult,
+  sameMemoryOperationFailure,
   validateMutations,
 } from "../memory/contracts.ts";
 import {
   BackwardResult,
   copyBackwardValue,
   retainFailure,
+  sameBackwardResult,
   validateDeclaredNames,
   validateInputOutputPaths,
 } from "../nodes/base.ts";
-import { ExecutionScope, isExactly } from "../nodes/contracts.ts";
+import { ExecutionScope, isExactly, sameExecutionScope, sameItems, sameOptional } from "../nodes/contracts.ts";
 import { type JsonValue, parseJson } from "../typesys/json.ts";
 import { isList, isRecord } from "../typesys/values.ts";
 
@@ -446,6 +457,22 @@ export class BackwardAttribution {
   }
 }
 
+/** Whether two sources have the same key. */
+function sameSource(a: SourceRef, b: SourceRef): boolean {
+  return sourceKey(a) === sourceKey(b);
+}
+
+/** Whether two attributions have the same sender (by key), input name, indexes and parents. */
+export function sameBackwardAttribution(a: BackwardAttribution, b: BackwardAttribution): boolean {
+  return (
+    sameOptional(a.sender, b.sender, sameSource) &&
+    a.inputName === b.inputName &&
+    a.messageIndex === b.messageIndex &&
+    a.contributionIndex === b.contributionIndex &&
+    sameItems(a.parents, b.parents)
+  );
+}
+
 /**
  * Detached feedback and a result for one accepted forward occurrence. Frozen.
  *
@@ -510,6 +537,17 @@ export class AttributedBackwardResult {
     this.invoked = invoked;
     Object.freeze(this);
   }
+}
+
+/** Whether two occurrence results have the same source key, feedback, attributions, result and invoked flag. */
+export function sameAttributedBackwardResult(a: AttributedBackwardResult, b: AttributedBackwardResult): boolean {
+  return (
+    sameSource(a.source, b.source) &&
+    sameItems(a.feedback, b.feedback, sameFeedback) &&
+    sameItems(a.attribution, b.attribution, sameBackwardAttribution) &&
+    sameBackwardResult(a.result, b.result) &&
+    a.invoked === b.invoked
+  );
 }
 
 /** The ordered mutations one memory proposed in a backward attempt. Frozen. */
@@ -642,6 +680,29 @@ export class BackwardFailure {
   }
 }
 
+/** Whether two causes are of one class and equal by value; a retained `Failure` is a fresh copy. */
+function sameCause(a: Failure | MemoryOperationFailure, b: Failure | MemoryOperationFailure): boolean {
+  if (isExactly(a, Failure)) return isExactly(b, Failure) && sameFailure(a, b);
+  return isExactly(b, MemoryOperationFailure) && sameMemoryOperationFailure(a, b);
+}
+
+/** Whether two backward failures have equal fields: scopes, and causes, by value. */
+export function sameBackwardFailure(a: BackwardFailure, b: BackwardFailure): boolean {
+  return (
+    a.stage === b.stage &&
+    a.code === b.code &&
+    a.message === b.message &&
+    sameOptional(a.scope, b.scope, sameExecutionScope) &&
+    a.runId === b.runId &&
+    a.nodeId === b.nodeId &&
+    a.nodeStartedSeq === b.nodeStartedSeq &&
+    a.memory === b.memory &&
+    sameOptional(a.cause, b.cause, sameCause) &&
+    a.causeType === b.causeType &&
+    a.traceback === b.traceback
+  );
+}
+
 /** How a backward attempt ended. */
 export type BackwardStatus = "succeeded" | "failed";
 
@@ -700,4 +761,14 @@ export class BackwardOutcome {
     this.learning = learning;
     Object.freeze(this);
   }
+}
+
+/** Whether two outcomes have the same status and equal feedback, failure and learning result. */
+export function sameBackwardOutcome(a: BackwardOutcome, b: BackwardOutcome): boolean {
+  return (
+    a.status === b.status &&
+    sameOptional(a.feedback, b.feedback, sameBackwardResult) &&
+    sameOptional(a.failure, b.failure, sameBackwardFailure) &&
+    sameOptional(a.learning, b.learning, sameLearningResult)
+  );
 }

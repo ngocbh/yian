@@ -19,8 +19,10 @@
  * `projectStructuralFeedback` selects through `input_output_paths`; record membership reads own
  * keys only (`constructor`, `toString`); an `ExecutionScope` rebuilds each occurrence position, so
  * a forged one is refused; `sameExecutionPosition` and `sameExecutionScope` compare by value, field
- * by field. One row per check, with its class and message, for the transfer half of
- * `BackwardAttribution`, `AttributedBackwardResult`, `MemoryProposal`'s memory key,
+ * by field; `sameOptional`'s three cases (both null, one null, both present); `sameBackwardResult`
+ * is true for separately built equal results and false for each differing channel. One row per
+ * check, with its class and message, for the transfer half of `BackwardAttribution`,
+ * `AttributedBackwardResult`, `MemoryProposal`'s memory key,
  * `BackwardFailure` (stage before code) and `BackwardOutcome`; a `MemoryOperationFailure` cause is
  * kept by identity; a transfer attribution keeps a frozen copy of its parents and a root seed is
  * valid; an unreached occurrence with no material is valid; a backward failure keeps each field it
@@ -69,6 +71,7 @@ import {
   BackwardResult,
   copyBackwardValue,
   projectStructuralFeedback,
+  sameBackwardResult,
   validateBackwardResult,
   validateInputOutputPaths,
 } from "../../src/nodes/base.ts";
@@ -78,6 +81,7 @@ import {
   Parameter,
   sameExecutionPosition,
   sameExecutionScope,
+  sameOptional,
   ValueContract,
 } from "../../src/nodes/contracts.ts";
 import {
@@ -191,6 +195,36 @@ test("execution scopes compare by static path, flow path, positions and boundary
   expect(sameExecutionScope(base, scope({ occurrencePath: [call, item(1), item(1)] }))).toBe(false);
   expect(sameExecutionScope(base, scope({ boundary: "start" }))).toBe(false);
   expect(sameExecutionScope(base, scope({ boundary: null }))).toBe(false);
+});
+
+test("sameOptional is true for two nulls, false for one null, and otherwise asks same", () => {
+  const same = (x: string, y: string) => x.toLowerCase() === y.toLowerCase();
+  expect(sameOptional<string>(null, null, same)).toBe(true);
+  expect(sameOptional("a", null, same)).toBe(false);
+  expect(sameOptional(null, "a", same)).toBe(false);
+  expect(sameOptional("a", "A", same)).toBe(true);
+  expect(sameOptional("a", "b", same)).toBe(false);
+});
+
+test("sameBackwardResult compares the three channels by feedback value", () => {
+  const inputs = () => ({ text: ["Shorter.", { title: "Bad.", body: null }], items: [["One.", null]] });
+  const variables = () => ({ tone: ["Warmer."] });
+  const result = (changed: ConstructorParameters<typeof BackwardResult>[0] = {}) =>
+    new BackwardResult({ inputFeedback: inputs(), selfFeedback: ["Slow."], variableFeedback: variables(), ...changed });
+  const base = result();
+
+  expect(sameBackwardResult(base, result())).toBe(true);
+  expect(sameBackwardResult(new BackwardResult(), new BackwardResult({ inputFeedback: null }))).toBe(true);
+  expect(sameBackwardResult(base, result({ inputFeedback: { ...inputs(), text: ["Shorter."] } }))).toBe(false);
+  expect(sameBackwardResult(base, result({ inputFeedback: { ...inputs(), extra: ["More."] } }))).toBe(false);
+  expect(sameBackwardResult(base, result({ inputFeedback: { items: [["One.", "Two."]] } }))).toBe(false);
+  expect(sameBackwardResult(base, result({ inputFeedback: {} }))).toBe(false);
+  expect(sameBackwardResult(base, result({ selfFeedback: ["Fast."] }))).toBe(false);
+  expect(sameBackwardResult(base, result({ selfFeedback: [] }))).toBe(false);
+  expect(sameBackwardResult(base, result({ selfFeedback: ["Slow.", "Slow."] }))).toBe(false);
+  expect(sameBackwardResult(base, result({ variableFeedback: { tone: ["Cooler."] } }))).toBe(false);
+  expect(sameBackwardResult(base, result({ variableFeedback: { style: ["Warmer."] } }))).toBe(false);
+  expect(sameBackwardResult(base, result({ variableFeedback: {} }))).toBe(false);
 });
 
 test("feedback uses exact nested list lengths", () => {

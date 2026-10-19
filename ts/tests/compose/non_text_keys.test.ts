@@ -15,11 +15,10 @@
 
 import { expect, test } from "bun:test";
 
-import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
-import { parseNodes } from "../../src/compose/parse/nodes.ts";
+import { parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
-import { loadError } from "./declarations.ts";
-import { StandInCode, standIn, withKinds } from "./stand_ins.ts";
+import { loadError, nodesOf } from "./declarations.ts";
+import { StandInCode, standIn } from "./stand_ins.ts";
 
 const SITES = [
   "field",
@@ -151,10 +150,8 @@ test("a quoted key follows the usual name rules", () => {
   parseFile(parseSourceDocument(flowWith("root_node", '"True"'), "k.yaml"));
   parseFile(parseSourceDocument(flowWith("x_block", "'2026-10-13'"), "k.yaml"));
 
-  const document = parseSourceDocument(flowWith("root_node", "'1'"), "k.yaml");
-  const cursor = flowNodesCursor(document, parseFile(document).nodes);
   const call = standIn("call", { allow: ["nodes", "outputs"] });
-  const error = loadError(() => withKinds([StandInCode, call], () => parseNodes(cursor)));
+  const error = loadError(() => nodesOf(flowWith("root_node", "'1'"), [StandInCode, call]));
 
   expect(error.diagnostic.message).not.toContain("names in a flow must be text");
   expect(error.diagnostic.message).toContain("_1");

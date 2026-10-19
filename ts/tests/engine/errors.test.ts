@@ -3,10 +3,10 @@
  * (the rows the parse phase decides), through `parseFile`, `flowNodesCursor` and `parseNodes`
  * with stand-in kinds.
  *
- * The e09, e10 and e42 gallery rows read the conformance cases
+ * All five gallery rows read conformance cases holding Python's `tests/seeds/errors/` flows:
  * `load-core/seed_e09_unknown_top_level_key`, `seed_e10_unknown_node_kind` and
- * `seed_e42_removed_model_kind`, which hold Python's `tests/seeds/errors/` flows; the e11 and e12
- * flows are copied here verbatim. The `env` collision row reads
+ * `seed_e42_removed_model_kind`, and `load-leaves/seed_e11_field_not_allowed` and
+ * `seed_e12_missing_required_field`. The `env` collision row reads
  * `load-core/seed_e33_input_named_like_field`.
  *
  * Later (T3-22): `test_e01_dangling_ref_located`, `test_e02_cycle_located`,
@@ -33,72 +33,39 @@
 import { afterEach, expect, test } from "bun:test";
 
 import { siteKey } from "../../src/compose/nodes/base.ts";
-import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
-import { caseDocument, loadError } from "../compose/declarations.ts";
+import { caseDocument, loadError, nodesOf } from "../compose/declarations.ts";
 import { ALL_KIND_NAMES, StandInCode, standIn, withKinds } from "../compose/stand_ins.ts";
 
 afterEach(() => forget());
 
-const E11 = `# e11 — a flat field illegal for the kind. COMPILE: "field 'prompt' is not allowed" (code).
-id: err-field-not-allowed
-name: err_field_not_allowed
-input:
-  topic: !str
-nodes:
-  calc:
-    kind: code
-    input:
-      topic: \${input.topic}
-    output: str
-    code: tests.seeds.fns:echo_value
-    prompt: "nope"     # ERROR: a CODE node has no prompt
-output: \${calc.output}
-`;
+/** The nine author-written kinds as stand-ins, `code` the one that builds. */
+const KINDS = [StandInCode, ...ALL_KIND_NAMES.filter((k) => k !== "code").map((k) => standIn(k))];
 
-const E12 = `# e12 — a kind-required field omitted. COMPILE: "missing required field 'code'".
-id: err-missing-required-field
-name: err_missing_required_field
-input:
-  topic: !str
-nodes:
-  calc:
-    kind: code         # ERROR: missing \`code:\`
-    input:
-      topic: \${input.topic}
-    output: str
-output: \${calc.output}
-`;
-
-/** The flow of seed case `name` in `load-core`. */
-function seed(name: string): () => SourceDocument {
-  return () => caseDocument(`load-core/${name}`).document;
+/** The flow text of conformance case `id`. */
+function seed(id: string): () => string {
+  return () => caseDocument(id).case_["flow"] as string;
 }
 
 test.each([
-  ["e09", seed("seed_e09_unknown_top_level_key"), "unknown top-level key 'bogus'", 14],
+  ["e09", seed("load-core/seed_e09_unknown_top_level_key"), "unknown top-level key 'bogus'", 14],
   // Per-kind parse anchors these at the precise offending field (not the node body):
-  ["e10", seed("seed_e10_unknown_node_kind"), "unknown kind 'llm'", 8], // the `kind:` value
-  ["e42", seed("seed_e42_removed_model_kind"), "kind 'model' was removed", 8], // the `kind:` line
-  ["e11", () => parseSourceDocument(E11, "<flow>"), "field 'prompt' is not allowed", 13],
-  ["e12", () => parseSourceDocument(E12, "<flow>"), "missing required field 'code'", 8],
-] as const)("compile error gallery: %s", (_, document, substr, line) => {
-  const kinds = [StandInCode, ...ALL_KIND_NAMES.filter((k) => k !== "code").map((k) => standIn(k))];
-  const error = loadError(() => {
-    const flow = document();
-    const cursor = flowNodesCursor(flow, parseFile(flow).nodes);
-    withKinds(kinds, () => parseNodes(cursor));
-  });
+  ["e10", seed("load-core/seed_e10_unknown_node_kind"), "unknown kind 'llm'", 8], // the value
+  ["e42", seed("load-core/seed_e42_removed_model_kind"), "kind 'model' was removed", 8], // the line
+  ["e11", seed("load-leaves/seed_e11_field_not_allowed"), "field 'prompt' is not allowed", 13],
+  ["e12", seed("load-leaves/seed_e12_missing_required_field"), "missing required field 'code'", 8],
+] as const)("compile error gallery: %s", (_, flow, substr, line) => {
+  const error = loadError(() => nodesOf(flow(), KINDS));
 
   expect(error.message).toContain(substr);
   expect(error.diagnostic.frames[0]!.range.startLine).toBe(line);
 });
 
 test("input named like a field does not collide", () => {
-  // e33 has an `env:` field on L32 and an input named `env` on L35. Tuple-tagged keys retain
-  // separate source ranges for those author constructs.
+  // e33 has an `env:` field on L32 and an input named `env` on L35. `siteKey` keys keep
+  // separate source ranges for the two.
   const flow = caseDocument("load-core/seed_e33_input_named_like_field").case_["flow"] as string;
   const document = SourceDocument.parse(flow.replace("${nope.output}", '"lit"'));
   const fr = withKinds([StandInCode], () => parseNodes(document.root.child("nodes")))

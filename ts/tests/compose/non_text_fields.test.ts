@@ -19,8 +19,8 @@
  * `test_null_call_is_empty`, `test_text_call_still_loads`, `test_non_text_case_on_is_a_load_error`,
  * `test_null_case_on_is_absent`, `test_text_case_on_still_loads`, and the while, until,
  * searched-when, on-when, then and else rows of `test_already_located_fields_are_unchanged`).
- * Later (T3-22): the defs, compact, merge and inline-body rows
- * (`test_code_in_def_compact_merge_and_inline_body`, `test_non_text_kind_in_a_def_and_inline_body`)
+ * Later (T3-17): the inline-body rows of `test_code_in_def_compact_merge_and_inline_body` and
+ * `test_non_text_kind_in_a_def_and_inline_body`. Later (T3-22): their defs, compact and merge rows,
  * and the def `asserts:` rows (`test_non_text_def_assert_is_a_load_error`,
  * `test_non_list_def_asserts_is_a_load_error`, `test_null_def_asserts_loads`).
  */
@@ -29,11 +29,9 @@ import { describe, expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { notTextError } from "../../src/compose/nodes/base.ts";
-import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
-import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
-import { parseNodes } from "../../src/compose/parse/nodes.ts";
-import { loadError } from "./declarations.ts";
-import { ALL_KIND_NAMES, StandInCode, standIn, withKinds } from "./stand_ins.ts";
+import { parseFile } from "../../src/compose/parse/file.ts";
+import { loadError, nodesOf } from "./declarations.ts";
+import { ALL_KIND_NAMES, StandInCode, standIn } from "./stand_ins.ts";
 
 test("notTextError names the field", () => {
   expect(notTextError("prompt", 5n)).toBe(
@@ -94,13 +92,6 @@ function fileError(text: string): LoadError {
   return loadError(() => parseFile(text));
 }
 
-/** Parse `text`'s nodes with `kinds` registered, as the loader reads them. */
-function nodesOf(text: string, kinds: readonly DescriptorClass[]) {
-  const document = parseSourceDocument(text, "<flow>");
-  const cursor = flowNodesCursor(document, parseFile(document).nodes);
-  return withKinds(kinds, () => parseNodes(cursor));
-}
-
 /** A flow whose `nodes:` entry `a` has `kind: <v>`. */
 function kindFlow(v: string): string {
   return `id: f
@@ -150,8 +141,17 @@ output: \${a.output}
 
 /** A flow whose top-level `<field>:` is `<v>`. */
 function flowField(field: string, v: string): string {
-  const body = FLOW.split("\n").slice(2).join("\n");
-  const text = `id: f\nname: f\ndescription: d\nversion: '1'\n${body}`;
+  const text = `id: f
+name: f
+description: d
+version: '1'
+nodes:
+  a:
+    kind: code
+    output: str
+    code: "return 'x'"
+output: \${a.output}
+`;
   return text
     .split("\n")
     .map((line) => (line.startsWith(`${field}: `) ? `${field}: ${v}` : line))

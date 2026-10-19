@@ -20,11 +20,10 @@
 import { describe, expect, test } from "bun:test";
 
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
-import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { reprText } from "../../src/diagnostics.ts";
-import { loadError } from "../compose/declarations.ts";
+import { loadError, nodesOf } from "../compose/declarations.ts";
 import { StandInAgent, StandInCode, standIn, withKinds } from "../compose/stand_ins.ts";
 
 /** Parse a bare `nodes:`-body mapping with `kinds` registered. */
@@ -125,9 +124,7 @@ nodes:
     code: "return 1"
 output: \${fetch-data.output}
 `;
-    const document = parseSourceDocument(flow, "<flow>");
-    const cursor = flowNodesCursor(document, parseFile(document).nodes);
-    const error = loadError(() => withKinds([StandInCode], () => parseNodes(cursor)));
+    const error = loadError(() => nodesOf(flow, [StandInCode]));
 
     expect(error.message).toMatch(/node id 'fetch-data' must be an identifier.*try 'fetch_data'/);
     expect(error.message).not.toContain("unknown namespace");

@@ -2,7 +2,8 @@
  * Read authored `input:` or `variables:` declarations straight from YAML text: a port of
  * `tests/compose/_declarations.py`.
  *
- * TS-only: `caseDocument`, which reads a conformance case's flow as a parsed document, and the
+ * TS-only: `nodesOf`, which parses a flow's `nodes:` with stand-in kinds registered;
+ * `caseDocument`, which reads a conformance case's flow as a parsed document; and the
  * harvested-case harness built on it (`loadError`, `cursorAt`, `caseRegistry`, `CaseRow`,
  * `runCase`, `inputsAt`, `variablesAt`), which makes the loader's call on a case and compares
  * the result with the case's `expect`.
@@ -16,12 +17,17 @@ import { expect } from "bun:test";
 
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import { readSourceFlowInputs, readSourceParameters } from "../../src/compose/helpers/types.ts";
+import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
+import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
+import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
+import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { reload } from "../../src/defaults.ts";
 import type { Parameter } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { type Case, prepare, readCase } from "../conformance.ts";
+import { withKinds } from "./stand_ins.ts";
 
 const CASES = fileURLToPath(new URL("../../../conformance/cases/", import.meta.url));
 
@@ -49,6 +55,21 @@ export function parametersFromYaml(
     declarationLabel: requireDefault ? "variable" : "input",
     requireDefault,
   });
+}
+
+/**
+ * Parse flow `text`'s `nodes:` as the loader reads them (`parseSourceDocument`, `parseFile`,
+ * `flowNodesCursor`, `parseNodes`), with `classes` registered as the node kinds.
+ *
+ * @returns The node descriptors by id.
+ */
+export function nodesOf(
+  text: string,
+  classes: readonly DescriptorClass[],
+): Map<string, NodeDescriptor> {
+  const document = parseSourceDocument(text, "<flow>");
+  const cursor = flowNodesCursor(document, parseFile(document).nodes);
+  return withKinds(classes, () => parseNodes(cursor));
 }
 
 /**

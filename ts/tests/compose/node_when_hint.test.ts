@@ -14,10 +14,9 @@
 import { expect, test } from "bun:test";
 
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
-import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
-import { loadError } from "./declarations.ts";
+import { loadError, nodesOf } from "./declarations.ts";
 import { StandInCase, StandInCode, withKinds } from "./stand_ins.ts";
 
 const NON_CASE_HINT = "route to it from a `case` node";
@@ -31,9 +30,7 @@ class HintedCase extends StandInCase {
 
 /** Return the message of the `LoadError` parsing flow `text`'s nodes with `kinds` throws. */
 function nodesMessage(text: string, kinds: readonly DescriptorClass[]): string {
-  const document = parseSourceDocument(text, "<flow>");
-  const cursor = flowNodesCursor(document, parseFile(document).nodes);
-  return loadError(() => withKinds(kinds, () => parseNodes(cursor))).message;
+  return loadError(() => nodesOf(text, kinds)).message;
 }
 
 test("when on a non-case node suggests a case node", () => {

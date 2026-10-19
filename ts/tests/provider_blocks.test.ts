@@ -438,6 +438,17 @@ function error(of: BlockSchema, data: unknown): string {
   throw new Error("expected a ValidationError");
 }
 
+/**
+ * Return the issues `checkBlock` finds in `data`, asserting there are some and that none is a
+ * key problem, so a key misspelled in a schema can't pass a bad-value row.
+ */
+function valueIssues(of: BlockSchema, data: unknown): readonly Issue[] {
+  const { issues } = checkBlock(of, data);
+  expect(issues.length).toBeGreaterThan(0);
+  expect(issues.map((issue) => issue.type)).not.toContain("value_error");
+  return issues;
+}
+
 /** Return `value` nested under the keys of the dotted `path`. */
 function nest(path: string, value: unknown): unknown {
   return path
@@ -448,10 +459,8 @@ function nest(path: string, value: unknown): unknown {
 
 describe("OpenAI Responses block", () => {
   test("dump omits unset fields at every level", () => {
-    const expected = { reasoning: { effort: "low" }, text: {}, top_p: 0.5 };
-    expect(validateBlock(OpenAIResponsesBlock, { reasoning: { effort: "low" }, text: {}, top_p: 0.5 })).toEqual(
-      expected,
-    );
+    const data = { reasoning: { effort: "low" }, text: {}, top_p: 0.5 };
+    expect(validateBlock(OpenAIResponsesBlock, data)).toEqual(data);
     expect(validateBlock(OpenAIResponsesBlock, {})).toEqual({});
   });
 
@@ -534,7 +543,7 @@ describe("OpenAI Responses block", () => {
     { prompt_cache_options: { mode: "auto" } },
   ];
   test.each(badValues.map((data) => [data]))("bad value is rejected: %p", (data) => {
-    expect(() => validateBlock(OpenAIResponsesBlock, data)).toThrow(ValidationError);
+    valueIssues(OpenAIResponsesBlock, data);
   });
 
   const reservedRows: [unknown, string][] = [
@@ -571,7 +580,9 @@ describe("OpenAI Responses block", () => {
   });
 
   test.each([[NaN], [Infinity], [-Infinity]])("non-finite numbers are rejected: %p", (value) => {
-    expect(() => validateBlock(OpenAIResponsesBlock, { top_p: value })).toThrow(ValidationError);
+    expect(valueIssues(OpenAIResponsesBlock, { top_p: value })).toEqual([
+      { loc: ["top_p"], type: "finite_number", msg: "Input should be a finite number" },
+    ]);
   });
 
   test.each([["comparison_response_id"], ["prewarm"]])(
@@ -1134,7 +1145,7 @@ describe("Chat Completions blocks", () => {
   test.each(outside.map(([block, data]) => [block.title, block, data] as const))(
     "%s: value outside the vendor set is rejected: %p",
     (_title, block, data) => {
-      expect(() => validateBlock(block, data)).toThrow(ValidationError);
+      valueIssues(block, data);
     },
   );
 
@@ -1317,7 +1328,7 @@ describe("Ollama chat block", () => {
     { top_logprobs: 1.5 },
   ];
   test.each(bad.map((data) => [data]))("bad value is rejected: %p", (data) => {
-    expect(() => validateBlock(OllamaChatBlock, data)).toThrow(ValidationError);
+    valueIssues(OllamaChatBlock, data);
   });
 
   test("think gives one issue per union member", () => {

@@ -76,7 +76,7 @@ interface Checked {
 type Options<K extends Field["kind"]> = Omit<Extract<Field, { kind: K }>, "kind">;
 
 /** Return `obj` as a frozen null-prototype object, so no inherited key reads as an entry. */
-function table<T>(obj: Record<string, T>): Readonly<Record<string, T>> {
+function table<T>(obj: Readonly<Record<string, T>>): Readonly<Record<string, T>> {
   return Object.freeze(Object.assign(Object.create(null) as Record<string, T>, obj));
 }
 
@@ -89,11 +89,11 @@ const list = (item: Field, options: Omit<Options<"list">, "item"> = {}): Field =
   Object.freeze({ kind: "list", item, ...options });
 const map = (key: Field, value: Field, options: Omit<Options<"map">, "key" | "value"> = {}): Field =>
   Object.freeze({ kind: "map", key, value, ...options });
-const schema = (fields: Record<string, Field>, required: readonly string[] = []): ObjectSchema =>
+const schema = (fields: Readonly<Record<string, Field>>, required: readonly string[] = []): ObjectSchema =>
   Object.freeze({ fields: table(fields), required: Object.freeze([...required]) });
 const object = (of: ObjectSchema): Field => Object.freeze({ kind: "object", schema: of });
 const union = (...members: Field[]): Field => Object.freeze({ kind: "union", members: Object.freeze(members) });
-const tagged = (variants: Record<string, ObjectSchema>): Field =>
+const tagged = (variants: Readonly<Record<string, ObjectSchema>>): Field =>
   Object.freeze({ kind: "tagged", variants: table(variants) });
 const json = (): Field => Object.freeze({ kind: "json" });
 
@@ -405,15 +405,19 @@ function nestedSchema(field: Field, value: Readonly<Record<string, unknown>>): O
   return objects.length === 1 ? objects[0]! : null;
 }
 
+/** What `block` builds a block from; the fields not in `required` are optional. */
+interface BlockOptions {
+  readonly title: string;
+  readonly name: string;
+  readonly api: string;
+  readonly reserved: Readonly<Record<string, string>>;
+  readonly fields: Readonly<Record<string, Field>>;
+  readonly required?: readonly string[];
+}
+
 /** Return a frozen block schema. */
-function block(
-  title: string,
-  name: string,
-  api: string,
-  reserved: Record<string, string>,
-  fields: Record<string, Field>,
-): BlockSchema {
-  return Object.freeze({ ...schema(fields), title, name, api, reserved: table(reserved) });
+function block({ title, name, api, reserved, fields, required = [] }: BlockOptions): BlockSchema {
+  return Object.freeze({ ...schema(fields, required), title, name, api, reserved: table(reserved) });
 }
 
 // --------------------------------------------------------------------------------------- //
@@ -452,13 +456,13 @@ const OpenAIModeration = schema({ model: str(), policy: object(OpenAIModerationP
  */
 const OpenAIPromptCacheOptions = schema({ mode: literal("implicit", "explicit"), ttl: literal("30m") });
 
-const _Metadata = map(str({ maxLength: 64 }), str({ maxLength: 512 }), { maxLength: 16 });
+const OPENAI_METADATA = map(str({ maxLength: 64 }), str({ maxLength: 512 }), { maxLength: 16 });
 
 /** Responses API request fields that every OpenAI transport yian uses accepts. */
-const _OpenAIResponsesShared: Record<string, Field> = {
+const OPENAI_RESPONSES_SHARED: Readonly<Record<string, Field>> = Object.freeze({
   access_programs: object(OpenAIAccessPrograms),
   max_tool_calls: int({ ge: 1n }),
-  metadata: _Metadata,
+  metadata: OPENAI_METADATA,
   moderation: object(OpenAIModeration),
   prompt_cache_key: str(),
   prompt_cache_options: object(OpenAIPromptCacheOptions),
@@ -471,10 +475,10 @@ const _OpenAIResponsesShared: Record<string, Field> = {
   top_p: float({ ge: 0, le: 1 }),
   truncation: literal("auto", "disabled"),
   user: str(),
-};
+});
 
 /** The paths of a Responses API request that yian builds, with what it builds there. */
-const _OPENAI_RESERVED: Record<string, string> = {
+const OPENAI_RESERVED: Readonly<Record<string, string>> = Object.freeze({
   model: "llm_config.model",
   input: "messages",
   instructions: "system prompt",
@@ -491,7 +495,7 @@ const _OPENAI_RESERVED: Record<string, string> = {
   include: "response items",
   background: "request lifecycle",
   context_management: "conversation state",
-};
+});
 
 /**
  * The `openai` block: the request body of the OpenAI Responses API (`POST /v1/responses`).
@@ -499,13 +503,13 @@ const _OPENAI_RESERVED: Record<string, string> = {
  * Mirrors Python yian's `OpenAIResponsesBlock`: every body keyword of the request is a
  * field here or reserved.
  */
-export const OpenAIResponsesBlock: BlockSchema = block(
-  "OpenAIResponsesBlock",
-  "openai",
-  "is not a supported field of the OpenAI Responses API request",
-  _OPENAI_RESERVED,
-  { ..._OpenAIResponsesShared, max_output_tokens: int({ ge: 1n }), temperature: float({ ge: 0, le: 2 }) },
-);
+export const OpenAIResponsesBlock: BlockSchema = block({
+  title: "OpenAIResponsesBlock",
+  name: "openai",
+  api: "is not a supported field of the OpenAI Responses API request",
+  reserved: OPENAI_RESERVED,
+  fields: { ...OPENAI_RESPONSES_SHARED, max_output_tokens: int({ ge: 1n }), temperature: float({ ge: 0, le: 2 }) },
+});
 
 /**
  * The `openai` block when the call goes to the ChatGPT subscription endpoint.
@@ -513,20 +517,20 @@ export const OpenAIResponsesBlock: BlockSchema = block(
  * The endpoint accepts a subset of the Responses API request: everything in
  * `OpenAIResponsesBlock` except `temperature` and `max_output_tokens`, which it refuses.
  */
-export const OpenAISubscriptionBlock: BlockSchema = block(
-  "OpenAISubscriptionBlock",
-  "openai",
-  "is not accepted by the ChatGPT subscription endpoint (a subset of the Responses API)",
-  _OPENAI_RESERVED,
-  _OpenAIResponsesShared,
-);
+export const OpenAISubscriptionBlock: BlockSchema = block({
+  title: "OpenAISubscriptionBlock",
+  name: "openai",
+  api: "is not accepted by the ChatGPT subscription endpoint (a subset of the Responses API)",
+  reserved: OPENAI_RESERVED,
+  fields: OPENAI_RESPONSES_SHARED,
+});
 
 // --------------------------------------------------------------------------------------- //
 // Chat Completions APIs
 // --------------------------------------------------------------------------------------- //
 
 // Chat Completions body fields every vendor below reserves, with what yian builds there.
-const _CHAT_RESERVED: Record<string, string> = {
+const CHAT_RESERVED: Readonly<Record<string, string>> = Object.freeze({
   model: "llm_config.model",
   messages: "messages",
   tools: "tools",
@@ -536,37 +540,37 @@ const _CHAT_RESERVED: Record<string, string> = {
   stream: "streaming",
   stream_options: "streaming",
   n: "one choice per call",
-};
+});
 
-const _Stop4 = union(str(), list(str(), { maxLength: 4 }));
+const STOP4 = union(str(), list(str(), { maxLength: 4 }));
 
 // A `logit_bias` key: a token id as a digit string. A YAML integer key reaches here as
 // text already, since record keys are always text.
-const _TokenId = str({ pattern: "^[0-9]+$" });
+const TOKEN_ID = str({ pattern: "^[0-9]+$" });
 
 /** `temperature` in [0, 2] and `top_p` in [0, 1], as most vendors take them. */
-const CHAT_SAMPLING: Record<string, Field> = {
+const CHAT_SAMPLING: Readonly<Record<string, Field>> = Object.freeze({
   temperature: float({ ge: 0, le: 2 }),
   top_p: float({ ge: 0, le: 1 }),
-};
+});
 
 /** `frequency_penalty` and `presence_penalty`, each in [-2, 2]. */
-const CHAT_PENALTIES: Record<string, Field> = {
+const CHAT_PENALTIES: Readonly<Record<string, Field>> = Object.freeze({
   frequency_penalty: float({ ge: -2, le: 2 }),
   presence_penalty: float({ ge: -2, le: 2 }),
-};
+});
 
 /** `max_tokens` (older) and `max_completion_tokens` output limits, each at least 1. */
-const CHAT_LENGTH: Record<string, Field> = {
+const CHAT_LENGTH: Readonly<Record<string, Field>> = Object.freeze({
   max_completion_tokens: int({ ge: 1n }),
   max_tokens: int({ ge: 1n }),
-};
+});
 
 /** `logprobs` and `top_logprobs` in [0, 20]. */
-const CHAT_LOGPROBS: Record<string, Field> = {
+const CHAT_LOGPROBS: Readonly<Record<string, Field>> = Object.freeze({
   logprobs: bool(),
   top_logprobs: int({ ge: 0n, le: 20n }),
-};
+});
 
 // Blocks spread the shared field records last base first, then their own fields, which is
 // Python's field order; an own field replaces a shared one in place.
@@ -579,17 +583,17 @@ const CHAT_LOGPROBS: Record<string, Field> = {
  * 2026-10-13. `logit_bias` is left out because the reference marks it unsupported, and
  * `reasoning_effort` is any string because the accepted values depend on the model.
  */
-export const XAIChatBlock: BlockSchema = block(
-  "XAIChatBlock",
-  "xai",
-  "is not a supported field of the xAI Chat Completions request",
-  {
-    ..._CHAT_RESERVED,
+export const XAIChatBlock: BlockSchema = block({
+  title: "XAIChatBlock",
+  name: "xai",
+  api: "is not a supported field of the xAI Chat Completions request",
+  reserved: {
+    ...CHAT_RESERVED,
     deferred: "request lifecycle",
     search_parameters: "tools: server-side search",
     web_search_options: "tools: server-side search",
   },
-  {
+  fields: {
     ...CHAT_LOGPROBS,
     ...CHAT_LENGTH,
     ...CHAT_PENALTIES,
@@ -603,7 +607,7 @@ export const XAIChatBlock: BlockSchema = block(
     top_logprobs: int({ ge: 0n, le: 8n }),
     user: str(),
   },
-);
+});
 
 /** The `thinking` object of a Z.AI GLM chat request. */
 const GLMThinking = schema({ type: literal("enabled", "disabled"), clear_thinking: bool() });
@@ -614,12 +618,12 @@ const GLMThinking = schema({ type: literal("enabled", "disabled"), clear_thinkin
  * Mirrors `POST /api/paas/v4/chat/completions`
  * (https://docs.z.ai/api-reference/llm/chat-completion), checked 2026-10-13.
  */
-export const GLMChatBlock: BlockSchema = block(
-  "GLMChatBlock",
-  "glm",
-  "is not a supported field of the Z.AI GLM Chat Completion request",
-  { ..._CHAT_RESERVED, tool_stream: "streaming" },
-  {
+export const GLMChatBlock: BlockSchema = block({
+  title: "GLMChatBlock",
+  name: "glm",
+  api: "is not a supported field of the Z.AI GLM Chat Completion request",
+  reserved: { ...CHAT_RESERVED, tool_stream: "streaming" },
+  fields: {
     do_sample: bool(),
     max_tokens: int({ ge: 1n, le: 131072n }),
     reasoning_effort: literal("max", "xhigh", "high", "medium", "low", "minimal", "none"),
@@ -629,7 +633,7 @@ export const GLMChatBlock: BlockSchema = block(
     top_p: float({ ge: 0.01, le: 1 }),
     user_id: str({ minLength: 6, maxLength: 128 }),
   },
-);
+});
 
 /** The `glm-cn` block: `GLMChatBlock` for the mainland China endpoint. */
 export const GLMCNChatBlock: BlockSchema = Object.freeze({
@@ -648,19 +652,19 @@ const MiniMaxThinking = schema({ type: literal("disabled", "adaptive") });
  * (https://platform.minimax.io/docs/api-reference/text-openai-api), checked 2026-10-13.
  * MiniMax ignores the other OpenAI parameters, so they are not fields here.
  */
-export const MiniMaxChatBlock: BlockSchema = block(
-  "MiniMaxChatBlock",
-  "minimax",
-  "is not a supported field of the MiniMax Chat Completions request",
-  { ..._CHAT_RESERVED, reasoning_split: "keeps reasoning out of the message content" },
-  {
+export const MiniMaxChatBlock: BlockSchema = block({
+  title: "MiniMaxChatBlock",
+  name: "minimax",
+  api: "is not a supported field of the MiniMax Chat Completions request",
+  reserved: { ...CHAT_RESERVED, reasoning_split: "keeps reasoning out of the message content" },
+  fields: {
     ...CHAT_LENGTH,
     ...CHAT_SAMPLING,
     reasoning_effort: literal("low", "medium", "high", "xhigh", "max"),
     service_tier: literal("standard", "priority"),
     thinking: object(MiniMaxThinking),
   },
-);
+});
 
 /** The `minimax-cn` block: `MiniMaxChatBlock` for the mainland China endpoint. */
 export const MiniMaxCNChatBlock: BlockSchema = Object.freeze({
@@ -680,12 +684,12 @@ const DeepSeekThinking = schema({ type: literal("enabled", "disabled") });
  * `frequency_penalty` and `presence_penalty` are left out because the reference says
  * they no longer take effect.
  */
-export const DeepSeekChatBlock: BlockSchema = block(
-  "DeepSeekChatBlock",
-  "deepseek",
-  "is not a supported field of the DeepSeek Chat Completion request",
-  _CHAT_RESERVED,
-  {
+export const DeepSeekChatBlock: BlockSchema = block({
+  title: "DeepSeekChatBlock",
+  name: "deepseek",
+  api: "is not a supported field of the DeepSeek Chat Completion request",
+  reserved: CHAT_RESERVED,
+  fields: {
     ...CHAT_LOGPROBS,
     max_tokens: int({ ge: 1n, le: 393216n }),
     reasoning_effort: literal("none", "low", "high", "max"),
@@ -695,7 +699,7 @@ export const DeepSeekChatBlock: BlockSchema = block(
     top_p: float({ gt: 0, le: 1 }),
     user_id: str({ maxLength: 512, pattern: "^[a-zA-Z0-9_-]+$" }),
   },
-);
+});
 
 /** The `search_options` object of a Qwen chat request. */
 const QwenSearchOptions = schema({
@@ -712,18 +716,18 @@ const QwenSearchOptions = schema({
  * checked 2026-10-13. `thinking` and `clear_thinking` are for the MiniMax and GLM models
  * Model Studio also serves.
  */
-export const QwenChatBlock: BlockSchema = block(
-  "QwenChatBlock",
-  "qwen",
-  "is not a supported field of the Model Studio Chat Completions request",
-  {
-    ..._CHAT_RESERVED,
+export const QwenChatBlock: BlockSchema = block({
+  title: "QwenChatBlock",
+  name: "qwen",
+  api: "is not a supported field of the Model Studio Chat Completions request",
+  reserved: {
+    ...CHAT_RESERVED,
     tool_stream: "streaming",
     modalities: "output format",
     audio: "output format",
     enable_code_interpreter: "tools: server-side code interpreter",
   },
-  {
+  fields: {
     ...CHAT_LENGTH,
     clear_thinking: bool(),
     enable_search: bool(),
@@ -746,7 +750,7 @@ export const QwenChatBlock: BlockSchema = block(
     use_multichannel: bool(),
     vl_high_resolution_images: bool(),
   },
-);
+});
 
 /** The `qwen-cn` block: `QwenChatBlock` for the mainland China endpoint. */
 export const QwenCNChatBlock: BlockSchema = Object.freeze({
@@ -781,12 +785,12 @@ const OpenRouterPromptCacheOptions = schema({ mode: literal("explicit"), ttl: st
  * `session_id` and `trace` are left out because they identify one conversation or
  * trace, so a value fixed in the flow would group every run together.
  */
-export const OpenRouterChatBlock: BlockSchema = block(
-  "OpenRouterChatBlock",
-  "openrouter",
-  "is not a supported field of the OpenRouter Chat Completions request",
-  {
-    ..._CHAT_RESERVED,
+export const OpenRouterChatBlock: BlockSchema = block({
+  title: "OpenRouterChatBlock",
+  name: "openrouter",
+  api: "is not a supported field of the OpenRouter Chat Completions request",
+  reserved: {
+    ...CHAT_RESERVED,
     plugins: "tools",
     web_search_options: "tools: server-side search",
     stop_server_tools_when: "tools",
@@ -796,14 +800,14 @@ export const OpenRouterChatBlock: BlockSchema = block(
     image_config: "output format",
     debug: "streaming",
   },
-  {
+  fields: {
     ...CHAT_LOGPROBS,
     ...CHAT_LENGTH,
     ...CHAT_PENALTIES,
     ...CHAT_SAMPLING,
     cache_control: object(OpenRouterCacheControl),
-    logit_bias: map(_TokenId, float({ ge: -100, le: 100 })),
-    metadata: _Metadata,
+    logit_bias: map(TOKEN_ID, float({ ge: -100, le: 100 })),
+    metadata: OPENAI_METADATA,
     min_p: float({ ge: 0, le: 1 }),
     models: list(str()),
     prompt_cache_key: str(),
@@ -814,13 +818,13 @@ export const OpenRouterChatBlock: BlockSchema = block(
     repetition_penalty: float({ ge: 0, le: 2 }),
     seed: int(),
     service_tier: literal("auto", "default", "fast", "flex", "priority", "scale", "ultrafast"),
-    stop: _Stop4,
+    stop: STOP4,
     top_a: float({ ge: 0, le: 1 }),
     top_k: int({ ge: 0n }),
     user: str(),
     verbosity: literal("low", "medium", "high", "xhigh", "max"),
   },
-);
+});
 
 /**
  * The `vllm` block: the request body of a vLLM server's Chat Completions API.
@@ -830,12 +834,12 @@ export const OpenRouterChatBlock: BlockSchema = block(
  * `SamplingParams` checks, checked 2026-10-13. `top_logprobs` is capped at 20, the
  * server's default `max_logprobs`.
  */
-export const VLLMChatBlock: BlockSchema = block(
-  "VLLMChatBlock",
-  "vllm",
-  "is not a supported field of the vLLM Chat Completions request",
-  {
-    ..._CHAT_RESERVED,
+export const VLLMChatBlock: BlockSchema = block({
+  title: "VLLMChatBlock",
+  name: "vllm",
+  api: "is not a supported field of the vLLM Chat Completions request",
+  reserved: {
+    ...CHAT_RESERVED,
     guided_json: "structured output",
     guided_regex: "structured output",
     guided_choice: "structured output",
@@ -848,7 +852,7 @@ export const VLLMChatBlock: BlockSchema = block(
     continue_final_message: "messages",
     echo: "messages",
   },
-  {
+  fields: {
     ...CHAT_LOGPROBS,
     ...CHAT_LENGTH,
     ...CHAT_PENALTIES,
@@ -856,7 +860,7 @@ export const VLLMChatBlock: BlockSchema = block(
     ignore_eos: bool(),
     include_stop_str_in_output: bool(),
     length_penalty: float(),
-    logit_bias: map(_TokenId, float()),
+    logit_bias: map(TOKEN_ID, float()),
     min_p: float({ ge: 0, le: 1 }),
     min_tokens: int({ ge: 0n }),
     priority: int(),
@@ -875,7 +879,7 @@ export const VLLMChatBlock: BlockSchema = block(
     top_p: float({ gt: 0, le: 1 }),
     user: str(),
   },
-);
+});
 
 /** The `user_security_context` object of an Azure OpenAI chat request. */
 const AzureUserSecurityContext = schema({
@@ -894,37 +898,37 @@ const AzureUserSecurityContext = schema({
  * `service_tier`, `prompt_cache_options` and `moderation` are left out: the `openai`
  * SDK sends them, but the Azure reference does not list them.
  */
-export const AzureChatBlock: BlockSchema = block(
-  "AzureChatBlock",
-  "azure",
-  "is not a supported field of the Azure OpenAI Chat Completions request",
-  {
-    ..._CHAT_RESERVED,
+export const AzureChatBlock: BlockSchema = block({
+  title: "AzureChatBlock",
+  name: "azure",
+  api: "is not a supported field of the Azure OpenAI Chat Completions request",
+  reserved: {
+    ...CHAT_RESERVED,
     data_sources: "tools: On Your Data retrieval",
     functions: "tools",
     function_call: "tools",
     modalities: "output format",
     audio: "output format",
   },
-  {
+  fields: {
     ...CHAT_LOGPROBS,
     ...CHAT_LENGTH,
     ...CHAT_PENALTIES,
     ...CHAT_SAMPLING,
-    logit_bias: map(_TokenId, int({ ge: -100n, le: 100n })),
-    metadata: _Metadata,
+    logit_bias: map(TOKEN_ID, int({ ge: -100n, le: 100n })),
+    metadata: OPENAI_METADATA,
     prompt_cache_key: str(),
     prompt_cache_retention: literal("in_memory", "24h"),
     reasoning_effort: literal("none", "minimal", "low", "medium", "high", "xhigh"),
     safety_identifier: str({ maxLength: 64 }),
     seed: int(),
-    stop: _Stop4,
+    stop: STOP4,
     store: bool(),
     user: str(),
     user_security_context: object(AzureUserSecurityContext),
     verbosity: literal("low", "medium", "high"),
   },
-);
+});
 
 // --------------------------------------------------------------------------------------- //
 // Anthropic Messages API
@@ -939,11 +943,11 @@ const AnthropicMetadata = schema({ user_id: str({ maxLength: 512 }) });
 /** The `output_config` object of an Anthropic Messages request (`format` is reserved). */
 const AnthropicOutputConfig = schema({ effort: literal("low", "medium", "high", "xhigh", "max") });
 
-const _ThinkingDisplay = literal("summarized", "omitted");
+const THINKING_DISPLAY = literal("summarized", "omitted");
 
 /** Manual extended thinking with a token budget of at least 1024. */
 const AnthropicThinkingEnabled = schema(
-  { type: literal("enabled"), budget_tokens: int({ ge: 1024n }), display: _ThinkingDisplay },
+  { type: literal("enabled"), budget_tokens: int({ ge: 1024n }), display: THINKING_DISPLAY },
   ["type", "budget_tokens"],
 );
 
@@ -954,7 +958,7 @@ const AnthropicThinkingDisabled = schema({ type: literal("disabled") }, ["type"]
 const AnthropicThinkingBetweenTools = schema({ type: literal("between_tools") }, ["type"]);
 
 /** Thinking whose amount the model decides. */
-const AnthropicThinkingAdaptive = schema({ type: literal("adaptive"), display: _ThinkingDisplay }, ["type"]);
+const AnthropicThinkingAdaptive = schema({ type: literal("adaptive"), display: THINKING_DISPLAY }, ["type"]);
 
 /**
  * The `anthropic` block: the request body of the Anthropic Messages API (`POST /v1/messages`).
@@ -963,11 +967,11 @@ const AnthropicThinkingAdaptive = schema({ type: literal("adaptive"), display: _
  * fields; a model that refuses them answers with a provider error. `max_tokens` starts at
  * 1 because a zero-token call only warms the cache and yian reads the reply.
  */
-export const AnthropicMessagesBlock: BlockSchema = block(
-  "AnthropicMessagesBlock",
-  "anthropic",
-  "is not a supported field of the Anthropic Messages API request",
-  {
+export const AnthropicMessagesBlock: BlockSchema = block({
+  title: "AnthropicMessagesBlock",
+  name: "anthropic",
+  api: "is not a supported field of the Anthropic Messages API request",
+  reserved: {
     model: "llm_config.model",
     messages: "messages",
     system: "system prompt",
@@ -979,7 +983,7 @@ export const AnthropicMessagesBlock: BlockSchema = block(
     mcp_servers: "tools",
     diagnostics: "conversation state",
   },
-  {
+  fields: {
     cache_control: object(AnthropicCacheControl),
     inference_geo: str(),
     max_tokens: int({ ge: 1n }),
@@ -997,7 +1001,7 @@ export const AnthropicMessagesBlock: BlockSchema = block(
     top_k: int({ ge: 0n }),
     top_p: float({ ge: 0, le: 1 }),
   },
-);
+});
 
 // --------------------------------------------------------------------------------------- //
 // Gemini generateContent
@@ -1051,11 +1055,11 @@ const GeminiSafetySetting = schema(
  * image, audio, translation) are left out because yian reads a text reply, and `labels`
  * because the Gemini Developer API refuses it.
  */
-export const GeminiGenerateContentBlock: BlockSchema = block(
-  "GeminiGenerateContentBlock",
-  "google",
-  "is not a supported field of the Gemini generateContent request",
-  {
+export const GeminiGenerateContentBlock: BlockSchema = block({
+  title: "GeminiGenerateContentBlock",
+  name: "google",
+  api: "is not a supported field of the Gemini generateContent request",
+  reserved: {
     model: "llm_config.model",
     contents: "messages",
     systemInstruction: "system prompt",
@@ -1070,13 +1074,13 @@ export const GeminiGenerateContentBlock: BlockSchema = block(
     "generationConfig.responseFormat": "structured output",
     "generationConfig.candidateCount": "yian reads one reply",
   },
-  {
+  fields: {
     generationConfig: object(GeminiGenerationConfig),
     safetySettings: list(object(GeminiSafetySetting)),
     serviceTier: literal("standard", "flex", "priority"),
     store: bool(),
   },
-);
+});
 
 // --------------------------------------------------------------------------------------- //
 // Ollama /api/chat
@@ -1133,18 +1137,18 @@ const OllamaOptions = schema({
  * checked 2026-10-13, limited to what `ollama.Client.chat` sends (`ollama` 0.6.3).
  * `think` takes the levels the reference lists; the client passes any string through.
  */
-export const OllamaChatBlock: BlockSchema = block(
-  "OllamaChatBlock",
-  "ollama",
-  "is not a supported field of the Ollama /api/chat request",
-  {
+export const OllamaChatBlock: BlockSchema = block({
+  title: "OllamaChatBlock",
+  name: "ollama",
+  api: "is not a supported field of the Ollama /api/chat request",
+  reserved: {
     model: "llm_config.model",
     messages: "messages",
     tools: "tools",
     stream: "streaming",
     format: "structured output",
   },
-  {
+  fields: {
     // A duration string such as "5m", or a number of seconds; negative keeps the model loaded.
     keep_alive: union(float(), str()),
     logprobs: bool(),
@@ -1152,7 +1156,7 @@ export const OllamaChatBlock: BlockSchema = block(
     think: union(bool(), literal("low", "medium", "high", "max")),
     top_logprobs: int(),
   },
-);
+});
 
 // --------------------------------------------------------------------------------------- //
 // Registry

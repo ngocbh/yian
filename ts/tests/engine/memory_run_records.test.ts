@@ -21,27 +21,61 @@
  *   memory nesting limit (bound inputs are values, bounded where they're made).
  * - Sections and interactions are arrays, not tuples; a missing value is `null`, not `None`.
  *
+ * Ported, the run-record constructors: `test_run_started_distinguishes_disabled_and_enabled_empty_memory`,
+ * `test_run_started_requires_a_canonical_table_and_matching_snapshots` and the constructor rows of
+ * `test_run_started_records_a_key_table_and_stacks` (each without its wire round trip),
+ * `test_records_reject_forged_nested_carrier_subclasses`.
+ *
+ * TS-only (run records): the memory table, stacks and snapshots are held as frozen arrays whose
+ * items are the given carriers, unchanged by the caller's later edits; a table, stack or snapshot
+ * item of another class (a subclass too) is refused with its message; an unknown stack key is
+ * named in the message (`["missing"]`).
+ *
+ * Changed (run records):
+ * - The memory table, stacks and snapshots are arrays, so the rejected container is a `Set`
+ *   (Python passes a list) and the message says "arrays" where Python says "tuples".
+ * - `test_records_reject_forged_nested_carrier_subclasses` constructs subclass instances (TS has
+ *   no forged dataclasses); the evidence message says `…or null` where Python says `…or None`.
+ *
  * Covered elsewhere: the scope rows of `test_memory_scope_requires_unique_keys_and_nested_occurrences`
  * by `memory_contracts.test.ts`; `test_memory_spec_config_rejects_private_keys` by
  * `memory_decl_shape.test.ts`.
  *
- * Later: the run-record tests of the module, with the runtime log.
+ * Not ported: `test_nested_frozen_carriers_are_revalidated_before_recording`,
+ * `test_codec_revalidates_carriers_mutated_after_record_construction` and
+ * `test_codec_replays_outer_record_invariants_after_forging` (they forge frozen carriers with
+ * `object.__setattr__`, which a frozen TS carrier refuses).
+ *
+ * Later: the wire tests of the module (the round trips of the run-start tests above, the commit
+ * and outcome records, schema and payload rejections), with the record codec.
  */
 
 import { expect, test } from "bun:test";
 
 import { current } from "../../src/defaults.ts";
 import {
+  DeclSite,
   EvaluationEvidence,
   type JsonObject,
+  MemoryMutation,
   MemoryScope,
   MemorySection,
   MemorySnapshotEnvelope,
+  MemorySpec,
+  MemoryStack,
   ModelTextInteraction,
   ModelValueInteraction,
   ToolCallInteraction,
   ToolResultInteraction,
 } from "../../src/memory/contracts.ts";
+import {
+  encodePool,
+  MemoryCommitRequestedRecord,
+  NodeSucceededRecord,
+  type RunStartedFields,
+  RunStartedRecord,
+} from "../../src/runtime/log.ts";
+import { VariablePool } from "../../src/typesys/index.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError;
 
@@ -352,4 +386,181 @@ test("bound inputs deeper than the value nesting limit are kept", () => {
   let deep: JsonObject = {};
   for (let i = 0; i <= current().maxValueNesting; i++) deep = { d: deep };
   expect(new EvaluationEvidence(null, deep, null, null).boundInputs).toEqual(deep);
+});
+
+const ROOT = new DeclSite([], ["root"], null);
+const AGENT = new DeclSite([], ["root"], "agent");
+
+/** Return one key-table entry; an AGENT owner makes it conversation-eligible. */
+function spec(key = "reflective", config: JsonObject = {}, owner: DeclSite = AGENT): MemorySpec {
+  return new MemorySpec(key, key, config, [owner], owner.node !== null);
+}
+
+/** Return a run-start record with an empty pool and the given memory fields. */
+function started(
+  fields: Pick<Partial<RunStartedFields>, "memorySnapshots" | "learnable" | "memories" | "memoryStacks"> = {},
+): RunStartedRecord {
+  return new RunStartedRecord({
+    flowFingerprint: "a".repeat(64),
+    initialPool: encodePool(new VariablePool("start")),
+    startWiringOverride: {},
+    effectiveLlmByStaticPath: {},
+    numWorkers: 0,
+    ...fields,
+  });
+}
+
+const ALL_OR_NONE = "memories, memory_stacks and memory_snapshots must all be recorded or all be absent";
+
+test("run started distinguishes disabled and enabled empty memory", () => {
+  const disabled = started();
+  const enabled = started({ memories: [], memoryStacks: [], memorySnapshots: [] });
+  const learning = started({ memories: [], memoryStacks: [], memorySnapshots: [], learnable: true });
+
+  expect(disabled.memories).toBeNull();
+  expect(disabled.memoryStacks).toBeNull();
+  expect(disabled.memorySnapshots).toBeNull();
+  expect(enabled.memories).toEqual([]);
+  expect(enabled.memoryStacks).toEqual([]);
+  expect(enabled.memorySnapshots).toEqual([]);
+  expect(learning.learnable).toBe(true);
+  expect("memoryLayout" in enabled).toBe(false);
+
+  for (const partial of [
+    { memories: [], memoryStacks: [], memorySnapshots: null },
+    { memories: [], memoryStacks: null, memorySnapshots: [] },
+    { memories: null, memoryStacks: [], memorySnapshots: [] },
+  ]) {
+    expectError(() => started(partial), RangeError, ALL_OR_NONE);
+  }
+  expectError(
+    () => started({ memories: new Set() as never, memoryStacks: [], memorySnapshots: [] }),
+    TypeError,
+    "memories, memory_stacks and memory_snapshots must be arrays when recorded",
+  );
+  expect(started({ learnable: true }).learnable).toBe(true);
+  expectError(
+    () => started({ memories: [], memoryStacks: [], memorySnapshots: [], learnable: 1 as never }),
+    TypeError,
+    "learnable must be a boolean",
+  );
+});
+
+test("run started requires a canonical table and matching snapshots", () => {
+  const memories = [spec("profile", { mode: "flow" }, ROOT), spec("reflective", { mode: "agent" })];
+  const snapshots = [
+    new MemorySnapshotEnvelope("profile", { state: 1n }),
+    new MemorySnapshotEnvelope("reflective", { state: 2n }),
+  ];
+  const stacks = [new MemoryStack(["agent"], ["profile", "reflective"]), new MemoryStack(["plain"], ["profile"])];
+  const record = started({ memories, memoryStacks: stacks, memorySnapshots: snapshots });
+
+  expect(record.memories).toEqual(memories);
+  expect(record.memoryStacks).toEqual(stacks);
+  expect(record.memorySnapshots).toEqual(snapshots);
+
+  expectError(
+    () => started({ memories: [...memories].reverse(), memoryStacks: stacks, memorySnapshots: snapshots }),
+    RangeError,
+    "memories keys must be sorted and unique",
+  );
+  expectError(
+    () => started({ memories: [memories[0]!, memories[0]!], memoryStacks: [], memorySnapshots: snapshots.slice(0, 1) }),
+    RangeError,
+    "memories keys must be sorted and unique",
+  );
+  expectError(
+    () => started({ memories, memoryStacks: stacks, memorySnapshots: [...snapshots].reverse() }),
+    RangeError,
+    "memory_snapshots memory keys must be sorted and unique",
+  );
+  expectError(
+    () => started({ memories, memoryStacks: stacks, memorySnapshots: snapshots.slice(0, 1) }),
+    RangeError,
+    "memory_snapshots memory keys must equal memories keys",
+  );
+  expectError(
+    () => started({ memories, memoryStacks: [...stacks].reverse(), memorySnapshots: snapshots }),
+    RangeError,
+    "memory_stacks locators must be sorted and unique",
+  );
+  expectError(
+    () => started({ memories, memoryStacks: [new MemoryStack(["agent"], ["missing"])], memorySnapshots: snapshots }),
+    RangeError,
+    'memory_stacks name unknown memory keys: ["missing"]',
+  );
+});
+
+// The constructor rows of test_run_started_records_a_key_table_and_stacks.
+test("run started records a key table and stacks", () => {
+  const memories = [spec("profile", { mode: "flow" }, ROOT), spec("reflective", { mode: "agent" })];
+  const stacks = [new MemoryStack(["agent"], ["profile", "reflective"])];
+  const snapshots = [
+    new MemorySnapshotEnvelope("profile", { state: 1n }),
+    new MemorySnapshotEnvelope("reflective", { state: 2n }),
+  ];
+  const record = started({ memories, memoryStacks: stacks, memorySnapshots: snapshots });
+  memories.pop();
+  stacks.pop();
+  snapshots.pop();
+
+  expect(record.memories!.map((item) => [item.key, item.config, item.conversationEligible])).toEqual([
+    ["profile", { mode: "flow" }, false],
+    ["reflective", { mode: "agent" }, true],
+  ]);
+  expect(record.memories![0]).toBe(memories[0]!);
+  expect(record.memoryStacks!.map((stack) => [stack.locator, stack.memories])).toEqual([
+    [["agent"], ["profile", "reflective"]],
+  ]);
+  expect(record.memorySnapshots!.map((snapshot) => snapshot.memory)).toEqual(["profile", "reflective"]);
+  expect(Object.isFrozen(record.memories)).toBe(true);
+  expect(Object.isFrozen(record.memoryStacks)).toBe(true);
+  expect(Object.isFrozen(record.memorySnapshots)).toBe(true);
+});
+
+class SubSpec extends MemorySpec {}
+class SubStack extends MemoryStack {}
+class SubSnapshot extends MemorySnapshotEnvelope {}
+
+test.each<[string, Pick<RunStartedFields, "memories" | "memoryStacks" | "memorySnapshots">, string]>([
+  [
+    "a table entry that isn't a MemorySpec",
+    { memories: [{ key: "notes" } as never], memoryStacks: [], memorySnapshots: [] },
+    "memories items must be MemorySpec values",
+  ],
+  [
+    "a MemorySpec subclass",
+    { memories: [new SubSpec("notes", "notes", {}, [ROOT], false)], memoryStacks: [], memorySnapshots: [] },
+    "memories items must be MemorySpec values",
+  ],
+  [
+    "a MemorySnapshotEnvelope subclass",
+    { memories: [], memoryStacks: [], memorySnapshots: [new SubSnapshot("notes", {})] },
+    "memory_snapshots items must be MemorySnapshotEnvelope values",
+  ],
+  [
+    "a MemoryStack subclass",
+    { memories: [], memoryStacks: [new SubStack(["agent"], [])], memorySnapshots: [] },
+    "memory_stacks items must be MemoryStack values",
+  ],
+])("run started rejects %s", (_label, fields, message) => {
+  expectError(() => started(fields), TypeError, message);
+});
+
+class ForgedEvidence extends EvaluationEvidence {}
+class ForgedMutation extends MemoryMutation {}
+
+test("records reject forged nested carrier subclasses", () => {
+  const forgedEvidence = new ForgedEvidence(SCOPE, { question: ["hello"] }, "base", "answer the question");
+
+  expectError(
+    () => new NodeSucceededRecord("agent", "agent", { kind: "str", value: "done" }, { evidence: forgedEvidence }),
+    TypeError,
+    "evidence must be an EvaluationEvidence or null",
+  );
+  expectError(
+    () => new MemoryCommitRequestedRecord("reflective", "commit", [new ForgedMutation("m1", {})], 1),
+    TypeError,
+    "mutations items must be MemoryMutation values",
+  );
 });

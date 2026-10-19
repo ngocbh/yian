@@ -12,9 +12,18 @@
  */
 
 import { compareCodeUnits, Failure, reprText } from "../diagnostics.ts";
-import { EvaluationEvidence } from "../memory/contracts.ts";
-import { retainFailure } from "../nodes/base.ts";
-import { isExactly } from "../nodes/contracts.ts";
+import { type FeedbackValue, validateFeedback } from "../expr/lineage.ts";
+import {
+  EvaluationEvidence,
+  type MemoryMutation,
+  MemoryOperationFailure,
+  MemorySnapshotEnvelope,
+  MemorySpec,
+  MemoryStack,
+  validateMutations,
+} from "../memory/contracts.ts";
+import { BackwardResult, copyBackwardValue, retainFailure } from "../nodes/base.ts";
+import { comparePaths, isExactly } from "../nodes/contracts.ts";
 import { type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import {
   buildValue,
@@ -26,7 +35,7 @@ import {
   VariablePool,
 } from "../typesys/index.ts";
 import { isList, isRecord, jsonPart, valueRepr, writeAsText } from "../typesys/values.ts";
-import { ForwardCapture } from "./contracts.ts";
+import { AttributedBackwardResult, BackwardOutcome, ForwardCapture, MemoryProposal } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
 export const SCHEMA_VERSION = 10;
@@ -137,6 +146,161 @@ export interface OutcomeCarriers {
   evidence?: EvaluationEvidence | null;
   /** The binding capture accepted with the outcome; defaults to `null`. */
   forwardCapture?: ForwardCapture | null;
+}
+
+/** The fields of a `RunStartedRecord`. */
+export interface RunStartedFields {
+  /** The authored flow's SHA-256 identity, 64 lowercase hex digits. */
+  flowFingerprint: string;
+  /** The full initial variable pool's canonical wire object (see `encodePool`). */
+  initialPool: PoolWire;
+  /** The per-run wiring override of the synthesized START node. */
+  startWiringOverride: Readonly<Record<string, unknown>>;
+  /** The complete resolved agent configuration, keyed by stable static node path. */
+  effectiveLlmByStaticPath: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  /** The initial dispatcher worker count; zero selects serial execution. */
+  numWorkers: number;
+  /** Recorded snapshots, one per memory key in key order; `null` (the default) when memory is disabled. */
+  memorySnapshots?: readonly MemorySnapshotEnvelope[] | null;
+  /** Whether the run retains learning evidence; defaults to `false`. */
+  learnable?: boolean;
+  /** The memory key table, sorted by key; `null` (the default) when memory is disabled. */
+  memories?: readonly MemorySpec[] | null;
+  /** Each target's ordered key stack, sorted by locator; `null` (the default) when memory is disabled. */
+  memoryStacks?: readonly MemoryStack[] | null;
+  /** The `yian.defaults` values that differ from the built-in ones, by entry name; defaults to `{}`. */
+  defaults?: Readonly<Record<string, bigint>>;
+  /**
+   * The agents whose configuration resolves only when they run, `{selection, agents}`: `agents`
+   * maps each one's static path to its base layer, and `selection` holds the connection selection
+   * they bind from. `null` (the default) when the run has no such agent.
+   */
+  callTimeLlm?: Readonly<Record<string, unknown>> | null;
+}
+
+/** Initialize a run from its complete canonical inputs and resolved configuration. Frozen. */
+export class RunStartedRecord {
+  /** The authored flow's SHA-256 identity, 64 lowercase hex digits. */
+  readonly flowFingerprint: string;
+  /** The full initial variable pool's deep-frozen canonical wire object. */
+  readonly initialPool: Readonly<PoolWire>;
+  /** The deep-frozen canonical START wiring override; a `FileRef` is held as its mapping. */
+  readonly startWiringOverride: Readonly<JsonObject>;
+  /** The deep-frozen canonical agent configuration by static path; a `FileRef` is held as its mapping. */
+  readonly effectiveLlmByStaticPath: Readonly<Record<string, Readonly<JsonObject>>>;
+  /** The initial dispatcher worker count; zero selects serial execution. */
+  readonly numWorkers: number;
+  /** Recorded snapshots, one per memory key in key order, or `null` when memory is disabled. */
+  readonly memorySnapshots: readonly MemorySnapshotEnvelope[] | null;
+  /** Whether the run retains learning evidence. */
+  readonly learnable: boolean;
+  /** The memory key table, sorted by key, or `null` when memory is disabled. */
+  readonly memories: readonly MemorySpec[] | null;
+  /** Each scoped target's ordered key stack, sorted by locator, or `null` when memory is disabled. */
+  readonly memoryStacks: readonly MemoryStack[] | null;
+  /** The non-built-in `yian.defaults` values by entry name; empty means all built-in values. */
+  readonly defaults: Readonly<Record<string, bigint>>;
+  /** The deep-frozen canonical call-time agents `{selection, agents}`, or `null` when there are none. */
+  readonly callTimeLlm: Readonly<JsonObject> | null;
+
+  /**
+   * The memory table, stacks and snapshots are all recorded or all `null`; recorded, they are
+   * copied into frozen arrays that hold the given carriers. JSON fields keep `±Infinity` and read
+   * `-0` back as `0`.
+   *
+   * @throws TypeError when the fingerprint isn't a string, `numWorkers` isn't a safe integer,
+   *   `learnable` isn't a boolean, the memory fields aren't arrays of exactly their carrier
+   *   class, `defaults` isn't a plain object of `bigint`s, or `callTimeLlm` or one of its parts
+   *   isn't a plain object.
+   * @throws RangeError when the fingerprint isn't 64 lowercase hex digits, `numWorkers` is
+   *   negative, the initial pool isn't a pool wire object (see `decodePool`), the memory fields
+   *   are only partly recorded, aren't sorted and unique, disagree on their keys or a stack names
+   *   an unknown key, a defaults name is empty, or `callTimeLlm` has missing or extra fields, no
+   *   agent, an empty agent path or a non-JSON value.
+   * @throws TypeCheckError at the bad part's path when the wiring override or the agent
+   *   configuration holds NaN or another non-JSON value (see `jsonPart`).
+   */
+  constructor(fields: RunStartedFields) {
+    const {
+      memorySnapshots = null,
+      learnable = false,
+      memories = null,
+      memoryStacks = null,
+      defaults = {},
+      callTimeLlm = null,
+    } = fields;
+    this.flowFingerprint = requireSha256(fields.flowFingerprint, "flow_fingerprint");
+    const pool = encodePool(decodePool(fields.initialPool));
+    this.initialPool = freezeParsed(pool as unknown as JsonObject) as unknown as PoolWire;
+    this.startWiringOverride = freezeParsed(
+      canonicalCopy(jsonPart(fields.startWiringOverride, [], "mapping")) as JsonObject,
+    );
+    this.effectiveLlmByStaticPath = freezeParsed(
+      canonicalCopy(jsonPart(fields.effectiveLlmByStaticPath, [], "mapping")) as JsonObject,
+    ) as Readonly<Record<string, Readonly<JsonObject>>>;
+    this.numWorkers = validatedCount(fields.numWorkers, "num_workers");
+    [this.memories, this.memoryStacks, this.memorySnapshots] = validatedRunMemoryConfiguration(
+      memories,
+      memoryStacks,
+      memorySnapshots,
+      learnable,
+    );
+    this.learnable = learnable;
+    this.defaults = validatedDefaults(defaults);
+    this.callTimeLlm = callTimeLlm === null ? null : validatedCallTimeLlm(callTimeLlm);
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Return a deep-frozen canonical copy of a `RunStarted.callTimeLlm` value after checking its
+ * shape: `{selection: {...}, agents: {path: {...}, ...}}` with at least one agent. The contents
+ * are checked when the run applies them.
+ *
+ * @throws TypeError when the value or one of its parts isn't a plain object.
+ * @throws RangeError when a field is missing or extra, `agents` is empty or has an empty path,
+ *   or a value isn't JSON (NaN, a `FileRef`, ...).
+ */
+function validatedCallTimeLlm(value: unknown): Readonly<JsonObject> {
+  if (!isRecord(value)) throw new TypeError("RunStarted call_time_llm must be a dict");
+  const keys = Object.keys(value);
+  if (keys.length !== 2 || !Object.hasOwn(value, "selection") || !Object.hasOwn(value, "agents")) {
+    throw new RangeError("RunStarted call_time_llm must have exactly selection and agents");
+  }
+  if (!isRecord(value["selection"])) throw new TypeError("RunStarted call_time_llm selection must be a dict");
+  const agents = value["agents"];
+  if (!isRecord(agents)) throw new TypeError("RunStarted call_time_llm agents must be a dict");
+  if (Object.keys(agents).length === 0) throw new RangeError("RunStarted call_time_llm agents must not be empty");
+  for (const [path, base] of Object.entries(agents)) {
+    if (!path) throw new RangeError("RunStarted call_time_llm agent paths must be non-empty strings");
+    if (!isRecord(base)) throw new TypeError(`RunStarted call_time_llm base for ${reprText(path)} must be a dict`);
+  }
+  let copy: JsonObject;
+  try {
+    copy = canonicalCopy(jsonPart(value, [], "refuse")) as JsonObject;
+  } catch (error) {
+    throw new RangeError(`RunStarted call_time_llm: ${(error as Error).message}`, { cause: error });
+  }
+  return freezeParsed(copy);
+}
+
+/**
+ * Return a frozen copy of recorded defaults: non-empty entry names mapped to `bigint`s.
+ *
+ * @throws TypeError when `recorded` isn't a plain object or a value isn't a `bigint`.
+ * @throws RangeError when a name is empty.
+ */
+function validatedDefaults(recorded: unknown): Readonly<Record<string, bigint>> {
+  if (!isRecord(recorded)) throw new TypeError("RunStarted defaults must be a mapping");
+  const entries = Object.entries(recorded);
+  for (const [name, value] of entries) {
+    if (!name) throw new RangeError("RunStarted defaults names must be non-empty strings");
+    if (typeof value !== "bigint") {
+      throw new TypeError(`RunStarted defaults value for ${reprText(name)} must be an int`);
+    }
+  }
+  // `Object.fromEntries` defines own data properties, so a `__proto__` name stays a key.
+  return Object.freeze(Object.fromEntries(entries) as Record<string, bigint>);
 }
 
 /** Start a recovery segment with ordered unfinished work and a worker count. Frozen. */
@@ -315,7 +479,7 @@ export class NodeExpandedRecord {
    * @throws TypeError when an id or the digest isn't a string, or a carrier is of another class.
    * @throws RangeError when the spawner id is empty, the prune ids aren't a sorted array of
    *   unique non-empty strings, or the digest isn't 64 lowercase hex digits.
-   * @throws TypeCheckError when the seed isn't a JSON value (see `canonicalSeed`).
+   * @throws TypeCheckError when the seed isn't a JSON value (see `jsonPart`).
    */
   constructor(
     spawnerId: string,
@@ -360,8 +524,206 @@ export class NodeFailedRecord {
   }
 }
 
+/**
+ * Return `attemptId` when it is a positive safe integer, an accepted backward attempt's identity.
+ *
+ * @throws TypeError when it isn't a safe integer `number`.
+ * @throws RangeError when it isn't positive.
+ */
+function validatedAttemptId(attemptId: unknown): number {
+  if (typeof attemptId !== "number" || !Number.isSafeInteger(attemptId)) {
+    throw new TypeError("attempt_id must be an integer");
+  }
+  if (attemptId <= 0) throw new RangeError("attempt_id must be positive");
+  return attemptId;
+}
+
+/**
+ * Return a frozen copy of an array of exact `AttributedBackwardResult`s, kept by reference.
+ *
+ * @throws TypeError when `results` isn't an array or an item is of another class.
+ */
+function validatedAttributedResults(results: unknown): readonly AttributedBackwardResult[] {
+  if (!isList(results)) throw new TypeError("attributed_results must be an array");
+  const items = [...results];
+  if (!items.every((item) => isExactly(item, AttributedBackwardResult))) {
+    throw new TypeError("attributed_results require exact AttributedBackwardResult values");
+  }
+  return Object.freeze(items);
+}
+
+/** Start one backward attempt with detached ordinary root feedback. Frozen. */
+export class BackwardStartedRecord {
+  /** The attempt's positive identity within the run. */
+  readonly attemptId: number;
+  /** A deep-frozen copy of the attempt's root message. */
+  readonly feedback: FeedbackValue;
+
+  /**
+   * @param feedback One ordinary root message; agreement with the output's shape is checked by
+   *   the reducer.
+   * @throws TypeError when `attemptId` isn't a safe integer or `feedback` isn't ordinary
+   *   feedback.
+   * @throws RangeError when `attemptId` isn't positive.
+   */
+  constructor(attemptId: number, feedback: FeedbackValue) {
+    this.attemptId = validatedAttemptId(attemptId);
+    validateFeedback(feedback, feedback);
+    this.feedback = copyBackwardValue(feedback, "feedback") as FeedbackValue;
+    Object.freeze(this);
+  }
+}
+
+/** Retain a computed root result, occurrence inventory and memory proposals. Frozen. */
+export class BackwardReadyRecord {
+  /** The attempt's positive identity within the run. */
+  readonly attemptId: number;
+  /** The completed three-channel root feedback. */
+  readonly rootResult: BackwardResult;
+  /** The ordered accepted occurrence results, unreached occurrences included. */
+  readonly attributedResults: readonly AttributedBackwardResult[];
+  /**
+   * The ordered proposals, one per recorded memory key. Table membership and attempt agreement
+   * belong to reduction.
+   */
+  readonly proposals: readonly MemoryProposal[];
+
+  /**
+   * The carriers are held by reference; the arrays are copied and frozen.
+   *
+   * @throws TypeError when `attemptId` isn't a safe integer, a carrier isn't exactly its class,
+   *   or an array argument isn't an array.
+   * @throws RangeError when `attemptId` isn't positive.
+   */
+  constructor(
+    attemptId: number,
+    rootResult: BackwardResult,
+    attributedResults: readonly AttributedBackwardResult[],
+    proposals: readonly MemoryProposal[],
+  ) {
+    this.attemptId = validatedAttemptId(attemptId);
+    if (!isExactly(rootResult, BackwardResult)) throw new TypeError("result must be an exact BackwardResult");
+    this.rootResult = rootResult;
+    this.attributedResults = validatedAttributedResults(attributedResults);
+    if (!isList(proposals)) throw new TypeError("proposals must be an array");
+    const items = [...proposals];
+    if (!items.every((proposal) => isExactly(proposal, MemoryProposal))) {
+      throw new TypeError("proposals require exact MemoryProposal values");
+    }
+    this.proposals = Object.freeze(items);
+    Object.freeze(this);
+  }
+}
+
+/** Settle one backward attempt with its outcome and completed inventory. Frozen. */
+export class BackwardFinishedRecord {
+  /** The attempt's positive identity within the run. */
+  readonly attemptId: number;
+  /** The backward and learning dispositions, keeping completed root feedback when a later operation fails. */
+  readonly outcome: BackwardOutcome;
+  /**
+   * The completed occurrence inventory, possibly empty; its agreement with the attempt's accepted
+   * computation is checked by the reducer.
+   */
+  readonly attributedResults: readonly AttributedBackwardResult[];
+
+  /**
+   * The carriers are held by reference; the array is copied and frozen.
+   *
+   * @throws TypeError when `attemptId` isn't a safe integer, a carrier isn't exactly its class,
+   *   or `attributedResults` isn't an array.
+   * @throws RangeError when `attemptId` isn't positive.
+   */
+  constructor(
+    attemptId: number,
+    outcome: BackwardOutcome,
+    attributedResults: readonly AttributedBackwardResult[] = [],
+  ) {
+    this.attemptId = validatedAttemptId(attemptId);
+    if (!isExactly(outcome, BackwardOutcome)) throw new TypeError("outcome must be an exact BackwardOutcome");
+    this.outcome = outcome;
+    this.attributedResults = validatedAttributedResults(attributedResults);
+    Object.freeze(this);
+  }
+}
+
+/** Request one memory's atomic idempotent mutation commit. Frozen. */
+export class MemoryCommitRequestedRecord {
+  /** The non-empty memory key. */
+  readonly memory: string;
+  /** The non-empty commit id. */
+  readonly commitId: string;
+  /** The mutations with unique ids, in order, kept by reference. */
+  readonly mutations: readonly MemoryMutation[];
+  /** The positive identity of the accepted backward attempt. */
+  readonly attemptId: number;
+
+  /**
+   * @throws TypeError when `attemptId` is missing or isn't a safe integer, an identity isn't a
+   *   string, `mutations` isn't an array or an item isn't exactly a `MemoryMutation`.
+   * @throws RangeError when `attemptId` isn't positive, an identity is empty or two mutations
+   *   share an id.
+   */
+  constructor(memory: string, commitId: string, mutations: readonly MemoryMutation[], attemptId: number) {
+    this.attemptId = validatedAttemptId(attemptId);
+    this.memory = requireNonemptyString(memory, "memory");
+    this.commitId = requireNonemptyString(commitId, "commit_id");
+    this.mutations = validateMutations(mutations);
+    Object.freeze(this);
+  }
+}
+
+/** Confirm that one memory commit completed. Frozen. */
+export class MemoryCommitSucceededRecord {
+  /** The non-empty memory key. */
+  readonly memory: string;
+  /** The non-empty commit id. */
+  readonly commitId: string;
+  /** The positive identity of the accepted backward attempt whose request this settles. */
+  readonly attemptId: number;
+
+  /**
+   * @throws TypeError when `attemptId` is missing or isn't a safe integer, or an identity isn't
+   *   a string.
+   * @throws RangeError when `attemptId` isn't positive or an identity is empty.
+   */
+  constructor(memory: string, commitId: string, attemptId: number) {
+    this.attemptId = validatedAttemptId(attemptId);
+    this.memory = requireNonemptyString(memory, "memory");
+    this.commitId = requireNonemptyString(commitId, "commit_id");
+    Object.freeze(this);
+  }
+}
+
+/** Retain one observed memory commit failure. Frozen. */
+export class MemoryCommitFailedRecord {
+  /** The non-empty memory key. */
+  readonly memory: string;
+  /** The non-empty commit id. */
+  readonly commitId: string;
+  /** The failure, held by reference. */
+  readonly failure: MemoryOperationFailure;
+  /** The positive identity of the accepted backward attempt whose request this settles. */
+  readonly attemptId: number;
+
+  /**
+   * @throws TypeError when `attemptId` is missing or isn't a safe integer, an identity isn't a
+   *   string, or `failure` isn't exactly a `MemoryOperationFailure`.
+   * @throws RangeError when `attemptId` isn't positive or an identity is empty.
+   */
+  constructor(memory: string, commitId: string, failure: MemoryOperationFailure, attemptId: number) {
+    this.attemptId = validatedAttemptId(attemptId);
+    this.memory = requireNonemptyString(memory, "memory");
+    this.commitId = requireNonemptyString(commitId, "commit_id");
+    if (!isExactly(failure, MemoryOperationFailure)) throw new TypeError("failure must be a MemoryOperationFailure");
+    this.failure = failure;
+    Object.freeze(this);
+  }
+}
+
 /** One durable run transition. */
 export type RunRecord =
+  | RunStartedRecord
   | RunResumedRecord
   | RunStoppedRecord
   | NodeStartedRecord
@@ -369,13 +731,20 @@ export type RunRecord =
   | NodeSucceededRecord
   | NodeRoutedRecord
   | NodeExpandedRecord
-  | NodeFailedRecord;
+  | NodeFailedRecord
+  | MemoryCommitRequestedRecord
+  | MemoryCommitSucceededRecord
+  | MemoryCommitFailedRecord
+  | BackwardStartedRecord
+  | BackwardReadyRecord
+  | BackwardFinishedRecord;
 
 /** A run-record class. */
 type RunRecordClass = new (...args: never[]) => RunRecord;
 
 /** Each record class and its snake_case wire kind. */
 const RECORD_KINDS: ReadonlyMap<RunRecordClass, string> = new Map<RunRecordClass, string>([
+  [RunStartedRecord, "run_started"],
   [RunResumedRecord, "run_resumed"],
   [RunStoppedRecord, "run_stopped"],
   [NodeStartedRecord, "node_started"],
@@ -384,6 +753,12 @@ const RECORD_KINDS: ReadonlyMap<RunRecordClass, string> = new Map<RunRecordClass
   [NodeRoutedRecord, "node_routed"],
   [NodeExpandedRecord, "node_expanded"],
   [NodeFailedRecord, "node_failed"],
+  [MemoryCommitRequestedRecord, "memory_commit_requested"],
+  [MemoryCommitSucceededRecord, "memory_commit_succeeded"],
+  [MemoryCommitFailedRecord, "memory_commit_failed"],
+  [BackwardStartedRecord, "backward_started"],
+  [BackwardReadyRecord, "backward_ready"],
+  [BackwardFinishedRecord, "backward_finished"],
 ]);
 
 /** Every run-record class. */
@@ -447,6 +822,67 @@ function validatedCapture(capture: unknown): ForwardCapture | null {
     throw new TypeError("forward_capture must be a ForwardCapture or null");
   }
   return capture;
+}
+
+/** Whether `items` are in strictly increasing order by `compare`: sorted and unique. */
+function strictlyIncreasing<T>(items: readonly T[], compare: (a: T, b: T) => number): boolean {
+  return items.every((item, index) => index === 0 || compare(items[index - 1]!, item) < 0);
+}
+
+/**
+ * Validate one `RunStarted` memory table, its stacks and its snapshots, and return frozen copies
+ * of the three arrays (each `null` when memory is disabled), holding the given carriers.
+ *
+ * @throws TypeError when `learnable` isn't a boolean, a recorded field isn't an array, or an item
+ *   isn't exactly its carrier class.
+ * @throws RangeError when the fields are only partly recorded, keys or locators aren't sorted and
+ *   unique in code-unit order, the snapshot keys differ from the table's, or a stack names an
+ *   unknown key.
+ */
+function validatedRunMemoryConfiguration(
+  memories: unknown,
+  stacks: unknown,
+  snapshots: unknown,
+  learnable: unknown,
+): [readonly MemorySpec[] | null, readonly MemoryStack[] | null, readonly MemorySnapshotEnvelope[] | null] {
+  if (typeof learnable !== "boolean") throw new TypeError("learnable must be a boolean");
+  if (new Set([memories === null, stacks === null, snapshots === null]).size !== 1) {
+    throw new RangeError("memories, memory_stacks and memory_snapshots must all be recorded or all be absent");
+  }
+  if (memories === null) return [null, null, null];
+  if (!isList(memories) || !isList(stacks) || !isList(snapshots)) {
+    throw new TypeError("memories, memory_stacks and memory_snapshots must be arrays when recorded");
+  }
+  const specs = [...memories];
+  if (!specs.every((spec) => isExactly(spec, MemorySpec))) {
+    throw new TypeError("memories items must be MemorySpec values");
+  }
+  const keys = specs.map((spec) => spec.key);
+  if (!strictlyIncreasing(keys, compareCodeUnits)) throw new RangeError("memories keys must be sorted and unique");
+  const envelopes = [...snapshots];
+  if (!envelopes.every((snapshot) => isExactly(snapshot, MemorySnapshotEnvelope))) {
+    throw new TypeError("memory_snapshots items must be MemorySnapshotEnvelope values");
+  }
+  const snapshotKeys = envelopes.map((snapshot) => snapshot.memory);
+  if (!strictlyIncreasing(snapshotKeys, compareCodeUnits)) {
+    throw new RangeError("memory_snapshots memory keys must be sorted and unique");
+  }
+  if (snapshotKeys.length !== keys.length || snapshotKeys.some((key, index) => key !== keys[index])) {
+    throw new RangeError("memory_snapshots memory keys must equal memories keys");
+  }
+  const keyStacks = [...stacks];
+  if (!keyStacks.every((stack) => isExactly(stack, MemoryStack))) {
+    throw new TypeError("memory_stacks items must be MemoryStack values");
+  }
+  if (!strictlyIncreasing(keyStacks.map((stack) => stack.locator), comparePaths)) {
+    throw new RangeError("memory_stacks locators must be sorted and unique");
+  }
+  const known = new Set(keys);
+  const unknown = [...new Set(keyStacks.flatMap((stack) => stack.memories))].filter((key) => !known.has(key));
+  if (unknown.length > 0) {
+    throw new RangeError(`memory_stacks name unknown memory keys: ${writeAsText(unknown.sort(compareCodeUnits))}`);
+  }
+  return [Object.freeze(specs), Object.freeze(keyStacks), Object.freeze(envelopes)];
 }
 
 /**

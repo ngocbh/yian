@@ -8,7 +8,8 @@
  * `test_seed_keeps_supported_values_and_independent_canonical_copies`,
  * `test_pool_decoder_rejects_unknown_fields_and_wrong_types` (3 rows),
  * `test_records_and_envelopes_are_frozen` (every record of this module and the envelope, nested
- * values too; assignment is a `TypeError`). Python's `ValueError` is a `RangeError` here.
+ * values and held arrays too; assignment is a `TypeError`). Python's `ValueError` is a
+ * `RangeError` here.
  *
  * TS-only: a seed keeps `±Infinity` as a float (a TS yian value, unlike Python's); a seed's
  * record keys come out in code-unit order; the envelope's schema rows (7, 8 and 11 are
@@ -17,8 +18,10 @@
  * rows (an unknown reason, an empty or repeated node id, a non-text message; no node ids is
  * valid); a failure without a node id, an evidence or capture of another class, a bad worker
  * count, digest, commit target, handle, spawner id, typed-value wire or envelope seq, refused by
- * the record's constructor; `RUN_RECORD_TYPES`; carriers held by reference and failures and
- * values held as frozen copies.
+ * the record's constructor; a bad flow fingerprint, run-start worker count, initial pool or start
+ * wiring override, commit identity, mutation batch or failure, and a backward carrier of another
+ * class, refused by the run-start, memory-commit and backward records; `RUN_RECORD_TYPES`;
+ * carriers held by reference and failures and values held as frozen copies.
  *
  * Changed:
  * - `test_encode_validates_programmatically_constructed_envelopes`: the record's constructor
@@ -55,13 +58,20 @@ import { expect, test } from "bun:test";
 
 import { Failure } from "../../src/diagnostics.ts";
 import { ValueRoute } from "../../src/expr/lineage.ts";
-import { EvaluationEvidence } from "../../src/memory/contracts.ts";
-import { ForwardCapture } from "../../src/runtime/contracts.ts";
+import { EvaluationEvidence, MemoryOperationFailure } from "../../src/memory/contracts.ts";
+import { BackwardResult } from "../../src/nodes/base.ts";
+import { BackwardOutcome, ForwardCapture } from "../../src/runtime/contracts.ts";
 import {
+  BackwardFinishedRecord,
+  BackwardReadyRecord,
+  BackwardStartedRecord,
   canonicalSeed,
   canonicalTyped,
   decodePool,
   encodePool,
+  MemoryCommitFailedRecord,
+  MemoryCommitRequestedRecord,
+  MemoryCommitSucceededRecord,
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
@@ -72,6 +82,8 @@ import {
   RUN_RECORD_TYPES,
   RUN_STOP_REASONS,
   RunResumedRecord,
+  type RunStartedFields,
+  RunStartedRecord,
   RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
@@ -246,6 +258,21 @@ test.each<[string, unknown, string]>([
 });
 
 const FAILURE = new Failure({ code: "node.execute", message: "boom", nodeId: "work" });
+const OPERATION_FAILURE = new MemoryOperationFailure("backend", "failed", "Failed.", true);
+const SUCCEEDED = new BackwardOutcome("succeeded");
+
+/** Return a run-start record with an empty pool, one agent's LLM config and `fields` over them. */
+function runStarted(fields: Partial<RunStartedFields> = {}): RunStartedRecord {
+  return new RunStartedRecord({
+    flowFingerprint: "a".repeat(64),
+    initialPool: encodePool(new VariablePool("start")),
+    startWiringOverride: {},
+    effectiveLlmByStaticPath: { agent: { model: "gpt-test" } },
+    numWorkers: 0,
+    defaults: { MAX_TOTAL_NODES: 5000n },
+    ...fields,
+  });
+}
 
 test.each<[string, () => unknown]>([
   ["run resumed", () => ((new RunResumedRecord(["a"], 1) as { numWorkers: number }).numWorkers = 2)],
@@ -285,6 +312,81 @@ test.each<[string, () => unknown]>([
   ],
   ["prune ids", () => (new NodeExpandedRecord("grow", {}, ["a"], TOPOLOGY_DIGEST).pruneIds as string[]).push("b")],
   ["a failure", () => ((new NodeFailedRecord(FAILURE).failure as { message: string }).message = "changed")],
+  ["run started", () => ((runStarted() as { numWorkers: number }).numWorkers = 2)],
+  [
+    "a run-started pool value",
+    () => ((runStarted().initialPool.system as Record<string, unknown>)["run_id"] = null),
+  ],
+  [
+    "a nested start wiring override",
+    () => ((runStarted({ startWiringOverride: { a: [1n] } }).startWiringOverride["a"] as unknown[]).push(2n)),
+  ],
+  [
+    "a nested LLM config",
+    () => ((runStarted().effectiveLlmByStaticPath["agent"] as { model: string }).model = "other"),
+  ],
+  ["run-started defaults", () => ((runStarted().defaults as Record<string, bigint>)["MAX_TOTAL_NODES"] = 1n)],
+  [
+    "a nested call-time LLM config",
+    () =>
+      ((runStarted({ callTimeLlm: { selection: {}, agents: { chat: {} } } }).callTimeLlm!["agents"] as {
+        chat: unknown;
+      }).chat = null),
+  ],
+  [
+    "run-started memories",
+    () => (runStarted({ memories: [], memoryStacks: [], memorySnapshots: [] }).memories as unknown[]).push(null),
+  ],
+  [
+    "run-started memory stacks",
+    () => (runStarted({ memories: [], memoryStacks: [], memorySnapshots: [] }).memoryStacks as unknown[]).push(null),
+  ],
+  [
+    "run-started memory snapshots",
+    () =>
+      (runStarted({ memories: [], memoryStacks: [], memorySnapshots: [] }).memorySnapshots as unknown[]).push(null),
+  ],
+  [
+    "memory commit requested",
+    () => ((new MemoryCommitRequestedRecord("notes", "c", [], 1) as { attemptId: number }).attemptId = 2),
+  ],
+  [
+    "commit mutations",
+    () => (new MemoryCommitRequestedRecord("notes", "c", [], 1).mutations as unknown[]).push(null),
+  ],
+  [
+    "memory commit succeeded",
+    () => ((new MemoryCommitSucceededRecord("notes", "c", 1) as { commitId: string }).commitId = "d"),
+  ],
+  [
+    "memory commit failed",
+    () => ((new MemoryCommitFailedRecord("notes", "c", OPERATION_FAILURE, 1) as { failure: unknown }).failure = null),
+  ],
+  ["backward started", () => ((new BackwardStartedRecord(1, null) as { attemptId: number }).attemptId = 2)],
+  [
+    "a nested backward feedback",
+    () => ((new BackwardStartedRecord(1, { parts: ["a"] }).feedback as { parts: unknown[] }).parts.push("b")),
+  ],
+  [
+    "backward ready",
+    () => ((new BackwardReadyRecord(1, new BackwardResult(), [], []) as { attemptId: number }).attemptId = 2),
+  ],
+  [
+    "ready attributed results",
+    () => (new BackwardReadyRecord(1, new BackwardResult(), [], []).attributedResults as unknown[]).push(null),
+  ],
+  [
+    "ready proposals",
+    () => (new BackwardReadyRecord(1, new BackwardResult(), [], []).proposals as unknown[]).push(null),
+  ],
+  [
+    "backward finished",
+    () => ((new BackwardFinishedRecord(1, SUCCEEDED) as { outcome: unknown }).outcome = null),
+  ],
+  [
+    "finished attributed results",
+    () => (new BackwardFinishedRecord(1, SUCCEEDED).attributedResults as unknown[]).push(null),
+  ],
 ])("records and envelopes are frozen: %s", (_name, assign) => {
   expect(assign).toThrow(TypeError);
 });
@@ -295,6 +397,7 @@ test("the envelope names its record's wire kind", () => {
 
 test("RUN_RECORD_TYPES holds every record class", () => {
   expect(RUN_RECORD_TYPES).toEqual([
+    RunStartedRecord,
     RunResumedRecord,
     RunStoppedRecord,
     NodeStartedRecord,
@@ -303,6 +406,12 @@ test("RUN_RECORD_TYPES holds every record class", () => {
     NodeRoutedRecord,
     NodeExpandedRecord,
     NodeFailedRecord,
+    MemoryCommitRequestedRecord,
+    MemoryCommitSucceededRecord,
+    MemoryCommitFailedRecord,
+    BackwardStartedRecord,
+    BackwardReadyRecord,
+    BackwardFinishedRecord,
   ]);
   expect(Object.isFrozen(RUN_RECORD_TYPES)).toBe(true);
 });
@@ -363,11 +472,6 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
     TypeError,
     "forward_capture must be a ForwardCapture or null",
   ],
-])("record constructors refuse %s", (_name, fn, cls, message) => {
-  expectError(fn, cls, message);
-});
-
-test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
   ["negative workers", () => new RunResumedRecord([], -1), RangeError, "num_workers must be non-negative"],
   ["fractional workers", () => new RunResumedRecord([], 1.5), TypeError, "num_workers must be an integer"],
   ["bigint workers", () => new RunResumedRecord([], 1n as never), TypeError, "num_workers must be an integer"],
@@ -416,6 +520,85 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
     "run-record envelope seq must be a non-negative integer",
   ],
   ["a non-text stop reason", () => new RunStoppedRecord(3 as never, "stop", []), TypeError, "reason must be a string"],
+  [
+    "a non-text flow fingerprint",
+    () => runStarted({ flowFingerprint: 3 as never }),
+    TypeError,
+    "flow_fingerprint must be a string",
+  ],
+  [
+    "a flow fingerprint that isn't 64 lowercase hex digits",
+    () => runStarted({ flowFingerprint: "A".repeat(64) }),
+    RangeError,
+    "flow_fingerprint must be 64 lowercase hex digits",
+  ],
+  ["negative run-start workers", () => runStarted({ numWorkers: -1 }), RangeError, "num_workers must be non-negative"],
+  [
+    "bigint run-start workers",
+    () => runStarted({ numWorkers: 1n as never }),
+    TypeError,
+    "num_workers must be an integer",
+  ],
+  [
+    "a bad initial pool",
+    () => runStarted({ initialPool: { store: {}, system: {} } as never }),
+    RangeError,
+    'invalid variable pool fields; missing=["start_id"], extra=[]',
+  ],
+  [
+    "a NaN in the start wiring override",
+    () => runStarted({ startWiringOverride: { x: [NaN] } }),
+    TypeCheckError,
+    "NaN is not a yian value",
+  ],
+  [
+    "an empty commit memory",
+    () => new MemoryCommitSucceededRecord("", "commit", 1),
+    RangeError,
+    "memory must be non-empty",
+  ],
+  [
+    "a non-text commit id",
+    () => new MemoryCommitRequestedRecord("notes", 3 as never, [], 1),
+    TypeError,
+    "commit_id must be a string",
+  ],
+  [
+    "commit mutations that aren't an array",
+    () => new MemoryCommitRequestedRecord("notes", "commit", new Set() as never, 1),
+    TypeError,
+    "mutations must be an array",
+  ],
+  [
+    "a commit failure of another class",
+    () => new MemoryCommitFailedRecord("notes", "commit", {} as never, 1),
+    TypeError,
+    "failure must be a MemoryOperationFailure",
+  ],
+  [
+    "a ready root result of another class",
+    () => new BackwardReadyRecord(1, {} as never, [], []),
+    TypeError,
+    "result must be an exact BackwardResult",
+  ],
+  [
+    "ready attributed results that aren't an array",
+    () => new BackwardReadyRecord(1, new BackwardResult(), new Set() as never, []),
+    TypeError,
+    "attributed_results must be an array",
+  ],
+  [
+    "ready proposals that aren't an array",
+    () => new BackwardReadyRecord(1, new BackwardResult(), [], new Set() as never),
+    TypeError,
+    "proposals must be an array",
+  ],
+  [
+    "a finished outcome of another class",
+    () => new BackwardFinishedRecord(1, {} as never),
+    TypeError,
+    "outcome must be an exact BackwardOutcome",
+  ],
 ])("record constructors refuse %s", (_name, fn, cls, message) => {
   expectError(fn, cls, message);
 });

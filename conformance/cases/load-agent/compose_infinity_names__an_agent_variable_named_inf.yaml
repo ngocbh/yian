@@ -1,0 +1,23 @@
+# TS reads `${inf}` as infinity, so an AGENT variable named `inf` is refused (rules: infinity); Python loads it.
+kind: load
+rules: [infinity]
+flow: |
+  id: f
+  name: f
+  nodes:
+    a:
+      kind: agent
+      prompt: hi
+      variables:
+        inf: !int 1
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'' variable ''inf'': `inf` is infinity in an expression, so ${inf} can''t read it; rename it'
+      frames:
+      - label: flow.yaml
+        range: [8, 7, 8, 10]
+python_expect:
+  load: ok

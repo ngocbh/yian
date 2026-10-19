@@ -8,20 +8,27 @@
  * Changed: the message says `or null` where Python's says `or None`. The identity rows build the
  * `reply` node by hand where Python loads `_flow`.
  *
+ * The `123` row of `test_non_string_system_prompt_points_at_its_line` is pinned through its
+ * harvested case, as `parseNodes` reads it.
+ *
  * Later (T3-15): the `load_flow` half of `test_system_prompt_defaults_to_none`,
  * `test_system_prompt_reaches_the_agent_node`, `test_compact_flow_accepts_system_prompt`,
  * `test_system_prompt_sees_the_node_variables`, `test_unknown_ref_points_at_the_system_prompt_line`,
- * `test_unknown_ref_in_a_compact_flow_is_located` and
+ * `test_unknown_ref_in_a_compact_flow_is_located` and the other rows of
  * `test_non_string_system_prompt_points_at_its_line`, and the pinned fingerprints of
  * `test_flow_without_system_prompt_keeps_its_fingerprint` (loaded `_flow` and `_compact`).
  */
 
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { Flow } from "../../src/compile/model.ts";
+import { forget } from "../../src/defaults.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
+import { type CaseRow, parsedNodes, runCase } from "./declarations.ts";
+
+afterEach(() => forget());
 
 const PERSONA = "You are ${name}, ${title}. Speak as ${name} in the first person.";
 
@@ -58,3 +65,7 @@ test("system prompt is identity", () => {
 
   expect(new Set([base, persona, other]).size).toBe(3);
 });
+
+test.each<CaseRow>([
+  { id: "load-agent/compose_agent_system_prompt_yaml__int_system_prompt", call: parsedNodes },
+])("parseNodes: $id", runCase);

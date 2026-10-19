@@ -1,0 +1,284 @@
+/**
+ * The `agent` kind's parse side: a port of `tests/compose/test_kind_agent_parse.py`.
+ *
+ * Changed: Python compares the descriptor to an `AgentDescriptor` with `field_ranges` excluded;
+ * TS compares its class and fields. The variable values keep YAML's ints as `bigint` (`4n`).
+ *
+ * TS-only: a `retries:` past `Number.MAX_SAFE_INTEGER` is refused, and a count is stored as a
+ * `number`; the default follows `YIAN_AGENT_RETRIES`; a variable named `inf` is refused at its key,
+ * before a like-named input; a lone surrogate in `prompt:` or `system_prompt:` is refused at the
+ * field; the constructor refuses a non-exact `MemoryDecl`; and `withSourceOrigins` registers one
+ * origin per `long_term_memory:` entry.
+ *
+ * Held here until T3-22: the harvested cases at the end, whose error the AGENT parse raises,
+ * each under a comment naming the Python file it comes from.
+ */
+
+import { afterEach, describe, expect, test } from "bun:test";
+
+import { siteKey } from "../../src/compose/nodes/base.ts";
+import { AgentDescriptor, MODE_REMOVED_FIX, retriesError } from "../../src/compose/nodes/agent.ts";
+import { parseNodes } from "../../src/compose/parse/nodes.ts";
+import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
+import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
+import { current, forget, reload } from "../../src/defaults.ts";
+import { SourceRange } from "../../src/diagnostics.ts";
+import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
+import { type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
+
+afterEach(() => forget());
+
+const FLOW = `nodes:
+  writer:
+    kind: agent
+    prompt: "Write about \${topic}"
+    inputs:
+      topic: \${input.topic}
+    outputs: string
+`;
+
+/** Return the cursor over node `nodeId` of `text`'s `nodes:`. */
+function readerFor(text: string, nodeId: string): SourceCursor {
+  return SourceDocument.parse(text).root.child("nodes").child(nodeId);
+}
+
+/** Parse node `a` of `text` as an AGENT. */
+function parseA(text: string): AgentDescriptor {
+  return AgentDescriptor.parse("a", readerFor(text, "a"));
+}
+
+/** Return a descriptor's fields, leaving out the parse metadata (Python's `compare=False`). */
+function fieldsOf(desc: AgentDescriptor): Record<string, unknown> {
+  const { range: _range, fieldRanges: _fieldRanges, assertRanges: _assertRanges, ...fields } = desc;
+  return fields;
+}
+
+test("agent parse matches today's descriptor and stamps ranges", () => {
+  const desc = AgentDescriptor.parse("writer", readerFor(FLOW, "writer"));
+
+  expect(desc).toBeInstanceOf(AgentDescriptor);
+  expect(fieldsOf(desc)).toEqual(
+    fieldsOf(
+      new AgentDescriptor({
+        id: "writer",
+        prompt: "Write about ${topic}",
+        inputs: { topic: "${input.topic}" },
+        outputs: "string",
+      }),
+    ),
+  );
+  // Ranges are recorded for the node body and its fields.
+  expect(desc.range).toBeInstanceOf(SourceRange);
+  expect(desc.fieldRanges.get(siteKey("field", "prompt"))).toBeInstanceOf(SourceRange);
+  expect(desc.fieldRanges.get(siteKey("field", "inputs"))).toBeInstanceOf(SourceRange);
+  // The prompt value sits on line 4 of the flow (1-based).
+  expect(desc.fieldRanges.get(siteKey("field", "prompt"))!.startLine).toBe(4);
+});
+
+test("agent descriptor rejects controls field", () => {
+  const text = "nodes:\n  writer:\n    kind: agent\n    prompt: hi\n    controls: [ask_user]\n";
+
+  expect(loadError(() => AgentDescriptor.parse("writer", readerFor(text, "writer"))).message).toMatch(
+    /controls.*not allowed/,
+  );
+});
+
+test("agent variable declarations remain separate from binding fields", () => {
+  const text = `typedefs:
+  Tone: Literal(concise, detailed, technical)
+nodes:
+  writer:
+    kind: agent
+    variables:
+      num_sentences: !int(1..12) 4
+      temperature: !float(0..1) 0.4
+      tone: !Tone concise
+      instruction: !str "Summarize clearly"
+    prompt: "\${instruction} in \${num_sentences} sentences."
+`;
+  const desc = AgentDescriptor.parse("writer", readerFor(text, "writer"));
+
+  expect(desc.variables).toEqual({
+    num_sentences: 4n,
+    temperature: 0.4,
+    tone: "concise",
+    instruction: "Summarize clearly",
+  });
+  expect(desc.inputs).toEqual({});
+  expect(AgentDescriptor.bindingFields).toEqual(["inputs"]);
+});
+
+describe("retries", () => {
+  test("a count past the largest safe integer is refused", () => {
+    const error = loadError(() => parseA("nodes:\n  a:\n    kind: agent\n    retries: 9007199254740992\n"));
+
+    expect(error.message).toBe(
+      "node 'a' (kind=agent): `retries:` must be at most 9007199254740991, got 9007199254740992",
+    );
+    expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(4);
+  });
+
+  test("a count is stored as a number", () => {
+    expect(parseA("nodes:\n  a:\n    kind: agent\n    retries: 3\n").retries).toBe(3);
+    expect(parseA("nodes:\n  a:\n    kind: agent\n    retries: 9007199254740991\n").retries).toBe(
+      Number.MAX_SAFE_INTEGER,
+    );
+  });
+
+  test("the default follows YIAN_AGENT_RETRIES", () => {
+    const text = "nodes:\n  a:\n    kind: agent\n    prompt: hi\n";
+    reload((name) => (name === "YIAN_AGENT_RETRIES" ? "4" : undefined));
+    expect(parseA(text).retries).toBe(4);
+    forget();
+    reload(() => undefined);
+    expect(parseA(text).retries).toBe(current().agentRetries);
+    expect(new AgentDescriptor({ id: "a" }).retries).toBe(current().agentRetries);
+  });
+
+  test.each<[unknown, string | null]>([
+    [0n, null],
+    [3n, null],
+    [9007199254740991n, null],
+    [9007199254740992n, "must be at most 9007199254740991, got 9007199254740992"],
+    [-1n, "must be a non-negative integer, got -1"],
+    [true, "must be a non-negative integer, got true"],
+    [1.5, "must be a non-negative integer, got 1.5"],
+    ["3", 'must be a non-negative integer, got "3"'],
+    [null, "must be a non-negative integer, got null"],
+  ])("retriesError(%p)", (value, problem) => {
+    expect(retriesError(value)).toBe(problem);
+  });
+});
+
+describe("inf names", () => {
+  test("a variable named inf is refused at its key", () => {
+    const text = "nodes:\n  a:\n    kind: agent\n    prompt: hi\n    variables:\n      inf: !int 1\n";
+    const error = loadError(() => parseA(text));
+
+    expect(error.message).toBe(
+      "node 'a' variable 'inf': `inf` is infinity in an expression, so ${inf} can't read it; rename it",
+    );
+    expect(error.diagnostic.frames.at(-1)!.range).toEqual(
+      readerFor(text, "a").child("variables").keyRangeOf("inf")!,
+    );
+  });
+
+  test("a variable named inf is refused before an input named inf", () => {
+    const text = `nodes:
+  a:
+    kind: agent
+    prompt: hi
+    input:
+      inf: \${input.x}
+    variables:
+      inf: !int 1
+`;
+    const error = loadError(() => parseNodes(SourceDocument.parse(text).root.child("nodes")));
+
+    expect(error.message).toStartWith("node 'a' variable 'inf': ");
+  });
+});
+
+describe("lone surrogates", () => {
+  test.each(["prompt", "system_prompt"])("a lone surrogate in %s is refused at the field", (key) => {
+    const text = `nodes:\n  a:\n    kind: agent\n    ${key}: "\\ud800"\n`;
+    const error = loadError(() => parseA(text));
+
+    expect(error.message).toBe(`node 'a' field '${key}': text holding a lone surrogate is not a yian value`);
+    expect(error.diagnostic.frames.at(-1)!.range).toEqual(readerFor(text, "a").rangeOf(key)!);
+  });
+});
+
+test("the constructor refuses memories that aren't exact MemoryDecl values", () => {
+  class SubDecl extends MemoryDecl {}
+  const site = new DeclSite([], ["root"], "a");
+  const message = "agent descriptor memories must be an array of exact MemoryDecl values";
+
+  expect(
+    () => new AgentDescriptor({ id: "a", memories: [new SubDecl("notes", "episodic", {}, site)] }),
+  ).toThrow(new TypeError(message));
+  expect(
+    () => new AgentDescriptor({ id: "a", memories: "notes" as unknown as readonly MemoryDecl[] }),
+  ).toThrow(new TypeError(message));
+  expect(new AgentDescriptor({ id: "a", memories: [new MemoryDecl("notes", "episodic", {}, site)] }).memories)
+    .toHaveLength(1);
+});
+
+describe("withSourceOrigins", () => {
+  test("one origin per long_term_memory entry, at its key", () => {
+    const text = "nodes:\n  a:\n    kind: agent\n    long_term_memory:\n      notes: episodic\n      lessons: reflective\n";
+    const cursor = readerFor(text, "a");
+    const builder = new SourceCatalogBuilder();
+    const desc = AgentDescriptor.parse("a", cursor);
+    expect(desc.memories.map((decl) => decl.site)).toEqual([
+      new DeclSite([], ["root"], "a"),
+      new DeclSite([], ["root"], "a"),
+    ]);
+
+    const stamped = desc.withSourceOrigins(cursor, { sitePath: ["node", "a"], catalogBuilder: builder });
+
+    expect(stamped).toBeInstanceOf(AgentDescriptor);
+    expect(stamped.memories.map((decl) => decl.name)).toEqual(["notes", "lessons"]);
+    const memories = cursor.child("long_term_memory");
+    for (const decl of stamped.memories) {
+      expect(builder.resolveRegistered(decl.origin!)!.range).toEqual(memories.keyRangeOf(decl.name)!);
+    }
+    expect(desc.memories.every((decl) => decl.origin === null)).toBe(true);
+  });
+
+  test("the sugar form's one origin is the whole value", () => {
+    const text = "nodes:\n  a:\n    kind: agent\n    long_term_memory: episodic\n";
+    const cursor = readerFor(text, "a");
+    const builder = new SourceCatalogBuilder();
+
+    const stamped = AgentDescriptor.parse("a", cursor).withSourceOrigins(cursor, {
+      sitePath: ["node", "a"],
+      catalogBuilder: builder,
+    });
+
+    expect(stamped.memories).toHaveLength(1);
+    expect(builder.resolveRegistered(stamped.memories[0]!.origin!)!.range).toEqual(
+      cursor.rangeOf("long_term_memory")!,
+    );
+  });
+
+  test("no memories: the descriptor itself", () => {
+    const cursor = readerFor("nodes:\n  a:\n    kind: agent\n    long_term_memory: null\n", "a");
+    const desc = AgentDescriptor.parse("a", cursor);
+
+    expect(desc.memories).toEqual([]);
+    expect(desc.withSourceOrigins(cursor, { sitePath: ["node", "a"], catalogBuilder: new SourceCatalogBuilder() }))
+      .toBe(desc);
+  });
+});
+
+test("MODE_REMOVED_FIX", () => {
+  expect(MODE_REMOVED_FIX).toBe(
+    "an AGENT with tools runs the tool loop, one without tools makes a single call; delete this line",
+  );
+});
+
+// ---------- harvested conformance cases ----------
+
+test.each<CaseRow>([
+  // tests/cli/test_memory.py
+  { id: "load-agent/cli_memory__session_recent_turns_below_zero", call: parsedNodes },
+  { id: "load-agent/cli_memory__storage_key_is_host_owned", call: parsedNodes },
+  // tests/compose/test_agent_field_shapes.py
+  { id: "load-agent/compose_agent_field_shapes__bool_retries", call: parsedNodes },
+  { id: "load-agent/compose_agent_field_shapes__negative_retries", call: parsedNodes },
+  { id: "load-agent/compose_agent_field_shapes__tools_as_text", call: parsedNodes },
+  // tests/compose/test_agent_mode_removed.py
+  { id: "load-agent/compose_agent_mode_removed__mode_plain_without_tools", call: parsedNodes },
+  // tests/compose/test_agent_skills_yaml.py
+  { id: "load-agent/compose_agent_skills_yaml__skills_as_text", call: parsedNodes },
+  // tests/engine/test_node_env.py
+  { id: "load-agent/engine_node_env__env_must_be_string_keyed_mapping", call: parsedNodes },
+  // tests/seeds/errors/
+  { id: "load-agent/seed_e40_agent_controls_no_range", call: parsedNodes },
+  { id: "load-agent/seed_e43_agent_mode_removed", call: parsedNodes },
+  // tests/compose/test_non_text_prompt.py
+  { id: "load-core/compose_non_text_prompt__non_text_agent_prompt", call: parsedNodes },
+  // TS-only (no Python test): the AGENT half of the `inf` name rule
+  { id: "load-agent/compose_infinity_names__an_agent_variable_named_inf", call: parsedNodes },
+])("parseNodes: $id", runCase);

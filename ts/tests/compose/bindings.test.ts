@@ -1,9 +1,9 @@
 /**
- * The kind-blind binding-field walk: a port of `tests/compose/test_bindings.py`. No concrete kind
- * is ported yet, so each row uses a stand-in of the kind Python uses (`standIn` for the kinds
- * whose only binding field is `inputs`, test-local `StandInCall` and `StandInMap` for the kinds
- * with a scalar `over`) and passes an explicit `bindingFields` table built from their
- * `bindingFields`.
+ * The kind-blind binding-field walk: a port of `tests/compose/test_bindings.py`. The agent rows use
+ * the real `AgentDescriptor`; each other row uses a stand-in of the kind Python uses (`standIn` for
+ * the kinds whose only binding field is `inputs`, test-local `StandInCall` and `StandInMap` for the
+ * kinds with a scalar `over`), since those kinds aren't ported yet. Every row passes an explicit
+ * `bindingFields` table built from the classes' `bindingFields`.
  *
  * TS-only: `mapBindingSources` hands the mapper a `ValueTemplate` whole, in a record field and in
  * a scalar field, and `keyless` drops the field and key.
@@ -11,6 +11,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { NodeDescriptor, type NodeDescriptorFields } from "../../src/compose/nodes/base.ts";
 import { keyless, mapBindingSources, mapBindingStrings } from "../../src/compose/nodes/bindings.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
@@ -35,14 +36,13 @@ class StandInMap extends StandInCall {
   static override readonly kind = "map";
 }
 
-const StandInAgent = standIn("agent", { bindingFields: ["inputs"] });
 const StandInTool = standIn("tool", { bindingFields: ["inputs"] });
 const StandInHumanInput = standIn("human_input", { bindingFields: ["inputs"] });
 const StandInLoop = standIn("loop", { bindingFields: ["inputs"] });
 const StandInWait = standIn("wait");
 
 const CLASSES: readonly DescriptorClass[] = [
-  StandInAgent,
+  AgentDescriptor,
   StandInTool,
   StandInHumanInput,
   StandInLoop,
@@ -61,7 +61,7 @@ function up(_field: string, _key: string, value: string): string {
 
 describe("mapBindingStrings", () => {
   test("agent inputs rewritten, non-strings left", () => {
-    const desc = new StandInAgent({ id: "a", inputs: { x: "${src}", n: 5 } });
+    const desc = new AgentDescriptor({ id: "a", inputs: { x: "${src}", n: 5 } });
     const out = mapBindingStrings(desc, up, { bindingFields });
     expect(out.inputs).toEqual({ x: "${SRC}", n: 5 });
     // A fresh descriptor (not the same object): a rewrite happened.
@@ -134,7 +134,7 @@ describe("mapBindingStrings", () => {
   test("template leaf strings rewritten with their binding key", () => {
     const origin = new OriginRef("/s:leaf");
     const template = new ValueTemplate({ a: "${src}", b: [1n, "${other}"] }, [[["a"], origin]]);
-    const desc = new StandInAgent({ id: "a", inputs: { x: template } });
+    const desc = new AgentDescriptor({ id: "a", inputs: { x: template } });
     const sites: [string, string, string][] = [];
     const out = mapBindingStrings(
       desc,
@@ -180,7 +180,7 @@ describe("mapBindingSources", () => {
 
 describe("keyless", () => {
   test("adapts a value-only mapper, ignoring the field and key", () => {
-    const desc = new StandInAgent({ id: "a", inputs: { x: "${src}" } });
+    const desc = new AgentDescriptor({ id: "a", inputs: { x: "${src}" } });
     const out = mapBindingStrings(
       desc,
       keyless((value) => value.toUpperCase()),

@@ -1,7 +1,8 @@
 /**
- * Stand-in node kinds for the Compose tests, since no concrete kind is ported yet: `StandInAgent`,
- * `StandInCode` and `StandInCase` shaped like the real kinds, `standIn` for one-off classes, and
- * `withKinds`, which registers classes in `KINDS` and `BINDING_FIELDS` for one call.
+ * Stand-in node kinds for the Compose tests, for kinds not ported yet or rows that need a minimal
+ * kind: `StandInAgent`, `StandInCode` and `StandInCase` shaped like the real kinds, `standIn` for
+ * one-off classes, and `withKinds`, which registers classes in `KINDS` and `BINDING_FIELDS` for
+ * one call.
  */
 
 import {

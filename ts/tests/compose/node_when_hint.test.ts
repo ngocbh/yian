@@ -3,21 +3,27 @@
  * `tests/compose/test_node_when_hint.py`, through `parseFile`, `flowNodesCursor` and `parseNodes`
  * with stand-in kinds.
  *
- * Changed: `test_when_on_non_case_node_suggests_a_case_node` runs on the `code` stand-in alone,
- * and `test_when_on_case_node_points_at_cases_entries` on a `case` stand-in carrying the case
- * kind's `whenHint`.
+ * Changed: `test_when_on_non_case_node_suggests_a_case_node` runs on the `code` stand-in, and
+ * its per-kind sweep over the registered kinds but `case`, through `parseNodes` where Python
+ * loads the flow; `test_when_on_case_node_points_at_cases_entries` runs on a `case` stand-in
+ * carrying the case kind's `whenHint`. The harvested
+ * `load-core/compose_node_when_hint__when_on_an_agent_node` is pinned.
  *
- * Later (T3-15/T3-16): the per-kind sweep of `test_when_on_non_case_node_suggests_a_case_node`
- * over every kind but `case`, and the real `case` kind's hint.
+ * Later (T3-15/T3-16): the sweep's rows for the kinds not registered yet, and the real `case`
+ * kind's hint.
  */
 
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 
-import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
+import { type DescriptorClass, KINDS } from "../../src/compose/nodes/index.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
-import { loadError, nodesOf } from "./declarations.ts";
+import { forget } from "../../src/defaults.ts";
+import { compareCodeUnits } from "../../src/diagnostics.ts";
+import { type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "./declarations.ts";
 import { StandInCase, StandInCode, withKinds } from "./stand_ins.ts";
+
+afterEach(() => forget());
 
 const NON_CASE_HINT = "route to it from a `case` node";
 const CASE_HINT = "goes in each entry of `cases:`";
@@ -49,6 +55,39 @@ output: \${x.output}
   expect(message).toContain("(allowed: ");
   expect(message).toContain(NON_CASE_HINT);
 });
+
+// call, loop and map check their `call:`-or-`nodes:` choice before body keys, so they need one.
+const EXTRA_BODY: ReadonlyMap<string, string> = new Map([
+  ["call", "call: sub"],
+  ["loop", "call: sub"],
+  ["map", "call: sub"],
+]);
+
+test.each([...KINDS.keys()].filter((kind) => kind !== "case").sort(compareCodeUnits))(
+  "when on a registered %s node suggests a case node",
+  (kind) => {
+    const text = `id: f
+name: f
+nodes:
+  x:
+    kind: ${kind}
+    ${EXTRA_BODY.get(kind) ?? ""}
+    when: \${x.output}
+output: \${x.output}
+`;
+
+    const message = nodesMessage(text, []);
+
+    expect(message).toContain("field 'when' is not allowed");
+    expect(message).toContain("(allowed: ");
+    expect(message).toContain(NON_CASE_HINT);
+  },
+);
+
+test.each<CaseRow>([{ id: "load-core/compose_node_when_hint__when_on_an_agent_node", call: parsedNodes }])(
+  "parseNodes: $id",
+  runCase,
+);
 
 test("when on a case node points at cases entries", () => {
   const text = `id: f

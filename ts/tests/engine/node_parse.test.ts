@@ -5,8 +5,10 @@
  *
  * TS-only: `inf` is an expression keyword, so it is a rejected node id too.
  *
- * Later (T3-15): `test_agent_minimal_parses`, `test_agent_knobs_parse`, `test_code_parses`,
- * `test_tool_parses`, `test_seed_11_anchored_nodes_parse`.
+ * Changed: `test_agent_minimal_parses` and `test_agent_knobs_parse` parse with the real `agent`
+ * kind; the knobs row reads seed 14 through the conformance case `load-agent/seed_14_agent_tools`.
+ *
+ * Later (T3-15): `test_code_parses`, `test_tool_parses`, `test_seed_11_anchored_nodes_parse`.
  * Later (T3-16): `test_case_searched_parses`, `test_case_on_parses`,
  * `test_case_carries_no_inputs`, `test_call_ref_form_parses`, `test_node_asserts_rejected_on_case`,
  * `test_call_map_form_parses`, `test_map_without_over_is_loud`, `test_over_on_kind_call_is_loud`.
@@ -24,12 +26,13 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { reprText } from "../../src/diagnostics.ts";
-import { loadError, nodesOf, runTextCase } from "../compose/declarations.ts";
+import { caseText, loadError, nodesOf, runTextCase } from "../compose/declarations.ts";
 import {
   ALL_KIND_NAMES,
   StandInAgent,
@@ -142,6 +145,37 @@ output: \${fetch-data.output}
 
     expect(error.message).toMatch(/node id 'fetch-data' must be an identifier.*try 'fetch_data'/);
     expect(error.message).not.toContain("unknown namespace");
+  });
+});
+
+describe("agent", () => {
+  test("agent minimal parses", () => {
+    const node = nodes(
+      "\nnote:\n  kind: agent\n  input:\n    topic: ${input.topic}\n  output: str\n  prompt: Write a note on ${topic}.\n",
+    ).get("note") as AgentDescriptor;
+
+    expect(node).toBeInstanceOf(AgentDescriptor);
+    expect(node.id).toBe("note");
+    expect(node.prompt).toBe("Write a note on ${topic}.");
+    expect(node.inputs).toEqual({ topic: "${input.topic}" });
+    expect(node.outputs).toBe("str");
+    expect(node.tools).toEqual([]);
+    expect(node.llmConfig).toEqual({});
+  });
+
+  test("agent knobs parse", () => {
+    // seed 14: tools, llm_config and a record output
+    const { text, label } = caseText("load-agent/seed_14_agent_tools");
+    const node = nodesOf(text, [], label).get("reviewer") as AgentDescriptor;
+
+    expect(node).toBeInstanceOf(AgentDescriptor);
+    expect(node.tools).toEqual(["get_web_data", "web_search", "ask_user"]);
+    expect(node.llmConfig).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      anthropic: { temperature: 0.3 },
+    });
+    expect(node.outputs).toEqual({ claim: "str", confidence: "float" });
   });
 });
 

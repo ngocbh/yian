@@ -1,18 +1,22 @@
 /**
  * The kind dispatch tables `KINDS` and `BINDING_FIELDS`, and `REMOVED_KINDS`: a port of
- * `tests/compose/test_kinds_table.py`. TS-era: no kind is ported yet, so the tables start empty,
- * and the agreement row also runs on the nine stand-ins registered with `withKinds`.
+ * `tests/compose/test_kinds_table.py`. TS-era: only some kinds are ported, so the tables hold
+ * kinds of `ALL_KIND_NAMES`, and the agreement row also runs on the nine stand-ins registered
+ * with `withKinds`.
+ *
+ * Ported: the `agent` half of `test_kinds_maps_string_to_descriptor_class`.
  *
  * TS-only: `withKinds` restores the tables after its function returns or throws.
  *
  * Dropped: `test_retired_kindspec_is_not_public` (a Python import).
  *
- * Later (T3-15): `test_kinds_maps_string_to_descriptor_class` (`KINDS` maps `agent` and `tool`
- * to their descriptors). Later (T3-16): `test_all_authored_kinds_registered`.
+ * Later (T3-15): the `tool` half of `test_kinds_maps_string_to_descriptor_class`. Later (T3-16):
+ * `test_all_authored_kinds_registered`.
  */
 
 import { expect, test } from "bun:test";
 
+import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { BINDING_FIELDS, KINDS, REMOVED_KINDS } from "../../src/compose/nodes/index.ts";
 import { ALL_KIND_NAMES, StandInCode, standIn, withKinds } from "./stand_ins.ts";
 
@@ -25,11 +29,15 @@ function expectTablesAgree(): void {
   }
 }
 
-test("the kind tables are maps and start empty", () => {
+test("the kind tables are maps of authored kinds", () => {
   expect(KINDS).toBeInstanceOf(Map);
   expect(BINDING_FIELDS).toBeInstanceOf(Map);
-  expect(KINDS.size).toBe(0);
-  expect(BINDING_FIELDS.size).toBe(0);
+  expect([...KINDS.keys()].filter((kind) => !ALL_KIND_NAMES.includes(kind))).toEqual([]);
+});
+
+test("KINDS maps the kind text to its descriptor class", () => {
+  expect(KINDS.get("agent")).toBe(AgentDescriptor);
+  for (const [kind, cls] of KINDS) expect(cls.kind).toBe(kind);
 });
 
 test("removed kinds are not registered", () => {
@@ -49,6 +57,8 @@ test("KINDS and BINDING_FIELDS agree", () => {
 });
 
 test("withKinds restores the tables after a return or a throw", () => {
+  const kinds = [...KINDS];
+  const bindingFields = [...BINDING_FIELDS];
   const first = standIn("code");
   withKinds([first], () => {
     withKinds([StandInCode], () => {
@@ -63,6 +73,6 @@ test("withKinds restores the tables after a return or a throw", () => {
     ).toThrow("boom");
     expect(KINDS.get("code")).toBe(first);
   });
-  expect(KINDS.size).toBe(0);
-  expect(BINDING_FIELDS.size).toBe(0);
+  expect([...KINDS]).toEqual(kinds);
+  expect([...BINDING_FIELDS]).toEqual(bindingFields);
 });

@@ -1,6 +1,6 @@
 /**
- * The parse phase's `nodes:` mapping pass: a port of `tests/compose/test_parse.py`, with
- * `StandInAgent` and `StandInCase` for the agent and case kinds.
+ * The parse phase's `nodes:` mapping pass: a port of `tests/compose/test_parse.py`, with the real
+ * `agent` kind (`AgentDescriptor`) and `StandInCase` for the case kind.
  *
  * Changed: `test_case_rejects_numeric_key` asserts "field '1' is not allowed", since TS keeps the
  * key `1` as the text written. Python compares the descriptor to an `AgentDescriptor` with
@@ -14,13 +14,14 @@
 
 import { afterEach, expect, test } from "bun:test";
 
+import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { siteKey } from "../../src/compose/nodes/base.ts";
 import { flowNodesCursor } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { loadError, nodesOf, runTextCase } from "./declarations.ts";
-import { StandInAgent, StandInCase, StandInCode, standIn, withKinds } from "./stand_ins.ts";
+import { StandInCase, StandInCode, standIn, withKinds } from "./stand_ins.ts";
 
 afterEach(() => forget());
 
@@ -42,12 +43,12 @@ output: \${writer.output}
 `;
 
 test("parse nodes uses span tree", () => {
-  const desc = withKinds([StandInAgent], () => parseNodes(nodesReader(FLOW)).get("writer")!);
+  const desc = parseNodes(nodesReader(FLOW)).get("writer")!;
 
   // The singular `input:`/`output:` source keys are back-mapped to the plural fields.
-  expect(desc).toBeInstanceOf(StandInAgent);
+  expect(desc).toBeInstanceOf(AgentDescriptor);
   expect(desc.id).toBe("writer");
-  expect((desc as StandInAgent).prompt).toBe("Write about ${topic}");
+  expect((desc as AgentDescriptor).prompt).toBe("Write about ${topic}");
   expect(desc.inputs).toEqual({ topic: "${input.topic}" });
   expect(desc.outputs).toBe("string");
   // Located: the physical cursor stamps ranges onto the descriptor and its fields.
@@ -78,11 +79,11 @@ test("parse nodes virtual cursor", () => {
   const reader = SourceCursor.virtual({
     w: { kind: "agent", prompt: "hi", inputs: { x: "${input.x}" }, outputs: "str" },
   });
-  const desc = withKinds([StandInAgent], () => parseNodes(reader).get("w")!);
+  const desc = parseNodes(reader).get("w")!;
 
-  expect(desc).toBeInstanceOf(StandInAgent);
+  expect(desc).toBeInstanceOf(AgentDescriptor);
   expect(desc.id).toBe("w");
-  expect((desc as StandInAgent).prompt).toBe("hi");
+  expect((desc as AgentDescriptor).prompt).toBe("hi");
   expect(desc.inputs).toEqual({ x: "${input.x}" });
   expect(desc.outputs).toBe("str");
   expect(desc.range).toBeNull();
@@ -93,7 +94,7 @@ test("parse nodes normalizes without mutating cursor", () => {
   const nodes = SourceDocument.parse(FLOW).root.child("nodes");
   const before = nodes.value;
 
-  const desc = withKinds([StandInAgent], () => parseNodes(nodes).get("writer")!);
+  const desc = parseNodes(nodes).get("writer")!;
 
   expect(desc.inputs).toEqual({ topic: "${input.topic}" });
   expect(desc.outputs).toBe("string");

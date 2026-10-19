@@ -1320,17 +1320,18 @@ describe("Standard Schema libraries", () => {
   }
 
   /**
-   * Check `placed`: its input types (`qty`'s labelled `qty`) and required `symbol`; a good call reaches
-   * `execute` as `good`; yian's check refuses `symbol: 1`; and `symbol: "ab"` fails the validator
-   * with `refused`, or, with no validator (`null`), reaches `execute` as given.
+   * Check `placed`: its input types (`symbol` a `str`, `qty` labelled `qtyLabel`) and required
+   * `symbol`; a good call reaches `execute` as `good`; yian's check refuses `symbol: 1`; and
+   * `symbol: "ab"` fails the validator with `refused`, or, with no validator (`null`), reaches
+   * `execute` as given.
    */
   async function expectPlace(
     placed: FunctionTool,
-    qty: string,
+    qtyLabel: string,
     good: Record<string, unknown>,
     refused: string | null,
   ): Promise<void> {
-    expect(inputLabels(placed)).toEqual({ symbol: "str", qty });
+    expect(inputLabels(placed)).toEqual({ symbol: "str", qty: qtyLabel });
     expect(toolTypes(placed).required).toEqual(new Set(["symbol"]));
     const tools = new ToolSet({ place: placed });
     expect(await tools.invoke(await tools.validate("place", { symbol: "abc" }))).toEqual(good);

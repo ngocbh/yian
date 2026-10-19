@@ -7,11 +7,12 @@
  * the subprocess. A failed call throws an `McpError` whose tool error kinds tell an AGENT's tool
  * loop whether its model reads the error and a TOOL node whether `retries:` apply.
  *
- * Knows about: `tools/errors`, `tools/function_tools`, `llm/body` (exact JSON writes), `defaults`,
- * typesys and diagnostics.
+ * Knows about: `tools/errors`, `tools/function_tools`, `llm/body` (exact JSON writes), typesys and
+ * diagnostics.
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
+import type { Writable } from "node:stream";
 
 import { reprText } from "../diagnostics.ts";
 import { encodeBody } from "../llm/body.ts";
@@ -434,11 +435,12 @@ export interface StdioTransportOptions {
  * grandchildren behind. It has the SDK `Transport` shape without naming the SDK's types.
  */
 export class StdioTransport {
+  /** Called once when the server is gone: it exited, its stdout ended, or `close()` ran. */
   onclose?: () => void;
+  /** Called with a write, read or decode error, or one thrown by `onmessage` or `onclose`. */
   onerror?: (error: Error) => void;
+  /** Called with each JSON-RPC message the server sends. */
   onmessage?: (message: unknown) => void;
-  /** Always `null`: stderr is read into `stderrTail()`. The SDK reads it to see a stdio transport. */
-  readonly stderr = null;
   private readonly options: StdioTransportOptions;
   private child: ChildProcess | undefined;
   /** stdout bytes after the last newline, and their total length. */
@@ -451,6 +453,8 @@ export class StdioTransport {
   private ended = false;
   private closeFired = false;
   private closing: Promise<void> | undefined;
+  /** Settles on stdin's next `drain` or `close`; every send waiting on a full pipe shares it. */
+  private drained: Promise<void> | undefined;
   private readonly settled: Promise<void>;
   private settle!: () => void;
 
@@ -475,7 +479,8 @@ export class StdioTransport {
 
   /** Start the server; reject with the spawn error when it can't start. */
   start(): Promise<void> {
-    if (this.child !== undefined || this.closed) return Promise.reject(new Error("StdioTransport already started"));
+    if (this.closed) return Promise.reject(new Error("StdioTransport is closed"));
+    if (this.child !== undefined) return Promise.reject(new Error("StdioTransport already started"));
     const { command, args, env, cwd, defaultEnv } = this.options;
     return new Promise((resolve, reject) => {
       let child: ChildProcess;
@@ -538,21 +543,26 @@ export class StdioTransport {
       const flushed = stdin.write(line, (error) => {
         if (error) reject(error);
       });
-      if (flushed) {
-        resolve();
-        return;
-      }
-      const onDrain = () => {
-        stdin.off("close", onClose);
-        resolve();
-      };
-      const onClose = () => {
+      if (flushed) resolve();
+      else this.drain(stdin).then(resolve, reject);
+    });
+  }
+
+  /** Wait for `stdin` to drain; reject when it closes first. */
+  private drain(stdin: Writable): Promise<void> {
+    return (this.drained ??= new Promise<void>((resolve, reject) => {
+      const done = (error?: Error) => {
         stdin.off("drain", onDrain);
-        reject(new Error("Not connected"));
+        stdin.off("close", onClose);
+        this.drained = undefined;
+        if (error) reject(error);
+        else resolve();
       };
+      const onDrain = () => done();
+      const onClose = () => done(new Error("Not connected"));
       stdin.once("drain", onDrain);
       stdin.once("close", onClose);
-    });
+    }));
   }
 
   /**
@@ -581,16 +591,16 @@ export class StdioTransport {
     } catch {
       // Already gone.
     }
-    await Promise.race([exit, sleep(2000)]);
+    await within(exit, 2000);
     // Even when the leader exited, what it started may still run in its group.
     if (signalGroup(pid, "SIGTERM")) {
       const deadline = Date.now() + 2000;
       while (signalGroup(pid, 0) && Date.now() < deadline) await sleep(50);
       signalGroup(pid, "SIGKILL");
     }
-    await Promise.race([exit, sleep(1000)]);
+    await within(exit, 1000);
     // Let `onclose` fire with the stderr tail settled.
-    await Promise.race([this.settled, sleep(500)]);
+    await within(this.settled, 500);
     this.fireClose();
     child.stdout?.destroy();
     child.stderr?.destroy();
@@ -687,20 +697,33 @@ export class StdioTransport {
   }
 }
 
-/** Resolve after `ms`, without keeping the process alive. */
+// The timers below keep the process alive on purpose: a host whose last statement is
+// `await transport.close()` must not exit before the SIGKILL.
+
+/** Resolve after `ms`. */
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms).unref());
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Send `signal` to process group `pid`; return whether the group still existed. */
+/** Resolve when `promise` does or after `ms`, whichever comes first; no timer outlives it. */
+async function within(promise: Promise<void>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([promise, new Promise<void>((resolve) => (timer = setTimeout(resolve, ms)))]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Send `signal` to process group `pid`; return whether the group still existed. Never throws. */
 function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
   try {
     process.kill(-pid, signal);
     return true;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ESRCH" || code === "EPERM") return false;
-    throw error;
+  } catch {
+    // ESRCH: the group is gone; EPERM: the id now names another user's group. Any other error
+    // counts as gone too, so `close()` never rejects.
+    return false;
   }
 }
 

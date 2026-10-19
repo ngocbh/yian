@@ -9,9 +9,11 @@
  * with the MCP client.
  */
 
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { Client } from "@modelcontextprotocol/client";
 import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
@@ -334,7 +336,37 @@ describe("StdioTransport", () => {
       expect(childAlive(sleeper!)).toBe(true);
       await t.close();
       expect(childAlive(server)).toBe(false);
-      expect(await waitFor(() => !childAlive(sleeper!), 1000)).toBe(true);
+      expect(childAlive(sleeper!)).toBe(false);
+    },
+    SLOW,
+  );
+
+  test(
+    "close in a host with nothing else to do still SIGKILLs a grandchild that ignores SIGTERM",
+    () => {
+      const grandchild = marker("grandchild-ignores-term");
+      const src = (path: string) => JSON.stringify(fileURLToPath(new URL(path, import.meta.url)));
+      // `close()` is the host's last statement: only close's own timers keep the host alive.
+      const script = `
+        import { StdioTransport } from ${src("../../src/tools/mcp.ts")};
+        import { pids, stdioOptions, waitFor } from ${src("./mcp_helpers.ts")};
+        const file = ${JSON.stringify(grandchild)};
+        const t = new StdioTransport({
+          ...stdioOptions("--grandchild-ignores-term", file),
+          maxMessageBytes: 1024,
+          defaultEnv: { ...process.env },
+        });
+        await t.start();
+        if (!(await waitFor(() => pids(file).length === 1, 5000))) throw new Error("no grandchild");
+        await t.close();
+      `;
+      const runtimeFlags = process.versions.bun === undefined ? [] : ["--no-install"];
+      const host = spawnSync(process.execPath, [...runtimeFlags, "-e", script], { encoding: "utf8", timeout: 12_000 });
+      expect(host.stderr).toBe("");
+      expect(host.status).toBe(0);
+      const [sleeper] = pids(grandchild);
+      expect(sleeper).toBeNumber();
+      expect(childAlive(sleeper!)).toBe(false);
     },
     SLOW,
   );
@@ -456,6 +488,28 @@ describe("StdioTransport", () => {
       await t.close();
       await t.close();
       await expect(t.send({ jsonrpc: "2.0", method: "notifications/initialized" })).rejects.toThrow();
+      await expect(t.start()).rejects.toThrow("StdioTransport is closed");
+    },
+    SLOW,
+  );
+
+  test(
+    "sends waiting on a full pipe share one drain and one close listener",
+    async () => {
+      // `--hang` never reads stdin, so the pipe fills and every send waits.
+      const t = transport(["--hang"]);
+      await t.start();
+      const stdin = (t as unknown as { child: { stdin: NodeJS.WritableStream } }).child.stdin;
+      const drains = stdin.listenerCount("drain");
+      const closes = stdin.listenerCount("close");
+      const message = { jsonrpc: "2.0", method: "notifications/x", params: { text: "x".repeat(100_000) } };
+      // The first few writes fit in the pipe and resolve; the rest wait, and fail once close ends
+      // the server.
+      const sends = Promise.allSettled(Array.from({ length: 20 }, () => t.send(message)));
+      expect(stdin.listenerCount("drain")).toBe(drains + 1);
+      expect(stdin.listenerCount("close")).toBe(closes + 1);
+      await t.close();
+      expect((await sends).map((result) => result.status)).toContain("rejected");
     },
     SLOW,
   );

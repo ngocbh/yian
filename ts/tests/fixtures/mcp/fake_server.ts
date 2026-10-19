@@ -7,8 +7,8 @@
  * dist/tests/fixtures/mcp/fake_server.js [flags]`).
  */
 
-import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, statSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { appendFileSync, existsSync, realpathSync, statSync } from "node:fs";
 import { PassThrough, type Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -341,6 +341,7 @@ async function main(): Promise<void> {
       "bad-output": { type: "boolean" },
       twins: { type: "boolean" },
       grandchild: { type: "string" },
+      "grandchild-ignores-term": { type: "string" },
       stubborn: { type: "boolean" },
       flood: { type: "string" },
     },
@@ -363,6 +364,14 @@ async function main(): Promise<void> {
     // Not detached, so it stays in the server's process group.
     const child = spawn("sleep", ["300"], { stdio: "ignore" });
     appendLine(values.grandchild, String(child.pid));
+  }
+  if (values["grandchild-ignores-term"] !== undefined) {
+    // An ignored signal stays ignored across `exec`, so `sleep` ignores SIGTERM too.
+    const child = spawn("sh", ["-c", "trap '' TERM; exec sleep 300"], { stdio: "ignore" });
+    // The pid is written once `sh` has exec'd `sleep`, so a reader knows SIGTERM is ignored.
+    while (!commandOf(child.pid!).startsWith("sleep")) await sleep(0.01);
+    appendLine(values["grandchild-ignores-term"], String(child.pid));
+    process.exit(0);
   }
   if (values.stubborn) {
     process.on("SIGTERM", () => {});
@@ -393,7 +402,24 @@ async function main(): Promise<void> {
   }
 }
 
-// `import.meta.main` doesn't exist on Node 22.
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+/** The command line of process `pid`, or `""` when it is gone. */
+function commandOf(pid: number): string {
+  return spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim();
+}
+
+/** Return whether this file is the process's entry script. */
+function isEntry(): boolean {
+  // Node 22 has no `import.meta.main`; Node realpaths the main module's URL but not `argv[1]`.
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    // `argv[1]` names no file.
+    return false;
+  }
+}
+
+if (isEntry()) {
   await main();
 }

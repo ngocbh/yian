@@ -22,7 +22,8 @@
  * `MemoryContext`, `MemoryRecallError`), and the host interfaces: `Memory` and its run
  * `MemorySession` (`recall`, `learn`, `commit`), `TranscriptSource` and its `ConversationTurn`, and
  * the engine's `EvaluationTrace` sink. A host interface method may return a value or a promise,
- * and yian always awaits it. It imports only `diagnostics` and `defaults`.
+ * and yian always awaits it; property reads (`snapshot`, `view`), `ConversationTurn.interrupt()`
+ * and `EvaluationTrace` stay synchronous. It imports only `diagnostics` and `defaults`.
  */
 
 import { current } from "../defaults.ts";
@@ -2282,11 +2283,10 @@ export type ConversationCheckpoint =
 /**
  * A leased invocation that directly retains requests and actual observations.
  *
- * `TranscriptSource.openTurn` resolves to a turn already admitted under its FIFO lease. The turn
- * calls `signal.throwIfAborted()` on the signal it was opened with while queuing and between
- * effects, never before recording an actual observation; that failure propagates unchanged. A
- * method may return a value or a promise, and yian awaits it; `view` and `interrupt()` stay
- * synchronous.
+ * The turn calls `signal.throwIfAborted()` (Python's `check_stopped()`) on the signal it was opened
+ * with while queuing and between effects, never before recording an actual observation; that
+ * failure propagates unchanged. A method may return a value or a promise, and yian awaits it;
+ * `view` and `interrupt()` stay synchronous.
  *
  * Callers probe two optional capabilities with `typeof turn.x === "function"`: `prepareHistory`
  * projects and summarizes retained history for an API request, and `interrupt()` asks the turn to
@@ -2331,7 +2331,8 @@ export interface ConversationTurn {
    * called before a normal return; `failed` when `error` is given; else `completed`. It never
    * rethrows `error`, and throws its own close failure only when `error` is undefined. With `error`
    * undefined and the signal aborted, it records `interrupted`, releases the lease, then throws
-   * `signal.reason`.
+   * `signal.reason`. It releases the lease even when recording fails. While `error` is pending, its
+   * own close failure is attached to `error` rather than lost.
    */
   close(error?: unknown): void | Promise<void>;
   /**
@@ -2362,9 +2363,11 @@ export interface TranscriptSource {
    * Open one turn for an invocation, admitted under the source's FIFO lease (Python's `open_turn`
    * and `__enter__`).
    *
-   * It checks the request's types before any waiting, then waits for the lease, persists the
-   * admission and resolves to the admitted turn; it may return the turn or a promise of it. The
-   * turn calls `signal.throwIfAborted()` where Python calls `check_stopped()`.
+   * A non-`ConversationRequest` throws `TypeError` before any waiting. It then waits for the lease,
+   * persists the admission and resolves to the admitted turn. If opening fails or the signal aborts
+   * after the lease is reserved, it records the close of a persisted admission (`interrupted` for an
+   * abort), releases the lease and rejects with that failure unchanged; the caller then has no turn
+   * to close.
    *
    * @param request - The authored consumer, invocation and compatibility descriptor, without
    *   backend-owned identity.
@@ -2394,7 +2397,8 @@ export class MemoryContent {
    * @throws TypeError when `text` isn't a string or the source lacks `openTurn`.
    * @throws RangeError when `text` holds a lone surrogate.
    */
-  constructor({ text = "", transcript = null }: { text?: string; transcript?: TranscriptSource | null } = {}) {
+  constructor(options: { text?: string; transcript?: TranscriptSource | null } = {}) {
+    const { text = "", transcript = null } = options;
     this.text = requireString(text, "text", false);
     if (transcript !== null && typeof (transcript as { openTurn?: unknown }).openTurn !== "function") {
       throw new TypeError("transcript must supply openTurn or be null");
@@ -2447,10 +2451,8 @@ export class MemoryContext {
    *
    * @throws TypeError when `sections` isn't an array or an item isn't exactly a `MemorySection`.
    */
-  constructor({
-    sections = [],
-    transcript = null,
-  }: { sections?: readonly MemorySection[]; transcript?: ConversationTurn | null } = {}) {
+  constructor(options: { sections?: readonly MemorySection[]; transcript?: ConversationTurn | null } = {}) {
+    const { sections = [], transcript = null } = options;
     if (!isPlainArray(sections)) throw new TypeError("sections must be an array");
     for (const section of sections) {
       if (!isExactly(section, MemorySection)) throw new TypeError("sections must contain MemorySection values");
@@ -2495,7 +2497,7 @@ export interface MemorySession {
    */
   recall(context?: RecallContext | null): string | MemoryContent | Promise<string | MemoryContent>;
   /** Return this memory's proposed mutations for one batch, as an array. */
-  learn(context: LearnContext): MemoryMutation[] | Promise<MemoryMutation[]>;
+  learn(context: LearnContext): readonly MemoryMutation[] | Promise<readonly MemoryMutation[]>;
   /**
    * Atomically commit one immutable mutation batch.
    *

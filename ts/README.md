@@ -324,8 +324,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `5n`.
 - A host memory is any object with `openRun({ snapshot })` and `reset()` (`isMemory` checks it, as
   Python's `isinstance(value, Memory)`). Every method of a host memory interface (`Memory`,
-  `MemorySession`, `TranscriptSource`, `ConversationTurn`) may return a value or a promise, and
-  yian always awaits it, as for tools; property reads (`snapshot`, `view`),
+  `MemorySession`, `TranscriptSource`, `ConversationTurn`, `MarkdownStore.read/write`) may return a
+  value or a promise, and yian always awaits it, as for tools; property reads (`snapshot`, `view`),
   `ConversationTurn.interrupt()` and the engine's `EvaluationTrace` stay synchronous. A session has
   no `with` form: the caller calls `close()` in `finally`.
 - `src/memory/storage/sqlite.ts` holds `SQLiteStorage`, the single-owner SQLite state file, opened
@@ -339,11 +339,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   and unreachable storage a Node system error. The document, kept versions and write log are
   byte-compatible with Python's, pinned by `conformance/fixtures/markdown_store.json`, which
   Python yian wrote. The `.<name>.lock` file is a SQLite lock that Python's `flock` doesn't see.
-- A host-implemented memory interface (here `MarkdownStore`) may return a value or a promise;
-  yian awaits.
-- The recall context, the session conversation contracts, the session's recall, learn and commit
-  methods, and the built-in backends that use the storage (episodic, reflective, session, profile)
-  are not ported yet.
+- The conversation codecs and fold (`memory/conversation.ts`), session summaries, the package
+  exports of the recall and conversation names, and the built-in backends that use the storage
+  (episodic, reflective, session, profile) are not ported yet.
 
 ## Runtime
 

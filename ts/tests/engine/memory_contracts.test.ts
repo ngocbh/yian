@@ -33,15 +33,16 @@
  * `test_learn_context_requires_episodes_of_its_run`, the episode and context rows of
  * `test_episodes_contexts_mutations_and_failures_name_the_memory_key`,
  * `test_freeze_still_detects_cycles`, `test_freeze_shares_a_repeated_subtree` and
- * `test_learn_context_equal_feedback`; plus JavaScript's own
- * values (a `"__proto__"` key, a null-prototype object, a repeated subtree, an array hole), the
- * value nesting limit, and the depth-first order of the first error. 100 000-level arrays and
- * objects are copied through a snapshot envelope, a mutation and learn feedback (compared as log
- * JSON text, since Bun's `toEqual` overflows the stack at that depth), and an error deep inside one
- * names its full path. It also covers the occurrence nesting order, the operation failure's field
- * checks (Python pins those through the learning outcome and backward records), `validateMutations`,
- * a mutation's id and payload checks (a payload deeper than the value nesting limit is kept), and
- * each learning carrier's field checks in Python's order.
+ * `test_learn_context_equal_feedback`; plus JavaScript's own values (a `"__proto__"` key, a
+ * null-prototype object, a repeated subtree, an array hole), the value nesting limit, and the
+ * depth-first order of the first error. 100 000-level arrays and objects are copied through a
+ * snapshot envelope, a mutation and learn feedback (compared as log JSON text, since Bun's
+ * `toEqual` overflows the stack at that depth), and an error deep inside one names its full path.
+ * It also covers the occurrence nesting order, the operation failure's field checks (Python pins
+ * those through the learning outcome and backward records), `validateMutations`, a mutation's id
+ * and payload checks (a payload deeper than the value nesting limit is kept), each learning
+ * carrier's field checks in Python's order, the recall context's field checks, its value number
+ * rule at any depth, and the recall error's field checks.
  *
  * TS-only (episodes and learn contexts): one row per `MemoryEpisode` and `LearnContext`
  * constructor message with its class, in Python's check order; the episode JSON and the learn
@@ -68,27 +69,28 @@
  * and message. The scalar identity test checks that `true`, `1n` and `1` keep their exact JS types
  * at every depth of the snapshot. A memory config nests at most `maxValueNesting` levels (memory
  * JSON nesting doesn't exist here), with that limit's message. The ambiguous-index rows add `1.5`,
- * `1n` and a `"MAP_ITEM"` kind; the non-array paths are `Set`s (Python passes lists). A
- * scope's lack of a boundary is checked on the module's exports and the scope's fields (TS takes
- * extra constructor arguments silently). The scope row of the forged-carrier test passes a plain
- * object shaped like a segment. The memory protocols are checked on plain-object fakes: `Memory`
- * with `isMemory` (Python's `isinstance` on a runtime-checkable protocol), `MemorySession` by its
- * type, and its missing `openFrame` with `@ts-expect-error` and `in`. A host method may return a
- * promise, so the protocol test runs a synchronous and an async fake and awaits each call; a
- * session has no context-manager methods, so the test calls `close()`. The recall context's
- * `inputs` follow the yian value number rule and are a deep-frozen snapshot, so editing them throws
- * `TypeError` (Python returns a fresh copy). `MemoryRecallError` takes its cause as `{ cause }`,
- * read back as `error.cause` (Python's `raise ... from` and `__cause__`). The backend-import test
- * reads `memory/index.ts` and checks
- * that it imports only `./contracts.ts` (the layer-direction test pins `contracts.ts` to
- * `diagnostics` and `defaults`), where Python imports the package in a fresh interpreter. Python's
- * `ValueError` is `RangeError`; a frozen field throws `TypeError` where Python raises
- * `FrozenInstanceError`. A mutation's payload is its deep-frozen snapshot, so editing it throws
- * `TypeError` (Python returns a fresh copy); Python's int payloads are `bigint`s. The learning
- * carriers keep their nested carriers by reference: where Python asserts a copied policy `is not`
- * the one passed in, the test checks that it is the same frozen value. The policy outcome's
- * optional fields are an options object (`{ commitId, failure }`), and the learning result's arrays
- * are `{ failures, policies }`. The identity rows check only the error class, as Python does.
+ * `1n` and a `"MAP_ITEM"` kind; the non-array paths are `Set`s (Python passes lists). A scope's
+ * lack of a boundary is checked on the module's exports and the scope's fields (TS takes extra
+ * constructor arguments silently). The scope row of the forged-carrier test passes a plain object
+ * shaped like a segment. The memory protocols are checked on plain-object fakes: `Memory` with
+ * `isMemory` (Python's `isinstance` on a runtime-checkable protocol), `MemorySession` by its type,
+ * and its missing `openFrame` with `@ts-expect-error` and `in`. A host method may return a promise,
+ * so the protocol test runs a synchronous and an async fake and awaits each call; a session has no
+ * context-manager methods, so the test calls `close()`. The recall context's `inputs` follow the
+ * yian value number rule and are a deep-frozen snapshot, so editing them throws `TypeError` (Python
+ * returns a fresh copy). `MemoryRecallError` takes its cause as `{ cause }`, read back as
+ * `error.cause` (Python's `raise ... from` and `__cause__`). The fake's `snapshot` is frozen, so a
+ * reader's edit of it throws `TypeError` and leaves the snapshot unchanged (Python's fake returns a
+ * copy). The backend-import test reads `memory/index.ts` and checks that it imports only
+ * `./contracts.ts` (the layer-direction test pins `contracts.ts` to `diagnostics` and `defaults`),
+ * where Python imports the package in a fresh interpreter. Python's `ValueError` is `RangeError`; a
+ * frozen field throws `TypeError` where Python raises `FrozenInstanceError`. A mutation's payload
+ * is its deep-frozen snapshot, so editing it throws `TypeError` (Python returns a fresh copy);
+ * Python's int payloads are `bigint`s. The learning carriers keep their nested carriers by
+ * reference: where Python asserts a copied policy `is not` the one passed in, the test checks that
+ * it is the same frozen value. The policy outcome's optional fields are an options object
+ * (`{ commitId, failure }`), and the learning result's arrays are `{ failures, policies }`. The
+ * identity rows check only the error class, as Python does.
  *
  * Not ported: the tuple and bytes rows and the list-for-tuple path row (TS has only arrays and no
  * bytes in a config); `test_memory_json_rejects_nesting_beyond_the_memory_limit` (its carriers
@@ -98,11 +100,10 @@
  * its base constructor, so no carrier holds an unvalidated segment or origin);
  * `test_memory_operation_error_survives_copy_and_pickle` (no `copy` or `pickle`); dataclass `==`
  * and `hash` (Bun's `toEqual` replaces equality); the `MemorySession` row of
- * `test_frame_types_are_gone` (`MemorySession` is an interface, with no runtime members; the session
- * protocol test checks a session's missing `openFrame`);
- * the forged rows of
- * `test_learning_result_revalidates_exact_nested_policy_carriers` (Python's `object.__setattr__`
- * on a frozen dataclass; a TS carrier is frozen by its constructor, so none holds an unchecked
+ * `test_frame_types_are_gone` (`MemorySession` is an interface, with no runtime members; the
+ * session protocol test checks a session's missing `openFrame`); the forged rows of
+ * `test_learning_result_revalidates_exact_nested_policy_carriers` (Python's `object.__setattr__` on
+ * a frozen dataclass; a TS carrier is frozen by its constructor, so none holds an unchecked
  * `commitId` or `retryable`); `test_freeze_memo_keeps_the_nesting_limit` (TS has no memory nesting
  * limit); the forged row of `test_episode_execution_sequence_is_optional_and_survives_context_copy`
  * and the episode and context rows of `test_nested_memory_carriers_reject_forged_subclass_values`
@@ -543,7 +544,7 @@ function fakeMemory(async = false): Memory & FakeMemoryLog {
     openRun({ snapshot = null } = {}) {
       this.opened.push(snapshot);
       const session: MemorySession = {
-        snapshot: { namespace: "test" },
+        snapshot: Object.freeze({ namespace: "test" }),
         close: () => {
           this.closes++;
           return settle(undefined);
@@ -582,6 +583,10 @@ test.each([
   expect(memory.opened[0]).toBe(snapshot);
   expect(memory.opened[1]).toBeNull();
   expect(session.snapshot).toEqual({ namespace: "test" });
+  expect(() => {
+    (session.snapshot as Record<string, unknown>).namespace = "changed";
+  }).toThrow(TypeError);
+  expect(session.snapshot).toEqual({ namespace: "test" });
   expect(await session.recall()).toBe("all");
   expect(await session.recall(null)).toBe("all");
   expect(await session.recall(new RecallContext("base", "query", {}, ["root", "agent"]))).toBe("query");
@@ -598,18 +603,15 @@ test.each([
 });
 
 // test_session_protocol_recalls_and_learns_without_frames
-test("the session protocol recalls and learns without frames", () => {
+test("the session protocol recalls and learns without frames", async () => {
   const session: MemorySession = {
     snapshot: {},
     close() {},
-    recall: (context = null) => (context === null ? "all" : context.prompt),
+    recall: () => "",
     learn: (context) => [new MemoryMutation("learned", { memory: context.memory })],
-    commit: (commitId, mutations) => {
-      expect(commitId).not.toBe("");
-      expect(Array.isArray(mutations)).toBe(true);
-    },
+    commit() {},
   };
-  const learned = session.learn(new LearnContext("run", "notes", [])) as MemoryMutation[];
+  const learned = await session.learn(new LearnContext("run", "notes", []));
   expect(learned[0]!.payload).toEqual({ memory: "notes" });
   expect("openFrame" in session).toBe(false);
   // @ts-expect-error a session has no openFrame

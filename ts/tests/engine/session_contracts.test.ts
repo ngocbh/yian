@@ -53,11 +53,10 @@
  * checkpoint union, `openTurn`'s parameters (the request and an options object holding the stop
  * `signal`, with no checkpoint), and fake turns typed as `ConversationTurn` with and without the
  * optional `prepareHistory` and `interrupt`, whose `request` is called without `items`.
- * `MemoryContextRequest` keeps its frozen recall context and invocation
- * by reference, so where Python mutates the originals through `object.__setattr__`, the test
- * checks that assigning to them throws `TypeError` and that the request holds the same values.
- * `MemoryContent` takes an options object (`{ text, transcript }`); its rows check each class and
- * message.
+ * `MemoryContextRequest` keeps its frozen recall context and invocation by reference, so where
+ * Python mutates the originals through `object.__setattr__`, the test checks that assigning to them
+ * throws `TypeError` and that the request holds the same values. `MemoryContent` takes an options
+ * object (`{ text, transcript }`); its rows check each class and message.
  *
  * Not ported: the `object.__setattr__` rows of
  * `test_nested_view_carriers_are_revalidated_and_detached` and all of
@@ -69,7 +68,7 @@
  * Left for later: `test_conversation_contracts_are_exported_without_concrete_backend` (`:361`), the
  * `memory.__all__` half of `test_memory_context_carriers_are_contracts_only_exports` (`:1357`) and
  * the export half of `test_conversation_carriers_have_no_owner_key` (`:1367`), with the package
- * exports; and the fold and codec tests (`:523` onward), with `conversation.ts`.
+ * exports; and the fold and codec tests (`:523`–`:1277`), with `conversation.ts`.
  */
 
 import { expect, test } from "bun:test";
@@ -671,7 +670,6 @@ test("conversation capabilities are optional and exact", async () => {
     Parameters<TranscriptSource["openTurn"]>,
     [request: ConversationRequest, options: { signal: AbortSignal }]
   > = true;
-  expect([checkpoints, openTurnParameters]).toEqual([true, true]);
 
   const plain = plainTurn();
   // `items` is optional, as Python's `()` default.
@@ -955,7 +953,6 @@ test("the memory context carriers are contracts exports", () => {
   const source: contracts.TranscriptSource | null = null;
   // @ts-expect-error the stop check is the turn's AbortSignal, not an export
   const check: contracts.CheckStopped | null = null;
-  expect([source, check]).toEqual([null, null]);
 });
 
 // test_conversation_carriers_have_no_owner_key, its field-order half

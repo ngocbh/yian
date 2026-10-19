@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "a_json_two_text_blocks: one object split over two text blocks: Message.text() joins them with a newline. anthropic/claude-sonnet-4-5 on anthropic_messages. Block {\"thinking\":{\"type\":\"adaptive\"}}. Schema Rec (corpus:Rec), name Record. Strategy json_schema. Request: output_config {format: {type: \"json_schema\", schema: the Anthropic output schema of Rec}}; thinking {type: \"adaptive\"}; max_tokens 64000. Expected: plan.parse(response) returns {\"answer\":\"x\",\"score\":1}.",
+  "description": "a_json_two_text_blocks: one object split inside the answer string over two text blocks: Message.text() joins them with a newline. anthropic/claude-sonnet-4-5 on anthropic_messages. Block {\"thinking\":{\"type\":\"adaptive\"}}. Schema Rec (corpus:Rec), name Record. Strategy json_schema. Request: output_config {format: {type: \"json_schema\", schema: the Anthropic output schema of Rec}}; thinking {type: \"adaptive\"}; max_tokens 64000. Expected: plan.parse(response) returns {\"answer\":\"x\\n\",\"score\":1}.",
   "interactions": [
     {
       "request": {
@@ -66,11 +66,11 @@
           "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\n",
           "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 1, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n",
           "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"{\\\"ans\"}}\n\n",
-          "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"wer\\\": \\\"x\\\",\"}}\n\n",
+          "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"wer\\\": \\\"x\"}}\n\n",
           "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 1}\n\n",
           "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 2, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n",
-          "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 2, \"delta\": {\"type\": \"text_delta\", \"text\": \" \\\"sco\"}}\n\n",
-          "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 2, \"delta\": {\"type\": \"text_delta\", \"text\": \"re\\\": 1}\"}}\n\n",
+          "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 2, \"delta\": {\"type\": \"text_delta\", \"text\": \"\\\", \\\"s\"}}\n\n",
+          "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 2, \"delta\": {\"type\": \"text_delta\", \"text\": \"core\\\": 1}\"}}\n\n",
           "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 2}\n\n",
           "event: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"input_tokens\": 12, \"output_tokens\": 40, \"cache_read_input_tokens\": 100, \"cache_creation_input_tokens\": 30}}\n\n",
           "event: message_stop\ndata: {\"type\": \"message_stop\"}\n\n"

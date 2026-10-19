@@ -326,7 +326,7 @@ const SCENARIOS: Record<string, Scenario> = {
   a_json_invalid_value: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", {
     value: { answer: "x", score: "notint" },
   }, { block: THINKING }),
-  // Truncated JSON is not repaired.
+  // Cut short by max_tokens: the call does not fail, the text goes to the parser and is not repaired.
   a_json_truncated: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", TRUNCATED, {
     block: THINKING,
   }),
@@ -337,9 +337,9 @@ const SCENARIOS: Record<string, Scenario> = {
     error: StructuredOutputError,
     message: 'Invalid json output: {"answer": "a", "score": 1}\n{"answer": "b", "score": 2}',
   }, { block: THINKING }),
-  // One object split over two text blocks, joined with a newline.
+  // One object split inside the answer string over two text blocks: the newline join lands in the value.
   a_json_two_text_blocks: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", {
-    value: REC,
+    value: { answer: "x\n", score: 1n },
   }, { block: { thinking: { type: "adaptive" } } }),
   // The output schema keeps the nullable fields' `{default: null}`.
   a_thinking_reflection: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:_ReflectionResponse",

@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "a_json_truncated: truncated JSON: not repaired. anthropic/claude-sonnet-4-5 on anthropic_messages. Block {\"thinking\":{\"type\":\"adaptive\"},\"output_config\":{\"effort\":\"high\"}}. Schema Rec (corpus:Rec), name Record. Strategy json_schema. Request: output_config {format: {type: \"json_schema\", schema: the Anthropic output schema of Rec}, effort: \"high\"}; thinking {type: \"adaptive\"}; max_tokens 64000. Expected: plan.parse(response) throws StructuredOutputError(\"Invalid json output: {\\\"answer\\\": \\\"x\\\", \\\"score\\\": 1\").",
+  "description": "a_json_truncated: JSON cut short by the token limit (stop reason max_tokens): left to the parser, not repaired. anthropic/claude-sonnet-4-5 on anthropic_messages. Block {\"thinking\":{\"type\":\"adaptive\"},\"output_config\":{\"effort\":\"high\"}}. Schema Rec (corpus:Rec), name Record. Strategy json_schema. Request: output_config {format: {type: \"json_schema\", schema: the Anthropic output schema of Rec}, effort: \"high\"}; thinking {type: \"adaptive\"}; max_tokens 64000. Expected: plan.parse(response) throws StructuredOutputError(\"Invalid json output: {\\\"answer\\\": \\\"x\\\", \\\"score\\\": 1\").",
   "interactions": [
     {
       "request": {
@@ -69,7 +69,7 @@
           "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"{\\\"ans\"}}\n\n",
           "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"wer\\\": \\\"x\\\", \\\"score\\\": 1\"}}\n\n",
           "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 1}\n\n",
-          "event: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"input_tokens\": 12, \"output_tokens\": 40, \"cache_read_input_tokens\": 100, \"cache_creation_input_tokens\": 30}}\n\n",
+          "event: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"max_tokens\", \"stop_sequence\": null}, \"usage\": {\"input_tokens\": 12, \"output_tokens\": 40, \"cache_read_input_tokens\": 100, \"cache_creation_input_tokens\": 30}}\n\n",
           "event: message_stop\ndata: {\"type\": \"message_stop\"}\n\n"
         ]
       }

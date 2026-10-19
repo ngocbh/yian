@@ -2,6 +2,8 @@
 
 import importlib
 import json
+import os
+import signal
 from types import SimpleNamespace
 import warnings
 
@@ -16,6 +18,7 @@ from yian.llm_clients.auth import (
     AuthStore,
     OAuthCredentials,
 )
+from yian.llm_clients.auth import store as store_module
 from yian.llm_clients.api_key_env import PROVIDER_API_KEY_ENV
 from yian.llm_clients.model_list import ModelListError
 
@@ -127,6 +130,76 @@ def test_failed_or_cancelled_setup_preserves_previous_connection(
     assert store.path.read_bytes() == before
     assert store.selection() == previous
     assert "old-key" not in result.output and "private-" not in result.output
+
+
+DEVICE_JSON = ["auth", "openai", "--method", "subscription", "--login", "device", "--json"]
+
+
+@pytest.fixture
+def device_json(monkeypatch, setup_auth):
+    """Build the fake service only with `check_stopped`, and make a SIGTERM the command
+    doesn't handle fail the test instead of killing pytest."""
+    store, service = setup_auth
+
+    def build(*, check_stopped):
+        return service
+
+    def unhandled(number, frame):
+        raise AssertionError("SIGTERM reached the test's own handler")
+
+    monkeypatch.setattr(auth_cli, "OpenAIAuth", build)
+    previous = signal.signal(signal.SIGTERM, unhandled)
+    yield store, service, unhandled
+    signal.signal(signal.SIGTERM, previous)
+
+
+def test_device_json_stopped_before_the_save_exits_130_and_saves_nothing(
+    monkeypatch, device_json
+):
+    store, service, unhandled = device_json
+
+    def stop(credentials):
+        os.kill(os.getpid(), signal.SIGTERM)
+        return ("gpt-test",)
+
+    monkeypatch.setattr(service, "subscription_models", stop)
+    result = runner.invoke(app, DEVICE_JSON)
+    assert result.exit_code == 130, result.output
+    lines = [json.loads(line) for line in result.stdout.splitlines()]
+    assert [line["event"] for line in lines] == ["code", "waiting"]
+    assert not store.path.exists()
+    assert signal.getsignal(signal.SIGTERM) is unhandled
+
+
+def test_device_json_stopped_after_the_rename_is_saved_and_done(monkeypatch, device_json):
+    store, service, unhandled = device_json
+    replace = store_module.os.replace
+
+    def replace_then_stop(*args, **kwargs):
+        replace(*args, **kwargs)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setattr(store_module.os, "replace", replace_then_stop)
+    result = runner.invoke(app, DEVICE_JSON)
+    assert result.exit_code == 0, result.output
+    assert [json.loads(line) for line in result.stdout.splitlines()] == [
+        {
+            "format": "yian.cli.v1",
+            "event": "code",
+            "user_code": "TEST-CODE",
+            "verification_uri": "https://example.invalid/device",
+        },
+        {"format": "yian.cli.v1", "event": "waiting"},
+        {
+            "format": "yian.cli.v1",
+            "event": "done",
+            "models": ["gpt-test", "gpt-other"],
+            "model": "gpt-test",
+        },
+    ]
+    assert store.read().default_provider == "openai"
+    assert store.selection().model == "gpt-test"
+    assert signal.getsignal(signal.SIGTERM) is unhandled
 
 
 @pytest.mark.parametrize(

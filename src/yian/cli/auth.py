@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import json
 import os
+import signal
 import sys
 from typing import Optional
 import warnings
@@ -460,6 +461,59 @@ def _setup_openai(
     typer.echo(f"Saved OpenAI {method} authentication with model {model}")
 
 
+class _Stopped(Exception):
+    """Raised inside a JSON device sign-in once SIGTERM or SIGINT has asked it to stop."""
+
+
+def _sign_in_lines(auth_file: Optional[str], model: Optional[str]) -> None:
+    """Sign in to an OpenAI subscription by device code, writing JSON lines, and save the login.
+
+    Writes a `code` line, a `waiting` line, and a `done` line once the login is saved with
+    `model`, or the subscription's first model; it becomes the default when the store has
+    none. The first SIGTERM or SIGINT stops the sign-in before the store's rename: nothing is
+    saved and no further line is written. A second one kills the process.
+
+    Raises:
+        AuthError: The store is unusable, or sign-in, the listing or the model choice fails.
+        typer.Exit: 130 once stopped.
+    """
+    stopped = False
+
+    def stop(number, frame):
+        nonlocal stopped
+        stopped = True
+        # The default actions make a second signal kill a sign-in that doesn't stop.
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+    def check_stopped():
+        if stopped:
+            raise _Stopped
+
+    def show(url, code):
+        print_json({"event": "code", "user_code": code, "verification_uri": url})
+        print_json({"event": "waiting"})
+
+    saved = {number: signal.signal(number, stop) for number in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        store = AuthStore(auth_file, check_stopped=check_stopped)
+        # Reading first also diagnoses an unusable store before any request.
+        make_default = store.read().default_provider is None
+        service = OpenAIAuth(check_stopped=check_stopped)
+        credentials = service.device_login(show)
+        models = service.subscription_models(credentials)
+        model = models[0] if model is None else model
+        if model not in models:
+            raise AuthError("The selected model is not available for this connection")
+        store.save("openai", credentials, model, make_default=make_default)
+        print_json({"event": "done", "models": list(models), "model": model})
+    except _Stopped:
+        raise typer.Exit(130) from None
+    finally:
+        for number, handler in saved.items():
+            signal.signal(number, handler)
+
+
 def _model_answers(
     provider: str,
     model: str,
@@ -691,7 +745,10 @@ def auth(
 
     --auth-file F makes every form use the file F instead of $YIAN_AUTH_FILE or
     ~/.config/yian/auth.json. --json prints one yian.cli.v1 document on stdout
-    for --remove: success, or the error that failed it.
+    for --remove: success, or the error that failed it. For openai --method
+    subscription --login device it prints JSON lines: the code to enter, a
+    waiting line, then the saved models or the error; SIGTERM or SIGINT stops
+    the sign-in, saving nothing, with exit 130.
 
     A failed or cancelled setup leaves the saved logins unchanged.
 
@@ -769,6 +826,9 @@ def auth(
             project=project,
             header=header,
         )
+        if json_output and device:
+            _sign_in_lines(auth_file, model)
+            return
         store = AuthStore(auth_file)
         if remove:
             state = store.read()
@@ -815,7 +875,9 @@ def auth(
             )
     except AuthError as error:
         if json_output:
-            print_json({"error": {"code": "auth.failed", "message": str(error)}})
+            failure = {"code": "auth.failed", "message": str(error)}
+            # Device sign-in writes JSON lines, so its error is an event line too.
+            print_json({"event": "error", "error": failure} if device else {"error": failure})
         else:
             typer.echo(str(error), err=True)
         raise typer.Exit(1) from None

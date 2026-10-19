@@ -335,6 +335,22 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   (`seq`, `numWorkers`, `attemptId`, indexes) are safe-integer `number`s, written as JSON ints. A
   capture or feedback nested deep enough to overflow the stack throws the engine's `RangeError`,
   because `ForwardCapture` and backward feedback freeze recursively.
+- `log.ts` also holds the logs. `MemoryRunLog` keeps one run's records in the process;
+  `MemoryRunLog.fromRecords` reopens a detached prefix. `JsonlRunLog.create(path, runId)` makes a
+  new 0600 file and `JsonlRunLog.resume(path)` reopens one, validating its complete prefix before
+  it truncates an incomplete tail. Both logs keep the canonical round trip of every record, and
+  `close()` refuses later appends but keeps the records readable.
+- Changed: a `JsonlRunLog` holds a SQLite exclusive lock (`lockFile` in `platform.ts`) on
+  `<path>.lock` until `close()`, where Python flocks the log itself. The kernel frees the lock when
+  the process dies, and the lock file is never deleted. A busy lock throws `run log <path> is
+  locked by another writer (is the run still active?)` with the `FileLockError` as `cause`.
+- Each append writes at the known prefix end and fsyncs. A failed write or fsync truncates back to
+  the prefix and poisons the log: later appends throw `run log <path> refuses appends after a
+  failed append` (cause: the original error), and a failed rollback throws an `AggregateError`. A
+  record refused before any write doesn't poison the log.
+- For inspection, `readRunLog(path)` reads the complete prefix without the lock and without
+  changing the file, so it may see a line a concurrent writer later rolls back;
+  `isRunLogLocked(path)` probes `<path>.lock`.
 
 ## Compile
 

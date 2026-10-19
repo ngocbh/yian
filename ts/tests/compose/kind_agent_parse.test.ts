@@ -17,11 +17,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { siteKey } from "../../src/compose/nodes/base.ts";
-import { AgentDescriptor, MODE_REMOVED_FIX, retriesError } from "../../src/compose/nodes/agent.ts";
+import { AgentDescriptor, retriesError } from "../../src/compose/nodes/agent.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
-import { current, forget, reload } from "../../src/defaults.ts";
+import { BUILTIN, forget, reload } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
@@ -127,12 +127,11 @@ describe("retries", () => {
 
   test("the default follows YIAN_AGENT_RETRIES", () => {
     const text = "nodes:\n  a:\n    kind: agent\n    prompt: hi\n";
-    reload((name) => (name === "YIAN_AGENT_RETRIES" ? "4" : undefined));
-    expect(parseA(text).retries).toBe(4);
-    forget();
+    reload((name) => (name === "YIAN_AGENT_RETRIES" ? "5" : undefined));
+    expect(parseA(text).retries).toBe(5);
     reload(() => undefined);
-    expect(parseA(text).retries).toBe(current().agentRetries);
-    expect(new AgentDescriptor({ id: "a" }).retries).toBe(current().agentRetries);
+    expect(parseA(text).retries).toBe(BUILTIN.agentRetries);
+    expect(new AgentDescriptor({ id: "a" }).retries).toBe(BUILTIN.agentRetries);
   });
 
   test.each<[unknown, string | null]>([
@@ -250,12 +249,6 @@ describe("withSourceOrigins", () => {
     expect(desc.withSourceOrigins(cursor, { sitePath: ["node", "a"], catalogBuilder: new SourceCatalogBuilder() }))
       .toBe(desc);
   });
-});
-
-test("MODE_REMOVED_FIX", () => {
-  expect(MODE_REMOVED_FIX).toBe(
-    "an AGENT with tools runs the tool loop, one without tools makes a single call; delete this line",
-  );
 });
 
 // ---------- harvested conformance cases ----------

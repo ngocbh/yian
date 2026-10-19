@@ -1,12 +1,13 @@
 /**
  * The keyed-map flat-body node descriptors `parseNodes` reads: a port of
- * `tests/engine/test_node_parse.py`, with the stand-in kinds of `tests/compose/stand_ins.ts`
- * (`StandInAgent`, `StandInCode`, and a `tool` stand-in taking `tool_id` and `input:`).
+ * `tests/engine/test_node_parse.py`. Agent rows parse with the registered `agent` kind; kinds not
+ * yet ported use the stand-ins of `tests/compose/stand_ins.ts` (`StandInCode`, and a `tool`
+ * stand-in taking `tool_id` and `input:`).
  *
  * TS-only: `inf` is an expression keyword, so it is a rejected node id too.
  *
- * Changed: `test_agent_minimal_parses` and `test_agent_knobs_parse` parse with the real `agent`
- * kind; the knobs row reads seed 14 through the conformance case `load-agent/seed_14_agent_tools`.
+ * Changed: `test_agent_knobs_parse` reads seed 14 through the conformance case
+ * `load-agent/seed_14_agent_tools`.
  *
  * Later (T3-15): `test_code_parses`, `test_tool_parses`, `test_seed_11_anchored_nodes_parse`.
  * Later (T3-16): `test_case_searched_parses`, `test_case_on_parses`,
@@ -35,7 +36,6 @@ import { reprText } from "../../src/diagnostics.ts";
 import { caseText, loadError, nodesOf, runTextCase } from "../compose/declarations.ts";
 import {
   ALL_KIND_NAMES,
-  StandInAgent,
   StandInCode,
   standIn,
   withKinds,
@@ -125,7 +125,7 @@ describe("node ids must be identifiers", () => {
 
   test("identifier node ids accepted", () => {
     const text = agentAt("fetch_data") + agentAt("_private2") + agentAt("notify");
-    const descs = nodes(text, [StandInAgent]);
+    const descs = nodes(text);
 
     expect([...descs.keys()]).toEqual(["fetch_data", "_private2", "notify"]);
   });
@@ -265,7 +265,6 @@ fetch:
   test("depends on and runs after default empty", () => {
     const node = nodes(
       "\nnote:\n  kind: agent\n  input:\n    topic: ${input.topic}\n  output: str\n  prompt: hi\n",
-      [StandInAgent],
     ).get("note")!;
 
     expect(node.dependsOn).toEqual([]);
@@ -284,7 +283,7 @@ fetch:
 
   test("tool id illegal on agent is loud", () => {
     const text = "\nn:\n  kind: agent\n  tool_id: get_facts\n  output: str\n  prompt: hi\n";
-    const error = loadError(() => nodes(text, [StandInAgent]));
+    const error = loadError(() => nodes(text));
 
     expect(error.message).toContain("tool_id");
   });

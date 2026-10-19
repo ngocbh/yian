@@ -45,7 +45,7 @@ export const MODE_REMOVED_FIX =
 export function retriesError(value: unknown): string | null {
   if (typeof value === "bigint" && value >= 0n) {
     if (value <= BigInt(Number.MAX_SAFE_INTEGER)) return null;
-    return `must be at most ${Number.MAX_SAFE_INTEGER}, got ${value}`;
+    return `must be at most ${Number.MAX_SAFE_INTEGER}, got ${valueRepr(value)}`;
   }
   return `must be a non-negative integer, got ${valueRepr(value)}`;
 }
@@ -132,8 +132,9 @@ export class AgentDescriptor extends NodeDescriptor {
 
   /**
    * Create a descriptor from `fields`. `retries` defaults to `current().agentRetries`;
-   * `variables` and `llmConfig` to `{}` (a `null` is kept for `build` to refuse); `skills` and
-   * `asserts` read `null` as empty.
+   * `variables` and `llmConfig` to `{}` (a `null` is kept as written for `build`, which refuses a
+   * null `variables:` and reads a null `llm_config:` as the defaults); `skills` and `asserts` read
+   * `null` as empty.
    *
    * @throws TypeError when `memories` isn't an array of exact `MemoryDecl` values, or `origin`
    *   isn't an `OriginRef` or `null`.

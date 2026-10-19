@@ -1,0 +1,16 @@
+# From tests/engine/test_union_values.py::test_untagged_union_matching_no_member.
+kind: value
+typedefs:
+  Text:
+    text: str
+  Call:
+    name: str
+    input: object
+type: Union(Call, Text)
+value:
+  text: 3
+expect:
+  raises:
+    class: TypeCheckError
+    message: 'value matches no member of Union({"input":object,"name":str},{"text":str}): {"input":object,"name":str}: record missing required fields: [''input'', ''name'']; {"text":str}: 3 does not match declared type str'
+    path: []

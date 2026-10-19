@@ -650,8 +650,12 @@ def _compare(what: str, actual: object, expected: object, **flags: bool) -> None
 
 
 def _raised(exc: Exception) -> dict:
-    """Return an error in the case's `raises` form."""
-    raised = {"class": type(exc).__name__, "message": str(exc)}
+    """Return an error in the case's `raises` form.
+
+    A private class is named by its nearest public base.
+    """
+    public = next(c for c in type(exc).__mro__ if not c.__name__.startswith("_"))
+    raised = {"class": public.__name__, "message": str(exc)}
     if isinstance(exc, TypeCheckError):
         raised["path"] = list(exc.path)
     return raised
@@ -3551,6 +3555,16 @@ def test_compose_codefns_fixture_ports_python_functions() -> None:
     names = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
     exported = harvest._exported(harvest._FIXTURE_MODULES["tests.engine._compose_codefns"])
     assert exported and exported <= names
+
+
+def test_raised_reports_a_private_class_as_its_public_base() -> None:
+    """A private Python class (`_NoUnionMember`) is reported by its nearest public base."""
+
+    class _Private(TypeCheckError):
+        pass
+
+    raised = _raised(_Private("no", path=("a",)))
+    assert raised == {"class": "TypeCheckError", "message": "no", "path": ["a"]}
 
 
 _CODE_TESTS = '''

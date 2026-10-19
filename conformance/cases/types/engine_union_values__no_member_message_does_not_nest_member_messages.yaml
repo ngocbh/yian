@@ -1,0 +1,21 @@
+# From tests/engine/test_union_values.py::test_untagged_no_match_message_does_not_nest_member_messages.
+kind: value
+typedefs:
+  A:
+    a: str
+  B:
+    b: int
+  Inner: Union(A, B)
+  Wrap:
+    wrap: Inner
+  C:
+    c: bool
+type: Union(Wrap, C)
+value:
+  wrap:
+    a: 1
+expect:
+  raises:
+    class: TypeCheckError
+    message: 'value matches no member of Union({"c":bool},{"wrap":Union({"a":str},{"b":int})}): {"c":bool}: record missing required fields: [''c'']; {"wrap":Union({"a":str},{"b":int})}: value matches no member of Union({"a":str},{"b":int})'
+    path: []

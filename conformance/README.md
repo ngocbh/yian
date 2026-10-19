@@ -209,9 +209,11 @@ hash. `python_flow` and `python_files` are not keys of a `fingerprint` case: bot
 
 Runs the `yian` command with `args` (the arguments after `yian`) in the case directory, with
 `HOME` set to an empty `home/` directory there, `PATH`, `COLUMNS=1000`, the `env` variables
-and no other variables (the Python runner adds `PYTHONPATH`, to find yian; the runner doesn't
-set `YIAN_AUTH_FILE`, so unless `env` does, its default under `HOME` applies), and `stdin`
-(absent: empty; never a terminal). `expect.exit` is the exit code. In stdout and stderr the case directory's path, and its resolved real path, are
+and no other variables (the Python runner adds `PYTHONPATH`, to find yian, and `no_proxy=*`,
+so a system proxy doesn't take requests meant for the stub; the runner doesn't set
+`YIAN_AUTH_FILE`, so unless `env` does, its default under `HOME` applies), and `stdin` (absent:
+empty; never a terminal). `expect.exit` is the exit code. In stdout and stderr the case
+directory's path, and its resolved real path, are
 replaced by `<tmp>`, and spaces at line ends are removed; then `stdout` and `stderr` are
 compared exactly when present. `json` is stdout read as one JSON document, and `json_lines`
 stdout read as one JSON document per non-empty line, both in codec form. A command that names a
@@ -410,7 +412,8 @@ uses it:
 
 Not in the format yet (each comes as an addition when a case needs it): file values in
 `values`/`item`, output schemas for stub tools, `files` for the `other` flow of a fingerprint
-case and a clock for `system.now`.
+case, a clock for `system.now`, and the content of a file after a `cli` command (such as
+which logins an auth file holds), so no case pins a removal or the token a refresh saves.
 
 ## Forms
 

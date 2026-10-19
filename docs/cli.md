@@ -748,10 +748,12 @@ new token is saved in `F`.
 
 `yian models --provider P` lists the model ids `P`'s host gives a key, sorted. The key
 is read from stdin, never from the command line, with surrounding whitespace removed;
-an empty stdin or a terminal sends no key. `--base-url URL` lists another host instead
-of the provider's own (`vllm`'s is `http://localhost:8000/v1`, `ollama`'s
-`http://localhost:11434`). No environment variable is read: the listing goes to the
-host given, with the key given. `azure` has no model listing, so `models` is `null`.
+an empty stdin or a terminal sends no key. Stdin is read to its end before the listing
+starts, so close it, or pass an empty stdin, when there is no key. `--base-url URL`
+lists another host instead of the provider's own (`vllm`'s is
+`http://localhost:8000/v1`, `ollama`'s `http://localhost:11434`). No environment
+variable is read: the listing goes to the host given, with the key given. `azure` has
+no model listing, so `models` is `null`.
 
 Give exactly one of `--auth-file` and `--provider`; `--base-url` goes only with
 `--provider`. `--timeout S` is the seconds for the whole listing (default 8), a
@@ -808,9 +810,11 @@ subscription doesn't offer fails with `auth.failed` and saves nothing. The login
 becomes the default when the file has no default.
 
 SIGTERM or SIGINT stops the sign-in: nothing is saved, no further line is written,
-and the command exits 130. A signal that comes after the login is saved doesn't undo
-it; `done` is still written. A second signal kills the process. The command exits 0
-after `done`, 1 after an error, and 2 for a usage error.
+and the command exits 130. A SIGTERM that comes before the `code` line, while the
+command starts, may end the process by the signal instead; nothing is saved either way.
+A signal that comes after the login is saved doesn't undo it; `done` is still written.
+A second signal kills the process. The command exits 0 after `done`, 1 after an error,
+and 2 for a usage error.
 
 ### Removing a sign-in
 

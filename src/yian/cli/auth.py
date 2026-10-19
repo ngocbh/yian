@@ -1110,10 +1110,14 @@ def models(
     error = None
     listed = None
     if provider is not None:
-        try:
-            key = None if sys.stdin.isatty() else sys.stdin.read().strip() or None
-        except ValueError:  # UnicodeDecodeError is a ValueError
-            raise typer.BadParameter("stdin must be the API key as text") from None
+        key = None
+        if not sys.stdin.isatty():
+            # Decoded strictly here: without a locale, Python's UTF-8 mode reads stdin text
+            # with surrogateescape, so bytes that aren't UTF-8 would pass as a key.
+            try:
+                key = sys.stdin.buffer.read().decode("utf-8").strip() or None
+            except UnicodeDecodeError:
+                raise typer.BadParameter("stdin must be the API key as text") from None
         try:
             listed = list_models(provider, key, base_url, timeout=timeout)
         except ModelListError as failure:

@@ -20,6 +20,7 @@ from operator import add
 import os
 from pathlib import Path
 import re
+import select
 import shutil
 import signal
 import subprocess
@@ -1890,6 +1891,8 @@ class _StubHandler(BaseHTTPRequestHandler):
     """Answer one request to a `_Stub` as the exchange it matches says, or 500 with no body."""
 
     server: _Stub
+    # A connection the command left half-open can't keep `close` waiting for this handler.
+    timeout = 10
 
     def __getattr__(self, name: str):
         # Any method a command sends is checked and answered, not only the ones named here.
@@ -1936,6 +1939,9 @@ class _Stub(ThreadingHTTPServer):
     Setting `stop` cuts `delay`s short.
     """
 
+    # `server_close` joins only non-daemon handler threads.
+    daemon_threads = False
+
     def __init__(self, http: list) -> None:
         super().__init__(("127.0.0.1", 0), _StubHandler)
         self.http, self.taken, self.problems = http, 0, []
@@ -1954,11 +1960,14 @@ class _Stub(ThreadingHTTPServer):
         """Stop serving once every handler finishes; return the problems, then each exchange
         without `repeat` that was never requested, with filled secrets written `<key:N>`.
 
-        Called once the command has exited, so every handler's reads end and `stop` ends its
-        `delay`.
+        Called once the command has exited, so a handler's reads end at the closed connection
+        or its `timeout`, and `stop` ends its `delay`.
         """
         self.stop.set()
         self.shutdown()
+        # A connection the command made just before `shutdown` may not have been accepted.
+        while select.select([self], [], [], 0)[0]:
+            self._handle_request_noblock()
         self.server_close()  # joins every handler thread
         problems = [*self.problems, *(
             f"`http[{index}]` was never requested" for index in range(self.taken, len(self.http))
@@ -2000,7 +2009,7 @@ def _actual_cli(case: dict, case_dir: Path) -> dict:
     """
     (case_dir / "home").mkdir()
     env = {"PATH": os.environ["PATH"], "HOME": str(case_dir / "home"), "COLUMNS": "1000",
-           "PYTHONPATH": os.pathsep.join(sys.path), **case.get("env", {})}
+           "PYTHONPATH": os.pathsep.join(sys.path), "no_proxy": "*", **case.get("env", {})}
     stub = _Stub(case.get("http", []))
     argv = [sys.executable, "-c", _program(f"http://127.0.0.1:{stub.server_port}/"),
             *case.get("args", [])]

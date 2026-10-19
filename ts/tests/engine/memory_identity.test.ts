@@ -26,9 +26,9 @@
  * and rewrite (`memory declaration origin must be an OriginRef or None`), since a frozen
  * `MemoryDecl` checked its origin when built.
  *
- * Left for later: `test_backward_failure_and_commit_records_name_their_memory_key`; its
- * `BackwardFailure` line lands with `BackwardFailure`, and its commit-record half with the runtime
- * log (Later (T4-2)).
+ * Later (T4-2): the commit-record half of
+ * `test_backward_failure_and_commit_records_name_their_memory_key`, with the runtime log; its
+ * `BackwardFailure` line lands with `BackwardFailure`.
  */
 
 import { expect, test } from "bun:test";
@@ -340,9 +340,11 @@ test("learning carriers name their memory key", () => {
   expect([failure.memory, outcome.memory]).toEqual(["notes", "notes"]);
   const result = new LearningResult("failed", { failures: [failure], policies: [outcome] });
   expect(result.policies[0]!.memory).toBe("notes");
-  const repeated = () => new LearningResult("failed", { failures: [failure], policies: [outcome, outcome] });
-  expect(repeated).toThrow(RangeError);
-  expect(repeated).toThrow(/memory keys must be unique/);
+  expectError(
+    () => new LearningResult("failed", { failures: [failure], policies: [outcome, outcome] }),
+    RangeError,
+    "learning memory keys must be unique",
+  );
 });
 
 // test_package_docstring_and_exports_describe_keyed_memories

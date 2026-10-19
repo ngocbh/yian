@@ -61,6 +61,11 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
+/** Whether `value` is an instance of exactly `cls`, not of a subclass. */
+function isExactly<T>(value: unknown, cls: abstract new (...args: never[]) => T): value is T {
+  return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === cls.prototype;
+}
+
 /**
  * Return a frozen copy of one path whose components are non-empty strings.
  *
@@ -76,7 +81,13 @@ function requirePath(value: unknown, name: string, allowEmpty = false): readonly
 }
 
 /** Validate and copy one JSON value into frozen containers; see `freezeJsonObject`. */
-function freezeJson(value: unknown, name: string, active: Set<object>, nesting: number, limit: number): JsonValue {
+function freezeJson(
+  value: unknown,
+  name: string,
+  active: Set<object> = new Set(),
+  nesting = 0,
+  limit = Number.POSITIVE_INFINITY,
+): JsonValue {
   if (value === null || typeof value === "boolean" || typeof value === "bigint") return value;
   if (typeof value === "string") return requireString(value, name, false);
   if (typeof value === "number") {
@@ -732,9 +743,7 @@ function requireDecls(decls: unknown): asserts decls is readonly MemoryDecl[] {
   if (!isPlainArray(decls)) throw new TypeError("memories must be an array");
   for (const decl of decls) {
     // Exact, because the rewrite rebuilds a `MemoryDecl` and would drop a subclass.
-    if (typeof decl !== "object" || decl === null || Object.getPrototypeOf(decl) !== MemoryDecl.prototype) {
-      throw new TypeError("memories items must be exact MemoryDecl values");
-    }
+    if (!isExactly(decl, MemoryDecl)) throw new TypeError("memories items must be exact MemoryDecl values");
   }
 }
 
@@ -924,11 +933,6 @@ export class MemoryOperationFailure {
   }
 }
 
-/** Whether `value` is an instance of exactly `cls`, not of a subclass. */
-function isExactly<T>(value: unknown, cls: abstract new (...args: never[]) => T): value is T {
-  return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === cls.prototype;
-}
-
 /** One JSON mutation a memory proposed. Frozen. */
 export class MemoryMutation {
   readonly mutationId: string;
@@ -943,7 +947,7 @@ export class MemoryMutation {
    */
   constructor(mutationId: string, payload: unknown) {
     this.mutationId = requireString(mutationId, "mutation_id");
-    this.payload = freezeJson(payload, "payload", new Set(), 0, Number.POSITIVE_INFINITY);
+    this.payload = freezeJson(payload, "payload");
     Object.freeze(this);
   }
 }
@@ -960,16 +964,14 @@ export function validateMutations(mutations: unknown): readonly MemoryMutation[]
     if (!isExactly(mutation, MemoryMutation)) throw new TypeError("mutations items must be MemoryMutation values");
   }
   const checked = mutations as MemoryMutation[];
-  if (new Set(checked.map((mutation) => mutation.mutationId)).size !== checked.length) {
-    throw new RangeError("mutation IDs must be unique");
-  }
+  requireUnique(checked.map((mutation) => mutation.mutationId), "mutation IDs");
   return Object.freeze([...checked]);
 }
 
-/** The memory operation a learning failure came from. */
-export type LearningOperation = "learn" | "commit";
+const LEARNING_OPERATIONS = ["learn", "commit"] as const;
 
-const LEARNING_OPERATIONS: readonly string[] = ["learn", "commit"];
+/** The memory operation a learning failure came from. */
+export type LearningOperation = (typeof LEARNING_OPERATIONS)[number];
 
 /** One memory's learn or commit failure in a run result. Frozen. */
 export class LearningFailure {
@@ -995,10 +997,10 @@ export class LearningFailure {
   }
 }
 
-/** One memory's commit disposition. */
-export type PolicyCommitStatus = "unrequested" | "unknown" | "succeeded" | "failed";
+const POLICY_COMMIT_STATUSES = ["unrequested", "unknown", "succeeded", "failed"] as const;
 
-const POLICY_COMMIT_STATUSES: readonly string[] = ["unrequested", "unknown", "succeeded", "failed"];
+/** One memory's commit disposition. */
+export type PolicyCommitStatus = (typeof POLICY_COMMIT_STATUSES)[number];
 
 /** One memory's confirmed or still-unresolved commit disposition. Frozen. */
 export class PolicyCommitOutcome {
@@ -1045,10 +1047,10 @@ export class PolicyCommitOutcome {
   }
 }
 
-/** How a run's learning ended. */
-export type LearningStatus = "succeeded" | "failed" | "incomplete";
+const LEARNING_STATUSES = ["succeeded", "failed", "incomplete"] as const;
 
-const LEARNING_STATUSES: readonly string[] = ["succeeded", "failed", "incomplete"];
+/** How a run's learning ended. */
+export type LearningStatus = (typeof LEARNING_STATUSES)[number];
 
 /**
  * A run's learning completion, kept apart from backend retryability hints. Frozen.

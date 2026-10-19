@@ -673,13 +673,8 @@ test.each(
 )("a policy commit outcome refuses %s %p", (field, invalid, cls) => {
   const values: Record<string, unknown> = { memory: "history", status: "unknown", commit_id: "commit-1" };
   values[field] = invalid;
-  let caught: unknown;
-  try {
-    new PolicyCommitOutcome(values.memory as never, values.status as never, { commitId: values.commit_id as never });
-  } catch (error) {
-    caught = error;
-  }
-  expect(caught).toBeInstanceOf(cls);
+  const { memory, status, commit_id: commitId } = values as { memory: never; status: never; commit_id: never };
+  expect(() => new PolicyCommitOutcome(memory, status, { commitId })).toThrow(cls);
 });
 
 test("a policy commit outcome refuses a failure that isn't a MemoryOperationFailure", () => {
@@ -704,13 +699,17 @@ test("a learning result checks its exact nested policy carriers", () => {
   expect(Object.isFrozen(result.policies)).toBe(true);
   expect(Object.isFrozen(result.failures)).toBe(true);
   expect(Object.isFrozen(result)).toBe(true);
-  const notArray = () => new LearningResult("incomplete", { policies: new Set([first]) as never });
-  expect(notArray).toThrow(TypeError);
-  expect(notArray).toThrow(/array/);
+  expectError(
+    () => new LearningResult("incomplete", { policies: new Set([first]) as never }),
+    TypeError,
+    "learning policies must be an array",
+  );
   class PolicySubclass extends PolicyCommitOutcome {}
-  const subclass = () => new LearningResult("incomplete", { policies: [new PolicySubclass("history", "unrequested")] });
-  expect(subclass).toThrow(TypeError);
-  expect(subclass).toThrow(/PolicyCommitOutcome/);
+  expectError(
+    () => new LearningResult("incomplete", { policies: [new PolicySubclass("history", "unrequested")] }),
+    TypeError,
+    "policies items must be PolicyCommitOutcome values",
+  );
 });
 
 test("a learning result checks its status and failures in Python's order", () => {

@@ -245,6 +245,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   is exported from `memory/contracts.ts` only, as Python keeps `_validate_mutations` private.
 - The learning result carriers are frozen and hold their nested carriers by reference (checked by
   exact class), where Python copies them.
+- Changed: a mutation payload has no depth limit (Python bounds it at the value nesting limit plus
+  28), matching the snapshot envelope.
 - A config or snapshot is a deep-frozen copy whose keys are inserted in code-unit order; JS still
   lists integer-like keys (`"9"`, `"10"`) first, in numeric order.
 - The declarations are frozen, so `rewriteMemoryDeclOrigins` returns rebuilt declarations and

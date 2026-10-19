@@ -70,11 +70,17 @@
  * names only; a resume clearing unfinished starts; an applied delta leaving earlier occurrences
  * alone; a `TraceDelta`'s defaults and frozen arrays.
  *
+ * TS-only (frontier trace), on `learnableStarted` with START's `NodeStarted` committed: a learnable
+ * `RunStopped` carries a sequence-only trace delta and commits; a forged stop plan whose trace
+ * delta starts a node is refused; a frontier plan holding an outcome record is refused by the
+ * frontier trace check.
+ *
  * Later (T4-4 to T4-7): the trace tests that run flows.
  */
 
 import { afterEach, expect, test } from "bun:test";
 
+import { START_ID } from "../../src/compile/model.ts";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
@@ -99,6 +105,7 @@ import {
   encodePool,
   encodeRecord,
   evidencePayload,
+  type MemoryRunLog,
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
@@ -108,6 +115,7 @@ import {
   type RunRecord,
   RunResumedRecord,
   RunStartedRecord,
+  RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import {
@@ -125,8 +133,16 @@ import {
   TraceOccurrence,
   TraceTerminal,
 } from "../../src/runtime/trace.ts";
+import {
+  commitPrepared,
+  PreparedTransition,
+  prepareNodeStarted,
+  prepareRunStopped,
+  type RunState,
+} from "../../src/runtime/state.ts";
 import { FileRef, Type, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { JSONDecodeError, logJson, parseJson } from "../../src/typesys/json.ts";
+import { flow, learnableStarted } from "./run_state_fixtures.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError;
 
@@ -1878,4 +1894,79 @@ test("a trace delta holds frozen copies of its arrays and defaults to an empty c
   expect(Object.isFrozen(delta)).toBe(true);
   expect(Object.isFrozen(delta.pruneIds)).toBe(true);
   expect(Object.isFrozen(delta.started)).toBe(true);
+});
+
+// TS-only (frontier trace): the learnable stop.
+
+/** A learnable started state with START in flight, its log and a prepared `RunStopped`. */
+function preparedLearnableStop(): { state: RunState; log: MemoryRunLog; prepared: PreparedTransition } {
+  const { state, log } = learnableStarted(flow());
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  return { state, log, prepared: prepareRunStopped(state, "signal", "SIGTERM") };
+}
+
+/** Return `prepared` with its record or its plan's trace delta replaced. */
+function forgedStop(
+  prepared: PreparedTransition,
+  changes: { record?: RunRecord; traceDelta?: TraceDelta },
+): PreparedTransition {
+  const plan = Object.freeze({ ...prepared._plan, traceDelta: changes.traceDelta ?? prepared._plan.traceDelta });
+  return new PreparedTransition(
+    changes.record ?? prepared.record,
+    prepared.expectedRunId,
+    prepared.expectedSequence,
+    plan as never,
+    [],
+  );
+}
+
+test("a learnable RunStopped carries a sequence-only trace delta and commits", () => {
+  const { state, log, prepared } = preparedLearnableStop();
+  const trace = state.trace!;
+  const delta = prepared._plan.traceDelta!;
+
+  expect(delta).toBeInstanceOf(TraceDelta);
+  expect(delta.originatingTrace).toBe(trace);
+  expect(delta.sequence).toBe(2);
+  expect(delta.started).toBeNull();
+  expect(delta.resumed).toBe(false);
+
+  expect(commitPrepared(log, state, prepared)).toEqual([]);
+
+  expect(prepared.record).toStrictEqual(new RunStoppedRecord("signal", "SIGTERM", [START_ID]));
+  // The trace applies in place: only its sequence moves.
+  expect(state.trace).toBe(trace);
+  expect(trace.nextSequence).toBe(3);
+  expect([...trace._started]).toEqual([[START_ID, 1]]);
+  expect(log.nextSequence).toBe(state.nextSequence);
+});
+
+test("a learnable stop whose trace delta starts a node is refused", () => {
+  const { state, log, prepared } = preparedLearnableStop();
+  const forged = forgedStop(prepared, {
+    traceDelta: new TraceDelta(state.trace, state.nextSequence, { started: [START_ID, state.nextSequence] }),
+  });
+
+  expectError(
+    () => commitPrepared(log, state, forged),
+    RangeError,
+    "frontier trace stop must only advance the accepted sequence",
+  );
+
+  expect(log.nextSequence).toBe(2);
+  expect(state.trace!.nextSequence).toBe(2);
+});
+
+test("a learnable frontier plan holding an outcome record is refused", () => {
+  const { state, log, prepared } = preparedLearnableStop();
+  const failure = new Failure({ code: "node.execute", message: "done", nodeId: START_ID });
+  const forged = forgedStop(prepared, { record: new NodeFailedRecord(failure) });
+
+  expectError(
+    () => commitPrepared(log, state, forged),
+    RangeError,
+    "frontier trace requires a dispatch, resume, step or stop record",
+  );
+
+  expect(log.nextSequence).toBe(2);
 });

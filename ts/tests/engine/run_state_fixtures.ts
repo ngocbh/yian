@@ -6,14 +6,16 @@
  * more run-state test files use lives here.
  */
 
+import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
+import type { MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { encodePool, MemoryRunLog, type RecordEnvelope, type RunLog, type RunRecord } from "../../src/runtime/log.ts";
-import type { RunStartData, RunState } from "../../src/runtime/state.ts";
+import { commitPrepared, prepareRunStarted, type RunStartData, RunState } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 
 /** The run id the run-state tests record. */
@@ -174,6 +176,45 @@ export function graph(
     wiring.set(END_ID, new Map(outputs.map((output) => [output.name, output.binding])));
   }
   return CompiledFlow.fromParts(nodeMap, edges, { outputs, wiring });
+}
+
+/**
+ * Return a learnable state of `flow` after its committed RunStarted, and its memory log; Python's
+ * `_engine(flow, inputs, learnable=True, ...)` where a test only needs the started state.
+ *
+ * The flow gets its execution layout; the pool primes START with `inputs`, and START's wiring
+ * reads each input as `${input.<name>}`. The run records no agent configuration.
+ */
+export function learnableStarted(
+  flow: CompiledFlow,
+  options: {
+    inputs?: Readonly<Record<string, unknown>>;
+    memories?: readonly MemorySpec[] | null;
+    memoryStacks?: readonly MemoryStack[] | null;
+    memorySnapshots?: readonly MemorySnapshotEnvelope[] | null;
+  } = {},
+): { state: RunState; log: MemoryRunLog } {
+  const inputs = options.inputs ?? {};
+  applyExecutionLayout(flow, resolveExecutionLayout(flow));
+  const state = new RunState(flow);
+  const initialPool = new VariablePool(flow.startId);
+  initialPool.set(flow.startId, { ...inputs });
+  initialPool.addSystem("run_id", RUN_ID);
+  const log = new MemoryRunLog(RUN_ID);
+  const prepared = prepareRunStarted(state, {
+    runId: RUN_ID,
+    flowFingerprint: FINGERPRINT,
+    initialPool,
+    startWiringOverride: Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
+    effectiveLlmByStaticPath: {},
+    numWorkers: 0,
+    learnable: true,
+    memories: options.memories ?? null,
+    memoryStacks: options.memoryStacks ?? null,
+    memorySnapshots: options.memorySnapshots ?? null,
+  });
+  commitPrepared(log, state, prepared);
+  return { state, log };
 }
 
 /**

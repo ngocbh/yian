@@ -1,24 +1,23 @@
 /**
- * Per-declaration shape rules, a port of `tests/engine/test_memory_decl_shape.py`, through
- * `checkMemoryDeclaration`: `test_invalid_memory_names_are_rejected`,
- * `test_invalid_memory_type_names_are_rejected`, `test_location_keys_are_banned_for_every_type`,
- * `test_api_key_anywhere_is_rejected`, `test_builtin_allowlist_is_a_static_table`,
- * `test_builtin_types_accept_only_allowlisted_keys`, `test_builtin_config_values_are_checked`,
- * `test_builtin_config_rules_cover_the_allowlist`, `test_custom_types_accept_any_public_config`,
- * `test_non_finite_config_is_rejected`, and the check halves of
- * `test_builtin_config_values_at_their_limits_load_and_build`,
+ * Per-declaration shape rules, a port of `tests/engine/test_memory_decl_shape.py`. Through
+ * `MemoryDecl`, as Python writes them: `test_valid_memory_names_are_accepted`,
+ * `test_invalid_memory_names_are_rejected`, `test_invalid_memory_type_names_are_rejected`,
+ * `test_location_keys_are_banned_for_every_type`, `test_api_key_anywhere_is_rejected`,
+ * `test_builtin_types_accept_only_allowlisted_keys`, `test_custom_types_accept_any_public_config`
+ * and `test_non_finite_config_is_rejected`. Through `checkMemoryDeclaration`:
+ * `test_builtin_config_values_are_checked`, `test_builtin_config_rules_cover_the_allowlist`, the
+ * check halves of `test_builtin_config_values_at_their_limits_load_and_build`,
  * `test_builtin_config_rules_match_the_backends` (its null half) and
- * `test_shape_check_is_public_and_exported`; plus a table of the private-key rules.
+ * `test_shape_check_is_public_and_exported`, and a table of the private-key rules. Also
+ * `test_builtin_allowlist_is_a_static_table` and `test_setup_error_carries_related_origins`.
  *
  * Changed: ints are `bigint`; a `number` is a float, so `{recall_limit: 3}` is refused as YAML
  * `3.0` is. A value in a message is compact JSON with JS number spelling (`got [1]`, `got 1` for
  * the float `1.0`). `test_builtin_config_rules_cover_the_allowlist` can't read the private rules
  * table, so it holds each allowlisted key's minimum and checks that the minimum loads and the
  * minimum minus one is refused. `test_non_finite_config_is_rejected` adds `Infinity`. Python's
- * `ValueError` is `RangeError`.
- *
- * Ported by the next commits: `test_valid_memory_names_are_accepted`,
- * `test_setup_error_carries_related_origins`, and the `MemoryDecl` forms of the tests above.
+ * `ValueError` is `RangeError`. The setup error's list-for-tuple `related` row passes a `Set`
+ * (TS has only arrays) and checks the error's `name`.
  *
  * Not ported: the backend halves of `test_builtin_config_values_at_their_limits_load_and_build` and
  * `test_builtin_config_rules_match_the_backends` (the built-in backends aren't ported); the
@@ -38,11 +37,22 @@
 
 import { expect, test } from "bun:test";
 
+import { OriginRef } from "../../src/diagnostics.ts";
 import {
   BUILTIN_MEMORY_CONFIG_KEYS,
   checkMemoryDeclaration,
+  DeclSite,
   MEMORY_IDENTIFIER_PATTERN,
+  MemoryDecl,
+  MemorySetupError,
 } from "../../src/memory/contracts.ts";
+
+const SITE = new DeclSite([], ["root"], null);
+
+/** Build one declaration at the root site. */
+function decl(name: unknown, typeName: unknown, config: unknown): MemoryDecl {
+  return new MemoryDecl(name as string, typeName as string, config, SITE);
+}
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
@@ -56,32 +66,34 @@ function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeErro
   expect((caught as Error).message).toBe(message);
 }
 
+// test_valid_memory_names_are_accepted
+test.each(["notes", "_n", "a-b", "A9_x"])("memory name %p is accepted", (name) => {
+  expect(decl(name, "episodic", {}).name).toBe(name);
+  expect(MEMORY_IDENTIFIER_PATTERN.test(name)).toBe(true);
+});
+
 // test_invalid_memory_names_are_rejected
 test.each(["", "9a", "a.b", "a b", "-a", "né"])("memory name %p is rejected", (name) => {
   expect(MEMORY_IDENTIFIER_PATTERN.test(name)).toBe(false);
-  expect(() => checkMemoryDeclaration(name, "episodic", {})).toThrow(RangeError);
-  expect(() => checkMemoryDeclaration(name, "episodic", {})).toThrow("memory name");
+  expect(() => decl(name, "episodic", {})).toThrow(RangeError);
+  expect(() => decl(name, "episodic", {})).toThrow("memory name");
 });
 
 test("a memory name must be a string", () => {
-  expectError(() => checkMemoryDeclaration(1n, "episodic", {}), TypeError, "memory name must be a string");
-  expectError(
-    () => checkMemoryDeclaration("a.b", "episodic", {}),
-    RangeError,
-    "memory name 'a.b' must match [A-Za-z_][A-Za-z0-9_-]*",
-  );
+  expectError(() => decl(1n, "episodic", {}), TypeError, "memory name must be a string");
+  expectError(() => decl("a.b", "episodic", {}), RangeError, "memory name 'a.b' must match [A-Za-z_][A-Za-z0-9_-]*");
 });
 
 // test_invalid_memory_type_names_are_rejected
 test.each(["", "my.type", "1x"])("memory type %p is rejected", (typeName) => {
-  expect(() => checkMemoryDeclaration("notes", typeName, {})).toThrow(RangeError);
-  expect(() => checkMemoryDeclaration("notes", typeName, {})).toThrow("memory type");
+  expect(() => decl("notes", typeName, {})).toThrow(RangeError);
+  expect(() => decl("notes", typeName, {})).toThrow("memory type");
 });
 
 // test_location_keys_are_banned_for_every_type
 test.each(["storage", "store", "path"])("location key %p is banned", (key) => {
   expectError(
-    () => checkMemoryDeclaration("notes", "vector", { [key]: "x" }),
+    () => decl("notes", "vector", { [key]: "x" }),
     RangeError,
     `config key '${key}' is not allowed: storage belongs to the host ` +
       "(build_memories storage=/root= or yian run --memory-root)",
@@ -89,13 +101,13 @@ test.each(["storage", "store", "path"])("location key %p is banned", (key) => {
 });
 
 test("the first location key in the caller's order is reported", () => {
-  expect(() => checkMemoryDeclaration("notes", "vector", { storage: 1n, path: 2n })).toThrow("config key 'storage'");
+  expect(() => decl("notes", "vector", { storage: 1n, path: 2n })).toThrow("config key 'storage'");
 });
 
 // test_api_key_anywhere_is_rejected
 test("api_key anywhere is rejected", () => {
   expectError(
-    () => checkMemoryDeclaration("notes", "vector", { nested: { api_key: "x" } }),
+    () => decl("notes", "vector", { nested: { api_key: "x" } }),
     RangeError,
     "config.nested contains forbidden private key 'api_key'",
   );
@@ -173,16 +185,14 @@ test("the built-in allowlist is a static table", () => {
 
 // test_builtin_types_accept_only_allowlisted_keys
 test("built-in types accept only allowlisted keys", () => {
-  checkMemoryDeclaration("notes", "episodic", { max_episodes: 5n, recall_limit: 2n });
+  decl("notes", "episodic", { max_episodes: 5n, recall_limit: 2n });
   expectError(
-    () => checkMemoryDeclaration("notes", "episodic", { max_items: 5n }),
+    () => decl("notes", "episodic", { max_items: 5n }),
     RangeError,
     "episodic memory config has unknown key(s) ['max_items'] (allowed: max_episodes, recall_limit)",
   );
-  expect(() => checkMemoryDeclaration("chat", "session", { budget: 1n })).toThrow(
-    "allowed: history_budget_chars, recent_turns",
-  );
-  expect(() => checkMemoryDeclaration("notes", "episodic", { max_items: 5n, b: 1n })).toThrow(
+  expect(() => decl("chat", "session", { budget: 1n })).toThrow("allowed: history_budget_chars, recent_turns");
+  expect(() => decl("notes", "episodic", { max_items: 5n, b: 1n })).toThrow(
     "unknown key(s) ['b', 'max_items']",
   );
 });
@@ -253,16 +263,53 @@ test("an authored null is refused where the backend default isn't nullable", () 
 
 // test_custom_types_accept_any_public_config
 test("custom types accept any public config", () => {
-  checkMemoryDeclaration("notes", "vector", { top_k: 3n, nested: { x: 1n } });
+  expect(decl("notes", "vector", { top_k: 3n, nested: { x: 1n } }).config).toEqual({ top_k: 3n, nested: { x: 1n } });
 });
 
 // test_non_finite_config_is_rejected
 test.each([Number.NaN, Number.POSITIVE_INFINITY])("non-finite config %p is rejected", (x) => {
-  expectError(() => checkMemoryDeclaration("notes", "vector", { x }), RangeError, "config.x JSON number must be finite");
+  expectError(() => decl("notes", "vector", { x }), RangeError, "config.x JSON number must be finite");
 });
 
 // test_shape_check_is_public_and_exported (the check half)
 test("the shape check is public", () => {
   checkMemoryDeclaration("notes", "episodic", { recall_limit: 2n });
   expect(() => checkMemoryDeclaration("a.b", "episodic", {})).toThrow("memory name");
+});
+
+// test_setup_error_carries_related_origins
+test("a setup error carries related origins", () => {
+  const first = new OriginRef("a");
+  const second = new OriginRef("b");
+  const related = [second];
+  const error = new MemorySetupError("clash", { origin: first, related });
+  related.push(first);
+  expect(error.name).toBe("MemorySetupError");
+  expect(error.origin).toBe(first);
+  expect(error.related).toEqual([second]);
+  expect(error.related[0]).toBe(second);
+  expect(Object.isFrozen(error.related)).toBe(true);
+  expect(new MemorySetupError("plain").related).toEqual([]);
+  expect(new MemorySetupError("").origin).toBeNull();
+  expectError(
+    () => new MemorySetupError("bad", { related: new Set([second]) as never }),
+    TypeError,
+    "related must be an array of OriginRef values",
+  );
+  expectError(
+    () => new MemorySetupError("bad", { related: [null] as never }),
+    TypeError,
+    "related must not contain null",
+  );
+  expectError(
+    () => new MemorySetupError("bad", { related: ["x"] as never }),
+    TypeError,
+    "related origin must be an OriginRef or null",
+  );
+  expectError(() => new MemorySetupError(1n as never), TypeError, "message must be a string");
+  expectError(
+    () => new MemorySetupError("bad", { origin: "x" as never }),
+    TypeError,
+    "origin must be an OriginRef or null",
+  );
 });

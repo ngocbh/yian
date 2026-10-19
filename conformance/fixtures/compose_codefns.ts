@@ -23,6 +23,11 @@ export function cautious(inputs: Record<string, any>): string {
   return `cautious note for ${inputs.topic}`;
 }
 
+/** Fan-in: concatenate two upstream string outputs (parallel-branch merge tests). */
+export function join_two(inputs: Record<string, any>): string {
+  return `${inputs.pro} | ${inputs.con}`;
+}
+
 // --- CALL/MAP child-flow CODE fns (Ollama-free subflows) ---
 /** A `{report, n}` child codomain (CALL re-exports it; MAP collects a list of it). */
 export function make_report(inputs: Record<string, any>): Record<string, unknown> {
@@ -41,6 +46,11 @@ export function echo_x(inputs: Record<string, any>): unknown {
   return inputs.x;
 }
 
+/** A child CODE node that fails makes the CALL/MAP run fail. */
+export function boom(inputs: Record<string, any>): unknown {
+  throw new Error("boom");
+}
+
 // --- co-skip fns (Ollama-free branch+join) ---
 /** Return the pro branch's claim for the bound `topic`. */
 export function pick_pro(inputs: Record<string, any>): string {
@@ -50,6 +60,16 @@ export function pick_pro(inputs: Record<string, any>): string {
 /** Return the con branch's claim for the bound `topic`. */
 export function pick_con(inputs: Record<string, any>): string {
   return `con: ${inputs.topic}`;
+}
+
+/** Return the detail for the bound `base`. */
+export function detail_of(inputs: Record<string, any>): string {
+  return `detail: ${inputs.base}`;
+}
+
+/** claim = the taken branch (ref-coalesce join); detail = pro_detail or null (`:-null`). */
+export function assemble_join(inputs: Record<string, any>): string {
+  return `${inputs.claim}|detail=${inputs.detail}`;
 }
 
 /** The `take(stance=...)` def body for then:/else: ${call} tests. */
@@ -62,6 +82,11 @@ export function double(inputs: Record<string, any>): bigint {
   return inputs.n * 2n;
 }
 
+/** Surface the bound `${system.run_id}` so the run test can assert on it. */
+export function echo_rid(inputs: Record<string, any>): string {
+  return inputs.rid;
+}
+
 // --- LOOP body CODE fns (Ollama-free while-loop e2e) ---
 /**
  * A loop body 'a -> 'a over `{n, exited}`: increment n, set exited once n reaches 3.
@@ -70,4 +95,23 @@ export function double(inputs: Record<string, any>): bigint {
 export function loop_bump(inputs: Record<string, any>): Record<string, unknown> {
   const n = inputs.n + 1n;
   return { n, exited: n >= 3n };
+}
+
+/**
+ * Decrement the carried n. Drives a loop whose `while:` predicate divides by n
+ * (`10 / n > 0`), so the predicate RAISES (division by zero) once n reaches 0 on
+ * a later iteration — the engine must convert that predicate error into a failed run,
+ * not let it escape run() uncaught.
+ */
+export function loop_countdown(inputs: Record<string, any>): Record<string, unknown> {
+  return { n: inputs.n - 1n };
+}
+
+// Tags `record` saw, in call order; a test clears it before running a flow.
+export const RECORDED: unknown[] = [];
+
+/** A side-effect probe: note that its node ran, then echo its tag. */
+export function record(inputs: Record<string, any>): string {
+  RECORDED.push(inputs.tag);
+  return inputs.tag;
 }

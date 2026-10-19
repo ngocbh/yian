@@ -1,0 +1,664 @@
+kind: run
+flow: |2
+
+  id: partial-in-call
+  name: partial_in_call
+  defs:
+    bump:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: code
+          code: |
+            return {"n": inputs["n"] + 1n}
+          input:
+            n: ${input.n}
+          output:
+            n: int
+      output: ${step.output}
+    counter:
+      input:
+        tag: !str
+      nodes:
+        loop:
+          kind: loop
+          call: bump
+          input:
+            n: 0
+            tag: ${input.tag}
+          times: 2
+      output: ${loop.output}
+  nodes:
+    outer:
+      kind: call
+      call: counter
+      input:
+        tag: kept
+    mapped:
+      kind: map
+      call: counter
+      over: ${["a", "b"]}
+      input:
+        tag: ${item}
+  output:
+    outer: ${outer.output}
+    mapped: ${mapped.output}
+python_flow: |2
+
+  id: partial-in-call
+  name: partial_in_call
+  defs:
+    bump:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: code
+          code: |
+            return {"n": inputs["n"] + 1}
+          input:
+            n: ${input.n}
+          output:
+            n: int
+      output: ${step.output}
+    counter:
+      input:
+        tag: !str
+      nodes:
+        loop:
+          kind: loop
+          call: bump
+          input:
+            n: 0
+            tag: ${input.tag}
+          times: 2
+      output: ${loop.output}
+  nodes:
+    outer:
+      kind: call
+      call: counter
+      input:
+        tag: kept
+    mapped:
+      kind: map
+      call: counter
+      over: ${["a", "b"]}
+      input:
+        tag: ${item}
+  output:
+    outer: ${outer.output}
+    mapped: ${mapped.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      mapped:
+      - n: 2
+        tag: a
+      - n: 2
+        tag: b
+      outer:
+        n: 2
+        tag: kept
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, mapped]
+  - - node_expanded
+    - mapped
+    - prune_ids: []
+      seed:
+      - tag: a
+      - tag: b
+  - [node_started, outer]
+  - - node_expanded
+    - outer
+    - prune_ids: []
+      seed:
+        tag: kept
+  - [node_started, mapped/__start__]
+  - - node_succeeded
+    - mapped/__start__
+    - value: {}
+  - [node_started, outer/__start__]
+  - - node_succeeded
+    - outer/__start__
+    - value:
+        tag: kept
+  - [node_started, mapped#0/__start__]
+  - - node_succeeded
+    - mapped#0/__start__
+    - value:
+        tag: a
+  - [node_started, mapped#1/__start__]
+  - - node_succeeded
+    - mapped#1/__start__
+    - value:
+        tag: b
+  - [node_started, outer/loop]
+  - - node_expanded
+    - outer/loop
+    - prune_ids: []
+      seed:
+      - n: 0
+        tag: kept
+      - 0
+  - [node_started, mapped#0/loop]
+  - - node_expanded
+    - mapped#0/loop
+    - prune_ids: []
+      seed:
+      - n: 0
+        tag: a
+      - 0
+  - [node_started, mapped#1/loop]
+  - - node_expanded
+    - mapped#1/loop
+    - prune_ids: []
+      seed:
+      - n: 0
+        tag: b
+      - 0
+  - [node_started, outer/loop#0/__start__]
+  - - node_succeeded
+    - outer/loop#0/__start__
+    - value:
+        n: 0
+  - [node_started, mapped#0/loop#0/__start__]
+  - - node_succeeded
+    - mapped#0/loop#0/__start__
+    - value:
+        n: 0
+  - [node_started, mapped#1/loop#0/__start__]
+  - - node_succeeded
+    - mapped#1/loop#0/__start__
+    - value:
+        n: 0
+  - [node_started, outer/loop#0/step]
+  - - node_succeeded
+    - outer/loop#0/step
+    - value:
+        n: 1
+  - [node_started, mapped#0/loop#0/step]
+  - - node_succeeded
+    - mapped#0/loop#0/step
+    - value:
+        n: 1
+  - [node_started, mapped#1/loop#0/step]
+  - - node_succeeded
+    - mapped#1/loop#0/step
+    - value:
+        n: 1
+  - [node_started, outer/loop#0/__end__]
+  - - node_succeeded
+    - outer/loop#0/__end__
+    - value:
+        n: 1
+  - [node_started, mapped#0/loop#0/__end__]
+  - - node_succeeded
+    - mapped#0/loop#0/__end__
+    - value:
+        n: 1
+  - [node_started, mapped#1/loop#0/__end__]
+  - - node_succeeded
+    - mapped#1/loop#0/__end__
+    - value:
+        n: 1
+  - [node_started, outer/loop~1]
+  - - node_expanded
+    - outer/loop~1
+    - prune_ids:
+      - outer/loop#0/__end__
+      - outer/loop#0/__start__
+      - outer/loop#0/step
+      - outer/loop~1
+      seed:
+      - n: 1
+        tag: kept
+      - 1
+  - [node_started, mapped#0/loop~1]
+  - - node_expanded
+    - mapped#0/loop~1
+    - prune_ids:
+      - mapped#0/loop#0/__end__
+      - mapped#0/loop#0/__start__
+      - mapped#0/loop#0/step
+      - mapped#0/loop~1
+      seed:
+      - n: 1
+        tag: a
+      - 1
+  - [node_started, mapped#1/loop~1]
+  - - node_expanded
+    - mapped#1/loop~1
+    - prune_ids:
+      - mapped#1/loop#0/__end__
+      - mapped#1/loop#0/__start__
+      - mapped#1/loop#0/step
+      - mapped#1/loop~1
+      seed:
+      - n: 1
+        tag: b
+      - 1
+  - [node_started, outer/loop#1/__start__]
+  - - node_succeeded
+    - outer/loop#1/__start__
+    - value:
+        n: 1
+  - [node_started, mapped#0/loop#1/__start__]
+  - - node_succeeded
+    - mapped#0/loop#1/__start__
+    - value:
+        n: 1
+  - [node_started, mapped#1/loop#1/__start__]
+  - - node_succeeded
+    - mapped#1/loop#1/__start__
+    - value:
+        n: 1
+  - [node_started, outer/loop#1/step]
+  - - node_succeeded
+    - outer/loop#1/step
+    - value:
+        n: 2
+  - [node_started, mapped#0/loop#1/step]
+  - - node_succeeded
+    - mapped#0/loop#1/step
+    - value:
+        n: 2
+  - [node_started, mapped#1/loop#1/step]
+  - - node_succeeded
+    - mapped#1/loop#1/step
+    - value:
+        n: 2
+  - [node_started, outer/loop#1/__end__]
+  - - node_succeeded
+    - outer/loop#1/__end__
+    - value:
+        n: 2
+  - [node_started, mapped#0/loop#1/__end__]
+  - - node_succeeded
+    - mapped#0/loop#1/__end__
+    - value:
+        n: 2
+  - [node_started, mapped#1/loop#1/__end__]
+  - - node_succeeded
+    - mapped#1/loop#1/__end__
+    - value:
+        n: 2
+  - [node_started, outer/loop~2]
+  - - node_succeeded
+    - outer/loop~2
+    - commit_target: outer/loop
+      value:
+        n: 2
+        tag: kept
+  - [node_started, mapped#0/loop~2]
+  - - node_succeeded
+    - mapped#0/loop~2
+    - commit_target: mapped#0/loop
+      value:
+        n: 2
+        tag: a
+  - [node_started, mapped#1/loop~2]
+  - - node_succeeded
+    - mapped#1/loop~2
+    - commit_target: mapped#1/loop
+      value:
+        n: 2
+        tag: b
+  - [node_started, outer/__end__]
+  - - node_succeeded
+    - outer/__end__
+    - commit_target: outer
+      value:
+        n: 2
+        tag: kept
+  - [node_started, mapped#0/__end__]
+  - - node_succeeded
+    - mapped#0/__end__
+    - value:
+        n: 2
+        tag: a
+  - [node_started, mapped#1/__end__]
+  - - node_succeeded
+    - mapped#1/__end__
+    - value:
+        n: 2
+        tag: b
+  - [node_started, mapped/__end__]
+  - - node_succeeded
+    - mapped/__end__
+    - commit_target: mapped
+      value:
+      - n: 2
+        tag: a
+      - n: 2
+        tag: b
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        mapped:
+        - n: 2
+          tag: a
+        - n: 2
+          tag: b
+        outer:
+          n: 2
+          tag: kept
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: mapped
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - tag: a
+        - tag: b
+      node_id: mapped
+  - - NodeStarted
+    - node_id: outer
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          tag: kept
+      node_id: outer
+  - - NodeStarted
+    - node_id: mapped/__start__
+  - - NodeSucceeded
+    - node_id: mapped/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: outer/__start__
+  - - NodeSucceeded
+    - node_id: outer/__start__
+      output:
+        tag: kept
+  - - NodeStarted
+    - node_id: mapped#0/__start__
+  - - NodeSucceeded
+    - node_id: mapped#0/__start__
+      output:
+        tag: a
+  - - NodeStarted
+    - node_id: mapped#1/__start__
+  - - NodeSucceeded
+    - node_id: mapped#1/__start__
+      output:
+        tag: b
+  - - NodeStarted
+    - node_id: outer/loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: 0
+          tag: kept
+        - 0
+      node_id: outer/loop
+  - - NodeStarted
+    - node_id: mapped#0/loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: 0
+          tag: a
+        - 0
+      node_id: mapped#0/loop
+  - - NodeStarted
+    - node_id: mapped#1/loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: 0
+          tag: b
+        - 0
+      node_id: mapped#1/loop
+  - - NodeStarted
+    - node_id: outer/loop#0/__start__
+  - - NodeSucceeded
+    - node_id: outer/loop#0/__start__
+      output:
+        n: 0
+  - - NodeStarted
+    - node_id: mapped#0/loop#0/__start__
+  - - NodeSucceeded
+    - node_id: mapped#0/loop#0/__start__
+      output:
+        n: 0
+  - - NodeStarted
+    - node_id: mapped#1/loop#0/__start__
+  - - NodeSucceeded
+    - node_id: mapped#1/loop#0/__start__
+      output:
+        n: 0
+  - - NodeStarted
+    - node_id: outer/loop#0/step
+  - - NodeSucceeded
+    - node_id: outer/loop#0/step
+      output:
+        n: 1
+  - - NodeStarted
+    - node_id: mapped#0/loop#0/step
+  - - NodeSucceeded
+    - node_id: mapped#0/loop#0/step
+      output:
+        n: 1
+  - - NodeStarted
+    - node_id: mapped#1/loop#0/step
+  - - NodeSucceeded
+    - node_id: mapped#1/loop#0/step
+      output:
+        n: 1
+  - - NodeStarted
+    - node_id: outer/loop#0/__end__
+  - - NodeSucceeded
+    - node_id: outer/loop#0/__end__
+      output:
+        n: 1
+  - - NodeStarted
+    - node_id: mapped#0/loop#0/__end__
+  - - NodeSucceeded
+    - node_id: mapped#0/loop#0/__end__
+      output:
+        n: 1
+  - - NodeStarted
+    - node_id: mapped#1/loop#0/__end__
+  - - NodeSucceeded
+    - node_id: mapped#1/loop#0/__end__
+      output:
+        n: 1
+  - - NodeStarted
+    - node_id: outer/loop~1
+  - - NodeExpanded
+    - grow:
+        prune:
+        - outer/loop#0/__end__
+        - outer/loop#0/__start__
+        - outer/loop#0/step
+        - outer/loop~1
+        seed:
+        - n: 1
+          tag: kept
+        - 1
+      node_id: outer/loop~1
+  - - NodeStarted
+    - node_id: mapped#0/loop~1
+  - - NodeExpanded
+    - grow:
+        prune:
+        - mapped#0/loop#0/__end__
+        - mapped#0/loop#0/__start__
+        - mapped#0/loop#0/step
+        - mapped#0/loop~1
+        seed:
+        - n: 1
+          tag: a
+        - 1
+      node_id: mapped#0/loop~1
+  - - NodeStarted
+    - node_id: mapped#1/loop~1
+  - - NodeExpanded
+    - grow:
+        prune:
+        - mapped#1/loop#0/__end__
+        - mapped#1/loop#0/__start__
+        - mapped#1/loop#0/step
+        - mapped#1/loop~1
+        seed:
+        - n: 1
+          tag: b
+        - 1
+      node_id: mapped#1/loop~1
+  - - NodeStarted
+    - node_id: outer/loop#1/__start__
+  - - NodeSucceeded
+    - node_id: outer/loop#1/__start__
+      output:
+        n: 1
+  - - NodeStarted
+    - node_id: mapped#0/loop#1/__start__
+  - - NodeSucceeded
+    - node_id: mapped#0/loop#1/__start__
+      output:
+        n: 1
+  - - NodeStarted
+    - node_id: mapped#1/loop#1/__start__
+  - - NodeSucceeded
+    - node_id: mapped#1/loop#1/__start__
+      output:
+        n: 1
+  - - NodeStarted
+    - node_id: outer/loop#1/step
+  - - NodeSucceeded
+    - node_id: outer/loop#1/step
+      output:
+        n: 2
+  - - NodeStarted
+    - node_id: mapped#0/loop#1/step
+  - - NodeSucceeded
+    - node_id: mapped#0/loop#1/step
+      output:
+        n: 2
+  - - NodeStarted
+    - node_id: mapped#1/loop#1/step
+  - - NodeSucceeded
+    - node_id: mapped#1/loop#1/step
+      output:
+        n: 2
+  - - NodeStarted
+    - node_id: outer/loop#1/__end__
+  - - NodeSucceeded
+    - node_id: outer/loop#1/__end__
+      output:
+        n: 2
+  - - NodeStarted
+    - node_id: mapped#0/loop#1/__end__
+  - - NodeSucceeded
+    - node_id: mapped#0/loop#1/__end__
+      output:
+        n: 2
+  - - NodeStarted
+    - node_id: mapped#1/loop#1/__end__
+  - - NodeSucceeded
+    - node_id: mapped#1/loop#1/__end__
+      output:
+        n: 2
+  - - NodeStarted
+    - node_id: outer/loop~2
+  - - NodeSucceeded
+    - commit_as: outer/loop
+      node_id: outer/loop~2
+      output:
+        n: 2
+        tag: kept
+  - - NodeStarted
+    - node_id: mapped#0/loop~2
+  - - NodeSucceeded
+    - commit_as: mapped#0/loop
+      node_id: mapped#0/loop~2
+      output:
+        n: 2
+        tag: a
+  - - NodeStarted
+    - node_id: mapped#1/loop~2
+  - - NodeSucceeded
+    - commit_as: mapped#1/loop
+      node_id: mapped#1/loop~2
+      output:
+        n: 2
+        tag: b
+  - - NodeStarted
+    - node_id: outer/__end__
+  - - NodeSucceeded
+    - commit_as: outer
+      node_id: outer/__end__
+      output:
+        n: 2
+        tag: kept
+  - - NodeStarted
+    - node_id: mapped#0/__end__
+  - - NodeSucceeded
+    - node_id: mapped#0/__end__
+      output:
+        n: 2
+        tag: a
+  - - NodeStarted
+    - node_id: mapped#1/__end__
+  - - NodeSucceeded
+    - node_id: mapped#1/__end__
+      output:
+        n: 2
+        tag: b
+  - - NodeStarted
+    - node_id: mapped/__end__
+  - - NodeSucceeded
+    - commit_as: mapped
+      node_id: mapped/__end__
+      output:
+      - n: 2
+        tag: a
+      - n: 2
+        tag: b
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        mapped:
+        - n: 2
+          tag: a
+        - n: 2
+          tag: b
+        outer:
+          n: 2
+          tag: kept
+  - - RunSucceeded
+    - output:
+        mapped:
+        - n: 2
+          tag: a
+        - n: 2
+          tag: b
+        outer:
+          n: 2
+          tag: kept

@@ -1,0 +1,235 @@
+kind: run
+flow: |2
+
+  id: loop-omitted
+  name: loop_omitted
+  typedefs:
+    Cfg: {limit: int}
+  input:
+    cfg: !Cfg
+  nodes:
+    repeat:
+      kind: loop
+      while: n < cfg.limit
+      input:
+        n: 0
+        cfg: ${input.cfg}
+      nodes:
+        inc:
+          kind: code
+          input:
+            n: ${input.n}
+          output: int
+          code: |
+            return inputs["n"] + 1n
+      output:
+        n: ${inc.output}
+  output: ${repeat.output}
+python_flow: |2
+
+  id: loop-omitted
+  name: loop_omitted
+  typedefs:
+    Cfg: {limit: int}
+  input:
+    cfg: !Cfg
+  nodes:
+    repeat:
+      kind: loop
+      while: n < cfg.limit
+      input:
+        n: 0
+        cfg: ${input.cfg}
+      nodes:
+        inc:
+          kind: code
+          input:
+            n: ${input.n}
+          output: int
+          code: |
+            return inputs["n"] + 1
+      output:
+        n: ${inc.output}
+  output: ${repeat.output}
+inputs:
+  cfg:
+    limit: 2
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      cfg:
+        limit: 2
+      n: 2
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        cfg:
+          limit: 2
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        cfg:
+          limit: 2
+  - [node_started, repeat]
+  - - node_expanded
+    - repeat
+    - prune_ids: []
+      seed:
+      - cfg:
+          limit: 2
+        n: 0
+      - 0
+  - [node_started, repeat#0/__start__]
+  - - node_succeeded
+    - repeat#0/__start__
+    - value:
+        cfg:
+          limit: 2
+        n: 0
+  - [node_started, repeat#0/inc]
+  - - node_succeeded
+    - repeat#0/inc
+    - value: 1
+  - [node_started, repeat#0/__end__]
+  - - node_succeeded
+    - repeat#0/__end__
+    - value:
+        n: 1
+  - [node_started, repeat~1]
+  - - node_expanded
+    - repeat~1
+    - prune_ids: [repeat#0/__end__, repeat#0/__start__, repeat#0/inc, repeat~1]
+      seed:
+      - cfg:
+          limit: 2
+        n: 1
+      - 1
+  - [node_started, repeat#1/__start__]
+  - - node_succeeded
+    - repeat#1/__start__
+    - value:
+        cfg:
+          limit: 2
+        n: 1
+  - [node_started, repeat#1/inc]
+  - - node_succeeded
+    - repeat#1/inc
+    - value: 2
+  - [node_started, repeat#1/__end__]
+  - - node_succeeded
+    - repeat#1/__end__
+    - value:
+        n: 2
+  - [node_started, repeat~2]
+  - - node_succeeded
+    - repeat~2
+    - commit_target: repeat
+      value:
+        cfg:
+          limit: 2
+        n: 2
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        cfg:
+          limit: 2
+        n: 2
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        cfg:
+          limit: 2
+  - - NodeStarted
+    - node_id: repeat
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - cfg:
+            limit: 2
+          n: 0
+        - 0
+      node_id: repeat
+  - - NodeStarted
+    - node_id: repeat#0/__start__
+  - - NodeSucceeded
+    - node_id: repeat#0/__start__
+      output:
+        cfg:
+          limit: 2
+        n: 0
+  - - NodeStarted
+    - node_id: repeat#0/inc
+  - - NodeSucceeded
+    - node_id: repeat#0/inc
+      output: 1
+  - - NodeStarted
+    - node_id: repeat#0/__end__
+  - - NodeSucceeded
+    - node_id: repeat#0/__end__
+      output:
+        n: 1
+  - - NodeStarted
+    - node_id: repeat~1
+  - - NodeExpanded
+    - grow:
+        prune: [repeat#0/__end__, repeat#0/__start__, repeat#0/inc, repeat~1]
+        seed:
+        - cfg:
+            limit: 2
+          n: 1
+        - 1
+      node_id: repeat~1
+  - - NodeStarted
+    - node_id: repeat#1/__start__
+  - - NodeSucceeded
+    - node_id: repeat#1/__start__
+      output:
+        cfg:
+          limit: 2
+        n: 1
+  - - NodeStarted
+    - node_id: repeat#1/inc
+  - - NodeSucceeded
+    - node_id: repeat#1/inc
+      output: 2
+  - - NodeStarted
+    - node_id: repeat#1/__end__
+  - - NodeSucceeded
+    - node_id: repeat#1/__end__
+      output:
+        n: 2
+  - - NodeStarted
+    - node_id: repeat~2
+  - - NodeSucceeded
+    - commit_as: repeat
+      node_id: repeat~2
+      output:
+        cfg:
+          limit: 2
+        n: 2
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        cfg:
+          limit: 2
+        n: 2
+  - - RunSucceeded
+    - output:
+        cfg:
+          limit: 2
+        n: 2

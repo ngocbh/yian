@@ -1,0 +1,118 @@
+kind: run
+flow: |
+  id: mn
+  name: mn
+  typedefs:
+    Page:
+      next: Optional(str)
+      n: int
+    Strict:
+      next: str
+      n: int
+  defs:
+    step:
+      input:
+        page: !Strict
+      nodes:
+        get:
+          kind: code
+          input:
+            page: ${input.page}
+          output:
+            page: Optional(Page)
+          code: "return {page: null}"
+      output: ${get.output}
+  nodes:
+    pages:
+      kind: loop
+      while: page.next != null
+      input:
+        page: {n: 0}
+      call: step
+  output: ${pages.output}
+python_flow: |
+  id: mn
+  name: mn
+  typedefs:
+    Page:
+      next: Optional(str)
+      n: int
+    Strict:
+      next: str
+      n: int
+  defs:
+    step:
+      input:
+        page: !Strict
+      nodes:
+        get:
+          kind: code
+          input:
+            page: ${input.page}
+          output:
+            page: Optional(Page)
+          code: return dict(page=None)
+      output: ${get.output}
+  nodes:
+    pages:
+      kind: loop
+      while: page.next != null
+      input:
+        page: {n: 0}
+      call: step
+  output: ${pages.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      page:
+        n: 0
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, pages]
+  - - node_succeeded
+    - pages
+    - value:
+        page:
+          n: 0
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        page:
+          n: 0
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: pages
+  - - NodeSucceeded
+    - node_id: pages
+      output:
+        page:
+          n: 0
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        page:
+          n: 0
+  - - RunSucceeded
+    - output:
+        page:
+          n: 0

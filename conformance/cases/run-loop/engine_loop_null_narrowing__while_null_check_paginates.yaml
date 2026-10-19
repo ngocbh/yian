@@ -1,0 +1,204 @@
+kind: run
+flow: |
+  id: pages
+  name: pages
+  input:
+    start: !Optional(str)
+  defs:
+    fetch_page:
+      input:
+        cursor: !str
+      nodes:
+        get:
+          kind: code
+          input:
+            cursor: ${input.cursor}
+          output: Optional(str)
+          code: |
+            if (inputs["cursor"] === null) throw new Error("body saw a null cursor")
+            return ({p1: "p2", p2: null})[inputs["cursor"]] ?? null
+      output:
+        cursor: ${get.output}
+  nodes:
+    pages:
+      kind: loop
+      while: cursor != null
+      input:
+        cursor: ${input.start}
+      call: fetch_page
+  output: ${pages.output}
+python_flow: |
+  id: pages
+  name: pages
+  input:
+    start: !Optional(str)
+  defs:
+    fetch_page:
+      input:
+        cursor: !str
+      nodes:
+        get:
+          kind: code
+          input:
+            cursor: ${input.cursor}
+          output: Optional(str)
+          code: |
+            assert inputs["cursor"] is not None, "body saw a null cursor"
+            return {"p1": "p2", "p2": None}.get(inputs["cursor"])
+      output:
+        cursor: ${get.output}
+  nodes:
+    pages:
+      kind: loop
+      while: cursor != null
+      input:
+        cursor: ${input.start}
+      call: fetch_page
+  output: ${pages.output}
+inputs:
+  start: p1
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      cursor: null
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        start: p1
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        start: p1
+  - [node_started, pages]
+  - - node_expanded
+    - pages
+    - prune_ids: []
+      seed:
+      - cursor: p1
+      - 0
+  - [node_started, pages#0/__start__]
+  - - node_succeeded
+    - pages#0/__start__
+    - value:
+        cursor: p1
+  - [node_started, pages#0/get]
+  - - node_succeeded
+    - pages#0/get
+    - value: p2
+  - [node_started, pages#0/__end__]
+  - - node_succeeded
+    - pages#0/__end__
+    - value:
+        cursor: p2
+  - [node_started, pages~1]
+  - - node_expanded
+    - pages~1
+    - prune_ids: [pages#0/__end__, pages#0/__start__, pages#0/get, pages~1]
+      seed:
+      - cursor: p2
+      - 1
+  - [node_started, pages#1/__start__]
+  - - node_succeeded
+    - pages#1/__start__
+    - value:
+        cursor: p2
+  - [node_started, pages#1/get]
+  - [node_succeeded, pages#1/get]
+  - [node_started, pages#1/__end__]
+  - - node_succeeded
+    - pages#1/__end__
+    - value:
+        cursor: null
+  - [node_started, pages~2]
+  - - node_succeeded
+    - pages~2
+    - commit_target: pages
+      value:
+        cursor: null
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        cursor: null
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        start: p1
+  - - NodeStarted
+    - node_id: pages
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - cursor: p1
+        - 0
+      node_id: pages
+  - - NodeStarted
+    - node_id: pages#0/__start__
+  - - NodeSucceeded
+    - node_id: pages#0/__start__
+      output:
+        cursor: p1
+  - - NodeStarted
+    - node_id: pages#0/get
+  - - NodeSucceeded
+    - node_id: pages#0/get
+      output: p2
+  - - NodeStarted
+    - node_id: pages#0/__end__
+  - - NodeSucceeded
+    - node_id: pages#0/__end__
+      output:
+        cursor: p2
+  - - NodeStarted
+    - node_id: pages~1
+  - - NodeExpanded
+    - grow:
+        prune: [pages#0/__end__, pages#0/__start__, pages#0/get, pages~1]
+        seed:
+        - cursor: p2
+        - 1
+      node_id: pages~1
+  - - NodeStarted
+    - node_id: pages#1/__start__
+  - - NodeSucceeded
+    - node_id: pages#1/__start__
+      output:
+        cursor: p2
+  - - NodeStarted
+    - node_id: pages#1/get
+  - - NodeSucceeded
+    - node_id: pages#1/get
+  - - NodeStarted
+    - node_id: pages#1/__end__
+  - - NodeSucceeded
+    - node_id: pages#1/__end__
+      output:
+        cursor: null
+  - - NodeStarted
+    - node_id: pages~2
+  - - NodeSucceeded
+    - commit_as: pages
+      node_id: pages~2
+      output:
+        cursor: null
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        cursor: null
+  - - RunSucceeded
+    - output:
+        cursor: null

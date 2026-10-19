@@ -1,0 +1,249 @@
+kind: run
+flow: |2
+
+  id: t3
+  name: t3
+  defs:
+    countdown:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:loop_countdown
+          input:
+            n: ${input.n}
+          output:
+            n: int
+      output: ${step.output}
+  nodes:
+    loop:
+      kind: loop
+      call: countdown
+      input:
+        n: 10
+      times: 3
+  output: ${loop.output}
+python_flow: |2
+
+  id: t3
+  name: t3
+  defs:
+    countdown:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: code
+          code: tests.engine._compose_codefns:loop_countdown
+          input:
+            n: ${input.n}
+          output:
+            n: int
+      output: ${step.output}
+  nodes:
+    loop:
+      kind: loop
+      call: countdown
+      input:
+        n: 10
+      times: 3
+  output: ${loop.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      n: 7
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, loop]
+  - - node_expanded
+    - loop
+    - prune_ids: []
+      seed:
+      - n: 10
+      - 0
+  - [node_started, loop#0/__start__]
+  - - node_succeeded
+    - loop#0/__start__
+    - value:
+        n: 10
+  - [node_started, loop#0/step]
+  - - node_succeeded
+    - loop#0/step
+    - value:
+        n: 9
+  - [node_started, loop#0/__end__]
+  - - node_succeeded
+    - loop#0/__end__
+    - value:
+        n: 9
+  - [node_started, loop~1]
+  - - node_expanded
+    - loop~1
+    - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/step, loop~1]
+      seed:
+      - n: 9
+      - 1
+  - [node_started, loop#1/__start__]
+  - - node_succeeded
+    - loop#1/__start__
+    - value:
+        n: 9
+  - [node_started, loop#1/step]
+  - - node_succeeded
+    - loop#1/step
+    - value:
+        n: 8
+  - [node_started, loop#1/__end__]
+  - - node_succeeded
+    - loop#1/__end__
+    - value:
+        n: 8
+  - [node_started, loop~2]
+  - - node_expanded
+    - loop~2
+    - prune_ids: [loop#1/__end__, loop#1/__start__, loop#1/step, loop~2]
+      seed:
+      - n: 8
+      - 2
+  - [node_started, loop#2/__start__]
+  - - node_succeeded
+    - loop#2/__start__
+    - value:
+        n: 8
+  - [node_started, loop#2/step]
+  - - node_succeeded
+    - loop#2/step
+    - value:
+        n: 7
+  - [node_started, loop#2/__end__]
+  - - node_succeeded
+    - loop#2/__end__
+    - value:
+        n: 7
+  - [node_started, loop~3]
+  - - node_succeeded
+    - loop~3
+    - commit_target: loop
+      value:
+        n: 7
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        n: 7
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: 10
+        - 0
+      node_id: loop
+  - - NodeStarted
+    - node_id: loop#0/__start__
+  - - NodeSucceeded
+    - node_id: loop#0/__start__
+      output:
+        n: 10
+  - - NodeStarted
+    - node_id: loop#0/step
+  - - NodeSucceeded
+    - node_id: loop#0/step
+      output:
+        n: 9
+  - - NodeStarted
+    - node_id: loop#0/__end__
+  - - NodeSucceeded
+    - node_id: loop#0/__end__
+      output:
+        n: 9
+  - - NodeStarted
+    - node_id: loop~1
+  - - NodeExpanded
+    - grow:
+        prune: [loop#0/__end__, loop#0/__start__, loop#0/step, loop~1]
+        seed:
+        - n: 9
+        - 1
+      node_id: loop~1
+  - - NodeStarted
+    - node_id: loop#1/__start__
+  - - NodeSucceeded
+    - node_id: loop#1/__start__
+      output:
+        n: 9
+  - - NodeStarted
+    - node_id: loop#1/step
+  - - NodeSucceeded
+    - node_id: loop#1/step
+      output:
+        n: 8
+  - - NodeStarted
+    - node_id: loop#1/__end__
+  - - NodeSucceeded
+    - node_id: loop#1/__end__
+      output:
+        n: 8
+  - - NodeStarted
+    - node_id: loop~2
+  - - NodeExpanded
+    - grow:
+        prune: [loop#1/__end__, loop#1/__start__, loop#1/step, loop~2]
+        seed:
+        - n: 8
+        - 2
+      node_id: loop~2
+  - - NodeStarted
+    - node_id: loop#2/__start__
+  - - NodeSucceeded
+    - node_id: loop#2/__start__
+      output:
+        n: 8
+  - - NodeStarted
+    - node_id: loop#2/step
+  - - NodeSucceeded
+    - node_id: loop#2/step
+      output:
+        n: 7
+  - - NodeStarted
+    - node_id: loop#2/__end__
+  - - NodeSucceeded
+    - node_id: loop#2/__end__
+      output:
+        n: 7
+  - - NodeStarted
+    - node_id: loop~3
+  - - NodeSucceeded
+    - commit_as: loop
+      node_id: loop~3
+      output:
+        n: 7
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        n: 7
+  - - RunSucceeded
+    - output:
+        n: 7

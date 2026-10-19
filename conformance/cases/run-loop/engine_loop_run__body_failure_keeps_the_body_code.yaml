@@ -1,0 +1,256 @@
+# From tests/engine/test_loop_run.py::test_body_failure_in_bounded_loop_keeps_the_body_code.
+# A failing body keeps its own code (node.execute), not loop.max_exceeded.
+# hand TS expect: the TS `boom` fixture throws `new Error("boom")`, whose failure message is "Error: boom" as in the
+# committed run-map-call/seed_e24_nested_code_raise; the frames are unchanged (both references are 34 characters long).
+kind: run
+rules: [code]
+flow: |2
+
+  id: counter
+  name: counter
+  defs:
+    bump:
+      input:
+        n: !int
+        exited: !bool
+      nodes:
+        step:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:boom
+          input:
+            n: ${input.n}
+            exited: ${input.exited}
+          output:
+            n: int
+            exited: bool
+      output: ${step.output}
+  nodes:
+    loop:
+      kind: loop
+      call: bump
+      input:
+        n: 0
+        exited: false
+      while: not exited
+      max: 10
+  output: ${loop.output}
+python_flow: |2
+
+  id: counter
+  name: counter
+  defs:
+    bump:
+      input:
+        n: !int
+        exited: !bool
+      nodes:
+        step:
+          kind: code
+          code: tests.engine._compose_codefns:boom
+          input:
+            n: ${input.n}
+            exited: ${input.exited}
+          output:
+            n: int
+            exited: bool
+      output: ${step.output}
+  nodes:
+    loop:
+      kind: loop
+      call: bump
+      input:
+        n: 0
+        exited: false
+      while: not exited
+      max: 10
+  output: ${loop.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      frames:
+      - label: flow.yaml
+        range: [21, 3, 21, 7]
+      - label: flow.yaml
+        range: [12, 15, 12, 49]
+      message: "Error: boom"
+      node: loop#0/step
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, loop]
+  - - node_expanded
+    - loop
+    - prune_ids: []
+      seed:
+      - exited: false
+        n: 0
+      - 0
+  - [node_started, loop#0/__start__]
+  - - node_succeeded
+    - loop#0/__start__
+    - value:
+        exited: false
+        n: 0
+  - [node_started, loop#0/step]
+  - - node_failed
+    - loop#0/step
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [21, 3, 21, 7]
+        - label: flow.yaml
+          range: [12, 15, 12, 49]
+        message: "Error: boom"
+        node: loop#0/step
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - exited: false
+          n: 0
+        - 0
+      node_id: loop
+  - - NodeStarted
+    - node_id: loop#0/__start__
+  - - NodeSucceeded
+    - node_id: loop#0/__start__
+      output:
+        exited: false
+        n: 0
+  - - NodeStarted
+    - node_id: loop#0/step
+  - - NodeFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [21, 3, 21, 7]
+        - label: flow.yaml
+          range: [12, 15, 12, 49]
+        message: "Error: boom"
+        node: loop#0/step
+  - - RunFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [21, 3, 21, 7]
+        - label: flow.yaml
+          range: [12, 15, 12, 49]
+        message: "Error: boom"
+        node: loop#0/step
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      frames:
+      - label: flow.yaml
+        range: [21, 3, 21, 7]
+      - label: flow.yaml
+        range: [12, 15, 12, 49]
+      message: boom
+      node: loop#0/step
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, loop]
+  - - node_expanded
+    - loop
+    - prune_ids: []
+      seed:
+      - exited: false
+        n: 0
+      - 0
+  - [node_started, loop#0/__start__]
+  - - node_succeeded
+    - loop#0/__start__
+    - value:
+        exited: false
+        n: 0
+  - [node_started, loop#0/step]
+  - - node_failed
+    - loop#0/step
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [21, 3, 21, 7]
+        - label: flow.yaml
+          range: [12, 15, 12, 49]
+        message: boom
+        node: loop#0/step
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - exited: false
+          n: 0
+        - 0
+      node_id: loop
+  - - NodeStarted
+    - node_id: loop#0/__start__
+  - - NodeSucceeded
+    - node_id: loop#0/__start__
+      output:
+        exited: false
+        n: 0
+  - - NodeStarted
+    - node_id: loop#0/step
+  - - NodeFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [21, 3, 21, 7]
+        - label: flow.yaml
+          range: [12, 15, 12, 49]
+        message: boom
+        node: loop#0/step
+  - - RunFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [21, 3, 21, 7]
+        - label: flow.yaml
+          range: [12, 15, 12, 49]
+        message: boom
+        node: loop#0/step

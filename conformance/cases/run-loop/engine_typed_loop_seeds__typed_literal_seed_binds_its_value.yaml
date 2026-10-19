@@ -1,0 +1,235 @@
+kind: run
+flow: |2
+
+  id: typed-counter
+  name: typed_counter
+  nodes:
+    loop:
+      kind: loop
+      times: 3
+      input:
+        rounds: !int 0
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.rounds}
+          output: int
+          code: |
+            return inputs["n"] + 1n
+      output:
+        rounds: ${bump.output}
+  output: ${loop.output}
+python_flow: |2
+
+  id: typed-counter
+  name: typed_counter
+  nodes:
+    loop:
+      kind: loop
+      times: 3
+      input:
+        rounds: !int 0
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.rounds}
+          output: int
+          code: |
+            return inputs["n"] + 1
+      output:
+        rounds: ${bump.output}
+  output: ${loop.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      rounds: 3
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, loop]
+  - - node_expanded
+    - loop
+    - prune_ids: []
+      seed:
+      - rounds: 0
+      - 0
+  - [node_started, loop#0/__start__]
+  - - node_succeeded
+    - loop#0/__start__
+    - value:
+        rounds: 0
+  - [node_started, loop#0/bump]
+  - - node_succeeded
+    - loop#0/bump
+    - value: 1
+  - [node_started, loop#0/__end__]
+  - - node_succeeded
+    - loop#0/__end__
+    - value:
+        rounds: 1
+  - [node_started, loop~1]
+  - - node_expanded
+    - loop~1
+    - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/bump, loop~1]
+      seed:
+      - rounds: 1
+      - 1
+  - [node_started, loop#1/__start__]
+  - - node_succeeded
+    - loop#1/__start__
+    - value:
+        rounds: 1
+  - [node_started, loop#1/bump]
+  - - node_succeeded
+    - loop#1/bump
+    - value: 2
+  - [node_started, loop#1/__end__]
+  - - node_succeeded
+    - loop#1/__end__
+    - value:
+        rounds: 2
+  - [node_started, loop~2]
+  - - node_expanded
+    - loop~2
+    - prune_ids: [loop#1/__end__, loop#1/__start__, loop#1/bump, loop~2]
+      seed:
+      - rounds: 2
+      - 2
+  - [node_started, loop#2/__start__]
+  - - node_succeeded
+    - loop#2/__start__
+    - value:
+        rounds: 2
+  - [node_started, loop#2/bump]
+  - - node_succeeded
+    - loop#2/bump
+    - value: 3
+  - [node_started, loop#2/__end__]
+  - - node_succeeded
+    - loop#2/__end__
+    - value:
+        rounds: 3
+  - [node_started, loop~3]
+  - - node_succeeded
+    - loop~3
+    - commit_target: loop
+      value:
+        rounds: 3
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        rounds: 3
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - rounds: 0
+        - 0
+      node_id: loop
+  - - NodeStarted
+    - node_id: loop#0/__start__
+  - - NodeSucceeded
+    - node_id: loop#0/__start__
+      output:
+        rounds: 0
+  - - NodeStarted
+    - node_id: loop#0/bump
+  - - NodeSucceeded
+    - node_id: loop#0/bump
+      output: 1
+  - - NodeStarted
+    - node_id: loop#0/__end__
+  - - NodeSucceeded
+    - node_id: loop#0/__end__
+      output:
+        rounds: 1
+  - - NodeStarted
+    - node_id: loop~1
+  - - NodeExpanded
+    - grow:
+        prune: [loop#0/__end__, loop#0/__start__, loop#0/bump, loop~1]
+        seed:
+        - rounds: 1
+        - 1
+      node_id: loop~1
+  - - NodeStarted
+    - node_id: loop#1/__start__
+  - - NodeSucceeded
+    - node_id: loop#1/__start__
+      output:
+        rounds: 1
+  - - NodeStarted
+    - node_id: loop#1/bump
+  - - NodeSucceeded
+    - node_id: loop#1/bump
+      output: 2
+  - - NodeStarted
+    - node_id: loop#1/__end__
+  - - NodeSucceeded
+    - node_id: loop#1/__end__
+      output:
+        rounds: 2
+  - - NodeStarted
+    - node_id: loop~2
+  - - NodeExpanded
+    - grow:
+        prune: [loop#1/__end__, loop#1/__start__, loop#1/bump, loop~2]
+        seed:
+        - rounds: 2
+        - 2
+      node_id: loop~2
+  - - NodeStarted
+    - node_id: loop#2/__start__
+  - - NodeSucceeded
+    - node_id: loop#2/__start__
+      output:
+        rounds: 2
+  - - NodeStarted
+    - node_id: loop#2/bump
+  - - NodeSucceeded
+    - node_id: loop#2/bump
+      output: 3
+  - - NodeStarted
+    - node_id: loop#2/__end__
+  - - NodeSucceeded
+    - node_id: loop#2/__end__
+      output:
+        rounds: 3
+  - - NodeStarted
+    - node_id: loop~3
+  - - NodeSucceeded
+    - commit_as: loop
+      node_id: loop~3
+      output:
+        rounds: 3
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        rounds: 3
+  - - RunSucceeded
+    - output:
+        rounds: 3

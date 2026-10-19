@@ -1,0 +1,204 @@
+kind: run
+flow: |2
+
+  id: loop-seed
+  name: loop_seed
+  typedefs:
+    Done: {answer: str}
+    More: {hint: str}
+  defs:
+    body:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+            r: Done
+          code: |
+            return {"n": inputs["n"] + 1n, "r": {"answer": "ok"}}
+      output: ${step.output}
+  nodes:
+    prev:
+      kind: code
+      code: "return {hint: \"x\"}"
+    ask:
+      kind: loop
+      call: body
+      while: not isinstance(r, Done)
+      max: 5
+      input:
+        n: 0
+        r: null
+  output: ${ask.output}
+python_flow: |2
+
+  id: loop-seed
+  name: loop_seed
+  typedefs:
+    Done: {answer: str}
+    More: {hint: str}
+  defs:
+    body:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+            r: Done
+          code: |
+            return {"n": inputs["n"] + 1, "r": {"answer": "ok"}}
+      output: ${step.output}
+  nodes:
+    prev:
+      kind: code
+      code: return dict(hint="x")
+    ask:
+      kind: loop
+      call: body
+      while: not isinstance(r, Done)
+      max: 5
+      input:
+        n: 0
+        r: null
+  output: ${ask.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      n: 1
+      r:
+        answer: ok
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, ask]
+  - - node_expanded
+    - ask
+    - prune_ids: []
+      seed:
+      - n: 0
+        r: null
+      - 0
+  - [node_started, prev]
+  - - node_succeeded
+    - prev
+    - value:
+        hint: x
+  - [node_started, ask#0/__start__]
+  - - node_succeeded
+    - ask#0/__start__
+    - value:
+        n: 0
+  - [node_started, ask#0/step]
+  - - node_succeeded
+    - ask#0/step
+    - value:
+        n: 1
+        r:
+          answer: ok
+  - [node_started, ask#0/__end__]
+  - - node_succeeded
+    - ask#0/__end__
+    - value:
+        n: 1
+        r:
+          answer: ok
+  - [node_started, ask~1]
+  - - node_succeeded
+    - ask~1
+    - commit_target: ask
+      value:
+        n: 1
+        r:
+          answer: ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        n: 1
+        r:
+          answer: ok
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: ask
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: 0
+          r: null
+        - 0
+      node_id: ask
+  - - NodeStarted
+    - node_id: prev
+  - - NodeSucceeded
+    - node_id: prev
+      output:
+        hint: x
+  - - NodeStarted
+    - node_id: ask#0/__start__
+  - - NodeSucceeded
+    - node_id: ask#0/__start__
+      output:
+        n: 0
+  - - NodeStarted
+    - node_id: ask#0/step
+  - - NodeSucceeded
+    - node_id: ask#0/step
+      output:
+        n: 1
+        r:
+          answer: ok
+  - - NodeStarted
+    - node_id: ask#0/__end__
+  - - NodeSucceeded
+    - node_id: ask#0/__end__
+      output:
+        n: 1
+        r:
+          answer: ok
+  - - NodeStarted
+    - node_id: ask~1
+  - - NodeSucceeded
+    - commit_as: ask
+      node_id: ask~1
+      output:
+        n: 1
+        r:
+          answer: ok
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        n: 1
+        r:
+          answer: ok
+  - - RunSucceeded
+    - output:
+        n: 1
+        r:
+          answer: ok

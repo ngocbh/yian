@@ -1,0 +1,236 @@
+kind: run
+flow: |2
+
+  id: loop-single-output-record
+  name: loop_single_output_record
+  defs:
+    bump:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": inputs["n"] + 100n}
+      output:
+        state: ${step.output}
+  nodes:
+    chat_loop:
+      kind: loop
+      call: bump
+      input:
+        n: 0
+        state: init
+      times: 2
+  output: ${chat_loop.output}
+python_flow: |2
+
+  id: loop-single-output-record
+  name: loop_single_output_record
+  defs:
+    bump:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": inputs["n"] + 100}
+      output:
+        state: ${step.output}
+  nodes:
+    chat_loop:
+      kind: loop
+      call: bump
+      input:
+        n: 0
+        state: init
+      times: 2
+  output: ${chat_loop.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      n: 0
+      state:
+        n: 100
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, chat_loop]
+  - - node_expanded
+    - chat_loop
+    - prune_ids: []
+      seed:
+      - n: 0
+        state: init
+      - 0
+  - [node_started, chat_loop#0/__start__]
+  - - node_succeeded
+    - chat_loop#0/__start__
+    - value:
+        n: 0
+  - [node_started, chat_loop#0/step]
+  - - node_succeeded
+    - chat_loop#0/step
+    - value:
+        n: 100
+  - [node_started, chat_loop#0/__end__]
+  - - node_succeeded
+    - chat_loop#0/__end__
+    - value:
+        state:
+          n: 100
+  - [node_started, chat_loop~1]
+  - - node_expanded
+    - chat_loop~1
+    - prune_ids:
+      - chat_loop#0/__end__
+      - chat_loop#0/__start__
+      - chat_loop#0/step
+      - chat_loop~1
+      seed:
+      - n: 0
+        state:
+          n: 100
+      - 1
+  - [node_started, chat_loop#1/__start__]
+  - - node_succeeded
+    - chat_loop#1/__start__
+    - value:
+        n: 0
+  - [node_started, chat_loop#1/step]
+  - - node_succeeded
+    - chat_loop#1/step
+    - value:
+        n: 100
+  - [node_started, chat_loop#1/__end__]
+  - - node_succeeded
+    - chat_loop#1/__end__
+    - value:
+        state:
+          n: 100
+  - [node_started, chat_loop~2]
+  - - node_succeeded
+    - chat_loop~2
+    - commit_target: chat_loop
+      value:
+        n: 0
+        state:
+          n: 100
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        n: 0
+        state:
+          n: 100
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: chat_loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: 0
+          state: init
+        - 0
+      node_id: chat_loop
+  - - NodeStarted
+    - node_id: chat_loop#0/__start__
+  - - NodeSucceeded
+    - node_id: chat_loop#0/__start__
+      output:
+        n: 0
+  - - NodeStarted
+    - node_id: chat_loop#0/step
+  - - NodeSucceeded
+    - node_id: chat_loop#0/step
+      output:
+        n: 100
+  - - NodeStarted
+    - node_id: chat_loop#0/__end__
+  - - NodeSucceeded
+    - node_id: chat_loop#0/__end__
+      output:
+        state:
+          n: 100
+  - - NodeStarted
+    - node_id: chat_loop~1
+  - - NodeExpanded
+    - grow:
+        prune:
+        - chat_loop#0/__end__
+        - chat_loop#0/__start__
+        - chat_loop#0/step
+        - chat_loop~1
+        seed:
+        - n: 0
+          state:
+            n: 100
+        - 1
+      node_id: chat_loop~1
+  - - NodeStarted
+    - node_id: chat_loop#1/__start__
+  - - NodeSucceeded
+    - node_id: chat_loop#1/__start__
+      output:
+        n: 0
+  - - NodeStarted
+    - node_id: chat_loop#1/step
+  - - NodeSucceeded
+    - node_id: chat_loop#1/step
+      output:
+        n: 100
+  - - NodeStarted
+    - node_id: chat_loop#1/__end__
+  - - NodeSucceeded
+    - node_id: chat_loop#1/__end__
+      output:
+        state:
+          n: 100
+  - - NodeStarted
+    - node_id: chat_loop~2
+  - - NodeSucceeded
+    - commit_as: chat_loop
+      node_id: chat_loop~2
+      output:
+        n: 0
+        state:
+          n: 100
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        n: 0
+        state:
+          n: 100
+  - - RunSucceeded
+    - output:
+        n: 0
+        state:
+          n: 100

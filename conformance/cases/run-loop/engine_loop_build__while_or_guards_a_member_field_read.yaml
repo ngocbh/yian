@@ -1,0 +1,315 @@
+kind: run
+flow: |2
+
+  id: loop-union
+  name: loop_union
+  typedefs:
+    Done: {answer: str}
+    More: {hint: str}
+    Step: Union(Done, More)
+  nodes:
+    ask:
+      kind: loop
+      while: isinstance(r, More) or r.answer != 'ok'
+      input:
+        n: 0
+        r: !Step {"hint":"start"}
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+            r: Step
+          code: |
+            const n = inputs["n"] + 1n
+            return {"n": n, "r": n >= 3n ? {"answer": "ok"} : {"hint": "again"}}
+      output: ${step.output}
+  output: ${ask.output}
+python_flow: |2
+
+  id: loop-union
+  name: loop_union
+  typedefs:
+    Done: {answer: str}
+    More: {hint: str}
+    Step: Union(Done, More)
+  nodes:
+    ask:
+      kind: loop
+      while: isinstance(r, More) or r.answer != 'ok'
+      input:
+        n: 0
+        r: !Step {"hint":"start"}
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+            r: Step
+          code: |
+            n = inputs["n"] + 1
+            return {"n": n, "r": {"answer": "ok"} if n >= 3 else {"hint": "again"}}
+      output: ${step.output}
+  output: ${ask.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      n: 3
+      r:
+        answer: ok
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, ask]
+  - - node_expanded
+    - ask
+    - prune_ids: []
+      seed:
+      - n: 0
+        r:
+          hint: start
+      - 0
+  - [node_started, ask#0/__start__]
+  - - node_succeeded
+    - ask#0/__start__
+    - value:
+        n: 0
+        r:
+          hint: start
+  - [node_started, ask#0/step]
+  - - node_succeeded
+    - ask#0/step
+    - value:
+        n: 1
+        r:
+          hint: again
+  - [node_started, ask#0/__end__]
+  - - node_succeeded
+    - ask#0/__end__
+    - value:
+        n: 1
+        r:
+          hint: again
+  - [node_started, ask~1]
+  - - node_expanded
+    - ask~1
+    - prune_ids: [ask#0/__end__, ask#0/__start__, ask#0/step, ask~1]
+      seed:
+      - n: 1
+        r:
+          hint: again
+      - 1
+  - [node_started, ask#1/__start__]
+  - - node_succeeded
+    - ask#1/__start__
+    - value:
+        n: 1
+        r:
+          hint: again
+  - [node_started, ask#1/step]
+  - - node_succeeded
+    - ask#1/step
+    - value:
+        n: 2
+        r:
+          hint: again
+  - [node_started, ask#1/__end__]
+  - - node_succeeded
+    - ask#1/__end__
+    - value:
+        n: 2
+        r:
+          hint: again
+  - [node_started, ask~2]
+  - - node_expanded
+    - ask~2
+    - prune_ids: [ask#1/__end__, ask#1/__start__, ask#1/step, ask~2]
+      seed:
+      - n: 2
+        r:
+          hint: again
+      - 2
+  - [node_started, ask#2/__start__]
+  - - node_succeeded
+    - ask#2/__start__
+    - value:
+        n: 2
+        r:
+          hint: again
+  - [node_started, ask#2/step]
+  - - node_succeeded
+    - ask#2/step
+    - value:
+        n: 3
+        r:
+          answer: ok
+  - [node_started, ask#2/__end__]
+  - - node_succeeded
+    - ask#2/__end__
+    - value:
+        n: 3
+        r:
+          answer: ok
+  - [node_started, ask~3]
+  - - node_succeeded
+    - ask~3
+    - commit_target: ask
+      value:
+        n: 3
+        r:
+          answer: ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        n: 3
+        r:
+          answer: ok
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: ask
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: 0
+          r:
+            hint: start
+        - 0
+      node_id: ask
+  - - NodeStarted
+    - node_id: ask#0/__start__
+  - - NodeSucceeded
+    - node_id: ask#0/__start__
+      output:
+        n: 0
+        r:
+          hint: start
+  - - NodeStarted
+    - node_id: ask#0/step
+  - - NodeSucceeded
+    - node_id: ask#0/step
+      output:
+        n: 1
+        r:
+          hint: again
+  - - NodeStarted
+    - node_id: ask#0/__end__
+  - - NodeSucceeded
+    - node_id: ask#0/__end__
+      output:
+        n: 1
+        r:
+          hint: again
+  - - NodeStarted
+    - node_id: ask~1
+  - - NodeExpanded
+    - grow:
+        prune: [ask#0/__end__, ask#0/__start__, ask#0/step, ask~1]
+        seed:
+        - n: 1
+          r:
+            hint: again
+        - 1
+      node_id: ask~1
+  - - NodeStarted
+    - node_id: ask#1/__start__
+  - - NodeSucceeded
+    - node_id: ask#1/__start__
+      output:
+        n: 1
+        r:
+          hint: again
+  - - NodeStarted
+    - node_id: ask#1/step
+  - - NodeSucceeded
+    - node_id: ask#1/step
+      output:
+        n: 2
+        r:
+          hint: again
+  - - NodeStarted
+    - node_id: ask#1/__end__
+  - - NodeSucceeded
+    - node_id: ask#1/__end__
+      output:
+        n: 2
+        r:
+          hint: again
+  - - NodeStarted
+    - node_id: ask~2
+  - - NodeExpanded
+    - grow:
+        prune: [ask#1/__end__, ask#1/__start__, ask#1/step, ask~2]
+        seed:
+        - n: 2
+          r:
+            hint: again
+        - 2
+      node_id: ask~2
+  - - NodeStarted
+    - node_id: ask#2/__start__
+  - - NodeSucceeded
+    - node_id: ask#2/__start__
+      output:
+        n: 2
+        r:
+          hint: again
+  - - NodeStarted
+    - node_id: ask#2/step
+  - - NodeSucceeded
+    - node_id: ask#2/step
+      output:
+        n: 3
+        r:
+          answer: ok
+  - - NodeStarted
+    - node_id: ask#2/__end__
+  - - NodeSucceeded
+    - node_id: ask#2/__end__
+      output:
+        n: 3
+        r:
+          answer: ok
+  - - NodeStarted
+    - node_id: ask~3
+  - - NodeSucceeded
+    - commit_as: ask
+      node_id: ask~3
+      output:
+        n: 3
+        r:
+          answer: ok
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        n: 3
+        r:
+          answer: ok
+  - - RunSucceeded
+    - output:
+        n: 3
+        r:
+          answer: ok

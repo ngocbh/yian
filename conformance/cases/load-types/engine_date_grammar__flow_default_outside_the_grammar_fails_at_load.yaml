@@ -1,4 +1,4 @@
-# Python's full message: TS typesys keeps the grammar hint too, shared.
+# Shared; the shim audit flags it on purpose: the messages shim's value_repr breaks _mismatch_reason's prefix match (tags.py) and drops the hint, which TS keeps (values.ts).
 kind: load
 flow: |
   id: f

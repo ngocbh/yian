@@ -1,7 +1,8 @@
-# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each restarted node (decision 20); the trace still pins the resume.
 # From tests/engine/test_run_recovery_matrix.py::test_namespaced_human_input_start_replays_without_host_interaction[map].
 # A HUMAN_INPUT inside a grown MAP item is retried under its namespaced id.
 # Record 11 is invoke#0/ask's node_started: the first answer is given, its result is refused.
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# restarted node (decision 20); the trace still pins the resume.
 kind: resume
 flow: |
   id: recovery-nested-human-map

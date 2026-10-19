@@ -1,9 +1,10 @@
-# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each restarted node (decision 20); the trace still pins the resume.
 # From tests/engine/test_run_api_key.py::test_resume_sends_the_key_passed_again_and_records_none_of_it.
 # Also ::test_openai_compatible_run_sends_the_key_and_records_none_of_it (the recorded `_host_key` marker).
 # A run whose agent authenticates with the host's llm_config.api_key resumes with the key passed again; the key
 # appears in no record, event or result.
 # Record 3 is agent's node_started: its first model call runs, its result is refused.
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# restarted node (decision 20); the trace still pins the resume.
 kind: resume
 flow: |
   id: keyed

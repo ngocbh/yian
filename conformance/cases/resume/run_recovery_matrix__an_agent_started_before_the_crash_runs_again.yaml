@@ -1,7 +1,8 @@
-# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each restarted node (decision 20); the trace still pins the resume.
 # From tests/engine/test_run_recovery_matrix.py::test_effect_start_prefix_replays_without_running_effect_work[agent].
 # An AGENT that started before the crash is retried on resume, and its model is called again.
 # Record 3 is effect's node_started: its first model call runs (the first reply), its result is refused.
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# restarted node (decision 20); the trace still pins the resume.
 kind: resume
 flow: |
   id: recovery-agent

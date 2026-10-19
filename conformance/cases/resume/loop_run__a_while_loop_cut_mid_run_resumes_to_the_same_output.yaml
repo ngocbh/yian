@@ -1,7 +1,8 @@
-# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each restarted node (decision 20); the trace still pins the resume.
 # From tests/engine/test_loop_run.py::test_loop_without_max_resumes_from_its_log.
 # A while LOOP without `max:` cut in the middle of its run resumes from the recorded drivers to the same output.
 # Record 15 is loop#1/step's node_started (mid-iteration): the step runs, its result is refused.
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# restarted node (decision 20); the trace still pins the resume.
 kind: resume
 flow: |
   id: counter

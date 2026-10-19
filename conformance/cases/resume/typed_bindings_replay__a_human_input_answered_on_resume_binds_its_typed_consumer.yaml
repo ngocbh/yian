@@ -1,9 +1,10 @@
-# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each restarted node (decision 20); the trace still pins the resume.
 # From tests/engine/test_typed_bindings_replay.py::test_typed_consumer_after_resume_accepts_a_matching_answer.
 # Also tests/engine/test_run_recovery_matrix.py::test_effect_start_prefix_replays_without_running_effect_work[human_input].
 # A HUMAN_INPUT that started before the crash is retried and asked again; the consumer binds the answer given
 # on resume against its declared type. `use` returns its input (the test doubles it).
 # Record 3 is ask's node_started: the first answer is given, its result is refused.
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# restarted node (decision 20); the trace still pins the resume.
 kind: resume
 flow: |
   id: typed-gate-replay

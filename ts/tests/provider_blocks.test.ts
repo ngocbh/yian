@@ -13,17 +13,31 @@ import { compareCodeUnits } from "../src/diagnostics.ts";
 import { FileRef } from "../src/typesys/index.ts";
 import {
   AnthropicMessagesBlock,
+  AzureChatBlock,
   type BlockSchema,
+  blockSchema,
   checkBlock,
   checkObject,
+  DeepSeekChatBlock,
   type Field,
   GeminiGenerateContentBlock,
+  GLMChatBlock,
+  GLMCNChatBlock,
   type Issue,
+  MiniMaxChatBlock,
+  MiniMaxCNChatBlock,
   type ObjectSchema,
+  OllamaChatBlock,
   OpenAIResponsesBlock,
   OpenAISubscriptionBlock,
+  OpenRouterChatBlock,
+  PROVIDER_BLOCKS,
+  QwenChatBlock,
+  QwenCNChatBlock,
   ValidationError,
   validateBlock,
+  VLLMChatBlock,
+  XAIChatBlock,
 } from "../src/llm_clients/provider_blocks.ts";
 
 /** Return a frozen schema with `fields`, of which `required` are required. */
@@ -836,12 +850,510 @@ describe("Gemini generateContent block", () => {
   });
 });
 
-const ALL_BLOCKS: [string, BlockSchema][] = [
-  ["AnthropicMessagesBlock", AnthropicMessagesBlock],
-  ["GeminiGenerateContentBlock", GeminiGenerateContentBlock],
-  ["OpenAIResponsesBlock", OpenAIResponsesBlock],
-  ["OpenAISubscriptionBlock", OpenAISubscriptionBlock],
+const CHAT_BLOCKS: BlockSchema[] = [
+  XAIChatBlock,
+  GLMChatBlock,
+  GLMCNChatBlock,
+  MiniMaxChatBlock,
+  MiniMaxCNChatBlock,
+  DeepSeekChatBlock,
+  QwenChatBlock,
+  QwenCNChatBlock,
+  OpenRouterChatBlock,
+  VLLMChatBlock,
+  AzureChatBlock,
 ];
+
+const SAMPLES: [BlockSchema, Record<string, unknown>][] = [
+  [
+    XAIChatBlock,
+    {
+      frequency_penalty: 0.5,
+      logprobs: true,
+      max_completion_tokens: 4096n,
+      presence_penalty: -0.5,
+      prompt_cache_key: "flow-a",
+      reasoning_effort: "high",
+      safety_identifier: "user-hash",
+      seed: 7n,
+      service_tier: "priority",
+      stop: ["END"],
+      temperature: 0.7,
+      top_logprobs: 8n,
+      top_p: 0.9,
+      user: "someone",
+    },
+  ],
+  [
+    GLMChatBlock,
+    {
+      do_sample: true,
+      max_tokens: 131072n,
+      reasoning_effort: "xhigh",
+      stop: ["END"],
+      temperature: 1n,
+      thinking: { type: "disabled", clear_thinking: false },
+      top_p: 0.01,
+      user_id: "user-123456",
+    },
+  ],
+  [
+    MiniMaxChatBlock,
+    {
+      max_completion_tokens: 2048n,
+      max_tokens: 4096n,
+      reasoning_effort: "max",
+      service_tier: "priority",
+      temperature: 2n,
+      thinking: { type: "adaptive" },
+      top_p: 0.95,
+    },
+  ],
+  [
+    DeepSeekChatBlock,
+    {
+      logprobs: true,
+      max_tokens: 393216n,
+      reasoning_effort: "max",
+      stop: "END",
+      temperature: 1.3,
+      thinking: { type: "enabled" },
+      top_logprobs: 20n,
+      top_p: 0.95,
+      user_id: "team_a-1",
+    },
+  ],
+  [
+    QwenChatBlock,
+    {
+      enable_search: true,
+      enable_thinking: true,
+      logprobs: true,
+      max_completion_tokens: 8192n,
+      presence_penalty: 1.5,
+      reasoning_effort: "medium",
+      repetition_penalty: 1.05,
+      search_options: { forced_search: true, search_strategy: "max" },
+      seed: 2147483647n,
+      stop: [104307n],
+      temperature: 1.99,
+      thinking_budget: 4096n,
+      top_k: 20n,
+      top_logprobs: 5n,
+      top_p: 0.8,
+    },
+  ],
+  [
+    OpenRouterChatBlock,
+    {
+      cache_control: { type: "ephemeral", ttl: "1h" },
+      logit_bias: { "50256": -100n },
+      max_completion_tokens: 1000n,
+      metadata: { session: "s-1" },
+      min_p: 0.1,
+      models: ["openai/gpt-5", "anthropic/claude-opus"],
+      provider: { allow_fallbacks: false, order: ["anthropic"] },
+      reasoning: { effort: "high", max_tokens: 2000n, exclude: true, enabled: true },
+      repetition_penalty: 1.1,
+      seed: 42n,
+      service_tier: "flex",
+      stop: "END",
+      temperature: 0.7,
+      top_a: 0.2,
+      top_k: 40n,
+      top_p: 1n,
+      verbosity: "xhigh",
+    },
+  ],
+  [
+    VLLMChatBlock,
+    {
+      chat_template_kwargs: { enable_thinking: false },
+      ignore_eos: false,
+      include_stop_str_in_output: true,
+      // Python's float 1.0.
+      length_penalty: 1,
+      max_tokens: 512n,
+      min_p: 0.05,
+      min_tokens: 4n,
+      priority: -1n,
+      repetition_penalty: 1.1,
+      skip_special_tokens: false,
+      spaces_between_special_tokens: true,
+      stop: ["</s>", "END"],
+      stop_token_ids: [2n],
+      temperature: 0.6,
+      top_k: 20n,
+      top_p: 0.95,
+    },
+  ],
+  [
+    AzureChatBlock,
+    {
+      frequency_penalty: 0.1,
+      logit_bias: { "50256": -100n },
+      max_completion_tokens: 4096n,
+      metadata: { team: "research" },
+      presence_penalty: 0.2,
+      reasoning_effort: "minimal",
+      safety_identifier: "user-hash",
+      seed: 1n,
+      stop: ["END"],
+      temperature: 0.5,
+      top_logprobs: 3n,
+      top_p: 0.9,
+      user_security_context: { application_name: "flows" },
+      verbosity: "low",
+    },
+  ],
+  [
+    OllamaChatBlock,
+    {
+      think: "high",
+      options: {
+        num_ctx: 8192n,
+        num_predict: 512n,
+        temperature: 0.6,
+        top_k: 20n,
+        top_p: 0.95,
+        repeat_penalty: 1.1,
+        seed: 1n,
+        stop: ["</s>"],
+        use_mmap: true,
+      },
+      keep_alive: "5m",
+      logprobs: true,
+      top_logprobs: 3n,
+    },
+  ],
+];
+
+describe("provider registry", () => {
+  test("every supported provider has its own block class", () => {
+    expect(Object.keys(PROVIDER_BLOCKS)).toEqual([
+      "openai",
+      "azure",
+      "xai",
+      "deepseek",
+      "qwen",
+      "qwen-cn",
+      "glm",
+      "glm-cn",
+      "minimax",
+      "minimax-cn",
+      "openrouter",
+      "vllm",
+      "ollama",
+      "anthropic",
+      "google",
+    ]);
+    expect(Object.values(PROVIDER_BLOCKS)).toEqual([
+      OpenAIResponsesBlock,
+      AzureChatBlock,
+      XAIChatBlock,
+      DeepSeekChatBlock,
+      QwenChatBlock,
+      QwenCNChatBlock,
+      GLMChatBlock,
+      GLMCNChatBlock,
+      MiniMaxChatBlock,
+      MiniMaxCNChatBlock,
+      OpenRouterChatBlock,
+      VLLMChatBlock,
+      OllamaChatBlock,
+      AnthropicMessagesBlock,
+      GeminiGenerateContentBlock,
+    ]);
+    for (const [provider, block] of Object.entries(PROVIDER_BLOCKS)) {
+      expect(block.name).toBe(provider);
+      expect(blockSchema(provider)).toBe(block);
+    }
+    expect(Object.isFrozen(PROVIDER_BLOCKS)).toBe(true);
+    expect(Object.getPrototypeOf(PROVIDER_BLOCKS)).toBeNull();
+  });
+
+  test("block schema picks the API actually called", () => {
+    const subscription = { method: "subscription" };
+    expect(blockSchema("openai", subscription)).toBe(OpenAISubscriptionBlock);
+    expect(blockSchema("openai", subscription, null)).toBe(OpenAISubscriptionBlock);
+    expect(blockSchema("openai", subscription, "sk-x")).toBe(OpenAIResponsesBlock);
+    expect(blockSchema("openai", { method: "api_key" })).toBe(OpenAIResponsesBlock);
+    expect(blockSchema("openai")).toBe(OpenAIResponsesBlock);
+    expect(blockSchema("azure", subscription)).toBe(AzureChatBlock);
+  });
+
+  test.each([["constructor"], ["toString"], ["__proto__"], ["mistral"]])(
+    "block schema refuses a name with no block: %s",
+    (name) => {
+      expect(() => blockSchema(name)).toThrow(new RangeError(`no provider block named "${name}"`));
+    },
+  );
+
+  test("inherited object keys are not entries", () => {
+    expect("toString" in PROVIDER_BLOCKS).toBe(false);
+    expect("constructor" in OpenAIResponsesBlock.fields).toBe(false);
+  });
+});
+
+describe("Chat Completions blocks", () => {
+  test.each(SAMPLES.map(([block, sample]) => [block.title, block, sample] as const))(
+    "%s: valid sample dumps unchanged",
+    (_title, block, sample) => {
+      expect(validateBlock(block, sample) as unknown).toEqual(sample);
+    },
+  );
+
+  const outside: [BlockSchema, unknown][] = [
+    [DeepSeekChatBlock, { reasoning_effort: "medium" }],
+    [DeepSeekChatBlock, { max_tokens: 393217n }],
+    [DeepSeekChatBlock, { stop: Array.from({ length: 17 }, (_, i) => String(i)) }],
+    [DeepSeekChatBlock, { top_p: 0n }],
+    [GLMChatBlock, { temperature: 1.5 }],
+    [GLMChatBlock, { top_p: 0.001 }],
+    [GLMChatBlock, { stop: "END" }],
+    [GLMChatBlock, { thinking: { type: "adaptive" } }],
+    [MiniMaxChatBlock, { thinking: { type: "enabled" } }],
+    [MiniMaxChatBlock, { reasoning_effort: "none" }],
+    [MiniMaxChatBlock, { service_tier: "flex" }],
+    [QwenChatBlock, { temperature: 2n }],
+    [QwenChatBlock, { top_logprobs: 6n }],
+    [QwenChatBlock, { enable_thinking: "yes" }],
+    [QwenChatBlock, { search_options: { search_strategy: "deep" } }],
+    [XAIChatBlock, { top_logprobs: 9n }],
+    [XAIChatBlock, { service_tier: "flex" }],
+    [XAIChatBlock, { stop: ["a", "b", "c", "d", "e"] }],
+    [OpenRouterChatBlock, { reasoning: { effort: "extreme" } }],
+    [OpenRouterChatBlock, { repetition_penalty: 2.5 }],
+    [VLLMChatBlock, { top_k: -2n }],
+    [VLLMChatBlock, { top_p: 0n }],
+    [VLLMChatBlock, { temperature: NaN }],
+    [AzureChatBlock, { reasoning_effort: "extreme" }],
+    [AzureChatBlock, { logit_bias: { "1": 101n } }],
+    [AzureChatBlock, { temperature: 2.1 }],
+  ];
+  test.each(outside.map(([block, data]) => [block.title, block, data] as const))(
+    "%s: value outside the vendor set is rejected: %p",
+    (_title, block, data) => {
+      expect(() => validateBlock(block, data)).toThrow(ValidationError);
+    },
+  );
+
+  test("xAI's own top_logprobs replaces the shared one in place", () => {
+    expect(Object.keys(XAIChatBlock.fields).slice(0, 9)).toEqual([
+      "logprobs",
+      "top_logprobs",
+      "max_completion_tokens",
+      "max_tokens",
+      "frequency_penalty",
+      "presence_penalty",
+      "temperature",
+      "top_p",
+      "prompt_cache_key",
+    ]);
+    expect(checkBlock(XAIChatBlock, { top_logprobs: 9n }).issues).toEqual([
+      { loc: ["top_logprobs"], type: "less_than_equal", msg: "Input should be less than or equal to 8" },
+    ]);
+  });
+
+  test("vLLM seed takes the signed 64-bit range", () => {
+    expect(validateBlock(VLLMChatBlock, { seed: 2n ** 63n - 1n })).toEqual({ seed: 2n ** 63n - 1n });
+    expect(validateBlock(VLLMChatBlock, { seed: -(2n ** 63n) })).toEqual({ seed: -(2n ** 63n) });
+    expect(checkBlock(VLLMChatBlock, { seed: 2n ** 63n }).issues).toEqual([
+      { loc: ["seed"], type: "less_than_equal", msg: "Input should be less than or equal to 9223372036854775807" },
+    ]);
+    expect(checkBlock(VLLMChatBlock, { seed: -(2n ** 63n) - 1n }).issues).toEqual([
+      {
+        loc: ["seed"],
+        type: "greater_than_equal",
+        msg: "Input should be greater than or equal to -9223372036854775808",
+      },
+    ]);
+  });
+
+  test.each([
+    ["qwen-cn", QwenChatBlock, "enable_thinkng"],
+    ["glm-cn", GLMChatBlock, "do_sampel"],
+    ["minimax-cn", MiniMaxChatBlock, "reasoning_efort"],
+  ] as const)("CN block shares the schema and names itself: %s", (provider, parent, typo) => {
+    const block = PROVIDER_BLOCKS[provider]!;
+    expect(block).not.toBe(parent);
+    expect(block.fields).toBe(parent.fields);
+    expect(block.reserved).toBe(parent.reserved);
+    expect(block.name).toBe(provider);
+    expect(block.title).toBe(parent.title.replace("ChatBlock", "CNChatBlock"));
+    const message = error(block, { [typo]: true });
+    expect(message).toContain(`\`${provider}.${typo}\` is not a supported field of the`);
+    expect(message).not.toContain(`\`${parent.name}.${typo}\``);
+  });
+
+  test("nested chat typo names the full path", () => {
+    const message = error(GLMChatBlock, { thinking: { typ: "enabled" } });
+    expect(message).toContain("`glm.thinking.typ` is not a supported field of the");
+    expect(message).toContain("allowed: clear_thinking, type");
+  });
+
+  const commonReserved: [unknown, string][] = [
+    [{ response_format: { type: "json_object" } }, "response_format"],
+    [{ n: 2n }, "n"],
+    [{ messages: [] }, "messages"],
+    [{ model: "m" }, "model"],
+    [{ tools: [] }, "tools"],
+    [{ tool_choice: "auto" }, "tool_choice"],
+    [{ parallel_tool_calls: false }, "parallel_tool_calls"],
+    [{ stream: true }, "stream"],
+    [{ stream_options: { include_usage: true } }, "stream_options"],
+  ];
+  const commonRows = CHAT_BLOCKS.flatMap((block) =>
+    commonReserved.map(([data, path]) => [block.title, block, data, path] as const),
+  );
+  test.each(commonRows)(
+    "%s: common chat reserved path is built by yian: %p",
+    (_title, block, data, path) => {
+      expect(error(block, data)).toContain(`\`${block.name}.${path}\` is built by yian (`);
+    },
+  );
+
+  const vendorReserved: [BlockSchema, unknown, string][] = [
+    [MiniMaxChatBlock, { reasoning_split: true }, "minimax.reasoning_split"],
+    [VLLMChatBlock, { guided_json: {} }, "vllm.guided_json"],
+    [VLLMChatBlock, { guided_whitespace_pattern: "x" }, "vllm.guided_whitespace_pattern"],
+    [VLLMChatBlock, { structured_outputs: {} }, "vllm.structured_outputs"],
+    [VLLMChatBlock, { chat_template: "x" }, "vllm.chat_template"],
+    [AzureChatBlock, { data_sources: [] }, "azure.data_sources"],
+    [XAIChatBlock, { search_parameters: { mode: "on" } }, "xai.search_parameters"],
+    [XAIChatBlock, { deferred: true }, "xai.deferred"],
+    [GLMChatBlock, { tool_stream: true }, "glm.tool_stream"],
+    [QwenChatBlock, { tool_stream: true }, "qwen.tool_stream"],
+    [OpenRouterChatBlock, { plugins: [] }, "openrouter.plugins"],
+  ];
+  test.each(vendorReserved.map(([block, data, path]) => [block.title, block, data, path] as const))(
+    "%s: vendor reserved path is built by yian: %p",
+    (_title, block, data, path) => {
+      const message = error(block, data);
+      expect(message).toContain(`\`${path}\` is built by yian (`);
+      expect(message).toContain("remove it");
+    },
+  );
+
+  const perRequest: [BlockSchema, unknown, string][] = [
+    [AzureChatBlock, { prediction: { type: "content", content: "x" } }, "azure.prediction"],
+    [OpenRouterChatBlock, { prediction: { type: "content", content: "x" } }, "openrouter.prediction"],
+    [GLMChatBlock, { request_id: "req-123456" }, "glm.request_id"],
+    [OpenRouterChatBlock, { session_id: "session-1" }, "openrouter.session_id"],
+    [OpenRouterChatBlock, { trace: { trace_id: "t-1" } }, "openrouter.trace"],
+  ];
+  test.each(perRequest.map(([block, data, path]) => [block.title, block, data, path] as const))(
+    "%s: per-request field is not a block field: %p",
+    (_title, block, data, path) => {
+      expect(error(block, data)).toContain(`\`${path}\` is not a supported field of the`);
+    },
+  );
+
+  test.each(CHAT_BLOCKS.map((block) => [block.title, block] as const))(
+    "%s: the paths the Chat Completions adapter builds are reserved",
+    (_title, block) => {
+      const paths = ["model", "messages", "stream", "stream_options", "tools", "tool_choice", "parallel_tool_calls"];
+      for (const path of paths) {
+        expect(Object.hasOwn(block.reserved, path)).toBe(true);
+        expect(error(block, nest(path, "x"))).toContain(`\`${block.name}.${path}\` is built by yian (`);
+      }
+    },
+  );
+
+  test.each([MiniMaxChatBlock, MiniMaxCNChatBlock].map((block) => [block.title, block] as const))(
+    "%s: reasoning_split, which the adapter sends, is reserved",
+    (_title, block) => {
+      expect(error(block, { reasoning_split: false })).toContain(
+        `\`${block.name}.reasoning_split\` is built by yian (keeps reasoning out of the message content); remove it`,
+      );
+    },
+  );
+
+  test.each([
+    [OpenRouterChatBlock, "provider"],
+    [VLLMChatBlock, "chat_template_kwargs"],
+  ] as const)("%#: a non-finite number in a pass-through mapping is refused where it is", (block, key) => {
+    for (const bad of [NaN, Infinity, -Infinity]) {
+      expect(checkBlock(block, { [key]: { a: bad } })).toEqual({
+        value: null,
+        issues: [{ loc: [key, "a"], type: "finite_number", msg: "Input should be a finite number" }],
+      });
+    }
+    expect(checkBlock(block, { [key]: { a: [{ b: Infinity }] } }).issues).toEqual([
+      { loc: [key, "a", 0, "b"], type: "finite_number", msg: "Input should be a finite number" },
+    ]);
+    const content = { allow_fallbacks: false, order: ["anthropic"], nested: { x: [1n, 0.5, null, "y"] } };
+    expect(validateBlock(block, { [key]: content }) as unknown).toEqual({ [key]: content });
+  });
+});
+
+describe("Ollama chat block", () => {
+  const accepted: unknown[] = [
+    { options: { num_ctx: 8192n } },
+    { think: "high" },
+    { think: "max" },
+    { think: true },
+    { think: false },
+    { keep_alive: "5m" },
+    { keep_alive: 300n },
+    { keep_alive: -1n },
+    // Python's float 5.0.
+    { options: { mirostat: 2n, mirostat_tau: 5, numa: false } },
+    { options: { min_p: 0.05 } },
+  ];
+  test.each(accepted.map((data) => [data]))("field is accepted: %p", (data) => {
+    expect(validateBlock(PROVIDER_BLOCKS["ollama"]!, data) as unknown).toEqual(data);
+  });
+
+  const bad: unknown[] = [
+    { think: "ultra" },
+    { think: "HIGH" },
+    { think: 1n },
+    { keep_alive: true },
+    { keep_alive: ["5m"] },
+    { options: { num_ctx: "8192" } },
+    { options: { stop: "END" } },
+    { options: { min_p: "0.05" } },
+    { top_logprobs: 1.5 },
+  ];
+  test.each(bad.map((data) => [data]))("bad value is rejected: %p", (data) => {
+    expect(() => validateBlock(OllamaChatBlock, data)).toThrow(ValidationError);
+  });
+
+  test("think gives one issue per union member", () => {
+    expect(checkBlock(OllamaChatBlock, { think: 1n }).issues).toEqual([
+      { loc: ["think", "bool"], type: "bool_type", msg: "Input should be a valid boolean" },
+      {
+        loc: ["think", "literal['low','medium','high','max']"],
+        type: "literal_error",
+        msg: "Input should be 'low', 'medium', 'high' or 'max'",
+      },
+    ]);
+  });
+
+  const reserved: [unknown, string, string][] = [
+    [{ format: "json" }, "format", "structured output"],
+    [{ model: "llama3" }, "model", "llm_config.model"],
+    [{ messages: [] }, "messages", "messages"],
+    [{ tools: [] }, "tools", "tools"],
+    [{ stream: false }, "stream", "streaming"],
+  ];
+  test.each(reserved)("reserved path is built by yian: %p", (data, path, reason) => {
+    expect(error(OllamaChatBlock, data)).toContain(`\`ollama.${path}\` is built by yian (${reason}); remove it`);
+  });
+
+  test("an option at the top level is unknown", () => {
+    let message = error(OllamaChatBlock, { num_ctx: 8192n });
+    expect(message).toContain("`ollama.num_ctx` is not a supported field of the Ollama /api/chat request");
+    expect(message).toContain("allowed: keep_alive, logprobs, options, think, top_logprobs");
+    message = error(OllamaChatBlock, { options: { num_ctxx: 8192n } });
+    expect(message).toContain("`ollama.options.num_ctxx` is not a supported field of the");
+  });
+});
+
+const ALL_BLOCKS: [string, BlockSchema][] = [...new Set([...Object.values(PROVIDER_BLOCKS), OpenAISubscriptionBlock])]
+  .sort((a, b) => compareCodeUnits(a.title, b.title))
+  .map((block) => [block.title, block]);
 
 describe("every block", () => {
   test.each(ALL_BLOCKS)("%s: errors never echo values", (title, block) => {
@@ -892,4 +1404,26 @@ describe("every block", () => {
     expect(Object.getPrototypeOf(metadata)).toBe(Object.prototype);
     expect(Object.entries(metadata)).toEqual([["__proto__", "v"]]);
   });
+});
+
+describe("logit_bias", () => {
+  test.each([OpenRouterChatBlock, VLLMChatBlock, AzureChatBlock].map((block) => [block.title, block] as const))(
+    "%s: takes digit-string token ids",
+    (_title, block) => {
+      expect(validateBlock(block, { logit_bias: { "50256": -100n, "1734": 5n } })).toEqual({
+        logit_bias: { "50256": -100n, "1734": 5n },
+      });
+      // A YAML int or bool key arrives here as text, so `-1` and `true` fail the pattern
+      // where Python reports a type error for the non-string key.
+      for (const badKey of ["abc", "-1", "true", "1.5"]) {
+        expect(checkBlock(block, { logit_bias: { [badKey]: 1n } }).issues).toEqual([
+          {
+            loc: ["logit_bias", badKey, "[key]"],
+            type: "string_pattern_mismatch",
+            msg: "String should match pattern '^[0-9]+$'",
+          },
+        ]);
+      }
+    },
+  );
 });

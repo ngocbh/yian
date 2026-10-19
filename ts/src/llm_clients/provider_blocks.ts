@@ -12,6 +12,7 @@
 import { compareCodeUnits } from "../diagnostics.ts";
 import { isList, isRecord } from "../typesys/index.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
+import { valueRepr } from "../typesys/values.ts";
 
 /** A path into a value: keys, list indices and pydantic's union labels and variant tags. */
 type Loc = readonly (string | number)[];
@@ -521,6 +522,411 @@ export const OpenAISubscriptionBlock: BlockSchema = block(
 );
 
 // --------------------------------------------------------------------------------------- //
+// Chat Completions APIs
+// --------------------------------------------------------------------------------------- //
+
+// Chat Completions body fields every vendor below reserves, with what yian builds there.
+const _CHAT_RESERVED: Record<string, string> = {
+  model: "llm_config.model",
+  messages: "messages",
+  tools: "tools",
+  tool_choice: "tools",
+  parallel_tool_calls: "tools",
+  response_format: "structured output",
+  stream: "streaming",
+  stream_options: "streaming",
+  n: "one choice per call",
+};
+
+const _Stop4 = union(str(), list(str(), { maxLength: 4 }));
+
+// A `logit_bias` key: a token id as a digit string. A YAML integer key reaches here as
+// text already, since record keys are always text.
+const _TokenId = str({ pattern: "^[0-9]+$" });
+
+/** `temperature` in [0, 2] and `top_p` in [0, 1], as most vendors take them. */
+const CHAT_SAMPLING: Record<string, Field> = {
+  temperature: float({ ge: 0, le: 2 }),
+  top_p: float({ ge: 0, le: 1 }),
+};
+
+/** `frequency_penalty` and `presence_penalty`, each in [-2, 2]. */
+const CHAT_PENALTIES: Record<string, Field> = {
+  frequency_penalty: float({ ge: -2, le: 2 }),
+  presence_penalty: float({ ge: -2, le: 2 }),
+};
+
+/** `max_tokens` (older) and `max_completion_tokens` output limits, each at least 1. */
+const CHAT_LENGTH: Record<string, Field> = {
+  max_completion_tokens: int({ ge: 1n }),
+  max_tokens: int({ ge: 1n }),
+};
+
+/** `logprobs` and `top_logprobs` in [0, 20]. */
+const CHAT_LOGPROBS: Record<string, Field> = {
+  logprobs: bool(),
+  top_logprobs: int({ ge: 0n, le: 20n }),
+};
+
+// Blocks spread the shared field records last base first, then their own fields, which is
+// Python's field order; an own field replaces a shared one in place.
+
+/**
+ * The `xai` block: the request body of the xAI Chat Completions API.
+ *
+ * Mirrors `POST /v1/chat/completions`
+ * (https://docs.x.ai/developers/rest-api-reference/inference/chat-completions), checked
+ * 2026-10-13. `logit_bias` is left out because the reference marks it unsupported, and
+ * `reasoning_effort` is any string because the accepted values depend on the model.
+ */
+export const XAIChatBlock: BlockSchema = block(
+  "XAIChatBlock",
+  "xai",
+  "is not a supported field of the xAI Chat Completions request",
+  {
+    ..._CHAT_RESERVED,
+    deferred: "request lifecycle",
+    search_parameters: "tools: server-side search",
+    web_search_options: "tools: server-side search",
+  },
+  {
+    ...CHAT_LOGPROBS,
+    ...CHAT_LENGTH,
+    ...CHAT_PENALTIES,
+    ...CHAT_SAMPLING,
+    prompt_cache_key: str(),
+    reasoning_effort: str(),
+    safety_identifier: str(),
+    seed: int(),
+    service_tier: literal("default", "priority", "fast"),
+    stop: list(str(), { maxLength: 4 }),
+    top_logprobs: int({ ge: 0n, le: 8n }),
+    user: str(),
+  },
+);
+
+/** The `thinking` object of a Z.AI GLM chat request. */
+const GLMThinking = schema({ type: literal("enabled", "disabled"), clear_thinking: bool() });
+
+/**
+ * The `glm` block: the request body of the Z.AI GLM Chat Completion API.
+ *
+ * Mirrors `POST /api/paas/v4/chat/completions`
+ * (https://docs.z.ai/api-reference/llm/chat-completion), checked 2026-10-13.
+ */
+export const GLMChatBlock: BlockSchema = block(
+  "GLMChatBlock",
+  "glm",
+  "is not a supported field of the Z.AI GLM Chat Completion request",
+  { ..._CHAT_RESERVED, tool_stream: "streaming" },
+  {
+    do_sample: bool(),
+    max_tokens: int({ ge: 1n, le: 131072n }),
+    reasoning_effort: literal("max", "xhigh", "high", "medium", "low", "minimal", "none"),
+    stop: list(str(), { maxLength: 4 }),
+    temperature: float({ ge: 0, le: 1 }),
+    thinking: object(GLMThinking),
+    top_p: float({ ge: 0.01, le: 1 }),
+    user_id: str({ minLength: 6, maxLength: 128 }),
+  },
+);
+
+/** The `glm-cn` block: `GLMChatBlock` for the mainland China endpoint. */
+export const GLMCNChatBlock: BlockSchema = Object.freeze({
+  ...GLMChatBlock,
+  title: "GLMCNChatBlock",
+  name: "glm-cn",
+});
+
+/** The `thinking` object of a MiniMax chat request. */
+const MiniMaxThinking = schema({ type: literal("disabled", "adaptive") });
+
+/**
+ * The `minimax` block: the request body of MiniMax's OpenAI-compatible API.
+ *
+ * Mirrors the Chat Completions parameters MiniMax lists
+ * (https://platform.minimax.io/docs/api-reference/text-openai-api), checked 2026-10-13.
+ * MiniMax ignores the other OpenAI parameters, so they are not fields here.
+ */
+export const MiniMaxChatBlock: BlockSchema = block(
+  "MiniMaxChatBlock",
+  "minimax",
+  "is not a supported field of the MiniMax Chat Completions request",
+  { ..._CHAT_RESERVED, reasoning_split: "keeps reasoning out of the message content" },
+  {
+    ...CHAT_LENGTH,
+    ...CHAT_SAMPLING,
+    reasoning_effort: literal("low", "medium", "high", "xhigh", "max"),
+    service_tier: literal("standard", "priority"),
+    thinking: object(MiniMaxThinking),
+  },
+);
+
+/** The `minimax-cn` block: `MiniMaxChatBlock` for the mainland China endpoint. */
+export const MiniMaxCNChatBlock: BlockSchema = Object.freeze({
+  ...MiniMaxChatBlock,
+  title: "MiniMaxCNChatBlock",
+  name: "minimax-cn",
+});
+
+/** The `thinking` object of a DeepSeek chat request. */
+const DeepSeekThinking = schema({ type: literal("enabled", "disabled") });
+
+/**
+ * The `deepseek` block: the request body of the DeepSeek Chat Completion API.
+ *
+ * Mirrors `POST /chat/completions`
+ * (https://api-docs.deepseek.com/api/create-chat-completion), checked 2026-10-13.
+ * `frequency_penalty` and `presence_penalty` are left out because the reference says
+ * they no longer take effect.
+ */
+export const DeepSeekChatBlock: BlockSchema = block(
+  "DeepSeekChatBlock",
+  "deepseek",
+  "is not a supported field of the DeepSeek Chat Completion request",
+  _CHAT_RESERVED,
+  {
+    ...CHAT_LOGPROBS,
+    max_tokens: int({ ge: 1n, le: 393216n }),
+    reasoning_effort: literal("none", "low", "high", "max"),
+    stop: union(str(), list(str(), { maxLength: 16 })),
+    temperature: float({ ge: 0, le: 2 }),
+    thinking: object(DeepSeekThinking),
+    top_p: float({ gt: 0, le: 1 }),
+    user_id: str({ maxLength: 512, pattern: "^[a-zA-Z0-9_-]+$" }),
+  },
+);
+
+/** The `search_options` object of a Qwen chat request. */
+const QwenSearchOptions = schema({
+  enable_search_extension: bool(),
+  forced_search: bool(),
+  search_strategy: literal("turbo", "max", "agent"),
+});
+
+/**
+ * The `qwen` block: the request body of Model Studio's OpenAI-compatible chat.
+ *
+ * Mirrors Alibaba Cloud Model Studio's OpenAI-compatible Chat Completions request
+ * (https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions),
+ * checked 2026-10-13. `thinking` and `clear_thinking` are for the MiniMax and GLM models
+ * Model Studio also serves.
+ */
+export const QwenChatBlock: BlockSchema = block(
+  "QwenChatBlock",
+  "qwen",
+  "is not a supported field of the Model Studio Chat Completions request",
+  {
+    ..._CHAT_RESERVED,
+    tool_stream: "streaming",
+    modalities: "output format",
+    audio: "output format",
+    enable_code_interpreter: "tools: server-side code interpreter",
+  },
+  {
+    ...CHAT_LENGTH,
+    clear_thinking: bool(),
+    enable_search: bool(),
+    enable_thinking: bool(),
+    logprobs: bool(),
+    preserve_thinking: bool(),
+    presence_penalty: float({ ge: -2, le: 2 }),
+    reasoning_effort: literal("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"),
+    repetition_penalty: float({ gt: 0 }),
+    search_options: object(QwenSearchOptions),
+    seed: int({ ge: 0n, le: 2n ** 31n - 1n }),
+    // A stop list holds strings or token ids, never both.
+    stop: union(str(), list(str()), list(int())),
+    temperature: float({ ge: 0, lt: 2 }),
+    thinking: object(MiniMaxThinking),
+    thinking_budget: int({ ge: 1n }),
+    top_k: int({ ge: 0n }),
+    top_logprobs: int({ ge: 0n, le: 5n }),
+    top_p: float({ gt: 0, le: 1 }),
+    use_multichannel: bool(),
+    vl_high_resolution_images: bool(),
+  },
+);
+
+/** The `qwen-cn` block: `QwenChatBlock` for the mainland China endpoint. */
+export const QwenCNChatBlock: BlockSchema = Object.freeze({
+  ...QwenChatBlock,
+  title: "QwenCNChatBlock",
+  name: "qwen-cn",
+});
+
+/** The `reasoning` object of an OpenRouter chat request. */
+const OpenRouterReasoning = schema({
+  effort: literal("max", "xhigh", "high", "medium", "low", "minimal", "none"),
+  enabled: bool(),
+  exclude: bool(),
+  max_tokens: int({ ge: 0n }),
+  summary: literal("auto", "concise", "detailed"),
+});
+
+/** The top-level `cache_control` object of an OpenRouter chat request. */
+const OpenRouterCacheControl = schema({ type: literal("ephemeral"), ttl: literal("5m", "1h") });
+
+/** The `prompt_cache_options` object of an OpenRouter chat request. */
+const OpenRouterPromptCacheOptions = schema({ mode: literal("explicit"), ttl: str() });
+
+/**
+ * The `openrouter` block: the request body of the OpenRouter Chat Completions API.
+ *
+ * Mirrors `POST /api/v1/chat/completions`
+ * (https://openrouter.ai/docs/api/api-reference/chat/create-a-chat-completion), with
+ * bounds from https://openrouter.ai/docs/api/reference/parameters and the `reasoning`
+ * fields from https://openrouter.ai/docs/guides/best-practices/reasoning-tokens, checked
+ * 2026-10-13. `provider` (routing preferences) is passed through as written.
+ * `session_id` and `trace` are left out because they identify one conversation or
+ * trace, so a value fixed in the flow would group every run together.
+ */
+export const OpenRouterChatBlock: BlockSchema = block(
+  "OpenRouterChatBlock",
+  "openrouter",
+  "is not a supported field of the OpenRouter Chat Completions request",
+  {
+    ..._CHAT_RESERVED,
+    plugins: "tools",
+    web_search_options: "tools: server-side search",
+    stop_server_tools_when: "tools",
+    deferred_tools: "tools",
+    structured_outputs: "structured output",
+    modalities: "output format",
+    image_config: "output format",
+    debug: "streaming",
+  },
+  {
+    ...CHAT_LOGPROBS,
+    ...CHAT_LENGTH,
+    ...CHAT_PENALTIES,
+    ...CHAT_SAMPLING,
+    cache_control: object(OpenRouterCacheControl),
+    logit_bias: map(_TokenId, float({ ge: -100, le: 100 })),
+    metadata: _Metadata,
+    min_p: float({ ge: 0, le: 1 }),
+    models: list(str()),
+    prompt_cache_key: str(),
+    prompt_cache_options: object(OpenRouterPromptCacheOptions),
+    provider: map(str(), json()),
+    reasoning: object(OpenRouterReasoning),
+    reasoning_effort: literal("max", "xhigh", "high", "medium", "low", "minimal", "none"),
+    repetition_penalty: float({ ge: 0, le: 2 }),
+    seed: int(),
+    service_tier: literal("auto", "default", "fast", "flex", "priority", "scale", "ultrafast"),
+    stop: _Stop4,
+    top_a: float({ ge: 0, le: 1 }),
+    top_k: int({ ge: 0n }),
+    user: str(),
+    verbosity: literal("low", "medium", "high", "xhigh", "max"),
+  },
+);
+
+/**
+ * The `vllm` block: the request body of a vLLM server's Chat Completions API.
+ *
+ * Mirrors vLLM's `ChatCompletionRequest` with its extra sampling parameters
+ * (https://docs.vllm.ai/en/latest/serving/online_serving/), with bounds from vLLM's
+ * `SamplingParams` checks, checked 2026-10-13. `top_logprobs` is capped at 20, the
+ * server's default `max_logprobs`.
+ */
+export const VLLMChatBlock: BlockSchema = block(
+  "VLLMChatBlock",
+  "vllm",
+  "is not a supported field of the vLLM Chat Completions request",
+  {
+    ..._CHAT_RESERVED,
+    guided_json: "structured output",
+    guided_regex: "structured output",
+    guided_choice: "structured output",
+    guided_grammar: "structured output",
+    guided_decoding_backend: "structured output",
+    guided_whitespace_pattern: "structured output",
+    structured_outputs: "structured output",
+    chat_template: "messages",
+    add_generation_prompt: "messages",
+    continue_final_message: "messages",
+    echo: "messages",
+  },
+  {
+    ...CHAT_LOGPROBS,
+    ...CHAT_LENGTH,
+    ...CHAT_PENALTIES,
+    chat_template_kwargs: map(str(), json()),
+    ignore_eos: bool(),
+    include_stop_str_in_output: bool(),
+    length_penalty: float(),
+    logit_bias: map(_TokenId, float()),
+    min_p: float({ ge: 0, le: 1 }),
+    min_tokens: int({ ge: 0n }),
+    priority: int(),
+    reasoning_effort: literal("none", "minimal", "low", "medium", "high", "xhigh", "max"),
+    repetition_penalty: float({ gt: 0 }),
+    seed: int({ ge: -(2n ** 63n), le: 2n ** 63n - 1n }),
+    skip_special_tokens: bool(),
+    spaces_between_special_tokens: bool(),
+    stop: union(str(), list(str())),
+    stop_token_ids: list(int()),
+    temperature: float({ ge: 0, le: 2 }),
+    // -1 means no limit.
+    thinking_token_budget: int({ ge: -1n }),
+    // -1 and 0 both turn top-k off.
+    top_k: int({ ge: -1n }),
+    top_p: float({ gt: 0, le: 1 }),
+    user: str(),
+  },
+);
+
+/** The `user_security_context` object of an Azure OpenAI chat request. */
+const AzureUserSecurityContext = schema({
+  application_name: str(),
+  end_user_id: str(),
+  end_user_tenant_id: str(),
+  source_ip: str(),
+});
+
+/**
+ * The `azure` block: the request body of the Azure OpenAI Chat Completions API.
+ *
+ * Mirrors the chat completions request in the Azure OpenAI reference
+ * (https://learn.microsoft.com/azure/ai-foundry/openai/latest) and the matching
+ * `openai.types.chat.completion_create_params` fields, checked 2026-10-13.
+ * `service_tier`, `prompt_cache_options` and `moderation` are left out: the `openai`
+ * SDK sends them, but the Azure reference does not list them.
+ */
+export const AzureChatBlock: BlockSchema = block(
+  "AzureChatBlock",
+  "azure",
+  "is not a supported field of the Azure OpenAI Chat Completions request",
+  {
+    ..._CHAT_RESERVED,
+    data_sources: "tools: On Your Data retrieval",
+    functions: "tools",
+    function_call: "tools",
+    modalities: "output format",
+    audio: "output format",
+  },
+  {
+    ...CHAT_LOGPROBS,
+    ...CHAT_LENGTH,
+    ...CHAT_PENALTIES,
+    ...CHAT_SAMPLING,
+    logit_bias: map(_TokenId, int({ ge: -100n, le: 100n })),
+    metadata: _Metadata,
+    prompt_cache_key: str(),
+    prompt_cache_retention: literal("in_memory", "24h"),
+    reasoning_effort: literal("none", "minimal", "low", "medium", "high", "xhigh"),
+    safety_identifier: str({ maxLength: 64 }),
+    seed: int(),
+    stop: _Stop4,
+    store: bool(),
+    user: str(),
+    user_security_context: object(AzureUserSecurityContext),
+    verbosity: literal("low", "medium", "high"),
+  },
+);
+
+// --------------------------------------------------------------------------------------- //
 // Anthropic Messages API
 // --------------------------------------------------------------------------------------- //
 
@@ -671,3 +1077,130 @@ export const GeminiGenerateContentBlock: BlockSchema = block(
     store: bool(),
   },
 );
+
+// --------------------------------------------------------------------------------------- //
+// Ollama /api/chat
+// --------------------------------------------------------------------------------------- //
+
+/**
+ * The `options` object of an Ollama chat request.
+ *
+ * Has the fields of `ollama.Options` plus `min_p`, which the /api/chat reference lists;
+ * the client sends `options` as a plain mapping.
+ */
+const OllamaOptions = schema({
+  // Load-time options.
+  numa: bool(),
+  num_ctx: int(),
+  num_batch: int(),
+  num_gpu: int(),
+  main_gpu: int(),
+  low_vram: bool(),
+  f16_kv: bool(),
+  logits_all: bool(),
+  vocab_only: bool(),
+  use_mmap: bool(),
+  use_mlock: bool(),
+  embedding_only: bool(),
+  num_thread: int(),
+
+  // Runtime options.
+  num_keep: int(),
+  seed: int(),
+  num_predict: int(),
+  top_k: int(),
+  top_p: float(),
+  tfs_z: float(),
+  typical_p: float(),
+  repeat_last_n: int(),
+  temperature: float(),
+  repeat_penalty: float(),
+  presence_penalty: float(),
+  frequency_penalty: float(),
+  mirostat: int(),
+  mirostat_tau: float(),
+  mirostat_eta: float(),
+  min_p: float(),
+  penalize_newline: bool(),
+  stop: list(str()),
+});
+
+/**
+ * The `ollama` block: the request body of Ollama's native chat API.
+ *
+ * Mirrors `POST /api/chat`
+ * (https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-chat-completion),
+ * checked 2026-10-13, limited to what `ollama.Client.chat` sends (`ollama` 0.6.3).
+ * `think` takes the levels the reference lists; the client passes any string through.
+ */
+export const OllamaChatBlock: BlockSchema = block(
+  "OllamaChatBlock",
+  "ollama",
+  "is not a supported field of the Ollama /api/chat request",
+  {
+    model: "llm_config.model",
+    messages: "messages",
+    tools: "tools",
+    stream: "streaming",
+    format: "structured output",
+  },
+  {
+    // A duration string such as "5m", or a number of seconds; negative keeps the model loaded.
+    keep_alive: union(float(), str()),
+    logprobs: bool(),
+    options: object(OllamaOptions),
+    think: union(bool(), literal("low", "medium", "high", "max")),
+    top_logprobs: int(),
+  },
+);
+
+// --------------------------------------------------------------------------------------- //
+// Registry
+// --------------------------------------------------------------------------------------- //
+
+/** Provider name -> the block of the API a call to it reaches, in Python yian's order. */
+export const PROVIDER_BLOCKS: Readonly<Record<string, BlockSchema>> = table({
+  openai: OpenAIResponsesBlock,
+  azure: AzureChatBlock,
+  xai: XAIChatBlock,
+  deepseek: DeepSeekChatBlock,
+  qwen: QwenChatBlock,
+  "qwen-cn": QwenCNChatBlock,
+  glm: GLMChatBlock,
+  "glm-cn": GLMCNChatBlock,
+  minimax: MiniMaxChatBlock,
+  "minimax-cn": MiniMaxCNChatBlock,
+  openrouter: OpenRouterChatBlock,
+  vllm: VLLMChatBlock,
+  ollama: OllamaChatBlock,
+  anthropic: AnthropicMessagesBlock,
+  google: GeminiGenerateContentBlock,
+});
+
+/**
+ * Return the block for the API a call to `provider` actually reaches.
+ *
+ * @param provider A key of `PROVIDER_BLOCKS`, e.g. `"openai"`.
+ * @param connection The resolved OpenAI connection, whose own `method` says how the call is
+ *   authenticated; `undefined` means no connection.
+ * @param apiKey The host-supplied key. A key sends the call to the Responses API even when the
+ *   connection is a subscription.
+ * @returns `OpenAISubscriptionBlock` for an `openai` call on a `subscription` connection
+ *   without `apiKey`; otherwise `PROVIDER_BLOCKS[provider]`.
+ * @throws {RangeError} If `provider` has no block.
+ */
+export function blockSchema(provider: string, connection?: unknown, apiKey?: unknown): BlockSchema {
+  if (
+    provider === "openai" &&
+    isRecord(connection) &&
+    Object.hasOwn(connection, "method") &&
+    connection["method"] === "subscription" &&
+    (apiKey === null || apiKey === undefined)
+  ) {
+    return OpenAISubscriptionBlock;
+  }
+  if (!Object.hasOwn(PROVIDER_BLOCKS, provider)) {
+    throw new RangeError(`no provider block named ${valueRepr(provider)}`);
+  }
+  return PROVIDER_BLOCKS[provider]!;
+}

@@ -863,7 +863,9 @@ function standardResult(
  */
 function validatorFailure(head: string, issues: ReadonlyArray<StandardIssue>): string {
   const shown = issues.map((issue) => {
-    const path = (issue.path ?? []).map((segment) => {
+    // `Array.from`, not `.map`: a library's path may be an Array subclass whose species
+    // constructor builds a different array (ArkType's empty path maps to `[0]`).
+    const path = Array.from(issue.path ?? [], (segment) => {
       // `null` is outside the type, but a host validator may still send it.
       const key = typeof segment === "object" && segment !== null ? segment.key : segment;
       return typeof key === "symbol" ? String(key) : key;

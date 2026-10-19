@@ -1388,6 +1388,19 @@ describe("tool() results", () => {
     expect(none.message).toBe("tool 'x' result: the output validator returned undefined, not a Standard Schema result");
   });
 
+  test("an ArkType issue at the root has no path", async () => {
+    const made = tool({
+      name: "x",
+      description: "",
+      parameters: { type: "object", properties: {} },
+      // A string pattern yian's check doesn't carry, so the validator sees the value.
+      output: type(/^ok/),
+      execute: () => "s",
+    });
+    const error = await checkFailure(new ToolSet({ x: made }).invoke("x", {}));
+    expect(error.message).toBe('tool \'x\' result failed its output validator: must be matched by ^ok (was "s")');
+  });
+
   test("an untranslatable output schema still runs intake", async () => {
     const nan = await checkFailure(returning({}, NaN));
     expect(nan.message).toBe("tool 'x' result: NaN is not a yian value");

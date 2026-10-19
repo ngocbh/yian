@@ -1480,7 +1480,7 @@ export function boundText(end: Bound): string {
  * the decimal exponent is in `-4..15`, else exponent form with at least two exponent
  * digits (`1e-05`, `1.5e+16`). A non-finite value prints as JavaScript spells it.
  */
-function pythonFloatRepr(x: number): string {
+export function pythonFloatRepr(x: number): string {
   if (!Number.isFinite(x)) return String(x);
   if (x === 0) return Object.is(x, -0) ? "-0.0" : "0.0";
   // `toExponential()` with no argument gives the shortest digits that round-trip.

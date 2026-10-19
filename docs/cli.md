@@ -256,6 +256,9 @@ an episodic or reflective limit against an existing file fails with
 `<type>.config_conflict`. Only removing the file or using the stored limits
 clears it; a reset keeps the stored limits.
 
+Changed (TS yian): a `.sqlite` file written by Python yian fails with `storage.version`; start
+with a fresh file (a `.md` profile carries over).
+
 Session history advances automatically during execution. This does not enable
 learning: `yian run` neither sets `learnable=True` nor calls `backward()`.
 

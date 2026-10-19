@@ -312,8 +312,22 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - A host memory is any object with `openRun({ snapshot })` and `reset()` (`isMemory` checks it, as
   Python's `isinstance(value, Memory)`); both are synchronous, and a session has no `with` form:
   the caller calls `close()` in `finally`.
+- `src/memory/storage/sqlite.ts` holds `SQLiteStorage`, the single-owner SQLite state file, opened
+  through `platform.ts`'s `openSqlite`. Changed: the envelope is version 3 (Python's is 2), so a
+  Python file fails `storage.version`; `±Infinity` is kept with the codec's `$float` tag; there is
+  no fork or thread guard. It also holds `checkStoragePath` and `realStoragePath`, a port of
+  Python's non-strict `os.path.realpath`.
+- `src/memory/storage/markdown.ts` holds the `MarkdownStore` interface, the async
+  `FileMarkdownStore` and the sync `InMemoryMarkdownStore`. `read` returns `[text, version]`; an
+  unknown version or non-UTF-8 text throws `RangeError`, a stale base `MarkdownVersionMismatch`,
+  and unreachable storage a Node system error. The document, kept versions and write log are
+  byte-compatible with Python's, pinned by `conformance/fixtures/markdown_store.json`, which
+  Python yian wrote. The `.<name>.lock` file is a SQLite lock that Python's `flock` doesn't see.
+- A host-implemented memory interface (here `MarkdownStore`) may return a value or a promise;
+  yian awaits.
 - The recall and learning contexts, the episodes, the session conversation contracts, the
-  session's recall, learn and commit methods, and the built-in backends are not ported yet.
+  session's recall, learn and commit methods, and the built-in backends that use the storage
+  (episodic, reflective, session, profile) are not ported yet.
 
 ## Runtime
 

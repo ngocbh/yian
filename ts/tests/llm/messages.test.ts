@@ -969,6 +969,17 @@ describe("replay records", () => {
     expect(readReplayRecord(record, KEY, FIELDS)).toEqual({ ok: false, reason: "other_model" });
   });
 
+  test("matchModel false reads another model's record, still checking the account", () => {
+    const other = replayRecord({ ...KEY, model: "gpt-4" }, { item_id: "i" });
+    expect(readReplayRecord(other, KEY, FIELDS, { matchModel: false })).toEqual({ ok: true, fields: { item_id: "i" } });
+    expect(readReplayRecord(other, KEY, FIELDS)).toEqual({ ok: false, reason: "other_model" });
+    const otherAccount = replayRecord({ ...KEY, model: "gpt-4", account: "acct_1" }, { item_id: "i" });
+    expect(readReplayRecord(otherAccount, KEY, FIELDS, { matchModel: false })).toEqual({
+      ok: false,
+      reason: "other_account",
+    });
+  });
+
   test("other_account", () => {
     const withAccount = replayRecord({ ...KEY, account: "acct_1" }, { item_id: "i" });
     expect(readReplayRecord(withAccount, KEY, FIELDS)).toEqual({ ok: false, reason: "other_account" });

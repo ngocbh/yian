@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "replay_degraded: thinking off; turn 2 to claude-sonnet-4-5 whose prior was parsed for claude-opus-4-5: no thinking blocks, text and tool_use kept.",
+  "description": "replay_degraded: thinking enabled; turn 2 after an API key rotation, its prior parsed under the old key: no thinking blocks, text and tool_use kept.",
   "interactions": [
     {
       "request": {
@@ -68,7 +68,11 @@
               },
               "description": "Double an integer."
             }
-          ]
+          ],
+          "thinking": {
+            "type": "enabled",
+            "budget_tokens": 2048
+          }
         }
       },
       "response": {

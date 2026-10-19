@@ -1144,29 +1144,21 @@ describe("round trips", () => {
     role: "user",
     content: [{ type: "tool_result", content: "6", tool_use_id: "toolu_01", is_error: false }],
   };
-  const REQUIRED =
-    "anthropic needs its signed thinking to continue a tool call with thinking on; finish the tool turn on the " +
-    "original model or turn thinking off in the anthropic block";
 
   /** Return the reply parsed from the Messages SSE events streamed for `content`. */
   async function replyOf(content: JsonObject[]): Promise<Message> {
     return (await collected(events(messageObj(content, { stopReason: "tool_use" })))).message;
   }
 
-  /** Return a protocol for `model` with `block`, pushing each degraded reason to `reasons`. */
-  function protocolFor(model: string, block: JsonObject | null, reasons: ReplayDegradedReason[] = []) {
+  /** Return a protocol for `model` with `block` and `account`, pushing each degraded reason to `reasons`. */
+  function protocolFor(
+    model: string,
+    block: JsonObject | null,
+    reasons: ReplayDegradedReason[] = [],
+    account: string | null = null,
+  ) {
     const onReplayDegraded = (reason: ReplayDegradedReason) => reasons.push(reason);
-    return new AnthropicMessages({ model, provider: "anthropic", block, onReplayDegraded });
-  }
-
-  /** Return the `ProviderError` `run` throws, failing when it returns. */
-  function thrown(run: () => unknown): ProviderError {
-    try {
-      run();
-    } catch (error) {
-      return error as ProviderError;
-    }
-    throw new Error("expected an error");
+    return new AnthropicMessages({ model, provider: "anthropic", account, block, onReplayDegraded });
   }
 
   /** Return the messages `protocol` sends for `messages`. */
@@ -1208,22 +1200,24 @@ describe("round trips", () => {
     ]);
   });
 
-  test("on claude-opus-4-5 the reasoning is left out with other_model; thinking enabled throws", async () => {
+  test("a reply replays to claude-opus-4-5, thinking enabled or not; another account leaves its reasoning out", async () => {
     const first = await replyOf([THINKING, REDACTED, TEXT, TOOL_USE]);
-    const reasons: ReplayDegradedReason[] = [];
-    const error = thrown(() => sentBy(protocolFor("claude-opus-4-5", ENABLED, reasons), [ASK, first, RESULT]));
-    expect(error).toBeInstanceOf(ProviderError);
-    expect(error.kind).toBe("bad_request");
-    expect(error.retryable).toBe(false);
-    expect(error.message).toBe(`the last assistant turn came from anthropic/${SONNET}; ${REQUIRED}`);
-    expect(reasons).toEqual(["other_model"]);
+    for (const block of [ENABLED, null]) {
+      const reasons: ReplayDegradedReason[] = [];
+      expect(sentBy(protocolFor("claude-opus-4-5", block, reasons), [ASK, first, RESULT])).toEqual([
+        { role: "user", content: "Double 3." },
+        { role: "assistant", content: FIRST_BLOCKS },
+        TOOL_RESULT,
+      ]);
+      expect(reasons).toEqual([]);
+    }
 
-    const off: ReplayDegradedReason[] = [];
-    expect(sentBy(protocolFor("claude-opus-4-5", null, off), [ASK, first, RESULT])).toEqual([
+    const other: ReplayDegradedReason[] = [];
+    expect(sentBy(protocolFor(SONNET, ENABLED, other, "acct"), [ASK, first, RESULT])).toEqual([
       { role: "user", content: "Double 3." },
       { role: "assistant", content: FIRST_BLOCKS.slice(2) },
       TOOL_RESULT,
     ]);
-    expect(off).toEqual(["other_model"]);
+    expect(other).toEqual(["other_account"]);
   });
 });

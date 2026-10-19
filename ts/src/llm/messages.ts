@@ -923,12 +923,14 @@ export function replayRecord(key: ReplayKey, fields: JsonObject): JsonObject {
  * @param payload The payload holding the record, or `null`.
  * @param key Who the record must belong to; the accounts must match exactly, both absent counting as equal.
  * @param allowed The keys the record may hold besides its envelope.
+ * @param options.matchModel `false` for a provider whose records replay across its models.
  * @returns The record's other keys, copied, or why it can't be replayed.
  */
 export function readReplayRecord(
   payload: JsonObject | null,
   key: ReplayKey,
   allowed: readonly string[],
+  options: { matchModel?: boolean } = {},
 ): { ok: true; fields: JsonObject } | { ok: false; reason: ReplayDegradedReason } {
   if (payload === null) return { ok: false, reason: "missing" };
   const { kind, provider, model, v } = payload;
@@ -946,7 +948,7 @@ export function readReplayRecord(
   if (v !== BigInt(REPLAY_VERSION) && v !== REPLAY_VERSION) return { ok: false, reason: "unknown_version" };
   if (kind !== key.protocol) return { ok: false, reason: "other_protocol" };
   if (provider !== key.provider) return { ok: false, reason: "other_provider" };
-  if (model !== key.model) return { ok: false, reason: "other_model" };
+  if (options.matchModel !== false && model !== key.model) return { ok: false, reason: "other_model" };
   if ((hasAccount ? payload["account"] : null) !== (key.account ?? null)) return { ok: false, reason: "other_account" };
   const rest: JsonObject = {};
   for (const name of Object.keys(payload)) {

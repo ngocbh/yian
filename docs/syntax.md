@@ -2121,7 +2121,7 @@ A few providers need a note:
 
     Changed (TS yian): every call streams. A reply that ends without a finish reason fails
     the model call and is retried; an error in the stream fails it, retried when its kind
-    allows (an error without a code counts as a server error). A content-policy stop (such
+    allows (an unknown or missing code counts as a server error). A content-policy stop (such
     as `SAFETY`, `RECITATION`, or `PROHIBITED_CONTENT`) or a blocked prompt is
     `provider.refused`; `MALFORMED_RESPONSE` is retried; another early stop fails the call.
     An invalid key is `provider.auth`, a full context window `provider.context_length`.

@@ -1,6 +1,8 @@
 /**
  * Mirrors `tests/test_provider_connections.py`; the factory tests go with
- * `llm_clients/factory.ts`, `test_run_records_connections` with `runFlow`.
+ * `llm_clients/factory.ts`, `test_run_records_connections` with `runFlow`. The environment table
+ * test also builds and calls a model for every provider and connection source, so the factory's
+ * reads are held to the same table.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -10,6 +12,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { ENTRIES, type Env } from "../src/defaults.ts";
+import { collect } from "../src/llm/events.ts";
+import { Message, Request, TextPart } from "../src/llm/messages.ts";
 import { PROVIDER_API_KEY_ENV } from "../src/llm_clients/api_key_env.ts";
 import {
   ApiKeyCredentials,
@@ -44,7 +48,9 @@ import {
   splitModelConfig,
   validateConnection,
 } from "../src/llm_clients/connection.ts";
+import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
 import { requireConcreteSelection, validateLayer } from "../src/llm_clients/layers.ts";
+import type { Send } from "../src/platform.ts";
 
 const STORE: Connection = {
   method: "api_key",
@@ -808,7 +814,25 @@ describe("environment table", () => {
     "AZURE_OPENAI_DEPLOYMENT_NAME",
     "CODEX_HOME",
     "SSL_CERT_FILE",
+    "OLLAMA_HOST",
+    "GOOGLE_GEMINI_BASE_URL",
+    "GOOGLE_GENAI_USE_ENTERPRISE",
+    "ANTHROPIC_API_URL",
+    "OPENAI_API_BASE",
+    "LANGSMITH_GATEWAY",
+    "LANGSMITH_GATEWAY_API_KEY",
+    "LANGSMITH_API_KEY",
+    "OPENAI_PROXY",
+    "ANTHROPIC_PROXY",
+    "LC_OUTPUT_VERSION",
+    "AZURE_OPENAI_ENDPOINT",
+    "OPENAI_API_TYPE",
   ];
+  const REQUEST = new Request({ messages: [new Message({ role: "user", parts: [new TextPart("Hi")] })] });
+  // Every request fails before the wire; only the reads up to it count.
+  const fake: Send = async () => {
+    throw new Error("not sent");
+  };
 
   /** Return the logins of each kind `provider` can save. */
   function logins(provider: string): (Credentials | null)[] {
@@ -830,7 +854,7 @@ describe("environment table", () => {
     };
     for (const name of NEVER_READ) vars.set(name, "never-read");
 
-    /** Snapshot, resolve, list and resolve credentials for `provider`'s configs. */
+    /** Snapshot, resolve, list and resolve credentials for `provider`'s configs, then build and call each. */
     const drive = async (provider: string) => {
       const base: AgentConfig = provider === "azure" ? { provider, model: "m", base_url: AZURE } : { provider, model: "m" };
       connectionSnapshot({ env: recording });
@@ -846,6 +870,9 @@ describe("environment table", () => {
           // Only the reads count; an environment connection outside OpenAI refuses.
           await connectionCredentials(config["_connection"], provider, { env: recording }).catch(() => null);
         }
+        await chatModelFromConfig(config, { env: recording, send: fake, onWarning: () => {} })
+          .then((model) => collect(model.stream(REQUEST)))
+          .catch(() => null);
       }
     };
 
@@ -855,6 +882,10 @@ describe("environment table", () => {
     for (const name of READ) if (name.endsWith("_API_KEY")) vars.set(name, `env-${name}`);
     vars.set("AZURE_OPENAI_AD_TOKEN", "env-ad-token");
     vars.set("OPENAI_BASE_URL", "https://api.example/v1");
+    vars.set("ANTHROPIC_BASE_URL", "https://anthropic.example");
+    vars.set("VLLM_BASE_URL", "http://gpu-box:8000/v1");
+    vars.set("OLLAMA_BASE_URL", "http://user:pw@gpu-box:11434");
+    vars.set("OPENAI_API_VERSION", "2025-03-01-preview");
     for (const provider of SUPPORTED_LLM_PROVIDERS) await drive(provider);
     // Each login kind, over the key variables.
     const store = new AuthStore(null, { env: recording });
@@ -885,6 +916,10 @@ describe("environment table", () => {
         "GEMINI_API_KEY",
         "AZURE_OPENAI_API_KEY",
         "AZURE_OPENAI_AD_TOKEN",
+        "OPENAI_API_VERSION",
+        "ANTHROPIC_BASE_URL",
+        "VLLM_BASE_URL",
+        "OLLAMA_BASE_URL",
         "XDG_CONFIG_HOME",
         "HOME",
       ]),

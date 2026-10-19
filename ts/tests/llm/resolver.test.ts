@@ -8,6 +8,35 @@
  * URL, a header, the body). A case that fails names the error's class and exact message, with no
  * request sent. Every case sends the request the matching `*_cassettes.test.ts` sends for its
  * golden (`REQUESTS`). Later providers append cases and requests.
+ *
+ * Every case that sends also checks the credential superset (s2c's credential rule): each value
+ * the route's auth sent, less vLLM's keyless `EMPTY`, is one `callCredentials` lists for the same
+ * config, so the scrub knows every credential on the wire.
+ *
+ * Below the table: reserved block keys refused at build; no Anthropic block field reaching the
+ * beta endpoint (Python's `every_block_field_is_a_messages_keyword_or_a_relocated_sampling_field`);
+ * and lite ports of `tests/test_llm_client_env_headers.py`, where the environment holds every SDK
+ * header and credential variable and only the configured credential reaches the wire:
+ * `openai_responses_send_only_the_explicit_key`, `openai_callable_key_sends_only_its_value`,
+ * `openai_compatible_provider_sends_only_the_explicit_key`, `subscription_sends_only_its_own_headers`,
+ * `azure_sends_only_the_explicit_key`, `azure_without_a_key_keeps_the_sdk_order`,
+ * `anthropic_sends_only_the_explicit_key`, `anthropic_with_a_base_url_sends_only_the_explicit_key`,
+ * `google_sends_only_the_explicit_key`, `google_without_any_key_fails_on_the_developer_api`,
+ * `ollama_does_not_send_the_environment_key` and `ollama_keeps_userinfo_auth_from_its_base_url`;
+ * `wire_credentials_are_tracked` is the superset check. Left out, since TS has no SDK to read the
+ * environment, build a client or warn about dropped variables (design 7.4): the SDK client
+ * internals (`explicit_default_headers_survive`, `openai_default_clients_drop_env_headers`,
+ * `azure_user_agent_from_env_does_not_win`, `anthropic_default_client_drops_env_headers`,
+ * `anthropic_hook_clears_an_env_auth_token`, `host_http_client_headers_are_sent`,
+ * `google_never_writes_the_key_to_the_environment`, `google_rebuilt_client_keeps_base_url_key_and_no_redirects`,
+ * `google_rebuild_without_a_cleanup_object`, `google_client_does_not_import_the_cleanup_class`) and
+ * the dropped-variable warnings (`openai_warns_when_it_drops_env_headers`,
+ * `openai_names_openai_organization`, `drop_warning_shows_once_across_builds_and_tool_binding`,
+ * `drop_warning_points_at_the_sdk_adapter`, `anthropic_warns_when_it_drops_env_headers`,
+ * `anthropic_without_env_headers_does_not_warn`, `openai_without_env_headers_does_not_warn`,
+ * `google_warns_once_about_the_vertex_switch`, `google_without_the_vertex_switch_does_not_warn`,
+ * `ollama_warns_once_about_the_environment_key`). `google_ignores_the_vertex_switch` and its
+ * `base_url` twin are the environment table's never-read check in `provider_connections.test.ts`.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -20,12 +49,14 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import type { Env } from "../../src/defaults.ts";
 import { collect } from "../../src/llm/events.ts";
 import { Message, Request, TextPart } from "../../src/llm/messages.ts";
-import { type Cassette, CassetteReplay, IGNORED_HEADERS, loadCassette } from "../../src/llm/testing.ts";
+import type { RouteModel } from "../../src/llm/executor.ts";
+import { type Cassette, CASSETTE_REDACTED, CassetteReplay, IGNORED_HEADERS, loadCassette } from "../../src/llm/testing.ts";
 import { ApiKeyCredentials, AuthError, isAuthFailure, OAuthCredentials } from "../../src/llm_clients/auth/common.ts";
 import { AuthStore } from "../../src/llm_clients/auth/store.ts";
 import { LLMConfig } from "../../src/llm_clients/config.ts";
 import {
   type AgentConfig,
+  callCredentials,
   type Connection,
   keyIdentity,
   legacyConnectionConfig,
@@ -33,8 +64,9 @@ import {
   resolveModelConfig,
 } from "../../src/llm_clients/connection.ts";
 import { accountHash, chatModelFromConfig, prefersResponses, warnOnce } from "../../src/llm_clients/factory.ts";
+import { AnthropicMessagesBlock } from "../../src/llm_clients/provider_blocks.ts";
 import { virtualScheduler } from "../../src/platform.ts";
-import type { JsonObject } from "../../src/typesys/json.ts";
+import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
 
 const CASSETTES = fileURLToPath(new URL("cassettes/", import.meta.url));
 // Far enough ahead that the build-time read never refreshes: the default refresh would use
@@ -1205,6 +1237,25 @@ function editedGolden(golden: string, edit: Edit = {}): Cassette {
   return cassette;
 }
 
+/** Replay `golden` checking only its URL (or `url`): any headers and any body match. */
+function urlOnlyReplay(golden: string, url?: string): CassetteReplay {
+  const cassette = editedGolden(golden, { url });
+  const request = cassette.interactions[0]!.request;
+  request.headers = {};
+  request.json = CASSETTE_REDACTED;
+  return new CassetteReplay(cassette);
+}
+
+/**
+ * Check that every credential `model`'s auth sent, less vLLM's keyless `EMPTY`, is one
+ * `callCredentials` lists for `config`; a failure counts the others, never showing them.
+ */
+function expectTracked(model: RouteModel, config: AgentConfig | LLMConfig, env: Env): void {
+  const tracked = new Set(callCredentials(config, { env }));
+  const sent = model.route.auth.credentials();
+  expect(sent.filter((value) => value !== "EMPTY" && !tracked.has(value)).length).toBe(0);
+}
+
 describe("chatModelFromConfig", () => {
   for (const each of CASES) {
     test(each.name, async () => {
@@ -1256,8 +1307,239 @@ describe("chatModelFromConfig", () => {
       const recorded = Object.keys(cassette.interactions[0]!.request.headers ?? {}).map((name) => name.toLowerCase());
       const names = [...sent.keys()].filter((name) => !IGNORED_HEADERS.has(name));
       expect(names.sort()).toEqual(recorded.filter((name) => !IGNORED_HEADERS.has(name)).sort());
+      expectTracked(model, config, env);
     });
   }
+});
+
+describe("reserved block keys", () => {
+  const CHAT = ["xai", "deepseek", "qwen", "qwen-cn", "glm", "glm-cn", "minimax", "minimax-cn", "openrouter", "vllm", "azure"];
+  const ROWS: [provider: string, path: string][] = [
+    ...CHAT.flatMap((provider): [string, string][] => [
+      [provider, "stream"],
+      [provider, "stream_options"],
+    ]),
+    ["minimax", "reasoning_split"],
+    ...["stream", "messages", "system", "tools", "tool_choice", "output_config.format"].map(
+      (path): [string, string] => ["anthropic", path],
+    ),
+    ...["tools", "toolConfig", "cachedContent", "generationConfig.responseJsonSchema"].map(
+      (path): [string, string] => ["google", path],
+    ),
+    ["ollama", "stream"],
+    ["ollama", "format"],
+    ["openai", "stream"],
+    ["openai", "text.format"],
+  ];
+  for (const [provider, path] of ROWS) {
+    test(`${provider}.${path} is refused at build`, async () => {
+      const { env } = await caseSetup({ OPENAI_API_VERSION: API_VERSION });
+      // A dotted path nests: `text.format` gives `{text: {format: true}}`.
+      const block = path.split(".").reduceRight<JsonValue>((value, key) => ({ [key]: value }), true);
+      const config = { provider, model: "m", api_key: HOST_KEY, [provider]: block, ...(provider === "azure" ? { base_url: AZURE.base_url } : {}) };
+      let sends = 0;
+      const error = await chatModelFromConfig(config, {
+        env,
+        send: async () => {
+          sends++;
+          throw new Error("never sent");
+        },
+        onWarning: () => {},
+      }).then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+      expect(error).toBeInstanceOf(RangeError);
+      expect((error as Error).message).toContain(`\`${provider}.${path}\` is built by yian (`);
+      expect(sends).toBe(0);
+    });
+  }
+});
+
+describe("never beta", () => {
+  // One value for every field the anthropic block accepts: `anthropic_messages_body.test.ts`'s
+  // no-beta block plus the rest.
+  const SAMPLE: JsonObject = {
+    thinking: { type: "enabled", budget_tokens: 1024n },
+    metadata: { user_id: "u" },
+    output_config: { effort: "high" },
+    service_tier: "auto",
+    cache_control: { type: "ephemeral" },
+    inference_geo: "us",
+    max_tokens: 1024n,
+    stop_sequences: ["END"],
+    temperature: 0.5,
+    top_k: 40n,
+    top_p: 0.9,
+  };
+
+  test("the sample holds every field of the anthropic block", () => {
+    expect(Object.keys(SAMPLE).sort()).toEqual(Object.keys(AnthropicMessagesBlock.fields).sort());
+  });
+
+  const blocks: [name: string, block: JsonObject][] = [
+    ...Object.entries(SAMPLE).map(([key, value]): [string, JsonObject] => [key, { [key]: value }]),
+    ["the whole sample", SAMPLE],
+  ];
+  for (const [name, block] of blocks) {
+    test(`${name} goes to /v1/messages with no beta`, async () => {
+      const { env } = await caseSetup({});
+      const replay = urlOnlyReplay("anthropic_messages/plain");
+      const model = await chatModelFromConfig(
+        { ...ANTHROPIC, api_key: HOST_KEY, anthropic: block },
+        { env, send: replay.send, scheduler: virtualScheduler() },
+      );
+      await collect(model.stream(PLAIN));
+      replay.assertDone();
+      const [sent] = replay.requests;
+      expect(sent!.url).toBe("https://api.anthropic.com/v1/messages");
+      expect(sent!.headers.has("anthropic-beta")).toBe(false);
+    });
+  }
+});
+
+describe("environment values never reach the wire", () => {
+  // `test_llm_client_env_headers.py`'s `ENV` and `_GOOGLE_ENV`: every SDK header and credential
+  // variable, each value holding `env-`.
+  const POISONED: Record<string, string> = {
+    OPENAI_CUSTOM_HEADERS:
+      "X-Env-Injected: from-env\nAuthorization: Bearer env-custom-auth\napi-key: env-custom-api-key\n" +
+      "ChatGPT-Account-Id: env-account",
+    OPENAI_ORG_ID: "env-org",
+    OPENAI_ORGANIZATION: "env-org-2",
+    OPENAI_PROJECT_ID: "env-project",
+    AZURE_OPENAI_AD_TOKEN: "env-ad-token",
+    OPENAI_API_VERSION: API_VERSION,
+    ANTHROPIC_CUSTOM_HEADERS:
+      "X-Env-Injected: from-env\nX-Api-Key: env-custom-x-api-key\nAuthorization: Bearer env-custom-anthropic-auth",
+    ANTHROPIC_AUTH_TOKEN: "env-anthropic-token",
+    OPENAI_ADMIN_KEY: "env-admin",
+    GOOGLE_GENAI_DEFAULT_HEADERS: '{"X-Env-Injected": "from-env"}',
+    GOOGLE_GENAI_ACCESS_TOKEN: "env-google-access-token",
+    GOOGLE_GENAI_API_KEY: "env-google-genai-key",
+  };
+
+  /**
+   * Build `config` in the poisoned environment plus `vars`, with `saved` in the store, send the
+   * golden's request to its URL (or `url`), check the credential superset, and return the headers
+   * sent.
+   */
+  async function sent(
+    config: AgentConfig,
+    golden: string,
+    options: { vars?: Record<string, string>; saved?: Login; url?: string } = {},
+  ): Promise<Headers> {
+    const { env } = await caseSetup({ ...POISONED, ...options.vars }, options.saved);
+    const replay = urlOnlyReplay(golden, options.url);
+    const model = await chatModelFromConfig(config, {
+      env,
+      send: replay.send,
+      scheduler: virtualScheduler(),
+      onWarning: () => {},
+    });
+    await collect(model.stream(REQUESTS[golden]!));
+    replay.assertDone();
+    expectTracked(model, config, env);
+    return replay.requests[0]!.headers;
+  }
+
+  /** Check that `headers` hold no `env-` value and none of the SDK-only headers; never shows a value. */
+  function expectClean(headers: Headers): void {
+    const leaked = [...headers].filter(([, value]) => value.toLowerCase().includes("env-")).map(([name]) => name);
+    expect(leaked).toEqual([]);
+    for (const name of ["openai-organization", "openai-project", "x-env-injected"]) expect(headers.has(name)).toBe(false);
+  }
+
+  test("openai_responses_send_only_the_explicit_key", async () => {
+    const headers = await sent({ ...OPENAI, api_key: "sk-explicit" }, "openai_responses/plain");
+    expect(headers.get("authorization")).toBe("Bearer sk-explicit");
+    expectClean(headers);
+  });
+
+  test("openai_callable_key_sends_only_its_value", async () => {
+    // A saved key is read per request, the shape Python passes as a callable.
+    const saved = { credentials: new ApiKeyCredentials("sk-explicit"), model: "gpt-5.5" };
+    const headers = await sent({}, "openai_responses/plain", { saved });
+    expect(headers.get("authorization")).toBe("Bearer sk-explicit");
+    expectClean(headers);
+  });
+
+  test("openai_compatible_provider_sends_only_the_explicit_key", async () => {
+    const config = { provider: "deepseek", model: "deepseek-chat", api_key: "ds-explicit" };
+    const headers = await sent(config, "openai_chat/deepseek_reasoner", { vars: { DEEPSEEK_API_KEY: "env-deepseek-key" } });
+    expect(headers.get("authorization")).toBe("Bearer ds-explicit");
+    expectClean(headers);
+  });
+
+  test("subscription_sends_only_its_own_headers", async () => {
+    const headers = await sent({}, "openai_responses/subscription_plain", { saved: SUBSCRIPTION });
+    expect(headers.get("authorization")).toBe(`Bearer ${ACCESS}`);
+    expect(headers.get("chatgpt-account-id")).toBe(ACCOUNT);
+    expectClean(headers);
+  });
+
+  test("azure_sends_only_the_explicit_key", async () => {
+    const headers = await sent({ ...AZURE, api_key: "az-explicit" }, "openai_chat/azure_plain");
+    expect(headers.get("api-key")).toBe("az-explicit");
+    expect(headers.has("authorization")).toBe(false);
+    expectClean(headers);
+  });
+
+  test("azure_without_a_key_keeps_the_sdk_order", async () => {
+    // With no key, AZURE_OPENAI_AD_TOKEN goes first, as the SDK orders it; OPENAI_API_KEY never.
+    const headers = await sent(AZURE, "openai_chat/azure_plain", { vars: { OPENAI_API_KEY: "sk-openai" } });
+    expect(headers.get("authorization")).toBe("Bearer env-ad-token");
+    expect(headers.has("api-key")).toBe(false);
+    expect([...headers].filter(([, value]) => value.includes("sk-openai")).length).toBe(0);
+    for (const name of ["openai-organization", "openai-project", "x-env-injected"]) expect(headers.has(name)).toBe(false);
+  });
+
+  /** Check the Anthropic headers carry only the explicit key and the API version. */
+  function expectAnthropicKeyOnly(headers: Headers): void {
+    expect(headers.get("x-api-key")).toBe("sk-ant-explicit");
+    expect(headers.has("authorization")).toBe(false);
+    expect(headers.has("anthropic-version")).toBe(true);
+    expectClean(headers);
+  }
+
+  test("anthropic_sends_only_the_explicit_key", async () => {
+    expectAnthropicKeyOnly(await sent({ ...ANTHROPIC, api_key: "sk-ant-explicit" }, "anthropic_messages/plain"));
+  });
+
+  test("anthropic_with_a_base_url_sends_only_the_explicit_key", async () => {
+    const config = { ...ANTHROPIC, api_key: "sk-ant-explicit", base_url: "https://gateway.test" };
+    expectAnthropicKeyOnly(await sent(config, "anthropic_messages/plain", { url: "https://gateway.test/v1/messages" }));
+  });
+
+  test("google_sends_only_the_explicit_key", async () => {
+    const vars = { GOOGLE_API_KEY: "ENV-LEAK-1", GEMINI_API_KEY: "env-gemini-key" };
+    const headers = await sent({ ...GOOGLE, api_key: "g-explicit" }, "gemini/plain", { vars });
+    expect(headers.get("x-goog-api-key")).toBe("g-explicit");
+    expectClean(headers);
+  });
+
+  test("google_without_any_key_fails_on_the_developer_api", async () => {
+    // The Vertex AI switch is never read, so a keyless setup fails on the Developer API.
+    const { env } = await caseSetup({ ...POISONED, GOOGLE_GENAI_USE_VERTEXAI: "true", GOOGLE_CLOUD_PROJECT: "p" });
+    const error = await chatModelFromConfig(GOOGLE, { env, onWarning: () => {} }).then(
+      () => null,
+      (thrown: unknown) => thrown,
+    );
+    expect(error).toBeInstanceOf(RangeError);
+    expect((error as Error).message).toBe(missingKey("google", "GOOGLE_API_KEY").message);
+  });
+
+  test("ollama_does_not_send_the_environment_key", async () => {
+    const headers = await sent(OLLAMA, "ollama_chat/plain", { vars: { OLLAMA_API_KEY: "env-ollama-key" } });
+    expect(headers.has("authorization")).toBe(false);
+    expectClean(headers);
+  });
+
+  test("ollama_keeps_userinfo_auth_from_its_base_url", async () => {
+    const vars = { OLLAMA_API_KEY: "env-ollama-key", OLLAMA_BASE_URL: "http://user:pw@localhost:11434" };
+    const headers = await sent(OLLAMA, "ollama_chat/plain", { vars });
+    expect(headers.get("authorization")).toBe("Basic dXNlcjpwdw==");
+  });
 });
 
 describe("anthropic connection headers", () => {

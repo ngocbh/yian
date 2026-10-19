@@ -7,18 +7,29 @@
  * layer's `iter_flow_origins` and `rewrite_flow_origins` in Python; here they call the node's own
  * `iterLocalOrigins` and `rewriteLocalOrigins`. Python's bare `Node` is a minimal subclass.
  *
+ * Changed (local half): the CALL and MAP rows of
+ * `test_each_composite_exposes_its_signature_and_baked_child` check the driver's own hooks over a
+ * stub child: `iterLocalOrigins` yields the cached `childInputs` signature after the base's
+ * origins, `originChildren()` returns the baked child, and `rewriteLocalOrigins` on a shallow
+ * copy maps the signature and leaves the original unchanged.
+ *
  * TS-only: the local traversal order with shared carriers yielded once; `rewriteLocalOrigins` on
  * a shallow node copy leaves the original unchanged and keeps shared carriers shared; a shallow
  * copy validates its assertions and runs; and `failureTrace`.
  *
- * Later (T3-10): the 25 compile tests.
+ * Later (T3-8, LOOP): the LOOP row of `test_each_composite_exposes_its_signature_and_baked_child`.
+ *
+ * Later (T3-10): the 25 compile tests, and the composite rows' recursion into the child flow and
+ * alias identity.
  */
 
 import { expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { CallNode } from "../../src/nodes/call/node.ts";
 import { Assertion, ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { MapNode } from "../../src/nodes/map/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 
 /** A minimal concrete node; the base hooks are the subject. Its body lets a copy run. */
@@ -58,8 +69,8 @@ function richNode(): { node: BareNode; contract: ValueContract; shared: Assertio
 }
 
 /** Return a shallow copy of `node`: the same prototype, its own fields copied. */
-function shallowCopy(node: BareNode): BareNode {
-  return Object.assign(Object.create(Object.getPrototypeOf(node)) as BareNode, node);
+function shallowCopy<N extends Node>(node: N): N {
+  return Object.assign(Object.create(Object.getPrototypeOf(node)) as N, node);
 }
 
 test("generated origin context is not local authored provenance", () => {
@@ -192,3 +203,38 @@ test("failure trace rejects malformed ancestry", () => {
   node.originContext = [forged];
   expect(() => node.failureTrace()).toThrow(RangeError);
 });
+
+/** Build one CALL fixture over a baked child and cached signature. */
+function callDriver(child: object, signature: Parameter): CallNode {
+  return new CallNode("call", { flowId: "child", child, childInputs: [signature] });
+}
+
+/** Build one MAP fixture over a baked child and cached signature. */
+function mapDriver(child: object, signature: Parameter): MapNode {
+  return new MapNode("map", { flowId: "child", child, childInputs: [signature] });
+}
+
+for (const [label, make] of [
+  ["call", callDriver],
+  ["map", mapDriver],
+] as const) {
+  test(`each composite exposes its signature and baked child (${label}, local half)`, () => {
+    const signature = new Parameter("item", { origin: origin("signature") });
+    const child = {};
+    const driver = make(child, signature);
+    driver.origin = origin("driver");
+
+    expect([...driver.iterLocalOrigins()].map((o) => o.key)).toEqual(["driver", "signature"]);
+    expect(driver.originChildren()).toEqual([child]);
+    expect(driver.originChildren()[0]).toBe(child);
+
+    const copy = shallowCopy(driver);
+    copy.rewriteLocalOrigins((o) => origin(`mapped/${o.key}`));
+
+    expect([...copy.iterLocalOrigins()].map((o) => o.key)).toEqual(["mapped/driver", "mapped/signature"]);
+    expect(copy.childInputs[0]).not.toBe(signature);
+    expect([...driver.iterLocalOrigins()].map((o) => o.key)).toEqual(["driver", "signature"]);
+    expect(driver.childInputs[0]).toBe(signature);
+    expect(signature.origin).toEqual(origin("signature"));
+  });
+}

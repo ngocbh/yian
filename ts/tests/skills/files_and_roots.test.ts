@@ -1,8 +1,8 @@
 /**
- * Bundled-file confinement, a port of `tests/skills/test_files_and_roots.py`.
+ * Bundled-file confinement and default Claude/Codex skill roots, a port of
+ * `tests/skills/test_files_and_roots.py`.
  *
- * Later: the compose facade test (with the compose loaders) and the default Claude/Codex
- * skill roots (with `compose/skills.ts`).
+ * Later: the compose facade test (with the compose loaders).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -10,6 +10,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { defaultSkillRoots } from "../../src/compose/skills.ts";
 import { current } from "../../src/defaults.ts";
 import { readSkillFile, readSkillText, resolvedPath } from "../../src/skills/catalog.ts";
 import { Skill, SkillError } from "../../src/skills/index.ts";
@@ -106,7 +107,32 @@ test("read skill file rejects missing, directories, binary and large", () => {
   expectSkillError(() => readSkillFile(skill, "."), "does not exist");
 });
 
+test("default roots put user before project and stop at git root", () => {
+  const home = join(tmp, "home");
+  const repo = join(tmp, "outer", "repo");
+  const work = join(repo, "pkg", "sub");
+  mkdirSync(work, { recursive: true });
+  mkdirSync(join(repo, ".git"));
+  const base = (dir: string) => [join(dir, ".claude", "skills"), join(dir, ".agents", "skills")];
+  expect(defaultSkillRoots({ cwd: work, home })).toEqual([
+    ...base(home),
+    ...base(work),
+    ...base(join(repo, "pkg")),
+    ...base(repo),
+  ]);
+});
+
+test("default roots outside git use only cwd", () => {
+  const roots = defaultSkillRoots({ cwd: tmp, home: join(tmp, "home") });
+  expect(roots.slice(2)).toEqual([join(tmp, ".claude", "skills"), join(tmp, ".agents", "skills")]);
+});
+
 // TS-only: the rows below pin behavior Python gets from pathlib.
+
+test("default roots read the home from the injected env", () => {
+  const roots = defaultSkillRoots({ cwd: tmp, env: (name) => (name === "HOME" ? "/h" : undefined) });
+  expect(roots.slice(0, 2)).toEqual(["/h/.claude/skills", "/h/.agents/skills"]);
+});
 
 test("dangling links and link loops do not exist", () => {
   symlinkSync(join(tmp, "nowhere"), join(root, "gone.md"));

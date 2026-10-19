@@ -1110,6 +1110,30 @@ describe("AuthStore", () => {
     expect(fs.existsSync(file)).toBe(false);
   });
 
+  test("a failure of the lock itself is the access error", async () => {
+    const access = (error: Error) => {
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("Could not access private credential storage");
+      expect(error.cause).toBeUndefined();
+    };
+    fs.mkdirSync(join(tmp, "auth"), { mode: 0o700 });
+    // A private regular file that is not a database: the lock mechanism fails, not the lock check.
+    fs.writeFileSync(`${file}.lock`, "not a database", { mode: 0o600 });
+    access(await rejected(new AuthStore(file).save("openai", new ApiKeyCredentials("key"), "model")));
+    expect(fs.existsSync(file)).toBe(false);
+
+    fs.rmSync(`${file}.lock`);
+    const store = new AuthStore(file);
+    await store.save("openai", new ApiKeyCredentials("key"), "model", { makeDefault: false });
+    await store.save("anthropic", new ApiKeyCredentials("other"), "model");
+    const raw = fs.readFileSync(file);
+    fs.rmSync(`${file}.lock`);
+    fs.writeFileSync(`${file}.lock`, "not a database", { mode: 0o600 });
+    access(await rejected(store.save("openai", new ApiKeyCredentials("new"), "model")));
+    access(await rejected(store.setDefault("openai")));
+    expect(fs.readFileSync(file)).toEqual(raw);
+  });
+
   test("a changed connection prevents refresh and an account switch prevents the save", async () => {
     const store = new AuthStore(file, { scheduler: fixedClock(1_000_000) });
     const first = await store.save("openai", oauth("old", "refresh", 900), "model");

@@ -154,7 +154,8 @@ function dumpCredentials(credentials: Credentials | null): Record<string, unknow
 
 /**
  * Serialize `value` (objects, strings, numbers and `null`) as Python's
- * `json.dumps(value, sort_keys=True)` does, so both write the same bytes.
+ * `json.dumps(value, sort_keys=True)` does, so both write the same bytes. A float is spelled as
+ * JS spells it (`1e-7`, Python `1e-07`; an integral float is `9000`, Python `9000.0`).
  */
 function pythonJson(value: unknown): string {
   if (value === null) return "null";
@@ -479,8 +480,14 @@ export class AuthStore {
   ): Promise<ProviderSelection> {
     const { endpoint = null, organization = null, project = null, makeDefault = true } = options;
     // Exactly these classes, as Python's `type(x) in`: a subclass could change what is stored.
-    const prototype = typeof credentials === "object" && credentials !== null && Object.getPrototypeOf(credentials);
-    if (credentials !== null && prototype !== ApiKeyCredentials.prototype && prototype !== OAuthCredentials.prototype) {
+    if (
+      credentials !== null &&
+      !(
+        typeof credentials === "object" &&
+        (Object.getPrototypeOf(credentials) === ApiKeyCredentials.prototype ||
+          Object.getPrototypeOf(credentials) === OAuthCredentials.prototype)
+      )
+    ) {
       throw new AuthError("Unsupported credential type");
     }
     const selection = new ProviderSelection({
@@ -565,7 +572,7 @@ export class AuthStore {
     options: { refresh?: (current: OAuthCredentials) => OAuthCredentials | Promise<OAuthCredentials> } = {},
   ): Promise<Credentials> {
     const { refresh } = options;
-    const resolve = (providers: Providers) => {
+    const pinned = (providers: Providers) => {
       const pair = providers.get(provider);
       if (pair === undefined || pair[0].credentialId !== expectedCredentialId) {
         throw new AuthError("The saved connection changed");
@@ -579,12 +586,12 @@ export class AuthStore {
     this.#signal?.throwIfAborted();
     const directory = this.#openDirectory();
     try {
-      const [, saved] = resolve(this.#load(directory)[1]);
+      const [, saved] = pinned(this.#load(directory)[1]);
       if (fresh(saved)) return saved;
       // A saved login means the directory exists.
       return await this.#locked(async () => {
         const [defaultProvider, providers] = this.#load(directory!);
-        const [selection, credentials] = resolve(providers);
+        const [selection, credentials] = pinned(providers);
         if (fresh(credentials)) return credentials;
         if (refresh === undefined) throw new AuthError("Subscription credentials expired; sign in again");
         this.#signal?.throwIfAborted();

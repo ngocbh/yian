@@ -150,13 +150,20 @@ describe("redact", () => {
     expect(text).not.toContain("-longer-1234");
   });
 
-  test("encoded and masked echoes of a key with /, a space, ~ and ] are removed", () => {
+  test("encoded and masked echoes of keys with /, a space, ~, ], \\, [ and ^ are removed", () => {
     const key = "sk/sent inel~scr]ub-zqxw";
     const json = JSON.stringify(key).slice(1, -1).replaceAll("/", "\\/");
     expect(json).toBe("sk\\/sent inel~scr]ub-zqxw");
     expect(redactKey(`body: {"key": "${json}"}`, key)).toBe(`body: {"key": "[REDACTED]"}`);
     expect(redactKey("GET /v1?key=sk%2Fsent%20inel~scr%5Dub-zqxw", key)).toBe("GET /v1?key=[REDACTED]");
     expect(redactKey(`provided: ${key.slice(0, 8)}****${key.slice(-4)}.`, key)).toBe("provided: [REDACTED].");
+
+    // The masked head and tail both hold characters a character class must escape.
+    const other = "sk\\se[nt^inel-z\\q^w";
+    expect(redactKey(`plain: ${other}`, other)).toBe("plain: [REDACTED]");
+    expect(redactKey(`body: {"key": "sk\\\\se[nt^inel-z\\\\q^w"}`, other)).toBe(`body: {"key": "[REDACTED]"}`);
+    expect(redactKey("GET /v1?key=sk%5Cse%5Bnt%5Einel-z%5Cq%5Ew", other)).toBe("GET /v1?key=[REDACTED]");
+    expect(redactKey(`provided: ${other.slice(0, 8)}****${other.slice(-4)}.`, other)).toBe("provided: [REDACTED].");
   });
 
   test("masked echoes with ... and … are removed", () => {

@@ -11,7 +11,7 @@
 
 /** Provider name to the variable that holds its API key; `null` for a provider that takes none. */
 export const PROVIDER_API_KEY_ENV: Readonly<Record<string, string | null>> = Object.freeze(
-  Object.assign(Object.create(null), {
+  Object.assign(Object.create(null) as Record<string, string | null>, {
     openai: "OPENAI_API_KEY",
     anthropic: "ANTHROPIC_API_KEY",
     google: "GOOGLE_API_KEY",

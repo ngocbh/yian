@@ -1,9 +1,11 @@
 /**
- * Mirrors `tests/test_llm_config_connection_settings.py`; this task ports the module-function
- * tests, the `LLMConfig` tests come with `config.ts`.
+ * Mirrors `tests/test_llm_config_connection_settings.py`. This file ports the module-function
+ * tests; the `LLMConfig` tests come with `config.ts`.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+
+import { BUILTIN, install } from "../src/defaults.ts";
 
 import {
   OPENAI_REFUSED_HEADER_NAMES,
@@ -14,6 +16,8 @@ import {
   validateHeaderValue,
   validateOrganization,
 } from "../src/llm_clients/connection_settings.ts";
+
+afterEach(() => install(BUILTIN));
 
 const GATEWAY = "gw-secret-91c4e2";
 const CREDENTIAL_NAMES = ["Authorization", "Proxy-Authorization", "x-api-key", "api-key", "x-goog-api-key"];
@@ -83,6 +87,28 @@ describe("TS additions", () => {
     expect(Object.hasOwn(checked, "__proto__")).toBe(true);
     expect(Object.keys(checked)).toEqual(["__proto__"]);
     expect(Object.getPrototypeOf(checked)).toBe(Object.prototype);
+  });
+
+  test("an undefined entry is skipped and not counted for the header cap", () => {
+    install({ ...BUILTIN, maxConnectionHeaders: 1 });
+    expect(validateHeaders({ "X-A": "1", "X-B": undefined }, null)).toEqual({ "X-A": "1" });
+    expect(() => validateHeaders({ "X-A": "1", "X-B": "2" }, null)).toThrow("at most 1 headers");
+  });
+
+  test("lengths count code points, as Python's len", () => {
+    install({ ...BUILTIN, maxOrganizationChars: 2, maxHeaderValueChars: 2 });
+    // Two emoji are four UTF-16 units but two code points: within the cap, refused as non-ASCII.
+    expect(() => validateOrganization("😀😀", "organization")).toThrow("non-empty visible ASCII");
+    expect(() => validateOrganization("😀😀😀", "organization")).toThrow("organization must be at most 2 characters");
+    expect(() => validateHeaderValue("X-A", "😀😀")).toThrow("non-empty visible ASCII");
+    expect(() => validateHeaderName("😀😀", null)).toThrow("HTTP tokens");
+    expect(() => validateHeaderName("😀😀😀", null)).toThrow("header names must be at most 2 characters");
+  });
+
+  test("for a string name the length check runs before the token check", () => {
+    install({ ...BUILTIN, maxHeaderValueChars: 3 });
+    expect(() => validateHeaderName("X Y-Long", null)).toThrow("header names must be at most 3 characters");
+    expect(() => validateHeaderName("X Y", null)).toThrow("HTTP tokens");
   });
 
   test("constructor and toString are ordinary header names", () => {

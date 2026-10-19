@@ -22,7 +22,7 @@ const OPENAI_IDS = "use llm_config.organization / project";
  * the request.
  */
 export const REFUSED_HEADER_NAMES: Readonly<Record<string, string>> = Object.freeze(
-  Object.assign(Object.create(null), {
+  Object.assign(Object.create(null) as Record<string, string>, {
     authorization: CREDENTIAL,
     "proxy-authorization": CREDENTIAL,
     "x-api-key": CREDENTIAL,
@@ -42,7 +42,7 @@ export const REFUSED_HEADER_NAMES: Readonly<Record<string, string>> = Object.fre
  * Other providers (an OpenAI-compatible gateway, say) may send them as ordinary headers.
  */
 export const OPENAI_REFUSED_HEADER_NAMES: Readonly<Record<string, string>> = Object.freeze(
-  Object.assign(Object.create(null), {
+  Object.assign(Object.create(null) as Record<string, string>, {
     "openai-organization": OPENAI_IDS,
     "openai-project": OPENAI_IDS,
   }),
@@ -55,6 +55,11 @@ const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 // error.
 const FIELD_VALUE = /^[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*$/;
 const VISIBLE_ASCII = /^[\x21-\x7e]+$/;
+
+/** Return `table`'s own entry for `key`, so inherited names such as `constructor` are absent. */
+function own(table: Readonly<Record<string, string>>, key: string): string | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
 
 /** Return the number of code points in `text`, as Python's `len` counts. */
 function codePoints(text: string): number {
@@ -78,10 +83,8 @@ export function validateHeaderName(name: unknown, provider: string | null): stri
     throw new RangeError("header names must be HTTP tokens: letters, digits and !#$%&'*+-.^_`|~");
   }
   const lower = name.toLowerCase();
-  let reason = Object.hasOwn(REFUSED_HEADER_NAMES, lower) ? REFUSED_HEADER_NAMES[lower] : undefined;
-  if (reason === undefined && provider === "openai" && Object.hasOwn(OPENAI_REFUSED_HEADER_NAMES, lower)) {
-    reason = OPENAI_REFUSED_HEADER_NAMES[lower];
-  }
+  const reason =
+    own(REFUSED_HEADER_NAMES, lower) ?? (provider === "openai" ? own(OPENAI_REFUSED_HEADER_NAMES, lower) : undefined);
   if (reason !== undefined) throw new RangeError(`header ${name} is refused: ${reason}`);
   return name;
 }

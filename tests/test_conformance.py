@@ -2261,7 +2261,7 @@ def test_harvest_records_runs(tmp_path: Path) -> None:
     assert "run" in raises and "run_id" not in raises["run"]
     assert raises["expect"]["raises"] == {"class": "ValueError",
                                           "message": 'unknown input "nope"; declared inputs: q'}
-    # The name is in the text form in TS (decision 43); Python's repr is the Python wording.
+    # TS spells the name in the text form; Python's repr is the Python wording.
     assert raises["rules"] == ["messages"]
     assert raises["python_expect"]["raises"]["message"] == "unknown input 'nope'; declared inputs: q"
     # Raised before the run started: no events, which the case checks.
@@ -3885,6 +3885,7 @@ def test_shim_ts_names() -> None:
         ("no list here: 'a', 'b'", "no list here: 'a', 'b'"),
     ]
     assert [harvest._ts_names(text) for text, _ in rows] == [text for _, text in rows]
+    assert harvest._ts_names('["a", "b"] [\'c\']', python_only=True) == '["a", "b"] ["c"]'
 
 
 def test_shim_ts_messages() -> None:
@@ -3906,6 +3907,26 @@ def test_shim_ts_messages() -> None:
         "trace": [["node_failed", "n", {"failure": {"code": "c", "message": ts, "node": "n"}}]],
         "output": {"status": "succeeded", "output": {"message": py, "notes": [py], "code": 404}},
     }
+
+
+def test_shim_messages_request() -> None:
+    """Under `messages`, a model request holding a Python list of names counts as differing."""
+    from langchain_core.messages import HumanMessage
+
+    from tests import test_conformance as runner
+
+    def difference(text: str) -> str:
+        messages = [HumanMessage(text)]
+        return runner._request_difference("`r`", runner._v1_request(messages, [], None),
+                                          messages, [], None)
+
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, "messages")
+        assert difference("Fix unknown key(s) ['a'].") == (
+            "`r` holds a list of names, which TS spells differently")
+        assert difference('Fix unknown key(s) ["a"].') == ""
+        assert difference('Match {"required": ["name", "score"]}.') == ""
+    assert difference("Fix unknown key(s) ['a'].") == ""
 
 
 def test_shim_messages_replay(tmp_path: Path) -> None:

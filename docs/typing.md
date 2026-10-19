@@ -417,7 +417,9 @@ member is that member. The members must be told apart by the data alone:
   stored). `build_value_as` picks the member by the tag (the first tag field by name), then
   runs that member's record check. A missing tag fails at `(tag,)` with
   `missing tag field 'action' (expected one of ['buy', 'sell'])`; an unknown one with
-  `'hold' is not a tag of the union (expected one of ['buy', 'sell'])`.
+  `'hold' is not a tag of the union (expected one of ['buy', 'sell'])`. Changed (TS yian):
+  `missing tag field 'action' (expected one of ["buy","sell"])` and `"hold" is not a tag of
+  the union (expected one of ["buy","sell"])`.
 - **Untagged.** The members' shapes can't overlap (`types_overlap`, conservative), so a
   value satisfies at most one, and that member's check runs. No match fails at `()` with
   `value matches no member of <label>: <member>: <reason>; ...`.

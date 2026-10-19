@@ -1490,20 +1490,25 @@ def _ts_value_repr(value: object) -> str:
 # a quoted key, `x['k']`) and as `", ".join` of text-form names gives one (`["a", "b"]`).
 _QUOTED = r"'(?:[^'\\\n]|\\.)*'" "|" r'"(?:[^"\\\n]|\\.)*"'
 _NAME_LIST = re.compile(rf"\[(?:{_QUOTED})(?:, (?:{_QUOTED}))*\]")
+# A single-quoted item in a `_NAME_LIST` match: Python's repr, not JSON.
+_PYTHON_QUOTED = re.compile(r"(?:^\[|, )'")
 
 
-def _ts_names(text: str) -> str:
+def _ts_names(text: str, python_only: bool = False) -> str:
     """Return `text` with each bracketed list of quoted texts written as compact JSON.
 
     So `unknown key(s) ['max_items']` reads `unknown key(s) ["max_items"]`, `["a", "b"]` reads
-    `["a","b"]`, and a quoted key `x['my key']` reads `x["my key"]`, as TS writes them
-    (decision 43). A list holding anything but texts is left alone, but a list of texts
-    nested in another list or a mapping is converted alone (`{'k': ['a']}` reads
-    `{'k': ["a"]}`). Not matched: a list cut by `shown_text`, and names joined without
-    brackets by Python's own `", ".join(repr(...))`. Converted too: such a list
-    inside a text value or source text the message quotes. Review `messages` cases by hand.
+    `["a","b"]`, and a quoted key `x['my key']` reads `x["my key"]`, as TS writes them.
+    A list holding anything but texts is left alone, but a list of texts nested in another
+    list or a mapping is converted alone (`{'k': ['a']}` reads `{'k': ["a"]}`). With
+    `python_only`, a list whose texts are all double-quoted (JSON, as `json.dumps` writes it)
+    is left alone too. Not matched: a list cut by `shown_text`, and names joined without
+    brackets by Python's own `", ".join(repr(...))`. Converted too: such a list inside a text
+    value or source text the message quotes. Review `messages` cases by hand.
     """
     def write(match: re.Match) -> str:
+        if python_only and not _PYTHON_QUOTED.search(match.group(0)):
+            return match.group(0)
         try:
             names = ast.literal_eval(match.group(0))
         except (SyntaxError, ValueError):
@@ -1544,7 +1549,9 @@ def _install_messages(patch: pytest.MonkeyPatch, case: dict) -> None:
 
     `value_repr` is the text form at every call, names included. Most lists of names are
     written by Python's own list repr (`f"{sorted(names)}"`), so the replay's results go through
-    `_ts_messages` too.
+    `_ts_messages` too. Such a list can also reach a model call's request (a retry prompt
+    quoting an error, a tool's error text), where it can't be rewritten: a request holding one
+    is reported as differing, so the harvest drops it.
     """
     original = typesys_values.value_repr
 
@@ -1560,6 +1567,17 @@ def _install_messages(patch: pytest.MonkeyPatch, case: dict) -> None:
         return _ts_messages(results(*args, **kwargs))
 
     patch.setattr(runner, "results", ts_results)
+    request_difference = runner._request_difference
+
+    @functools.wraps(request_difference)
+    def ts_request_difference(what: str, expected: dict, *args: object) -> str:
+        difference = request_difference(what, expected, *args)
+        # A prompt may hold JSON (a schema), which TS writes the same way.
+        if difference or all(_ts_names(text, True) == text for text in _texts(expected)):
+            return difference
+        return f"{what} holds a list of names, which TS spells differently"
+
+    patch.setattr(runner, "_request_difference", ts_request_difference)
 
 
 def _ordering(original):

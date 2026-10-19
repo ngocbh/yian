@@ -561,7 +561,7 @@ describe("StdioTransport", () => {
 });
 
 describe("McpServer open and close", () => {
-  // Process tests get 15 s; the `< N s` assertions are the real check.
+  // Process and HTTP tests get 15 s; the `< N s` assertions are the real check.
   const SLOW = 15_000;
   const dir = mkdtempSync(join(tmpdir(), "yian-mcp-open-"));
   const markers: string[] = [];
@@ -1026,7 +1026,7 @@ describe("McpServer open and close", () => {
       expect(redirect.hits).toBeGreaterThan(0);
       // Not even a request with the real server's host header reached it.
       expect(real.recordedHeaders).toEqual([]);
-    });
+    }, SLOW);
   }
 
   test("test_http_server_that_is_down_fails_without_leaking_the_url", async () => {

@@ -29,7 +29,7 @@ import { TypeCheckError } from "../../src/typesys/values.ts";
 import { type HttpServer, PNG_BASE64, startHttpServer } from "../fixtures/mcp/fake_server.ts";
 import { killMarkers, stdioOptions, strayProcesses } from "./mcp_helpers.ts";
 
-// Opening a server spawns a process; the default 5 s is too tight on a loaded machine.
+// Opening a server spawns a process or opens sockets; the default 5 s is too tight on a loaded machine.
 const SLOW = 15_000;
 const dir = mkdtempSync(join(tmpdir(), "yian-mcp-calls-"));
 const markers: string[] = [];
@@ -174,31 +174,31 @@ for (const mode of ["auto", "legacy"] as const) {
       server = mcpServer({ url: http.url });
       (server as unknown as { mode: string }).mode = mode;
       await server.open();
-    });
+    }, SLOW);
 
     afterAll(async () => {
       await server?.close();
       await http?.stop();
-    });
+    }, SLOW);
 
     test("test_echo_returns_the_text", async () => {
       expect(await tools().invoke("echo", { text: "hi" })).toBe("hi");
-    });
+    }, SLOW);
 
     test("test_structured_content_is_the_value", async () => {
       expect(await tools().invoke("add", { a: 1, b: 2 })).toEqual({ result: 3 });
-    });
+    }, SLOW);
 
     test("test_the_call_meta_carries_the_call_id_and_attempt", async () => {
       const bound = tools().forRun("run-1");
       expect(await bound.invoke("whoami", {}, { node: "n", attempt: 2 })).toBe("run-1/n 2");
-    });
+    }, SLOW);
 
     test("test_media_blocks_become_one_line_markers", async () => {
       const size = Buffer.from(PNG_BASE64, "base64").length;
       expect(await tools().invoke("picture", {})).toBe(`[image image/png, ${size} B]\n\ncaption`);
       expect(await tools().invoke("resource", {})).toBe("note body\n\n[resource file:///a.png image/png]");
-    });
+    }, SLOW);
 
     test("test_calls_from_many_threads_run_at_once", async () => {
       const set = tools();
@@ -208,17 +208,17 @@ for (const mode of ["auto", "legacy"] as const) {
       // One after another they would take 2.4 s; `peak` is shared with the other mode's server.
       expect(performance.now() - start).toBeLessThan(2000);
       expect(((await set.invoke("peak", {})) as { result: number }).result).toBeGreaterThan(1);
-    });
+    }, SLOW);
 
     test("an integer past 2^53 in structured content is a number over HTTP", async () => {
       const value = (await tools().invoke("big", {})) as { n: unknown };
       expect(value).toEqual({ n: 18446744073709552000 });
       expect(typeof value.n).toBe("number");
-    });
+    }, SLOW);
 
     test("a tool with an x-mcp-header parameter answers", async () => {
       expect(await tools().invoke("region", { region: "eu" })).toBe("eu");
-    });
+    }, SLOW);
 
     test("an integer past 2^53 in the arguments is refused before the server is called", async () => {
       const before = await tools().invoke("calls", {});
@@ -231,7 +231,7 @@ for (const mode of ["auto", "legacy"] as const) {
       const nested = await rejection(slow.execute({ seconds: 1, extra: [1, -(2n ** 53n)] }, context("slow")));
       expect(nested.message).toBe(message("extra[1]"));
       expect(await tools().invoke("calls", {})).toEqual(before as Record<string, unknown>);
-    });
+    }, SLOW);
   });
 }
 

@@ -829,10 +829,11 @@ export class McpServer {
       );
     }
     if (failure instanceof sdk.SdkHttpError) {
-      const transport = generation.transport as Sdk.StreamableHTTPClientTransport;
+      const transport = generation.transport;
+      const session = !(transport instanceof StdioTransport) && transport?.sessionId !== undefined;
       // The server forgot the session (a restart), so this client can't reach it again.
       if (
-        (failure.status === 404 && transport.sessionId !== undefined) ||
+        (failure.status === 404 && session) ||
         (failure.status === 400 && failure.message.includes("Server not initialized"))
       ) {
         return this.closedError(generation);
@@ -896,26 +897,24 @@ function secondsText(seconds: number): string {
 }
 
 /**
- * The texts scrubbed from a server's errors: every non-empty `headers` value, and the token after
- * its scheme word (`Bearer abc` gives `abc` too, since a server may echo the bare token); the
- * `env` values and the URL's query-parameter values of 8 or more characters. Shorter ones, like
- * `DEBUG=1`, would garble messages and are rarely secrets; the default environment's values
- * (`HOME`, `PATH`) never count.
+ * The texts scrubbed from a server's errors, each of 8 or more characters: the `headers` values
+ * and the token after a value's scheme word (`Bearer abcdefgh` gives `abcdefgh` too, since a
+ * server may echo the bare token), the `env` values, and the URL's query-parameter values.
+ * Shorter ones, like `DEBUG=1` or `x-test: v`, would garble messages and are rarely secrets; the
+ * default environment's values (`HOME`, `PATH`) never count.
  */
 function secretsOf(spec: McpServerSpec): string[] {
   const secrets: string[] = [];
   for (const value of Object.values(spec.headers ?? {})) {
-    if (value === "") continue;
     secrets.push(value);
     const token = /^\S+\s+(\S.*)$/.exec(value)?.[1];
     if (token !== undefined) secrets.push(token);
   }
-  const long = (value: string) => value.length >= 8;
-  secrets.push(...Object.values(spec.env ?? {}).filter(long));
+  secrets.push(...Object.values(spec.env ?? {}));
   if (spec.url !== undefined && URL.canParse(spec.url)) {
-    secrets.push(...[...new URL(spec.url).searchParams.values()].filter(long));
+    secrets.push(...new URL(spec.url).searchParams.values());
   }
-  return secrets;
+  return secrets.filter((value) => value.length >= 8);
 }
 
 /** An error's class name, as Python's `type(error).__name__`. */
@@ -992,17 +991,13 @@ function leaf(error: unknown, sdk: typeof Sdk): unknown {
 }
 
 /**
- * Return what failed an HTTP call, when that is a refused redirect, a failed request or an HTTP
- * error status: `error` itself or, under up to two `SdkError` wrappers, its cause; else `undefined`.
+ * Return `error` when it is what failed an HTTP call: a refused redirect, a failed request or an
+ * HTTP error status; else `undefined`.
  */
 function httpFailure(error: unknown, sdk: typeof Sdk): unknown {
-  let current = error;
-  for (let depth = 0; depth <= 2; depth++) {
-    if (current instanceof RedirectError || current instanceof sdk.SdkHttpError) return current;
-    if (typeof current === "object" && current !== null && transportFailures.has(current)) return current;
-    if (!(current instanceof sdk.SdkError)) return undefined;
-    current = current.cause;
-  }
+  // The client rejects a call with the transport's error as is; only the connect probe wraps one.
+  if (error instanceof RedirectError || error instanceof sdk.SdkHttpError) return error;
+  if (typeof error === "object" && error !== null && transportFailures.has(error)) return error;
   return undefined;
 }
 

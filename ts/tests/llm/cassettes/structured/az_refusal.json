@@ -63,7 +63,7 @@
         },
         "chunks": [
           "data: {\"id\": \"\", \"object\": \"\", \"created\": 0, \"model\": \"\", \"choices\": [], \"prompt_filter_results\": [{\"prompt_index\": 0, \"content_filter_results\": {}}]}\n\n",
-          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": null, \"refusal\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
           "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"refusal\": \"I can't hel\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
           "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"refusal\": \"p with that.\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
           "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\", \"logprobs\": null}]}\n\n",

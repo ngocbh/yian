@@ -61,7 +61,7 @@
           "content-type": "text/event-stream"
         },
         "chunks": [
-          "event: response.created\ndata: {\"type\": \"response.created\", \"sequence_number\": 0, \"response\": {\"id\": \"resp_1\", \"object\": \"response\", \"created_at\": 1700000000, \"status\": \"in_progress\", \"model\": \"gpt-5-codex\", \"output\": [], \"error\": null, \"incomplete_details\": {\"reason\": \"max_output_tokens\"}, \"usage\": null, \"parallel_tool_calls\": true, \"tool_choice\": \"auto\", \"tools\": []}}\n\n",
+          "event: response.created\ndata: {\"type\": \"response.created\", \"sequence_number\": 0, \"response\": {\"id\": \"resp_1\", \"object\": \"response\", \"created_at\": 1700000000, \"status\": \"in_progress\", \"model\": \"gpt-5-codex\", \"output\": [], \"error\": null, \"incomplete_details\": null, \"usage\": null, \"parallel_tool_calls\": true, \"tool_choice\": \"auto\", \"tools\": []}}\n\n",
           "event: response.output_item.added\ndata: {\"type\": \"response.output_item.added\", \"output_index\": 0, \"sequence_number\": 1, \"item\": {\"id\": \"msg_1\", \"type\": \"message\", \"role\": \"assistant\", \"status\": \"in_progress\", \"content\": []}}\n\n",
           "event: response.content_part.added\ndata: {\"type\": \"response.content_part.added\", \"output_index\": 0, \"content_index\": 0, \"item_id\": \"msg_1\", \"sequence_number\": 2, \"part\": {\"type\": \"output_text\", \"text\": \"\", \"annotations\": []}}\n\n",
           "event: response.output_text.delta\ndata: {\"type\": \"response.output_text.delta\", \"output_index\": 0, \"content_index\": 0, \"item_id\": \"msg_1\", \"sequence_number\": 3, \"delta\": \"{\\\"ans\", \"logprobs\": []}\n\n",

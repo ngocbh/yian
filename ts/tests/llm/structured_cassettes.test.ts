@@ -348,52 +348,70 @@ const SCENARIOS: Record<string, Scenario> = {
  * Responses API, or a Chat vendor's base URL.
  */
 function route({ family, provider, model }: Scenario): Route {
-  if (family === "anthropic") {
-    return new Route({
-      provider,
-      baseUrl: "https://api.anthropic.com",
-      path: "v1/messages",
-      auth: new HeaderKeyAuth("x-api-key", "test-key-1"),
-      headers: { "anthropic-version": "2023-06-01" },
-    });
+  const azure = { query: { "api-version": "2025-03-01-preview" }, auth: new HeaderKeyAuth("api-key", "test-key-1") };
+  switch (family) {
+    case "anthropic":
+      return new Route({
+        provider,
+        baseUrl: "https://api.anthropic.com",
+        path: "v1/messages",
+        auth: new HeaderKeyAuth("x-api-key", "test-key-1"),
+        headers: { "anthropic-version": "2023-06-01" },
+      });
+    case "subscription": {
+      const account = { accessToken: "test-token-1", accountId: "test-account-1", residency: null };
+      return new Route({
+        provider,
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        path: "responses",
+        auth: new SubscriptionAuth(() => account),
+      });
+    }
+    case "chat":
+      // Azure's Chat Completions names the deployment in the path.
+      if (provider === "azure") {
+        return new Route({
+          provider,
+          baseUrl: "https://res.openai.azure.com",
+          path: `openai/deployments/${model}/chat/completions`,
+          ...azure,
+        });
+      }
+      return new Route({
+        provider,
+        baseUrl: BASE_URLS[provider]!,
+        path: "chat/completions",
+        auth: new BearerAuth("test-key-1"),
+      });
+    case "responses":
+      // Azure's Responses API takes the deployment as the model.
+      if (provider === "azure") {
+        return new Route({ provider, baseUrl: "https://res.openai.azure.com/openai", path: "responses", ...azure });
+      }
+      return new Route({
+        provider,
+        baseUrl: "https://api.openai.com/v1",
+        path: "responses",
+        auth: new BearerAuth("test-key-1"),
+      });
   }
-  if (family === "subscription") {
-    const account = { accessToken: "test-token-1", accountId: "test-account-1", residency: null };
-    return new Route({
-      provider,
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      path: "responses",
-      auth: new SubscriptionAuth(() => account),
-    });
-  }
-  if (provider === "azure") {
-    // Chat Completions names the deployment in the path; the Responses API takes it as the model.
-    return new Route({
-      provider,
-      baseUrl: family === "chat" ? "https://res.openai.azure.com" : "https://res.openai.azure.com/openai",
-      path: family === "chat" ? `openai/deployments/${model}/chat/completions` : "responses",
-      query: { "api-version": "2025-03-01-preview" },
-      auth: new HeaderKeyAuth("api-key", "test-key-1"),
-    });
-  }
-  return new Route({
-    provider,
-    baseUrl: family === "chat" ? BASE_URLS[provider]! : "https://api.openai.com/v1",
-    path: family === "chat" ? "chat/completions" : "responses",
-    auth: new BearerAuth("test-key-1"),
-  });
 }
 
 /** Build a scenario's model on its route, speaking its family's protocol. */
 function buildModel(scenario: Scenario, send: Send): RouteModel {
   const { family, provider, model, block } = scenario;
-  const protocol =
-    family === "anthropic"
-      ? new AnthropicMessages({ model, provider, block })
-      : family === "chat"
-        ? new OpenAIChat({ model, provider, block })
-        : new OpenAIResponses({ model, provider, block, subscription: family === "subscription" });
-  return new RouteModel({ route: route(scenario), protocol, send });
+  const routed = { route: route(scenario), send };
+  switch (family) {
+    case "anthropic":
+      return new RouteModel({ ...routed, protocol: new AnthropicMessages({ model, provider, block }) });
+    case "chat":
+      return new RouteModel({ ...routed, protocol: new OpenAIChat({ model, provider, block }) });
+    case "responses":
+    case "subscription": {
+      const subscription = family === "subscription";
+      return new RouteModel({ ...routed, protocol: new OpenAIResponses({ model, provider, block, subscription }) });
+    }
+  }
 }
 
 /** Return the error `run` throws, failing when it returns. */
@@ -434,7 +452,8 @@ async function runScenario(name: string, scenario: Scenario): Promise<void> {
   const { expected } = scenario;
   if ("providerError" in expected) {
     await expect(call).rejects.toBeInstanceOf(ProviderError);
-    await expect(call).rejects.toMatchObject({ kind: expected.providerError });
+    // Not retryable: the call fails at once rather than being corrected under `retries:`.
+    await expect(call).rejects.toMatchObject({ kind: expected.providerError, retryable: false });
   } else if ("value" in expected) {
     expect(plan.parse(await call)).toEqual(expected.value);
   } else {

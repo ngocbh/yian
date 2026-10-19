@@ -1,0 +1,41 @@
+# TS spells the list as JSON text (rules: messages); Python's repr in python_expect.
+kind: load
+rules: [messages]
+flow: |2
+
+  id: loop-never-ends
+  name: loop_never_ends
+  defs:
+    body:
+      input:
+        done: !bool
+        attempts: !int
+      nodes: {}
+      output:
+        attempts: ${input.attempts + 1}
+  nodes:
+    wait:
+      kind: loop
+      call: body
+      input:
+        done: false
+        attempts: 0
+      until: done
+      while: not done
+  output: ${wait.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''wait'': exactly one of while:/until:/times: is required (got ["until","while"])'
+      frames:
+      - label: flow.yaml
+        range: [13, 3, 13, 7]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''wait'': exactly one of while:/until:/times: is required (got [''until'', ''while''])'
+      frames:
+      - label: flow.yaml
+        range: [13, 3, 13, 7]

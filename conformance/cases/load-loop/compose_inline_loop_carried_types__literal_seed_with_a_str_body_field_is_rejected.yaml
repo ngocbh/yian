@@ -1,0 +1,32 @@
+kind: load
+flow: |
+  typedefs:
+    AB: Literal(a, b)
+
+  id: note
+  name: note
+  nodes:
+    repeat:
+      kind: loop
+      times: 2
+      input:
+        note: !AB a
+      nodes:
+        mk:
+          kind: code
+          input:
+            note: ${input.note}
+          output: str
+          code: |
+            return "a"
+      output:
+        note: ${mk.output}
+  output: ${repeat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''repeat'': the body returns ''note'' as str, but the carried field is declared Literal(a, b); declare the seed''s type: `note: !str "a"`'
+      frames:
+      - label: flow.yaml
+        range: [11, 13, 11, 18]

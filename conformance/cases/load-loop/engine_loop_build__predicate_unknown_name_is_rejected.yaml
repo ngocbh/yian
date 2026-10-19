@@ -1,0 +1,40 @@
+# TS spells the lists as JSON text (rules: messages); Python's reprs in python_expect.
+kind: load
+rules: [messages]
+flow: |2
+
+  id: loop-never-ends
+  name: loop_never_ends
+  defs:
+    body:
+      input:
+        done: !bool
+        attempts: !int
+      nodes: {}
+      output:
+        attempts: ${input.attempts + 1}
+  nodes:
+    wait:
+      kind: loop
+      call: body
+      input:
+        done: false
+        attempts: 0
+      until: done or nope
+  output: ${wait.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''wait'': `until:` references unknown name(s) ["nope"] — the predicate reads the carried record ["attempts","done"]'
+      frames:
+      - label: flow.yaml
+        range: [13, 3, 13, 7]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''wait'': `until:` references unknown name(s) [''nope''] — the predicate reads the carried record [''attempts'', ''done'']'
+      frames:
+      - label: flow.yaml
+        range: [13, 3, 13, 7]

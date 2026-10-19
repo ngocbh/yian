@@ -1,0 +1,30 @@
+kind: load
+flow: |2
+
+  id: note
+  name: note
+  nodes:
+    repeat:
+      kind: loop
+      times: 2
+      input:
+        note: !str "start"
+      nodes:
+        mk:
+          kind: code
+          input:
+            note: ${input.note}
+          output: int
+          code: |
+            return 1
+      output:
+        note: ${mk.output}
+  output: ${repeat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''repeat'': carried field ''note'' — body output is ''int'', carried source is ''str'' (a returned field must keep its carried type)'
+      frames:
+      - label: flow.yaml
+        range: [9, 7, 10, 5]

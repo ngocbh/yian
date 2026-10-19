@@ -1,0 +1,73 @@
+# TS spells the bool in the text form, `true` (rules: messages); Python's `True` in python_expect.
+kind: load
+rules: [messages]
+flow: |
+  id: f
+  name: f
+  input:
+    n: !int
+  defs:
+    body:
+      input:
+        x: !int
+      nodes:
+        inc:
+          kind: code
+          code: "return inputs[\"x\"] + 1n"
+          input:
+            x: ${input.x}
+          output: int
+      output:
+        x: ${inc.output}
+  nodes:
+    lp:
+      kind: loop
+      call: body
+      input:
+        x: ${input.n}
+      while: true
+      max: 3
+  output: ${lp.output}
+python_flow: |
+  id: f
+  name: f
+  input:
+    n: !int
+  defs:
+    body:
+      input:
+        x: !int
+      nodes:
+        inc:
+          kind: code
+          code: return inputs["x"] + 1
+          input:
+            x: ${input.x}
+          output: int
+      output:
+        x: ${inc.output}
+  nodes:
+    lp:
+      kind: loop
+      call: body
+      input:
+        x: ${input.n}
+      while: true
+      max: 3
+  output: ${lp.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''lp'': `while:` must be an expression string over the carried record, such as `while: not done` (got true)'
+      frames:
+      - label: flow.yaml
+        range: [24, 12, 24, 16]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''lp'': `while:` must be an expression string over the carried record, such as `while: not done` (got True)'
+      frames:
+      - label: flow.yaml
+        range: [24, 12, 24, 16]

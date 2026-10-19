@@ -1,0 +1,65 @@
+kind: load
+flow: |2
+
+  id: loop-union
+  name: loop_union
+  typedefs:
+    Done: {answer: str}
+    More: {hint: str}
+    Step: Union(Done, More)
+  nodes:
+    ask:
+      kind: loop
+      until: not isinstance(r, Done) and r.nosuch == 'x'
+      input:
+        n: 0
+        r: !Done {"answer":"x"}
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+            r: Done
+          code: |
+            const n = inputs["n"] + 1n
+            return {"n": n, "r": n >= 3n ? {"answer": "ok"} : {"hint": "again"}}
+      output: ${step.output}
+  output: ${ask.output}
+python_flow: |2
+
+  id: loop-union
+  name: loop_union
+  typedefs:
+    Done: {answer: str}
+    More: {hint: str}
+    Step: Union(Done, More)
+  nodes:
+    ask:
+      kind: loop
+      until: not isinstance(r, Done) and r.nosuch == 'x'
+      input:
+        n: 0
+        r: !Done {"answer":"x"}
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+            r: Done
+          code: |
+            n = inputs["n"] + 1
+            return {"n": n, "r": {"answer": "ok"} if n >= 3 else {"hint": "again"}}
+      output: ${step.output}
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''ask'': `until:` `not isinstance(r, Done)` can never be true: r is declared Done, so `isinstance(r, Done)` is always true'
+      frames:
+      - label: flow.yaml
+        range: [9, 3, 9, 6]

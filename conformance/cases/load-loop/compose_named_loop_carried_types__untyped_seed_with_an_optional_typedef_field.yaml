@@ -1,0 +1,40 @@
+kind: load
+flow: |
+  typedefs:
+    P:
+      x: int
+
+  id: named
+  name: named
+  input:
+    p: !P
+  defs:
+    step:
+      input:
+        n: !P
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: Optional(P)
+          code: |
+            return {"n": inputs["n"]}
+      output: ${bump.output}
+  nodes:
+    repeat:
+      kind: loop
+      times: 2
+      call: step
+      input:
+        n: ${input.p}
+  output: ${repeat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''repeat'': the body ''step'' returns ''n'' as Optional({"x":int}), but takes ''n'' as {"x":int}; make the input Optional(P), or tag the seed to leave the check to runtime: `n: !P ${input.p}`'
+      frames:
+      - label: flow.yaml
+        range: [29, 10, 29, 20]

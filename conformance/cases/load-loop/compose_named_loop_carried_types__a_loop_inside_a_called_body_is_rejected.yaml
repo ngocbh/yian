@@ -1,0 +1,88 @@
+kind: load
+flow: |2
+
+  id: nested
+  name: nested
+  input:
+    z: !int
+  defs:
+    step:
+      input:
+        n: !int
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: Optional(int)
+          code: |
+            return {"n": null}
+      output: ${bump.output}
+    outer:
+      input:
+        z: !int
+      nodes:
+        repeat:
+          kind: loop
+          times: 2
+          call: step
+          input:
+            n: ${input.z}
+      output: ${repeat.output}
+  nodes:
+    run:
+      kind: call
+      call: outer
+      input:
+        z: ${input.z}
+  output: ${run.output}
+python_flow: |2
+
+  id: nested
+  name: nested
+  input:
+    z: !int
+  defs:
+    step:
+      input:
+        n: !int
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: Optional(int)
+          code: |
+            return {"n": None}
+      output: ${bump.output}
+    outer:
+      input:
+        z: !int
+      nodes:
+        repeat:
+          kind: loop
+          times: 2
+          call: step
+          input:
+            n: ${input.z}
+      output: ${repeat.output}
+  nodes:
+    run:
+      kind: call
+      call: outer
+      input:
+        z: ${input.z}
+  output: ${run.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''outer'': loop node ''repeat'': the body ''step'' returns ''n'' as Optional(int), but takes ''n'' as int; make the input Optional(int), or tag the seed to leave the check to runtime: `n: !int ${input.z}`'
+      frames:
+      - label: flow.yaml
+        range: [21, 5, 31, 1]
+        note: definition 'outer'
+      - label: flow.yaml
+        range: [29, 14, 29, 24]

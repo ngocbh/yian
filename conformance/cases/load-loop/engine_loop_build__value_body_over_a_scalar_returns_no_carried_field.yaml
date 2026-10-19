@@ -1,0 +1,69 @@
+# TS spells the list as JSON text (rules: messages); Python's repr in python_expect.
+kind: load
+rules: [messages]
+flow: |2
+
+  id: loop-rejected-body
+  name: loop_rejected_body
+  defs:
+    bump:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output: int
+          code: |
+            return inputs["n"] + 1n
+      output: ${step.output}
+  nodes:
+    chat_loop:
+      kind: loop
+      call: bump
+      input:
+        n: 0
+      times: 2
+  output: ${chat_loop.output}
+python_flow: |2
+
+  id: loop-rejected-body
+  name: loop_rejected_body
+  defs:
+    bump:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output: int
+          code: |
+            return inputs["n"] + 1
+      output: ${step.output}
+  nodes:
+    chat_loop:
+      kind: loop
+      call: bump
+      input:
+        n: 0
+      times: 2
+  output: ${chat_loop.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''chat_loop'': body callable ''bump'' must return a record with at least one carried field (a subset of the carried record ["n"]); write `output: {field: ...}` or a whole reference to a node with a record output'
+      frames:
+      - label: flow.yaml
+        range: [18, 3, 18, 12]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''chat_loop'': body callable ''bump'' must return a record with at least one carried field (a subset of the carried record [''n'']); write `output: {field: ...}` or a whole reference to a node with a record output'
+      frames:
+      - label: flow.yaml
+        range: [18, 3, 18, 12]

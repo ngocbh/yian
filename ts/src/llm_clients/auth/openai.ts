@@ -1,7 +1,9 @@
 /** OpenAI browser/device OAuth, refresh, and authenticated model discovery. */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import net from "node:net";
 
+import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
 import { realScheduler, type Scheduler } from "../../platform.ts";
 import { isRecord } from "../../typesys/index.ts";
@@ -34,9 +36,77 @@ interface CallbackListener {
   close(): Promise<void>;
 }
 
-/** Start the local login callback listener. */
+/** Return the status, body and, for a valid callback, the callback URL answering `received`. */
+function callbackAnswer(received: Buffer, limit: number): { status: string; body: string; target?: string } {
+  const bad = { status: "400 Bad Request", body: "Invalid callback request." };
+  const lineEnd = received.indexOf("\r\n");
+  const line = lineEnd === -1 ? received : received.subarray(0, lineEnd);
+  // Checked on bytes: TextDecoder's "ascii" is windows-1252 and Buffer's masks the high bit.
+  if (line.some((byte) => byte >= 0x80)) return bad;
+  const parts = line.toString("latin1").split(" ");
+  if (parts.length !== 3) return bad;
+  const [method, target, version] = parts as [string, string, string];
+  if (method !== "GET" || (version !== "HTTP/1.0" && version !== "HTTP/1.1")) return bad;
+  if (!received.includes("\r\n\r\n") || received.length > limit) return bad;
+  if (!/^\/auth\/callback(?:$|[?#])/.test(target)) return { status: "404 Not Found", body: "Unknown callback path." };
+  const body = "Authorization received. Return to Yian.";
+  return { status: "200 OK", body, target: "http://localhost:1455" + target };
+}
+
+/**
+ * Start the local login callback listener on 127.0.0.1:1455.
+ *
+ * Each connection is answered once, after its request headers, the size cap, or the peer's end;
+ * `callbackUrl` resolves with the first valid callback and never rejects. Rejects with
+ * `AuthError` if the port can't be bound.
+ */
 async function listen(): Promise<CallbackListener> {
-  throw new Error("not implemented");
+  let found!: (url: string) => void;
+  // Created now, so a callback arriving while the browser still opens isn't lost.
+  const callbackUrl = new Promise<string>((resolve) => (found = resolve));
+  const waiting = new Set<net.Socket>();
+  // Half-open, so a peer that ends its side early still gets its answer.
+  const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+    const limit = current().maxOauthCallbackBytes;
+    let received = Buffer.alloc(0);
+    let answered = false;
+    waiting.add(socket);
+    const answer = () => {
+      if (answered) return;
+      answered = true;
+      waiting.delete(socket);
+      const { status, body, target } = callbackAnswer(received, limit);
+      if (target !== undefined) found(target);
+      const head =
+        `HTTP/1.1 ${status}\r\nContent-Type: text/plain; charset=utf-8\r\n` +
+        `Content-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n`;
+      socket.end(Buffer.from(head + body), () => socket.destroy());
+    };
+    socket.on("data", (chunk: Buffer) => {
+      if (answered) return;
+      received = Buffer.concat([received, chunk]);
+      if (received.includes("\r\n\r\n") || received.length > limit) answer();
+    });
+    socket.on("end", answer);
+    socket.on("error", answer);
+  });
+  await new Promise<void>((resolve, reject) => {
+    const failed = () => reject(new AuthError("Could not open the local login callback; use device login"));
+    server.once("error", failed);
+    server.listen({ host: "127.0.0.1", port: 1455 }, () => {
+      server.off("error", failed);
+      resolve();
+    });
+  });
+  // A later accept failure (EMFILE or the like) must not crash the process.
+  server.on("error", () => {});
+  return {
+    callbackUrl,
+    async close() {
+      for (const socket of waiting) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
 }
 
 /**

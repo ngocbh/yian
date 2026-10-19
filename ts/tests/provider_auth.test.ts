@@ -2302,3 +2302,213 @@ describe("OpenAIAuth", () => {
     }
   }
 });
+
+/** Send `data` to the login callback listener and return everything it answers before closing. */
+function callbackExchange(data: string | Buffer, options: { end?: boolean } = {}): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect({ host: "127.0.0.1", port: 1455 }, () => {
+      if (options.end) socket.end(data);
+      else socket.write(data);
+    });
+    const chunks: Buffer[] = [];
+    socket.on("data", (chunk) => chunks.push(chunk));
+    socket.on("error", reject);
+    socket.on("close", () => resolve(Buffer.concat(chunks)));
+  });
+}
+
+/** Open a connection to the login callback listener that sends nothing. */
+function idleConnection(): net.Socket {
+  const socket = net.connect({ host: "127.0.0.1", port: 1455 });
+  socket.on("error", () => {});
+  return socket;
+}
+
+/** A valid callback request carrying the state of the authorize `url`. */
+function callbackRequest(url: string, version = "HTTP/1.1"): string {
+  const state = new URL(url).searchParams.get("state");
+  return `GET /auth/callback?code=code&state=${state} ${version}\r\nHost: localhost:1455\r\n\r\n`;
+}
+
+/** The listener's exact answer for `status` and `body`. */
+function callbackAnswer(status: string, body: string): string {
+  return (
+    `HTTP/1.1 ${status}\r\nContent-Type: text/plain; charset=utf-8\r\n` +
+    `Content-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
+  );
+}
+
+/** Bind 127.0.0.1:1455 and release it, proving no listener still holds it. */
+async function expectCallbackPortFree(): Promise<void> {
+  const server = net.createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port: 1455 }, resolve);
+  });
+  await new Promise((resolve) => server.close(resolve));
+}
+
+describe("browser callback listener", () => {
+  test("the listener is closed after success", async () => {
+    const http = new FakeHttp(new HttpResponse(200, tokens()));
+    const replies: Promise<Buffer>[] = [];
+    const auth = new OpenAIAuth({ request: http.request, scheduler: realScheduler });
+    const credentials = await auth.browserLogin((url) => void replies.push(callbackExchange(callbackRequest(url))), {
+      timeoutMs: 3000,
+    });
+    const reply = (await replies[0]!).toString("latin1");
+    expect(reply).toStartWith("HTTP/1.1 200 OK");
+    expect(reply).toEndWith("Authorization received. Return to Yian.");
+    expect(credentials.accountId).toBe("account-test");
+    expect(http.calls[0]![2].form!.code).toBe("code");
+    await expectCallbackPortFree();
+  });
+
+  test("the listener is closed when the user cancels", async () => {
+    const unhandled: unknown[] = [];
+    const guard = (reason: unknown) => void unhandled.push(reason);
+    process.on("unhandledRejection", guard);
+    try {
+      const cancelled = new Error("cancelled by user");
+      const auth = new OpenAIAuth({ request: new FakeHttp().request, scheduler: realScheduler });
+      const error = await rejected(
+        auth.browserLogin(() => {
+          throw cancelled;
+        }),
+      );
+      expect(error).toBe(cancelled);
+      await realScheduler.sleep(50);
+    } finally {
+      process.off("unhandledRejection", guard);
+    }
+    expect(unhandled).toEqual([]);
+    await expectCallbackPortFree();
+  });
+
+  test("the callback deadline survives an idle local connection", async () => {
+    const sockets: net.Socket[] = [];
+    const auth = new OpenAIAuth({ request: new FakeHttp().request, scheduler: realScheduler });
+    const start = performance.now();
+    try {
+      const error = await rejected(auth.browserLogin(() => void sockets.push(idleConnection()), { timeoutMs: 300 }));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toMatch(/timed out/);
+      expect(performance.now() - start).toBeLessThan(800);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+    }
+    await expectCallbackPortFree();
+  });
+
+  test("an idle connection opened first doesn't hold up a real callback", async () => {
+    const http = new FakeHttp(new HttpResponse(200, tokens()));
+    const sockets: net.Socket[] = [];
+    const replies: Promise<Buffer>[] = [];
+    const auth = new OpenAIAuth({ request: http.request, scheduler: realScheduler });
+    const start = performance.now();
+    try {
+      const credentials = await auth.browserLogin(
+        (url) => {
+          sockets.push(idleConnection());
+          replies.push(callbackExchange(callbackRequest(url)));
+        },
+        { timeoutMs: 3000 },
+      );
+      expect(credentials.accountId).toBe("account-test");
+      expect(performance.now() - start).toBeLessThan(1000);
+      expect((await replies[0]!).toString("latin1")).toStartWith("HTTP/1.1 200 OK");
+    } finally {
+      for (const socket of sockets) socket.destroy();
+    }
+    await expectCallbackPortFree();
+  });
+
+  for (const cancel of [false, true]) {
+    const label = cancel ? "cancel" : "timeout";
+    test(`the callback checks the deadline and cancellation during slow headers: ${label}`, async () => {
+      const controller = new AbortController();
+      const reason = new Error("stopped by host");
+      const sockets: net.Socket[] = [];
+      const timers: ReturnType<typeof setInterval>[] = [];
+      const trickle = () => {
+        const socket = idleConnection();
+        sockets.push(socket);
+        let sent = 0;
+        const timer = setInterval(() => {
+          if (sent++ >= 20 || socket.destroyed) return clearInterval(timer);
+          socket.write("G", () => {
+            if (cancel) controller.abort(reason);
+          });
+        }, 50);
+        timers.push(timer);
+      };
+      const auth = new OpenAIAuth({
+        request: new FakeHttp().request,
+        scheduler: realScheduler,
+        signal: controller.signal,
+      });
+      const start = performance.now();
+      try {
+        const error = await rejected(auth.browserLogin(trickle, { timeoutMs: 250 }));
+        if (cancel) expect(error).toBe(reason);
+        else expect(error).toBeInstanceOf(AuthError);
+        expect(performance.now() - start).toBeLessThan(700);
+      } finally {
+        for (const timer of timers) clearInterval(timer);
+        for (const socket of sockets) socket.destroy();
+      }
+      await expectCallbackPortFree();
+    });
+  }
+
+  test("invalid requests get 400 or 404 and a valid HTTP/1.0 callback still succeeds", async () => {
+    const http = new FakeHttp(new HttpResponse(200, tokens()));
+    const bad = callbackAnswer("400 Bad Request", "Invalid callback request.");
+    const unknown = callbackAnswer("404 Not Found", "Unknown callback path.");
+    const replies: [string, string][] = [];
+    const auth = new OpenAIAuth({ request: http.request, scheduler: realScheduler });
+    const credentials = await auth.browserLogin(
+      async (url) => {
+        const cases: [string | Buffer, string, boolean?][] = [
+          ["POST /auth/callback HTTP/1.1\r\nHost: localhost:1455\r\n\r\n", bad],
+          ["GET /other HTTP/1.1\r\n\r\n", unknown],
+          ["GET //evil/auth/callback HTTP/1.1\r\n\r\n", unknown],
+          ["GET /auth/callback HTTP/2.0\r\n\r\n", bad],
+          ["GET /auth/callback HTTP/1.1 extra\r\n\r\n", bad],
+          [Buffer.from("GET /auth/callback?x=\xe9 HTTP/1.1\r\n\r\n", "latin1"), bad],
+          ["GET /auth/callback HTTP/1.1\r\nHost: localhost:1455\r\n", bad, true],
+          [callbackRequest(url, "HTTP/1.0"), callbackAnswer("200 OK", "Authorization received. Return to Yian.")],
+        ];
+        for (const [data, expected, end] of cases) {
+          replies.push([(await callbackExchange(data, { end })).toString("latin1"), expected]);
+        }
+      },
+      { timeoutMs: 3000 },
+    );
+    for (const [reply, expected] of replies) expect(reply).toBe(expected);
+    expect(replies).toHaveLength(8);
+    expect(credentials.accountId).toBe("account-test");
+    expect(http.calls).toHaveLength(1);
+    await expectCallbackPortFree();
+  });
+
+  test("a taken port is refused before the browser opens", async () => {
+    const blocker = net.createServer();
+    await new Promise<void>((resolve, reject) => {
+      blocker.once("error", reject);
+      blocker.listen({ host: "127.0.0.1", port: 1455 }, resolve);
+    });
+    const opened: string[] = [];
+    try {
+      const auth = new OpenAIAuth({ request: new FakeHttp().request, scheduler: realScheduler });
+      const error = await rejected(auth.browserLogin((url) => void opened.push(url), { timeoutMs: 1000 }));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("Could not open the local login callback; use device login");
+      expect(error.cause).toBeUndefined();
+      expect(opened).toEqual([]);
+    } finally {
+      await new Promise((resolve) => blocker.close(resolve));
+    }
+    await expectCallbackPortFree();
+  });
+});

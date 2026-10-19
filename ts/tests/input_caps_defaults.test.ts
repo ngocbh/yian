@@ -1,14 +1,14 @@
 /**
  * Input-size caps come from `defaults`; mirrors `tests/test_input_caps_defaults.py`.
  *
- * Holds the base URL, skill, question option, auth store and auth response rows; the other rows
- * come with their modules.
+ * Holds the base URL, skill, question option, auth store, auth response and OAuth callback rows;
+ * the other rows come with their modules.
  */
 
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,8 +17,10 @@ import { BUILTIN, install } from "../src/defaults.ts";
 import { ProviderError } from "../src/llm/errors.ts";
 import { ApiKeyCredentials, AuthError } from "../src/llm_clients/auth/common.ts";
 import { request } from "../src/llm_clients/auth/http.ts";
+import { OpenAIAuth } from "../src/llm_clients/auth/openai.ts";
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import { validateBaseUrl } from "../src/llm_clients/config.ts";
+import { realScheduler } from "../src/platform.ts";
 import { checkSkillName } from "../src/skills/catalog.ts";
 import { Skill, SkillError } from "../src/skills/index.ts";
 import { systemPromptWithSkills } from "../src/skills/tool.ts";
@@ -137,3 +139,30 @@ for (const limit of [10, null]) {
     }
   });
 }
+
+test("oauth callback cap", async () => {
+  install({ ...BUILTIN, maxOauthCallbackBytes: 20 });
+  const replies: Promise<Buffer>[] = [];
+  const send = (url: string) => {
+    const state = new URL(url).searchParams.get("state");
+    const data = `GET /auth/callback?code=code&state=${state} HTTP/1.1\r\nHost: localhost:1455\r\n\r\n`;
+    replies.push(
+      new Promise((resolve, reject) => {
+        const socket = net.connect({ host: "127.0.0.1", port: 1455 }, () => socket.write(data));
+        const chunks: Buffer[] = [];
+        socket.on("data", (chunk) => chunks.push(chunk));
+        socket.on("error", reject);
+        socket.on("close", () => resolve(Buffer.concat(chunks)));
+      }),
+    );
+  };
+  const noHttp = () => {
+    throw new Error("no token exchange expected");
+  };
+  const auth = new OpenAIAuth({ request: noHttp, scheduler: realScheduler });
+  const error = await auth.browserLogin(send, { timeoutMs: 500 }).catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(AuthError);
+  expect((error as AuthError).message).toMatch(/timed out/);
+  expect(replies).toHaveLength(1);
+  expect((await replies[0]!).toString("latin1")).toStartWith("HTTP/1.1 400");
+});

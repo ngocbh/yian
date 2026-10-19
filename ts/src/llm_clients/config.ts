@@ -227,6 +227,7 @@ export function splitOllamaBaseUrl(value: unknown): [baseUrl: string, credential
   const text = !HAS_SCHEME.test(value) && value.includes(":") ? `http://${value}` : value;
   const groups = OLLAMA_URL.exec(text)?.groups;
   if (groups === undefined) throw new RangeError(OLLAMA_SHAPE);
+  // The pattern always matches `scheme` and `host`; the defaults only satisfy the group types.
   const { scheme = "", userinfo, host = "", port, path = "" } = groups;
   if (port && !(Number(port) >= 1 && Number(port) <= 65535)) {
     throw new RangeError("OLLAMA_BASE_URL port must be a number from 1 to 65535");
@@ -239,7 +240,8 @@ export function splitOllamaBaseUrl(value: unknown): [baseUrl: string, credential
   }
   // The ollama SDK gives 80/443 only to an exact "http"/"https" and 11434 to anything else, and
   // LangChain lowercases the scheme only when it rebuilds the URL, which it does for credentials.
-  let suffix = port ? `:${Number(port)}` : scheme !== scheme.toLowerCase() && credentials === null ? ":11434" : "";
+  let suffix = port ? `:${Number(port)}` : "";
+  if (!port && scheme !== scheme.toLowerCase() && credentials === null) suffix = ":11434";
   let trimmed = path.replace(/\/+$/, "");
   if (trimmed.endsWith("/v1")) trimmed = trimmed.slice(0, -3);
   trimmed = trimmed.replace(/^\/+|\/+$/g, "");

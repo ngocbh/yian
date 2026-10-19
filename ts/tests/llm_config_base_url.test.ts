@@ -1,8 +1,10 @@
 /**
  * Mirrors `tests/test_llm_config_base_url.py`: the `LLMConfig`, `host_only_field_error`,
  * `pop_host_credentials` and `check_model_config` tests, and the `resolve_model_config` and
- * `split_model_config` halves of the pinned-connection tests, and the `split_ollama_base_url`
- * tests; the client and redirect tests go with the factory.
+ * `split_model_config` halves of the pinned-connection tests; the client and redirect tests go
+ * with the factory. The `splitOllamaBaseUrl` tests come from s3's planned
+ * `split_ollama_base_url` list (not in Python yet); its "pinned against today" half runs each
+ * value through LangChain and the ollama SDK, so it is left out.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";

@@ -23,6 +23,7 @@ import { Message, Request, TextPart } from "../../src/llm/messages.ts";
 import { type Cassette, CassetteReplay, IGNORED_HEADERS, loadCassette } from "../../src/llm/testing.ts";
 import { ApiKeyCredentials, AuthError, OAuthCredentials } from "../../src/llm_clients/auth/common.ts";
 import { AuthStore } from "../../src/llm_clients/auth/store.ts";
+import { LLMConfig } from "../../src/llm_clients/config.ts";
 import {
   type AgentConfig,
   type Connection,
@@ -102,13 +103,13 @@ interface Failed {
 interface Case {
   name: string;
   /** The config, or a function building it once `saved` is in the store. */
-  config: AgentConfig | ((setup: Setup) => AgentConfig | Promise<AgentConfig>);
+  config: AgentConfig | LLMConfig | ((setup: Setup) => AgentConfig | Promise<AgentConfig>);
   saved?: Login;
   env: Record<string, string>;
   /** `<protocol>/<cassette>`, also the key of the case's request in `REQUESTS`. */
   golden: string;
   edit?: Edit;
-  /** Environment changes made after the build, before the request. */
+  /** Environment changes made after the build, before the request (failing cases only). */
   afterBuild?: Record<string, string>;
   expect: Built | Failed;
 }
@@ -164,6 +165,13 @@ const CASES: Case[] = [
   {
     name: "openai host key",
     config: { ...OPENAI, api_key: HOST_KEY },
+    env: {},
+    golden: "openai_responses/plain",
+    expect: openaiKey(HOST_KEY),
+  },
+  {
+    name: "openai host key in an LLMConfig",
+    config: new LLMConfig({ ...OPENAI, api_key: HOST_KEY }),
     env: {},
     golden: "openai_responses/plain",
     expect: openaiKey(HOST_KEY),
@@ -474,7 +482,6 @@ describe("chatModelFromConfig", () => {
       }
 
       const model = await build();
-      for (const [name, value] of Object.entries(each.afterBuild ?? {})) vars.set(name, value);
       await collect(model.stream(request));
       replay.assertDone();
       expect(model.provider).toBe(expected.provider);

@@ -16,8 +16,8 @@
  * at a time: `YIAN_DEFAULT_PROVIDER`, `YIAN_DEFAULT_MODEL`, `OPENAI_BASE_URL` and `OPENAI_API_KEY`
  * for the snapshot and OpenAI's credentials; for `callCredentials`, each provider's key variable
  * (`PROVIDER_API_KEY_ENV`), `GEMINI_API_KEY` after Google's, `AZURE_OPENAI_AD_TOKEN` for Azure and
- * `OLLAMA_BASE_URL` for Ollama; and, through `AuthStore`, `YIAN_AUTH_FILE`, `XDG_CONFIG_HOME` and `HOME` for the store path. An
- * empty value counts as unset.
+ * `OLLAMA_BASE_URL` for Ollama; and, through `AuthStore`, `YIAN_AUTH_FILE`, `XDG_CONFIG_HOME` and
+ * `HOME` for the store path. An empty value counts as unset.
  */
 
 import { createHash } from "node:crypto";
@@ -1217,9 +1217,9 @@ export async function connectionCredentials(
  * then its fallbacks (`GEMINI_API_KEY` for Google). `AZURE_OPENAI_AD_TOKEN` is listed for `azure`
  * whenever set. For `ollama`, a non-empty `OLLAMA_BASE_URL` whose userinfo has a non-empty user
  * lists the Basic auth password and token the route sends (`splitOllamaBaseUrl`); a malformed
- * value lists nothing. A config without connection metadata is resolved first, as the factory does. Each
- * step is guarded, so a failing one still leaves the others' credentials. Every header value is
- * listed however short, so a value such as `prod` is scrubbed wherever it appears.
+ * value lists nothing. A config without connection metadata is resolved first, as the factory
+ * does. Each step is guarded, so a failing one still leaves the others' credentials. Every header
+ * value is listed however short, so a value such as `prod` is scrubbed wherever it appears.
  */
 export function callCredentials(config: unknown, options: { env?: Env } = {}): readonly string[] {
   const { env = processEnv } = options;

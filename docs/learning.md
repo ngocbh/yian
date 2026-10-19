@@ -288,6 +288,21 @@ Locking is single-host. Other storage implements the `MarkdownStore` protocol:
 `LookupError` for an unknown version, `ValueError` for text it cannot decode, and
 `OSError` when storage cannot be reached.
 
+Changed (TS yian): `read(version?)` returns `[text, version]`, and
+`write(text, { baseVersion, provenance })` returns the version. `FileMarkdownStore` answers
+with a promise and `InMemoryMarkdownStore` answers at once; a host store may do either, and
+yian awaits. An unknown version, or stored text that isn't UTF-8, throws `RangeError`. Storage
+that can't be reached throws a Node system error, an `Error` with a string `code`: `ENOENT` for
+a missing parent directory, `EIO` when the lock fails. Bad provenance throws `TypeError` or
+`RangeError` naming `provenance`, and nothing is written. The document, the kept versions
+(`.<name>.versions/<sha256>.md`), and the write log are byte-compatible with Python yian's,
+so a profile directory written by Python opens in TS and continues. Each log line is exactly
+what Python's `json.dumps(sort_keys=True)` writes. A whole-number JS `number` in provenance is
+written as a float (`2.0`); pass `2n` for an int. TS locks `.<name>.lock` with SQLite, not
+`flock`, so Python's and TS's locks don't see each other. Don't let Python yian and TS yian
+write the same profile at the same time: both could pass the compare-and-set, and one update
+would be lost.
+
 ## Compute first, then commit
 
 One backward attempt has two phases:

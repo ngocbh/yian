@@ -1,19 +1,39 @@
 /**
  * A text or expression field YAML reads as non-text is a load error at that value: a port of
  * `tests/compose/test_non_text_fields.py`. Values are as TS YAML gives them: ints are `bigint`.
+ * The flow rows read through `parseFile`, the node rows through `parseFile`, `flowNodesCursor`
+ * and `parseNodes` with stand-in kinds (`StandInCode`; the nine `ALL_KIND_NAMES` for the kind
+ * list).
+ *
+ * Changed: a flow with no `nodes:` says "missing required top-level key 'nodes'", where Python's
+ * text is pydantic's. The null and text `node_name:` rows and the null optional flow field rows
+ * check the parsed value, where Python loads the flow.
  *
  * Dropped: the date rows (TS reads an unquoted date as text) and
  * `test_not_text_detail_reads_the_first_string_error` (`not_text_detail` reads a pydantic error).
  *
- * Later (T3-14, the parse rows): the `parseFile` rows (compact kind, compact id, required id,
- * flow fields, null flow fields, null optional fields, uses ref, flow assert, missing `nodes`)
- * and the `parseNodes` rows (node name, non-text kind, null and unknown kinds, def asserts).
- * Later (T3-15): the `llm_config` rows. Later (T3-22): the `load_flow` rows.
+ * Later (T3-15): the `code:` and `tool_id:` rows (`test_non_text_code_is_a_load_error`,
+ * `test_non_text_tool_id_is_a_load_error`, `test_null_code_and_tool_id_are_empty`,
+ * `test_tagged_non_text_tool_id`, `test_text_code_and_tool_id_still_load`) and the `llm_config`
+ * rows. Later (T3-16): the `call:`, `on:` and loop/case rows (`test_non_text_call_is_a_load_error`,
+ * `test_null_call_is_empty`, `test_text_call_still_loads`, `test_non_text_case_on_is_a_load_error`,
+ * `test_null_case_on_is_absent`, `test_text_case_on_still_loads`, and the while, until,
+ * searched-when, on-when, then and else rows of `test_already_located_fields_are_unchanged`).
+ * Later (T3-22): the defs, compact, merge and inline-body rows
+ * (`test_code_in_def_compact_merge_and_inline_body`, `test_non_text_kind_in_a_def_and_inline_body`)
+ * and the def `asserts:` rows (`test_non_text_def_assert_is_a_load_error`,
+ * `test_non_list_def_asserts_is_a_load_error`, `test_null_def_asserts_loads`).
  */
 
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
+import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { notTextError } from "../../src/compose/nodes/base.ts";
+import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
+import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
+import { parseNodes } from "../../src/compose/parse/nodes.ts";
+import { loadError } from "./declarations.ts";
+import { ALL_KIND_NAMES, StandInCode, standIn, withKinds } from "./stand_ins.ts";
 
 test("notTextError names the field", () => {
   expect(notTextError("prompt", 5n)).toBe(
@@ -34,4 +54,253 @@ test("notTextError takes a fix", () => {
   expect(notTextError("kind", null, "write one of a, b")).toBe(
     "`kind:` must be text, but it is empty; write one of a, b",
   );
+});
+
+// ---------- the parse rows ----------
+
+/** Non-text values with what YAML read each as; the date row drops, since TS reads it as text. */
+const NON_TEXT = [
+  ["5", "an integer"],
+  ["0", "an integer"],
+  ["true", "a boolean"],
+  ["false", "a boolean"],
+  ["1.5", "a float"],
+  ["[a]", "a list"],
+  ["[]", "a list"],
+  ["{x: 1}", "a mapping"],
+  ["{}", "a mapping"],
+] as const;
+
+/** `NON_TEXT` with each phrase as the message words it, plus the empty `null`. */
+const NON_TEXT_OR_NULL = [
+  ...NON_TEXT.map(([value, phrase]) => [value, `YAML read it as ${phrase}`] as const),
+  ["null", "it is empty"] as const,
+];
+
+/** The 1-based line of `text` holding `marker` (the first match). */
+function lineOf(text: string, marker: string): number {
+  const index = text.split("\n").findIndex((line) => line.includes(marker));
+  if (index < 0) throw new Error(`${marker} not in text`);
+  return index + 1;
+}
+
+/** Return the start line of the last frame of `error`'s diagnostic. */
+function startLine(error: LoadError): number {
+  return error.diagnostic.frames.at(-1)!.range.startLine;
+}
+
+/** Return the `LoadError` `parseFile` throws for `text`. */
+function fileError(text: string): LoadError {
+  return loadError(() => parseFile(text));
+}
+
+/** Parse `text`'s nodes with `kinds` registered, as the loader reads them. */
+function nodesOf(text: string, kinds: readonly DescriptorClass[]) {
+  const document = parseSourceDocument(text, "<flow>");
+  const cursor = flowNodesCursor(document, parseFile(document).nodes);
+  return withKinds(kinds, () => parseNodes(cursor));
+}
+
+/** A flow whose `nodes:` entry `a` has `kind: <v>`. */
+function kindFlow(v: string): string {
+  return `id: f
+name: f
+nodes:
+  a:
+    kind: ${v}
+    prompt: hi
+output: \${a.output}
+`;
+}
+
+/** A compact (single-node) flow with `kind: <v>`. */
+function compactKind(v: string): string {
+  return `id: f\nname: f\noutput: int\nkind: ${v}\ncode: return 1\n`;
+}
+
+/** A compact (single-node) flow with `id: <v>`, or no `id:` when `v` is null. */
+function compactId(v: string | null): string {
+  const head = v === null ? "" : `id: ${v}\n`;
+  return `${head}name: f\noutput: int\nkind: code\ncode: return 1\n`;
+}
+
+/** A flow whose code node `a` has `node_name: <v>`. */
+function nodeNameFlow(v: string): string {
+  return `id: f
+name: f
+nodes:
+  a:
+    kind: code
+    node_name: ${v}
+    output: str
+    code: "return 'x'"
+output: \${a.output}
+`;
+}
+
+const FLOW = `id: f
+name: f
+nodes:
+  a:
+    kind: code
+    output: str
+    code: "return 'x'"
+output: \${a.output}
+`;
+
+/** A flow whose top-level `<field>:` is `<v>`. */
+function flowField(field: string, v: string): string {
+  const body = FLOW.split("\n").slice(2).join("\n");
+  const text = `id: f\nname: f\ndescription: d\nversion: '1'\n${body}`;
+  return text
+    .split("\n")
+    .map((line) => (line.startsWith(`${field}: `) ? `${field}: ${v}` : line))
+    .join("\n");
+}
+
+describe("parseFile", () => {
+  test.each(NON_TEXT_OR_NULL)("non-text compact kind is a load error: %s", (value, phrase) => {
+    const text = compactKind(value);
+
+    const error = fileError(text);
+
+    expect(error.message).toContain(
+      `compact (single-node) flow: \`kind:\` must be text, but ${phrase}; ` +
+        "write one of agent, code, human_input, tool",
+    );
+    expect(startLine(error)).toBe(lineOf(text, "kind: "));
+  });
+
+  test.each(NON_TEXT)("non-text compact id is a load error: %s", (value, phrase) => {
+    const text = compactId(value);
+
+    const error = fileError(text);
+
+    expect(error.message).toContain(
+      `compact (single-node) flow: \`id:\` must be text, but YAML read it as ${phrase}; ` +
+        "put it in quotes",
+    );
+    expect(startLine(error)).toBe(lineOf(text, "id: "));
+  });
+
+  test.each([
+    ["null", "null"],
+    ["empty", "''"],
+    ["absent", null],
+  ] as const)("null, empty and absent compact id are required: %s", (_, value) => {
+    expect(fileError(compactId(value)).message).toContain(
+      "compact (single-node) flow: a top-level `id:` is required",
+    );
+  });
+
+  test.each(
+    ["id", "name", "description", "version"].flatMap((field) =>
+      (
+        [
+          ["5", "an integer"],
+          ["true", "a boolean"],
+          ["1.5", "a float"],
+          ["[a]", "a list"],
+        ] as const
+      ).map(([value, phrase]) => [field, value, phrase] as const),
+    ),
+  )("non-text flow field is a load error: %s %s", (field, value, phrase) => {
+    const text = flowField(field, value);
+
+    const error = fileError(text);
+
+    expect(
+      error.message.startsWith(
+        `\`${field}:\` must be text, but YAML read it as ${phrase}; put it in quotes`,
+      ),
+    ).toBe(true);
+    expect(startLine(error)).toBe(lineOf(text, `${field}: `));
+  });
+
+  test.each(["id", "name"])("null flow field: %s", (field) => {
+    expect(fileError(flowField(field, "null")).message).toContain(
+      `\`${field}:\` must be text, but it is empty; write the text`,
+    );
+  });
+
+  test.each(["description", "version"])("null optional flow field parses: %s", (field) => {
+    expect(parseFile(flowField(field, "null"))[field as "description" | "version"]).toBeNull();
+  });
+
+  test.each(NON_TEXT_OR_NULL)("non-text uses ref is a load error: %s", (value, phrase) => {
+    const text = `${FLOW}uses:\n  lib: ${value}\n`;
+
+    const error = fileError(text);
+
+    expect(error.message).toContain(`\`uses.lib:\` must be text, but ${phrase}`);
+    expect(startLine(error)).toBe(lineOf(text, "lib: "));
+  });
+
+  test.each(NON_TEXT)("non-text flow assert is a load error: %s", (value, phrase) => {
+    const text = `${FLOW}asserts:\n  - "true"\n  - ${value}\n`;
+
+    const error = fileError(text);
+
+    expect(error.message).toContain(`\`asserts[1]:\` must be text, but YAML read it as ${phrase}`);
+    expect(startLine(error)).toBe(text.split("\n").length - 1);
+  });
+
+  test("a missing nodes section names it", () => {
+    // Changed: Python's text is pydantic's "validation error for ComposeFile".
+    expect(fileError("id: f\nname: f\noutput: x\n").message).toBe(
+      "missing required top-level key 'nodes'",
+    );
+  });
+});
+
+describe("parseNodes", () => {
+  const ALL_KINDS = ALL_KIND_NAMES.map((kind) => standIn(kind));
+
+  test.each(NON_TEXT)("non-text node name is a load error: %s", (value, phrase) => {
+    const text = nodeNameFlow(value);
+
+    const error = loadError(() => nodesOf(text, [StandInCode]));
+
+    expect(error.message).toContain(
+      `node 'a' (kind=code): \`node_name:\` must be text, but YAML read it as ${phrase}; ` +
+        "put it in quotes",
+    );
+    expect(startLine(error)).toBe(lineOf(text, "node_name: "));
+  });
+
+  test.each([
+    ["null", null],
+    ["'5'", "5"],
+  ])("null and text node name still parse: %s", (value, expected) => {
+    expect(nodesOf(nodeNameFlow(value), [StandInCode]).get("a")!.nodeName).toBe(expected);
+  });
+
+  test.each(NON_TEXT)("non-text kind is a load error: %s", (value, phrase) => {
+    const text = kindFlow(value);
+
+    const error = loadError(() => nodesOf(text, ALL_KINDS));
+
+    expect(error.message).toContain(
+      `node 'a': \`kind:\` must be text, but YAML read it as ${phrase}; ` +
+        "write one of agent, call, case, code, human_input, loop, map, tool, wait",
+    );
+    expect(startLine(error)).toBe(lineOf(text, "kind: "));
+  });
+
+  test.each([
+    ["null", "add `kind:` for a node"],
+    ["llm", "unknown kind"],
+    ["''", "unknown kind"],
+  ])("null and text kinds are unchanged: %s", (value, fragment) => {
+    expect(loadError(() => nodesOf(kindFlow(value), ALL_KINDS)).message).toContain(fragment);
+  });
+
+  test("a node's asserts must be a list of strings, located", () => {
+    const text = FLOW.replace("    output: str\n", '    output: str\n    asserts: ["true", 5]\n');
+
+    const error = loadError(() => nodesOf(text, [StandInCode]));
+
+    expect(error.message).toContain("`asserts:` must be a list of strings");
+    expect(startLine(error)).toBe(lineOf(text, "asserts: "));
+  });
 });

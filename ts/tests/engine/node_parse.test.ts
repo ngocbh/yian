@@ -12,13 +12,15 @@
  * `test_call_map_form_parses`, `test_map_without_over_is_loud`, `test_over_on_kind_call_is_loud`.
  * Later (T3-17): `test_hyphenated_node_in_inline_body_rejected`.
  * Later (T3-22): `test_hyphenated_single_node_def_rejected_but_multi_node_def_name_loads`.
- * Later: `test_referenced_hyphenated_node_names_the_id_not_split_refs`, which reads the flow
- * through `parseFile`.
+ *
+ * Changed: `test_referenced_hyphenated_node_names_the_id_not_split_refs` reads its flow through
+ * `parseFile`, `flowNodesCursor` and `parseNodes`, where Python loads it.
  */
 
 import { describe, expect, test } from "bun:test";
 
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
+import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { reprText } from "../../src/diagnostics.ts";
@@ -110,6 +112,25 @@ describe("node ids must be identifiers", () => {
     const descs = nodes(text, [StandInAgent]);
 
     expect([...descs.keys()]).toEqual(["fetch_data", "_private2", "notify"]);
+  });
+
+  test("referenced hyphenated node names the id, not split refs", () => {
+    const flow = `
+id: f
+name: f
+input: {}
+nodes:
+  fetch-data:
+    kind: code
+    code: "return 1"
+output: \${fetch-data.output}
+`;
+    const document = parseSourceDocument(flow, "<flow>");
+    const cursor = flowNodesCursor(document, parseFile(document).nodes);
+    const error = loadError(() => withKinds([StandInCode], () => parseNodes(cursor)));
+
+    expect(error.message).toMatch(/node id 'fetch-data' must be an identifier.*try 'fetch_data'/);
+    expect(error.message).not.toContain("unknown namespace");
   });
 });
 

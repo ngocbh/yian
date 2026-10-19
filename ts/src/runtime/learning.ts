@@ -71,6 +71,7 @@ import {
   BackwardReadyRecord,
   BackwardStartedRecord,
   canonicalSeed,
+  executionScopePayload,
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
@@ -78,7 +79,6 @@ import {
   NodeFailedRecord,
   NodeRoutedRecord,
   NodeSucceededRecord,
-  executionScopePayload,
   routePayload,
 } from "./log.ts";
 import { type OutcomeRecord, RetainedTrace, type TraceOccurrence, TraceTerminal } from "./trace.ts";
@@ -138,8 +138,8 @@ export function takeMessages(pending: PendingMessages, source: SourceRef): Backw
   return [...messages].sort((a, b) => compareOrder(a.order, b.order));
 }
 
-/** Append `message` to `source`'s pending messages. */
-function addMessage(pending: PendingMessages, source: SourceRef, message: BackwardMessage): void {
+/** Append `message` to `source`'s pending messages, starting its list when it has none. */
+export function addMessage(pending: PendingMessages, source: SourceRef, message: BackwardMessage): void {
   const key = sourceKey(source);
   const messages = pending.get(key);
   if (messages === undefined) pending.set(key, [message]);
@@ -1238,7 +1238,7 @@ function ownerFeedback(
       entries.push({
         channel: "variable",
         target_name: name,
-        value: feedback as JsonValue,
+        value: feedback,
         message_index: BigInt(index),
         contribution_context: {},
       });
@@ -1274,7 +1274,7 @@ function rootOwnerFeedback(result: BackwardResult): JsonObject[] {
       entries.push({
         channel: "variable",
         target_name: name,
-        value: feedback as JsonValue,
+        value: feedback,
         message_index: BigInt(index),
         contribution_context: {},
       });
@@ -1370,7 +1370,8 @@ export function projectOwnerContexts(
     const episodes: MemoryEpisode[] = [];
     const frozen: FrozenJson[] = [];
     for (const occurrence of occurrences) {
-      const scope = scopes.get(sourceKey(occurrence.source));
+      const key = sourceKey(occurrence.source);
+      const scope = scopes.get(key);
       if (scope === undefined || !scope.memories.includes(spec.key)) continue;
       const record = occurrence.record;
       // An accepted outcome holds its forward capture while learning.
@@ -1384,7 +1385,7 @@ export function projectOwnerContexts(
         occurrence_path: executionScope === null ? null : executionScope.occurrence_path!,
         execution_scope: executionScope,
       };
-      const local = feedbackBySource.get(sourceKey(occurrence.source))!;
+      const local = feedbackBySource.get(key)!;
       const entries = local.map((entry) => ({ ...coordinates, ...entry }));
       let inputs = capture.boundInputs;
       if (inputs !== null && occurrence.hiddenInputs.size > 0) {

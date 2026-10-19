@@ -33,7 +33,8 @@
  * TS-only, owner learn contexts over `chainTrace()` (`p` sends `v`, `w`, self and variable
  * feedback): the producer's episode (inputs without the hidden `w`, output, coordinates) and
  * `notes` feedback entries (output, input with contributions, self and variable channels) with
- * `bigint` integers; an empty context for a key with no occurrences; the root fallback for a
+ * `bigint` integers; the coordinates every entry carries when `p` has an execution scope with an
+ * indexed position; an empty context for a key with no occurrences; the root fallback for a
  * root-owned key; one refusal per table, stack and scope check; the two `OwnerContextError`
  * constructor checks; context failures: a lone surrogate in `p`'s self feedback, which
  * `freezeFeedback` refuses (the TS message doesn't name `feedback[i]`), names `p`'s backward
@@ -71,7 +72,7 @@ import {
   PolicyCommitOutcome,
 } from "../../src/memory/contracts.ts";
 import { BackwardContext, BackwardResult, Node, NodeKind } from "../../src/nodes/base.ts";
-import { ExecutionScope } from "../../src/nodes/contracts.ts";
+import { ExecutionPosition, ExecutionScope } from "../../src/nodes/contracts.ts";
 import {
   AttributedBackwardResult,
   BackwardAttribution,
@@ -134,14 +135,20 @@ function expectError(fn: () => unknown, cls: ErrorClass, message: string): void 
   expect((caught as Error).message).toBe(message);
 }
 
-test("an explicitly synthetic source-free failure keeps the direct root text", () => {
-  const trace = new RetainedTrace("synthetic", START_ID, END_ID);
+/** A terminal trace of run `runId` with no occurrences and a synthetic source-free failure. */
+function syntheticTrace(runId: string): RetainedTrace {
+  const trace = new RetainedTrace(runId, START_ID, END_ID);
   trace.terminal = new TraceTerminal(
     false,
     null,
     null,
     new Failure({ code: "graph.terminal_unreachable", message: "no executing producer", nodeId: null }),
   );
+  return trace;
+}
+
+test("an explicitly synthetic source-free failure keeps the direct root text", () => {
+  const trace = syntheticTrace("synthetic");
   const root = new BackwardResult({ selfFeedback: ["original text"] });
   expect(() => validateAttributedBackward(trace, "original text", root, [])).not.toThrow();
   expectError(
@@ -214,17 +221,19 @@ interface ChainOptions {
   pOutput?: unknown;
   /** `p`'s node-data `input_output_paths`, or `null` (the default) for no node data. */
   pPaths?: Record<string, (string | number)[]> | null;
+  /** `p`'s execution scope, set on the node and its capture; defaults to `null`. */
+  pScope?: ExecutionScope | null;
 }
 
 /**
  * A terminal trace of a learnable run, driven through `prepareTrace` and `apply`: RunStarted (START
  * `__start__` writes `{x: 1n}`, root END `end`, root input names `["x"]`); START, whose capture
  * routes `x` to source 0 path `["x"]`; `p`, routing `v` from START's output `x` and `w` straight to
- * source 0 path `["x"]`, with variable `tone`, hidden input `w`, and memory scope `["p"]` with key
- * `notes`; END, routing `value` from `p`, with the successful terminal. Returns the trace, the
- * nodes and the envelopes.
+ * source 0 path `["x"]`, with variable `tone`, hidden input `w`, memory scope `["p"]` with key
+ * `notes`, and execution scope `pScope`; END, routing `value` from `p`, with the successful
+ * terminal. Returns the trace, the nodes and the envelopes.
  */
-function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null }: ChainOptions = {}) {
+function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pScope = null }: ChainOptions = {}) {
   const pool = new VariablePool(START_ID);
   pool.set(START_ID, { x: 1n });
   const run = new RunStartedRecord({
@@ -249,6 +258,7 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null }: 
       inputNames: ["v", "w"],
       variableNames: ["tone"],
       nodeData: pPaths === null ? null : { input_output_paths: pPaths },
+      scope: pScope,
     },
   );
   const endCapture = new ForwardCapture({ value: pOutput }, ValueRoute.record([["value", sourceRoute(3)]]), {
@@ -257,6 +267,7 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null }: 
   const nodes = { start: new TraceNode(START_ID), p: new TraceNode("p"), end: new TraceNode(END_ID) };
   nodes.p.memoryScope = new MemoryScope(["p"], { memories: ["notes"] });
   nodes.p.hidden = new Set(["w"]);
+  nodes.p.executionScope = pScope;
   const envelopes = [
     at(0, run),
     at(1, new NodeStartedRecord(START_ID)),
@@ -1688,6 +1699,35 @@ test("owner contexts project the producer's episode and feedback for its memory 
   }
 });
 
+test("owner context entries carry p's execution scope coordinates", () => {
+  const position = new ExecutionPosition("map_item", ["outer"], 2);
+  const scope = new ExecutionScope(["outer", "p"], { flowPath: ["outer"], occurrencePath: [position] });
+  const { trace } = chainTrace({ pScope: scope });
+  const notes = ownerContexts(trace)[1]!;
+  const occurrencePath = [{ kind: "map_item", static_path: ["outer"], index: 2n }];
+  const coordinates = {
+    execution_seq: 3n,
+    owner_static_path: ["outer", "p"],
+    occurrence_path: occurrencePath,
+    execution_scope: {
+      static_path: ["outer", "p"],
+      flow_path: ["outer"],
+      occurrence_path: occurrencePath,
+      boundary: null,
+    },
+  };
+  expect(notes.feedback).toHaveLength(5);
+  for (const entry of notes.feedback as Record<string, unknown>[]) {
+    expect({
+      execution_seq: entry.execution_seq,
+      owner_static_path: entry.owner_static_path,
+      occurrence_path: entry.occurrence_path,
+      execution_scope: entry.execution_scope,
+    }).toEqual(coordinates);
+    expect(typeof (entry.occurrence_path as { index: unknown }[])[0]!.index).toBe("bigint");
+  }
+});
+
 test.each<[string, OwnerOptions, ErrorClass, string]>([
   [
     "a table that isn't an array",
@@ -1807,13 +1847,7 @@ test("a feedback value freezeFeedback refuses fails the owner's context, naming 
 });
 
 test("a root fallback context that can't be built names no occurrence", () => {
-  const trace = new RetainedTrace("", START_ID, END_ID);
-  trace.terminal = new TraceTerminal(
-    false,
-    null,
-    null,
-    new Failure({ code: "graph.terminal_unreachable", message: "no producer", nodeId: null }),
-  );
+  const trace = syntheticTrace("");
   const root = new BackwardResult({ selfFeedback: ["original text"] });
   const error = thrown(() =>
     projectOwnerContexts(trace, [OUTER_SPEC], [], "original text", root, []),

@@ -8,7 +8,7 @@
  * `retries` stays a YAML int (`2n`).
  *
  * TS-only: a lone surrogate in `prompt:`, the `adaptive_questions.prompt:` brief or a literal
- * question's text is refused at the field.
+ * question's text is refused at the text.
  *
  * Held here until T3-22: the harvested cases at the end, whose error the HUMAN_INPUT parse raises,
  * each under a comment naming the Python file it comes from.
@@ -221,7 +221,7 @@ test("human_input parse records a range per question string", () => {
   for (const [path] of sites) {
     expect(desc.fieldRanges.get(siteKey("text", siteLabel(path)))).toBeInstanceOf(SourceRange);
   }
-  expect([...desc.fieldRanges.keys()].filter((key) => key.startsWith("text:questions[1].options[2]"))).toEqual([]);
+  expect([...desc.fieldRanges.keys()].filter((key) => key.startsWith(siteKey("text", "questions[1].options[2]")))).toEqual([]);
 });
 
 test("human_input parse records ranges in a flow-style list", () => {
@@ -494,7 +494,7 @@ describe("lone surrogates", () => {
     );
   });
 
-  test("in a literal question, refused at questions: with the item's path", () => {
+  test("in a literal question, refused at the text", () => {
     const text =
       "nodes:\n  ask:\n    kind: human_input\n    questions:\n      - question: Pick\n" +
       '        options: [{label: "\\ud800"}]\n';
@@ -503,7 +503,9 @@ describe("lone surrogates", () => {
     expect(error.message).toBe(
       "node 'ask' field 'questions' at [0].options[0].label: text holding a lone surrogate is not a yian value",
     );
-    expect(error.diagnostic.frames.at(-1)!.range).toEqual(readerFor(text, "ask").rangeOf("questions")!);
+    expect(error.diagnostic.frames.at(-1)!.range).toEqual(
+      readerFor(text, "ask").child("questions").child(0).child("options").child(0).rangeOf("label")!,
+    );
   });
 });
 

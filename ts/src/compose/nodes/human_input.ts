@@ -29,7 +29,15 @@ import { scanTemplate, Span, type TemplateSegment } from "../../expr/template.ts
 import { isExactly, ValueContract } from "../../nodes/contracts.ts";
 import { HumanInputNode, siteLabel, templateSites } from "../../nodes/human_input/node.ts";
 import { pythonTypeName } from "../../typesys/types.ts";
-import { isList, isRecord, Type, valueRepr, ValueKind } from "../../typesys/values.ts";
+import {
+  isList,
+  isRecord,
+  rejectLoneSurrogates,
+  Type,
+  TypeCheckError,
+  valueRepr,
+  ValueKind,
+} from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
@@ -119,7 +127,8 @@ export class HumanInputDescriptor extends NodeDescriptor {
    * @throws LoadError when the `adaptive_questions:` block authors `mode:` or a key other than
    *   `prompt`/`llm_config`/`retries` (at the key), its brief is not text or holds a lone
    *   surrogate, the template `parse` rejects the node, or a literal question's text field is
-   *   present but not text, or holds a lone surrogate.
+   *   present but not text, or text in the list holds a lone surrogate (at that text; for a
+   *   key, at its record).
    */
   static override parse<T extends typeof NodeDescriptor>(
     this: T,
@@ -176,7 +185,15 @@ export class HumanInputDescriptor extends NodeDescriptor {
         range: rangeAt(cursor, path) ?? questionsRange,
       });
     }
-    checkWrittenValue(desc.questions, `node ${id} field 'questions'`, questionsRange, diagnostics);
+    try {
+      rejectLoneSurrogates(desc.questions, `node ${id} field 'questions'`);
+    } catch (error) {
+      if (!(error instanceof TypeCheckError)) throw error;
+      throw diagnostics.error(error.message, {
+        range: rangeAt(cursor, ["questions", ...error.path]) ?? questionsRange,
+        cause: error,
+      });
+    }
     for (const [path] of templateSites(null, desc.questions)) {
       const range = rangeAt(cursor, path);
       if (range !== null) desc.fieldRanges.set(siteKey("text", siteLabel(path)), range);
@@ -401,8 +418,8 @@ function fieldSchema(name: string, typ: Type, required: boolean): Readonly<Recor
     entry["enum"] = [...typ.element.tags].sort(compareCodeUnits);
   }
   if (typ.kind === ValueKind.OBJECT && typ.fields !== undefined && typ.fields.size > 0) {
-    const required = typ.required ?? new Set<string>();
-    entry["fields"] = [...typ.fields].map(([key, field]) => fieldSchema(key, field, required.has(key)));
+    const requiredKeys = typ.required ?? new Set<string>();
+    entry["fields"] = [...typ.fields].map(([key, field]) => fieldSchema(key, field, requiredKeys.has(key)));
   }
   return entry;
 }
@@ -421,8 +438,8 @@ function fieldSchema(name: string, typ: Type, required: boolean): Readonly<Recor
 export function answerSchema(typ: Type | null): Readonly<Record<string, unknown>>[] {
   if (typ === null) return [];
   if (typ.kind === ValueKind.OBJECT && typ.fields !== undefined && typ.fields.size > 0) {
-    const required = typ.required ?? new Set<string>();
-    return [...typ.fields].map(([key, field]) => fieldSchema(key, field, required.has(key)));
+    const requiredKeys = typ.required ?? new Set<string>();
+    return [...typ.fields].map(([key, field]) => fieldSchema(key, field, requiredKeys.has(key)));
   }
   return [fieldSchema("answer", typ, !typ.nullable)];
 }

@@ -55,5 +55,6 @@ test("nested record recurses", () => {
 });
 
 test("an enum is sorted by code units", () => {
-  expect(schema("Literal(reject, approve, Zed)")[0]!["enum"]).toEqual(["Zed", "approve", "reject"]);
+  // U+FF01 sorts before U+1F600 by code point (Python) but after its surrogate pair by code unit.
+  expect(schema('Literal("\uFF01", "\u{1F600}")')[0]!["enum"]).toEqual(["\u{1F600}", "\uFF01"]);
 });

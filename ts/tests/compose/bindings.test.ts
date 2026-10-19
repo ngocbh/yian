@@ -1,11 +1,10 @@
 /**
  * The kind-blind binding-field walk: a port of `tests/compose/test_bindings.py`. The agent, tool,
  * human_input and wait rows use the real `AgentDescriptor`, `ToolDescriptor`,
- * `HumanInputDescriptor` and `WaitDescriptor`; each other
- * row uses a stand-in of the kind Python uses (`standIn` for the kinds whose only binding field is
- * `inputs`, test-local `StandInCall` and `StandInMap` for the kinds with a scalar `over`), since
- * those kinds aren't ported yet. Every row passes an explicit `bindingFields` table built from the
- * classes' `bindingFields`.
+ * `HumanInputDescriptor` and `WaitDescriptor`; each other row uses a stand-in of the kind Python
+ * uses (`standIn` for the kinds whose only binding field is `inputs`, test-local `StandInCall` and
+ * `StandInMap` for the kinds with a scalar `over`), since those kinds aren't ported yet. Every row
+ * passes an explicit `bindingFields` table built from the classes' `bindingFields`.
  *
  * TS-only: `mapBindingSources` hands the mapper a `ValueTemplate` whole, in a record field and in
  * a scalar field, and `keyless` drops the field and key.

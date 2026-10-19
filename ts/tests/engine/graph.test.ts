@@ -18,7 +18,8 @@
  * cycle; a node copy takes its child flow along, with fresh containers; each call gets a fresh
  * memo; a copy shares its carriers, and a field reassigned on it leaves the original;
  * `validateGrowthMetadata` (Python tests it through the expansion builders): a small valid
- * fragment passes, and one row per refusal message.
+ * fragment passes, and one row per refusal message; `compile/index.ts` exports exactly Python's
+ * `yian.compile.__all__`.
  *
  * Later (T3-17/T3-22): `test_compiled_flow_is_flow_and_keeps_boundary_and_terminal` and the
  * compose rows (`test_data_edge_optional_reflects_binding_escape`, the CASE escape rows, the
@@ -28,6 +29,7 @@
 
 import { expect, test } from "bun:test";
 
+import * as compilePackage from "../../src/compile/index.ts";
 import {
   CompiledFlow,
   copyGraph,
@@ -38,6 +40,7 @@ import {
   START_ID,
   validateGrowthMetadata,
 } from "../../src/compile/model.ts";
+import { compareCodeUnits } from "../../src/diagnostics.ts";
 import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
@@ -579,4 +582,20 @@ test.each([
   const flow = build();
   expect(() => validateGrowthMetadata(flow)).toThrow(error);
   expect(() => validateGrowthMetadata(flow)).toThrow(message);
+});
+
+test("compile/index.ts exports exactly Python's yian.compile.__all__", () => {
+  expect(Object.keys(compilePackage).sort(compareCodeUnits)).toEqual([
+    "CompiledFlow",
+    "END_ID",
+    "Edge",
+    "START_ID",
+    "applyExecutionLayout",
+    "iterFlowOrigins",
+    "rebaseFlowOrigins",
+    "resolveExecutionLayout",
+    "rewriteFlowOrigins",
+  ]);
+  expect(compilePackage.CompiledFlow).toBe(CompiledFlow);
+  expect(compilePackage.Edge).toBe(Edge);
 });

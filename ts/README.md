@@ -192,6 +192,25 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - The recall, learning evidence, learning and session conversation contracts, the session's
   recall, learn and commit methods, and the built-in backends are not ported yet.
 
+## Compile
+
+- `src/compile/model.ts` holds the graph (`Flow`, `CompiledFlow`, `Edge`, `FlowOutput`), the
+  growth-metadata check and `copyGraph`; `origins.ts` the origin traversal and rewrites;
+  `execution_layout.ts` the static execution scopes; `validation.ts` the cycle, path and type
+  checks. `src/compile/index.ts` re-exports Python's `__all__` only.
+- A `Flow`'s `nodes` and `wiring` are `Map`s: they keep insertion order, so node and wiring order
+  is Python's (a record would list index-like keys first and could collide with `__proto__`).
+- `copyGraph` is the one graph copier (Python's `copy.deepcopy` of a flow or node). A node copy is
+  shallow, with a fresh memo per call; a flow reached through a node field is copied once; each
+  flow copy gets fresh `nodes`, `edges` and `wiring` containers and a rebuilt adjacency index.
+  Carriers and payloads stay shared, so change a copy by reassigning a field or, on a
+  `CompiledFlow`, through `addSubgraph`/`removeSubgraph`.
+- `rewriteFlowOrigins` and `rebaseFlowOrigins` return a rewritten copy and never touch the input;
+  payloads aren't walked.
+- In `typesCompatible` and `typeRelation`, an open numeric end is `null`.
+- Compare positions and scopes with `sameExecutionPosition`/`sameExecutionScope`, and arrays with
+  `sameItems` (`src/nodes/contracts.ts`).
+
 ## Commands
 
 Run from `ts/`:

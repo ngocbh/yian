@@ -1,0 +1,72 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "g_fenced: a thought part, then a fenced object: the thought is excluded, the fence body parses. google/gemini-2.5-flash on gemini. Schema Rec (corpus:Rec), name Record. Strategy json_schema. Request: generationConfig {candidateCount: 1, responseMimeType: \"application/json\", responseJsonSchema: schema Rec as given}. Expected: plan.parse(response) returns {\"answer\":\"x\",\"score\":1}.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-goog-api-key": "<redacted>"
+        },
+        "json": {
+          "contents": [
+            {
+              "role": "user",
+              "parts": [
+                {
+                  "text": "Answer."
+                }
+              ]
+            }
+          ],
+          "systemInstruction": {
+            "parts": [
+              {
+                "text": "You are terse."
+              }
+            ]
+          },
+          "safetySettings": [],
+          "generationConfig": {
+            "candidateCount": 1,
+            "responseMimeType": "application/json",
+            "responseJsonSchema": {
+              "properties": {
+                "answer": {
+                  "title": "Answer",
+                  "type": "string"
+                },
+                "score": {
+                  "title": "Score",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "answer",
+                "score"
+              ],
+              "title": "Record",
+              "type": "object"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"candidates\": [{\"content\": {\"role\": \"model\", \"parts\": [{\"text\": \"Let m\", \"thought\": true}]}, \"index\": 0}], \"usageMetadata\": {\"promptTokenCount\": 12, \"candidatesTokenCount\": 40, \"thoughtsTokenCount\": 25, \"cachedContentTokenCount\": 8, \"totalTokenCount\": 77}, \"modelVersion\": \"gemini-2.5-flash\", \"responseId\": \"resp-1\"}\r\n\r\n",
+          "data: {\"candidates\": [{\"content\": {\"role\": \"model\", \"parts\": [{\"text\": \"e think.\", \"thought\": true}]}, \"index\": 0}], \"usageMetadata\": {\"promptTokenCount\": 12, \"candidatesTokenCount\": 40, \"thoughtsTokenCount\": 25, \"cachedContentTokenCount\": 8, \"totalTokenCount\": 77}, \"modelVersion\": \"gemini-2.5-flash\", \"responseId\": \"resp-1\"}\r\n\r\n",
+          "data: {\"candidates\": [{\"content\": {\"role\": \"model\", \"parts\": [{\"text\": \"```js\"}]}, \"index\": 0}], \"usageMetadata\": {\"promptTokenCount\": 12, \"candidatesTokenCount\": 40, \"thoughtsTokenCount\": 25, \"cachedContentTokenCount\": 8, \"totalTokenCount\": 77}, \"modelVersion\": \"gemini-2.5-flash\", \"responseId\": \"resp-1\"}\r\n\r\n",
+          "data: {\"candidates\": [{\"content\": {\"role\": \"model\", \"parts\": [{\"text\": \"on\\n{\\\"answer\\\": \\\"x\\\", \\\"score\\\": 1}\\n```\"}]}, \"index\": 0, \"finishReason\": \"STOP\"}], \"usageMetadata\": {\"promptTokenCount\": 12, \"candidatesTokenCount\": 40, \"thoughtsTokenCount\": 25, \"cachedContentTokenCount\": 8, \"totalTokenCount\": 77}, \"modelVersion\": \"gemini-2.5-flash\", \"responseId\": \"resp-1\"}\r\n\r\n"
+        ]
+      }
+    }
+  ]
+}

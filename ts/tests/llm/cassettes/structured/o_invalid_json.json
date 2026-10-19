@@ -1,0 +1,62 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "o_invalid_json: a reply that is not JSON. ollama/qwen3 on ollama_chat. Schema Rec (corpus:Rec), name Record. Strategy json_schema. Request: tools []; format schema Rec as given. Expected: plan.parse(response) throws StructuredOutputError(\"Invalid json output: not json\").",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "http://localhost:11434/api/chat",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json"
+        },
+        "json": {
+          "model": "qwen3",
+          "stream": true,
+          "options": {},
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Answer."
+            }
+          ],
+          "tools": [],
+          "format": {
+            "properties": {
+              "answer": {
+                "title": "Answer",
+                "type": "string"
+              },
+              "score": {
+                "title": "Score",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "answer",
+              "score"
+            ],
+            "title": "Record",
+            "type": "object"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/x-ndjson"
+        },
+        "chunks": [
+          "{\"model\":\"qwen3\",\"created_at\":\"2026-10-16T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"not \"},\"done\":false}\n",
+          "{\"model\":\"qwen3\",\"created_at\":\"2026-10-16T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"json\"},\"done\":false}\n",
+          "{\"model\":\"qwen3\",\"created_at\":\"2026-10-16T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\",\"total_duration\":1000,\"load_duration\":10,\"prompt_eval_count\":17,\"prompt_eval_duration\":100,\"eval_count\":9,\"eval_duration\":200}\n"
+        ]
+      }
+    }
+  ]
+}

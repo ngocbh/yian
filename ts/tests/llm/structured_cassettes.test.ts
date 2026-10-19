@@ -10,11 +10,13 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { BearerAuth, HeaderKeyAuth, SubscriptionAuth } from "../../src/llm/auth.ts";
+import { BearerAuth, HeaderKeyAuth, NoAuth, SubscriptionAuth } from "../../src/llm/auth.ts";
 import { type ErrorKind, ProviderError } from "../../src/llm/errors.ts";
 import { callWithRetries, type RetryInfo, RouteModel } from "../../src/llm/executor.ts";
 import { Message, Request, TextPart } from "../../src/llm/messages.ts";
 import { AnthropicMessages } from "../../src/llm/protocols/anthropic_messages.ts";
+import { Gemini } from "../../src/llm/protocols/gemini.ts";
+import { OllamaChat } from "../../src/llm/protocols/ollama_chat.ts";
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { OpenAIResponses } from "../../src/llm/protocols/openai_responses.ts";
 import { Route } from "../../src/llm/route.ts";
@@ -123,6 +125,7 @@ const MISSING = {
 };
 const THINKING: JsonObject = { thinking: { type: "adaptive" }, output_config: { effort: "high" } };
 const REFUSED = { error: StructuredOutputError, message: "the model refused: I can't help with that." };
+const INVALID = { error: StructuredOutputError, message: "Invalid json output: not json" };
 const TRUNCATED = { error: StructuredOutputError, message: 'Invalid json output: {"answer": "x", "score": 1' };
 
 /**
@@ -137,9 +140,10 @@ type Expected =
 interface Scenario {
   /**
    * The wire: the Responses API with a key (OpenAI's or Azure's), the ChatGPT subscription, or
-   * Chat Completions (a vendor's or an Azure deployment's), or Anthropic's Messages API.
+   * Chat Completions (a vendor's or an Azure deployment's), Anthropic's Messages API, Ollama's chat
+   * API, or the Gemini API.
    */
-  family: "responses" | "subscription" | "chat" | "anthropic";
+  family: "responses" | "subscription" | "chat" | "anthropic" | "ollama" | "gemini";
   provider: string;
   model: string;
   schema: string;
@@ -150,6 +154,8 @@ interface Scenario {
   budget?: number;
   /** The kinds of the errors `callWithRetries` retried, in order; none when absent. */
   retried?: ErrorKind[];
+  /** The prompt strategy's instruction, which the test appends to the request as a user message. */
+  instruction?: string;
 }
 
 /** A scenario on `family`'s route to `provider`, `extra` adding its block, budget or retries. */
@@ -340,12 +346,49 @@ const SCENARIOS: Record<string, Scenario> = {
     "json_schema", { value: { actions: [{ action: "add", lesson_id: null, text: "be terse" }] } }, {
     block: THINKING,
   }),
+  o_format_closed: scenario("ollama", "ollama", "qwen3", "corpus:Rec", "json_schema", { value: REC }),
+  o_format_open: scenario("ollama", "ollama", "qwen3", "corpus:Open", "json_schema", { value: OPEN }),
+  // `format` is sent beside the block's `think`; the thinking is not parsed.
+  o_think_format: scenario("ollama", "ollama", "qwen3", "corpus:Rec", "json_schema", { value: REC }, {
+    block: { think: true },
+  }),
+  o_invalid_json: scenario("ollama", "ollama", "qwen3", "corpus:Rec", "json_schema", INVALID),
+  // The schema is sent raw, `$defs`, `$ref` and `const` included.
+  o_union: scenario("ollama", "ollama", "qwen3", "corpus:Union", "json_schema", { value: UNION }),
+  // `const` is sent as a one-member `enum`.
+  g_union_const_enum: scenario("gemini", "google", "gemini-2.5-flash", "corpus:Union", "json_schema", {
+    value: UNION,
+  }),
+  g_closed: scenario("gemini", "google", "gemini-2.5-flash", "corpus:Rec", "json_schema", { value: REC }),
+  g_open: scenario("gemini", "google", "gemini-2.5-flash", "corpus:Open", "json_schema", { value: OPEN }),
+  // A fenced reply after a thought part; the thought is not parsed.
+  g_fenced: scenario("gemini", "google", "gemini-2.5-flash", "corpus:Rec", "json_schema", { value: REC }),
+  g_two_parts: scenario("gemini", "google", "gemini-2.5-flash", "corpus:Rec", "json_schema", {
+    error: StructuredOutputError,
+    message: 'Invalid json output: {"answer": "a", "score": 1}{"answer": "b", "score": 2}',
+  }),
+  // The adapter merges the unsigned text parts into one object.
+  g_split_parts: scenario("gemini", "google", "gemini-2.5-flash", "corpus:Rec", "json_schema", {
+    value: { answer: "a", score: 1n },
+  }),
+  g_invalid: scenario("gemini", "google", "gemini-2.5-flash", "corpus:Rec", "json_schema", INVALID),
+  // The block's `generationConfig.maxOutputTokens` is sent beside the JSON schema.
+  g_block: scenario("gemini", "google", "gemini-2.5-flash", "corpus:Rec", "json_schema", { value: REC }, {
+    block: { generationConfig: { maxOutputTokens: 64n } },
+  }),
+  // A model with no structured output gets the instruction; its fenced reply is parsed.
+  p_sentinel: scenario("chat", "xai", "no-structured-sentinel", "corpus:Rec", "prompt", { value: REC }, {
+    instruction:
+      "Respond with ONLY a JSON object matching this JSON schema (no prose, no code fences):\n" +
+      '{"properties":{"answer":{"title":"Answer","type":"string"},"score":{"title":"Score","type":"integer"}},' +
+      '"required":["answer","score"],"title":"Record","type":"object"}',
+  }),
 };
 
 /**
- * Build a scenario's route as the Responses, Chat and Anthropic cassette tests build theirs:
- * Anthropic's Messages API, Azure's on either wire, the ChatGPT subscription's, OpenAI's
- * Responses API, or a Chat vendor's base URL.
+ * Build a scenario's route as the Responses, Chat, Anthropic, Ollama and Gemini cassette tests
+ * build theirs: Anthropic's Messages API, the ChatGPT subscription's, Azure's on either wire, a
+ * Chat vendor's base URL, OpenAI's Responses API, a local Ollama, or the Gemini API.
  */
 function route({ family, provider, model }: Scenario): Route {
   const azure = { query: { "api-version": "2025-03-01-preview" }, auth: new HeaderKeyAuth("api-key", "test-key-1") };
@@ -394,6 +437,16 @@ function route({ family, provider, model }: Scenario): Route {
         path: "responses",
         auth: new BearerAuth("test-key-1"),
       });
+    case "ollama":
+      return new Route({ provider, baseUrl: "http://localhost:11434", path: "api/chat", auth: new NoAuth() });
+    case "gemini":
+      return new Route({
+        provider,
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        path: `models/${model}:streamGenerateContent`,
+        query: { alt: "sse" },
+        auth: new HeaderKeyAuth("x-goog-api-key", "test-key-1"),
+      });
   }
 }
 
@@ -411,6 +464,10 @@ function buildModel(scenario: Scenario, send: Send): RouteModel {
       const subscription = family === "subscription";
       return new RouteModel({ ...routed, protocol: new OpenAIResponses({ model, provider, block, subscription }) });
     }
+    case "ollama":
+      return new RouteModel({ ...routed, protocol: new OllamaChat({ model, provider, block }) });
+    case "gemini":
+      return new RouteModel({ ...routed, protocol: new Gemini({ model, provider, block }) });
   }
 }
 
@@ -442,8 +499,16 @@ async function runScenario(name: string, scenario: Scenario): Promise<void> {
 
   const plan = planStructured(structuredTarget(model), SCHEMAS[scenario.schema]!);
   expect(plan.strategy).toBe(scenario.strategy);
+  let request = REQUEST;
+  if (plan.strategy === "prompt") {
+    // The prompt strategy sends the request as it is; the caller appends the instruction.
+    expect(plan.instruction()).toBe(scenario.instruction!);
+    const instruction = new Message({ role: "user", parts: [new TextPart(plan.instruction())] });
+    request = new Request({ messages: [...REQUEST.messages, instruction] });
+    expect(plan.apply(request)).toBe(request);
+  }
   const retried: RetryInfo[] = [];
-  const call = callWithRetries(model, plan.apply(REQUEST), {
+  const call = callWithRetries(model, plan.apply(request), {
     budget: scenario.budget ?? 0,
     scheduler: virtualScheduler(),
     random: () => 0,

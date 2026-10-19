@@ -1,0 +1,106 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "o_union: a tagged union on Ollama: format schema Union as given with raw $defs, $ref and const. ollama/qwen3 on ollama_chat. Schema Union (corpus:Union), name ScalarWrapper. Strategy json_schema. Request: tools []; format schema Union as given. Expected: plan.parse(response) returns {\"value\":{\"kind\":\"buy\",\"x\":1}}.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "http://localhost:11434/api/chat",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json"
+        },
+        "json": {
+          "model": "qwen3",
+          "stream": true,
+          "options": {},
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Answer."
+            }
+          ],
+          "tools": [],
+          "format": {
+            "$defs": {
+              "buy": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "buy",
+                    "title": "Kind",
+                    "type": "string"
+                  },
+                  "x": {
+                    "title": "X",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "x"
+                ],
+                "title": "buy",
+                "type": "object"
+              },
+              "sell": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "sell",
+                    "title": "Kind",
+                    "type": "string"
+                  },
+                  "n": {
+                    "title": "N",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "n"
+                ],
+                "title": "sell",
+                "type": "object"
+              }
+            },
+            "properties": {
+              "value": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/buy"
+                  },
+                  {
+                    "$ref": "#/$defs/sell"
+                  }
+                ],
+                "title": "Value"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "title": "ScalarWrapper",
+            "type": "object"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/x-ndjson"
+        },
+        "chunks": [
+          "{\"model\":\"qwen3\",\"created_at\":\"2026-10-16T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"value\\\": {\\\"kind\\\"\"},\"done\":false}\n",
+          "{\"model\":\"qwen3\",\"created_at\":\"2026-10-16T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\": \\\"buy\\\", \\\"x\\\": 1}}\"},\"done\":false}\n",
+          "{\"model\":\"qwen3\",\"created_at\":\"2026-10-16T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\",\"total_duration\":1000,\"load_duration\":10,\"prompt_eval_count\":17,\"prompt_eval_duration\":100,\"eval_count\":9,\"eval_duration\":200}\n"
+        ]
+      }
+    }
+  ]
+}

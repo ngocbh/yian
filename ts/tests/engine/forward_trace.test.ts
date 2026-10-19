@@ -10,7 +10,8 @@
  * TS-only: one row per `ForwardCapture` message with its class; a capture with items, scope and
  * node data keeps frozen copies; `ForwardCapture`'s defaults; an unfinished capture may keep an
  * unfinished item; `BackwardCapture`'s defaults, one row per check its constructor wires in, and
- * its frozen copy of `nodeData`.
+ * its frozen copy of `nodeData`; a `Set` subclass whose iterator changes between passes stores the
+ * keys that were checked.
  *
  * Changed:
  * - Captures hold frozen copies, with no copy on read: a reader's edit throws a `TypeError` where
@@ -177,6 +178,18 @@ test("a forward capture keeps frozen copies of its values", () => {
   expect(() => {
     (capture as { scope: ExecutionScope | null }).scope = null;
   }).toThrow(TypeError);
+});
+
+test("a forward capture stores the evaluated keys it checked", () => {
+  // Yields `x` on the first pass and an uncaptured key on any later pass.
+  class ShiftingSet extends Set<string> {
+    passes = 0;
+    override *[Symbol.iterator](): SetIterator<string> {
+      yield this.passes++ === 0 ? "x" : "nope";
+    }
+  }
+  const capture = new ForwardCapture({ x: 1 }, ROUTE_X, { evaluatedKeys: new ShiftingSet(["x"]) });
+  expect([...capture.evaluatedKeys]).toEqual(["x"]);
 });
 
 test("a forward capture defaults to empty keys, items and inventories", () => {

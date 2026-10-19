@@ -76,6 +76,14 @@ function isIndex(value: unknown): boolean {
 }
 
 /**
+ * Copy an array by index, so the checked copy is the stored one: a hole reads as `undefined`, and
+ * an own `Symbol.iterator` is ignored.
+ */
+function copyList<T>(value: readonly T[]): T[] {
+  return Array.from({ length: value.length }, (_, index) => value[index]!);
+}
+
+/**
  * Require a source identity, without normalizing forged carrier fields.
  *
  * @throws TypeError when `source` isn't exactly a `SourceRef`.
@@ -316,10 +324,12 @@ export class ForwardCapture {
     } = options;
     validateRoute(route);
     if (route.kind !== "record") throw new RangeError("input route must be a record");
-    if (!(evaluatedKeys instanceof Set) || [...evaluatedKeys].some((key) => typeof key !== "string")) {
+    // Copied once, so the checked keys are the stored ones even if a subclass iterates otherwise.
+    const keys = evaluatedKeys instanceof Set ? new Set(evaluatedKeys) : null;
+    if (keys === null || [...keys].some((key) => typeof key !== "string")) {
       throw new TypeError("evaluated_keys must be a set of strings");
     }
-    for (const key of evaluatedKeys) {
+    for (const key of keys) {
       if (!route.names.includes(key)) throw new RangeError("evaluated_keys must name captured routes");
     }
     if (boundInputs !== null) {
@@ -331,8 +341,9 @@ export class ForwardCapture {
       }
     }
     if (!isList(items)) throw new TypeError("items must be an array");
+    const pairs = copyList<readonly [number, ForwardCapture]>(items);
     let previousIndex = -1;
-    for (const pair of items as unknown[]) {
+    for (const pair of pairs as unknown[]) {
       if (!isList(pair) || pair.length !== 2) throw new TypeError("item captures must be index/capture pairs");
       const [index, capture] = pair;
       if (typeof index !== "number" || !Number.isSafeInteger(index) || index <= previousIndex) {
@@ -355,8 +366,8 @@ export class ForwardCapture {
     }
     this.boundInputs = copyBackwardValue(boundInputs, "bound_inputs") as typeof this.boundInputs;
     this.route = route;
-    this.evaluatedKeys = new Set(evaluatedKeys);
-    this.items = Object.freeze(items.map(([index, capture]) => Object.freeze([index, capture] as const)));
+    this.evaluatedKeys = keys;
+    this.items = Object.freeze(pairs.map(([index, capture]) => Object.freeze([index, capture] as const)));
     this.scope = scope;
     this.nodeData = copyBackwardValue(nodeData, "node_data") as typeof this.nodeData;
     this.inputNames = Object.freeze([...inputNames]);
@@ -402,15 +413,15 @@ export class BackwardAttribution {
     parents: readonly number[],
   ) {
     if (!isIndex(messageIndex)) throw new RangeError("message_index must be a non-negative integer");
-    // Spread, so a hole reads as `undefined` and fails, where `every` would skip it.
-    if (!isList(parents) || ![...parents].every(isIndex)) {
+    const positions = isList(parents) ? copyList<number>(parents) : null;
+    if (positions === null || !positions.every(isIndex)) {
       throw new TypeError("parents must be an array of non-negative integer positions");
     }
-    if (parents.some((parent, index) => index > 0 && parent <= parents[index - 1]!)) {
+    if (positions.some((parent, index) => index > 0 && parent <= positions[index - 1]!)) {
       throw new RangeError("parents must be distinct ordered positions");
     }
     if (sender === null) {
-      if (inputName !== null || messageIndex !== 0 || contributionIndex !== null || parents.length > 0) {
+      if (inputName !== null || messageIndex !== 0 || contributionIndex !== null || positions.length > 0) {
         throw new RangeError("root attribution cannot carry sender coordinates");
       }
     } else {
@@ -424,13 +435,13 @@ export class BackwardAttribution {
       if (!isIndex(contributionIndex)) {
         throw new RangeError("transfer attribution requires a non-negative contribution index");
       }
-      if (parents.length === 0) throw new RangeError("transfer attribution requires incoming parent positions");
+      if (positions.length === 0) throw new RangeError("transfer attribution requires incoming parent positions");
     }
     this.sender = sender;
     this.inputName = inputName;
     this.messageIndex = messageIndex;
     this.contributionIndex = contributionIndex;
-    this.parents = Object.freeze([...parents]);
+    this.parents = Object.freeze(positions);
     Object.freeze(this);
   }
 }
@@ -473,8 +484,9 @@ export class AttributedBackwardResult {
       throw new RangeError("backward result source must identify an accepted occurrence");
     }
     if (!isList(feedback) || !isList(attribution)) throw new TypeError("feedback and attribution must be arrays");
-    if (feedback.length !== attribution.length) throw new RangeError("feedback and attribution must align");
-    for (const message of feedback) validateFeedback(message, message);
+    const messages = copyList(feedback);
+    if (messages.length !== attribution.length) throw new RangeError("feedback and attribution must align");
+    for (const message of messages) validateFeedback(message, message);
     for (const item of attribution) {
       if (!isExactly(item, BackwardAttribution)) {
         throw new TypeError("attribution requires exact BackwardAttribution values");
@@ -487,12 +499,12 @@ export class AttributedBackwardResult {
       Object.keys(result.inputFeedback).length > 0 ||
       result.selfFeedback.length > 0 ||
       Object.keys(result.variableFeedback).length > 0;
-    if (!invoked && (feedback.length > 0 || material)) {
+    if (!invoked && (messages.length > 0 || material)) {
       throw new RangeError("unreached occurrences cannot carry backward material");
     }
-    if (invoked && feedback.length === 0) throw new RangeError("invoked occurrences require received feedback");
+    if (invoked && messages.length === 0) throw new RangeError("invoked occurrences require received feedback");
     this.source = source;
-    this.feedback = Object.freeze(feedback.map((message) => copyBackwardValue(message, "feedback") as FeedbackValue));
+    this.feedback = Object.freeze(messages.map((message) => copyBackwardValue(message, "feedback") as FeedbackValue));
     this.attribution = Object.freeze([...attribution]);
     this.result = result;
     this.invoked = invoked;

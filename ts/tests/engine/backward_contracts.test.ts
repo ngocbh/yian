@@ -24,7 +24,9 @@
  * `BackwardFailure` (stage before code) and `BackwardOutcome`; a `MemoryOperationFailure` cause is
  * kept by identity; a transfer attribution keeps a frozen copy of its parents and a root seed is
  * valid; an unreached occurrence with no material is valid; a backward failure keeps each field it
- * was given.
+ * was given; parents with their own `Symbol.iterator` are read by index, so the stored parents are
+ * the checked elements; the ported invalid-snapshot table also checks the message of its outcome
+ * and failure rows.
  *
  * Changed:
  * - Infinity is a backward JSON value (decision 34), so the `output=float("inf")` row is accepted;
@@ -696,6 +698,12 @@ test("a backward attribution copies its parents", () => {
     null,
     [],
   ]);
+});
+
+test("a backward attribution stores the parents it checked, not what their iterator yields", () => {
+  const parents = [1, 2];
+  Object.defineProperty(parents, Symbol.iterator, { value: () => [5, 3][Symbol.iterator]() });
+  expect(new BackwardAttribution(SENDER, "items", 0, 1, parents).parents).toEqual([1, 2]);
 });
 
 /** Build a `BackwardAttribution` from untyped arguments. */

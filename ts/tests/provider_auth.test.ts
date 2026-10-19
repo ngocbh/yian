@@ -51,6 +51,8 @@ describe("ApiKeyCredentials", () => {
     ["symbol name", [[Symbol("X"), "do-not-echo"]]],
     ["three-item pair", [["X", "do-not-echo", "extra"]]],
     ["null", null],
+    ["undefined pair value", [["X-A", undefined]]],
+    ["undefined Map value", new Map([["X-A", undefined]])],
   ];
   for (const [label, headers] of refusedHeaders) {
     test(`refuse headers that cannot be sent: ${label}`, () => {
@@ -76,8 +78,19 @@ describe("ApiKeyCredentials", () => {
     expect(thrown(() => new ApiKeyCredentials("k", { Authorization: "a" })).message).toBe(
       "Invalid connection headers: header Authorization is refused: yian sends the credential itself",
     );
+    expect(thrown(() => new ApiKeyCredentials("k", [["X-A", undefined]])).message).toBe(
+      "Invalid connection headers: header X-A value must be a string",
+    );
+    expect(thrown(() => new ApiKeyCredentials("k", new Map([["X-A", undefined]]))).message).toBe(
+      "Invalid connection headers: header X-A value must be a string",
+    );
+  });
+
+  test("the key must be visible text", () => {
     for (const key of ["", "has space", "ké", 1, null]) {
-      expect(thrown(() => new ApiKeyCredentials(key)).message).toBe("Invalid API key credential");
+      const error = thrown(() => new ApiKeyCredentials(key));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("Invalid API key credential");
     }
   });
 
@@ -94,9 +107,7 @@ describe("ApiKeyCredentials", () => {
     expect(fromPairs.apiKey).toBe(credentials.apiKey);
     expect(fromPairs.headers).toEqual(credentials.headers);
     expect(new ApiKeyCredentials("k").headers).toEqual([]);
-    expect(Object.fromEntries(new ApiKeyCredentials("k", { "OpenAI-Project": "p" }).headers)).toHaveProperty(
-      "OpenAI-Project",
-    );
+    expect(new ApiKeyCredentials("k", { "OpenAI-Project": "p" }).headers).toEqual([["OpenAI-Project", "p"]]);
     expect(Object.isFrozen(credentials)).toBe(true);
     expect(Object.isFrozen(credentials.headers)).toBe(true);
     expect(credentials.headers.every((pair) => Object.isFrozen(pair))).toBe(true);
@@ -201,47 +212,52 @@ describe("ProviderSelection", () => {
     expect(plain.endpoint).toBeNull();
     expect(plain.organization).toBeNull();
     expect(plain.project).toBeNull();
-    for (const fields of [
-      { method: "subscription", headerNames: ["X-A"] },
-      { method: "none", headerNames: ["X-A"] },
-      { headerNames: ["Authorization"] },
-      { headerNames: ["OpenAI-Project"] },
-      { headerNames: ["X-A", "x-a"] },
-      { method: "subscription", organization: "org-1" },
-      { provider: "anthropic", project: "proj-1" },
-      { organization: "has space" },
-      { provider: "ollama", headerNames: ["X-A"] },
-    ]) {
-      const values = { provider: "openai", method: "api_key", ...fields };
-      expect(() => new ProviderSelection({ model: "m", credentialId: "c".repeat(32), ...values })).toThrow(AuthError);
-    }
   });
 
-  test("messages follow Python's order", () => {
-    const base = { provider: "openai", method: "api_key", model: "m", credentialId: "c".repeat(32) };
-    const message = (fields: Record<string, unknown>) => thrown(() => new ProviderSelection({ ...base, ...fields })).message;
-    expect(message({ method: "other" })).toBe("Invalid provider selection");
-    expect(message({ headerNames: "X-A" })).toBe("Invalid provider selection");
-    expect(message({ provider: "anthropic", organization: "org-1" })).toBe(
+  const refusals: [Record<string, unknown>, string][] = [
+    [{ provider: "" }, "Invalid provider selection"],
+    [{ method: "other" }, "Invalid provider selection"],
+    [{ endpoint: "has space" }, "Invalid provider selection"],
+    [{ headerNames: "X-A" }, "Invalid provider selection"],
+    [
+      { method: "subscription", organization: "org-1" },
       "organization and project are only for an openai API-key login",
-    );
-    expect(message({ method: "none", headerNames: ["X-A"] })).toBe("Connection headers are only for an API-key login");
-    expect(message({ provider: "ollama", headerNames: ["X-A"] })).toBe(
-      "Connection headers are not sent to provider ollama",
-    );
-    expect(message({ organization: "has space" })).toBe(
+    ],
+    [{ provider: "anthropic", project: "proj-1" }, "organization and project are only for an openai API-key login"],
+    [{ method: "subscription", headerNames: ["X-A"] }, "Connection headers are only for an API-key login"],
+    [{ method: "none", headerNames: ["X-A"] }, "Connection headers are only for an API-key login"],
+    [{ provider: "ollama", headerNames: ["X-A"] }, "Connection headers are not sent to provider ollama"],
+    [
+      { organization: "has space" },
       "Invalid provider selection: organization must be non-empty visible ASCII, without spaces",
-    );
-    expect(message({ headerNames: ["X-A", "x-a"] })).toBe(
+    ],
+    [
+      { headerNames: ["Authorization"] },
+      "Invalid provider selection: header Authorization is refused: yian sends the credential itself",
+    ],
+    [
+      { headerNames: ["OpenAI-Project"] },
+      "Invalid provider selection: header OpenAI-Project is refused: use llm_config.organization / project",
+    ],
+    [
+      { headerNames: ["X-A", "x-a"] },
       "Invalid provider selection: a header name is given more than once (names ignore case)",
-    );
-    expect(message({ headerNames: Array.from({ length: 33 }, (_, n) => `X-${n}`) })).toBe(
+    ],
+    [
+      { headerNames: Array.from({ length: 33 }, (_, n) => `X-${n}`) },
       "Invalid provider selection: headers must have at most 32 headers",
-    );
-  });
+    ],
+  ];
+  for (const [fields, message] of refusals) {
+    test(`refuses ${JSON.stringify(fields).slice(0, 60)}`, () => {
+      const values = { provider: "openai", method: "api_key", model: "m", credentialId: "c".repeat(32), ...fields };
+      const error = thrown(() => new ProviderSelection(values));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe(message);
+    });
+  }
 });
 
-/** A provider error carrying an HTTP `status`, like the openai SDK's `APIStatusError`. */
 class StatusError extends Error {
   readonly status: unknown;
 
@@ -284,11 +300,21 @@ function raisingCause(): Error {
   });
 }
 
+/** Return two errors that are each other's `cause`. */
 function cycle(): Error {
   const first = new Error("first");
   const second = new Error("second", { cause: first });
   first.cause = second;
   return first;
+}
+
+/** Return a `Proxy` of an `AuthError` whose `getPrototypeOf` trap throws, so `instanceof` throws. */
+function prototypeTrap(): object {
+  return new Proxy(new AuthError("no credentials"), {
+    getPrototypeOf() {
+      throw new Error("no prototype");
+    },
+  });
 }
 
 /** Return a 401 behind `depth` plain wrapping errors. */
@@ -321,6 +347,7 @@ describe("isAuthFailure", () => {
     ["16th link", wrapped401(15), true],
     ["17th link", wrapped401(16), false],
     ["raising-cause", raisingCause(), false],
+    ["throwing-instanceof", prototypeTrap(), false],
     ["provider-error-auth", new ProviderError("auth", "API key not valid", { status: 400 }), true],
     ["provider-error-bad-request", new ProviderError("bad_request", "invalid argument", { status: 400 }), false],
     ["not an object", "401", false],

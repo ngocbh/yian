@@ -25,10 +25,10 @@ function read(link: object, name: string): unknown {
  * Missing means yian couldn't supply them, which it reports as an `AuthError`. Walks `error` and
  * its `cause` chain, since a wrapping error keeps the provider's as its cause; the walk stops at a
  * non-object, a repeated link, or after 16 links, so a cyclic or runaway chain ends. A link counts
- * when it is an `AuthError`, a `ProviderError` of kind `auth`, or carries an integer `status` or
- * `code` of 401 or 403, or of 400 with `api_key_invalid` in its text: Gemini reports an invalid
- * key as a 400 whose only distinguishing mark is that reason, so the substring match is
- * deliberate. Callers run this inside a `catch`, so it never throws: a link whose property or
+ * when it is an `AuthError`, a link whose `kind` is `"auth"` (such as a `ProviderError` of kind
+ * `auth`), or carries an integer `status` or `code` of 401 or 403, or of 400 with
+ * `api_key_invalid` in its text: Gemini reports an invalid key as a 400 whose only distinguishing
+ * mark is that reason, so the substring match is deliberate. Callers run this inside a `catch`, so it never throws: a link whose property or
  * text can't be read doesn't count, and a `cause` that can't be read ends the walk.
  */
 export function isAuthFailure(error: unknown): boolean {
@@ -36,7 +36,11 @@ export function isAuthFailure(error: unknown): boolean {
   let link: unknown = error;
   while (typeof link === "object" && link !== null && !seen.has(link) && seen.size < 16) {
     seen.add(link);
-    if (link instanceof AuthError || read(link, "kind") === "auth") return true;
+    // A Proxy's getPrototypeOf trap can make `instanceof` throw; such a link isn't an AuthError.
+    try {
+      if (link instanceof AuthError) return true;
+    } catch {}
+    if (read(link, "kind") === "auth") return true;
     for (const name of ["status", "code"]) {
       const status = read(link, name);
       if (typeof status !== "number" || !Number.isInteger(status)) continue;
@@ -91,22 +95,25 @@ export class ApiKeyCredentials {
     } else {
       throw new AuthError(HEADERS_SHAPE);
     }
-    if (!pairs.every((pair) => Array.isArray(pair) && pair.length === 2 && typeof pair[0] === "string")) {
+    if (
+      !pairs.every(
+        (pair): pair is [string, unknown] => Array.isArray(pair) && pair.length === 2 && typeof pair[0] === "string",
+      )
+    ) {
       throw new AuthError(HEADERS_SHAPE);
     }
-    const named = pairs as [string, unknown][];
     // A record keeps only one of two pairs with the same name, so count exact repeats before
     // building it.
-    if (new Set(named.map(([name]) => name)).size !== named.length) {
+    if (new Set(pairs.map(([name]) => name)).size !== pairs.length) {
       throw new AuthError("Invalid connection headers: a header name is given more than once");
     }
     let checked: Record<string, string>;
     try {
-      checked = validateHeaders(Object.fromEntries(named), null);
+      // validateHeaders skips `undefined` values, but only a record's are absent; a pair's
+      // `undefined` is a value, refused as `null` is.
+      checked = validateHeaders(Object.fromEntries(pairs.map(([name, value]) => [name, value ?? null])), null);
     } catch (error) {
-      if (error instanceof RangeError || error instanceof TypeError) {
-        throw new AuthError(`Invalid connection headers: ${error.message}`);
-      }
+      if (error instanceof RangeError) throw new AuthError(`Invalid connection headers: ${error.message}`);
       throw error;
     }
     this.#apiKey = apiKey;
@@ -200,7 +207,10 @@ export type Credentials = ApiKeyCredentials | OAuthCredentials;
 /** How a provider is logged in to; `"none"` is a provider saved without a credential. */
 export type LoginMethod = "api_key" | "subscription" | "none";
 
-const LOGIN_METHODS: readonly unknown[] = ["api_key", "subscription", "none"];
+/** Whether `value` is a `LoginMethod`. */
+function isLoginMethod(value: unknown): value is LoginMethod {
+  return value === "api_key" || value === "subscription" || value === "none";
+}
 
 /**
  * The nonsecret provider choice that a run may pin to one connection.
@@ -240,7 +250,7 @@ export class ProviderSelection {
       !isVisibleText(provider) ||
       !isVisibleText(model) ||
       !isVisibleText(credentialId) ||
-      !LOGIN_METHODS.includes(method) ||
+      !isLoginMethod(method) ||
       (endpoint !== null && !isVisibleText(endpoint)) ||
       !Array.isArray(headerNames)
     ) {
@@ -256,11 +266,13 @@ export class ProviderSelection {
     if (provider === "ollama" && headerNames.length > 0) {
       throw new AuthError("Connection headers are not sent to provider ollama");
     }
+    let checkedOrganization: string | null;
+    let checkedProject: string | null;
+    let names: string[];
     try {
-      if (organization !== null) validateOrganization(organization, "organization");
-      if (project !== null) validateOrganization(project, "project");
-      for (const name of headerNames) validateHeaderName(name, provider);
-      const names = headerNames as string[];
+      checkedOrganization = organization === null ? null : validateOrganization(organization, "organization");
+      checkedProject = project === null ? null : validateOrganization(project, "project");
+      names = headerNames.map((name: unknown) => validateHeaderName(name, provider));
       if (new Set(names.map((name) => name.toLowerCase())).size !== names.length) {
         throw new RangeError("a header name is given more than once (names ignore case)");
       }
@@ -271,13 +283,13 @@ export class ProviderSelection {
       throw error;
     }
     this.provider = provider;
-    this.method = method as LoginMethod;
+    this.method = method;
     this.model = model;
     this.credentialId = credentialId;
     this.endpoint = endpoint;
-    this.organization = organization as string | null;
-    this.project = project as string | null;
-    this.headerNames = Object.freeze([...(headerNames as string[])].sort(compareCodeUnits));
+    this.organization = checkedOrganization;
+    this.project = checkedProject;
+    this.headerNames = Object.freeze(names.sort(compareCodeUnits));
     Object.freeze(this);
   }
 }

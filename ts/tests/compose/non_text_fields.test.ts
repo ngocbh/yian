@@ -2,7 +2,7 @@
  * A text or expression field YAML reads as non-text is a load error at that value: a port of
  * `tests/compose/test_non_text_fields.py`. Values are as TS YAML gives them: ints are `bigint`.
  * The flow rows read through `parseFile`, the node rows through `parseFile`, `flowNodesCursor`
- * and `parseNodes` with stand-in kinds (`StandInCode`; the nine `ALL_KIND_NAMES` for the kind
+ * and `parseNodes` with the registered kinds (the nine `ALL_KIND_NAMES` stand-ins for the kind
  * list).
  *
  * Changed: a flow with no `nodes:` says "missing required top-level key 'nodes'", where Python's
@@ -19,12 +19,10 @@
  * Dropped: the date rows (TS reads an unquoted date as text) and
  * `test_not_text_detail_reads_the_first_string_error` (`not_text_detail` reads a pydantic error).
  *
- * The `tool_id:` rows (`test_non_text_tool_id_is_a_load_error`, the `tool_id` half of
- * `test_null_code_and_tool_id_are_empty`, `test_tagged_non_text_tool_id`) parse with the
- * registered `tool` kind.
+ * Changed: `test_text_code_and_tool_id_still_load` assembles the root flow with `assembleText`,
+ * where Python loads it.
  *
- * Later (T3-15): the `code:` rows (`test_non_text_code_is_a_load_error`, the `code` half of
- * `test_null_code_and_tool_id_are_empty`, `test_text_code_and_tool_id_still_load`). Later (T3-16): the
+ * Later (T3-16): the
  * `call:`, `on:` and loop/case rows (`test_non_text_call_is_a_load_error`,
  * `test_null_call_is_empty`, `test_text_call_still_loads`, `test_non_text_case_on_is_a_load_error`,
  * `test_null_case_on_is_absent`, `test_text_case_on_still_loads`, and the while, until,
@@ -53,7 +51,7 @@ import {
   runCase,
   runTextCase,
 } from "./declarations.ts";
-import { ALL_KIND_NAMES, StandInCode, standIn } from "./stand_ins.ts";
+import { ALL_KIND_NAMES, standIn } from "./stand_ins.ts";
 
 afterEach(() => forget());
 
@@ -149,6 +147,19 @@ nodes:
     node_name: ${v}
     output: str
     code: "return 'x'"
+output: \${a.output}
+`;
+}
+
+/** A flow whose CODE node `a` has `code: <v>`. */
+function codeFlow(v: string): string {
+  return `id: f
+name: f
+nodes:
+  a:
+    kind: code
+    output: str
+    code: ${v}
 output: \${a.output}
 `;
 }
@@ -307,7 +318,7 @@ describe("parseNodes", () => {
   test.each(NON_TEXT)("non-text node name is a load error: %s", (value, phrase) => {
     const text = nodeNameFlow(value);
 
-    const error = loadError(() => nodesOf(text, [StandInCode]));
+    const error = loadError(() => nodesOf(text, []));
 
     expect(error.message).toContain(
       `node 'a' (kind=code): \`node_name:\` must be text, but YAML read it as ${phrase}; ` +
@@ -320,7 +331,7 @@ describe("parseNodes", () => {
     ["null", null],
     ["'5'", "5"],
   ])("null and text node name still parse: %s", (value, expected) => {
-    expect(nodesOf(nodeNameFlow(value), [StandInCode]).get("a")!.nodeName).toBe(expected);
+    expect(nodesOf(nodeNameFlow(value), []).get("a")!.nodeName).toBe(expected);
   });
 
   test.each(NON_TEXT)("non-text kind is a load error: %s", (value, phrase) => {
@@ -346,10 +357,21 @@ describe("parseNodes", () => {
   test("a node's asserts must be a list of strings, located", () => {
     const text = FLOW.replace("    output: str\n", '    output: str\n    asserts: ["true", 5]\n');
 
-    const error = loadError(() => nodesOf(text, [StandInCode]));
+    const error = loadError(() => nodesOf(text, []));
 
     expect(error.message).toContain("`asserts:` must be a list of strings");
     expect(startLine(error)).toBe(lineOf(text, "asserts: "));
+  });
+
+  test.each(NON_TEXT)("non-text code is a load error: %s", (value, phrase) => {
+    const text = codeFlow(value);
+
+    const error = loadError(() => nodesOf(text, []));
+
+    expect(error.message).toContain(
+      `node 'a' (kind=code): \`code:\` must be text, but YAML read it as ${phrase}; put it in quotes`,
+    );
+    expect(startLine(error)).toBe(lineOf(text, "code: "));
   });
 
   test.each(NON_TEXT)("non-text tool id is a load error: %s", (value, phrase) => {
@@ -363,13 +385,20 @@ describe("parseNodes", () => {
     expect(startLine(error)).toBe(lineOf(text, "tool_id: "));
   });
 
-  test("null tool id is empty", () => {
-    const text = toolFlow("null");
-
+  test.each([
+    [codeFlow("null"), "code", "code"],
+    [toolFlow("null"), "tool", "tool_id"],
+  ])("null code and tool id are empty: %#", (text, kind, key) => {
     const error = loadError(() => nodesOf(text, []));
 
-    expect(error.message).toContain("node 'a' (kind=tool): `tool_id:` must be text, but it is empty; write the text");
-    expect(startLine(error)).toBe(lineOf(text, "tool_id: "));
+    expect(error.message).toContain(
+      `node 'a' (kind=${kind}): \`${key}:\` must be text, but it is empty; write the text`,
+    );
+    expect(startLine(error)).toBe(lineOf(text, `${key}: `));
+  });
+
+  test.each([codeFlow(`"return 'x'"`), toolFlow("'5'")])("text code and tool id still load: %#", (text) => {
+    expect(() => assembleText(text)).not.toThrow();
   });
 
   test("tagged non-text tool id", () => {
@@ -387,6 +416,9 @@ describe("parseNodes", () => {
   );
 
   test.each([
+    "load-core/compose_non_text_fields__node_asserts_holding_a_number",
+    "load-core/compose_non_text_fields__non_text_code",
+    "load-core/compose_non_text_fields__non_text_node_name",
     "load-core/compose_non_text_fields__non_text_tool_id",
     "load-core/compose_non_text_fields__null_tool_id",
   ])("case %s", (id) => runCase({ id, call: parsedNodes }));

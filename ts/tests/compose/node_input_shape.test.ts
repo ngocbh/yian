@@ -2,8 +2,9 @@
  * A node's `input:` must be a mapping; any other value is a located load error naming the kind's
  * binding noun and showing a fix: the parse half of `tests/compose/test_node_input_shape.py`
  * (rows 1-4 and 6), through each kind's `parse` on the node's cursor with `input:` renamed to
- * `inputs` as the parse phase does: the registered `AgentDescriptor` and `ToolDescriptor` for
- * `agent` and `tool`, a stand-in's template `parse` for each kind not yet ported. A text value is spelled by `valueRepr` (`"abc"`
+ * `inputs` as the parse phase does: the registered `AgentDescriptor`, `CodeDescriptor` and
+ * `ToolDescriptor` for `agent`, `code` and `tool`, a stand-in's template `parse` for each kind not
+ * yet ported. The harvested `whole_reference_input_{code,agent}` cases are pinned at the end. A text value is spelled by `valueRepr` (`"abc"`
  * and `true` where Python shows `'abc'` and `True`).
  *
  * Dropped: the date row of `test_non_mapping_input_is_a_load_error` (TS reads an unquoted date
@@ -19,17 +20,18 @@ import { expect, test } from "bun:test";
 
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
+import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { SourceDocument } from "../../src/compose/source/document.ts";
-import { loadError } from "./declarations.ts";
-import { StandInCode, standIn } from "./stand_ins.ts";
+import { type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
+import { standIn } from "./stand_ins.ts";
 
 const CLASSES: ReadonlyMap<string, DescriptorClass> = new Map([
   ["loop", standIn("loop", { allow: ["times", "call", "inputs"] })],
   ["call", standIn("call", { allow: ["call", "inputs"] })],
   ["map", standIn("map", { allow: ["over", "call", "inputs"] })],
-  ["code", StandInCode],
+  ["code", CodeDescriptor],
   ["tool", ToolDescriptor],
   ["agent", AgentDescriptor],
   ["human_input", standIn("human_input", { allow: ["prompt", "inputs"] })],
@@ -131,3 +133,8 @@ test.each([
   const text = `nodes:\n  c:\n    kind: code\n    code: return 1\n    input:${inputText}\n`;
   expect(parseNode(text, "c").inputs).toEqual({});
 });
+
+test.each<CaseRow>([
+  { id: "load-core/compose_node_input_shape__whole_reference_input_agent", call: parsedNodes },
+  { id: "load-core/compose_node_input_shape__whole_reference_input_code", call: parsedNodes },
+])("parseNodes: $id", runCase);

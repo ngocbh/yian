@@ -3,6 +3,8 @@
  * `tests/compose/test_build_context.py`. The frozen rows check `Object.isFrozen`, the TS form of
  * a frozen dataclass.
  *
+ * TS-only: `baseDir`, the directory a CODE reference resolves against, defaults to `null`.
+ *
  * Dropped: `test_build_result_range_metadata_does_not_affect_equality` (TS has no dataclass
  * `==`).
  *
@@ -22,6 +24,7 @@ test("BuildContext requires only the registry; every other field defaults", () =
   expect(ctx.sourceFile).toBe("<inline-code>");
   expect(ctx.resolveOrigin).toBeNull();
   expect(ctx.outputContractReader).toBeNull();
+  expect(ctx.baseDir).toBeNull();
 });
 
 test("BuildResult defaults its graph and Compose metadata to empty values", () => {

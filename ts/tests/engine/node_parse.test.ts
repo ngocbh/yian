@@ -1,14 +1,17 @@
 /**
  * The keyed-map flat-body node descriptors `parseNodes` reads: a port of
- * `tests/engine/test_node_parse.py`. Agent and tool rows parse with the registered kinds; kinds not
- * yet ported use the stand-ins of `tests/compose/stand_ins.ts` (`StandInCode`).
+ * `tests/engine/test_node_parse.py`. Agent, code and tool rows read through `parseNodes` parse
+ * with the registered kinds; the rows that check a common field or rule on a `code` node keep the
+ * `StandInCode` stand-in of `tests/compose/stand_ins.ts`.
  *
  * TS-only: `inf` is an expression keyword, so it is a rejected node id too.
  *
- * Changed: `test_agent_knobs_parse` and `test_tool_parses` read seeds 14 and 08 through the
- * conformance cases `load-agent/seed_14_agent_tools` and `load-leaves/seed_08_tool_news`.
+ * Changed: `test_agent_knobs_parse`, `test_code_parses`, `test_tool_parses` and
+ * `test_seed_11_anchored_nodes_parse` read seeds 14, 01, 08 and 11 through the conformance cases
+ * `load-agent/seed_14_agent_tools`, `load-agent/seed_01_structured_agent`,
+ * `load-leaves/seed_08_tool_news` and `load-core/seed_11_reuse_anchors`; seed 01's CODE reference
+ * is the TS form (`./fixtures/seeds.ts:one_line_summary`).
  *
- * Later (T3-15): `test_code_parses`, `test_seed_11_anchored_nodes_parse`.
  * Later (T3-16): `test_case_searched_parses`, `test_case_on_parses`,
  * `test_case_carries_no_inputs`, `test_call_ref_form_parses`, `test_node_asserts_rejected_on_case`,
  * `test_call_map_form_parses`, `test_map_without_over_is_loud`, `test_over_on_kind_call_is_loud`.
@@ -27,6 +30,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
+import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
@@ -179,6 +183,22 @@ describe("agent", () => {
   });
 });
 
+describe("code", () => {
+  test("code parses", () => {
+    // seed 01 verdict node
+    const { text, label } = caseText("load-agent/seed_01_structured_agent");
+    const node = nodesOf(text, [], label).get("verdict") as CodeDescriptor;
+
+    expect(node).toBeInstanceOf(CodeDescriptor);
+    expect(node.code).toBe("./fixtures/seeds.ts:one_line_summary");
+    expect(node.inputs).toEqual({
+      rating: "${score.output.rating}",
+      rationale: "${score.output.rationale}",
+    });
+    expect(node.outputs).toBe("str");
+  });
+});
+
 describe("tool", () => {
   test("model kind is removed and points at tool", () => {
     // ML inference is a host capability: `kind: model` names `kind: tool` as the replacement,
@@ -243,6 +263,19 @@ x:
     expect(error.message).toContain("ref");
     expect(error.message).toContain("unknown kind");
   });
+});
+
+test("seed 11 anchored nodes parse", () => {
+  // merged-anchor agent nodes all parse to AgentDescriptors
+  const { text, label } = caseText("load-core/seed_11_reuse_anchors");
+  const descs = nodesOf(text, [], label);
+
+  for (const nodeId of ["pro", "con", "judge"]) {
+    const node = descs.get(nodeId) as AgentDescriptor;
+    expect(node).toBeInstanceOf(AgentDescriptor);
+    expect(node.outputs).toBe("str");
+    expect((node.llmConfig as Record<string, unknown>)["provider"]).toBe("anthropic");
+  }
 });
 
 describe("common fields and loud rules", () => {

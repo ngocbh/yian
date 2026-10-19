@@ -2,8 +2,8 @@
  * Classifying `nodes:` entries, a node has `kind:` and a value has a YAML tag: a port of
  * `tests/compose/test_value_entry_parse.py`. The Python tests read the flow with `load_flow`;
  * these read its `nodes:` mapping with `parseNodes`, so the entry under test comes first and the
- * `code` node after it is parsed only by the rows that load every entry, with `StandInCode`
- * registered.
+ * `code` node after it is parsed, by the registered `CodeDescriptor`, only by the rows that load
+ * every entry.
  *
  * Re-expected: TS reads unquoted dates as text (rule `dates`), so the four date rows of
  * `test_untagged_scalar_or_list_shows_the_tag_to_write` are deliberate TS rows, not Python's: a
@@ -25,12 +25,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
+import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { containsItself, exampleType, parseNodes } from "../../src/compose/parse/nodes.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
 import { loadError, nodesOf, runTextCase } from "./declarations.ts";
-import { StandInCode, standIn, withKinds } from "./stand_ins.ts";
+import { standIn } from "./stand_ins.ts";
 
 afterEach(() => forget());
 
@@ -73,9 +74,9 @@ function nodesCursor(text: string): SourceCursor {
   return SourceDocument.parse(text).root.child("nodes");
 }
 
-/** Parse the `nodes:` of `text` with `StandInCode` registered, expecting a load error. */
+/** Parse the `nodes:` of `text`, expecting a load error. */
 function parseError(text: string): LoadError {
-  return loadError(() => withKinds([StandInCode], () => parseNodes(nodesCursor(text))));
+  return loadError(() => parseNodes(nodesCursor(text)));
 }
 
 test("untagged mapping without kind says add kind or a tag", () => {
@@ -210,7 +211,7 @@ test("tagged entries are read by the callback in source order", () => {
     return desc;
   };
 
-  const descriptors = withKinds([StandInCode], () => parseNodes(cursor, { readValue }));
+  const descriptors = parseNodes(cursor, { readValue });
 
   expect([...descriptors.keys()]).toEqual(["a", "x", "d", "b"]);
   expect(calls).toEqual([
@@ -219,8 +220,8 @@ test("tagged entries are read by the callback in source order", () => {
   ]);
   expect(descriptors.get("x")).toBe(read.get("x")!);
   expect(descriptors.get("d")).toBe(read.get("d")!);
-  expect(descriptors.get("a")).toBeInstanceOf(StandInCode);
-  expect(descriptors.get("b")).toBeInstanceOf(StandInCode);
+  expect(descriptors.get("a")).toBeInstanceOf(CodeDescriptor);
+  expect(descriptors.get("b")).toBeInstanceOf(CodeDescriptor);
 });
 
 test("a tagged mapping with kind is still a value", () => {

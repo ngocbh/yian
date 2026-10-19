@@ -114,7 +114,10 @@ interface CallPiece {
 
 /** The request rules that differ between Chat Completions routes. */
 export interface ChatOptions {
-  /** Send earlier assistant reasoning back as `reasoning_content` (DeepSeek). */
+  /**
+   * Send earlier assistant reasoning back as `reasoning_content` (DeepSeek), and `""` for a turn
+   * with none when the request sends tools.
+   */
   readonly echoReasoningContent: boolean;
   /** Send `reasoning_split: true`, so reasoning arrives apart from the text (MiniMax M2). */
   readonly reasoningSplit: boolean;
@@ -163,7 +166,8 @@ export interface OpenAIChatOptions {
   block?: JsonObject | null;
   /**
    * Called once per assistant message, on a route that echoes reasoning, holding a reasoning
-   * record that can't be used.
+   * record that can't be used. The message is still sent, with `reasoning_content: ""` when the
+   * request sends tools and nothing else is echoed.
    */
   onReplayDegraded?: (reason: ReplayDegradedReason) => void;
 }
@@ -201,7 +205,8 @@ export class OpenAIChat implements SseProtocol {
    * On a route that echoes reasoning, an assistant message holding a reasoning record that
    * can't be used is sent without that reasoning, and `onReplayDegraded` is called once for it;
    * a throw from the callback propagates. When such a request sends tools, an assistant message
-   * with no reasoning to echo is sent with `reasoning_content: ""`.
+   * with no reasoning to echo is sent with `reasoning_content: ""` (tools added only by the
+   * provider block don't count).
    *
    * @throws {TypeError} If a message holds a media part or a part its role cannot carry.
    */

@@ -54,6 +54,7 @@ import { join } from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
 
+import { copyGraph } from "../../src/compile/model.ts";
 import { current, type Env } from "../../src/defaults.ts";
 import { TokenUsage } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
@@ -328,7 +329,7 @@ test("needsSteps follows callTime, also on a shallow copy", () => {
   expect(node.callTime).toBe(at);
   expect(node.needsSteps).toBe(true);
 
-  const copy = Object.assign(Object.create(Object.getPrototypeOf(node)) as AgentNode, node);
+  const copy = copyGraph(node);
   expect(copy.callTime).toBe(at);
   expect(copy.needsSteps).toBe(true);
   copy.callTime = null;
@@ -397,11 +398,14 @@ test("bindReserved names a field by llmConfigLabel and passes the host credentia
   });
 });
 
-test("bindReserved needs the __llm_config wiring", () => {
+test("bindReserved needs the __llm_config binding", () => {
   const node = new AgentNode("chat");
   node.callTime = callTime();
-  expect(() => node.bindReserved(new Map(), pickPool(null))).toThrow(
-    new Error("AGENT node 'chat' has no `__llm_config` wiring"),
+  const message = "AGENT node 'chat' has no `__llm_config` wiring";
+  expect(() => node.bindReserved(new Map(), pickPool(null))).toThrow(new Error(message));
+  // A value that isn't a binding is the same setup fault.
+  expect(() => node.bindReserved(new Map([[LLM_CONFIG_KEY, { model: "m" }]]), pickPool(null))).toThrow(
+    new Error(message),
   );
 });
 

@@ -1351,8 +1351,8 @@ Changed (TS yian): the inbox is push-based. In place of `interrupted(node_id)`,
 `interruptSignal(nodeId)` returns an `AbortSignal` the host aborts to interrupt that
 node. `drain(nodeId)` returns the queued messages or a promise of them, and the node
 awaits it between its effects. Nothing runs on a worker thread, so the inbox needs no
-lock. The `Steering` interface lives in `nodes/base.ts`, and the run entry point
-re-exports it.
+lock. The `Steering` interface lives in `nodes/base.ts`; the run entry point will
+re-export it once it is ported.
 
 ## Injecting agent memory
 

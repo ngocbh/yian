@@ -258,7 +258,7 @@ export class AgentNode extends Node {
    *
    * @returns `{__llm_config: <config>}`, the resolved config with no key or header value, the
    *   shape of a `RunStarted` map entry; `{}` for an agent run start resolved.
-   * @throws Error when a call-time agent's wiring has no `__llm_config` source.
+   * @throws Error when a call-time agent's wiring has no `__llm_config` binding.
    * @throws BindingError when a value breaks its tag (`binding.type`) or fails to resolve, or the
    *   resolved config is refused (`contract.input`); the message names the field.
    * @throws AuthError when the config is marked for the host key the run does not hold; the
@@ -270,11 +270,12 @@ export class AgentNode extends Node {
     options: { bind?: ReservedBinder | null } = {},
   ): Record<string, unknown> {
     if (this.callTime === null) return {};
-    if (!nodeWiring.has(LLM_CONFIG_KEY)) {
+    const template = nodeWiring.get(LLM_CONFIG_KEY);
+    if (!(template instanceof Binding)) {
       throw new Error(`AGENT node ${reprText(this.id)} has no \`${LLM_CONFIG_KEY}\` wiring`);
     }
     return {
-      [LLM_CONFIG_KEY]: callTimeConfig(nodeWiring.get(LLM_CONFIG_KEY) as Binding, pool, this.callTime, {
+      [LLM_CONFIG_KEY]: callTimeConfig(template, pool, this.callTime, {
         label: this.llmConfigLabel,
         credentials: this.hostCredentials,
       }),

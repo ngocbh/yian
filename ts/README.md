@@ -180,8 +180,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   every read.
 - `src/nodes/base.ts` holds `Node`. `run(inputs, caps)` is async and resolves to one `Output`,
   `Route` or `Grow`; a kind's `forward(inputs, caps)` may return the result or a promise. The
-  capabilities are one `NodeCaps` object (`signal`, `bindItem`, `steps`, `tools`). `tools` is the
-  run's `ToolSet`, for a node that declares `needsTools` (TOOL and HUMAN_INPUT). `signal` is
+  capabilities are one `NodeCaps` object (`signal`, `bindItem`, `steps`, `tools`, and AGENT's
+  fields below). `tools` is the run's `ToolSet`, for a node that declares `needsTools` (TOOL,
+  HUMAN_INPUT and AGENT). `signal` is
   optional in the type; the runtime's evaluator gives every node its own (the evaluator is not
   ported yet).
 - `BackwardContext` and `BackwardResult` deep-copy and deep-freeze their values once, in the

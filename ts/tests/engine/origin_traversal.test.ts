@@ -380,7 +380,10 @@ test("a plain-record AGENT llm config adds no origin", () => {
   const config = node.ownLlmConfig;
 
   expect(keys(node.iterLocalOrigins())).toEqual(AGENT_LOCAL_KEYS);
-  node.rewriteLocalOrigins((o) => origin(`mapped/${o.key}`));
+  const copy = shallowCopy(node);
+  copy.rewriteLocalOrigins((o) => origin(`mapped/${o.key}`));
+  expect(keys(copy.iterLocalOrigins())).toEqual(AGENT_LOCAL_KEYS.map((key) => `mapped/${key}`));
+  expect(copy.ownLlmConfig).toBe(config);
   expect(node.ownLlmConfig).toBe(config);
 });
 

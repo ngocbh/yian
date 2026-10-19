@@ -13,7 +13,8 @@ import { Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { encodePool } from "../../src/runtime/log.ts";
-import type { RunState } from "../../src/runtime/state.ts";
+import type { RunStartData, RunState } from "../../src/runtime/state.ts";
+import { VariablePool } from "../../src/typesys/pool.ts";
 
 /** The run id the run-state tests record. */
 export const RUN_ID = "run-123";
@@ -59,6 +60,34 @@ export function flow(): CompiledFlow {
     new Edge("start-work", START_ID, "work"),
     new Edge("work-end", "work", END_ID),
   ]);
+}
+
+/** Return the complete pool a fresh run of `flow` records under `runId`. */
+export function pool(flow: CompiledFlow, runId: string = RUN_ID): VariablePool {
+  const built = new VariablePool(flow.startId);
+  built.set(flow.startId, { name: "Ada", count: 2n, aliases: ["A", "B"] });
+  built.set("preseeded", { retained: true });
+  built.addSystem("run_id", runId);
+  built.addSystem("today", "2026-08-13");
+  built.addSystem("now", "2026-08-13T12:34:56+00:00");
+  built.addSystem("tenant", "tests");
+  return built;
+}
+
+/** Return representative fresh-run data for `flow`. */
+export function startData(
+  flow: CompiledFlow,
+  options: { runId?: string; pool?: VariablePool; numWorkers?: number } = {},
+): RunStartData {
+  const { runId = RUN_ID, numWorkers = 3 } = options;
+  return {
+    runId,
+    flowFingerprint: FINGERPRINT,
+    initialPool: options.pool ?? pool(flow, runId),
+    startWiringOverride: { name: "${input.name}", metadata: { labels: ["one", "two"] } },
+    effectiveLlmByStaticPath: { agent: { provider: "openai", model: "gpt-test", options: { temperature: 0.2 } } },
+    numWorkers,
+  };
 }
 
 /** The flow wiring the nodes declare through `FuncNode.reads`; another node declares none. */

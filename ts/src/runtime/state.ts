@@ -13,18 +13,33 @@
  * Never imports: engine, run, backward, compose, or the CLI.
  */
 
-import { CompiledFlow } from "../compile/model.ts";
+import { CompiledFlow, type Edge } from "../compile/model.ts";
 import { BUILTIN, type Defaults } from "../defaults.ts";
-import type { Failure } from "../diagnostics.ts";
-import type { RunFailed, RunSucceeded } from "../events.ts";
+import { type Failure, reprText } from "../diagnostics.ts";
+import { RunStarted, type RunEvent, type RunFailed, type RunSucceeded } from "../events.ts";
 import type { MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../memory/index.ts";
-import { isExactly, type OutputContract } from "../nodes/contracts.ts";
+import type { Node } from "../nodes/base.ts";
+import { type Binding, isExactly, type OutputContract } from "../nodes/contracts.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
-import { isRecord } from "../typesys/values.ts";
+import { isRecord, type Type } from "../typesys/values.ts";
 import { NodeState } from "./common.ts";
 import { RuntimeBackwardState } from "./learning.ts";
-import type { RetainedTrace } from "./trace.ts";
+import {
+  decodePool,
+  decodeRecord,
+  encodePool,
+  encodeRecord,
+  NodeExpandedRecord,
+  NodeFailedRecord,
+  NodeRoutedRecord,
+  NodeSucceededRecord,
+  RecordEnvelope,
+  type RunRecord,
+  RunStartedRecord,
+  SCHEMA_VERSION,
+} from "./log.ts";
+import { type PrepareTraceOptions, prepareTrace, type RetainedTrace, type TraceDelta } from "./trace.ts";
 
 /** @internal Immutable identity roots established by canonical RunStarted decoding. Frozen. */
 export class MemoryAuthority {
@@ -201,6 +216,325 @@ export class RunState {
     this.memoryAuthority = new MemoryAuthority(null, false, null, null, this.backwardState.memoryOrder);
     this.initialStaticIds = new Set(flow.nodes.keys());
   }
+}
+
+/** The fully resolved inputs `prepareRunStarted` builds the first authoritative record from. */
+export interface RunStartData {
+  /** The non-empty identity the pool, the state and the enclosing log share. */
+  runId: string;
+  /** The authored flow's SHA-256 identity, 64 lowercase hex digits. */
+  flowFingerprint: string;
+  /** The complete pool, including the system values and the primed START record. */
+  initialPool: VariablePool;
+  /** START's narrowed per-run wiring. */
+  startWiringOverride: Readonly<Record<string, unknown>>;
+  /** The complete resolved agent configuration by stable static path. */
+  effectiveLlmByStaticPath: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  /** The exact non-negative dispatcher worker count. */
+  numWorkers: number;
+  /** Canonical snapshots, one per memory key; `null` (the default) disables memory. */
+  memorySnapshots?: readonly MemorySnapshotEnvelope[] | null;
+  /** Whether eligible accepted outcomes must carry learning evidence; defaults to `false`. */
+  learnable?: boolean;
+  /** The sorted memory key table paired with `memorySnapshots`; defaults to `null`. */
+  memories?: readonly MemorySpec[] | null;
+  /** Each scoped target's key stack, sorted by locator; defaults to `null`. */
+  memoryStacks?: readonly MemoryStack[] | null;
+  /**
+   * The `yian.defaults` values that differ from the built-in ones, by entry name; empty (the
+   * default) means the run uses the built-in values.
+   */
+  defaults?: Readonly<Record<string, bigint>>;
+  /**
+   * The agents whose configuration resolves only when they run, as `RunStartedRecord.callTimeLlm`;
+   * `null` (the default) when there are none.
+   */
+  callTimeLlm?: Readonly<Record<string, unknown>> | null;
+}
+
+/**
+ * The authority every plan carries: the exact state and flow it was prepared against, the
+ * canonical envelope text, the boundary nodes, and the trace change.
+ */
+interface PlanAnchors {
+  readonly originatingState: RunState;
+  readonly originatingFlow: CompiledFlow;
+  readonly envelopeJson: string;
+  readonly startId: string;
+  readonly startNode: Node;
+  readonly endId: string;
+  readonly endNode: Node | null;
+  readonly traceDelta: TraceDelta | null;
+}
+
+/** One initialization: the anchors alone, since the envelope text holds every payload. */
+interface RunStartedPlan extends PlanAnchors {
+  readonly kind: "runStarted";
+}
+
+/** Dispatching one ready head. */
+interface NodeStartedDelta {
+  readonly kind: "started";
+  readonly nodeId: string;
+}
+
+/** Restoring one retry frontier. */
+interface RunResumedDelta {
+  readonly kind: "resumed";
+  readonly retryNodeIds: readonly string[];
+  readonly numWorkers: number;
+}
+
+/** Appending one canonical step to an in-flight node's steps. */
+interface NodeStepDelta {
+  readonly kind: "step";
+  readonly nodeId: string;
+  readonly step: Readonly<JsonObject>;
+}
+
+/** Recording a stop over the in-flight nodes; it changes nothing but the sequence. */
+interface RunStoppedDelta {
+  readonly kind: "stopped";
+  readonly nodeIds: readonly string[];
+}
+
+/** One dispatch, resume, step or stop. */
+interface FrontierPlan extends PlanAnchors {
+  readonly kind: "frontier";
+  readonly delta: NodeStartedDelta | RunResumedDelta | NodeStepDelta | RunStoppedDelta;
+}
+
+/** The touched coordinates of one successful output commit. */
+interface SuccessDelta {
+  readonly nodeId: string;
+  readonly commitTarget: string;
+  readonly valueJson: string;
+  readonly outgoingEdgeIds: readonly string[];
+  readonly newlyReadyIds: readonly string[];
+  readonly observerCommitAs: string | null;
+}
+
+/**
+ * The derived terminal attached to one causal outcome. `outputJson` is canonical typed log text
+ * for success and `null` for failure; `succeeded` tells a typed null output from failure;
+ * `failure` is the one source-neutral authority for an unreachable terminal. `files` is the type
+ * the output is read through to restore its files, from `RunState.resultContract`.
+ */
+interface TerminalDelta {
+  readonly succeeded: boolean;
+  readonly outputJson: string | null;
+  readonly failure: Failure | null;
+  readonly files: Type | null;
+}
+
+/** One successful output; `files` is the type its commit target reads it through. */
+interface SuccessPlan extends PlanAnchors {
+  readonly kind: "success";
+  readonly delta: SuccessDelta;
+  readonly terminal: TerminalDelta | null;
+  readonly files: Type | null;
+}
+
+/** The ordered operations of one route and its skip closure. */
+interface RouteDelta {
+  readonly nodeId: string;
+  readonly handle: string;
+  readonly edgeUpdates: readonly (readonly [string, NodeState])[];
+  readonly skippedNodeIds: readonly string[];
+  readonly newlyReadyIds: readonly string[];
+  readonly terminalUnreachableFailure: Failure | null;
+}
+
+/** One route. */
+interface RoutePlan extends PlanAnchors {
+  readonly kind: "route";
+  readonly delta: RouteDelta;
+  readonly terminal: TerminalDelta | null;
+}
+
+/** One canonical failure. */
+interface FailurePlan extends PlanAnchors {
+  readonly kind: "failure";
+  readonly failure: Failure;
+}
+
+/** The scalar authority of one flat deterministic expansion. */
+interface GrowthDelta {
+  readonly spawnerId: string;
+  readonly pruneIds: readonly string[];
+  readonly retiredIds: readonly string[];
+  readonly topologyDigest: string;
+  readonly fragmentStartId: string;
+  readonly fragmentEndId: string;
+  readonly newNodeIds: readonly string[];
+  readonly newEdgeIds: readonly string[];
+  readonly derivedDepth: number | null;
+}
+
+/**
+ * A detached topology change: the fragment to add and what retires with it. Commit applies it in
+ * place, so a growth costs the fragment plus its prunes rather than a copy of every container.
+ */
+interface GrowthTopology {
+  readonly nodes: readonly (readonly [string, Node])[];
+  readonly edges: readonly Edge[];
+  readonly wiring: readonly (readonly [string, ReadonlyMap<string, Binding>])[];
+  readonly retiredEdges: readonly Edge[];
+  readonly depth: readonly (readonly [string, number])[];
+  readonly growthOwner: readonly (readonly [string, string | null])[];
+  readonly deferredPrune: ReadonlySet<string>;
+  readonly names: readonly (readonly [string, readonly string[]])[];
+}
+
+/** One fully materialized expansion. */
+interface GrowthPlan extends PlanAnchors {
+  readonly kind: "growth";
+  readonly delta: GrowthDelta;
+  readonly topology: GrowthTopology;
+}
+
+/** One post-terminal backward or memory-commit record and the backward state it leads to. */
+interface BackwardPlan extends PlanAnchors {
+  readonly kind: "backward";
+  readonly originatingBackwardState: RuntimeBackwardState;
+  readonly nextBackwardState: RuntimeBackwardState;
+}
+
+/** Every plan kind a `PreparedTransition` carries. */
+type PreparedPlan = RunStartedPlan | FrontierPlan | SuccessPlan | RoutePlan | FailurePlan | GrowthPlan | BackwardPlan;
+
+/**
+ * One canonical record plus its already validated total state-change plan. Frozen.
+ *
+ * `_plan` is internal: callers may inspect the durable record and the expected authority
+ * coordinates, but the reducer's plan isn't a construction surface. The observers are returned
+ * only after append and apply both succeed.
+ */
+export class PreparedTransition {
+  /** The canonical record the log will retain. */
+  readonly record: RunRecord;
+  /** The run id the state and the log must have. */
+  readonly expectedRunId: string;
+  /** The sequence the state and the log must expect next. */
+  readonly expectedSequence: number;
+  /** @internal The frozen plan `commitPrepared` checks and applies. */
+  readonly _plan: PreparedPlan;
+  /** The events the transition publishes once committed. */
+  readonly observers: readonly RunEvent[];
+
+  /** Hold the fields as given, with a frozen copy of `observers`. */
+  constructor(
+    record: RunRecord,
+    expectedRunId: string,
+    expectedSequence: number,
+    plan: PreparedPlan,
+    observers: readonly RunEvent[],
+  ) {
+    this.record = record;
+    this.expectedRunId = expectedRunId;
+    this.expectedSequence = expectedSequence;
+    this._plan = plan;
+    this.observers = Object.freeze([...observers]);
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Prepare canonical initialization without mutating `state`.
+ *
+ * @param state A pristine state whose private graph holds its synthesized START node.
+ * @param data The complete pool, identity, configuration and worker count of the run.
+ * @returns The canonical `RunStartedRecord`, its frozen total plan and its observer.
+ * @throws TypeError when `state` isn't exactly a `RunState`, or the worker count isn't a safe
+ *   integer.
+ * @throws RangeError when the state isn't pristine, identity disagrees across the inputs, START
+ *   is missing or unprimed, or a field breaks the public run-record wire contract.
+ */
+export function prepareRunStarted(state: RunState, data: RunStartData): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareRunStarted expects a RunState");
+  requirePristine(state);
+  const startId = state.flow.startId;
+  if (!state.flow.nodes.has(startId)) throw new RangeError(`flow START node ${reprText(startId)} is missing`);
+  if (!Number.isSafeInteger(data.numWorkers)) throw new TypeError("num_workers must be a non-negative integer");
+  if (data.numWorkers < 0) throw new RangeError("num_workers must be a non-negative integer");
+
+  // Encode then decode before any identity check, so live initialization and replay both reason
+  // about the same strict durable pool representation.
+  const canonicalPool = decodePool(encodePool(data.initialPool));
+  if (canonicalPool.startId !== startId) {
+    throw new RangeError(
+      `initial pool start_id mismatch: expected ${reprText(startId)}, found ${reprText(canonicalPool.startId)}`,
+    );
+  }
+  if (canonicalPool.resolve("system", ["run_id"]) !== data.runId) {
+    throw new RangeError("initial pool system.run_id must equal RunStartData.run_id");
+  }
+  if (!isRecord(canonicalPool.get(startId))) throw new RangeError("initial pool primed START value must be a dict");
+
+  const candidate = new RunStartedRecord({
+    flowFingerprint: data.flowFingerprint,
+    initialPool: encodePool(canonicalPool),
+    startWiringOverride: data.startWiringOverride,
+    effectiveLlmByStaticPath: data.effectiveLlmByStaticPath,
+    numWorkers: data.numWorkers,
+    memorySnapshots: data.memorySnapshots ?? null,
+    learnable: data.learnable ?? false,
+    memories: data.memories ?? null,
+    memoryStacks: data.memoryStacks ?? null,
+    defaults: data.defaults ?? {},
+    callTimeLlm: data.callTimeLlm ?? null,
+  });
+  // The public envelope codec is the sole payload authority. Decode its canonical text at once,
+  // so the prepared record is exactly what either log will retain.
+  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, data.runId, state.nextSequence, candidate));
+  const envelope = decodeRecord(envelopeJson);
+  const record = envelope.record;
+  // An exhaustive codec invariant.
+  if (!isExactly(record, RunStartedRecord)) {
+    throw new TypeError("run-start envelope decoded to a different record kind");
+  }
+
+  const plan: RunStartedPlan = Object.freeze({
+    kind: "runStarted",
+    originatingState: state,
+    originatingFlow: state.flow,
+    envelopeJson,
+    startId,
+    startNode: state.flow.nodes.get(startId)!,
+    endId: state.flow.endId,
+    endNode: state.flow.nodes.get(state.flow.endId) ?? null,
+    traceDelta: prepareRecordTrace(state, envelope),
+  });
+  return new PreparedTransition(record, envelope.runId, envelope.seq, plan, [new RunStarted()]);
+}
+
+/**
+ * Prepare the accepted trace change while the executing node still exists.
+ *
+ * `options.writerFiles` is the type an accepted output's commit target reads it through to
+ * restore its files.
+ */
+function prepareRecordTrace(
+  state: RunState,
+  envelope: RecordEnvelope,
+  options: Omit<PrepareTraceOptions, "rootEndId" | "rootInputNames"> = {},
+): TraceDelta | null {
+  const record = envelope.record;
+  const nodeId = outcomeNodeId(record);
+  const started = isExactly(record, RunStartedRecord);
+  return prepareTrace(state.trace, envelope, nodeId === null ? null : (state.flow.nodes.get(nodeId) ?? null), {
+    ...options,
+    rootEndId: started ? state.flow.endId : null,
+    rootInputNames: started && record.learnable ? state.flow.nodes.get(state.flow.startId)!.backwardInputNames() : null,
+  });
+}
+
+/** The physical executing node of a canonical outcome record, or `null` for another record. */
+function outcomeNodeId(record: RunRecord): string | null {
+  if (isExactly(record, NodeFailedRecord)) return record.failure.nodeId;
+  if (isExactly(record, NodeExpandedRecord)) return record.spawnerId;
+  if (isExactly(record, NodeSucceededRecord) || isExactly(record, NodeRoutedRecord)) return record.nodeId;
+  return null;
 }
 
 /** Whether two sets of ids hold the same ids, in any order. */

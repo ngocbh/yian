@@ -5,11 +5,11 @@
  * `code` node after it is parsed only by the rows that load every entry, with `StandInCode`
  * registered.
  *
- * Unquoted dates are text in TS (rule `dates`), so the date rows of
- * `test_untagged_scalar_or_list_shows_the_tag_to_write` are re-expected as TS reads them: a list
- * holding a date is a list of mixed items or of text, and a lone date is `!str`. Under D34
- * infinity is a value, so an untagged `.inf` gets its example, and the YAML layer refuses `.nan`
- * before `parseNodes` sees it.
+ * Re-expected: TS reads unquoted dates as text (rule `dates`), so the four date rows of
+ * `test_untagged_scalar_or_list_shows_the_tag_to_write` are deliberate TS rows, not Python's: a
+ * list holding a date is a list of mixed items or of text, and a lone date is `!str`. Infinity is
+ * a float value in TS (rule `infinity`), so an untagged `.inf` gets its example, and the YAML
+ * layer refuses `.nan` before `parseNodes` sees it.
  *
  * TS-only: `!!str 3`, whose example quotes the text since plain `3` reads as an int (Python checks
  * it through `test_the_example_entry_loads`), and `exampleType` and `containsItself` called
@@ -108,7 +108,8 @@ describe("untagged scalar or list shows the tag to write", () => {
     ["  x: 2024-01-01T10:00:00\n", "`x: !str 2024-01-01T10:00:00`"],
     // Plain `3` would read back as an int, so the example quotes the text.
     ["  x: !!str 3\n", '`x: !str "3"`'],
-    // Under D34 infinity is a value, and `x: !float .inf` loads; Python gives no example.
+    // Infinity is a float value in TS (rule `infinity`), and `x: !float .inf` loads; Python gives
+    // no example.
     ["  x: .inf\n", "`x: !float .inf`"],
   ])("%j", (entry, example) => {
     const text = flow(entry);

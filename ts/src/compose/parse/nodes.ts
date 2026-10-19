@@ -68,6 +68,7 @@ const NON_IDENTIFIER_CHAR = /[^A-Za-z0-9_]/gu;
 // Item types a list of numbers joins to `float`.
 const INT = Type.scalar(ValueKind.INTEGER);
 const FLOAT = Type.scalar(ValueKind.NUMBER);
+const isNumberType = (typ: Type) => typeEquals(typ, INT) || typeEquals(typ, FLOAT);
 // A null while list items are joined: its type is the other items' type, made optional.
 const NULL = new Type({ kind: ValueKind.NONE, nullable: true });
 // The item type of a list whose items share no type.
@@ -339,10 +340,11 @@ function itemType(value: unknown): Type | null {
   if (isRecord(value)) return Type.scalar(ValueKind.OBJECT);
   if (isList(value) && value.length > 0) {
     const types = value.map(itemType);
-    if (types.some((typ) => typ === null)) return null;
+    if (!types.every((typ): typ is Type => typ !== null)) return null;
     let element: Type | null = types[0]!;
     for (const typ of types.slice(1)) {
-      element = element === null ? null : joined(element, typ!);
+      element = joined(element, typ);
+      if (element === null) break;
     }
     if (element !== null) return listOf(element);
     return listOf(ANY.replace({ nullable: value.includes(null) }));
@@ -363,11 +365,10 @@ function joined(first: Type, second: Type): Type | null {
   const nullable = first.nullable || second.nullable;
   const a = first.replace({ nullable: false });
   const b = second.replace({ nullable: false });
-  const isNumber = (typ: Type) => typeEquals(typ, INT) || typeEquals(typ, FLOAT);
   let result: Type;
   if (typeEquals(a, b)) {
     result = a;
-  } else if (isNumber(a) && isNumber(b)) {
+  } else if (isNumberType(a) && isNumberType(b)) {
     result = FLOAT;
   } else if (isListKind(a.kind) && isListKind(b.kind)) {
     if (a.element === undefined || b.element === undefined) {

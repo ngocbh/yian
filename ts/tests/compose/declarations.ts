@@ -6,8 +6,8 @@
  * `fileOf`, which parses its top level; `caseText` and `caseDocument`, which read a conformance
  * case's flow as text or as a parsed document; and the harvested-case harness built on them
  * (`loadError`, `cursorAt`, `caseRegistry`, `CaseRow`, `runCase`, `TextCaseRow`, `runTextCase`,
- * `inputsAt`, `variablesAt`), which makes the loader's call on a case and compares the result
- * with the case's `expect`.
+ * `inputsAt`, `variablesAt`, `parsedNodes`, `assembled`, `assembleText`), which makes the loader's
+ * call on a case and compares the result with the case's `expect`.
  */
 
 import { readFileSync } from "node:fs";
@@ -16,7 +16,9 @@ import { fileURLToPath } from "node:url";
 
 import { expect } from "bun:test";
 
+import { assemble, type CallableScope, type ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
+import { boundaryFieldRanges } from "../../src/compose/helpers/source.ts";
 import { readSourceFlowInputs, readSourceParameters } from "../../src/compose/helpers/types.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
@@ -188,6 +190,72 @@ export const variablesAt =
       declarationLabel: "variable",
       requireDefault: true,
     });
+
+/** Parse the flow's `nodes:` as `assemble` does (`parseFile`, `flowNodesCursor`, `parseNodes`). */
+export const parsedNodes: CaseCall = (document) =>
+  parseNodes(flowNodesCursor(document, parseFile(document).nodes));
+
+/**
+ * Assemble the root flow of `document` as the loader calls `assemble` on it, with a scope whose
+ * catalog is `builder`; the loader's `uses:` aliases, flow `llm_config:` and root memories are
+ * left out.
+ */
+function assembleRoot(
+  document: SourceDocument,
+  registry: TypeRegistry,
+  builder: SourceCatalogBuilder,
+): ComposedFlow {
+  const file = parseFile(document);
+  const root = document.root;
+  const scope: CallableScope = {
+    catalogBuilder: builder,
+    resolve: () => {
+      throw new Error("child flows load in T3-22");
+    },
+    registerPrivate: () => {},
+  };
+  // A compact flow (no `nodes:`) lends its top-level `output:` to its one synthesized node, so the
+  // loader locates the flow's `asserts:` and `output:` only in a full flow.
+  const childOf = (key: string, flowOnly = false) =>
+    (!flowOnly || root.has("nodes")) && root.has(key) ? root.child(key) : null;
+  return assemble({
+    inputsSection: file.inputs,
+    inputsCursor: childOf("input"),
+    nodesCursor: flowNodesCursor(document, file.nodes),
+    outputsSection: file.outputs,
+    assertsSection: file.asserts,
+    registry,
+    scope,
+    owner: ["root"],
+    version: file.version,
+    name: file.name,
+    description: file.description,
+    flowEnv: file.env,
+    boundaryFieldRanges: boundaryFieldRanges(root),
+    assertsCursor: childOf("asserts", true),
+    outputsCursor: childOf("output", true),
+    flowId: file.id,
+  });
+}
+
+/** Assemble the case's root flow as the loader calls `assemble` on it. */
+export const assembled: CaseCall = (document, registry, _diagnostics, builder) =>
+  assembleRoot(document, registry, builder);
+
+/**
+ * Assemble flow `text`'s root as `assembled` does, returning the flow and the catalog builder
+ * its origins resolve through (`builder.freeze()` or `builder.resolveRegistered(origin)`).
+ *
+ * @param label The file name diagnostics name (default `flow.yaml`).
+ */
+export function assembleText(
+  text: string,
+  label = "flow.yaml",
+): { flow: ComposedFlow; builder: SourceCatalogBuilder } {
+  const document = parseSourceDocument(text, label);
+  const builder = new SourceCatalogBuilder();
+  return { flow: assembleRoot(document, caseRegistry(document), builder), builder };
+}
 
 /**
  * Make `row.call` on its case and compare the result with the case's `expect`: an `ok` case

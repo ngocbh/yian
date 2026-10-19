@@ -10,9 +10,9 @@
  * TS-only: an untagged float default's example, spelled as Python's `repr` spells a finite
  * float and as `.inf` for infinity, which YAML reads back as a float (Python writes `inf`,
  * which reads back as text); a type with a default that doesn't parse (`n: int = [`), kept as
- * written where Python reads an unbound name; and the harvested-case table, which makes the
- * loader's call on the declarations of the conformance cases these readers decide, comparing
- * the message and the last frame.
+ * written where Python reads an unbound name; and the harvested-case table, comparing the
+ * message and the last frame: its flow-input rows read the declarations, and its agent-variable
+ * rows assemble the flow as the loader calls `assemble`.
  *
  * Later (T3-22): the `load_flow` tests: the bracket typedef and node output, the typed binding
  * text, the typed flow output text, text without a type that stays plain text, and the
@@ -24,14 +24,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFlowInputs, readVariables } from "../../src/compose/helpers/types.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
-import {
-  type CaseRow,
-  inputsAt,
-  loadError,
-  parametersFromYaml,
-  runCase,
-  variablesAt,
-} from "./declarations.ts";
+import { assembled, type CaseRow, inputsAt, loadError, parametersFromYaml, runCase } from "./declarations.ts";
 
 // Pinned before `MESSAGE_REGISTRY` is read too, so neither depends on the shell's `YIAN_*` limits.
 install(BUILTIN);
@@ -189,12 +182,11 @@ describe("source-free declarations", () => {
 
 const rootInput = inputsAt(["input"]);
 const childInput = inputsAt(["defs", "child", "input"], ["def", "child"]);
-const askVariables = variablesAt(["nodes", "ask", "variables"], ["node", "ask"]);
 const OLD_FORMS = "load-core/compose_old_forms__";
 
 test.each<CaseRow>([
-  { id: `${OLD_FORMS}untagged_agent_variable`, call: askVariables },
-  { id: `${OLD_FORMS}untagged_agent_variable_value`, call: askVariables },
+  { id: `${OLD_FORMS}untagged_agent_variable`, call: assembled },
+  { id: `${OLD_FORMS}untagged_agent_variable_value`, call: assembled },
   { id: `${OLD_FORMS}untagged_bool_input_with_a_yaml11_word`, call: rootInput },
   { id: `${OLD_FORMS}untagged_flow_input`, call: rootInput },
   { id: `${OLD_FORMS}untagged_flow_input_value`, call: rootInput },

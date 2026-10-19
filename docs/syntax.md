@@ -87,7 +87,7 @@ Changed (TS yian): `inf` is an expression keyword too, so a node named `inf` mus
 renamed. So must a node input named `inf`, since `${inf}` reads infinity, not the input; a
 `map` argument may keep the name (the child reads it as `${input.inf}`, and a `map` has no
 node asserts). A compact flow's input named `inf` must be renamed too, since its node reads
-it by bare name.
+it by bare name. So must an AGENT variable named `inf`, since its prompts read it the same way.
 
 Changed: a node id that isn't an identifier, or is an expression keyword, used to load,
 and failed only when a `${...}` referenced it, with an error that didn't name the node
@@ -1810,6 +1810,8 @@ naming the tool it didn't call. `retries:` must be a
 non-negative integer (`0` means no retry); anything else fails at load. It covers
 only these corrections, not tool failures. A TOOL node's `retries:` is different:
 it retries a failed tool call (see [TOOL retries](#tool-retries)).
+
+Changed (TS yian): `retries:` is at most 9,007,199,254,740,991 (JavaScript's largest safe integer).
 
 ```yaml
 extract:

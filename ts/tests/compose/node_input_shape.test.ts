@@ -1,8 +1,9 @@
 /**
  * A node's `input:` must be a mapping; any other value is a located load error naming the kind's
  * binding noun and showing a fix: the parse half of `tests/compose/test_node_input_shape.py`
- * (rows 1-4 and 6), through each stand-in's template `parse` on the node's cursor with `input:`
- * renamed to `inputs` as the parse phase does. A text value is spelled by `valueRepr` (`"abc"`
+ * (rows 1-4 and 6), through each kind's `parse` on the node's cursor with `input:` renamed to
+ * `inputs` as the parse phase does: the registered `AgentDescriptor` for `agent`, a stand-in's
+ * template `parse` for each kind not yet ported. A text value is spelled by `valueRepr` (`"abc"`
  * and `true` where Python shows `'abc'` and `True`).
  *
  * Dropped: the date row of `test_non_mapping_input_is_a_load_error` (TS reads an unquoted date
@@ -16,26 +17,27 @@
 
 import { expect, test } from "bun:test";
 
+import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
 import { SourceDocument } from "../../src/compose/source/document.ts";
 import { loadError } from "./declarations.ts";
-import { StandInAgent, StandInCode, standIn } from "./stand_ins.ts";
+import { StandInCode, standIn } from "./stand_ins.ts";
 
-const STAND_INS: ReadonlyMap<string, DescriptorClass> = new Map([
+const CLASSES: ReadonlyMap<string, DescriptorClass> = new Map([
   ["loop", standIn("loop", { allow: ["times", "call", "inputs"] })],
   ["call", standIn("call", { allow: ["call", "inputs"] })],
   ["map", standIn("map", { allow: ["over", "call", "inputs"] })],
   ["code", StandInCode],
   ["tool", standIn("tool", { allow: ["tool_id", "inputs"] })],
-  ["agent", StandInAgent],
+  ["agent", AgentDescriptor],
   ["human_input", standIn("human_input", { allow: ["prompt", "inputs"] })],
 ]);
 
-/** Parse node `nodeId` of `text`'s `nodes:` with the stand-in its `kind:` names. */
+/** Parse node `nodeId` of `text`'s `nodes:` with the class its `kind:` names. */
 function parseNode(text: string, nodeId: string): NodeDescriptor {
   const cursor = SourceDocument.parse(text).root.child("nodes").child(nodeId);
-  const cls = STAND_INS.get(cursor.get("kind") as string)!;
+  const cls = CLASSES.get(cursor.get("kind") as string)!;
   return cls.parse(nodeId, cursor.renamed(new Map([["input", "inputs"]])));
 }
 

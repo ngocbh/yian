@@ -7,7 +7,8 @@
  * `test_malformed_values_are_load_errors` (ints written as bigints). The messages of the
  * harvested `load-agent/engine_memory_surface__empty_flow_declaration` and
  * `load-agent/engine_memory_authoring__{reserved_memory_name,config_not_a_mapping,empty_memory_name}`
- * are pinned.
+ * are pinned, and `load-agent/engine_memory_surface__empty_agent_declaration` (the `{}` half of
+ * `test_agent_null_declaration_is_absent_and_empty_mapping_fails`) as `parseNodes` reads it.
  *
  * Changed: unknown long-form keys are listed with `writeAsText` over the names in code-unit
  * order (`unknown key(s) ["extra"]`), where Python writes a sorted list of reprs.
@@ -18,17 +19,21 @@
  * `test_null_flow_declaration_is_the_same_as_absent`,
  * `test_flow_shape_errors_point_at_the_value`, `test_def_flow_declarations_carry_the_def_owner`,
  * `test_agent_declarations_are_parsed_and_stamped_with_the_node`,
- * `test_agent_null_declaration_is_absent_and_empty_mapping_fails` and
+ * the `null` half of `test_agent_null_declaration_is_absent_and_empty_mapping_fails` and
  * `test_resolver_errors_become_located_load_errors` need the loader.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import { parseMemoryDeclarations } from "../../src/compose/helpers/memory.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
+import { forget } from "../../src/defaults.ts";
 import { DeclSite, type MemoryDecl } from "../../src/memory/contracts.ts";
 import type { Value } from "../../src/typesys/values.ts";
+import { type CaseRow, parsedNodes, runCase } from "../compose/declarations.ts";
+
+afterEach(() => forget());
 
 const SITE = new DeclSite([], ["root"], null);
 
@@ -161,3 +166,7 @@ describe("parseMemoryDeclarations", () => {
     expect(frames[0]!.range).toEqual(sourceRange!);
   });
 });
+
+test.each<CaseRow>([
+  { id: "load-agent/engine_memory_surface__empty_agent_declaration", call: parsedNodes },
+])("parseNodes: $id", runCase);

@@ -3176,6 +3176,10 @@ The gate's answer is a **record keyed by header** — `{header: label}`, or
 `object`. `prompt:` is optional once a node has questions; `questions:` and
 `adaptive_questions:` are **mutually exclusive**.
 
+Changed (TS yian): `multi_select` must be `true` or `false`; text such as `yes` or `"true"` and
+the numbers `1`/`0` are not converted (write `true`). A bad question reads
+`question[N] is invalid: <the first problem>` instead of a validation dump.
+
 **Static questions** — a literal list (with `${...}` templating from `input:`):
 
 ```yaml

@@ -1,21 +1,21 @@
 /**
- * CODE: run deterministic TypeScript or JavaScript, either a file reference or an inline body, or
- * a built-in operation.
+ * CODE: run deterministic TypeScript or JavaScript (a file reference or an inline body), or a
+ * built-in operation.
  *
  * A `code` node carries one polymorphic `code:` field, classified once by shape:
  *
  * - a relative path to a `.ts`, `.js` or `.mjs` file plus `:fn` (`./helpers.ts:fn`,
  *   `../lib/x.mjs:run`) is **reference mode**: the named export, resolved against the flow's base
  *   directory, is called **in-process** with the node's inputs.
- * - anything else is **inline mode**: a body that reads the node's `inputs` and returns a value,
+ * - any other text is **inline mode**: a body that reads the node's `inputs` and returns a value,
  *   run **in-process** with the same one-record calling convention, so a body promotes to a
  *   reference by moving it into a file.
  * - a `{builtin: "identity", field: <input name>}` object is **built-in mode**: the node returns
  *   that input unchanged, with no module to load. A tagged value entry in `nodes:` lowers to this
  *   form rather than to code text.
  *
- * All modes call with the node's bound typed input record (only its declared inputs, not the
- * pool) and return the node's one output value.
+ * All modes read the node's bound typed input record (only its declared inputs, not the pool) and
+ * return the node's one output value.
  *
  * Only the node's shell is here. Nothing is compiled or imported at construction; the body
  * (importing a reference, running an inline body or a built-in, and mapping a failure to its
@@ -31,7 +31,7 @@
  */
 
 import { OriginRef, reprText } from "../../diagnostics.ts";
-import { jsTypeName } from "../../typesys/values.ts";
+import { isRecord, jsTypeName } from "../../typesys/values.ts";
 import { Node, NodeKind } from "../base.ts";
 import { mapOrigin, type OriginMapper, validateOptionalOrigin } from "../contracts.ts";
 
@@ -84,27 +84,28 @@ export function selectInlineCodeOrigin(
 /**
  * Require a `code:` value to be text or exactly `{builtin: "identity", field: <input name>}`.
  *
+ * `field` names the input the operation returns (compose sets it to the value entry's id); it
+ * isn't checked against the declared inputs here.
+ *
  * @returns The text itself, or a frozen copy of the built-in form.
  */
 function validateCode(code: unknown): string | BuiltinCode {
   if (typeof code === "string") return code;
-  if (typeof code !== "object" || code === null) {
+  if (!isRecord(code)) {
     throw new TypeError(`CODE code must be text or a built-in operation, got ${jsTypeName(code)}`);
   }
-  const form = code as Record<string, unknown>;
-  const keys = Object.keys(form);
+  const keys = Object.keys(code);
   if (
-    Object.getPrototypeOf(form) !== Object.prototype ||
     keys.length !== 2 ||
     !keys.includes("builtin") ||
     !keys.includes("field") ||
-    form.builtin !== "identity" ||
-    typeof form.field !== "string"
+    code.builtin !== "identity" ||
+    typeof code.field !== "string"
   ) {
     throw new TypeError('CODE built-in must be {builtin: "identity", field: <input name>}');
   }
-  if (form.field === "") throw new RangeError("CODE built-in field must be non-empty");
-  return Object.freeze({ builtin: "identity", field: form.field });
+  if (code.field === "") throw new RangeError("CODE built-in field must be non-empty");
+  return Object.freeze({ builtin: "identity", field: code.field });
 }
 
 /** Require source-neutral CODE diagnostic carriers; only the selector passes a node origin. */
@@ -122,7 +123,8 @@ function validateCodeOrigins(codeOrigin: unknown, codeLineOrigins: unknown, node
  *
  * The one `code:` field is classified by shape at construction, and the mode is stored: text with
  * `classifyCodeSource`, a built-in form as `"builtin"`. A tagged value entry lowers to the built-in
- * identity form. The node never touches the pool: its body returns `new Output(value)`.
+ * identity form. The node never touches the pool: its body returns `new Output(value)`. Running
+ * any mode, the built-in included, is not ported yet and comes with `forward`.
  */
 export class CodeNode extends Node {
   readonly kind = NodeKind.CODE;

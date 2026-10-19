@@ -41,6 +41,18 @@ import { expect, test } from "bun:test";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { classifyCodeSource, CodeNode, selectInlineCodeOrigin } from "../../src/nodes/code/node.ts";
 
+/** Assert that `fn` throws exactly `cls` with exactly `message`. */
+function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
+  let caught: unknown;
+  try {
+    fn();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(cls);
+  expect((caught as Error).message).toBe(message);
+}
+
 test("classify reference inline reject", () => {
   expect(classifyCodeSource("./mod.ts:fn")).toBe("reference");
   expect(classifyCodeSource("../lib/x.mjs:run")).toBe("reference");
@@ -130,22 +142,31 @@ test("the built-in identity form has builtin mode and keeps a frozen copy", () =
 });
 
 test("a CODE built-in of the wrong shape is rejected", () => {
-  const message = new TypeError('CODE built-in must be {builtin: "identity", field: <input name>}');
+  const message = 'CODE built-in must be {builtin: "identity", field: <input name>}';
   for (const code of [
     { builtin: "other", field: "x" },
     { builtin: "identity" },
     { builtin: "identity", field: "x", extra: 1 },
     { builtin: "identity", field: 1 },
   ]) {
-    expect(() => new CodeNode("x", { code: code as never })).toThrow(message);
+    expectError(() => new CodeNode("x", { code: code as never }), TypeError, message);
   }
-  expect(() => new CodeNode("x", { code: { builtin: "identity", field: "" } })).toThrow(
-    new RangeError("CODE built-in field must be non-empty"),
+  expectError(
+    () => new CodeNode("x", { code: { builtin: "identity", field: "" } }),
+    RangeError,
+    "CODE built-in field must be non-empty",
   );
 });
 
 test("a CODE code that is neither text nor a built-in is rejected", () => {
-  expect(() => new CodeNode("x", { code: 42 as never })).toThrow(
-    new TypeError("CODE code must be text or a built-in operation, got number"),
+  expectError(
+    () => new CodeNode("x", { code: 42 as never }),
+    TypeError,
+    "CODE code must be text or a built-in operation, got number",
+  );
+  expectError(
+    () => new CodeNode("x", { code: [] as never }),
+    TypeError,
+    "CODE code must be text or a built-in operation, got Array",
   );
 });

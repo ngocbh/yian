@@ -78,6 +78,8 @@ import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
 import { siteKey } from "../nodes/base.ts";
 import { HumanInputDescriptor } from "../nodes/human_input.ts";
 // T3-17 imports
+import { Narrowing } from "../validate/narrowing.ts";
+import type { LocalInput } from "../validate/typed_bindings.ts";
 // T3-18 imports
 // T3-19 imports
 // T3-20 imports
@@ -1699,8 +1701,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // Every placeholder, by owner. Kind 1 is a stub in its owner's sub-block below: the owner deletes
 // the stub and imports the port under its import slot, keeping the sub-block header. A local type
 // alias is replaced by a `type` import of the same name under that slot, never just deleted, since
-// other owners' stubs use the shared ones: `Narrowing` (T3-20), `LocalInput` (T3-19) and
-// `LoweredAsserts` (T3-20). `TypeFn` is imported from compose/helpers/output_contracts.ts.
+// other owners' stubs use the shared one: `LoweredAsserts` (T3-20). `TypeFn` is imported from
+// compose/helpers/output_contracts.ts.
 // Kind 2 is a pipeline helper stubbed at its Python position: the owner ports its body in place,
 // adding the private helpers named beside it. Kind 3 is a `const` inside `assemble`: the owner
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
@@ -1736,7 +1738,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //          inlineLoops (3, `ReadonlySet<string>`): `new Set()`.
 //          localInputContracts (1): returns `new Map()`.
 //   T3-20  checkCaseBranches (1); caseOutputCursor (2): returns `null`.
-//          computeNarrowing (1): returns `{ unordered: new Set() }`.
+//          computeNarrowing (1): returns an empty `Narrowing` over the given maps.
 //          checkCaseWhenValues, checkImpossibleWhens, checkCaseExhaustive, validateNodeAsserts,
 //          checkSkippedArithmetic (1).
 //          lowerFlowAsserts (1): returns `null`.
@@ -1973,9 +1975,6 @@ function checkCaseHandles(
 
 // T3-19: compose/validate/{typed_bindings,call_types,loop_types,llm_config_sources}.ts
 
-/** Python's `compose.validate.typed_bindings.LocalInput`; not ported yet. */
-type LocalInput = unknown;
-
 /** Python's `compose.validate.typed_bindings.check_typed_inputs`; not ported yet. */
 function checkTypedInputs(
   flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
@@ -2061,11 +2060,6 @@ function checkLlmConfigSources(
 
 // T3-20: compose/validate/{case_branches,narrowing,case_exhaustive,asserts,skips}.ts
 
-/** What each node may assume about union values from the CASE branches that route it. */
-interface Narrowing {
-  /** Nodes a topological order could not reach, on or after a cycle; they get no facts. */
-  readonly unordered: ReadonlySet<string>;
-}
 /** Python's `compose.validate.asserts.LoweredAsserts`; not ported yet. */
 type LoweredAsserts = unknown;
 /** Python's `compose.validate.skips.SkipModel`; not ported yet. */
@@ -2092,7 +2086,7 @@ function computeNarrowing(
   inputs: ReadonlyMap<string, ValueContract>,
   options: { registry?: TypeRegistry | null } = {},
 ): Narrowing {
-  return { unordered: new Set() };
+  return new Narrowing({ producers, inputs });
 }
 
 /** Python's `compose.validate.case_exhaustive.check_case_when_values`; not ported yet. */

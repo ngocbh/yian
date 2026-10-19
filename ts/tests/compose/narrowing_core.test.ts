@@ -5,6 +5,7 @@
  * `::test_intersection_of_members_is_the_set_intersection`,
  * `::test_intersection_of_exact_with_members`, `::test_isinstance_fact_against_the_base_union`,
  * `::test_isinstance_fact_against_a_partly_shared_union`,
+ * `::test_the_fact_algebra_lives_in_helpers_and_narrowing_re_exports_it`,
  * `::test_not_isinstance_fact_keeps_the_members_the_check_cannot_have_passed`,
  * `::test_not_isinstance_fact_nullability`,
  * `::test_not_isinstance_fact_gives_nothing_without_a_union_or_an_exclusion`,
@@ -48,19 +49,20 @@
  * case's message, or its last line for a multi-line one, is the row's site prefix plus the
  * produced text. The `compose_null_narrowing__*` and `compose_null_narrowing_case__*` rows sit
  * here too, in the one harness, though their Python tests are `test_null_narrowing.py` and
- * `test_null_narrowing_case.py`. The sites' locations are not pinned here.
+ * `test_null_narrowing_case.py`. The sites' locations are not pinned here. Two rows read a
+ * `Narrowing` built by hand: an empty one gives the unchanged maps, and a filled one gives each
+ * node's and param's results.
  *
- * Changed: `Exact`, `Members`, `intersectFacts`, `isinstanceFact` and `unionFacts` are imported
- * from `narrowing_facts.ts`; Python imports them through `compose.validate.narrowing`'s
- * re-export. Facts, environments and guards compare with `toStrictEqual`, which also compares
- * classes; `Members` takes an array. `types` takes dotted base paths as keys (Python spells the
- * dots `__`). A compared tag and its close match are spelled `"biy"` / `did you mean "buy"?`
- * (Python `'biy'` / `did you mean 'buy'?`). `declaredImpossible` and `neverValue` are exported
- * for these tests (Python's `_declared_impossible` and `_never_value`). `searchedParamGuards`
- * gives a `Map` of `[case index, guard]` arrays where Python gives a dict of tuples.
+ * Changed: the re-export test compares the runtime names only, since `Env` and `Fact` are types
+ * and TS has no `__all__`. Facts, environments and guards compare with `toStrictEqual`, which
+ * also compares classes; `Members` takes an array. `types` takes dotted base paths as keys
+ * (Python spells the dots `__`). A compared tag and its close match are spelled `"biy"` /
+ * `did you mean "buy"?` (Python `'biy'` / `did you mean 'buy'?`). `declaredImpossible` and
+ * `neverValue` are exported for these tests (Python's `_declared_impossible` and `_never_value`).
+ * `searchedParamGuards` gives a `Map` of `[case index, guard]` arrays where Python gives a dict of
+ * tuples.
  *
- * Later (T3-20): `test_the_fact_algebra_lives_in_helpers_and_narrowing_re_exports_it`, the
- * `narrows` site of `test_an_unknown_check_kind_fails_loudly`,
+ * Later (T3-20): the `narrows` site of `test_an_unknown_check_kind_fails_loudly`,
  * `test_an_isinstance_case_narrows_its_target_to_the_member_or_sub_union`,
  * `test_a_case_branch_sees_what_its_when_proves`,
  * `test_a_case_branch_under_a_check_that_may_not_hold_is_not_narrowed`,
@@ -147,10 +149,14 @@ import {
   unionFacts,
   unresolvedType,
 } from "../../src/compose/helpers/narrowing_facts.ts";
+import * as narrowingFacts from "../../src/compose/helpers/narrowing_facts.ts";
 import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
 import { readType } from "../../src/compose/helpers/types.ts";
 import { CaseDescriptor, searchedParamGuards } from "../../src/compose/nodes/case.ts";
 import { forget } from "../../src/defaults.ts";
+import * as narrowing from "../../src/compose/validate/narrowing.ts";
+import { Narrowing, type Views } from "../../src/compose/validate/narrowing.ts";
+import { SourceRange } from "../../src/diagnostics.ts";
 import { parseCondition } from "../../src/expr/index.ts";
 import { isExactly, ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
@@ -245,6 +251,69 @@ test("isinstanceFact against a partly shared union", () => {
   expect(typesOverlap(BUY, t("Wide"))).toBe(true);
   expect(isinstanceFact(DECISION, t("SellOrWide"))).toStrictEqual(new Exact(t("SellOrWide")));
   expect(isinstanceFact(DECISION, t("TextOrWide"))).toStrictEqual(new Exact(t("TextOrWide")));
+});
+
+test("the fact algebra lives in helpers and narrowing re-exports it", () => {
+  for (const name of ["Exact", "Members", "intersectFacts", "isinstanceFact", "unionFacts"] as const) {
+    expect(narrowing[name]).toBe(narrowingFacts[name]);
+  }
+  // `Env` and `Fact` are types, re-exported with `export type`; nothing to compare at runtime.
+});
+
+test("an empty Narrowing gives every node and param the unchanged maps", () => {
+  const producers = new Map([["d", new ValueContract(DECISION)]]);
+  const inputs = new Map([["x", new ValueContract(BOOL)]]);
+  const empty = new Narrowing({ producers, inputs });
+  const [nodeProducers, nodeInputs] = empty.forNode("n");
+  expect(nodeProducers).toBe(producers);
+  expect(nodeInputs).toBe(inputs);
+  const [paramProducers, paramInputs] = empty.forParam("n", "p");
+  expect(paramProducers).toBe(producers);
+  expect(paramInputs).toBe(inputs);
+  expect(empty.paramSite("n", "p")).toBeNull();
+  expect(empty.paramEnv("n", "p")).toStrictEqual(new Map());
+  expect(empty.environment("n")).toStrictEqual(new Map());
+  expect(empty.paramRoutedBases("n", "p")).toStrictEqual(new Set());
+  expect(empty.paramUnchecked("n", "p")).toBe(false);
+  expect(empty.unordered).toStrictEqual(new Set());
+  expect(Object.isFrozen(empty)).toBe(true);
+});
+
+test("a Narrowing reads each node's and param's results", () => {
+  const producers = new Map([["d", new ValueContract(DECISION)]]);
+  const inputs = new Map<string, ValueContract>();
+  const nodeView: Views = [new Map([["d", new ValueContract(BUY_OR_SELL)]]), inputs];
+  const paramView: Views = [new Map([["d", new ValueContract(BUY)]]), inputs];
+  const env: Env = new Map([["d.output", new Members([BUY, SELL])]]);
+  const paramEnv: Env = new Map([["d.output", new Members([BUY])]]);
+  const site = ["cases[1].when", new SourceRange(3, 1, 3, 9)] as const;
+  const result = new Narrowing({
+    producers,
+    inputs,
+    environments: new Map([["n", env]]),
+    views: new Map([["n", nodeView]]),
+    paramViews: new Map([["n", new Map([["p", paramView]])]]),
+    paramSites: new Map([["n", new Map([["p", site]])]]),
+    paramEnvs: new Map([["n", new Map([["p", paramEnv]])]]),
+    paramRouted: new Map([["n", new Map([["p", new Set(["d.output"])]])]]),
+    uncheckedParams: new Map([["n", new Set(["q"])]]),
+    unordered: new Set(["loop"]),
+  });
+  expect(result.forNode("n")).toBe(nodeView);
+  // A guarded param gets its own view; any other param of the node gets the node's view.
+  expect(result.forParam("n", "p")).toBe(paramView);
+  expect(result.forParam("n", "q")).toBe(nodeView);
+  expect(result.forNode("m")[0]).toBe(producers);
+  expect(result.paramSite("n", "p")).toBe(site);
+  expect(result.paramSite("n", "q")).toBeNull();
+  expect(result.paramEnv("n", "p")).toBe(paramEnv);
+  expect(result.paramEnv("n", "q")).toStrictEqual(new Map());
+  expect(result.environment("n")).toBe(env);
+  expect(result.paramRoutedBases("n", "p")).toStrictEqual(new Set(["d.output"]));
+  expect(result.paramRoutedBases("n", "q")).toStrictEqual(new Set());
+  expect(result.paramUnchecked("n", "q")).toBe(true);
+  expect(result.paramUnchecked("n", "p")).toBe(false);
+  expect(result.unordered).toStrictEqual(new Set(["loop"]));
 });
 
 test("notIsinstanceFact keeps the members the check cannot have passed", () => {

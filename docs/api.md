@@ -829,6 +829,13 @@ an optional extra:
 python -m pip install "yian[mcp]"
 ```
 
+Changed (TS yian): the SDK is an optional peer dependency of the npm package, loaded only
+when a server opens:
+
+```console
+npm install @modelcontextprotocol/client@2.3.1
+```
+
 Describe a server with `mcp_server` from `yian.tools`. A stdio server is a command
 yian starts as a subprocess; an HTTP server is a streamable HTTP endpoint:
 
@@ -864,7 +871,7 @@ see [Tool context](#tool-context)). The MCP errors carry the tool error kinds of
 table below as brands, and `isMcpError` recognizes one from any copy of yian. `url`
 must start with `http://` or `https://`. A URL server's default label is the host as
 WHATWG `new URL` reads it, so an IPv6 host keeps its brackets and an international
-host reads as punycode. A server can't be opened in TS yet: `open()` rejects.
+host reads as punycode.
 
 Credentials stay with the host: the flow names the server only by its key. An
 AGENT grants the server's key, which grants every tool the server lists, or single
@@ -913,6 +920,14 @@ with mcp_server(url=url, headers=headers) as github:
         run_flow(flow, {"task": task}, tools={"github": github})
 ```
 
+Changed (TS yian): the host opens a server with `await server.open()`, or with
+`await using github = await mcpServer({ url, headers }).open()`, which closes it when the
+scope ends. `close()` returns a Promise that never rejects. `open({ signal })` takes an
+`AbortSignal`; aborting it while the server starts closes the server and rejects with the
+signal's reason. A stdio server runs in its own process group: `close()` ends its stdin,
+waits 2 s, sends SIGTERM to the group, waits 2 s, then sends SIGKILL, so a wrapper server
+(`npx`, `uvx`) leaves nothing behind.
+
 A host-owned server yian knows is gone (its loop ended, or a call saw it closed)
 raises `ValueError` at run start (`tools['github']: MCP server 'github' is closed`).
 A stdio server whose process died quietly is found on the first call, which raises
@@ -932,6 +947,14 @@ tools within the connect timeout, lists a tool twice, lists a tool whose input
 schema's `type` is not `"object"`, or lists more than 100 pages of tools. It raises
 `ImportError` naming the `mcp` extra when the SDK isn't installed, and
 `RuntimeError` when the server is already open.
+
+Changed (TS yian): `server.tools` is a frozen array. A listed `outputSchema` gives no
+return type, as in Python, but each call checks its result against it (see Results).
+`open()` also throws `McpConnectError` when `concurrencySafe` names a tool the server
+doesn't list, and a server without the tools capability opens with no tools. In place of
+`ImportError` it throws an `Error` naming `@modelcontextprotocol/client`, with the import
+error as its `cause`, and in place of `RuntimeError` an `Error` when the server is already
+open or still opening.
 
 `server.tools` holds plain `FunctionTool`s, so a host can wrap or rename them
 before a run. Most model providers accept only tool names matching
@@ -960,6 +983,19 @@ give a one-line marker with the mime type and decoded size, such as
 Blocks are joined by blank lines, and their bytes are dropped: media does not reach
 the model yet.
 
+Changed (TS yian): a stdio server's ints are read exactly: one within ±(2^53−1) arrives
+as a `number`, and a larger one in the structured content as a `bigint`. A whole-number
+float such as `1.0` arrives as the int `1`. An HTTP server's result is read by the SDK with
+`JSON.parse`, so an int beyond ±(2^53−1) loses precision. A tool that lists an
+`outputSchema` must return structured content, checked against the schema read as an input
+type; an object's fields are checked only when its schema sets `additionalProperties: false`
+(see [Typed tools](#typed-tools)). A result without structured content, or one that fails
+the check, is an `McpToolError`.
+
+Changed (TS yian): arguments holding `Infinity` anywhere, and for an HTTP server an int
+beyond ±(2^53−1), can't be carried as JSON; the call is refused before anything is sent,
+with a `ToolCheckError`, which is never retried.
+
 **Idempotency.** Each `tools/call` request carries
 `_meta: {"yian/call_id": ctx.call_id, "yian/attempt": ctx.attempt}`. A server with
 side effects can use `yian/call_id` as its idempotency key, as a Python tool uses
@@ -972,7 +1008,7 @@ class decides what an AGENT and a TOOL node do with it:
 | --- | --- | --- | --- |
 | `McpToolError` | the server returned an error result (`isError`), or the call failed locally, for example structured content that fails the tool's output schema | yes | yes |
 | `McpRequestError` | the server answered with a JSON-RPC error | yes | yes |
-| `McpInvalidRequestError` | the JSON-RPC error code is -32700, -32600, -32601, or -32602 (a malformed or unknown request), or the server redirected to another origin | yes | no |
+| `McpInvalidRequestError` | the JSON-RPC error code is -32700, -32600, -32601, or -32602 (a malformed or unknown request), or the server redirected | yes | no |
 | `McpTimeoutError` | the call outlasted the call timeout | yes | yes |
 | `McpTransportError` | an HTTP request to the server failed at the connection level | yes | yes |
 | `McpServerClosed` | the server is gone: it was closed, its process or connection ended, or it forgot the HTTP session | no, the node fails | no |
@@ -985,6 +1021,10 @@ also `TransientToolError`s. `McpInvalidRequestError` is an `McpRequestError`. Af
 server it opened. `McpConnectError` (a `RuntimeError`) is raised only when a server
 opens, so the run doesn't start.
 
+Changed (TS yian): Python yian refuses a redirect to another origin; TS yian follows no
+redirect at all. An HTTP server has forgotten the session when it answers 404 while the
+client holds a session id, or 400 "Server not initialized".
+
 The messages are fixed text naming the server's label and the tool. Only an error
 result's content and a JSON-RPC error's message and code come from the server; no
 URL, header, or exception text reaches the model, since those may hold a token.
@@ -993,11 +1033,19 @@ the URL's host, so set `label=` when the host name shouldn't appear.
 For a stdio server, `McpConnectError` ends with the last 20 lines the server wrote
 to stderr; for an HTTP server it names only the error type and HTTP status.
 
+Changed (TS yian): every error text is scrubbed of the server's `headers` values, the bare
+token after a scheme word in one (`Bearer <token>`), and its `env` and URL query values,
+each when it has 8 or more characters. An HTTP server's `McpConnectError` has the
+underlying error as its `cause`.
+
 **Timeouts.** A server must start and list its tools within
 `YIAN_MCP_CONNECT_TIMEOUT_SECONDS` (30 s), and each call must finish within
 `YIAN_MCP_CALL_TIMEOUT_SECONDS` (300 s). A server's `connect_timeout=` and
 `timeout=` override them. A server takes the values from `yian.defaults.current()`
 when it opens (see [Defaults and limits](#defaults-and-limits)).
+
+Changed (TS yian): on Node, one HTTP response slower than 300 s can fail as
+`McpTransportError`: that is the runtime's own header timeout.
 
 **Stops.** A run's stop (Ctrl-C, a failing sibling node, or a host stop) cancels
 that run's waiting calls; each raises `McpCallCancelled`. The cancel is per call,
@@ -1011,10 +1059,22 @@ a JSON response body is being read ends the connection instead, and the server i
 then gone (`McpServerClosed`). The proxy environment variables
 (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`) apply.
 
+Changed (TS yian): each request is its own exchange, so the server stays open when a
+response breaks mid-way. A JSON response body that fails while it is read fails that call
+as an `McpToolError`; a streamed (SSE) response that ends before its answer leaves the call
+waiting until the call timeout (`McpTimeoutError`), unless the server supports resumption.
+`retries:` apply to both. Proxies, CA files, and TLS checks are the runtime's settings (see
+[Proxies and certificates](installation.md#proxies-and-certificates)).
+
 **Protocol.** yian talks to servers that use the 2026-07-28 protocol and to older
 ones that use the 2025 initialize handshake. It only lists and calls tools:
 elicitation, sampling, prompts, and resources are not supported. A stdio server's
 stderr goes to a temporary file, not the host's terminal.
+
+Changed (TS yian): a stdio server always gets the 2025 `initialize` handshake; an HTTP
+server negotiates the protocol version. Only the tail of a stdio server's stderr is kept,
+in memory. `YIAN_MAX_MCP_MESSAGE_BYTES` (16 MiB) caps one message from a stdio server (not
+an HTTP one); a longer one closes the server.
 
 **Trust.** A server runs with whatever access the host gives it: yian starts the
 command the host names, with no sandbox, and sends requests to the URL the host

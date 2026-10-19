@@ -310,7 +310,7 @@ export const ENTRIES = Object.freeze([
   }),
   entry("MAX_MCP_MESSAGE_BYTES", {
     default: 16 * 1024 * 1024,
-    description: "Largest message read from an MCP server",
+    description: "Largest message read from a stdio MCP server",
     group: "input cap",
     minimum: 1,
   }),

@@ -11,7 +11,11 @@
     "test": "bun test ./tests"
   },
   "dependencies": { "amaro": "1.2.1", "yaml": "2.9.1" },
+  "peerDependencies": { "@modelcontextprotocol/client": "2.3.1" },
+  "peerDependenciesMeta": { "@modelcontextprotocol/client": { "optional": true } },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/server": "2.3.1",
     "@types/bun": "1.4.3",
     "@types/node": "22.20.5",
     "@valibot/to-json-schema": "1.8.0",

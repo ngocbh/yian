@@ -127,6 +127,12 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   a value and the value checked is the value recorded.
 - A `FunctionTool`'s `parametersJsonSchema` must be JSON within the nesting limit, since the
   model sees it; tools still receive and may return a real `Infinity`.
+- `tools/mcp.ts` holds everything MCP: yian's own stdio transport (the server in its own process
+  group, lossless decoding of big ints, the message cap, the stderr tail) and the HTTP path,
+  which sends every request through `safeFetch`. The SDK (`@modelcontextprotocol/client` 2.3.1)
+  is an optional peer dependency, loaded only when a server opens.
+- The MCP tests run a fake server (`tests/fixtures/mcp/fake_server.ts`) over stdio and as an
+  in-process HTTP server.
 
 ## LLM layer
 

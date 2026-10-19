@@ -26,8 +26,8 @@
  * `test_evaluator_capture_preserves_typed_values_before_node_mutation`,
  * `test_capture_includes_materialized_reserved_values_from_node_hooks`,
  * `test_per_item_wrapper_capture_includes_defaults_before_body_and_asserts`,
- * `test_map_wrapper_capture_includes_valid_defaults_and_item_routes`) land with `nodes/base.ts`
- * and the runtime.
+ * `test_map_wrapper_capture_includes_valid_defaults_and_item_routes`) wait for the runtime's
+ * `evalNode`.
  *
  * Not ported: `test_bind_params_rejects_noncanonical_containers` has no counterpart: both of
  * its rows are tuples, and TS has only arrays.

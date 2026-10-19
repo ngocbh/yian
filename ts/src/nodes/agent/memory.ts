@@ -11,7 +11,7 @@
  * not Python yian's `yian.langchain-message.v1`: TS stores its own message shape and never reads
  * a Python memory store.
  *
- * Knows about:   llm (message constants), llm_clients, typesys.
+ * Knows about:   defaults (the `Env` type), llm (message constants), llm_clients, typesys.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
@@ -32,15 +32,17 @@ import type { JsonObject } from "../../typesys/json.ts";
  * Example: `compatibility({provider: "OpenAI", api_key: "k"})` gives
  * `{provider: "openai", message_format: "yian.message.v1"}`.
  *
- * Throws `RangeError` if the provider is absent and no default sets one (and as
- * `resolveModelConfig` does).
+ * Throws `RangeError` if the provider is absent and no default sets one. Other errors from
+ * `resolveModelConfig` (such as a `ValidationError` for `provider: ""`) propagate.
  */
 export function compatibility(
   config: Readonly<Record<string, unknown>> | LLMConfig | null,
   options: { snapshot?: ConnectionSnapshot; env?: Env } = {},
 ): JsonObject {
-  const given = config === null ? undefined : config["provider"];
+  const given = config?.["provider"];
   const provider =
-    typeof given === "string" && given !== "" ? given : (resolveModelConfig(config ?? {}, options)["provider"] as string);
+    typeof given === "string" && given !== ""
+      ? given
+      : (resolveModelConfig(config ?? {}, options)["provider"] as string);
   return { provider: provider.toLowerCase(), message_format: MESSAGE_FORMAT };
 }

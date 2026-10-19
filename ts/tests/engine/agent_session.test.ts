@@ -53,7 +53,6 @@ test("compatibility matches factory defaults and config carriers", () => {
 test("a record's api_key is not kept when the provider comes from the defaults", () => {
   const descriptor = compatibility({ provider: null, api_key: "not-retained" }, { env });
   expect(descriptor).toEqual(expected);
-  expect(JSON.stringify(descriptor)).not.toContain("not-retained");
 });
 
 test("a passed snapshot is used", () => {

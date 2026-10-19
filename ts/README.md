@@ -202,6 +202,18 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   safe-integer `number`s, not `bigint`. END keeps its mode in public `mode`, `names` and `n`
   fields, and `EndNode.list` replaces Python's `list_`. A CASE branch is a frozen `Case`: an
   origin rewrite rebuilds it.
+- `typeToSchema(type)` in `src/nodes/agent/structured.ts` returns the JSON Schema pydantic gives
+  for an AGENT `output:`, with ints as `bigint`, or `null` for a bare `str`. It differs where
+  pydantic's output is an accident of Python: keys are sorted at every level but a `properties`
+  map (pydantic leaves a field named `properties` or `default` unsorted); `properties` and
+  `$defs` follow JS key order, so integer-like names come first; a `$defs` key turns every code
+  point outside `[A-Za-z0-9_-]` into `_` (pydantic keeps only the text after the last `.`), and
+  the `title` stays raw; a clashing key is `<key>__1`, `<key>__2` (pydantic writes a
+  module-qualified name); identical schemas share one def; fields starting with `_` are kept
+  (pydantic drops them).
+- `compatibility(config)` in `src/nodes/agent/memory.ts` gives the provider and message format,
+  `yian.message.v1` (Python's is `yian.langchain-message.v1`). TS yian never reads a Python memory
+  store.
 
 ## Memory
 

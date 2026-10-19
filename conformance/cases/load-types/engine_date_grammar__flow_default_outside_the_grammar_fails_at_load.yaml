@@ -1,4 +1,4 @@
-# Shared; the shim audit flags it on purpose: the messages shim's value_repr breaks _mismatch_reason's prefix match (tags.py) and drops the hint, which TS keeps (values.ts).
+# Shared: both languages add the datetime grammar hint.
 kind: load
 flow: |
   id: f

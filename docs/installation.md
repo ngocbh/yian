@@ -123,6 +123,18 @@ Vertex AI Application Default Credentials without an API key now fails with a
 missing-key error. This is a breaking change: earlier versions honored the
 variable. Azure's API version always comes from `OPENAI_API_VERSION`.
 
+A Python host can instead pass the key in `run_flow(..., llm_config={"provider": ...,
+"api_key": key})`, which takes precedence over the saved login and the variable and
+is never recorded.
+Pass it again to `resume_flow` and `RunResult.backward` with `api_key=key`; agents
+marked for the key never fall back to the variable. Add `"base_url": url` beside the
+key to send it to another endpoint, such as an Azure OpenAI resource's
+`https://<resource>.openai.azure.com/openai/v1/` with `"provider": "openai"` and the
+deployment name as `model`; no Azure environment variables are needed. Without
+`base_url`, the provider's default endpoint or its environment variables (such as
+`OPENAI_BASE_URL`) decide where the key goes, so pass `base_url` with the key when
+the endpoint must be fixed.
+
 Changed (TS yian): for model calls and saved logins, yian reads only the variables it
 documents, through one environment accessor: the provider key variables,
 `GOOGLE_API_KEY` then `GEMINI_API_KEY`, `AZURE_OPENAI_API_KEY` and
@@ -136,18 +148,6 @@ project variables, and `GOOGLE_GENAI_USE_VERTEXAI` and `GOOGLE_GENAI_USE_ENTERPR
 are not read and draw no warning. Azure doesn't fall back to `OPENAI_API_KEY`. Errors
 are scrubbed of a saved subscription's account id too.
 {: #ts-environment }
-
-A Python host can instead pass the key in `run_flow(..., llm_config={"provider": ...,
-"api_key": key})`, which takes precedence over the saved login and the variable and
-is never recorded.
-Pass it again to `resume_flow` and `RunResult.backward` with `api_key=key`; agents
-marked for the key never fall back to the variable. Add `"base_url": url` beside the
-key to send it to another endpoint, such as an Azure OpenAI resource's
-`https://<resource>.openai.azure.com/openai/v1/` with `"provider": "openai"` and the
-deployment name as `model`; no Azure environment variables are needed. Without
-`base_url`, the provider's default endpoint or its environment variables (such as
-`OPENAI_BASE_URL`) decide where the key goes, so pass `base_url` with the key when
-the endpoint must be fixed.
 
 When you `yian run` a flow whose AGENT nodes need a provider key that isn't set, the CLI
 prompts for it up front (in an interactive terminal) and continues once entered —
@@ -216,8 +216,8 @@ and atomic writes on POSIX hosts; it is not encrypted. Token refresh preserves t
 selected connection. Failed authentication never falls back to another credential.
 
 Changed (TS yian): the file keeps the same format, so TS yian uses logins saved by
-Python yian. An expiry with no fraction is written `9000`, where Python writes
-`9000.0`; both read either. TS yian locks `auth.json.lock` (the file's path plus
+Python yian. An `expires_at` that is a whole number of seconds is written without
+`.0` (`1767225600`, where Python writes `1767225600.0`); both read either. TS yian locks `auth.json.lock` (the file's path plus
 `.lock`) with its own lock, which Python's doesn't see: don't run Python and TS yian
 against the same saved logins at the same time (a refresh rotates the token); point
 `YIAN_AUTH_FILE` at a copy instead. The path expands only `~` and a leading `~/`, not
@@ -366,8 +366,9 @@ key as `api_key` instead, and then must pass `base_url` beside it.
 `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT_NAME` are not read: move their
 values into `base_url` and `model`, or save them with `yian auth azure`.
 
-Changed (TS yian): there is no Azure SDK. When no key is passed, `AZURE_OPENAI_AD_TOKEN`
-wins over `AZURE_OPENAI_API_KEY`; see [the environment note](#ts-environment).
+Changed (TS yian): there is no Azure SDK, so a call given no key never falls back to
+`OPENAI_API_KEY`. `AZURE_OPENAI_AD_TOKEN` is scrubbed from errors whenever it is set; see
+[the environment note](#ts-environment).
 
 ### Local models with Ollama
 

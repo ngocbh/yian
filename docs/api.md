@@ -202,11 +202,7 @@ run before appending any record.
   and echoes it, in full or masked like `sk-abc****wxyz`, the key and those
   fragments are replaced with `[REDACTED]` before the failure is recorded. The same
   applies to whichever credential the call used instead: the provider's saved login
-  or its key environment variable. Changed (TS yian): a saved subscription's account
-  id is scrubbed too, and `ANTHROPIC_AUTH_TOKEN` isn't read. The base URLs come from
-  `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `VLLM_BASE_URL` and `OLLAMA_BASE_URL`;
-  `GOOGLE_GEMINI_BASE_URL` isn't read, and an empty variable counts as unset
-  (`YIAN_AUTH_FILE` too). See [Installation](installation.md#ts-environment). The log
+  or its key environment variable. The log
   records only a nonsecret marker on those agents, so pass the key again as
   `resume_flow(..., api_key=key)` or `result.backward(..., api_key=key)`; without
   it, agents marked for the key fail when they call their model instead of reading
@@ -357,6 +353,11 @@ run before appending any record.
   values follow the `headers` rules, and an `http_client` or `http_async_client`
   passed beside them must not follow redirects. The `ollama` client and the
   ChatGPT subscription model refuse it, since they send no API key.
+
+  Changed (TS yian): a saved subscription's account id is scrubbed from errors too,
+  and `ANTHROPIC_AUTH_TOKEN` isn't read. [Installation](installation.md#ts-environment)
+  lists the variables TS yian reads, its base URL variables included; an empty
+  variable counts as unset.
 - `memory` — one backend per declared memory key, normally the
   `MemoryRegistry` from `build_memories(flow)`. `None` leaves all declarations
   dormant. A missing key, or one object under two keys, fails setup; extra keys

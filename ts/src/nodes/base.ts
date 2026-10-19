@@ -18,10 +18,43 @@
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
-import { Failure, OriginRef, reprText } from "../diagnostics.ts";
-import { type FeedbackValue, hasFeedback, validateFeedback } from "../expr/index.ts";
-import { isList, isRecord, setField, type Value, type ValueRecord } from "../typesys/values.ts";
-import { ExecutionScope, isExactly } from "./contracts.ts";
+import { Failure, type FailureCode, OriginRef, reprText } from "../diagnostics.ts";
+import {
+  ExpressionError,
+  type FeedbackValue,
+  hasFeedback,
+  parseCondition,
+  promptRefs,
+  validateFeedback,
+} from "../expr/index.ts";
+import type { MemoryScope } from "../memory/contracts.ts";
+import type { VariablePool } from "../typesys/pool.ts";
+import {
+  isList,
+  isRecord,
+  jsTypeName,
+  setField,
+  type Type,
+  type Value,
+  type ValueRecord,
+} from "../typesys/values.ts";
+import { type ReservedBinder, validateParameters } from "./binding.ts";
+import {
+  type Assertion,
+  ExecutionScope,
+  type HostToolCall,
+  isExactly,
+  iterOriginCarrier,
+  mapOrigin,
+  type NodeSteps,
+  type OriginMapper,
+  type OutputContract,
+  type Parameter,
+  PartialRecordContract,
+  rewriteOriginCarrier,
+  validateOptionalOrigin,
+  ValueContract,
+} from "./contracts.ts";
 
 /** The closed vocabulary of node kinds. Dispatch is an explicit `switch`, never a registry. */
 export const NodeKind = {
@@ -246,6 +279,43 @@ export function validateDeclaredNames(names: unknown, fieldName: string): void {
     if (typeof name !== "string") throw new TypeError(`${fieldName} must contain only strings`);
   }
   if (new Set(names).size !== names.length) throw new RangeError(`${fieldName} must contain unique names`);
+}
+
+/**
+ * Parse a condition expression, prefixing its parse error with `subject`. The node kinds with
+ * predicates use it.
+ *
+ * A `T(...)` constructor must name a type in `types`, the node's type table.
+ *
+ * @throws ExpressionError `<subject> is not a valid boolean expression: <error>`, with the parse
+ *   error as its `cause`.
+ */
+export function parseNamedCondition(
+  expression: string,
+  subject: string,
+  types: ReadonlyMap<string, Type> | null = null,
+): void {
+  try {
+    parseCondition(expression, types);
+  } catch (error) {
+    if (!(error instanceof ExpressionError)) throw error;
+    throw new ExpressionError(`${subject} is not a valid boolean expression: ${error.message}`, { cause: error });
+  }
+}
+
+/**
+ * Check one prompt template's `${...}` spans, prefixing an error with `subject`. AGENT and
+ * HUMAN_INPUT use it.
+ *
+ * @throws ExpressionError `<subject>: <error>`, with the template error as its `cause`.
+ */
+export function checkNamedPrompt(text: string, subject: string): void {
+  try {
+    promptRefs(text);
+  } catch (error) {
+    if (!(error instanceof ExpressionError)) throw error;
+    throw new ExpressionError(`${subject}: ${error.message}`, { cause: error });
+  }
 }
 
 /**
@@ -493,4 +563,518 @@ export function projectStructuralFeedback(
   const result = new BackwardResult({ inputFeedback: Object.fromEntries(projected) });
   validateBackwardResult(result, context);
   return result;
+}
+
+/**
+ * The capabilities a node's `run` and `forward` receive, as one object. The evaluator passes
+ * only what the node's traits ask for.
+ */
+export interface NodeCaps {
+  /** The node's own abort signal; a node that blocks cooperatively stops when it aborts. */
+  readonly signal?: AbortSignal;
+  /** Binds one element's input record; supplied to a node that binds per item (MAP). */
+  readonly bindItem?: (element: Value, index: number) => ValueRecord;
+  /** The node's durable steps; supplied to a node that records them (`needsSteps`). */
+  readonly steps?: NodeSteps;
+}
+
+/**
+ * The base contract every node kind implements: a pure function of its input record.
+ *
+ * A node implements its `forward` body; the inherited `run` template resolves to one of the
+ * closed sum `Output | Route | Grow`. The node never receives the pool (the engine's evaluator
+ * binds its inputs and hands it a record) and never writes the pool: it describes its one output
+ * as `new Output(value)` and the engine performs the write under the node id. Failure is a
+ * rejection, not a variant.
+ *
+ * The traits are read-only fields a kind overrides (`override readonly isSpawner = true`). A
+ * compile-owned node copy is shallow, so code that changes a node reassigns a field and never
+ * mutates an array, record, map or carrier it read from one.
+ */
+export abstract class Node {
+  /**
+   * The closed-vocabulary tag used by compose/compile and node-owned diagnostics. Runtime never
+   * dispatches on it. Set per kind.
+   */
+  abstract readonly kind: NodeKind;
+  /**
+   * Declares "I may grow the graph" (a spawner returns a `Grow`). Overridden by the spawner
+   * kinds (CALL, MAP, LOOP); the evaluator gates the grow path on it.
+   */
+  readonly isSpawner: boolean = false;
+  /**
+   * Declares "my committed output is the run's input record" (START). That record is the
+   * argument list around the input values, so it may go one level over the value nesting limit
+   * while each input value stays within it.
+   */
+  readonly commitsInputRecord: boolean = false;
+  /**
+   * Declares "I bind my inputs per element through `caps.bindItem` rather than once up front"
+   * (MAP). When set, the evaluator starts the record empty and supplies `caps.bindItem`;
+   * otherwise it binds `params` once from the pool.
+   */
+  readonly bindsPerItem: boolean = false;
+  /**
+   * The reserved input key a per-item binder may project its local scope from; `null` when the
+   * node has no recorded source collection for the local scope.
+   */
+  readonly itemSourceKey: string | null = null;
+  /**
+   * Nested-call depth policy for the engine's growth core: the depth stamped on a grow's subgraph
+   * spawners and its terminal is `parentDepth + growDepthDelta`. `null` for a non-spawner (the
+   * core does no depth work), `0` for LOOP (it inherits its parent's call depth), `1` for CALL
+   * and MAP (each child is one level deeper).
+   */
+  readonly growDepthDelta: number | null = null;
+  /**
+   * Declares "I am the self-respawning fixpoint-iteration driver" (LOOP). The growth reducer
+   * gates the origin-keyed single-live-record invariant on it: each iteration is a fresh driver
+   * clone whose grow is attributed to `originId` and supersedes the prior live iteration.
+   */
+  readonly isLoop: boolean = false;
+  /**
+   * Declares access to notes and an optional structured transcript through one lazy memory
+   * context capability. AGENT is the only built-in kind that opts in.
+   */
+  readonly needsMemoryContext: boolean = false;
+  /**
+   * Declares "I can use host-supplied skills": the evaluator supplies the run's skills only when
+   * the run boundary injected them and this is set. AGENT is the only built-in kind that opts in.
+   */
+  readonly needsSkills: boolean = false;
+  /**
+   * Declares "I can emit visible prompt, model and tool evidence": the evaluator supplies a
+   * write-only invocation-local trace only when evidence capture is on and this is set. AGENT is
+   * the only built-in kind that opts in.
+   */
+  readonly needsEvaluationTrace: boolean = false;
+  /**
+   * Declares "I can publish actual render locals for retained backward context": the evaluator
+   * supplies a single-write capture callable only during retention.
+   */
+  readonly needsRenderCapture: boolean = false;
+  /**
+   * Declares "I look up or invoke tools": the evaluator supplies the run's own tool set, so
+   * per-run tools and the per-run `ask_user` handler never leak between runs. TOOL, HUMAN_INPUT
+   * and AGENT opt in.
+   */
+  readonly needsTools: boolean = false;
+  /**
+   * Declares "I can publish transient in-loop observers": the evaluator supplies the stream and
+   * event sinks the host has. AGENT is the only built-in kind that opts in.
+   */
+  readonly needsLiveEvents: boolean = false;
+  /**
+   * Declares "I record durable steps and read them back on a later start": the engine supplies
+   * `caps.steps` only when this is set. The steps are opaque to the runtime.
+   */
+  readonly needsSteps: boolean = false;
+  /**
+   * Declares "I read the host's steering inbox": the evaluator supplies steering only when the
+   * run boundary injected it and this is set. Writable: AGENT sets it from its `steerable:` flag.
+   */
+  needsSteering: boolean = false;
+
+  /** The node's unique id within its (possibly namespaced) flow. */
+  id: string;
+  /** A human-friendly display title, or `null`. */
+  title: string | null;
+  /**
+   * The canonical declared output contract: one exact value or a closed record with field-local
+   * type evidence, shared by compiled and directly built nodes. `null` leaves the write
+   * unenforced.
+   */
+  outputContract: OutputContract | null;
+  /**
+   * The node-side declared params, with no source: the flow owns the wiring. Stamped by the
+   * compiler; the evaluator binds through `params` and the flow's wiring. `null` for a node that
+   * declares no inputs.
+   */
+  params: readonly Parameter[] | null = null;
+  /**
+   * Ordered node-local contracts checked by the `run` template against the bound record before
+   * `forward`. Stamped by the loader; empty for most nodes.
+   */
+  preAsserts: readonly Assertion[] = [];
+  /** Ordered node-local contracts (reading `${output}`) checked after `forward`. */
+  postAsserts: readonly Assertion[] = [];
+  /**
+   * Engine-baked commit redirect: write this node's output under `commitAs` instead of its own
+   * id, and fire that target's out-edges. Set by the compile-owned growth builders on a
+   * child-flow terminal (a CALL or MAP child END filler, or a MAP END-list filler) to point back
+   * at the spawner id; `null` for an ordinary node.
+   */
+  commitAs: string | null = null;
+  /**
+   * "Attribute my grows and self-commit to this origin node": `null` on every ordinary node. Set
+   * only on a self-respawning loop driver: the compiled loop `L` and each per-iteration clone
+   * `L~k` set it to `L`, so the engine attributes every iteration's `Grow` and `Output` to the
+   * one durable origin. A driver is the origin when `id === originId`, which gates "do not
+   * self-prune".
+   */
+  originId: string | null = null;
+  /**
+   * Opaque authored-source identity for this node, for diagnostics; `null` for a source-free or
+   * generated node. Unrelated to `originId`, which controls LOOP execution attribution.
+   */
+  origin: OriginRef | null;
+  /**
+   * Generated outer-to-inner authored ancestry for failures inside this node. Directly built
+   * nodes start empty; compile-owned expansion derives it from enclosing spawners after the
+   * authored origins are rewritten, so it stays outside local origin traversal.
+   */
+  originContext: readonly OriginRef[] = [];
+  /**
+   * Compile-derived static memory context; authors can't supply it. Memory layout resolution
+   * stamps it when memory is on; otherwise `null`.
+   */
+  memoryScope: MemoryScope | null = null;
+  /**
+   * Compile-derived authored location, independent of memory declarations. Static layout
+   * resolution stamps root-relative paths on private node templates; `null` when built directly.
+   */
+  executionScope: ExecutionScope | null = null;
+  /**
+   * Author-supplied static per-node config, baked at build time from the flow's `env:` default
+   * merged with the node's own `env:` (the node wins). The engine never reads it; only a node's
+   * own `forward` interprets the keys it understands (AGENT: `max_tool_iterations`), and unknown
+   * keys are carried but ignored. `{}` when none is authored.
+   */
+  env: Readonly<Record<string, unknown>> = {};
+  /**
+   * The type table `isinstance(x, T)` looks `T` up in when this node evaluates its bindings,
+   * asserts and predicates, keyed by type name. Filled at load from the names the node's
+   * expressions use; empty when none are used.
+   */
+  types: ReadonlyMap<string, Type> = new Map();
+  /**
+   * Wiring param to the author-facing phrase for a reference error, for a synthesized param the
+   * author never wrote (a CASE `__rN` from a `when:` ref, `__on` from `on:`), such as
+   * `cases[1].when` or `on:`. Render-only and absent from run records; filled by the desugar that
+   * mints the param. Empty for authored params, whose default label is `input '<param>'`.
+   */
+  wiringLabels: ReadonlyMap<string, string> = new Map();
+  /**
+   * Param to the full phrase a runtime binding error starts with in place of `input '<param>'`
+   * or `binding '<param>'` (such as `node 'g' on`), where `wiringLabels` holds only the load-time
+   * site phrase (`on:`). Not part of node identity or the manifest; filled by Compose for params
+   * the author never wrote as inputs. Empty means the default text.
+   */
+  bindingLabels: ReadonlyMap<string, string> = new Map();
+
+  /**
+   * Build a node; each option defaults to `null`.
+   *
+   * @param nodeId The node's id within its flow.
+   * @param options.title A display title.
+   * @param options.outputContract The declared output contract: an exact `ValueContract` or
+   *   `PartialRecordContract`.
+   * @param options.origin The authored-source identity.
+   * @throws TypeError for an output contract of another class, or an origin that isn't an
+   *   `OriginRef`.
+   */
+  constructor(
+    nodeId: string,
+    options: { title?: string | null; outputContract?: OutputContract | null; origin?: OriginRef | null } = {},
+  ) {
+    const { title = null, outputContract = null, origin = null } = options;
+    if (
+      outputContract !== null &&
+      !isExactly(outputContract, ValueContract) &&
+      !isExactly(outputContract, PartialRecordContract)
+    ) {
+      throw new TypeError(
+        "output_contract must be an exact ValueContract, PartialRecordContract, or null, " +
+          `got ${jsTypeName(outputContract)}`,
+      );
+    }
+    validateOptionalOrigin(origin, "node origin");
+    this.id = nodeId;
+    this.title = title;
+    this.outputContract = outputContract;
+    this.origin = origin;
+  }
+
+  /**
+   * Return the generated ancestry plus the best local failure origin.
+   *
+   * `operationOrigin` wins when present; otherwise the node's `origin` is used. When neither
+   * exists, only the ancestry is returned. Order and repeated origins are kept.
+   *
+   * @param operationOrigin A more precise authored identity for the failing operation.
+   * @throws TypeError when the ancestry isn't an array of `OriginRef`s or the selected origin
+   *   isn't an `OriginRef`.
+   * @throws RangeError for an `OriginRef` whose key bypassed the constructor's check.
+   */
+  failureTrace(operationOrigin: OriginRef | null = null): readonly OriginRef[] {
+    if (!Array.isArray(this.originContext)) throw new TypeError("node origin_context must be an array");
+    for (const origin of this.originContext) {
+      if (!(origin instanceof OriginRef)) throw new TypeError("node origin_context item must be an OriginRef");
+      // Rebuilding checks the key, which an object made without the constructor never had checked.
+      new OriginRef(origin.key);
+    }
+    const selected = operationOrigin ?? this.origin;
+    validateOptionalOrigin(selected, "failure operation origin");
+    if (selected === null) return this.originContext;
+    new OriginRef(selected.key);
+    return [...this.originContext, selected];
+  }
+
+  /**
+   * Yield this node's source-neutral origins without following child flows: the node origin,
+   * then the output contract's, the params', the pre-asserts' and the post-asserts', in
+   * structural order.
+   *
+   * @param seen Carriers already visited by a graph traversal; a carrier is yielded once per
+   *   `seen`. Omitted, a local traversal starts.
+   * @throws TypeError when `origin` isn't an `OriginRef` or `null`.
+   */
+  *iterLocalOrigins(seen: Set<object> = new Set()): Generator<OriginRef> {
+    validateOptionalOrigin(this.origin, "node origin");
+    if (this.origin !== null) yield this.origin;
+    if (this.outputContract !== null) yield* iterOriginCarrier(this.outputContract, seen);
+    if (this.params !== null) {
+      for (const parameter of this.params) yield* iterOriginCarrier(parameter, seen);
+    }
+    for (const assertion of this.preAsserts) yield* iterOriginCarrier(assertion, seen);
+    for (const assertion of this.postAsserts) yield* iterOriginCarrier(assertion, seen);
+  }
+
+  /**
+   * Rewrite this node's local origins, keeping shared carriers shared.
+   *
+   * This mutating hook is for a compile-owned private node copy, which may be shallow: it
+   * assigns `origin`, `outputContract` and fresh `params`, `preAsserts` and `postAsserts` arrays
+   * of rebuilt carriers, and never changes a carrier or an array in place.
+   *
+   * @param mapper A pure transform for each present origin; its errors propagate.
+   * @param seen Carriers already rewritten in this graph, mapped to their rebuilt forms. Omitted,
+   *   a local rewrite starts.
+   * @throws TypeError when `origin` isn't an `OriginRef` or `null`, or `mapper` returns anything
+   *   but an `OriginRef`.
+   */
+  rewriteLocalOrigins(mapper: OriginMapper, seen: Map<object, object> = new Map()): void {
+    validateOptionalOrigin(this.origin, "node origin");
+    this.origin = mapOrigin(this.origin, mapper);
+    if (this.outputContract !== null) this.outputContract = rewriteOriginCarrier(this.outputContract, mapper, seen);
+    if (this.params !== null) {
+      this.params = this.params.map((parameter) => rewriteOriginCarrier(parameter, mapper, seen));
+    }
+    this.preAsserts = this.preAsserts.map((assertion) => rewriteOriginCarrier(assertion, mapper, seen));
+    this.postAsserts = this.postAsserts.map((assertion) => rewriteOriginCarrier(assertion, mapper, seen));
+  }
+
+  /**
+   * Return the static child flows whose origins belong to this node. The base has none; the
+   * higher-order kinds override this without importing the compile layer that owns traversal.
+   */
+  originChildren(): readonly unknown[] {
+    return [];
+  }
+
+  /**
+   * Return the authored operation origin for one node-body error. The base returns the node's
+   * `origin` (`null` for a source-free node); a kind with finer source-neutral mapping overrides
+   * this.
+   */
+  exceptionOrigin(error: unknown): OriginRef | null {
+    return this.origin;
+  }
+
+  /**
+   * Return the failure code for one node-body error. The base returns `node.execute`; a kind
+   * with a finer source-neutral classification overrides this.
+   */
+  exceptionCode(error: unknown): FailureCode {
+    return "node.execute";
+  }
+
+  /**
+   * Return the node whose successors observe this node's absent output.
+   *
+   * A successful output commits under the baked `commitAs` redirect when present, else under the
+   * node's own id. Route skip propagation follows the same boundary, so generated completion
+   * nodes don't strand their parent's outgoing edges. A kind whose output target is chosen by
+   * other node-owned state overrides this.
+   */
+  skippedOutputTarget(): string {
+    return this.commitAs ?? this.id;
+  }
+
+  /**
+   * Parse every condition this node evaluates. The base parses the node's assertions; a kind
+   * that evaluates its own predicate (CASE `when`, LOOP `while`/`until`) extends this.
+   *
+   * @param options.path The static node path to name in the error instead of the node's id,
+   *   used by a pre-run check over a whole flow.
+   * @throws ExpressionError when a condition doesn't parse; the message names the node, the
+   *   field and the expression.
+   */
+  validateConditions(options: { path?: string | null } = {}): void {
+    this.validateAssertions(options);
+  }
+
+  /**
+   * Parse every pre-assert and post-assert expression on this node.
+   *
+   * @param options.path The static node path to name in the error instead of the node's id,
+   *   used by a pre-run check over a whole flow.
+   * @throws ExpressionError when an assertion doesn't parse; the message names the node, the
+   *   assertion list and the assertion.
+   */
+  validateAssertions(options: { path?: string | null } = {}): void {
+    const { path = null } = options;
+    for (const assertion of this.preAsserts) this.parseAssertion("pre-assert", assertion, path);
+    for (const assertion of this.postAsserts) this.parseAssertion("post-assert", assertion, path);
+  }
+
+  /**
+   * Check every prompt template this node renders. The base renders none; AGENT and HUMAN_INPUT
+   * override this. An override throws `ExpressionError` when a template's `${...}` span doesn't
+   * parse, calls `isinstance` or a function that isn't a builtin, or calls a builtin with
+   * arguments it doesn't take; the message names the node and the field.
+   *
+   * @param options.path The static node path to name in the error instead of the node's id,
+   *   used by a pre-run check over a whole flow.
+   */
+  validatePrompts(options: { path?: string | null } = {}): void {}
+
+  /** Parse one assertion's expression, naming the node and the assertion when it doesn't parse. */
+  private parseAssertion(label: string, assertion: Assertion, where: string | null = null): void {
+    let shown = reprText(assertion.display);
+    if (assertion.expression !== assertion.display) shown += ` (\`${assertion.expression}\`)`;
+    // `||`, as Python's `or`: an empty path names the node by its id.
+    parseNamedCondition(assertion.expression, `node ${reprText(where || this.id)} ${label} ${shown}`, this.types);
+  }
+
+  /** Return this node's local variable declarations; the base declares none. */
+  declaredVariables(): readonly Parameter[] {
+    return [];
+  }
+
+  /**
+   * Return the tool and tool-group ids a model inside this node may call. The run boundary
+   * checks them against the run's tools before any record is written. The base grants none.
+   */
+  grantedTools(): readonly string[] {
+    return [];
+  }
+
+  /**
+   * Return the tool call this node makes directly, without a model. The run boundary checks it
+   * against the run's tools before any record is written. The base makes none.
+   */
+  hostToolCall(): HostToolCall | null {
+    return null;
+  }
+
+  /**
+   * Return the declared inputs eligible for feedback, in declaration order. Kinds with
+   * control-only params override this.
+   *
+   * @throws TypeError when `params` isn't an exact array of `Parameter`s.
+   */
+  backwardInputNames(): readonly string[] {
+    const parameters = this.params ?? [];
+    validateParameters(parameters);
+    return parameters.map((parameter) => parameter.name);
+  }
+
+  /**
+   * Return static backward material before this invocation runs.
+   *
+   * This pure hook reads authored layout only: it doesn't resolve defaults, render prompts or
+   * run the body. Input and variable names are captured separately. With retention on, the base
+   * `run` template calls it after defaults and before the assertions or the body; a kind that
+   * overrides `run` keeps the evaluator's pre-run boundary.
+   *
+   * @returns Finite JSON material, empty by default. The reserved `input_output_paths` record
+   *   addresses declared inputs by paths of string fields or non-negative list indices into the
+   *   output.
+   */
+  captureBackwardContext(): Record<string, unknown> {
+    return {};
+  }
+
+  /**
+   * Return the bound inputs a model never sees (neither recalled on nor shown as evidence). They
+   * stay in the bound record, so backward and resume read what ran. Empty by default.
+   */
+  modelHiddenInputs(): ReadonlySet<string> {
+    return new Set();
+  }
+
+  /**
+   * Return the model config this invocation bound as an input, if any. Backward then records it
+   * as the invocation's `effective_llm_config` instead of the run's entry for the node's static
+   * path.
+   *
+   * @param inputs The invocation's bound inputs, reserved keys included.
+   * @returns The bound config; `null` by default, which reads the run's recorded map.
+   */
+  boundLlmConfig(inputs: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
+    return null;
+  }
+
+  /**
+   * Stop feedback at the default behavioral boundary with empty channels. The base makes no
+   * model call.
+   *
+   * @param context Detached recorded inputs, the optional accepted output or failure, the
+   *   declared names and node-owned static material for this invocation. Read this snapshot
+   *   rather than live node fields when interpreting feedback.
+   * @param feedback Ordered independent messages: text, a partial record, an exact-length nested
+   *   item list, or `null`; an array is one positional message.
+   * @returns The input, self and variable feedback channels; the base returns all three empty.
+   */
+  backward(context: BackwardContext, feedback: readonly FeedbackValue[]): BackwardResult | Promise<BackwardResult> {
+    return new BackwardResult();
+  }
+
+  /**
+   * Return the reserved input keys the evaluator pre-resolves from `nodeWiring` and `pool`
+   * before `run`, merged into the bound record. WAIT returns `{until: <ISO deadline>}`; MAP
+   * returns `{over: <list>}`; the base reserves none and returns `{}`.
+   *
+   * @param nodeWiring The flow-owned wiring for this node.
+   * @param pool The live pool the evaluator reads sources from.
+   * @param options.bind Resolves a named source and applies the node-owned check before
+   *   retaining its value; it takes the name, the source and the normalizing callable. Omitted
+   *   for direct read-hook calls.
+   */
+  bindReserved(
+    nodeWiring: ReadonlyMap<string, unknown>,
+    pool: VariablePool,
+    options: { bind?: ReservedBinder | null } = {},
+  ): Record<string, unknown> {
+    return {};
+  }
+
+  /**
+   * Return the reserved author-wiring key names this node owns beyond its declared `params`: the
+   * keys the wiring parity check allows. They are the static names of the keys `bindReserved`
+   * resolves (WAIT: `until`; MAP: `over`), read at load time. The base reserves none.
+   */
+  reservedWiringKeys(): ReadonlySet<string> {
+    return new Set();
+  }
+
+  /**
+   * Return the author-facing phrase naming a reserved wiring key in a message, without the node:
+   * it follows the node, as in `node 'w' wait until`. Default: `<kind> <key>`.
+   *
+   * @param key One of `reservedWiringKeys()`.
+   */
+  reservedKeyLabel(key: string): string {
+    return `${this.kind} ${key}`;
+  }
+
+  /**
+   * Return the author-facing phrase for a wiring `param` in a reference error: the label the
+   * desugar recorded in `wiringLabels` for a synthesized param (`cases[1].when`, `on:`), else
+   * `input '<param>'`.
+   */
+  wiringRefLabel(param: string): string {
+    return this.wiringLabels.get(param) ?? `input ${reprText(param)}`;
+  }
 }

@@ -169,4 +169,9 @@ test("a CODE code that is neither text nor a built-in is rejected", () => {
     TypeError,
     "CODE code must be text or a built-in operation, got Array",
   );
+  expectError(
+    () => new CodeNode("x", { code: null as never }),
+    TypeError,
+    "CODE code must be text or a built-in operation, got null",
+  );
 });

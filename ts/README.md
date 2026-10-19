@@ -261,7 +261,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `maxIters`, END `n`, indexes) are raw JSON ints and must be safe integers; LOOP `times` is an int
   wrapper.
 - A node's or flow's fields are its own enumerable keys; a field the manifest doesn't know throws.
-  Trait fields and `kind` are ignored: the kind fixes them.
+  `kind` is emitted; trait fields are ignored: the kind fixes them.
 - A CODE node contributes `{"inline": body}`, `{"ref": "./x.ts:fn"}` or
   `{"builtin": "identity", "field": "x"}`; `baseDir`, `mode` and its origins aren't identity. The
   AGENT manifest is not ported yet: an AGENT node throws.

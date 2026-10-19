@@ -92,34 +92,35 @@
  *   a `Map` whose value is the string `"int"`.
  * - The deep-union row has no call counter (an ES module can't be monkeypatched): a depth-30 union
  *   must manifest within the test's timeout, which an exponential encoding never does.
- * - The census is `Object.keys`, so the trait fields and `kind`, which a kind fixes, are ignored
- *   fields: an instance override of a trait goes unnoticed (Python would refuse
+ * - The census is `Object.keys`, so the trait fields, which a kind fixes, are ignored fields
+ *   (`kind` is emitted): an instance override of a trait goes unnoticed (Python would refuse
  *   `node.is_spawner = True` as unknown).
  * - A lone surrogate in a name or value is left to `canonicalJson`'s message, which carries no
  *   path (load refuses one first).
  *
  * TS-only: typed floats (`1.5`, `Infinity`, `-0`), NaN refused, `2n` vs `2`, a cyclic env record vs
- * a shared alias, a `FileRef` encoded as its mapping, `params` that isn't an array, a forged END
- * count, a list END's `names`, seed-path indexes as counts, the pinned fingerprint and expansion
- * digest of `fragment()`, a missing node field, a node whose `kind` isn't its class's, a CODE node
- * whose `kind` is `"agent"` refused as not ported (AGENT's manifest comes with AGENT), a node value
- * that isn't a `Node`, labels and a CODE or TOOL title or base directory outside identity, the CODE
- * descriptors (`{"inline": ...}`, `{"ref": ...}`, `{"builtin": "identity", "field": ...}`) and
- * their refusals, and TOOL `retries` (absent at 0, identity otherwise, a forged count refused), and
- * the flow fields: a typed wiring binding's `binding_types` and a typed output's `type`, a plain
- * `Flow`'s missing CompiledFlow keys, the flow `llm_config:` layer (literal values are identity and
- * key order isn't; the `ValueTemplate` and `Binding` arms), the LLM value types and adjacency index
- * outside identity, the flow id and flow memories (identity when present, never expansion topology,
- * forged values refused in both modes), the root outputs and LLM layer outside the expansion
- * digest, and an unknown flow field, a `Flow` subclass, a non-Flow, a wiring value that isn't a
- * `Binding`, a node wiring that isn't a `Map`, node and wiring tables that aren't `Map`s, a
- * non-string node, wiring or parameter key, an edge that isn't an `Edge`, a forged `Edge`, a
- * `flowLlmConfig` that isn't a record, memories that aren't an array and an output that isn't a
- * `FlowOutput` refused; the HUMAN_INPUT fields as typed values, a CALL child that isn't a `Flow`
- * refused, a literal in MAP wiring and a CALL argument literal as identity, LOOP `times` as a typed
- * int (`null` for a `while` loop), forged LOOP counts, a CASE branch that isn't a `Case` and CASE
- * `cases` that isn't an array refused, forged memory scopes and segments and a non-`ExecutionScope`
- * scope refused, and the execution-scope projection.
+ * a shared alias, a `FileRef` encoded as its mapping, `params`, `preAsserts` and `postAsserts` that
+ * aren't arrays, a forged END count, a list END's `names`, seed-path indexes as counts, the pinned
+ * fingerprint and expansion digest of `fragment()`, a missing node field, a node whose `kind` isn't
+ * its class's, a CODE node whose `kind` is `"agent"` refused as not ported (AGENT's manifest comes
+ * with AGENT), a node value that isn't a `Node`, labels and a CODE or TOOL title or base directory
+ * outside identity, the CODE descriptors (`{"inline": ...}`, `{"ref": ...}`,
+ * `{"builtin": "identity", "field": ...}`) and their refusals, and TOOL `retries` (absent at 0,
+ * identity otherwise, a forged count refused), and the flow fields: a typed wiring binding's
+ * `binding_types` and a typed output's `type`, a plain `Flow`'s missing CompiledFlow keys, the flow
+ * `llm_config:` layer (literal values are identity and key order isn't; the `ValueTemplate` and
+ * `Binding` arms), the LLM value types and adjacency index outside identity, the flow id and flow
+ * memories (identity when present, never expansion topology, forged values refused in both modes),
+ * the root outputs and LLM layer outside the expansion digest, and an unknown flow field, a `Flow`
+ * subclass, a non-Flow, a wiring value that isn't a `Binding`, a node wiring that isn't a `Map`,
+ * node and wiring tables that aren't `Map`s, a non-string node, wiring or parameter key, an edge
+ * that isn't an `Edge`, a forged `Edge`, a `flowLlmConfig` that isn't a record, edges, outputs and
+ * memories that aren't arrays and an output that isn't a `FlowOutput` refused; the HUMAN_INPUT
+ * fields as typed values, a CALL child that isn't a `Flow` refused, a literal in MAP wiring and a
+ * CALL argument literal as identity, LOOP `times` as a typed int (`null` for a `while` loop),
+ * forged LOOP counts, a CASE branch that isn't a `Case` and CASE `cases` that isn't an array
+ * refused, forged memory scopes and segments and a non-`ExecutionScope` scope refused, and the
+ * execution-scope projection.
  *
  * Later (T3-22): the loader rows `test_loaded_flow_stores_only_exact_parameter_carriers`,
  * `test_flow_fingerprint_ignores_comments_and_python_object_identity`,
@@ -138,7 +139,10 @@
  * `test_manifest_records_blocks_as_nested_sorted_mappings`,
  * `test_flow_fingerprint_tracks_block_fields_but_not_key_order`,
  * `test_block_field_names_are_not_redacted_as_credentials`, the five AGENT rows of
- * `test_flow_fingerprint_covers_each_included_kind_field`, the `test_agent_variable_*` rows and
+ * `test_flow_fingerprint_covers_each_included_kind_field`,
+ * `test_agent_variable_manifest_preserves_the_variable_free_fingerprint`,
+ * `test_agent_variable_identity_tracks_names_domains_defaults_and_order_only`,
+ * `test_agent_variable_manifest_rejects_noncanonical_containers` and
  * `test_expansion_digest_excludes_effective_but_includes_authored_llm_config`.
  *
  * Later (T4): `test_resume_rejects_a_flow_with_an_edited_literal` (a run and a resume).
@@ -965,6 +969,16 @@ test("params that isn't an array is refused", () => {
   expectError(() => flowManifest(flow), TypeError, "flow.nodes.body.params: expected array, got Set");
 });
 
+test.each([
+  ["preAsserts", {}, "flow.nodes.body.preAsserts: expected array, got Object"],
+  ["postAsserts", 5, "flow.nodes.body.postAsserts: expected array, got number"],
+] as const)("%s that isn't an array is refused", (field, value, message) => {
+  const flow = fragment();
+  Object.assign(code(flow, "body"), { [field]: value });
+
+  expectError(() => flowManifest(flow), TypeError, message);
+});
+
 // ---- Types -----------------------------------------------------------------------------------
 
 test("test_union_free_manifest_has_no_union_key_and_keeps_its_fingerprint", () => {
@@ -1666,6 +1680,12 @@ test.each([
     'flow.edges[0]: unknown noncanonical field(s): ["futureField"]',
   ],
   [
+    "edges that aren't an array",
+    (flow: CompiledFlow) => Object.assign(flow, { edges: {} }),
+    TypeError,
+    "flow.edges: expected array, got Object",
+  ],
+  [
     "a flowLlmConfig that isn't a record",
     (flow: CompiledFlow) => Object.assign(flow, { flowLlmConfig: 5 }),
     TypeError,
@@ -1682,6 +1702,12 @@ test.each([
     (flow: CompiledFlow) => Object.assign(flow, { outputs: [{}] }),
     TypeError,
     "flow.outputs[0]: expected FlowOutput, got Object",
+  ],
+  [
+    "outputs that aren't an array",
+    (flow: CompiledFlow) => Object.assign(flow, { outputs: 5 }),
+    TypeError,
+    "flow.outputs: expected array, got number",
   ],
 ] as const)("a flow carrier with %s is refused", (_, mutate, cls, message) => {
   const flow = compiled();

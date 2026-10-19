@@ -92,7 +92,8 @@ export function selectInlineCodeOrigin(
 function validateCode(code: unknown): string | BuiltinCode {
   if (typeof code === "string") return code;
   if (!isRecord(code)) {
-    throw new TypeError(`CODE code must be text or a built-in operation, got ${jsTypeName(code)}`);
+    const got = code === null ? "null" : jsTypeName(code);
+    throw new TypeError(`CODE code must be text or a built-in operation, got ${got}`);
   }
   const keys = Object.keys(code);
   if (

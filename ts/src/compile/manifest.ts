@@ -56,11 +56,13 @@ import {
 } from "../typesys/values.ts";
 import { CompiledFlow, Edge, Flow, FlowOutput, validateGrowthMetadata } from "./model.ts";
 
-// Fields common to every concrete Node. Most are emitted below; title is emitted only for
-// HUMAN_INPUT because other node kinds use it as display metadata, and types only when non-empty.
+// Fields common to every concrete Node. Most are emitted below, `kind` among them; title is emitted
+// only for HUMAN_INPUT because other node kinds use it as display metadata, and types only when
+// non-empty.
 // Keeping both sets explicit is the fail-loud field policy.
 const COMMON_NODE_FIELDS = [
   "id",
+  "kind",
   "title",
   "outputContract",
   "params",
@@ -71,8 +73,8 @@ const COMMON_NODE_FIELDS = [
   "env",
   "types",
 ];
-// The traits and `kind` are fixed by the kind (Python's are class variables, outside its census),
-// so they are never identity of their own.
+// The traits are fixed by the kind (Python's are class variables, outside its census), so they are
+// never identity of their own.
 const IGNORED_NODE_FIELDS = [
   "origin",
   "originContext",
@@ -80,7 +82,6 @@ const IGNORED_NODE_FIELDS = [
   "executionScope",
   "wiringLabels",
   "bindingLabels",
-  "kind",
   "isSpawner",
   "commitsInputRecord",
   "bindsPerItem",
@@ -732,6 +733,10 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
     if (!isList(declared)) throw new TypeError(`${path}.params: expected array, got ${typeName(declared)}`);
     params = declared.map((param, index) => parameterManifest(param, ctx, `${path}.params[${index}]`));
   }
+  const preAsserts: unknown = node.preAsserts;
+  if (!isList(preAsserts)) throw new TypeError(`${path}.preAsserts: expected array, got ${typeName(preAsserts)}`);
+  const postAsserts: unknown = node.postAsserts;
+  if (!isList(postAsserts)) throw new TypeError(`${path}.postAsserts: expected array, got ${typeName(postAsserts)}`);
   const outputType =
     node.outputContract === null ? null : outputContractManifest(node.outputContract, ctx, `${path}.outputContract`);
   const manifest: JsonObject = {
@@ -743,10 +748,10 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
     // The contract's diagnostic origins stay outside program identity.
     output_type: outputType,
     params,
-    post_asserts: Array.from(node.postAsserts, (assertion, index) =>
+    post_asserts: Array.from(postAsserts, (assertion, index) =>
       assertionManifest(assertion, ctx, `${path}.postAsserts[${index}]`),
     ),
-    pre_asserts: Array.from(node.preAsserts, (assertion, index) =>
+    pre_asserts: Array.from(preAsserts, (assertion, index) =>
       assertionManifest(assertion, ctx, `${path}.preAsserts[${index}]`),
     ),
   };
@@ -934,9 +939,11 @@ function flowManifestOf(flow: unknown, ctx: ManifestContext, path: string, topol
       if (nodeTypes.length > 0) bindingTypes.push([nodeId, Object.fromEntries(nodeTypes)]);
     }
 
+    const edges: unknown = flow.edges;
+    if (!isList(edges)) throw new TypeError(`${path}.edges: expected array, got ${typeName(edges)}`);
     // Built with `Object.fromEntries`, so a node id such as `__proto__` stays an own key.
     const manifest: JsonObject = {
-      edges: Array.from(flow.edges, (edge, index) => edgeManifest(edge, ctx, `${path}.edges[${index}]`)),
+      edges: Array.from(edges, (edge, index) => edgeManifest(edge, ctx, `${path}.edges[${index}]`)),
       end_id: flow.endId,
       nodes: Object.fromEntries(nodeEntries),
       start_id: flow.startId,
@@ -979,7 +986,9 @@ function flowManifestOf(flow: unknown, ctx: ManifestContext, path: string, topol
         // Omitted when empty, so memories don't change the identity of memory-free flows.
         if (memories.length > 0) manifest.memories = memories;
         manifest.flow_llm_config = llmLayerManifest(flow.flowLlmConfig, ctx, `${path}.flowLlmConfig`);
-        manifest.outputs = Array.from(flow.outputs, (output, index) =>
+        const outputs: unknown = flow.outputs;
+        if (!isList(outputs)) throw new TypeError(`${path}.outputs: expected array, got ${typeName(outputs)}`);
+        manifest.outputs = Array.from(outputs, (output, index) =>
           outputManifest(output, ctx, `${path}.outputs[${index}]`),
         );
       }

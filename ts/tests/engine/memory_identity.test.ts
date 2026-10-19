@@ -45,6 +45,7 @@ import {
   rewriteMemoryDeclOrigins,
 } from "../../src/memory/contracts.ts";
 import * as memoryPackage from "../../src/memory/index.ts";
+// Unused on purpose: the typecheck fails if the facade stops exporting one of these types.
 import type { JsonObject, JsonScalar, JsonValue, Memory, MemorySession } from "../../src/memory/index.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */

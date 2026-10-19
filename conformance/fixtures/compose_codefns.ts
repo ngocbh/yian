@@ -23,11 +23,6 @@ export function cautious(inputs: Record<string, any>): string {
   return `cautious note for ${inputs.topic}`;
 }
 
-/** Fan-in: concatenate two upstream string outputs (parallel-branch merge tests). */
-export function join_two(inputs: Record<string, any>): string {
-  return `${inputs.pro} | ${inputs.con}`;
-}
-
 // --- CALL/MAP child-flow CODE fns (Ollama-free subflows) ---
 /** A `{report, n}` child codomain (CALL re-exports it; MAP collects a list of it). */
 export function make_report(inputs: Record<string, any>): Record<string, unknown> {

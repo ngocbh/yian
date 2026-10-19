@@ -1,5 +1,5 @@
 /**
- * Mirrors `tests/test_llm_values.py` (all 32 rows). The `keepValues`, `resolveLayer`,
+ * Mirrors `tests/test_llm_values.py`. The `keepValues`, `resolveLayer`,
  * `checkResolvedLayer`, `agentLabel`/`fieldWhere`, `invocationConfig` and `callTimeConfig` rows
  * are TS-only: Python reaches those functions only through compile and runs. The
  * `callTimeConfig` rows pin the messages of `tests/engine/test_llm_config_values_call_time.py`.
@@ -40,7 +40,7 @@ import {
 } from "../src/nodes/agent/llm_values.ts";
 import { BindingError } from "../src/nodes/binding.ts";
 import { Binding, ContractOrigins, type ValuePath, ValueContract, ValueTemplate } from "../src/nodes/contracts.ts";
-import { Type, ValueKind, VariablePool } from "../src/typesys/index.ts";
+import { Type, typeFor, ValueKind, VariablePool } from "../src/typesys/index.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const OPT_STR = new Type({ kind: ValueKind.STRING, nullable: true });
@@ -73,8 +73,8 @@ function carriedTree(carried: Binding | null): Record<string, unknown> {
 
 // Names a field under each layer's subject, as a call-time agent `chat` does.
 const WHERE = {
-  nodeWhere: (field: ValuePath) => "node 'chat' llm_config" + field.map((part) => `.${part}`).join(""),
-  flowWhere: (field: ValuePath) => "flow llm_config" + field.map((part) => `.${part}`).join(""),
+  nodeWhere: (field: ValuePath) => fieldWhere("node 'chat' llm_config", field),
+  flowWhere: (field: ValuePath) => fieldWhere("flow llm_config", field),
 };
 
 /** Return a pool whose run input is `start` and whose nodes produced `outputs`. */
@@ -539,7 +539,7 @@ test("resolveLayer reads literal text back and checks typed values", () => {
 
 test("resolveLayer names a field with where", () => {
   const layer = new ValueTemplate({ model: typed("${pick.output}", STR) });
-  const where = (field: ValuePath): string => "flow llm_config" + field.map((part) => `.${part}`).join("");
+  const where = (field: ValuePath): string => fieldWhere("flow llm_config", field);
 
   const error = bindingError(() => resolveLayer(layer, pool({}, { pick: 3n }), { where }));
 
@@ -751,6 +751,20 @@ describe("callTimeConfig", () => {
     expect(error.origin).toEqual(tag);
   });
 
+  test("a value that fails to evaluate names the field", () => {
+    const origin = new OriginRef("node/model");
+    const node = new ValueTemplate({ provider: "openai", model: typed('${pick.output :? "no model"}', STR) }, [
+      [["model"], origin],
+    ]);
+
+    const error = bindingError(() => config(node, {}, null));
+
+    expect(error.failureCode).toBe("binding.evaluate");
+    expect(error.message.startsWith("node 'chat' llm_config.model: ")).toBe(true);
+    expect(error.message).toContain("no model");
+    expect(error.origin).toEqual(origin);
+  });
+
   test("a non-finite value names the block field", () => {
     const origin = new OriginRef("node/temperature");
     const node = new ValueTemplate(
@@ -782,7 +796,8 @@ describe("callTimeConfig", () => {
 
   test("a provider resolving to an unknown one names the field", () => {
     const origin = new OriginRef("node/provider");
-    const node = new ValueTemplate({ provider: "${pick.output}", model: "m" }, [[["provider"], origin]]);
+    const some = typeFor("Literal(openai, nope)", new Map());
+    const node = new ValueTemplate({ provider: typed("${pick.output}", some), model: "m" }, [[["provider"], origin]]);
 
     const error = bindingError(() => config(node, {}, "nope"));
 

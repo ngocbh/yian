@@ -13,14 +13,14 @@
  * Never imports: engine, run, backward, compose, or the CLI.
  */
 
-import { CompiledFlow, type Edge } from "../compile/model.ts";
+import { CompiledFlow, type Edge, type Flow } from "../compile/model.ts";
 import { BUILTIN, type Defaults, fromRecorded } from "../defaults.ts";
 import { Failure, reprText } from "../diagnostics.ts";
 import { RunStarted, type RunEvent, type RunFailed, type RunSucceeded } from "../events.ts";
 import type { MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../memory/index.ts";
-import type { Node } from "../nodes/base.ts";
+import type { Grow, Node } from "../nodes/base.ts";
 import { type Binding, isExactly, type OutputContract } from "../nodes/contracts.ts";
-import type { JsonObject } from "../typesys/json.ts";
+import type { JsonObject, JsonValue } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
 import { isRecord, type Type, writeAsText } from "../typesys/values.ts";
 import { NodeState } from "./common.ts";
@@ -35,6 +35,7 @@ import {
   NodeFailedRecord,
   NodeRoutedRecord,
   NodeSucceededRecord,
+  type OutcomeCarriers,
   RecordEnvelope,
   type RunLog,
   type RunRecord,
@@ -42,6 +43,9 @@ import {
   SCHEMA_VERSION,
 } from "./log.ts";
 import { type PrepareTraceOptions, prepareTrace, RetainedTrace, TraceDelta } from "./trace.ts";
+
+/** The injected kind-aware interpreter from a spawner and its canonical seed to a fragment. */
+export type GrowBuilder = (spawner: Node, seed: JsonValue) => Flow;
 
 /** @internal Immutable identity roots established by canonical RunStarted decoding. Frozen. */
 export class MemoryAuthority {
@@ -510,6 +514,39 @@ export function prepareRunStarted(state: RunState, data: RunStartData): Prepared
   return new PreparedTransition(record, envelope.runId, envelope.seq, plan, [new RunStarted()]);
 }
 
+/**
+ * Prepare a live expansion: validate `grow` against the expanding node and build its fragment
+ * with `growBuilder`, without mutating `state`.
+ *
+ * Not ported yet (T4-5): it always throws.
+ */
+export function prepareExpanded(
+  state: RunState,
+  nodeId: string,
+  grow: Grow,
+  growBuilder: GrowBuilder,
+  options: OutcomeCarriers = {},
+): PreparedTransition {
+  throw new Error("not ported yet (T4-5)");
+}
+
+/** Prepare a recorded expansion by rebuilding its fragment. Not ported yet (T4-5): it always throws. */
+function prepareGrowthRecord(
+  state: RunState,
+  record: NodeExpandedRecord,
+  growBuilder: GrowBuilder,
+): PreparedTransition {
+  throw new Error("not ported yet (T4-5)");
+}
+
+/**
+ * Prepare one backward or memory-commit record against the accepted terminal. Not ported yet
+ * (T4-5): it always throws.
+ */
+function prepareBackwardTransition(state: RunState, record: RunRecord): PreparedTransition {
+  throw new Error("not ported yet (T4-5)");
+}
+
 /** Every plan kind `commitPrepared` dispatches. */
 const PLAN_KINDS: ReadonlySet<string> = new Set([
   "runStarted",
@@ -552,6 +589,12 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
     case "runStarted":
       observers = commitRunStarted(log, state, prepared);
       break;
+    case "growth":
+      observers = commitGrowth(log, state, prepared);
+      break;
+    case "backward":
+      observers = commitBackward(log, state, prepared);
+      break;
     default:
       throw new TypeError("unsupported prepared transition plan");
   }
@@ -588,6 +631,21 @@ function outcomeNodeId(record: RunRecord): string | null {
   return null;
 }
 
+/**
+ * Silently fold one complete historical prefix through the live reducer path and return `state`.
+ *
+ * `state` is pristine around the graph that authored the run; `envelopes` is a non-empty
+ * sequence-zero prefix starting with `RunStarted`; `options.growBuilder` rebuilds and verifies
+ * growth. Not ported yet (T4-5): it always throws.
+ */
+export function replayRecords(
+  state: RunState,
+  envelopes: readonly RecordEnvelope[],
+  options: { growBuilder: GrowBuilder },
+): RunState {
+  throw new Error("not ported yet (T4-5)");
+}
+
 /** Validate, append and install one initialization transition. */
 function commitRunStarted(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   const plan = prepared._plan;
@@ -602,6 +660,11 @@ function commitRunStarted(log: RunLog, state: RunState, prepared: PreparedTransi
   appendAndVerify(log, prepared);
   applyRunStarted(state, apply);
   return apply.observers;
+}
+
+/** Append and apply one prepared expansion. Not ported yet (T4-5): it always throws. */
+function commitGrowth(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
+  throw new Error("not ported yet (T4-5)");
 }
 
 /** Require the exact sequence-only trace change before accepting a post-terminal record. */
@@ -636,6 +699,11 @@ function requirePostterminalTraceDelta(state: RunState, delta: TraceDelta | null
   ) {
     throw new RangeError(message);
   }
+}
+
+/** Append and apply one post-terminal backward record. Not ported yet (T4-5): it always throws. */
+function commitBackward(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
+  throw new Error("not ported yet (T4-5)");
 }
 
 /** Require the exact state, adopted flow and boundary nodes of the preparation. */

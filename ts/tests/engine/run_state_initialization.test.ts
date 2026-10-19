@@ -35,6 +35,11 @@
  * - `test_committed_state_does_not_alias_old_containers_or_prepared_payloads`: the prepared record
  *   is deep-frozen, so each change to its payload is a `TypeError`.
  *
+ * TS-only, for the part-2 stubs: `prepareExpanded` and `replayRecords` throw `not ported yet
+ * (T4-5)`; a hand-built backward plan with no trace change is refused by the post-terminal trace
+ * check before anything else; a backward plan with a sequence-only trace change and a growth plan
+ * reach their commit stubs, so the log stays empty.
+ *
  * Not ported:
  * - `test_historical_start_requires_an_exact_supported_schema`: `prepareRunStarted` has no schema
  *   parameter, since schema 10 is the only one.
@@ -47,7 +52,7 @@ import { expect, test } from "bun:test";
 
 import { type CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
 import { RunStarted } from "../../src/events.ts";
-import { Node } from "../../src/nodes/base.ts";
+import { Grow, Node } from "../../src/nodes/base.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
@@ -63,7 +68,15 @@ import {
   RunStartedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
-import { commitPrepared, PreparedTransition, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
+import {
+  commitPrepared,
+  PreparedTransition,
+  prepareExpanded,
+  prepareRunStarted,
+  replayRecords,
+  RunState,
+} from "../../src/runtime/state.ts";
+import { TraceDelta } from "../../src/runtime/trace.ts";
 import {
   FailingLog,
   FINGERPRINT,
@@ -582,4 +595,43 @@ test("a mismatched append return leaves the advanced log as recovery authority",
   const retained = log.records();
   expect(retained).toEqual([new RecordEnvelope(SCHEMA_VERSION, RUN_ID, 0, prepared.record)]);
   expect(retained[0]!.record).toBeInstanceOf(RunStartedRecord);
+});
+
+test("the growth and replay entry points aren't ported yet", () => {
+  const owned = flow();
+  const state = new RunState(owned);
+  const builder = () => owned;
+  expectError(() => prepareExpanded(state, "work", new Grow({}), builder), Error, /^not ported yet \(T4-5\)$/);
+  expectError(() => replayRecords(state, [], { growBuilder: builder }), Error, /^not ported yet \(T4-5\)$/);
+});
+
+/** Return a prepared RunStarted whose plan is replaced by `kind`'s, with `traceDelta`. */
+function handBuilt(kind: "backward" | "growth", traceDelta: TraceDelta | null): [RunState, PreparedTransition] {
+  const owned = flow();
+  const state = new RunState(owned);
+  const prepared = prepareRunStarted(state, startData(owned));
+  const extra =
+    kind === "backward"
+      ? { originatingBackwardState: state.backwardState, nextBackwardState: state.backwardState }
+      : { delta: Object.freeze({}), topology: Object.freeze({}) };
+  const plan = Object.freeze({ ...prepared._plan, kind, traceDelta, ...extra });
+  return [state, new PreparedTransition(prepared.record, prepared.expectedRunId, 0, plan as never, [])];
+}
+
+test("a backward plan needs a sequence-only trace change before anything else", () => {
+  const [state, prepared] = handBuilt("backward", null);
+  const log = new MemoryRunLog(RUN_ID);
+  expectError(
+    () => commitPrepared(log, state, prepared),
+    RangeError,
+    /^postterminal trace delta must only advance the accepted sequence$/,
+  );
+  expect(log.nextSequence).toBe(0);
+});
+
+test.each(["backward", "growth"] as const)("a %s plan reaches its commit, not ported yet", (kind) => {
+  const [state, prepared] = handBuilt(kind, kind === "backward" ? new TraceDelta(null, 0) : null);
+  const log = new MemoryRunLog(RUN_ID);
+  expectError(() => commitPrepared(log, state, prepared), Error, /^not ported yet \(T4-5\)$/);
+  expect(log.nextSequence).toBe(0);
 });

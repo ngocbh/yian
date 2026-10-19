@@ -6,9 +6,8 @@
  * Ported: `test_tagged_variables_read_their_types_and_defaults`, and the declarations of
  * `test_a_tagged_variable_needs_a_default_that_fits`, read once rather than at each placement.
  *
- * TS-only: the harvested-case table, which makes the loader's call on the `variables:`
- * declarations of the conformance case this reader decides, comparing the message and the last
- * frame.
+ * TS-only: the harvested-case table, which assembles the conformance case's flow as the loader
+ * calls `assemble`, comparing the message and the last frame.
  *
  * Later (T3-15, T3-22): the agent runs at each placement
  * (`test_tagged_variables_render_their_defaults`) and the `load_flow` placements.
@@ -18,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
-import { type CaseRow, loadError, parametersFromYaml, runCase, variablesAt } from "./declarations.ts";
+import { assembled, type CaseRow, loadError, parametersFromYaml, runCase } from "./declarations.ts";
 
 // Pinned before `REG` is read too, so neither depends on the shell's `YIAN_*` limits.
 install(BUILTIN);
@@ -71,9 +70,5 @@ describe("tagged variables", () => {
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
-  {
-    id: "load-types/compose_tagged_variables__a_variable_needs_a_default",
-    // A compact flow's one node is named by the flow's `id:`.
-    call: variablesAt(["variables"], ["node", "tagged_variables"]),
-  },
-])("readSourceParameters: $id", runCase);
+  { id: "load-types/compose_tagged_variables__a_variable_needs_a_default", call: assembled },
+])("assemble: $id", runCase);

@@ -3,26 +3,33 @@
  *
  * Owns the `agent` node's `AgentDescriptor`, which wraps the template `parse` from
  * `NodeDescriptor` (which records each field's `SourceRange`) to reject the removed `mode:` key
- * and a variable named `inf`, and checks the shapes of its own fields. Registered in `KINDS` and
- * `BINDING_FIELDS` by `compose/nodes/index.ts`.
+ * and a variable named `inf`, checks the shapes of its own fields, and builds the runtime
+ * `AgentNode`. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
  *
- * Knows about: diagnostics, compose source and helpers, memory contracts, nodes (contracts),
- *              typesys and defaults.
+ * Knows about: diagnostics, compose source and helpers, memory contracts, nodes (agent and
+ *              contracts), skills, typesys and defaults.
  * Never imports: compose/parse, the runtime or the CLI.
  */
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { current } from "../../defaults.ts";
 import { DeclSite, MemoryDecl } from "../../memory/contracts.ts";
-import { isExactly, type ValueContract } from "../../nodes/contracts.ts";
-import { isList, isRecord, type Value, valueRepr } from "../../typesys/values.ts";
-import { LoadDiagnostics } from "../helpers/errors.ts";
+import { LLM_CONFIG_KEY } from "../../nodes/agent/llm_values.ts";
+import { AgentNode, isMaxToolIterations, isTextOutput } from "../../nodes/agent/node.ts";
+import { typeToSchema } from "../../nodes/agent/structured.ts";
+import { type Binding, isExactly, Parameter, ValueContract, type ValueTemplate } from "../../nodes/contracts.ts";
+import { SkillError } from "../../skills/index.ts";
+import { isList, isRecord, typeLevels, type Value, valueRepr } from "../../typesys/values.ts";
+import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { parseMemoryDeclarations } from "../helpers/memory.ts";
+import { readVariables } from "../helpers/types.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { formerBooleanFix } from "../helpers/yaml_words.ts";
 import type { SourceCatalogBuilder } from "../source/catalog.ts";
 import type { SourceCursor } from "../source/index.ts";
 import {
+  type BuildContext,
+  BuildResult,
   NodeDescriptor,
   type NodeDescriptorFields,
   rejectInfinityName,
@@ -58,6 +65,17 @@ export function retriesError(value: unknown): string | null {
 function formerBooleanHint(value: unknown): string {
   const fix = formerBooleanFix(value);
   return fix === null ? "" : `; ${fix[1]}`;
+}
+
+/** Split an authored `llm_config:` layer into the config without `inherit` and `inherit`; `null` is `[{}, true]`. */
+function validateLlmConfig(
+  cfg: unknown,
+  prefix: string,
+  sourceRange: SourceRange | null,
+  diagnostics: LoadDiagnostics,
+  fieldRanges: ReadonlyMap<string, SourceRange>,
+): [Readonly<Record<string, unknown>> | ValueTemplate | Binding, boolean] {
+  return [(cfg ?? {}) as Readonly<Record<string, unknown>>, true];
 }
 
 /** The fields `AgentDescriptor`'s constructor takes: the common ones and the AGENT's own. */
@@ -282,6 +300,164 @@ export class AgentDescriptor extends NodeDescriptor {
             });
     }
     super._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
+  }
+
+  /**
+   * Build the runtime `AgentNode` and its flow-owned wiring.
+   *
+   * Reads the `llm_config:` layer and the local variables, stamps each memory's site with
+   * `ctx.owner`, sets the node's `params` from the authored `input:` and its output contract from
+   * the override or the authored `output:`. `_finish` stamps the descriptor origin; the result
+   * also ranges `__llm_config` at the authored `llm_config:`, where errors about its values point.
+   *
+   * @throws LoadError for a bad `env.max_tool_iterations`, a bad variable declaration, a tool or
+   *   skill grant the node refuses, an `output:` nesting deeper than
+   *   `current().maxAgentOutputNesting` or holding a type a model can't produce, `steerable` with
+   *   non-text output, a variable named like an input, or an input named `__llm_config`.
+   * @throws TypeError when `ctx.variableDeclarationReader` returns anything but an array of exact
+   *   `Parameter`s or `null`.
+   */
+  override build(ctx: BuildContext): BuildResult {
+    const id = reprText(this.id);
+    const llmConfigRange = this.fieldRanges.get(siteKey("field", "llm_config")) ?? this.range;
+    const llmFieldRanges = new Map<string, SourceRange>();
+    const llmPrefix = siteKey("llm_config", "");
+    for (const [key, range] of this.fieldRanges) {
+      if (key.startsWith(llmPrefix)) llmFieldRanges.set(key.slice(llmPrefix.length), range);
+    }
+    const [ownCfg, inherit] = validateLlmConfig(
+      this.llmConfig,
+      this.fieldLabels.get("llm_config") || `node ${id}: llm_config`,
+      llmConfigRange,
+      ctx.diagnostics,
+      llmFieldRanges,
+    );
+    const steerableRange = this.fieldRanges.get(siteKey("field", "steerable")) ?? this.range;
+    if (Object.hasOwn(this.env, "max_tool_iterations") && !isMaxToolIterations(this.env["max_tool_iterations"])) {
+      throw ctx.diagnostics.error(
+        `node ${id}: \`env.max_tool_iterations\` must be a positive int or -1 (no cap), ` +
+          `got ${valueRepr(this.env["max_tool_iterations"])}`,
+        { range: this.fieldRanges.get(siteKey("field", "env")) ?? this.range },
+      );
+    }
+    const variables = this.readVariables(ctx);
+    const memories = this.memories.map(
+      (decl) => new MemoryDecl(decl.name, decl.type, decl.config, new DeclSite([], ctx.owner, this.id), decl.origin),
+    );
+    let node: AgentNode;
+    try {
+      node = new AgentNode(this.id, {
+        prompt: this.prompt ?? "",
+        systemPrompt: this.systemPrompt,
+        tools: [...this.tools],
+        llmConfig: ownCfg,
+        llmInherit: inherit,
+        retries: this.retries,
+        title: this.nodeName,
+        memories,
+        variables,
+        skills: this.skills,
+        steerable: this.steerable,
+      });
+    } catch (error) {
+      // AgentNode checks skill grants and tool names; a refusal is the loader's one error type.
+      if (!(error instanceof RangeError)) throw error;
+      const skillsRange = this.fieldRanges.get(siteKey("field", "skills")) ?? this.range;
+      const toolsRange = this.fieldRanges.get(siteKey("field", "tools")) ?? this.range;
+      throw ctx.diagnostics.error(`node ${id}: ${error.message}`, {
+        range: error instanceof SkillError ? skillsRange : toolsRange,
+        cause: error,
+      });
+    }
+    node.llmConfigLabel = this.fieldLabels.get("llm_config") ?? null;
+
+    const override = this.outputContractOverride;
+    node.outputContract = override ?? this.outputContract(ctx);
+    if (isExactly(node.outputContract, ValueContract)) {
+      const outputsRange = this.fieldRanges.get(siteKey("field", "outputs")) ?? this.range;
+      // Schema generation, here and at run, recurses per level; deeper types aren't proven to
+      // fit the stack. An engine-built output type is not the author's.
+      const levels = typeLevels(node.outputContract.type);
+      const limit = current().maxAgentOutputNesting;
+      if (override === null && levels > limit) {
+        throw ctx.diagnostics.error(
+          `node ${id}: this AGENT's \`output:\` nests ${levels} levels, deeper than ${limit}, the limit ` +
+            "for a model's structured reply (each record and list is a level); flatten it, or build the " +
+            "deeper value in a CODE node",
+          { range: outputsRange },
+        );
+      }
+      try {
+        typeToSchema(node.outputContract.type);
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
+        throw ctx.diagnostics.error(
+          `node ${id}: an AGENT can't produce this \`output:\`; a model generates only str, int, float, ` +
+            "bool, date, datetime, Literal, record, union, object, Any, and list values, not `file` or " +
+            "`None`. Produce the value in a CODE node.",
+          { range: outputsRange, cause: error },
+        );
+      }
+    }
+    if (this.steerable && !isTextOutput(node.outputContract)) {
+      // Checked here too so the error points at the `steerable:` line.
+      throw ctx.diagnostics.error(`node ${id}: steerable needs \`str\` output`, { range: steerableRange });
+    }
+    node.params = this.sinkParams();
+    const inputNames = new Set(node.params.map((parameter) => parameter.name));
+    for (const variable of variables) {
+      if (!inputNames.has(variable.name)) continue;
+      const frame =
+        ctx.resolveOrigin !== null && variable.origin !== null ? ctx.resolveOrigin(variable.origin) : null;
+      const message = `node ${id}: variable ${reprText(variable.name)} collides with an input name`;
+      if (frame !== null) throw ctx.diagnostics.error(message, { frames: [frame] });
+      throw ctx.diagnostics.error(message, {
+        range: this.fieldRanges.get(siteKey("field", "variables")) ?? this.range,
+      });
+    }
+    if (inputNames.has(LLM_CONFIG_KEY)) {
+      throw ctx.diagnostics.error(
+        `node ${id}: input ${reprText(LLM_CONFIG_KEY)} is reserved for the values of \`llm_config\`; ` +
+          "rename the input",
+        { range: this.fieldRanges.get(siteKey("input", LLM_CONFIG_KEY)) ?? this.range },
+      );
+    }
+    const result = this._finish(node, this.sinkWiring());
+    // Errors about `llm_config` values point at the authored `llm_config:`.
+    const fieldRanges = new Map(result.fieldRanges);
+    if (llmConfigRange !== null) fieldRanges.set(siteKey("field", LLM_CONFIG_KEY), llmConfigRange);
+    return new BuildResult({ ...result, fieldRanges });
+  }
+
+  /**
+   * Compile this node's variable declarations at their authored site, through
+   * `ctx.variableDeclarationReader`, or source-free when it declines or is unset.
+   *
+   * @throws LoadError for a bad declaration, ranged at `variables:` when the error has no frame.
+   * @throws TypeError when the reader returns anything but an array of exact `Parameter`s or
+   *   `null`.
+   */
+  private readVariables(ctx: BuildContext): Parameter[] {
+    try {
+      if (ctx.variableDeclarationReader !== null) {
+        const variables: unknown = ctx.variableDeclarationReader(this.id, this.variables);
+        if (variables !== null) {
+          if (!isList(variables) || variables.some((variable) => !isExactly(variable, Parameter))) {
+            throw new TypeError("variable declaration reader must return a list of exact Parameters or null");
+          }
+          return variables as Parameter[];
+        }
+      }
+      // Only a node with no authored source gets here; a variable needs a default, which only a
+      // tagged YAML declaration carries, so any declaration fails.
+      return readVariables(this.variables, ctx.registry, { diagnostics: ctx.diagnostics });
+    } catch (error) {
+      if (!(error instanceof LoadError) || error.diagnostic.frames.length > 0) throw error;
+      throw ctx.diagnostics.prepend(error, {
+        range: this.fieldRanges.get(siteKey("field", "variables")) ?? this.range,
+        cause: error,
+      });
+    }
   }
 
   /** Attach one origin per authored `long_term_memory:` entry: its key, or the whole sugar scalar. */

@@ -7,16 +7,18 @@
  * TS-only: a `retries:` past `Number.MAX_SAFE_INTEGER` is refused, and a count is stored as a
  * `number`; the default follows `YIAN_AGENT_RETRIES`; a variable named `inf` is refused at its key,
  * before a like-named input; a lone surrogate in `prompt:` or `system_prompt:` is refused at the
- * field; the constructor refuses a non-exact `MemoryDecl`; and `withSourceOrigins` registers one
- * origin per `long_term_memory:` entry.
+ * field; the constructor refuses a non-exact `MemoryDecl`; `withSourceOrigins` registers one
+ * origin per `long_term_memory:` entry; and `build` on a hand-built descriptor and context (the
+ * variable reader's fallback and return check, memory sites stamped with `ctx.owner`, the
+ * `llm_config` label and the `__llm_config` range).
  *
- * Held here until T3-22: the harvested cases at the end, whose error the AGENT parse raises,
- * each under a comment naming the Python file it comes from.
+ * Held here until T3-22: the harvested cases at the end, whose error the AGENT parse or build
+ * raises, each under a comment naming the Python file it comes from, and the flows that assemble.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { siteKey } from "../../src/compose/nodes/base.ts";
+import { BuildContext, siteKey, type VariableDeclarationReader } from "../../src/compose/nodes/base.ts";
 import { AgentDescriptor, retriesError } from "../../src/compose/nodes/agent.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
@@ -24,7 +26,9 @@ import { type SourceCursor, SourceDocument } from "../../src/compose/source/inde
 import { BUILTIN, forget, reload } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
-import { type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { Parameter } from "../../src/nodes/contracts.ts";
+import { assembled, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
 
 afterEach(() => forget());
 
@@ -251,6 +255,75 @@ describe("withSourceOrigins", () => {
   });
 });
 
+describe("build", () => {
+  /** A context over an empty registry, with `reader` as its variable declaration reader. */
+  const reading = (reader: VariableDeclarationReader | null = null, owner?: readonly string[]) =>
+    new BuildContext({ registry: new Map(), variableDeclarationReader: reader, owner });
+
+  test("a reader returning null falls back to the source-free reader", () => {
+    const calls: unknown[] = [];
+    const reader = (nodeId: string, declarations: unknown) => {
+      calls.push([nodeId, declarations]);
+      return null;
+    };
+
+    expect((new AgentDescriptor({ id: "a" }).build(reading(reader)).node as AgentNode).variables).toEqual([]);
+    expect(loadError(() => new AgentDescriptor({ id: "a", variables: { n: "int" } }).build(reading(reader))).message)
+      .toStartWith("variable 'n': a variable needs a default");
+    expect(calls).toEqual([["a", {}], ["a", { n: "int" }]]);
+  });
+
+  class LooseParameter extends Parameter {}
+
+  test.each<[string, unknown]>([
+    ["a record", {}],
+    ["text", "x"],
+    ["a set", new Set()],
+    ["a list holding a record", [{}]],
+    ["a list holding a Parameter subclass", [new LooseParameter("x")]],
+  ])("a reader returning %s is a defect", (_label, returned) => {
+    const reader = (() => returned) as unknown as VariableDeclarationReader;
+
+    expect(() => new AgentDescriptor({ id: "a" }).build(reading(reader))).toThrow(
+      new TypeError("variable declaration reader must return a list of exact Parameters or null"),
+    );
+  });
+
+  test("memory sites are stamped with the context's owner", () => {
+    const origin = new SourceCatalogBuilder().register(["node", "a"], readerFor("nodes:\n  a: {}\n", "a"));
+    const memories = [new MemoryDecl("notes", "episodic", {}, new DeclSite([], ["root"], "a"), origin)];
+    const node = new AgentDescriptor({ id: "a", memories }).build(reading(null, ["root", "node", "outer"]))
+      .node as AgentNode;
+
+    expect(node.memories).toEqual([
+      new MemoryDecl("notes", "episodic", {}, new DeclSite([], ["root", "node", "outer"], "a"), origin),
+    ]);
+  });
+
+  test("the llm_config label comes from the field labels", () => {
+    const label = "node 'ask' adaptive_questions.llm_config";
+    const labelled = new AgentDescriptor({ id: "a", fieldLabels: new Map([["llm_config", label]]) });
+
+    expect((labelled.build(reading()).node as AgentNode).llmConfigLabel).toBe(label);
+    expect((new AgentDescriptor({ id: "a" }).build(reading()).node as AgentNode).llmConfigLabel).toBeNull();
+  });
+
+  test("errors about llm_config values point at the authored llm_config", () => {
+    const own = new SourceRange(1, 1, 5, 1);
+    const field = new SourceRange(3, 17, 3, 30);
+    const fieldRanges = new Map([[siteKey("field", "llm_config"), field]]);
+
+    expect(
+      new AgentDescriptor({ id: "a", range: own, fieldRanges }).build(reading()).fieldRanges.get(
+        siteKey("field", "__llm_config"),
+      ),
+    ).toBe(field);
+    expect(
+      new AgentDescriptor({ id: "a", range: own }).build(reading()).fieldRanges.get(siteKey("field", "__llm_config")),
+    ).toBe(own);
+  });
+});
+
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
@@ -275,3 +348,42 @@ test.each<CaseRow>([
   // TS-only (no Python test): the AGENT half of the `inf` name rule
   { id: "load-agent/compose_infinity_names__an_agent_variable_named_inf", call: parsedNodes },
 ])("parseNodes: $id", runCase);
+
+test.each<CaseRow>([
+  // tests/compose/test_agent_load_checks.py
+  { id: "load-agent/compose_agent_load_checks__agent_output_of_file", call: assembled },
+  { id: "load-agent/compose_agent_load_checks__node_env_max_tool_iterations_zero", call: assembled },
+  // tests/compose/test_agent_mode_removed.py
+  { id: "load-agent/compose_agent_mode_removed__builtin_tools_is_rejected_at_the_tools_line", call: assembled },
+  // tests/compose/test_agent_output_nesting.py
+  { id: "load-agent/compose_agent_output_nesting__a_written_out_record_past_the_limit", call: assembled },
+  { id: "load-agent/compose_agent_output_nesting__the_limit_follows_the_variable", call: assembled },
+  // tests/compose/test_agent_skills_yaml.py
+  { id: "load-agent/compose_agent_skills_yaml__invalid_skill_name", call: assembled },
+  // tests/compose/test_llm_config_values_wiring.py
+  { id: "load-agent/compose_llm_config_values_wiring__reserved_input_name", call: assembled },
+])("assemble: $id", runCase);
+
+test.each<CaseRow>([
+  // tests/compose/test_agent_load_checks.py
+  { id: "load-agent/compose_agent_load_checks__agent_union_output_loads", call: assembled },
+  { id: "load-agent/compose_agent_load_checks__max_tool_iterations_minus_one_loads", call: assembled },
+  // tests/compose/test_agent_mode_removed.py
+  { id: "load-agent/compose_agent_mode_removed__steerable_agent_without_tools_loads", call: assembled },
+  // tests/compose/test_agent_output_nesting.py
+  { id: "load-agent/compose_agent_output_nesting__a_written_out_record_at_the_limit_loads", call: assembled },
+  // tests/compose/test_agent_system_prompt_yaml.py
+  { id: "load-agent/compose_agent_system_prompt_yaml__compact_flow_accepts_system_prompt", call: assembled },
+  // tests/compose/test_agent_variables.py
+  { id: "load-agent/compose_agent_variables__prompt_reads_inputs_and_variables_loads", call: assembled },
+  // examples/
+  { id: "load-agent/example_ask_user", call: assembled },
+  { id: "load-agent/example_classify", call: assembled },
+  { id: "load-agent/example_debate", call: assembled },
+  { id: "load-agent/example_hello", call: assembled },
+  { id: "load-agent/example_structured_test", call: assembled },
+  { id: "load-agent/example_summarize", call: assembled },
+  { id: "load-agent/example_triage_ticket", call: assembled },
+  // tests/seeds/
+  { id: "load-agent/seed_14_agent_tools", call: assembled },
+])("assembles: $id", runCase);

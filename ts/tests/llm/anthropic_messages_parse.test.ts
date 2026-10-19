@@ -367,6 +367,18 @@ describe("deltas and parts", () => {
     expect(out).toEqual(END);
   });
 
+  test("a thinking start without thinking or signature, or with both null, is an empty unsigned part", async () => {
+    const starts: JsonObject[] = [{ type: "thinking" }, { type: "thinking", thinking: null, signature: null }];
+    for (const content of starts) {
+      const out = await parse(reply([blockStart(0n, content), blockStop(0n)]));
+      expect(out).toEqual([new PartDone(0, new ReasoningPart("", null)), ...END]);
+    }
+  });
+
+  test("a text start without text opens nothing", async () => {
+    expect(await parse(reply([blockStart(0n, { type: "text" }), blockStop(0n)]))).toEqual(END);
+  });
+
   test("a thinking start with text and a signature", async () => {
     const out = await parse(
       reply([blockStart(0n, { type: "thinking", thinking: "Hm.", signature: "SIG-0" }), blockStop(0n)]),
@@ -491,6 +503,16 @@ describe("deltas and parts", () => {
     const error = await failure([start(), frame, messageDelta(), STOP]);
     expect(error.kind).toBe("overloaded");
     expect(error.message).toBe("anthropic stream failed (overloaded): Busy.");
+  });
+
+  test("a typed frame with an error, and an untyped frame whose error isn't an object, are ignored", async () => {
+    const ignored = [
+      new SSEEvent({ data: encodeBody({ type: "ping", error: { type: "overloaded_error" } }), event: "ping" }),
+      new SSEEvent({ data: encodeBody({ error: "Busy." }), event: "ping" }),
+      new SSEEvent({ data: encodeBody({ error: null }), event: "ping" }),
+    ];
+    const out = await parse([start(), ...ignored, blockStart(0n, TEXT), blockStop(0n), messageDelta(), STOP]);
+    expect(out).toEqual([new TextDelta(0, "Hello there."), new PartDone(0, TEXT_PART), ...END]);
   });
 });
 
@@ -1056,6 +1078,15 @@ describe("usage errors", () => {
     }
   });
 
+  test("a bad count fails on its own event, even when a later message_delta replaces it", async () => {
+    for (const token of ["1.0", "9007199254740992"]) {
+      const data = encodeBody(start({ input_tokens: "COUNT", output_tokens: 1n })).replace('"COUNT"', token);
+      const error = await failure([new SSEEvent({ data }), messageDelta("end_turn", { input_tokens: 5n }), STOP]);
+      expect(error.kind).toBe("protocol");
+      expect(error.message).toBe(NOT_INT);
+    }
+  });
+
   test("a sum past 2^53 - 1 is a protocol error before any part is done", async () => {
     const usage = { input_tokens: 2n ** 53n - 1n, output_tokens: 1n };
     const [out, error] = await failing([start(usage), blockStart(0n, TEXT), messageDelta(), STOP]);
@@ -1087,7 +1118,18 @@ describe("round trips", () => {
 
   /** Return a protocol for `model` with `block`, pushing each degraded reason to `reasons`. */
   function protocolFor(model: string, block: JsonObject | null, reasons: ReplayDegradedReason[] = []) {
-    return new AnthropicMessages({ model, provider: "anthropic", block, onReplayDegraded: (r) => reasons.push(r) });
+    const onReplayDegraded = (reason: ReplayDegradedReason) => reasons.push(reason);
+    return new AnthropicMessages({ model, provider: "anthropic", block, onReplayDegraded });
+  }
+
+  /** Return the `ProviderError` `run` throws, failing when it returns. */
+  function thrown(run: () => unknown): ProviderError {
+    try {
+      run();
+    } catch (error) {
+      return error as ProviderError;
+    }
+    throw new Error("expected an error");
   }
 
   /** Return the messages `protocol` sends for `messages`. */
@@ -1132,17 +1174,11 @@ describe("round trips", () => {
   test("on claude-opus-4-5 the reasoning is left out with other_model; thinking enabled throws", async () => {
     const first = await replyOf([THINKING, REDACTED, TEXT, TOOL_USE]);
     const reasons: ReplayDegradedReason[] = [];
-    let error: unknown = null;
-    try {
-      sentBy(protocolFor("claude-opus-4-5", ENABLED, reasons), [ASK, first, RESULT]);
-    } catch (thrown) {
-      error = thrown;
-    }
+    const error = thrown(() => sentBy(protocolFor("claude-opus-4-5", ENABLED, reasons), [ASK, first, RESULT]));
     expect(error).toBeInstanceOf(ProviderError);
-    expect((error as ProviderError).kind).toBe("bad_request");
-    expect((error as ProviderError).retryable).toBe(false);
-    const message = `the last assistant turn came from anthropic/${SONNET}; ${REQUIRED}`;
-    expect((error as ProviderError).message).toBe(message);
+    expect(error.kind).toBe("bad_request");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toBe(`the last assistant turn came from anthropic/${SONNET}; ${REQUIRED}`);
     expect(reasons).toEqual(["other_model"]);
 
     const off: ReplayDegradedReason[] = [];

@@ -29,14 +29,16 @@
  * below/beside `nodes` in the layer ladder.
  */
 
-import { compareCodeUnits, OriginRef, reprText } from "../diagnostics.ts";
+import { compareCodeUnits, type OriginRef, reprText } from "../diagnostics.ts";
 import type { ResolvedValue } from "../expr/lineage.ts";
 import { buildValueAs, isRecord, TypeCheckError, type Value, ValueKind, type ValueRecord } from "../typesys/index.ts";
 import { fromHost, jsTypeName, rejectDeepNesting, setField, shownText } from "../typesys/values.ts";
-import { Binding, Parameter, type ValuePath } from "./contracts.ts";
+import { Binding, isExactly, Parameter, type ValuePath, validateOptionalOrigin } from "./contracts.ts";
+
+const BINDING_FAILURE_CODES = ["binding.evaluate", "binding.type", "contract.input"] as const;
 
 /** The semantic stage a `BindingError` failed at. */
-export type BindingFailureCode = "binding.evaluate" | "binding.type" | "contract.input";
+export type BindingFailureCode = (typeof BINDING_FAILURE_CODES)[number];
 
 /** Resolves a reference path to its value and route. */
 export type SourceResolver = (path: string) => ResolvedValue;
@@ -49,8 +51,6 @@ export type ReservedBinder = (name: string, source: unknown, normalize: (value: 
 
 /** Names the place inside a parameter's value an error is at, from its path there. */
 export type ErrorLabel = string | ((path: ValuePath) => string);
-
-const BINDING_FAILURE_CODES: ReadonlySet<string> = new Set(["binding.evaluate", "binding.type", "contract.input"]);
 
 /**
  * An expected binding operation failed with one semantic stage and origin.
@@ -79,15 +79,10 @@ export class BindingError extends RangeError {
   ) {
     const { failureCode, origin = null, cause } = options;
     super(message, cause === undefined ? undefined : { cause });
-    if (!BINDING_FAILURE_CODES.has(failureCode)) {
+    if (!(BINDING_FAILURE_CODES as readonly string[]).includes(failureCode)) {
       throw new RangeError(`invalid binding failure code ${reprText(String(failureCode))}`);
     }
-    if (origin !== null) {
-      if (!(origin instanceof OriginRef)) {
-        throw new TypeError("binding failure origin must be an OriginRef or null");
-      }
-      new OriginRef(origin.key);
-    }
+    validateOptionalOrigin(origin, "binding failure origin");
     this.failureCode = failureCode;
     this.origin = origin;
   }
@@ -129,15 +124,10 @@ export function validateParameters(params: readonly Parameter[]): void {
     throw new TypeError(`node params must be an exact list, got ${jsTypeName(params)}`);
   }
   for (const parameter of params) {
-    if (!isExactParameter(parameter)) {
+    if (!isExactly(parameter, Parameter)) {
       throw new TypeError(`node params must contain Parameter values, got ${jsTypeName(parameter)}`);
     }
   }
-}
-
-/** Whether `value` is a `Parameter` itself, not a subclass instance. */
-function isExactParameter(value: unknown): value is Parameter {
-  return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Parameter.prototype;
 }
 
 const TRUE_SPELLINGS: ReadonlySet<string> = new Set(["1", "true", "yes", "y", "on"]);
@@ -175,7 +165,7 @@ function intFromText(text: string): bigint {
  *   double, and `integer is too large for this runtime` when the runtime refuses an int.
  */
 export function coerceParam(parameter: Parameter, value: unknown): unknown {
-  if (!isExactParameter(parameter)) {
+  if (!isExactly(parameter, Parameter)) {
     throw new TypeError(`parameter must be an exact Parameter, got ${jsTypeName(parameter)}`);
   }
   if (typeof value !== "string" || !parameter.coerceStrings || parameter.contract === null) {
@@ -243,6 +233,8 @@ export function coerceInputs(
   validateParameters(params);
   checkInputNames(params, raw);
   const byName = new Map(params.map((parameter) => [parameter.name, parameter]));
+  // The `as Value` casts below only satisfy `setField`: the record goes back to the caller
+  // unchecked, as Python's dict does.
   const coerced: ValueRecord = {};
   for (const name of Object.keys(raw)) {
     try {
@@ -270,6 +262,8 @@ export function applyDefaults(
   inputs: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> {
   validateParameters(params);
+  // The `as Value` casts below only satisfy `setField`: the record goes back to the caller
+  // unchecked, as Python's dict does.
   const output: ValueRecord = {};
   for (const name of Object.keys(inputs)) setField(output, name, inputs[name] as Value);
   for (const parameter of params) {

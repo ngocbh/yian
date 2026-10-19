@@ -79,8 +79,8 @@ function samePath(a: ValuePath, b: ValuePath): boolean {
   return a.length === b.length && a.every((segment, i) => segment === b[i]);
 }
 
-/** Whether `value` is an instance of exactly `cls`, not of a subclass. */
-function isExactly<T>(value: unknown, cls: abstract new (...args: never[]) => T): value is T {
+/** Whether `value` is an instance of exactly `cls`, not of a subclass. Used by node kinds. */
+export function isExactly<T>(value: unknown, cls: abstract new (...args: never[]) => T): value is T {
   return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === cls.prototype;
 }
 
@@ -959,7 +959,8 @@ export function* iterOriginCarrier(carrier: OriginCarrier, seen: Set<object>): G
  * container holding no binding, by identity. A template's tree is rebuilt the same way. The
  * carrier graph and the payloads it walks must have no cycles; compose never builds one.
  *
- * @param seen Carriers already rewritten, mapped to their rebuilt form.
+ * @param seen Carriers and payload containers already rewritten, each mapped to its rebuilt form
+ *   (itself when unchanged).
  * @throws TypeError for an unknown carrier or a mapper result that isn't an `OriginRef`.
  */
 export function rewriteOriginCarrier<C extends OriginCarrier>(

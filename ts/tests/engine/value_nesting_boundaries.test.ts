@@ -25,16 +25,21 @@ function nestRecord(levels: number): Value {
   return value;
 }
 
-test("applyDefaults rejects a default over the limit", () => {
-  let caught: unknown;
+/** Return the `BindingError` `call` throws. */
+function bindingError(call: () => unknown): BindingError {
   try {
-    applyDefaults([new Parameter("p", { hasDefault: true, default: nestRecord(101) })], {});
+    call();
   } catch (error) {
-    caught = error;
+    expect(error).toBeInstanceOf(BindingError);
+    return error as BindingError;
   }
+  throw new Error("call did not throw");
+}
 
-  expect(caught).toBeInstanceOf(BindingError);
-  const error = caught as BindingError;
+test("applyDefaults rejects a default over the limit", () => {
+  const error = bindingError(() =>
+    applyDefaults([new Parameter("p", { hasDefault: true, default: nestRecord(101) })], {}),
+  );
   expect(error.failureCode).toBe("binding.evaluate");
   expect(error.message.startsWith("default for 'p' at a.a")).toBe(true);
   expect(error.message).toContain("deeper than 100 levels");

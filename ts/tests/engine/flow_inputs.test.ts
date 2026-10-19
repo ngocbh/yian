@@ -19,7 +19,7 @@
  * accepted rather than rejected).
  *
  * Later: the 15 declaration tests (`test_required_scalar`, `test_float_default`, ...) read
- * inputs with compose's `read_flow_inputs` and land with it (T3-12).
+ * inputs with compose's `read_flow_inputs` and land with compose's flow-input reader.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -29,10 +29,10 @@ import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { buildValueAs, Type, TypeCheckError, ValueKind } from "../../src/typesys/index.ts";
 
 /** Return a flow input `name` of scalar `kind`, with a default when `fallback` is given. */
-function input(name: string, kind: ValueKind, ...fallback: [unknown?]): Parameter {
+function input(name: string, kind: ValueKind, fallback?: unknown): Parameter {
   const contract = new ValueContract(Type.scalar(kind));
-  if (fallback.length === 0) return new Parameter(name, { contract, required: true, coerceStrings: true });
-  return new Parameter(name, { contract, hasDefault: true, default: fallback[0], coerceStrings: true });
+  if (fallback === undefined) return new Parameter(name, { contract, required: true, coerceStrings: true });
+  return new Parameter(name, { contract, hasDefault: true, default: fallback, coerceStrings: true });
 }
 
 /** Return what `coerceInputs` makes of `text` supplied for an input `x` of `kind`. */
@@ -128,7 +128,10 @@ test("inputs must be a record", () => {
   expect(() => checkInputNames(params, [["x", "1"]])).toThrow(
     new TypeError("inputs must be a mapping of input names to values, got Array"),
   );
-  expect(() => coerceInputs(params, new Map([["x", "1"]]) as never)).toThrow(TypeError);
+  const fromMap = () => coerceInputs(params, new Map([["x", "1"]]) as never);
+  // Bun's toThrow(error) compares only the message, so the class is checked on its own.
+  expect(fromMap).toThrow(TypeError);
+  expect(fromMap).toThrow(new TypeError("inputs must be a mapping of input names to values, got Map"));
 });
 
 test("applyDefaults accepts a long int default", () => {

@@ -1,6 +1,7 @@
 /**
  * Tests for Anthropic Messages body building in `src/llm/protocols/anthropic_messages.ts`: the
- * top-level keys, turn merging, the system field, user, tool and assistant turns, tool ids.
+ * top-level keys, turn merging, the system field, user, tool and assistant turns, tool ids, the
+ * default `max_tokens`, tools, the tool choice, the block and determinism.
  */
 
 import { describe, expect, spyOn, test } from "bun:test";
@@ -9,19 +10,28 @@ import { encodeBody } from "../../src/llm/body.ts";
 import {
   MediaPart,
   Message,
+  NamedTool,
   type Part,
   ReasoningPart,
   RefusalPart,
   Request,
   type Role,
   TextPart,
+  type ToolChoice,
   ToolCallPart,
   ToolResultPart,
+  ToolSpec,
 } from "../../src/llm/messages.ts";
 import { AnthropicMessages, PROTOCOL } from "../../src/llm/protocols/anthropic_messages.ts";
-import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
+import { type JsonObject, type JsonValue, parseJson } from "../../src/typesys/json.ts";
 
 const SONNET = "claude-sonnet-4-5";
+
+const DOUBLE = new ToolSpec({
+  name: "double",
+  description: "Double an integer.",
+  parameters: { properties: { value: { type: "integer" } }, required: ["value"], type: "object" },
+});
 
 function message(role: Role, ...parts: Part[]): Message {
   return new Message({ role, parts });
@@ -59,20 +69,37 @@ function invalidCall(id: string, raw: string): ToolCallPart {
   return new ToolCallPart({ id, name: "double", arguments: null, rawArguments: raw });
 }
 
-function bodyOf(messages: Message[], model = SONNET): JsonObject {
-  return new AnthropicMessages({ model, provider: "anthropic" }).buildBody(new Request({ messages }));
+interface BodyOptions {
+  model?: string;
+  block?: JsonObject | null;
+  tools?: ToolSpec[];
+  toolChoice?: ToolChoice;
+  parallelToolCalls?: boolean | null;
+}
+
+function bodyOf(messages: Message[], options: BodyOptions = {}): JsonObject {
+  const model = options.model ?? SONNET;
+  const protocol = new AnthropicMessages({ model, provider: "anthropic", block: options.block });
+  return protocol.buildBody(
+    new Request({
+      messages,
+      tools: options.tools,
+      toolChoice: options.toolChoice,
+      parallelToolCalls: options.parallelToolCalls,
+    }),
+  );
 }
 
 /** Return the rendered `messages` of a body built from `messages`. */
 function sent(messages: Message[], model = SONNET): JsonValue {
-  return bodyOf(messages, model)["messages"]!;
+  return bodyOf(messages, { model })["messages"]!;
 }
 
 /** Build a body with `process.emitWarning` stubbed; return it and the warnings it emitted. */
 function warned(messages: Message[], model = SONNET): [JsonObject, unknown[][]] {
   const emit = spyOn(process, "emitWarning").mockImplementation(() => {});
   try {
-    const body = bodyOf(messages, model);
+    const body = bodyOf(messages, { model });
     return [body, emit.mock.calls.map((args) => [...args])];
   } finally {
     emit.mockRestore();
@@ -169,6 +196,17 @@ describe("merging", () => {
       { role: "user", content: "" },
       { role: "assistant", content: "Hi." },
     ]);
+  });
+
+  test("a system, user or tool message without parts adds nothing", () => {
+    expect(sent([user(), user("Hi.")])).toEqual([{ role: "user", content: "Hi." }]);
+    expect(sent([user("Hi."), tool(), assistant(text("Ok."))])).toEqual([
+      { role: "user", content: "Hi." },
+      { role: "assistant", content: "Ok." },
+    ]);
+    const body = bodyOf([system(), user("Hi.")]);
+    expect(Object.hasOwn(body, "system")).toBe(false);
+    expect(body["messages"]).toEqual([{ role: "user", content: "Hi." }]);
   });
 
   test("a tool result after a tool call comes before the next user text in one turn", () => {
@@ -274,9 +312,10 @@ describe("system messages", () => {
   });
 
   test("a second non-consecutive system message is refused", () => {
-    const text = "Received multiple non-consecutive system messages.";
-    refuses(() => bodyOf([system("S."), user("Hi."), system("Late."), assistant(new TextPart("Ok."))]), text);
-    refuses(() => bodyOf([system("S."), user("Hi."), system("Late."), user("More.")], "claude-opus-5-5"), text);
+    const error = "Received multiple non-consecutive system messages.";
+    refuses(() => bodyOf([system("S."), user("Hi."), system("Late."), assistant(text("Ok."))]), error);
+    const late = [system("S."), user("Hi."), system("Late."), user("More.")];
+    refuses(() => bodyOf(late, { model: "claude-opus-5-5" }), error);
   });
 });
 
@@ -463,9 +502,259 @@ describe("refused parts", () => {
     ["tool", message("tool", text("6")), "cannot send a TextPart in a tool message"],
     ["system", message("system", new ReasoningPart("r")), "cannot send a ReasoningPart in a system message"],
   ];
-  for (const [role, carrier, text] of wrongParts) {
+  for (const [role, carrier, error] of wrongParts) {
     test(`a part the role cannot carry is refused (${role})`, () => {
-      refuses(() => bodyOf([user("Hi."), carrier]), `the anthropic_messages route ${text}`);
+      refuses(() => bodyOf([user("Hi."), carrier]), `the anthropic_messages route ${error}`);
     });
   }
+});
+
+describe("default max_tokens", () => {
+  const table: [string, bigint][] = [
+    ["claude-haiku-4-5", 64000n],
+    ["claude-haiku-4-5-20251001", 64000n],
+    ["claude-opus-4-5", 64000n],
+    ["claude-opus-4-5-20251101", 64000n],
+    ["claude-sonnet-4-5", 64000n],
+    ["claude-sonnet-4-5-20250929", 64000n],
+    ["claude-fable-5", 128000n],
+    ["claude-fable-5-1", 128000n],
+    ["claude-opus-4-6", 128000n],
+    ["claude-opus-4-7", 128000n],
+    ["claude-opus-4-8", 128000n],
+    ["claude-opus-5", 128000n],
+    ["claude-opus-5-5", 128000n],
+    ["claude-sonnet-4-6", 128000n],
+    ["claude-sonnet-5", 128000n],
+    ["claude-sonnet-5-5", 128000n],
+    ["claude-opus-4-1", 4096n],
+    ["claude-mythos-5-1", 4096n],
+    ["claude-sonnet-4-5-20990101", 4096n],
+    ["claude-unknown-x", 4096n],
+  ];
+  for (const [model, expected] of table) {
+    test(`${model} defaults to ${expected}`, () => {
+      expect(bodyOf([user("Hi.")], { model })["max_tokens"]).toBe(expected);
+    });
+  }
+
+  test("a block max_tokens wins", () => {
+    expect(bodyOf([user("Hi.")], { block: { max_tokens: 1000n } })["max_tokens"]).toBe(1000n);
+  });
+});
+
+describe("tools", () => {
+  test("tools carry name, input_schema and description, strict only when set", () => {
+    const strict = new ToolSpec({ name: "s", description: "", parameters: { type: "object" }, strict: true });
+    const loose = new ToolSpec({ name: "l", description: "Loose.", parameters: { type: "object" }, strict: false });
+    expect(bodyOf([user("Hi.")], { tools: [DOUBLE, strict, loose] })["tools"]).toEqual([
+      {
+        name: "double",
+        input_schema: { properties: { value: { type: "integer" } }, required: ["value"], type: "object" },
+        description: "Double an integer.",
+      },
+      { name: "s", input_schema: { type: "object" }, description: "", strict: true },
+      { name: "l", input_schema: { type: "object" }, description: "Loose.", strict: false },
+    ]);
+  });
+
+  test("tool parameters are copied", () => {
+    const [tool] = bodyOf([user("Hi.")], { tools: [DOUBLE] })["tools"] as JsonObject[];
+    ((tool!["input_schema"] as JsonObject)["required"] as JsonValue[]).push("x");
+    expect(DOUBLE.parameters["required"]).toEqual(["value"]);
+  });
+
+  test("no tools sends no tools", () => {
+    expect(Object.hasOwn(bodyOf([user("Hi.")]), "tools")).toBe(false);
+  });
+
+  const combinators: [JsonObject, string][] = [
+    [{ oneOf: [{ type: "object" }] }, "oneOf"],
+    [{ anyOf: [{ type: "object" }] }, "anyOf"],
+    [{ anyOf: [{ type: "object" }], oneOf: [{ type: "object" }] }, "oneOf/anyOf"],
+  ];
+  for (const [parameters, keys] of combinators) {
+    test(`a top-level ${keys} is refused`, () => {
+      const pick = new ToolSpec({ name: "pick", description: "Pick.", parameters });
+      refuses(
+        () => bodyOf([user("Hi.")], { tools: [pick] }),
+        `tool 'pick' has a top-level ${keys} in its parameters, which the Anthropic API does not support`,
+      );
+    });
+  }
+
+  test("nested combinators pass", () => {
+    const parameters: JsonObject = {
+      type: "object",
+      properties: { value: { anyOf: [{ type: "integer" }, { type: "string" }] }, kind: { oneOf: [{ const: "a" }] } },
+    };
+    const pick = new ToolSpec({ name: "pick", description: "Pick.", parameters });
+    const [tool] = bodyOf([user("Hi.")], { tools: [pick] })["tools"] as JsonObject[];
+    expect(tool!["input_schema"]).toEqual(parameters);
+  });
+});
+
+describe("tool choice and parallel tool calls", () => {
+  const choices: [ToolChoice, JsonObject][] = [
+    ["auto", { type: "auto" }],
+    ["required", { type: "any" }],
+    ["none", { type: "none" }],
+    [new NamedTool("double"), { type: "tool", name: "double" }],
+  ];
+  for (const [choice, expected] of choices) {
+    test(`tool choice ${JSON.stringify(expected)}`, () => {
+      expect(bodyOf([user("Hi.")], { tools: [DOUBLE], toolChoice: choice })["tool_choice"]).toEqual(expected);
+    });
+  }
+
+  test("no tool choice and no parallelToolCalls sends no tool_choice", () => {
+    expect(Object.hasOwn(bodyOf([user("Hi.")], { tools: [DOUBLE] }), "tool_choice")).toBe(false);
+  });
+
+  test("no tools sends no tool_choice, even when a choice or parallelToolCalls is set", () => {
+    for (const choice of choices.map(([each]) => each)) {
+      expect(Object.hasOwn(bodyOf([user("Hi.")], { toolChoice: choice }), "tool_choice")).toBe(false);
+    }
+    for (const parallelToolCalls of [false, true]) {
+      const body = bodyOf([user("Hi.")], { toolChoice: "auto", parallelToolCalls });
+      expect(Object.hasOwn(body, "tool_choice")).toBe(false);
+      expect(Object.hasOwn(bodyOf([user("Hi.")], { parallelToolCalls }), "tool_choice")).toBe(false);
+    }
+  });
+
+  for (const parallelToolCalls of [false, true]) {
+    const disable = !parallelToolCalls;
+    test(`parallelToolCalls ${parallelToolCalls} without a choice sends an auto choice`, () => {
+      const body = bodyOf([user("Hi.")], { tools: [DOUBLE], parallelToolCalls });
+      expect(body["tool_choice"]).toEqual({ type: "auto", disable_parallel_tool_use: disable });
+    });
+
+    test(`parallelToolCalls ${parallelToolCalls} is set on a choice`, () => {
+      const forced = bodyOf([user("Hi.")], { tools: [DOUBLE], toolChoice: new NamedTool("double"), parallelToolCalls });
+      expect(forced["tool_choice"]).toEqual({ type: "tool", name: "double", disable_parallel_tool_use: disable });
+      const any = bodyOf([user("Hi.")], { tools: [DOUBLE], toolChoice: "required", parallelToolCalls });
+      expect(any["tool_choice"]).toEqual({ type: "any", disable_parallel_tool_use: disable });
+    });
+
+    test(`parallelToolCalls ${parallelToolCalls} is not set on none`, () => {
+      const body = bodyOf([user("Hi.")], { tools: [DOUBLE], toolChoice: "none", parallelToolCalls });
+      expect(body["tool_choice"]).toEqual({ type: "none" });
+    });
+  }
+});
+
+describe("the block", () => {
+  test("block is merged last, a block key replacing yian's", () => {
+    const block: JsonObject = {
+      max_tokens: 2048n,
+      temperature: 0.2,
+      thinking: { type: "enabled", budget_tokens: 1024n },
+      tool_choice: { type: "any" },
+      stop_sequences: ["END"],
+    };
+    const body = bodyOf([system("S."), user("Hi.")], { block, tools: [DOUBLE], toolChoice: "auto" });
+    expect(body).toEqual({
+      model: SONNET,
+      max_tokens: 2048n,
+      messages: [{ role: "user", content: "Hi." }],
+      system: "S.",
+      tools: [
+        {
+          name: "double",
+          input_schema: { properties: { value: { type: "integer" } }, required: ["value"], type: "object" },
+          description: "Double an integer.",
+        },
+      ],
+      tool_choice: { type: "any" },
+      stream: true,
+      temperature: 0.2,
+      thinking: { type: "enabled", budget_tokens: 1024n },
+      stop_sequences: ["END"],
+    });
+  });
+
+  test("block is not shared with the body", () => {
+    const block: JsonObject = { thinking: { type: "enabled", budget_tokens: 1024n } };
+    const body = bodyOf([user("Hi.")], { block });
+    (body["thinking"] as JsonObject)["type"] = "changed";
+    expect(block).toEqual({ thinking: { type: "enabled", budget_tokens: 1024n } });
+    expect((bodyOf([user("Hi.")], { block })["thinking"] as JsonObject)["type"]).toBe("enabled");
+  });
+
+  test("later changes to the caller's block do not change bodies", () => {
+    const block: JsonObject = { temperature: 0.2 };
+    const protocol = new AnthropicMessages({ model: SONNET, provider: "anthropic", block });
+    block["temperature"] = 0.9;
+    block["max_tokens"] = 10n;
+    const body = protocol.buildBody(new Request({ messages: [user("Hi.")] }));
+    expect(body["temperature"]).toBe(0.2);
+    expect(body["max_tokens"]).toBe(64000n);
+  });
+
+  test("a null block leaf is unset and a __proto__ key stays an ordinary key", () => {
+    // Built with parseJson: an object literal's "__proto__" would set the prototype instead.
+    const block = parseJson(
+      '{"temperature": null, "metadata": {"user_id": "u", "__proto__": "x"}}',
+      "plain",
+    ) as JsonObject;
+    const body = bodyOf([user("Hi.")], { block });
+    expect(Object.hasOwn(body, "temperature")).toBe(false);
+    expect(Object.hasOwn(body["metadata"] as JsonObject, "__proto__")).toBe(true);
+    expect(encodeBody(body)).toContain('"metadata":{"user_id":"u","__proto__":"x"}');
+  });
+
+  test("no beta field is ever added: the body holds only yian's keys and the block's", () => {
+    const block: JsonObject = {
+      thinking: { type: "enabled", budget_tokens: 1024n },
+      metadata: { user_id: "u" },
+      output_config: { effort: "high" },
+      service_tier: "auto",
+      cache_control: { type: "ephemeral" },
+    };
+    const body = bodyOf([system("S."), user("Hi.")], {
+      block,
+      tools: [DOUBLE],
+      toolChoice: "auto",
+      parallelToolCalls: false,
+    });
+    expect(Object.keys(body)).toEqual([
+      "model",
+      "max_tokens",
+      "messages",
+      "system",
+      "tools",
+      "tool_choice",
+      "stream",
+      ...Object.keys(block),
+    ]);
+    expect(encodeBody(body)).not.toContain("beta");
+  });
+});
+
+describe("determinism", () => {
+  const history = [
+    system("S."),
+    user("Double 3."),
+    assistant(text("Calling."), call("call_1", { value: 3n })),
+    tool(result("call_1", "6")),
+    assistant(text("It is 6.")),
+  ];
+
+  test("the same request built twice encodes to the same bytes", () => {
+    const request = new Request({ messages: history, tools: [DOUBLE], toolChoice: "auto", parallelToolCalls: false });
+    const protocol = new AnthropicMessages({ model: SONNET, provider: "anthropic", block: { temperature: 0.2 } });
+    expect(encodeBody(protocol.buildBody(request))).toBe(encodeBody(protocol.buildBody(request)));
+  });
+
+  test("appending a user turn after a tool loop leaves every earlier rendered message equal", () => {
+    const before = bodyOf(history);
+    const after = bodyOf([...history, user("Thanks.")]);
+    const earlier = before["messages"] as JsonObject[];
+    const later = after["messages"] as JsonObject[];
+    expect(later).toHaveLength(earlier.length + 1);
+    expect(later.slice(0, earlier.length).map((each) => encodeBody(each))).toEqual(
+      earlier.map((each) => encodeBody(each)),
+    );
+    expect(after["system"]).toBe(before["system"]);
+  });
 });

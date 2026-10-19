@@ -6,7 +6,8 @@
  * lifted to `system`, and a later system message stays in place only where the model accepts
  * it, else it is hoisted to `system` with a warning. An assistant message is sent as its blocks
  * in part order, so a replayed turn goes back as the API sent it. Tool ids the API refuses are
- * hashed to ones it accepts, the same on the call and its result. Every call streams.
+ * hashed to ones it accepts, the same on the call and its result. Tools are sent with their
+ * schema as `input_schema`, and a tool choice only with tools. Every call streams.
  */
 
 import { createHash } from "node:crypto";
@@ -20,13 +21,16 @@ import {
   copyJson,
   MediaPart,
   type Message,
+  NamedTool,
   type Part,
   type ReplayDegradedReason,
   type ReplayKey,
   type Request,
   TextPart,
+  type ToolChoice,
   ToolCallPart,
   ToolResultPart,
+  type ToolSpec,
 } from "../messages.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
@@ -65,6 +69,8 @@ const IN_PLACE_SYSTEM_PREFIXES = [
   "claude-opus-5",
   "claude-sonnet-5-5",
 ];
+// The `tool_choice` type for each choice yian names by string.
+const CHOICE_TYPES = { auto: "auto", required: "any", none: "none" } as const;
 // The tool ids the API accepts on `tool_use` and `tool_result`.
 const TOOL_ID = /^[a-zA-Z0-9_-]+$/;
 
@@ -114,7 +120,12 @@ export class AnthropicMessages implements SseProtocol {
 
   /**
    * Build the Messages request body: `model`, `max_tokens` (the model's default), `messages`,
-   * `system` when there is one and `stream: true`, then the provider block.
+   * `system` when there is one, `tools` and `tool_choice` when tools are sent, and
+   * `stream: true`, then the provider block, whose keys replace yian's.
+   *
+   * A tool is its name, its parameters as `input_schema`, its description (always) and `strict`
+   * when set. The tool choice is sent only with tools; `parallelToolCalls`, when set, becomes
+   * `disable_parallel_tool_use` on it (an `auto` choice when none is set), but never on `none`.
    *
    * Runs of user and tool messages merge into one `user` turn, in which whitespace-only text
    * blocks are dropped. Leading system messages are lifted to `system`. A later one stays in
@@ -125,8 +136,9 @@ export class AnthropicMessages implements SseProtocol {
    * reasoning are not sent. The final assistant message is stripped at the end, and an empty
    * assistant message is skipped unless it is the final one.
    *
-   * @throws {TypeError} If a message holds a media part or a part its role cannot carry, or a
-   *   system message must be hoisted when `system` is already set.
+   * @throws {TypeError} If a message holds a media part or a part its role cannot carry, a
+   *   system message must be hoisted when `system` is already set, or a tool's parameters have
+   *   a top-level `oneOf` or `anyOf`.
    */
   buildBody(request: Request): JsonObject {
     const [system, messages] = this.#messages(request.messages);
@@ -136,6 +148,11 @@ export class AnthropicMessages implements SseProtocol {
       messages,
     };
     if (system !== null) body["system"] = system;
+    if (request.tools.length > 0) {
+      body["tools"] = request.tools.map(tool);
+      const choice = toolChoice(request.toolChoice, request.parallelToolCalls);
+      if (choice !== null) body["tool_choice"] = choice;
+    }
     body["stream"] = true;
     if (this.#block) mergeRequestBody(body, this.#block);
     return body;
@@ -165,18 +182,21 @@ export class AnthropicMessages implements SseProtocol {
     for (const [i, turn] of turns.entries()) {
       if (turn.role === "system") {
         const content = systemContent(turn.texts);
+        // `pending.length > 0` keeps a run of held messages together, as LangChain's
+        // `pending_system` check does, when a skipped empty assistant message sits between them.
         if (i === 0) system = content;
         else if (inPlace && (pending.length > 0 || rendered.at(-1)?.["role"] === "user")) pending.push(content);
         else system = this.#hoist(system, content);
         continue;
       }
-      const content =
-        turn.role === "user" ? userContent(turn.blocks) : assistantContent(turn.message, i === lastNonSystem);
-      // The API refuses empty content on every message but the final assistant one.
-      if (turn.role === "assistant" && content === "" && i !== lastNonSystem) continue;
+      let content: JsonValue;
       if (turn.role === "assistant") {
+        content = assistantContent(turn.message, i === lastNonSystem);
+        // The API refuses empty content on every message but the final assistant one.
+        if (content === "" && i !== lastNonSystem) continue;
         for (const each of pending) rendered.push({ role: "system", content: each });
       } else {
+        content = userContent(turn.blocks);
         for (const each of pending) system = this.#hoist(system, each);
       }
       pending = [];
@@ -240,6 +260,7 @@ function toolResult(part: Part): JsonObject {
   return { type: "tool_result", content: part.content, tool_use_id: toolId(part.callId), is_error: part.isError };
 }
 
+/** Return a `text` block. */
 function textBlock(text: string): JsonObject {
   return { type: "text", text };
 }
@@ -251,9 +272,7 @@ function systemContent(texts: string[]): JsonValue {
 
 /** Return a user turn's content: one text block as a string, else the blocks without whitespace-only texts. */
 function userContent(blocks: JsonObject[]): JsonValue {
-  const [first] = blocks;
-  if (blocks.length === 1 && first!["type"] === "text") return first!["text"]!;
-  return blocks.filter(isSendable);
+  return loneText(blocks) ?? blocks.filter(isSendable);
 }
 
 /**
@@ -277,11 +296,8 @@ function assistantContent(message: Message, final: boolean): JsonValue {
       blocks.push({ type: "tool_use", id: toolId(part.id), name: part.name, input });
     }
   }
-  const [first] = blocks;
-  if (blocks.length === 1 && first!["type"] === "text") {
-    const text = first!["text"] as string;
-    return final ? text.trimEnd() : text;
-  }
+  const lone = loneText(blocks);
+  if (lone !== null) return final ? lone.trimEnd() : lone;
   // Claude often streams a whitespace-only text block before a `tool_use`, which the API refuses back.
   const content = blocks.filter(isSendable);
   const last = content.at(-1);
@@ -289,9 +305,54 @@ function assistantContent(message: Message, final: boolean): JsonValue {
   return content.length === 0 ? "" : content;
 }
 
+/** Return the text of `blocks` when they are one text block, else `null`. */
+function loneText(blocks: JsonObject[]): string | null {
+  const [first] = blocks;
+  return blocks.length === 1 && first!["type"] === "text" ? (first!["text"] as string) : null;
+}
+
 /** Return whether a block may go in a list: anything but a whitespace-only text block. */
 function isSendable(block: JsonObject): boolean {
   return block["type"] !== "text" || (block["text"] as string).trim() !== "";
+}
+
+/**
+ * Render a tool: its name, its parameters (copied) as `input_schema`, its description and
+ * `strict` when set.
+ *
+ * @throws {TypeError} If its parameters have a top-level `oneOf` or `anyOf`.
+ */
+function tool(spec: ToolSpec): JsonObject {
+  const combinators = ["oneOf", "anyOf"].filter((key) => Object.hasOwn(spec.parameters, key));
+  if (combinators.length > 0) {
+    throw new TypeError(
+      `tool '${spec.name}' has a top-level ${combinators.join("/")} in its parameters, which the Anthropic API ` +
+        "does not support",
+    );
+  }
+  // Copied so changing a body cannot change the spec it came from.
+  const rendered: JsonObject = {
+    name: spec.name,
+    input_schema: copyJson(spec.parameters),
+    description: spec.description,
+  };
+  if (spec.strict !== null) rendered["strict"] = spec.strict;
+  return rendered;
+}
+
+/**
+ * Render the tool choice, or `null` for none. When `parallel` is set, `disable_parallel_tool_use`
+ * is its negation, on an `auto` choice when none is set; never on `none`, which has no such field.
+ */
+function toolChoice(choice: ToolChoice, parallel: boolean | null): JsonObject | null {
+  let rendered: JsonObject | null = null;
+  if (choice instanceof NamedTool) rendered = { type: "tool", name: choice.name };
+  else if (choice !== null) rendered = { type: CHOICE_TYPES[choice] };
+  if (parallel !== null && choice !== "none") {
+    rendered ??= { type: "auto" };
+    rendered["disable_parallel_tool_use"] = !parallel;
+  }
+  return rendered;
 }
 
 /** Return `id`, or when the API refuses it, `toolu_` and the first 24 hex digits of its SHA-256. */

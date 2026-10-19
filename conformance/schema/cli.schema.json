@@ -8,7 +8,8 @@
     {"$ref": "#/$defs/run_document"},
     {"$ref": "#/$defs/config_document"},
     {"$ref": "#/$defs/providers_document"},
-    {"$ref": "#/$defs/skills_document"}
+    {"$ref": "#/$defs/skills_document"},
+    {"$ref": "#/$defs/remove_document"}
   ],
   "$defs": {
     "format": {
@@ -79,7 +80,7 @@
       ]
     },
     "error_document": {
-      "description": "Written by a --json command that exits 1 without its own result document.",
+      "description": "Written by a --json command that exits 1 without its own result document. auth.failed: `yian auth` sign-in, the auth file, or removal failed (options that don't apply, a denied or expired sign-in, an HTTP failure, a store that isn't private or is malformed, a lock timeout, a missing login to remove, a model the subscription doesn't offer).",
       "type": "object",
       "required": ["format", "error"],
       "properties": {
@@ -90,7 +91,7 @@
             {
               "properties": {
                 "code": {
-                  "enum": ["compose.load", "defaults.invalid", "run.setup", "run.cancelled"]
+                  "enum": ["compose.load", "defaults.invalid", "run.setup", "run.cancelled", "auth.failed"]
                 }
               }
             }
@@ -237,6 +238,15 @@
       "properties": {
         "format": {"$ref": "#/$defs/format"},
         "skills": {"type": "array", "items": {"$ref": "#/$defs/skill_result"}}
+      }
+    },
+    "remove_document": {
+      "description": "`yian auth --remove --auth-file F --json` and `yian auth PROVIDER --remove --json`: the whole auth file, or the provider's saved login, is removed. Removing an auth file that doesn't exist succeeds; removing a provider login that isn't saved is an auth.failed error.",
+      "type": "object",
+      "required": ["format", "ok"],
+      "properties": {
+        "format": {"$ref": "#/$defs/format"},
+        "ok": {"const": true}
       }
     }
   }

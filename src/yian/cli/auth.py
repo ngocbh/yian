@@ -244,9 +244,9 @@ def _text_models(models: tuple[str, ...]) -> list[str]:
     ]
 
 
-def _list() -> None:
-    """Print each saved login and the default without reading any credential."""
-    state = AuthStore().read()
+def _list(store: AuthStore) -> None:
+    """Print each saved login in `store` and the default without reading any credential."""
+    state = store.read()
     overrides = [
         name
         for name in ("YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL")
@@ -292,7 +292,7 @@ def _check_endpoint(endpoint: str) -> None:
 
 
 def _check_options(
-    provider: str,
+    provider: Optional[str],
     *,
     method: Optional[str],
     login: Optional[str],
@@ -304,16 +304,17 @@ def _check_options(
     organization: Optional[str] = None,
     project: Optional[str] = None,
     header: Optional[list[str]] = None,
-) -> tuple[str, dict[str, Optional[str]]]:
+) -> tuple[Optional[str], dict[str, Optional[str]]]:
     """Validate the option combination and return the provider name and headers to use.
 
-    Azure setup also needs `OPENAI_API_VERSION` and a valid `endpoint`, when given.
+    `provider` is `None` only for removing the whole auth file, which takes no setup
+    option and no `default`. Azure setup also needs `OPENAI_API_VERSION` and a valid `endpoint`, when given.
     `organization` and `project` apply to an OpenAI API key, and `header` to every
     provider sent a key (see `_header_sources`).
 
     Returns:
-        `tuple[str, dict[str, str | None]]`: The provider name, and each header name
-        with its value from the environment or `None` to prompt.
+        `tuple[str | None, dict[str, str | None]]`: The provider name, and each header
+        name with its value from the environment or `None` to prompt.
 
     Raises:
         AuthError: The provider or an option does not apply, a connection setting is
@@ -647,7 +648,21 @@ def auth(
         False, "--default", help="Make an already-saved provider the default."
     ),
     remove: bool = typer.Option(
-        False, "--remove", help="Delete the provider's saved login."
+        False,
+        "--remove",
+        help="Delete the provider's saved login; without a provider, delete the whole "
+        "--auth-file.",
+    ),
+    auth_file: Optional[str] = typer.Option(
+        None,
+        "--auth-file",
+        help="Auth file to use instead of $YIAN_AUTH_FILE or ~/.config/yian/auth.json.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print yian.cli.v1 JSON on stdout; applies to --remove and to openai "
+        "--method subscription --login device.",
     ),
 ) -> None:
     """List, set up, choose the default among, or remove saved provider logins.
@@ -673,6 +688,11 @@ def auth(
 
     `yian auth PROVIDER --default` makes a saved login the default.
     `yian auth PROVIDER --remove` deletes one saved login.
+    `yian auth --remove --auth-file F` deletes the whole file F.
+
+    --auth-file F makes every form use the file F instead of $YIAN_AUTH_FILE or
+    ~/.config/yian/auth.json. --json prints one yian.cli.v1 document on stdout
+    for --remove: success, or the error that failed it.
 
     A failed or cancelled setup leaves the saved logins unchanged.
 
@@ -693,13 +713,28 @@ def auth(
             ``NAME``; refused for ollama and an openai subscription.
         default (`bool`): Make the saved provider the default without signing in.
         remove (`bool`): Delete the provider's saved login; accepts any saved name,
-            and a lowercase saved name in any case.
+            and a lowercase saved name in any case. Without a provider, delete the
+            whole `auth_file`, which must be given.
+        auth_file (`str | None`): Auth file used instead of `$YIAN_AUTH_FILE` or the
+            default path; relative to the working directory.
+        json_output (`bool`): Print `yian.cli.v1` JSON instead of text; only for
+            `--remove` and openai subscription device sign-in.
 
     Raises:
+        typer.BadParameter: `--json` is given to another form.
         typer.Exit: The command fails or is cancelled; saved logins stay unchanged.
     """
+    device = (
+        (provider or "").lower() == "openai"
+        and method == "subscription"
+        and login == "device"
+    )
+    if json_output and not (remove or device):
+        raise typer.BadParameter(
+            "--json applies to --remove and to openai --method subscription --login device"
+        )
     try:
-        if provider is None:
+        if provider is None and not (remove and auth_file is not None):
             if default or remove or any(
                 value is not None
                 for value in (
@@ -707,7 +742,7 @@ def auth(
                 )
             ) or header:
                 raise AuthError("Name a provider: yian auth <provider> [options]")
-            _list()
+            _list(AuthStore(auth_file))
             return
         provider, header_sources = _check_options(
             provider,
@@ -722,7 +757,14 @@ def auth(
             project=project,
             header=header,
         )
-        store = AuthStore()
+        store = AuthStore(auth_file)
+        if remove and provider is None:
+            store.delete()
+            if json_output:
+                print_json({"ok": True})
+            else:
+                typer.echo(f"Removed the saved logins in {auth_file}")
+            return
         if remove:
             state = store.read()
             saved = {selection.provider for selection in state.selections}
@@ -730,6 +772,9 @@ def auth(
                 provider = provider.lower()
             was_default = state.default_provider == provider
             store.remove(provider)
+            if json_output:
+                print_json({"ok": True})
+                return
             typer.echo(f"Removed the saved {provider} login")
             if was_default:
                 typer.echo(_NO_DEFAULT)
@@ -764,7 +809,10 @@ def auth(
                 f"(switch with 'yian auth {provider} --default')"
             )
     except AuthError as error:
-        typer.echo(str(error), err=True)
+        if json_output:
+            print_json({"error": {"code": "auth.failed", "message": str(error)}})
+        else:
+            typer.echo(str(error), err=True)
         raise typer.Exit(1) from None
     except (KeyboardInterrupt, EOFError):
         typer.echo(_CANCELLED, err=True)

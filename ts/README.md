@@ -300,12 +300,14 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   never `bigint`.
 - A `SourceRef` compares by identity: key maps and sets by `sourceKey(ref)`.
 - `src/runtime/log.ts` holds the run records, `RecordEnvelope` and its codec (`encodeRecord`,
-  `decodeRecord`, schema 10), and the canonical helpers (`canonicalTyped`, `canonicalSeed`,
-  `encodePool`, `decodePool`, `routePayload`). Records and envelopes are frozen: a record's
-  JSON values are deep-frozen canonical copies made once by its constructor, with no copy on
-  read, and its frozen carriers are kept by reference. Counters (`seq`, `numWorkers`,
-  `attemptId`, indexes) are safe-integer `number`s, written as JSON ints. A capture or feedback
-  deeper than about 10k levels throws the engine's stack `RangeError`.
+  `decodeRecord`, schema 10), the canonical helpers (`canonicalTyped`, `canonicalSeed`,
+  `encodePool`, `decodePool`), and the payload helpers later runtime modules share
+  (`routePayload`, `routeFromPayload`, `executionScopePayload`, `evidencePayload`). Records and
+  envelopes are frozen: a record's JSON values are deep-frozen canonical copies made once by its
+  constructor, with no copy on read, and its frozen carriers are kept by reference. Counters
+  (`seq`, `numWorkers`, `attemptId`, indexes) are safe-integer `number`s, written as JSON ints. A
+  capture or feedback nested deep enough to overflow the stack throws the engine's `RangeError`,
+  because `ForwardCapture` and backward feedback freeze recursively.
 
 ## Compile
 

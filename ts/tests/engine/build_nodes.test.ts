@@ -13,7 +13,8 @@
  * `test_agent_node_object_output`, `test_agent_invalid_llm_config_uses_the_config_field_range`,
  * `test_agent_non_mapping_llm_config_is_a_ranged_load_error`, `test_agent_node_knobs`,
  * `test_node_name_becomes_title`, `test_code_node_built`, `test_tool_node_built_with_args_bindings`
- * and `test_output_contract_resolves_registry_name`), which belong to the leaf readers (T3-15).
+ * and `test_output_contract_resolves_registry_name`): Later (T3-15 leftover; see the T3-16
+ * handoff), since T3-15 merged without porting them.
  */
 
 import { expect, test } from "bun:test";

@@ -41,7 +41,7 @@ import { childSignature } from "../../src/compose/nodes/resolver.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
-import { Binding, isExactly, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
+import { Binding, isExactly, Parameter, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
@@ -98,7 +98,11 @@ test("seed 03's child signature", () => {
 
   const parameters = new Map(sig.inputs.map((parameter) => [parameter.name, parameter]));
   expect([...parameters.keys()]).toEqual(["topic", "as_of"]);
-  expect(sig.inputs.every((parameter) => parameter.contract instanceof ValueContract)).toBe(true);
+  expect(
+    sig.inputs.every(
+      (parameter) => isExactly(parameter, Parameter) && isExactly(parameter.contract, ValueContract),
+    ),
+  ).toBe(true);
   expect(parameters.get("topic")!.required).toBe(true);
   expect(parameters.get("topic")!.contract!.type.kind).toBe(ValueKind.STRING);
   const asOf = parameters.get("as_of")!;

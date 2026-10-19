@@ -1,0 +1,164 @@
+kind: backward
+flow: |
+  id: memory-run
+  name: memory_run
+  long_term_memory: test
+  nodes:
+    work:
+      kind: code
+      code: return 7
+      output: int
+  output: ${work.output}
+run:
+  num_workers: 0
+  learnable: true
+backward:
+- feedback: null
+expect:
+  output:
+    status: succeeded
+    output: 7
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: true
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - forward_capture:
+        bound_inputs: {}
+        node_data:
+          input_output_paths: {}
+        route:
+          kind: record
+        scope:
+          boundary: start
+          flow_path: []
+          occurrence_path: []
+          static_path: [__start__]
+      value: {}
+  - [node_started, work]
+  - - node_succeeded
+    - work
+    - forward_capture:
+        bound_inputs: {}
+        route:
+          kind: record
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [work]
+      value: 7
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - forward_capture:
+        bound_inputs:
+          result: 7
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 3
+              path: []
+              run_id: <id:1>
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: []
+          occurrence_path: []
+          static_path: [__end__]
+      value: 7
+  - - backward_started
+    - null
+    - attempt_id: 1
+  - - backward_ready
+    - null
+    - attempt_id: 1
+      attributed_results:
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 1
+          path: []
+          run_id: <id:1>
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 3
+          path: []
+          run_id: <id:1>
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 5
+          path: []
+          run_id: <id:1>
+      proposals: []
+      root_result:
+        input_feedback: {}
+        self_feedback: []
+        variable_feedback: {}
+  - - backward_finished
+    - null
+    - attempt_id: 1
+      attributed_results: []
+      outcome:
+        failure: null
+        feedback:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        learning: null
+        status: succeeded
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: work
+  - - NodeSucceeded
+    - node_id: work
+      output: 7
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: 7
+  - - RunSucceeded
+    - output: 7
+  backward:
+  - failure: null
+    feedback:
+      input_feedback: {}
+      self_feedback: []
+      variable_feedback: {}
+    learning: null
+    status: succeeded

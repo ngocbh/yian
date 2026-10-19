@@ -1,0 +1,2562 @@
+# From tests/engine/test_backward_composition.py::test_call_and_map_loop_calls_retain_each_agent_after_pruning_and_terminal_resume
+# (shortest form: a MAP of a LOOP of a CALL to the AGENT; str output, no provider blocks, no
+# terminal-resume half).
+# Pins: backward calls every AGENT occurrence once, the LOOP's earlier (pruned) iterations too, and
+# returns the first iterations' input feedback to each MAP item's position.
+kind: backward
+flow: |
+  id: nested-agent-history
+  name: nested_agent_history
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    values: !list(str)
+  defs:
+    agent_body:
+      input:
+        n: !str
+      nodes:
+        author:
+          kind: agent
+          input:
+            n: ${input.n}
+          prompt: 'concise: ${n}'
+          output: str
+      output: ${author.output}
+    loop_body:
+      input:
+        n: !str
+      nodes:
+        invoke:
+          kind: call
+          call: agent_body
+          input:
+            n: ${input.n}
+      output:
+        n: ${invoke.output}
+    mapped:
+      input:
+        n: !str
+      nodes:
+        loop:
+          kind: loop
+          call: loop_body
+          input:
+            n: ${input.n}
+          times: 2
+      output: ${loop.output.n}
+  nodes:
+    many:
+      kind: map
+      call: mapped
+      over: ${input.values}
+      input:
+        n: ${item}
+  output: ${many.output}
+inputs:
+  values: [ten, twenty]
+run:
+  run_id: r1
+  num_workers: 0
+  learnable: true
+host:
+  models:
+    many#0/loop#0/invoke/author:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: one
+      backward:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"input_feedback": {"n": ["Refine n."]}, "self_feedback": [], "variable_feedback": {}}'
+    many#0/loop#1/invoke/author:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: one
+      backward:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"input_feedback": {"n": ["Refine n."]}, "self_feedback": [], "variable_feedback": {}}'
+    many#1/loop#0/invoke/author:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: one
+      backward:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"input_feedback": {"n": ["Refine n."]}, "self_feedback": [], "variable_feedback": {}}'
+    many#1/loop#1/invoke/author:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: one
+      backward:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"input_feedback": {"n": ["Refine n."]}, "self_feedback": [], "variable_feedback": {}}'
+backward:
+- feedback: Review every iteration.
+expect:
+  output:
+    status: succeeded
+    output: [one, one]
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        many/loop/invoke/author:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      inputs:
+        values: [ten, twenty]
+      learnable: true
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - forward_capture:
+        bound_inputs:
+          values: [ten, twenty]
+        evaluated_keys: [values]
+        input_names: [values]
+        node_data:
+          input_output_paths:
+            values: [values]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 0
+              path: [values]
+              run_id: r1
+          kind: record
+          names: [values]
+        scope:
+          boundary: start
+          flow_path: []
+          occurrence_path: []
+          static_path: [__start__]
+      value:
+        values: [ten, twenty]
+  - [node_started, many]
+  - - node_expanded
+    - many
+    - forward_capture:
+        bound_inputs:
+          over: [ten, twenty]
+        evaluated_keys: [over]
+        input_names: [n]
+        items:
+        - capture:
+            bound_inputs:
+              n: ten
+            evaluated_keys: [n]
+            route:
+              children:
+              - children:
+                - kind: source
+                  source:
+                    execution_seq: 1
+                    path: [values, 0]
+                    run_id: r1
+                kind: selected
+              kind: record
+              names: [n]
+            scope: null
+          index: 0
+        - capture:
+            bound_inputs:
+              n: twenty
+            evaluated_keys: [n]
+            route:
+              children:
+              - children:
+                - kind: source
+                  source:
+                    execution_seq: 1
+                    path: [values, 1]
+                    run_id: r1
+                kind: selected
+              kind: record
+              names: [n]
+            scope: null
+          index: 1
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 1
+              path: [values]
+              run_id: r1
+          kind: record
+          names: [over]
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [many]
+      prune_ids: []
+      seed:
+      - n: ten
+      - n: twenty
+  - [node_started, many/__start__]
+  - - node_succeeded
+    - many/__start__
+    - forward_capture:
+        bound_inputs: {}
+        node_data:
+          input_output_paths: {}
+        route:
+          kind: record
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [many]
+      value: {}
+  - [node_started, many#0/__start__]
+  - - node_succeeded
+    - many#0/__start__
+    - forward_capture:
+        bound_inputs:
+          n: ten
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: literal
+            value_json: ten
+          kind: record
+          names: [n]
+        scope:
+          boundary: start
+          flow_path: [many]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          static_path: [many, __start__]
+      value:
+        n: ten
+  - [node_started, many#1/__start__]
+  - - node_succeeded
+    - many#1/__start__
+    - forward_capture:
+        bound_inputs:
+          n: twenty
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: literal
+            value_json: twenty
+          kind: record
+          names: [n]
+        scope:
+          boundary: start
+          flow_path: [many]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          static_path: [many, __start__]
+      value:
+        n: twenty
+  - [node_started, many#0/loop]
+  - - node_expanded
+    - many#0/loop
+    - forward_capture:
+        bound_inputs:
+          n: ten
+        evaluated_keys: [n]
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 7
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: null
+          flow_path: [many]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          - index: 0
+            kind: loop_driver
+            static_path: [many, loop]
+          static_path: [many, loop]
+      prune_ids: []
+      seed:
+      - n: ten
+      - 0
+  - [node_started, many#1/loop]
+  - - node_expanded
+    - many#1/loop
+    - forward_capture:
+        bound_inputs:
+          n: twenty
+        evaluated_keys: [n]
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 9
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: null
+          flow_path: [many]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          - index: 0
+            kind: loop_driver
+            static_path: [many, loop]
+          static_path: [many, loop]
+      prune_ids: []
+      seed:
+      - n: twenty
+      - 0
+  - [node_started, many#0/loop#0/__start__]
+  - - node_succeeded
+    - many#0/loop#0/__start__
+    - forward_capture:
+        bound_inputs:
+          n: ten
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: literal
+            value_json: ten
+          kind: record
+          names: [n]
+        scope:
+          boundary: start
+          flow_path: [many, loop]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          - index: 0
+            kind: loop_body
+            static_path: [many, loop]
+          static_path: [many, loop, __start__]
+      value:
+        n: ten
+  - [node_started, many#1/loop#0/__start__]
+  - - node_succeeded
+    - many#1/loop#0/__start__
+    - forward_capture:
+        bound_inputs:
+          n: twenty
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: literal
+            value_json: twenty
+          kind: record
+          names: [n]
+        scope:
+          boundary: start
+          flow_path: [many, loop]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          - index: 0
+            kind: loop_body
+            static_path: [many, loop]
+          static_path: [many, loop, __start__]
+      value:
+        n: twenty
+  - [node_started, many#0/loop#0/invoke]
+  - - node_expanded
+    - many#0/loop#0/invoke
+    - forward_capture:
+        bound_inputs:
+          n: ten
+        evaluated_keys: [n]
+        input_names: [n]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 15
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: null
+          flow_path: [many, loop]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          - index: 0
+            kind: loop_body
+            static_path: [many, loop]
+          static_path: [many, loop, invoke]
+      prune_ids: []
+      seed:
+        n: ten
+  - [node_started, many#1/loop#0/invoke]
+  - - node_expanded
+    - many#1/loop#0/invoke
+    - forward_capture:
+        bound_inputs:
+          n: twenty
+        evaluated_keys: [n]
+        input_names: [n]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 17
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: null
+          flow_path: [many, loop]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          - index: 0
+            kind: loop_body
+            static_path: [many, loop]
+          static_path: [many, loop, invoke]
+      prune_ids: []
+      seed:
+        n: twenty
+  - [node_started, many#0/loop#0/invoke/__start__]
+  - - node_succeeded
+    - many#0/loop#0/invoke/__start__
+    - forward_capture:
+        bound_inputs:
+          n: ten
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: literal
+            value_json: ten
+          kind: record
+          names: [n]
+        scope:
+          boundary: start
+          flow_path: [many, loop, invoke]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          - index: 0
+            kind: loop_body
+            static_path: [many, loop]
+          - index: null
+            kind: call
+            static_path: [many, loop, invoke]
+          static_path: [many, loop, invoke, __start__]
+      value:
+        n: ten
+  - [node_started, many#1/loop#0/invoke/__start__]
+  - - node_succeeded
+    - many#1/loop#0/invoke/__start__
+    - forward_capture:
+        bound_inputs:
+          n: twenty
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: literal
+            value_json: twenty
+          kind: record
+          names: [n]
+        scope:
+          boundary: start
+          flow_path: [many, loop, invoke]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          - index: 0
+            kind: loop_body
+            static_path: [many, loop]
+          - index: null
+            kind: call
+            static_path: [many, loop, invoke]
+          static_path: [many, loop, invoke, __start__]
+      value:
+        n: twenty
+  - [node_started, many#0/loop#0/invoke/author]
+  - - node_succeeded
+    - many#0/loop#0/invoke/author
+    - forward_capture:
+        bound_inputs:
+          n: ten
+        evaluated_keys: [n]
+        input_names: [n]
+        node_data:
+          effective_llm_config:
+            _connection:
+              endpoint: https://api.openai.com/v1
+              method: api_key
+              source: missing
+            model: gpt-5.5
+            provider: openai
+          prompt_template: 'concise: ${n}'
+          rendered_prompt: 'concise: ten'
+          variable_domains: {}
+          variables: {}
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 23
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: null
+          flow_path: [many, loop, invoke]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          - index: 0
+            kind: loop_body
+            static_path: [many, loop]
+          - index: null
+            kind: call
+            static_path: [many, loop, invoke]
+          static_path: [many, loop, invoke, author]
+      value: one
+  - [node_started, many#1/loop#0/invoke/author]
+  - - node_succeeded
+    - many#1/loop#0/invoke/author
+    - forward_capture:
+        bound_inputs:
+          n: twenty
+        evaluated_keys: [n]
+        input_names: [n]
+        node_data:
+          effective_llm_config:
+            _connection:
+              endpoint: https://api.openai.com/v1
+              method: api_key
+              source: missing
+            model: gpt-5.5
+            provider: openai
+          prompt_template: 'concise: ${n}'
+          rendered_prompt: 'concise: twenty'
+          variable_domains: {}
+          variables: {}
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 25
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: null
+          flow_path: [many, loop, invoke]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          - index: 0
+            kind: loop_body
+            static_path: [many, loop]
+          - index: null
+            kind: call
+            static_path: [many, loop, invoke]
+          static_path: [many, loop, invoke, author]
+      value: one
+  - [node_started, many#0/loop#0/invoke/__end__]
+  - - node_succeeded
+    - many#0/loop#0/invoke/__end__
+    - commit_target: many#0/loop#0/invoke
+      forward_capture:
+        bound_inputs:
+          result: one
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 27
+              path: []
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: [many, loop, invoke]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          - index: 0
+            kind: loop_body
+            static_path: [many, loop]
+          - index: null
+            kind: call
+            static_path: [many, loop, invoke]
+          static_path: [many, loop, invoke, __end__]
+      value: one
+  - [node_started, many#1/loop#0/invoke/__end__]
+  - - node_succeeded
+    - many#1/loop#0/invoke/__end__
+    - commit_target: many#1/loop#0/invoke
+      forward_capture:
+        bound_inputs:
+          result: one
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 29
+              path: []
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: [many, loop, invoke]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          - index: 0
+            kind: loop_body
+            static_path: [many, loop]
+          - index: null
+            kind: call
+            static_path: [many, loop, invoke]
+          static_path: [many, loop, invoke, __end__]
+      value: one
+  - [node_started, many#0/loop#0/__end__]
+  - - node_succeeded
+    - many#0/loop#0/__end__
+    - forward_capture:
+        bound_inputs:
+          n: one
+        evaluated_keys: [n]
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 31
+              path: []
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: end
+          flow_path: [many, loop]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          - index: 0
+            kind: loop_body
+            static_path: [many, loop]
+          static_path: [many, loop, __end__]
+      value:
+        n: one
+  - [node_started, many#1/loop#0/__end__]
+  - - node_succeeded
+    - many#1/loop#0/__end__
+    - forward_capture:
+        bound_inputs:
+          n: one
+        evaluated_keys: [n]
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 33
+              path: []
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: end
+          flow_path: [many, loop]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          - index: 0
+            kind: loop_body
+            static_path: [many, loop]
+          static_path: [many, loop, __end__]
+      value:
+        n: one
+  - [node_started, many#0/loop~1]
+  - - node_expanded
+    - many#0/loop~1
+    - forward_capture:
+        bound_inputs:
+          n: one
+        evaluated_keys: [n]
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 35
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: null
+          flow_path: [many]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          - index: 1
+            kind: loop_driver
+            static_path: [many, loop]
+          static_path: [many, loop]
+      prune_ids:
+      - many#0/loop#0/__end__
+      - many#0/loop#0/__start__
+      - many#0/loop#0/invoke
+      - many#0/loop~1
+      seed:
+      - n: one
+      - 1
+  - [node_started, many#1/loop~1]
+  - - node_expanded
+    - many#1/loop~1
+    - forward_capture:
+        bound_inputs:
+          n: one
+        evaluated_keys: [n]
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 37
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: null
+          flow_path: [many]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          - index: 1
+            kind: loop_driver
+            static_path: [many, loop]
+          static_path: [many, loop]
+      prune_ids:
+      - many#1/loop#0/__end__
+      - many#1/loop#0/__start__
+      - many#1/loop#0/invoke
+      - many#1/loop~1
+      seed:
+      - n: one
+      - 1
+  - [node_started, many#0/loop#1/__start__]
+  - - node_succeeded
+    - many#0/loop#1/__start__
+    - forward_capture:
+        bound_inputs:
+          n: one
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: literal
+            value_json: one
+          kind: record
+          names: [n]
+        scope:
+          boundary: start
+          flow_path: [many, loop]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          - index: 1
+            kind: loop_body
+            static_path: [many, loop]
+          static_path: [many, loop, __start__]
+      value:
+        n: one
+  - [node_started, many#1/loop#1/__start__]
+  - - node_succeeded
+    - many#1/loop#1/__start__
+    - forward_capture:
+        bound_inputs:
+          n: one
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: literal
+            value_json: one
+          kind: record
+          names: [n]
+        scope:
+          boundary: start
+          flow_path: [many, loop]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          - index: 1
+            kind: loop_body
+            static_path: [many, loop]
+          static_path: [many, loop, __start__]
+      value:
+        n: one
+  - [node_started, many#0/loop#1/invoke]
+  - - node_expanded
+    - many#0/loop#1/invoke
+    - forward_capture:
+        bound_inputs:
+          n: one
+        evaluated_keys: [n]
+        input_names: [n]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 43
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: null
+          flow_path: [many, loop]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          - index: 1
+            kind: loop_body
+            static_path: [many, loop]
+          static_path: [many, loop, invoke]
+      prune_ids: []
+      seed:
+        n: one
+  - [node_started, many#1/loop#1/invoke]
+  - - node_expanded
+    - many#1/loop#1/invoke
+    - forward_capture:
+        bound_inputs:
+          n: one
+        evaluated_keys: [n]
+        input_names: [n]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 45
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: null
+          flow_path: [many, loop]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          - index: 1
+            kind: loop_body
+            static_path: [many, loop]
+          static_path: [many, loop, invoke]
+      prune_ids: []
+      seed:
+        n: one
+  - [node_started, many#0/loop#1/invoke/__start__]
+  - - node_succeeded
+    - many#0/loop#1/invoke/__start__
+    - forward_capture:
+        bound_inputs:
+          n: one
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: literal
+            value_json: one
+          kind: record
+          names: [n]
+        scope:
+          boundary: start
+          flow_path: [many, loop, invoke]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          - index: 1
+            kind: loop_body
+            static_path: [many, loop]
+          - index: null
+            kind: call
+            static_path: [many, loop, invoke]
+          static_path: [many, loop, invoke, __start__]
+      value:
+        n: one
+  - [node_started, many#1/loop#1/invoke/__start__]
+  - - node_succeeded
+    - many#1/loop#1/invoke/__start__
+    - forward_capture:
+        bound_inputs:
+          n: one
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: literal
+            value_json: one
+          kind: record
+          names: [n]
+        scope:
+          boundary: start
+          flow_path: [many, loop, invoke]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          - index: 1
+            kind: loop_body
+            static_path: [many, loop]
+          - index: null
+            kind: call
+            static_path: [many, loop, invoke]
+          static_path: [many, loop, invoke, __start__]
+      value:
+        n: one
+  - [node_started, many#0/loop#1/invoke/author]
+  - - node_succeeded
+    - many#0/loop#1/invoke/author
+    - forward_capture:
+        bound_inputs:
+          n: one
+        evaluated_keys: [n]
+        input_names: [n]
+        node_data:
+          effective_llm_config:
+            _connection:
+              endpoint: https://api.openai.com/v1
+              method: api_key
+              source: missing
+            model: gpt-5.5
+            provider: openai
+          prompt_template: 'concise: ${n}'
+          rendered_prompt: 'concise: one'
+          variable_domains: {}
+          variables: {}
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 51
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: null
+          flow_path: [many, loop, invoke]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          - index: 1
+            kind: loop_body
+            static_path: [many, loop]
+          - index: null
+            kind: call
+            static_path: [many, loop, invoke]
+          static_path: [many, loop, invoke, author]
+      value: one
+  - [node_started, many#1/loop#1/invoke/author]
+  - - node_succeeded
+    - many#1/loop#1/invoke/author
+    - forward_capture:
+        bound_inputs:
+          n: one
+        evaluated_keys: [n]
+        input_names: [n]
+        node_data:
+          effective_llm_config:
+            _connection:
+              endpoint: https://api.openai.com/v1
+              method: api_key
+              source: missing
+            model: gpt-5.5
+            provider: openai
+          prompt_template: 'concise: ${n}'
+          rendered_prompt: 'concise: one'
+          variable_domains: {}
+          variables: {}
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 53
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: null
+          flow_path: [many, loop, invoke]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          - index: 1
+            kind: loop_body
+            static_path: [many, loop]
+          - index: null
+            kind: call
+            static_path: [many, loop, invoke]
+          static_path: [many, loop, invoke, author]
+      value: one
+  - [node_started, many#0/loop#1/invoke/__end__]
+  - - node_succeeded
+    - many#0/loop#1/invoke/__end__
+    - commit_target: many#0/loop#1/invoke
+      forward_capture:
+        bound_inputs:
+          result: one
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 55
+              path: []
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: [many, loop, invoke]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          - index: 1
+            kind: loop_body
+            static_path: [many, loop]
+          - index: null
+            kind: call
+            static_path: [many, loop, invoke]
+          static_path: [many, loop, invoke, __end__]
+      value: one
+  - [node_started, many#1/loop#1/invoke/__end__]
+  - - node_succeeded
+    - many#1/loop#1/invoke/__end__
+    - commit_target: many#1/loop#1/invoke
+      forward_capture:
+        bound_inputs:
+          result: one
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 57
+              path: []
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: [many, loop, invoke]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          - index: 1
+            kind: loop_body
+            static_path: [many, loop]
+          - index: null
+            kind: call
+            static_path: [many, loop, invoke]
+          static_path: [many, loop, invoke, __end__]
+      value: one
+  - [node_started, many#0/loop#1/__end__]
+  - - node_succeeded
+    - many#0/loop#1/__end__
+    - forward_capture:
+        bound_inputs:
+          n: one
+        evaluated_keys: [n]
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 59
+              path: []
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: end
+          flow_path: [many, loop]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          - index: 1
+            kind: loop_body
+            static_path: [many, loop]
+          static_path: [many, loop, __end__]
+      value:
+        n: one
+  - [node_started, many#1/loop#1/__end__]
+  - - node_succeeded
+    - many#1/loop#1/__end__
+    - forward_capture:
+        bound_inputs:
+          n: one
+        evaluated_keys: [n]
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 61
+              path: []
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: end
+          flow_path: [many, loop]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          - index: 1
+            kind: loop_body
+            static_path: [many, loop]
+          static_path: [many, loop, __end__]
+      value:
+        n: one
+  - [node_started, many#0/loop~2]
+  - - node_succeeded
+    - many#0/loop~2
+    - commit_target: many#0/loop
+      forward_capture:
+        bound_inputs:
+          n: one
+        evaluated_keys: [n]
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 63
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: null
+          flow_path: [many]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          - index: 2
+            kind: loop_driver
+            static_path: [many, loop]
+          static_path: [many, loop]
+      value:
+        n: one
+  - [node_started, many#1/loop~2]
+  - - node_succeeded
+    - many#1/loop~2
+    - commit_target: many#1/loop
+      forward_capture:
+        bound_inputs:
+          n: one
+        evaluated_keys: [n]
+        input_names: [n]
+        node_data:
+          input_output_paths:
+            n: [n]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 65
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [n]
+        scope:
+          boundary: null
+          flow_path: [many]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          - index: 2
+            kind: loop_driver
+            static_path: [many, loop]
+          static_path: [many, loop]
+      value:
+        n: one
+  - [node_started, many#0/__end__]
+  - - node_succeeded
+    - many#0/__end__
+    - forward_capture:
+        bound_inputs:
+          result: one
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 67
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: [many]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [many]
+          static_path: [many, __end__]
+      value: one
+  - [node_started, many#1/__end__]
+  - - node_succeeded
+    - many#1/__end__
+    - forward_capture:
+        bound_inputs:
+          result: one
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 69
+              path: [n]
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: [many]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [many]
+          static_path: [many, __end__]
+      value: one
+  - [node_started, many/__end__]
+  - - node_succeeded
+    - many/__end__
+    - commit_target: many
+      forward_capture:
+        bound_inputs:
+          e0: one
+          e1: one
+        evaluated_keys: [e0, e1]
+        input_names: [e0, e1]
+        node_data:
+          input_output_paths:
+            e0: [0]
+            e1: [1]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 71
+              path: []
+              run_id: r1
+          - kind: source
+            source:
+              execution_seq: 73
+              path: []
+              run_id: r1
+          kind: record
+          names: [e0, e1]
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [many]
+      value: [one, one]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - forward_capture:
+        bound_inputs:
+          result: [one, one]
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 75
+              path: []
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: []
+          occurrence_path: []
+          static_path: [__end__]
+      value: [one, one]
+  - - backward_started
+    - null
+    - attempt_id: 1
+      feedback: Review every iteration.
+  - - backward_ready
+    - null
+    - attempt_id: 1
+      attributed_results:
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 7
+            path: []
+            run_id: r1
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 9
+            path: []
+            run_id: r1
+        feedback:
+        - values: [Refine n., null]
+        - values: [null, Refine n.]
+        invoked: true
+        result:
+          input_feedback:
+            values:
+            - [Refine n., null]
+            - [null, Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 1
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 3
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 5
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 15
+            path: []
+            run_id: r1
+        feedback:
+        - n: Refine n.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 7
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 17
+            path: []
+            run_id: r1
+        feedback:
+        - n: Refine n.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 9
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 11
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 13
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 23
+            path: []
+            run_id: r1
+        feedback:
+        - n: Refine n.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 15
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 25
+            path: []
+            run_id: r1
+        feedback:
+        - n: Refine n.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 17
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 19
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 21
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 27
+            path: []
+            run_id: r1
+        feedback:
+        - n: Refine n.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 23
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 29
+            path: []
+            run_id: r1
+        feedback:
+        - n: Refine n.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 25
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 31
+            path: []
+            run_id: r1
+        feedback: [Refine n.]
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 27
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 33
+            path: []
+            run_id: r1
+        feedback: [Refine n.]
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 29
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 35
+            path: []
+            run_id: r1
+        feedback: [Refine n.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 31
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 37
+            path: []
+            run_id: r1
+        feedback: [Refine n.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 33
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 43
+            path: []
+            run_id: r1
+        feedback:
+        - n: Refine n.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 35
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 45
+            path: []
+            run_id: r1
+        feedback:
+        - n: Refine n.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 37
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 39
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 41
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 51
+            path: []
+            run_id: r1
+        feedback:
+        - n: Refine n.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 43
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 53
+            path: []
+            run_id: r1
+        feedback:
+        - n: Refine n.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 45
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 47
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 49
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 55
+            path: []
+            run_id: r1
+        feedback:
+        - n: Refine n.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 51
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 57
+            path: []
+            run_id: r1
+        feedback:
+        - n: Refine n.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 53
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 59
+            path: []
+            run_id: r1
+        feedback: [Review every iteration.]
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 55
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 61
+            path: []
+            run_id: r1
+        feedback: [Review every iteration.]
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 57
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 63
+            path: []
+            run_id: r1
+        feedback: [Review every iteration.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 59
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 65
+            path: []
+            run_id: r1
+        feedback: [Review every iteration.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 61
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 67
+            path: []
+            run_id: r1
+        feedback:
+        - n: Review every iteration.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 63
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 69
+            path: []
+            run_id: r1
+        feedback:
+        - n: Review every iteration.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 65
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 71
+            path: []
+            run_id: r1
+        feedback:
+        - n: Review every iteration.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 67
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 73
+            path: []
+            run_id: r1
+        feedback:
+        - n: Review every iteration.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 69
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: e0
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 75
+            path: []
+            run_id: r1
+        feedback: [Review every iteration.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 71
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: e1
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 75
+            path: []
+            run_id: r1
+        feedback: [Review every iteration.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 73
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 77
+            path: []
+            run_id: r1
+        feedback: [Review every iteration.]
+        invoked: true
+        result:
+          input_feedback:
+            e0: [Review every iteration.]
+            e1: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 75
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: null
+          input_name: null
+          message_index: 0
+          parents: []
+          sender: null
+        feedback: [Review every iteration.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 77
+          path: []
+          run_id: r1
+      proposals: []
+      root_result:
+        input_feedback:
+          values:
+          - [Refine n., null]
+          - [null, Refine n.]
+        self_feedback: []
+        variable_feedback: {}
+  - - backward_finished
+    - null
+    - attempt_id: 1
+      attributed_results: []
+      outcome:
+        failure: null
+        feedback:
+          input_feedback:
+            values:
+            - [Refine n., null]
+            - [null, Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        learning: null
+        status: succeeded
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        values: [ten, twenty]
+  - - NodeStarted
+    - node_id: many
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: ten
+        - n: twenty
+      node_id: many
+  - - NodeStarted
+    - node_id: many/__start__
+  - - NodeSucceeded
+    - node_id: many/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: many#0/__start__
+  - - NodeSucceeded
+    - node_id: many#0/__start__
+      output:
+        n: ten
+  - - NodeStarted
+    - node_id: many#1/__start__
+  - - NodeSucceeded
+    - node_id: many#1/__start__
+      output:
+        n: twenty
+  - - NodeStarted
+    - node_id: many#0/loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: ten
+        - 0
+      node_id: many#0/loop
+  - - NodeStarted
+    - node_id: many#1/loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: twenty
+        - 0
+      node_id: many#1/loop
+  - - NodeStarted
+    - node_id: many#0/loop#0/__start__
+  - - NodeSucceeded
+    - node_id: many#0/loop#0/__start__
+      output:
+        n: ten
+  - - NodeStarted
+    - node_id: many#1/loop#0/__start__
+  - - NodeSucceeded
+    - node_id: many#1/loop#0/__start__
+      output:
+        n: twenty
+  - - NodeStarted
+    - node_id: many#0/loop#0/invoke
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          n: ten
+      node_id: many#0/loop#0/invoke
+  - - NodeStarted
+    - node_id: many#1/loop#0/invoke
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          n: twenty
+      node_id: many#1/loop#0/invoke
+  - - NodeStarted
+    - node_id: many#0/loop#0/invoke/__start__
+  - - NodeSucceeded
+    - node_id: many#0/loop#0/invoke/__start__
+      output:
+        n: ten
+  - - NodeStarted
+    - node_id: many#1/loop#0/invoke/__start__
+  - - NodeSucceeded
+    - node_id: many#1/loop#0/invoke/__start__
+      output:
+        n: twenty
+  - - NodeStarted
+    - node_id: many#0/loop#0/invoke/author
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: many#0/loop#0/invoke/author
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: many#0/loop#0/invoke/author
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: many#0/loop#0/invoke/author
+      output: one
+  - - NodeStarted
+    - node_id: many#1/loop#0/invoke/author
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: gpt-5.5
+      node_id: many#1/loop#0/invoke/author
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: gpt-5.5
+      node_id: many#1/loop#0/invoke/author
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: many#1/loop#0/invoke/author
+      output: one
+  - - NodeStarted
+    - node_id: many#0/loop#0/invoke/__end__
+  - - NodeSucceeded
+    - commit_as: many#0/loop#0/invoke
+      node_id: many#0/loop#0/invoke/__end__
+      output: one
+  - - NodeStarted
+    - node_id: many#1/loop#0/invoke/__end__
+  - - NodeSucceeded
+    - commit_as: many#1/loop#0/invoke
+      node_id: many#1/loop#0/invoke/__end__
+      output: one
+  - - NodeStarted
+    - node_id: many#0/loop#0/__end__
+  - - NodeSucceeded
+    - node_id: many#0/loop#0/__end__
+      output:
+        n: one
+  - - NodeStarted
+    - node_id: many#1/loop#0/__end__
+  - - NodeSucceeded
+    - node_id: many#1/loop#0/__end__
+      output:
+        n: one
+  - - NodeStarted
+    - node_id: many#0/loop~1
+  - - NodeExpanded
+    - grow:
+        prune:
+        - many#0/loop#0/__end__
+        - many#0/loop#0/__start__
+        - many#0/loop#0/invoke
+        - many#0/loop~1
+        seed:
+        - n: one
+        - 1
+      node_id: many#0/loop~1
+  - - NodeStarted
+    - node_id: many#1/loop~1
+  - - NodeExpanded
+    - grow:
+        prune:
+        - many#1/loop#0/__end__
+        - many#1/loop#0/__start__
+        - many#1/loop#0/invoke
+        - many#1/loop~1
+        seed:
+        - n: one
+        - 1
+      node_id: many#1/loop~1
+  - - NodeStarted
+    - node_id: many#0/loop#1/__start__
+  - - NodeSucceeded
+    - node_id: many#0/loop#1/__start__
+      output:
+        n: one
+  - - NodeStarted
+    - node_id: many#1/loop#1/__start__
+  - - NodeSucceeded
+    - node_id: many#1/loop#1/__start__
+      output:
+        n: one
+  - - NodeStarted
+    - node_id: many#0/loop#1/invoke
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          n: one
+      node_id: many#0/loop#1/invoke
+  - - NodeStarted
+    - node_id: many#1/loop#1/invoke
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          n: one
+      node_id: many#1/loop#1/invoke
+  - - NodeStarted
+    - node_id: many#0/loop#1/invoke/__start__
+  - - NodeSucceeded
+    - node_id: many#0/loop#1/invoke/__start__
+      output:
+        n: one
+  - - NodeStarted
+    - node_id: many#1/loop#1/invoke/__start__
+  - - NodeSucceeded
+    - node_id: many#1/loop#1/invoke/__start__
+      output:
+        n: one
+  - - NodeStarted
+    - node_id: many#0/loop#1/invoke/author
+  - - ModelCallStarted
+    - exchange_id: <id:3>
+      model: gpt-5.5
+      node_id: many#0/loop#1/invoke/author
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:3>
+      model: gpt-5.5
+      node_id: many#0/loop#1/invoke/author
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: many#0/loop#1/invoke/author
+      output: one
+  - - NodeStarted
+    - node_id: many#1/loop#1/invoke/author
+  - - ModelCallStarted
+    - exchange_id: <id:4>
+      model: gpt-5.5
+      node_id: many#1/loop#1/invoke/author
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:4>
+      model: gpt-5.5
+      node_id: many#1/loop#1/invoke/author
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: many#1/loop#1/invoke/author
+      output: one
+  - - NodeStarted
+    - node_id: many#0/loop#1/invoke/__end__
+  - - NodeSucceeded
+    - commit_as: many#0/loop#1/invoke
+      node_id: many#0/loop#1/invoke/__end__
+      output: one
+  - - NodeStarted
+    - node_id: many#1/loop#1/invoke/__end__
+  - - NodeSucceeded
+    - commit_as: many#1/loop#1/invoke
+      node_id: many#1/loop#1/invoke/__end__
+      output: one
+  - - NodeStarted
+    - node_id: many#0/loop#1/__end__
+  - - NodeSucceeded
+    - node_id: many#0/loop#1/__end__
+      output:
+        n: one
+  - - NodeStarted
+    - node_id: many#1/loop#1/__end__
+  - - NodeSucceeded
+    - node_id: many#1/loop#1/__end__
+      output:
+        n: one
+  - - NodeStarted
+    - node_id: many#0/loop~2
+  - - NodeSucceeded
+    - commit_as: many#0/loop
+      node_id: many#0/loop~2
+      output:
+        n: one
+  - - NodeStarted
+    - node_id: many#1/loop~2
+  - - NodeSucceeded
+    - commit_as: many#1/loop
+      node_id: many#1/loop~2
+      output:
+        n: one
+  - - NodeStarted
+    - node_id: many#0/__end__
+  - - NodeSucceeded
+    - node_id: many#0/__end__
+      output: one
+  - - NodeStarted
+    - node_id: many#1/__end__
+  - - NodeSucceeded
+    - node_id: many#1/__end__
+      output: one
+  - - NodeStarted
+    - node_id: many/__end__
+  - - NodeSucceeded
+    - commit_as: many
+      node_id: many/__end__
+      output: [one, one]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: [one, one]
+  - - RunSucceeded
+    - output: [one, one]
+  stream:
+  - chunk: one
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: many#0/loop#0/invoke/author
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: many#0/loop#0/invoke/author
+  - chunk: one
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: many#1/loop#0/invoke/author
+  - chunk: ''
+    exchange_id: <id:2>
+    final: true
+    key: text
+    node_id: many#1/loop#0/invoke/author
+  - chunk: one
+    exchange_id: <id:3>
+    final: false
+    key: text
+    node_id: many#0/loop#1/invoke/author
+  - chunk: ''
+    exchange_id: <id:3>
+    final: true
+    key: text
+    node_id: many#0/loop#1/invoke/author
+  - chunk: one
+    exchange_id: <id:4>
+    final: false
+    key: text
+    node_id: many#1/loop#1/invoke/author
+  - chunk: ''
+    exchange_id: <id:4>
+    final: true
+    key: text
+    node_id: many#1/loop#1/invoke/author
+  backward:
+  - failure: null
+    feedback:
+      input_feedback:
+        values:
+        - [Refine n., null]
+        - [null, Refine n.]
+      self_feedback: []
+      variable_feedback: {}
+    learning: null
+    status: succeeded

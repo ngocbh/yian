@@ -1,0 +1,302 @@
+# hand TS expect: the TS body throws `new Error('forward failed')`, whose failure message is "Error: forward failed"
+# (as in run-map-call/seed_e24_nested_code_raise), and its throwing line `  throw new Error('forward failed')` ends at
+# column 42; Python's "forward failed" and column 47 are in python_expect.
+kind: backward
+rules: [code]
+flow: |
+  id: failure
+  name: failure
+  nodes:
+    work:
+      kind: code
+      code: |
+        if (true)
+          throw new Error('forward failed')
+        return 0
+  output: ${work.output}
+python_flow: |
+  id: failure
+  name: failure
+  nodes:
+    work:
+      kind: code
+      code: |
+        if True:
+            raise RuntimeError('forward failed')
+        return 0
+  output: ${work.output}
+run:
+  num_workers: 0
+  learnable: true
+backward:
+- feedback: Review failure.
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      frames:
+      - label: flow.yaml
+        range: [8, 7, 8, 42]
+      message: 'Error: forward failed'
+      node: work
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: true
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - forward_capture:
+        bound_inputs: {}
+        node_data:
+          input_output_paths: {}
+        route:
+          kind: record
+        scope:
+          boundary: start
+          flow_path: []
+          occurrence_path: []
+          static_path: [__start__]
+      value: {}
+  - [node_started, work]
+  - - node_failed
+    - work
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [8, 7, 8, 42]
+        message: 'Error: forward failed'
+        node: work
+      forward_capture:
+        bound_inputs: {}
+        route:
+          kind: record
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [work]
+  - - backward_started
+    - null
+    - attempt_id: 1
+      feedback: Review failure.
+  - - backward_ready
+    - null
+    - attempt_id: 1
+      attributed_results:
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 1
+          path: []
+          run_id: <id:1>
+      - attribution:
+        - contribution_index: null
+          input_name: null
+          message_index: 0
+          parents: []
+          sender: null
+        feedback: [Review failure.]
+        invoked: true
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 3
+          path: []
+          run_id: <id:1>
+      proposals: []
+      root_result:
+        input_feedback: {}
+        self_feedback: []
+        variable_feedback: {}
+  - - backward_finished
+    - null
+    - attempt_id: 1
+      attributed_results: []
+      outcome:
+        failure: null
+        feedback:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        learning: null
+        status: succeeded
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: work
+  - - NodeFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [8, 7, 8, 42]
+        message: 'Error: forward failed'
+        node: work
+  - - RunFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [8, 7, 8, 42]
+        message: 'Error: forward failed'
+        node: work
+  backward:
+  - failure: null
+    feedback:
+      input_feedback: {}
+      self_feedback: []
+      variable_feedback: {}
+    learning: null
+    status: succeeded
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      frames:
+      - label: flow.yaml
+        range: [8, 7, 8, 47]
+      message: forward failed
+      node: work
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: true
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - forward_capture:
+        bound_inputs: {}
+        node_data:
+          input_output_paths: {}
+        route:
+          kind: record
+        scope:
+          boundary: start
+          flow_path: []
+          occurrence_path: []
+          static_path: [__start__]
+      value: {}
+  - [node_started, work]
+  - - node_failed
+    - work
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [8, 7, 8, 47]
+        message: forward failed
+        node: work
+      forward_capture:
+        bound_inputs: {}
+        route:
+          kind: record
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [work]
+  - - backward_started
+    - null
+    - attempt_id: 1
+      feedback: Review failure.
+  - - backward_ready
+    - null
+    - attempt_id: 1
+      attributed_results:
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 1
+          path: []
+          run_id: <id:1>
+      - attribution:
+        - contribution_index: null
+          input_name: null
+          message_index: 0
+          parents: []
+          sender: null
+        feedback: [Review failure.]
+        invoked: true
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 3
+          path: []
+          run_id: <id:1>
+      proposals: []
+      root_result:
+        input_feedback: {}
+        self_feedback: []
+        variable_feedback: {}
+  - - backward_finished
+    - null
+    - attempt_id: 1
+      attributed_results: []
+      outcome:
+        failure: null
+        feedback:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        learning: null
+        status: succeeded
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: work
+  - - NodeFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [8, 7, 8, 47]
+        message: forward failed
+        node: work
+  - - RunFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [8, 7, 8, 47]
+        message: forward failed
+        node: work
+  backward:
+  - failure: null
+    feedback:
+      input_feedback: {}
+      self_feedback: []
+      variable_feedback: {}
+    learning: null
+    status: succeeded

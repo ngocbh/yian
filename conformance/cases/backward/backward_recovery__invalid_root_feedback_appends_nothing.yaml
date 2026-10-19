@@ -1,0 +1,198 @@
+# From tests/engine/test_backward_recovery.py::test_invalid_root_shapes_preserve_the_public_forward_result_and_unopened_attempt
+# (the `{known: 1}` / `{missing: null}` row, the value from an input instead of CODE) and
+# tests/engine/test_run_backward.py::test_invalid_feedback_does_not_change_latest_outcome.
+# Pins: feedback naming a field the output doesn't have raises before any record is appended, so
+# the corrected call that follows is attempt 1.
+kind: backward
+flow: |
+  id: invalid-root-feedback
+  name: invalid_root_feedback
+  input:
+    value: !object
+  nodes: {}
+  output: ${input.value}
+inputs:
+  value:
+    known: 1
+run:
+  run_id: r1
+  num_workers: 0
+  learnable: true
+backward:
+- feedback:
+    missing: null
+- feedback:
+    known: Review.
+expect:
+  output:
+    status: succeeded
+    output:
+      known: 1
+  trace:
+  - - run_started
+    - null
+    - learnable: true
+      num_workers: 0
+      inputs:
+        value:
+          known: 1
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - forward_capture:
+        bound_inputs:
+          value:
+            known: 1
+        evaluated_keys: [value]
+        input_names: [value]
+        node_data:
+          input_output_paths:
+            value: [value]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 0
+              path: [value]
+              run_id: r1
+          kind: record
+          names: [value]
+        scope:
+          boundary: start
+          flow_path: []
+          occurrence_path: []
+          static_path: [__start__]
+      value:
+        value:
+          known: 1
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - forward_capture:
+        bound_inputs:
+          result:
+            known: 1
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 1
+              path: [value]
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: []
+          occurrence_path: []
+          static_path: [__end__]
+      value:
+        known: 1
+  - - backward_started
+    - null
+    - attempt_id: 1
+      feedback:
+        known: Review.
+  - - backward_ready
+    - null
+    - attempt_id: 1
+      attributed_results:
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 3
+            path: []
+            run_id: r1
+        feedback:
+        - value:
+            known: Review.
+        invoked: true
+        result:
+          input_feedback:
+            value:
+            - known: Review.
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 1
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: null
+          input_name: null
+          message_index: 0
+          parents: []
+          sender: null
+        feedback:
+        - known: Review.
+        invoked: true
+        result:
+          input_feedback:
+            result:
+            - known: Review.
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 3
+          path: []
+          run_id: r1
+      proposals: []
+      root_result:
+        input_feedback:
+          value:
+          - known: Review.
+        self_feedback: []
+        variable_feedback: {}
+  - - backward_finished
+    - null
+    - attempt_id: 1
+      attributed_results: []
+      outcome:
+        failure: null
+        feedback:
+          input_feedback:
+            value:
+            - known: Review.
+          self_feedback: []
+          variable_feedback: {}
+        learning: null
+        status: succeeded
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        value:
+          known: 1
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        known: 1
+  - - RunSucceeded
+    - output:
+        known: 1
+  backward:
+  - raises:
+      class: ValueError
+      message: feedback selects unknown field 'missing'
+  - failure: null
+    feedback:
+      input_feedback:
+        value:
+        - known: Review.
+      self_feedback: []
+      variable_feedback: {}
+    learning: null
+    status: succeeded

@@ -424,6 +424,27 @@ async function aChoiceMovesWithWraparoundAndReturnsTheTitle(): Promise<void> {
   assertRestored(input, output, exitHooks);
 }
 
+async function aBadChoiceListIsRefusedWithoutDrawing(): Promise<void> {
+  const { output, terminal } = setup();
+  await assert.rejects(terminal.askChoice("Pick", []), RangeError);
+  await assert.rejects(terminal.askChoice("Pick", ["a", "b"], { initial: "c" }), RangeError);
+  assert.equal(output.text, "");
+}
+
+async function aPromptQueuedWhileAnotherIsRawRestoresCookedMode(): Promise<void> {
+  const { input, terminal } = setup();
+  const first = terminal.askText("First:");
+  await tick();
+  assert.equal(input.isRaw, true);
+  const second = terminal.askText("Second:");
+  input.write("1" + ENTER);
+  assert.equal(await first, "1");
+  input.write("2" + ENTER);
+  assert.equal(await second, "2");
+  assert.deepEqual(input.rawCalls, [true, false, true, false]);
+  assert.equal(input.isRaw, false);
+}
+
 async function equalTitlesMapBackByIndex(): Promise<void> {
   const { input, terminal, view } = setup();
   const answer = terminal.askChoice("Pick", ["same", "same", "other"]);
@@ -605,20 +626,35 @@ async function afterCtrlCAQueuedPromptReturnsNull(): Promise<void> {
   assert.deepEqual(view().rows, ["? Name:"]);
   assertDetached(input);
   assert.ok(!output.text.includes("Queued"));
+  // A closed terminal outranks a signal that is already aborted.
+  assert.equal(await terminal.askText("Later:", { signal: controller.signal }), null);
+  assert.deepEqual(view().rows, ["? Name:"]);
+}
+
+async function afterTheEndOfInputAQueuedPromptReturnsNull(): Promise<void> {
+  const stops: string[] = [];
+  const { input, output, terminal } = setup({ onStop: (reason) => stops.push(reason) });
+  const answer = terminal.askText("Name:");
+  const queued = terminal.askText("Queued:");
+  await tick();
+  input.end();
+  assert.equal(await answer, null);
+  assert.equal(await queued, null);
+  assert.deepEqual(stops, ["eof"]);
+  assert.ok(!output.text.includes("Queued"));
 }
 
 async function anUnusedTerminalTouchesNothing(): Promise<void> {
   const input = new FakeInput();
   const output = new FakeOutput();
   const before = input.eventNames();
-  const terminal = new Terminal({ input, output });
+  new Terminal({ input, output });
   input.write("typed");
   await tick();
   assert.deepEqual(input.eventNames(), before);
   assert.equal(input.readableFlowing, null);
   assert.equal(String(input.read()), "typed");
   assert.equal(output.text, "");
-  assert.ok(terminal instanceof Terminal);
 }
 
 async function anInputThatAlreadyEndedGivesEofAtTheFirstPrompt(): Promise<void> {
@@ -631,6 +667,7 @@ async function anInputThatAlreadyEndedGivesEofAtTheFirstPrompt(): Promise<void> 
   assert.deepEqual(stops, []);
   assert.equal(await terminal.askText("Name:"), null);
   assert.deepEqual(stops, ["eof"]);
+  // No isPaused() check: on Bun, pausing a stream that already ended leaves it reporting not paused.
   for (const event of ["keypress", "end", "error"]) assert.equal(input.listenerCount(event), 0, event);
 }
 
@@ -664,6 +701,7 @@ async function aThrowingOnActiveStillRestoresTheTerminal(): Promise<void> {
 
 /** A spawned child's exit, waited for at most 10 s with its stdin kept open; what it printed. */
 async function runChild(send: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  // No execArgv forwarded: Node 22.18+ strips types by default, and Bun's execArgv isn't safe to pass on.
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "child"], { stdio: "pipe" });
   let stdout = "";
   let stderr = "";
@@ -686,8 +724,8 @@ async function runChild(send: string): Promise<{ code: number | null; stdout: st
     // Never ended: the child must exit on its own with its stdin still open.
     child.stdin.write(send);
     const code = await Promise.race([exited, limit]);
-    assert.notEqual(code, "timeout", `the child didn't exit within 10 s; stdout: ${stdout}; stderr: ${stderr}`);
-    return { code: code as number | null, stdout, stderr };
+    if (code === "timeout") assert.fail(`the child didn't exit within 10 s; stdout: ${stdout}; stderr: ${stderr}`);
+    return { code, stdout, stderr };
   } finally {
     clearTimeout(timer);
     child.kill("SIGKILL");
@@ -735,7 +773,9 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "wide characters at a wrap boundary start the next row": wideCharactersAtAWrapBoundaryStartTheNextRow,
   "a long line redraws without stale rows": aLongLineRedrawsWithoutStaleRows,
   "a choice moves with wraparound and returns the title": aChoiceMovesWithWraparoundAndReturnsTheTitle,
+  "a bad choice list is refused without drawing": aBadChoiceListIsRefusedWithoutDrawing,
   "equal titles map back by index": equalTitlesMapBackByIndex,
+  "a prompt queued while another is raw restores cooked mode": aPromptQueuedWhileAnotherIsRawRestoresCookedMode,
   "concurrent prompts draw one after the other": concurrentPromptsDrawOneAfterTheOther,
   "typeahead in one chunk answers queued prompts": typeaheadInOneChunkAnswersQueuedPrompts,
   "an already-aborted signal throws without drawing": anAlreadyAbortedSignalThrowsWithoutDrawing,
@@ -746,6 +786,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "close ends the active prompt and refuses later ones": closeEndsTheActivePromptAndRefusesLaterOnes,
   "close with no active prompt detaches and pauses": closeWithNoActivePromptDetachesAndPauses,
   "after Ctrl-C a queued prompt returns null": afterCtrlCAQueuedPromptReturnsNull,
+  "after the end of input a queued prompt returns null": afterTheEndOfInputAQueuedPromptReturnsNull,
   "an unused terminal touches nothing": anUnusedTerminalTouchesNothing,
   "an input that already ended gives EOF at the first prompt": anInputThatAlreadyEndedGivesEofAtTheFirstPrompt,
   "an input error ends the active prompt as end of input": anInputErrorEndsTheActivePromptAsEndOfInput,

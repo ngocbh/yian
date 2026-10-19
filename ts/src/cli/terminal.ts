@@ -266,7 +266,6 @@ export class Terminal {
   readonly #onActive: TerminalOptions["onActive"];
   #attached = false;
   #closed = false;
-  #stopNotified = false;
   /** Set once the input has ended or failed; the next widget ends with the EOF outcome. */
   #ended = false;
   /** Keys that arrived while no widget was active, fed to the next widget first. */
@@ -306,7 +305,12 @@ export class Terminal {
     choices: readonly string[],
     options: { initial?: string; signal?: AbortSignal } = {},
   ): Promise<string | null> {
-    const initial = options.initial === undefined ? 0 : Math.max(0, choices.indexOf(options.initial));
+    // questionary's select refuses both too.
+    if (choices.length === 0) throw new RangeError("askChoice needs at least one choice");
+    if (options.initial !== undefined && !choices.includes(options.initial)) {
+      throw new RangeError(`askChoice's initial ${JSON.stringify(options.initial)} is not one of the choices`);
+    }
+    const initial = options.initial === undefined ? 0 : choices.indexOf(options.initial);
     const ended = await this.#runTurn(options.signal, (run) => run(selectWidget({ label, titles: choices, initial })));
     return "value" in ended ? choices[ended.value]! : null;
   }
@@ -400,15 +404,16 @@ export class Terminal {
     const { promise: queuedAbort, resolve: leaveQueue } = Promise.withResolvers<void>();
     const onAbort = (): void => {
       // A queued turn whose signal aborts after the terminal closed is refused as closed.
-      turn.ending ??= this.#turn !== turn && this.#closed ? "closed" : "aborted";
+      turn.ending ??= this.#closed ? "closed" : "aborted";
       leaveQueue();
       turn.wake();
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     const input = this.#input;
     const output = this.#output;
-    const wasRaw = input.isRaw === true;
     const setsRaw = input.isTTY === true && typeof input.setRawMode === "function";
+    // Read at turn start: while queued, the turn ahead may still hold the terminal raw.
+    let wasRaw = false;
     // A `process.exit()` elsewhere skips the `finally` below.
     const onExit = (): void => {
       quietly(() => input.setRawMode!(false));
@@ -424,6 +429,7 @@ export class Terminal {
         this.#turn = turn;
         quietly(() => this.#onActive?.(true));
         this.#attach();
+        wasRaw = input.isRaw === true;
         if (setsRaw) {
           process.once("exit", onExit);
           input.setRawMode!(true);
@@ -451,10 +457,8 @@ export class Terminal {
     const ending = turn.ending;
     // After the restore, so a handler that prints or exits never meets a raw terminal; before the
     // turns behind are released, so they see what `onStop` did.
-    if ((ending === "interrupt" || ending === "eof") && !this.#stopNotified) {
-      this.#stopNotified = true;
-      quietly(() => this.#onStop?.(ending));
-    }
+    // Only the turn that closed the terminal records "interrupt" or "eof", so this runs once.
+    if (ending === "interrupt" || ending === "eof") quietly(() => this.#onStop?.(ending));
     release();
     if (ending !== undefined && ending !== "aborted") return { stop: ending };
     if (signal?.aborted) throw signal.reason;
@@ -478,7 +482,6 @@ export class Terminal {
       if (outcome !== undefined) return;
       outcome = ended;
       this.#active = undefined;
-      turn.wake = () => {};
       settle();
     };
     const stop = (reason: "interrupt" | "eof"): void => {
@@ -532,7 +535,6 @@ export class Terminal {
       finish({ error });
     } finally {
       this.#active = undefined;
-      turn.wake = () => {};
     }
     const ended = outcome!;
     if ("value" in ended) return ended.value;

@@ -42,6 +42,7 @@ import {
   type Message,
   MessageFormatError,
   NamedTool,
+  type OutputFormat,
   type Part,
   ReasoningPart,
   readReplayRecord,
@@ -199,8 +200,8 @@ export class OpenAIChat implements SseProtocol {
   /**
    * Build the Chat Completions request body: `model`, `messages`, `stream: true` and (when the
    * route reports usage) `stream_options`, then the tools, the tool choice and
-   * `parallel_tool_calls` as the route allows, then `reasoning_split` when the route needs it,
-   * then the provider block.
+   * `parallel_tool_calls` as the route allows, then `response_format` when the request sets
+   * `outputFormat`, then `reasoning_split` when the route needs it, then the provider block.
    *
    * On a route that echoes reasoning, an assistant message holding a reasoning record that
    * can't be used is sent without that reasoning, and `onReplayDegraded` is called once for it;
@@ -223,6 +224,7 @@ export class OpenAIChat implements SseProtocol {
     if (request.parallelToolCalls !== null && this.options.sendParallelToolCalls) {
       body["parallel_tool_calls"] = request.parallelToolCalls;
     }
+    if (request.outputFormat) body["response_format"] = responseFormat(request.outputFormat);
     // Set before the merge, so a block's own value wins.
     if (this.options.reasoningSplit) body["reasoning_split"] = true;
     if (this.#block) mergeRequestBody(body, this.#block);
@@ -704,6 +706,14 @@ function tool(spec: ToolSpec): JsonObject {
   };
   if (spec.strict !== null) fn["strict"] = spec.strict;
   return { type: "function", function: fn };
+}
+
+/** Render an output format as a `response_format` entry, `strict` only when set. */
+function responseFormat(format: OutputFormat): JsonObject {
+  // Copied so changing a body cannot change the format it came from.
+  const jsonSchema: JsonObject = { name: format.name, schema: copyJson(format.schema) };
+  if (format.strict !== null) jsonSchema["strict"] = format.strict;
+  return { type: "json_schema", json_schema: jsonSchema };
 }
 
 /** Return the error text for a part a message of `role` cannot carry. */

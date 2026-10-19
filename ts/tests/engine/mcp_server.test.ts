@@ -76,6 +76,7 @@ import {
   killMarkers,
   NODE,
   pids,
+  ROOT,
   stdioOptions,
   strayProcesses,
   trackServers,
@@ -85,9 +86,6 @@ import {
 /** How an HTTP server negotiates the protocol era: `auto`, the default, or the private `legacy`. */
 type Mode = "auto" | "legacy";
 const MODES: readonly Mode[] = ["auto", "legacy"];
-
-/** The `ts/` directory. */
-const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
 /** Node rows get 90 s: Node starts the built code and the fixture from cold. */
 const ON_NODE = 90_000;

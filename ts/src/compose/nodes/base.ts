@@ -14,8 +14,8 @@
  * otherwise), for a list or record holding a `${...}` span where the field binds whole, and for
  * an `input:` that is not a mapping, so every kind reports those mistakes in the same words.
  *
- * Knows about: diagnostics, typesys, the compile model, nodes (base and contracts), compose
- *              source and helpers, and expr.
+ * Knows about: diagnostics, typesys, the compile model, llm_clients (provider blocks), nodes
+ *              (base, contracts and human_input), compose source and helpers, and expr.
  * Never imports: compose/parse, the runtime or the CLI.
  */
 
@@ -28,6 +28,7 @@ import {
   type SourceRange,
 } from "../../diagnostics.ts";
 import { wholeSpanInterior } from "../../expr/grammar.ts";
+import type { ValidationError } from "../../llm_clients/provider_blocks.ts";
 import type { Node } from "../../nodes/base.ts";
 import {
   isExactly,
@@ -36,8 +37,9 @@ import {
   validateOptionalOrigin,
   ValueContract,
 } from "../../nodes/contracts.ts";
+import { siteLabel } from "../../nodes/human_input/node.ts";
 import { pythonTypeName, type TypeRegistry } from "../../typesys/types.ts";
-import { isRecord, valueRepr, type ValueRecord } from "../../typesys/values.ts";
+import { isList, isRecord, valueRepr, type ValueRecord } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { directReferencePath } from "../helpers/output_contracts.ts";
 import { hasSpan } from "../helpers/tags.ts";
@@ -162,6 +164,39 @@ export function valueTypeError(field: string, needed: string, value: unknown, fi
 export function notTextError(field: string, value: unknown, fix: string | null = null): string {
   fix ??= value === null ? "write the text" : "put it in quotes";
   return valueTypeError(field, "text", value, fix);
+}
+
+/**
+ * Return the field and value of an `LLMConfig` error that is a text field read as non-text, or
+ * `null`.
+ *
+ * Only the first issue is read, so the field named agrees with the range the caller locates from
+ * that same first issue. It is `null` when that issue is not a `string_type` failure, or is the
+ * `str` member of a union field, which takes more than text. Issues carry no input, so the value
+ * is read from `cfg` along the issue's path.
+ */
+export function notTextDetail(error: ValidationError, cfg: Readonly<Record<string, unknown>>): [string, unknown] | null {
+  const first = error.issues[0];
+  if (first === undefined || first.type !== "string_type") return null;
+  const { loc } = first;
+  if (loc.at(-1) === "str") {
+    // A union reports one issue per member, the `str` member first; any other issue under the same
+    // parent (a list member's item issue extends it) marks a field that takes more than text.
+    const parent = loc.slice(0, -1);
+    if (error.issues.some((issue) => issue !== first && parent.every((step, i) => issue.loc[i] === step))) {
+      return null;
+    }
+  }
+  let value: unknown = cfg;
+  for (const step of loc) {
+    // Union member labels and variant tags are steps of the path but not keys of the value.
+    if (typeof step === "number") {
+      if (isList(value)) value = value[step];
+    } else if (isRecord(value) && Object.hasOwn(value, step)) {
+      value = value[step];
+    }
+  }
+  return [siteLabel(loc), value];
 }
 
 /**

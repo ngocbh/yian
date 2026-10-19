@@ -7,7 +7,7 @@
  * `AgentNode`. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
  *
  * Knows about: diagnostics, compose source and helpers, llm_clients (config and provider
- *              blocks), memory contracts, nodes (agent, contracts and human_input), skills,
+ *              blocks), memory contracts, nodes (agent and contracts), skills,
  *              typesys and defaults.
  * Never imports: compose/parse, the runtime or the CLI.
  */
@@ -21,7 +21,6 @@ import { LLM_CONFIG_KEY } from "../../nodes/agent/llm_values.ts";
 import { AgentNode, isMaxToolIterations, isTextOutput } from "../../nodes/agent/node.ts";
 import { typeToSchema } from "../../nodes/agent/structured.ts";
 import { Binding, isExactly, Parameter, ValueContract, ValueTemplate } from "../../nodes/contracts.ts";
-import { siteLabel } from "../../nodes/human_input/node.ts";
 import { SkillError } from "../../skills/index.ts";
 import { isList, isRecord, typeLevels, type Value, valueRepr } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
@@ -36,6 +35,7 @@ import {
   BuildResult,
   NodeDescriptor,
   type NodeDescriptorFields,
+  notTextDetail,
   notTextError,
   rejectInfinityName,
   rejectNonText,
@@ -82,39 +82,6 @@ function hostOnlyMessage(prefix: string, message: string): string {
 function hostOnlyField(message: string): string {
   const rest = message.startsWith("llm_config.") ? message.slice("llm_config.".length) : message;
   return rest.split(" ", 1)[0]!;
-}
-
-/**
- * Return the field and value of an `LLMConfig` error that is a text field read as non-text, or
- * `null`.
- *
- * Only the first issue is read, so the field named agrees with the range the caller locates from
- * that same first issue. It is `null` when that issue is not a `string_type` failure, or is the
- * `str` member of a union field, which takes more than text. Issues carry no input, so the value
- * is read from `cfg` along the issue's path.
- */
-function notTextDetail(error: ValidationError, cfg: Readonly<Record<string, unknown>>): [string, unknown] | null {
-  const first = error.issues[0];
-  if (first === undefined || first.type !== "string_type") return null;
-  const { loc } = first;
-  if (loc.at(-1) === "str") {
-    // A union reports one issue per member, the `str` member first; any other issue under the same
-    // parent (a list member's item issue extends it) marks a field that takes more than text.
-    const parent = loc.slice(0, -1);
-    if (error.issues.some((issue) => issue !== first && parent.every((step, i) => issue.loc[i] === step))) {
-      return null;
-    }
-  }
-  let value: unknown = cfg;
-  for (const step of loc) {
-    // Union member labels and variant tags are steps of the path but not keys of the value.
-    if (typeof step === "number") {
-      if (isList(value)) value = value[step];
-    } else if (isRecord(value) && Object.hasOwn(value, step)) {
-      value = value[step];
-    }
-  }
-  return [siteLabel(loc), value];
 }
 
 /**

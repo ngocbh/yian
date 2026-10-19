@@ -1,7 +1,8 @@
 # From tests/engine/test_human_questions_e2e.py::test_manual_ref_questions_block_and_return_answer and
 # tests/engine/test_blocking_human_input.py::test_questions_input_is_validated_before_trusted_invocation.
 # A gate reading its questions from an input (`questions: "${qs}"`) sends them validated (defaults
-# filled) and returns the answer record; a flow input stands in for the test's CODE source.
+# filled) and returns the answer record; a flow input stands in for the test's CODE source. The gate
+# has a `prompt:` because a questions-only gate's `question` is undocumented (seed_26 leaves it out).
 kind: run
 flow: |
   id: manual_ref
@@ -12,6 +13,7 @@ flow: |
     ask:
       kind: human_input
       input: {qs: "${input.qs}"}
+      prompt: "Pick one"
       questions: "${qs}"
   output: ${ask.output}
 inputs:
@@ -92,7 +94,7 @@ expect:
   tool_calls:
     ask_user:
     - args:
-        question: ''
+        question: Pick one
         questions:
         - question: Which option?
           header: H

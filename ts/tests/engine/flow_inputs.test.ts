@@ -19,7 +19,7 @@
  * accepted rather than rejected).
  *
  * Later: the 15 declaration tests (`test_required_scalar`, `test_float_default`, ...) read
- * inputs with compose's `read_flow_inputs` and land with compose's flow-input reader.
+ * inputs with compose's `read_flow_inputs` and land with it.
  */
 
 import { describe, expect, test } from "bun:test";

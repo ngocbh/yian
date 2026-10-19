@@ -182,18 +182,6 @@ export function validateRoute(route: unknown, options: { deep?: boolean } = {}):
 }
 
 /**
- * Require `scope` to be `null` or exactly an `ExecutionScope`; a scope is frozen by its
- * constructor, so it is held without rebuilding.
- *
- * @throws TypeError for any other value.
- */
-function validateScope(scope: unknown): asserts scope is ExecutionScope | null {
-  if (scope !== null && !isExactly(scope, ExecutionScope)) {
-    throw new TypeError("scope must be an ExecutionScope or null");
-  }
-}
-
-/**
  * Transient detached inventories, scope, and node material from one invocation. Frozen.
  *
  * This worker-owned snapshot becomes durable only through an accepted `ForwardCapture`. It
@@ -232,7 +220,10 @@ export class BackwardCapture {
     const { inputNames = [], variableNames = [], scope = null } = options;
     validateDeclaredNames(inputNames, "input_names");
     validateDeclaredNames(variableNames, "variable_names");
-    validateScope(scope);
+    // A scope is frozen by its constructor, so it is held without rebuilding, unlike Python.
+    if (scope !== null && !isExactly(scope, ExecutionScope)) {
+      throw new TypeError("scope must be an ExecutionScope or null");
+    }
     const data: unknown = options.nodeData ?? {};
     if (!isRecord(data)) throw new TypeError("node_data must be a record");
     validateInputOutputPaths(data, inputNames);
@@ -331,16 +322,18 @@ export class ForwardCapture {
     for (const pair of items as unknown[]) {
       if (!isList(pair) || pair.length !== 2) throw new TypeError("item captures must be index/capture pairs");
       const [index, capture] = pair;
-      if (!Number.isSafeInteger(index) || (index as number) <= previousIndex) {
+      if (typeof index !== "number" || !Number.isSafeInteger(index) || index <= previousIndex) {
         throw new RangeError("item indices must be non-negative and increasing");
       }
       if (!isExactly(capture, ForwardCapture)) throw new TypeError("item capture must be a ForwardCapture");
       if (boundInputs === null && capture.boundInputs !== null) {
         throw new RangeError("unfinished binding cannot retain usable item inputs");
       }
-      previousIndex = index as number;
+      previousIndex = index;
     }
-    validateScope(scope);
+    if (scope !== null && !isExactly(scope, ExecutionScope)) {
+      throw new TypeError("scope must be an ExecutionScope or null");
+    }
     validateDeclaredNames(inputNames, "input_names");
     validateDeclaredNames(variableNames, "variable_names");
     if (nodeData !== null) {

@@ -7,9 +7,10 @@
  * `test_forward_capture_rejects_noncanonical_embedded_json` (5 rows). Python's `ValueError` is a
  * `RangeError` here.
  *
- * TS-only: one row per `ForwardCapture` message with its class; an unfinished capture may keep
- * an unfinished item; `BackwardCapture`'s defaults, inventory and path rows, scope and `nodeData`
- * checks, and its frozen copy of `nodeData`.
+ * TS-only: one row per `ForwardCapture` message with its class; a capture with items, scope and
+ * node data keeps frozen copies; `ForwardCapture`'s defaults; an unfinished capture may keep an
+ * unfinished item; `BackwardCapture`'s defaults, one row per check its constructor wires in, and
+ * its frozen copy of `nodeData`.
  *
  * Changed:
  * - Captures hold frozen copies, with no copy on read: a reader's edit throws a `TypeError` where
@@ -23,8 +24,9 @@
  * (`children`, `path`, `scope`): a TS route, source and scope are frozen by their constructors,
  * so a capture holds them without rebuilding them.
  *
- * Later (T4-2): the log round trips: the record encode and decode halves of the four tests above,
- * and the other log tests of the module. Later (T4-3): the trace tests, which run flows.
+ * Later (T4-2): the log round trips: the record encode and decode halves of the round-trip,
+ * malformed-inventory and noncanonical-JSON tests above, and the other log tests of the module.
+ * Later (T4-3): the trace tests, which run flows.
  */
 
 import { expect, test } from "bun:test";
@@ -59,22 +61,53 @@ test("a forward capture keeps invocation names and a detached copy of node data"
   expect(capture.nodeData).toEqual({ input_output_paths: { result: [] } });
 });
 
-test.each<[string, string, unknown, ErrorClass]>([
-  ["input names null", "inputNames", null, TypeError],
-  ["duplicate input names", "inputNames", ["result", "result"], RangeError],
-  ["a non-string input name", "inputNames", [1], TypeError],
-  ["duplicate variable names", "variableNames", ["instruction", "instruction"], RangeError],
-  ["a non-string variable name", "variableNames", [false], TypeError],
-  ["paths as an array", "nodeData", { input_output_paths: [] }, TypeError],
-  ["a path for an unknown input", "nodeData", { input_output_paths: { unknown: [] } }, RangeError],
-  ["a boolean path part", "nodeData", { input_output_paths: { result: [true] } }, RangeError],
-  ["a negative path part", "nodeData", { input_output_paths: { result: [-1] } }, RangeError],
-  ["a path as a string", "nodeData", { input_output_paths: { result: "result" } }, TypeError],
-])("a forward capture rejects malformed invocation inventory and paths: %s", (_label, field, value, cls) => {
+test.each<[string, string, unknown, ErrorClass, string]>([
+  ["input names null", "inputNames", null, TypeError, "input_names must be an array"],
+  ["duplicate input names", "inputNames", ["result", "result"], RangeError, "input_names must contain unique names"],
+  ["a non-string input name", "inputNames", [1], TypeError, "input_names must contain only strings"],
+  [
+    "duplicate variable names",
+    "variableNames",
+    ["instruction", "instruction"],
+    RangeError,
+    "variable_names must contain unique names",
+  ],
+  ["a non-string variable name", "variableNames", [false], TypeError, "variable_names must contain only strings"],
+  ["paths as an array", "nodeData", { input_output_paths: [] }, TypeError, "input_output_paths must be a record"],
+  [
+    "a path for an unknown input",
+    "nodeData",
+    { input_output_paths: { unknown: [] } },
+    RangeError,
+    "input_output_paths must name declared inputs",
+  ],
+  [
+    "a boolean path part",
+    "nodeData",
+    { input_output_paths: { result: [true] } },
+    RangeError,
+    "output path components must be strings or non-negative integers",
+  ],
+  [
+    "a negative path part",
+    "nodeData",
+    { input_output_paths: { result: [-1] } },
+    RangeError,
+    "output path components must be strings or non-negative integers",
+  ],
+  [
+    "a path as a string",
+    "nodeData",
+    { input_output_paths: { result: "result" } },
+    TypeError,
+    "input_output_paths values must be arrays",
+  ],
+])("a forward capture rejects malformed invocation inventory and paths: %s", (_label, field, value, cls, message) => {
   const options = { inputNames: ["result"], variableNames: ["instruction"], [field]: value };
   const route = ValueRoute.record([["result", ValueRoute.literal(1)]]);
   const build = () => new ForwardCapture({ result: 1 }, route, options as never);
   expect(build).toThrow(cls);
+  expect(build).toThrow(message);
 });
 
 test.each([
@@ -284,9 +317,7 @@ test("a backward capture keeps a frozen copy of its node data", () => {
 });
 
 test.each<[string, string, unknown, ErrorClass, string]>([
-  ["input names null", "inputNames", null, TypeError, "input_names must be an array"],
   ["duplicate input names", "inputNames", ["result", "result"], RangeError, "input_names must contain unique names"],
-  ["a non-string input name", "inputNames", [1], TypeError, "input_names must contain only strings"],
   [
     "duplicate variable names",
     "variableNames",
@@ -294,35 +325,12 @@ test.each<[string, string, unknown, ErrorClass, string]>([
     RangeError,
     "variable_names must contain unique names",
   ],
-  ["a non-string variable name", "variableNames", [false], TypeError, "variable_names must contain only strings"],
-  ["paths as an array", "nodeData", { input_output_paths: [] }, TypeError, "input_output_paths must be a record"],
   [
     "a path for an unknown input",
     "nodeData",
     { input_output_paths: { unknown: [] } },
     RangeError,
     "input_output_paths must name declared inputs",
-  ],
-  [
-    "a boolean path part",
-    "nodeData",
-    { input_output_paths: { result: [true] } },
-    RangeError,
-    "output path components must be strings or non-negative integers",
-  ],
-  [
-    "a negative path part",
-    "nodeData",
-    { input_output_paths: { result: [-1] } },
-    RangeError,
-    "output path components must be strings or non-negative integers",
-  ],
-  [
-    "a path as a string",
-    "nodeData",
-    { input_output_paths: { result: "result" } },
-    TypeError,
-    "input_output_paths values must be arrays",
   ],
   [
     "a scope that isn't an ExecutionScope",

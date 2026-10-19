@@ -8,7 +8,8 @@
  *
  * Changed: `multi_select` accepts only `true`/`false`, where pydantic's lax mode also turns
  * "yes", "true", "on", 1 and 0 into booleans; a bad item reads `question[<i>] is invalid: ` and
- * the first problem found, where Python dumps the pydantic validation error.
+ * the first problem found, where Python dumps the pydantic validation error; the duplicate
+ * headers are JSON text (`["D","D"]`), where Python writes `['D', 'D']`.
  *
  * TS-only: one row per item message, `null` given for `options`, `multi_select` or an option's
  * `description`, and the frozen result.

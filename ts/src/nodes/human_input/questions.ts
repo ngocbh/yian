@@ -91,8 +91,8 @@ export function parseQuestions(raw: unknown): QuestionSpec[] {
 function parseQuestion(item: unknown): QuestionSpec {
   if (!isRecord(item)) throw new QuestionSpecError(`must be a record, got ${valueRepr(item)}`);
   checkKeys(item, QUESTION_KEYS, ["question", "header"], "");
-  const question = text(item, "question", "");
-  const header = text(item, "header", "");
+  const question = readText(item, "question", "");
+  const header = readText(item, "header", "");
   let options: readonly OptionSpec[] = Object.freeze([]);
   if (Object.hasOwn(item, "options")) {
     const raw = item["options"];
@@ -114,8 +114,8 @@ function parseQuestion(item: unknown): QuestionSpec {
 function parseOption(raw: unknown, j: number): OptionSpec {
   if (!isRecord(raw)) throw new QuestionSpecError(`options[${j}] must be a record, got ${valueRepr(raw)}`);
   checkKeys(raw, OPTION_KEYS, ["label"], `options[${j}]: `);
-  const label = text(raw, "label", `options[${j}].`);
-  const description = Object.hasOwn(raw, "description") ? text(raw, "description", `options[${j}].`) : "";
+  const label = readText(raw, "label", `options[${j}].`);
+  const description = Object.hasOwn(raw, "description") ? readText(raw, "description", `options[${j}].`) : "";
   return Object.freeze({ label, description });
 }
 
@@ -135,7 +135,7 @@ function checkKeys(
 }
 
 /** The text at `key`; `prefix` leads the message when it is not text. */
-function text(record: Readonly<Record<string, unknown>>, key: string, prefix: string): string {
+function readText(record: Readonly<Record<string, unknown>>, key: string, prefix: string): string {
   const value = record[key];
   if (typeof value !== "string") throw new QuestionSpecError(`${prefix}${key} must be text, got ${valueRepr(value)}`);
   return value;

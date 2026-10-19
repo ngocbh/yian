@@ -118,8 +118,8 @@ test("the config split for an empty record, null, a template and a binding", () 
 
 test("a field value loads as a template", () => {
   const agent = agentOf(flow("    llm_config: {model: '${input.m}'}\n"));
-  const own = agent.ownLlmConfig as ValueTemplate;
-  expect(own).toEqual(new ValueTemplate({ model: "${input.m}" }, own.origins));
+  expect(agent.ownLlmConfig).toBeInstanceOf(ValueTemplate);
+  expect((agent.ownLlmConfig as ValueTemplate).value).toEqual({ model: "${input.m}" });
   expect(agent.llmConfig).toBeNull();
 });
 

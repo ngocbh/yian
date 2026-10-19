@@ -203,7 +203,9 @@ function holdsValue(tree: unknown): boolean {
 /** Return `tree` with its values in place and its literals as the values they bind. */
 function unescapeLiterals(tree: unknown): unknown {
   if (isValue(tree)) return tree;
-  if (isRecord(tree)) return Object.fromEntries(Object.entries(tree).map(([key, item]) => [key, unescapeLiterals(item)]));
+  if (isRecord(tree)) {
+    return Object.fromEntries(Object.entries(tree).map(([key, item]) => [key, unescapeLiterals(item)]));
+  }
   if (Array.isArray(tree)) return tree.map(unescapeLiterals);
   return literalPart(tree);
 }
@@ -322,10 +324,7 @@ export function checkLlmConfigValue(
     inherit = written;
     const { inherit: _inherit, ...rest } = tree;
     tree = rest;
-    cfg = new ValueTemplate(
-      rest,
-      cfg.origins.filter(([path]) => path[0] !== "inherit"),
-    );
+    cfg = new ValueTemplate(rest, cfg.origins.filter(([path]) => path[0] !== "inherit"));
   }
   // Each literal field as the value it binds, so a tagged `provider: !str azure` counts as
   // `azure`; a field holding a value is null here.

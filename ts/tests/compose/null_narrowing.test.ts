@@ -10,11 +10,20 @@
  * `::test_a_non_null_exact_fact_meets_a_nullable_one_with_null_removed`,
  * `::test_two_nullable_exact_facts_meet_to_the_narrower_still_nullable`,
  * `::test_two_unrelated_exact_facts_give_no_fact`,
- * `::test_two_isinstance_checks_on_one_base_meet_to_the_narrower` and
- * `::test_a_null_check_names_no_type`.
+ * `::test_two_isinstance_checks_on_one_base_meet_to_the_narrower`,
+ * `::test_a_null_check_names_no_type`,
+ * `::test_a_null_check_is_never_impossible_by_its_declared_type`,
+ * `::test_a_reported_null_check_literal_is_never_true`,
+ * `::test_a_null_check_on_any_value_is_not_reported`,
+ * `::test_an_isinstance_check_is_still_reported_after_a_null_check`,
+ * `::test_a_null_check_the_checks_before_it_prove_null_is_reported`,
+ * `::test_a_check_a_null_check_before_it_makes_dead_is_reported` and
+ * `::test_a_null_check_the_routing_proves_null_is_reported`.
  *
  * Changed: facts and environments compare with `toStrictEqual`, which also compares classes;
- * `Members` takes an array.
+ * `Members` takes an array. `declaredImpossible` and `neverValue` are exported for these tests
+ * (Python's `_declared_impossible` and `_never_value`). The pinned `compose_null_narrowing__*`
+ * cases sit in `narrowing_core.test.ts`'s table.
  *
  * Later (T3-20): `test_a_non_null_field_is_present_in_every_record_around_it`,
  * `test_a_nullable_field_leaves_the_records_around_it_alone` and
@@ -38,18 +47,26 @@ import {
   checkText,
   guardedRefs,
   Holds,
+  literalsInContext,
   NOTHING,
   NotNullCheck,
   proves,
 } from "../../src/compose/helpers/condition_guards.ts";
 import {
+  type BaseTypeOf,
   checkFact,
+  declaredImpossible,
   type Env,
   Exact,
   type Fact,
   guardEnv,
+  ImpossibleCheck,
+  impossibleCheckMessage,
+  impossibleChecks,
+  ImpossibleReason,
   intersectFacts,
   Members,
+  neverValue,
   unresolvedType,
 } from "../../src/compose/helpers/narrowing_facts.ts";
 import { readType } from "../../src/compose/helpers/types.ts";
@@ -81,10 +98,15 @@ const ANY = t("Any");
 const NULL = Type.scalar(ValueKind.NONE);
 const X = new NotNullCheck("x");
 
-/** The facts `condition` proves when true, with the bases typed by `declared`; other bases are unproven. */
-function env(condition: string, declared: Record<string, Type> = {}): Env {
+/** A `BaseTypeOf` over `declared`; other bases are unproven. */
+function types(declared: Record<string, Type> = {}): BaseTypeOf {
   const byBase = new Map(Object.entries(declared));
-  return guardEnv(proves(parseCondition(condition), true), (base) => byBase.get(base) ?? null, REGISTRY);
+  return (base) => byBase.get(base) ?? null;
+}
+
+/** The facts `condition` proves when true, with the bases typed by `declared`. */
+function env(condition: string, declared: Record<string, Type> = {}): Env {
+  return guardEnv(proves(parseCondition(condition), true), types(declared), REGISTRY);
 }
 
 // --------------------------------------------------------------------------- //
@@ -240,4 +262,82 @@ test("two isinstance checks on one base meet to the narrower", () => {
 test("a null check names no type", () => {
   expect(unresolvedType(new Holds(X, true), REGISTRY)).toBe(false);
   expect(unresolvedType(new Holds(X, false), REGISTRY)).toBe(false);
+});
+
+describe("a null check is never impossible by its declared type", () => {
+  for (const text of ["x != null", "x == null", "not x != null"]) {
+    for (const base of ["str", "Optional(str)", "AB", "Any", "None"]) {
+      test(`${text} on ${base}`, () => {
+        const literals = literalsInContext(parseCondition(text));
+        expect(literals).toHaveLength(1);
+        expect(declaredImpossible(literals[0]!, t(base), true, REGISTRY)).toBeNull();
+      });
+    }
+  }
+});
+
+describe("a reported null check literal is never true", () => {
+  const rows: [string, boolean][] = [
+    ["x != null", true],
+    ["x == null", true],
+    ["not x != null", false],
+  ];
+  for (const [text, never] of rows) {
+    test(text, () => {
+      // The value is that of the comparison without the `not` around it.
+      const reported = new ImpossibleCheck("x", "x", ImpossibleReason.CONTEXT);
+      const literals = literalsInContext(parseCondition(text));
+      expect(literals).toHaveLength(1);
+      expect(neverValue(literals[0]!, reported)).toBe(never);
+    });
+  }
+});
+
+describe("a null check on any value is not reported", () => {
+  for (const condition of [
+    "x != null and x.name != ''",
+    "x == null or x.name != ''",
+    "x != null and x != null",
+    "x == null and x == null",
+  ]) {
+    for (const base of ["Item", "Optional(Item)"]) {
+      test(`${condition} on ${base}`, () => {
+        expect(impossibleChecks(parseCondition(condition), types({ x: t(base) }), REGISTRY)).toEqual([]);
+      });
+    }
+  }
+});
+
+test("an isinstance check is still reported after a null check", () => {
+  const tree = parseCondition("x != null and isinstance(x, Other)");
+  const found = impossibleChecks(tree, types({ x: t("Optional(Item)") }), REGISTRY);
+  expect(found.map((check) => [check.text, check.reason])).toEqual([
+    ["isinstance(x, Other)", ImpossibleReason.NO_OVERLAP],
+  ]);
+});
+
+/** The impossible-check messages of `condition`, with `x` an `Optional(AB)`. */
+function impossible(condition: string, routing: Env | null = null): string[] {
+  const found = impossibleChecks(parseCondition(condition), types({ x: t("Optional(AB)") }), REGISTRY, { routing });
+  return found.map(impossibleCheckMessage);
+}
+
+test("a null check the checks before it prove null is reported", () => {
+  expect(impossible("not isinstance(x, A) and not isinstance(x, B) and x != null")).toEqual([
+    "`x != null` can never be true here: x is None, by the checks before it",
+  ]);
+});
+
+test("a check a null check before it makes dead is reported", () => {
+  expect(impossible("x != null and not isinstance(x, A) and not isinstance(x, B)")).toEqual([
+    "`not isinstance(x, B)` can never be true here: x is B, by the checks before it, " +
+      "so `isinstance(x, B)` is always true",
+  ]);
+});
+
+test("a null check the routing proves null is reported", () => {
+  expect(impossible("x != null", new Map([["x", new Members([], true)]]))).toEqual([
+    "`x != null` can never be true here: x is None, by the case branch that routes this node",
+  ]);
+  expect(impossible("x == null", new Map([["x", new Members([], true)]]))).toEqual([]);
 });

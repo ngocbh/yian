@@ -170,7 +170,7 @@ export function sameGuard(a: Guard, b: Guard): boolean {
   return b instanceof AnyOf && sameParts(a.parts, b.parts);
 }
 
-/** Whether two part lists are the same guards, in order. */
+/** Return whether two part lists are the same guards, in order. */
 function sameParts(a: readonly Guard[], b: readonly Guard[]): boolean {
   return a.length === b.length && a.every((part, i) => sameGuard(part, b[i]!));
 }

@@ -21,15 +21,41 @@
  * `::test_guarded_read_types_keeps_each_conjunct_s_candidate`, `::test_env_read_type`,
  * `::test_narrowed_type_label_names_members`, `::test_narrowed_read_message`,
  * `::test_isinstance_members_keeps_the_shared_members_only_when_nothing_else_can_pass`,
- * `::test_narrowed_read_error_names_the_narrowed_type_only_for_a_field_it_lacks`, and the
- * `check_text`, `check_fact` and `unresolved_type` sites of
+ * `::test_narrowed_read_error_names_the_narrowed_type_only_for_a_field_it_lacks`,
+ * `::test_checked_refs_keeps_a_guard_some_value_satisfies`,
+ * `::test_a_read_after_a_reported_check_is_not_checked`,
+ * `::test_a_read_that_needs_a_reported_check_to_hold_is_not_checked`,
+ * `::test_a_read_that_does_not_need_a_reported_check_is_checked`,
+ * `::test_a_read_after_a_check_the_known_type_decides_is_checked_without_it`,
+ * `::test_a_check_the_checks_before_it_rule_out_is_impossible`,
+ * `::test_a_check_the_checks_before_it_make_always_true_says_so`,
+ * `::test_a_tag_value_no_member_has_is_reported`,
+ * `::test_an_isinstance_the_declared_type_rules_out_is_impossible`,
+ * `::test_an_isinstance_on_a_nested_base_the_type_rules_out_is_impossible`,
+ * `::test_a_negated_isinstance_the_declared_type_always_passes_is_impossible`,
+ * `::test_a_negated_isinstance_of_a_nullable_typedef`, `::test_possible_checks_are_not_reported`,
+ * `::test_unproven_bases_and_lost_facts_prove_nothing_impossible`,
+ * `::test_each_impossible_check_is_reported_once_and_only_first`,
+ * `::test_code_after_an_always_true_check_is_not_reported`,
+ * `::test_a_check_the_routing_rules_out_is_impossible`,
+ * `::test_routing_and_the_checks_together_use_the_checks_wording`, and the `check_text`,
+ * `check_fact`, `unresolved_type`, `declared_impossible` and `never_value` sites of
  * `::test_an_unknown_check_kind_fails_loudly`.
+ *
+ * TS-only: the pinned-case table, which makes the call a site makes on the conformance cases a
+ * narrowing message decides (an impossible check, or a narrowed read's error) and checks that the
+ * case's message, or its last line for a multi-line one, is the row's site prefix plus the
+ * produced text. The `compose_null_narrowing__*` and `compose_null_narrowing_case__*` rows sit
+ * here too, in the one harness, though their Python tests are `test_null_narrowing.py` and
+ * `test_null_narrowing_case.py`. The sites' locations are not pinned here.
  *
  * Changed: `Exact`, `Members`, `intersectFacts`, `isinstanceFact` and `unionFacts` are imported
  * from `narrowing_facts.ts`; Python imports them through `compose.validate.narrowing`'s
- * re-export. Facts and environments compare with `toStrictEqual`, which also compares classes;
- * `Members` takes an array. `types` takes dotted base paths as keys (Python spells the dots
- * `__`).
+ * re-export. Facts, environments and guards compare with `toStrictEqual`, which also compares
+ * classes; `Members` takes an array. `types` takes dotted base paths as keys (Python spells the
+ * dots `__`). A compared tag and its close match are spelled `"biy"` / `did you mean "buy"?`
+ * (Python `'biy'` / `did you mean 'buy'?`). `declaredImpossible` and `neverValue` are exported
+ * for these tests (Python's `_declared_impossible` and `_never_value`).
  *
  * Later (T3-16): `test_searched_param_guards_lists_the_checks_before_each_read`.
  *
@@ -76,10 +102,12 @@
  * `test_narrow_contract_at_the_root_of_a_partial_record_rebases_field_origins`.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import {
+  AllOf,
   type Check,
+  CheckLiteral,
   checkText,
   type Guard,
   Holds,
@@ -91,7 +119,9 @@ import {
 import { isinstanceMembers } from "../../src/compose/helpers/isinstance_types.ts";
 import {
   type BaseTypeOf,
+  checkedRefs,
   checkFact,
+  declaredImpossible,
   type Env,
   envReadType,
   envUnsatisfiable,
@@ -99,6 +129,10 @@ import {
   type Fact,
   guardedReadTypes,
   guardEnv,
+  ImpossibleCheck,
+  impossibleCheckMessage,
+  impossibleChecks,
+  ImpossibleReason,
   intersectFacts,
   isinstanceFact,
   Members,
@@ -107,15 +141,21 @@ import {
   narrowedReadError,
   narrowedReadMessage,
   narrowedTypeLabel,
+  neverValue,
   notIsinstanceFact,
   tagFact,
   unionFacts,
   unresolvedType,
 } from "../../src/compose/helpers/narrowing_facts.ts";
+import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
 import { readType } from "../../src/compose/helpers/types.ts";
+import { forget } from "../../src/defaults.ts";
 import { parseCondition } from "../../src/expr/index.ts";
-import { readTypedefs } from "../../src/typesys/types.ts";
+import { isExactly, ValueContract } from "../../src/nodes/contracts.ts";
+import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, Type, TypeCheckError, typesOverlap, ValueKind } from "../../src/typesys/values.ts";
+import type { Case } from "../conformance.ts";
+import { caseDocument, caseRegistry, cursorAt } from "./declarations.ts";
 
 const TYPEDEFS = {
   Limit: { type: "Literal(limit)", price: "float" },
@@ -440,6 +480,304 @@ test("envReadType", () => {
   expect(envReadType("v.qty", new Map([["v", new Members([])]]))).toBeNull();
 });
 
+/** The guard each read in `condition` is checked under, with the bases typed by `declared`. */
+function checked(
+  condition: string,
+  declared: Record<string, Type> = {},
+  routing: Env | null = null,
+): [string, Guard | null][] {
+  return checkedRefs(parseCondition(condition), types(declared), REGISTRY, { routing });
+}
+
+test("checkedRefs keeps a guard some value satisfies", () => {
+  expect(checked("isinstance(v, Buy) and v.qty > 0", { v: DECISION })).toStrictEqual([
+    ["v", NOTHING],
+    ["v.qty", new Holds(new IsinstanceCheck("v", "Buy"), true)],
+  ]);
+});
+
+test("a read after a reported check is not checked", () => {
+  expect(checked("isinstance(v, Buy) and v.action == 'hold' and v.qty > 0", { v: DECISION }).at(-1)).toStrictEqual([
+    "v.qty",
+    null,
+  ]);
+  expect(checked("v.action != 'biy' or v.qty > 0", { v: DECISION }).at(-1)).toStrictEqual(["v.qty", null]);
+  expect(checked("v.action == 'zzz' and v.qty > 0", { v: DECISION }).at(-1)).toStrictEqual(["v.qty", null]);
+  // A negated check the declared type always passes is reported, so what follows is dead.
+  expect(checked("not isinstance(v, Decision) and v.qty > 0", { v: DECISION }).at(-1)).toStrictEqual([
+    "v.qty",
+    null,
+  ]);
+  const routing: Env = new Map([["v", new Members([BUY])]]);
+  expect(checked("isinstance(v, Sell) and v.qty > 0", { v: DECISION }, routing).at(-1)).toStrictEqual([
+    "v.qty",
+    null,
+  ]);
+});
+
+describe("a read that needs a reported check to hold is not checked", () => {
+  const rows: [string, Type][] = [
+    // No overlap: the check would narrow `v` to `Text`, a type it can never be.
+    ["isinstance(v, Text) and v.qty > 0", DECISION],
+    ["(isinstance(v, Text) or isinstance(v, Text)) and v.qty > 0", DECISION],
+    // A negated check a non-union type always passes.
+    ["not isinstance(v, Buy) and v.qty > 0", BUY],
+    ["not isinstance(v, Decision) and v.qty > 0", BUY],
+    // No overlap, on a record and on a union.
+    ["isinstance(v, Hold) and v.qty > 0", BUY],
+    ["isinstance(v, str) and v.qty > 0", DECISION],
+    // A text that is no tag never equals the tag field.
+    ["v.action == 'biy' and v.qty > 0", DECISION],
+    ["not (v.action != 'biy') and v.qty > 0", DECISION],
+  ];
+  for (const [condition, declared] of rows) {
+    test(condition, () => {
+      expect(checked(condition, { v: declared }).at(-1)).toStrictEqual(["v.qty", null]);
+    });
+  }
+});
+
+test("a read that does not need a reported check is checked", () => {
+  // A `!=` with a text that is no tag is always true, so the read after it runs.
+  expect(checked("v.action != 'biy' and v.qty > 0", { v: DECISION }).at(-1)![1]).not.toBeNull();
+  // The read runs when the reported check is false, as it always is.
+  expect(checked("isinstance(v, Text) or v.qty > 0", { v: DECISION }).at(-1)![1]).not.toBeNull();
+  // Reporting one occurrence of a check leaves another occurrence of it alone.
+  const condition = "(isinstance(v, Buy) and v.action == 'hold') or (v.action == 'hold' and v.qty > 0)";
+  expect(checked(condition, { v: DECISION }).at(-1)![1]).not.toBeNull();
+});
+
+test("a read after a check the known type decides is checked without it", () => {
+  expect(checked("isinstance(v, Decision) or v.nosuch > 0", { v: DECISION }).at(-1)).toStrictEqual([
+    "v.nosuch",
+    NOTHING,
+  ]);
+  // A false check on a non-union base proves nothing, so its guard is kept.
+  const [read, guard] = checked("isinstance(v, Buy) or v.qty > 0", { v: BUY }).at(-1)!;
+  expect(guard).not.toBeNull();
+  expect(guardedReadTypes(read, guard!, types({ v: BUY }), REGISTRY)).toStrictEqual([]);
+  // The other checks before the read still narrow it.
+  expect(
+    checked("v.action == 'buy' or isinstance(v, Decision) or v.qty > 0", { v: DECISION }).at(-1),
+  ).toStrictEqual(["v.qty", new Holds(new TagCheck("v", "action", "buy"), false)]);
+  const routing: Env = new Map([["v", new Members([BUY])]]);
+  expect(checked("isinstance(v, Buy) or v.qty > 0", { v: DECISION }, routing).at(-1)).toStrictEqual([
+    "v.qty",
+    NOTHING,
+  ]);
+  expect(checked("isinstance(v, Buy) or v.qty > 0", { v: DECISION }).at(-1)).toStrictEqual([
+    "v.qty",
+    new Holds(new IsinstanceCheck("v", "Buy"), false),
+  ]);
+  // A check the checks before it decide proves nothing either, so the read is checked under the
+  // checks before it.
+  expect(
+    checked("isinstance(v, Buy) and (isinstance(v, Buy) or v.qty > 0)", { v: DECISION }).at(-1),
+  ).toStrictEqual(["v.qty", new Holds(new IsinstanceCheck("v", "Buy"), true)]);
+  const condition = "isinstance(v, Buy) or isinstance(v, Hold) or isinstance(v, Sell) or v.qty > 0";
+  expect(checked(condition, { v: DECISION }).at(-1)).toStrictEqual([
+    "v.qty",
+    new AllOf([new Holds(new IsinstanceCheck("v", "Buy"), false), new Holds(new IsinstanceCheck("v", "Hold"), false)]),
+  ]);
+});
+
+// --------------------------------------------------------------------------- //
+// Impossible checks
+// --------------------------------------------------------------------------- //
+
+const MORE_REGISTRY = readTypedefs({ ...TYPEDEFS, MaybeText: "Optional(Text)", OptBuy: "Optional(Buy)" });
+
+/** The impossible-check messages of `condition`, with the bases typed by `declared`. */
+function impossible(
+  condition: string,
+  declared: Record<string, Type> = {},
+  options: { registry?: TypeRegistry; routing?: Env } = {},
+): string[] {
+  const { registry = REGISTRY, routing } = options;
+  const found = impossibleChecks(parseCondition(condition), types(declared), registry, { routing });
+  return found.map(impossibleCheckMessage);
+}
+
+test("a check the checks before it rule out is impossible", () => {
+  const found = impossibleChecks(
+    parseCondition("isinstance(v, Buy) and v.action == 'hold'"),
+    types({ v: DECISION }),
+    REGISTRY,
+  );
+  expect(found.map((c) => [c.text, c.base, c.reason])).toEqual([['v.action == "hold"', "v", ImpossibleReason.CONTEXT]]);
+  expect(impossibleCheckMessage(found[0]!)).toBe(
+    '`v.action == "hold"` can never be true here: v is Buy, by the checks before it',
+  );
+  expect(impossible("not isinstance(v, Buy) or v.action == 'hold'", { v: DECISION })).toEqual([
+    '`v.action == "hold"` can never be true here: v is Buy, by the checks before it',
+  ]);
+  expect(impossible("v.action != 'buy' and isinstance(v, Buy)", { v: DECISION })).toEqual([
+    "`isinstance(v, Buy)` can never be true here: v is Hold | Sell, by the checks before it",
+  ]);
+});
+
+test("a check the checks before it make always true says so", () => {
+  expect(impossible("isinstance(v, Buy) and not isinstance(v, Buy)", { v: DECISION })).toEqual([
+    "`not isinstance(v, Buy)` can never be true here: v is Buy, by the checks before it, " +
+      "so `isinstance(v, Buy)` is always true",
+  ]);
+  expect(impossible("isinstance(v, Buy) and v.action != 'buy'", { v: DECISION })).toEqual([
+    '`v.action != "buy"` can never be true here: v is Buy, by the checks before it, ' +
+      'so `v.action == "buy"` is always true',
+  ]);
+});
+
+test("a tag value no member has is reported", () => {
+  const message =
+    'compares v.action with "biy", which is not one of its tags (buy, hold, sell); did you mean "buy"?';
+  expect(impossible("v.action == 'biy'", { v: DECISION })).toEqual([`\`v.action == "biy"\` ${message}`]);
+  expect(impossible("v.action != 'biy'", { v: DECISION })).toEqual([`\`v.action != "biy"\` ${message}`]);
+  expect(impossible("v.action == 'zzzz'", { v: DECISION })).toEqual([
+    '`v.action == "zzzz"` compares v.action with "zzzz", which is not one of its tags (buy, hold, sell)',
+  ]);
+  // A field only `Buy` has is typed through the check before it.
+  expect(impossible("v.action == 'buy' and v.leg.type == 'lmit'", { v: DECISION })).toEqual([
+    '`v.leg.type == "lmit"` compares v.leg.type with "lmit", which is not one of its ' +
+      'tags (limit, market); did you mean "limit"?',
+  ]);
+});
+
+test("an isinstance the declared type rules out is impossible", () => {
+  const message =
+    "`isinstance(v, Text)` can never be true: v is declared Decision, and no Decision value fits Text";
+  expect(impossible("isinstance(v, Text)", { v: DECISION })).toEqual([message]);
+  expect(impossible("not not isinstance(v, Text)", { v: DECISION })).toEqual([message]);
+  expect(impossible("not isinstance(v, Text)", { v: DECISION })).toEqual([]);
+  // A missing value is checked as null, which a nullable type admits.
+  expect(impossible("isinstance(v, MaybeText)", { v: DECISION }, { registry: MORE_REGISTRY })).toEqual([]);
+  expect(impossible("isinstance(v, int)", { v: BOOL })).toEqual([
+    "`isinstance(v, int)` can never be true: v is declared bool, and no bool value fits int",
+  ]);
+});
+
+test("an isinstance on a nested base the type rules out is impossible", () => {
+  expect(impossible("isinstance(v.leg, Text)", { v: BUY, "v.leg": t("Leg") })).toEqual([
+    "`isinstance(v.leg, Text)` can never be true: v.leg is declared Leg, and no Leg value fits Text",
+  ]);
+  // `leg` is only on `Buy`, so its type comes from the check before it.
+  expect(impossible("isinstance(v, Buy) and isinstance(v.leg, Text)", { v: DECISION })).toEqual([
+    "`isinstance(v.leg, Text)` can never be true: v.leg is Leg here, " +
+      "by the checks before it, and no Leg value fits Text",
+  ]);
+});
+
+test("a negated isinstance the declared type always passes is impossible", () => {
+  expect(impossible("not isinstance(v, Buy)", { v: BUY })).toEqual([
+    "`not isinstance(v, Buy)` can never be true: v is declared Buy, so `isinstance(v, Buy)` is always true",
+  ]);
+  expect(impossible("not isinstance(v, BuyOrSell)", { v: BUY })).toEqual([
+    "`not isinstance(v, BuyOrSell)` can never be true: v is declared Buy, " +
+      "so `isinstance(v, BuyOrSell)` is always true",
+  ]);
+  expect(impossible("not isinstance(v, Decision)", { v: DECISION })).toEqual([
+    "`not isinstance(v, Decision)` can never be true: v is declared Decision, " +
+      "so `isinstance(v, Decision)` is always true",
+  ]);
+  expect(impossible("not isinstance(v, Buy)", { v: BUY.replace({ nullable: true }) })).toEqual([]);
+  expect(impossible("isinstance(v, Buy)", { v: BUY })).toEqual([]);
+});
+
+test("a negated isinstance of a nullable typedef", () => {
+  const nullableBuy = BUY.replace({ nullable: true });
+  const expected = "so `isinstance(v, OptBuy)` is always true";
+  expect(impossible("not isinstance(v, OptBuy)", { v: nullableBuy }, { registry: MORE_REGISTRY })).toEqual([
+    `\`not isinstance(v, OptBuy)\` can never be true: v is declared Optional(Buy), ${expected}`,
+  ]);
+  expect(impossible("not isinstance(v, OptBuy)", { v: BUY }, { registry: MORE_REGISTRY })).toEqual([
+    `\`not isinstance(v, OptBuy)\` can never be true: v is declared Buy, ${expected}`,
+  ]);
+});
+
+test("possible checks are not reported", () => {
+  expect(impossible("isinstance(v, Buy) or isinstance(v, Sell)", { v: DECISION })).toEqual([]);
+  expect(impossible("isinstance(v, Buy) and v.action == 'buy'", { v: DECISION })).toEqual([]);
+  expect(impossible("(v.action == 'biy') == true", { v: DECISION })).toEqual([]);
+  expect(impossible("v.qty == 'x'", { v: DECISION })).toEqual([]);
+  // An always-true check is no error on its own.
+  expect(impossible("isinstance(v, Decision)", { v: DECISION })).toEqual([]);
+  expect(impossible("isinstance(v, Decision) and v.qty > 0", { v: DECISION })).toEqual([]);
+});
+
+test("unproven bases and lost facts prove nothing impossible", () => {
+  expect(impossible("isinstance(v, Buy) and v.action == 'hold'", { v: OBJECT })).toEqual([]);
+  expect(impossible("isinstance(v, Buy) and v.action == 'hold'")).toEqual([]);
+  expect(impossible("isinstance(v, Buy) and isinstance(v, Text)", { v: OBJECT })).toEqual([]);
+  expect(impossible("isinstance(v, Buy) and isinstance(v, Text)")).toEqual([]);
+  expect(impossible("isinstance(v, Nope)", { v: DECISION })).toEqual([]);
+  expect(impossible("isinstance(v, Nope) and not isinstance(v, Nope)", { v: DECISION })).toEqual([]);
+
+  const tree = parseCondition("isinstance(v, Text) and v.action == 'biy'");
+  expect(impossibleChecks(tree, () => NOT_NARROWABLE, REGISTRY)).toEqual([]);
+});
+
+test("each impossible check is reported once and only first", () => {
+  expect(impossible("v.action == 'biy' or v.action == 'biy'", { v: DECISION })).toEqual([
+    '`v.action == "biy"` compares v.action with "biy", which is not one of its tags ' +
+      '(buy, hold, sell); did you mean "buy"?',
+  ]);
+  // Once the checks before a literal can't all hold, it is not reported again.
+  expect(
+    impossible("isinstance(v, Buy) and v.action == 'hold' and v.action == 'sell'", { v: DECISION }),
+  ).toEqual(['`v.action == "hold"` can never be true here: v is Buy, by the checks before it']);
+});
+
+test("code after an always-true check is not reported", () => {
+  // The not-a-tag text is wrong whatever runs before it.
+  expect(impossible("isinstance(v, Decision) or v.action == 'biy'", { v: DECISION })).toEqual([
+    '`v.action == "biy"` compares v.action with "biy", which is not one of its tags ' +
+      '(buy, hold, sell); did you mean "buy"?',
+  ]);
+  // A read after a check the declared type decides is checked by its site, unnarrowed.
+  expect(impossible("isinstance(v, Decision) or v.nosuch > 0", { v: DECISION })).toEqual([]);
+  expect(impossible("v.action == 'buy' or isinstance(v, Decision) or v.qty > w", { v: DECISION })).toEqual([]);
+  expect(impossible("isinstance(v, Text) or isinstance(v, Decision) or v.x", { v: DECISION })).toEqual([
+    "`isinstance(v, Text)` can never be true: v is declared Decision, and no Decision value fits Text",
+  ]);
+});
+
+test("a check the routing rules out is impossible", () => {
+  expect(impossible("v.action == 'hold'", { v: DECISION }, { routing: new Map([["v", new Members([BUY])]]) })).toEqual(
+    ['`v.action == "hold"` can never be true here: v is Buy, by the case branch that routes this node'],
+  );
+  expect(
+    impossible("v.action == 'buy'", { v: DECISION }, { routing: new Map([["v", new Members([BUY, SELL])]]) }),
+  ).toEqual([]);
+  expect(
+    impossible(
+      "not isinstance(v, Sell) and isinstance(v, Hold)",
+      { v: DECISION },
+      { routing: new Map([["v", new Members([BUY, SELL])]]) },
+    ),
+  ).toEqual([
+    "`isinstance(v, Hold)` can never be true here: v is Buy | Sell, by the case branch that routes this node",
+  ]);
+  // A node the routing never runs gets no impossible checks.
+  expect(impossible("v.action == 'hold'", { v: DECISION }, { routing: new Map([["v", new Members([])]]) })).toEqual(
+    [],
+  );
+});
+
+test("routing and the checks together use the checks' wording", () => {
+  expect(
+    impossible(
+      "not isinstance(v, Buy) and v.action != 'sell'",
+      { v: DECISION },
+      { routing: new Map([["v", new Members([BUY, SELL])]]) },
+    ),
+  ).toEqual([
+    '`v.action != "sell"` can never be true here: v is Sell, by the checks before it, ' +
+      'so `v.action == "sell"` is always true',
+  ]);
+  expect(
+    impossible("isinstance(v, Buy) or v.qty > 0", { v: DECISION }, { routing: new Map([["v", new Members([BUY])]]) }),
+  ).toEqual([]);
+});
+
 // --------------------------------------------------------------------------- //
 // Messages
 // --------------------------------------------------------------------------- //
@@ -503,9 +841,13 @@ class OtherCheck {
 
 describe("an unknown check kind fails loudly", () => {
   const other = new OtherCheck("v") as unknown as Check;
+  const literal = new CheckLiteral(NOTHING, other, true, false);
+  const reported = new ImpossibleCheck("x", "v", ImpossibleReason.CONTEXT);
   const sites: [string, () => unknown][] = [
     ["checkFact", () => checkFact(other, DECISION, true, REGISTRY)],
     ["checkText", () => checkText(other)],
+    ["declaredImpossible", () => declaredImpossible(literal, DECISION, true, REGISTRY)],
+    ["neverValue", () => neverValue(literal, reported)],
     ["unresolvedType", () => unresolvedType(new Holds(other, true), REGISTRY)],
   ];
   for (const [site, call] of sites) {
@@ -515,3 +857,224 @@ describe("an unknown check kind fails loudly", () => {
     });
   }
 });
+
+// --------------------------------------------------------------------------- //
+// Harvested conformance cases
+// --------------------------------------------------------------------------- //
+
+afterEach(forget);
+
+/** One harvested case whose message a narrowing call decides. */
+interface NarrowingRow {
+  /** The case, `group/name`. */
+  id: string;
+  /** The path from the document root to the condition. */
+  at: (string | number)[];
+  /** The site's prefix on the expected message (on its last line, for a multi-line one). */
+  prefix: string;
+  /** The declared type text of each base path the site types. */
+  bases: Record<string, string>;
+  /** The condition of the case branch that routes the site; for an `on:` route, its tag check. */
+  routing?: string;
+  /** The field read whose narrowed error the case pins; without it, the first impossible check. */
+  read?: string;
+}
+
+/** A `BaseTypeOf` over `bases`: the longest declared prefix of a base, projected to the rest. */
+function caseBaseTypeOf(bases: Record<string, string>, registry: TypeRegistry): BaseTypeOf {
+  return (base) => {
+    const parts = base.split(".");
+    for (let cut = parts.length; cut > 0; cut--) {
+      const text = bases[parts.slice(0, cut).join(".")];
+      if (text === undefined) continue;
+      const projected = projectOutputContract(new ValueContract(readType(text, registry)), parts.slice(cut));
+      return isExactly(projected, ValueContract) ? projected.type : null;
+    }
+    return null;
+  };
+}
+
+/** The narrowing text the site produces for `row`: its first impossible check, or its read's error. */
+function producedText(row: NarrowingRow, condition: string, registry: TypeRegistry): string {
+  const tree = parseCondition(condition);
+  const baseTypeOf = caseBaseTypeOf(row.bases, registry);
+  const routing: Env =
+    row.routing === undefined ? new Map() : guardEnv(proves(parseCondition(row.routing), true), baseTypeOf, registry);
+  if (row.read === undefined) {
+    const found = impossibleChecks(tree, baseTypeOf, registry, { routing });
+    expect(found.length).toBeGreaterThan(0);
+    return impossibleCheckMessage(found[0]!);
+  }
+  const byRouting = row.routing !== undefined;
+  let candidate: NarrowedRead | null | undefined;
+  if (byRouting) {
+    candidate = envReadType(row.read, routing);
+  } else {
+    const guard = checkedRefs(tree, baseTypeOf, registry, { routing }).find(([ref]) => ref === row.read)?.[1];
+    expect(guard).toBeDefined();
+    expect(guard).not.toBeNull();
+    candidate = guardedReadTypes(row.read, guard!, baseTypeOf, registry)[0];
+  }
+  expect(candidate).toBeDefined();
+  expect(candidate).not.toBeNull();
+  return narrowedReadError(row.read, candidate!, "<unused>", registry, { byRouting });
+}
+
+/** Check that the case's message, or its last line, is the row's prefix plus the produced text. */
+function runNarrowingRow(row: NarrowingRow): void {
+  const { case_, document } = caseDocument(row.id);
+  const registry = caseRegistry(document);
+  const condition = cursorAt(document, row.at).value;
+  expect(typeof condition).toBe("string");
+  const produced = producedText(row, condition as string, registry);
+  const expected = (case_["expect"] as Case)["load"] as Case;
+  const message = (expected["diagnostics"] as Case[])[0]!["message"] as string;
+  expect(message.split("\n").at(-1)).toBe(row.prefix + produced);
+}
+
+const FIELD_READ_SITES = "load-core/compose_field_read_sites__";
+const LOOP_BUILD = "load-loop/engine_loop_build__";
+const NULL_NARROWING = "load-types/compose_null_narrowing__";
+const UNION_NARROWING = "load-types/compose_union_narrowing__";
+
+test.each<NarrowingRow>([
+  {
+    id: `${FIELD_READ_SITES}flow_assert_compares_with_a_non_tag`,
+    at: ["asserts", 0],
+    prefix: `assert "input.o.action == 'hold'": `,
+    bases: { "input.o": "Order" },
+  },
+  {
+    id: `${FIELD_READ_SITES}flow_assert_shorthand_check_is_reported_as_written`,
+    at: ["asserts", 0],
+    prefix: "assert 'isinstance(o, Rec)': ",
+    bases: { o: "Order" },
+  },
+  {
+    id: `${FIELD_READ_SITES}impossible_flow_assert_check`,
+    at: ["asserts", 0],
+    prefix: "assert 'isinstance(d.output, Buy) and isinstance(d.output, Sell)': ",
+    bases: { "d.output": "Order" },
+  },
+  {
+    id: `${FIELD_READ_SITES}impossible_node_assert_check`,
+    at: ["nodes", "c", "asserts", 0],
+    prefix: "  node 'c' assert: ",
+    bases: { v: "Order" },
+  },
+  {
+    id: `${FIELD_READ_SITES}node_assert_check_no_value_fits`,
+    at: ["nodes", "c", "asserts", 0],
+    prefix: "  node 'c' assert: ",
+    bases: { output: "Order" },
+  },
+  {
+    id: `${FIELD_READ_SITES}node_assert_compares_with_a_non_tag`,
+    at: ["nodes", "c", "asserts", 0],
+    prefix: "  node 'c' assert: ",
+    bases: { v: "Order" },
+  },
+  {
+    id: `${FIELD_READ_SITES}node_assert_negated_check_always_true`,
+    at: ["nodes", "c", "asserts", 0],
+    prefix: "  node 'c' assert: ",
+    bases: { output: "Order" },
+  },
+  {
+    id: `${FIELD_READ_SITES}node_assert_read_on_the_other_member`,
+    at: ["nodes", "c", "asserts", 0],
+    prefix: "  node 'c' assert: ",
+    bases: { v: "Order" },
+    read: "v.qty",
+  },
+  {
+    id: `${LOOP_BUILD}predicate_isinstance_of_a_disjoint_type_is_rejected`,
+    at: ["nodes", "ask", "until"],
+    prefix: "loop node 'ask': `until:` ",
+    bases: { r: "Done" },
+  },
+  {
+    id: `${LOOP_BUILD}predicate_isinstance_ruled_out_by_an_earlier_check`,
+    at: ["nodes", "ask", "until"],
+    prefix: "loop node 'ask': `until:` ",
+    bases: { r: "Step" },
+  },
+  {
+    id: `${LOOP_BUILD}predicate_negated_isinstance_of_the_declared_type_is_rejected`,
+    at: ["nodes", "ask", "until"],
+    prefix: "loop node 'ask': `until:` ",
+    bases: { r: "Done" },
+  },
+  {
+    id: `${LOOP_BUILD}predicate_tag_comparison_with_a_non_tag`,
+    at: ["nodes", "ask", "until"],
+    prefix: "loop node 'ask': `until:` ",
+    bases: { r: "Step" },
+  },
+  {
+    id: `${NULL_NARROWING}a_node_assert_check_made_impossible_is_reported`,
+    at: ["nodes", "c", "asserts", 0],
+    prefix: "  node 'c' assert: ",
+    bases: { x: "Optional(AB)" },
+  },
+  {
+    id: `${NULL_NARROWING}a_null_check_after_isinstance_is_impossible`,
+    at: ["nodes", "route", "cases", 0, "when"],
+    prefix: "case node 'route': `cases[0].when`: ",
+    bases: { "input.x": "Optional(AB)" },
+  },
+  {
+    id: `${NULL_NARROWING}a_null_check_the_routing_rules_out_is_reported`,
+    at: ["nodes", "inner", "cases", 0, "when"],
+    prefix: "case node 'inner': `cases[0].when`: ",
+    bases: { "input.x": "Optional(AB)" },
+    routing: "not isinstance(input.x, A) and not isinstance(input.x, B)",
+  },
+  {
+    id: `${NULL_NARROWING}a_tag_check_after_a_null_check_is_impossible`,
+    at: ["nodes", "route", "cases", 0, "when"],
+    prefix: "case node 'route': `cases[0].when`: ",
+    bases: { "input.x": "Optional(AB)" },
+  },
+  {
+    id: "load-types/compose_null_narrowing_case__a_node_assert_null_check_narrows_its_read",
+    at: ["nodes", "x", "asserts", 0],
+    prefix: "  node 'x' assert: ",
+    bases: { output: "Optional(Item)" },
+    read: "output.nosuch",
+  },
+  {
+    id: `${UNION_NARROWING}a_misspelled_read_in_a_when_names_the_narrowed_type`,
+    at: ["nodes", "route", "cases", 0, "when"],
+    prefix: "  node 'route' cases[0].when from: ",
+    bases: { "d.output": "Decision" },
+    read: "d.output.limt",
+  },
+  {
+    id: `${UNION_NARROWING}a_read_in_a_when_of_a_field_the_narrowed_members_lack`,
+    at: ["nodes", "route", "cases", 0, "when"],
+    prefix: "  node 'route' cases[0].when from: ",
+    bases: { "d.output": "Decision" },
+    read: "d.output.limit",
+  },
+  {
+    id: `${UNION_NARROWING}a_when_comparing_the_tag_with_a_non_tag_suggests_one`,
+    at: ["nodes", "route", "cases", 1, "when"],
+    prefix: "case node 'route': `cases[1].when`: ",
+    bases: { "d.output": "Decision" },
+  },
+  {
+    id: `${UNION_NARROWING}a_when_read_narrowed_only_by_the_routing`,
+    at: ["nodes", "inner", "cases", 0, "when"],
+    prefix: "  node 'inner' cases[0].when from: ",
+    bases: { "d.output": "Decision", "input.o": "Reply" },
+    routing: 'd.output.action == "buy"',
+    read: "d.output.nosuch",
+  },
+  {
+    id: `${UNION_NARROWING}an_isinstance_that_can_never_be_true`,
+    at: ["nodes", "route", "cases", 1, "when"],
+    prefix: "case node 'route': `cases[1].when`: ",
+    bases: { "d.output": "Decision" },
+  },
+])("narrowing message: $id", runNarrowingRow);

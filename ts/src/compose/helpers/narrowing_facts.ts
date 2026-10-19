@@ -18,6 +18,7 @@
 
 import { typesCompatible } from "../../compile/validation.ts";
 import { compareCodeUnits, getCloseMatches, reprText } from "../../diagnostics.ts";
+import type { ExprNode } from "../../expr/grammar.ts";
 import { isExactly, sameItems, ValueContract } from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import {
@@ -25,18 +26,30 @@ import {
   Type,
   TypeCheckError,
   typeEquals,
+  typesOverlap,
   unionTagFields,
   ValueKind,
+  valueRepr,
 } from "../../typesys/values.ts";
 import {
   AllOf,
   type Check,
+  type CheckLiteral,
+  checkText,
   conjuncts,
+  falsified,
   type Guard,
   guardChecks,
+  guardedRefs,
   Holds,
   IsinstanceCheck,
+  literalsInContext,
+  literalText,
+  masked,
+  NEVER,
+  NOTHING,
   NotNullCheck,
+  sameGuard,
   TagCheck,
   unknownCheck,
 } from "./condition_guards.ts";
@@ -237,6 +250,7 @@ export function notIsinstanceFact(baseType: Type, typ: Type): Fact | null {
 export function tagFact(baseType: Type, field: string, value: string, holds: boolean): Fact | null {
   const members = baseType.variants;
   if (members === undefined || !unionTagFields(baseType).includes(field)) return null;
+  // `unionTagFields` checked that every member has `field` with tags.
   const tagsOf = (member: Type): ReadonlySet<string> => member.fields!.get(field)!.tags!;
   if (holds) return new Members(members.filter((m) => tagsOf(m).has(value)));
   const kept = members.filter((m) => {
@@ -412,7 +426,7 @@ export type NarrowedRead = readonly [Type, readonly string[], string];
  * A base whose declared type is unproven, such as a field only some members of an outer union
  * have, takes its type through the facts already proven for the longest outer base it is below.
  */
-function baseType(base: string, baseTypeOf: BaseTypeOf, outer: Env): Type | null | NotNarrowable {
+function baseTypeUnder(base: string, baseTypeOf: BaseTypeOf, outer: Env): Type | null | NotNarrowable {
   const declared = baseTypeOf(base);
   if (declared !== null) return declared;
   const parts = base.split(".");
@@ -431,7 +445,7 @@ function baseType(base: string, baseTypeOf: BaseTypeOf, outer: Env): Type | null
 function guardEnvUnder(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeRegistry, outer: Env): Env {
   if (guard instanceof Holds) {
     const base = guard.check.base;
-    const typ = baseType(base, baseTypeOf, outer);
+    const typ = baseTypeUnder(base, baseTypeOf, outer);
     if (typ === NOT_NARROWABLE) return new Map();
     let fact: Fact | null;
     try {
@@ -512,13 +526,150 @@ export function unresolvedType(guard: Guard, registry: TypeRegistry): boolean {
 }
 
 /** The distinct facts of `guard` and of each of its top-level conjuncts. */
-function guardEnvs(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeRegistry): Env[] {
+function candidateEnvs(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeRegistry): Env[] {
   const envs: Env[] = [];
   for (const part of [guard, ...conjuncts(guard)]) {
     const env = guardEnv(part, baseTypeOf, registry);
     if (!envs.some((seen) => sameEnv(seen, env))) envs.push(env);
   }
   return envs;
+}
+
+/**
+ * The check sub-trees of the literals whose value the known type and the checks before them
+ * decide.
+ *
+ * The known type is the declared type met with `routing`. Such a check, always true or always
+ * false where it is evaluated, is no error by itself.
+ */
+function decidedLiterals(tree: ExprNode, baseTypeOf: BaseTypeOf, registry: TypeRegistry, routing: Env): ExprNode[] {
+  const decided: ExprNode[] = [];
+  for (const literal of literalsInContext(tree)) {
+    const contextEnv = intersectEnvs([routing, guardEnv(literal.context, baseTypeOf, registry)]);
+    if (envUnsatisfiable(contextEnv)) continue;
+    const base = literal.check.base;
+    const typ = baseTypeUnder(base, baseTypeOf, contextEnv);
+    if (!(typ instanceof Type)) continue;
+    for (const value of [true, false]) {
+      let fact: Fact | null;
+      try {
+        fact = checkFact(literal.check, typ, value, registry);
+      } catch (error) {
+        if (!(error instanceof TypeCheckError)) throw error;
+        break;
+      }
+      if (fact !== null && isEmptyMembers(intersectFacts(contextEnv.get(base) ?? null, fact))) {
+        // `literalsInContext` gives every literal its sub-tree.
+        decided.push(literal.node!);
+        break;
+      }
+    }
+  }
+  return decided;
+}
+
+/** Whether some value satisfies `guard`'s facts and each top-level conjunct's, with `routing`. */
+function satisfiable(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeRegistry, routing: Env): boolean {
+  const envs = candidateEnvs(guard, baseTypeOf, registry);
+  return !envs.some((env) => envUnsatisfiable(intersectEnvs([routing, env])));
+}
+
+/**
+ * Return each reference occurrence in a condition with the guard its field read is checked under.
+ *
+ * A read that runs only when a check `impossibleChecks` reports has the value it can never have
+ * is not checked (`null`), whatever the report's reason: the report explains it, and errors on
+ * the code it makes dead would only repeat it. So is a read no value reaches because of a
+ * reported check. Otherwise a guard some value satisfies is kept. A read no value reaches only
+ * because an unreported check the known type or the checks before it always decide went the
+ * other way (`isinstance(v, Decision) or v.nosuch > 0` with `v` declared `Decision`,
+ * `isinstance(v, Buy) and (isinstance(v, Buy) or v.qty > 0)`) is no error by itself: such checks
+ * prove nothing here, so the read is checked as without them (with `NOTHING` when the guard still
+ * can't hold).
+ *
+ * @param tree A condition parsed with `parseCondition`, in any spelling.
+ * @param baseTypeOf The site's declared type of a base path, as for `guardEnv`.
+ * @param registry The flow's typedefs.
+ * @param options.routing The facts that hold wherever the condition is evaluated, such as a CASE
+ *   node's routing facts; with the declared type they make the known type. `null` (the default),
+ *   or facts no value satisfies, is none.
+ * @returns One `[reference path, guard or null]` pair per occurrence, in `guardedRefs` order.
+ *
+ * @example
+ * With `v` a `Union[Buy, Hold, Sell]`, the `v.qty` read in `isinstance(v, Decision) or v.qty > 0`
+ * gets `NOTHING`, in `isinstance(v, Buy) and (isinstance(v, Buy) or v.qty > 0)` the guard of
+ * `isinstance(v, Buy)`, and in `isinstance(v, Buy) and v.action == 'hold' and v.qty > 0` and
+ * `isinstance(v, Text) and v.qty > 0` gets `null`.
+ */
+export function checkedRefs(
+  tree: ExprNode,
+  baseTypeOf: BaseTypeOf,
+  registry: TypeRegistry,
+  options: { routing?: Env | null } = {},
+): [string, Guard | null][] {
+  const { routing = null } = options;
+  const known: Env = routing !== null && !envUnsatisfiable(routing) ? routing : new Map();
+  const refs = guardedRefs(tree);
+  const reported = reportedLiterals(tree, baseTypeOf, registry, known);
+  // `literalsInContext` gives every literal its sub-tree.
+  const reportedNodes = reported.map(([literal]) => literal.node!);
+  let unreported = refs;
+  let needing = refs;
+  if (reported.length > 0) {
+    unreported = guardedRefs(masked(tree, reportedNodes));
+    const never = reported.map(([literal, found]) => [literal.node!, neverValue(literal, found)] as const);
+    needing = guardedRefs(falsified(tree, never));
+  }
+  if (unreported.length !== refs.length || needing.length !== refs.length) {
+    throw new Error("masked and falsified copies of a condition must keep its reads");
+  }
+  let undecided: [string, Guard][] | null = null;
+  const checked: [string, Guard | null][] = [];
+  for (const [index, [ref, guard]] of refs.entries()) {
+    const withoutReported = unreported[index]![1];
+    const live = needing[index]![1];
+    if (sameGuard(live, NEVER)) {
+      checked.push([ref, null]);
+    } else if (satisfiable(guard, baseTypeOf, registry, known)) {
+      checked.push([ref, guard]);
+    } else if (satisfiable(withoutReported, baseTypeOf, registry, known)) {
+      checked.push([ref, null]);
+    } else {
+      if (undecided === null) {
+        const decided = decidedLiterals(tree, baseTypeOf, registry, known);
+        undecided = guardedRefs(masked(tree, [...reportedNodes, ...decided]));
+      }
+      const trimmed = undecided[index]![1];
+      checked.push([ref, satisfiable(trimmed, baseTypeOf, registry, known) ? trimmed : NOTHING]);
+    }
+  }
+  return checked;
+}
+
+/**
+ * Return the value a reported literal's check sub-tree (`v.action != 'x'`, without any `not`
+ * around it) never has; exported for tests; validators call `impossibleChecks`/`checkedRefs`.
+ *
+ * A text that is no tag never equals the tag field, whichever way the literal compares it; any
+ * other reported literal can never be true.
+ *
+ * @param literal A literal `impossibleChecks` reports.
+ * @param impossible Its report.
+ * @returns The value the sub-tree never has.
+ */
+export function neverValue(literal: CheckLiteral, impossible: ImpossibleCheck): boolean {
+  const check = literal.check;
+  let checkNever: boolean;
+  if (check instanceof TagCheck) {
+    checkNever = impossible.reason === ImpossibleReason.NOT_A_TAG ? true : literal.value;
+  } else if (check instanceof IsinstanceCheck || check instanceof NotNullCheck) {
+    checkNever = literal.value;
+  } else {
+    throw unknownCheck(check);
+  }
+  // `!=` spells the check negatively: the sub-tree is true when the check is false.
+  const positive = literal.value !== literal.negated;
+  return checkNever === positive;
 }
 
 /**
@@ -585,7 +736,7 @@ export function guardedReadTypes(
   registry: TypeRegistry,
 ): NarrowedRead[] {
   const candidates: NarrowedRead[] = [];
-  for (const env of guardEnvs(guard, baseTypeOf, registry)) {
+  for (const env of candidateEnvs(guard, baseTypeOf, registry)) {
     const candidate = envReadType(read, env);
     if (candidate !== null && !candidates.some((seen) => sameRead(seen, candidate))) candidates.push(candidate);
   }
@@ -593,8 +744,86 @@ export function guardedReadTypes(
 }
 
 // --------------------------------------------------------------------------- //
-// Messages
+// Impossible checks and messages
 // --------------------------------------------------------------------------- //
+
+/** Why `impossibleChecks` reports a check. */
+export const ImpossibleReason = Object.freeze({
+  /** The checks evaluated before the literal rule it out. */
+  CONTEXT: "context",
+  /** The case branch that routes the node rules the literal out on its own. */
+  ROUTING: "routing",
+  /** An `isinstance` names a type no value of the base's type can be. */
+  NO_OVERLAP: "no overlap",
+  /** A negated `isinstance` names a type every value of the base's type is. */
+  ALWAYS: "always",
+  /**
+   * A tag comparison's text is not a tag of the base union's tag field: a misspelling, reported
+   * for `==` (never true) and `!=` (always true) alike.
+   */
+  NOT_A_TAG: "not a tag",
+} as const);
+
+export type ImpossibleReason = (typeof ImpossibleReason)[keyof typeof ImpossibleReason];
+
+/** A check in a condition that is wrong whatever the values; frozen. */
+export class ImpossibleCheck {
+  /** The literal's canonical source, such as `not isinstance(v, Buy)`. */
+  readonly text: string;
+  /** The checked base path. */
+  readonly base: string;
+  /** Why it is reported. */
+  readonly reason: ImpossibleReason;
+  /** The base's type: narrowed for `CONTEXT` and `ROUTING`, else the type the base is checked against. */
+  readonly baseLabel: string;
+  /**
+   * For `NO_OVERLAP` and `ALWAYS`, whether the base's type is its declared type; `false` when it
+   * comes from the checks before the literal.
+   */
+  readonly declared: boolean;
+  /** The type an `isinstance` names, for `NO_OVERLAP`. */
+  readonly typeLabel: string;
+  /**
+   * The canonical source of the check that is always true where the literal needs it false, such
+   * as `isinstance(v, Buy)` for `not isinstance(v, Buy)`; `""` when the literal needs it true.
+   */
+  readonly alwaysTrue: string;
+  /** The compared text, for `NOT_A_TAG`. */
+  readonly value: string;
+  /** The compared field, for `NOT_A_TAG`. */
+  readonly field: string;
+  /** The tag field's tags, sorted, for `NOT_A_TAG`. */
+  readonly tags: readonly string[];
+
+  constructor(
+    text: string,
+    base: string,
+    reason: ImpossibleReason,
+    options: {
+      baseLabel?: string;
+      declared?: boolean;
+      typeLabel?: string;
+      alwaysTrue?: string;
+      value?: string;
+      field?: string;
+      tags?: readonly string[];
+    } = {},
+  ) {
+    const { baseLabel = "", declared = true, typeLabel = "", alwaysTrue = "", value = "", field = "", tags = [] } =
+      options;
+    this.text = text;
+    this.base = base;
+    this.reason = reason;
+    this.baseLabel = baseLabel;
+    this.declared = declared;
+    this.typeLabel = typeLabel;
+    this.alwaysTrue = alwaysTrue;
+    this.value = value;
+    this.field = field;
+    this.tags = Object.freeze([...tags]);
+    Object.freeze(this);
+  }
+}
 
 /**
  * Return a narrowed type's label for a message, naming a union member by member.
@@ -611,9 +840,236 @@ export function narrowedTypeLabel(typ: Type, registry: TypeRegistry): string {
   return typ.nullable ? `Optional(${label})` : label;
 }
 
+/** The label of the type a base has under `fact`, else of `fallback`. */
+function factLabel(fact: Fact | null, fallback: Type | null, registry: TypeRegistry): string {
+  let typ = fact !== null ? factType(fact) : null;
+  if (typ === null) typ = fallback;
+  return typ !== null ? narrowedTypeLabel(typ, registry) : "unknown";
+}
+
+/** Whether every value fits `typ`'s kind: `Any`, or a plain `object`. */
+function isOpen(typ: Type): boolean {
+  if (typ.kind === ValueKind.ANY) return true;
+  return typ.kind === ValueKind.OBJECT && typ.fields === undefined && typ.variants === undefined;
+}
+
+/** The check that is always true when `literal` can never be true, if it needs it false. */
+function alwaysTrue(literal: CheckLiteral): string {
+  return literal.value ? "" : checkText(literal.check, true);
+}
+
+/**
+ * Return the report a literal gets against its base's type alone, else `null`; exported for
+ * tests; validators call `impossibleChecks`/`checkedRefs`.
+ *
+ * @param literal A literal from `literalsInContext`.
+ * @param baseType The type its base is checked against.
+ * @param declared Whether `baseType` is the base's declared type.
+ * @param registry The flow's typedefs.
+ * @returns A `NOT_A_TAG`, `NO_OVERLAP` or `ALWAYS` report, or `null`.
+ */
+export function declaredImpossible(
+  literal: CheckLiteral,
+  baseType: Type,
+  declared: boolean,
+  registry: TypeRegistry,
+): ImpossibleCheck | null {
+  const check = literal.check;
+  if (check instanceof NotNullCheck) {
+    // Testing a value that is never null for null is ordinary defensive code.
+    return null;
+  }
+  const text = literalText(literal);
+  const label = namedTypeLabel(baseType, registry);
+  if (check instanceof TagCheck) {
+    const members = baseType.variants;
+    if (members === undefined || !unionTagFields(baseType).includes(check.field)) return null;
+    // `unionTagFields` checked that every member has the field with tags.
+    const tags = members.flatMap((member) => [...member.fields!.get(check.field)!.tags!]).sort(compareCodeUnits);
+    if (tags.includes(check.value)) return null;
+    return new ImpossibleCheck(text, check.base, ImpossibleReason.NOT_A_TAG, {
+      baseLabel: label,
+      value: check.value,
+      field: check.field,
+      tags,
+    });
+  }
+  if (!(check instanceof IsinstanceCheck)) throw unknownCheck(check);
+  if (isOpen(baseType)) return null;
+  let typ: Type;
+  try {
+    typ = resolveIsinstanceType(check.typeName, registry);
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    return null;
+  }
+  if (literal.value) {
+    // A missing value is checked as null, which a nullable type admits.
+    if (typ.nullable || typesOverlap(baseType, typ)) return null;
+    return new ImpossibleCheck(text, check.base, ImpossibleReason.NO_OVERLAP, {
+      baseLabel: label,
+      declared,
+      typeLabel: namedTypeLabel(typ, registry),
+    });
+  }
+  // A null base fails a non-nullable check, so its negation can hold.
+  if (baseType.nullable && !typ.nullable) return null;
+  const [strict, strictBase] = [typ.replace({ nullable: false }), baseType.replace({ nullable: false })];
+  const wanted = strict.variants?.length ? strict.variants : [strict];
+  const members = strictBase.variants?.length ? strictBase.variants : [strictBase];
+  if (!members.every((member) => contains(wanted, member))) return null;
+  return new ImpossibleCheck(text, check.base, ImpossibleReason.ALWAYS, {
+    baseLabel: label,
+    declared,
+    alwaysTrue: alwaysTrue(literal),
+  });
+}
+
+/**
+ * Return the checks in a condition that are wrong whatever the values.
+ *
+ * Each literal in a boolean position (a check, or `not` applied to one) is tested against its
+ * base's type and against what holds when it is evaluated:
+ *
+ * - Against the base's type alone, whatever the context: an `isinstance` naming a type no value
+ *   of it can be (not a nullable type: a missing value is checked as null), a negated
+ *   `isinstance` naming a type every value of it is, and a tag comparison whose text is not a tag
+ *   of the union's tag field, reported as a misspelling for `==` and `!=` alike. A null check is
+ *   never reported against its declared type alone, since testing a value that is never null for
+ *   null is ordinary defensive code.
+ * - Against the context, when the context can hold: the checks before the literal, met with what
+ *   it proves, leave its base no member and no null. With `routing`, a literal the routing rules
+ *   out together with the context is reported too, worded as routing only when the routing rules
+ *   it out on its own.
+ *
+ * A check the types always decide (always true in an `or`, always false in an `and`) is no error
+ * by itself, and neither is the code after it that no value reaches: sites check such a read as
+ * without that check, and do not check a read after a reported check (`checkedRefs`), so the
+ * report does not cascade into errors on the code it makes dead. Unproven, `object` and `Any`
+ * bases, unknown type names, bases `baseTypeOf` refuses, and facts lost to an intersection prove
+ * nothing. Each literal text is reported once.
+ *
+ * @param tree A condition parsed with `parseCondition`.
+ * @param baseTypeOf The site's declared type of a base path, as for `guardEnv`.
+ * @param registry The flow's typedefs.
+ * @param options.routing The facts that hold wherever the condition is evaluated, such as a CASE
+ *   node's routing facts. `null` (the default) is none. When no value satisfies them, the
+ *   condition never runs and nothing is reported.
+ * @returns The reported literals in source order.
+ *
+ * @example
+ * With `v` a `Union[Buy, Hold, Sell]` tagged by `action`, `isinstance(v, Buy) and v.action ==
+ * 'hold'` gives one `CONTEXT` check on `v.action == "hold"`, whose base is narrowed to `Buy`.
+ */
+export function impossibleChecks(
+  tree: ExprNode,
+  baseTypeOf: BaseTypeOf,
+  registry: TypeRegistry,
+  options: { routing?: Env | null } = {},
+): ImpossibleCheck[] {
+  const { routing = null } = options;
+  const found: ImpossibleCheck[] = [];
+  for (const [, impossible] of reportedLiterals(tree, baseTypeOf, registry, routing ?? new Map())) {
+    if (found.every((seen) => impossible.text !== seen.text)) found.push(impossible);
+  }
+  return found;
+}
+
+/** Each literal `impossibleChecks` reports, with its report, before deduplication. */
+function reportedLiterals(
+  tree: ExprNode,
+  baseTypeOf: BaseTypeOf,
+  registry: TypeRegistry,
+  routing: Env,
+): [CheckLiteral, ImpossibleCheck][] {
+  if (envUnsatisfiable(routing)) return [];
+  const found: [CheckLiteral, ImpossibleCheck][] = [];
+  for (const literal of literalsInContext(tree)) {
+    const contextEnv = guardEnv(literal.context, baseTypeOf, registry);
+    const routedEnv = intersectEnvs([routing, contextEnv]);
+    const base = literal.check.base;
+    const typ = baseTypeUnder(base, baseTypeOf, contextEnv);
+    if (typ === NOT_NARROWABLE) continue;
+    let impossible: ImpossibleCheck | null = null;
+    if (typ !== null) {
+      const declared = baseTypeOf(base) !== null;
+      impossible = declaredImpossible(literal, typ, declared, registry);
+    }
+    if (impossible === null && !(envUnsatisfiable(contextEnv) || envUnsatisfiable(routedEnv))) {
+      impossible = contextImpossible(literal, typ, contextEnv, routedEnv, baseTypeOf, registry, routing);
+    }
+    if (impossible !== null) found.push([literal, impossible]);
+  }
+  return found;
+}
+
+/** The report a literal gets from what holds when it is evaluated, else `null`. */
+function contextImpossible(
+  literal: CheckLiteral,
+  baseType: Type | null,
+  contextEnv: Env,
+  routedEnv: Env,
+  baseTypeOf: BaseTypeOf,
+  registry: TypeRegistry,
+  routing: Env,
+): ImpossibleCheck | null {
+  const base = literal.check.base;
+  const own = new Holds(literal.check, literal.value);
+  const text = literalText(literal);
+  const met = intersectEnvs([contextEnv, guardEnvUnder(own, baseTypeOf, registry, contextEnv)]);
+  if (isEmptyMembers(met.get(base))) {
+    const label = factLabel(contextEnv.get(base) ?? null, baseType, registry);
+    return new ImpossibleCheck(text, base, ImpossibleReason.CONTEXT, {
+      baseLabel: label,
+      alwaysTrue: alwaysTrue(literal),
+    });
+  }
+  if (!isEmptyMembers(intersectEnvs([routing, met]).get(base))) return null;
+  const routedOwn = intersectEnvs([routing, guardEnvUnder(own, baseTypeOf, registry, routing)]);
+  let label: string;
+  let reason: ImpossibleReason;
+  if (isEmptyMembers(routedOwn.get(base))) {
+    label = factLabel(routing.get(base) ?? null, baseType, registry);
+    reason = ImpossibleReason.ROUTING;
+  } else {
+    label = factLabel(routedEnv.get(base) ?? null, baseType, registry);
+    reason = ImpossibleReason.CONTEXT;
+  }
+  return new ImpossibleCheck(text, base, reason, { baseLabel: label, alwaysTrue: alwaysTrue(literal) });
+}
+
 /** The option closest to `word`, if one is close enough. */
 function closeMatch(word: string, options: Iterable<string>): string | null {
   return getCloseMatches(word, [...options], 1, CLOSE_MATCH_CUTOFF)[0] ?? null;
+}
+
+/**
+ * Return the load error text for an item of `impossibleChecks`.
+ *
+ * @param check An item of `impossibleChecks`.
+ * @returns The message without a site prefix, such as: `` `isinstance(d.output, Text)` can never
+ *   be true: d.output is declared Decision, and no Decision value fits Text ``.
+ */
+export function impossibleCheckMessage(check: ImpossibleCheck): string {
+  const text = `\`${check.text}\``;
+  const always = check.alwaysTrue ? `, so \`${check.alwaysTrue}\` is always true` : "";
+  if (check.reason === ImpossibleReason.CONTEXT || check.reason === ImpossibleReason.ROUTING) {
+    const why =
+      check.reason === ImpossibleReason.CONTEXT ? "the checks before it" : "the case branch that routes this node";
+    return `${text} can never be true here: ${check.base} is ${check.baseLabel}, by ${why}${always}`;
+  }
+  if (check.reason === ImpossibleReason.NO_OVERLAP || check.reason === ImpossibleReason.ALWAYS) {
+    const base = check.declared
+      ? `${check.base} is declared ${check.baseLabel}`
+      : `${check.base} is ${check.baseLabel} here, by the checks before it`;
+    if (check.reason === ImpossibleReason.ALWAYS) return `${text} can never be true: ${base}${always}`;
+    return `${text} can never be true: ${base}, and no ${check.baseLabel} value fits ${check.typeLabel}`;
+  }
+  const message =
+    `${text} compares ${check.base}.${check.field} with ${valueRepr(check.value)}, which is not ` +
+    `one of its tags (${check.tags.join(", ")})`;
+  const close = closeMatch(check.value, check.tags);
+  return close === null ? message : `${message}; did you mean ${valueRepr(close)}?`;
 }
 
 /**

@@ -80,6 +80,10 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - `src/compose/helpers/types.ts` reads `output:` types and `input:`/`variables:` declarations:
   the tag is the type and the value after it the default, checked with `checkWrittenValue`
   first.
+- `src/compose/helpers/narrowing_facts.ts` and `condition_guards.ts` hold the narrowing inside
+  conditions: what a check proves at each read, impossible checks and narrowed reads.
+  `output_contracts.ts` types output bindings, and `isinstance_types.ts` resolves the type names
+  of `isinstance` and constructors. These helpers return messages and never throw a `LoadError`.
 
 ## Skills
 

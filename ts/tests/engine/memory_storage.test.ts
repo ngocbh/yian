@@ -9,6 +9,14 @@
  * `test_new_file_permissions_and_connection_settings`, `test_new_file_permissions_do_not_depend_on_umask`,
  * `test_path_io_errors_are_sanitized`, `test_zero_byte_file_initializes_without_changing_permissions`,
  * `test_invalid_store_rejected_without_overwriting_or_leaking_owner`, `test_unrelated_files_are_preserved`,
+ * `test_lifetime_owner_survives_commits_and_failed_competitors`,
+ * `test_failed_save_poisoning_retains_ownership_and_primary`,
+ * `test_close_is_idempotent_and_closed_methods_do_not_touch_os_or_sqlite`,
+ * `test_failed_constructor_rolls_back_and_releases_connection`,
+ * `test_rollback_failure_does_not_replace_save_failure_or_release_owner`,
+ * `test_load_io_failure_poisoning_preserves_owner`, `test_process_crash_at_commit_is_atomic`,
+ * `test_creation_crash_leaves_recoverable_empty_file`,
+ * `test_process_death_releases_owner_and_preserves_commit`,
  * `test_check_storage_path_returns_an_absolute_path_without_io`,
  * `test_storage_path_follows_symlinks_before_parent_steps` and
  * `test_create_parent_makes_missing_directories`.
@@ -18,6 +26,9 @@
  * `..` in a relative path and writing no `//` when the current directory is `/`; and
  * `realStoragePath`, Python's non-strict `os.path.realpath` ported line for line (a symlink
  * followed after a missing component and its `..`, a dangling link, a loop, a relative link target).
+ * With `YIAN_TEST_NODE` set to a Node binary, the built store also runs under Node: a round trip
+ * with `±Infinity` and a big int, a reopen and damaged stores, and an owner on each runtime
+ * excluding a competitor on the other.
  *
  * Changed:
  * - The envelope is version 3 (Python's is 2): the `version` row writes 4, a `python_version` row
@@ -34,28 +45,36 @@
  *   private `connection`, as Python reads `store._connection`.
  * - `test_path_io_errors_are_sanitized`: the path's symlink can't be read (a spy on
  *   `fs.readlinkSync` throws a system error), where Python patches `os.path.realpath`.
- *
- * Not ported yet (they follow with the ownership tests):
- * `test_lifetime_owner_survives_commits_and_failed_competitors`,
- * `test_failed_save_poisoning_retains_ownership_and_primary`,
- * `test_close_is_idempotent_and_closed_methods_do_not_touch_os_or_sqlite`,
- * `test_failed_constructor_rolls_back_and_releases_connection`,
- * `test_rollback_failure_does_not_replace_save_failure_or_release_owner`,
- * `test_load_io_failure_poisoning_preserves_owner`, `test_process_crash_at_commit_is_atomic`,
- * `test_creation_crash_leaves_recoverable_empty_file` and
- * `test_process_death_releases_owner_and_preserves_commit`.
+ * - Child processes are `bun -e` scripts importing `src/memory/storage/sqlite.ts`, where Python
+ *   spawns `multiprocessing` children; a crash is `process.exit(23)`, Python's `os._exit(23)`.
+ * - Failures are injected by spies on the store's private connection (`exec` for `COMMIT` and
+ *   `ROLLBACK`, `prepare` for `SELECT id`) or on `fs`, where Python subclasses
+ *   `sqlite3.Connection`. `test_failed_save_poisoning_retains_ownership_and_primary`: the
+ *   `sqlite3.OperationalError` and `OSError` rows are a SQLite driver-shaped error and a system
+ *   error. `test_failed_constructor_rolls_back_and_releases_connection`: the failure is the size
+ *   check's `fs.statSync` inside the opening transaction, where Python's is the commit; the
+ *   rows are a plain `Error` and a system error, and the release shows as a reopen that isn't
+ *   busy (Python executes on the closed connection).
+ * - `test_close_is_idempotent_and_closed_methods_do_not_touch_os_or_sqlite`: spies on `fs` and on
+ *   the old connection see no call, where Python forbids `os.getpid` and `sqlite3.connect`.
+ * - `test_creation_crash_leaves_recoverable_empty_file`: the child exits from the constructor's
+ *   `fs.statSync`, just before SQLite opens, where Python patches `sqlite3.connect`.
  *
  * Not ported: `test_envelope_depth_rejection_preserves_old_state_and_usable_handle` and
  * `test_maximum_valid_envelope_depth_roundtrips` (TS has no memory JSON nesting limit);
  * `test_shared_connection_serializes_threads` (JS runs one thread, so there is no per-handle lock);
  * `test_postfork_guard_precedes_python_lock_and_sqlite` (JS can't fork a live process, so there is no
- * fork guard).
+ * fork guard); Python's exception classes (the `KeyboardInterrupt` and `SystemExit` rows are a plain
+ * `Error` and a thrown non-`Error` value, which propagate as the same value).
  */
 
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { MemoryOperationError } from "../../src/memory/contracts.ts";
 import { checkStoragePath, realStoragePath, SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
@@ -90,6 +109,98 @@ function pragma(connection: Sqlite, sql: string): unknown {
 /** Return the permission bits of the file at `file`. */
 function mode(file: string): number {
   return fs.statSync(file).mode & 0o777;
+}
+
+/** The `ts/` directory. */
+const ROOT = path.resolve(import.meta.dir, "../..");
+const BUILT = path.join(ROOT, "dist/src/memory/storage/sqlite.js");
+
+/** A runtime that runs a module script: its command line before the script, and the storage module the script imports. */
+interface ChildRuntime {
+  argv: string[];
+  module: string;
+}
+
+const BUN: ChildRuntime = {
+  argv: [process.execPath, "-e"],
+  module: pathToFileURL(path.join(ROOT, "src/memory/storage/sqlite.ts")).href,
+};
+
+/** Return `body` as a script for `runtime`, with `SQLiteStorage` imported and `file` bound. */
+function childScript(runtime: ChildRuntime, file: string, body: string): string {
+  return `import { SQLiteStorage } from ${JSON.stringify(runtime.module)};
+const file = ${JSON.stringify(file)};
+${body}`;
+}
+
+/** Run `body` in a child process of `runtime`; return its exit status and stdout, after checking it wrote no stderr. */
+function runChild(file: string, body: string, runtime = BUN): { status: number | null; stdout: string } {
+  const [command, ...args] = runtime.argv;
+  const result = spawnSync(command!, [...args, childScript(runtime, file, body)], { encoding: "utf8", timeout: 10_000 });
+  expect(result.stderr).toBe("");
+  return { status: result.status, stdout: result.stdout };
+}
+
+/** Open `file` in a child process and return `"opened"` or the failure's stage, code and retryability. */
+function attemptOpen(file: string, runtime = BUN): unknown {
+  const { status, stdout } = runChild(
+    file,
+    `try {
+  new SQLiteStorage(file, "session").close();
+  console.log(JSON.stringify("opened"));
+} catch (error) {
+  console.log(JSON.stringify([error.stage, error.code, error.retryable]));
+}`,
+    runtime,
+  );
+  expect(status).toBe(0);
+  return JSON.parse(stdout);
+}
+
+/**
+ * Start a child process of `runtime` that opens `file`, saves `{saved: true}`, prints "ready" and
+ * then holds the store until killed; resolve once it is ready.
+ */
+async function startOwner(file: string, runtime = BUN): Promise<ChildProcess> {
+  const [command, ...args] = runtime.argv;
+  const body = `const store = new SQLiteStorage(file, "session");
+store.save({ saved: true });
+console.log("ready");
+setInterval(() => {}, 1000);`;
+  const child = spawn(command!, [...args, childScript(runtime, file, body)], { stdio: ["ignore", "pipe", "pipe"] });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let stdout = "";
+      let stderr = "";
+      const timer = setTimeout(() => reject(new Error("storage child did not report within its deadline")), 10_000);
+      child.stdout!.on("data", (chunk) => {
+        stdout += chunk;
+        if (stdout.includes("ready\n")) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+      child.stderr!.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      child.on("exit", (code) => {
+        clearTimeout(timer);
+        reject(new Error(`storage child exited with ${code}: ${stderr}`));
+      });
+    });
+  } catch (error) {
+    await kill(child);
+    throw error;
+  }
+  return child;
+}
+
+/** Kill `child` and wait for it to exit. */
+async function kill(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = once(child, "exit");
+  child.kill("SIGKILL");
+  await exited;
 }
 
 let dir: string;
@@ -363,6 +474,265 @@ test.each(["table", "empty_database", "corrupt"])("an unrelated file (%s) is pre
   expect(fs.readFileSync(file)).toEqual(before);
 });
 
+test.each([
+  ["the same path", false],
+  ["a symlink alias", true],
+])(
+  "the lifetime owner survives commits and failed competitors (%s)",
+  (_label, alias) => {
+    const file = path.join(dir, "memory.sqlite");
+    const contender = alias ? path.join(dir, "alias.sqlite") : file;
+    const store = new SQLiteStorage(file, "session");
+    if (alias) fs.symlinkSync(file, contender);
+    try {
+      for (let value = 0; value < 3; value++) {
+        store.save({ value });
+        expectStorageError(() => new SQLiteStorage(contender, "session"), "busy");
+        expect(attemptOpen(contender)).toEqual(["storage", "storage.busy", true]);
+        expect(store.load()).toEqual({ value });
+      }
+    } finally {
+      store.close();
+    }
+    expect(attemptOpen(contender)).toBe("opened");
+  },
+  30_000,
+);
+
+const SAVE_FAILURES: [string, unknown, boolean][] = [
+  ["a SQLite error", Object.assign(new Error("secret-host-path"), { code: "ERR_SQLITE_ERROR", errcode: 1 }), true],
+  ["a system error", Object.assign(new Error("secret-host-path"), { code: "EIO", syscall: "write" }), true],
+  ["a plain Error", new Error("stop"), false],
+  ["a non-Error value", { thrown: 7 }, false],
+];
+
+test.each(
+  SAVE_FAILURES.flatMap(([label, failure, sanitized]) =>
+    (["before", "after"] as const).map((cut) => [label, cut, failure, sanitized] as const),
+  ),
+)("a failed save (%s, %s the commit) poisons the handle and keeps its owner and primary failure", (_label, cut, failure, sanitized) => {
+  const file = path.join(dir, "memory.sqlite");
+  const store = new SQLiteStorage(file, "session");
+  store.save({ old: true });
+  const connection = connectionOf(store);
+  const realExec = connection.exec;
+  const exec = spyOn(connection, "exec").mockImplementation((sql) => {
+    if (sql !== "COMMIT") return Reflect.apply(realExec, connection, [sql]);
+    if (cut === "after") Reflect.apply(realExec, connection, [sql]);
+    throw failure;
+  });
+  try {
+    let caught: unknown;
+    try {
+      store.save({ new: true });
+    } catch (error) {
+      caught = error;
+    }
+    if (sanitized) {
+      expect(caught).toBeInstanceOf(MemoryOperationError);
+      expect(String(caught)).not.toContain("secret-host-path");
+    } else {
+      expect(caught).toBe(failure);
+    }
+    for (const operation of [() => store.ensureOpen(), () => store.load(), () => store.save({})]) {
+      expectStorageError(operation, "poisoned");
+    }
+    expectStorageError(() => new SQLiteStorage(file, "session"), "busy");
+  } finally {
+    exec.mockRestore();
+    store.close();
+  }
+  const reopened = new SQLiteStorage(file, "session");
+  try {
+    expect(reopened.load()).toEqual(cut === "after" ? { new: true } : { old: true });
+  } finally {
+    reopened.close();
+  }
+});
+
+test("close is idempotent and a closed handle's methods touch neither the OS nor SQLite", () => {
+  const store = new SQLiteStorage(path.join(dir, "memory.sqlite"), "session");
+  const connection = connectionOf(store);
+  store.close();
+  const fsNames = ["openSync", "statSync", "lstatSync", "readlinkSync", "mkdirSync", "fchmodSync", "closeSync"] as const;
+  const spies = [
+    ...fsNames.map((name) => spyOn(fs, name)),
+    ...(["exec", "prepare", "close"] as const).map((name) => spyOn(connection, name)),
+  ];
+  try {
+    store.close();
+    for (const operation of [() => store.ensureOpen(), () => store.load(), () => store.save({})]) {
+      expectStorageError(operation, "closed");
+    }
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+  } finally {
+    for (const spy of spies) spy.mockRestore();
+  }
+});
+
+test.each([
+  ["a plain Error", new Error("stop")],
+  ["a system error", Object.assign(new Error("secret-host-path"), { code: "EIO", syscall: "stat" })],
+])("a failed constructor (%s) rolls back and releases its connection", (label, failure) => {
+  const file = path.join(dir, "memory.sqlite");
+  const realStat = fs.statSync;
+  let calls = 0;
+  // The second stat, the size check, runs inside the constructor's exclusive transaction.
+  const stat = spyOn(fs, "statSync").mockImplementation(((...args: unknown[]) => {
+    if (++calls === 2) throw failure;
+    return Reflect.apply(realStat, fs, args);
+  }) as typeof fs.statSync);
+  let caught: unknown;
+  try {
+    new SQLiteStorage(file, "session");
+  } catch (error) {
+    caught = error;
+  } finally {
+    stat.mockRestore();
+  }
+  expect(calls).toBe(2);
+  if (label === "a system error") {
+    expect(caught).toBeInstanceOf(MemoryOperationError);
+    expect((caught as MemoryOperationError).code).toBe("storage.io");
+    expect(String(caught)).not.toContain("secret-host-path");
+  } else {
+    expect(caught).toBe(failure);
+  }
+  const reopened = new SQLiteStorage(file, "session");
+  try {
+    expect(reopened.load()).toBeNull();
+  } finally {
+    reopened.close();
+  }
+});
+
+test("a rollback failure replaces neither the save failure nor the owner", () => {
+  const file = path.join(dir, "memory.sqlite");
+  const store = new SQLiteStorage(file, "session");
+  store.save({ old: true });
+  const primary = new Error("original");
+  const connection = connectionOf(store);
+  const realExec = connection.exec;
+  const exec = spyOn(connection, "exec").mockImplementation((sql) => {
+    if (sql === "COMMIT") throw primary;
+    if (sql === "ROLLBACK") throw new Error("cleanup");
+    return Reflect.apply(realExec, connection, [sql]);
+  });
+  try {
+    expect(() => store.save({ new: true })).toThrow(primary);
+    expect(attemptOpen(file)).toEqual(["storage", "storage.busy", true]);
+  } finally {
+    exec.mockRestore();
+    store.close();
+  }
+  const reopened = new SQLiteStorage(file, "session");
+  try {
+    expect(reopened.load()).toEqual({ old: true });
+  } finally {
+    reopened.close();
+  }
+});
+
+test("a load I/O failure poisons the handle and keeps its owner", () => {
+  const file = path.join(dir, "memory.sqlite");
+  const store = new SQLiteStorage(file, "session");
+  const connection = connectionOf(store);
+  const realPrepare = connection.prepare;
+  const prepare = spyOn(connection, "prepare").mockImplementation((sql) => {
+    if (sql.startsWith("SELECT id")) {
+      throw Object.assign(new Error("secret-host-path"), { code: "ERR_SQLITE_ERROR", errcode: 1 });
+    }
+    return Reflect.apply(realPrepare, connection, [sql]);
+  });
+  try {
+    const error = expectStorageError(() => store.load(), "io");
+    expect(String(error)).not.toContain("secret-host-path");
+    expectStorageError(() => store.ensureOpen(), "poisoned");
+    expect(attemptOpen(file)).toEqual(["storage", "storage.busy", true]);
+  } finally {
+    prepare.mockRestore();
+    store.close();
+  }
+});
+
+test.each(["before", "after"])(
+  "a process crash %s the commit is atomic",
+  (cut) => {
+    const file = path.join(dir, "memory.sqlite");
+    const store = new SQLiteStorage(file, "session");
+    try {
+      store.save({ value: "old" });
+    } finally {
+      store.close();
+    }
+    const { status } = runChild(
+      file,
+      `const store = new SQLiteStorage(file, "session");
+const connection = store["connection"];
+const exec = connection.exec;
+connection.exec = (sql) => {
+  if (sql === "COMMIT" && ${JSON.stringify(cut)} === "before") process.exit(23);
+  exec(sql);
+  if (sql === "COMMIT" && ${JSON.stringify(cut)} === "after") process.exit(23);
+};
+store.save({ value: "new", large: "x".repeat(100_000) });`,
+    );
+    expect(status).toBe(23);
+    const reopened = new SQLiteStorage(file, "session");
+    try {
+      expect(reopened.load()).toEqual(cut === "before" ? { value: "old" } : { value: "new", large: "x".repeat(100_000) });
+    } finally {
+      reopened.close();
+    }
+  },
+  30_000,
+);
+
+test(
+  "a creation crash leaves a recoverable empty file",
+  () => {
+    const file = path.join(dir, "memory.sqlite");
+    // The constructor stats the new file just before it opens SQLite.
+    const { status } = runChild(
+      file,
+      `const fs = (await import("node:fs")).default;
+fs.statSync = () => process.exit(23);
+new SQLiteStorage(file, "session");`,
+    );
+    expect(status).toBe(23);
+    expect(fs.readFileSync(file)).toEqual(Buffer.alloc(0));
+    const store = new SQLiteStorage(file, "session");
+    try {
+      expect(store.load()).toBeNull();
+      store.save({ recovered: true });
+    } finally {
+      store.close();
+    }
+  },
+  30_000,
+);
+
+test(
+  "process death releases the owner and preserves its commit",
+  async () => {
+    const file = path.join(dir, "memory.sqlite");
+    const child = await startOwner(file);
+    try {
+      expectStorageError(() => new SQLiteStorage(file, "session"), "busy");
+    } finally {
+      await kill(child);
+    }
+    expect(child.signalCode).toBe("SIGKILL");
+    const store = new SQLiteStorage(file, "session");
+    try {
+      expect(store.load()).toEqual({ saved: true });
+    } finally {
+      store.close();
+    }
+  },
+  30_000,
+);
+
 test("checkStoragePath returns an absolute path without I/O", () => {
   const previous = process.cwd();
   process.chdir(dir);
@@ -421,4 +791,104 @@ test("realStoragePath resolves like Python's non-strict realpath", () => {
   expect(realStoragePath(`${dir}/loop1/x`)).toBe(`${real}/loop1/x`);
   expect(realStoragePath(`${dir}/sub/rel/m`)).toBe(`${real}/target/m`);
   expect(realStoragePath(`${dir}//./link/`)).toBe(`${real}/target`);
+});
+
+/**
+ * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
+ * value that can't run, a Node older than the `engines` floor, or a missing build
+ * fails the whole file, so a typo can't pass as a run with the Node case skipped.
+ * A copy of `tests/engine/platform.test.ts`'s: importing a test file would run its tests.
+ */
+const NODE = ((): string | undefined => {
+  const node = process.env.YIAN_TEST_NODE;
+  if (!node) return undefined;
+  let version: string;
+  try {
+    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
+  } catch (error) {
+    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
+  }
+  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18)) {
+    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
+  }
+  if (!fs.existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
+  return node;
+})();
+
+describe.skipIf(!NODE)("the built storage on Node", () => {
+  const node = (): ChildRuntime => ({ argv: [NODE!, "--input-type=module", "-e"], module: pathToFileURL(BUILT).href });
+
+  test(
+    "a round trip, a reopen and damaged stores",
+    () => {
+      const platform = JSON.stringify(pathToFileURL(path.join(ROOT, "dist/src/platform.js")).href);
+      const { status, stdout } = runChild(
+        path.join(dir, "memory.sqlite"),
+        String.raw`
+const assert = (await import("node:assert/strict")).default;
+const { writeFileSync } = await import("node:fs");
+const { openSqlite } = await import(${platform});
+const code = (fn) => {
+  try {
+    fn();
+  } catch (error) {
+    return error.code;
+  }
+  assert.fail("expected a throw");
+};
+const state = { inf: Infinity, ninf: -Infinity, big: 2n ** 70n, text: "日本語" };
+const store = new SQLiteStorage(file, "session");
+try {
+  assert.equal(store.load(), null);
+  store.save(state);
+  assert.deepEqual(store.load(), state);
+  assert.equal(code(() => new SQLiteStorage(file, "session")), "storage.busy");
+} finally {
+  store.close();
+}
+const reopened = new SQLiteStorage(file, "session");
+try {
+  assert.deepEqual(reopened.load(), state);
+} finally {
+  reopened.close();
+}
+assert.equal(code(() => new SQLiteStorage(file, "episodic")), "storage.kind");
+const connection = openSqlite(file);
+connection.prepare("UPDATE memory_state SET envelope = ?").run("{");
+connection.close();
+assert.equal(code(() => new SQLiteStorage(file, "session")), "storage.corrupt");
+const unrelated = file + ".other";
+writeFileSync(unrelated, "caller data, not sqlite");
+assert.equal(code(() => new SQLiteStorage(unrelated, "session")), "storage.corrupt");
+console.log("ok");
+`,
+        node(),
+      );
+      expect(stdout).toBe("ok\n");
+      expect(status).toBe(0);
+    },
+    30_000,
+  );
+
+  test(
+    "a Bun owner excludes a Node competitor, and a Node owner a Bun one",
+    async () => {
+      const file = path.join(dir, "memory.sqlite");
+      const store = new SQLiteStorage(file, "session");
+      try {
+        expect(attemptOpen(file, node())).toEqual(["storage", "storage.busy", true]);
+      } finally {
+        store.close();
+      }
+      const child = await startOwner(file, node());
+      try {
+        expectStorageError(() => new SQLiteStorage(file, "session"), "busy");
+      } finally {
+        await kill(child);
+      }
+      expect(attemptOpen(file, node())).toBe("opened");
+    },
+    30_000,
+  );
 });

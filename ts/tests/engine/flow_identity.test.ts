@@ -24,12 +24,18 @@
  * half), `test_start_manifest_uses_canonical_parameters`,
  * `test_flow_fingerprint_preserves_start_parameter_order`,
  * `test_flow_fingerprint_covers_each_end_field`, `test_value_end_manifest_keeps_the_record_encoding`,
- * `test_zero_and_one_name_record_end_manifests_are_keyed` and
- * `test_two_name_record_end_manifest_is_not_keyed`.
+ * `test_zero_and_one_name_record_end_manifests_are_keyed`,
+ * `test_two_name_record_end_manifest_is_not_keyed`, `test_flow_fingerprint_covers_each_edge_field`,
+ * `test_flow_fingerprint_covers_flow_boundary_ids`,
+ * `test_expansion_digest_changes_for_every_builder_topology_component` and
+ * `test_expansion_digest_is_stable_across_canonical_mapping_order`.
  *
  * Rebased on hand-built flows (Python builds the baseline with the loader): `fragment()` mirrors
  * Python's `_fragment()`, and `compiled()` stands in for `_compiled()`'s loaded flow.
  * `test_flow_fingerprint_is_stable_across_reloads` (built twice),
+ * `test_flow_fingerprint_preserves_semantic_edge_order`,
+ * `test_flow_fingerprint_covers_flow_output_fields_and_order`,
+ * `test_node_inputs_and_flow_outputs_keep_literals_alike`,
  * `test_flow_fingerprint_changes_with_wiring_types_asserts_and_env`,
  * `test_flow_manifest_sorts_mapping_keys_without_reordering_semantic_lists`,
  * `test_manifest_rejects_non_json_values_without_repr_fallback`,
@@ -53,7 +59,8 @@
  * - Node, wiring and type tables are `Map`s, so "shuffle mapping order" rebuilds `Map`s and
  *   records in reverse insertion order. Carriers are frozen: Python's `replace(param, ...)` builds
  *   a new `Parameter`, and `object.__setattr__(carrier, "future_field", True)` is a forged carrier
- *   (`Object.assign(Object.create(Cls.prototype), carrier, {futureField: 1})`).
+ *   (`Object.assign(Object.create(Cls.prototype), carrier, {futureField: 1})`). Edges are frozen
+ *   and a Flow's `startId`/`endId` are readonly, so the edge and boundary rows rebuild them.
  * - Ints in values are `bigint`s, since a `number` is a float; Python's pinned hex digests are TS
  *   pins (TS fingerprints are SHA-256 over RFC 8785 text of TS's own manifest). Numeric bounds are
  *   typed values (`{"type": "int", "value": "1"}`), not raw JSON numbers.
@@ -78,7 +85,13 @@
  * digest of `fragment()`, a missing node field, a node whose `kind` isn't its class's, labels and a
  * CODE or TOOL title or base directory outside identity, the CODE descriptors (`{"inline": ...}`,
  * `{"ref": ...}`, `{"builtin": "identity", "field": ...}`) and their refusals, and TOOL `retries`
- * (absent at 0, identity otherwise, a forged count refused).
+ * (absent at 0, identity otherwise, a forged count refused), and the flow fields: a typed wiring
+ * binding's `binding_types` and a typed output's `type`, a plain `Flow`'s missing CompiledFlow keys,
+ * the flow `llm_config:` layer (literal values are identity and key order isn't; the
+ * `ValueTemplate` and `Binding` arms), the LLM value types and adjacency index outside identity,
+ * the flow id and flow memories (identity when present, never expansion topology, forged values
+ * refused in both modes), and an unknown flow field, a `Flow` subclass, a non-Flow, a wiring
+ * value that isn't a `Binding` and a node wiring that isn't a `Map` refused.
  *
  * Later (T3-22): the loader rows `test_loaded_flow_stores_only_exact_parameter_carriers`,
  * `test_flow_fingerprint_ignores_comments_and_python_object_identity`,
@@ -116,6 +129,7 @@ import { expect, test } from "bun:test";
 import { expansionDigest, flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
+import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import {
   Assertion,
@@ -125,6 +139,7 @@ import {
   Parameter,
   SeedConnection,
   ValueContract,
+  ValueTemplate,
 } from "../../src/nodes/contracts.ts";
 import { type BuiltinCode, CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
@@ -1278,3 +1293,323 @@ test.each([["key"], ["GITHUB_TOKEN"], ["X-Amz-Signature"]])(
     expect(JSON.stringify(flowManifest(first))).toContain("first-semantic-value");
   },
 );
+
+// ---- Edges, boundary ids and flow outputs ----------------------------------------------------
+
+/** Replace `flow.edges[index]` with a rebuilt edge carrying `change` (edges are frozen). */
+function replaceEdge(flow: Flow, index: number, change: Partial<Edge>): void {
+  const fields = { ...flow.edges[index]!, ...change };
+  flow.edges[index] = new Edge(fields.id, fields.from, fields.to, fields);
+}
+
+/** `flow` rebuilt with `ids` as its boundary ids, which are readonly. */
+function withBoundary(flow: Flow, ids: { startId?: string; endId?: string }): Flow {
+  return new Flow(flow.nodes, flow.edges, {
+    wiring: flow.wiring,
+    startId: flow.startId,
+    endId: flow.endId,
+    ...ids,
+  });
+}
+
+// The manifest of an `int` scalar type.
+const INT_TYPE_MANIFEST = { element: null, fields: null, kind: "int", nullable: false, required: null, tags: null };
+
+test("test_flow_fingerprint_preserves_semantic_edge_order", () => {
+  const original = compiled();
+  const base = compiled();
+  const reordered = CompiledFlow.fromParts(base.nodes, [...base.edges].reverse(), {
+    outputs: base.outputs,
+    wiring: base.wiring,
+    flowLlmConfig: base.flowLlmConfig,
+    flowId: base.flowId,
+  });
+
+  expect(flowFingerprint(original)).not.toBe(flowFingerprint(reordered));
+});
+
+test.each([
+  ["id", { id: "changed-edge" }],
+  ["from", { from: "changed-source" }],
+  ["to", { to: "changed-target" }],
+  ["source-handle", { sourceHandle: "branch" }],
+  ["input-group", { inputGroup: "value" }],
+  ["optional", { optional: true }],
+  ["ordering", { ordering: false }],
+] as const)("test_flow_fingerprint_covers_each_edge_field: %s", (_, change) => {
+  const changed = fragment();
+  // A dangling endpoint is not the manifest's to validate.
+  replaceEdge(changed, 0, change);
+
+  expect(flowFingerprint(changed)).not.toBe(flowFingerprint(fragment()));
+});
+
+test.each([["startId"], ["endId"]] as const)("test_flow_fingerprint_covers_flow_boundary_ids: %s", (field) => {
+  const changed = withBoundary(fragment(), { [field]: "body" });
+
+  expect(flowFingerprint(changed)).not.toBe(flowFingerprint(fragment()));
+});
+
+test.each([
+  ["name", [new FlowOutput("first", 1n)], [new FlowOutput("second", 1n)]],
+  ["from", [new FlowOutput("value", 1n)], [new FlowOutput("value", 2n)]],
+  [
+    "order",
+    [new FlowOutput("first", 1n), new FlowOutput("second", 2n)],
+    [new FlowOutput("second", 2n), new FlowOutput("first", 1n)],
+  ],
+])("test_flow_fingerprint_covers_flow_output_fields_and_order: %s", (_, firstOutputs, secondOutputs) => {
+  const first = compiled();
+  const second = compiled();
+  first.outputs = firstOutputs;
+  second.outputs = secondOutputs;
+
+  expect(flowFingerprint(first)).not.toBe(flowFingerprint(second));
+});
+
+test("test_node_inputs_and_flow_outputs_keep_literals_alike", () => {
+  const flow = oneStepFlow({ wiring: [["api_token", "shared-literal"]] });
+  flow.outputs = [new FlowOutput("step", "${step.output}"), new FlowOutput("api_token", "shared-literal")];
+  const manifest = flowManifest(flow);
+
+  expect(typedMappingValue((manifest.wiring as JsonObject).step!, "api_token")).toEqual({
+    type: "str",
+    value: "shared-literal",
+  });
+  expect(manifest.outputs).toContainEqual({ from: { type: "str", value: "shared-literal" }, name: "api_token" });
+});
+
+test("a typed wiring binding adds binding_types and changes both digests", () => {
+  const wired = (contract: ValueContract | null) =>
+    oneStepFlow({
+      inputs: [new Parameter("x", { contract: intContract() })],
+      wiring: [["x", new Binding("${input.x}", { contract })]],
+    });
+  const untyped = wired(null);
+  const typed = wired(intContract());
+
+  expect("binding_types" in flowManifest(untyped)).toBe(false);
+  expect(flowManifest(typed).binding_types).toEqual({ step: { x: INT_TYPE_MANIFEST } });
+  expect(flowFingerprint(typed)).not.toBe(flowFingerprint(untyped));
+  expect(expansionDigest(typed)).not.toBe(expansionDigest(untyped));
+});
+
+test("a typed flow output adds its type", () => {
+  const flow = compiled();
+  flow.outputs = [
+    new FlowOutput("plain", "${step.output}"),
+    new FlowOutput("typed", new Binding("${step.output}", { contract: intContract() })),
+  ];
+  const source = { type: "str", value: "${step.output}" };
+
+  expect(flowManifest(flow).outputs).toEqual([
+    { from: source, name: "plain" },
+    { from: source, name: "typed", type: INT_TYPE_MANIFEST },
+  ]);
+});
+
+test("a plain Flow has no outputs, flow id, memories or LLM layer", () => {
+  expect(Object.keys(flowManifest(fragment())).sort()).toEqual(["edges", "end_id", "nodes", "start_id", "wiring"]);
+});
+
+// ---- Compiled flow fields --------------------------------------------------------------------
+
+/** `compiled()` with `layer` as its flow `llm_config:` layer. */
+function withLlmConfig(layer: CompiledFlow["flowLlmConfig"]): CompiledFlow {
+  const flow = compiled();
+  flow.flowLlmConfig = layer;
+  return flow;
+}
+
+test("flow llm_config literal values are identity and key order isn't", () => {
+  const base = withLlmConfig({ openai: { model: "a", temperature: 0.2 }, provider: "openai" });
+  const reordered = withLlmConfig({ provider: "openai", openai: { temperature: 0.2, model: "a" } });
+  const changed = withLlmConfig({ openai: { model: "a", temperature: 0.7 }, provider: "openai" });
+
+  expect(flowFingerprint(reordered)).toBe(flowFingerprint(base));
+  expect(flowFingerprint(changed)).not.toBe(flowFingerprint(base));
+  expect(flowFingerprint(base)).not.toBe(flowFingerprint(compiled()));
+  expect(flowManifest(compiled()).flow_llm_config).toEqual({ entries: [], type: "mapping" });
+});
+
+test("a ValueTemplate flow layer encodes as a value template", () => {
+  const flow = withLlmConfig(new ValueTemplate({ model: new Binding("${input.model}") }));
+
+  expect(flowManifest(flow).flow_llm_config).toEqual({
+    tree: {
+      entries: [
+        {
+          key: { type: "str", value: "model" },
+          value: { contract: null, source: { type: "str", value: "${input.model}" }, type: "binding" },
+        },
+      ],
+      type: "mapping",
+    },
+    type: "value_template",
+  });
+});
+
+test("a Binding flow layer encodes as a binding", () => {
+  const flow = withLlmConfig(new Binding("${input.llm}"));
+
+  expect(flowManifest(flow).flow_llm_config).toEqual({
+    contract: null,
+    source: { type: "str", value: "${input.llm}" },
+    type: "binding",
+  });
+});
+
+test("the LLM value types and the adjacency index keep the fingerprint", () => {
+  const changed = withLlmConfig({ model: "a" });
+  changed.flowLlmValueTypes = [[["model"], Type.scalar(ValueKind.STRING)]];
+  changed.incomingEdges = new Map();
+  changed.outgoingEdges = new Map();
+
+  expect(flowFingerprint(changed)).toBe(flowFingerprint(withLlmConfig({ model: "a" })));
+});
+
+test("the flow id is identity but not expansion topology", () => {
+  const named = compiled();
+  const unnamed = compiled();
+  Object.assign(unnamed, { flowId: null });
+
+  expect(flowManifest(named).flow_id).toBe("stable");
+  expect("flow_id" in flowManifest(unnamed)).toBe(false);
+  expect(flowFingerprint(named)).not.toBe(flowFingerprint(unnamed));
+  expect(expansionDigest(named)).toBe(expansionDigest(unnamed));
+});
+
+test.each([
+  ["a number", 5],
+  ["an empty string", ""],
+])("a forged flow id that is %s is refused in both modes", (_, flowId) => {
+  const flow = compiled();
+  Object.assign(flow, { flowId });
+
+  expectError(() => flowManifest(flow), RangeError, "flow.flowId: expected a non-empty exact string or null");
+  expectError(
+    () => expansionDigest(flow),
+    RangeError,
+    "expansion.flowId: expected a non-empty exact string or null",
+  );
+});
+
+test("flow memories are identity only when present and never expansion topology", () => {
+  const plain = compiled();
+  const withMemory = compiled();
+  withMemory.memories = [new MemoryDecl("reflective", "reflective", { max_items: 4n }, new DeclSite([], ["root"]))];
+
+  expect("memories" in flowManifest(plain)).toBe(false);
+  expect(flowManifest(withMemory).memories).toEqual([
+    {
+      config: {
+        entries: [{ key: { type: "str", value: "max_items" }, value: { type: "int", value: "4" } }],
+        type: "mapping",
+      },
+      name: "reflective",
+      site: { node: null, owner: ["root"], scope: [] },
+      type: "reflective",
+    },
+  ]);
+  expect(flowFingerprint(withMemory)).not.toBe(flowFingerprint(plain));
+  expect(expansionDigest(withMemory)).toBe(expansionDigest(plain));
+});
+
+test("forged flow memories are refused in both modes", () => {
+  const flow = compiled();
+  Object.assign(flow, { memories: ["notes"] });
+
+  expectError(() => flowManifest(flow), TypeError, "flow.memories[0]: expected exact MemoryDecl, got string");
+  expectError(() => expansionDigest(flow), TypeError, "expansion.memories[0]: expected exact MemoryDecl, got string");
+});
+
+// ---- Flow field policy -----------------------------------------------------------------------
+
+class FlowSubclass extends Flow {}
+
+test("an unknown flow field is refused", () => {
+  const flow = compiled();
+  Object.assign(flow, { futureField: 1 });
+
+  expectError(() => flowManifest(flow), RangeError, 'flow: unknown noncanonical field(s): ["futureField"]');
+});
+
+test("a Flow subclass and a non-Flow are refused", () => {
+  const base = fragment();
+  const subclass = new FlowSubclass(base.nodes, base.edges, {
+    wiring: base.wiring,
+    startId: "entry",
+    endId: "terminal",
+  });
+
+  expectError(() => flowManifest(subclass), TypeError, "flow: unsupported Flow subclass FlowSubclass");
+  expectError(() => flowManifest({} as Flow), TypeError, "flow: expected Flow, got Object");
+});
+
+test("a wiring value that isn't a Binding is refused", () => {
+  const flow = fragment();
+  flow.wiring.set("body", new Map([["x", 1n]]) as unknown as ReadonlyMap<string, Binding>);
+
+  expectError(() => flowManifest(flow), TypeError, "flow.wiring.body.values[0]: expected Binding, got bigint");
+});
+
+test("a node wiring that isn't a Map is refused", () => {
+  const flow = fragment();
+  flow.wiring.set("body", { x: new Binding(1n) } as unknown as ReadonlyMap<string, Binding>);
+
+  expectError(() => flowManifest(flow), TypeError, "flow.wiring.body: expected Map, got Object");
+});
+
+// ---- Expansion digests -----------------------------------------------------------------------
+
+/** Python's `_replace_body`: swap the fragment's body for one with a different CODE body. */
+function replaceBody(flow: Flow): Flow {
+  const body = new CodeNode("body", { code: 'return inputs["x"] + 1' });
+  body.params = [new Parameter("x", { contract: intContract() })];
+  body.outputContract = intContract();
+  flow.nodes.set("body", body);
+  return flow;
+}
+
+test.each([
+  ["entry", (flow: Flow) => withBoundary(flow, { startId: "body" })],
+  ["terminal", (flow: Flow) => withBoundary(flow, { endId: "body" })],
+  ["node-fields", replaceBody],
+  [
+    "edge-order",
+    (flow: Flow) => {
+      flow.edges.reverse();
+      return flow;
+    },
+  ],
+  [
+    "wiring",
+    (flow: Flow) => {
+      flow.wiring.set("body", new Map([["x", new Binding(2n)]]));
+      return flow;
+    },
+  ],
+  [
+    "topology",
+    (flow: Flow) => {
+      flow.edges.push(new Edge("entry->terminal", "entry", "terminal", { ordering: true }));
+      return flow;
+    },
+  ],
+] as const)("test_expansion_digest_changes_for_every_builder_topology_component: %s", (_, mutate) => {
+  const original = fragment();
+  const changed = mutate(fragment());
+
+  expect(expansionDigest(changed)).not.toBe(expansionDigest(original));
+  expect(expansionDigest(original)).toMatch(HEX);
+});
+
+test("test_expansion_digest_is_stable_across_canonical_mapping_order", () => {
+  const original = fragment();
+  const shuffled = fragment();
+  shuffled.nodes = new Map([...shuffled.nodes].reverse());
+  shuffled.wiring = new Map([...shuffled.wiring].reverse().map(([id, wiring]) => [id, new Map([...wiring].reverse())]));
+
+  expect(expansionDigest(shuffled)).toBe(expansionDigest(original));
+  expect(() => JSON.stringify(flowManifest(shuffled))).not.toThrow();
+});

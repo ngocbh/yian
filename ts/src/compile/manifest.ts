@@ -153,7 +153,8 @@ const KIND_CLASSES: Readonly<Record<string, abstract new (...args: never[]) => N
   [NodeKind.LOOP]: LoopNode,
 };
 const NODE_KINDS: ReadonlySet<unknown> = new Set(Object.values(NodeKind));
-// Each kind's full field policy, built once.
+// Each kind's full field policy, built once. Every field is constructor-owned, so a node missing
+// one is not a complete canonical node.
 const NODE_FIELDS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
   Object.keys(KIND_FIELDS).map((kind) => [
     kind,
@@ -309,8 +310,6 @@ function checkNodeFields(node: Node, path: string): void {
   if (!isExactly(node, expectedClass)) {
     throw new RangeError(`${path}: node kind ${reprText(kind)} requires ${expectedClass.name}, got ${typeName(node)}`);
   }
-  // Every field is constructor-owned and must be present, or the object is not a complete
-  // canonical node.
   checkFields(node, NODE_FIELDS.get(kind)!, path, `noncanonical execution field(s) for ${kind}`);
 }
 
@@ -406,8 +405,8 @@ function templateTreeManifest(value: unknown, ctx: ManifestContext, path: string
 }
 
 /**
- * Return a node count as a raw JSON int: `null` where `nullable` allows it (LOOP `maxIters`), else a
- * safe integer.
+ * Return a count (a node count or a seed-path item index) as a raw JSON int: `null` where
+ * `nullable` allows it (LOOP `maxIters`), else a safe integer.
  *
  * @throws TypeError for anything else (a float, infinity, a bigint).
  */

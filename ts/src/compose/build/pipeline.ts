@@ -74,6 +74,8 @@ import { normalizeNodeSignatureCursor, parseNodes } from "../parse/nodes.ts";
 import type { SourceCatalogBuilder, SourceSitePath } from "../source/catalog.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
 // T3-15 imports
+import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
+import { siteKey } from "../nodes/base.ts";
 // T3-17 imports
 // T3-18 imports
 // T3-19 imports
@@ -687,7 +689,24 @@ export function splitTypedInputs(
   return split;
 }
 
-/** Python's `compose.build.pipeline._split_typed_llm_config`; not ported yet. */
+/**
+ * Read each AGENT's `llm_config:` with the values and tags in it.
+ *
+ * A layer holding values becomes a `ValueTemplate` (a `Binding` for a whole record written as one
+ * value), and the value range of each key in it lands in the descriptor's `fieldRanges` under
+ * `siteKey("llm_config", "<dotted.path>")`, so its errors point at the field. A layer without
+ * values stays a plain record.
+ *
+ * @param descriptors Located descriptors keyed by node id.
+ * @param nodesCursor Retained view of the flow's node mapping.
+ * @param options.registry The file's typedefs the tags resolve against.
+ * @param options.owner Complete lexical owner path for catalog sites.
+ * @param options.catalogBuilder File-owned origin catalog builder.
+ * @param options.diagnostics Factory for located load errors.
+ * @returns The descriptors, each layer read.
+ * @throws LoadError when a tag in a layer is malformed or misplaced, or a retained cursor can't be
+ *   traversed.
+ */
 function splitTypedLlmConfig(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
   nodesCursor: SourceCursor,
@@ -698,7 +717,30 @@ function splitTypedLlmConfig(
     diagnostics: LoadDiagnostics;
   },
 ): Map<string, NodeDescriptor> {
-  return new Map(descriptors);
+  const { registry, owner, catalogBuilder, diagnostics } = options;
+  const split = new Map(descriptors);
+  try {
+    for (const [nodeId, descriptor] of descriptors) {
+      if (!nodesCursor.has(nodeId) || !(descriptor instanceof AgentDescriptor)) continue;
+      const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
+      if (!nodeCursor.has("llm_config")) continue;
+      const cursor = nodeCursor.child("llm_config");
+      if (!cursor.holds(descriptor.llmConfig as Value)) continue;
+      const [llmConfig, ranges] = readLlmConfig(cursor, registry, {
+        prefix: `node ${reprText(nodeId)}: llm_config`,
+        sitePath: [...owner, "node", nodeId, "llm_config"],
+        catalogBuilder,
+        diagnostics,
+      });
+      const fieldRanges = new Map(descriptor.fieldRanges);
+      for (const [key, range] of ranges) fieldRanges.set(siteKey("llm_config", key), range);
+      split.set(nodeId, descriptor.replace({ llmConfig, fieldRanges }));
+    }
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw diagnostics.error(error.message, { range: error.range, cause: error });
+  }
+  return split;
 }
 
 /** Python's `compose.build.pipeline._attach_llm_config_wiring`; not ported yet. */
@@ -1638,7 +1680,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
-//   T3-15  splitTypedLlmConfig (2): returns the descriptors.
+//   T3-15  splitTypedLlmConfig (2): the adaptive-gate branch is not ported yet.
 //   T3-17  extractInlineBodies (1): returns `[nodesCursor, new Map()]`.
 //          readValueEntry (1): throws.
 //          isValueEntry (1): returns `false`.

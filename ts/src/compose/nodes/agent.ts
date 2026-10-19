@@ -5,26 +5,39 @@
  * `NodeDescriptor` (which records each field's `SourceRange`) to reject the removed `mode:` key
  * and a variable named `inf`, checks the shapes of its own fields, and builds the runtime
  * `AgentNode`. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
+ * `readLlmConfig` reads an authored `llm_config:` layer with the `${...}` values and tags in it,
+ * and `checkLlmConfigValue` checks a layer holding values.
  *
- * Knows about: diagnostics, compose source and helpers, llm_clients (config and provider
- *              blocks), memory contracts, nodes (agent and contracts), skills,
- *              typesys and defaults.
+ * Knows about: diagnostics, compose source and helpers, expr (span reading and the binder),
+ *              llm_clients (config and provider blocks), memory contracts, nodes (agent and
+ *              contracts), skills, typesys and defaults.
  * Never imports: compose/parse, the runtime or the CLI.
  */
 
-import { reprText, type SourceRange } from "../../diagnostics.ts";
+import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
 import { current } from "../../defaults.ts";
+import { wholeSpanInterior } from "../../expr/grammar.ts";
+import { evalBinding } from "../../expr/template.ts";
 import { hostOnlyFieldError, LLMConfig } from "../../llm_clients/config.ts";
-import { ValidationError } from "../../llm_clients/provider_blocks.ts";
+import { locatedBlockProblems, PROVIDER_BLOCKS, ValidationError } from "../../llm_clients/provider_blocks.ts";
 import { DeclSite, MemoryDecl } from "../../memory/contracts.ts";
-import { LLM_CONFIG_KEY } from "../../nodes/agent/llm_values.ts";
+import { isValue, LLM_CONFIG_KEY, valueLeaves } from "../../nodes/agent/llm_values.ts";
 import { AgentNode, isMaxToolIterations, isTextOutput } from "../../nodes/agent/node.ts";
 import { typeToSchema } from "../../nodes/agent/structured.ts";
-import { Binding, isExactly, Parameter, ValueContract, ValueTemplate } from "../../nodes/contracts.ts";
+import {
+  Binding,
+  isExactly,
+  Parameter,
+  ValueContract,
+  type ValuePath,
+  ValueTemplate,
+} from "../../nodes/contracts.ts";
 import { SkillError } from "../../skills/index.ts";
-import { isList, isRecord, typeLevels, type Value, valueRepr } from "../../typesys/values.ts";
+import type { TypeRegistry } from "../../typesys/types.ts";
+import { isList, isRecord, type Type, typeLevels, type Value, valueRepr } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { parseMemoryDeclarations } from "../helpers/memory.ts";
+import { readTaggedValue } from "../helpers/tags.ts";
 import { readVariables } from "../helpers/types.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { formerBooleanFix } from "../helpers/yaml_words.ts";
@@ -72,6 +85,160 @@ function formerBooleanHint(value: unknown): string {
   return fix === null ? "" : `; ${fix[1]}`;
 }
 
+/**
+ * Read one authored `llm_config` layer with the `${...}` values and tags in it.
+ *
+ * A layer without values is a plain record whose strings are `$$`-unescaped; a tagged literal in
+ * it stands for its value. One holding values is a `ValueTemplate`. A whole record written as
+ * exactly one `${...}` (optionally tagged) is a `Binding`; any other top-level text or scalar is
+ * returned as written for the shape check to refuse.
+ *
+ * @param cursor The authored `llm_config:` value.
+ * @param registry The flow's typedefs the tags resolve against.
+ * @param options.prefix Message prefix naming the layer, such as `node 'a': llm_config`.
+ * @param options.sitePath Catalog site prefix for the layer.
+ * @param options.catalogBuilder File-owned origin catalog builder.
+ * @param options.diagnostics Factory for located load errors.
+ * @returns The layer, and for a `ValueTemplate` the value range of each key written in it, keyed
+ *   by its dotted path (`anthropic.thinking`); empty otherwise.
+ * @throws LoadError when a tag is malformed or names no type, a tag sits on the whole mapping, a
+ *   tag has no value, or the tag reader refuses the value.
+ */
+export function readLlmConfig(
+  cursor: SourceCursor,
+  registry: TypeRegistry,
+  options: {
+    prefix: string;
+    sitePath: readonly (string | number)[];
+    catalogBuilder: SourceCatalogBuilder;
+    diagnostics: LoadDiagnostics;
+  },
+): [layer: unknown, fieldRanges: Map<string, SourceRange>] {
+  const { prefix, sitePath, catalogBuilder, diagnostics } = options;
+  const slot = readTaggedValue(cursor, registry, {
+    label: "llm_config",
+    sitePath,
+    catalogBuilder,
+    diagnostics,
+    ledger: catalogBuilder.consumedTags,
+    nestedCallFix: "compute it in a node and read that node's output with `${...}`, or reword the text",
+  });
+  if (!slot.hasValue) {
+    throw diagnostics.error(`${prefix}: a tag needs a value: \`llm_config: !${cursor.tag} \${...}\``, {
+      range: cursor.range,
+    });
+  }
+  const value = slot.value;
+  if (typeof value === "string") {
+    if (wholeSpanInterior(value) === null) return [value, new Map()];
+    const origin = catalogBuilder.register([...sitePath, "path"], cursor);
+    return [new Binding(value, { origin, contract: slot.contract }), new Map()];
+  }
+  if (slot.contract !== null) {
+    throw diagnostics.error(
+      `${prefix}: a tag on the whole mapping types nothing; tag a field's value, or write the whole record ` +
+        "as one value: `llm_config: !T ${...}`",
+      { range: cursor.range },
+    );
+  }
+  if (!(value instanceof ValueTemplate)) return [value, new Map()];
+  if (valueLeaves(value).length === 0) {
+    // Only tagged literals, already checked against their tags: a literal layer.
+    return [literalPart(value.value), new Map()];
+  }
+  const ranges = new Map<string, SourceRange>();
+  collectKeyRanges(cursor, "", ranges);
+  return [withKeyOrigins(value, cursor, sitePath, catalogBuilder), ranges];
+}
+
+/**
+ * Give every written key of a template layer an origin, literal keys included.
+ *
+ * A call-time check of the resolved config can refuse a literal field (a provider block the
+ * connection does not take), and its failure points at that field.
+ */
+function withKeyOrigins(
+  template: ValueTemplate,
+  cursor: SourceCursor,
+  sitePath: readonly (string | number)[],
+  catalogBuilder: SourceCatalogBuilder,
+): ValueTemplate {
+  const known = new Set(template.origins.map(([path]) => JSON.stringify(path)));
+  const added: (readonly [ValuePath, OriginRef])[] = [];
+  const visit = (at: SourceCursor, path: readonly string[]): void => {
+    if (!isRecord(at.value)) return;
+    for (const key of Object.keys(at.value)) {
+      const child = at.child(key);
+      const here = [...path, key];
+      if (!known.has(JSON.stringify(here))) {
+        const origin = catalogBuilder.register([...sitePath, "key", ...here], child);
+        if (origin !== null) added.push([here, origin]);
+      }
+      visit(child, here);
+    }
+  };
+  visit(cursor, []);
+  return new ValueTemplate(template.value, [...template.origins, ...added]);
+}
+
+/** Record the value range of every mapping key under `cursor` by its dotted path. */
+function collectKeyRanges(cursor: SourceCursor, prefix: string, ranges: Map<string, SourceRange>): void {
+  if (!isRecord(cursor.value)) return;
+  for (const key of Object.keys(cursor.value)) {
+    const child = cursor.child(key);
+    const path = `${prefix}${key}`;
+    if (child.range !== null) ranges.set(path, child.range);
+    collectKeyRanges(child, `${path}.`, ranges);
+  }
+}
+
+/** Return whether a layer part is, or holds, a value resolved later; a tagged literal is not. */
+function holdsValue(tree: unknown): boolean {
+  if (isValue(tree)) return true;
+  if (isRecord(tree)) return Object.values(tree).some(holdsValue);
+  if (Array.isArray(tree)) return tree.some(holdsValue);
+  return false;
+}
+
+/** Return `tree` with its values in place and its literals as the values they bind. */
+function unescapeLiterals(tree: unknown): unknown {
+  if (isValue(tree)) return tree;
+  if (isRecord(tree)) return Object.fromEntries(Object.entries(tree).map(([key, item]) => [key, unescapeLiterals(item)]));
+  if (Array.isArray(tree)) return tree.map(unescapeLiterals);
+  return literalPart(tree);
+}
+
+/**
+ * Return the range of the deepest written mapping key on a block problem's key path.
+ *
+ * @param keys The block's key, then the problem's key path in it.
+ * @param fieldRanges Value range of each key written in the layer, by dotted path; list items
+ *   have none.
+ * @returns The range, or `null` when no key on the path has one.
+ */
+function blockProblemRange(
+  keys: readonly (string | number)[],
+  fieldRanges: ReadonlyMap<string, SourceRange>,
+): SourceRange | null {
+  for (let end = keys.length; end > 0; end--) {
+    const head = keys.slice(0, end);
+    if (head.every((part) => typeof part === "string")) {
+      const found = fieldRanges.get(head.join("."));
+      if (found !== undefined) return found;
+    }
+  }
+  return null;
+}
+
+/** Return the value a literal template part binds: tags dropped, strings `$$`-unescaped. */
+function literalPart(tree: unknown): unknown {
+  if (tree instanceof Binding) return literalPart(tree.source);
+  if (typeof tree === "string") return evalBinding(tree, () => null);
+  if (isRecord(tree)) return Object.fromEntries(Object.entries(tree).map(([key, item]) => [key, literalPart(item)]));
+  if (Array.isArray(tree)) return tree.map(literalPart);
+  return tree;
+}
+
 /** Put `prefix` in place of the leading `llm_config` of a host-only field message. */
 function hostOnlyMessage(prefix: string, message: string): string {
   // A message that does not start with `llm_config` is kept whole after the prefix.
@@ -82,6 +249,111 @@ function hostOnlyMessage(prefix: string, message: string): string {
 function hostOnlyField(message: string): string {
   const rest = message.startsWith("llm_config.") ? message.slice("llm_config.".length) : message;
   return rest.split(" ", 1)[0]!;
+}
+
+/** Return the field names a record type, or any member of a record union, declares. */
+function declaredFields(typ: Type): Set<string> {
+  const names = new Set(typ.fields?.keys() ?? []);
+  for (const member of typ.variants ?? []) {
+    for (const name of member.fields?.keys() ?? []) names.add(name);
+  }
+  return names;
+}
+
+/**
+ * Check an `llm_config` layer holding values, and split off its literal `inherit`.
+ *
+ * Fields that only the host sets may not appear, from a value or not, and a whole-record type may
+ * not declare them; `base_url` beside a literal `provider: azure` must itself be literal.
+ * `inherit` must be a literal boolean. The literal top-level fields are checked as `LLMConfig`
+ * fields, and the literal parts of a provider block holding values against that block.
+ *
+ * @param cfg The layer, or the whole-record value.
+ * @param prefix Message prefix naming the layer.
+ * @param sourceRange The layer's location, when retained.
+ * @param diagnostics Factory for located load errors.
+ * @param fieldRanges Value range of each key written in the layer, by dotted path.
+ * @param options.allowInherit Whether the layer may set `inherit` (an AGENT's own layer; the
+ *   default); elsewhere it is an unknown field.
+ * @returns The layer without `inherit`, then `inherit`.
+ * @throws LoadError located at the offending field when its range is known.
+ */
+export function checkLlmConfigValue(
+  cfg: ValueTemplate | Binding,
+  prefix: string,
+  sourceRange: SourceRange | null,
+  diagnostics: LoadDiagnostics,
+  fieldRanges: ReadonlyMap<string, SourceRange>,
+  options: { allowInherit?: boolean } = {},
+): [ValueTemplate | Binding, boolean] {
+  const { allowInherit = true } = options;
+  if (cfg instanceof Binding) {
+    if (cfg.contract !== null) {
+      const declared = Object.fromEntries([...declaredFields(cfg.contract.type)].map((name) => [name, null]));
+      const message = hostOnlyFieldError(declared);
+      if (message !== null) {
+        throw diagnostics.error(`${prefix}: its type declares \`${hostOnlyField(message)}\`; ${message}`, {
+          range: sourceRange,
+        });
+      }
+    }
+    return [cfg, true];
+  }
+  let tree = cfg.value;
+  if (!isRecord(tree)) throw diagnostics.error(`${prefix} must be a mapping`, { range: sourceRange });
+  const at = (path: string) => fieldRanges.get(path) ?? sourceRange;
+
+  let inherit = true;
+  if (allowInherit && Object.hasOwn(tree, "inherit")) {
+    if (holdsValue(tree["inherit"])) {
+      throw diagnostics.error(
+        `${prefix} \`inherit:\` must be written as true or false; it decides which layers apply before any ` +
+          "value is known",
+        { range: at("inherit") },
+      );
+    }
+    const written = literalPart(tree["inherit"]);
+    if (typeof written !== "boolean") {
+      throw diagnostics.error(
+        `${prefix} \`inherit:\` must be true or false, got ${valueRepr(written)}${formerBooleanHint(written)}`,
+        { range: at("inherit") },
+      );
+    }
+    inherit = written;
+    const { inherit: _inherit, ...rest } = tree;
+    tree = rest;
+    cfg = new ValueTemplate(
+      rest,
+      cfg.origins.filter(([path]) => path[0] !== "inherit"),
+    );
+  }
+  // Each literal field as the value it binds, so a tagged `provider: !str azure` counts as
+  // `azure`; a field holding a value is null here.
+  const literal = Object.fromEntries(
+    Object.entries(tree).map(([key, item]) => [key, holdsValue(item) ? null : literalPart(item)]),
+  );
+  const hostOnly = hostOnlyFieldError(literal);
+  if (hostOnly !== null) {
+    throw diagnostics.error(hostOnlyMessage(prefix, hostOnly), { range: at(hostOnlyField(hostOnly)) });
+  }
+  if (Object.hasOwn(tree, "base_url") && holdsValue(tree["base_url"])) {
+    throw diagnostics.error(
+      `${prefix}.base_url can't come from a value: it decides where the key is sent, which stays with the ` +
+        "host or `yian auth`; write the Azure resource endpoint as literal text",
+      { range: at("base_url") },
+    );
+  }
+  checkLiteralFields(literal, prefix, sourceRange, diagnostics, at);
+  for (const [key, block] of Object.entries(tree)) {
+    if (!Object.hasOwn(PROVIDER_BLOCKS, key) || !holdsValue(block)) continue;
+    const problems = locatedBlockProblems(key, unescapeLiterals(block), isValue);
+    if (problems.length > 0) {
+      throw diagnostics.error(`${prefix}: ${problems[0]!.message}`, {
+        range: blockProblemRange([key, ...problems[0]!.keys], fieldRanges) ?? sourceRange,
+      });
+    }
+  }
+  return [cfg, inherit];
 }
 
 /**
@@ -105,17 +377,14 @@ function checkLiteralFields(
   try {
     new LLMConfig(cfg);
   } catch (error) {
-    if (error instanceof ValidationError) {
-      const detail = notTextDetail(error, cfg);
-      const key = error.issues[0]?.loc[0];
-      const range = fieldRange !== null && typeof key === "string" ? fieldRange(key) : sourceRange;
-      throw diagnostics.error(`${prefix}: ` + (detail !== null ? notTextError(...detail) : error.message), {
-        range,
-        cause: error,
-      });
-    }
-    if (!(error instanceof RangeError)) throw error;
-    throw diagnostics.error(`${prefix}: ${error.message}`, { range: sourceRange, cause: error });
+    if (!(error instanceof ValidationError)) throw error;
+    const detail = notTextDetail(error, cfg);
+    const key = error.issues[0]?.loc[0];
+    const range = fieldRange !== null && typeof key === "string" ? fieldRange(key) : sourceRange;
+    throw diagnostics.error(`${prefix}: ` + (detail !== null ? notTextError(...detail) : error.message), {
+      range,
+      cause: error,
+    });
   }
 }
 
@@ -146,7 +415,7 @@ function validateLlmConfig(
 ): [Readonly<Record<string, unknown>> | ValueTemplate | Binding, boolean] {
   if (cfg === null) return [{}, true];
   if (cfg instanceof ValueTemplate || cfg instanceof Binding) {
-    throw new Error("check_llm_config_value is not ported yet");
+    return checkLlmConfigValue(cfg, prefix, sourceRange, diagnostics, fieldRanges);
   }
   if (!isRecord(cfg)) throw diagnostics.error(`${prefix} must be a mapping`, { range: sourceRange });
   const { inherit = true, ...rest } = cfg;

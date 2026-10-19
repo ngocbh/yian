@@ -172,8 +172,13 @@ export function notTextError(field: string, value: unknown, fix: string | null =
  *
  * Only the first issue is read, so the field named agrees with the range the caller locates from
  * that same first issue. It is `null` when that issue is not a `string_type` failure, or is the
- * `str` member of a union field, which takes more than text. Issues carry no input, so the value
- * is read from `cfg` along the issue's path.
+ * `str` member of a union field, which takes more than text.
+ *
+ * @param error The `ValidationError` `new LLMConfig(cfg)` threw.
+ * @param cfg The fields that were checked; the value is read from it along the issue's path,
+ *   since issues carry no input.
+ * @returns The field's path as authored (such as `anthropic.inference_geo`) and its value, or
+ *   `null` when the first issue is not a text field read as non-text.
  */
 export function notTextDetail(error: ValidationError, cfg: Readonly<Record<string, unknown>>): [string, unknown] | null {
   const first = error.issues[0];

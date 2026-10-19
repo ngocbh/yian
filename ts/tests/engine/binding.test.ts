@@ -6,17 +6,21 @@
  * engine's read boundary.
  *
  * Changed (rule `int-in-float`): in `test_bind_ref_and_literal` the literal `90` bound into a
- * `float` parameter stays the int `90n` (Python widens it to `90.0`). Changed (values in
- * messages use the text form): `test_bind_never_converts_a_supplied_string` reads `"30" does not
- * match declared type int`.
+ * `float` parameter stays the int `90n` (Python widens it to `90.0`), and in
+ * `test_binding_capture_matches_the_value_actually_delivered` the `count` read as `12n` into a
+ * `float` parameter stays `12n`. That test registers its `observe` builtin with
+ * `registerTemplateFn` and removes it after, as Python's `monkeypatch.setitem` does. Changed
+ * (values in messages use the text form): `test_bind_never_converts_a_supplied_string` reads
+ * `"30" does not match declared type int`.
  *
- * TS-only: a `Set` as `params` is refused as not an exact list; and the copy a bind delivers
+ * TS-only: a `Set` as `params` is refused as not an exact list; the copy a bind delivers
  * writes `-0` as `0`, keeps a container shared inside the value shared, keeps a `FileRef` by
- * identity, and keeps an own `__proto__` key as data.
+ * identity, and keeps an own `__proto__` key as data; and `BindingCollector` refuses a negative,
+ * non-integer or repeated item index, keeps partial routes without usable inputs after
+ * `invalidate` (its items invalidated too), refuses a second `freeze`, and its capture's
+ * `boundInputs` gives a fresh copy on each read.
  *
- * Later: `test_binding_capture_matches_the_value_actually_delivered` and
- * `test_omitted_default_has_no_upstream_source` land with binding capture (`BindingCollector`);
- * the 5 node and evaluator capture tests
+ * Later: the 5 node and evaluator capture tests
  * (`test_binding_failure_keeps_partial_context_without_usable_inputs`,
  * `test_evaluator_capture_preserves_typed_values_before_node_mutation`,
  * `test_capture_includes_materialized_reserved_values_from_node_hooks`,
@@ -31,8 +35,10 @@
 import { expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
+import { TEMPLATE_FNS, registerTemplateFn } from "../../src/expr/builtins.ts";
 import { RequiredError } from "../../src/expr/index.ts";
-import { applyDefaults, BindingError, bindParams } from "../../src/nodes/binding.ts";
+import { ResolvedValue, routeFeedback, SourceRef } from "../../src/expr/lineage.ts";
+import { applyDefaults, BindingCollector, BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { Binding, ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { FileRef, Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 
@@ -112,6 +118,77 @@ function errorOf(call: () => unknown): Error {
   }
   throw new Error("call did not throw");
 }
+
+test("binding capture matches the value actually delivered", () => {
+  const original: ValueRecord = { items: ["before"] };
+  const reads: string[] = [];
+  const calls: Value[] = [];
+
+  const resolve = (path: string): ResolvedValue => {
+    reads.push(path);
+    const value = path === "count" ? 12n : original;
+    return new ResolvedValue(value, true, new SourceRef("run", 1, [path]));
+  };
+
+  registerTemplateFn("observe", {
+    params: [{ name: "value" }],
+    call: (value) => {
+      calls.push(value);
+      return value;
+    },
+  });
+  try {
+    const collector = new BindingCollector();
+    const delivered = bindParams(
+      [new Parameter("count", { contract: NUMBER }), new Parameter("payload")],
+      new Map([
+        ["count", "${count}"],
+        ["payload", "${observe(payload)}"],
+      ]),
+      poolOf(),
+      { collector, sourceResolver: resolve },
+    );
+    const captured = collector.freeze();
+    expect(captured.boundInputs).toEqual(delivered);
+    expect(delivered).toEqual({ count: 12n, payload: { items: ["before"] } });
+    expect(typeof delivered["count"]).toBe("bigint");
+    expect(reads).toEqual(["count", "payload"]);
+    expect(calls).toEqual([original]);
+    ((delivered["payload"] as ValueRecord)["items"] as Value[]).push("node mutation");
+    (original["items"] as Value[]).push("pool mutation");
+    expect(captured.boundInputs!["payload"]).toEqual({ items: ["before"] });
+    const routed = routeFeedback(captured.route, { count: "Too large." }, () => ({ count: 12n, payload: original }));
+    expect(routed.contributions.map((c) => [c.source, c.feedback])).toEqual([
+      [new SourceRef("run", 1), { count: "Too large." }],
+    ]);
+  } finally {
+    TEMPLATE_FNS.delete("observe");
+  }
+});
+
+test("an omitted default has no upstream source", () => {
+  const collector = new BindingCollector();
+  const delivered = bindParams(
+    [
+      new Parameter("defaulted", { contract: NUMBER, hasDefault: true, default: 30n }),
+      new Parameter("null", { hasDefault: true, default: "unused" }),
+      new Parameter("omitted"),
+    ],
+    new Map([["null", "${present}"]]),
+    poolOf(),
+    { collector, sourceResolver: () => new ResolvedValue(null, true, new SourceRef("run", 3)) },
+  );
+  const captured = collector.freeze();
+  expect(captured.boundInputs).toEqual(delivered);
+  expect(delivered).toEqual({ defaulted: 30n, null: null });
+  expect(typeof captured.boundInputs!["defaulted"]).toBe("bigint");
+  expect(captured.route.names).toEqual(["defaulted", "null"]);
+  expect(captured.evaluatedKeys).toEqual(new Set(["null"]));
+  const routed = routeFeedback(captured.route, { defaulted: "Local.", null: "Supply a value." }, () => null);
+  expect(routed.contributions.map((c) => [c.source, c.feedback])).toEqual([
+    [new SourceRef("run", 3), "Supply a value."],
+  ]);
+});
 
 test("bind a reference and a literal", () => {
   const pool = poolOf({ topics: "ACME" });
@@ -639,4 +716,59 @@ test("an own __proto__ key in a bound record stays data", () => {
   expect(Object.hasOwn(x, "__proto__")).toBe(true);
   expect(Object.getPrototypeOf(x)).toBe(Object.prototype);
   expect(Object.getOwnPropertyDescriptor(x, "__proto__")?.value).toBe(1n);
+});
+
+test("forItem refuses a negative, non-integer or repeated index", () => {
+  const collector = new BindingCollector();
+  for (const index of [-1, 1.5, Number.NaN]) {
+    const error = errorOf(() => collector.forItem(index));
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error.message).toBe("binding item index must be a nonnegative integer");
+  }
+  collector.forItem(3);
+  const error = errorOf(() => collector.forItem(3));
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe("binding item index 3 was already recorded");
+});
+
+test("an invalidated capture keeps partial routes without usable inputs", () => {
+  const collector = new BindingCollector();
+  collector.forItem(0).finish({ i: 2n });
+  // bindParams invalidates the collector first, then fails before it finishes.
+  bindingError(() =>
+    bindParams(
+      [new Parameter("a"), new Parameter("b", { required: true })],
+      new Map([["a", "${x}"]]),
+      poolOf(),
+      { collector, sourceResolver: () => new ResolvedValue(1n, true, new SourceRef("run", 1)) },
+    ),
+  );
+  const captured = collector.freeze();
+  expect(captured.boundInputs).toBeNull();
+  expect(captured.route.names).toEqual(["a"]);
+  expect(captured.route.children[0]!.kind).toBe("source");
+  expect(captured.evaluatedKeys).toEqual(new Set(["a"]));
+  expect(captured.items.map(([index]) => index)).toEqual([0]);
+  const [, item] = captured.items[0]!;
+  expect(item.boundInputs).toBeNull();
+  expect(item.route.names).toEqual(["i"]);
+});
+
+test("a collector freezes once", () => {
+  const collector = new BindingCollector();
+  collector.freeze();
+  const error = errorOf(() => collector.freeze());
+  expect(error).toBeInstanceOf(Error);
+  expect(error.message).toBe("binding capture is already frozen");
+});
+
+test("boundInputs gives a fresh copy on each read", () => {
+  const collector = new BindingCollector();
+  bindParams([new Parameter("x")], new Map([["x", { items: [1n] }]]), poolOf(), { collector });
+  const captured = collector.freeze();
+  const first = captured.boundInputs!;
+  expect(captured.boundInputs).not.toBe(first);
+  ((first["x"] as ValueRecord)["items"] as Value[]).push(2n);
+  expect(captured.boundInputs).toEqual({ x: { items: [1n] } });
+  expect(Object.isFrozen(captured)).toBe(true);
 });

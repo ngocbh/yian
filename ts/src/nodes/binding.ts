@@ -30,8 +30,16 @@
  */
 
 import { compareCodeUnits, type OriginRef, reprText } from "../diagnostics.ts";
-import { ConstructorTypeError, ExpressionError, evalBinding, resolveReference } from "../expr/index.ts";
-import { ResolvedValue, type ValueRoute } from "../expr/lineage.ts";
+import {
+  ConstructorTypeError,
+  ExpressionError,
+  evalBinding,
+  evalTemplate,
+  resolveReference,
+  scanTemplate,
+} from "../expr/index.ts";
+import { ResolvedValue, ValueRoute } from "../expr/lineage.ts";
+import { Span } from "../expr/template.ts";
 import {
   buildValueAs,
   isRecord,
@@ -80,6 +88,146 @@ export type ReservedBinder = (name: string, source: unknown, normalize: (value: 
 
 /** Names the place inside a parameter's value an error is at, from its path there. */
 export type ErrorLabel = string | ((path: ValuePath) => string);
+
+/**
+ * Detached delivered inputs and the routes evaluated while binding them. Frozen.
+ *
+ * An incomplete bind has no usable `boundInputs`. Its route and evaluated keys retain only the
+ * safe context already collected before the failure. `evaluatedKeys` distinguishes a template
+ * evaluated here from a materialized string passed through literally, even when evaluation
+ * produced a literal route.
+ */
+export class BindingCapture {
+  readonly #boundInputs: ValueRecord | null;
+  /** The record route of every recorded input, by name. */
+  readonly route: ValueRoute;
+  /** The inputs whose source evaluated a `${...}` span. */
+  readonly evaluatedKeys: ReadonlySet<string>;
+  /** Each item record's capture under the index its node gave it, in recording order. */
+  readonly items: readonly (readonly [number, BindingCapture])[];
+
+  /** Retain a capture; `boundInputs` is `null` for an incomplete bind. */
+  constructor(
+    boundInputs: ValueRecord | null,
+    route: ValueRoute,
+    evaluatedKeys: ReadonlySet<string>,
+    items: readonly (readonly [number, BindingCapture])[] = [],
+  ) {
+    this.#boundInputs = boundInputs;
+    this.route = route;
+    this.evaluatedKeys = evaluatedKeys;
+    this.items = Object.freeze([...items]);
+    Object.freeze(this);
+  }
+
+  /** Return a fresh copy of the complete pre-execution input record, or `null` when incomplete. */
+  get boundInputs(): ValueRecord | null {
+    return this.#boundInputs === null ? null : (copyValue(this.#boundInputs) as ValueRecord);
+  }
+}
+
+/** Collect one parameter record at its existing read and copying boundary. */
+export class BindingCollector {
+  #values: ValueRecord = {};
+  #routes = new Map<string, ValueRoute>();
+  #evaluated = new Set<string>();
+  #items = new Map<number, BindingCollector>();
+  #complete = false;
+  #frozen = false;
+
+  #requireOpen(): void {
+    if (this.#frozen) throw new Error("binding capture is already frozen");
+  }
+
+  /**
+   * Retain a route from the same scan and evaluation that produced a value.
+   *
+   * Internal to the binder: `resolveSource` and `bindParams` call it.
+   *
+   * @throws Error when the collector is frozen.
+   */
+  recordSource(name: string, route: ValueRoute, evaluated: boolean): void {
+    this.#requireOpen();
+    this.#routes.set(name, route);
+    if (evaluated) this.#evaluated.add(name);
+    else this.#evaluated.delete(name);
+  }
+
+  /**
+   * Snapshot the complete delivered record before node execution.
+   *
+   * @param record The exact record returned by binding, including any materialized values
+   *   supplied by node-owned hooks; it is copied. A name with no recorded route gets a literal one.
+   * @throws Error when the collector is frozen.
+   */
+  finish(record: ValueRecord): void {
+    this.#requireOpen();
+    const values = copyValue(record) as ValueRecord;
+    this.#values = values;
+    this.#routes = new Map(
+      Object.keys(values).map((name) => [name, this.#routes.get(name) ?? ValueRoute.literal(values[name])]),
+    );
+    for (const name of this.#evaluated) {
+      if (!Object.hasOwn(record, name)) this.#evaluated.delete(name);
+    }
+    this.#complete = true;
+  }
+
+  /**
+   * Return an already evaluated input route for local-scope projection.
+   *
+   * @throws RangeError when no route is recorded under `name`.
+   */
+  routeFor(name: string): ValueRoute {
+    const route = this.#routes.get(name);
+    if (route === undefined) throw new RangeError(`no route recorded for binding ${reprText(name)}`);
+    return route;
+  }
+
+  /**
+   * Allocate an item record under the explicit index supplied by its node.
+   *
+   * @throws Error when the collector is frozen.
+   * @throws RangeError when `index` is not a nonnegative integer or was already recorded.
+   */
+  forItem(index: number): BindingCollector {
+    this.#requireOpen();
+    if (!Number.isSafeInteger(index) || index < 0) {
+      throw new RangeError("binding item index must be a nonnegative integer");
+    }
+    if (this.#items.has(index)) throw new RangeError(`binding item index ${index} was already recorded`);
+    const collector = new BindingCollector();
+    this.#items.set(index, collector);
+    return collector;
+  }
+
+  /**
+   * Keep partial context while discarding the usable input record, here and in every item.
+   *
+   * @throws Error when the collector is frozen.
+   */
+  invalidate(): void {
+    this.#requireOpen();
+    this.#complete = false;
+    for (const item of this.#items.values()) item.invalidate();
+  }
+
+  /**
+   * Close this collector and its items and return its detached binding capture.
+   *
+   * @throws Error when the collector is already frozen.
+   */
+  freeze(): BindingCapture {
+    this.#requireOpen();
+    this.#frozen = true;
+    return new BindingCapture(
+      this.#complete ? this.#values : null,
+      ValueRoute.record(this.#routes),
+      new Set(this.#evaluated),
+      [...this.#items].map(([index, item]) => Object.freeze([index, item.freeze()] as const)),
+    );
+  }
+}
 
 /**
  * An expected binding operation failed with one semantic stage and origin.
@@ -335,30 +483,50 @@ function bindingWhere(name: string, path: ValuePath, label: ErrorLabel | null): 
 /** A source part's value, its route, and whether it evaluated a `${...}` span. */
 type SourceRead = [value: unknown, route: ValueRoute | null, evaluated: boolean];
 
-/** Evaluate template strings for one parameter. */
+/** Evaluate template strings for one parameter, with or without route capture. */
 class SourceReader {
   readonly pool: VariablePool;
   readonly item: Value | ResolvedValue;
+  readonly trace: boolean;
+  readonly sourceResolver: SourceResolver | null;
   readonly types: ReadonlyMap<string, Type> | null;
 
-  constructor(pool: VariablePool, item: Value | ResolvedValue, types: ReadonlyMap<string, Type> | null) {
+  constructor(
+    pool: VariablePool,
+    item: Value | ResolvedValue,
+    options: { trace: boolean; sourceResolver: SourceResolver | null; types: ReadonlyMap<string, Type> | null },
+  ) {
     this.pool = pool;
     this.item = item;
-    this.types = types;
+    this.trace = options.trace;
+    this.sourceResolver = options.sourceResolver;
+    this.types = options.types;
   }
 
   /**
-   * Return a template string's value, with no route and no spans flag (those come from a
-   * traced read).
+   * Return a template string's value, its route, and whether it had spans.
+   *
+   * The route and the spans flag are computed only when tracing; otherwise they are `null` and
+   * `false`.
    *
    * @throws ExpressionError (a `RequiredError` among them) when the template does not parse or
    *   evaluate.
    */
   string(text: string): SourceRead {
-    // Only a traced bind gets a `ResolvedValue` item; this read needs just its value.
-    const item = this.item instanceof ResolvedValue ? this.item.value : this.item;
-    const value = evalBinding(text, (path) => resolveReference(path, this.pool), { item, types: this.types });
-    return [value, null, false];
+    if (!this.trace) {
+      // Only a traced bind gets a `ResolvedValue` item; this read needs just its value.
+      const item = this.item instanceof ResolvedValue ? this.item.value : this.item;
+      const value = evalBinding(text, (path) => resolveReference(path, this.pool), { item, types: this.types });
+      return [value, null, false];
+    }
+    const resolve = (path: string): ResolvedValue => {
+      if (this.sourceResolver !== null) return this.sourceResolver(path);
+      const value = resolveReference(path, this.pool);
+      return new ResolvedValue(value, value !== null);
+    };
+    const segments = scanTemplate(text);
+    const result = evalTemplate(segments, resolve, { trace: true, item: this.item, types: this.types });
+    return [result.value, result.route, segments.some((segment) => segment instanceof Span)];
   }
 
   /**
@@ -414,26 +582,36 @@ class SourceReader {
     }
     if (isRecord(node)) {
       const values: ValueRecord = {};
+      const fields: [string, ValueRoute][] = [];
       let anyEvaluated = false;
       for (const key of Object.keys(node)) {
-        const [value, , evaluated] = this.tree(node[key], [...path, key], name, template, origin, label);
+        const [value, route, evaluated] = this.tree(node[key], [...path, key], name, template, origin, label);
         // The tree's values are checked at the binding boundary; the cast only satisfies `setField`.
         setField(values, key, value as Value);
+        if (route !== null) fields.push([key, route]);
         anyEvaluated ||= evaluated;
       }
-      return [values, null, anyEvaluated];
+      return [values, this.trace ? ValueRoute.record(fields) : null, anyEvaluated];
     }
     if (Array.isArray(node)) {
       const items: unknown[] = [];
+      const routes: ValueRoute[] = [];
       let anyEvaluated = false;
       for (const [index, child] of node.entries()) {
-        const [value, , evaluated] = this.tree(child, [...path, index], name, template, origin, label);
+        const [value, route, evaluated] = this.tree(child, [...path, index], name, template, origin, label);
         items.push(value);
+        if (route !== null) routes.push(route);
         anyEvaluated ||= evaluated;
       }
-      return [items, null, anyEvaluated];
+      const listRoute = this.trace
+        ? new ValueRoute("list", {
+            children: routes,
+            expression: `[${routes.map((route) => route.expression).join(", ")}]`,
+          })
+        : null;
+      return [items, listRoute, anyEvaluated];
     }
-    return [node, null, false];
+    return [node, this.trace ? ValueRoute.literal(node) : null, false];
   }
 }
 
@@ -445,44 +623,62 @@ class SourceReader {
  * of that expression; a `${...}` embedded in surrounding text is written into it as text; a
  * string with no `${...}` is a plain literal (after `$$` becomes `$`). `${item}` /
  * `${item.path}` resolve from the MAP-body-local `item` scope. A `ValueTemplate` evaluates each
- * leaf string the same way at its position and checks each nested typed `Binding`. Any other
- * source, a plain record or list included, is a literal.
+ * leaf string the same way at its position and checks each nested typed `Binding`; its route is
+ * a record or list of the parts' routes. Any other source, a plain record or list included, is a
+ * literal.
  *
- * `types` (default `null`, no types) is the table an `isinstance(x, T)` or a `T(...)`
- * constructor looks `T` up in. `label`, when set, names the parameter in a template error
- * message in place of `binding '<name>'`; a function label names the path inside the template
- * the error is at. `name` defaults to `""` and `item` to `null`.
+ * `collector` (default `null`) retains the selected route under `name`; `sourceResolver`
+ * (default `null`) pairs values with accepted producer identities in one read, and is used only
+ * with a `collector`. Without it, capture records no producer identity. `types` (default `null`,
+ * no types) is the table an `isinstance(x, T)` or a `T(...)` constructor looks `T` up in.
+ * `label`, when set, names the parameter in a template error message in place of
+ * `binding '<name>'`; a function label names the path inside the template the error is at.
+ * `name` defaults to `""` and `item` to `null`.
  *
  * @throws BindingError when a source does not parse or evaluate (`binding.evaluate`), a
  *   `${T(...)}` check fails (`binding.type`), or a nested typed binding rejects its value:
  *   `expr`'s errors never cross the `nodes <- expr` boundary.
+ * @throws Error when `collector` is frozen, or a traced read produced no route.
  */
 export function resolveSource(
   source: unknown,
   pool: VariablePool,
   options: {
     item?: Value | ResolvedValue;
+    collector?: BindingCollector | null;
     name?: string;
     label?: ErrorLabel | null;
+    sourceResolver?: SourceResolver | null;
     types?: ReadonlyMap<string, Type> | null;
   } = {},
 ): unknown {
-  const { item = null, name = "", label = null, types = null } = options;
+  const { item = null, collector = null, name = "", label = null, sourceResolver = null, types = null } = options;
   const origin = sourceOrigin(source);
   const sourceValue = bindingSource(source);
-  if (typeof sourceValue !== "string" && !(sourceValue instanceof ValueTemplate)) return sourceValue;
-  const reader = new SourceReader(pool, item, types);
+  if (typeof sourceValue !== "string" && !(sourceValue instanceof ValueTemplate)) {
+    collector?.recordSource(name, ValueRoute.literal(sourceValue), false);
+    return sourceValue;
+  }
+  const reader = new SourceReader(pool, item, { trace: collector !== null, sourceResolver, types });
+  let read: SourceRead;
   if (sourceValue instanceof ValueTemplate) {
-    return reader.tree(sourceValue.value, [], name, sourceValue, origin, label)[0];
-  }
-  try {
-    return reader.string(sourceValue)[0];
-  } catch (error) {
-    if (error instanceof ExpressionError) {
-      throw new BindingError(error.message, { failureCode: failureCodeOf(error), origin, cause: error });
+    read = reader.tree(sourceValue.value, [], name, sourceValue, origin, label);
+  } else {
+    try {
+      read = reader.string(sourceValue);
+    } catch (error) {
+      if (error instanceof ExpressionError) {
+        throw new BindingError(error.message, { failureCode: failureCodeOf(error), origin, cause: error });
+      }
+      throw error;
     }
-    throw error;
   }
+  const [value, route, evaluated] = read;
+  if (collector !== null) {
+    if (route === null) throw new Error(`traced binding ${reprText(name)} produced no source route`);
+    collector.recordSource(name, route, evaluated);
+  }
+  return value;
 }
 
 /** Classify a source evaluation error: a failed `${T(...)}` check is a type error. */
@@ -563,11 +759,17 @@ function copyValue(value: Value, copies: Map<object, Value> = new Map()): Value 
  * @param pool The pool each `${...}` source resolves against.
  * @param options.item The current element for a MAP body's `${item}` scope; `null` (the
  *   default) is the non-MAP path.
+ * @param options.collector Retains delivered values and routes independently of node execution;
+ *   `null` (the default) captures nothing.
+ * @param options.sourceResolver One-read value/presence/source lookup used only when capturing
+ *   bindings; `null` (the default) reads the pool and records no producer identity.
  * @param options.types The type table an `isinstance(x, T)` or a `T(...)` in a source looks `T`
  *   up in, keyed by type name (the node's `types`); `null` (the default) means no types.
  * @param options.labels Param name -> author-facing phrase an error message uses in place of
  *   `input '<param>'` / `binding '<param>'` (the node's binding labels); a param without one
  *   keeps the default text. Defaults to `null`.
+ * @param options.finishCapture The evaluator's seam (default `true`): `false` retains routes while
+ *   deferring the input snapshot until reserved values and wrapper defaults are complete.
  * @returns the bound `{name: value}` record handed to the node instead of the pool, built with
  *   own data properties.
  * @throws TypeError when `params` isn't canonical.
@@ -582,12 +784,17 @@ export function bindParams(
   pool: VariablePool,
   options: {
     item?: Value | ResolvedValue;
+    collector?: BindingCollector | null;
+    sourceResolver?: SourceResolver | null;
     types?: ReadonlyMap<string, Type> | null;
     labels?: ReadonlyMap<string, string> | null;
+    finishCapture?: boolean;
   } = {},
 ): ValueRecord {
-  const { item = null, types = null, labels = null } = options;
+  const { item = null, collector = null, sourceResolver = null, types = null, labels = null, finishCapture = true } =
+    options;
   validateParameters(params);
+  collector?.invalidate();
   const record: ValueRecord = {};
   for (const p of params) {
     try {
@@ -597,7 +804,14 @@ export function bindParams(
       const source = present ? wiring.get(p.name) : null;
       const label = labels?.get(p.name) ?? null;
       const inputWhere = label ?? `input ${reprText(p.name)}`;
-      let value = resolveSource(source, pool, { item, name: p.name, label, types });
+      let value = resolveSource(source, pool, {
+        item,
+        collector: present ? collector : null,
+        name: p.name,
+        label,
+        sourceResolver,
+        types,
+      });
       rejectInvalidBinding(value, inputWhere, sourceOrigin(source));
       if (present && source instanceof Binding && source.contract !== null) {
         value = checkBindingType(bindingWhere(p.name, [], label), source, source.contract, value);
@@ -611,6 +825,7 @@ export function bindParams(
           value = p.default;
           usedDefault = true;
           rejectInvalidBinding(value, `default for ${reprText(p.name)}`, p.defaultOrigin ?? p.origin);
+          collector?.recordSource(p.name, ValueRoute.literal(value), false);
         } else if (!present && p.required) {
           throw new BindingError(`required input ${reprText(p.name)} is unbound (from=${valueRepr(source)})`, {
             failureCode: "binding.evaluate",
@@ -647,5 +862,6 @@ export function bindParams(
       throw error;
     }
   }
+  if (collector !== null && finishCapture) collector.finish(record);
   return record;
 }

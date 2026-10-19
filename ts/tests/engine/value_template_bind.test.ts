@@ -18,8 +18,9 @@
  * rebuilt template yields is mapped; a record holding a binding and shared by two bindings' sources
  * comes back as one shared record, as Python's `copy.deepcopy` keeps it.
  *
- * Later: `test_template_routes_record_each_part_and_route_feedback` lands with binding capture
- * (`BindingCollector`).
+ * Later: `test_template_routes_record_each_part_and_route_feedback` leaves out its
+ * `_validate_route(captured.route)` line, which checks the route with the runtime's validator;
+ * it lands with `runtime/contracts.ts`.
  *
  * Not ported: the rows that differ from a good one only by a tuple where Python wants a list or
  * the reverse (a tuple template, a list of origins, a list path): TS has only arrays; and
@@ -30,7 +31,8 @@
 import { expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
-import { BindingError, bindParams } from "../../src/nodes/binding.ts";
+import { ResolvedValue, routeFeedback, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
+import { BindingCollector, BindingError, bindParams } from "../../src/nodes/binding.ts";
 import {
   Binding,
   bindingInputGroups,
@@ -44,7 +46,7 @@ import {
   ValueTemplate,
   type ValuePath,
 } from "../../src/nodes/contracts.ts";
-import { Type, typeFor, ValueKind, VariablePool } from "../../src/typesys/index.ts";
+import { Type, typeFor, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 
 const INTEGER = Type.scalar(ValueKind.INTEGER);
@@ -424,6 +426,43 @@ test("the MAP item scope reaches template strings", () => {
   expect(bindParams([new Parameter("p")], new Map([["p", template]]), poolOf(), { item: 5n })).toEqual({
     p: { i: 5n, n: 1n },
   });
+});
+
+test("template routes record each part and route feedback", () => {
+  const template = new ValueTemplate({ a: "${n.output}", b: [1n, "${m.output}"], c: "lit" });
+  const roots: Record<string, ValueRecord> = { n: { output: 3n }, m: { output: "x" } };
+
+  const resolve = (path: string): ResolvedValue => {
+    const [node, field] = path.split(".") as [string, string];
+    const seq = node === "n" ? 1 : 2;
+    return new ResolvedValue(roots[node]![field]!, true, new SourceRef("run", seq, [field]));
+  };
+
+  const collector = new BindingCollector();
+  const delivered = bindParams(
+    [new Parameter("p")],
+    new Map([["p", new Binding(template)]]),
+    poolOf({ n: 3n, m: "x" }),
+    { collector, sourceResolver: resolve },
+  );
+  const captured = collector.freeze();
+
+  expect(captured.boundInputs).toEqual(delivered);
+  expect(delivered).toEqual({ p: { a: 3n, b: [1n, "x"], c: "lit" } });
+  expect(captured.evaluatedKeys).toEqual(new Set(["p"]));
+  const route = captured.route.children[0]!;
+  expect(route.kind).toBe("record");
+  expect(route.names).toEqual(["a", "b", "c"]);
+  expect(route.children[1]!.kind).toBe("list");
+  expect(route.children[1]!.children[0]).toEqual(ValueRoute.literal(1n));
+
+  const routed = routeFeedback(captured.route, { p: { a: "Too small.", b: [null, "Wrong."] } }, (source) =>
+    source.executionSeq === 1 ? roots["n"] : roots["m"],
+  );
+  expect(routed.contributions.map((c) => [c.source, c.feedback])).toEqual([
+    [new SourceRef("run", 1), { output: "Too small." }],
+    [new SourceRef("run", 2), { output: "Wrong." }],
+  ]);
 });
 
 // --- TS-only rows --- //

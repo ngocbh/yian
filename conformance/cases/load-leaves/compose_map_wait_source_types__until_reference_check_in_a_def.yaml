@@ -1,4 +1,3 @@
-# The frames are the def and the `until:` value (flow structure), so the case is shared.
 kind: load
 flow: |
   id: f

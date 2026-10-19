@@ -1,5 +1,6 @@
-# `got '...'` is the authored `questions:` text as written (source text, shared).
+# TS writes the rejected `questions:` text as JSON text (rules: messages); Python's repr in python_expect.
 kind: load
+rules: [messages]
 flow: |
   id: f
   name: f
@@ -12,6 +13,14 @@ flow: |
       questions: "Answer these carefully: ${qs}"
   output: ${ask.output}
 expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''ask'' (kind=human_input): `questions:` as a string must be exactly one `${name}` naming a declared input (e.g. `questions: ${qs}`), got "Answer these carefully: ${qs}"; put any text in `prompt:` instead'
+      frames:
+      - label: flow.yaml
+        range: [9, 16, 9, 47]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

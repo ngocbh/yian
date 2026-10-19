@@ -11,6 +11,8 @@
  * Never imports: state, trace, engine, run, compile, compose, or the CLI.
  */
 
+import fs from "node:fs";
+
 import { compareCodeUnits, Failure, OriginRef, reprText } from "../diagnostics.ts";
 import {
   type FeedbackValue,
@@ -1129,6 +1131,129 @@ export function decodeRecord(data: string | Uint8Array): RecordEnvelope {
   }
   const payload = wireObject(envelope["payload"], "run-record envelope payload");
   return new RecordEnvelope(SCHEMA_VERSION, runId, seq, recordFromPayload(kind, payload));
+}
+
+/**
+ * An ordered, append-only owner of validated record envelopes for one run.
+ *
+ * `close` must be idempotent. An engine borrows a log and never closes it; the run boundary or
+ * the direct caller owns it (`using`).
+ */
+export interface RunLog {
+  /** The sole non-empty run id this log accepts. */
+  readonly runId: string;
+  /** The durable JSONL path, or `null` for a process-local log. */
+  readonly path: string | null;
+  /** The zero-based sequence the next successful append receives. */
+  readonly nextSequence: number;
+  /** Iterate the validated envelopes in contiguous sequence order. */
+  [Symbol.iterator](): Iterator<RecordEnvelope>;
+  /** Return the validated envelopes in sequence order, as a fresh frozen array. */
+  records(): readonly RecordEnvelope[];
+  /** Validate `record`, append it under `nextSequence`, and return its retained envelope. */
+  append(record: RunRecord): RecordEnvelope;
+  /** Release owned resources; repeated calls do nothing. */
+  close(): void;
+  /** Close the log. */
+  [Symbol.dispose](): void;
+}
+
+/**
+ * A process-local, ordered authority for one run's canonical records.
+ *
+ * The log retains the codec round trip of every appended record. Closing refuses later appends
+ * but keeps the records iterable, so a caller can inspect a completed result after disposing it.
+ */
+export class MemoryRunLog implements RunLog {
+  /** The sole run id this log accepts. */
+  readonly runId: string;
+  /** Always `null`: this log has no durable file. */
+  readonly path = null;
+  #records: RecordEnvelope[] = [];
+  #closed = false;
+
+  /**
+   * Create an empty, zero-based log for one run id.
+   *
+   * @throws RangeError when `runId` isn't a non-empty string or holds a lone surrogate.
+   */
+  constructor(runId: string) {
+    this.runId = validatedRunId(runId);
+  }
+
+  /**
+   * Reopen a detached canonical prefix without renumbering its records; the next append gets
+   * the sequence after the last record.
+   *
+   * @throws RangeError when `records` isn't a non-empty array, or its envelopes don't share one
+   *   run id with contiguous sequences from 0.
+   * @throws TypeError when an item isn't exactly a `RecordEnvelope`.
+   */
+  static fromRecords(records: readonly RecordEnvelope[]): MemoryRunLog {
+    if (!Array.isArray(records) || records.length === 0) {
+      throw new RangeError("reopening requires a nonempty record array");
+    }
+    if (!records.every((envelope) => isExactly(envelope, RecordEnvelope))) {
+      throw new TypeError("reopening requires exact RecordEnvelope values");
+    }
+    const canonical = records.map((envelope) => decodeRecord(encodeRecord(envelope)));
+    const runId = canonical[0]!.runId;
+    if (canonical.some((envelope, sequence) => envelope.runId !== runId || envelope.seq !== sequence)) {
+      throw new RangeError("reopened prefix must have one run and contiguous sequences");
+    }
+    const log = new MemoryRunLog(runId);
+    log.#records = canonical;
+    return log;
+  }
+
+  /** The sequence the next successful append receives. */
+  get nextSequence(): number {
+    return this.#records.length;
+  }
+
+  /** Iterate the records retained when the iteration starts. */
+  [Symbol.iterator](): Iterator<RecordEnvelope> {
+    return [...this.#records][Symbol.iterator]();
+  }
+
+  records(): readonly RecordEnvelope[] {
+    return Object.freeze([...this.#records]);
+  }
+
+  /**
+   * @throws Error when the log is closed.
+   * @throws RangeError, TypeError the envelope's and the codec's errors; the log is unchanged.
+   */
+  append(record: RunRecord): RecordEnvelope {
+    if (this.#closed) throw new Error("run log is closed");
+    // The retained envelope is the decoded line, so a live run sees exactly what a resumed run
+    // reads back.
+    const line = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, this.runId, this.#records.length, record));
+    const retained = decodeRecord(line);
+    this.#records.push(retained);
+    return retained;
+  }
+
+  close(): void {
+    this.#closed = true;
+  }
+
+  [Symbol.dispose](): void {
+    this.close();
+  }
+}
+
+/**
+ * Read a run log's complete prefix: every newline-terminated record, without taking the writer's
+ * lock and without changing the file. An incomplete last line is ignored; an empty file or one
+ * without a complete line gives no records.
+ *
+ * @throws RangeError when a complete line isn't a valid record, or the records don't share one
+ *   run id with contiguous sequences from 0; the message names `path`, the line and its seq.
+ */
+export function readRunLog(path: string): RecordEnvelope[] {
+  const data = fs.readFileSync(path);
+  return decodeCompletePrefix(data.subarray(0, data.lastIndexOf(0x0a) + 1), path);
 }
 
 /** Return a failure's wire object, shared by the failure-bearing records. */
@@ -2352,4 +2477,56 @@ function wireInt(value: unknown, label: string): number {
   const number = Number(value);
   if (!Number.isSafeInteger(number)) throw new RangeError(`${label} must be a safe integer`);
   return number;
+}
+
+/**
+ * Return `runId` when it is a non-empty string fit for an envelope.
+ *
+ * @throws RangeError when it isn't a non-empty string or holds a lone surrogate.
+ */
+function validatedRunId(runId: unknown): string {
+  if (typeof runId !== "string" || !runId) throw new RangeError("run log run_id must be a non-empty string");
+  if (!runId.isWellFormed()) throw new RangeError("Unicode surrogate is not valid canonical JSON");
+  return runId;
+}
+
+/**
+ * Decode every newline-terminated record in `data` and check their shared identity.
+ *
+ * Errors name `path`, the 1-based line and the expected seq, so a damaged log can be located
+ * without bisecting it.
+ *
+ * @throws RangeError when `data` doesn't end in a newline, a line isn't a valid record (the
+ *   decoder's error as `cause`), or a seq or run id doesn't match.
+ */
+function decodeCompletePrefix(data: Uint8Array, path: string): RecordEnvelope[] {
+  if (data.length === 0) return [];
+  if (data[data.length - 1] !== 0x0a) throw new RangeError(`run log ${path} is not newline terminated`);
+  const records: RecordEnvelope[] = [];
+  let runId: string | null = null;
+  for (let start = 0, sequence = 0; start < data.length; sequence++) {
+    const end = data.indexOf(0x0a, start);
+    const where = `run log ${path} line ${sequence + 1} (seq ${sequence})`;
+    let envelope: RecordEnvelope;
+    try {
+      envelope = decodeRecord(data.subarray(start, end));
+    } catch (error) {
+      if (error instanceof JSONDecodeError || error instanceof TypeError || error instanceof RangeError) {
+        throw new RangeError(`${where}: ${error.message}`, { cause: error });
+      }
+      throw error;
+    }
+    if (envelope.seq !== sequence) {
+      throw new RangeError(`${where}: run-log sequence mismatch: expected ${sequence}, found ${envelope.seq}`);
+    }
+    runId ??= envelope.runId;
+    if (envelope.runId !== runId) {
+      throw new RangeError(
+        `${where}: run-log run_id mismatch: expected ${reprText(runId)}, found ${reprText(envelope.runId)}`,
+      );
+    }
+    records.push(envelope);
+    start = end + 1;
+  }
+  return records;
 }

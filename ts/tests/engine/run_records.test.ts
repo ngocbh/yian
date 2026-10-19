@@ -7,6 +7,8 @@
  * `test_recorded_object_past_the_nesting_limit_still_replays`,
  * `test_seed_keeps_supported_values_and_independent_canonical_copies`,
  * `test_pool_decoder_rejects_unknown_fields_and_wrong_types` (3 rows),
+ * `test_run_log_protocol_pins_iteration_append_close_and_context_management` (a class assigned
+ * to `RunLog`, closed through `using`),
  * `test_records_and_envelopes_are_frozen` (every record of this module and the envelope, nested
  * values and held arrays too; assignment is a `TypeError`). Python's `ValueError` is a
  * `RangeError` here.
@@ -141,6 +143,7 @@ import {
   RecordEnvelope,
   RUN_RECORD_TYPES,
   RUN_STOP_REASONS,
+  type RunLog,
   type RunRecord,
   RunResumedRecord,
   type RunStartedFields,
@@ -319,6 +322,57 @@ test.each<[string, unknown, string]>([
   }
   expect((caught as Error).constructor).toBe(RangeError);
   expect((caught as Error).message).toBe(message);
+});
+
+/** A minimal structural implementation that pins the `RunLog` interface. */
+class ProtocolLog {
+  readonly runId = "run-protocol";
+  readonly path: string | null = null;
+  nextSequence = 0;
+  closeCount = 0;
+  #records: RecordEnvelope[] = [];
+  #closed = false;
+
+  [Symbol.iterator](): Iterator<RecordEnvelope> {
+    return this.#records[Symbol.iterator]();
+  }
+
+  records(): readonly RecordEnvelope[] {
+    return Object.freeze([...this.#records]);
+  }
+
+  append(record: RunRecord): RecordEnvelope {
+    const envelope = new RecordEnvelope(SCHEMA_VERSION, this.runId, this.nextSequence, record);
+    this.#records.push(envelope);
+    this.nextSequence += 1;
+    return envelope;
+  }
+
+  close(): void {
+    if (!this.#closed) {
+      this.#closed = true;
+      this.closeCount += 1;
+    }
+  }
+
+  [Symbol.dispose](): void {
+    this.close();
+  }
+}
+
+test("the run log protocol pins iteration, append, close and context management", () => {
+  const log = new ProtocolLog();
+  {
+    using entered: RunLog = log;
+    expect(entered).toBe(log);
+    const envelope = log.append(new NodeStartedRecord("work"));
+    expect(envelope.seq).toBe(0);
+    expect([...log]).toEqual([envelope]);
+    expect(log.nextSequence).toBe(1);
+  }
+
+  log.close();
+  expect(log.closeCount).toBe(1);
 });
 
 const FAILURE = new Failure({ code: "node.execute", message: "boom", nodeId: "work" });

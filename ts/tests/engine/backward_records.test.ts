@@ -50,10 +50,12 @@
  * `1`; `true` isn't an int, as in Python. A cause `node_id` that isn't text (`1n`, `true`, `[]`,
  * `{}`) and a node failure's `null` `node_id` are `TypeError`s where Python raises `ValueError`.
  *
- * Later (T4-3 to T4-8): `test_historical_backward_prepares_recorded_schema_bytes`,
- * `test_backward_records_isolate_payload_views_before_and_after_log_round_trip` (with the memory
- * run log), and the prepare, append, reduce and replay tests (with the reducer, the runtime log and
- * the engine).
+ * Changed (log): `test_backward_records_isolate_payload_views_before_and_after_log_round_trip`
+ * with the memory run log: the records, the envelope's payload and the replayed record are
+ * frozen, so each edit throws `TypeError` where Python edits a private copy.
+ *
+ * Later (T4-3 to T4-8): `test_historical_backward_prepares_recorded_schema_bytes` and the
+ * prepare, append, reduce and replay tests (with the reducer, the runtime log and the engine).
  */
 
 import { expect, test } from "bun:test";
@@ -85,6 +87,7 @@ import {
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
+  MemoryRunLog,
   NodeFailedRecord,
   NodeRoutedRecord,
   RecordEnvelope,
@@ -456,6 +459,25 @@ test("a backward record's feedback keeps the existing wider depth boundary", () 
   ]) {
     expect(roundTrip(record)).toEqual(record);
   }
+});
+
+test("backward records isolate payload views before and after a log round trip", () => {
+  const ready = backwardRecords()[1];
+  const log = new MemoryRunLog("run");
+  const accepted = log.append(ready);
+  const edits: (() => unknown)[] = [
+    () => (ready.rootResult.inputFeedback["topic"]![0] as any)[1].uri = "changed",
+    () => (ready.proposals[0]!.mutations[0]!.payload as any).notes.length = 0,
+    () => ((accepted.record as BackwardReadyRecord).attributedResults[0]!.result.variableFeedback as any).tone = [],
+    () => (accepted.payload as any).proposals[0].mutations[0].payload.notes.length = 0,
+  ];
+  const replayed = [...log][0]!.record as BackwardReadyRecord;
+  edits.push(
+    () => ((replayed.rootResult.inputFeedback["topic"]![0] as any).length = 0),
+    () => (replayed.proposals[0]!.mutations[0]!.payload as any).notes.push("changed"),
+  );
+  for (const edit of edits) expect(edit).toThrow(TypeError);
+  expect([...log][0]!.record).toEqual(backwardRecords()[1]);
 });
 
 test("memory and mutation proposal order survives the wire round trip", () => {

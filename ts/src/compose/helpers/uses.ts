@@ -11,8 +11,8 @@
  * - `@<version>`: an optional opaque tag, split at the last `@` (`a@b@c` gives path `a@b`,
  *   version `c`); a trailing `@` (empty version) is an error.
  *
- * Imports only `compose/helpers/errors` (the lowest layer, so the loader and the resolver can
- * both import this without a cycle).
+ * Imports only `diagnostics` and `compose/helpers/errors` (the lowest layers, so the loader
+ * and the resolver can both import this without a cycle).
  */
 
 import { reprText } from "../../diagnostics.ts";
@@ -48,7 +48,7 @@ export function parseUsesRef(
   options: { diagnostics?: LoadDiagnostics | null } = {},
 ): UsesRef {
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
-  const raw = (value || "").trim();
+  const raw = value.trim();
   if (!raw) throw diagnostics.error("uses: ref must be a non-empty string");
 
   let scheme: string | null = null;

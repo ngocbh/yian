@@ -71,12 +71,13 @@ describe("parseMemoryDeclarations", () => {
       notes: { type: "episodic", config: { max_episodes: 50n } },
       plain: { type: "vector" },
     };
-    expect(shape(parse(value))).toEqual([
+    const decls = parse(value);
+    expect(shape(decls)).toEqual([
       ["lessons", "reflective", {}, SITE],
       ["notes", "episodic", { max_episodes: 50n }, SITE],
       ["plain", "vector", {}, SITE],
     ]);
-    expect(parse(value).every((decl) => decl.origin === null)).toBe(true);
+    expect(decls.every((decl) => decl.origin === null)).toBe(true);
   });
 
   test.each<[Value, string]>([
@@ -134,7 +135,8 @@ describe("parseMemoryDeclarations", () => {
 
   test("a wrapped declaration error keeps the MemoryDecl error as its cause", () => {
     const error = loadError({ notes: "my.type" });
-    expect(error.cause).toBeInstanceOf(Error);
+    // `LoadError` is a `RangeError` too, so rule it out.
+    expect(error.cause).toBeInstanceOf(RangeError);
     expect(error.cause).not.toBeInstanceOf(LoadError);
     expect(error.diagnostic.message).toBe(`long_term_memory 'notes': ${(error.cause as Error).message}`);
   });

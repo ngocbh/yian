@@ -32,7 +32,7 @@ import { checkEnvValues, checkWrittenValue } from "../../src/compose/helpers/val
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
-import type { Value } from "../../src/typesys/values.ts";
+import { TypeCheckError, type Value } from "../../src/typesys/values.ts";
 
 const MAX_VALUE_NESTING = BUILTIN.maxValueNesting;
 const LIMIT = `value nests deeper than ${MAX_VALUE_NESTING} levels`;
@@ -219,19 +219,22 @@ describe("recursive aliases", () => {
 });
 
 describe("lone surrogates", () => {
+  // Only gives `range` a source to frame.
+  const SOURCE = "a\nb: 123456789\n";
   const range = new SourceRange(2, 3, 2, 9);
   const where = "node 'use' input 'topic'";
 
   /** Return the error `checkWrittenValue(value, where, range, …)` throws. */
   function writtenError(value: Value): LoadError {
-    return loadError(() => checkWrittenValue(value, where, range, new LoadDiagnostics("f.yaml", "a\nb: 123456789\n")));
+    const diagnostics = new LoadDiagnostics("f.yaml", SOURCE);
+    return loadError(() => checkWrittenValue(value, where, range, diagnostics));
   }
 
   test("text holding one is refused at its path, at the range", () => {
     const error = writtenError(["ok", { k: "\uD800" }]);
     expect(error.diagnostic.message).toBe(`${where} at [1].k: ${SURROGATE}`);
     expect(error.diagnostic.frames.map((frame) => frame.range)).toEqual([range]);
-    expect(error.cause).toBeInstanceOf(Error);
+    expect(error.cause).toBeInstanceOf(TypeCheckError);
   });
 
   test("a key holding one is refused at its record's path", () => {

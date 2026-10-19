@@ -99,7 +99,7 @@ Changed (TS yian): infinity and minus infinity are float values; an open range e
 infinity (`float(0.0..)` takes infinity), and a range closed at that end refuses it. NaN is
 refused by the build boundary and host intake with `NaN is not a yian value`. Text or a record
 key holding a lone surrogate is not a yian value (`text holding a lone surrogate is not a yian
-value`) (a value written in a flow file fails the load; see [Nesting limit](#nesting-limit)).
+value`); a value written in a flow file fails the load (see [Nesting limit](#nesting-limit)).
 `-0` becomes `0` when a float becomes a value.
 
 A temporary inside an expression may be infinite or complex; only a binding's final

@@ -1042,6 +1042,34 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>
     "owner_static_path must be non-empty",
   ],
   [
+    "occurrence segments out of lexical nesting order",
+    () =>
+      new MemoryEpisode(
+        "run",
+        [
+          new MemoryOccurrenceSegment(MemoryOccurrenceKind.LOOP_ITERATION, ["root", "child"], 0),
+          new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["root"], 0),
+        ],
+        AGENT_PATH,
+        MemoryEpisodeStatus.SUCCEEDED,
+        {},
+      ),
+    RangeError,
+    "occurrence segments must follow lexical nesting order",
+  ],
+  [
+    "an owner path component that isn't a string",
+    () => new MemoryEpisode("run", [], ["root", 1] as never, MemoryEpisodeStatus.SUCCEEDED, {}),
+    TypeError,
+    "owner_static_path components must be a string",
+  ],
+  [
+    "an empty owner path component",
+    () => new MemoryEpisode("run", [], ["root", ""], MemoryEpisodeStatus.SUCCEEDED, {}),
+    RangeError,
+    "owner_static_path components must be non-empty",
+  ],
+  [
     "an unknown status",
     () => new MemoryEpisode("run", [], AGENT_PATH, "SUCCEEDED" as never, []),
     TypeError,
@@ -1055,7 +1083,7 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>
   ],
   [
     "inputs that are an array",
-    () => new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, [], { output: new Map() }),
+    () => new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, []),
     TypeError,
     "inputs must be an exact JSON object or null",
   ],

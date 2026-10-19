@@ -77,6 +77,7 @@ function isExactly<T>(value: unknown, cls: abstract new (...args: never[]) => T)
 }
 
 /** Whether two arrays have equal items in order, by `same`. */
+// A copy of nodes/contracts.ts's sameItems: this module imports only diagnostics and defaults.
 function sameItems<T>(a: readonly T[], b: readonly T[], same: (x: T, y: T) => boolean = (x, y) => x === y): boolean {
   return a.length === b.length && a.every((item, i) => same(item, b[i]!));
 }
@@ -847,7 +848,7 @@ export class ToolCallInteraction {
    */
   constructor(name: string, args: unknown) {
     this.name = requireString(name, "name");
-    this.arguments = freezeJsonObject(args, "arguments", { limitNesting: false, valueNumbers: true });
+    this.arguments = freezeValueObject(args, "arguments");
     Object.freeze(this);
   }
 }
@@ -940,7 +941,7 @@ export class EvaluationEvidence {
     this.boundInputs =
       boundInputs === null
         ? null
-        : freezeJsonObject(boundInputs, "bound_inputs", { limitNesting: false, valueNumbers: true });
+        : freezeValueObject(boundInputs, "bound_inputs");
     if ((baseSystemPrompt === null) !== (prompt === null)) {
       throw new RangeError("base_system_prompt and prompt must both be present or absent");
     }

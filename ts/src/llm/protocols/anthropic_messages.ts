@@ -604,7 +604,7 @@ function reasoningBlock(
   part: ReasoningPart,
   key: ReplayKey,
 ): { ok: true; block: JsonObject } | { ok: false; reason: ReplayDegradedReason } {
-  // Anthropic accepts thinking another Claude model wrote, so only the provider and account must match.
+  // Anthropic accepts thinking another Claude model wrote, so the model need not match.
   const read = readReplayRecord(part.providerPayload, key, REASONING_FIELDS, { matchModel: false });
   if (!read.ok) return read;
   const { signature, redacted } = read.fields;

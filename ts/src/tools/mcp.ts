@@ -10,9 +10,10 @@
  * `close()` ends a waiting call.
  *
  * Knows about: the MCP SDK client (`@modelcontextprotocol/client`, imported when a server opens),
- * `defaults`, `platform` (the version), `tools/context`, `tools/errors`, `tools/function_tools`,
- * `tools/types` (the output schema check), `llm/body` (exact JSON writes), `llm/errors` and
- * `llm/auth` (scrubbing the server's secrets from errors), typesys and diagnostics.
+ * `defaults`, `platform` (the version, and `safeFetch` for every HTTP request), `tools/context`,
+ * `tools/errors`, `tools/function_tools`, `tools/types` (the output schema check), `llm/body`
+ * (exact JSON writes), `llm/errors` and `llm/auth` (scrubbing the server's secrets from errors),
+ * typesys and diagnostics.
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
@@ -25,7 +26,7 @@ import { reprText } from "../diagnostics.ts";
 import { scrub } from "../llm/auth.ts";
 import { encodeBody } from "../llm/body.ts";
 import { scrubError } from "../llm/errors.ts";
-import { VERSION } from "../platform.ts";
+import { RedirectError, safeFetch, VERSION } from "../platform.ts";
 import { type JsonObject, parseJson } from "../typesys/json.ts";
 import {
   buildValueAs,
@@ -382,6 +383,32 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
 /** JSON-RPC codes for a request the server can't parse, route or accept. */
 const INVALID_REQUEST_CODES: ReadonlySet<number> = new Set([-32700, -32600, -32601, -32602]);
 
+/** The JSON-RPC code of a request the server refuses as invalid; a refused redirect gets it too. */
+const INVALID_REQUEST = -32600;
+
+/** How long closing an HTTP server waits for the server to end its session. */
+const TERMINATE_SESSION_MS = 5000;
+
+/** The largest integer JSON over HTTP carries exactly: the SDK writes it with `JSON.stringify`. */
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+
+/**
+ * The errors `safeFetch` rejected an MCP HTTP request with because the request failed (no
+ * connection, a reset), so a call that fails with one is a transport error.
+ */
+const transportFailures = new WeakSet<object>();
+
+/**
+ * Remember `error`, what `safeFetch` rejected the request `init` with, as a transport failure
+ * unless it is a refused redirect or the request was aborted; then rethrow it.
+ */
+function remember(error: unknown, init: RequestInit | undefined): never {
+  if (!(error instanceof RedirectError) && !init?.signal?.aborted && typeof error === "object" && error !== null) {
+    transportFailures.add(error);
+  }
+  throw error;
+}
+
 /** One connection of a server: what one `open()` started, and what `close()` ends. */
 interface Generation {
   /** Aborted when the open fails, times out or is closed; ends a pending connect or listing. */
@@ -389,7 +416,7 @@ interface Generation {
   /** The SDK module, once loaded; its error classes classify a failed call. */
   sdk: typeof Sdk | undefined;
   client: Sdk.Client | undefined;
-  transport: StdioTransport | undefined;
+  transport: StdioTransport | Sdk.StreamableHTTPClientTransport | undefined;
   /** `"host"`, or the token of the run that opened the server, once its tools are listed. */
   owner: string | undefined;
   tools: readonly FunctionTool[] | undefined;
@@ -435,6 +462,8 @@ export class McpServer {
   private closeRequested = false;
   /** The texts scrubbed from every error `open()` and a call throw. */
   private readonly secrets: readonly string[];
+  /** How an HTTP server negotiates the protocol era; tests set `"legacy"`. Stdio is always legacy. */
+  private mode: "auto" | "legacy" = "auto";
 
   /** Keep a spec `mcpServer` checked; build a server with `mcpServer`, not this constructor. */
   constructor(spec: McpServerSpec) {
@@ -571,6 +600,7 @@ export class McpServer {
    */
   private async connect(generation: Generation, owner: string, signal: AbortSignal | undefined): Promise<void> {
     const label = this.label;
+    const http = this.spec.url !== undefined;
     const settings = current();
     const connectTimeout = this.spec.connectTimeout ?? settings.mcpConnectTimeoutSeconds;
     generation.callTimeout = this.spec.timeout ?? settings.mcpCallTimeoutSeconds;
@@ -603,11 +633,14 @@ export class McpServer {
     });
     try {
       check();
-      const { sdk, defaultEnv } = await loadSdk(this.spec.command !== undefined);
+      const { sdk, defaultEnv } = await loadSdk(!http);
       check();
       generation.sdk = sdk;
-      const transport = (generation.transport = this.createTransport(defaultEnv, settings.maxMcpMessageBytes));
-      const client = new sdk.Client({ name: "yian", version: VERSION }, { capabilities: {}, listMaxPages: MAX_PAGES });
+      const transport = (generation.transport = this.createTransport(sdk, defaultEnv, settings.maxMcpMessageBytes));
+      const client = new sdk.Client(
+        { name: "yian", version: VERSION },
+        { capabilities: {}, versionNegotiation: http ? { mode: this.mode } : undefined, listMaxPages: MAX_PAGES },
+      );
       generation.client = client;
       client.onclose = () => {
         generation.gone = true;
@@ -632,15 +665,23 @@ export class McpServer {
       generation.outputTypes = listed.outputTypes;
       generation.owner = owner;
     } catch (error) {
-      const tail = generation.transport?.stderrTail() ?? "";
+      const transport = generation.transport;
+      const tail = transport instanceof StdioTransport ? transport.stderrTail() : "";
       const late = `MCP server '${label}' didn't start within ${secondsText(connectTimeout)} s` + tail;
       if (timedOut) throw new McpConnectError(late);
       if (generation.closed) throw new McpConnectError(`MCP server '${label}' was closed while starting`);
       if (signal?.aborted) throw signal.reason;
+      if (!started || error instanceof McpConnectError) throw error;
+      const root = http ? leaf(error, generation.sdk!) : error;
       // The SDK's timeout for a request is what was left of the deadline, so it may fire just
       // before yian's timer.
-      if ((error as { code?: unknown } | null)?.code === "REQUEST_TIMEOUT") throw new McpConnectError(late);
-      if (!started || error instanceof McpConnectError) throw error;
+      if ((root as { code?: unknown } | null)?.code === "REQUEST_TIMEOUT") throw new McpConnectError(late);
+      if (http) {
+        // Only the type and status: the URL and the error text may hold a token.
+        const status = (root as { status?: unknown } | null)?.status;
+        const shown = typeof status === "number" ? ` (HTTP ${status})` : "";
+        throw new McpConnectError(`MCP server '${label}' didn't start: ${errorName(root)}${shown}`, { cause: root });
+      }
       throw new McpConnectError(`MCP server '${label}' didn't start: ${describeError(error)}` + tail, { cause: error });
     } finally {
       clearTimeout(timer);
@@ -648,11 +689,21 @@ export class McpServer {
     }
   }
 
-  /** Return the transport for this server. */
-  private createTransport(defaultEnv: Readonly<Record<string, string>>, maxMessageBytes: number): StdioTransport {
-    const { command, args, env, cwd } = this.spec;
-    if (command === undefined) throw new Error(`MCP server '${this.label}': HTTP servers are not ported yet`);
-    return new StdioTransport({ command, args, env, cwd, maxMessageBytes, defaultEnv });
+  /**
+   * Return the transport for this server: yian's stdio transport, or the SDK's streamable HTTP
+   * transport sending every request through `safeFetch`, which follows no redirect.
+   */
+  private createTransport(
+    sdk: typeof Sdk,
+    defaultEnv: Readonly<Record<string, string>>,
+    maxMessageBytes: number,
+  ): StdioTransport | Sdk.StreamableHTTPClientTransport {
+    const { command, args, env, cwd, url, headers } = this.spec;
+    if (command !== undefined) return new StdioTransport({ command, args, env, cwd, maxMessageBytes, defaultEnv });
+    return new sdk.StreamableHTTPClientTransport(new URL(url!), {
+      fetch: (input, init) => safeFetch(input, init).catch((error: unknown) => remember(error, init)),
+      requestInit: { headers },
+    });
   }
 
   /** End `generation`: its calls, its client and its transport. Never rejects; runs once. */
@@ -661,7 +712,12 @@ export class McpServer {
       generation.stop.abort();
       for (const call of generation.calls) call.abort();
       generation.calls.clear();
-      const transportClosed = generation.transport?.close();
+      const transport = generation.transport;
+      if (transport !== undefined && !(transport instanceof StdioTransport) && transport.sessionId !== undefined) {
+        // Before the transport closes, which would abort the DELETE.
+        await within(transport.terminateSession().catch(() => {}), TERMINATE_SESSION_MS);
+      }
+      const transportClosed = transport?.close();
       try {
         await generation.client?.close();
       } catch {
@@ -676,14 +732,17 @@ export class McpServer {
    * value: the structured content when the server sent it, else the content rendered as text.
    * Every error it throws has this server's secrets scrubbed.
    *
-   * @throws {ToolCheckError} An argument is `Infinity`, which JSON can't carry; nothing is sent.
+   * @throws {ToolCheckError} An argument is `Infinity`, which JSON can't carry, or, for an HTTP
+   *   server, an integer beyond ±(2^53-1); nothing is sent.
    * @throws {Error} The server was never opened.
    * @throws {McpToolError} The server returned an error result, a result that breaks the tool's
    *   `outputSchema`, or the call failed in a way no other error here covers.
    * @throws {McpRequestError} The server answered with a JSON-RPC error; `McpInvalidRequestError`
-   *   for a malformed or unknown request.
+   *   for a malformed or unknown request, or an HTTP server's redirect.
    * @throws {McpTimeoutError} The call outlasted the call timeout.
-   * @throws {McpServerClosed} The server is closed or gone.
+   * @throws {McpTransportError} The HTTP request failed, or the server answered it with an HTTP
+   *   error status.
+   * @throws {McpServerClosed} The server is closed or gone, or an HTTP server forgot the session.
    * @throws {McpCallCancelled} `ctx.signal` aborted before or while the call waited.
    */
   private async callTool(tool: ListedTool, args: Record<string, unknown>, ctx: ToolContext<unknown>): Promise<unknown> {
@@ -697,11 +756,9 @@ export class McpServer {
   /** The body of `callTool`, before scrubbing. */
   private async sendCall(tool: ListedTool, args: Record<string, unknown>, ctx: ToolContext<unknown>): Promise<unknown> {
     const { name, inputSchema } = tool;
-    const path = infinityPath(args);
-    if (path !== null) {
-      throw new ToolCheckError(
-        `tool call '${name}' arguments at ${renderValuePath(path)}: Infinity can't be sent to an MCP server`,
-      );
+    const refused = unsendable(args, this.spec.url !== undefined);
+    if (refused !== null) {
+      throw new ToolCheckError(`tool call '${name}' arguments at ${renderValuePath(refused.path)}: ${refused.reason}`);
     }
     // The connection this call goes to; a later open replaces it.
     const generation = this.generation;
@@ -751,23 +808,45 @@ export class McpServer {
     if (generation.closed || generation.gone) return this.closedError(generation);
     if (signal.aborted) return cancelledError(name);
     const sdk = generation.sdk!;
-    if (error instanceof sdk.SdkError) {
-      if (error.code === sdk.SdkErrorCode.RequestTimeout) {
-        return new McpTimeoutError(
-          `MCP server '${label}' tool '${name}' timed out after ${secondsText(generation.callTimeout)} s`,
-        );
-      }
-      if (error.code === sdk.SdkErrorCode.ConnectionClosed || error.code === sdk.SdkErrorCode.NotConnected) {
+    const code = error instanceof sdk.SdkError ? error.code : undefined;
+    if (code === sdk.SdkErrorCode.RequestTimeout) {
+      return new McpTimeoutError(
+        `MCP server '${label}' tool '${name}' timed out after ${secondsText(generation.callTimeout)} s`,
+      );
+    }
+    if (code === sdk.SdkErrorCode.ConnectionClosed || code === sdk.SdkErrorCode.NotConnected) {
+      return this.closedError(generation);
+    }
+    if (code === undefined && error instanceof Error && error.message === "Not connected") {
+      // The SDK's own error for a request sent after the transport closed.
+      return this.closedError(generation);
+    }
+    const failure = httpFailure(error, sdk);
+    if (failure instanceof RedirectError) {
+      return new McpInvalidRequestError(
+        `MCP server '${label}' redirected the request; yian doesn't follow redirects`,
+        INVALID_REQUEST,
+      );
+    }
+    if (failure instanceof sdk.SdkHttpError) {
+      const transport = generation.transport as Sdk.StreamableHTTPClientTransport;
+      // The server forgot the session (a restart), so this client can't reach it again.
+      if (
+        (failure.status === 404 && transport.sessionId !== undefined) ||
+        (failure.status === 400 && failure.message.includes("Server not initialized"))
+      ) {
         return this.closedError(generation);
       }
-    } else if (error instanceof sdk.ProtocolError) {
+      return new McpTransportError(`MCP server '${label}' transport error (HTTP ${failure.status})`);
+    }
+    if (failure !== undefined) {
+      return new McpTransportError(`MCP server '${label}' transport error (connection failed)`);
+    }
+    if (error instanceof sdk.ProtocolError) {
       const text = `MCP server '${label}' tool '${name}': ${error.message} (code ${error.code})`;
       return INVALID_REQUEST_CODES.has(error.code)
         ? new McpInvalidRequestError(text, error.code)
         : new McpRequestError(text, error.code);
-    } else if (error instanceof Error && error.message === "Not connected") {
-      // The SDK's own error for a request sent after the transport closed.
-      return this.closedError(generation);
     }
     return new McpToolError(`MCP server '${label}' tool '${name}' failed (${errorName(error)})`, { cause: error });
   }
@@ -845,16 +924,20 @@ function errorName(error: unknown): string {
 }
 
 /**
- * Return the path to the first `Infinity` or `-Infinity` in `args`, depth first and in order, or
- * `null` when there is none.
+ * Return the first value in `args` that JSON can't carry to the server, depth first and in order:
+ * `Infinity` or `-Infinity`, and for an HTTP server an integer beyond ±(2^53-1); its path and why;
+ * or `null` when there is none.
  */
-function infinityPath(args: unknown): (string | number)[] | null {
+function unsendable(args: unknown, http: boolean): { path: (string | number)[]; reason: string } | null {
   const stack: [unknown, (string | number)[]][] = [[args, []]];
   // A host may call `execute` directly with a cyclic record; each container is walked once.
   const seen = new Set<object>();
   while (stack.length > 0) {
     const [value, path] = stack.pop()!;
-    if (value === Infinity || value === -Infinity) return path;
+    if (value === Infinity || value === -Infinity) return { path, reason: "Infinity can't be sent to an MCP server" };
+    if (http && typeof value === "bigint" && (value > MAX_SAFE || value < -MAX_SAFE)) {
+      return { path, reason: "an integer beyond ±(2^53-1) can't be sent to an MCP HTTP server" };
+    }
     if (typeof value === "object" && value !== null) {
       if (seen.has(value)) continue;
       seen.add(value);
@@ -890,6 +973,37 @@ async function loadSdk(stdio: boolean): Promise<{ sdk: typeof Sdk; defaultEnv: R
   } catch (cause) {
     throw new Error("MCP servers need the MCP SDK; install @modelcontextprotocol/client 2.3.1", { cause });
   }
+}
+
+/**
+ * Return the error an HTTP connect failed with: under the `EraNegotiationFailed` wrappers that
+ * the `auto` probe puts around it, so both modes report the same error (Python's `_leaf`).
+ */
+function leaf(error: unknown, sdk: typeof Sdk): unknown {
+  let current = error;
+  while (
+    current instanceof sdk.SdkError &&
+    current.code === sdk.SdkErrorCode.EraNegotiationFailed &&
+    current.cause !== undefined
+  ) {
+    current = current.cause;
+  }
+  return current;
+}
+
+/**
+ * Return what failed an HTTP call, when that is a refused redirect, a failed request or an HTTP
+ * error status: `error` itself or, under up to two `SdkError` wrappers, its cause; else `undefined`.
+ */
+function httpFailure(error: unknown, sdk: typeof Sdk): unknown {
+  let current = error;
+  for (let depth = 0; depth <= 2; depth++) {
+    if (current instanceof RedirectError || current instanceof sdk.SdkHttpError) return current;
+    if (typeof current === "object" && current !== null && transportFailures.has(current)) return current;
+    if (!(current instanceof sdk.SdkError)) return undefined;
+    current = current.cause;
+  }
+  return undefined;
 }
 
 /** `<Name>: <message>` for an error, as Python's `type(error).__name__: error`. */

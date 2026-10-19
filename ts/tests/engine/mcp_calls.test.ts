@@ -9,8 +9,10 @@
  * `test_result_value_prefers_structured_content_and_renders_empty_content_as_empty`; and
  * `test_structured_content_failing_the_output_schema_is_a_tool_error` from `test_mcp_errors.py`.
  * Python runs each row in the `auto`, `legacy` and `http` modes; stdio connects only in `legacy`
- * here, and the `http` rows land with the HTTP transport. `test_a_tool_node_calls_a_host_opened_server`
- * is run-level and lands with the runs that open servers.
+ * here, and the HTTP rows run in both the `auto` and `legacy` modes, with an integer past 2^53
+ * read as a `number` over HTTP (the SDK parses with `JSON.parse`) and refused in the arguments.
+ * `test_a_tool_node_calls_a_host_opened_server` is run-level and lands with the runs that open
+ * servers.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -24,7 +26,7 @@ import { isPermanentToolError, isReportedToolError, ToolCheckError } from "../..
 import { isMcpError, type McpServer, mcpServer, McpToolError, resultValue } from "../../src/tools/mcp.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
-import { PNG_BASE64 } from "../fixtures/mcp/fake_server.ts";
+import { type HttpServer, PNG_BASE64, startHttpServer } from "../fixtures/mcp/fake_server.ts";
 import { killMarkers, stdioOptions, strayProcesses } from "./mcp_helpers.ts";
 
 // Opening a server spawns a process; the default 5 s is too tight on a loaded machine.
@@ -40,7 +42,7 @@ async function openFake(flags: string[], label?: string): Promise<McpServer> {
 }
 
 /** The error `promise` rejects with; fails the test when it resolves. */
-async function rejection(promise: Promise<unknown>): Promise<Error> {
+async function rejection(promise: unknown): Promise<Error> {
   try {
     await promise;
   } catch (error) {
@@ -149,7 +151,89 @@ describe("calls to the fake server", () => {
     expect(negative.message).toBe("tool call 'gate' arguments at seconds: Infinity can't be sent to an MCP server");
     expect(await tools().invoke("calls", {})).toEqual(before as Record<string, unknown>);
   });
+
+  test("Infinity reachable through a cycle is refused, and the walk ends", async () => {
+    const slow = server.tools.find((tool) => tool.name === "slow")!;
+    const args: Record<string, unknown> = { seconds: 1 };
+    args.self = args;
+    args.deep = { back: args, bad: Infinity };
+    const error = await rejection(slow.execute(args, context("slow")));
+    expect(error).toBeInstanceOf(ToolCheckError);
+    expect(error.message).toBe("tool call 'slow' arguments at deep.bad: Infinity can't be sent to an MCP server");
+  });
 });
+
+for (const mode of ["auto", "legacy"] as const) {
+  describe(`calls over HTTP (${mode})`, () => {
+    let http: HttpServer;
+    let server: McpServer;
+    const tools = () => new ToolSet({ fake: [...server.tools] });
+
+    beforeAll(async () => {
+      http = await startHttpServer();
+      server = mcpServer({ url: http.url });
+      (server as unknown as { mode: string }).mode = mode;
+      await server.open();
+    });
+
+    afterAll(async () => {
+      await server?.close();
+      await http?.stop();
+    });
+
+    test("test_echo_returns_the_text", async () => {
+      expect(await tools().invoke("echo", { text: "hi" })).toBe("hi");
+    });
+
+    test("test_structured_content_is_the_value", async () => {
+      expect(await tools().invoke("add", { a: 1, b: 2 })).toEqual({ result: 3 });
+    });
+
+    test("test_the_call_meta_carries_the_call_id_and_attempt", async () => {
+      const bound = tools().forRun("run-1");
+      expect(await bound.invoke("whoami", {}, { node: "n", attempt: 2 })).toBe("run-1/n 2");
+    });
+
+    test("test_media_blocks_become_one_line_markers", async () => {
+      const size = Buffer.from(PNG_BASE64, "base64").length;
+      expect(await tools().invoke("picture", {})).toBe(`[image image/png, ${size} B]\n\ncaption`);
+      expect(await tools().invoke("resource", {})).toBe("note body\n\n[resource file:///a.png image/png]");
+    });
+
+    test("test_calls_from_many_threads_run_at_once", async () => {
+      const set = tools();
+      const start = performance.now();
+      const results = await Promise.all(Array.from({ length: 8 }, () => set.invoke("gate", { seconds: 0.3 })));
+      expect(results).toEqual(Array(8).fill("done"));
+      // One after another they would take 2.4 s; `peak` is shared with the other mode's server.
+      expect(performance.now() - start).toBeLessThan(2000);
+      expect(((await set.invoke("peak", {})) as { result: number }).result).toBeGreaterThan(1);
+    });
+
+    test("an integer past 2^53 in structured content is a number over HTTP", async () => {
+      const value = (await tools().invoke("big", {})) as { n: unknown };
+      expect(value).toEqual({ n: 18446744073709552000 });
+      expect(typeof value.n).toBe("number");
+    });
+
+    test("a tool with an x-mcp-header parameter answers", async () => {
+      expect(await tools().invoke("region", { region: "eu" })).toBe("eu");
+    });
+
+    test("an integer past 2^53 in the arguments is refused before the server is called", async () => {
+      const before = await tools().invoke("calls", {});
+      const slow = server.tools.find((tool) => tool.name === "slow")!;
+      const message = (path: string) =>
+        `tool call 'slow' arguments at ${path}: an integer beyond ±(2^53-1) can't be sent to an MCP HTTP server`;
+      const error = await rejection(slow.execute({ seconds: 2n ** 60n }, context("slow")));
+      expect(error).toBeInstanceOf(ToolCheckError);
+      expect(error.message).toBe(message("seconds"));
+      const nested = await rejection(slow.execute({ seconds: 1, extra: [1, -(2n ** 53n)] }, context("slow")));
+      expect(nested.message).toBe(message("extra[1]"));
+      expect(await tools().invoke("calls", {})).toEqual(before as Record<string, unknown>);
+    });
+  });
+}
 
 describe("tools that break their output schema", () => {
   let server: McpServer;

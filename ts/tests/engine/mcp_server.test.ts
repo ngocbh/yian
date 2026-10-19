@@ -11,10 +11,12 @@
  * `test_open_twice_and_tools_when_closed_raise_and_close_is_idempotent`,
  * `test_keyboard_interrupt_during_open_closes_the_server` (as an aborted `signal`),
  * `test_close_from_another_thread_during_open_fails_the_open` and
- * `test_a_close_leaves_alone_a_connection_opened_while_it_waited`; the MCP error classes; and
- * yian's stdio transport driven by a bare SDK client, as `tests/engine/test_mcp_fake_server.py`
- * drives the fake server. Tool calls are in `mcp_calls.test.ts`; the HTTP rows and the rest of
- * `test_mcp_errors.py` land with the HTTP transport and the call errors.
+ * `test_a_close_leaves_alone_a_connection_opened_while_it_waited`,
+ * `test_http_server_lists_tools_and_sends_headers` and
+ * `test_http_server_that_is_down_fails_without_leaking_the_url` (each HTTP row in the `auto` and
+ * `legacy` modes), and the refusal of a redirect at open; the MCP error classes; and yian's stdio
+ * transport driven by a bare SDK client, as `tests/engine/test_mcp_fake_server.py` drives the fake
+ * server. Tool calls are in `mcp_calls.test.ts`, call errors in `mcp_errors.test.ts`.
  */
 
 import { spawnSync } from "node:child_process";
@@ -57,8 +59,28 @@ import {
   listAll,
   StdioTransport,
 } from "../../src/tools/mcp.ts";
+import { RedirectError } from "../../src/platform.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { childAlive, killMarkers, pids, stdioOptions, strayProcesses, trackServers, waitFor } from "./mcp_helpers.ts";
+import {
+  type HttpServer,
+  type HttpServerOptions,
+  startHttpServer,
+  startRedirectServer,
+} from "../fixtures/mcp/fake_server.ts";
+import {
+  childAlive,
+  freePort,
+  killMarkers,
+  pids,
+  stdioOptions,
+  strayProcesses,
+  trackServers,
+  waitFor,
+} from "./mcp_helpers.ts";
+
+/** How an HTTP server negotiates the protocol era: `auto`, the default, or the private `legacy`. */
+type Mode = "auto" | "legacy";
+const MODES: readonly Mode[] = ["auto", "legacy"];
 
 /** Call `mcpServer` with `options`, which may be ill-typed on purpose. */
 function build(options: Record<string, unknown>): McpServer {
@@ -818,6 +840,17 @@ describe("McpServer open and close", () => {
   );
 
   test(
+    "a connect timeout too small for fixed notation prints as Python's :g does",
+    async () => {
+      const s = server(["--hang", "--marker", marker()], { connectTimeout: 0.00001, label: "hung" });
+      const error = await rejection(s.open());
+      expect(error).toBeInstanceOf(McpConnectError);
+      expect(error.message).toBe("MCP server 'hung' didn't start within 1e-05 s");
+    },
+    SLOW,
+  );
+
+  test(
     "a server that exits on a request before initialize still opens",
     async () => {
       const s = await server(["--exit-before-init", "--only", "echo"]).open();
@@ -953,8 +986,63 @@ describe("McpServer open and close", () => {
     SLOW,
   );
 
-  test("a url server can't open yet", async () => {
-    const error = await rejection(tracker.track(mcpServer({ url: "http://localhost:1/mcp" })).open());
-    expect(error.message).toBe("MCP server 'localhost': HTTP servers are not ported yet");
-  });
+  /** The fake server over HTTP, stopped in `afterEach`. */
+  const serveHttp = async (options: HttpServerOptions = {}): Promise<HttpServer> => {
+    const http = await startHttpServer(options);
+    tracker.track({ close: () => http.stop() });
+    return http;
+  };
+
+  /** An unopened server built from `options` that connects in `mode`, closed in `afterEach`. */
+  const httpServer = (options: McpServerOptions, mode: Mode): McpServer => {
+    const s = tracker.track(mcpServer(options));
+    (s as unknown as { mode: Mode }).mode = mode;
+    return s;
+  };
+
+  for (const mode of MODES) {
+    test(`test_http_server_lists_tools_and_sends_headers (${mode})`, async () => {
+      const http = await serveHttp();
+      const s = httpServer({ url: http.url, headers: { "x-test": "v" } }, mode);
+      await s.open();
+      const names = s.tools.map((tool) => tool.name);
+      expect(await new ToolSet({ fake: [...s.tools] }).invoke("headers", {})).toBe("v");
+      await s.close();
+      expect(http.recordedHeaders.some((headers) => headers["x-test"] === "v")).toBe(true);
+      expect(names).toEqual((await bareListing()).map((tool) => tool.name));
+      expect(s.label).toBe("localhost");
+    }, SLOW);
+
+    test(`redirect refusal at open (${mode})`, async () => {
+      const real = await serveHttp();
+      const redirect = await startRedirectServer(real.url);
+      tracker.track({ close: () => redirect.stop() });
+      const s = httpServer({ url: redirect.url, label: "moved" }, mode);
+      const error = await rejection(s.open());
+      expect(error).toBeInstanceOf(McpConnectError);
+      expect(error.message).toBe("MCP server 'moved' didn't start: RedirectError (HTTP 307)");
+      expect(error.cause).toBeInstanceOf(RedirectError);
+      expect(s.isOpen).toBe(false);
+      expect(redirect.hits).toBeGreaterThan(0);
+      // Not even a request with the real server's host header reached it.
+      expect(real.recordedHeaders).toEqual([]);
+    });
+  }
+
+  test("test_http_server_that_is_down_fails_without_leaking_the_url", async () => {
+    const port = await freePort();
+    const messages: string[] = [];
+    for (const mode of MODES) {
+      const s = httpServer({ url: `http://localhost:${port}/mcp?token=SECRET`, connectTimeout: 5 }, mode);
+      const error = await rejection(s.open());
+      expect(error).toBeInstanceOf(McpConnectError);
+      expect(error.message).not.toContain("SECRET");
+      expect(error.message).not.toContain(String(port));
+      expect(error.cause).toBeInstanceOf(Error);
+      expect(s.isOpen).toBe(false);
+      messages.push(error.message);
+    }
+    // The `auto` probe's `EraNegotiationFailed` wrapper is unwrapped, so both modes say the same.
+    expect(messages).toEqual(["MCP server 'localhost' didn't start: TypeError", messages[0]!]);
+  }, SLOW);
 });

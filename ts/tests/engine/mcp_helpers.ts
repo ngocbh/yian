@@ -5,6 +5,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { type AddressInfo, createServer } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,6 +23,18 @@ export function stdioOptions(...flags: string[]): { command: string; args: strin
   // Without `--no-install`, Bun may try to install the fixture's imports from the network.
   const runtimeFlags = process.versions.bun === undefined ? [] : ["--no-install"];
   return { command: process.execPath, args: [...runtimeFlags, FAKE, ...flags] };
+}
+
+/** A TCP port on 127.0.0.1 that was free a moment ago. */
+export function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as AddressInfo;
+      server.close(() => resolve(port));
+    });
+  });
 }
 
 /** Whether process `pid` exists and is not a zombie. */

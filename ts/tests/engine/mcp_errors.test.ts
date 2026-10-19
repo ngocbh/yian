@@ -13,11 +13,14 @@
  * (a real close and re-open) and `test_a_call_with_the_stop_already_set_is_cancelled_before_it_is_sent`;
  * plus the message cap through a server, a failed open, and the scrubbing of the server's secrets.
  *
+ * Over HTTP: `test_a_stopped_http_server_is_a_transport_error_and_a_restart_recovers`,
+ * `test_a_restarted_session_http_server_is_closed`, a redirect mid-session (Python's
+ * `test_an_sdk_redirect_answer_hides_the_location`, through a real server), the DELETE that
+ * closing a session server sends, and the scrubbing of a header's value and bare token.
+ *
  * Elsewhere: `test_structured_content_failing_the_output_schema_is_a_tool_error` is in
- * `mcp_calls.test.ts`. The HTTP rows (`test_a_stopped_http_server_is_a_transport_error_and_a_restart_recovers`,
- * `test_a_restarted_session_http_server_is_closed`, and `test_an_sdk_redirect_answer_hides_the_location`
- * and `test_a_raw_timeout_is_a_transport_error`, which become the mid-session redirect and
- * stopped-server rows) land with the HTTP transport. The TOOL and AGENT rows
+ * `mcp_calls.test.ts`. Not ported: `test_a_raw_timeout_is_a_transport_error` (a failed request is
+ * recognized by the error `safeFetch` rejects with, which the stopped-server row covers). The TOOL and AGENT rows
  * (`test_tool_node_retries_follow_the_error_class`,
  * `test_an_agent_model_reads_an_mcp_error_result_and_the_node_succeeds`) are run-level and land
  * with the runs that open servers. Not ported: `test_a_request_error_survives_a_pickle_round_trip`
@@ -51,6 +54,12 @@ import {
   McpTransportError,
 } from "../../src/tools/mcp.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
+import {
+  type HttpServer,
+  type HttpServerOptions,
+  REDIRECT_LOCATION,
+  startHttpServer,
+} from "../fixtures/mcp/fake_server.ts";
 import { killMarkers, stdioOptions, strayProcesses, trackServers } from "./mcp_helpers.ts";
 
 // Process tests get 15 s; the `< N s` assertions are the real check.
@@ -269,6 +278,8 @@ describe("errors that end a call", () => {
       const closing = server.close();
       // The stale call fails while the new connection opens, after `close()` detached the old one.
       const reopening = server.open();
+      // Still awaited below; this keeps a failing `stale` check from leaving it unhandled.
+      reopening.catch(() => {});
       expect(await rejection(stale)).toBeInstanceOf(McpServerClosed);
       await reopening;
       await closing;
@@ -318,7 +329,7 @@ describe("scrubbing the server's secrets", () => {
       const error = await rejection(tools(server).invoke("echo_secret", {}));
       expect(error).toBeInstanceOf(McpToolError);
       expect(error.message).toBe("secret: [REDACTED]");
-      expect(String(error.cause)).not.toContain(secret);
+      expect(error.cause).toBeUndefined();
       expect(error.stack ?? "").not.toContain(secret);
     },
     SLOW,
@@ -347,4 +358,85 @@ describe("scrubbing the server's secrets", () => {
     },
     SLOW,
   );
+
+  test("a header's value and its bare token are scrubbed from a call's error", async () => {
+    const http = await serveHttp();
+    const server = await httpServer({ url: http.url, headers: { "x-secret": "Bearer tok-1234567" } }).open();
+    const error = await rejection(tools(server).invoke("echo_secret", {}));
+    expect(error).toBeInstanceOf(McpToolError);
+    expect(error.message).toBe("secret: \nx-secret: [REDACTED]\ntoken: [REDACTED]");
+    expect(error.stack ?? "").not.toContain("tok-1234567");
+  });
+});
+
+/** The fake server over HTTP, stopped in `afterEach`. */
+async function serveHttp(options: HttpServerOptions = {}): Promise<HttpServer> {
+  const http = await startHttpServer(options);
+  tracker.track({ close: () => http.stop() });
+  return http;
+}
+
+/** An unopened server built from `options` that connects in `mode`, closed in `afterEach`. */
+function httpServer(options: McpServerOptions, mode: "auto" | "legacy" = "auto"): McpServer {
+  const server = tracker.track(mcpServer(options));
+  (server as unknown as { mode: string }).mode = mode;
+  return server;
+}
+
+describe("errors over HTTP", () => {
+  for (const mode of ["auto", "legacy"] as const) {
+    test(`a redirect mid-session is an invalid request that hides the location (${mode})`, async () => {
+      const http = await serveHttp({ redirectAfterInit: true });
+      const server = await httpServer({ url: http.url }, mode).open();
+      const error = await rejection(tools(server).invoke("echo", { text: "x" }));
+      expect(error).toBeInstanceOf(McpInvalidRequestError);
+      expect((error as McpInvalidRequestError).code).toBe(-32600);
+      expect(error.message).toBe("MCP server 'localhost' redirected the request; yian doesn't follow redirects");
+      expect(isPermanentToolError(error)).toBe(true);
+      expect(error.message).not.toContain(new URL(REDIRECT_LOCATION).host);
+      // Nothing carries the Location: the `RedirectError` isn't kept as the cause.
+      expect(error.cause).toBeUndefined();
+    });
+  }
+
+  test("test_a_stopped_http_server_is_a_transport_error_and_a_restart_recovers", async () => {
+    let http = await serveHttp();
+    const server = await httpServer({ url: `${http.url}?token=SECRET`, label: "remote" }).open();
+    const set = tools(server);
+    expect(await set.invoke("echo", { text: "up" })).toBe("up");
+    const port = http.port;
+    await http.stop();
+    const error = await rejection(set.invoke("echo", { text: "down" }));
+    expect(error).toBeInstanceOf(McpTransportError);
+    expect(isReportedToolError(error)).toBe(true);
+    expect(isTransientToolError(error)).toBe(true);
+    expect(error.message).toBe("MCP server 'remote' transport error (connection failed)");
+    expect(error.message).not.toContain("SECRET");
+    expect(server.isOpen).toBe(true);
+    expect(server.isClosed).toBe(false);
+    http = await serveHttp({ port });
+    expect(await set.invoke("echo", { text: "back" })).toBe("back");
+  });
+
+  test("test_a_restarted_session_http_server_is_closed", async () => {
+    const http = await serveHttp({ stateful: true });
+    const server = await httpServer({ url: http.url, label: "restarted" }, "legacy").open();
+    const set = tools(server);
+    expect(await set.invoke("echo", { text: "up" })).toBe("up");
+    await http.stop();
+    await serveHttp({ port: http.port, stateful: true });
+    const error = await rejection(set.invoke("echo", { text: "lost session" }));
+    expect(error).toBeInstanceOf(McpServerClosed);
+    expect(error.message).toBe("MCP server 'restarted' is closed");
+    expect(server.isClosed).toBe(true);
+  });
+
+  test("closing a session server sends a DELETE", async () => {
+    const http = await serveHttp({ stateful: true });
+    const server = await httpServer({ url: http.url }, "legacy").open();
+    expect(await tools(server).invoke("echo", { text: "x" })).toBe("x");
+    expect(http.recordedMethods).not.toContain("DELETE");
+    await server.close();
+    expect(http.recordedMethods).toContain("DELETE");
+  });
 });

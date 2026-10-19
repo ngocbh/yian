@@ -2,13 +2,17 @@
  * A fake MCP server with one tool per behaviour the MCP client tests need, a port of yian's
  * `tests/fixtures/mcp/fake_server.py`, `paged_server.py` and `bad_output_server.py`.
  *
- * Import `buildServer` to serve it in-process, or run this file as a script to serve it over stdio
- * (`bun --no-install tests/fixtures/mcp/fake_server.ts [flags]`, or built, `node
- * dist/tests/fixtures/mcp/fake_server.js [flags]`).
+ * Import `buildServer` to serve it in-process, `startHttpServer` to serve it over streamable HTTP
+ * in-process, or run this file as a script to serve it over stdio (`bun --no-install
+ * tests/fixtures/mcp/fake_server.ts [flags]`, or built, `node dist/tests/fixtures/mcp/fake_server.js
+ * [flags]`).
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, realpathSync, statSync } from "node:fs";
+import { createServer, type IncomingMessage } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
 import { PassThrough, type Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -16,6 +20,8 @@ import { parseArgs } from "node:util";
 import {
   type CallToolRequest,
   type CallToolResult,
+  createMcpHandler,
+  isLegacyRequest,
   McpServer,
   ProtocolError,
   Server,
@@ -24,6 +30,7 @@ import {
   type StandardSchemaWithJSON,
   type Tool,
   type ToolCallback,
+  WebStandardStreamableHTTPServerTransport,
 } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
@@ -205,10 +212,26 @@ export function buildServer({ name = "fake", only, marker, flood }: FakeServerOp
       return big();
     },
   );
-  tool("echo_secret", { description: "Fail with an error result naming `SECRET_TOKEN`'s value." }, () => ({
-    content: [{ type: "text", text: `secret: ${process.env.SECRET_TOKEN ?? ""}` }],
-    isError: true,
-  }));
+  tool(
+    "echo_secret",
+    { description: "Fail naming `SECRET_TOKEN`'s value and, over HTTP, the `x-secret` header and its last word." },
+    (ctx) => {
+      const header = ctx.http?.req?.headers.get("x-secret");
+      const echoed = header == null ? "" : `\nx-secret: ${header}\ntoken: ${header.split(" ").pop()}`;
+      return { content: [{ type: "text", text: `secret: ${process.env.SECRET_TOKEN ?? ""}${echoed}` }], isError: true };
+    },
+  );
+  tool("headers", { description: 'Return the request\'s `x-test` HTTP header, or "" when there is none.' }, (ctx) =>
+    text(ctx.http?.req?.headers.get("x-test") ?? ""),
+  );
+  tool(
+    "region",
+    {
+      description: "Return `region`, which a modern HTTP client also sends as the `Mcp-Param-Region` header.",
+      inputSchema: z.object({ region: z.string().meta({ "x-mcp-header": "Region" }) }),
+    },
+    ({ region }) => text(region),
+  );
 
   // Python's `_CountingServer.call_tool`: count every call but `calls`, and answer the error tools.
   const inner = toolsCallHandler(srv);
@@ -230,6 +253,168 @@ function toolsCallHandler(
 ): ((request: CallToolRequest, ctx: ServerContext) => Promise<CallToolResult>) | undefined {
   // `_getRequestHandler` is protected; the SDK has no public way to wrap a registered handler.
   return (srv.server as unknown as { _getRequestHandler(method: string): never })._getRequestHandler("tools/call");
+}
+
+/** Options for {@link startHttpServer}. */
+export interface HttpServerOptions {
+  /** Tool names to keep. Unset keeps every tool. */
+  only?: Iterable<string>;
+  /** The port to listen on; 0, the default, picks a free one. */
+  port?: number;
+  /**
+   * Serve 2025-era traffic from one session-keeping transport, so a restart forgets the session;
+   * otherwise each legacy request is served statelessly.
+   */
+  stateful?: boolean;
+  /** Answer every request after the first `tools/list` with a 307 to another local URL. */
+  redirectAfterInit?: boolean;
+}
+
+/** The fake server over streamable HTTP, from {@link startHttpServer}. */
+export interface HttpServer {
+  /** The MCP endpoint. */
+  readonly url: string;
+  readonly port: number;
+  /** The headers of every request served so far, names in lower case. */
+  readonly recordedHeaders: Record<string, string>[];
+  /** The method of every request served so far. */
+  readonly recordedMethods: string[];
+  /** Stop serving and drop open connections; a second call does nothing more. */
+  stop(): Promise<void>;
+}
+
+/** Where `redirectAfterInit` sends requests; its path and query must never reach an error. */
+export const REDIRECT_LOCATION = "http://127.0.0.1:1/elsewhere?token=SECRET-LOCATION";
+
+/**
+ * Serve `handle` on 127.0.0.1 through `node:http`, each request turned into a web `Request` and
+ * the `Response` written back as it streams. `close` stops listening and drops open connections.
+ */
+function listen(
+  port: number,
+  handle: (request: Request, req: IncomingMessage) => Promise<Response>,
+): Promise<{ port: number; close: () => Promise<void> }> {
+  let bound = port;
+  const sockets = new Set<Socket>();
+  const listener = createServer((req, res) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      const headers = new Headers();
+      for (let i = 0; i < req.rawHeaders.length; i += 2) headers.append(req.rawHeaders[i]!, req.rawHeaders[i + 1]!);
+      const method = req.method ?? "GET";
+      const body = method === "POST" || method === "DELETE" ? Buffer.concat(chunks) : undefined;
+      const response = await handle(new Request(`http://127.0.0.1:${bound}${req.url}`, { method, headers, body }), req);
+      res.writeHead(response.status, Object.fromEntries(response.headers));
+      // An SSE stream's headers must reach the client before its first event.
+      res.flushHeaders();
+      if (response.body !== null) {
+        const reader = response.body.getReader();
+        res.once("close", () => void reader.cancel().catch(() => {}));
+        for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) res.write(chunk.value);
+      }
+      res.end();
+    })().catch(() => res.destroy());
+  });
+  // Tracked by hand: Bun's `closeAllConnections` leaves a streaming response's connection open.
+  listener.on("connection", (socket: Socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
+  const close = () => {
+    const closed = new Promise<void>((resolve) => listener.close(() => resolve()));
+    for (const socket of sockets) socket.destroy();
+    return closed;
+  };
+  return new Promise((resolve, reject) => {
+    listener.once("error", reject);
+    listener.listen(port, "127.0.0.1", () => {
+      bound = (listener.address() as AddressInfo).port;
+      resolve({ port: bound, close });
+    });
+  });
+}
+
+/** Whether `body` is a JSON-RPC `tools/list` request. */
+function isToolsList(body: string): boolean {
+  try {
+    return JSON.parse(body).method === "tools/list";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Serve the fake server over streamable HTTP on 127.0.0.1: the SDK's modern handler with its
+ * stateless legacy fallback, or with `stateful` a session-keeping transport for 2025-era traffic.
+ * Each start builds fresh state, so a server stopped and started on the same port forgets its
+ * sessions.
+ */
+export async function startHttpServer({
+  only,
+  port = 0,
+  stateful = false,
+  redirectAfterInit = false,
+}: HttpServerOptions = {}): Promise<HttpServer> {
+  const keep = only === undefined ? undefined : [...only];
+  const modern = createMcpHandler(() => buildServer({ only: keep }));
+  let session: WebStandardStreamableHTTPServerTransport | undefined;
+  if (stateful) {
+    session = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() });
+    await buildServer({ only: keep }).connect(session);
+  }
+  const recordedHeaders: Record<string, string>[] = [];
+  const recordedMethods: string[] = [];
+  let redirecting = false;
+  const { port: bound, close } = await listen(port, async (request, req) => {
+    recordedHeaders.push(
+      Object.fromEntries(Object.entries(req.headers).map(([name, value]) => [name, [value].flat().join(", ")])),
+    );
+    recordedMethods.push(request.method);
+    if (redirecting) return new Response(null, { status: 307, headers: { location: REDIRECT_LOCATION } });
+    if (redirectAfterInit && isToolsList(await request.clone().text())) redirecting = true;
+    if (session !== undefined && (await isLegacyRequest(request))) return session.handleRequest(request);
+    return modern.fetch(request);
+  });
+  let stopped: Promise<void> | undefined;
+  return {
+    url: `http://localhost:${bound}/mcp`,
+    port: bound,
+    recordedHeaders,
+    recordedMethods,
+    stop: () =>
+      (stopped ??= (async () => {
+        await close();
+        await modern.close();
+        await session?.close();
+      })()),
+  };
+}
+
+/** A server that answers every request with a 307 to `target`, from {@link startRedirectServer}. */
+export interface RedirectServer {
+  readonly url: string;
+  /** How many requests it answered. */
+  readonly hits: number;
+  /** Stop serving and drop open connections; a second call does nothing more. */
+  stop(): Promise<void>;
+}
+
+/** Serve a 307 to `target` for every request on 127.0.0.1. */
+export async function startRedirectServer(target: string): Promise<RedirectServer> {
+  let hits = 0;
+  let stopped: Promise<void> | undefined;
+  const { port, close } = await listen(0, async () => {
+    hits += 1;
+    return new Response(null, { status: 307, headers: { location: target } });
+  });
+  return {
+    url: `http://localhost:${port}/mcp`,
+    get hits() {
+      return hits;
+    },
+    stop: () => (stopped ??= close()),
+  };
 }
 
 /** A low-level server listing one tool per page, following a cursor; tool `pageK` answers "K". */

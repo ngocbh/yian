@@ -1,0 +1,82 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "sub_forced_closed: a closed record on the ChatGPT subscription: the forced Record tool, system text in instructions. openai/gpt-5.5 on openai_responses. Subscription route. Schema Rec (corpus:Rec), name Record. Strategy forced_tool. Request: tools [Record the function-tool parameters of Rec]; tool_choice {type: \"function\", name: \"Record\"}; parallel_tool_calls false. Expected: plan.parse(response) returns {\"answer\":\"x\",\"score\":1}.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://chatgpt.com/backend-api/codex/responses",
+        "headers": {
+          "authorization": "<redacted>",
+          "accept": "application/json",
+          "content-type": "application/json",
+          "chatgpt-account-id": "<redacted>",
+          "originator": "yian"
+        },
+        "json": {
+          "model": "gpt-5.5",
+          "input": [
+            {
+              "content": "Answer.",
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "stream": true,
+          "tools": [
+            {
+              "type": "function",
+              "name": "Record",
+              "description": "",
+              "parameters": {
+                "properties": {
+                  "answer": {
+                    "type": "string"
+                  },
+                  "score": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "answer",
+                  "score"
+                ],
+                "type": "object"
+              }
+            }
+          ],
+          "tool_choice": {
+            "type": "function",
+            "name": "Record"
+          },
+          "parallel_tool_calls": false,
+          "store": false,
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "instructions": "You are terse."
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "event: response.created\ndata: {\"type\": \"response.created\", \"sequence_number\": 0, \"response\": {\"id\": \"resp_1\", \"object\": \"response\", \"created_at\": 1700000000, \"status\": \"in_progress\", \"model\": \"gpt-5.5\", \"output\": [], \"error\": null, \"incomplete_details\": null, \"usage\": null, \"parallel_tool_calls\": true, \"tool_choice\": \"auto\", \"tools\": []}}\n\n",
+          "event: response.output_item.added\ndata: {\"type\": \"response.output_item.added\", \"output_index\": 0, \"sequence_number\": 1, \"item\": {\"id\": \"rs_1\", \"type\": \"reasoning\", \"summary\": [], \"encrypted_content\": null}}\n\n",
+          "event: response.reasoning_summary_part.added\ndata: {\"type\": \"response.reasoning_summary_part.added\", \"output_index\": 0, \"item_id\": \"rs_1\", \"summary_index\": 0, \"sequence_number\": 2, \"part\": {\"type\": \"summary_text\", \"text\": \"\"}}\n\n",
+          "event: response.reasoning_summary_text.delta\ndata: {\"type\": \"response.reasoning_summary_text.delta\", \"output_index\": 0, \"item_id\": \"rs_1\", \"summary_index\": 0, \"sequence_number\": 3, \"delta\": \"Thinking about it.\"}\n\n",
+          "event: response.output_item.done\ndata: {\"type\": \"response.output_item.done\", \"output_index\": 0, \"sequence_number\": 4, \"item\": {\"id\": \"rs_1\", \"type\": \"reasoning\", \"summary\": [{\"type\": \"summary_text\", \"text\": \"Thinking about it.\"}], \"encrypted_content\": \"ENC-CONTINUATION-1\"}}\n\n",
+          "event: response.output_item.added\ndata: {\"type\": \"response.output_item.added\", \"output_index\": 1, \"sequence_number\": 5, \"item\": {\"id\": \"fc_1\", \"type\": \"function_call\", \"name\": \"Record\", \"arguments\": \"\", \"call_id\": \"call_1\", \"status\": \"in_progress\"}}\n\n",
+          "event: response.function_call_arguments.delta\ndata: {\"type\": \"response.function_call_arguments.delta\", \"output_index\": 1, \"item_id\": \"fc_1\", \"sequence_number\": 6, \"delta\": \"{\\\"answer\\\": \\\"x\"}\n\n",
+          "event: response.function_call_arguments.delta\ndata: {\"type\": \"response.function_call_arguments.delta\", \"output_index\": 1, \"item_id\": \"fc_1\", \"sequence_number\": 7, \"delta\": \"\\\", \\\"score\\\": 1}\"}\n\n",
+          "event: response.function_call_arguments.done\ndata: {\"type\": \"response.function_call_arguments.done\", \"output_index\": 1, \"item_id\": \"fc_1\", \"sequence_number\": 8, \"arguments\": \"{\\\"answer\\\": \\\"x\\\", \\\"score\\\": 1}\"}\n\n",
+          "event: response.output_item.done\ndata: {\"type\": \"response.output_item.done\", \"output_index\": 1, \"sequence_number\": 9, \"item\": {\"id\": \"fc_1\", \"type\": \"function_call\", \"name\": \"Record\", \"arguments\": \"{\\\"answer\\\": \\\"x\\\", \\\"score\\\": 1}\", \"call_id\": \"call_1\", \"status\": \"completed\"}}\n\n",
+          "event: response.completed\ndata: {\"type\": \"response.completed\", \"sequence_number\": 10, \"response\": {\"id\": \"resp_1\", \"object\": \"response\", \"created_at\": 1700000000, \"status\": \"completed\", \"model\": \"gpt-5.5\", \"output\": [{\"id\": \"rs_1\", \"type\": \"reasoning\", \"summary\": [{\"type\": \"summary_text\", \"text\": \"Thinking about it.\"}], \"encrypted_content\": \"ENC-CONTINUATION-1\"}, {\"id\": \"fc_1\", \"type\": \"function_call\", \"name\": \"Record\", \"arguments\": \"{\\\"answer\\\": \\\"x\\\", \\\"score\\\": 1}\", \"call_id\": \"call_1\", \"status\": \"completed\"}], \"error\": null, \"incomplete_details\": null, \"usage\": {\"input_tokens\": 21, \"input_tokens_details\": {\"cached_tokens\": 5}, \"output_tokens\": 40, \"output_tokens_details\": {\"reasoning_tokens\": 30}, \"total_tokens\": 61}, \"parallel_tool_calls\": true, \"tool_choice\": \"auto\", \"tools\": []}}\n\n"
+        ]
+      }
+    }
+  ]
+}

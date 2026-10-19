@@ -411,11 +411,6 @@ function jsonText(value: JsonValue): string {
     .join(",")}}`;
 }
 
-/** Return `names` as Python's repr of a list of strings: `['a', 'b']`. */
-function reprList(names: readonly string[]): string {
-  return `[${names.map(reprText).join(", ")}]`;
-}
-
 /** Grammar shared by memory names, memory type names and `uses:` scope segments. */
 export const MEMORY_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
@@ -524,7 +519,7 @@ function checkedConfig(name: unknown, typeName: unknown, config: unknown): JsonO
       .sort(compareCodeUnits);
     if (extra.length > 0) {
       throw new RangeError(
-        `${type} memory config has unknown key(s) ${reprList(extra)} ` +
+        `${type} memory config has unknown key(s) ${jsonText(extra)} ` +
           `(allowed: ${[...allowed].sort(compareCodeUnits).join(", ")})`,
       );
     }

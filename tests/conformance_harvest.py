@@ -28,6 +28,7 @@ Design section 4.4 explains the harvest; `conformance/README.md` defines the cas
 
 from __future__ import annotations
 
+import ast
 from collections import Counter
 from collections.abc import Callable, Collection
 import dataclasses
@@ -1485,42 +1486,98 @@ def _ts_value_repr(value: object) -> str:
     return shown_text(text)
 
 
-# The `value_repr` callers that pass it a name or a key, as `(path under src/yian, co_qualname)`.
-# Design 3.2.8 keeps Python's repr for a name, so a message quoting one reads as in Python.
-# The `_json_value_error` entry also covers its two value sites, which show only non-JSON values
-# (no TS counterpart).
-_NAME_CALLERS = frozenset({
-    ("nodes/binding.py", "check_input_names.<locals>.<genexpr>"),
-    ("nodes/contracts.py", "validate_output_contract.<locals>.<genexpr>"),
-    ("typesys/values.py", "_build_for_type.<locals>.<genexpr>"),
-    ("typesys/values.py", "reject_non_text_keys"),
-    ("typesys/values.py", "plain_containers"),
-    ("typesys/values.py", "_json_value_error"),
-    ("typesys/values.py", "_dict_children"),
-    ("typesys/values.py", "_nesting_segment"),
-})
+# A bracketed list of one or more quoted texts, as Python's repr writes a list of names (and
+# a quoted key, `x['k']`) and as `", ".join` of text-form names gives one (`["a", "b"]`).
+_QUOTED = r"'(?:[^'\\\n]|\\.)*'" "|" r'"(?:[^"\\\n]|\\.)*"'
+_NAME_LIST = re.compile(rf"\[(?:{_QUOTED})(?:, (?:{_QUOTED}))*\]")
+# A single-quoted item in a `_NAME_LIST` match: Python's repr, not JSON.
+_PYTHON_QUOTED = re.compile(r"(?:^\[|, )'")
 
 
-def _from_name_caller() -> bool:
-    """Return whether the first calling frame outside this file is one of `_NAME_CALLERS`."""
-    frame = sys._getframe(1)
-    # Skip this file's frames, so a key-order wrapper in between doesn't hide the caller.
-    while frame.f_code.co_filename == __file__:
-        frame = frame.f_back
-    code = frame.f_code
-    path = code.co_filename.removeprefix(_YIAN_DIR).replace(os.sep, "/")
-    return (path, code.co_qualname) in _NAME_CALLERS
+def _ts_names(text: str, python_only: bool = False) -> str:
+    """Return `text` with each bracketed list of quoted texts written as compact JSON.
+
+    So `unknown key(s) ['max_items']` reads `unknown key(s) ["max_items"]`, `["a", "b"]` reads
+    `["a","b"]`, and a quoted key `x['my key']` reads `x["my key"]`, as TS writes them.
+    A list holding anything but texts is left alone, but a list of texts nested in another
+    list or a mapping is converted alone (`{'k': ['a']}` reads `{'k': ["a"]}`). With
+    `python_only`, a list whose texts are all double-quoted (JSON, as `json.dumps` writes it)
+    is left alone too, as is Python's list of names that each hold a `'`. Not matched: a list cut by `shown_text`, and names joined without
+    brackets by Python's own `", ".join(repr(...))`. Converted too: such a list inside a text
+    value or source text the message quotes. Review `messages` cases by hand.
+    """
+    def write(match: re.Match) -> str:
+        if python_only and not _PYTHON_QUOTED.search(match.group(0)):
+            return match.group(0)
+        try:
+            names = ast.literal_eval(match.group(0))
+        except (SyntaxError, ValueError):
+            return match.group(0)
+        return _ts_json(names)
+
+    return _NAME_LIST.sub(write, text)
+
+
+def _ts_messages(value: object) -> object:
+    """Return a runner result with `_ts_names` applied to the text of each error in it.
+
+    An error is a mapping with a text `message` beside a `class` (a raise) or a text `code` (a
+    failure or a diagnostic); its `notes` and its frames' `note`s are converted too. Values
+    a flow or a tool returned are left alone, unless shaped like an error.
+    """
+    if isinstance(value, list):
+        return [_ts_messages(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    converted = {key: _ts_messages(item) for key, item in value.items()}
+    if isinstance(value.get("message"), str) and (
+            "class" in value or isinstance(value.get("code"), str)):
+        converted["message"] = _ts_names(value["message"])
+        if isinstance(value.get("notes"), list):
+            converted["notes"] = [_ts_names(note) if isinstance(note, str) else note
+                                  for note in value["notes"]]
+        if isinstance(value.get("frames"), list):
+            converted["frames"] = [
+                frame | {"note": _ts_names(frame["note"])}
+                if isinstance(frame, dict) and isinstance(frame.get("note"), str) else frame
+                for frame in converted["frames"]]
+    return converted
 
 
 def _install_messages(patch: pytest.MonkeyPatch, case: dict) -> None:
-    """Show values in yian's messages in the text form, and names with Python's repr."""
+    """Show values, names and lists of names in yian's messages in the text form.
+
+    `value_repr` is the text form at every call, names included. Most lists of names are
+    written by Python's own list repr (`f"{sorted(names)}"`), so the replay's results go through
+    `_ts_messages` too. Such a list can also reach a model call's request (a retry prompt
+    quoting an error, a tool's error text), where it can't be rewritten: a request holding one
+    is reported as differing, so the harvest drops it.
+    """
     original = typesys_values.value_repr
 
     @functools.wraps(original)
     def messages_value_repr(value: object) -> str:
-        return original(value) if _from_name_caller() else _ts_value_repr(value)
+        return _ts_value_repr(value)
 
     _patch_held(patch, original, messages_value_repr)
+    results = runner.results
+
+    @functools.wraps(results)
+    def ts_results(*args: object, **kwargs: object) -> dict:
+        return _ts_messages(results(*args, **kwargs))
+
+    patch.setattr(runner, "results", ts_results)
+    request_difference = runner._request_difference
+
+    @functools.wraps(request_difference)
+    def ts_request_difference(what: str, expected: dict, *args: object) -> str:
+        difference = request_difference(what, expected, *args)
+        # A prompt may hold JSON (a schema), which TS writes the same way.
+        if difference or all(_ts_names(text, True) == text for text in _texts(expected)):
+            return difference
+        return f"{what} holds a list of names, which TS spells differently"
+
+    patch.setattr(runner, "_request_difference", ts_request_difference)
 
 
 def _ordering(original):

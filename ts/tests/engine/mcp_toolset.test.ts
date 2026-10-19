@@ -82,13 +82,13 @@ describe("an MCP server in a ToolSet", () => {
   test("test_an_unopened_server_is_rejected", () => {
     const unopened = mcpServer({ command: "fake" });
     expect(thrown(() => new ToolSet({ fake: unopened }), TypeError)).toBe(
-      "tools['fake'] is an MCP server that isn't open; open it with \"await server.open()\" or pass it to runFlow/resumeFlow, which open it",
+      `tools["fake"] is an MCP server that isn't open; open it with "await server.open()" or pass it to runFlow/resumeFlow, which open it`,
     );
   });
 
   test("test_a_server_inside_a_list_group_is_rejected", () => {
     expect(thrown(() => new ToolSet({ g: [server as unknown as FunctionTool] }), TypeError)).toBe(
-      "tools['g'][0] is an MCP server; pass it as its own tools entry, which becomes its group",
+      'tools["g"][0] is an MCP server; pass it as its own tools entry, which becomes its group',
     );
   });
 
@@ -102,7 +102,7 @@ describe("an MCP server in a ToolSet", () => {
 
   test("test_a_server_tool_named_like_a_top_level_key_clashes", () => {
     expect(thrown(() => new ToolSet({ echo: serverTool("echo"), fake: server }), RangeError)).toBe(
-      "tool 'echo' in group 'fake' clashes with tools['echo']",
+      `tool 'echo' in group 'fake' clashes with tools["echo"]`,
     );
   });
 
@@ -128,13 +128,13 @@ describe("an MCP server in a ToolSet", () => {
 
   test("a server listing a non-FunctionTool is rejected", () => {
     const odd = new FakeServer("odd", [serverTool("echo"), { name: "add" } as unknown as FunctionTool]);
-    expect(thrown(() => new ToolSet({ odd }), TypeError)).toBe("tools['odd'][1] must be a FunctionTool, got Object");
+    expect(thrown(() => new ToolSet({ odd }), TypeError)).toBe('tools["odd"][1] must be a FunctionTool, got Object');
   });
 
   test("test_a_dead_server_is_rejected", () => {
     const quitter = new FakeServer("quitter", [serverTool("exit_now")], { dead: true });
     expect(thrown(() => new ToolSet({ fake: quitter }), RangeError)).toBe(
-      "tools['fake']: MCP server 'quitter' is closed",
+      `tools["fake"]: MCP server 'quitter' is closed`,
     );
   });
 });

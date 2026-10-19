@@ -162,14 +162,14 @@ describe("renderValuePath", () => {
   test.each<[string, (string | number)[], string]>([
     ["a list index", ["a", 1], "a[1]"],
     ["a field after an index", ["a", 1, "b"], "a[1].b"],
-    ["a key that isn't an identifier", [0, "my key"], "[0]['my key']"],
+    ["a key that isn't an identifier", [0, "my key"], '[0]["my key"]'],
   ])("renders %s", (_id, path, expected) => {
     expect(renderValuePath(path)).toBe(expected);
   });
 
   test("cuts each key to the cap", () => {
     expect(renderValuePath(["x".repeat(301)])).toBe("x".repeat(CAP - 1) + "…");
-    expect(renderValuePath([" ".repeat(301)])).toBe("['" + " ".repeat(CAP - 2) + "…]");
+    expect(renderValuePath([" ".repeat(301)])).toBe('["' + " ".repeat(CAP - 2) + "…]");
   });
 
   test("keeps the start and end of a path longer than four times the cap", () => {
@@ -214,7 +214,7 @@ describe("unknown record fields", () => {
     const later = "x".repeat(300) + "b";
     const earlier = "x".repeat(300) + "a";
     const error = buildError({ a: 1n, [later]: 1n, [earlier]: 2n });
-    expect(error.message.startsWith("record has unknown fields: ['xxx")).toBe(true);
+    expect(error.message.startsWith('record has unknown fields: ["xxx')).toBe(true);
     expect(error.message.length).toBeLessThanOrEqual(MESSAGE_BOUND);
     expect(error.path).toEqual([earlier]);
   });
@@ -230,7 +230,7 @@ test("unknown inputs list within the cap", () => {
     expect(error).toBeInstanceOf(RangeError);
     message = (error as RangeError).message;
   }
-  expect(message.startsWith("unknown inputs 'name0', 'name1', ")).toBe(true);
+  expect(message.startsWith('unknown inputs "name0", "name1", ')).toBe(true);
   expect(message.endsWith("; declared inputs: topic")).toBe(true);
   expect(message.length).toBeLessThanOrEqual(MESSAGE_BOUND);
 });

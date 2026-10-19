@@ -395,7 +395,7 @@ export function checkInputNames(params: readonly Parameter[], raw: unknown): voi
     .sort(compareCodeUnits);
   if (unknown.length > 0) {
     const noun = unknown.length === 1 ? "input" : "inputs";
-    const shown = shownText(unknown.map(reprText).join(", "));
+    const shown = shownText(unknown.map((name) => JSON.stringify(name)).join(", "));
     throw new RangeError(`unknown ${noun} ${shown}; declared inputs: ${declared.join(", ") || "(none)"}`);
   }
 }

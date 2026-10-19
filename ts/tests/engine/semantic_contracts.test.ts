@@ -531,10 +531,10 @@ test("validateOutputContract names missing and unknown fields", () => {
   ]);
   const missing = thrown(() => validateOutputContract(contract, {}));
   expect(missing).toBeInstanceOf(TypeCheckError);
-  expect(missing.message).toBe("record missing required fields: ['b', 'a']");
+  expect(missing.message).toBe('record missing required fields: ["b","a"]');
   expect((missing as TypeCheckError).path).toEqual(["b"]);
   const unknown = thrown(() => validateOutputContract(contract, { a: 1n, b: 2n, z: 3n, y: 4n }));
-  expect(unknown.message).toBe("record has unknown fields: ['y', 'z']");
+  expect(unknown.message).toBe('record has unknown fields: ["y","z"]');
   expect((unknown as TypeCheckError).path).toEqual(["y"]);
   expect(() => validateOutputContract(contract, [])).toThrow("[] is not an object for a partial record contract");
 });

@@ -181,7 +181,7 @@ test("a __proto__ key stays a data key", () => {
   expect(Object.getPrototypeOf(snapshot)).toBe(Object.prototype);
   // The snapshot's key list holds it, so a built-in type reports it as unknown.
   expect(() => new MemoryDecl("notes", "episodic", config, new DeclSite([], ["root"]))).toThrow(
-    "unknown key(s) ['__proto__']",
+    'unknown key(s) ["__proto__"]',
   );
 });
 

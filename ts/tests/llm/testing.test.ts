@@ -186,7 +186,7 @@ describe("CassetteReplay", () => {
     [
       "unknown keys",
       { ...oneInteraction(request), zeta: 1, alpha: 2 },
-      "cassette: unknown keys ['alpha', 'zeta']",
+      'cassette: unknown keys ["alpha","zeta"]',
     ],
     ["a bad source", { ...oneInteraction(request), source: "made-up" }, "cassette: source must be 'synthetic' or 'recorded'"],
     ["no body", oneInteraction(request, { status: 200 }), "interactions[0].response: needs exactly one of chunks, json, text"],

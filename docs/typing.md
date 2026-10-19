@@ -325,7 +325,11 @@ Changed (TS yian): JSON values are `null`, a boolean, an int (`bigint`), a float
 text, and arrays and records of those, so the dict and tuple wording above reads as records and
 arrays; anything else (a `Date`, a `Map` or `Set`, a class instance) is `<value> is not a JSON
 value` (`<Date object> is not a JSON value`). A value shown in a type-check message is in the text form (`"bad" does not match
-declared type int`, where Python writes `'bad'`); names keep Python's repr.
+declared type int`, where Python writes `'bad'`). A name quoted in the prose keeps Python's
+repr (`missing tag field 'action'`), but a list of names and a quoted key in a value path are in
+the text form too: `record missing required fields: ["confidence","value"]`, `unknown inputs
+"a", "b"` and `output at a["my key"]`, where Python writes `['confidence', 'value']`,
+`'a', 'b'` and `a['my key']`.
 
 Changed (TS yian): host intake replaces the plain-container read. A host value (such as a tool's
 result or a CODE body's return value) enters through `fromHost(value, where)`, which returns a
@@ -413,7 +417,9 @@ member is that member. The members must be told apart by the data alone:
   stored). `build_value_as` picks the member by the tag (the first tag field by name), then
   runs that member's record check. A missing tag fails at `(tag,)` with
   `missing tag field 'action' (expected one of ['buy', 'sell'])`; an unknown one with
-  `'hold' is not a tag of the union (expected one of ['buy', 'sell'])`.
+  `'hold' is not a tag of the union (expected one of ['buy', 'sell'])`. Changed (TS yian):
+  `missing tag field 'action' (expected one of ["buy","sell"])` and `"hold" is not a tag of
+  the union (expected one of ["buy","sell"])`.
 - **Untagged.** The members' shapes can't overlap (`types_overlap`, conservative), so a
   value satisfies at most one, and that member's check runs. No match fails at `()` with
   `value matches no member of <label>: <member>: <reason>; ...`.

@@ -134,6 +134,14 @@ test("inputs must be a record", () => {
   expect(fromMap).toThrow(new TypeError("inputs must be a mapping of input names to values, got Map"));
 });
 
+test("unknown input names are listed in the text form", () => {
+  const params = [input("x", ValueKind.INTEGER)];
+  expect(() => checkInputNames(params, { zz: 1n })).toThrow(new RangeError('unknown input "zz"; declared inputs: x'));
+  expect(() => checkInputNames(params, { b: 1n, a: 2n })).toThrow(
+    new RangeError('unknown inputs "a", "b"; declared inputs: x'),
+  );
+});
+
 test("applyDefaults accepts a long int default", () => {
   const big = 10n ** 5000n - 1n;
   expect(applyDefaults([new Parameter("x", { hasDefault: true, default: big })], {})).toEqual({ x: big });

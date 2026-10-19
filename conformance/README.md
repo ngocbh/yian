@@ -466,7 +466,7 @@ A case lists in `rules` the TS-era rules its expectation depends on (design #736
 | `text-form` | how a value becomes text: JSON-style values, JS number spelling |
 | `canonical` | RFC 8785 fingerprints and the log's canonical JSON |
 | `columns` | 1-based UTF-16 columns; line breaks only at LF, CRLF and CR |
-| `messages` | values in messages spelled in the text form |
+| `messages` | values, lists of names and quoted keys in messages spelled in the text form |
 | `text` | character counting, ASCII lexer classes, whitespace, `$` at the end of text only |
 | `yaml` | YAML 1.2 as the TS parser reads it |
 | `dates` | dates and times as text, `system.now` |

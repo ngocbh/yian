@@ -123,7 +123,7 @@ test("an int checked as a float field stays an int", () => {
 test("a value missing a required field fails naming it", () => {
   expectError(
     () => evaluate("Buy(d.output)", { d: { output: { conviction: 0.5 } } }),
-    "Buy(...): record missing required fields: ['action']",
+    'Buy(...): record missing required fields: ["action"]',
     ConstructorTypeError,
   );
 });
@@ -136,7 +136,7 @@ test("a union typedef checks against every member", () => {
   expect(evaluate("Decision(d.output)", { d: { output: A_SELL } })).toEqual(A_SELL);
   expectError(
     () => evaluate("Decision(d.output)", { d: { output: { action: "hold" } } }),
-    `Decision(...): "hold" is not a tag of the union (expected one of ['buy', 'sell'])`,
+    `Decision(...): "hold" is not a tag of the union (expected one of ["buy","sell"])`,
     ConstructorTypeError,
   );
 });
@@ -145,7 +145,7 @@ test("an enum alias checks a scalar", () => {
   expect(evaluate("Size(x)", { x: "m" })).toBe("m");
   expectError(
     () => evaluate("Size(x)", { x: "xl" }),
-    `Size(...): "xl" is not a member of variant ['l', 'm', 's']`,
+    `Size(...): "xl" is not a member of variant ["l","m","s"]`,
     ConstructorTypeError,
   );
 });
@@ -168,7 +168,7 @@ test("keywords build a record from exactly the given fields", () => {
 test("a built record missing a field fails naming it", () => {
   expectError(
     () => evaluate("Buy(conviction=s.output)", { s: { output: 0.7 } }),
-    "Buy(...): record missing required fields: ['action']",
+    'Buy(...): record missing required fields: ["action"]',
     ConstructorTypeError,
   );
 });
@@ -200,7 +200,7 @@ test("a constructor in a condition", () => {
   expect(evaluateWhenRecord("Buy(d).conviction > 0.1", record, TYPES)).toBe(true);
   expectError(
     () => evaluateWhenRecord("Sell(d).price > 0.1", record, TYPES),
-    "Sell(...): record missing required fields: ['price']",
+    'Sell(...): record missing required fields: ["price"]',
     ConstructorTypeError,
   );
 });
@@ -356,7 +356,7 @@ test("the binder reports a failed constructor as binding.type", () => {
   );
   expect(error).toBeInstanceOf(BindingError);
   expect((error as BindingError).failureCode).toBe("binding.type");
-  expect(error.message).toContain("record missing required fields: ['action']");
+  expect(error.message).toContain('record missing required fields: ["action"]');
 });
 
 test("the binder reports a failed nested constructor as binding.type", () => {

@@ -145,11 +145,6 @@ function byCodeUnits(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/** Return Python's repr of a list of strings, for messages. */
-function quoted(names: readonly string[]): string {
-  return `[${names.map((name) => `'${name}'`).join(", ")}]`;
-}
-
 /** Throw unless `data` is a plain object with every required key and no others. */
 function checkKeys(
   data: unknown,
@@ -164,7 +159,7 @@ function checkKeys(
   const unknown = Object.keys(data)
     .filter((key) => !allowed.includes(key))
     .sort(byCodeUnits);
-  if (unknown.length > 0) throw new TypeError(`${where}: unknown keys ${quoted(unknown)}`);
+  if (unknown.length > 0) throw new TypeError(`${where}: unknown keys ${JSON.stringify(unknown)}`);
 }
 
 /** Throw unless `headers` maps strings to strings. */

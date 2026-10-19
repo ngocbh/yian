@@ -88,6 +88,7 @@ test.each<CaseRow>([
   { id: "load-core/compose_node_when_hint__when_on_an_agent_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_code_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_tool_node", call: parsedNodes },
+  { id: "load-core/compose_node_when_hint__when_on_a_wait_node", call: parsedNodes },
 ])(
   "parseNodes: $id",
   runCase,

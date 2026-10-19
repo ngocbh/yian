@@ -19,6 +19,7 @@ import type { NodeDescriptor } from "./base.ts";
 import { AgentDescriptor } from "./agent.ts";
 import { CodeDescriptor } from "./code.ts";
 import { ToolDescriptor } from "./tool.ts";
+import { WaitDescriptor } from "./wait.ts";
 // T3-16: case, call, map, loop
 
 /** A descriptor class: `NodeDescriptor` or a kind's subclass. */
@@ -33,6 +34,7 @@ export const DESCRIPTORS: readonly DescriptorClass[] = [
   AgentDescriptor,
   CodeDescriptor,
   ToolDescriptor,
+  WaitDescriptor,
   // T3-16: case, call, map, loop
 ];
 

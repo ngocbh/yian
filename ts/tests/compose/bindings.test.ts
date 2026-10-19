@@ -1,9 +1,9 @@
 /**
- * The kind-blind binding-field walk: a port of `tests/compose/test_bindings.py`. The agent and tool
- * rows use the real `AgentDescriptor` and `ToolDescriptor`; each other row uses a stand-in of the
- * kind Python uses (`standIn` for the kinds whose only binding field is `inputs`, test-local
- * `StandInCall` and `StandInMap` for the kinds with a scalar `over`), since those kinds aren't
- * ported yet. Every row passes an explicit `bindingFields` table built from the classes'
+ * The kind-blind binding-field walk: a port of `tests/compose/test_bindings.py`. The agent, tool
+ * and wait rows use the real `AgentDescriptor`, `ToolDescriptor` and `WaitDescriptor`; each other
+ * row uses a stand-in of the kind Python uses (`standIn` for the kinds whose only binding field is
+ * `inputs`, test-local `StandInCall` and `StandInMap` for the kinds with a scalar `over`), since
+ * those kinds aren't ported yet. Every row passes an explicit `bindingFields` table built from the classes'
  * `bindingFields`.
  *
  * TS-only: `mapBindingSources` hands the mapper a `ValueTemplate` whole, in a record field and in
@@ -17,6 +17,7 @@ import { NodeDescriptor, type NodeDescriptorFields } from "../../src/compose/nod
 import { keyless, mapBindingSources, mapBindingStrings } from "../../src/compose/nodes/bindings.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
+import { WaitDescriptor } from "../../src/compose/nodes/wait.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { ValueTemplate } from "../../src/nodes/contracts.ts";
 import { StandInCase, standIn } from "./stand_ins.ts";
@@ -40,14 +41,13 @@ class StandInMap extends StandInCall {
 
 const StandInHumanInput = standIn("human_input", { bindingFields: ["inputs"] });
 const StandInLoop = standIn("loop", { bindingFields: ["inputs"] });
-const StandInWait = standIn("wait");
 
 const CLASSES: readonly DescriptorClass[] = [
   AgentDescriptor,
   ToolDescriptor,
   StandInHumanInput,
   StandInLoop,
-  StandInWait,
+  WaitDescriptor,
   StandInCase,
   StandInCall,
   StandInMap,
@@ -116,7 +116,10 @@ describe("mapBindingStrings", () => {
 
   test("no binding fields pass through unchanged", () => {
     // CASE and WAIT have no authored input-binding mapping -> identity (same object).
-    for (const desc of [new StandInCase({ id: "k", on: "${sel}", cases: [] }), new StandInWait({ id: "w" })]) {
+    for (const desc of [
+      new StandInCase({ id: "k", on: "${sel}", cases: [] }),
+      new WaitDescriptor({ id: "w", until: "${t}" }),
+    ]) {
       expect(mapBindingStrings(desc, up, { bindingFields })).toBe(desc);
     }
   });

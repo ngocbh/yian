@@ -3313,6 +3313,9 @@ node 'w' (kind=wait): `until:` must be a date or datetime, but the value is int;
 
 Changed: a wrong-typed `until:` used to load and fail when the node ran.
 
+Changed (TS yian): an unquoted date or timestamp in `until:` is text, bound as written; Python
+bound the timestamp it read in `isoformat()` spelling.
+
 ### `call` / `map` — composition over child flows
 
 `call` runs a child flow once; `map` runs it over a list (`${item}` is the

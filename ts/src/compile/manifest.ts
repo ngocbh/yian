@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 
 import { compareCodeUnits, OriginRef, reprText } from "../diagnostics.ts";
 import { DeclSite, MemoryDecl, MemoryOccurrenceSegment, MemoryScope } from "../memory/contracts.ts";
+import { AgentNode } from "../nodes/agent/node.ts";
 import { Node, NodeKind } from "../nodes/base.ts";
 import { CallNode } from "../nodes/call/node.ts";
 import { Case, CaseNode } from "../nodes/case/node.ts";
@@ -100,10 +101,21 @@ const IGNORED_NODE_FIELDS = [
 
 // A kind owns both the canonical fields that affect its behavior and known noncanonical fields
 // that are derived caches or render-only metadata. Unknown fields are never serialized by guess.
-// AGENT's lists come with its manifest.
 const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   [NodeKind.START]: [],
   [NodeKind.END]: ["mode", "names", "n"],
+  [NodeKind.AGENT]: [
+    "prompt",
+    "systemPrompt",
+    "tools",
+    "ownLlmConfig",
+    "llmInherit",
+    "retries",
+    "memories",
+    "variables",
+    "skills",
+    "steerable",
+  ],
   [NodeKind.CODE]: ["code"],
   [NodeKind.TOOL]: ["toolId", "retries"],
   [NodeKind.CASE]: ["cases"],
@@ -128,6 +140,18 @@ const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
 const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   [NodeKind.START]: [],
   [NodeKind.END]: [],
+  // `llmConfig` is always run-resolved; `ownLlmConfig` is the authored identity source.
+  // `llmConfigLabel` is render-only. `wiresLlmConfig` and `llmValueTypes` are derived from the
+  // layers; the reserved wiring they decide is manifested with the wiring. `callTimeValue` (behind
+  // the `callTime` accessor) and `hostCredentials` are run-resolved like `llmConfig`.
+  [NodeKind.AGENT]: [
+    "llmConfig",
+    "llmConfigLabel",
+    "wiresLlmConfig",
+    "llmValueTypes",
+    "callTimeValue",
+    "hostCredentials",
+  ],
   // `mode` is derived from `code`; CODE origins are diagnostic metadata resolved only by the
   // authoring front end; `baseDir` is where a reference resolves, not what it names.
   [NodeKind.CODE]: ["mode", "baseDir", "codeOrigin", "codeLineOrigins"],
@@ -145,6 +169,7 @@ const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
 const KIND_CLASSES: Readonly<Record<string, abstract new (...args: never[]) => Node>> = {
   [NodeKind.START]: StartNode,
   [NodeKind.END]: EndNode,
+  [NodeKind.AGENT]: AgentNode,
   [NodeKind.CODE]: CodeNode,
   [NodeKind.TOOL]: ToolNode,
   [NodeKind.CASE]: CaseNode,
@@ -303,12 +328,10 @@ function assertionManifest(value: unknown, ctx: ManifestContext, path: string): 
  *
  * @throws RangeError when `kind` isn't a `NodeKind`, the node's class isn't exactly its kind's, or
  *   a field is unknown or missing.
- * @throws Error for an AGENT node, whose manifest isn't ported yet.
  */
 function checkNodeFields(node: Node, path: string): void {
   const kind = node.kind;
   if (!NODE_KINDS.has(kind)) throw new RangeError(`${path}: node kind must be a NodeKind`);
-  if (kind === NodeKind.AGENT) throw new Error(`${path}: node kind 'agent' manifest is not ported yet (T3-22)`);
   const expectedClass = KIND_CLASSES[kind]!;
   if (!isExactly(node, expectedClass)) {
     throw new RangeError(`${path}: node kind ${reprText(kind)} requires ${expectedClass.name}, got ${typeName(node)}`);
@@ -783,6 +806,42 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
         manifest.keyed = true;
       }
       manifest.n = list ? count(end.n, `${path}.n`, false) : null;
+      break;
+    }
+    case NodeKind.AGENT: {
+      const agent = node as AgentNode;
+      const variables: unknown = agent.variables;
+      if (!isList(variables)) throw new TypeError(`${path}.variables: expected array, got ${typeName(variables)}`);
+      if (variables.length > 0) {
+        manifest.variables = variables.map((variable, index) =>
+          parameterManifest(variable, ctx, `${path}.variables[${index}]`),
+        );
+      }
+      // Left out when empty so flows without skills keep their identity. Grant order never changes
+      // behavior (the listing is sorted), so it isn't identity either.
+      const skills: unknown = agent.skills;
+      if (skills === "all") {
+        manifest.skills = "all";
+      } else {
+        if (!isList(skills) || !skills.every((skill) => typeof skill === "string")) {
+          throw new TypeError(`${path}.skills: expected "all" or an array of strings`);
+        }
+        if (skills.length > 0) manifest.skills = [...skills].sort(compareCodeUnits);
+      }
+      // Left out when false so flows that never opt in keep their identity.
+      if (agent.steerable) manifest.steerable = true;
+      // Left out when unset so flows on the default system prompt keep their identity.
+      if (agent.systemPrompt !== null) manifest.system_prompt = agent.systemPrompt;
+      const tools: unknown = agent.tools;
+      if (!isList(tools)) throw new TypeError(`${path}.tools: expected array, got ${typeName(tools)}`);
+      const memories = memoriesManifest(agent.memories, ctx, `${path}.memories`);
+      manifest.llm_inherit = agent.llmInherit;
+      manifest.prompt = agent.prompt;
+      manifest.retries = count(agent.retries, `${path}.retries`, false);
+      manifest.tools = canonicalSequence(tools, ctx, `${path}.tools`);
+      manifest.own_llm_config = llmLayerManifest(agent.ownLlmConfig, ctx, `${path}.ownLlmConfig`);
+      // Left out when empty so memory-free flows keep their identity.
+      if (!topologyOnly && memories.length > 0) manifest.memories = memories;
       break;
     }
     case NodeKind.CODE:

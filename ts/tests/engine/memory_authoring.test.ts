@@ -3,11 +3,11 @@
  * `tests/engine/test_memory_authoring.py`.
  *
  * Ported: `test_python_constructors_default_and_validate_authored_memory_fields` (the
- * `CompiledFlow` half), `test_authored_identity_includes_flow_id_and_policy_but_excludes_origin`
- * (flow memories), `test_decl_config_rejects_host_private_fields`,
+ * `CompiledFlow` half), `test_authored_identity_includes_flow_id_and_policy_but_excludes_origin`,
+ * `test_decl_config_rejects_host_private_fields`,
  * `test_policy_config_keeps_public_behavior_options`,
  * `test_manifest_keeps_every_value_of_a_forged_policy_config` and
- * `test_expansion_digest_excludes_flow_id_and_agent_memory` (the flow-id half).
+ * `test_expansion_digest_excludes_flow_id_and_agent_memory`.
  *
  * Changed:
  * - `CompiledFlow({}, [])` is `new CompiledFlow(new Map(), [])`, Python's `copy.deepcopy` is
@@ -23,10 +23,6 @@
  *
  * Also ported: the AGENT half of `test_python_constructors_default_and_validate_authored_memory_fields`
  * (`memories` is an array where Python's is a tuple).
- *
- * Later (T3-22, with AGENT): the `agent_policy` lines of
- * `test_authored_identity_includes_flow_id_and_policy_but_excludes_origin` and the AGENT-memory half
- * of `test_expansion_digest_excludes_flow_id_and_agent_memory`.
  *
  * Later (T3-22): `test_full_root_retains_flow_owned_policy_with_one_origin`,
  * `test_full_nested_definition_retains_flow_owned_policy_and_semantic_id`,
@@ -166,6 +162,17 @@ test("authored identity includes flow id and policy but excludes origin", () => 
   const flowPolicyResited = flowWith(
     new MemoryDecl("reflective", "reflective", { max_items: 4n }, new DeclSite([], ["def", "x"], null)),
   );
+  const agentPolicy = new CompiledFlow(
+    new Map([
+      [
+        "agent",
+        new AgentNode("agent", {
+          memories: [new MemoryDecl("reflective", "reflective", {}, new DeclSite([], ["root"], "agent"))],
+        }),
+      ],
+    ]),
+    [],
+  );
 
   const plainManifest = flowManifest(plain);
   expect("flow_id" in plainManifest).toBe(false);
@@ -178,6 +185,7 @@ test("authored identity includes flow id and policy but excludes origin", () => 
   expect(flowFingerprint(flowPolicyRenamed)).not.toBe(flowFingerprint(flowPolicy));
   expect(flowFingerprint(flowPolicyReconfigured)).not.toBe(flowFingerprint(flowPolicy));
   expect(flowFingerprint(flowPolicyResited)).not.toBe(flowFingerprint(flowPolicy));
+  expect(flowFingerprint(agentPolicy)).not.toBe(flowFingerprint(plain));
   expect(flowManifest(flowPolicy).memories).toEqual([
     {
       config: {
@@ -236,11 +244,15 @@ test("manifest keeps every value of a forged policy config", () => {
   expect(flowManifest(flow)).not.toEqual(firstManifest);
 });
 
-test("expansion digest excludes flow id", () => {
+test("expansion digest excludes flow id and agent memory", () => {
   const plainFlow = new CompiledFlow(new Map(), []);
   const namedFlow = new CompiledFlow(new Map(), [], { flowId: "named" });
+  const plainAgent = new CompiledFlow(new Map([["agent", new AgentNode("agent")]]), []);
+  const decl = new MemoryDecl("reflective", "reflective", { max_items: 4n }, new DeclSite([], ["root"], "agent"));
+  const memoryAgent = new CompiledFlow(new Map([["agent", new AgentNode("agent", { memories: [decl] })]]), []);
 
   expect(expansionDigest(namedFlow)).toBe(expansionDigest(plainFlow));
+  expect(expansionDigest(memoryAgent)).toBe(expansionDigest(plainAgent));
 });
 
 test("the AGENT constructor defaults and validates authored memory fields", () => {

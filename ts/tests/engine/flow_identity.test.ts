@@ -6,8 +6,7 @@
  * `test_flow_fingerprint_covers_each_included_common_node_field`,
  * `test_node_origin_does_not_affect_program_or_expansion_identity`,
  * `test_node_origin_context_does_not_affect_program_or_expansion_identity`,
- * `test_prompts_code_and_tool_ids_keep_uri_text` (the CODE and TOOL pairs; the AGENT prompt pair
- * comes with AGENT), `test_flow_fingerprint_covers_each_parameter_field`,
+ * `test_prompts_code_and_tool_ids_keep_uri_text`, `test_flow_fingerprint_covers_each_parameter_field`,
  * `test_flow_fingerprint_covers_parameter_default_independently`,
  * `test_flow_fingerprint_preserves_parameter_order`,
  * `test_parameter_origins_do_not_affect_program_or_expansion_identity`,
@@ -29,7 +28,7 @@
  * `test_flow_fingerprint_covers_flow_boundary_ids`,
  * `test_expansion_digest_changes_for_every_builder_topology_component`,
  * `test_expansion_digest_is_stable_across_canonical_mapping_order`,
- * `test_flow_fingerprint_covers_each_included_kind_field` (its 26 non-AGENT rows),
+ * `test_flow_fingerprint_covers_each_included_kind_field`,
  * `test_flow_manifest_covers_remaining_kind_execution_fields` (its END row; its other five rows
  * repeat kind-field rows),
  * `test_flow_manifest_includes_human_input_title_but_ignores_inert_map_parallel`,
@@ -38,8 +37,12 @@
  * `test_case_predicate_origins_do_not_affect_program_or_expansion_identity`,
  * `test_case_manifest_rejects_a_mutated_non_origin_predicate_carrier`,
  * `test_memory_scope_is_not_authored_identity_but_is_expansion_topology`,
- * `test_memory_expansion_projection_covers_keys_and_occurrence_topology` and
- * `test_memory_expansion_projection_fields`.
+ * `test_memory_expansion_projection_covers_keys_and_occurrence_topology`,
+ * `test_memory_expansion_projection_fields`,
+ * `test_agent_variable_manifest_preserves_the_variable_free_fingerprint` (the same pin as Python's),
+ * `test_agent_variable_identity_tracks_names_domains_defaults_and_order_only`,
+ * `test_agent_variable_manifest_rejects_noncanonical_containers` and
+ * `test_expansion_digest_excludes_effective_but_includes_authored_llm_config`.
  *
  * Rebased on hand-built flows (Python builds the baseline with the loader): `fragment()` mirrors
  * Python's `_fragment()`, and `compiled()` stands in for `_compiled()`'s loaded flow.
@@ -69,6 +72,16 @@
  * `CompiledFlow` with a `flowLlmConfig` layer), and
  * `tests/engine/test_call_subgraph_builder.py::test_growth_metadata_and_execution_topology_have_a_separate_digest_policy`
  * (a hand-grown `fragment()` instead of `call_subgraph`'s).
+ * `test_flow_fingerprint_includes_authored_llm_layers_but_not_effective_values`,
+ * `test_manifest_records_blocks_as_nested_sorted_mappings`,
+ * `test_flow_fingerprint_tracks_block_fields_but_not_key_order` and
+ * `test_block_field_names_are_not_redacted_as_credentials` build `llmFlow()`, a CompiledFlow with
+ * one AGENT step whose layers are the loaded flow's (the loader's `inherit: false` is
+ * `llmInherit: false`); and
+ * `tests/compose/test_agent_skills_yaml.py::test_skills_are_identity_but_empty_and_order_are_not`
+ * and the manifest assertion of
+ * `tests/compose/test_agent_mode_removed.py::test_agent_manifest_has_no_mode` use hand-built AGENT
+ * nodes.
  * `test_flow_fingerprint_changes_with_node_kind_and_execution_source` and
  * `test_flow_fingerprint_recursively_includes_static_child_flows` are covered by the kind-literal
  * and kind-field rows.
@@ -87,6 +100,8 @@
  * - `Case` is frozen, so the forged-origin row builds a forged `Case`; `_memory_scope_topology`
  *   isn't exported, so the projection-fields row compares the expansion digest with the SHA-256 of
  *   the expected manifest.
+ * - `test_agent_variable_manifest_rejects_noncanonical_containers`: TS has no tuple, so its rows
+ *   are `null` and a `Set`.
  * - The non-JSON row uses a `Map`, a `Uint8Array`, a class instance, a function and `undefined`.
  * - The malformed type-table rows are a record instead of a `Map`, a `Map` with a `bigint` key, and
  *   a `Map` whose value is the string `"int"`.
@@ -102,10 +117,10 @@
  * a shared alias, a `FileRef` encoded as its mapping, `params`, `preAsserts` and `postAsserts` that
  * aren't arrays, a forged END count, a list END's `names`, seed-path indexes as counts, the pinned
  * fingerprint and expansion digest of `fragment()`, a missing node field, a node whose `kind` isn't
- * its class's, a CODE node whose `kind` is `"agent"` refused as not ported (AGENT's manifest comes
- * with AGENT), a node value that isn't a `Node`, labels and a CODE or TOOL title or base directory
- * outside identity, the CODE descriptors (`{"inline": ...}`, `{"ref": ...}`,
- * `{"builtin": "identity", "field": ...}`) and their refusals, and TOOL `retries` (absent at 0,
+ * its class's, a CODE node whose `kind` is `"agent"` refused as not an `AgentNode`, a node value
+ * that isn't a `Node`, labels and a CODE or TOOL title or base directory outside identity, the
+ * CODE descriptors (`{"inline": ...}`, `{"ref": ...}`, `{"builtin": "identity", "field": ...}`) and
+ * their refusals, and TOOL `retries` (absent at 0,
  * identity otherwise, a forged count refused), and the flow fields: a typed wiring binding's
  * `binding_types` and a typed output's `type`, a plain `Flow`'s missing CompiledFlow keys, the flow
  * `llm_config:` layer (literal values are identity and key order isn't; the `ValueTemplate` and
@@ -120,7 +135,10 @@
  * CALL argument literal as identity, LOOP `times` as a typed int (`null` for a `while` loop),
  * forged LOOP counts, a CASE branch that isn't a `Case` and CASE `cases` that isn't an array
  * refused, forged memory scopes and segments and a non-`ExecutionScope` scope refused, and the
- * execution-scope projection.
+ * execution-scope projection; and for AGENT: unset optional keys left out, `retries` present at
+ * zero and a forged count refused, the run-resolved and derived fields (`llmConfig`,
+ * `llmConfigLabel`, `wiresLlmConfig`, `llmValueTypes`, `callTime`, `hostCredentials`) outside
+ * identity, and an unknown field and `skills` or `tools` that aren't arrays refused.
  *
  * Later (T3-22): the loader rows `test_loaded_flow_stores_only_exact_parameter_carriers`,
  * `test_flow_fingerprint_ignores_comments_and_python_object_identity`,
@@ -134,16 +152,7 @@
  * `test_loaded_zero_and_one_field_records_differ_from_their_value_forms`,
  * `test_call_over_a_single_node_def_keeps_its_fingerprint`,
  * `test_loaded_value_output_and_single_node_def_use_a_value_end` and
- * `test_loop_with_max_keeps_its_fingerprint`. With AGENT (T3-22, which ports `AgentNode`'s
- * manifest): `test_flow_fingerprint_includes_authored_llm_layers_but_not_effective_values`,
- * `test_manifest_records_blocks_as_nested_sorted_mappings`,
- * `test_flow_fingerprint_tracks_block_fields_but_not_key_order`,
- * `test_block_field_names_are_not_redacted_as_credentials`, the five AGENT rows of
- * `test_flow_fingerprint_covers_each_included_kind_field`,
- * `test_agent_variable_manifest_preserves_the_variable_free_fingerprint`,
- * `test_agent_variable_identity_tracks_names_domains_defaults_and_order_only`,
- * `test_agent_variable_manifest_rejects_noncanonical_containers` and
- * `test_expansion_digest_excludes_effective_but_includes_authored_llm_config`.
+ * `test_loop_with_max_keeps_its_fingerprint`.
  *
  * Later (T4): `test_resume_rejects_a_flow_with_an_edited_literal` (a run and a resume).
  *
@@ -170,6 +179,7 @@ import {
   MemoryOccurrenceSegment,
   MemoryScope,
 } from "../../src/memory/contracts.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import {
   Assertion,
@@ -463,7 +473,7 @@ test("a node missing a field is refused", () => {
 test.each([
   ["tool", RangeError, "flow.nodes.step: node kind 'tool' requires ToolNode, got CodeNode"],
   ["nope", RangeError, "flow.nodes.step: node kind must be a NodeKind"],
-  ["agent", Error, "flow.nodes.step: node kind 'agent' manifest is not ported yet (T3-22)"],
+  ["agent", RangeError, "flow.nodes.step: node kind 'agent' requires AgentNode, got CodeNode"],
 ] as const)("a CODE node whose kind is %p is refused", (kind, cls, message) => {
   const flow = compiled();
   Object.assign(code(flow, "step"), { kind });
@@ -648,6 +658,7 @@ test("test_prompts_code_and_tool_ids_keep_uri_text", () => {
       new CodeNode("node", { code: `return ${JSON.stringify(secondUri)}` }),
     ],
     [new ToolNode("node", { toolId: firstUri, retries: 0 }), new ToolNode("node", { toolId: secondUri, retries: 0 })],
+    [new AgentNode("node", { prompt: firstUri }), new AgentNode("node", { prompt: secondUri })],
   ];
 
   for (const [first, second] of pairs) {
@@ -676,6 +687,281 @@ test("a forged TOOL retries count is refused with its path", () => {
     TypeError,
     "flow.nodes.node.retries: expected a safe integer, got 1.5",
   );
+});
+
+// ---- AGENT -----------------------------------------------------------------------------------
+
+/**
+ * A CompiledFlow whose one AGENT step `ask` answers briefly with text, under the flow layer
+ * `flowLayer` and its own layer `nodeLayer`.
+ */
+function llmFlow(
+  flowLayer: CompiledFlow["flowLlmConfig"],
+  nodeLayer: Record<string, unknown> | null = null,
+  llmInherit = true,
+): CompiledFlow {
+  const ask = new AgentNode("ask", { prompt: "Answer briefly.", llmConfig: nodeLayer, llmInherit });
+  ask.outputContract = strContract();
+  return CompiledFlow.fromParts(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID, { params: [] })],
+      ["ask", ask],
+      [END_ID, EndNode.value(END_ID, { outputName: "result" })],
+    ]),
+    [new Edge(`ask->${END_ID}`, "ask", END_ID, { inputGroup: "result" })],
+    {
+      wiring: new Map([
+        [START_ID, new Map()],
+        ["ask", new Map()],
+        [END_ID, new Map([["result", "${ask.output}"]])],
+      ]),
+      flowLlmConfig: flowLayer,
+      flowId: "llm",
+    },
+  );
+}
+
+/** The AGENT node `ask` of `flow`. */
+function ask(flow: Flow): AgentNode {
+  return flow.nodes.get("ask") as AgentNode;
+}
+
+/** Unwrap the manifest's typed mapping form into plain nested values, checking keys are sorted. */
+function plainMapping(canonical: JsonValue): unknown {
+  const value = canonical as JsonObject;
+  if (value.type !== "mapping") return value.value;
+  const entries = value.entries as JsonObject[];
+  const keys = entries.map((entry) => (entry.key as JsonObject).value as string);
+  expect(keys).toEqual([...keys].sort());
+  return Object.fromEntries(entries.map((entry, index) => [keys[index], plainMapping(entry.value!)]));
+}
+
+test("test_flow_fingerprint_includes_authored_llm_layers_but_not_effective_values", () => {
+  const flowLayer = () => ({ provider: "openai", openai: { temperature: 0.2 } });
+  const original = () => llmFlow(flowLayer(), { model: "gpt-5.5" }, false);
+  const baseline = flowFingerprint(original());
+
+  const changedFlowLayer = llmFlow({ provider: "openai", openai: { temperature: 0.7 } }, { model: "gpt-5.5" }, false);
+  const ownLayer = llmFlow(flowLayer(), { model: "gpt-5.5-pro" }, false);
+  const inherit = llmFlow(flowLayer(), { model: "gpt-5.5" }, true);
+  const effective = original();
+  ask(effective).llmConfig = { provider: "anthropic", model: "claude-opus-4-8" };
+
+  expect(flowFingerprint(changedFlowLayer)).not.toBe(baseline);
+  expect(flowFingerprint(ownLayer)).not.toBe(baseline);
+  expect(flowFingerprint(inherit)).not.toBe(baseline);
+  expect(flowFingerprint(effective)).toBe(baseline);
+});
+
+/** Python's `_BLOCK_FLOW`, with its layers' keys in authored or reversed order. */
+function blockFlow(options: { reordered?: boolean; effort?: string } = {}): CompiledFlow {
+  const { reordered = false, effort = "low" } = options;
+  const anthropic = reordered
+    ? { output_config: { effort }, max_tokens: 2048n }
+    : { max_tokens: 2048n, output_config: { effort } };
+  const openai = { reasoning: { effort: "high" } };
+  const flowLayer = reordered
+    ? { openai, anthropic, provider: "anthropic" }
+    : { provider: "anthropic", anthropic, openai };
+  const thinking = reordered ? { budget_tokens: 1024n, type: "enabled" } : { type: "enabled", budget_tokens: 1024n };
+  return llmFlow(flowLayer, { anthropic: { max_tokens: 512n, thinking } });
+}
+
+test("test_manifest_records_blocks_as_nested_sorted_mappings", () => {
+  const manifest = flowManifest(blockFlow());
+
+  expect(plainMapping(manifest.flow_llm_config!)).toEqual({
+    anthropic: { max_tokens: "2048", output_config: { effort: "low" } },
+    openai: { reasoning: { effort: "high" } },
+    provider: "anthropic",
+  });
+  expect(plainMapping(((manifest.nodes as JsonObject).ask as JsonObject).own_llm_config!)).toEqual({
+    anthropic: { max_tokens: "512", thinking: { budget_tokens: "1024", type: "enabled" } },
+  });
+});
+
+test("test_flow_fingerprint_tracks_block_fields_but_not_key_order", () => {
+  const baseline = flowFingerprint(blockFlow());
+  const raised = blockFlow({ effort: "high" });
+  const reordered = blockFlow({ reordered: true });
+
+  expect(Object.keys(reordered.flowLlmConfig)).not.toEqual(Object.keys(blockFlow().flowLlmConfig));
+  const ownLayer = ask(reordered).ownLlmConfig as { anthropic: { thinking: object } };
+  expect(Object.keys(ownLayer.anthropic.thinking)).toEqual(["budget_tokens", "type"]);
+  expect(flowFingerprint(raised)).not.toBe(baseline);
+  expect(flowFingerprint(reordered)).toBe(baseline);
+});
+
+test("test_block_field_names_are_not_redacted_as_credentials", () => {
+  const flow = llmFlow({
+    provider: "openai",
+    openai: { max_output_tokens: 7771n, safety_identifier: "safety-id-value", prompt_cache_key: "cache-key-value" },
+    anthropic: { max_tokens: 7772n, thinking: { type: "enabled", budget_tokens: 7773n } },
+    ollama: { keep_alive: "keep-alive-value" },
+    google: { generationConfig: { thinkingConfig: { thinkingBudget: 7774n } } },
+  });
+  const flowConfig = plainMapping(flowManifest(flow).flow_llm_config!) as Record<string, unknown>;
+
+  expect(flowConfig.openai).toEqual({
+    max_output_tokens: "7771",
+    prompt_cache_key: "cache-key-value",
+    safety_identifier: "safety-id-value",
+  });
+  expect(flowConfig.anthropic).toEqual({ max_tokens: "7772", thinking: { budget_tokens: "7773", type: "enabled" } });
+  expect(flowConfig.ollama).toEqual({ keep_alive: "keep-alive-value" });
+  expect(flowConfig.google).toEqual({ generationConfig: { thinkingConfig: { thinkingBudget: "7774" } } });
+});
+
+test("test_agent_variable_manifest_preserves_the_variable_free_fingerprint", () => {
+  const flow = singleNodeFlow(new AgentNode("node", { prompt: "hi" }));
+
+  expect("variables" in nodeManifest(flow, "node")).toBe(false);
+  expect(flowFingerprint(flow)).toBe("4bf7361e46300e1e8c9250fbca0505b9ad985ce4159558c1528ac1bc29bf8bd4");
+});
+
+test("test_agent_variable_identity_tracks_names_domains_defaults_and_order_only", () => {
+  const countType = (high: bigint) => new Type({ kind: ValueKind.INTEGER, bounds: [1n, high] });
+  const count = new Parameter("count", { contract: new ValueContract(countType(12n)), hasDefault: true, default: 4n });
+  const tone = new Parameter("tone", {
+    contract: new ValueContract(new Type({ kind: ValueKind.STRING, tags: new Set(["brief", "detailed"]) })),
+    hasDefault: true,
+    default: "brief",
+  });
+  const declarations = [
+    [count, tone],
+    [new Parameter("sentences", { contract: count.contract, hasDefault: true, default: 4n }), tone],
+    [new Parameter("count", { contract: count.contract, hasDefault: true, default: 5n }), tone],
+    [new Parameter("count", { contract: new ValueContract(countType(8n)), hasDefault: true, default: 4n }), tone],
+    [tone, count],
+  ];
+  const flows = declarations.map((variables) => singleNodeFlow(new AgentNode("node", { variables })));
+
+  expect(new Set(flows.map(flowFingerprint)).size).toBe(flows.length);
+  expect(new Set(flows.map(expansionDigest)).size).toBe(flows.length);
+  expect((nodeManifest(flows[0]!, "node").variables as JsonObject[]).map((variable) => variable.name)).toEqual([
+    "count",
+    "tone",
+  ]);
+
+  const located = singleNodeFlow(
+    new AgentNode("node", {
+      variables: [
+        new Parameter("count", {
+          contract: new ValueContract(countType(12n), new ContractOrigins({ default: new OriginRef("type") })),
+          hasDefault: true,
+          default: 4n,
+          origin: new OriginRef("declaration"),
+          defaultOrigin: new OriginRef("default"),
+        }),
+        tone,
+      ],
+    }),
+  );
+  expect(flowFingerprint(located)).toBe(flowFingerprint(flows[0]!));
+  expect(expansionDigest(located)).toBe(expansionDigest(flows[0]!));
+});
+
+test.each([
+  [null, "null"],
+  [new Set([new Parameter("x")]), "Set"],
+])("test_agent_variable_manifest_rejects_noncanonical_containers: %p", (variables, name) => {
+  const node = new AgentNode("node");
+  Object.assign(node, { variables });
+
+  expectError(
+    () => flowManifest(singleNodeFlow(node)),
+    TypeError,
+    `flow.nodes.node.variables: expected array, got ${name}`,
+  );
+});
+
+test("test_expansion_digest_excludes_effective_but_includes_authored_llm_config", () => {
+  const first = new AgentNode("node", { prompt: "answer", llmConfig: { provider: "openai" } });
+  const changedEffective = new AgentNode("node", { prompt: "answer", llmConfig: { provider: "openai" } });
+  changedEffective.llmConfig = { provider: "anthropic" };
+  const changedAuthored = new AgentNode("node", { prompt: "answer", llmConfig: { provider: "anthropic" } });
+
+  expect(expansionDigest(singleNodeFlow(first))).toBe(expansionDigest(singleNodeFlow(changedEffective)));
+  expect(expansionDigest(singleNodeFlow(first))).not.toBe(expansionDigest(singleNodeFlow(changedAuthored)));
+});
+
+test("an AGENT leaves out unset variables, skills, steerable, system prompt, memories and mode", () => {
+  const manifest = nodeManifest(singleNodeFlow(new AgentNode("node", { prompt: "p" })), "node");
+
+  for (const key of ["variables", "skills", "steerable", "system_prompt", "memories", "mode"]) {
+    expect(key in manifest).toBe(false);
+  }
+  expect(manifest.retries).toBe(2);
+});
+
+test("compose/test_agent_skills_yaml.py::test_skills_are_identity_but_empty_and_order_are_not", () => {
+  const skills = (granted: readonly string[] | "all") =>
+    flowFingerprint(singleNodeFlow(new AgentNode("node", { prompt: "p", skills: granted })));
+  const base = flowFingerprint(singleNodeFlow(new AgentNode("node", { prompt: "p" })));
+  const ab = skills(["a", "b"]);
+
+  expect(skills([])).toBe(base);
+  expect(ab).not.toBe(base);
+  expect(skills(["b", "a"])).toBe(ab);
+  expect([base, ab]).not.toContain(skills("all"));
+  const granted = (names: readonly string[] | "all") =>
+    nodeManifest(singleNodeFlow(new AgentNode("node", { skills: names })), "node").skills;
+  expect(granted(["b", "a"])).toEqual(["a", "b"]);
+  expect(granted("all")).toBe("all");
+});
+
+test("AGENT retries is identity even at zero, and a forged count is refused with its path", () => {
+  const agent = (retries: number) => singleNodeFlow(new AgentNode("node", { prompt: "p", retries }));
+
+  expect(nodeManifest(agent(0), "node").retries).toBe(0);
+  const forged = new AgentNode("node", { prompt: "p" });
+  forged.retries = 1.5;
+  expectError(
+    () => flowManifest(singleNodeFlow(forged)),
+    TypeError,
+    "flow.nodes.node.retries: expected a safe integer, got 1.5",
+  );
+});
+
+test("AGENT run-resolved and derived fields are not identity", () => {
+  const original = singleNodeFlow(new AgentNode("node", { prompt: "p", llmConfig: { model: "m" } }));
+  const node = new AgentNode("node", { prompt: "p", llmConfig: { model: "m" } });
+  Object.assign(node, {
+    llmConfig: { model: "other" },
+    llmConfigLabel: "openai/other",
+    wiresLlmConfig: true,
+    llmValueTypes: [[["model"], null]],
+    callTime: { model: "other" },
+    hostCredentials: { apiKey: "secret" },
+  });
+
+  expect(flowManifest(singleNodeFlow(node))).toEqual(flowManifest(original));
+});
+
+test.each([
+  [
+    "an unknown field",
+    (node: AgentNode) => Object.assign(node, { futureField: 1 }),
+    RangeError,
+    'flow.nodes.node: unknown noncanonical execution field(s) for agent: ["futureField"]',
+  ],
+  [
+    "skills that aren't an array",
+    (node: AgentNode) => Object.assign(node, { skills: 5 }),
+    TypeError,
+    'flow.nodes.node.skills: expected "all" or an array of strings',
+  ],
+  [
+    "tools that aren't an array",
+    (node: AgentNode) => Object.assign(node, { tools: "t" }),
+    TypeError,
+    "flow.nodes.node.tools: expected array, got string",
+  ],
+] as const)("an AGENT with %s is refused", (_, mutate, cls, message) => {
+  const node = new AgentNode("node", { prompt: "p" });
+  mutate(node);
+
+  expectError(() => flowManifest(singleNodeFlow(node)), cls, message);
 });
 
 // ---- Values ----------------------------------------------------------------------------------
@@ -1737,6 +2023,27 @@ test.each([
     "code-source",
     () => new CodeNode("node", { code: 'return "first"' }),
     () => new CodeNode("node", { code: 'return "second"' }),
+  ],
+  ["agent-prompt", () => new AgentNode("node", { prompt: "first" }), () => new AgentNode("node", { prompt: "second" })],
+  [
+    "agent-tools",
+    () => new AgentNode("node", { prompt: "p", tools: ["first"] }),
+    () => new AgentNode("node", { prompt: "p", tools: ["second"] }),
+  ],
+  [
+    "agent-retries",
+    () => new AgentNode("node", { prompt: "p", retries: 1 }),
+    () => new AgentNode("node", { prompt: "p", retries: 2 }),
+  ],
+  [
+    "agent-own-llm-config",
+    () => new AgentNode("node", { prompt: "p", llmConfig: { provider: "openai" } }),
+    () => new AgentNode("node", { prompt: "p", llmConfig: { provider: "anthropic" } }),
+  ],
+  [
+    "agent-llm-inherit",
+    () => new AgentNode("node", { prompt: "p", llmInherit: true }),
+    () => new AgentNode("node", { prompt: "p", llmInherit: false }),
   ],
   ["tool-id", () => new ToolNode("node", { toolId: "first" }), () => new ToolNode("node", { toolId: "second" })],
   [

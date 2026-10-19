@@ -900,6 +900,22 @@ const CASES: Case[] = [
     expect: blockOnResponses("openrouter", "openai/gpt-5-codex"),
   },
   {
+    // A missing key fails at build, as Python's `get_llm()` does, before the block check.
+    name: "openrouter name-routed model with a block and no key",
+    config: { provider: "openrouter", model: "openai/gpt-5-codex", openrouter: { max_tokens: 64n } },
+    env: {},
+    golden: "openai_responses/openrouter_codex",
+    expect: missingKey("openrouter", "OPENROUTER_API_KEY"),
+  },
+  {
+    // The SDK client raises a missing API version at build, before the block check.
+    name: "azure name-routed deployment with a block and no OPENAI_API_VERSION",
+    config: { ...AZURE, model: "gpt-5-codex", api_key: HOST_KEY, azure: { max_tokens: 100n } },
+    env: {},
+    golden: "openai_responses/azure_codex",
+    expect: AZURE_NO_VERSION,
+  },
+  {
     name: "vllm name-routed model with a block",
     config: { provider: "vllm", model: "my-codex-finetune", vllm: { max_tokens: 64n } },
     env: {},

@@ -273,21 +273,23 @@ function routedToResponses(provider: string, model: string, block: JsonObject): 
  *
  * The key is the resolved one, else the provider's non-empty key variable, else `"EMPTY"` for
  * vLLM; the base URL the resolved one, else (vLLM) a non-empty `VLLM_BASE_URL` as written, else
- * `PROVIDER_BASE_URL`. Throws `RangeError` naming the key variable if no key is found, or if a
- * name-routed model has a block.
+ * `PROVIDER_BASE_URL`; each variable is read only when no earlier source matched. Throws
+ * `RangeError` naming the key variable if no key is found, or if a name-routed model has a block.
  */
 function vendorModel(provider: string, resolved: Resolved, wiring: Wiring): RouteModel {
   const { model, block } = resolved;
+  // Every Chat Completions vendor has a key variable.
   const variable = getApiKeyEnv(provider)!;
   const key = resolved.keyAtBuild ?? (wiring.env(variable) || null);
   if (key === null && !OPTIONAL_API_KEY_PROVIDERS.has(provider)) throw missingKey(provider, variable);
-  const envBaseUrl = provider === "vllm" ? wiring.env("VLLM_BASE_URL") : undefined;
   const responses = routedToResponses(provider, model, block);
+  const envBaseUrl =
+    resolved.baseUrl === null && provider === "vllm" ? wiring.env("VLLM_BASE_URL") : undefined;
   const route = new Route({
     provider,
     baseUrl: resolved.baseUrl ?? (envBaseUrl || PROVIDER_BASE_URL[provider]!),
     path: responses ? "responses" : "chat/completions",
-    // A keyless vLLM server takes any bearer value; OpenAI-compatible servers expect one.
+    // A keyless vLLM server ignores the value; sending "EMPTY" keeps today's wire request.
     auth: withHeaders(new BearerAuth(key ?? "EMPTY"), resolved.secretHeaders),
   });
   const { onReplayDegraded } = wiring;
@@ -304,40 +306,39 @@ function vendorModel(provider: string, resolved: Resolved, wiring: Wiring): Rout
 }
 
 /**
+ * Return the Azure auth, first match wins, and its replay account: the resolved key as `api-key`;
+ * a non-empty `AZURE_OPENAI_AD_TOKEN` as a bearer token; a non-empty `AZURE_OPENAI_API_KEY` as
+ * `api-key`. Each variable is read only when no earlier source matched, as in Python.
+ *
+ * Throws `RangeError` if none is found.
+ */
+function azureAuth(key: string | null, endpoint: string, env: Env): [Auth, string] {
+  if (key !== null) return [new HeaderKeyAuth("api-key", key), accountHash(key)];
+  const adToken = env("AZURE_OPENAI_AD_TOKEN");
+  // An AD token rotates about hourly while the reasoning stays bound to the resource, so the
+  // replay account is the resource's.
+  if (adToken) return [new BearerAuth(adToken), accountHash(endpoint)];
+  const envKey = env("AZURE_OPENAI_API_KEY");
+  if (envKey) return [new HeaderKeyAuth("api-key", envKey), accountHash(envKey)];
+  throw new RangeError(
+    "provider azure has no credential; set llm_config.api_key with llm_config.base_url, run " +
+      "'yian auth azure', or set AZURE_OPENAI_API_KEY or AZURE_OPENAI_AD_TOKEN",
+  );
+}
+
+/**
  * Build the Azure OpenAI route: the deployment's `chat/completions` at the resource endpoint, or
  * `openai/responses` for a name-routed deployment, with `api-version` from `OPENAI_API_VERSION`.
  *
- * Auth, first match wins: the resolved key as `api-key`; a non-empty `AZURE_OPENAI_AD_TOKEN` as a
- * bearer token; a non-empty `AZURE_OPENAI_API_KEY` as `api-key`. Throws `RangeError` if none is
- * found, then if `OPENAI_API_VERSION` is unset or empty, then if a name-routed deployment has a
- * block.
+ * Auth comes from `azureAuth`. Throws `RangeError` if it finds no credential, then if
+ * `OPENAI_API_VERSION` is unset or empty, then if a name-routed deployment has a block.
  */
 function azureModel(resolved: Resolved, wiring: Wiring): RouteModel {
   const { model, block } = resolved;
   const { env } = wiring;
   // `checkModelConfig` requires an Azure config's base_url.
   const endpoint = azureResourceEndpoint(resolved.baseUrl!);
-  const adToken = env("AZURE_OPENAI_AD_TOKEN");
-  const envKey = env("AZURE_OPENAI_API_KEY");
-  let auth: Auth;
-  // The replay account: the key sent, or the resource for an AD token, which rotates about
-  // hourly while the reasoning stays bound to the resource.
-  let account: string;
-  if (resolved.keyAtBuild !== null) {
-    auth = new HeaderKeyAuth("api-key", resolved.keyAtBuild);
-    account = accountHash(resolved.keyAtBuild);
-  } else if (adToken) {
-    auth = new BearerAuth(adToken);
-    account = accountHash(endpoint);
-  } else if (envKey) {
-    auth = new HeaderKeyAuth("api-key", envKey);
-    account = accountHash(envKey);
-  } else {
-    throw new RangeError(
-      "provider azure has no credential; set llm_config.api_key with llm_config.base_url, run " +
-        "'yian auth azure', or set AZURE_OPENAI_API_KEY or AZURE_OPENAI_AD_TOKEN",
-    );
-  }
+  const [auth, account] = azureAuth(resolved.keyAtBuild, endpoint, env);
   const version = env("OPENAI_API_VERSION");
   if (!version) {
     throw new RangeError(
@@ -519,10 +520,9 @@ async function subscriptionModel(
  * Throws `RangeError` if `checkModelConfig` rejects the config (e.g. a block the API it reaches
  * refuses), a vendor, Anthropic or Google key is missing, `OLLAMA_BASE_URL` is malformed, Azure
  * has no credential or no `OPENAI_API_VERSION`, or a model routed to the Responses API has a Chat
- * Completions block;
- * `AuthError` if a pinned login changed or was removed,
- * an OpenAI key is missing or changed, or saved header names differ from the recorded ones; a
- * `TypeCheckError` for a record that holds a non-yian value.
+ * Completions block; `AuthError` if a pinned login changed or was removed, an OpenAI key is
+ * missing or changed, or saved header names differ from the recorded ones; a `TypeCheckError` for
+ * a record that holds a non-yian value.
  */
 export async function chatModelFromConfig(
   config: Readonly<Record<string, unknown>> | LLMConfig,
@@ -599,7 +599,7 @@ export async function chatModelFromConfig(
     secretHeaders,
   };
   // After the credential and header reads, as Python warns in `get_llm()`: a removed login or
-  // mismatched header names raise without a warning, while a missing key still warns first.
+  // mismatched header names raise without a warning, while a missing vendor key still warns first.
   if (!validateModel(provider, model)) {
     onWarning(
       `Model '${model}' is not in the known model list for provider '${provider}'. Continuing anyway.`,

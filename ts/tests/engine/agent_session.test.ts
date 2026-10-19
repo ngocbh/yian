@@ -50,9 +50,8 @@ test("compatibility matches factory defaults and config carriers", () => {
   expect(compatibility({ provider: "OpenAI", model: "other", api_key: "not-retained" }, { env })).toEqual(expected);
 });
 
-test("a record's api_key is not kept when the provider comes from the defaults", () => {
-  const descriptor = compatibility({ provider: null, api_key: "not-retained" }, { env });
-  expect(descriptor).toEqual(expected);
+test("a record's null provider resolves from the defaults", () => {
+  expect(compatibility({ provider: null, api_key: "k" }, { env })).toEqual(expected);
 });
 
 test("a passed snapshot is used", () => {

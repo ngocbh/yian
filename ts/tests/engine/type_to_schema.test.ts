@@ -662,6 +662,15 @@ describe("test_bounded_scalar_schema_exposes_and_enforces_inclusive_limits (sche
   });
 });
 
+test("a hand-built -0 bound becomes 0, also inside a record", () => {
+  const typ = new Type({ kind: ValueKind.NUMBER, bounds: [-0, 1] });
+  const value = obj(obj(schemaOf(typ).properties).value);
+  expect(Object.is(value.minimum, 0)).toBe(true);
+  const outer = schemaOf(record({ r: record({ x: typ }, ["x"]) }, ["r"]));
+  const field = obj(obj(obj(obj(outer.$defs).r).properties).x);
+  expect(Object.is(field.minimum, 0)).toBe(true);
+});
+
 test("test_bounded_numeric_schemas_preserve_nested_lists_records_and_nullable_fields (schema half)", () => {
   const registry = readTypedefs({
     Rating: {

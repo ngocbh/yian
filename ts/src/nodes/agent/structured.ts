@@ -160,13 +160,15 @@ function nonNullSchema(typ: Type, defs: Defs, position: string, closed: boolean)
  * Return the schema of a scalar slot of `kind`, within inclusive `bounds`.
  *
  * An open (`null`) end has no limit, so the schema omits that end's `minimum` or `maximum`.
- * A bound keeps the form the type stores it in (`bigint` or `number`).
+ * A bound keeps the form the type stores it in (`bigint` or `number`); a `-0` bound becomes `0`.
  */
 function scalarSchema(kind: ValueKind, bounds: Bounds | undefined): JsonObject {
   const schema: JsonObject = { type: SCALAR_TYPES.get(kind)! };
   const [minimum, maximum] = bounds ?? [null, null];
-  if (minimum !== null) schema.minimum = minimum;
-  if (maximum !== null) schema.maximum = maximum;
+  // `define` compares schemas by their `logJson` text, which throws on `-0`; only a hand-built
+  // Type has one. `-0 === 0`, so the ternary writes `0`, and a `bigint` passes through.
+  if (minimum !== null) schema.minimum = minimum === 0 ? 0 : minimum;
+  if (maximum !== null) schema.maximum = maximum === 0 ? 0 : maximum;
   return schema;
 }
 

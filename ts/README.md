@@ -146,9 +146,10 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   every read.
 - `src/nodes/base.ts` holds `Node`. `run(inputs, caps)` is async and resolves to one `Output`,
   `Route` or `Grow`; a kind's `forward(inputs, caps)` may return the result or a promise. The
-  capabilities are one `NodeCaps` object (`signal`, `bindItem`, `steps`). `signal` is optional
-  in the type; the runtime's evaluator gives every node its own (the evaluator is not ported
-  yet).
+  capabilities are one `NodeCaps` object (`signal`, `bindItem`, `steps`, `tools`). `tools` is the
+  run's `ToolSet`, for a node that declares `needsTools` (TOOL and HUMAN_INPUT). `signal` is
+  optional in the type; the runtime's evaluator gives every node its own (the evaluator is not
+  ported yet).
 - `BackwardContext` and `BackwardResult` deep-copy and deep-freeze their values once, in the
   constructor: read them, and copy before you change one (unlike `BindingCapture.boundInputs`,
   which gives a fresh copy per read).
@@ -157,14 +158,20 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   use no ES `#` members (a copy never ran the constructor, so it has no private brand) and no
   instance field that captures `this` (an arrow-function field or a bound callback would stay
   bound to the original); use TS `private` and prototype methods.
-- Each kind lives in `src/nodes/<kind>/node.ts` (start, end, case, call, map, loop so far) as a
-  `Node` subclass; import it from that file. There is no per-kind index, and, as Python's
-  `yian.nodes`, `src/nodes/index.ts` exports no kind. START's and END's bodies run. The other
-  kinds hold their data, checks and load-time hooks (origins, setup and condition checks, MAP's
-  `over` binding, backward layouts, LOOP `respawn`); their `forward` throws "not ported yet".
-- Counts on nodes (LOOP `times`, `maxIters` and `iteration`, END `n`) are safe-integer `number`s,
-  not `bigint`. END keeps its mode in public `mode`, `names` and `n` fields, and `EndNode.list`
-  replaces Python's `list_`. A CASE branch is a frozen `Case`: an origin rewrite rebuilds it.
+- Each kind lives in `src/nodes/<kind>/node.ts` (start, end, case, call, map, loop, code, tool,
+  human_input, wait) as a `Node` subclass; import it from that file. There is no per-kind index,
+  and, as Python's `yian.nodes`, `src/nodes/index.ts` exports no kind. START's and END's bodies
+  run. The other kinds hold their data, checks and load-time hooks (origins, setup and condition
+  checks, MAP's `over` and WAIT's `until` bindings, HUMAN_INPUT's prompt sites, backward layouts,
+  LOOP `respawn`); their `forward` throws "not ported yet".
+- A CODE `code:` value is a reference (`./file.ts:fn`, also `.js` or `.mjs` and `../` paths,
+  resolved against the node's `baseDir`) or an inline TS/JS body. The constructor classifies it
+  by shape into `mode` and compiles or imports nothing.
+- WAIT's `until` takes a date or datetime string only: dates are text in TS yian.
+- Counts on nodes (LOOP `times`, `maxIters` and `iteration`, END `n`, TOOL `retries`) are
+  safe-integer `number`s, not `bigint`. END keeps its mode in public `mode`, `names` and `n`
+  fields, and `EndNode.list` replaces Python's `list_`. A CASE branch is a frozen `Case`: an
+  origin rewrite rebuilds it.
 
 ## Memory
 

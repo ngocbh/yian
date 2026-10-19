@@ -14,7 +14,7 @@
  * Invariant: a node never writes the pool. It describes its one output value as
  * `new Output(value)`; the engine performs the write under the node's id. This keeps nodes pure.
  *
- * Knows about:   diagnostics, expr, memory contracts, typesys, nodes/binding, nodes/contracts.
+ * Knows about:   diagnostics, expr, memory contracts, tools, typesys, nodes/binding, nodes/contracts.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -29,6 +29,7 @@ import {
 } from "../expr/index.ts";
 import { evaluateWhenRecord } from "../expr/expressions.ts";
 import type { MemoryScope } from "../memory/contracts.ts";
+import type { ToolSet } from "../tools/registry.ts";
 import type { VariablePool } from "../typesys/pool.ts";
 import {
   isList,
@@ -701,6 +702,8 @@ export interface NodeCaps {
   readonly bindItem?: (element: Value, index: number) => ValueRecord;
   /** The node's durable steps; supplied to a node that records them (`needsSteps`). */
   readonly steps?: NodeSteps;
+  /** The run's tool set; supplied to a node that declares `needsTools`. */
+  readonly tools?: ToolSet;
 }
 
 /**

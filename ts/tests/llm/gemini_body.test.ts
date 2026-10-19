@@ -1,7 +1,8 @@
 /**
  * Tests for Gemini body building in `src/llm/protocols/gemini.ts`: the protocol object, the
  * contents (system, user, tool and assistant messages), tool results and their ids, the media and
- * wrong-part refusals, tools, the tool choice, the block and determinism.
+ * wrong-part refusals, tools, the tool choice, the block, determinism, thought signatures sent back
+ * from replay records and the placeholder signature.
  */
 
 import { describe, expect, spyOn, test } from "bun:test";
@@ -14,6 +15,7 @@ import {
   type Part,
   ReasoningPart,
   RefusalPart,
+  type ReplayDegradedReason,
   type ReplayKey,
   Request,
   replayRecord,
@@ -75,14 +77,24 @@ function gemini(block: JsonObject | null = null): Gemini {
 }
 
 interface BodyOptions {
+  model?: string;
+  account?: string | null;
   block?: JsonObject | null;
+  onReplayDegraded?: (reason: ReplayDegradedReason) => void;
   tools?: ToolSpec[];
   toolChoice?: ToolChoice;
   parallelToolCalls?: boolean | null;
 }
 
 function bodyOf(messages: Message[], options: BodyOptions = {}): JsonObject {
-  return gemini(options.block ?? null).buildBody(
+  const protocol = new Gemini({
+    model: options.model ?? FLASH,
+    provider: "google",
+    account: options.account,
+    block: options.block,
+    onReplayDegraded: options.onReplayDegraded,
+  });
+  return protocol.buildBody(
     new Request({
       messages,
       tools: options.tools,
@@ -430,6 +442,8 @@ describe("tools", () => {
     const [entry] = bodyOf([user("Hi.")], { tools: [pick] })["tools"] as JsonObject[];
     const [declaration] = entry!["functionDeclarations"] as JsonObject[];
     expect(declaration!["parametersJsonSchema"]).toEqual(parameters);
+    // toEqual ignores key order; the bytes pin it.
+    expect(encodeBody(declaration!["parametersJsonSchema"]!)).toBe(encodeBody(parameters));
   });
 
   test("tool parameters are copied", () => {
@@ -454,13 +468,17 @@ describe("tools", () => {
 });
 
 describe("tool choice", () => {
-  const choices: [ToolChoice, JsonObject][] = [
-    ["required", { functionCallingConfig: { mode: "ANY" } }],
-    ["none", { functionCallingConfig: { mode: "NONE" } }],
-    [new NamedTool("double"), { functionCallingConfig: { mode: "ANY", allowedFunctionNames: ["double"] } }],
+  const choices: [string, ToolChoice, JsonObject][] = [
+    ["required", "required", { functionCallingConfig: { mode: "ANY" } }],
+    ["none", "none", { functionCallingConfig: { mode: "NONE" } }],
+    [
+      'NamedTool("double")',
+      new NamedTool("double"),
+      { functionCallingConfig: { mode: "ANY", allowedFunctionNames: ["double"] } },
+    ],
   ];
-  for (const [choice, expected] of choices) {
-    test(`tool choice ${JSON.stringify(expected)}`, () => {
+  for (const [label, choice, expected] of choices) {
+    test(`tool choice ${label} -> ${JSON.stringify(expected)}`, () => {
       expect(bodyOf([user("Hi.")], { tools: [DOUBLE], toolChoice: choice })["toolConfig"]).toEqual(expected);
     });
   }
@@ -472,7 +490,7 @@ describe("tool choice", () => {
   });
 
   test("no tools sends no toolConfig, even with a choice set", () => {
-    for (const [toolChoice] of choices) {
+    for (const [, toolChoice] of choices) {
       const body = bodyOf([user("Hi.")], { toolChoice });
       expect(Object.hasOwn(body, "toolConfig")).toBe(false);
       expect(Object.hasOwn(body, "tools")).toBe(false);
@@ -559,6 +577,7 @@ describe("the block", () => {
     const body = protocol.buildBody(request);
     ((body["safetySettings"] as JsonObject[])[0]!)["threshold"] = "changed";
     expect(block).toEqual({ safetySettings: [{ category: "C", threshold: "T" }] });
+    // This one checks sharing: a body holding the protocol's copy of the block would change the next body.
     expect(protocol.buildBody(request)["safetySettings"]).toEqual([{ category: "C", threshold: "T" }]);
   });
 
@@ -598,5 +617,298 @@ describe("determinism", () => {
       earlier.map((each) => encodeBody(each)),
     );
     expect(encodeBody(after["systemInstruction"]!)).toBe(encodeBody(before["systemInstruction"]!));
+  });
+});
+
+const PRO = "gemini-3-pro-preview";
+const SIG = "c2lnLTE=";
+const SIG2 = "c2lnLTI=";
+const PLACEHOLDER = "skip_thought_signature_validator";
+const ARGS: JsonObject = { value: 3n };
+const FUNCTION_CALL = { functionCall: { id: "call_1", name: "double", args: { value: 3n } } };
+const SECOND_CALL = { functionCall: { id: "call_2", name: "double", args: { value: 4n } } };
+
+/** Return a replay record for `key` (this protocol's key by default) holding `fields`. */
+function record(fields: JsonObject, key: ReplayKey = KEY): JsonObject {
+  return replayRecord(key, fields);
+}
+
+/** Return a text part carrying a signature record for `key`. */
+function signedText(value: string, signature: string, key: ReplayKey = KEY): TextPart {
+  return new TextPart(value, record({ thought_signature: signature }, key));
+}
+
+/** Return a call part carrying `payload`. */
+function callWith(id: string, args: JsonObject, payload: JsonObject | null): ToolCallPart {
+  return new ToolCallPart({ id, name: "double", arguments: args, providerPayload: payload });
+}
+
+/** Return a call part carrying a signature record for `key`. */
+function signedCall(id: string, args: JsonObject, signature: string, key: ReplayKey = KEY): ToolCallPart {
+  return callWith(id, args, record({ thought_signature: signature }, key));
+}
+
+/** Return an assistant message carrying a message record for `key`. */
+function recorded(key: ReplayKey, ...parts: Part[]): Message {
+  return new Message({ role: "assistant", parts, protocol: key.protocol, providerPayload: record({}, key) });
+}
+
+/** Build a body from `messages`; return its contents and the reasons passed to `onReplayDegraded`. */
+function sendWithReasons(messages: Message[], options: BodyOptions = {}): [JsonObject[], ReplayDegradedReason[]] {
+  const reasons: ReplayDegradedReason[] = [];
+  const body = bodyOf(messages, { ...options, onReplayDegraded: (reason) => reasons.push(reason) });
+  return [body["contents"] as JsonObject[], reasons];
+}
+
+/** Send `assistant` after a user turn; return its model parts (`null` when skipped) and the reasons. */
+function modelParts(assistant: Message, options: BodyOptions = {}): [JsonValue, ReplayDegradedReason[]] {
+  const [sent, reasons] = sendWithReasons([user("Hi."), assistant], options);
+  return [sent.length > 1 ? sent[1]!["parts"]! : null, reasons];
+}
+
+describe("thought signatures sent back", () => {
+  test("a signed text part and a signed call go back with thoughtSignature in place", () => {
+    const parts = [signedText("Calling.", SIG), signedCall("call_1", ARGS, SIG2), text("Done.")];
+    expect(modelParts(own(...parts))).toEqual([
+      [{ text: "Calling.", thoughtSignature: SIG }, { ...FUNCTION_CALL, thoughtSignature: SIG2 }, { text: "Done." }],
+      [],
+    ]);
+  });
+
+  test("an empty text part with a usable signature is sent as empty text with it", () => {
+    expect(modelParts(own(text("Hello."), signedText("", SIG)))).toEqual([
+      [{ text: "Hello." }, { text: "", thoughtSignature: SIG }],
+      [],
+    ]);
+  });
+
+  test("an empty text part with an unusable record is not sent", () => {
+    const parts = [text("Hello."), signedText("", SIG, { ...KEY, model: PRO })];
+    expect(modelParts(own(...parts))).toEqual([[{ text: "Hello." }], ["other_model"]]);
+  });
+
+  test("a signed reasoning part is not sent", () => {
+    const parts = [new ReasoningPart("Thinking.", record({ thought_signature: SIG })), text("Hello.")];
+    expect(modelParts(own(...parts))).toEqual([[{ text: "Hello." }], []]);
+  });
+
+  test("a tool result is refused before an unusable record is signalled", () => {
+    const reasons: ReplayDegradedReason[] = [];
+    refuses(
+      () =>
+        bodyOf([own(signedText("A.", SIG, { ...KEY, model: PRO }), result("call_1", "6"))], {
+          onReplayDegraded: (reason) => reasons.push(reason),
+        }),
+      "the gemini route cannot send a ToolResultPart in an assistant message",
+    );
+    expect(reasons).toEqual([]);
+  });
+
+  const signed = record({ thought_signature: SIG });
+  const signedFor = (change: Partial<ReplayKey>) => record({ thought_signature: SIG }, { ...KEY, ...change });
+  const anthropic = { protocol: "anthropic_messages", provider: "anthropic", model: "claude-sonnet-4-5" };
+  const unusable: [string, JsonObject, ReplayDegradedReason, string | null][] = [
+    ["an anthropic_messages record", record({ signature: SIG }, anthropic), "other_protocol", null],
+    ["another provider", signedFor({ provider: "vertex" }), "other_provider", null],
+    ["another model", signedFor({ model: PRO }), "other_model", null],
+    ["a record with an account, a key without", signedFor({ account: "acct" }), "other_account", null],
+    ["a record without an account, a key with one", signed, "other_account", "acct"],
+    ["an unknown version", { ...signed, v: 2n }, "unknown_version", null],
+    ["a malformed envelope", { ...signed, provider: 1n }, "malformed", null],
+    ["an unknown field", record({ thought_signature: SIG, extra: "x" }), "unknown_field", null],
+    ["no thought_signature", record({}), "malformed", null],
+    ["an empty thought_signature", record({ thought_signature: "" }), "malformed", null],
+    ["a non-string thought_signature", record({ thought_signature: 1n }), "malformed", null],
+  ];
+  for (const [name, payload, reason, account] of unusable) {
+    test(`${name}: no signature from the message, text and calls kept, signalled once`, () => {
+      // The call's own record is usable; the whole message degrades, so the call goes out with
+      // the placeholder instead.
+      const usable = account === null ? KEY : { ...KEY, account };
+      const parts = [new TextPart("Calling.", payload), signedCall("call_1", ARGS, SIG2, usable), text("Done.")];
+      expect(modelParts(own(...parts), { account })).toEqual([
+        [{ text: "Calling." }, { ...FUNCTION_CALL, thoughtSignature: PLACEHOLDER }, { text: "Done." }],
+        [reason],
+      ]);
+    });
+  }
+
+  test("two unusable parts signal once, with the first reason in part order", () => {
+    const parts = [
+      signedText("A.", SIG, { ...KEY, model: PRO }),
+      signedCall("call_1", ARGS, SIG2, { ...KEY, provider: "vertex" }),
+    ];
+    expect(modelParts(own(...parts))[1]).toEqual(["other_model"]);
+  });
+
+  test("a usable record beside an unusable one: neither is sent", () => {
+    const parts = [signedText("A.", SIG), signedText("B.", SIG2, { ...KEY, model: PRO })];
+    expect(modelParts(own(...parts))).toEqual([[{ text: "A." }, { text: "B." }], ["other_model"]]);
+  });
+
+  test("without a callback the signatures are still left out", () => {
+    const parts = [signedText("A.", SIG), signedText("B.", SIG2, { ...KEY, model: PRO })];
+    expect(contents([own(...parts)])).toEqual([{ role: "model", parts: [{ text: "A." }, { text: "B." }] }]);
+  });
+
+  test("a throwing callback propagates", () => {
+    const onReplayDegraded = () => {
+      throw new Error("stop");
+    };
+    const messages = [user("Hi."), own(signedText("A.", SIG, { ...KEY, model: PRO }))];
+    expect(() => bodyOf(messages, { onReplayDegraded })).toThrow("stop");
+  });
+
+  test("a matching record with an account replays", () => {
+    const key = { ...KEY, account: "acct" };
+    const parts = [signedText("Calling.", SIG, key), signedCall("call_1", ARGS, SIG2, key)];
+    expect(modelParts(recorded(key, ...parts), { account: "acct" })).toEqual([
+      [{ text: "Calling.", thoughtSignature: SIG }, { ...FUNCTION_CALL, thoughtSignature: SIG2 }],
+      [],
+    ]);
+  });
+
+  test("a bigint and a number version are both accepted", () => {
+    const parts = [
+      new TextPart("A.", { ...signed, v: 1n }),
+      new TextPart("B.", { ...record({ thought_signature: SIG2 }), v: 1 }),
+    ];
+    expect(modelParts(own(...parts))).toEqual([
+      [
+        { text: "A.", thoughtSignature: SIG },
+        { text: "B.", thoughtSignature: SIG2 },
+      ],
+      [],
+    ]);
+  });
+
+  test("a part without a payload has no signature and signals nothing", () => {
+    const parts = [signedText("A.", SIG), text("B."), call("call_1", ARGS)];
+    expect(modelParts(own(...parts))).toEqual([
+      [{ text: "A.", thoughtSignature: SIG }, { text: "B." }, FUNCTION_CALL],
+      [],
+    ]);
+  });
+
+  test("a reasoning part with a foreign record signals nothing", () => {
+    const thinking = new ReasoningPart("Thinking.", record({ thought_signature: SIG }, { ...KEY, model: PRO }));
+    expect(modelParts(own(thinking, signedText("A.", SIG2)))).toEqual([[{ text: "A.", thoughtSignature: SIG2 }], []]);
+  });
+});
+
+describe("the placeholder signature", () => {
+  /** An `openai_chat` reply calling `double`: its own message record, no part records. */
+  const openaiChat = new Message({
+    role: "assistant",
+    parts: [text("Calling."), call("call_1", ARGS)],
+    protocol: "openai_chat",
+    providerPayload: record(
+      { response_id: "chatcmpl-1" },
+      { protocol: "openai_chat", provider: "openai", model: "gpt-4o" },
+    ),
+  });
+
+  for (const model of [FLASH, PRO]) {
+    test(`a call from openai_chat gets the placeholder on ${model}, signalling nothing`, () => {
+      expect(modelParts(openaiChat, { model })).toEqual([
+        [{ text: "Calling." }, { ...FUNCTION_CALL, thoughtSignature: PLACEHOLDER }],
+        [],
+      ]);
+    });
+  }
+
+  test("a hand-built message with no payload gets the placeholder, signalling nothing", () => {
+    expect(modelParts(message("assistant", call("call_1", ARGS)))).toEqual([
+      [{ ...FUNCTION_CALL, thoughtSignature: PLACEHOLDER }],
+      [],
+    ]);
+  });
+
+  test("this model's own reply with an unsigned call goes as received", () => {
+    // Gemini 2.5 signs the first part, here the text, and leaves the call unsigned.
+    expect(modelParts(own(signedText("Hello", SIG), call("call_1", ARGS)))).toEqual([
+      [{ text: "Hello", thoughtSignature: SIG }, FUNCTION_CALL],
+      [],
+    ]);
+    // With thinking off it signs nothing.
+    expect(modelParts(own(text("Hello"), call("call_1", ARGS)))).toEqual([[{ text: "Hello" }, FUNCTION_CALL], []]);
+  });
+
+  test("a reply from another model: its call record degrades, and the call gets the placeholder", () => {
+    const pro = { ...KEY, model: PRO };
+    expect(modelParts(recorded(pro, text("Calling."), signedCall("call_1", ARGS, SIG, pro)))).toEqual([
+      [{ text: "Calling." }, { ...FUNCTION_CALL, thoughtSignature: PLACEHOLDER }],
+      ["other_model"],
+    ]);
+  });
+
+  test("a reply for another account gets the placeholder", () => {
+    const other = { ...KEY, account: "acct-2" };
+    expect(modelParts(recorded(other, call("call_1", ARGS)), { account: "acct-1" })).toEqual([
+      [{ ...FUNCTION_CALL, thoughtSignature: PLACEHOLDER }],
+      [],
+    ]);
+    expect(modelParts(recorded(other, call("call_1", ARGS)))).toEqual([
+      [{ ...FUNCTION_CALL, thoughtSignature: PLACEHOLDER }],
+      [],
+    ]);
+  });
+
+  test("this model's own reply whose call record is malformed gets the placeholder", () => {
+    const bad = callWith("call_1", ARGS, record({ thought_signature: 1n }));
+    expect(modelParts(own(text("Calling."), bad))).toEqual([
+      [{ text: "Calling." }, { ...FUNCTION_CALL, thoughtSignature: PLACEHOLDER }],
+      ["malformed"],
+    ]);
+  });
+
+  test("two unsigned parallel calls in a foreign message: only the first gets it", () => {
+    expect(modelParts(message("assistant", call("call_1", ARGS), call("call_2", { value: 4n })))).toEqual([
+      [{ ...FUNCTION_CALL, thoughtSignature: PLACEHOLDER }, SECOND_CALL],
+      [],
+    ]);
+  });
+
+  test("a foreign message whose first call is unsigned and second signed: the first only gets it", () => {
+    const pro = { ...KEY, model: PRO };
+    const parts = [call("call_1", ARGS), signedCall("call_2", { value: 4n }, SIG)];
+    expect(modelParts(recorded(pro, ...parts))).toEqual([
+      [
+        { ...FUNCTION_CALL, thoughtSignature: PLACEHOLDER },
+        { ...SECOND_CALL, thoughtSignature: SIG },
+      ],
+      [],
+    ]);
+  });
+
+  test("a foreign message whose first call is signed gets none", () => {
+    const pro = { ...KEY, model: PRO };
+    const parts = [signedCall("call_1", ARGS, SIG), call("call_2", { value: 4n })];
+    expect(modelParts(recorded(pro, ...parts))).toEqual([
+      [{ ...FUNCTION_CALL, thoughtSignature: SIG }, SECOND_CALL],
+      [],
+    ]);
+  });
+
+  test("each foreign model content in a two-step loop gets one", () => {
+    const [sent, reasons] = sendWithReasons([
+      user("Double 3, then double 6."),
+      message("assistant", call("call_1", ARGS)),
+      tool(result("call_1", "6")),
+      message("assistant", call("call_2", { value: 4n }), call("call_3", { value: 5n })),
+      tool(result("call_2", "8"), result("call_3", "10")),
+    ]);
+    expect(sent[1]!["parts"]).toEqual([{ ...FUNCTION_CALL, thoughtSignature: PLACEHOLDER }]);
+    expect(sent[3]!["parts"]).toEqual([
+      { ...SECOND_CALL, thoughtSignature: PLACEHOLDER },
+      { functionCall: { id: "call_3", name: "double", args: { value: 5n } } },
+    ]);
+    expect(reasons).toEqual([]);
+  });
+
+  test("a foreign model content with text only gets none", () => {
+    expect(modelParts(message("assistant", text("Hello.")))).toEqual([[{ text: "Hello." }], []]);
+    const chat = new Message({ role: "assistant", parts: [text("Hi.")], providerPayload: openaiChat.providerPayload });
+    expect(modelParts(chat)).toEqual([[{ text: "Hi." }], []]);
   });
 });

@@ -7,9 +7,12 @@
  * is its own `user` content (an empty one is not sent, with a warning), each run of tool messages
  * becomes one `user` content of `functionResponse` parts carrying the call ids, and an assistant
  * message is a `model` content of its text and `functionCall` parts in part order, its reasoning
- * and refusals left out. Every tool goes in one `functionDeclarations` entry with its parameters
- * as written, and a tool choice becomes `toolConfig`, both only with tools. `safetySettings: []`
- * and `generationConfig.candidateCount: 1` are always sent, and the provider block is merged last.
+ * and refusals left out. A text or call part's thought signature goes back from its replay record
+ * only to the provider, model and account that wrote it, and a function call Gemini didn't write
+ * for this model goes out with Google's placeholder signature. Every tool goes in one
+ * `functionDeclarations` entry with its parameters as written, and a tool choice becomes
+ * `toolConfig`, both only with tools. `safetySettings: []` and `generationConfig.candidateCount: 1`
+ * are always sent, and the provider block is merged last.
  *
  * Replies are not read yet.
  */
@@ -26,6 +29,7 @@ import {
   type Message,
   NamedTool,
   type Part,
+  readReplayRecord,
   type ReplayDegradedReason,
   type ReplayKey,
   type Request,
@@ -40,6 +44,10 @@ import {
 export const PROTOCOL = "gemini";
 const NO_MEDIA = "the gemini route does not send media parts yet";
 const EMPTY_USER = "an empty user message was not sent; Gemini rejects empty content";
+const PART_FIELDS = ["thought_signature"];
+const MESSAGE_FIELDS = ["response_id", "response_model"];
+// Google's documented signature for a function call that Gemini didn't write.
+const PLACEHOLDER = "skip_thought_signature_validator";
 
 /** What `Gemini` is built from. */
 export interface GeminiOptions {
@@ -98,6 +106,14 @@ export class Gemini implements SseProtocol {
    * `functionCall` with its id, name and arguments (`{}` for an invalid call); reasoning and
    * refusal parts are not sent, and a message rendering no part is skipped. A trailing assistant
    * message goes as written.
+   *
+   * A text or call part's replay record puts its `thoughtSignature` on its part (an empty text
+   * part is sent only with one). When any of a message's records can't be used, none of its
+   * signatures is sent and `onReplayDegraded` is called once with the first reason in part order;
+   * an exception it throws propagates. A message's first call that goes out unsigned gets
+   * `thoughtSignature: "skip_thought_signature_validator"` when the message is not this model's
+   * own reply (its message record doesn't read back for this protocol, provider, model and
+   * account) or its records couldn't be used; this model's own reply otherwise goes as received.
    *
    * Every tool goes in one `functionDeclarations` entry: its name, description and parameters
    * (copied, as written) as `parametersJsonSchema`; `strict` is not sent. The tool choice is sent
@@ -167,24 +183,75 @@ export class Gemini implements SseProtocol {
   }
 
   /**
-   * Return an assistant message's parts in part order: a non-empty text as `{text}`, a call as
-   * `functionCall`; reasoning and refusals are not sent.
+   * Return an assistant message's parts in part order: a text as `{text}` (an empty one only when
+   * it carries a signature), a call as `functionCall`, each with its usable signature as
+   * `thoughtSignature`; reasoning and refusals are not sent.
+   *
+   * The first call gets the placeholder signature when it goes out unsigned and the message is
+   * not this model's own reply, or its signature records were left out.
    *
    * @throws {TypeError} If the message holds a tool result.
    */
   #modelParts(message: Message): JsonObject[] {
+    const [signatures, degraded] = this.#signatures(message);
     const parts: JsonObject[] = [];
-    for (const part of message.parts) {
-      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, message.role));
+    let firstCall: JsonObject | null = null;
+    for (const [index, part] of message.parts.entries()) {
+      const signature = signatures[index] ?? null;
+      let rendered: JsonObject;
       if (part instanceof TextPart) {
-        if (part.text !== "") parts.push({ text: part.text });
+        if (part.text === "" && signature === null) continue;
+        rendered = { text: part.text };
       } else if (part instanceof ToolCallPart) {
         // Copied so changing a body cannot change the message it came from.
         const args = part.arguments === null ? {} : copyJson(part.arguments);
-        parts.push({ functionCall: { id: part.id, name: part.name, args } });
+        rendered = { functionCall: { id: part.id, name: part.name, args } };
+        firstCall ??= rendered;
+      } else {
+        continue;
       }
+      if (signature !== null) rendered["thoughtSignature"] = signature;
+      parts.push(rendered);
+    }
+    // Gemini 3 refuses a step whose first call is unsigned. This model's own reply goes back as
+    // received (Gemini 2.5 leaves calls unsigned); a call yian can't send a signature for, from
+    // another model or built by hand, gets the literal Google documents for such calls.
+    const own = readReplayRecord(message.providerPayload, this.#key, MESSAGE_FIELDS).ok;
+    if (firstCall !== null && (!own || degraded) && !Object.hasOwn(firstCall, "thoughtSignature")) {
+      firstCall["thoughtSignature"] = PLACEHOLDER;
     }
     return parts;
+  }
+
+  /**
+   * Read an assistant message's text and call signature records, calling `onReplayDegraded` once
+   * with the first reason when one can't be used.
+   *
+   * Every signature is left out when any record can't be used: a reply's signatures come from one
+   * model, so a mismatch on one part means all of them. A part without a payload has no signature
+   * and signals nothing.
+   *
+   * @returns Each part's signature, `null` for none, all `null` when they are left out; and
+   *   whether they were left out.
+   * @throws {TypeError} If the message holds a tool result.
+   */
+  #signatures(message: Message): [(string | null)[], boolean] {
+    const signatures: (string | null)[] = [];
+    let reason: ReplayDegradedReason | null = null;
+    for (const part of message.parts) {
+      // Refused here so a bad message never fires onReplayDegraded first.
+      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, message.role));
+      if (!(part instanceof TextPart || part instanceof ToolCallPart) || part.providerPayload === null) {
+        signatures.push(null);
+        continue;
+      }
+      const read = thoughtSignature(part.providerPayload, this.#key);
+      if (!read.ok) reason ??= read.reason;
+      signatures.push(read.ok ? read.signature : null);
+    }
+    if (reason === null) return [signatures, false];
+    this.#onReplayDegraded?.(reason);
+    return [message.parts.map(() => null), true];
   }
 
   /** Warn, the first time, that an empty user message was not sent. */
@@ -193,6 +260,21 @@ export class Gemini implements SseProtocol {
     this.#emptyUserWarned = true;
     process.emitWarning(EMPTY_USER);
   }
+}
+
+/**
+ * Read a text or call part's replay record and return its `thought_signature`; a record without
+ * it as a non-empty string is `malformed`.
+ */
+function thoughtSignature(
+  payload: JsonObject,
+  key: ReplayKey,
+): { ok: true; signature: string } | { ok: false; reason: ReplayDegradedReason } {
+  const read = readReplayRecord(payload, key, PART_FIELDS);
+  if (!read.ok) return read;
+  const signature = read.fields["thought_signature"];
+  if (typeof signature === "string" && signature !== "") return { ok: true, signature };
+  return { ok: false, reason: "malformed" };
 }
 
 /**

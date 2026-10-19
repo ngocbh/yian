@@ -76,8 +76,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - A host tool is a `FunctionTool` (`execute(args, ctx)`, sync or async); a run's `ask_user`
   handler is wrapped into one, so a `ToolSet` holds only `FunctionTool`s.
 - Tool errors, `FunctionTool`, `McpServer` and the MCP errors are recognized by `Symbol.for`
-  brands (`toolErrorKinds`, `isPermanentToolError`, `isFunctionTool`, `isMcpError`, ...), never
-  by `instanceof`, so a tool built against another copy of yian works.
+  brands, never by `instanceof`, so a tool built against another copy of yian works.
+  `toolErrorKinds`, the tool error guards (`isPermanentToolError`, ...) and `isMcpError` read
+  the error brands; the registry checks the `FunctionTool` and `McpServer` brands.
 - Arguments enter through `fromHost` and reach `execute` through `toHost`: fresh arrays and
   records, ints within ±(2^53−1) as `number`, larger ones as `bigint`.
 - `invoke` returns the tool's result raw, awaited, with `undefined` read as `null`; the callers

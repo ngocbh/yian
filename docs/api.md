@@ -567,16 +567,23 @@ Changed (TS yian): every tool is a `FunctionTool`, built with
 `new FunctionTool({ name, description, parametersJsonSchema, execute, isConcurrencySafe })`;
 a plain function is not a tool, and `registerTool(id, tool, { descriptionOverride })`
 takes a `FunctionTool`. `execute(args, ctx)` gets the arguments first and the context
-second, and may be sync or async; `ToolSet.invoke` and `ToolSet.validate` are async.
+second, and may be sync or async. `ToolSet`'s `invoke`, `invokeTrusted` and `validate`,
+and the functions `invokeTool` and `invokeToolTrusted`, return Promises.
 `ctx`'s fields are camelCase (`callId`, `toolName`, `runId`), `context` is `undefined`
 when none is given, and `signal` is an `AbortSignal` aborted when the call must end
 early (the run stops, or a sibling call fails the node); `forRun(runId, { signal })`
-binds it. Arguments enter through host value intake, so a non-yian value (`undefined`,
+binds it. Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not
+`instanceof`, so ones built against another copy of yian (an npm install beside a
+workspace one) are accepted and classified.
+
+Arguments enter through host value intake, so a non-yian value (`undefined`,
 `NaN`, a `Date`) anywhere in them is refused, and reach the tool as fresh host values:
 an int within ±(2^53−1) arrives as a `number`, a larger one as a `bigint`, and an
 infinite float as a real `Infinity`, which a tool may also return. `isConcurrencySafe(args)`
-is opt-in, so a tool without it is unsafe; once the AGENT loop is ported, consecutive
-safe calls in one turn may run together.
+is opt-in, so a tool without it is unsafe. It receives the host form of the arguments,
+and a call counts as safe only when it returns exactly `true`; a throw or any other
+result counts as unsafe. Once the AGENT loop is ported, consecutive safe calls in one
+turn may run together.
 
 ### TOOL retries
 
@@ -597,6 +604,9 @@ Every exception from the tool is retried, except:
   whose `on_invoke` returns an awaitable raises `ToolCheckError`. None of these is
   retried;
 - a host stop, such as Ctrl-C or a sibling node's failure, which ends the node.
+
+Changed (TS yian): the check on the returned value refuses NaN but not `Infinity`:
+a host tool may return `Infinity`, which is a float value.
 
 A `ReportedToolError` is retried like any other failure, unless it is also a
 `PermanentToolError`.
@@ -801,8 +811,10 @@ connectTimeout, label, concurrencySafe })` takes camelCase options; a bad one th
 `TypeError` or `RangeError`. `concurrencySafe` (`true`, or an array of tool names) marks
 the server's tools, or the named ones, safe to run beside other calls (default `false`;
 see [Tool context](#tool-context)). The MCP errors carry the tool error kinds of the
-table below as brands, and `isMcpError` recognizes one from any copy of yian. A server
-can't be opened in TS yet: `open()` rejects.
+table below as brands, and `isMcpError` recognizes one from any copy of yian. `url`
+must start with `http://` or `https://`. A URL server's default label is the host as
+WHATWG `new URL` reads it, so an IPv6 host keeps its brackets and an international
+host reads as punycode. A server can't be opened in TS yet: `open()` rejects.
 
 Credentials stay with the host: the flow names the server only by its key. An
 AGENT grants the server's key, which grants every tool the server lists, or single

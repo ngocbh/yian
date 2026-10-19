@@ -21,10 +21,12 @@
  *   no private `_config`, so the row forges a `MemoryDecl` (its prototype plus own fields) whose
  *   `config` holds `api_token`, a key the constructor refuses, then swaps that config.
  *
+ * Also ported: the AGENT half of `test_python_constructors_default_and_validate_authored_memory_fields`
+ * (`memories` is an array where Python's is a tuple).
+ *
  * Later (T3-22, with AGENT): the `agent_policy` lines of
- * `test_authored_identity_includes_flow_id_and_policy_but_excludes_origin`, the AGENT-memory half
- * of `test_expansion_digest_excludes_flow_id_and_agent_memory`, and the AGENT half of
- * `test_python_constructors_default_and_validate_authored_memory_fields`.
+ * `test_authored_identity_includes_flow_id_and_policy_but_excludes_origin` and the AGENT-memory half
+ * of `test_expansion_digest_excludes_flow_id_and_agent_memory`.
  *
  * Later (T3-22): `test_full_root_retains_flow_owned_policy_with_one_origin`,
  * `test_full_nested_definition_retains_flow_owned_policy_and_semantic_id`,
@@ -45,6 +47,7 @@ import { expansionDigest, flowFingerprint, flowManifest } from "../../src/compil
 import { CompiledFlow, copyGraph } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
 
 const ROOT = new DeclSite([], ["root"], null);
 
@@ -238,4 +241,20 @@ test("expansion digest excludes flow id", () => {
   const namedFlow = new CompiledFlow(new Map(), [], { flowId: "named" });
 
   expect(expansionDigest(namedFlow)).toBe(expansionDigest(plainFlow));
+});
+
+test("the AGENT constructor defaults and validates authored memory fields", () => {
+  expect(new AgentNode("agent").memories).toEqual([]);
+
+  const flowDecl = new MemoryDecl("reflective", "reflective", {}, new DeclSite([], ["root"], null));
+  const agentDecl = new MemoryDecl("reflective", "reflective", {}, new DeclSite([], ["root"], "agent"));
+  expect(new AgentNode("agent", { memories: [agentDecl] }).memories[0]).toBe(agentDecl);
+  expect(() => new AgentNode("agent", { memories: [flowDecl] })).toThrow(
+    new RangeError("AGENT memories must carry AGENT DeclSites"),
+  );
+
+  class DerivedDecl extends MemoryDecl {}
+  const derivedAgent = new DerivedDecl("reflective", "reflective", {}, new DeclSite([], ["root"], "agent"));
+  expect(() => new AgentNode("agent", { memories: [derivedAgent] })).toThrow(TypeError);
+  expect(() => new AgentNode("agent", { memories: [derivedAgent] })).toThrow("exact MemoryDecl");
 });

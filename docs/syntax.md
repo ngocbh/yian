@@ -1716,6 +1716,27 @@ or `strict`; an older deployment that langchain sends as a function tool (`gpt-4
 reply, such as one with hand-written schema keywords or a pydantic v1 class. A strict
 request among them may still be rejected.
 
+Changed (TS yian): structured generation differs from Python yian in these ways:
+
+- Every structured call streams. On every provider the reply's tool call is found by the
+  tool's name; a call to another tool, or one whose arguments aren't a JSON object, counts
+  as no call.
+- A text reply is read as strict JSON and never repaired. yian drops whitespace and
+  backticks around it, or takes a code fence's body (any info string) and ignores prose
+  around the fence. A truncated reply (an Azure strict reply cut short by the token limit
+  too), two objects, duplicate keys, or a `NaN` or `Infinity` gets an `Invalid json output`
+  correction under `retries:`. An int of any length is read whole.
+- A refusal with no JSON is named in the correction; a refusal beside valid JSON parses.
+- A provider error that can't be retried, such as a content filter, fails the AGENT at
+  once instead of being corrected under `retries:`.
+- Corrections carry no LangChain link. Anthropic's notes for unsupported keywords spell
+  values as JSON (`{const: "buy"}`, `{default: null}`), Azure's float bounds read
+  `{minimum: 0, maximum: 1}`, and the JSON prompt fallback writes the schema as compact JSON.
+- Every schema comes from `output:` and is checked after the reply, so the exceptions above
+  (a host's JSON-schema dict, explicit `method` or `strict`, an output class yian can't
+  check, a pydantic v1 class) don't exist. An older Azure deployment still gets a function
+  tool, with no warning.
+
 An AGENT's `output:` nests at most 16 levels, counted as the type limit counts a record
 (each record and list is a level, a union counts as its deepest member, `Optional(...)`
 adds none), because building the model's reply schema recurses once per level.

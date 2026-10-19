@@ -125,6 +125,10 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   listing and sign-in.
 - Retries happen above the call: `callWithRetries` retries a retryable `ProviderError`, before or
   after partial output, up to `MODEL_RETRIES` times, calling `onRetry` before each wait.
+- `src/llm/structured.ts` chooses how a structured call is sent per route, model and schema (a
+  tool, an output format, or a prompt), and parses the reply into a JSON object the caller
+  validates; `src/llm/json_schema.ts` holds the schema transforms, and adapters render
+  `Request.outputFormat`.
 - `ScriptedModel` in `src/llm/testing.ts` scripts model replies for tests. Cassettes
   (`yian.cassette.v1`) replay HTTP exchanges as a `Send` (`CassetteReplay`); `CassetteRecorder`
   records them with every credential redacted by value, and refuses to save one that still holds

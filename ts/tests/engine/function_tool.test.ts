@@ -16,8 +16,10 @@
  * `test_function_tool_without_context_gets_its_validated_arguments` (calling `on_invoke` directly
  * validates; calling `execute` directly runs no validator), and the LangChain binding rows. The
  * exports row, `test_tool_names_are_exported_from_yian_and_yian_tools`, is in
- * `tool_errors.test.ts`. With `YIAN_TEST_NODE` set to a Node binary, the built tools code on Node,
- * beside a second copy of its leaves.
+ * `tool_errors.test.ts`. The library matrix builds one `place` tool with zod, valibot (with a JSON
+ * Schema beside it, and through its Standard JSON Schema interface), ArkType and a raw JSON Schema.
+ * With `YIAN_TEST_NODE` set to a Node binary, the built tools code on Node, beside a second copy of
+ * its leaves, and a zod `tool()` there.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -26,6 +28,8 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { toJsonSchema, toStandardJsonSchema } from "@valibot/to-json-schema";
+import { type } from "arktype";
 import * as v from "valibot";
 import { z } from "zod";
 
@@ -1297,6 +1301,93 @@ describe("tool() results", () => {
   });
 });
 
+describe("Standard Schema libraries", () => {
+  /** `place`'s arguments in valibot: a `symbol` of 3 or more characters and an integer `qty` that defaults to 1. */
+  const VALIBOT_PLACE = v.object({
+    symbol: v.pipe(v.string(), v.minLength(3)),
+    qty: v.optional(v.pipe(v.number(), v.integer()), 1),
+  });
+
+  /** Build `place` on `parameters`, with `parametersJsonSchema` when given; `execute` returns its arguments. */
+  function libraryPlace(parameters: StandardSchemaV1 | JsonObject, parametersJsonSchema?: JsonObject): FunctionTool {
+    return tool({
+      name: "place",
+      description: "Place an order.",
+      parameters,
+      parametersJsonSchema,
+      execute: (args) => args,
+    });
+  }
+
+  /**
+   * Check `placed`: its input types (`qty`'s labelled `qty`) and required `symbol`; a good call reaches
+   * `execute` as `good`; yian's check refuses `symbol: 1`; and `symbol: "ab"` fails the validator
+   * with `refused`, or, with no validator (`null`), reaches `execute` as given.
+   */
+  async function expectPlace(
+    placed: FunctionTool,
+    qty: string,
+    good: Record<string, unknown>,
+    refused: string | null,
+  ): Promise<void> {
+    expect(inputLabels(placed)).toEqual({ symbol: "str", qty });
+    expect(toolTypes(placed).required).toEqual(new Set(["symbol"]));
+    const tools = new ToolSet({ place: placed });
+    expect(await tools.invoke(await tools.validate("place", { symbol: "abc" }))).toEqual(good);
+    // yian's message, not the validator's: its check refused the value before the validator ran.
+    const wrong = await rejection(tools.invoke("place", { symbol: 1 }), TypeCheckError);
+    expect(wrong.message).toBe("tool 'place' argument 'symbol': 1 does not match declared type str");
+    if (refused === null) {
+      expect(await tools.invoke("place", { symbol: "ab" })).toEqual({ symbol: "ab" });
+      return;
+    }
+    const error = await rejection(tools.invoke("place", { symbol: "ab" }), ToolCheckError);
+    expect(error.message).toBe(`tool 'place' arguments failed its validator: symbol: ${refused}`);
+  }
+
+  test("zod 4", async () => {
+    const parameters = z.object({ symbol: z.string().refine((s) => s.length > 2), qty: z.number().int().default(1) });
+
+    await expectPlace(
+      libraryPlace(parameters),
+      "int(-9007199254740991..9007199254740991)",
+      { symbol: "abc", qty: 1 },
+      "Invalid input",
+    );
+  });
+
+  test("valibot with parametersJsonSchema", async () => {
+    const placed = libraryPlace(VALIBOT_PLACE, toJsonSchema(VALIBOT_PLACE) as JsonObject);
+
+    expect(placed.parametersJsonSchema.$schema).toBe("http://json-schema.org/draft-07/schema#");
+    await expectPlace(placed, "int", { symbol: "abc", qty: 1 }, "Invalid length: Expected >=3 but received 2");
+  });
+
+  test("valibot through its Standard JSON Schema interface", async () => {
+    const placed = libraryPlace(toStandardJsonSchema(VALIBOT_PLACE));
+
+    expect(placed.parametersJsonSchema.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
+    await expectPlace(placed, "int", { symbol: "abc", qty: 1 }, "Invalid length: Expected >=3 but received 2");
+  });
+
+  test("ArkType", async () => {
+    const placed = libraryPlace(type({ symbol: "string > 2", qty: "number.integer = 1" }));
+
+    await expectPlace(placed, "int", { symbol: "abc", qty: 1 }, "symbol must be at least length 3 (was 2)");
+  });
+
+  test("raw JSON Schema", async () => {
+    const placed = libraryPlace({
+      type: "object",
+      properties: { symbol: { type: "string" }, qty: { type: "integer", default: 1 } },
+      required: ["symbol"],
+    });
+
+    expect(placed.parametersValidator).toBeNull();
+    await expectPlace(placed, "int", { symbol: "abc" }, null);
+  });
+});
+
 /** The `ts/` directory. */
 const ROOT = resolve(import.meta.dir, "../..");
 const BUILT = join(ROOT, "dist/src/tools/index.js");
@@ -1325,7 +1416,7 @@ const NODE = ((): string | undefined => {
 })();
 
 test.skipIf(!NODE)(
-  "the built tools code runs on Node beside a second copy of its leaves",
+  "the built tools code runs on Node beside a second copy of its leaves, and a zod tool() there",
   () => {
     const url = (file: string) => JSON.stringify(pathToFileURL(join(ROOT, file)).href);
     // Node keys modules by full URL, so a query loads a second instance of that module. Copying
@@ -1366,9 +1457,23 @@ test.skipIf(!NODE)(
       });
       assert.ok(!(echo instanceof tools.FunctionTool));
       assert.equal(await new tools.ToolSet({ echo }).invoke("echo", { text: "hi" }), "hi from echo");
+
+      const { z } = await import("zod");
+      const place = tools.tool({
+        name: "place",
+        description: "Place an order.",
+        parameters: z.object({ symbol: z.string().refine((s) => s.length > 2), qty: z.number().int().default(1) }),
+        execute: (args) => args,
+      });
+      const placeSet = new tools.ToolSet({ place });
+      const call = await placeSet.validate("place", { symbol: "abc" });
+      assert.deepEqual(await placeSet.invoke(call), { symbol: "abc", qty: 1 });
+      await assert.rejects(placeSet.invoke("place", { symbol: "ab" }), { name: "ToolCheckError" });
       console.log("ok");
     `;
-    expect(execFileSync(NODE!, ["--input-type=module", "-e", script], { encoding: "utf8" })).toBe("ok\n");
+    // From `ts/`, so the script's bare "zod" import resolves from `ts/node_modules`.
+    const output = execFileSync(NODE!, ["--input-type=module", "-e", script], { cwd: ROOT, encoding: "utf8" });
+    expect(output).toBe("ok\n");
   },
   30_000,
 );

@@ -368,10 +368,12 @@ function failedRecord(
   return new BackwardFinishedRecord(2, outcome, completed ? attributed() : []);
 }
 
-test.each([0, 1, 2])("a backward record's wire round trip preserves all channels: %d", (index) => {
-  const record = backwardRecords()[index]!;
-  expect(roundTrip(record)).toEqual(record);
-});
+test.each(backwardRecords().map((record) => [record.constructor.name, record] as const))(
+  "a backward record's wire round trip preserves all channels: %s",
+  (_name, record) => {
+    expect(roundTrip(record)).toEqual(record);
+  },
+);
 
 test("the commit wire preserves supplied attempt ids", () => {
   const failure = new MemoryOperationFailure("backend", "failed", "Failed.", false);

@@ -1208,9 +1208,7 @@ function scopeFromPayload(value: unknown, label: string): MemoryScope {
   const wire = wireObject(value, label, ["static_path", "memories", "occurrence_path"]);
   return new MemoryScope(wireTextArray(wire["static_path"], `${label} static_path`), {
     memories: wireTextArray(wire["memories"], `${label} memories`),
-    occurrencePath: wireArray(wire["occurrence_path"], `${label} occurrence_path`).map((segment) =>
-      occurrenceSegmentFromPayload(segment, `${label} occurrence_path item`),
-    ),
+    occurrencePath: wireItems(wire["occurrence_path"], `${label} occurrence_path`, occurrenceSegmentFromPayload),
   });
 }
 
@@ -1660,12 +1658,8 @@ function evidenceFromPayload(value: unknown, label: string): EvaluationEvidence 
     wireNullableObject(wire["bound_inputs"], `${label} bound_inputs`),
     wireNullableText(wire["base_system_prompt"], `${label} base_system_prompt`),
     wireNullableText(wire["prompt"], `${label} prompt`),
-    wireArray(wire["memory_sections"], `${label} memory_sections`).map((section) =>
-      memorySectionFromPayload(section, `${label} memory_sections item`),
-    ),
-    wireArray(wire["interactions"], `${label} interactions`).map((interaction) =>
-      interactionFromPayload(interaction, `${label} interactions item`),
-    ),
+    wireItems(wire["memory_sections"], `${label} memory_sections`, memorySectionFromPayload),
+    wireItems(wire["interactions"], `${label} interactions`, interactionFromPayload),
   );
 }
 
@@ -1787,9 +1781,7 @@ function attributedResultFromPayload(value: unknown, label: string): AttributedB
   return new AttributedBackwardResult(
     sourceFromPayload(wire["source"], `${label} source`),
     wireArray(wire["feedback"], `${label} feedback`) as FeedbackValue[],
-    wireArray(wire["attribution"], `${label} attribution`).map((item) =>
-      attributionFromPayload(item, `${label} attribution item`),
-    ),
+    wireItems(wire["attribution"], `${label} attribution`, attributionFromPayload),
     backwardResultFromPayload(wire["result"], `${label} result`),
     wireBool(wire["invoked"], `${label} invoked`),
   );
@@ -1810,9 +1802,7 @@ function memoryProposalFromPayload(value: unknown, label: string): MemoryProposa
   const wire = wireObject(value, label, ["memory", "mutations"]);
   return new MemoryProposal(
     wireName(wire["memory"], `${label} memory`),
-    wireArray(wire["mutations"], `${label} mutations`).map((item) =>
-      mutationFromPayload(item, `${label} mutations item`),
-    ),
+    wireItems(wire["mutations"], `${label} mutations`, mutationFromPayload),
   );
 }
 
@@ -1915,6 +1905,12 @@ function backwardFailureFromPayload(value: unknown, label: string): BackwardFail
   const wire = wireObject(value, label, BACKWARD_FAILURE_FIELDS);
   const causeLabel = `${label} cause`;
   const cause = wireNullableObject(wire["cause"], causeLabel);
+  let decodedCause: Failure | MemoryOperationFailure | null = null;
+  if (cause !== null) {
+    decodedCause = Object.hasOwn(cause, "stage")
+      ? memoryFailureFromPayload(cause, causeLabel)
+      : failureFromPayload(cause, causeLabel, true);
+  }
   const seq = wire["node_started_seq"];
   return new BackwardFailure(
     wireText(wire["stage"], `${label} stage`),
@@ -1926,12 +1922,7 @@ function backwardFailureFromPayload(value: unknown, label: string): BackwardFail
       nodeId: wireNullableText(wire["node_id"], `${label} node_id`),
       nodeStartedSeq: seq === null ? null : wireInt(seq, `${label} node_started_seq`),
       memory: wireNullableText(wire["memory"], `${label} memory`),
-      cause:
-        cause === null
-          ? null
-          : Object.hasOwn(cause, "stage")
-            ? memoryFailureFromPayload(cause, causeLabel)
-            : failureFromPayload(cause, causeLabel, true),
+      cause: decodedCause,
       causeType: wireNullableText(wire["cause_type"], `${label} cause_type`),
       traceback: wireNullableText(wire["traceback"], `${label} traceback`),
     },
@@ -2097,8 +2088,8 @@ function payloadForRecord(record: RunRecord): JsonObject {
  * Build the record of wire kind `kind` from its payload object, through the record's
  * constructor.
  *
- * @throws RangeError for missing or extra fields, an empty id or a counter that isn't a safe
- *   integer, besides the constructor's own errors.
+ * @throws RangeError for an unknown kind, missing or extra fields, an empty id or a counter that
+ *   isn't a safe integer, besides the constructor's own errors.
  * @throws TypeError when a field has the wrong JSON type.
  */
 function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
@@ -2194,9 +2185,7 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
       return new MemoryCommitRequestedRecord(
         wireName(payload["memory"], `${label} memory`),
         wireName(payload["commit_id"], `${label} commit_id`),
-        wireArray(payload["mutations"], `${label} mutations`).map((item) =>
-          mutationFromPayload(item, `${label} mutations item`),
-        ),
+        wireItems(payload["mutations"], `${label} mutations`, mutationFromPayload),
         wireInt(payload["attempt_id"], `${label} attempt_id`),
       );
     case "memory_commit_succeeded":
@@ -2225,31 +2214,19 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
       return new BackwardReadyRecord(
         wireInt(payload["attempt_id"], `${label} attempt_id`),
         backwardResultFromPayload(payload["root_result"], `${label} root_result`),
-        attributedResultsFromPayload(payload["attributed_results"], `${label} attributed_results`),
-        wireArray(payload["proposals"], `${label} proposals`).map((item) =>
-          memoryProposalFromPayload(item, `${label} proposals item`),
-        ),
+        wireItems(payload["attributed_results"], `${label} attributed_results`, attributedResultFromPayload),
+        wireItems(payload["proposals"], `${label} proposals`, memoryProposalFromPayload),
       );
     case "backward_finished":
       requireFields(payload, ["attempt_id", "outcome", "attributed_results"], label);
       return new BackwardFinishedRecord(
         wireInt(payload["attempt_id"], `${label} attempt_id`),
         backwardOutcomeFromPayload(payload["outcome"], `${label} outcome`),
-        attributedResultsFromPayload(payload["attributed_results"], `${label} attributed_results`),
+        wireItems(payload["attributed_results"], `${label} attributed_results`, attributedResultFromPayload),
       );
     default:
       throw new RangeError(`unknown run-record kind: ${reprText(kind)}`);
   }
-}
-
-/**
- * Decode a record's array of occurrence results; `label` names it in errors.
- *
- * @throws RangeError or TypeError as `attributedResultFromPayload`, or TypeError when `value`
- *   isn't an array.
- */
-function attributedResultsFromPayload(value: unknown, label: string): AttributedBackwardResult[] {
-  return wireArray(value, label).map((item) => attributedResultFromPayload(item, `${label} item`));
 }
 
 /**
@@ -2294,6 +2271,15 @@ function wireTextArray(value: unknown, label: string): string[] {
     throw new TypeError(`${label} must be an array of strings`);
   }
   return value as string[];
+}
+
+/**
+ * Return each item of the JSON array `value` decoded by `decode` with the label `<label> item`.
+ *
+ * @throws TypeError when `value` isn't an array, besides `decode`'s errors.
+ */
+function wireItems<T>(value: unknown, label: string, decode: (item: unknown, label: string) => T): T[] {
+  return wireArray(value, label).map((item) => decode(item, `${label} item`));
 }
 
 /**

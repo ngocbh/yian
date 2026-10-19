@@ -14,13 +14,15 @@
  * TS-only: `${input.x * 10}` with `1e308` delivers `Infinity`, and a function label passed to
  * `resolveSource` names a failing template leaf by its path.
  *
- * Later: `test_fresh_node_has_no_binding_labels` and `test_eval_node_uses_the_node_binding_labels`
- * land with the node kinds and the runtime's `evalNode`.
+ * Ported: `test_fresh_node_has_no_binding_labels`.
+ *
+ * Later (T4-6): `test_eval_node_uses_the_node_binding_labels` lands with the runtime's `evalNode`.
  */
 
 import { expect, test } from "bun:test";
 
 import { BindingError, bindParams, resolveSource } from "../../src/nodes/binding.ts";
+import { CodeNode } from "../../src/nodes/code/node.ts";
 import { Binding, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 
@@ -133,6 +135,10 @@ test.each(CASES)(
     expect(other.message).toBe(unlabeled);
   },
 );
+
+test("a fresh node has no binding labels", () => {
+  expect(new CodeNode("n", { code: "return 1" }).bindingLabels.size).toBe(0);
+});
 
 // --- TS-only rows --- //
 

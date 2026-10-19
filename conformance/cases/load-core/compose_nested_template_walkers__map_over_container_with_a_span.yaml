@@ -1,5 +1,26 @@
 kind: load
-flow: "\nid: m\nname: m\ndefs:\n  echo:\n    input:\n      v: !int\n    nodes: {}\n    output: ${input.v}\nnodes:\n  a:\n    kind: code\n    code: return 1\n  m:\n    kind: map\n    call: echo\n    over: \n      x: ${a.output}\n    input:\n      v: ${item}\noutput: ${m.output}\n"
+flow: |
+
+  id: m
+  name: m
+  defs:
+    echo:
+      input:
+        v: !int
+      nodes: {}
+      output: ${input.v}
+  nodes:
+    a:
+      kind: code
+      code: return 1
+    m:
+      kind: map
+      call: echo
+      over:
+        x: ${a.output}
+      input:
+        v: ${item}
+  output: ${m.output}
 expect:
   load:
     diagnostics:

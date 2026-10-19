@@ -17,23 +17,5 @@ flow: |
       code: "return null"
   output:
     v: ${d.output.v}
-python_flow: |
-  id: p
-  name: p
-  typedefs:
-    A: {kind: 'Literal(a)', v: int}
-    B: {kind: 'Literal(b)', v: str}
-    AB: Union(A, B)
-  input:
-    s: !str
-  nodes:
-    d:
-      kind: code
-      input:
-        x: ${input.s}
-      output: AB
-      code: return None
-  output:
-    v: ${d.output.v}
 expect:
   load: ok

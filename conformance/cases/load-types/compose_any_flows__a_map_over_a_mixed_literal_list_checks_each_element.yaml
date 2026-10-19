@@ -30,37 +30,6 @@ flow: |
       input:
         x: ${item}
   output: ${m.output}
-python_flow: |
-  id: p
-  name: p
-  defs:
-    child:
-      input:
-        x: !str
-      nodes:
-        n:
-          kind: code
-          input:
-            x: ${input.x}
-          output: str
-          code: return repr(inputs['x'])
-      output: ${n.output}
-  input:
-    s: !str
-  nodes:
-    mk:
-      kind: code
-      input:
-        s: ${input.s}
-      code: |
-        return None
-    m:
-      kind: map
-      over: ['a', 1]
-      call: child
-      input:
-        x: ${item}
-  output: ${m.output}
 expect:
   load:
     diagnostics:

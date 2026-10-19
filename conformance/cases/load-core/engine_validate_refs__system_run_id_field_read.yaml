@@ -11,18 +11,6 @@ flow: |
       code: |
         return String(inputs["t"])
   output: ${read.output}
-python_flow: |
-  id: system_fields
-  name: system_fields
-  nodes:
-    read:
-      kind: code
-      input:
-        t: ${system.run_id.x.y}
-      output: str
-      code: |
-        return str(inputs["t"])
-  output: ${read.output}
 expect:
   load:
     diagnostics:

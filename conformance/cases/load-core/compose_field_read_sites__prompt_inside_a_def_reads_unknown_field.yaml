@@ -35,42 +35,6 @@ flow: |
       input:
         x: ${step.output}
   output: ${c.output}
-python_flow: |
-  id: p
-  name: p
-  typedefs:
-    Rec: {a: str}
-    Rec3: {a: str, b: Optional(str)}
-    Buy: {action: 'Literal(buy)', qty: int}
-    Sell: {action: 'Literal(sell)'}
-    Order: Union(Buy, Sell)
-  defs:
-    child:
-      input:
-        x: !Rec
-      nodes:
-        inner:
-          kind: agent
-          input:
-            x: ${input.x}
-          prompt: "${x.b}"
-      output: ${inner.output}
-  input:
-    s: !str
-    r: !Rec
-  nodes:
-    step:
-      kind: code
-      input:
-        x: ${input.s}
-      output: Rec
-      code: return dict(a='x')
-    c:
-      kind: call
-      call: child
-      input:
-        x: ${step.output}
-  output: ${c.output}
 expect:
   load:
     diagnostics:

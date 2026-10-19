@@ -1,5 +1,35 @@
 kind: load
-flow: "\nid: nested_skips\nname: nested_skips\ninput:\n  approve: !bool\nnodes:\n  gate:\n    kind: case\n    cases:\n      - when: ${input.approve}\n        then: order\n    else: rejected\n  order:\n    kind: code\n    output: str\n    code: |\n      return \"filled\"\n  rejected:\n    kind: code\n    output: str\n    code: |\n      return \"no\"\n  c:\n    kind: code\n    input:\n      x: ${order.output}\n    code: |\n      return inputs[\"x\"]\noutput: \n  r: {a: '${order.output + 1}'}\n"
+flow: |
+
+  id: nested_skips
+  name: nested_skips
+  input:
+    approve: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: order
+      else: rejected
+    order:
+      kind: code
+      output: str
+      code: |
+        return "filled"
+    rejected:
+      kind: code
+      output: str
+      code: |
+        return "no"
+    c:
+      kind: code
+      input:
+        x: ${order.output}
+      code: |
+        return inputs["x"]
+  output:
+    r: {a: '${order.output + 1}'}
 expect:
   load:
     diagnostics:

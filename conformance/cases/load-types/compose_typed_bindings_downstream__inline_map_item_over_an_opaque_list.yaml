@@ -23,30 +23,6 @@ flow: |2
             return inputs["t"].toUpperCase()
       output: ${shout.output}
   output: ${each.output}
-python_flow: |2
-
-  id: inline-map-item
-  name: inline_map_item
-  nodes:
-    opaque:
-      kind: code
-      code: |
-        return ["a", "b"]
-    each:
-      kind: map
-      over: ${opaque.output}
-      input:
-        t: ${item}
-      nodes:
-        shout:
-          kind: code
-          input:
-            t: ${input.t}
-          output: str
-          code: |
-            return inputs["t"].upper()
-      output: ${shout.output}
-  output: ${each.output}
 expect:
   load:
     diagnostics:

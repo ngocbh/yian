@@ -13,20 +13,6 @@ flow: |
       code: "return null"
   output:
     o: ${step.output.order}
-python_flow: |
-  id: p
-  name: p
-  input:
-    s: !str
-  nodes:
-    step:
-      kind: code
-      input:
-        x: ${input.s}
-      output: str
-      code: return None
-  output:
-    o: ${step.output.order}
 expect:
   load:
     diagnostics:

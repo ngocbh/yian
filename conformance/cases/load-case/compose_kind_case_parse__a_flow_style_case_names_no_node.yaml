@@ -1,5 +1,12 @@
 kind: load
-flow: "id: malformed-case\nname: malformed-case\nnodes:\n  gate:\n    kind: case\n    cases: [{then: done}]\noutput: ${gate.output}\n    "
+flow: |
+  id: malformed-case
+  name: malformed-case
+  nodes:
+    gate:
+      kind: case
+      cases: [{then: done}]
+  output: ${gate.output}
 expect:
   load:
     diagnostics:

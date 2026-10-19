@@ -32,37 +32,6 @@ flow: |
         page: {n: 0}
       call: step
   output: ${pages.output}
-python_flow: |
-  id: mn
-  name: mn
-  typedefs:
-    Page:
-      next: Optional(str)
-      n: int
-    Strict:
-      next: str
-      n: int
-  defs:
-    step:
-      input:
-        page: !Strict
-      nodes:
-        get:
-          kind: code
-          input:
-            page: ${input.page}
-          output:
-            page: Optional(Strict)
-          code: return dict(page=None)
-      output: ${get.output}
-  nodes:
-    pages:
-      kind: loop
-      while: page.next != null
-      input:
-        page: {n: 0}
-      call: step
-  output: ${pages.output}
 expect:
   load:
     diagnostics:

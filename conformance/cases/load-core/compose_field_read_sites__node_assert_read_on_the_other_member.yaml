@@ -33,40 +33,6 @@ flow: |
       asserts:
         - "isinstance(v, Buy) or v.qty > 0"
   output: ${c.output}
-python_flow: |
-  id: p
-  name: p
-  typedefs:
-    Rec: {a: str}
-    Rec3: {a: str, b: Optional(str)}
-    Buy: {action: 'Literal(buy)', qty: int}
-    Sell: {action: 'Literal(sell)'}
-    Order: Union(Buy, Sell)
-  input:
-    s: !str
-    r: !Rec
-  nodes:
-    step:
-      kind: code
-      input:
-        x: ${input.s}
-      output: Rec
-      code: return dict(a='x')
-    d:
-      kind: code
-      input:
-        s: ${input.s}
-      output: Order
-      code: return None
-    c:
-      kind: code
-      input:
-        v: ${d.output}
-      output: str
-      code: return 'x'
-      asserts:
-        - "isinstance(v, Buy) or v.qty > 0"
-  output: ${c.output}
 expect:
   load:
     diagnostics:

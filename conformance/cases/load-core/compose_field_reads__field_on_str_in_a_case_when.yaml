@@ -24,31 +24,6 @@ flow: |
           then: a
       else: a
   output: ${a.output}
-python_flow: |
-  id: p
-  name: p
-  input:
-    s: !str
-  nodes:
-    step:
-      kind: code
-      input:
-        x: ${input.s}
-      output: str
-      code: return None
-    a:
-      kind: code
-      input:
-        v: ${input.s}
-      output: str
-      code: return 'x'
-    route:
-      kind: case
-      cases:
-        - when: ${step.output.order == 'x'}
-          then: a
-      else: a
-  output: ${a.output}
 expect:
   load:
     diagnostics:

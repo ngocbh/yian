@@ -25,32 +25,6 @@ flow: |
       code: |
         return String(inputs['topic'])
   output: ${use.output}
-python_flow: |
-  id: f
-  name: f
-  input:
-    x: !int
-    s: !str
-  defs:
-    g:
-      input:
-        d: !int
-      nodes:
-        run:
-          kind: code
-          output: str
-          code: |
-            return 'x'
-      output: ${run.output}
-  nodes:
-    use:
-      kind: code
-      input:
-        topic: call(g, d=${-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(1)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))})
-      output: str
-      code: |
-        return str(inputs['topic'])
-  output: ${use.output}
 expect:
   load:
     diagnostics:

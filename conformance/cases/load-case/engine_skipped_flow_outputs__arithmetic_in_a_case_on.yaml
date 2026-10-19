@@ -1,5 +1,46 @@
 kind: load
-flow: "id: f\nname: f\ninput:\n  approve: !bool\nnodes:\n  gate:\n    kind: case\n    cases:\n      - when: ${input.approve}\n        then: order\n    else: rejected\n  order:\n    kind: code\n    output: \n      qty: int\n    code: |\n      return {\"qty\": 2}\n  rejected:\n    kind: code\n    output: str\n    code: |\n      return \"no\"\n  route:\n    kind: case\n    on: ${order.output.qty + 1}\n    cases:\n      - when: 3\n        then: three\n    else: other\n  three:\n    kind: code\n    output: str\n    code: |\n      return \"3\"\n  other:\n    kind: code\n    output: str\n    code: |\n      return \"?\"\noutput:\n  v: ${three.output | other.output}\n"
+flow: |
+  id: f
+  name: f
+  input:
+    approve: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: order
+      else: rejected
+    order:
+      kind: code
+      output:
+        qty: int
+      code: |
+        return {"qty": 2}
+    rejected:
+      kind: code
+      output: str
+      code: |
+        return "no"
+    route:
+      kind: case
+      on: ${order.output.qty + 1}
+      cases:
+        - when: 3
+          then: three
+      else: other
+    three:
+      kind: code
+      output: str
+      code: |
+        return "3"
+    other:
+      kind: code
+      output: str
+      code: |
+        return "?"
+  output:
+    v: ${three.output | other.output}
 expect:
   load:
     diagnostics:

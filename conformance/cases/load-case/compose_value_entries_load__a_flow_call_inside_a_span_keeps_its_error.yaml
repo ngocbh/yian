@@ -25,32 +25,6 @@ flow: |
         return 0.5
     x: !str ${ f(input.t) }
   output: ${x.output}
-python_flow: |
-  id: f
-  name: f
-  defs:
-    f:
-      input:
-        x: !str
-      nodes:
-        up:
-          kind: code
-          input:
-            x: ${input.x}
-          output: str
-          code: |
-            return inputs['x'].upper()
-      output: ${up.output}
-  input:
-    t: !str
-  nodes:
-    s:
-      kind: code
-      output: float
-      code: |
-        return 0.5
-    x: !str ${ f(input.t) }
-  output: ${x.output}
 expect:
   load:
     diagnostics:

@@ -1,5 +1,13 @@
 kind: load
-flow: "id: f\nname: f\nnodes:\n  x:\n    kind: human_input\n    \n    when: ${x.output}\noutput: ${x.output}\n"
+flow: |
+  id: f
+  name: f
+  nodes:
+    x:
+      kind: human_input
+
+      when: ${x.output}
+  output: ${x.output}
 expect:
   load:
     diagnostics:

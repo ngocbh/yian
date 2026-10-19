@@ -37,44 +37,6 @@ flow: |2
       input:
         z: ${input.z}
   output: ${run.output}
-python_flow: |2
-
-  id: nested
-  name: nested
-  input:
-    z: !int
-  defs:
-    step:
-      input:
-        n: !int
-      nodes:
-        bump:
-          kind: code
-          input:
-            n: ${input.n}
-          output:
-            n: Optional(int)
-          code: |
-            return {"n": None}
-      output: ${bump.output}
-    outer:
-      input:
-        z: !int
-      nodes:
-        repeat:
-          kind: loop
-          times: 2
-          call: step
-          input:
-            n: ${input.z}
-      output: ${repeat.output}
-  nodes:
-    run:
-      kind: call
-      call: outer
-      input:
-        z: ${input.z}
-  output: ${run.output}
 expect:
   load:
     diagnostics:

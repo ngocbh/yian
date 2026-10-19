@@ -1,5 +1,33 @@
 kind: load
-flow: "id: f\nname: f\ninput:\n  approve: !bool\nnodes:\n  gate:\n    kind: case\n    cases:\n      - when: ${input.approve}\n        then: order\n    else: rejected\n  order:\n    kind: code\n    output: \n      items: list(int)\n      s: str\n    code: |\n      return {\"items\": [1], \"s\": \"2020\"}\n  rejected:\n    kind: code\n    output: str\n    code: |\n      return \"no\"\n  w:\n    kind: wait\n    until: ${order.output.s + '-01-01'}\noutput:\n  r: ${rejected.output}\n"
+flow: |
+  id: f
+  name: f
+  input:
+    approve: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: order
+      else: rejected
+    order:
+      kind: code
+      output:
+        items: list(int)
+        s: str
+      code: |
+        return {"items": [1], "s": "2020"}
+    rejected:
+      kind: code
+      output: str
+      code: |
+        return "no"
+    w:
+      kind: wait
+      until: ${order.output.s + '-01-01'}
+  output:
+    r: ${rejected.output}
 expect:
   load:
     diagnostics:

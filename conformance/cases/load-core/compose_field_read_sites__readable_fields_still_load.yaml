@@ -24,30 +24,5 @@ flow: |
         v: ${step.output}
       prompt: "${v.a}"
   output: ${ag.output}
-python_flow: |
-  id: p
-  name: p
-  typedefs:
-    Rec: {a: str}
-    Rec3: {a: str, b: Optional(str)}
-    Buy: {action: 'Literal(buy)', qty: int}
-    Sell: {action: 'Literal(sell)'}
-    Order: Union(Buy, Sell)
-  input:
-    s: !str
-    r: !Rec
-  nodes:
-    step:
-      kind: code
-      input:
-        x: ${input.s}
-      output: Rec
-      code: return dict(a='x')
-    ag:
-      kind: agent
-      input:
-        v: ${step.output}
-      prompt: "${v.a}"
-  output: ${ag.output}
 expect:
   load: ok

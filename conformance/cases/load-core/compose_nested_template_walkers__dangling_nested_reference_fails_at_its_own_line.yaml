@@ -1,5 +1,22 @@
 kind: load
-flow: "\nid: nested\nname: nested\nnodes:\n  p:\n    kind: code\n    code: |\n      return \"hi\"\n  c:\n    kind: code\n    input:\n      x: \n        a: ${p.output}\n        b: ${nope.output}\n    code: |\n      return inputs[\"x\"]\noutput: ${c.output}\n"
+flow: |
+
+  id: nested
+  name: nested
+  nodes:
+    p:
+      kind: code
+      code: |
+        return "hi"
+    c:
+      kind: code
+      input:
+        x:
+          a: ${p.output}
+          b: ${nope.output}
+      code: |
+        return inputs["x"]
+  output: ${c.output}
 expect:
   load:
     diagnostics:

@@ -18,25 +18,6 @@ flow: |
       output: str
       code: return 'x'
   output: ${sink.output}
-python_flow: |
-  id: p
-  name: p
-  input:
-    s: !str
-  nodes:
-    step:
-      kind: code
-      input:
-        x: ${input.s}
-      output: str
-      code: return None
-    sink:
-      kind: code
-      input:
-        v: ${step.output.order}
-      output: str
-      code: return 'x'
-  output: ${sink.output}
 expect:
   load:
     diagnostics:

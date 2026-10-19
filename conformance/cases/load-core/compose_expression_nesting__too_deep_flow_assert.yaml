@@ -16,23 +16,6 @@ flow: |
   output: ${use.output}
   asserts:
     - not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not true
-python_flow: |
-  id: f
-  name: f
-  input:
-    x: !int
-    s: !str
-  nodes:
-    use:
-      kind: code
-      input:
-        topic: ${input.s}
-      output: str
-      code: |
-        return str(inputs['topic'])
-  output: ${use.output}
-  asserts:
-    - not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not true
 expect:
   load:
     diagnostics:

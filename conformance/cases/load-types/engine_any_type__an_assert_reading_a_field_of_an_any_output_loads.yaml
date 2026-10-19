@@ -14,20 +14,5 @@ flow: |
       asserts:
         - output.a.b == 1
   output: ${step.output}
-python_flow: |
-  id: p
-  name: p
-  input:
-    s: !str
-  nodes:
-    step:
-      kind: code
-      input:
-        x: ${input.s}
-      output: Any
-      code: return None
-      asserts:
-        - output.a.b == 1
-  output: ${step.output}
 expect:
   load: ok

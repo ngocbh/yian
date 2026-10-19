@@ -14,21 +14,6 @@ flow: |
       code: |
         return String(inputs['topic'])
   output: ${use.output}
-python_flow: |
-  id: f
-  name: f
-  input:
-    x: !int
-    s: !str
-  nodes:
-    use:
-      kind: code
-      input:
-        topic: "${-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(1)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))}"
-      output: str
-      code: |
-        return str(inputs['topic'])
-  output: ${use.output}
 expect:
   load:
     diagnostics:

@@ -39,46 +39,6 @@ flow: |
       input:
         st: ${step.output}
   output: ${drive.output}
-python_flow: |
-  id: p
-  name: p
-  typedefs:
-    Rec: {a: str}
-    Rec3: {a: str, b: Optional(str)}
-    Buy: {action: 'Literal(buy)', qty: int}
-    Sell: {action: 'Literal(sell)'}
-    Order: Union(Buy, Sell)
-  defs:
-    body:
-      input:
-        st: !Rec3
-      nodes:
-        bump:
-          kind: code
-          input:
-            st: ${input.st}
-          output:
-            st: Rec3
-          code: return dict(st=dict(a='x', b='y'))
-      output: ${bump.output}
-  input:
-    s: !str
-    r: !Rec
-  nodes:
-    step:
-      kind: code
-      input:
-        x: ${input.s}
-      output: Rec
-      code: return dict(a='x')
-    drive:
-      kind: loop
-      call: body
-      while: ${upper(st.a).f == 'x'}
-      max: 3
-      input:
-        st: ${step.output}
-  output: ${drive.output}
 expect:
   load:
     diagnostics:

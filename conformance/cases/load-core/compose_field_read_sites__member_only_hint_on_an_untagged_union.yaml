@@ -51,58 +51,6 @@ flow: |
       asserts:
         - "v.x > 0"
   output: ${c.output}
-python_flow: |
-  id: p
-  name: p
-  typedefs:
-    Rec: {a: str}
-    Rec3: {a: str, b: Optional(str)}
-    Buy: {action: 'Literal(buy)', qty: int}
-    Sell: {action: 'Literal(sell)'}
-    Order: Union(Buy, Sell)
-    Short: {action: 'Literal(short)', qty: int}
-    Hold: {action: 'Literal(hold)'}
-    Trade: Union(Buy, Short, Hold)
-    Sized: Union(Buy, Short)
-    A: {x: int}
-    B: {y: str}
-    AB: Union(A, B)
-  defs:
-    child:
-      input:
-        v: !AB
-      nodes:
-        inner:
-          kind: code
-          input:
-            v: ${input.v}
-          output: str
-          code: return 'x'
-      output: ${inner.output}
-  input:
-    s: !str
-    r: !Rec
-  nodes:
-    step:
-      kind: code
-      input:
-        x: ${input.s}
-      output: Rec
-      code: return dict(a='x')
-    d:
-      kind: code
-      input:
-        s: ${input.s}
-      output: AB
-      code: return None
-    c:
-      kind: call
-      call: child
-      input:
-        v: ${d.output}
-      asserts:
-        - "v.x > 0"
-  output: ${c.output}
 expect:
   load:
     diagnostics:

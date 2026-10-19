@@ -1,5 +1,23 @@
 kind: load
-flow: "id: f\nname: f\ndefs:\n  b:\n    nodes:\n      c:\n        kind: code\n        output: int\n        code: return 1\n    output: ${c.output}\n    asserts: \n      - \"true\"\n      - {}\nnodes:\n  a:\n    kind: call\n    call: b\noutput: ${a.output}\n"
+flow: |
+  id: f
+  name: f
+  defs:
+    b:
+      nodes:
+        c:
+          kind: code
+          output: int
+          code: return 1
+      output: ${c.output}
+      asserts:
+        - "true"
+        - {}
+  nodes:
+    a:
+      kind: call
+      call: b
+  output: ${a.output}
 expect:
   load:
     diagnostics:

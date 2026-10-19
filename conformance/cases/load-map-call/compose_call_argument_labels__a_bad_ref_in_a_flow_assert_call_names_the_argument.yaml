@@ -20,27 +20,6 @@ flow: |2
   output: ${n.output}
   asserts:
     - call(check, y=${nosuch.output})
-python_flow: |2
-
-  id: f
-  name: f
-  defs:
-    check:
-      input:
-        y: !str
-      nodes:
-        x:
-          kind: code
-          code: "return True"
-          input:
-            y: ${input.y}
-          output: bool
-      output: ${x.output}
-  nodes:
-    n: {kind: code, code: "return 'a'", output: str}
-  output: ${n.output}
-  asserts:
-    - call(check, y=${nosuch.output})
 expect:
   load:
     diagnostics:

@@ -11,18 +11,6 @@ flow: |
   kind: code
   output: object
   code: "return {...inputs}"
-python_flow: |
-  id: tagged_inputs
-  name: tagged_inputs
-  typedefs:
-    Cfg: {kind: Literal(cfg), a: int}
-    Message: {role: str, content: str}
-  input:
-    qty: !int
-    cfg: !Cfg {a: 1}
-  kind: code
-  output: object
-  code: return dict(inputs)
 expect:
   load:
     diagnostics:

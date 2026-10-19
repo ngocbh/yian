@@ -46,6 +46,7 @@ import { checkEnvValues } from "../helpers/value_nesting.ts";
 import { yamlReadAs } from "../helpers/yaml_words.ts";
 import type { SourceCatalogBuilder } from "../source/catalog.ts";
 import type { SourceCursor } from "../source/index.ts";
+import type { ChildResolver } from "./resolver.ts";
 
 /**
  * Return the key of a descriptor's `fieldRanges` entry for the site named `name`: a field, an
@@ -218,9 +219,6 @@ export function rejectInfinityName(
     );
   }
 }
-
-/** Resolves a child flow by id and version for call, map and loop. */
-export type ChildResolver = (flowId: string, version: string | null) => unknown;
 
 /** Presents an origin registered before the file's catalog is final. */
 export type OriginPresenter = (origin: OriginRef) => DiagnosticFrame | null;

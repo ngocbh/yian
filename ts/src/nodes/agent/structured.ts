@@ -3,37 +3,47 @@
  *
  * An AGENT declares `output:` as a typed `Type`. For a bare `str` the agent stays a text
  * producer: `typeToSchema` returns `null` and the AGENT loop takes the plain-text path. For any
- * constrained or richer type (a `Literal(...)` variant, record, scalar `int`/`float`/`bool`, or
- * list) it returns the JSON Schema the model is asked to fill: what Python yian's pydantic model
+ * constrained or richer type (a `Literal(...)` variant, record, union, scalar `int`/`float`/`bool`,
+ * or list) it returns the JSON Schema the model is asked to fill: what Python yian's pydantic model
  * emits (`model_json_schema()`), with ints as `bigint`.
  *
  * Scalars and lists can't be a top-level schema on their own, so they are wrapped in a
- * single-field object (`ScalarWrapper` with `value`, `ListWrapper` with `items`). A record maps
- * one property per declared field. A nested record goes to `$defs` under its position name
- * (`meta`, `item`, `lines_item`; `Record` for a nullable root record) and is referenced by
- * `$ref`.
+ * single-field object (`ScalarWrapper` with `value`, `ListWrapper` with `items`), and so is a
+ * union. A record maps one property per declared field. A nested record goes to `$defs` under
+ * its position name (`meta`, `item`, `lines_item`; `Record` for a nullable root record) and is
+ * referenced by `$ref`. A union is an `anyOf` of its members' `$ref`s, each member named by its
+ * tag or numbered (`buy`, `item_Member1`); members and every record inside them are closed
+ * (`additionalProperties: false`), so a reply can't match a member by ignoring fields.
+ *
+ * A `$defs` key is the position name with every code point outside `[A-Za-z0-9_-]` replaced by
+ * `_`; the definition's `title` stays the raw name. Different definitions that want one key get
+ * `<key>__1`, `<key>__2`, ... in definition order, skipping any key another definition wants;
+ * identical ones share it.
  *
  * Where pydantic's output is an accident of Python, it differs: keys are sorted at every level
  * but a `properties` map (pydantic leaves unsorted the schema of a field named `properties` or
  * `default` and of a definition named `properties`); a `properties` map follows JS key order,
  * so integer-like field names come first, then the others in field order; fields starting with
- * `_` are kept, `__proto__` included (pydantic drops them).
+ * `_` are kept, `__proto__` included (pydantic drops them); a `.` in a `$defs` key becomes `_`
+ * (pydantic keeps the text after the last one), and a clashing key is `<key>__<n>` (pydantic
+ * qualifies it with its module, `yian__nodes__agent__structured__a_b__1`).
  *
- * Only the schema is here. Union schemas, generating a value and checking the reply are not
- * ported yet.
+ * Only the schema is here. Generating a value and checking the reply are not ported yet.
  *
  * Knows about:   diagnostics and typesys.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
 import { compareCodeUnits } from "../../diagnostics.ts";
-import type { JsonObject, JsonValue } from "../../typesys/json.ts";
+import { type JsonObject, type JsonValue, logJson } from "../../typesys/json.ts";
 import {
   type Bounds,
+  IDENTIFIER_PATTERN,
   isListKind,
   listElementKind,
   setField,
   type Type,
+  unionTagFields,
   ValueKind,
 } from "../../typesys/values.ts";
 
@@ -47,8 +57,23 @@ const SCALAR_TYPES: ReadonlyMap<ValueKind, string> = new Map([
   [ValueKind.DATETIME, "string"],
 ]);
 
-/** Nested record schemas by their `$defs` key, collected while one schema is built. */
-type Defs = Map<string, JsonObject>;
+// Python's `str.isidentifier()`.
+const IDENTIFIER = new RegExp(`^(?:${IDENTIFIER_PATTERN})$`, "u");
+
+/**
+ * A nested record's definition, collected while one schema is built: the `$defs` key it wants,
+ * its schema (and that schema's text, to find an identical one), and the `$ref`s to it, which
+ * get the final key once every definition is known.
+ */
+interface Definition {
+  key: string;
+  schema: JsonObject;
+  text: string;
+  refs: JsonObject[];
+}
+
+/** The definitions of one schema, in the order they are made (a record after those inside it). */
+type Defs = Definition[];
 
 /** Return an open object's schema: any mapping. */
 function openObject(): JsonObject {
@@ -78,20 +103,23 @@ function anySchema(): JsonObject {
  * Return the schema of a value of `typ` at `position`; a nullable `typ` also accepts null.
  *
  * A `STRING` with `tags` is a `const` or `enum`; a nested `OBJECT` with `fields` goes to `defs`
- * under its position name and is referenced by `$ref`; a `LIST_*` is an array of its element
- * schema; `Any` is an `anyOf` of the JSON types.
+ * under its position name and is referenced by `$ref`; a union is an `anyOf` of `$ref`s to its
+ * closed members, in member order; a `LIST_*` is an array of its element schema; `Any` is an
+ * `anyOf` of the JSON types.
  *
  * @param position The slot's position name, built by `nested`; `""` is the schema root.
+ * @param closed Whether records reject unknown fields. Union members and everything inside
+ *   them are always closed.
  * @throws RangeError when `typ` has no structured mapping (`NONE`, `FILE`), so a new
  *   `ValueKind` is loud, or a scalar's bounds are malformed.
  */
-function schemaFor(typ: Type, defs: Defs, position: string): JsonObject {
-  const schema = nonNullSchema(typ, defs, position);
+function schemaFor(typ: Type, defs: Defs, position: string, closed: boolean): JsonObject {
+  const schema = nonNullSchema(typ, defs, position, closed);
   return typ.nullable ? orNull(schema) : schema;
 }
 
 /** `schemaFor` without the nullable widening. */
-function nonNullSchema(typ: Type, defs: Defs, position: string): JsonObject {
+function nonNullSchema(typ: Type, defs: Defs, position: string, closed: boolean): JsonObject {
   const kind = typ.kind;
   if (kind === ValueKind.ANY) return anySchema();
   if (kind === ValueKind.STRING && typ.tags !== undefined && typ.tags.size > 0) {
@@ -103,18 +131,22 @@ function nonNullSchema(typ: Type, defs: Defs, position: string): JsonObject {
     return scalarSchema(kind, typ.bounds);
   }
   if (kind === ValueKind.OBJECT && typ.variants !== undefined) {
-    throw new Error("typeToSchema: union schemas are not ported yet");
+    const names = memberNames(typ, position);
+    return {
+      anyOf: typ.variants.map((member, index) =>
+        define(defs, names[index]!, recordSchema(member, defs, names[index]!, true)),
+      ),
+    };
   }
   if (kind === ValueKind.OBJECT) {
     if (!isRecord(typ)) return openObject();
-    const name = position || "Record";
-    defs.set(name, recordSchema(typ, defs, position));
-    return { $ref: `#/$defs/${name}` };
+    return define(defs, position, recordSchema(typ, defs, position, closed));
   }
   if (kind === ValueKind.LIST_ANY && typ.element === undefined) return bareList();
   if (isListKind(kind)) {
     if (typ.element !== undefined) {
-      return { items: schemaFor(typ.element, defs, nested(position, "item")), type: "array" };
+      const items = schemaFor(typ.element, defs, nested(position, "item"), closed);
+      return { items, type: "array" };
     }
     const scalar = listElementKind(kind);
     if (scalar === null || !SCALAR_TYPES.has(scalar)) return bareList();
@@ -145,9 +177,28 @@ function orNull(schema: JsonObject): JsonObject {
   return { ...schema, anyOf: [...arms, { type: "null" }] };
 }
 
-/** Return the position name of `segment` (a field or `item`) inside `position`. */
+/** Return the position name of `segment` (a field, `item`, or a member) inside `position`. */
 function nested(position: string, segment: string): string {
   return position ? `${position}_${segment}` : segment;
+}
+
+/**
+ * Return the position names of the members of the union `typ` at `position`, in member order.
+ *
+ * A tagged union whose tag values are all identifiers (Python's `str.isidentifier()`) names
+ * each member after its tag (`buy`, `sell`); otherwise the members are `Member1`, `Member2`, ...
+ */
+function memberNames(typ: Type, position: string): string[] {
+  const variants = typ.variants ?? [];
+  const [tagField] = unionTagFields(typ);
+  let tags =
+    tagField === undefined
+      ? []
+      : variants.map((member) => [...member.fields!.get(tagField)!.tags!][0]!);
+  if (tags.length === 0 || !tags.every((tag) => IDENTIFIER.test(tag))) {
+    tags = variants.map((_, index) => `Member${index + 1}`);
+  }
+  return tags.map((tag) => nested(position, tag));
 }
 
 /** Whether `typ` is a record with fields, whose schema is a `$ref` to its own definition. */
@@ -169,12 +220,13 @@ function isRecord(typ: Type): boolean {
  *
  * @param position The record's position name, which is its title and prefixes the records
  *   inside it; `""` is the schema root, titled `Record`.
+ * @param closed Whether the record and the records inside it reject unknown fields.
  */
-function recordSchema(typ: Type, defs: Defs, position: string): JsonObject {
+function recordSchema(typ: Type, defs: Defs, position: string, closed: boolean): JsonObject {
   const properties: JsonObject = {};
   const required: string[] = [];
   for (const [name, sub] of typ.fields ?? []) {
-    let schema = schemaFor(sub, defs, nested(position, name));
+    let schema = schemaFor(sub, defs, nested(position, name), closed);
     if (typ.required?.has(name) && !sub.nullable) {
       required.push(name);
     } else {
@@ -184,7 +236,54 @@ function recordSchema(typ: Type, defs: Defs, position: string): JsonObject {
   }
   const schema: JsonObject = { properties, title: position || "Record", type: "object" };
   if (required.length > 0) schema.required = required;
+  if (closed) schema.additionalProperties = false;
   return schema;
+}
+
+/**
+ * Add the record `schema` at `position` to `defs` and return a `$ref` to it. An identical
+ * definition that wants the same key is shared.
+ */
+function define(defs: Defs, position: string, schema: JsonObject): JsonObject {
+  const key = (position || "Record").replace(/[^A-Za-z0-9_-]/gu, "_");
+  // Key order doesn't matter (Python compares dicts); the text sorts keys.
+  const text = logJson(schema);
+  let index = defs.findIndex((definition) => definition.key === key && definition.text === text);
+  if (index < 0) index = defs.push({ key, schema, text, refs: [] }) - 1;
+  // The index stands in for the key until `definitions` knows every clash; it also keeps the
+  // text of records referring to different definitions apart.
+  const ref: JsonObject = { $ref: `#/$defs/${index}` };
+  defs[index]!.refs.push(ref);
+  return ref;
+}
+
+/**
+ * Return the `$defs` map of `defs`, pointing every `$ref` at its definition's final key.
+ *
+ * A key wanted by one definition is used as is; definitions sharing a key get `<key>__1`,
+ * `<key>__2`, ... in order, skipping any key some definition wants or already got.
+ */
+function definitions(defs: Defs): JsonObject {
+  const counts = new Map<string, number>();
+  for (const { key } of defs) counts.set(key, (counts.get(key) ?? 0) + 1);
+  const taken = new Set(counts.keys());
+  const suffixes = new Map<string, number>();
+  const $defs: JsonObject = {};
+  for (const definition of defs) {
+    let key = definition.key;
+    if (counts.get(key)! > 1) {
+      let suffix = suffixes.get(definition.key) ?? 0;
+      do {
+        suffix += 1;
+        key = `${definition.key}__${suffix}`;
+      } while (taken.has(key));
+      suffixes.set(definition.key, suffix);
+      taken.add(key);
+    }
+    for (const ref of definition.refs) ref.$ref = `#/$defs/${key}`;
+    setField($defs, key, definition.schema);
+  }
+  return $defs;
 }
 
 /** Return the property schema of field `name` of type `sub`: `schema` with the field's title. */
@@ -195,7 +294,7 @@ function titled(schema: JsonObject, name: string, sub: Type): JsonObject {
 /** Return a root schema wrapping `typ` as its one required property `field`. */
 function wrapper(title: string, field: string, typ: Type, defs: Defs): JsonObject {
   const properties: JsonObject = {};
-  setField(properties, field, titled(schemaFor(typ, defs, ""), field, typ));
+  setField(properties, field, titled(schemaFor(typ, defs, "", false), field, typ));
   return { properties, required: [field], title, type: "object" };
 }
 
@@ -204,8 +303,8 @@ function wrapper(title: string, field: string, typ: Type, defs: Defs): JsonObjec
  * producer (an untagged `str`, nullable or not).
  *
  * A non-nullable record (`OBJECT` with `fields`) maps directly to an object schema titled
- * `Record`. A scalar, a list, or a nullable record can't be a standalone schema, so it is
- * wrapped in a single required property: `items` for a list (`ListWrapper`), else `value`
+ * `Record`. A scalar, a union, a list, or a nullable record can't be a standalone schema, so it
+ * is wrapped in a single required property: `items` for a list (`ListWrapper`), else `value`
  * (`ScalarWrapper`). Nested records are collected under `$defs`.
  *
  * @throws RangeError when `typ` holds a kind with no structured mapping (`file`, `None`) or a
@@ -215,20 +314,16 @@ export function typeToSchema(typ: Type): JsonObject | null {
   if (typ.kind === ValueKind.STRING && (typ.tags === undefined || typ.tags.size === 0)) {
     return null; // unconstrained text stays on the ordinary generation path
   }
-  const defs: Defs = new Map();
+  const defs: Defs = [];
   let schema: JsonObject;
   if (isRecord(typ) && !typ.nullable) {
-    schema = recordSchema(typ, defs, "");
+    schema = recordSchema(typ, defs, "", false);
   } else if (isListKind(typ.kind)) {
     schema = wrapper("ListWrapper", "items", typ, defs);
   } else {
     schema = wrapper("ScalarWrapper", "value", typ, defs);
   }
-  if (defs.size > 0) {
-    const $defs: JsonObject = {};
-    for (const [name, definition] of defs) setField($defs, name, definition);
-    schema.$defs = $defs;
-  }
+  if (defs.length > 0) schema.$defs = definitions(defs);
   return sortKeys(schema);
 }
 

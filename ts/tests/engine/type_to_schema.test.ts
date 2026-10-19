@@ -5,8 +5,8 @@
  * (`tests/engine/test_flow_identity.py`). Python reads a pydantic model's `__name__` and
  * `model_json_schema()`; TS reads the schema and its `title`.
  *
- * Every non-union schema Python yian emits (`model_json_schema()`, captured with pydantic
- * 2.13.5) is pinned exactly: the captured JSON text is read with `parseJson`, so its ints are
+ * Every schema Python yian emits (`model_json_schema()`, captured with pydantic 2.13.5) is
+ * pinned exactly: the captured JSON text is read with `parseJson`, so its ints are
  * `bigint` as in TS's schema, and a float bound spelled as an int (`float(-0.5..1)`'s `1`) is a
  * `bigint` on both sides. The question-list type of `nodes/human_input/questions.py` is built by
  * hand.
@@ -14,22 +14,21 @@
  * Differences from pydantic, by design: keys are sorted at every level but a `properties` map
  * (pydantic leaves the schema of a field or definition named `properties` unsorted); in
  * `properties`, integer-like field names come first (JS key order), then the others in field
- * order; fields starting with `_` are kept, `__proto__` too (pydantic drops them).
+ * order; fields starting with `_` are kept, `__proto__` too (pydantic drops them); a `.` in a
+ * `$defs` key becomes `_` (pydantic keeps the text after the last one), and a clashing key is
+ * `<key>__<n>` (pydantic qualifies it with its module, `yian__nodes__agent__structured__a_b__1`).
  *
  * TS-only: a root `Optional(str)` gives `null`; titles follow Python's `str.title()` (the
  * expected titles are Python's); `_x` and `__proto__` fields; integer-like field names; a field
- * named `properties`; bounds on a non-numeric scalar; `file` and `None` throwing.
+ * named `properties`; bounds on a non-numeric scalar; `file` and `None` throwing; `$defs` keys and
+ * clashes.
  *
  * Later (T5-11a): the validate and unwrap halves (`model_validate`, `_unwrap`, the
  * `model_validate` half of `test_large_numeric_schema_bounds_match_resolved_type`),
  * `test_union_members_reject_unknown_fields_and_unwrap_to_the_member_dict`,
  * `test_null_at_an_any_position_is_reported_at_that_position` and
  * `test_absent_optional_any_record_field_reads_none`. Later (T5-11a, T3-22):
- * `test_agent_with_any_output_loads_and_returns_the_value`. Later: the union rows
- * (`test_tagged_union_schema_is_any_of_closed_members_with_const_tags` through
- * `test_list_of_union_schema_gets_member_schemas`, the shape half of
- * `test_records_nested_in_union_members_reject_unknown_fields`, and the union captures), with
- * union schemas.
+ * `test_agent_with_any_output_loads_and_returns_the_value`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -58,6 +57,42 @@ const OPEN = readTypedefs({
   C2: { kind: "Literal(c2)", a: "int" },
   C3: { kind: "Literal(c3)", b: "str" },
   CU: "Union(C2, C3)",
+});
+const TRADE_DEFS = {
+  Buy: { action: "Literal(buy)", qty: "int" },
+  Sell: { action: "Literal(sell)", price: "float" },
+  Text: { text: "str" },
+  Call: { name: "str", input: "object" },
+};
+const TRADES = readTypedefs(TRADE_DEFS);
+const BUY_SELL_DEFS = { Buy: { action: "Literal(buy)" }, Sell: { action: "Literal(sell)" } };
+const BUY_SELL = readTypedefs(BUY_SELL_DEFS);
+const NOW_LATER = readTypedefs({
+  Now: { when: "Literal('right now')" },
+  Later: { when: "Literal(later)" },
+});
+const TICKETS = readTypedefs({
+  ...TRADE_DEFS,
+  Limit: { px: "float" },
+  Ticket: { kind: "Literal(ticket)", trade: "Union(Buy, Sell)", limit: "Limit" },
+  Skip: { kind: "Literal(skip)", trade: "Union(Buy, Sell)" },
+});
+const ORDER = readTypedefs({ ...TRADE_DEFS, Order: { trade: "Union(Buy, Sell)", note: "str" } });
+const LIMITED = readTypedefs({
+  Limit: { px: "float" },
+  Buy: { action: "Literal(buy)", limit: "Limit" },
+  Sell: { action: "Literal(sell)" },
+});
+const HOLDER = readTypedefs({
+  Point: { x: "int" },
+  ...BUY_SELL_DEFS,
+  Holder: { p: "Optional(Point)", u: "Optional(Union(Buy, Sell))", q: "Point" },
+});
+const ZED_ALPHA = readTypedefs({
+  Zed: { t: "Literal(z)", u: "Union(Buy, Sell)" },
+  Alpha: { t: "Literal(a)", p: "P" },
+  P: { x: "int" },
+  ...BUY_SELL_DEFS,
 });
 
 /** The type `expression` names. */
@@ -517,6 +552,66 @@ const CAPTURES: [string, () => Type, string][] = [
     () => t("Literal(b)"),
     `{"properties":{"value":{"const":"b","title":"Value","type":"string"}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
   ],
+  [
+    "Union(Buy, Sell)",
+    () => t("Union(Buy, Sell)", TRADES),
+    `{"$defs":{"buy":{"additionalProperties":false,"properties":{"action":{"const":"buy","title":"Action","type":"string"},"qty":{"title":"Qty","type":"integer"}},"required":["action","qty"],"title":"buy","type":"object"},"sell":{"additionalProperties":false,"properties":{"action":{"const":"sell","title":"Action","type":"string"},"price":{"title":"Price","type":"number"}},"required":["action","price"],"title":"sell","type":"object"}},"properties":{"value":{"anyOf":[{"$ref":"#/$defs/buy"},{"$ref":"#/$defs/sell"}],"title":"Value"}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
+  ],
+  [
+    "Union(Now, Later)",
+    () => t("Union(Now, Later)", NOW_LATER),
+    `{"$defs":{"Member1":{"additionalProperties":false,"properties":{"when":{"const":"later","title":"When","type":"string"}},"required":["when"],"title":"Member1","type":"object"},"Member2":{"additionalProperties":false,"properties":{"when":{"const":"right now","title":"When","type":"string"}},"required":["when"],"title":"Member2","type":"object"}},"properties":{"value":{"anyOf":[{"$ref":"#/$defs/Member1"},{"$ref":"#/$defs/Member2"}],"title":"Value"}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
+  ],
+  [
+    "list(Union(Ticket, Skip))",
+    () => t("list(Union(Ticket, Skip))", TICKETS),
+    `{"$defs":{"item_skip":{"additionalProperties":false,"properties":{"kind":{"const":"skip","title":"Kind","type":"string"},"trade":{"anyOf":[{"$ref":"#/$defs/item_skip_trade_buy"},{"$ref":"#/$defs/item_skip_trade_sell"}],"title":"Trade"}},"required":["kind","trade"],"title":"item_skip","type":"object"},"item_skip_trade_buy":{"additionalProperties":false,"properties":{"action":{"const":"buy","title":"Action","type":"string"},"qty":{"title":"Qty","type":"integer"}},"required":["action","qty"],"title":"item_skip_trade_buy","type":"object"},"item_skip_trade_sell":{"additionalProperties":false,"properties":{"action":{"const":"sell","title":"Action","type":"string"},"price":{"title":"Price","type":"number"}},"required":["action","price"],"title":"item_skip_trade_sell","type":"object"},"item_ticket":{"additionalProperties":false,"properties":{"kind":{"const":"ticket","title":"Kind","type":"string"},"trade":{"anyOf":[{"$ref":"#/$defs/item_ticket_trade_buy"},{"$ref":"#/$defs/item_ticket_trade_sell"}],"title":"Trade"},"limit":{"$ref":"#/$defs/item_ticket_limit"}},"required":["kind","trade","limit"],"title":"item_ticket","type":"object"},"item_ticket_limit":{"additionalProperties":false,"properties":{"px":{"title":"Px","type":"number"}},"required":["px"],"title":"item_ticket_limit","type":"object"},"item_ticket_trade_buy":{"additionalProperties":false,"properties":{"action":{"const":"buy","title":"Action","type":"string"},"qty":{"title":"Qty","type":"integer"}},"required":["action","qty"],"title":"item_ticket_trade_buy","type":"object"},"item_ticket_trade_sell":{"additionalProperties":false,"properties":{"action":{"const":"sell","title":"Action","type":"string"},"price":{"title":"Price","type":"number"}},"required":["action","price"],"title":"item_ticket_trade_sell","type":"object"}},"properties":{"items":{"items":{"anyOf":[{"$ref":"#/$defs/item_skip"},{"$ref":"#/$defs/item_ticket"}]},"title":"Items","type":"array"}},"required":["items"],"title":"ListWrapper","type":"object"}`,
+  ],
+  [
+    "Union(Text, Call)",
+    () => t("Union(Text, Call)", TRADES),
+    `{"$defs":{"Member1":{"additionalProperties":false,"properties":{"name":{"title":"Name","type":"string"},"input":{"additionalProperties":true,"title":"Input","type":"object"}},"required":["name","input"],"title":"Member1","type":"object"},"Member2":{"additionalProperties":false,"properties":{"text":{"title":"Text","type":"string"}},"required":["text"],"title":"Member2","type":"object"}},"properties":{"value":{"anyOf":[{"$ref":"#/$defs/Member1"},{"$ref":"#/$defs/Member2"}],"title":"Value"}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
+  ],
+  [
+    "Order (a union field)",
+    () => t("Order", ORDER),
+    `{"$defs":{"trade_buy":{"additionalProperties":false,"properties":{"action":{"const":"buy","title":"Action","type":"string"},"qty":{"title":"Qty","type":"integer"}},"required":["action","qty"],"title":"trade_buy","type":"object"},"trade_sell":{"additionalProperties":false,"properties":{"action":{"const":"sell","title":"Action","type":"string"},"price":{"title":"Price","type":"number"}},"required":["action","price"],"title":"trade_sell","type":"object"}},"properties":{"trade":{"anyOf":[{"$ref":"#/$defs/trade_buy"},{"$ref":"#/$defs/trade_sell"}],"title":"Trade"},"note":{"title":"Note","type":"string"}},"required":["trade","note"],"title":"Record","type":"object"}`,
+  ],
+  [
+    "list(Union(Buy, Sell))",
+    () => t("list(Union(Buy, Sell))", TRADES),
+    `{"$defs":{"item_buy":{"additionalProperties":false,"properties":{"action":{"const":"buy","title":"Action","type":"string"},"qty":{"title":"Qty","type":"integer"}},"required":["action","qty"],"title":"item_buy","type":"object"},"item_sell":{"additionalProperties":false,"properties":{"action":{"const":"sell","title":"Action","type":"string"},"price":{"title":"Price","type":"number"}},"required":["action","price"],"title":"item_sell","type":"object"}},"properties":{"items":{"items":{"anyOf":[{"$ref":"#/$defs/item_buy"},{"$ref":"#/$defs/item_sell"}]},"title":"Items","type":"array"}},"required":["items"],"title":"ListWrapper","type":"object"}`,
+  ],
+  [
+    "Union(Buy, Sell) (a record inside a member)",
+    () => t("Union(Buy, Sell)", LIMITED),
+    `{"$defs":{"buy":{"additionalProperties":false,"properties":{"action":{"const":"buy","title":"Action","type":"string"},"limit":{"$ref":"#/$defs/buy_limit"}},"required":["action","limit"],"title":"buy","type":"object"},"buy_limit":{"additionalProperties":false,"properties":{"px":{"title":"Px","type":"number"}},"required":["px"],"title":"buy_limit","type":"object"},"sell":{"additionalProperties":false,"properties":{"action":{"const":"sell","title":"Action","type":"string"}},"required":["action"],"title":"sell","type":"object"}},"properties":{"value":{"anyOf":[{"$ref":"#/$defs/buy"},{"$ref":"#/$defs/sell"}],"title":"Value"}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
+  ],
+  [
+    "D (open typedefs)",
+    () => t("D", OPEN),
+    `{"$defs":{"buy":{"additionalProperties":false,"properties":{"kind":{"const":"buy","title":"Kind","type":"string"},"x":{"anyOf":[{"type":"boolean"},{"type":"integer"},{"type":"number"},{"type":"string"},{"additionalProperties":true,"type":"object"},{"items":{},"type":"array"}],"title":"X"}},"required":["kind","x"],"title":"buy","type":"object"},"sell":{"additionalProperties":false,"properties":{"kind":{"const":"sell","title":"Kind","type":"string"},"n":{"title":"N","type":"integer"}},"required":["kind","n"],"title":"sell","type":"object"}},"properties":{"value":{"anyOf":[{"$ref":"#/$defs/buy"},{"$ref":"#/$defs/sell"}],"title":"Value"}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
+  ],
+  [
+    "CU (open typedefs)",
+    () => t("CU", OPEN),
+    `{"$defs":{"c2":{"additionalProperties":false,"properties":{"kind":{"const":"c2","title":"Kind","type":"string"},"a":{"title":"A","type":"integer"}},"required":["kind","a"],"title":"c2","type":"object"},"c3":{"additionalProperties":false,"properties":{"kind":{"const":"c3","title":"Kind","type":"string"},"b":{"title":"B","type":"string"}},"required":["kind","b"],"title":"c3","type":"object"}},"properties":{"value":{"anyOf":[{"$ref":"#/$defs/c2"},{"$ref":"#/$defs/c3"}],"title":"Value"}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
+  ],
+  [
+    "Holder (nullable record and union fields)",
+    () => t("Holder", HOLDER),
+    `{"$defs":{"p":{"properties":{"x":{"title":"X","type":"integer"}},"required":["x"],"title":"p","type":"object"},"q":{"properties":{"x":{"title":"X","type":"integer"}},"required":["x"],"title":"q","type":"object"},"u_buy":{"additionalProperties":false,"properties":{"action":{"const":"buy","title":"Action","type":"string"}},"required":["action"],"title":"u_buy","type":"object"},"u_sell":{"additionalProperties":false,"properties":{"action":{"const":"sell","title":"Action","type":"string"}},"required":["action"],"title":"u_sell","type":"object"}},"properties":{"p":{"anyOf":[{"$ref":"#/$defs/p"},{"type":"null"}],"default":null},"u":{"anyOf":[{"$ref":"#/$defs/u_buy"},{"$ref":"#/$defs/u_sell"},{"type":"null"}],"default":null,"title":"U"},"q":{"$ref":"#/$defs/q"}},"required":["q"],"title":"Record","type":"object"}`,
+  ],
+  [
+    "Optional(Union(Buy, Sell))",
+    () => t("Optional(Union(Buy, Sell))", BUY_SELL),
+    `{"$defs":{"buy":{"additionalProperties":false,"properties":{"action":{"const":"buy","title":"Action","type":"string"}},"required":["action"],"title":"buy","type":"object"},"sell":{"additionalProperties":false,"properties":{"action":{"const":"sell","title":"Action","type":"string"}},"required":["action"],"title":"sell","type":"object"}},"properties":{"value":{"anyOf":[{"$ref":"#/$defs/buy"},{"$ref":"#/$defs/sell"},{"type":"null"}],"title":"Value"}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
+  ],
+  [
+    "Union(Zed, Alpha) (members in canonical order)",
+    () => t("Union(Zed, Alpha)", ZED_ALPHA),
+    `{"$defs":{"a":{"additionalProperties":false,"properties":{"t":{"const":"a","title":"T","type":"string"},"p":{"$ref":"#/$defs/a_p"}},"required":["t","p"],"title":"a","type":"object"},"a_p":{"additionalProperties":false,"properties":{"x":{"title":"X","type":"integer"}},"required":["x"],"title":"a_p","type":"object"},"z":{"additionalProperties":false,"properties":{"t":{"const":"z","title":"T","type":"string"},"u":{"anyOf":[{"$ref":"#/$defs/z_u_buy"},{"$ref":"#/$defs/z_u_sell"}],"title":"U"}},"required":["t","u"],"title":"z","type":"object"},"z_u_buy":{"additionalProperties":false,"properties":{"action":{"const":"buy","title":"Action","type":"string"}},"required":["action"],"title":"z_u_buy","type":"object"},"z_u_sell":{"additionalProperties":false,"properties":{"action":{"const":"sell","title":"Action","type":"string"}},"required":["action"],"title":"z_u_sell","type":"object"}},"properties":{"value":{"anyOf":[{"$ref":"#/$defs/a"},{"$ref":"#/$defs/z"}],"title":"Value"}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
+  ],
 ];
 
 describe("Python's captured schemas", () => {
@@ -645,6 +740,95 @@ test("test_record_type and test_list_of_records (schema titles)", () => {
   expect(schemaOf(new Type({ kind: ValueKind.LIST_OBJECT, element: point })).title).toBe(
     "ListWrapper",
   );
+});
+
+/** The member definitions the `anyOf` arms of `armSchema` refer to, in order. */
+function unionArms(schema: JsonObject, armSchema: JsonValue | undefined): JsonObject[] {
+  expect("oneOf" in obj(armSchema) || "discriminator" in obj(armSchema)).toBe(false);
+  return arms(armSchema)
+    .filter((arm) => "$ref" in arm)
+    .map((arm) => obj(obj(schema.$defs)[(arm.$ref as string).split("/").at(-1)!]));
+}
+
+/** Every key of a JSON schema, at any depth. */
+function schemaKeys(node: JsonValue): string[] {
+  if (Array.isArray(node)) return node.flatMap(schemaKeys);
+  if (typeof node !== "object" || node === null) return [];
+  return Object.entries(node).flatMap(([key, value]) => [key, ...schemaKeys(value)]);
+}
+
+/** Expect `size` closed member definitions with distinct titles, and no `oneOf` anywhere. */
+function expectMemberDefs(schema: JsonObject, members: JsonObject[], size: number): void {
+  expect(members).toHaveLength(size);
+  expect(members.every((member) => member.additionalProperties === false)).toBe(true);
+  expect(new Set(members.map((member) => member.title)).size).toBe(size);
+  const keys = new Set(schemaKeys(schema));
+  expect(keys.has("oneOf") || keys.has("discriminator")).toBe(false);
+}
+
+/** The `const` of each member's `action` property. */
+function actions(members: JsonObject[]): JsonValue[] {
+  return members.map((member) => obj(obj(member.properties).action).const!);
+}
+
+test("test_tagged_union_schema_is_any_of_closed_members_with_const_tags", () => {
+  const schema = schemaOf(t("Union(Buy, Sell)", TRADES));
+  expect(schema.title).toBe("ScalarWrapper");
+  const members = unionArms(schema, obj(schema.properties).value);
+  expectMemberDefs(schema, members, 2);
+  expect(actions(members)).toEqual(["buy", "sell"]);
+  expect(members.map((member) => member.title)).toEqual(["buy", "sell"]);
+});
+
+test("test_union_members_with_non_identifier_tags_are_numbered", () => {
+  const schema = schemaOf(t("Union(Now, Later)", NOW_LATER));
+  const members = unionArms(schema, obj(schema.properties).value);
+  expect(members.map((member) => member.title)).toEqual(["Member1", "Member2"]);
+});
+
+test("test_union_nested_in_a_member_gets_position_named_defs", () => {
+  const defs = obj(schemaOf(t("list(Union(Ticket, Skip))", TICKETS)).$defs);
+  expect(Object.keys(defs).filter((key) => key.includes("__"))).toEqual([]);
+  const titles = new Set(Object.values(defs).map((definition) => obj(definition).title));
+  expect(titles.size).toBe(Object.keys(defs).length);
+  expect(new Set(Object.keys(defs))).toEqual(
+    new Set([
+      "item_skip",
+      "item_skip_trade_buy",
+      "item_skip_trade_sell",
+      "item_ticket",
+      "item_ticket_limit",
+      "item_ticket_trade_buy",
+      "item_ticket_trade_sell",
+    ]),
+  );
+});
+
+test("test_untagged_union_schema_is_any_of_closed_members", () => {
+  const schema = schemaOf(t("Union(Text, Call)", TRADES));
+  const members = unionArms(schema, obj(schema.properties).value);
+  expectMemberDefs(schema, members, 2);
+  const names = members.map((member) => Object.keys(obj(member.properties)).sort());
+  expect(names.sort()).toEqual([["input", "name"], ["text"]]);
+});
+
+test("test_record_field_of_union_type_gets_member_schemas", () => {
+  const schema = schemaOf(t("Order", ORDER));
+  const members = unionArms(schema, obj(schema.properties).trade);
+  expectMemberDefs(schema, members, 2);
+  expect(actions(members)).toEqual(["buy", "sell"]);
+});
+
+test("test_list_of_union_schema_gets_member_schemas", () => {
+  const schema = schemaOf(t("list(Union(Buy, Sell))", TRADES));
+  expect(schema.title).toBe("ListWrapper");
+  const members = unionArms(schema, obj(obj(schema.properties).items).items);
+  expectMemberDefs(schema, members, 2);
+});
+
+test("test_records_nested_in_union_members_reject_unknown_fields (schema half)", () => {
+  const schema = schemaOf(t("Union(Buy, Sell)", LIMITED));
+  expect(obj(obj(schema.$defs).buy_limit).additionalProperties).toBe(false);
 });
 
 describe("test_nullable_root_schema_accepts_null (schema half)", () => {
@@ -821,6 +1005,112 @@ describe("TS-only", () => {
     expect(() => typeToSchema(new Type({ kind: ValueKind.INTEGER, bounds: [3n, 2n] }))).toThrow(
       new RangeError("type bounds must be ordered from minimum to maximum"),
     );
+  });
+
+  describe("$defs keys and clashes", () => {
+    const P = { x: "int" };
+    const Q = { y: "str" };
+    const DEF_X = `{"properties":{"x":{"title":"X","type":"integer"}},"required":["x"],"type":"object"`;
+    const DEF_Y = `{"properties":{"y":{"title":"Y","type":"string"}},"required":["y"],"type":"object"`;
+
+    test("a key replaces each code point outside [A-Za-z0-9_-] with _; the title stays raw", () => {
+      // Python's capture.
+      expectSchema(
+        t("R", readTypedefs({ P, R: { "my key": "P", "a/b": "P", café: "P" } })),
+        parseJson(
+          `{"$defs":{"a_b":{"properties":{"x":{"title":"X","type":"integer"}},"required":["x"],"title":"a/b","type":"object"},"caf_":{"properties":{"x":{"title":"X","type":"integer"}},"required":["x"],"title":"café","type":"object"},"my_key":{"properties":{"x":{"title":"X","type":"integer"}},"required":["x"],"title":"my key","type":"object"}},"properties":{"my key":{"$ref":"#/$defs/my_key"},"a/b":{"$ref":"#/$defs/a_b"},"café":{"$ref":"#/$defs/caf_"}},"required":["my key","a/b","café"],"title":"Record","type":"object"}`,
+          "plain",
+        ),
+      );
+      // pydantic keeps the text after the last dot (`b`).
+      const dotted = schemaOf(t("R", readTypedefs({ P, R: { "a.b": "P" } })));
+      expect(obj(dotted.properties)["a.b"]).toStrictEqual({ $ref: "#/$defs/a_b" });
+      expect(obj(obj(dotted.$defs).a_b).title).toBe("a.b");
+      // As pydantic: one key for the code point, not one per UTF-16 half.
+      const emoji = schemaOf(t("R", readTypedefs({ P, R: { "😀": "P" } })));
+      expect(obj(emoji.properties)["😀"]).toStrictEqual({ $ref: "#/$defs/_" });
+      expect(obj(obj(emoji.$defs)._).title).toBe("😀");
+    });
+
+    test("different records wanting one key are numbered in definition order", () => {
+      // Python's capture, where pydantic writes `yian__nodes__agent__structured__a_b__1`.
+      expectSchema(
+        t("C", readTypedefs({ P, Q, I: { b: "Q" }, C: { a_b: "P", a: "I" } })),
+        parseJson(
+          `{"$defs":{"a":{"properties":{"b":{"$ref":"#/$defs/a_b__2"}},"required":["b"],"title":"a","type":"object"},"a_b__1":${DEF_X},"title":"a_b"},"a_b__2":${DEF_Y},"title":"a_b"}},"properties":{"a_b":{"$ref":"#/$defs/a_b__1"},"a":{"$ref":"#/$defs/a"}},"required":["a_b","a"],"title":"Record","type":"object"}`,
+          "plain",
+        ),
+      );
+    });
+
+    test("identical records wanting one key share it", () => {
+      // Python's capture.
+      expectSchema(
+        t("C", readTypedefs({ P, I: { b: "P" }, C: { a_b: "P", a: "I" } })),
+        parseJson(
+          `{"$defs":{"a":{"properties":{"b":{"$ref":"#/$defs/a_b"}},"required":["b"],"title":"a","type":"object"},"a_b":${DEF_X},"title":"a_b"}},"properties":{"a_b":{"$ref":"#/$defs/a_b"},"a":{"$ref":"#/$defs/a"}},"required":["a_b","a"],"title":"Record","type":"object"}`,
+          "plain",
+        ),
+      );
+    });
+
+    test("a numbered key skips a key another record wants", () => {
+      const schema = schemaOf(
+        t("C", readTypedefs({ P, Q, I: { b: "Q" }, C: { a_b: "P", a: "I", a_b__1: "Q" } })),
+      );
+      expect(obj(schema.properties).a_b).toStrictEqual({ $ref: "#/$defs/a_b__2" });
+      expect(obj(schema.properties).a_b__1).toStrictEqual({ $ref: "#/$defs/a_b__1" });
+      const defs = obj(schema.$defs);
+      expect(obj(defs.a).properties).toStrictEqual({ b: { $ref: "#/$defs/a_b__3" } });
+      expect(Object.keys(defs)).toEqual(["a", "a_b__1", "a_b__2", "a_b__3"]);
+      expect(Object.values(defs).map((definition) => obj(definition).title)).toEqual([
+        "a",
+        "a_b__1",
+        "a_b",
+        "a_b",
+      ]);
+    });
+
+    test("a/b beside a_b clash after normalization, though only their titles differ", () => {
+      // Python's capture, where pydantic writes `yian__nodes__agent__structured__a_b__1`.
+      expectSchema(
+        t("C", readTypedefs({ P, C: { "a/b": "P", a_b: "P" } })),
+        parseJson(
+          `{"$defs":{"a_b__1":${DEF_X},"title":"a/b"},"a_b__2":${DEF_X},"title":"a_b"}},"properties":{"a/b":{"$ref":"#/$defs/a_b__1"},"a_b":{"$ref":"#/$defs/a_b__2"}},"required":["a/b","a_b"],"title":"Record","type":"object"}`,
+          "plain",
+        ),
+      );
+    });
+
+    test("the root position's Record takes part in clashes", () => {
+      // Python's capture, where pydantic writes `yian__nodes__agent__structured__Record__1`.
+      expectSchema(
+        t("Optional(C)", readTypedefs({ P, C: { Record: "P" } })),
+        parseJson(
+          `{"$defs":{"Record__1":${DEF_X},"title":"Record"},"Record__2":{"properties":{"Record":{"$ref":"#/$defs/Record__1"}},"required":["Record"],"title":"Record","type":"object"}},"properties":{"value":{"anyOf":[{"$ref":"#/$defs/Record__2"},{"type":"null"}]}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
+          "plain",
+        ),
+      );
+    });
+
+    test("integer-like $defs keys come first, then the others sorted", () => {
+      const schema = schemaOf(t("C", readTypedefs({ P, C: { "10": "P", "2": "P", b: "P" } })));
+      expect(Object.keys(obj(schema.$defs))).toEqual(["2", "10", "b"]);
+    });
+
+    test("a __proto__ record field's definition survives the key sort", () => {
+      const typ = new Type({
+        kind: ValueKind.OBJECT,
+        fields: new Map([["__proto__", t("P", readTypedefs({ P }))]]),
+        required: new Set(["__proto__"]),
+      });
+      const schema = schemaOf(typ);
+      expect(obj(schema.properties).__proto__).toStrictEqual({ $ref: "#/$defs/__proto__" });
+      const defs = obj(schema.$defs);
+      expect(Object.hasOwn(defs, "__proto__")).toBe(true);
+      expect(Object.getPrototypeOf(defs)).toBe(Object.prototype);
+      expect(defs.__proto__).toStrictEqual(parseJson(`${DEF_X},"title":"__proto__"}`, "plain"));
+    });
   });
 
   test("file and None have no structured mapping", () => {

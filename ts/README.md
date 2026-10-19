@@ -343,14 +343,16 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - Changed: a `JsonlRunLog` holds a SQLite exclusive lock (`lockFile` in `platform.ts`) on
   `<path>.lock` until `close()`, where Python flocks the log itself. The kernel frees the lock when
   the process dies, and the lock file is never deleted. A busy lock throws `run log <path> is
-  locked by another writer (is the run still active?)` with the `FileLockError` as `cause`.
+  locked by another writer (is the run still active?)` with the `FileLockError` as `cause`. The
+  lock sits beside the log's resolved path, so symlinks to a log share it; a hard link doesn't
+  (Python's flock covered hard links too), so never run two writers through hard links.
 - Each append writes at the known prefix end and fsyncs. A failed write or fsync truncates back to
   the prefix and poisons the log: later appends throw `run log <path> refuses appends after a
   failed append` (cause: the original error), and a failed rollback throws an `AggregateError`. A
   record refused before any write doesn't poison the log.
 - For inspection, `readRunLog(path)` reads the complete prefix without the lock and without
   changing the file, so it may see a line a concurrent writer later rolls back;
-  `isRunLogLocked(path)` probes `<path>.lock`.
+  `isRunLogLocked(path)` probes the resolved log's `.lock`.
 
 ## Compile
 

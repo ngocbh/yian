@@ -2059,8 +2059,11 @@ the same ordering without a durable path.
 Changed (TS yian): the single-owner lock is a SQLite exclusive lock on the sibling file
 `<log>.lock`, not a lock on the log itself. `JsonlRunLog.create` and `JsonlRunLog.resume`
 take it without waiting and hold it for the log's lifetime, until `close()`; the kernel
-releases it when the process dies. The lock file is kept after `close()` and never
-deleted, so its presence alone doesn't mean a writer is active. A lock another writer
+releases it when the process dies. The lock follows symlinks: it sits beside the log's
+resolved path, so every symlink to a log shares one lock, but a hard link to the log is a
+different lock (Python's flock on the file excluded hard links as well), so don't run two
+writers through hard links. The lock file is kept after `close()` and never deleted, so
+its presence alone doesn't mean a writer is active. A lock another writer
 holds raises an `Error` "run log <path> is locked by another writer (is the run still
 active?)" with the busy `FileLockError` as its `cause`. Each append writes its line at
 the known end of the complete prefix and fsyncs before the log keeps the record; a
@@ -2070,7 +2073,9 @@ rethrows that error; from then on the log refuses appends with "run log <path> r
 appends after a failed append", the original error as its `cause`, and keeps the lock
 until `close()`. When that rollback fails too, the append raises an `AggregateError`
 "run log <path> append failed and its rollback also failed" holding the append's error
-and the rollback's errors, and the file may still hold part or all of the failed line.
+and the rollback's errors, and the file may still hold part or all of the failed line: a
+later resume drops a partial line but keeps a complete one as a record, even though its
+fsync failed.
 A record the envelope or the codec refuses raises its `RangeError` or `TypeError` before
 anything is written and doesn't poison the log. A damaged record in a log being read
 raises a `RangeError` naming the path, the 1-based line and the seq.

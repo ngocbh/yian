@@ -1303,7 +1303,7 @@ export class JsonlRunLog implements RunLog {
     try {
       // The open's mode is masked by the umask.
       fs.fchmodSync(fd, 0o600);
-      lock = lockRunLog(path);
+      lock = lockRunLog(path, fd);
       return new JsonlRunLog(path, canonicalRunId, fd, lock, [], 0);
     } catch (error) {
       releaseAfterFailure(fd, lock);
@@ -1322,7 +1322,8 @@ export class JsonlRunLog implements RunLog {
    * @throws RangeError when the file holds no complete line (`cannot resume an empty run log:
    *   <path>`) or a complete line isn't a valid record, or the records don't share one run id with
    *   contiguous sequences from 0 (the message names `path`, the line and its seq).
-   * @throws Error the busy message, as `create`.
+   * @throws Error the busy message, as `create`; `run log <path> was replaced while being opened`
+   *   when `path` stops naming the opened file before the lock is taken.
    * @throws the `fs` error (`code` `ENOENT` for a missing log, which creates no lock file) and
    *   other `lockFile` errors.
    */
@@ -1330,7 +1331,7 @@ export class JsonlRunLog implements RunLog {
     const fd = fs.openSync(path, fs.constants.O_RDWR);
     let lock: FileLock | undefined;
     try {
-      lock = lockRunLog(path);
+      lock = lockRunLog(path, fd);
       const data = fs.readFileSync(fd);
       const completeEnd = data.lastIndexOf(0x0a) + 1;
       const records = decodeCompletePrefix(data.subarray(0, completeEnd), path);
@@ -1392,8 +1393,9 @@ export class JsonlRunLog implements RunLog {
       }
       fs.fsyncSync(this.#fd);
     } catch (error) {
-      // Poisoned even after a clean rollback: the failed append ends the run as a host error,
-      // and a failed rollback leaves a tail only a resume repairs.
+      // Poisoned even after a clean rollback: the failed append ends the run as a host error.
+      // A failed rollback can leave the line on disk: a resume drops a partial line but keeps a
+      // complete one, even though its fsync failed.
       this.#failure = { error };
       const rollbackErrors = rollbackAppend(this.#fd, this.#prefixSize);
       if (rollbackErrors.length > 0) {
@@ -1434,9 +1436,19 @@ export function readRunLog(path: string): RecordEnvelope[] {
   return decodeCompletePrefix(data.subarray(0, data.lastIndexOf(0x0a) + 1), path);
 }
 
-/** Return whether a writer (in any process) holds the lock of the log at `path`. */
+/**
+ * Return whether a writer (in any process) holds the lock of the log at `path`, following
+ * symlinks to the log; a missing log gives `false`.
+ */
 export function isRunLogLocked(path: string): boolean {
-  return isLocked(`${path}.lock`);
+  let real: string;
+  try {
+    real = fs.realpathSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return false;
+    throw error;
+  }
+  return isLocked(`${real}.lock`);
 }
 
 /** Return a failure's wire object, shared by the failure-bearing records. */
@@ -2716,17 +2728,38 @@ function decodeCompletePrefix(data: Uint8Array, path: string): RecordEnvelope[] 
 }
 
 /**
- * Take the writer's lock on the log at `path` (its sibling `<path>.lock`) without waiting.
+ * Take the writer's lock on the log at `path`, opened as `fd`, without waiting. The lock is the
+ * sibling `<real>.lock` of the log's resolved path, so every symlink to the log shares it, as
+ * Python's flock on the file does.
  *
  * @throws Error naming the log and the likely cause when another writer holds it, with the busy
- *   `FileLockError` as `cause`; other `lockFile` errors propagate.
+ *   `FileLockError` as `cause`; `run log <path> was replaced while being opened` when the
+ *   resolved path no longer names `fd`'s file once locked (the lock is released then). The `fs`
+ *   errors and other `lockFile` errors propagate.
  */
-function lockRunLog(path: string): FileLock {
+function lockRunLog(path: string, fd: number): FileLock {
+  const real = fs.realpathSync(path);
+  let lock: FileLock;
   try {
-    return lockFile(`${path}.lock`);
+    lock = lockFile(`${real}.lock`);
   } catch (error) {
     if (error instanceof FileLockError && error.reason === "busy") {
       throw new Error(`run log ${path} is locked by another writer (is the run still active?)`, { cause: error });
+    }
+    throw error;
+  }
+  try {
+    const opened = fs.fstatSync(fd, { bigint: true });
+    const resolved = fs.statSync(real, { bigint: true });
+    if (opened.dev !== resolved.dev || opened.ino !== resolved.ino) {
+      throw new Error(`run log ${path} was replaced while being opened`);
+    }
+    return lock;
+  } catch (error) {
+    try {
+      lock.release();
+    } catch {
+      // The identity error explains the failure; a release error would mask it.
     }
     throw error;
   }
@@ -2767,11 +2800,11 @@ function releaseAfterFailure(fd: number, lock: FileLock | undefined): void {
   }
 }
 
-/** Release `lock` (when taken) and close `fd`; the close runs even when the release throws. */
+/** Close `fd` and release `lock` (when taken); the release runs even when the close throws. */
 function release(fd: number, lock: FileLock | undefined): void {
   try {
-    lock?.release();
-  } finally {
     fs.closeSync(fd);
+  } finally {
+    lock?.release();
   }
 }

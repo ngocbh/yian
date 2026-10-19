@@ -1,4 +1,6 @@
+# TS spells the compared value and the close tag as JSON text (rules: messages; narrowing_facts.py `{check.value!r}`, `{close!r}`); Python's repr in python_expect.
 kind: load
+rules: [messages]
 flow: |
   id: p
   name: p
@@ -68,6 +70,16 @@ python_flow: |
         - "v.action == 'byu' and v.zz > 0"
   output: ${c.output}
 expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'c' assert: `v.action == "byu"` compares v.action with "byu", which is not one of its tags (buy, sell); did you mean "buy"?
+      frames:
+      - label: flow.yaml
+        range: [32, 9, 32, 41]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

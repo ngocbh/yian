@@ -1,4 +1,6 @@
+# TS spells the versions as JSON text (rules: messages; loader.py `{child.version!r}`, `{version!r}`); Python's repr in python_expect.
 kind: load
+rules: [messages]
 flow: |
   id: p
   name: p
@@ -50,6 +52,15 @@ python_files:
     uses:
       ch: child@v1
 expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'uses: ref pinned child@v1 but the resolved file declares version: "v2" (file-per-version: name a file that declares "v1")'
+      frames:
+      - label: flow.yaml
+        range: [9, 7, 9, 15]
+        note: uses alias 'ch'
+python_expect:
   load:
     diagnostics:
     - code: compose.load

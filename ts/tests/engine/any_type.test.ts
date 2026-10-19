@@ -9,7 +9,15 @@
  *
  * It also ports the field-read test of node contracts (`test_a_field_read_on_any_is_not_checked`).
  *
- * Later: the compatibility and proof tests (with the compile checks), and the flow loading tests.
+ * It also ports the compatibility tests (`typesCompatible`, `typeRelation`):
+ * `test_unproven_list_items_compare_as_optional_any`, `test_a_non_null_json_type_fits_any`
+ * through `test_any_is_disjoint_from_file_and_none`,
+ * `test_any_is_narrower_than_a_union_with_one_file_member_and_back` and
+ * `test_any_is_narrower_than_a_record_whose_file_field_may_be_null`.
+ *
+ * Later (T3-17): the proof test
+ * (`test_proof_rejects_an_unproven_list_and_accepts_list_of_optional_any`), which needs
+ * `require_proven_type`. Later: the flow loading tests.
  *
  * Not ported: the tuple rows, `test_any_path_unwraps_a_str_subclass_key`, and the non-text key
  * rows (`test_object_rejects_a_non_text_key`,
@@ -20,6 +28,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { typeRelation, typesCompatible } from "../../src/compile/validation.ts";
 import { outputContractFieldError, ValueContract } from "../../src/nodes/contracts.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { parseType, readTypedefs, typeFor } from "../../src/typesys/types.ts";
@@ -426,6 +435,176 @@ const FILE_TYPEDEFS = {
   U: "Union(F, N)",
   OF: { f: "Optional(file)", n: "int" },
 };
+
+describe("compatibility with Any", () => {
+  test("unproven list items compare as Optional(Any)", () => {
+    const listStr = new Type({
+      kind: ValueKind.LIST_STRING,
+      element: Type.scalar(ValueKind.STRING),
+    });
+    const listFile = new Type({ kind: ValueKind.LIST_ANY, element: FILE });
+
+    expect(typesCompatible(UNPROVEN_LIST, typeFor("list(Optional(Any))", new Map()))).toBe(true);
+    expect(typesCompatible(listStr, UNPROVEN_LIST)).toBe(true);
+    expect(typesCompatible(listFile, UNPROVEN_LIST)).toBe(false);
+    expect(typeRelation(UNPROVEN_LIST, listStr)).toBe("narrower");
+  });
+
+  test.each([
+    "str",
+    "int",
+    "float",
+    "bool",
+    "date",
+    "datetime",
+    "object",
+    "Rec",
+    "list(int)",
+    "list(Any)",
+    "list(Optional(Any))",
+    "Literal(a)",
+    "int(1..3)",
+    "int(0..)",
+    "Union(Buy, Sell)",
+    "Any",
+  ])("a non-null JSON type fits Any: %s", (text) => {
+    expect(typesCompatible(t(text), ANY)).toBe(true);
+    expect(typeRelation(t(text), ANY)).toBe("fits");
+  });
+
+  test("an unproven list fits Any", () => {
+    expect(typesCompatible(UNPROVEN_LIST, ANY)).toBe(true);
+    expect(typeRelation(UNPROVEN_LIST, ANY)).toBe("fits");
+  });
+
+  test.each<[string, Type]>([
+    ["Optional(int)", t("Optional(int)")],
+    ["None", t("None")],
+    ["Optional(Any)", OPTIONAL_ANY],
+  ])("a nullable source does not fit Any: %s", (_id, source) => {
+    expect(typesCompatible(source, ANY)).toBe(false);
+  });
+
+  test.each<[string, Type]>([
+    ["Optional(int)", t("Optional(int)")],
+    ["None", t("None")],
+    ["Optional(Any)", OPTIONAL_ANY],
+    ["Any", ANY],
+  ])("a nullable source fits Optional(Any): %s", (_id, source) => {
+    expect(typesCompatible(source, OPTIONAL_ANY)).toBe(true);
+  });
+
+  test.each([
+    "str",
+    "int",
+    "float",
+    "object",
+    "Rec",
+    "Union(Buy, Sell)",
+    "list(Any)",
+    "list(str)",
+    "Literal(a)",
+    "int(1..3)",
+    "Optional(str)",
+    "None",
+  ])("Any fits nothing but Any: %s", (sink) => {
+    expect(typesCompatible(ANY, t(sink))).toBe(false);
+  });
+
+  test.each<[string, Type]>([
+    ["file", FILE],
+    ["list(file)", LIST_FILE],
+    ["{f: file}", FILE_RECORD],
+  ])("a type holding a file does not fit Any: %s", (_id, source) => {
+    expect(typesCompatible(source, ANY)).toBe(false);
+    expect(typeRelation(source, ANY)).toBe("disjoint");
+  });
+
+  test("a list fits list(Any) when its items fit Any", () => {
+    expect(typesCompatible(t("list(int)"), LIST_ANY)).toBe(true);
+    expect(typesCompatible(t("list(Rec)"), LIST_ANY)).toBe(true);
+    expect(typesCompatible(t("list(Optional(int))"), LIST_ANY)).toBe(false);
+    expect(typesCompatible(LIST_FILE, LIST_ANY)).toBe(false);
+  });
+
+  test.each<[string, Type]>([
+    ["list(int)", t("list(int)")],
+    ["list(Optional(str))", t("list(Optional(str))")],
+    ["list(Any)", LIST_ANY],
+    ["list(Optional(Any))", LIST_OPTIONAL_ANY],
+    ["an unproven list", UNPROVEN_LIST],
+  ])("a list of JSON items fits list(Optional(Any)): %s", (_id, source) => {
+    expect(typesCompatible(source, LIST_OPTIONAL_ANY)).toBe(true);
+  });
+
+  test.each<[string, Type, string, Type]>([
+    ["list(Optional(Any))", LIST_OPTIONAL_ANY, "list(Any)", LIST_ANY],
+    ["list(Optional(Any))", LIST_OPTIONAL_ANY, "list(str)", t("list(str)")],
+    ["an unproven list", UNPROVEN_LIST, "list(Any)", LIST_ANY],
+    ["an unproven list", UNPROVEN_LIST, "list(str)", t("list(str)")],
+  ])(
+    "a list of Optional(Any) does not fit a list of non-null items: %s into %s",
+    (_source, source, _sink, sink) => {
+      expect(typesCompatible(source, sink)).toBe(false);
+    },
+  );
+
+  test.each<[string, Type]>([
+    ["Optional(int)", t("Optional(int)")],
+    ["Optional(Any)", OPTIONAL_ANY],
+    ["Optional(Rec)", t("Optional(Rec)")],
+  ])("a nullable JSON type is narrower than Any: %s", (_id, inferred) => {
+    expect(typeRelation(inferred, ANY)).toBe("narrower");
+  });
+
+  test.each([
+    "str",
+    "int",
+    "float(..2.5)",
+    "int(1..3)",
+    "int(0..)",
+    "object",
+    "Rec",
+    "Buy",
+    "Union(Buy, Sell)",
+    "list(str)",
+    "list(Any)",
+    "date",
+    "Literal(a)",
+    "Optional(str)",
+  ])("Any is narrower than any other type: %s", (declared) => {
+    expect(typeRelation(ANY, t(declared))).toBe("narrower");
+  });
+
+  test.each<[string, Type]>([
+    ["Any", ANY],
+    ["Optional(Any)", OPTIONAL_ANY],
+  ])("Any fits Any and Optional(Any): %s", (_id, declared) => {
+    expect(typesCompatible(ANY, declared)).toBe(true);
+    expect(typeRelation(ANY, declared)).toBe("fits");
+  });
+
+  test.each<[string, Type]>([
+    ["file", FILE],
+    ["None", t("None")],
+  ])("Any is disjoint from file and None: %s", (_id, declared) => {
+    expect(typeRelation(ANY, declared)).toBe("disjoint");
+  });
+
+  test("Any is narrower than a union with one file member, and back", () => {
+    const union = typeFor("U", readTypedefs(FILE_TYPEDEFS));
+    expect(typeRelation(ANY, union)).toBe("narrower");
+    expect(typeRelation(union, ANY)).toBe("narrower");
+    expect(typesOverlap(ANY, union)).toBe(true);
+    expect(typesOverlap(union, ANY)).toBe(true);
+  });
+
+  test("Any is narrower than a record whose file field may be null", () => {
+    const record = typeFor("OF", readTypedefs(FILE_TYPEDEFS));
+    expect(typeRelation(ANY, record)).toBe("narrower");
+    expect(typeRelation(record, ANY)).toBe("narrower");
+  });
+});
 
 describe("requiresFile and hasFile", () => {
   test.each<[string, Type]>([

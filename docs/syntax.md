@@ -1575,6 +1575,11 @@ type, `storage`, `store`, and `path` are rejected as config keys, and
 `api_key` is rejected anywhere: storage locations and credentials belong to
 the host.
 
+Changed (TS yian): a memory `config` nests at most `YIAN_MAX_VALUE_NESTING` levels, the limit
+for a yian value (Python allows 28 more, 128 by default). A value quoted in a built-in key's
+error is JSON text with JS number spelling, so a float `1.0` reads `got 1`. An int must be an
+int: `5.0` is refused as in Python, and a TS host passes `5n`, since a JS `number` is a float.
+
 **Memory keys.** A memory is identified by its key, the name prefixed by the
 `uses:` aliases it was imported through: `notes` in the root file, `lib.notes`
 in a file imported as `lib`, `b.d.notes` through two imports. Declaring the

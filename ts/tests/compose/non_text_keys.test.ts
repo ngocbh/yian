@@ -189,7 +189,7 @@ nodes:
 output: \${done.output}
 `;
 
-  expect((nodesOf(text, [StandInCode]).get("route") as CaseDescriptor).on).toBe("${input.x}");
+  expect((nodesOf(text, []).get("route") as CaseDescriptor).on).toBe("${input.x}");
 });
 
 test.each(["yes", "on", "off", "no"])("yaml 1.1 boolean words are text keys: %s", (key) => {

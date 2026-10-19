@@ -22,7 +22,7 @@ import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { loadError, nodesOf, runTextCase } from "./declarations.ts";
-import { standIn, withKinds } from "./stand_ins.ts";
+import { standIn } from "./stand_ins.ts";
 
 afterEach(() => forget());
 

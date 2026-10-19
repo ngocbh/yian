@@ -144,7 +144,7 @@ every other result is the main run's.
 ### `resume`
 
 For serial runs (`num_workers: 0`). `host.crash_after_record` (required) is a record number or
-`end`. `k` cuts the first run after record `k` (0-based, so records `0`..`k` are kept): every later
+`end`. A number `k` cuts the first run after record `k` (0-based, so records `0`..`k` are kept): every later
 append is refused without writing, the run is abandoned, and the runner checks that the cut
 happened. The Python runner's cut still runs the run's own cleanup (closing the log; later, memory
 and MCP close calls), which a real crash would not. `end` lets the first run run to its end (a first

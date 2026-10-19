@@ -194,24 +194,25 @@ export class Gemini implements SseProtocol {
    * Turn a streamed reply's events into stream events.
    *
    * Each event's data is a whole `GenerateContentResponse`; empty and non-object data are
-   * skipped, and an explicit `null` reads as absent. The last string `responseId`,
-   * `modelVersion` and `finishReason` win, every chunk is read (usage may come after the
-   * `finishReason`), and only the first candidate's parts are read, in order. A `functionCall`
-   * part is a call; else a part with `text` is a text piece, or a reasoning piece when `thought`
-   * is true; else a part with only a `thoughtSignature` is an empty piece with that signature;
-   * other part kinds are skipped. A piece joins the reply's last part when that is a text or
+   * skipped, and an explicit `null` reads as absent. The last string `responseId` and
+   * `modelVersion` win, and the last non-empty `finishReason` with its `finishMessage`; every
+   * chunk is read (usage may come after the `finishReason`), and only the first candidate's parts
+   * are read, in order. A `functionCall` part is a call; else a part with `text` is a text piece,
+   * or a reasoning piece when `thought` is true; else a part with a `thoughtSignature` but no
+   * `text` (of any other kind too, whose content is dropped) is an empty piece with that
+   * signature; other unsigned part kinds are skipped. A piece joins the reply's last part when that is a text or
    * reasoning part of its kind and not both are signed, else it opens a new part (an empty,
    * unsigned piece opens nothing); its signature goes to the part it joins. Non-empty pieces
    * stream as deltas. A call's id is its own unless missing or already in the reply, else
    * `yian_call_<n>`, `n` its position among the calls, with `_<k>` appended while taken; its
    * `args` are as sent, `{}` when missing, and anything but an object makes an invalid call with
    * the raw args. Each of the six usage counts merges across chunks, a missing one replacing
-   * nothing.
+   * nothing; `totalTokenCount` is checked but not used, the total being input + output.
    *
    * @param frames The reply's server-sent events, in order.
    * @returns The deltas (one `ToolCallDelta` per call, with its id, name and encoded args), then
    *   at the end of the stream a `PartDone` for each part in index order (a part with a
-   *   signature carries a record of it), `UsageReport` when any count is above zero, and
+   *   signature carries a record of it), `UsageReport` when a count other than the total is above zero, and
    *   `Finish`: `length` for `MAX_TOKENS`, else `tool_calls` when a call came, else `stop`, with
    *   a record of the response id and model.
    * @throws {ProviderError} For an `error` object in a chunk (kind from its `code`), a blocked
@@ -265,8 +266,8 @@ export class Gemini implements SseProtocol {
         const signature = rawSignature || null;
         const call = part["functionCall"] ?? null;
         if (call !== null) {
-          const [wireId, name, args, rawArguments] = readCall(call, invalid);
-          const id = callId(wireId, calls++, taken);
+          const { name, args, rawArguments, ...wire } = readCall(call, invalid);
+          const id = callId(wire.id, calls++, taken);
           const index = parts.push({ kind: "call", id, name, args, rawArguments, signature }) - 1;
           yield new ToolCallDelta({ index, id, name, arguments: rawArguments ?? encodeBody(args) });
           continue;
@@ -288,8 +289,12 @@ export class Gemini implements SseProtocol {
         }
         if (piece !== "") yield kind === "text" ? new TextDelta(index, piece) : new ReasoningDelta(index, piece);
       }
-      if (typeof candidate["finishReason"] === "string") finishReason = candidate["finishReason"];
-      if (typeof candidate["finishMessage"] === "string") finishMessage = candidate["finishMessage"];
+      const reason = candidate["finishReason"];
+      // An empty reason is no finish, as an empty id or signature is none.
+      if (typeof reason === "string" && reason !== "") {
+        finishReason = reason;
+        finishMessage = typeof candidate["finishMessage"] === "string" ? candidate["finishMessage"] : null;
+      }
     }
     if (blockReason !== null) {
       throw new ProviderError("refused", withDetail(`${provider} blocked the prompt (${blockReason})`, blockMessage));
@@ -586,14 +591,18 @@ function candidateParts(candidate: JsonObject, invalid: (field: string) => Provi
 function readCall(
   call: JsonValue,
   invalid: (field: string) => ProviderError,
-): [string | null, string, JsonObject | null, string | null] {
+): { id: string | null; name: string; args: JsonObject | null; rawArguments: string | null } {
   if (!isPlainObject(call)) throw invalid("functionCall");
-  const id = call["id"] ?? null;
+  const rawId = call["id"] ?? null;
   const name = call["name"];
-  if ((id !== null && typeof id !== "string") || typeof name !== "string" || name === "") throw invalid("functionCall");
+  if ((rawId !== null && typeof rawId !== "string") || typeof name !== "string" || name === "") {
+    throw invalid("functionCall");
+  }
+  const id = rawId || null;
   const args = call["args"] ?? null;
-  if (args === null) return [id || null, name, {}, null];
-  return isPlainObject(args) ? [id || null, name, args, null] : [id || null, name, null, encodeBody(args)];
+  if (args === null) return { id, name, args: {}, rawArguments: null };
+  if (isPlainObject(args)) return { id, name, args, rawArguments: null };
+  return { id, name, args: null, rawArguments: encodeBody(args) };
 }
 
 /**
@@ -631,18 +640,18 @@ function mergeUsage(counts: Map<string, number>, usage: JsonValue | undefined, p
 }
 
 /**
- * Return the usage of the merged counts, or `null` when none is above zero. Input is the prompt
- * and tool-use prompt, output the candidates and thoughts, and the total their sum
- * (`totalTokenCount` is not used).
+ * Return the usage of the merged counts, or `null` when no count it uses is above zero. Input is
+ * the prompt and tool-use prompt, output the candidates and thoughts, and the total their sum
+ * (`totalTokenCount` is checked but not used).
  *
  * @throws {ProviderError} A sum is past `Number.MAX_SAFE_INTEGER` (kind `protocol`).
  */
 function usageOf(counts: Map<string, number>, provider: string): Usage | null {
-  if (![...counts.values()].some((count) => count > 0)) return null;
   const count = (field: string): number => counts.get(field) ?? 0;
   const thoughts = count("thoughtsTokenCount");
   const inputTokens = count("promptTokenCount") + count("toolUsePromptTokenCount");
   const outputTokens = count("candidatesTokenCount") + thoughts;
+  if (inputTokens + outputTokens === 0 && count("cachedContentTokenCount") === 0) return null;
   try {
     return new Usage({
       inputTokens,

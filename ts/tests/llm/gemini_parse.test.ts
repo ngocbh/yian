@@ -8,6 +8,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { encodeBody } from "../../src/llm/body.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
 import {
   collect,
   type Event,
@@ -89,24 +90,20 @@ function replyObj(parts: JsonObject[], options: ReplyOptions = {}): JsonObject {
  * the first piece), usage on every chunk, `finishReason` on the last.
  */
 function sseChunks(parts: JsonObject[], options: ReplyOptions & { splitText?: boolean } = {}): JsonObject[] {
-  const chunks: JsonObject[] = [];
+  const pieces: JsonObject[] = [];
   for (const part of parts) {
-    let pieces = [part];
     const text = part["text"];
     if (options.splitText !== false && typeof text === "string" && text.length > 4) {
       const { thoughtSignature: _, ...unsigned } = part;
-      pieces = [
-        { ...part, text: text.slice(0, 5) },
-        { ...unsigned, text: text.slice(5) },
-      ];
+      pieces.push({ ...part, text: text.slice(0, 5) }, { ...unsigned, text: text.slice(5) });
+    } else {
+      pieces.push(part);
     }
-    for (const piece of pieces) chunks.push(replyObj([piece], { ...options, finish: null }));
   }
   const finish = options.finish === undefined ? "STOP" : options.finish;
-  if (chunks.length > 0 && finish !== null) {
-    ((chunks.at(-1)!["candidates"] as JsonObject[])[0] as JsonObject)["finishReason"] = finish;
-  }
-  return chunks;
+  return pieces.map((piece, i) =>
+    replyObj([piece], { ...options, finish: i === pieces.length - 1 ? finish : null }),
+  );
 }
 
 /** Return a chunk with one candidate holding `parts`, and the chunk's other `fields`. */
@@ -132,6 +129,17 @@ async function parse(items: (JsonObject | SSEEvent)[], protocol = gemini()): Pro
   const out: Event[] = [];
   for await (const event of protocol.parse(frames(items))) out.push(event);
   return out;
+}
+
+/** Return the `ProviderError` parsing `items` throws; fail the test if none is thrown. */
+async function failure(items: (JsonObject | SSEEvent)[], protocol = gemini()): Promise<ProviderError> {
+  try {
+    await parse(items, protocol);
+  } catch (error) {
+    expect(error).toBeInstanceOf(ProviderError);
+    return error as ProviderError;
+  }
+  throw new Error("expected a ProviderError");
 }
 
 async function collected(items: (JsonObject | SSEEvent)[], protocol = gemini()): Promise<Response> {
@@ -355,6 +363,15 @@ describe("deltas and parts", () => {
     expect(await partsOfChunks({ text: "A" }, ...unknown, { text: "B" })).toEqual([new TextPart("AB")]);
   });
 
+  test("a signed part of another kind signs the open text part, or opens an empty text part", async () => {
+    const signedImage: JsonObject = { inlineData: { mimeType: "image/png", data: "aGk=" }, thoughtSignature: SIG };
+    expect(await partsOfChunks({ text: "A" }, signedImage)).toEqual([signedText("A", SIG)]);
+    expect(await partsOfChunks(signedImage)).toEqual([signedText("", SIG)]);
+    expect(await partsOfChunks(THOUGHT, { ...signedImage, thought: true })).toEqual([
+      signedThought("Let me think.", SIG),
+    ]);
+  });
+
   test("explicit nulls read as absent", async () => {
     const chunks: JsonObject[] = [
       { candidates: null, promptFeedback: null, usageMetadata: null },
@@ -433,6 +450,15 @@ describe("usage", () => {
     expect(await usageOf([replyObj([TEXT], { usage })])).toEqual(USAGE_COUNTS);
   });
 
+  test("totalTokenCount is not used: the total is input + output", async () => {
+    expect(await usageOf([replyObj([TEXT], { usage: { ...USAGE, totalTokenCount: 999n } })])).toEqual(USAGE_COUNTS);
+  });
+
+  test("a totalTokenCount alone reports no usage", async () => {
+    const out = await parse([replyObj([TEXT], { usage: { totalTokenCount: 5n } })]);
+    expect(out.some((event) => event instanceof UsageReport)).toBe(false);
+  });
+
   test("a missing cache count is null and zero thoughts are no reasoning count", async () => {
     const usage = { promptTokenCount: 12n, candidatesTokenCount: 40n, thoughtsTokenCount: 0n, totalTokenCount: 52n };
     expect(await usageOf([replyObj([TEXT], { usage })])).toEqual(
@@ -498,6 +524,19 @@ describe("finish", () => {
     expect((await parse([chunk([TEXT]), finishChunk("MAX_TOKENS"), finishChunk("STOP")])).at(-1)!).toEqual(
       new Finish({ reason: "stop", protocol: PROTOCOL, providerPayload: record({}) }),
     );
+  });
+
+  test("a finishMessage goes with its finishReason", async () => {
+    const safety = { candidates: [{ finishReason: "SAFETY", finishMessage: "Blocked.", index: 0n }] };
+    const error = await failure([chunk([TEXT]), safety, finishChunk("OTHER")]);
+    expect(error.message).toBe("google response did not complete (OTHER)");
+  });
+
+  test("an empty finishReason is no finish", async () => {
+    const error = await failure([chunk([TEXT]), finishChunk("")]);
+    expect(error.kind).toBe("incomplete");
+    expect(error.retryable).toBe(true);
+    expect(error.message).toBe("google stream ended before a complete response");
   });
 
   test("PartDone, UsageReport and Finish come only at the end of the stream", async () => {

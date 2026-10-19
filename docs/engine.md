@@ -222,6 +222,9 @@ schema 7 or 8 is rejected on read with "run log schema N predates schema 9 and
 is not supported"; other versions are rejected too. Recovery preserves the
 accepted prefix's canonical bytes and appends new records without rewriting it.
 
+Changed (TS yian): records use schema 10, with a `RunStoppedRecord` and every payload
+field required; see [Authoritative run logs](api.md#authoritative-run-logs).
+
 `RunStartedRecord` holds the complete effective model map of the agents resolved at
 run start. An agent whose `llm_config` reads a value known only when it runs (see
 [Values in `llm_config`](syntax.md#values-in-llm_config)) is in the optional

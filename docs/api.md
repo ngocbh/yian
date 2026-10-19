@@ -1970,6 +1970,23 @@ the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
+Changed (TS yian): records use schema 10, and readers accept only schema 10. The schema
+is checked before anything else in a line. A schema 9 log is rejected with "run log
+schema 9 was written by Python yian; resume it with Python yian", and any other schema
+with "unsupported run-record schema: N" (a float token shows as `10.0`); the
+"predates" message for schemas 7 and 8 is gone. The vocabulary adds
+`RunStoppedRecord`: `reason` is `signal` when the host's abort signal fired or
+`callback` when a host callback threw or rejected, `message` is the reason's text, and
+`node_ids` lists the nodes in flight. It is not a terminal record. Every payload field
+is required: `RunStartedRecord` writes `defaults` as `{}` when every value is built-in
+and `call_time_llm` as `null` when no agent resolves at call time. Route payloads have
+no `count` or `content_index`, and there is no `repeat` route kind. Values keep ints of
+any size and `±Infinity`, written `{"$float": "inf"}` or `{"$float": "-inf"}`; NaN is
+refused. Counters (`seq`, `schema`, `num_workers`, `attempt_id`, indexes) are
+safe-integer `number`s in the API and JSON ints in the line. A damaged or foreign line
+fails with a `RangeError`, or a `TypeError` for a field of the wrong JSON type; text
+that isn't JSON, including a BOM or invalid UTF-8, fails with "invalid run-record JSON".
+
 Backward attempts use `BackwardStartedRecord`, then one `BackwardReadyRecord`
 after the complete backward fold and every memory proposal, then ordered
 per-memory commit requests/observations and `BackwardFinishedRecord`. A known

@@ -225,6 +225,9 @@ Logs use schema 9. A log written with schema 7 or 8 is rejected on read with
 preserved when new records extend a prefix. Run logs hold no conversation
 history; that belongs to the memory backend.
 
+Changed (TS yian): logs use schema 10, with a `RunStoppedRecord` and every payload
+field required; see [Authoritative run logs](api.md#authoritative-run-logs).
+
 ::: yian.runtime.log.RecordEnvelope
 
 ::: yian.runtime.log.RunStartedRecord

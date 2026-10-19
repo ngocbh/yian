@@ -259,12 +259,18 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - `src/memory/contracts.ts` holds the memory identities that compile records (`DeclSite`,
   `MemoryDecl`, `MemorySpec`, `MemoryStack`, `MemoryScope`), the declaration check
   `checkMemoryDeclaration`, the setup and operation failures, recorded snapshots, and the host
-  memory objects (`Memory`, `MemorySession`, `isMemory`), and the learning result carriers
-  (`MemoryMutation`, `LearningFailure`, `PolicyCommitOutcome`, `LearningResult`).
+  memory objects (`Memory`, `MemorySession`, `isMemory`), the learning result carriers
+  (`MemoryMutation`, `LearningFailure`, `PolicyCommitOutcome`, `LearningResult`), and the
+  evidence carriers (`EvaluationEvidence`, `MemorySection`, `ModelTextInteraction`,
+  `ModelValueInteraction`, `ToolCallInteraction`, `ToolResultInteraction`).
   `src/memory/index.ts` re-exports the public names; the mutation batch check `validateMutations`
   is exported from `memory/contracts.ts` only, as Python keeps `_validate_mutations` private.
 - The learning result carriers are frozen and hold their nested carriers by reference (checked by
   exact class), where Python copies them.
+- The evidence carriers are frozen too and hold their nested carriers the same way. Their JSON
+  values (bound inputs, a model value, tool arguments) are deep-frozen copies under the value
+  number rule: NaN is refused, `±Infinity` kept and `-0` copied as `0`. They have no memory
+  nesting limit.
 - Changed: a mutation payload and a snapshot envelope's export have no checked depth limit (Python
   bounds both at the value nesting limit plus 28); a payload deep enough to overflow the stack
   throws the engine's RangeError.
@@ -277,8 +283,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - A host memory is any object with `openRun({ snapshot })` and `reset()` (`isMemory` checks it, as
   Python's `isinstance(value, Memory)`); both are synchronous, and a session has no `with` form:
   the caller calls `close()` in `finally`.
-- The recall, learning evidence and session conversation contracts, the session's recall, learn
-  and commit methods, and the built-in backends are not ported yet.
+- The recall and learning contexts, the episodes, the session conversation contracts, the
+  session's recall, learn and commit methods, and the built-in backends are not ported yet.
 
 ## Runtime
 
@@ -293,6 +299,13 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - Route and source numbers (sequences, sizes, spans, path indexes) are safe-integer `number`s,
   never `bigint`.
 - A `SourceRef` compares by identity: key maps and sets by `sourceKey(ref)`.
+- `src/runtime/log.ts` holds the run records, `RecordEnvelope` and its codec (`encodeRecord`,
+  `decodeRecord`, schema 10), and the canonical helpers (`canonicalTyped`, `canonicalSeed`,
+  `encodePool`, `decodePool`, `routePayload`). Records and envelopes are frozen: a record's
+  JSON values are deep-frozen canonical copies made once by its constructor, with no copy on
+  read, and its frozen carriers are kept by reference. Counters (`seq`, `numWorkers`,
+  `attemptId`, indexes) are safe-integer `number`s, written as JSON ints. A capture or feedback
+  deeper than about 10k levels throws the engine's stack `RangeError`.
 
 ## Compile
 

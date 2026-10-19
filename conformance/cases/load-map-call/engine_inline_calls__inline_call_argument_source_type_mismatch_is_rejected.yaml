@@ -1,8 +1,8 @@
 kind: load
 flow: |2
 
-  id: ic_e06
-  name: ic_e06
+  id: ic_type
+  name: ic_type
   input:
     topic: !str
   defs:
@@ -33,8 +33,8 @@ flow: |2
   output: ${use.output}
 python_flow: |2
 
-  id: ic_e06
-  name: ic_e06
+  id: ic_type
+  name: ic_type
   input:
     topic: !str
   defs:

@@ -1,14 +1,5 @@
 kind: load
 flow: |
-  # Inline composite bodies — one-off CALL, MAP, and LOOP children without `defs:`.
-  # Each `input:` entry becomes a typed parameter of the adjacent child `nodes:` body;
-  # that body is closed, so it reads the parameter as `${input.<name>}`.
-  # Provider-free: every leaf is inline CODE.
-  #
-  # Run:
-  #   yian run inline-composites.yaml --inputs inputs.json
-  # where inputs.json contains: {"seed": 2, "items": [1, 2, 3]}
-
   id: inline-composites
   name: inline_composites
   description: Define one-off CALL, MAP, and LOOP child bodies in place.
@@ -68,15 +59,6 @@ flow: |
     map: ${map_each.output}
     loop: ${loop_three.output}
 python_flow: |
-  # Inline composite bodies — one-off CALL, MAP, and LOOP children without `defs:`.
-  # Each `input:` entry becomes a typed parameter of the adjacent child `nodes:` body;
-  # that body is closed, so it reads the parameter as `${input.<name>}`.
-  # Provider-free: every leaf is inline CODE.
-  #
-  # Run:
-  #   yian run inline-composites.yaml --inputs inputs.json
-  # where inputs.json contains: {"seed": 2, "items": [1, 2, 3]}
-
   id: inline-composites
   name: inline_composites
   description: Define one-off CALL, MAP, and LOOP child bodies in place.

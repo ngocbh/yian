@@ -8,7 +8,7 @@ flow: |
       nodes:
         echo:
           kind: code
-          run: tests.engine._compose_codefns:echo
+          code: return inputs["value"]
           input:
             value: hello
           output: str

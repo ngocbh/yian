@@ -1,3 +1,4 @@
+# TS quotes the element as JSON text, "no" (rules: messages); Python's repr 'no' in python_expect.
 kind: load
 rules: [messages]
 flow: "id: p\nname: p\ninput:\n  m: !Optional(str)\n  n: !Optional(int)\n  s: !str\n  xs: !list(int)\n  ds: !list(str)\n  rs: !list(R)\n  os: !list(Optional(str))\n  d: !Optional(date)\ntypedefs:\n  R:\n    a: int\n  AB: Literal(a, b)\ndefs:\n  child:\n    input:\n      t: !list(bool)\n    nodes:\n      n:\n        kind: code\n        input:\n          t: ${input.t}\n        output: str\n        code: \"return String(inputs[\\\"t\\\"])\"\n    output: ${n.output}\nnodes:\n  c:\n    kind: call\n    \n    call: child\n    input:\n      t: [true, no]\noutput: ${c.output}\n"

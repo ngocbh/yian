@@ -1,3 +1,4 @@
+# The frame sits on def/inline-body structure, not CODE text: shared.
 kind: load
 flow: |
   id: eager-def-inline-output-range

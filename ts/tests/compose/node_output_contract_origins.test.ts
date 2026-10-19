@@ -4,8 +4,7 @@
  *
  * Changed: the flows assemble with `assembleText`, where Python loads them, and an origin
  * resolves through the scope's catalog builder (`builder.resolveRegistered`) in place of
- * `loaded.origin_resolver`. `test_all_authorable_leaf_kinds_receive_output_root_origins_on_load`
- * covers its AGENT and CODE leaves;
+ * `loaded.origin_resolver`.
  * `test_formatting_only_relocation_preserves_output_origins_and_fingerprint` keeps its origin half.
  *
  * Pinned in `engine/read_type.test.ts` (the cases of the reader that raises):
@@ -14,8 +13,7 @@
  * `test_unsupported_nested_output_type_reports_the_exact_value_site` and
  * `test_invalid_output_list_item_reports_the_exact_item_site`.
  *
- * Later (HUMAN_INPUT reader): the `human_input` leaf of
- * `test_all_authorable_leaf_kinds_receive_output_root_origins_on_load`. Later (T4-9):
+ * Later (T4-9):
  * `test_nested_output_failure_selects_the_exact_contract_field`,
  * `test_root_output_failure_selects_the_contract_root`,
  * `test_scalar_list_output_failure_falls_back_to_the_contract_root` and
@@ -235,12 +233,16 @@ nodes:
     kind: code
     code: return "ok"
     output: str
+  human_leaf:
+    kind: human_input
+    prompt: continue?
+    output: str
 output: \${code_leaf.output}
 `;
   const nodes = SourceDocument.parse(text, "leaves.yaml").root.child("nodes");
   const { flow, builder } = assembleText(text, "leaves.yaml");
 
-  for (const nodeId of ["agent_leaf", "code_leaf"]) {
+  for (const nodeId of ["agent_leaf", "code_leaf", "human_leaf"]) {
     const contract = flow.compiled.nodes.get(nodeId)!.outputContract as ValueContract;
     expect(contract.constructor).toBe(ValueContract);
     expect(contract.origins.entries).toEqual([]);

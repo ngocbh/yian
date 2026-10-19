@@ -1,8 +1,9 @@
 /**
- * The `human_input` kind's parse side: a port of `tests/compose/test_kind_human_input_parse.py`.
+ * The `human_input` kind's parse and build: a port of `tests/compose/test_kind_human_input_parse.py`.
  *
  * Changed: Python compares the descriptor to a `HumanInputDescriptor` with `field_ranges`
- * excluded; TS compares its class and fields. `test_human_input_parse_rejects_a_non_string_adaptive_key`
+ * excluded; TS compares its class and fields. The rows Python loads with `load_flow` assemble
+ * with `assembleText`. `test_human_input_parse_rejects_a_non_string_adaptive_key`
  * expects the key `'1'`, since TS keeps the key `1` as the text written. The adaptive block's
  * `retries` stays a YAML int (`2n`).
  *
@@ -15,13 +16,15 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { siteKey } from "../../src/compose/nodes/base.ts";
+import { BuildContext, siteKey } from "../../src/compose/nodes/base.ts";
 import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
-import { siteLabel, templateSites } from "../../src/nodes/human_input/node.ts";
-import { type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
+import { ValueContract } from "../../src/nodes/contracts.ts";
+import { HumanInputNode, siteLabel, templateSites } from "../../src/nodes/human_input/node.ts";
+import { ValueKind } from "../../src/typesys/values.ts";
+import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
 
 const FLOW = `nodes:
   ask:
@@ -30,6 +33,18 @@ const FLOW = `nodes:
     inputs:
       ctx: \${input.ctx}
 `;
+
+const QUESTIONS_FLOW = `nodes:
+  ask:
+    kind: human_input
+    questions:
+      - question: Pick one
+        header: Choice
+        options: [a, b]
+`;
+
+/** A context over an empty registry. */
+const reading = () => new BuildContext({ registry: new Map() });
 
 /** Return the cursor over node `nodeId` of `text`'s `nodes:`. */
 function readerFor(text: string, nodeId: string): SourceCursor {
@@ -59,6 +74,26 @@ test("human_input parse matches descriptor and records ranges", () => {
   expect(desc.fieldRanges.get(siteKey("field", "inputs"))).toBeInstanceOf(SourceRange);
 });
 
+test("human_input build returns gate and wires inputs", () => {
+  const desc = parseAsk(FLOW);
+  const result = desc.build(reading());
+
+  expect(result.node).toBeInstanceOf(HumanInputNode);
+  expect((result.node as HumanInputNode).prompt).toBe("Approve this?");
+  expect(result.wiring).toEqual(new Map([["ctx", "${input.ctx}"]]));
+  expect(result.nodeRange).toBe(desc.range);
+});
+
+test("human_input build: a questions gate defaults to an open object", () => {
+  const node = parseAsk(QUESTIONS_FLOW).build(reading()).node as HumanInputNode;
+
+  expect(node).toBeInstanceOf(HumanInputNode);
+  // A questions gate with no `output:` defaults to a bare open OBJECT.
+  expect(node.outputContract).toBeInstanceOf(ValueContract);
+  expect((node.outputContract as ValueContract).type.kind).toBe(ValueKind.OBJECT);
+  expect(node.answerSchema).toEqual([{ name: "answer", type: "object", required: true }]);
+});
+
 test("human_input parse requires a question surface", () => {
   const flow = "nodes:\n  ask:\n    kind: human_input\n    inputs:\n      x: ${input.x}\n";
   const error = loadError(() => parseAsk(flow));
@@ -82,6 +117,81 @@ test("human_input parse: questions and adaptive_questions are mutually exclusive
     "      prompt: author questions\n";
 
   expect(loadError(() => parseAsk(flow)).message).toContain("mutually exclusive");
+});
+
+/** A flow whose gate `ask` reads input `order` and writes `questions:` as `questions`. */
+const questionsRefFlow = (questions: string) => `id: ask
+name: ask
+input:
+  order: !object
+nodes:
+  ask:
+    kind: human_input
+    input:
+      order: \${input.order}
+    questions: '${questions}'
+output: \${ask.output}
+`;
+
+test.each(["${isinstance(order, Buy)}", "${bogus(order)}"])(
+  "a questions: function error %s points at questions:",
+  (questions) => {
+    const error = loadError(() => assembleText(questionsRefFlow(questions)));
+
+    expect(error.message).toMatch(/exactly one `\$\{name\}`/);
+    expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(10);
+  },
+);
+
+/** Assemble a flow whose gate `ask` reads input `qs` and writes `questions: <questionsYaml>`. */
+function loadQuestions(questionsYaml: string) {
+  return assembleText(
+    "id: f\n" +
+      "name: f\n" +
+      "input:\n" +
+      "  qs: !list(object)\n" +
+      "nodes:\n" +
+      "  ask:\n" +
+      "    kind: human_input\n" +
+      '    input: {qs: "${input.qs}"}\n' +
+      `    questions: ${questionsYaml}\n` +
+      "output: ${ask.output}\n",
+  );
+}
+
+test.each(["5", "true", '{question: "Pick one", header: P}'])(
+  "human_input build rejects questions: %s, not a list or reference",
+  (questionsYaml) => {
+    // A non-list, non-text `questions:` used to build a plain gate with an empty prompt.
+    const error = loadError(() => loadQuestions(questionsYaml));
+
+    expect(error.message).toContain("`questions:` must be a list");
+    expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(9);
+  },
+);
+
+test.each([
+  '"Answer these carefully: ${qs}"',
+  '"${qs} "',
+  '"${upper(qs)}"',
+  '"${qs or qs}"',
+  '"${qs.items}"',
+  '"${qs}${qs}"',
+  '"qs"',
+  '"${qs[0]}"',
+])("human_input build rejects questions: %s, not one whole reference", (questionsYaml) => {
+  // Text or an expression around the reference used to be dropped, keeping only the name.
+  const error = loadError(() => loadQuestions(questionsYaml));
+
+  expect(error.message).toMatch(/exactly one `\$\{name\}`/);
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(9);
+});
+
+test.each(['"${qs}"', '"${ qs }"', "${qs}"])("human_input build accepts the whole reference %s", (questionsYaml) => {
+  const node = loadQuestions(questionsYaml).flow.compiled.nodes.get("ask") as HumanInputNode;
+
+  expect(node.questionsInput).toBe("qs");
+  expect(node.questions).toBeNull();
 });
 
 const TWO_QUESTIONS_FLOW = `nodes:
@@ -422,3 +532,9 @@ test.each<CaseRow>([
     call: parsedNodes,
   },
 ])("parseNodes: $id", runCase);
+
+test.each<CaseRow>([
+  // tests/compose/test_kind_human_input_parse.py
+  { id: "load-leaves/compose_kind_human_input_parse__questions_not_a_list_or_ref", call: assembled },
+  { id: "load-leaves/compose_kind_human_input_parse__questions_text_around_a_ref", call: assembled },
+])("assemble: $id", runCase);

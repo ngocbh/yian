@@ -101,10 +101,10 @@ test("call parse rejects non-string asserts", () => {
 // ---------- harvested conformance cases ----------
 
 /** A def built by hand: `input:` text `inputs` and the one node `id`, whose output it returns. */
-function def(inputs: string, id: string, node: ValueContract | CallNode): ComposedFlow {
+function def(inputs: string, id: string, producer: ValueContract | CallNode): ComposedFlow {
   return handChild({
     inputs: parametersFromYaml(inputs, new Map()),
-    producers: { [id]: node },
+    producers: { [id]: producer },
     output: `\${${id}.output}`,
   });
 }

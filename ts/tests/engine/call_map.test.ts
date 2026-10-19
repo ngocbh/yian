@@ -50,6 +50,7 @@ import {
   assembleText,
   type CaseRow,
   caseText,
+  type ChildFlows,
   handChild,
   loadError,
   nodesOf,
@@ -71,7 +72,7 @@ function researchOne(): ComposedFlow {
 }
 
 /** A build context whose resolver hands back `children[flowId]`. */
-function contextWith(children: Readonly<Record<string, ComposedFlow>>): BuildContext {
+function contextWith(children: ChildFlows): BuildContext {
   return new BuildContext({
     registry: new Map(),
     resolver: (flowId) => {
@@ -130,7 +131,7 @@ test("seed 04's call builds and re-exports the child's output", () => {
   expect("parallel" in node).toBe(false);
   expect(node.flowId).toBe("research-one");
   expect(node.child).toBe(child.compiled);
-  expect(node.childInputs).toEqual(child.input);
+  expect(node.childInputs).toStrictEqual(child.input);
   expect(node.outputContract).toBeInstanceOf(ValueContract);
   const contract = node.outputContract as ValueContract;
   expect(contract.type.kind).toBe(ValueKind.OBJECT);

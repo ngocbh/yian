@@ -209,7 +209,7 @@ export function childSignature(loaded: ResolvedChild): ChildSignature {
   });
 }
 
-/** Return an author-facing callable description without changing named errors. */
+/** Return how messages name a callable: `childLabel` when given, else `callable '<flowId>'`. */
 export function callableDisplay(flowId: string, childLabel: string | null = null): string {
   return childLabel || `callable ${reprText(flowId)}`;
 }

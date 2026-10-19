@@ -16,7 +16,7 @@ import { type FileLock, FileLockError, sqliteErrorCode, waitForLock } from "../.
 import type { JsonObject } from "../../typesys/json.ts";
 import { pythonFloatRepr } from "../../typesys/values.ts";
 import { freezeJsonObject } from "../contracts.ts";
-import { checkStoragePath, realStoragePath } from "./sqlite.ts";
+import { checkStoragePath, isSystemError, realStoragePath } from "./sqlite.ts";
 
 /** A compare-and-set write named a base version that is no longer current. */
 export class MarkdownVersionMismatch extends Error {
@@ -48,7 +48,9 @@ export interface MarkdownStore {
    *
    * @throws RangeError when the named version is unknown.
    */
-  read(version?: string | null): readonly [text: string, version: string] | Promise<readonly [string, string]>;
+  read(
+    version?: string | null,
+  ): readonly [text: string, version: string] | Promise<readonly [text: string, version: string]>;
 
   /**
    * Replace the current document with `text` if `baseVersion` is still current, and return the
@@ -70,30 +72,8 @@ export interface MarkdownStore {
  * @throws RangeError when `text` holds a lone surrogate, which has no UTF-8 encoding.
  */
 export function markdownVersion(text: string): string {
-  if (!text.isWellFormed()) {
-    // Python's UnicodeEncodeError message; its position counts code points.
-    let position = 0;
-    for (const ch of text) {
-      const cp = ch.codePointAt(0)!;
-      if (cp >= 0xd800 && cp <= 0xdfff) {
-        throw new RangeError(
-          `'utf-8' codec can't encode character '\\u${cp.toString(16)}' in position ${position}: surrogates not allowed`,
-        );
-      }
-      position++;
-    }
-  }
+  if (!text.isWellFormed()) throw new RangeError("text holds a lone surrogate, which has no UTF-8 encoding");
   return `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`;
-}
-
-/**
- * Whether `error` is a Node SystemError (an OS error). A copy of `skills/catalog.ts`'s
- * predicate: memory doesn't import skills.
- */
-function isSystemError(error: unknown): error is NodeJS.ErrnoException & { code: string } {
-  if (!(error instanceof Error)) return false;
-  const { code, syscall, errno } = error as NodeJS.ErrnoException;
-  return typeof code === "string" && (typeof syscall === "string" || typeof errno === "number");
 }
 
 /** The errors Python's `Path.exists()`, `is_file()` and `is_dir()` treat as false. */
@@ -287,7 +267,6 @@ export class FileMarkdownStore implements MarkdownStore {
     } else if (!statOrNull(this.#directory)?.isDirectory()) {
       throw Object.assign(new Error(`document directory does not exist: ${this.#directory}`), {
         code: "ENOENT",
-        errno: -2,
         syscall: "stat",
       });
     }

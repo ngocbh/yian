@@ -24,9 +24,9 @@ function storageError(reason: string, message: string): MemoryOperationError {
 
 /**
  * Whether `error` is a Node SystemError (an OS error). A copy of `skills/catalog.ts`'s
- * predicate: memory doesn't import skills.
+ * predicate: memory doesn't import skills. Also used by the markdown store.
  */
-function isSystemError(error: unknown): error is NodeJS.ErrnoException & { code: string } {
+export function isSystemError(error: unknown): error is NodeJS.ErrnoException & { code: string } {
   if (!(error instanceof Error)) return false;
   const { code, syscall, errno } = error as NodeJS.ErrnoException;
   return typeof code === "string" && (typeof syscall === "string" || typeof errno === "number");

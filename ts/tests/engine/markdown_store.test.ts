@@ -20,9 +20,9 @@
  * (`conformance/fixtures/markdown_store.json`), byte for byte; a copy of those files read by name
  * and extended by a compare-and-set write; a lone surrogate in written text and invalid UTF-8 on
  * disk; a BOM kept; non-finite provenance; floats, an astral key and key order in the write log as
- * Python writes them; a written document's mode; a lock path that isn't a file. With
- * `YIAN_TEST_NODE` set to a Node binary, the golden replay and the read of the fixture copy also
- * run under Node, from the built module.
+ * Python writes them; a written document's mode; a failed rename; a lock path that isn't a file.
+ * With `YIAN_TEST_NODE` set to a Node binary, the golden replay and the read of the fixture copy
+ * also run under Node, from the built store and `markdown_both_runtimes.ts`.
  *
  * Changed:
  * - `LookupError` and `ValueError` are `RangeError`; `FileNotFoundError` and `OSError` are Node
@@ -76,7 +76,7 @@
  * (The original writes the BOM and U+2028 as literal characters; they are escaped here.)
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -92,14 +92,15 @@ import {
   markdownVersion,
 } from "../../src/memory/storage/markdown.ts";
 import { FileLockError } from "../../src/platform.ts";
+import { type ExtendResult, readAndExtend, replay } from "./markdown_both_runtimes.ts";
 
 /** The `ts/` directory. */
 const ROOT = path.resolve(import.meta.dir, "../..");
 const BUILT = path.join(ROOT, "dist/src/memory/storage/markdown.js");
+const BUILT_SCENARIOS = path.join(ROOT, "dist/tests/engine/markdown_both_runtimes.js");
 const FIXTURE: Record<string, string> = JSON.parse(
   fs.readFileSync(path.join(ROOT, "../conformance/fixtures/markdown_store.json"), "utf8"),
 );
-const CRLF_DOC = "# Ada\r\nPrefers email.\r\nCafé ☕ 日本語 😀\r\n";
 
 /** Return what the promise or call `fn` rejects or throws with; fail when it succeeds. */
 async function failure(fn: () => unknown): Promise<unknown> {
@@ -135,57 +136,6 @@ function keptPath(root: string, version: string): string {
   return path.join(root, ".ada.md.versions", `${version.slice("sha256:".length)}.md`);
 }
 
-/**
- * Run the fixture generator's operations on `store`. Its source also runs under Node, so it holds
- * no TS-only syntax beyond the stripped annotation. Python's ints are `bigint`s and its floats
- * `number`s: a `number` `3` would be written `3.0`.
- */
-async function replay(store: MarkdownStore): Promise<void> {
-  const [, empty] = await store.read();
-  const v1 = await store.write("# Ada\n", {
-    baseVersion: empty,
-    provenance: {
-      run_id: "r1",
-      commit_id: "c1",
-      seen_version: empty,
-      feedback: ["Prefers email.", { score: 3n, ok: true, none: null, ratio: 0.25, whole: 100 }],
-    },
-  });
-  const crlf = "# Ada\r\nPrefers email.\r\nCafé ☕ 日本語 😀\r\n";
-  const v2 = await store.write(crlf, {
-    baseVersion: v1,
-    provenance: {
-      run_id: "r2",
-      commit_id: "c2",
-      seen_version: v1,
-      feedback: ["naïve — “quotes”", 'tab\there\nnewline "q" back\\slash', "😀", "\u0001\u007f\u2028"],
-      Zeta: [],
-      _under: {},
-      alpha: { b: 2n ** 70n, a: -5n, B: [1.5, -0.5] },
-    },
-  });
-  const [, current] = await store.read();
-  const v3 = await store.write("\ufeff# BOM doc\rold mac\nno trailing newline", { baseVersion: current });
-  const v4 = await store.write("", { baseVersion: v3, provenance: { run_id: "r4", commit_id: "c4", feedback: [] } });
-  await store.write(crlf, { baseVersion: v4, provenance: { run_id: "r5", commit_id: "c5" } });
-  await store.read(v2);
-}
-
-/**
- * Read the current document and each of `versions` from `store`, then write a new document on the
- * current version. Its source also runs under Node; the result is plain JSON.
- */
-async function readAndExtend(store: MarkdownStore, versions: string[]) {
-  const current = await store.read();
-  const kept = [];
-  for (const version of versions) kept.push(await store.read(version));
-  const written = await store.write("# Ada\nFrom TS.\n", {
-    baseVersion: current[1],
-    provenance: { run_id: "ts", score: 0.5 },
-  });
-  return { current, kept, written };
-}
-
 /** Write the fixture's files into `root`. */
 function copyFixture(root: string): void {
   for (const [relative, text] of Object.entries(FIXTURE)) {
@@ -209,7 +159,7 @@ function expectFixtureFiles(root: string): void {
 }
 
 /** Assert `result` is what `readAndExtend` returns on the fixture copy in `root`, and check the files it changed. */
-function expectExtendedFixture(root: string, result: Awaited<ReturnType<typeof readAndExtend>>): void {
+function expectExtendedFixture(root: string, result: ExtendResult): void {
   const current = markdownVersion(FIXTURE["ada.md"]!);
   expect(result.current).toEqual([FIXTURE["ada.md"]!, current]);
   expect(result.kept).toEqual(
@@ -254,7 +204,7 @@ test("a missing parent directory fails on first use", async () => {
   for (const operation of [() => store.read(), () => store.write("x", { baseVersion: markdownVersion("") })]) {
     const error = await failure(operation);
     expectSystemError(error);
-    expect(error.code).toBe("ENOENT");
+    expect([error.code, error.syscall]).toEqual(["ENOENT", "stat"]);
     expect(error.message).toBe(`document directory does not exist: ${fs.realpathSync(dir)}/missing`);
   }
   expect(fs.existsSync(path.join(dir, "missing"))).toBe(false);
@@ -522,12 +472,9 @@ test("a copy of Python's files reads every version and takes a compare-and-set w
 test("a lone surrogate in written text is a RangeError and writes nothing", async () => {
   const store = new FileMarkdownStore(path.join(dir, "ada.md"));
   const error = await failure(() => store.write("ab\ud800", { baseVersion: markdownVersion("") }));
-  expect(error).toEqual(
-    new RangeError("'utf-8' codec can't encode character '\\ud800' in position 2: surrogates not allowed"),
-  );
-  expect(() => markdownVersion("😀\udc00")).toThrow(
-    new RangeError("'utf-8' codec can't encode character '\\udc00' in position 1: surrogates not allowed"),
-  );
+  const message = "text holds a lone surrogate, which has no UTF-8 encoding";
+  expect(error).toEqual(new RangeError(message));
+  expect(() => markdownVersion("😀\udc00")).toThrow(new RangeError(message));
   expect(() => new InMemoryMarkdownStore("\ud800")).toThrow(RangeError);
   expect(fs.readdirSync(dir)).toEqual([]);
 });
@@ -574,6 +521,30 @@ test("a written document is private", async () => {
   expect(fs.statSync(keptPath(dir, version)).mode & 0o777).toBe(0o600);
 });
 
+test.each(["kept copy", "document"])(
+  "a failed rename of the %s rejects the write, leaves no temporary file and releases the lock",
+  async (failing) => {
+    const file = path.join(dir, "ada.md");
+    const store = new FileMarkdownStore(file);
+    const base = await store.write("# Ada\n", { baseVersion: markdownVersion("") });
+    const renameError = Object.assign(new Error("rename failed"), { code: "EIO", syscall: "rename" });
+    const rename = fs.renameSync;
+    const spy = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (failing === "kept copy" || to === store.path) throw renameError;
+      rename(from, to);
+    });
+    try {
+      expect(await failure(() => store.write("# Ada\nMore.\n", { baseVersion: base }))).toBe(renameError);
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+    // `.ada.md.<hex>` beside the document, `.<hex>.md.<hex>` among the kept copies.
+    expect(walk(dir).filter((relative) => /(^|\/)\.[^/]+\.md\.[0-9a-f]{16}$/.test(relative))).toEqual([]);
+    expect(await store.read()).toEqual(["# Ada\n", base]);
+  },
+);
+
 test("a lock path that isn't a file fails with a system error and writes nothing", async () => {
   fs.mkdirSync(path.join(dir, ".ada.md.lock"));
   const store = new FileMarkdownStore(path.join(dir, "ada.md"));
@@ -605,14 +576,20 @@ const NODE = ((): string | undefined => {
   if (major < 22 || (major === 22 && minor < 18)) {
     throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
   }
-  if (!fs.existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
+  for (const built of [BUILT, BUILT_SCENARIOS]) {
+    if (!fs.existsSync(built)) throw new Error(`${built} is missing; run bun run build first`);
+  }
   return node;
 })();
 
 describe.skipIf(!NODE)("the built markdown store on Node", () => {
-  /** Run `body` under Node with `FileMarkdownStore` imported and `file` bound to `<dir>/ada.md`; return its stdout. */
+  /**
+   * Run `body` under Node with `FileMarkdownStore`, `replay` and `readAndExtend` imported from the
+   * build and `file` bound to `<dir>/ada.md`; return its stdout.
+   */
   function runNode(body: string): string {
     const script = `import { FileMarkdownStore } from ${JSON.stringify(pathToFileURL(BUILT).href)};
+import { readAndExtend, replay } from ${JSON.stringify(pathToFileURL(BUILT_SCENARIOS).href)};
 const file = ${JSON.stringify(path.join(dir, "ada.md"))};
 ${body}`;
     const result = spawnSync(NODE!, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 20_000 });
@@ -624,7 +601,7 @@ ${body}`;
   test(
     "the same operations write exactly the files Python yian wrote",
     () => {
-      runNode(`await (${replay.toString()})(new FileMarkdownStore(file));`);
+      runNode("await replay(new FileMarkdownStore(file));");
       expectFixtureFiles(dir);
     },
     30_000,
@@ -634,7 +611,7 @@ ${body}`;
     "a copy of Python's files reads every version and takes a compare-and-set write",
     () => {
       copyFixture(dir);
-      const stdout = runNode(`const result = await (${readAndExtend.toString()})(
+      const stdout = runNode(`const result = await readAndExtend(
   new FileMarkdownStore(file),
   ${JSON.stringify(FIXTURE_VERSIONS)},
 );

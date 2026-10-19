@@ -210,23 +210,24 @@ test.each([
   ["AssertionStageError", AssertionStageError],
   ["DeferredBindingFault", DeferredBindingFault],
   ["CapabilityFault", CapabilityFault],
-] as const)("the %s marker keeps its original", (name, Marker) => {
+] as const)("the %s marker keeps its original", (name, marker) => {
+  const Marker = marker as new (original: unknown) => Error & { original: unknown };
   const original = name === "BindingStageError"
     ? new BindingError("bad default", { failureCode: "binding.evaluate" })
     : new NodeAssertFailed("bad default");
-  const marker = new (Marker as new (original: unknown) => Error & { original: unknown })(original);
+  const wrapped = new Marker(original);
 
-  expect(marker).toBeInstanceOf(Error);
-  expect(marker.name).toBe(name);
-  expect(marker.original).toBe(original);
-  expect(marker.cause).toBe(original);
-  expect(marker.message).toBe("bad default");
+  expect(wrapped).toBeInstanceOf(Error);
+  expect(wrapped.name).toBe(name);
+  expect(wrapped.original).toBe(original);
+  expect(wrapped.cause).toBe(original);
+  expect(wrapped.message).toBe("bad default");
 
-  const thrown = new (Marker as new (original: unknown) => Error & { original: unknown })("boom");
+  const thrown = new Marker("boom");
   expect(thrown.original).toBe("boom");
   expect(thrown.cause).toBe("boom");
   expect(thrown.message).toBe("boom");
-  expect(new (Marker as new (original: unknown) => Error)(7n).message).toBe("7");
+  expect(new Marker(7n).message).toBe("7");
 });
 
 test("NodeAssertFailed defaults its failure code and keeps its assertion and cause", () => {

@@ -100,15 +100,8 @@ test("incompatible stored default fails without string coercion", async () => {
   const parameter = new Parameter("x", { contract: INTEGER, hasDefault: true, default: "30", coerceStrings: true });
   node.params = [parameter];
 
-  let error: unknown;
-  try {
-    await node.run({});
-  } catch (caught) {
-    error = caught;
-  }
-
-  expect(error).toBeInstanceOf(BindingError);
-  expect((error as BindingError).failureCode).toBe("binding.evaluate");
+  await expect(node.run({})).rejects.toBeInstanceOf(BindingError);
+  await expect(node.run({})).rejects.toMatchObject({ failureCode: "binding.evaluate" });
   expect(parameter.default).toBe("30");
   expect(node.seen).toBeNull();
 });

@@ -1101,8 +1101,9 @@ export abstract class Node {
    * Run the base template with the stage markers and input capture. Used by the evaluator.
    *
    * A default's `BindingError` rejects as a `BindingStageError`, an assertion failure as an
-   * `AssertionStageError`, and anything else the body throws as a `NodeBodyError`, except the
-   * evaluator's own markers, which pass through as they are.
+   * `AssertionStageError`, and anything else the body throws as a `NodeBodyError`, except four
+   * markers, which pass through as they are: `BindingStageError`, `DeferredBindingFault`,
+   * `CapabilityFault` and `NodeBodyError`. An `AssertionStageError` thrown by a body is wrapped.
    *
    * @param inputs The bound input record.
    * @param caps The capabilities the node's traits ask for, passed to `forward`.
@@ -1138,7 +1139,7 @@ export abstract class Node {
     // Everything before the first `await` runs inside the caller's call, so `captureInputs` has
     // run by the time `runForEvaluator` returns; `async` still turns a throw here into a rejection.
     const params = this.params ?? [];
-    if (!Array.isArray(params) || Object.getPrototypeOf(params) !== Array.prototype) {
+    if (!isList(params)) {
       throw new TypeError(`node ${reprText(this.id)} params must be an exact list, got ${jsTypeName(params)}`);
     }
     for (const parameter of params) {
@@ -1167,6 +1168,8 @@ export abstract class Node {
     try {
       result = await this.forward(record, caps);
     } catch (error) {
+      // The evaluator's own capabilities and deferred binder raise these four inside the body; an
+      // assertion marker comes only from this template, so one a body throws is node code.
       if (
         !classify ||
         error instanceof BindingStageError ||
@@ -1351,9 +1354,9 @@ export abstract class Node {
     assertions: readonly Assertion[],
     record: Record<string, unknown>,
   ): NodeAssertFailed | null {
+    const subject = `node ${reprText(this.id)} ${label}`;
     for (const assertion of assertions) {
       this.parseAssertion(label, assertion);
-      const subject = `node ${reprText(this.id)} ${label}`;
       let holds: boolean;
       try {
         holds = evaluateWhenRecord(assertion.expression, record as ValueRecord, this.types);

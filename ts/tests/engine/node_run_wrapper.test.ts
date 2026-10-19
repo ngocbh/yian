@@ -41,6 +41,7 @@ import {
   BackwardResult,
   BindingStageError,
   CapabilityFault,
+  DeferredBindingFault,
   Grow,
   Node,
   NodeAssertFailed,
@@ -363,11 +364,18 @@ test("runForEvaluator wraps an assert failure", async () => {
   expect((postError as AssertionStageError).original.assertion).toBe(post.postAsserts[0]!);
 });
 
-test("runForEvaluator passes a capability fault through and wraps a body's assertion marker", async () => {
-  const fault = new CapabilityFault(new Error("host down"));
+test("runForEvaluator passes the evaluator's markers through and wraps a body's assertion marker", async () => {
+  const passed = [
+    new BindingStageError(new BindingError("bad item", { failureCode: "binding.evaluate" })),
+    new DeferredBindingFault(new Error("binder down")),
+    new CapabilityFault(new Error("host down")),
+    new NodeBodyError(new Error("inner body")),
+  ];
   const marker = new AssertionStageError(new NodeAssertFailed("bad"));
 
-  expect(await rejection(new ThrowNode("n", fault).runForEvaluator({}))).toBe(fault);
+  for (const fault of passed) {
+    expect(await rejection(new ThrowNode("n", fault).runForEvaluator({}))).toBe(fault);
+  }
   const wrapped = await rejection(new ThrowNode("n", marker).runForEvaluator({}));
   expect(wrapped).toBeInstanceOf(NodeBodyError);
   expect((wrapped as NodeBodyError).original).toBe(marker);

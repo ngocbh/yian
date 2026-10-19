@@ -266,9 +266,10 @@ http:
   own HTTP seam.
 - An exchange counts as requested once its request has been read, before its `delay`. A request
   that doesn't match the next exchange, or comes after the last one (unless that one has
-  `repeat`), is answered 500 with no body and fails the case whatever the exit code. After the
-  command exits, the runner waits for the handlers that have read a request, then fails the case
-  if an exchange without `repeat` was never requested.
+  `repeat`), is answered 500 with no body and fails the case whatever the exit code; the failure
+  names what differs, with filled secrets written `<key:N>`. After the command exits, the runner
+  stops the server and waits for its handlers, then fails the case if an exchange without
+  `repeat` was never requested.
 
 ### `json`
 

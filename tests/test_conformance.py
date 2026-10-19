@@ -1860,21 +1860,29 @@ def _interrupted(argv: list, case_dir: Path, env: dict, stdin: str, name: str,
     return process.returncode, "".join(out), "".join(err)
 
 
-def _matches(expected: dict, method: str, url: str, headers, body: bytes) -> bool:
-    """Return whether a request matches the `request` of an `http` exchange, `expected`."""
+def _mismatch(expected: dict, method: str, url: str, headers, body: bytes) -> str | None:
+    """Return what differs between a request and the `request` of an `http` exchange,
+    `expected`, or None when it matches."""
     if method != expected["method"] or url != expected["url"]:
-        return False
-    # `headers` looks names up case-insensitively.
-    if any(headers.get(name) != value for name, value in expected.get("headers", {}).items()):
-        return False
+        return f"expected {expected['method']} {expected['url']}"
+    for name, value in expected.get("headers", {}).items():
+        # `headers` looks names up case-insensitively.
+        if headers.get(name) != value:
+            return f"header {name}: expected {value!r}, got {headers.get(name)!r}"
+    key = next((key for key in ("json", "form") if key in expected), None)
+    if key is None:
+        return None
     try:
-        if "json" in expected:
-            return _same(json.loads(body), expected["json"])
-        if "form" in expected:
-            return _same(dict(parse_qsl(body.decode(), keep_blank_values=True)), expected["form"])
+        if key == "json":
+            same = _same(json.loads(body), expected["json"])
+        else:
+            same = _same(dict(parse_qsl(body.decode(), keep_blank_values=True)), expected["form"])
     except ValueError:  # JSONDecodeError and UnicodeDecodeError are ValueErrors
-        return False
-    return True
+        same = False
+    if same:
+        return None
+    return (f"body: expected {key} {json.dumps(expected[key])}, "
+            f"got {body.decode(errors='replace')[:500]!r}")
 
 
 class _StubHandler(BaseHTTPRequestHandler):
@@ -1893,16 +1901,16 @@ class _StubHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         stub, url = self.server, self.headers.get("x-conformance-url", self.path)
         with stub.lock:
-            stub.handlers.append(threading.current_thread())
             index = stub.taken
             if index == len(stub.http) and stub.http and stub.http[-1].get("repeat"):
                 index -= 1
             response = {"status": 500}
             if index == len(stub.http):
                 stub.problems.append(f"{self.command} {url}: `http` has no exchange left for it")
-            elif not _matches(stub.http[index]["request"], self.command, url, self.headers,
-                              body):
-                stub.problems.append(f"{self.command} {url} doesn't match `http[{index}]`")
+            elif difference := _mismatch(stub.http[index]["request"], self.command, url,
+                                         self.headers, body):
+                stub.problems.append(
+                    f"{self.command} {url} doesn't match `http[{index}]`: {difference}")
             else:
                 stub.taken = index + 1
                 response = stub.http[index]["response"]
@@ -1923,41 +1931,40 @@ class _Stub(ThreadingHTTPServer):
     """A stub HTTP server on 127.0.0.1, serving on its own thread, for the exchanges `http`.
 
     Each request names the URL it was meant for in an `x-conformance-url` header. One that
-    doesn't match the next exchange is recorded in `problems`. Setting `stop` cuts `delay`s
-    short.
+    doesn't match the next exchange, or an error in a handler, is recorded in `problems`.
+    Setting `stop` cuts `delay`s short.
     """
-
-    # `close` joins only the handlers that read a request; one a command never wrote to would
-    # block a join of every handler.
-    block_on_close = False
 
     def __init__(self, http: list) -> None:
         super().__init__(("127.0.0.1", 0), _StubHandler)
-        self.http, self.taken, self.problems, self.handlers = http, 0, [], []
+        self.http, self.taken, self.problems = http, 0, []
         self.lock, self.stop = threading.Lock(), threading.Event()
-        threading.Thread(target=self.serve_forever, daemon=True).start()
+        # The default 0.5 s poll would delay `shutdown` in `close` by 0.25 s on average.
+        threading.Thread(target=self.serve_forever, kwargs={"poll_interval": 0.05},
+                         daemon=True).start()
 
     def handle_error(self, request: object, client_address: object) -> None:
-        """Write nothing: a command can drop a connection the stub is still answering."""
+        """Record the error a handler raised, except a connection the command dropped."""
+        if not isinstance(sys.exc_info()[1], ConnectionError):
+            with self.lock:
+                self.problems.append(traceback.format_exc())
 
     def close(self) -> list:
-        """Stop serving once the handlers that read a request finish; return the problems,
-        then each exchange without `repeat` that was never requested."""
+        """Stop serving once every handler finishes; return the problems, then each exchange
+        without `repeat` that was never requested, with filled secrets written `<key:N>`.
+
+        Called once the command has exited, so every handler's reads end and `stop` ends its
+        `delay`.
+        """
         self.stop.set()
-        with self.lock:
-            handlers = list(self.handlers)
-        for handler in handlers:
-            handler.join(timeout=10)
         self.shutdown()
-        self.server_close()
+        self.server_close()  # joins every handler thread
         problems = [*self.problems, *(
             f"`http[{index}]` was never requested" for index in range(self.taken, len(self.http))
             if not self.http[index].get("repeat")
         )]
-        if any(handler.is_alive() for handler in handlers):
-            problems.append("a stub HTTP handler was still answering 10 seconds after the "
-                            "command exited")
-        return problems
+        return [_FILLED.sub(lambda filled: f"<key:{filled[0].rpartition('-')[2]}>", problem)
+                for problem in problems]
 
 
 def _program(server: str) -> str:
@@ -1970,10 +1977,10 @@ from yian.llm_clients import model_list
 from yian.llm_clients.auth import openai
 
 def routed(request):
-    def send(method, url, *args, headers, **kwargs):
+    def send(method, url, *, headers, **kwargs):
         headers = dict(headers)
         headers["x-conformance-url"] = url
-        return request(method, {server!r}, *args, headers=headers, **kwargs)
+        return request(method, {server!r}, headers=headers, **kwargs)
     return send
 
 openai._request = routed(openai._request)
@@ -4362,6 +4369,7 @@ def test_cli_format_accepts_and_refuses() -> None:
         (status, response(status=700)),
         (status, response(status=200.0)),
         ("`http[0].response.delay` must be a non-negative number", response(delay=-1)),
+        ("`http[0].response.delay` must be a non-negative number", response(delay=math.inf)),
         ("`expect.exists` values must be true or false",
          {"expect": {"exit": 0, "exists": {"a": "yes"}}}),
         (exists.format("a/../b"), {"expect": {"exit": 0, "exists": {"a/../b": True}}}),
@@ -4381,12 +4389,24 @@ def test_cli_http_unrequested(tmp_path: Path) -> None:
 
 
 def test_cli_http_mismatch(tmp_path: Path) -> None:
-    """A request that doesn't match the next exchange fails the case, naming the request."""
-    case = {"kind": "cli", "args": _DEVICE_LOGIN, "http": [_exchange("GET")],
-            "expect": {"exit": 1}}
-    with pytest.raises(pytest.fail.Exception,
-                       match=re.escape(f"POST {_USERCODE} doesn't match `http[0]`")):
-        _check_results(case, results(case, tmp_path))
+    """A request that doesn't match the next exchange fails the case, naming the request and
+    what differs, with filled secrets written `<key:N>`."""
+    header = _exchange()
+    header["request"]["headers"] = {"Authorization": "Bearer <key:1>"}
+    body = _exchange()
+    body["request"]["json"] = {"client_id": "x"}
+    differences = [
+        (_exchange("GET"), f"expected GET {_USERCODE}"),
+        (header, "header Authorization: expected 'Bearer <key:1>', got None"),
+        (body, 'body: expected json {"client_id": "x"}, '
+               'got \'{"client_id": "app_EMoamEEZ73f0CkXaXp7hrann"}\''),
+    ]
+    for index, (exchange, difference) in enumerate(differences):
+        case = {"kind": "cli", "args": _DEVICE_LOGIN, "http": [exchange], "expect": {"exit": 1}}
+        (tmp_path / str(index)).mkdir()
+        message = f"POST {_USERCODE} doesn't match `http[0]`: {difference}"
+        with pytest.raises(pytest.fail.Exception, match=re.escape(message)):
+            _check_results(case, results(case, tmp_path / str(index)))
 
 
 def test_cli_http_unlisted(tmp_path: Path) -> None:
@@ -4395,6 +4415,25 @@ def test_cli_http_unlisted(tmp_path: Path) -> None:
     with pytest.raises(pytest.fail.Exception,
                        match=re.escape(f"POST {_USERCODE}: `http` has no exchange left for it")):
         _check_results(case, results(case, tmp_path))
+
+
+def test_cli_http_repeat_unrequested(tmp_path: Path) -> None:
+    """A last exchange with `repeat` may answer no request."""
+    case = {"kind": "cli", "args": ["providers", "--json"],
+            "http": [{**_exchange(), "repeat": True}], "expect": {"exit": 0}}
+    _check_results(case, results(case, tmp_path))
+
+
+def test_cli_exists(tmp_path: Path) -> None:
+    """`expect.exists` compares which paths exist in the case directory."""
+    case = {"kind": "cli", "args": ["providers", "--json"], "files": {"a": "x"},
+            "expect": {"exit": 0, "exists": {"a": True, "b": False}}}
+    (tmp_path / "pass").mkdir()
+    _check_results(case, results(case, tmp_path / "pass"))
+    case["expect"]["exists"] = {"a": False, "b": False}
+    (tmp_path / "fail").mkdir()
+    with pytest.raises(pytest.fail.Exception, match="exists differs"):
+        _check_results(case, results(case, tmp_path / "fail"))
 
 
 def test_cli_http_routes(tmp_path: Path) -> None:

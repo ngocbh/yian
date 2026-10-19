@@ -180,8 +180,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   every read.
 - `src/nodes/base.ts` holds `Node`. `run(inputs, caps)` is async and resolves to one `Output`,
   `Route` or `Grow`; a kind's `forward(inputs, caps)` may return the result or a promise. The
-  capabilities are one `NodeCaps` object (`signal`, `bindItem`, `steps`, `tools`). `tools` is the
-  run's `ToolSet`, for a node that declares `needsTools` (TOOL and HUMAN_INPUT). `signal` is
+  capabilities are one `NodeCaps` object (`signal`, `bindItem`, `steps`, `tools`, and AGENT's
+  fields below). `tools` is the run's `ToolSet`, for a node that declares `needsTools` (TOOL,
+  HUMAN_INPUT and AGENT). `signal` is
   optional in the type; the runtime's evaluator gives every node its own (the evaluator is not
   ported yet).
 - `BackwardContext` and `BackwardResult` deep-copy and deep-freeze their values once, in the
@@ -198,6 +199,13 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   run. The other kinds hold their data, checks and load-time hooks (origins, setup and condition
   checks, MAP's `over` and WAIT's `until` bindings, HUMAN_INPUT's prompt sites, backward layouts,
   LOOP `respawn`); their `forward` throws "not ported yet".
+- AGENT lives in `src/nodes/agent/node.ts`, and its `llm_config` values in
+  `src/nodes/agent/llm_values.ts`. The node holds its data, checks and load-time hooks; `forward`
+  and `backward` are not ported yet. `callTime` is an accessor over an own field, so setting it
+  also sets `needsSteps`, and a shallow copy carries both. `llmValueTypes` is an array of
+  `[path, type]` entries, not a map keyed by path. AGENT is the node the remaining `NodeCaps`
+  fields serve (`skills`, `emitStream`, `emitEvent`, `captureRender`, and `steering`, a `Steering`
+  inbox given only to an agent authored `steerable: true`).
 - A CODE `code:` value is a reference (`./file.ts:fn`, also `.js` or `.mjs` and `../` paths,
   resolved against the node's `baseDir`) or an inline TS/JS body. The constructor classifies it
   by shape into `mode` and compiles or imports nothing.
@@ -261,14 +269,16 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - Every manifest value is a typed wrapper: an int `{"type": "int", "value": "<digits>"}`, a float
   its IEEE-754 big-endian hex (`inf` is `7ff0000000000000`, `-0` is written as `0`), a mapping's
   entries sorted by key, a `FileRef` its `{uri, mime, name}` mapping. NaN is refused (V8 and
-  JavaScriptCore write its bits differently). Counts (TOOL `retries`, LOOP `iteration` and
-  `maxIters`, END `n`, indexes) are raw JSON ints and must be safe integers; LOOP `times` is an int
-  wrapper.
+  JavaScriptCore write its bits differently). Counts (TOOL and AGENT `retries`, LOOP `iteration`
+  and `maxIters`, END `n`, indexes) are raw JSON ints and must be safe integers; AGENT `retries` is
+  written even at 0, TOOL's only when non-zero; LOOP `times` is an int wrapper.
 - A node's or flow's fields are its own enumerable keys; a field the manifest doesn't know throws.
   `kind` is emitted; trait fields are ignored: the kind fixes them.
 - A CODE node contributes `{"inline": body}`, `{"ref": "./x.ts:fn"}` or
-  `{"builtin": "identity", "field": "x"}`; `baseDir`, `mode` and its origins aren't identity. The
-  AGENT manifest is not ported yet: an AGENT node throws.
+  `{"builtin": "identity", "field": "x"}`; `baseDir`, `mode` and its origins aren't identity. An
+  AGENT contributes its authored fields (`own_llm_config`, not `llmConfig`); `llmConfig`,
+  `llmConfigLabel`, `wiresLlmConfig`, `llmValueTypes`, `callTime` and `hostCredentials` aren't
+  identity.
 - In `typesCompatible` and `typeRelation`, an open numeric end is `null`.
 - Compare positions and scopes with `sameExecutionPosition`/`sameExecutionScope`, and arrays with
   `sameItems` (`src/nodes/contracts.ts`).

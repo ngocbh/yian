@@ -11,27 +11,28 @@
  * `test_template_and_nested_binding_origins_are_not_identity`,
  * `test_template_parts_change_identity`, `test_a_nested_binding_must_have_only_canonical_fields`,
  * `test_a_template_under_a_credential_name_keeps_every_part_as_identity`,
- * `test_a_plain_mapping_under_a_credential_key_is_identity` and
- * `test_a_flow_output_template_encodes_as_a_tagged_tree`.
+ * `test_a_plain_mapping_under_a_credential_key_is_identity`,
+ * `test_a_flow_output_template_encodes_as_a_tagged_tree`,
+ * `test_llm_config_values_are_fingerprinted_as_written`,
+ * `test_a_tag_on_an_llm_config_value_changes_the_fingerprint`,
+ * `test_whole_record_llm_config_values_are_fingerprinted` and
+ * `test_a_flow_llm_config_value_is_fingerprinted_as_written`.
  *
  * Changed:
  * - `test_a_flow_output_template_encodes_as_a_tagged_tree` is hand-built instead of `load_flow`:
- *   `CompiledFlow.fromParts` builds the one-step flow with each output.
+ *   `CompiledFlow.fromParts` builds the one-step flow with each output. The `llm_config` rows build
+ *   Python's `_LLM_FLOW` the same way (`llmFingerprint`), with each layer as the loader leaves it:
+ *   a record, a `ValueTemplate` whose values are `Binding`s, or a `Binding` for the whole record
+ *   (a tag is the binding's contract).
  * - Ints in values are `bigint`s. Binding is frozen, so the unknown-field row forges one
  *   (`Object.assign(Object.create(Binding.prototype), binding, {extra: 1})`); Python's
  *   `ValueError` is a `RangeError` and the message lists the field as a JSON array (`["extra"]`
  *   where Python prints `['extra']`).
  * - `json.dumps(manifest)` is `JSON.stringify`.
  *
- * Later (T3-22): the loader row `test_a_flow_without_templates_keeps_its_fingerprint` (a pinned
- * fingerprint of a loaded flow).
- *
- * Later (T3-22, with AGENT): `test_a_literal_llm_config_flow_keeps_its_fingerprint`,
- * `test_llm_config_values_are_fingerprinted_as_written`,
- * `test_a_tag_on_an_llm_config_value_changes_the_fingerprint`,
- * `test_whole_record_llm_config_values_are_fingerprinted`,
- * `test_a_flow_llm_config_value_is_fingerprinted_as_written` and
- * `test_a_literal_llm_config_with_a_doubled_dollar_reads_unescaped` (AGENT `llm_config` layers).
+ * Later (T3-22): the loader rows `test_a_flow_without_templates_keeps_its_fingerprint` and
+ * `test_a_literal_llm_config_flow_keeps_its_fingerprint` (pinned fingerprints of loaded flows), and
+ * `test_a_literal_llm_config_with_a_doubled_dollar_reads_unescaped` (the loader's `$$` reading).
  */
 
 import { expect, test } from "bun:test";
@@ -39,6 +40,7 @@ import { expect, test } from "bun:test";
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import { Binding, ContractOrigins, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
@@ -48,6 +50,8 @@ import { Type, ValueKind } from "../../src/typesys/index.ts";
 import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
 
 const INTEGER = Type.scalar(ValueKind.INTEGER);
+const STRING = Type.scalar(ValueKind.STRING);
+const OBJECT = new Type({ kind: ValueKind.OBJECT });
 
 /** Check `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof Error, message: string): void {
@@ -252,4 +256,74 @@ test("a flow output template encodes as a tagged tree", () => {
 
   expect(((manifest.outputs as JsonObject[])[0]!.from as JsonObject).type).toBe("value_template");
   expect(flowFingerprint(changed)).not.toBe(flowFingerprint(plain));
+});
+
+type LlmLayer = Record<string, unknown> | ValueTemplate | Binding;
+
+/**
+ * Fingerprint Python's `_LLM_FLOW`: inputs `m`, `n` and `cfg`, and one AGENT `a` with the node layer
+ * `nodeLayer`, under the flow layer `flowLayer`.
+ */
+function llmFingerprint(
+  nodeLayer: LlmLayer,
+  flowLayer: LlmLayer = { provider: "anthropic", anthropic: { max_tokens: 900n } },
+): string {
+  const inputs = [
+    new Parameter("m", { contract: new ValueContract(STRING) }),
+    new Parameter("n", { contract: new ValueContract(STRING) }),
+    new Parameter("cfg", { contract: new ValueContract(OBJECT) }),
+  ];
+  return flowFingerprint(
+    CompiledFlow.fromParts(
+      new Map<string, Node>([
+        [START_ID, new StartNode(START_ID, { params: inputs })],
+        ["a", new AgentNode("a", { prompt: "Go.", llmConfig: nodeLayer })],
+        [END_ID, EndNode.value(END_ID, { outputName: "result" })],
+      ]),
+      [new Edge(`a->${END_ID}`, "a", END_ID, { inputGroup: "result" })],
+      {
+        wiring: new Map([
+          [START_ID, new Map()],
+          ["a", new Map()],
+          [END_ID, new Map([["result", "${a.output}"]])],
+        ]),
+        flowLlmConfig: flowLayer,
+        flowId: "f",
+      },
+    ),
+  );
+}
+
+/** The layer `{key: ${input.<name>}}`, with `contract` on the value when given. */
+function valueLayer(key: string, name: string, contract: ValueContract | null = null): ValueTemplate {
+  return new ValueTemplate({ [key]: new Binding(`\${input.${name}}`, { contract }) });
+}
+
+test("llm config values are fingerprinted as written", () => {
+  expect(llmFingerprint(valueLayer("model", "m"))).not.toBe(llmFingerprint(valueLayer("model", "n")));
+  expect(llmFingerprint(valueLayer("model", "m"))).not.toBe(llmFingerprint({ model: "m" }));
+});
+
+test("a tag on an llm config value changes the fingerprint", () => {
+  expect(llmFingerprint(valueLayer("model", "m", new ValueContract(STRING)))).not.toBe(
+    llmFingerprint(valueLayer("model", "m")),
+  );
+});
+
+test("whole record llm config values are fingerprinted", () => {
+  const whole = new Binding("${input.cfg}");
+  const tagged = new Binding("${input.cfg}", { contract: new ValueContract(OBJECT) });
+
+  const node = llmFingerprint(whole);
+  expect(node).not.toBe(llmFingerprint(tagged));
+  expect(node).not.toBe(llmFingerprint(valueLayer("model", "m")));
+  const flow = llmFingerprint({ model: "m" }, whole);
+  expect(flow).not.toBe(llmFingerprint({ model: "m" }, tagged));
+  expect(flow).not.toBe(llmFingerprint({ model: "m" }, { model: "x" }));
+});
+
+test("a flow llm config value is fingerprinted as written", () => {
+  expect(llmFingerprint({ model: "m" }, valueLayer("provider", "m"))).not.toBe(
+    llmFingerprint({ model: "m" }, valueLayer("provider", "n")),
+  );
 });

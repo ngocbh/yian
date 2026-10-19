@@ -1,7 +1,7 @@
 /**
  * Input-size caps come from `defaults`; mirrors `tests/test_input_caps_defaults.py`.
  *
- * Holds the skill and question option rows; the other rows come with their modules.
+ * Holds the base URL, skill and question option rows; the other rows come with their modules.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -11,6 +11,7 @@ import { join } from "node:path";
 
 import { loadSkillDir } from "../src/compose/skills.ts";
 import { BUILTIN, install } from "../src/defaults.ts";
+import { validateBaseUrl } from "../src/llm_clients/config.ts";
 import { checkSkillName } from "../src/skills/catalog.ts";
 import { Skill, SkillError } from "../src/skills/index.ts";
 import { systemPromptWithSkills } from "../src/skills/tool.ts";
@@ -29,6 +30,15 @@ function expectSkillError(run: () => unknown, text: string): void {
   expect(caught).toBeInstanceOf(SkillError);
   expect((caught as SkillError).message).toContain(text);
 }
+
+test("base url cap", () => {
+  const url = "https://a.example/v1";
+  expect(url.length).toBe(20);
+  install({ ...BUILTIN, maxBaseUrlChars: 20 });
+  expect(validateBaseUrl(url)).toBe(url);
+  expect(() => validateBaseUrl(`${url}x`)).toThrow(RangeError);
+  expect(() => validateBaseUrl(`${url}x`)).toThrow("at most 20 characters");
+});
 
 test("skill file cap", () => {
   const tmp = mkdtempSync(join(tmpdir(), "yian-skills-"));

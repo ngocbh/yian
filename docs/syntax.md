@@ -2064,6 +2064,12 @@ type, a value outside the documented enum or bounds, or a non-finite number fail
 that `llm_config:`, naming the block, the key path, and what is allowed. The error
 never shows the value.
 
+Changed (TS yian): a number that is not finite, or a file, is refused anywhere in a
+block, including inside the free-form mappings `openrouter.provider` and
+`vllm.chat_template_kwargs`, which Python yian passes through. A whole number given for
+a float field stays an int and is sent as written (`temperature: 1` sends `1`), as
+everywhere in TS yian (see [Types → Two constructors](typing.md#two-constructors-infer-vs-check)).
+
 | Provider | API yian calls | Reference |
 | --- | --- | --- |
 | `openai` | OpenAI Responses (`POST /v1/responses`) | [platform.openai.com](https://platform.openai.com/docs/api-reference/responses/create) |

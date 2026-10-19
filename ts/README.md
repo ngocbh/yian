@@ -114,6 +114,19 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   records them with every credential redacted by value, and refuses to save one that still holds
   a credential. Record only when `recordMode(processEnv)` says so (`RECORD=1`, never under `CI`).
 
+## LLM clients
+
+- `src/llm_clients/` holds `LLMConfig`, the provider block decoders (one field-spec table per
+  API, the key walk, the value pass), the connection-setting checks and the key-variable table.
+- It reads no environment variable itself; its limits come from `current()`.
+- Values are yian values (ints are `bigint`), so a host `llm_config` goes through `fromHost` first.
+- `LLMConfig` holds the key, the header values and the blocks in `#private` fields. The key and
+  headers are never dumped; the blocks are read through `blockFor` and `dump`.
+- Lookups by a user key use `Object.hasOwn`. `PROVIDER_BLOCKS` and the schema tables have no
+  prototype, so an inherited name such as `toString` or `__proto__` is never an entry.
+- Validation errors are `ValidationError` with pydantic-shaped `issues` (`loc`, `type`, `msg`);
+  for a `value_error`, `error` holds the validator's own text.
+
 ## Nodes
 
 - The carriers in `src/nodes/contracts.ts` (`Binding`, `ValueTemplate`, `Parameter`, the

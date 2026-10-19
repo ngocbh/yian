@@ -1,22 +1,27 @@
 /** SKILL.md parsing, root precedence, and diagnostics; a port of `tests/skills/test_catalog.py`. */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadSkillDir } from "../../src/compose/skills.ts";
+import { loadSkillDir, loadSkills } from "../../src/compose/skills.ts";
 import { BUILTIN, current, install } from "../../src/defaults.ts";
 import { Skill, SkillError } from "../../src/skills/index.ts";
 
 let tmp: string;
+/** Paths a test made unreadable, given their modes back before the temp dir is removed. */
+let locked: string[];
+const asRoot = process.getuid?.() === 0;
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "yian-skills-"));
+  locked = [];
 });
 
 afterEach(() => {
   install(BUILTIN);
+  for (const path of locked) chmodSync(path, 0o755);
   rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -128,4 +133,97 @@ test("skill file cap", () => {
   writeFileSync(join(dir, "SKILL.md"), "x".repeat(11));
   install({ ...BUILTIN, maxSkillFileBytes: 10 });
   expectSkillError(() => loadSkillDir(dir), "larger than 10 bytes");
+});
+
+/** Make `path` unreadable until the test ends. */
+function lock(path: string): void {
+  chmodSync(path, 0);
+  locked.push(path);
+}
+
+test("earlier root wins and skips non-skills", () => {
+  const first = join(tmp, "first");
+  const second = join(tmp, "second");
+  writeSkill(first, "review", "description: First review.\n");
+  writeSkill(second, "review", "description: Second review.\n");
+  writeSkill(second, "deploy", "description: Deploy.\n");
+  mkdirSync(join(second, "notes"));
+  writeSkill(second, ".hidden", "description: Hidden.\n");
+  const skills = loadSkills([first, second, join(tmp, "missing")]);
+  expect([...skills.keys()]).toEqual(["deploy", "review"]);
+  expect(skills.get("review")!.description).toBe("First review.");
+});
+
+test("follows symlinked skill directories", () => {
+  const real = writeSkill(join(tmp, "store"), "shared", "description: Shared.\n");
+  const root = join(tmp, "root");
+  mkdirSync(root);
+  symlinkSync(real, join(root, "shared"));
+  expect(loadSkills([root]).get("shared")!.directory).toBe(realpathSync(real));
+});
+
+test("reports every problem at once", () => {
+  writeSkill(tmp, "one", "name: same\ndescription: One.\n");
+  writeSkill(tmp, "two", "name: same\ndescription: Two.\n");
+  writeSkill(tmp, "bad", "name: bad\n");
+  const { message } = expectSkillError(() => loadSkills([tmp]), "'same' is used by both one/ and two/");
+  expect(message.startsWith("invalid skills:\n- ")).toBe(true);
+  expect(message).toContain("bad");
+  expect(message).toContain("description");
+});
+
+test("skipInvalid warns and keeps the rest", () => {
+  writeSkill(tmp, "good", "description: Good.\n");
+  writeSkill(tmp, "bad", "name: bad\n");
+  const file = join(realpathSync(tmp), "bad", "SKILL.md");
+  const expected = `skipped skill: ${file}: frontmatter needs a non-empty \`description\``;
+  const warnings: string[] = [];
+  const skills = loadSkills([tmp], { skipInvalid: true, warn: (message) => warnings.push(message) });
+  expect(warnings).toEqual([expected]);
+  expect([...skills.keys()]).toEqual(["good"]);
+  const emit = spyOn(process, "emitWarning").mockImplementation(() => {});
+  try {
+    expect([...loadSkills([tmp], { skipInvalid: true }).keys()]).toEqual(["good"]);
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith(expected);
+  } finally {
+    emit.mockRestore();
+  }
+});
+
+test.skipIf(asRoot)("reports unreadable skill files", () => {
+  writeSkill(tmp, "good", "description: Good.\n");
+  lock(join(writeSkill(tmp, "locked", "description: Locked.\n"), "SKILL.md"));
+  expectSkillError(() => loadSkills([tmp]), "locked: cannot read skill");
+  const warnings: string[] = [];
+  const skills = loadSkills([tmp], { skipInvalid: true, warn: (message) => warnings.push(message) });
+  expect([...skills.keys()]).toEqual(["good"]);
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain("locked: cannot read skill");
+});
+
+// TS-only: unreadable roots and directories, the sort order, and a non-path root.
+
+test.skipIf(asRoot)("reports an unreadable root", () => {
+  const root = join(tmp, "root");
+  writeSkill(root, "good", "description: Good.\n");
+  lock(root);
+  expectSkillError(() => loadSkills([root]), `${root}: cannot read skill root:`);
+});
+
+test.skipIf(asRoot)("reports an unreadable skill directory", () => {
+  writeSkill(tmp, "good", "description: Good.\n");
+  lock(writeSkill(tmp, "locked", "description: Locked.\n"));
+  expectSkillError(() => loadSkills([tmp]), "locked: cannot read skill: EACCES");
+  const skills = loadSkills([tmp], { skipInvalid: true, warn: () => {} });
+  expect([...skills.keys()]).toEqual(["good"]);
+});
+
+test("skills are sorted by name", () => {
+  for (const name of ["zed", "123", "abc"]) writeSkill(tmp, name, "description: d\n");
+  expect([...loadSkills([tmp]).keys()]).toEqual(["123", "abc", "zed"]);
+});
+
+test("a root that is not a path is not collected", () => {
+  expect(() => loadSkills([5 as unknown as string])).toThrow(TypeError);
 });

@@ -120,7 +120,8 @@ export class OllamaChat implements NdjsonProtocol {
   }
 
   /**
-   * Build the `/api/chat` request body: `model`, `stream: true`, `options: {}`, `messages` and
+   * Build the `/api/chat` request body: `model`, `stream: true`, `options: {}`, `messages`,
+   * `format` (the request's `outputFormat` schema, copied as written) when there is one, and
    * `tools` (`[]` with none), then the block merged over them.
    *
    * Every message is sent in place. A system or user message is `{role, content}`, its text parts
@@ -153,13 +154,9 @@ export class OllamaChat implements NdjsonProtocol {
       else if (message.role === "assistant") messages.push(this.#assistant(message));
       else messages.push(withContent({ role: message.role }, joinedText(message)));
     }
-    const body: JsonObject = {
-      model: this.model,
-      stream: true,
-      options: {},
-      messages,
-      tools: request.tools.map(functionTool),
-    };
+    const body: JsonObject = { model: this.model, stream: true, options: {}, messages };
+    if (request.outputFormat !== null) body["format"] = copyJson(request.outputFormat.schema);
+    body["tools"] = request.tools.map(functionTool);
     if (this.#block) mergeRequestBody(body, this.#block);
     return body;
   }

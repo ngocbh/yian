@@ -2,8 +2,8 @@
  * Tests for Ollama body building in `src/llm/protocols/ollama_chat.ts`: the protocol object, the
  * fixed fields and their order, system, user, assistant and tool messages sent in place, call ids
  * and tool results, thinking sent back from matching replay records and left out when one can't be
- * used, tools with their schemas as written, the tool choice left out, the block, the copies, and
- * the media and wrong-part refusals.
+ * used, tools with their schemas as written, the tool choice left out, the output format, the
+ * block, the copies, and the media and wrong-part refusals.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -13,6 +13,7 @@ import {
   MediaPart,
   Message,
   NamedTool,
+  OutputFormat,
   type Part,
   ReasoningPart,
   RefusalPart,
@@ -82,6 +83,7 @@ interface BodyOptions {
   tools?: ToolSpec[];
   toolChoice?: ToolChoice;
   parallelToolCalls?: boolean | null;
+  outputFormat?: OutputFormat | null;
 }
 
 function bodyOf(messages: Message[], options: BodyOptions = {}): JsonObject {
@@ -98,6 +100,7 @@ function bodyOf(messages: Message[], options: BodyOptions = {}): JsonObject {
       tools: options.tools,
       toolChoice: options.toolChoice,
       parallelToolCalls: options.parallelToolCalls,
+      outputFormat: options.outputFormat,
     }),
   );
 }
@@ -447,6 +450,47 @@ describe("tools", () => {
       expect(Object.keys(body)).toEqual(["model", "stream", "options", "messages", "tools"]);
       expect(encodeBody(body)).not.toMatch(/choice|parallel/i);
     }
+  });
+});
+
+describe("the output format", () => {
+  const RECORD = new OutputFormat({
+    name: "Record",
+    schema: {
+      title: "Record",
+      type: "object",
+      properties: { answer: { type: "string" }, score: { type: "integer" } },
+      required: ["answer", "score"],
+    },
+  });
+
+  test("outputFormat is sent as format, the schema as given, and tools: [] stays", () => {
+    const body = bodyOf([user("Hi.")], { outputFormat: RECORD });
+    expect(body).toEqual({
+      model: QWEN,
+      stream: true,
+      options: {},
+      messages: [{ role: "user", content: "Hi." }],
+      format: RECORD.schema,
+      tools: [],
+    });
+    expect(Object.keys(body)).toEqual(["model", "stream", "options", "messages", "format", "tools"]);
+  });
+
+  test("a block's think lands beside format", () => {
+    const body = bodyOf([user("Hi.")], { block: { think: true }, outputFormat: RECORD });
+    expect(body["format"]).toEqual(RECORD.schema);
+    expect(body["think"]).toBe(true);
+  });
+
+  test("a body without outputFormat has no format", () => {
+    expect(Object.hasOwn(bodyOf([user("Hi.")]), "format")).toBe(false);
+  });
+
+  test("the rendered schema is a copy", () => {
+    const body = bodyOf([user("Hi.")], { outputFormat: RECORD });
+    ((body["format"] as JsonObject)["required"] as JsonValue[]).push("x");
+    expect(RECORD.schema["required"]).toEqual(["answer", "score"]);
   });
 });
 

@@ -5,15 +5,30 @@
  * at the first space and, in strict YAML 1.2, can't contain `,`, `[`, `]`, `{` or `}`, so a
  * type with several arguments is named in `typedefs:` and tagged by its name. `readTagType`
  * turns tag text into a `Type` and explains each way a tag goes wrong; `suggestTag` spells a
- * tagged slot for error messages.
+ * tagged slot for error messages; `readTaggedValue` reads one slot's authored value, with tags
+ * inside it, into a binding source or a literal, and records each tag it reads in the load's
+ * ledger. `rejectUnreadTags` then rejects every tag no slot read (on `kind:`, a typedef, a
+ * mapping key, ...), and `rejectTaggedOutput` a tag on a node's `output:` type declaration.
  *
  * A tag only checks a value and declares its type: it never adds or changes a field.
  */
 
-import { getCloseMatches, isPrintable, reprText, type SourceRange } from "../../diagnostics.ts";
+import {
+  getCloseMatches,
+  isPrintable,
+  type OriginRef,
+  reprText,
+  type SourceRange,
+} from "../../diagnostics.ts";
 import { ExpressionError } from "../../expr/expressions.ts";
-import { scanTemplate, Span } from "../../expr/template.ts";
-import type { ValuePath } from "../../nodes/contracts.ts";
+import { evalBinding, scanTemplate, Span } from "../../expr/template.ts";
+import {
+  Binding,
+  ContractOrigins,
+  ValueContract,
+  type ValuePath,
+  ValueTemplate,
+} from "../../nodes/contracts.ts";
 import {
   BUILTIN_TYPE_NAMES,
   formatTypeExpr,
@@ -26,17 +41,27 @@ import {
   buildValueAs,
   canonicalTypeLabel,
   isListKind,
+  isRecord,
   requiresFile,
   Type,
   TypeCheckError,
   typeEquals,
   ValueKind,
   type Value,
+  valueRepr,
 } from "../../typesys/values.ts";
+import type { SourceCatalogBuilder } from "../source/catalog.ts";
 import type { ScalarStyle } from "../source/common.ts";
-import { parseYamlLiteral, SourceSyntaxError } from "../source/index.ts";
+import {
+  parseYamlLiteral,
+  SourceAccessError,
+  type SourceCursor,
+  type SourceDocument,
+  SourceSyntaxError,
+} from "../source/index.ts";
 import { CALL_HEAD } from "./directives.ts";
 import type { LoadDiagnostics } from "./errors.ts";
+import { isExtensionKey } from "./source.ts";
 import { formerBooleanFix } from "./yaml_words.ts";
 
 const HEAD_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*/;
@@ -500,6 +525,507 @@ function typedefName(typ: Type, registry: TypeRegistry): string | null {
 /** Return whether `text` reads back as exactly one YAML tag when written after `!`. */
 function writableAsTag(text: string): boolean {
   return TAG_CHARACTERS.test(text);
+}
+
+/** One slot's authored value, read through its tags. Frozen. */
+export class TaggedSlot {
+  /**
+   * The binding source or literal: a template string, a `ValueTemplate`, or a plain value;
+   * `null` when `hasValue` is false.
+   */
+  readonly value: unknown;
+  /** The top-level tag's contract, or `null` for an untagged value. */
+  readonly contract: ValueContract | null;
+  /** False for `name: !T` with nothing after the tag. */
+  readonly hasValue: boolean;
+
+  constructor(value: unknown, contract: ValueContract | null, hasValue: boolean) {
+    this.value = value;
+    this.contract = contract;
+    this.hasValue = hasValue;
+    Object.freeze(this);
+  }
+}
+
+/** How `readTaggedValue` reads one slot. */
+export interface TaggedValueOptions {
+  /** The slot's name, used in messages and suggested spellings. */
+  label: string;
+  /** Catalog site prefix for this slot. */
+  sitePath: readonly (string | number)[];
+  /** File-owned origin catalog builder. */
+  catalogBuilder: SourceCatalogBuilder;
+  /** Factory for located load errors. */
+  diagnostics: LoadDiagnostics;
+  /**
+   * Consumed tags; the reader adds the definition id (`SourceCursor.tagDefinitionId`, matching
+   * `TaggedNode.definitionId`) of every tag it reads.
+   */
+  ledger: Set<number>;
+  /**
+   * Read a literal (a default): strings are text, never templates, and are not unescaped;
+   * nested tags are checked and dropped, so the value is plain. Defaults to `false`.
+   */
+  literalOnly?: boolean;
+  /**
+   * The fix a nested string starting with `call(` is told to make; defaults to binding it at
+   * the top level.
+   */
+  nestedCallFix?: string;
+}
+
+/**
+ * Read one slot's authored value and the tags on and inside it.
+ *
+ * The top-level tag becomes the slot's contract. A top-level string is kept as written (a
+ * template, a `call(...)`, or text the binder unescapes). A tagged node inside a mapping or list
+ * becomes a typed `Binding` at its position, and a container holding one, or holding a string
+ * with a `${...}` span, becomes a `ValueTemplate` with raw leaf strings; any other container is
+ * a plain literal with its leaf strings `$$`-unescaped once. Every span-free tagged literal is
+ * checked against its tag here; a tag never fills in a missing field.
+ *
+ * Catalog sites: the top-level contract at `[...sitePath, "type", "root"]`, a nested binding at
+ * `[...sitePath, "type", "path", ...path]`, and a template's leaf string at
+ * `[...sitePath, "path", ...path]`.
+ *
+ * @param cursor The slot's value.
+ * @param registry The flow's typedefs the tags resolve against.
+ * @returns The value, the top-level contract, and whether a value follows the tag.
+ * @throws LoadError when a tag is malformed or names no type, a value is missing after a nested
+ *   tag, a space splits a tag from its arguments, a nested string starts with `call(`, a
+ *   span-free tagged literal does not fit its tag, or the value can't be walked (a recursive
+ *   alias).
+ */
+export function readTaggedValue(
+  cursor: SourceCursor,
+  registry: TypeRegistry,
+  options: TaggedValueOptions,
+): TaggedSlot {
+  const reader = new TaggedValueReader(registry, options);
+  try {
+    return reader.read(cursor);
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw options.diagnostics.error(`${reprText(options.label)}: ${error.message}`, {
+      range: error.range,
+      cause: error,
+    });
+  }
+}
+
+/** One walked node: its tree, and what in it needs the binder. */
+class Walked {
+  tree: unknown;
+  hasSpan: boolean;
+  hasBinding: boolean;
+
+  constructor(tree: unknown, options: { hasSpan?: boolean; hasBinding?: boolean } = {}) {
+    this.tree = tree;
+    this.hasSpan = options.hasSpan ?? false;
+    this.hasBinding = options.hasBinding ?? false;
+  }
+
+  /** Whether the node must be a `ValueTemplate` part rather than a literal. */
+  get dynamic(): boolean {
+    return this.hasSpan || this.hasBinding;
+  }
+
+  /** Carry a child's span and binding flags up to this container. */
+  absorb(part: Walked): void {
+    this.hasSpan ||= part.hasSpan;
+    this.hasBinding ||= part.hasBinding;
+  }
+}
+
+/** Walk one slot's value with its cursors, reading the tags inside it. */
+class TaggedValueReader {
+  readonly registry: TypeRegistry;
+  readonly label: string;
+  readonly sitePath: readonly (string | number)[];
+  readonly catalogBuilder: SourceCatalogBuilder;
+  readonly diagnostics: LoadDiagnostics;
+  readonly ledger: Set<number>;
+  readonly literalOnly: boolean;
+  readonly nestedCallFix: string;
+  readonly leafSites: [ValuePath, SourceCursor][] = [];
+
+  constructor(registry: TypeRegistry, options: TaggedValueOptions) {
+    this.registry = registry;
+    this.label = options.label;
+    this.sitePath = options.sitePath;
+    this.catalogBuilder = options.catalogBuilder;
+    this.diagnostics = options.diagnostics;
+    this.ledger = options.ledger;
+    this.literalOnly = options.literalOnly ?? false;
+    this.nestedCallFix = options.nestedCallFix ?? "bind it at the top level, or reword the text";
+  }
+
+  /** Read the slot at `cursor`; see `readTaggedValue`. */
+  read(cursor: SourceCursor): TaggedSlot {
+    let contract: ValueContract | null = null;
+    if (cursor.tag !== null) {
+      // A space-split tag (`!Optional (str)`) usually names no type on its own, so the spacing
+      // is reported before the type is resolved.
+      this.rejectSpacedTag(cursor, []);
+      const typ = this.tagType(cursor, []);
+      const origin = this.catalogBuilder.register([...this.sitePath, "type", "root"], cursor);
+      contract = new ValueContract(typ, new ContractOrigins({ default: origin }));
+      if (!cursor.hasValue) return new TaggedSlot(null, contract, false);
+    }
+    const walked = this.walk(cursor, cursor.value, []);
+    if (typeof walked.tree === "string" || !walked.dynamic || this.literalOnly) {
+      let literal = walked.tree;
+      if (!this.isTemplateText(literal, cursor)) {
+        literal = this.literal(literal);
+        if (contract !== null) this.check(cursor, [], contract.type, literal);
+      }
+      // A top-level string stays as written: the binder unescapes it.
+      return new TaggedSlot(
+        typeof walked.tree === "string" ? walked.tree : literal,
+        contract,
+        true,
+      );
+    }
+
+    if (contract !== null && !walked.hasSpan) {
+      this.check(cursor, [], contract.type, this.literal(walked.tree));
+    }
+    const origins: [ValuePath, OriginRef][] = [];
+    for (const [path, leaf] of this.leafSites) {
+      const origin = this.catalogBuilder.register([...this.sitePath, "path", ...path], leaf);
+      if (origin !== null) origins.push([path, origin]);
+    }
+    // Only a container walks dynamic: a top-level string returned above.
+    const tree = walked.tree as Record<string, unknown> | unknown[];
+    return new TaggedSlot(new ValueTemplate(tree, origins), contract, true);
+  }
+
+  /** Walk one node, reading a tag on it unless it is the slot itself. */
+  walk(cursor: SourceCursor, value: unknown, path: ValuePath): Walked {
+    if (path.length > 0 && cursor.tag !== null) return this.walkTagged(cursor, value, path);
+    return this.walkValue(cursor, value, path);
+  }
+
+  /** Read a nested tagged node into a typed `Binding`, or check and fold it. */
+  walkTagged(cursor: SourceCursor, value: unknown, path: ValuePath): Walked {
+    this.rejectSpacedTag(cursor, path);
+    const typ = this.tagType(cursor, path);
+    if (!cursor.hasValue) {
+      throw this.diagnostics.error(
+        `${reprText(pathLabel(this.label, path))}: a nested tag needs a value: ` +
+          `\`!${cursor.tag} <value>\``,
+        { range: cursor.range },
+      );
+    }
+    const inner = this.walkValue(cursor, value, path);
+    if (!inner.hasSpan) this.check(cursor, path, typ, this.literal(inner.tree));
+    if (this.literalOnly) return inner;
+    const origin = this.catalogBuilder.register(
+      [...this.sitePath, "type", "path", ...path],
+      cursor,
+    );
+    const binding = new Binding(inner.tree, {
+      origin,
+      contract: new ValueContract(typ, new ContractOrigins({ default: origin })),
+    });
+    return new Walked(binding, { hasSpan: inner.hasSpan, hasBinding: true });
+  }
+
+  /** Walk one node's own value, reading the tags on its children. */
+  walkValue(cursor: SourceCursor, value: unknown, path: ValuePath): Walked {
+    if (typeof value === "string") {
+      if (this.literalOnly || path.length === 0) return new Walked(value);
+      if (CALL_HEAD.test(value.trim())) {
+        throw this.diagnostics.error(
+          `${reprText(pathLabel(this.label, path))}: a \`call(...)\` inside a value isn't ` +
+            `supported; ${this.nestedCallFix}`,
+          { range: cursor.range },
+        );
+      }
+      this.leafSites.push([path, cursor]);
+      return new Walked(value, { hasSpan: hasSpan(value) });
+    }
+    if (isRecord(value)) {
+      const entries: [string, unknown][] = [];
+      const walked = new Walked(null);
+      for (const [key, item] of Object.entries(value)) {
+        const part = this.walk(cursor.child(key), item, [...path, key]);
+        entries.push([key, part.tree]);
+        walked.absorb(part);
+      }
+      // `fromEntries` keeps a `__proto__` key as data.
+      walked.tree = Object.fromEntries(entries);
+      return walked;
+    }
+    if (Array.isArray(value)) {
+      const items: unknown[] = [];
+      const walked = new Walked(items);
+      for (const [index, item] of value.entries()) {
+        const part = this.walk(cursor.child(index), item, [...path, index]);
+        items.push(part.tree);
+        walked.absorb(part);
+      }
+      return walked;
+    }
+    return new Walked(value);
+  }
+
+  /** Record the tag on `cursor` as consumed and return the type it names. */
+  tagType(cursor: SourceCursor, path: ValuePath): Type {
+    const definitionId = cursor.tagDefinitionId;
+    if (definitionId !== null) this.ledger.add(definitionId);
+    return readTagType(cursor.tag!, this.registry, {
+      label: pathLabel(this.label, path),
+      diagnostics: this.diagnostics,
+      range: cursor.range,
+    });
+  }
+
+  /**
+   * Reject plain text starting with `(` right after a tag.
+   *
+   * When the tag and the parenthesized part together name a type (`!int (1..12) 5`), a space
+   * cut the tag's arguments off; otherwise the text really starts with `(`
+   * (`!str (555) 123-4567`) and must be quoted so a reader doesn't take it for arguments. A tag
+   * that names no type either way is left for `readTagType` to report.
+   */
+  rejectSpacedTag(cursor: SourceCursor, path: ValuePath): void {
+    if (cursor.scalarStyle !== "plain") return;
+    const value = cursor.value;
+    if (typeof value !== "string" || !value.startsWith("(")) return;
+    const tag = cursor.tag!;
+    const close = value.indexOf(")");
+    const joined = tag + (close < 0 ? value : value.slice(0, close + 1));
+    const label = pathLabel(this.label, path);
+    let message: string;
+    if (writableAsTag(joined) && resolves(joined, this.registry)) {
+      message =
+        `${reprText(label)}: a YAML tag ends at the first space; ` +
+        `write \`!${joined}\` without spaces`;
+    } else if (resolves(tag, this.registry)) {
+      const quoted = `!${tag} ${yamlQuoted(value)}`;
+      message =
+        `${reprText(label)}: a YAML tag ends at the first space; quote the text: ` +
+        (path.length === 0 ? `\`${this.label}: ${quoted}\`` : `\`${quoted}\``);
+    } else {
+      return;
+    }
+    throw this.diagnostics.error(message, { range: cursor.range });
+  }
+
+  /**
+   * Whether a top-level value is binding text resolved once sources are known.
+   *
+   * Unquoted text starting with `call(` is left to the inline-call desugar, which requires
+   * exactly one well-formed directive; quoted, it is text.
+   */
+  isTemplateText(value: unknown, cursor: SourceCursor): boolean {
+    if (this.literalOnly || typeof value !== "string") return false;
+    if (hasSpan(value)) return true;
+    return cursor.scalarStyle === "plain" && CALL_HEAD.test(value.trim());
+  }
+
+  /** Return the value a span-free tree binds: no bindings, strings unescaped. */
+  literal(tree: unknown): unknown {
+    if (tree instanceof Binding) return this.literal(tree.source);
+    if (typeof tree === "string") {
+      return this.literalOnly ? tree : evalBinding(tree, () => null);
+    }
+    if (isRecord(tree)) {
+      return Object.fromEntries(
+        Object.entries(tree).map(([key, item]) => [key, this.literal(item)]),
+      );
+    }
+    if (Array.isArray(tree)) return tree.map((item) => this.literal(item));
+    return tree;
+  }
+
+  /**
+   * Check a span-free literal against its tag's type, explaining a mismatch.
+   *
+   * @throws LoadError when the literal does not fit `typ`.
+   */
+  check(cursor: SourceCursor, path: ValuePath, typ: Type, value: unknown): void {
+    try {
+      buildValueAs(typ, value);
+    } catch (error) {
+      if (!(error instanceof TypeCheckError)) throw error;
+      throw this.diagnostics.error(this.mismatch(cursor, path, typ, value, error), {
+        range: cursor.range,
+      });
+    }
+  }
+
+  /**
+   * Explain why a tagged literal does not fit, suggesting a rewrite when one helps.
+   *
+   * A former YAML boolean word such as `yes`, now text, written bare gets the `true`/`false` to
+   * write when that boolean fits; a non-string scalar whose text would fit gets the quoted form.
+   */
+  mismatch(
+    cursor: SourceCursor,
+    path: ValuePath,
+    typ: Type,
+    value: unknown,
+    error: TypeCheckError,
+  ): string {
+    const label = pathLabel(this.label, path);
+    const tag = cursor.tag;
+    const text = cursor.scalarText;
+    if (text === null) {
+      let message = `${reprText(label)}: the value is not a valid ${tag}: ${error.message}`;
+      if (error.path.length > 0) message += ` (at \`${pathLabel(label, error.path)}\`)`;
+      return message;
+    }
+    // Quoted and block text is shown quoted, so its line breaks stay escaped.
+    const written = cursor.scalarStyle === "plain" ? text : yamlQuoted(text);
+    let message = `${reprText(label)}: \`${written}\` is not a valid ${tag}`;
+    if (error.path.length > 0) {
+      message += ` (${error.message})`;
+    } else {
+      const reason = mismatchReason(error, value);
+      if (reason !== null) message += ` (${reason})`;
+    }
+    const fix = formerBooleanFix(value, typ);
+    if (fix !== null) return `${message}; ${fix[1]}`;
+    // Quoting only helps when YAML read the text as a non-string and the text itself would
+    // fit, e.g. `!str 30`.
+    if (typeof value === "string") return message;
+    if (value === null && typ.kind === ValueKind.ANY && !typ.nullable) {
+      // `Any` would read the quoted text as the string "null", which is rarely what a null
+      // under `!Any` means.
+      const optional = `!Optional(${tag}) null`;
+      return (
+        message +
+        "; to allow null, write " +
+        (path.length === 0 ? `\`${this.label}: ${optional}\`` : `\`${optional}\``)
+      );
+    }
+    if (!fits(typ, text)) return message;
+    const quoted = `!${tag} ${yamlQuoted(text)}`;
+    message +=
+      "; quote it to keep it as text: " +
+      (path.length === 0 ? `\`${this.label}: ${quoted}\`` : `\`${quoted}\``);
+    if (typeof value === "boolean") message += " (YAML reads unquoted true/false as booleans)";
+    return message;
+  }
+}
+
+/**
+ * Return the reason a root type check gives beyond the plain mismatch, else `null`.
+ *
+ * A date or datetime check, for example, says what the text must look like.
+ *
+ * @param error The failed check of `value`, at the root.
+ * @param value The checked literal.
+ * @returns The reason, or `null` when the error only says the value does not match.
+ */
+function mismatchReason(error: TypeCheckError, value: unknown): string | null {
+  const head = `${valueRepr(value)} does not match declared type `;
+  const text = error.message;
+  if (!text.startsWith(head)) return null;
+  const rest = text.slice(head.length);
+  const at = rest.indexOf(": ");
+  const reason = at < 0 ? "" : rest.slice(at + 2);
+  return reason || null;
+}
+
+/**
+ * Reject a tag on a node's `output:` type declaration or inside it.
+ *
+ * An `output:` declaration is a type, so a tag there would type nothing.
+ *
+ * @param cursor The node's `output:` value.
+ * @param diagnostics Factory for located load errors.
+ * @throws LoadError at the first tag on or inside the declaration.
+ */
+export function rejectTaggedOutput(cursor: SourceCursor, diagnostics: LoadDiagnostics): void {
+  // Each entry: a cursor, the key it sits under, and whether it is a list item.
+  const stack: [SourceCursor, string, boolean][] = [[cursor, "output", false]];
+  while (stack.length > 0) {
+    const [current, key, isItem] = stack.pop()!;
+    const tag = current.tag;
+    const value = current.value;
+    if (tag !== null) {
+      let message: string;
+      if (isItem) {
+        message =
+          `\`output:\` declares a type; an item of \`${key}:\` is tagged \`!${tag}\`; ` +
+          "write the type without a tag";
+      } else {
+        const written = current.hasValue && typeof value === "string" ? value : tag;
+        message = `\`output:\` declares a type; write \`${key}: ${written}\`, without a tag`;
+      }
+      throw diagnostics.error(message, { range: current.range });
+    }
+    if (isRecord(value)) {
+      const children = Object.keys(value).map((name) => current.child(name));
+      for (const child of children.reverse()) stack.push([child, authoredKey(child), false]);
+    } else if (Array.isArray(value)) {
+      for (let index = value.length - 1; index >= 0; index--) {
+        stack.push([current.child(index), key, true]);
+      }
+    }
+  }
+}
+
+/** Spell the mapping key selecting `cursor` as written. */
+function authoredKey(cursor: SourceCursor): string {
+  return cursor.keyText ?? String(cursor.sourceKeyValue);
+}
+
+/**
+ * Reject the first tag in `document` that no slot reader consumed.
+ *
+ * A tag types a flow input, a binding, a flow output, an agent variable, an `llm_config` value
+ * (the whole record or a field), a value entry in `nodes:`, or a value inside one; anywhere
+ * else it would be silently ignored. Tags reached only through top-level `x-*` keys are exempt.
+ * Tags under `typedefs:` and on mapping keys get their own messages. Keys are spelled as
+ * written, so `on:` stays `on:`.
+ *
+ * @param document The loaded document.
+ * @param consumed Definition ids of the tags slot readers read.
+ * @param diagnostics Factory for located load errors.
+ * @param options.typedefsOnly Check only tags under `typedefs:`, which are read before any
+ *   slot. Defaults to `false`.
+ * @throws LoadError at the first offending tag, in document order.
+ */
+export function rejectUnreadTags(
+  document: SourceDocument,
+  consumed: ReadonlySet<number>,
+  diagnostics: LoadDiagnostics,
+  options: { typedefsOnly?: boolean } = {},
+): void {
+  const typedefsOnly = options.typedefsOnly ?? false;
+  for (const node of document.taggedNodes({ skipTopLevel: isExtensionKey })) {
+    const path = node.keyPath;
+    const inTypedefs = path.length >= 2 && path[0] === "typedefs";
+    if (typedefsOnly && !inTypedefs) continue;
+    const key = path.findLast((step): step is string => typeof step === "string") ?? null;
+    if (node.isKey && key !== null) {
+      throw diagnostics.error(
+        `\`!${node.tag} ${key}:\` tags a mapping key; a tag types a value, so put it after ` +
+          `the colon: \`${key}: !${node.tag} <value>\``,
+        { range: node.range },
+      );
+    }
+    if (inTypedefs) {
+      const name = path[1]!;
+      throw diagnostics.error(
+        `typedef ${typeof name === "string" ? reprText(name) : name}: a type definition is ` +
+          "written as a type, without a tag",
+        { range: node.range },
+      );
+    }
+    if (consumed.has(node.definitionId)) continue;
+    const where = key !== null ? `\`${key}:\`` : "the document root";
+    throw diagnostics.error(
+      "a tag types a value — a flow input, a binding, a flow output, an agent variable, an " +
+        "`llm_config` value, a value entry in `nodes:`, or a value inside one; " +
+        `${where} is not one`,
+      { range: node.range },
+    );
+  }
 }
 
 /** Spell a slot name and a path inside its value, as in `x.items[0]`. */

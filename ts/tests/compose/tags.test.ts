@@ -9,14 +9,25 @@
  * helpers produce, each the exact text in its case. `suggestTag` with neither a type nor its
  * text throws `TypeError`, where Python asserts.
  *
- * Not ported: `read_tag_type`'s long-int message (`the tag` in place of a tag that repeats
- * every digit); ints are unbounded in TS, so the message always shows the tag.
+ * The `read_tagged_value` tests are ported with a `read` helper as Python's. Ints are `bigint`;
+ * an unquoted date is text (rule `dates`), so `x: [!str 2026-01-01]` loads, where Python asks
+ * for quotes; a missing-field list is written in the text form (`["action"]`).
  *
- * Not yet ported: the `read_tagged_value`, `reject_tagged_output` and `reject_unread_tags`
- * tests.
+ * TS-only: a verbatim tag carrying `[`, `]` or `,`, a flow-style tag cut at its `,`, a `%XX`
+ * escape kept raw in a tag, `!Any` on a date and on a null, and direct rows for
+ * `rejectTaggedOutput` and `rejectUnreadTags`, which Python tests only through `load_flow`.
+ * The harvested-case tables make the loader's calls on the slots of the conformance cases these
+ * functions decide, comparing the message and the last frame.
+ *
+ * Not ported: `read_tag_type`'s long-int message (`the tag` in place of a tag that repeats
+ * every digit); ints are unbounded in TS, so the message always shows the tag. And
+ * `test_any_other_value_error_from_the_check_is_a_located_load_error`: TS has no value models,
+ * so the check throws only `TypeCheckError` for an author's value; anything else is a bug and
+ * propagates.
  */
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import {
@@ -27,15 +38,25 @@ import {
   oldFormSuggestion,
   oldTypedText,
   pathLabel,
+  readTaggedValue,
   readTagType,
+  rejectTaggedOutput,
+  rejectUnreadTags,
   spellTypeText,
   splitTypedText,
   suggestedLiteral,
   suggestTag,
+  TaggedSlot,
   yamlQuoted,
 } from "../../src/compose/helpers/tags.ts";
+import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
+import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
+import { forget, reload } from "../../src/defaults.ts";
+import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import { type Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
+import { type Case, readCase } from "../conformance.ts";
+import { caseDocument } from "./declarations.ts";
 
 const REG = readTypedefs({
   Buy: { action: "Literal(buy)", conviction: "float" },
@@ -296,4 +317,640 @@ describe("conformance message fragments", () => {
       oldFormSuggestion("n", t("int"), "int", "", { registry: EMPTY, placeholder: null }),
     ).toBe("`n: !int`");
   });
+});
+
+// ---------- readTaggedValue ----------
+
+/** Read slot `key` of `text` (or of `options.document`) as a node input. */
+function read(
+  text: string,
+  key = "x",
+  options: { ledger?: Set<number>; document?: SourceDocument; literalOnly?: boolean } = {},
+): TaggedSlot {
+  const document = options.document ?? SourceDocument.parse(text);
+  return readTaggedValue(document.root.child(key), REG, {
+    label: key,
+    sitePath: ["node", "n", "input", key],
+    catalogBuilder: new SourceCatalogBuilder(),
+    diagnostics: LoadDiagnostics.fromDocument(document),
+    ledger: options.ledger ?? new Set(),
+    literalOnly: options.literalOnly,
+  });
+}
+
+/** Return the `LoadError` `run` throws, failing if it throws none. */
+function loadError(run: () => unknown): LoadError {
+  try {
+    run();
+  } catch (error) {
+    if (error instanceof LoadError) return error;
+    throw error;
+  }
+  throw new Error("expected a LoadError");
+}
+
+/** Assert reading `text` fails with a message holding `fragment`. */
+function fails(text: string, fragment: string, options: { literalOnly?: boolean } = {}): void {
+  expect(loadError(() => read(text, "x", options)).message).toContain(fragment);
+}
+
+/** Return `slot`'s value as a `ValueTemplate`, failing if it isn't one. */
+function templateOf(slot: TaggedSlot): ValueTemplate {
+  expect(slot.value).toBeInstanceOf(ValueTemplate);
+  return slot.value as ValueTemplate;
+}
+
+/** Return `node` as a `Binding`, failing if it isn't one. */
+function bindingOf(node: unknown): Binding {
+  expect(node).toBeInstanceOf(Binding);
+  return node as Binding;
+}
+
+describe("readTaggedValue", () => {
+  test("the top-level tag gives the contract", () => {
+    const slot = read("x: !int ${a.output}\n");
+    expect([slot.value, slot.hasValue]).toEqual(["${a.output}", true]);
+    expect(typeEquals(slot.contract!.type, t("int"))).toBe(true);
+    expect(slot.contract!.origins.default).not.toBeNull();
+  });
+
+  test("an untagged value has no contract and is unchanged", () => {
+    expect(read("x: ${a.output}\n")).toEqual(new TaggedSlot("${a.output}", null, true));
+    expect(read("x: {a: 1, b: [y, 2.5], c: null}\n")).toEqual(
+      new TaggedSlot({ a: 1n, b: ["y", 2.5], c: null }, null, true),
+    );
+    expect(read("x: '$$5'\n").value).toBe("$$5");
+  });
+
+  test("every tag read is recorded in the ledger", () => {
+    const document = SourceDocument.parse(
+      "x: !Order {decision: !Buy {action: buy, conviction: !float 1}, qty: !int 1}\n" +
+        "y: !int 2\n",
+    );
+    const ledger = new Set<number>();
+    read("", "x", { document, ledger });
+    const unread = document.root.child("y").tagDefinitionId;
+    const all = document.taggedNodes().map((node) => node.definitionId);
+    expect(ledger).toEqual(new Set(all.filter((id) => id !== unread)));
+    expect(ledger.size).toBe(4);
+  });
+
+  test("an empty tagged value has no value", () => {
+    const slot = read("x: !Optional(int)\n");
+    expect([slot.value, slot.hasValue]).toEqual([null, false]);
+    expect(slot.contract!.type.nullable).toBe(true);
+  });
+
+  test.each(["x:\n  - !int\n", "x:\n  d: !Buy\n", "x: !list(int)\n  - 1\n  - !int\n"])(
+    "a nested empty tag is an error: %p",
+    (text) => {
+      fails(text, "a nested tag needs a value");
+    },
+  );
+
+  test.each([
+    ["x: !int (1..12) 5\n", "`!int(1..12)`"],
+    ["x: !Optional (str)\n", "`!Optional(str)`"],
+    ["x: [!int (1..12) 5]\n", "`!int(1..12)`"],
+  ])("a space after a tag is an error: %p", (text, spelled) => {
+    fails(text, `a YAML tag ends at the first space; write ${spelled} without spaces`);
+  });
+
+  test("quoted text starting with a parenthesis is text", () => {
+    expect(read("x: !str '(a) b'\n").value).toBe("(a) b");
+  });
+
+  test("top-level strings are kept as written", () => {
+    expect(read('x: !str "Status: ${a.output}"\n').value).toBe("Status: ${a.output}");
+    expect(read("x: !int call(f, a=1)\n").value).toBe("call(f, a=1)");
+    expect(read("x: !str '$$5'\n").value).toBe("$$5");
+  });
+
+  test("a nested tagged template becomes a nested binding", () => {
+    const slot = read('x: {d: !Buy "${d.output}", n: 1}\n');
+    const template = templateOf(slot);
+    expect(slot.contract).toBeNull();
+    const value = template.value as Record<string, unknown>;
+    const nested = bindingOf(value["d"]);
+    expect(nested.source).toBe("${d.output}");
+    expect(typeEquals(nested.contract!.type, t("Buy"))).toBe(true);
+    expect(nested.origin).not.toBeNull();
+    expect(nested.contract!.origins.default).toBe(nested.origin);
+    expect(value["n"]).toBe(1n);
+    const leaf = template.originAt(["d"]);
+    expect(leaf).not.toBeNull();
+    expect(leaf!.key).not.toBe(nested.origin!.key);
+  });
+
+  test("a nested tagged literal is checked and kept as a binding", () => {
+    const value = templateOf(read("x: {q: !int 5, s: !str '$$x'}\n")).value as Record<
+      string,
+      unknown
+    >;
+    expect(bindingOf(value["q"]).source).toBe(5n);
+    expect(typeEquals(bindingOf(value["q"]).contract!.type, t("int"))).toBe(true);
+    // The binder unescapes `$$` in a template, so the raw text is kept.
+    expect(bindingOf(value["s"]).source).toBe("$$x");
+    fails("x: {q: !int '5'}\n", "'x.q': `\"5\"` is not a valid int");
+  });
+
+  test("a list of tagged items", () => {
+    const items = templateOf(read('x: !list(int) [!int "${a.output}", !int 2]\n'))
+      .value as unknown[];
+    const [first, second] = items.map(bindingOf);
+    expect([first!.source, second!.source]).toEqual(["${a.output}", 2n]);
+    for (const binding of [first!, second!]) {
+      expect(typeEquals(binding.contract!.type, t("int"))).toBe(true);
+    }
+  });
+
+  test.each(["x: {a: call(f)}\n", "x: {a: 'call(f, b=1)'}\n", "x: [' call(f)']\n"])(
+    "a nested call is an error: %p",
+    (text) => {
+      fails(
+        text,
+        "a `call(...)` inside a value isn't supported; bind it at the top level, " +
+          "or reword the text",
+      );
+    },
+  );
+
+  test("nested spans make a template with raw leaf strings", () => {
+    const template = templateOf(read('x: {a: "${n.output}", b: [1, "${m.output}"], c: "$$x"}\n'));
+    expect(template.value).toEqual({ a: "${n.output}", b: [1n, "${m.output}"], c: "$$x" });
+    expect(template.originAt(["a"])).not.toBeNull();
+    expect(template.originAt(["b", 1])).not.toBeNull();
+    expect(template.originAt(["c"])).not.toBeNull();
+  });
+
+  test("a span-free container is a literal unescaped once", () => {
+    expect(read('x: {c: "$$x", d: ["$$$${y}"]}\n').value).toEqual({ c: "$x", d: ["$${y}"] });
+  });
+
+  test("a top-level tagged container with spans is checked later", () => {
+    templateOf(read('x: !Buy {action: buy, conviction: "${c.output}"}\n'));
+  });
+
+  test("a wrong literal is an error", () => {
+    fails("x: !int '5'\n", "'x': `\"5\"` is not a valid int");
+    fails("x: !int(1..12) 13\n", "`13` is not a valid int(1..12)");
+    fails(
+      "x: !date 2026/01/01\n",
+      "'x': `2026/01/01` is not a valid date (date must look like 2026-05-21)",
+    );
+    fails("x: !Buy {action: sell, conviction: 1}\n", "not a valid Buy");
+    fails('x: !Order {decision: !Buy {action: buy, conviction: 1}, qty: "1"}\n', "(at `x.qty`)");
+  });
+
+  test("a str literal read as a number gets the quote hint", () => {
+    fails(
+      "x: !str 30\n",
+      "'x': `30` is not a valid str; quote it to keep it as text: `x: !str \"30\"`",
+    );
+    const message = loadError(() => read("x: !str true\n")).message;
+    expect(message).toContain('`x: !str "true"`');
+    expect(message).toContain("(YAML reads unquoted true/false as booleans)");
+    expect(read("x: !str yes\n").value).toBe("yes");
+    // An unquoted date is text, so it fits `str` as written.
+    const items = templateOf(read("x: [!str 2026-01-01]\n")).value as unknown[];
+    expect(bindingOf(items[0]).source).toBe("2026-01-01");
+  });
+
+  test.each([
+    ["x: !Buy {conviction: 1}\n", "x.action"],
+    ["x: !list(Buy) [{conviction: 1}]\n", "x[0].action"],
+    ["x: !Order {decision: {conviction: 1}, qty: 1}\n", "x.decision.action"],
+    ["x: {d: !Buy {conviction: 1}}\n", "x.d.action"],
+  ])("a tag never fills in a missing field: %p", (text, at) => {
+    fails(text, `record missing required fields: ["action"] (at \`${at}\`)`);
+  });
+
+  test("a valid union member loads", () => {
+    expect(read("x: !Decision {action: sell, conviction: 0.5}\n").value).toEqual({
+      action: "sell",
+      conviction: 0.5,
+    });
+  });
+
+  test("literalOnly folds nested tags into a plain value", () => {
+    const slot = read("x: !Order {decision: !Buy {action: buy, conviction: 1}, qty: 1}\n", "x", {
+      literalOnly: true,
+    });
+    expect(slot.value).toEqual({ decision: { action: "buy", conviction: 1n }, qty: 1n });
+    expect(read("x: !str ${y}\n", "x", { literalOnly: true }).value).toBe("${y}");
+    expect(read('x: {s: "$$y", t: call(f)}\n', "x", { literalOnly: true }).value).toEqual({
+      s: "$$y",
+      t: "call(f)",
+    });
+    expect(read("x: !int\n", "x", { literalOnly: true }).hasValue).toBe(false);
+    fails("x: {d: !Buy {conviction: 1}}\n", "record missing required fields", {
+      literalOnly: true,
+    });
+  });
+
+  test("text starting with a parenthesis after a tag must be quoted", () => {
+    fails(
+      "x: !str (555) 123-4567\n",
+      "'x': a YAML tag ends at the first space; quote the text: " +
+        '`x: !str "(555) 123-4567"`',
+    );
+    fails("x: [!str (555) 1]\n", 'quote the text: `!str "(555) 1"`');
+    fails("x: !Strr (a)\n", "Did you mean `str`?");
+  });
+
+  test("a mismatch at the root does not repeat the path", () => {
+    const message = loadError(() => read("x: !int [1]\n")).message;
+    expect(message).toContain("'x': the value is not a valid int:");
+    expect(message).not.toContain("(at");
+  });
+
+  test("block scalar text is quoted in messages", () => {
+    fails("x: !int |\n  5\n", '`"5\\n"` is not a valid int');
+  });
+
+  test("a recursive value error names the slot", () => {
+    fails("x: &a {b: *a}\n", "'x': cannot descend through a recursive alias");
+  });
+
+  test("text starting with a call skips the load check", () => {
+    // The inline-call desugar knows the YAML style: unquoted, the text must be one well-formed
+    // directive; quoted, it is text.
+    expect(read("x: !str call(f) and more\n").value).toBe("call(f) and more");
+    expect(read("x: !int call(f) and more\n").value).toBe("call(f) and more");
+    expect(read("x: !int call(f, a=1)\n").value).toBe("call(f, a=1)");
+    fails("x: !int calls(f)\n", "is not a valid int");
+  });
+
+  test("a verbatim tag carries brackets and commas into the tag", () => {
+    fails(
+      "x: !<!list[Buy]> v\n",
+      "'x': a tag can't contain `[`, `]`, `{` or `}` (strict YAML 1.2); write `!list(Buy)`",
+    );
+    fails(
+      "x: !<!Union(Buy,Sell)> v\n",
+      "'x': `!Union(Buy,Sell)`: a tag can't contain `,`; name it in `typedefs:`",
+    );
+  });
+
+  test("a tag in a flow collection stops at the comma", () => {
+    fails("x: {d: !Union(Buy, Sell) y}\n", "'x.d': `!Union(Buy` is not a complete type");
+  });
+
+  test("a %XX escape in a tag is kept raw", () => {
+    fails("x: !e%2Cf v\n", "'x': `!e%2Cf` is not a type (");
+  });
+
+  test("!Any takes a date as text and refuses a null", () => {
+    expect(read("x: !Any 2026-01-01\n").value).toBe("2026-01-01");
+    fails(
+      "x: !Any null\n",
+      "'x': `null` is not a valid Any; to allow null, write `x: !Optional(Any) null`",
+    );
+  });
+});
+
+// ---------- rejectTaggedOutput, rejectUnreadTags ----------
+
+/** Return the message of the `LoadError` checking `output:` in `text` throws. */
+function outputRejection(text: string): string {
+  const document = SourceDocument.parse(text);
+  const diagnostics = LoadDiagnostics.fromDocument(document);
+  return loadError(() => rejectTaggedOutput(document.root.child("output"), diagnostics)).message;
+}
+
+/** Check `text` for unread tags with an empty ledger. */
+function checkUnread(text: string, options: { typedefsOnly?: boolean } = {}): void {
+  const document = SourceDocument.parse(text);
+  rejectUnreadTags(document, new Set(), LoadDiagnostics.fromDocument(document), options);
+}
+
+describe("tag positions", () => {
+  test("rejectTaggedOutput names a nested record key and a list item", () => {
+    expect(outputRejection("output:\n  a:\n    b: !int\n")).toBe(
+      "`output:` declares a type; write `b: int`, without a tag",
+    );
+    expect(outputRejection("output:\n  - str\n  - !int\n")).toBe(
+      "`output:` declares a type; an item of `output:` is tagged `!int`; write the type " +
+        "without a tag",
+    );
+  });
+
+  test("rejectUnreadTags with typedefsOnly checks only typedefs", () => {
+    checkUnread("kind: !str code\ntypedefs:\n  A: int\n", { typedefsOnly: true });
+    expect(
+      loadError(() => checkUnread("typedefs:\n  A: !int x\n", { typedefsOnly: true })).message,
+    ).toBe("typedef 'A': a type definition is written as a type, without a tag");
+    expect(loadError(() => checkUnread("kind: !str code\n")).message).toContain(
+      "`kind:` is not one",
+    );
+  });
+
+  test("rejectUnreadTags skips a tag under an x- key", () => {
+    checkUnread("x-a: !int 1\nb: 2\n");
+  });
+
+  test("rejectUnreadTags gives a tagged mapping key its own message", () => {
+    expect(loadError(() => checkUnread("a:\n  !int b: 1\n")).message).toBe(
+      "`!int b:` tags a mapping key; a tag types a value, so put it after the colon: " +
+        "`b: !int <value>`",
+    );
+  });
+});
+
+// ---------- Harvested cases ----------
+
+/** The call the loader makes on a case's document; `builder` holds the ledger reads. */
+type Call = (
+  document: SourceDocument,
+  registry: TypeRegistry,
+  diagnostics: LoadDiagnostics,
+  builder: SourceCatalogBuilder,
+) => void;
+
+/** A slot `readTaggedValue` reads: its path from the root, its label, and its options. */
+type Slot = [
+  path: (string | number)[],
+  label: string,
+  options?: { literalOnly?: boolean; nestedCallFix?: string },
+];
+
+interface Row {
+  /** The case, `group/name`. */
+  id: string;
+  call: Call;
+  /** Slots read first, so the ledger holds every legitimately read tag. */
+  ledger?: Slot[];
+  /** A file of the case other than its flow. */
+  file?: string;
+  /** The loader's prefix on the expected message. */
+  prefix?: string;
+}
+
+const LLM_CONFIG_CALL_FIX =
+  "compute it in a node and read that node's output with `${...}`, or reword the text";
+
+/** Return the cursor at `path` from the document root. */
+function at(document: SourceDocument, path: (string | number)[]): SourceCursor {
+  return path.reduce((cursor: SourceCursor, step) => cursor.child(step), document.root);
+}
+
+/** Read `slot` as the loader does, with the file's consumed-tag ledger. */
+function readSlot(
+  [path, label, options = {}]: Slot,
+  document: SourceDocument,
+  registry: TypeRegistry,
+  diagnostics: LoadDiagnostics,
+  builder: SourceCatalogBuilder,
+): void {
+  readTaggedValue(at(document, path), registry, {
+    label,
+    sitePath: path,
+    catalogBuilder: builder,
+    diagnostics,
+    ledger: builder.consumedTags,
+    ...options,
+  });
+}
+
+const slot =
+  (...read: Slot): Call =>
+  (document, registry, diagnostics, builder) =>
+    readSlot(read, document, registry, diagnostics, builder);
+
+const output =
+  (path: (string | number)[]): Call =>
+  (document, _registry, diagnostics) =>
+    rejectTaggedOutput(at(document, path), diagnostics);
+
+const unread =
+  (options: { typedefsOnly?: boolean } = {}): Call =>
+  (document, _registry, diagnostics, builder) =>
+    rejectUnreadTags(document, builder.consumedTags, diagnostics, options);
+
+/** Return the case's `env:`, read before any flow parses. */
+function caseEnv(id: string): Record<string, string> {
+  const url = new URL(`../../../conformance/cases/${id}.yaml`, import.meta.url);
+  return (readCase(readFileSync(url, "utf8"))["env"] ?? {}) as Record<string, string>;
+}
+
+/** Make the row's call on its case and compare the result with the case's `expect`. */
+function runRow(row: Row): void {
+  const env = caseEnv(row.id);
+  reload((name) => (Object.hasOwn(env, name) ? env[name] : undefined));
+  try {
+    const { case_, document } = caseDocument(row.id, { file: row.file });
+    const root = document.root;
+    const registry: TypeRegistry = root.has("typedefs")
+      ? readTypedefs(root.mapping("typedefs"))
+      : new Map();
+    const diagnostics = LoadDiagnostics.fromDocument(document);
+    const builder = new SourceCatalogBuilder();
+    for (const read of row.ledger ?? []) readSlot(read, document, registry, diagnostics, builder);
+    const expected = (case_["expect"] as Case)["load"];
+    if (expected === "ok") {
+      row.call(document, registry, diagnostics, builder);
+      return;
+    }
+    const error = loadError(() => row.call(document, registry, diagnostics, builder));
+    const frame = error.diagnostic.frames.at(-1)!;
+    const range = frame.range;
+    const diagnostic = ((expected as Case)["diagnostics"] as Case[])[0]!;
+    const expectedFrame = (diagnostic["frames"] as Case[]).at(-1)!;
+    const message = diagnostic["message"] as string;
+    const prefix = row.prefix ?? "";
+    expect(message.startsWith(prefix)).toBe(true);
+    expect([
+      error.message,
+      frame.label,
+      [range.startLine, range.startCol, range.endLine, range.endCol],
+    ]).toEqual([
+      message.slice(prefix.length),
+      expectedFrame["label"] as string,
+      (expectedFrame["range"] as bigint[]).map(Number),
+    ]);
+  } finally {
+    forget();
+  }
+}
+
+describe("harvested cases", () => {
+  test.each<Row>([
+    {
+      id: "types/compose_open_range_flows__no_ends_in_a_tag",
+      call: slot(["nodes", "use", "input", "x"], "x"),
+    },
+    {
+      id: "types/compose_open_range_flows__tagged_literal_outside_an_open_range",
+      call: slot(["nodes", "use", "input", "x"], "x"),
+    },
+    {
+      id: "load-types/compose_any_flows__a_null_any_literal_is_a_load_error",
+      call: slot(["nodes", "n", "input", "x"], "x"),
+    },
+    {
+      id: "load-types/compose_tagged_bindings__tagged_mapping_output_that_does_not_fit_fails",
+      call: slot(["output"], "output"),
+    },
+    {
+      id: "load-types/compose_tagged_bindings__unknown_tag_on_an_input_offers_a_close_match",
+      call: slot(["nodes", "use", "input", "qty"], "qty"),
+    },
+    {
+      id: "load-types/compose_typed_bindings_check__null_literal_for_an_output_field",
+      call: slot(["output", "x"], "x"),
+    },
+    {
+      id: "load-types/compose_typed_bindings_check__number_literal_for_str_suggests_quoting",
+      call: slot(["nodes", "use", "input", "x"], "x"),
+    },
+    {
+      id: "load-types/compose_typed_bindings_check__text_literal_for_int_fails_at_its_line",
+      call: slot(["nodes", "use", "input", "x"], "x"),
+    },
+    {
+      id: "load-types/compose_typed_bindings_check__true_literal_for_str_explains_yaml_booleans",
+      call: slot(["nodes", "use", "input", "x"], "x"),
+    },
+    {
+      id: "load-case/compose_value_entries_load__a_list_under_an_object_tag_is_rejected",
+      call: slot(["nodes", "x"], "x"),
+    },
+    {
+      id: "load-case/compose_value_entries_load__a_mistyped_literal_under_a_credential_name",
+      call: slot(["nodes", "api_key"], "api_key"),
+    },
+    {
+      id: "load-case/compose_value_entries_load__a_nested_tag_is_checked_at_its_own_line",
+      call: slot(["nodes", "x"], "x"),
+    },
+    {
+      id: "load-case/compose_value_entries_load__a_number_under_a_str_tag_asks_for_quotes",
+      call: slot(["nodes", "x"], "x"),
+    },
+    {
+      id: "load-case/compose_value_entries_load__a_spaced_tag_is_rejected",
+      call: slot(["nodes", "x"], "x"),
+    },
+    {
+      id: "load-case/compose_value_entries_load__a_tag_does_not_fill_in_a_missing_field",
+      call: slot(["nodes", "x"], "x"),
+    },
+    {
+      id: "load-case/compose_value_entries_load__an_unknown_tag_suggests_a_type",
+      call: slot(["nodes", "x"], "x"),
+    },
+    {
+      id: "load-agent/compose_llm_config_values_load__a_call_inside_an_llm_config_string_fails",
+      call: slot(["nodes", "a", "llm_config"], "llm_config", {
+        nestedCallFix: LLM_CONFIG_CALL_FIX,
+      }),
+    },
+    {
+      id: "yaml/compose_untyped_output_dates__any_tag_on_a_date",
+      call: slot(["output", "as_of"], "as_of"),
+    },
+    {
+      id: "yaml/compose_yaml_node_limit__a_recursive_alias_keeps_its_error",
+      call: slot(["nodes", "use", "input", "topic"], "topic"),
+    },
+    {
+      id: "yaml/compose_yaml_words__former_boolean_in_a_bool_slot",
+      call: slot(["output", "ok"], "ok"),
+    },
+    {
+      id: "yaml/compose_yaml_words__former_boolean_inside_a_list_gets_no_fix",
+      call: slot(["output", "ok"], "ok"),
+    },
+    {
+      id: "types/compose_any_name_literals__a_typed_binding_under_a_credential_name_loads",
+      call: slot(["nodes", "fetch", "input", "password"], "password"),
+    },
+    {
+      id: "load-types/compose_typed_bindings_check__a_null_literal_fits_an_optional_tag",
+      call: slot(["nodes", "use", "input", "x"], "x"),
+    },
+    {
+      id: "load-types/compose_typed_bindings_check__str_into_literal_loads",
+      call: slot(["nodes", "use", "input", "x"], "x"),
+    },
+  ])("readTaggedValue: $id", runRow);
+
+  test.each<Row>([
+    {
+      id: "load-types/compose_tag_positions__tagged_agent_output_is_rejected",
+      call: output(["nodes", "n", "output"]),
+    },
+    {
+      id: "load-types/compose_tag_positions__tagged_compact_output_is_rejected_at_its_line",
+      call: output(["output"]),
+    },
+    {
+      id: "load-types/compose_tag_positions__tagged_list_item_in_a_node_output_says_the_item_is_tagged",
+      call: output(["nodes", "n", "output"]),
+    },
+    {
+      id: "load-types/compose_tag_positions__tagged_tool_output_is_rejected",
+      call: output(["nodes", "n", "output"]),
+    },
+    {
+      id: "load-types/compose_tag_positions__tagged_single_node_def_output_is_rejected",
+      call: output(["defs", "echo", "output"]),
+      prefix: "defs entry 'echo': ",
+    },
+  ])("rejectTaggedOutput: $id", runRow);
+
+  test.each<Row>([
+    {
+      id: "load-types/compose_tag_positions__tag_on_kind_is_rejected_at_its_line",
+      call: unread(),
+    },
+    {
+      id: "load-types/compose_tag_positions__tag_on_prompt_is_rejected_at_its_line",
+      call: unread(),
+    },
+    {
+      id: "load-types/compose_tag_positions__tag_outside_a_slot_in_a_def_is_rejected",
+      call: unread(),
+      ledger: [[["defs", "sub", "input", "x"], "x", { literalOnly: true }]],
+    },
+    {
+      id: "load-types/compose_tag_positions__tag_outside_a_slot_in_a_uses_child_is_rejected",
+      call: unread(),
+      file: "child.yaml",
+      ledger: [[["input", "x"], "x", { literalOnly: true }]],
+    },
+    {
+      id: "load-types/compose_tag_positions__tag_outside_a_slot_in_an_inline_body_is_rejected",
+      call: unread(),
+    },
+    {
+      id: "load-types/compose_tag_positions__tagged_mapping_key_gets_its_own_message",
+      call: unread(),
+    },
+    {
+      id: "load-types/compose_tag_positions__tagged_typedef_is_rejected_at_its_line",
+      call: unread({ typedefsOnly: true }),
+    },
+    {
+      id: "load-types/compose_tag_positions__tags_in_flow_inputs_load",
+      call: unread(),
+      ledger: [
+        [["input", "n"], "n", { literalOnly: true }],
+        [["input", "m"], "m", { literalOnly: true }],
+      ],
+    },
+    {
+      id: "load-types/compose_tag_positions__tags_in_a_def_slot_load",
+      call: unread(),
+      ledger: [
+        [["defs", "sub", "input", "x"], "x", { literalOnly: true }],
+        [["defs", "sub", "nodes", "echo", "input", "value"], "value"],
+      ],
+    },
+    {
+      id: "load-types/compose_tag_positions__tag_under_an_extension_key_aliased_into_a_slot_loads",
+      call: unread(),
+      ledger: [[["nodes", "n", "input", "qty"], "qty"]],
+    },
+  ])("rejectUnreadTags: $id", runRow);
 });

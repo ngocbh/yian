@@ -27,6 +27,7 @@ export function cautious(inputs: Record<string, any>): string {
 /** A `{report, n}` child codomain (CALL re-exports it; MAP collects a list of it). */
 export function make_report(inputs: Record<string, any>): Record<string, unknown> {
   const t = inputs.topic;
+  // Python's len() counts code points, not UTF-16 units.
   return { report: `report for ${t}`, n: BigInt([...t].length) };
 }
 

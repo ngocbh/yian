@@ -3568,17 +3568,19 @@ def test_raised_reports_a_private_class_as_its_public_base() -> None:
 
 
 def test_compose_codefns_references_are_exported() -> None:
-    """Every `_compose_codefns` fixture function a committed case's flow or files names exists."""
+    """Committed cases name `_compose_codefns` fixture functions in their flow or files, and
+    the fixture exports each one."""
     from tests import conformance_harvest as harvest
 
-    reference = re.compile(r"(?:\./|(?:\.\./)+)fixtures/compose_codefns\.ts:([A-Za-z_]\w*)")
-    texts = ["nodes:\n  p: {kind: code, code: ./fixtures/compose_codefns.ts:make_plan}\n"]
+    file = harvest._FIXTURE_MODULES["tests.engine._compose_codefns"]
+    reference = re.compile(rf"fixtures/{re.escape(file)}:(\w+)")
+    texts = []
     for path in sorted((_ROOT / "cases").rglob("*.yaml")):
         case = _read(path)
         texts += [case.get("flow", ""), *case.get("files", {}).values()]
     names = {name for text in texts for name in reference.findall(text)}
-    exported = harvest._exported(harvest._FIXTURE_MODULES["tests.engine._compose_codefns"])
-    assert names - exported == set()
+    assert names
+    assert names - harvest._exported(file) == set()
 
 
 _CODE_TESTS = '''

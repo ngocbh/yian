@@ -6,8 +6,8 @@
  * Changed: `test_when_on_non_case_node_suggests_a_case_node` sweeps the registered kinds but
  * `case`, through `parseNodes` where Python loads the flow;
  * `test_when_on_case_node_points_at_cases_entries` runs on a `case` stand-in carrying the case
- * kind's `whenHint`. The harvested `compose_node_when_hint__when_on_*` cases of
- * the registered kinds are pinned.
+ * kind's `whenHint`. The harvested `compose_node_when_hint__when_on_*` cases of the registered
+ * kinds are pinned.
  *
  * Later (T3-16): the sweep's rows and pinned cases for the kinds not registered yet, and the real
  * `case` kind's hint.

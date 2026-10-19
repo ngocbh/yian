@@ -4,8 +4,9 @@
  * (rows 1-4 and 6), through each kind's `parse` on the node's cursor with `input:` renamed to
  * `inputs` as the parse phase does: the registered `AgentDescriptor`, `CodeDescriptor`,
  * `ToolDescriptor` and `HumanInputDescriptor` for `agent`, `code`, `tool` and `human_input`, a
- * stand-in's template `parse` for each kind not yet ported. The harvested `whole_reference_input_{code,agent}` cases are pinned at the end. A
- * text value is spelled by `valueRepr` (`"abc"` and `true` where Python shows `'abc'` and `True`).
+ * stand-in's template `parse` for each kind not yet ported. The harvested
+ * `whole_reference_input_{code,agent}` cases are pinned at the end. A text value is spelled by
+ * `valueRepr` (`"abc"` and `true` where Python shows `'abc'` and `True`).
  *
  * Dropped: the date row of `test_non_mapping_input_is_a_load_error` (TS reads an unquoted date
  * as text).

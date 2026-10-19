@@ -18,6 +18,9 @@ import { iterSse } from "../../src/llm/framing.ts";
 import {
   Message,
   NamedTool,
+  type Part,
+  ReasoningPart,
+  RefusalPart,
   type ReplayDegradedReason,
   Request,
   type Response,
@@ -151,8 +154,9 @@ interface Call {
 }
 
 /**
- * What one turn's reply must parse to; `finish` defaults to `stop`, `usage` to the shared
- * `USAGE`, `responseId` to `chatcmpl-1`. `reasoning` and `refusal` are checked when given.
+ * What one turn's reply must parse to; `calls` defaults to none, `finish` to `stop`, `usage` to
+ * the shared `USAGE`, `responseId` to `chatcmpl-1`. `reasoning` and `refusal` are checked when
+ * given.
  */
 interface Reply {
   text: string;
@@ -180,15 +184,14 @@ interface Scenario {
   turns: Turn[];
   /** One per turn, unless the last turn fails. */
   replies: Reply[];
+  /** The `authorization` header every request must send (the cassette compares it redacted). */
+  sentAuthorization?: string;
   /** The last turn's error. */
   error?: { kind: ErrorKind; retryable: boolean; message: string };
   /** Run each turn through `callWithRetries`. */
   retries?: boolean;
-  /**
-   * The `onRetry` calls: the error kind, the partial message's text (`null` for no partial) and,
-   * when given, the wait.
-   */
-  retried?: { kind: ErrorKind; partial: string | null; retryIn?: number }[];
+  /** The `onRetry` calls: the error kind, the partial message's text (`null` for no partial), the wait. */
+  retried?: { kind: ErrorKind; partial: string | null; retryIn: number }[];
   /** The `onReplayDegraded` calls. */
   degraded?: ReplayDegradedReason[];
 }
@@ -204,15 +207,16 @@ const hello = (parts = ["text"], extra: Partial<Reply> = {}): Reply => ({ text: 
 const thinkingHello = hello(["reasoning", "text"], { reasoning: "Thinking." });
 const ok = text("ok");
 const itIs6 = text("It is 6.");
-const toolCall = (parts: string[], calls?: Call[], extra: Partial<Reply> = {}): Reply => ({
+const toolCall = (calls: Call[], parts = ["tool_call"], extra: Partial<Reply> = {}): Reply => ({
   text: "",
   parts,
-  ...(calls ? { calls } : {}),
+  calls,
   finish: "tool_calls",
   ...extra,
 });
 const doubleCall = call("call_1", "double", { value: 3n });
 const answerCall = call("call_1", "Answer", { answer: "x", score: 1n });
+const openCall = call("call_1", "Open", { answer: "x", extra: { k: 1n } });
 
 const PLAIN_TURN: Turn = () => request(PLAIN);
 const TOOLS_TURN: Turn = () => request(TOOLS, { tools: [DOUBLE] });
@@ -233,11 +237,6 @@ function followUp(messages: Message[], followUpText: string): Turn {
   return ([first]) => request([...messages, first!.message, user(followUpText)]);
 }
 
-/** A reply holding only tool calls; the calls are checked when given. */
-function callsOnly(calls?: Call[]): Reply {
-  return toolCall(["tool_call"], calls);
-}
-
 const SCENARIOS: Record<string, Scenario> = {
   xai_plain: { turns: [PLAIN_TURN], replies: [thinkingHello] },
   xai_user_multipart: {
@@ -250,7 +249,7 @@ const SCENARIOS: Record<string, Scenario> = {
     ],
     replies: [hello()],
   },
-  xai_tools: { turns: [TOOLS_TURN], replies: [toolCall(["reasoning", "tool_call"], [doubleCall])] },
+  xai_tools: { turns: [TOOLS_TURN], replies: [toolCall([doubleCall], ["reasoning", "tool_call"])] },
   xai_turn2: { turns: [toolsTurn2("xai_tools")], replies: [itIs6] },
   xai_turn2_mixed_calls: {
     turns: [
@@ -278,12 +277,12 @@ const SCENARIOS: Record<string, Scenario> = {
   xai_parallel: {
     turns: [TOOLS_TURN],
     replies: [
-      toolCall(["text", "tool_call", "tool_call"], [doubleCall, call("call_2", "double", { value: 4n })], {
+      toolCall([doubleCall, call("call_2", "double", { value: 4n })], ["text", "tool_call", "tool_call"], {
         text: "Calling.",
       }),
     ],
   },
-  xai_tool_choice_named: { turns: [ANSWER_TURN], replies: [callsOnly([answerCall])] },
+  xai_tool_choice_named: { turns: [ANSWER_TURN], replies: [toolCall([answerCall])] },
   xai_block_merge: {
     block: { reasoning_effort: "high", max_completion_tokens: 100n, stop: ["END"], temperature: 0.2 },
     turns: [HI_TURN],
@@ -293,8 +292,8 @@ const SCENARIOS: Record<string, Scenario> = {
     turns: [TOOLS_TURN],
     replies: [
       toolCall(
-        ["tool_call", "tool_call", "tool_call"],
         [doubleCall, call("call_2", "double", { value: 4n }), call("call_3", "double", null, '{"value": 5')],
+        ["tool_call", "tool_call", "tool_call"],
       ),
     ],
   },
@@ -303,7 +302,7 @@ const SCENARIOS: Record<string, Scenario> = {
       TOOLS_TURN,
       ([first]) => request([...TOOLS, first!.message, toolResult("yian_call_0", "6")], { tools: [DOUBLE] }),
     ],
-    replies: [callsOnly([call("yian_call_0", "double", { value: 3n })]), itIs6],
+    replies: [toolCall([call("yian_call_0", "double", { value: 3n })]), itIs6],
   },
   xai_nameless_call: {
     turns: [TOOLS_TURN],
@@ -320,7 +319,7 @@ const SCENARIOS: Record<string, Scenario> = {
     retries: true,
     turns: [HI_TURN],
     replies: [ok],
-    retried: [{ kind: "rate_limit", partial: null }],
+    retried: [{ kind: "rate_limit", partial: null, retryIn: 0.5 }],
   },
   error_400: {
     turns: [HI_TURN],
@@ -331,14 +330,14 @@ const SCENARIOS: Record<string, Scenario> = {
     retries: true,
     turns: [HI_TURN],
     replies: [ok],
-    retried: [{ kind: "incomplete", partial: "Hello there." }],
+    retried: [{ kind: "incomplete", partial: "Hello there.", retryIn: 0.5 }],
   },
 
   deepseek_reasoner: { provider: "deepseek", turns: [PLAIN_TURN], replies: [thinkingHello] },
   deepseek_tools: {
     provider: "deepseek",
     turns: [TOOLS_TURN],
-    replies: [toolCall(["reasoning", "tool_call"], undefined, { reasoning: "Need the tool." })],
+    replies: [toolCall([doubleCall], ["reasoning", "tool_call"], { reasoning: "Need the tool." })],
   },
   deepseek_turn2: { provider: "deepseek", turns: [toolsTurn2("deepseek_tools")], replies: [itIs6] },
   deepseek_turn2_text: {
@@ -364,7 +363,7 @@ const SCENARIOS: Record<string, Scenario> = {
   deepseek_tool_choice_suppressed: {
     provider: "deepseek",
     turns: [ANSWER_TURN],
-    replies: [toolCall(["reasoning", "tool_call"])],
+    replies: [toolCall([answerCall], ["reasoning", "tool_call"])],
   },
   deepseek_block_merge: {
     provider: "deepseek",
@@ -385,8 +384,8 @@ const SCENARIOS: Record<string, Scenario> = {
     },
   },
 
-  qwen_plain: { provider: "qwen", turns: [PLAIN_TURN], replies: [hello(["reasoning", "text"])] },
-  qwen_cn_plain: { provider: "qwen-cn", turns: [PLAIN_TURN], replies: [hello(["reasoning", "text"])] },
+  qwen_plain: { provider: "qwen", turns: [PLAIN_TURN], replies: [thinkingHello] },
+  qwen_cn_plain: { provider: "qwen-cn", turns: [PLAIN_TURN], replies: [thinkingHello] },
   qwen_block_merge: {
     provider: "qwen",
     block: {
@@ -404,11 +403,11 @@ const SCENARIOS: Record<string, Scenario> = {
     provider: "qwen",
     model: "MiniMax-M2.5",
     turns: [ANSWER_TURN],
-    replies: [callsOnly()],
+    replies: [toolCall([answerCall])],
   },
 
-  glm_plain: { provider: "glm", turns: [PLAIN_TURN], replies: [hello(["reasoning", "text"])] },
-  glm_cn_plain: { provider: "glm-cn", turns: [PLAIN_TURN], replies: [hello(["reasoning", "text"])] },
+  glm_plain: { provider: "glm", turns: [PLAIN_TURN], replies: [thinkingHello] },
+  glm_cn_plain: { provider: "glm-cn", turns: [PLAIN_TURN], replies: [thinkingHello] },
   glm_block_merge: {
     provider: "glm",
     block: { thinking: { type: "enabled", clear_thinking: false }, do_sample: false, max_tokens: 64n },
@@ -418,7 +417,7 @@ const SCENARIOS: Record<string, Scenario> = {
 
   minimax_m2: { provider: "minimax", turns: [PLAIN_TURN], replies: [thinkingHello] },
   minimax_cn_plain: { provider: "minimax-cn", turns: [PLAIN_TURN], replies: [thinkingHello] },
-  minimax_m2_tool_choice_suppressed: { provider: "minimax", turns: [ANSWER_TURN], replies: [callsOnly()] },
+  minimax_m2_tool_choice_suppressed: { provider: "minimax", turns: [ANSWER_TURN], replies: [toolCall([answerCall])] },
   minimax_text01_plain: { provider: "minimax", model: "MiniMax-Text-01", turns: [PLAIN_TURN], replies: [hello()] },
   minimax_block_merge: {
     provider: "minimax",
@@ -446,19 +445,30 @@ const SCENARIOS: Record<string, Scenario> = {
     provider: "openrouter",
     model: "deepseek/deepseek-r1",
     turns: [ANSWER_TURN],
-    replies: [callsOnly()],
+    replies: [toolCall([answerCall])],
   },
   openrouter_error_chunk: {
     provider: "openrouter",
     retries: true,
     turns: [HI_TURN],
     replies: [ok],
-    retried: [{ kind: "server", partial: "ok" }],
+    retried: [{ kind: "server", partial: "ok", retryIn: 0.5 }],
   },
 
   vllm_plain: { provider: "vllm", turns: [PLAIN_TURN], replies: [thinkingHello] },
-  vllm_keyless: { provider: "vllm", auth: new BearerAuth("EMPTY"), turns: [HI_TURN], replies: [ok] },
-  vllm_deepseek_name: { provider: "vllm", model: "deepseek-reasoner", turns: [ANSWER_TURN], replies: [callsOnly()] },
+  vllm_keyless: {
+    provider: "vllm",
+    auth: new BearerAuth("EMPTY"),
+    sentAuthorization: "Bearer EMPTY",
+    turns: [HI_TURN],
+    replies: [ok],
+  },
+  vllm_deepseek_name: {
+    provider: "vllm",
+    model: "deepseek-reasoner",
+    turns: [ANSWER_TURN],
+    replies: [toolCall([answerCall])],
+  },
   vllm_inline_think: { provider: "vllm", turns: [HI_TURN], replies: [text("<think>\nhidden\n</think>\n\nVisible.")] },
   vllm_list_content: { provider: "vllm", turns: [HI_TURN], replies: [text("Part A.\nPart B.")] },
   vllm_no_usage_chunk: { provider: "vllm", turns: [HI_TURN], replies: [text("ok", { usage: null })] },
@@ -467,14 +477,20 @@ const SCENARIOS: Record<string, Scenario> = {
   azure_tools: {
     provider: "azure",
     turns: [TOOLS_TURN],
-    replies: [toolCall(["tool_call"], undefined, { responseId: "chatcmpl-az1" })],
+    replies: [toolCall([doubleCall], ["tool_call"], { responseId: "chatcmpl-az1" })],
   },
   azure_turn2: {
     provider: "azure",
     turns: [toolsTurn2("azure_tools")],
     replies: [text("It is 6.", { responseId: "chatcmpl-az2" })],
   },
-  azure_ad_token: { provider: "azure", auth: new BearerAuth("test-ad-token-1"), turns: [HI_TURN], replies: [ok] },
+  azure_ad_token: {
+    provider: "azure",
+    auth: new BearerAuth("test-ad-token-1"),
+    sentAuthorization: "Bearer test-ad-token-1",
+    turns: [HI_TURN],
+    replies: [ok],
+  },
   azure_block_merge: {
     provider: "azure",
     block: {
@@ -486,12 +502,8 @@ const SCENARIOS: Record<string, Scenario> = {
     turns: [HI_TURN],
     replies: [ok],
   },
-  azure_tool_choice_named: {
-    provider: "azure",
-    turns: [OPEN_TURN],
-    replies: [callsOnly([call("call_1", "Open", { answer: "x", extra: { k: 1n } })])],
-  },
-  azure_tool_choice_gpt4o: { provider: "azure", model: "gpt-4o", turns: [OPEN_TURN], replies: [callsOnly()] },
+  azure_tool_choice_named: { provider: "azure", turns: [OPEN_TURN], replies: [toolCall([openCall])] },
+  azure_tool_choice_gpt4o: { provider: "azure", model: "gpt-4o", turns: [OPEN_TURN], replies: [toolCall([openCall])] },
   azure_refusal: {
     provider: "azure",
     turns: [HI_TURN, followUp(HI, "Why not?")],
@@ -519,10 +531,10 @@ const SCENARIOS: Record<string, Scenario> = {
   },
 };
 
-function partText(response: Response, type: "reasoning" | "refusal"): string {
+function partText(response: Response, kind: typeof ReasoningPart | typeof RefusalPart): string {
   return response.message.parts
-    .filter((part) => part.type === type)
-    .map((part) => (part as { text: string }).text)
+    .filter((part: Part): part is ReasoningPart | RefusalPart => part instanceof kind)
+    .map((part) => part.text)
     .join("");
 }
 
@@ -530,17 +542,15 @@ function expectReply(response: Response, reply: Reply): void {
   const { message } = response;
   expect(message.text()).toBe(reply.text);
   expect(message.parts.map((part) => part.type)).toEqual(reply.parts as never);
-  if (reply.calls) {
-    const calls = message.toolCalls().map(({ id, name, arguments: args, rawArguments }) => ({
-      id,
-      name,
-      arguments: args,
-      rawArguments,
-    }));
-    expect(calls).toEqual(reply.calls);
-  }
-  if (reply.reasoning !== undefined) expect(partText(response, "reasoning")).toBe(reply.reasoning);
-  if (reply.refusal !== undefined) expect(partText(response, "refusal")).toBe(reply.refusal);
+  const calls = message.toolCalls().map(({ id, name, arguments: args, rawArguments }) => ({
+    id,
+    name,
+    arguments: args,
+    rawArguments,
+  }));
+  expect(calls).toEqual(reply.calls ?? []);
+  if (reply.reasoning !== undefined) expect(partText(response, ReasoningPart)).toBe(reply.reasoning);
+  if (reply.refusal !== undefined) expect(partText(response, RefusalPart)).toBe(reply.refusal);
   expect(response.usage).toEqual(reply.usage === undefined ? USAGE : reply.usage);
   expect(response.finishReason).toBe(reply.finish ?? "stop");
   expect(response.responseId).toBe(reply.responseId ?? "chatcmpl-1");
@@ -595,7 +605,12 @@ async function runScenario(name: string, scenario: Scenario): Promise<void> {
     partial: retry.partial === null ? null : retry.partial.text(),
     retryIn: retry.retryIn,
   }));
-  expect(seen).toMatchObject(scenario.retried ?? []);
+  expect(seen).toEqual(scenario.retried ?? []);
+  if (scenario.sentAuthorization !== undefined) {
+    for (const received of replay.requests) {
+      expect(received.headers.get("authorization")).toBe(scenario.sentAuthorization);
+    }
+  }
 
   // CassetteReplay checks that every recorded header was sent; this checks the reverse.
   replay.requests.forEach((received, index) => {

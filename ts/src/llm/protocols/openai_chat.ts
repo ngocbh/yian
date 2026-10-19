@@ -228,14 +228,14 @@ export class OpenAIChat implements SseProtocol {
    * are dense, in the order each part gets its first non-empty piece (a call, its first entry);
    * inside one chunk the order is reasoning, text, refusal, calls. A call entry joins the call
    * at its wire `index` with its id, else the last call at that index unless it brings a
-   * different id; without an index it joins the call with its id, else the last call. A call's id and name are the first non-empty ones,
-   * carried by the delta that brings them. A chunk's reasoning is its first non-empty source of
-   * `reasoning_content`, `reasoning` and the `reasoning.text` items of `reasoning_details`; on
-   * a route that echoes reasoning an empty `reasoning_content` opens the part too. A list
-   * `content` counts its text items and strings, joined with newlines. The finish reason is
-   * the last one sent, and is held until `[DONE]` or the end of the stream, so a usage chunk
-   * after it is read. Chunks without choices contribute only usage, unknown keys are ignored,
-   * and empty or non-object event data is skipped.
+   * different id; without an index it joins the call with its id, else the last call. A call's
+   * id and name are the first non-empty ones, carried by the delta that brings them. A chunk's
+   * reasoning is its first non-empty source of `reasoning_content`, `reasoning` and the
+   * `reasoning.text` items of `reasoning_details`; on a route that echoes reasoning an empty
+   * `reasoning_content` opens the part too. A list `content` counts its text items and strings,
+   * joined with newlines. The finish reason is the last one sent, and is held until `[DONE]` or
+   * the end of the stream, so a usage chunk after it is read. Chunks without choices contribute
+   * only usage, unknown keys are ignored, and empty or non-object event data is skipped.
    *
    * @param frames The reply's server-sent events, in order.
    * @returns The deltas, then one `PartDone` per part in index order (reasoning with its replay

@@ -2,12 +2,11 @@
  * A node's `input:` must be a mapping; any other value is a located load error naming the kind's
  * binding noun and showing a fix: the parse half of `tests/compose/test_node_input_shape.py`
  * (rows 1-4 and 6), through each kind's `parse` on the node's cursor with `input:` renamed to
- * `inputs` as the parse phase does: the registered `AgentDescriptor`, `CodeDescriptor`,
- * `ToolDescriptor`, `HumanInputDescriptor`, `CallDescriptor` and `MapDescriptor` for `agent`,
- * `code`, `tool`, `human_input`, `call` and `map`, a stand-in's template `parse` for `loop`, not
- * yet ported. The harvested `whole_reference_input_{agent,call,code}` cases are pinned at the
- * end. A text value is spelled by `valueRepr` (`"abc"` and `true` where Python shows `'abc'` and
- * `True`).
+ * `inputs` as the parse phase does: the registered `LoopDescriptor`, `CallDescriptor`,
+ * `MapDescriptor`, `CodeDescriptor`, `ToolDescriptor`, `AgentDescriptor` and
+ * `HumanInputDescriptor`. The harvested `whole_reference_input_{agent,call,code}` and
+ * `{empty_list,expression,number,whole_record}_loop_seed` cases are pinned at the end. A text
+ * value is spelled by `valueRepr` (`"abc"` and `true` where Python shows `'abc'` and `True`).
  *
  * Dropped: the date row of `test_non_mapping_input_is_a_load_error` (TS reads an unquoted date
  * as text).
@@ -26,14 +25,14 @@ import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
+import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { SourceDocument } from "../../src/compose/source/document.ts";
 import { type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
-import { standIn } from "./stand_ins.ts";
 
-const CLASSES: ReadonlyMap<string, DescriptorClass> = new Map([
-  ["loop", standIn("loop", { allow: ["times", "call", "inputs"] })],
+const CLASSES: ReadonlyMap<string, DescriptorClass> = new Map<string, DescriptorClass>([
+  ["loop", LoopDescriptor],
   ["call", CallDescriptor],
   ["map", MapDescriptor],
   ["code", CodeDescriptor],
@@ -140,6 +139,10 @@ test.each([
 });
 
 test.each<CaseRow>([
+  { id: "load-core/compose_node_input_shape__empty_list_loop_seed", call: parsedNodes },
+  { id: "load-core/compose_node_input_shape__expression_loop_seed", call: parsedNodes },
+  { id: "load-core/compose_node_input_shape__number_loop_seed", call: parsedNodes },
+  { id: "load-core/compose_node_input_shape__whole_record_loop_seed", call: parsedNodes },
   { id: "load-core/compose_node_input_shape__whole_reference_input_agent", call: parsedNodes },
   { id: "load-core/compose_node_input_shape__whole_reference_input_call", call: parsedNodes },
   { id: "load-core/compose_node_input_shape__whole_reference_input_code", call: parsedNodes },

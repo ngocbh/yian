@@ -8,11 +8,14 @@
  * counterpart: every registered function declares its `params`.
  *
  * The harvested `load-case/engine_condition_calls__wrong_builtin_arguments_in_a_case_when` is
- * pinned at the end (`assemble`, whose CASE build raises it).
+ * pinned at the end (`assemble`, whose CASE build raises it), and so is
+ * `load-case/engine_condition_calls__wrong_builtin_arguments_in_a_loop_while` (`assembledWith`, the
+ * `step` def built by hand; the LOOP build raises it).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import {
   bindArguments,
   registerTemplateFn,
@@ -21,9 +24,10 @@ import {
   type TemplateParam,
 } from "../../src/expr/builtins.ts";
 import { ExpressionError, parseCondition } from "../../src/expr/expressions.ts";
+import { ValueContract } from "../../src/nodes/contracts.ts";
 import { typeFor } from "../../src/typesys/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
-import { assembled, runCase } from "../compose/declarations.ts";
+import { assembled, assembledWith, handChild, parametersFromYaml, runCase } from "../compose/declarations.ts";
 
 // Each registration's previous entry (or its absence), put back after the test, as Python's
 // `monkeypatch.setitem` does.
@@ -190,4 +194,24 @@ describe("registerTemplateFn", () => {
 
 test("assembled: load-case/engine_condition_calls__wrong_builtin_arguments_in_a_case_when", () => {
   runCase({ id: "load-case/engine_condition_calls__wrong_builtin_arguments_in_a_case_when", call: assembled });
+});
+
+/**
+ * The `step` def of the LOOP case: it reads `{n, exited}`, and its producer `s` returns the record
+ * `{n: int, exited: bool}`, which the def outputs.
+ */
+function stepBody(): ComposedFlow {
+  const record = new ValueContract(typeFor("Rec", readTypedefs({ Rec: { n: "int", exited: "bool" } })));
+  return handChild({
+    inputs: parametersFromYaml("input:\n  n: !int\n  exited: !bool\n", new Map()),
+    producers: { s: record },
+    output: "${s.output}",
+  });
+}
+
+test("assembled: load-case/engine_condition_calls__wrong_builtin_arguments_in_a_loop_while", () => {
+  runCase({
+    id: "load-case/engine_condition_calls__wrong_builtin_arguments_in_a_loop_while",
+    call: assembledWith({ step: stepBody() }),
+  });
 });

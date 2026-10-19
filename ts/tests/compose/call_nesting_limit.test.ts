@@ -8,8 +8,8 @@
  * does a `null` resolver (Python's tail is CPython's `'NoneType' object is not callable`); the
  * check before resolving with the count at the limit; the check after resolving with a deep fake
  * child; `callNestingScope` restores the count after a throw; the limit follows
- * `YIAN_MAX_CALL_NESTING`; and a MAP build whose child already nests at the limit fails, since a
- * MAP resolves its child through `resolveChild` as a CALL does.
+ * `YIAN_MAX_CALL_NESTING`; and a MAP or LOOP build whose child already nests at the limit fails,
+ * since a MAP and a LOOP resolve their child through `resolveChild` as a CALL does.
  *
  * Later (they need the loader): `test_chain_at_the_limit_loads_runs_and_resumes`,
  * `test_chain_past_the_limit_is_located_at_the_root_call`,
@@ -28,14 +28,15 @@
  * `test_imports_and_a_calling_defs_chain_count_apart`,
  * `test_imports_at_the_limit_over_defs_at_the_limit_load` and
  * `test_long_cross_file_cycle_reports_the_depth_limit` (T3-22); `test_inline_bodies_count` and
- * `test_call_directive_counts` (T3-17); `test_map_and_loop_bodies_count` (T3-16, the loop
- * kind; T3-22 and T4 for its load and run).
+ * `test_call_directive_counts` (T3-17); `test_map_and_loop_bodies_count` (T3-22 and T4, its
+ * load and run).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
+import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import {
   callNesting,
@@ -245,8 +246,10 @@ describe("resolveChild", () => {
   });
 });
 
-test("a map whose child already nests at the limit fails", () => {
-  const desc = new MapDescriptor({ id: "m", call: "c", over: "${input.xs}" });
+test.each([
+  ["map", new MapDescriptor({ id: "m", call: "c", over: "${input.xs}" })],
+  ["loop", new LoopDescriptor({ id: "m", call: "c", times: 1n })],
+])("a %s whose child already nests at the limit fails", (_kind, desc) => {
   const ctx = new BuildContext({ registry: new Map(), resolver: () => resolved(50) });
 
   const error = thrown(() => desc.build(ctx));

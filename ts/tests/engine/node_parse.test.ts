@@ -25,8 +25,7 @@
  *
  * The harvested cases whose error `parseNodes` raises are pinned at the end, with
  * `load-core/engine_author_id_ban__author_id_with_hash_is_loud` (from
- * `tests/engine/test_author_id_ban.py`) and the e10 and e42 seeds; the e10 row registers
- * stand-ins for the kinds not registered yet, since its message lists all nine.
+ * `tests/engine/test_author_id_ban.py`) and the e10 and e42 seeds.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -42,7 +41,7 @@ import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { reprText } from "../../src/diagnostics.ts";
 import { caseText, loadError, nodesOf, runTextCase } from "../compose/declarations.ts";
-import { standIn, UNREGISTERED_KIND_NAMES, withKinds } from "../compose/stand_ins.ts";
+import { withKinds } from "../compose/stand_ins.ts";
 
 afterEach(() => forget());
 
@@ -483,10 +482,8 @@ fetch:
 
 test.each([
   // tests/engine/test_author_id_ban.py
-  ["load-core/engine_author_id_ban__author_id_with_hash_is_loud", []],
-  ["load-core/engine_node_parse__hyphenated_node_id", []],
-  ["load-core/seed_e10_unknown_node_kind", UNREGISTERED_KIND_NAMES.map((kind) => standIn(kind))],
-  ["load-core/seed_e42_removed_model_kind", []],
-] as const)("parseNodes: %s", (id, kinds) =>
-  runTextCase({ id, call: (text, label) => nodesOf(text, kinds, label) }),
-);
+  "load-core/engine_author_id_ban__author_id_with_hash_is_loud",
+  "load-core/engine_node_parse__hyphenated_node_id",
+  "load-core/seed_e10_unknown_node_kind",
+  "load-core/seed_e42_removed_model_kind",
+])("parseNodes: %s", (id) => runTextCase({ id, call: (text, label) => nodesOf(text, [], label) }));

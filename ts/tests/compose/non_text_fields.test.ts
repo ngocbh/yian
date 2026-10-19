@@ -2,16 +2,16 @@
  * A text or expression field YAML reads as non-text is a load error at that value: a port of
  * `tests/compose/test_non_text_fields.py`. Values are as TS YAML gives them: ints are `bigint`.
  * The flow rows read through `parseFile`, the node rows through `parseFile`, `flowNodesCursor`
- * and `parseNodes` with the registered kinds (plus stand-ins for the kinds not registered yet, for
- * the kind list).
+ * and `parseNodes` with the registered kinds.
  *
  * Changed: a flow with no `nodes:` says "missing required top-level key 'nodes'", where Python's
  * text is pydantic's. The null and text `node_name:` rows, the null optional flow field rows and
  * the null and text `on:` rows check the parsed value, where Python loads the flow.
  * `test_text_code_and_tool_id_still_load` assembles the root flow with `assembleText`, where
- * Python loads it. The call and map rows of `test_non_text_call_is_a_load_error` and
- * `test_null_call_is_empty` parse the flow's nodes, where Python loads it; the parse half of
- * `test_text_call_still_loads` checks the parsed `call:`.
+ * Python loads it. `test_non_text_call_is_a_load_error` and `test_null_call_is_empty` parse the
+ * flow's nodes, where Python loads it; the parse half of `test_text_call_still_loads` checks the
+ * parsed `call:`. The while and until rows of `test_already_located_fields_are_unchanged` parse the
+ * flow's nodes too, since the LOOP parse raises their error.
  *
  * The `llm_config` rows (`test_non_text_llm_config_field_is_a_load_error`,
  * `test_nested_llm_config_text_field`, `test_other_llm_config_errors_are_unchanged`) load the node
@@ -24,11 +24,8 @@
  * Dropped: the date rows (TS reads an unquoted date as text) and
  * `test_not_text_detail_reads_the_first_string_error` (`not_text_detail` reads a pydantic error).
  *
- * Later (T3-16, the loop kind): the loop rows of `test_non_text_call_is_a_load_error`,
- * `test_null_call_is_empty` and `test_text_call_still_loads`, and the while and until rows of
- * `test_already_located_fields_are_unchanged`. Later (T3-22): the load half of
- * `test_text_call_still_loads`. Later (T3-20): the then and else rows of
- * `test_already_located_fields_are_unchanged`.
+ * Later (T3-22): the load half of `test_text_call_still_loads`. Later (T3-20): the then and else
+ * rows of `test_already_located_fields_are_unchanged`.
  * Later (T3-18, T3-22): the unresolved-reference error of `test_null_case_on_is_absent`. Later
  * (T3-22): the loading of `test_text_case_on_still_loads`.
  * Later (T3-17): the inline-body rows of `test_code_in_def_compact_merge_and_inline_body` and
@@ -45,6 +42,7 @@ import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { notTextError } from "../../src/compose/nodes/base.ts";
 import type { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import type { CaseDescriptor } from "../../src/compose/nodes/case.ts";
+import type { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { parseFile } from "../../src/compose/parse/file.ts";
 import { forget } from "../../src/defaults.ts";
 import {
@@ -57,7 +55,6 @@ import {
   runCase,
   runTextCase,
 } from "./declarations.ts";
-import { standIn, UNREGISTERED_KIND_NAMES } from "./stand_ins.ts";
 
 afterEach(() => forget());
 
@@ -213,6 +210,7 @@ output: \${b.output | c.output}
 const CALL_HEADS: ReadonlyMap<string, string> = new Map([
   ["call", ""],
   ["map", "    over: ${input.xs}\n"],
+  ["loop", "    times: 2\n"],
 ]);
 
 /** A flow whose `kind` node `a` has `call: <v>`, beside a `defs:` entry `body`. */
@@ -379,8 +377,6 @@ describe("parseFile", () => {
 });
 
 describe("parseNodes", () => {
-  const UNREGISTERED_KINDS = UNREGISTERED_KIND_NAMES.map((kind) => standIn(kind));
-
   test.each(NON_TEXT)("non-text node name is a load error: %s", (value, phrase) => {
     const text = nodeNameFlow(value);
 
@@ -403,7 +399,7 @@ describe("parseNodes", () => {
   test.each(NON_TEXT)("non-text kind is a load error: %s", (value, phrase) => {
     const text = kindFlow(value);
 
-    const error = loadError(() => nodesOf(text, UNREGISTERED_KINDS));
+    const error = loadError(() => nodesOf(text));
 
     expect(error.message).toContain(
       `node 'a': \`kind:\` must be text, but YAML read it as ${phrase}; ` +
@@ -417,7 +413,7 @@ describe("parseNodes", () => {
     ["llm", "unknown kind"],
     ["''", "unknown kind"],
   ])("null and text kinds are unchanged: %s", (value, fragment) => {
-    expect(loadError(() => nodesOf(kindFlow(value), UNREGISTERED_KINDS)).message).toContain(fragment);
+    expect(loadError(() => nodesOf(kindFlow(value))).message).toContain(fragment);
   });
 
   test.each(NON_TEXT)("non-text case on is a load error: %s", (value, phrase) => {
@@ -456,8 +452,21 @@ describe("parseNodes", () => {
     });
 
     test("text call still parses", () => {
-      expect((nodesOf(callFlow(kind, "body")).get("a") as CallDescriptor).call).toBe("body");
+      expect((nodesOf(callFlow(kind, "body")).get("a") as CallDescriptor | LoopDescriptor).call).toBe("body");
     });
+  });
+
+  test.each([
+    ["while", "while: 5"],
+    ["until", "until: 5"],
+  ])("a non-string %s is located as before", (key, marker) => {
+    const text = callFlow("loop", "body").replace("    times: 2\n", `    times: 2\n    ${marker}\n`);
+
+    const error = loadError(() => nodesOf(text));
+
+    expect(error.message).toContain("must be an expression string over the carried record");
+    expect(error.message).toContain(`\`${key}:\``);
+    expect(startLine(error)).toBe(lineOf(text, marker));
   });
 
   test("null case on is absent", () => {
@@ -523,19 +532,19 @@ describe("parseNodes", () => {
     );
   });
 
-  test.each([
-    ["load-core/compose_non_text_fields__non_text_kind", UNREGISTERED_KINDS],
-    ["load-core/compose_non_text_fields__null_kind", []],
-  ] as const)("case %s", (id, kinds) =>
-    runTextCase({ id, call: (text, label) => nodesOf(text, kinds, label) }),
+  test.each(["load-core/compose_non_text_fields__non_text_kind", "load-core/compose_non_text_fields__null_kind"])(
+    "case %s",
+    (id) => runTextCase({ id, call: (text, label) => nodesOf(text, [], label) }),
   );
 
   test.each([
     "load-core/compose_non_text_fields__node_asserts_holding_a_number",
     "load-core/compose_non_text_fields__non_text_call_on_a_call_node",
+    "load-core/compose_non_text_fields__non_text_call_on_a_loop_node",
     "load-core/compose_non_text_fields__non_text_call_on_a_map_node",
     "load-core/compose_non_text_fields__non_text_case_on",
     "load-core/compose_non_text_fields__non_text_code",
+    "load-core/compose_non_text_fields__non_text_loop_while",
     "load-core/compose_non_text_fields__non_text_node_name",
     "load-core/compose_non_text_fields__non_text_tool_id",
     "load-core/compose_non_text_fields__null_call",

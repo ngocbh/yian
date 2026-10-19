@@ -9,11 +9,14 @@
  * `::test_shared_field_optional_in_one_member_reads_as_optional`,
  * `::test_shared_field_through_an_optional_union_reads_as_optional` and
  * `::test_shared_field_of_differing_types_is_untyped_and_loads` (the signature, not the load);
- * and `::test_map_over_a_union_output_gives_a_list_of_objects`. `typeFor` stands in for compose's
+ * `::test_map_over_a_union_output_gives_a_list_of_objects` and
+ * `::test_loop_carrying_a_union_keeps_the_non_record_error`. `typeFor` stands in for compose's
  * `read_type`. The child-signature rows build the child with `handChild` (a producer `d` of the
  * given type and a record output), where Python loads a flow; the MAP row builds a
  * `MapDescriptor` over a hand-built child returning its `Decision` producer, where Python loads a
- * flow whose def is that child.
+ * flow whose def is that child. The LOOP row builds a `LoopDescriptor` labelled as an inline body
+ * over a hand-built body returning its `Decision` producer, where Python loads a flow with an
+ * inline body, and pins the whole message (its harvested case is T3-17's).
  *
  * TS-only: the member-only fix hints, which Python checks only through flows the loader builds
  * (a tag comparison hint read from the local path, through a union root and below a shared
@@ -21,8 +24,7 @@
  * shared-field walk (continuing into a nested union, stopping at an untyped shared field, and
  * reading below a merged `Literal` field), and reading below a file field.
  *
- * Later: `::test_loop_carrying_a_union_keeps_the_non_record_error` (T3-16, the loop kind); the
- * rest needs compose and the runtime.
+ * Later: the rest needs compose and the runtime.
  */
 
 import { expect, test } from "bun:test";
@@ -30,6 +32,7 @@ import { expect, test } from "bun:test";
 import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { answerSchema } from "../../src/compose/nodes/human_input.ts";
+import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { childSignature } from "../../src/compose/nodes/resolver.ts";
 import {
@@ -40,7 +43,7 @@ import {
 } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
-import { handChild, parametersFromYaml } from "./declarations.ts";
+import { handChild, loadError, parametersFromYaml } from "./declarations.ts";
 
 const DECISION_TYPEDEFS = {
   Buy: { action: "Literal(buy)", qty: "int" },
@@ -263,4 +266,27 @@ test("a map over a union output gives a list of objects", () => {
 
   expect(contract.type.kind).toBe(ValueKind.LIST_OBJECT);
   expect(contract.type.element!.variants).toBeDefined();
+});
+
+test("a loop carrying a union keeps the non-record error", () => {
+  const body = handChild({
+    inputs: parametersFromYaml("input:\n  action: !str\n", new Map()),
+    producers: { step: new ValueContract(typeFor("Decision", readTypedefs(TRADE_TYPEDEFS))) },
+    output: "${step.output}",
+  });
+  const desc = new LoopDescriptor({
+    id: "drive",
+    call: "inline-body",
+    inputs: { action: "buy" },
+    times: 2n,
+    childLabel: "inline body of node 'drive'",
+  });
+
+  const error = loadError(() => desc.build(new BuildContext({ registry: new Map(), resolver: () => body })));
+
+  expect(error.message).toBe(
+    "loop node 'drive': body inline body of node 'drive' must return a record with at least one carried " +
+      'field (a subset of the carried record ["action"]); write `output: {field: ...}` or a whole reference ' +
+      "to a node with a record output",
+  );
 });

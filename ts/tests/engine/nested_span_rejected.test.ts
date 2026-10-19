@@ -6,7 +6,9 @@
  *
  * The harvested `load-core/engine_nested_span_rejected__case_condition_shows_the_rewrite`, from
  * `test_case_condition_with_a_nested_span_fails_to_load_with_the_rewrite`, is pinned at the end
- * (`assemble`, whose CASE build raises it).
+ * (`assemble`, whose CASE build raises it), and so is
+ * `load-core/engine_nested_span_rejected__loop_predicate_shows_the_rewrite` (`assembledWith`, the
+ * `step` def built by hand; the LOOP build raises it).
  *
  * Left for later: the binding, case, assert, loop and prompt load tests and the run tests land
  * with compose and `run.ts`.
@@ -14,6 +16,7 @@
 
 import { expect, test } from "bun:test";
 
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import {
   conditionRefs,
   ExpressionError,
@@ -22,7 +25,9 @@ import {
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, rejectNestedSpans, Token } from "../../src/expr/grammar.ts";
 import { scanTemplate } from "../../src/expr/template.ts";
-import { assembled, runCase } from "../compose/declarations.ts";
+import { ValueContract } from "../../src/nodes/contracts.ts";
+import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
+import { assembled, assembledWith, handChild, parametersFromYaml, runCase } from "../compose/declarations.ts";
 
 const NESTED = "`${...}` can't appear inside an expression";
 
@@ -148,4 +153,24 @@ test("the rewrite only needs to parse, not pass the later checks", () => {
 
 test("assembled: load-core/engine_nested_span_rejected__case_condition_shows_the_rewrite", () => {
   runCase({ id: "load-core/engine_nested_span_rejected__case_condition_shows_the_rewrite", call: assembled });
+});
+
+/**
+ * The `step` def of the LOOP case: it reads `{n, exited}`, and its producer `s` returns the record
+ * `{n: int, exited: bool}`, which the def outputs.
+ */
+function stepBody(): ComposedFlow {
+  const record = new ValueContract(typeFor("Rec", readTypedefs({ Rec: { n: "int", exited: "bool" } })));
+  return handChild({
+    inputs: parametersFromYaml("input:\n  n: !int\n  exited: !bool\n", new Map()),
+    producers: { s: record },
+    output: "${s.output}",
+  });
+}
+
+test("assembled: load-core/engine_nested_span_rejected__loop_predicate_shows_the_rewrite", () => {
+  runCase({
+    id: "load-core/engine_nested_span_rejected__loop_predicate_shows_the_rewrite",
+    call: assembledWith({ step: stepBody() }),
+  });
 });

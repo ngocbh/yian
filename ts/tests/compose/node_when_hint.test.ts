@@ -6,9 +6,7 @@
  * Changed: `test_when_on_non_case_node_suggests_a_case_node` sweeps the registered kinds but
  * `case`, through `parseNodes` where Python loads the flow;
  * `test_when_on_case_node_points_at_cases_entries` runs on the real `case` kind. The harvested
- * `compose_node_when_hint__when_on_*` cases of the registered kinds are pinned.
- *
- * Later (T3-16, the loop kind): the sweep's loop row and its pinned case.
+ * `compose_node_when_hint__when_on_*` cases are pinned.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -67,6 +65,7 @@ test.each<CaseRow>([
   { id: "load-core/compose_node_when_hint__when_on_a_case_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_code_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_human_input_node", call: parsedNodes },
+  { id: "load-core/compose_node_when_hint__when_on_a_loop_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_map_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_tool_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_wait_node", call: parsedNodes },

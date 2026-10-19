@@ -6,14 +6,20 @@
  * `test_child_signature_of_a_value_output_is_the_value_contract`,
  * `test_child_signature_of_an_empty_record_is_the_empty_record_contract`,
  * `test_direct_child_signature_must_say_it_returns_a_record`, the contract half of
- * `test_map_over_a_one_field_record_def_returns_a_list_of_records` and
- * `test_map_over_a_def_without_fields_is_rejected` (absent, empty record).
+ * `test_map_over_a_one_field_record_def_returns_a_list_of_records`,
+ * `test_map_over_a_def_without_fields_is_rejected` (absent, empty record),
+ * `test_loop_body_with_an_empty_record_output_is_rejected` and
+ * `test_loop_value_body_re_exporting_an_empty_record_is_rejected`.
  *
  * Changed: the child-signature rows build the child with `handChild` (a `step` producer typed
  * `str`), where Python loads a flow; the empty-record row compares with `sameOutputContract`
  * (Python's dataclass `==`). Python's `ValueError` is a `RangeError`. The MAP rows build a
  * `MapDescriptor` over that hand-built child, where Python loads a flow whose def is the child,
- * and pin the whole message, where Python matches a fragment.
+ * and pin the whole message, where Python matches a fragment. The LOOP rows build a
+ * `LoopDescriptor` labelled `inline body of node 'lp'` over a hand-built body (an empty record
+ * output; a value output re-exporting a producer typed as the empty record), where Python loads a
+ * flow with an inline body, and pin the whole message the harvested
+ * `load-core/engine_flow_output_shape__loop_body_*` cases expect (pinning the cases is T3-17's).
  *
  * Pinned at the end (`assembledWith`, the def built by hand):
  * `load-core/engine_flow_output_shape__map_over_a_def_without_output`.
@@ -21,9 +27,6 @@
  * TS-only: `ChildSignature`'s constructor errors, which no Python test reaches: a non-contract
  * output, a non-array `declaredOutputs`, a malformed pair, an empty or duplicate name, a
  * non-contract declared output; and the form with no declared evidence, which skips the check.
- *
- * Later (T3-16, the loop kind): `test_loop_body_with_an_empty_record_output_is_rejected` and
- * `test_loop_value_body_re_exporting_an_empty_record_is_rejected`.
  *
  * Later (T3-17, T3-18, T3-22, T4): `test_flow_result_follows_the_output_shape` (T3-17, T4);
  * `test_call_over_a_one_field_record_def_returns_the_record`,
@@ -47,6 +50,7 @@ import { expect, test } from "bun:test";
 
 import { combineOutputContracts } from "../../src/compose/helpers/output_contracts.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
+import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ChildSignature, childSignature } from "../../src/compose/nodes/resolver.ts";
 import { isExactly, type OutputContract, sameOutputContract, ValueContract } from "../../src/nodes/contracts.ts";
@@ -54,6 +58,7 @@ import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 import { assembledWith, type CaseRow, handChild, loadError, runCase } from "../compose/declarations.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
+const INT = Type.scalar(ValueKind.INTEGER);
 
 /** A child whose one producer `step` is typed `str`, returning `output`. */
 function shapeChild(output: Parameters<typeof handChild>[0]["output"]) {
@@ -218,6 +223,37 @@ test.each([
     "map node 'each': callable 'child' must declare a non-empty `output:`; " +
       "a mapped call (over:) returns a list of the child's results",
   );
+});
+
+/** Build the inline-labelled LOOP `lp`, carrying `count`, over `body` (built by hand). */
+function buildLoop(body: ReturnType<typeof handChild>) {
+  const desc = new LoopDescriptor({
+    id: "lp",
+    call: "inline-body",
+    inputs: { count: 0n },
+    times: 2n,
+    childLabel: "inline body of node 'lp'",
+  });
+  return desc.build(new BuildContext({ registry: new Map(), resolver: () => body }));
+}
+
+const NO_CARRIED_FIELD =
+  "loop node 'lp': body inline body of node 'lp' must return a record with at least one carried field " +
+  '(a subset of the carried record ["count"]); write `output: {field: ...}` or a whole reference to a node ' +
+  "with a record output";
+
+test("a loop body with an empty record output is rejected", () => {
+  const error = loadError(() => buildLoop(handChild({ producers: { bump: new ValueContract(INT) }, output: {} })));
+
+  expect(error.message).toBe(NO_CARRIED_FIELD);
+});
+
+test("a loop value body re-exporting an empty record is rejected", () => {
+  const body = handChild({ producers: { inner: combineOutputContracts(new Map()) }, output: "${inner.output}" });
+
+  const error = loadError(() => buildLoop(body));
+
+  expect(error.message).toBe(NO_CARRIED_FIELD);
 });
 
 // ---------- harvested conformance cases ----------

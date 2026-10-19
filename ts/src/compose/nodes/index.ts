@@ -24,6 +24,7 @@ import { WaitDescriptor } from "./wait.ts";
 // T3-16: case, call, map, loop
 import { CallDescriptor } from "./call.ts";
 import { CaseDescriptor } from "./case.ts";
+import { LoopDescriptor } from "./loop.ts";
 import { MapDescriptor } from "./map.ts";
 
 /** A descriptor class: `NodeDescriptor` or a kind's subclass. */
@@ -44,6 +45,7 @@ export const DESCRIPTORS: readonly DescriptorClass[] = [
   CaseDescriptor,
   CallDescriptor,
   MapDescriptor,
+  LoopDescriptor,
 ];
 
 /** The `kind:` text to its descriptor class, for the shared parse and build dispatch. */

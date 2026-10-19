@@ -1,0 +1,13 @@
+kind: expr
+rules: [text-form]
+template: w=${w} flag=${s.on} n='${name}'
+values:
+  w: 0
+  s:
+    on: false
+  name: ''
+mode: strict
+expect:
+  value: w=0 flag=false n=''
+python_expect:
+  value: w=0 flag=False n=''

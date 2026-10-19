@@ -1,0 +1,6 @@
+kind: value
+type: list(Any)
+value: [1, two]
+expect:
+  value: [1, two]
+  kind: list[Any]

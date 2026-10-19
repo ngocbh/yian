@@ -1,0 +1,7 @@
+kind: expr
+template: 'Note: ${note :- "none"}'
+values:
+  note: null
+mode: strict
+expect:
+  value: 'Note: none'

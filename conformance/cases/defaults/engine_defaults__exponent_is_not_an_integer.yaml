@@ -1,0 +1,12 @@
+kind: defaults
+rules: [messages]
+env:
+  YIAN_MAX_VALUE_NESTING: '1e3'
+expect:
+  raises:
+    class: DefaultsError
+    message: 'YIAN_MAX_VALUE_NESTING="1e3" is not an integer; use an integer from 1 to 100, or unset it'
+python_expect:
+  raises:
+    class: DefaultsError
+    message: "YIAN_MAX_VALUE_NESTING='1e3' is not an integer; use an integer from 1 to 100, or unset it"

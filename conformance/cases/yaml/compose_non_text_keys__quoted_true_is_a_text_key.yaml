@@ -1,0 +1,53 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    R:
+      a: int
+      n_field: int
+    T:
+      a: int
+  defs:
+    child:
+      nodes:
+        n_def_node:
+          kind: code
+          code: return 1
+          output: int
+      output: 1
+  input:
+    q: !str
+    n_flow_input: !str
+  nodes:
+    a:
+      kind: code
+      code: return inputs["v"]
+      input:
+        v: ${input.q}
+        n_node_input: x
+        w: {n_record: a}
+      output: str
+    b:
+      kind: call
+      nodes:
+        inner:
+          kind: code
+          code: return 1
+          output: int
+        n_inline_node:
+          kind: code
+          code: return 2
+          output: int
+      output: ${inner.output}
+    "True":
+      kind: code
+      code: return 3
+      output: int
+  output:
+    r: ${a.output}
+    n_flow_output: ${a.output}
+  x-meta:
+    n_x_block: v
+expect:
+  load: ok

@@ -1,0 +1,6 @@
+kind: value
+type: list(str)
+value: [ACME, BETA]
+expect:
+  value: [ACME, BETA]
+  kind: list[str]

@@ -1,0 +1,9 @@
+kind: value
+# Hand-written from tests/engine/test_types.py::test_paren_syntax_errors: bad type text raises when the type is built.
+type: int(1.5..)
+value: 1
+expect:
+  raises:
+    class: TypeCheckError
+    message: "invalid bounds in 'int(1.5..)': int bounds require exact numeric endpoints, excluding bool"
+    path: []

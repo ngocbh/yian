@@ -1,0 +1,18 @@
+kind: load
+flow: |
+  id: t
+  name: t
+  input:
+    n: !int
+  output: 'Optional[list[str]]'
+  kind: code
+  code: |
+    return 1
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad type expression ''Optional[list[str]]'': types use parentheses: `Optional(list(str))`'
+      frames:
+      - label: flow.yaml
+        range: [5, 9, 5, 30]

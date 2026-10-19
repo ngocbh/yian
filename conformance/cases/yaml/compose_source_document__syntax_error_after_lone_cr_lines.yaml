@@ -1,0 +1,18 @@
+kind: load
+rules: [yaml]
+flow: "id: x\rname: x\rdescription: \"a\rb\"\rnodes: [\r"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      frames:
+      - label: flow.yaml
+        range: [6, 1, 6, 2]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "invalid YAML: while parsing a flow node\nexpected the node content, but found '<stream end>'\n  in \"<unicode string>\", line 6, column 1:\n    \n    ^"
+      frames:
+      - label: flow.yaml
+        range: [6, 1, 6, 2]

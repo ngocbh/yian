@@ -1,0 +1,10 @@
+kind: value
+env:
+  YIAN_MAX_VALUE_NESTING: '3'
+type: Any
+value:
+- - - - [1]
+expect:
+  value:
+  - - - - [1]
+  kind: list[Any]

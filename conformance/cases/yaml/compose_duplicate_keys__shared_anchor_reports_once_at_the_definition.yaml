@@ -1,0 +1,21 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  x-base: &base
+    kind: code
+    code: return 1
+    code: return 2
+    output: int
+  nodes:
+    a: *base
+    b: *base
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: duplicate key 'code' (first at line 5); a YAML mapping's keys must be unique, so remove or rename one
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 7]

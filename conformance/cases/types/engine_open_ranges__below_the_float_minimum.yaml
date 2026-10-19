@@ -1,0 +1,14 @@
+kind: value
+rules: [messages]
+type: float(0.0..)
+value: -0.5
+expect:
+  raises:
+    class: TypeCheckError
+    message: -0.5 is below the inclusive float minimum 0
+    path: []
+python_expect:
+  raises:
+    class: TypeCheckError
+    message: -0.5 is below the inclusive float minimum 0.0
+    path: []

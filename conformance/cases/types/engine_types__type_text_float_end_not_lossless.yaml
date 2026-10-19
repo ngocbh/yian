@@ -1,0 +1,9 @@
+kind: value
+# Hand-written from tests/engine/test_types.py::test_float_domain_rejects_endpoints_without_lossless_finite_representation: bad type text raises when the type is built.
+type: float(9007199254740993..9007199254740993)
+value: 1
+expect:
+  raises:
+    class: TypeCheckError
+    message: "invalid bounds in 'float(9007199254740993..9007199254740993)': float bounds require lossless float endpoints"
+    path: []

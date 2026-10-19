@@ -1,0 +1,4 @@
+kind: expr
+template: cost is $5
+expect:
+  value: cost is $5

@@ -1,0 +1,7 @@
+kind: expr
+template: ${a}${b}
+values:
+  a: 1
+  b: 2
+expect:
+  value: '12'

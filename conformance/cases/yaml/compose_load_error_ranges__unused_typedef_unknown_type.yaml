@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: typedefs
+  name: typedefs
+  typedefs:
+    Al: Nope
+  input:
+    n: !int
+  output: int
+  kind: code
+  code: |
+    return inputs["n"]
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad typedefs: typedef ''Al'': unknown type ''Nope'''
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 5]

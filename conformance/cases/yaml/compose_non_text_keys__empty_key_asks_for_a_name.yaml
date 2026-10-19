@@ -1,0 +1,10 @@
+kind: load
+flow: "id: f\nname: f\ntypedefs:\n  R:\n    a: int\n    n_field: int\n  T:\n    a: int\ndefs:\n  child:\n    nodes:\n      n_def_node:\n        kind: code\n        code: return 1\n        output: int\n    output: 1\ninput:\n  q: !str\n  n_flow_input: !str\nnodes:\n  a:\n    kind: code\n    code: return inputs[\"v\"]\n    input:\n      v: ${input.q}\n      n_node_input: x\n      w: {n_record: a}\n    output: str\n  b:\n    kind: call\n    nodes:\n      inner:\n        kind: code\n        code: return 1\n        output: int\n      n_inline_node:\n        kind: code\n        code: return 2\n        output: int\n    output: ${inner.output}\n  n_root_node:\n    kind: code\n    code: return 3\n    output: int\noutput:\n  r: ${a.output}\n  n_flow_output: ${a.output}\nx-meta:\n  ? \n  : v\n"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: an empty key was read by YAML as null, but names in a flow must be text. Write a name.
+      frames:
+      - label: flow.yaml
+        range: [49, 4, 49, 4]

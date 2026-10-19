@@ -1,0 +1,15 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  x-base: &base
+    kind: code
+    code: return 1
+    output: nope
+  nodes:
+    a:
+      <<: *base
+      output: int
+  output: ${a.output}
+expect:
+  load: ok

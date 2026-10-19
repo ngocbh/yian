@@ -1,0 +1,6 @@
+kind: expr
+expr: join(xs, "-")
+values:
+  xs: [1, 2]
+expect:
+  value: 1-2

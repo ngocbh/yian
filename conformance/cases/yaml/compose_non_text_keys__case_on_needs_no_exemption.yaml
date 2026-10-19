@@ -1,0 +1,21 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    route:
+      kind: case
+      on: ${input.x}
+      cases:
+        - when: a
+          then: done
+      else: done
+    done:
+      kind: code
+      code: return 1
+      output: int
+  output: ${done.output}
+expect:
+  load: ok

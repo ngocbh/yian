@@ -1,0 +1,26 @@
+kind: load
+flow: |
+  id: t
+  name: t
+  typedefs:
+    T0: {a: int}
+    T1: {a: T0}
+    T2: {a: T1}
+    T3: {a: T2}
+    T4: {a: T3}
+  input:
+    n: !int
+  output: 'list(T4)'
+  kind: code
+  code: |
+    return 1
+env:
+  YIAN_MAX_TYPE_NESTING: '5'
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad type expression ''list(T4)'': type nests deeper than 5 levels once its typedef names are expanded, the limit for a type (each record and list is a level)'
+      frames:
+      - label: flow.yaml
+        range: [11, 9, 11, 19]

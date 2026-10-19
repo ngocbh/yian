@@ -1,0 +1,8 @@
+kind: value
+type: float(9007199254740992..9007199254740994)
+value: 9007199254740996
+expect:
+  raises:
+    class: TypeCheckError
+    message: 9007199254740996 is outside inclusive float bounds (9007199254740992, 9007199254740994)
+    path: []

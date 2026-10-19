@@ -1,0 +1,6 @@
+kind: defaults
+env:
+  YIAN_AGENT_MAX_TOOL_ITERATIONS: '-1'
+expect:
+  defaults:
+    AGENT_MAX_TOOL_ITERATIONS: -1

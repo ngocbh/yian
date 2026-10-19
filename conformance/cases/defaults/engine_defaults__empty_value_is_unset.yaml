@@ -1,0 +1,6 @@
+kind: defaults
+env:
+  YIAN_MAX_VALUE_NESTING: ''
+expect:
+  defaults:
+    MAX_VALUE_NESTING: 100

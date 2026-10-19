@@ -1,0 +1,6 @@
+kind: expr
+expr: isinstance(n, int)
+values:
+  n: 3
+expect:
+  value: true

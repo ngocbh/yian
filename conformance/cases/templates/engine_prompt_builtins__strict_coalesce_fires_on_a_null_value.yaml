@@ -1,0 +1,8 @@
+kind: expr
+template: Hi ${x | y}
+values:
+  x: null
+  y: Y
+mode: strict
+expect:
+  value: Hi Y

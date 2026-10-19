@@ -1,0 +1,16 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  x-good: &good
+    output: int
+  x-bad: &bad
+    output: nope
+  nodes:
+    a:
+      <<: [*good, *bad]
+      kind: code
+      code: return 1
+  output: ${a.output}
+expect:
+  load: ok

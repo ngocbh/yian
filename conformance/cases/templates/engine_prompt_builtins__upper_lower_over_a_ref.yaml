@@ -1,0 +1,7 @@
+kind: expr
+template: ${upper(name)}/${lower('HI')}
+values:
+  name: zeta
+mode: strict
+expect:
+  value: ZETA/hi

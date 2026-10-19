@@ -1,0 +1,6 @@
+kind: expr
+expr: 1 + 2 / 0
+expect:
+  raises:
+    class: ExpressionError
+    message: 'division by zero: 2 / 0'

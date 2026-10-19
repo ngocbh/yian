@@ -1,0 +1,7 @@
+kind: expr
+template: hi ${ghost}
+mode: strict
+expect:
+  raises:
+    class: ExpressionError
+    message: unresolved reference ${ghost} in expression

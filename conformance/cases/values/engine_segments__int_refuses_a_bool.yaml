@@ -1,0 +1,14 @@
+kind: value
+rules: [messages]
+type: int
+value: true
+expect:
+  raises:
+    class: TypeCheckError
+    message: true does not match declared type int
+    path: []
+python_expect:
+  raises:
+    class: TypeCheckError
+    message: True does not match declared type int
+    path: []

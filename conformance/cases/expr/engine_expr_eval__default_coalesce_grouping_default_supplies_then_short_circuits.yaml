@@ -1,0 +1,6 @@
+kind: expr
+expr: a:-b | c
+values:
+  b: 10
+expect:
+  value: 10

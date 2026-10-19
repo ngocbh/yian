@@ -1,0 +1,6 @@
+kind: value
+type: Any
+value: hello
+expect:
+  value: hello
+  kind: str

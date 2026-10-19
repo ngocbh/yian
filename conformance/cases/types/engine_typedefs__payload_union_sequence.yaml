@@ -1,0 +1,10 @@
+kind: value
+# Hand-written from tests/engine/test_typedefs.py::test_payload_union_sequence_rejected: a bad typedef raises when the typedefs are read.
+type: Choice
+typedefs: {Choice: [defer, {approve: {count: int}}]}
+value: 1
+expect:
+  raises:
+    class: TypeCheckError
+    message: "typedef 'Choice': a tagged/payload union sequence is not supported; declare each member as a record and write Choice: Union(A, B, ...)"
+    path: [Choice]

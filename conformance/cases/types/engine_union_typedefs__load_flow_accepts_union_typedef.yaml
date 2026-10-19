@@ -1,0 +1,27 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', price: float}
+    Decision: Union(Buy, Sell)
+  nodes:
+    a: {kind: code, code: ./fixtures/seeds.ts:one_line_summary, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+python_flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', price: float}
+    Decision: Union(Buy, Sell)
+  nodes:
+    a: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+expect:
+  load: ok

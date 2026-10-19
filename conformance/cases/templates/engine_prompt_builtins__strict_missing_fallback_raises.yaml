@@ -1,0 +1,10 @@
+kind: expr
+template: ${x :- y}
+values:
+  x: null
+  y: null
+mode: strict
+expect:
+  raises:
+    class: ExpressionError
+    message: unresolved reference ${y} in expression

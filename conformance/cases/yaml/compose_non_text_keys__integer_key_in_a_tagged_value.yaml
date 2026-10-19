@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    q: !str
+  nodes:
+    a:
+      kind: code
+      code: return 1
+      input:
+        v: !object {1: 2}
+      output: int
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: the key `1` was read by YAML as an integer, but names in a flow must be text. Quote it ("1") or choose another name.
+      frames:
+      - label: flow.yaml
+        range: [10, 19, 10, 20]

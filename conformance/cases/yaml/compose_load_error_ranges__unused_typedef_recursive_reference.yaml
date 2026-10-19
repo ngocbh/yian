@@ -1,0 +1,21 @@
+kind: load
+flow: |
+  id: typedefs
+  name: typedefs
+  typedefs:
+    Tree:
+      kids: list(Tree)
+  input:
+    n: !int
+  output: int
+  kind: code
+  code: |
+    return inputs["n"]
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad typedefs: typedef ''Tree'' field ''kids'': recursive type reference: ''Tree'''
+      frames:
+      - label: flow.yaml
+        range: [5, 11, 5, 21]

@@ -1,0 +1,12 @@
+kind: expr
+rules: [text-form]
+template: ${settings}
+values:
+  settings:
+    nested:
+      items: [a, b]
+mode: strict
+expect:
+  value: '{"nested":{"items":["a","b"]}}'
+python_expect:
+  value: '{''nested'': {''items'': [''a'', ''b'']}}'

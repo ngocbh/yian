@@ -1,0 +1,6 @@
+kind: value
+type: Optional(Any)
+value: null
+expect:
+  value: null
+  kind: None

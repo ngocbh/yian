@@ -1,0 +1,6 @@
+kind: expr
+expr: item.title
+item:
+  title: T
+expect:
+  value: T

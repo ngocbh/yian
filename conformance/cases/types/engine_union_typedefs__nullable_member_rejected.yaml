@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: t
+  name: t
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', price: float}
+    MaybeSell: Optional(Sell)
+  input:
+    n: !int
+  output: 'Union(Buy, MaybeSell)'
+  kind: code
+  code: |
+    return 1
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad type expression ''Union(Buy, MaybeSell)'': Union(Buy, MaybeSell): member ''MaybeSell'' is nullable; use Optional(Union(...)) instead'
+      frames:
+      - label: flow.yaml
+        range: [9, 9, 9, 32]

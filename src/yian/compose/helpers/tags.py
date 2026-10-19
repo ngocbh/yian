@@ -274,7 +274,7 @@ def suggested_literal(text: str, typ: Type) -> tuple[str, str | None]:
     else:
         return text, None
     fix = former_boolean_fix(parsed, typ)
-    if fix is not None and isinstance(parsed, str):
+    if fix is not None:
         return ("true" if fix[0] else "false"), fix[1]
     if not isinstance(parsed, str):
         try:
@@ -877,19 +877,18 @@ class _TaggedValueReader:
     ) -> str:
         """Explain why a tagged literal does not fit, suggesting a rewrite when one helps.
 
-        A former YAML boolean word such as `yes`, now text, gets the `true`/`false` to
-        write when that boolean fits, at any depth of a list or record; a non-string
-        scalar whose text would fit gets the quoted form.
+        A former YAML boolean word such as `yes`, now text, written bare gets the
+        `true`/`false` to write when that boolean fits; a non-string scalar whose text
+        would fit gets the quoted form.
         """
         label = path_label(self.label, path)
         tag = cursor.tag
         text = cursor.scalar_text
-        fix = former_boolean_fix(value, typ)
         if text is None:
             message = f"{label!r}: the value is not a valid {tag}: {error}"
             if error.path:
                 message += f" (at `{path_label(label, error.path)}`)"
-            return message if fix is None else f"{message}; {fix[1]}"
+            return message
         # Quoted and block text is shown quoted, so its line breaks stay escaped.
         written = text if cursor.scalar_style == "plain" else yaml_quoted(text)
         message = f"{label!r}: `{written}` is not a valid {tag}"
@@ -899,6 +898,7 @@ class _TaggedValueReader:
             reason = _mismatch_reason(error, value)
             if reason is not None:
                 message += f" ({reason})"
+        fix = former_boolean_fix(value, typ)
         if fix is not None:
             return f"{message}; {fix[1]}"
         # Quoting only helps when YAML read the text as a non-string and the text

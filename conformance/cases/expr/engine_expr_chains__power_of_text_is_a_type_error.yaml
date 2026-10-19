@@ -1,0 +1,13 @@
+kind: expr
+rules: [arithmetic, messages]
+expr: 2 ** s
+values:
+  s: ab
+expect:
+  raises:
+    class: ExpressionError
+    message: 'type error evaluating 2 ** "ab": unsupported operand kinds for `**`: `int` and `str`'
+python_expect:
+  raises:
+    class: ExpressionError
+    message: 'type error evaluating 2 ** ''ab'': unsupported operand type(s) for ** or pow(): ''int'' and ''str'''

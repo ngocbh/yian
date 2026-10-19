@@ -1,0 +1,10 @@
+kind: expr
+template: x ${sig.nope} y
+values:
+  sig:
+    value: 0.8
+mode: strict
+expect:
+  raises:
+    class: ExpressionError
+    message: unresolved reference ${sig.nope} in expression

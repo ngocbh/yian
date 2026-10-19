@@ -1,0 +1,20 @@
+kind: load
+# In Python `1 == True`, so the second key would repeat the first; the non-text key is reported first.
+flow: |
+  id: f
+  name: f
+  x-meta: {1: a, true: b}
+  nodes:
+    a:
+      kind: code
+      code: return 1
+      output: int
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: the key `1` was read by YAML as an integer, but names in a flow must be text. Quote it ("1") or choose another name.
+      frames:
+      - label: flow.yaml
+        range: [3, 10, 3, 11]

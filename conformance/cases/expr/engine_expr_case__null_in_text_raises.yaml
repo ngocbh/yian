@@ -1,0 +1,12 @@
+kind: expr
+rules: [compare]
+expr: x in 'abc'
+mode: condition
+expect:
+  raises:
+    class: ExpressionError
+    message: 'type error evaluating null in "abc": unsupported operand kinds for `in`: `null` and `str`'
+python_expect:
+  raises:
+    class: ExpressionError
+    message: '`in` rhs is not iterable: ''in <string>'' requires string as left operand, not NoneType'

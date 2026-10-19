@@ -1,0 +1,11 @@
+kind: expr
+rules: [arithmetic, messages]
+expr: -missing
+expect:
+  raises:
+    class: ExpressionError
+    message: 'unary minus on non-number null: unsupported operand kind for `-`: `null`'
+python_expect:
+  raises:
+    class: ExpressionError
+    message: 'unary minus on non-number None: bad operand type for unary -: ''NoneType'''

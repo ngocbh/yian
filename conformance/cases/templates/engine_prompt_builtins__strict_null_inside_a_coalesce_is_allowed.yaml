@@ -1,0 +1,5 @@
+kind: expr
+template: value=${null | 'fallback'}
+mode: strict
+expect:
+  value: value=fallback

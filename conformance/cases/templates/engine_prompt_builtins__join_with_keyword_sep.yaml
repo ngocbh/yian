@@ -1,0 +1,7 @@
+kind: expr
+template: ${join(briefs, sep=', ')}
+values:
+  briefs: [ab, adf]
+mode: strict
+expect:
+  value: ab, adf

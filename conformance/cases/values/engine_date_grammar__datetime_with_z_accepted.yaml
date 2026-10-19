@@ -1,0 +1,6 @@
+kind: value
+type: datetime
+value: 2020-01-01T00:00:00Z
+expect:
+  value: 2020-01-01T00:00:00Z
+  kind: datetime

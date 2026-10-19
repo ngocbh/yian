@@ -1,0 +1,7 @@
+kind: expr
+expr: in
+mode: condition
+expect:
+  raises:
+    class: ExpressionError
+    message: reserved expression keyword 'in' cannot be used as a reference root

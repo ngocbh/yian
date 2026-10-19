@@ -1,0 +1,6 @@
+kind: defaults
+env:
+  YIAN_MAX_TOTAL_NODES: '9007199254740991'
+expect:
+  defaults:
+    MAX_TOTAL_NODES: 9007199254740991

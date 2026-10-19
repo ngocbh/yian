@@ -1,0 +1,7 @@
+kind: expr
+expr: __on == 'a"b'
+values:
+  __on: a"b
+mode: condition
+expect:
+  value: true

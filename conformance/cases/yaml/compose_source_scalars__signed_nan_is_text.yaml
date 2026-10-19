@@ -1,0 +1,13 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  nodes:
+    b:
+      kind: code
+      code: return 1
+  output:
+    g: -.nan
+    h: ${b.output}
+expect:
+  load: ok

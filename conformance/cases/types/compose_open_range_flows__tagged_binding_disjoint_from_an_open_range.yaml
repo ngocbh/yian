@@ -1,0 +1,30 @@
+kind: load
+flow: |
+  id: tagged_binding
+  name: tagged_binding
+  input:
+    v: !int
+  nodes:
+    a:
+      kind: code
+      input:
+        v: ${input.v}
+      code: |
+        return inputs["v"]
+      output: int(..-1)
+    use:
+      kind: code
+      input:
+        x: !int(0..) ${a.output}
+      code: |
+        return inputs["x"]
+      output: int
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''use'' input ''x'': declared int(0..), but the value is int(..-1)'
+      frames:
+      - label: flow.yaml
+        range: [16, 10, 16, 31]

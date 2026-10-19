@@ -1,0 +1,6 @@
+kind: expr
+expr: '"z" not in items'
+values:
+  items: [a, b]
+expect:
+  value: true

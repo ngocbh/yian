@@ -1,0 +1,8 @@
+kind: value
+type: list(list(int))
+value: 3
+expect:
+  raises:
+    class: TypeCheckError
+    message: 3 is not a list for declared list(list(int))
+    path: []

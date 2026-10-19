@@ -1,0 +1,4 @@
+kind: expr
+expr: 8 / 2
+expect:
+  value: 4.0

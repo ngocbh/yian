@@ -1,0 +1,9 @@
+kind: expr
+template: ${frobnicate(name)}
+values:
+  name: zeta
+mode: strict
+expect:
+  raises:
+    class: ExpressionError
+    message: unknown expression function 'frobnicate'

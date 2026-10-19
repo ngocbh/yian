@@ -1,0 +1,23 @@
+kind: value
+rules: [int-in-float]
+typedefs:
+  Buy:
+    action: Literal(buy)
+    qty: int
+  Sell:
+    action: Literal(sell)
+    price: float
+type: Union(Buy, Sell)
+value:
+  action: sell
+  price: 3
+expect:
+  value:
+    action: sell
+    price: 3
+  kind: object
+python_expect:
+  value:
+    action: sell
+    price: 3.0
+  kind: object

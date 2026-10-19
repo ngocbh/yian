@@ -1,0 +1,9 @@
+kind: expr
+template: '[${render_as_json(${briefs})}]'
+values:
+  briefs: [ab, adf]
+mode: strict
+expect:
+  raises:
+    class: ExpressionError
+    message: '`${...}` can''t appear inside an expression; write `${render_as_json(briefs)}`'

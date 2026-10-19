@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: signal
+  name: signal
+  typedefs:
+    Signal:
+      score: float
+      tags: lst(str)
+  input:
+    s: !Signal
+  output: float
+  kind: code
+  code: |
+    return inputs["s"]["score"]
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad typedefs: typedef ''Signal'' field ''tags'': unknown type constructor ''lst'' in ''lst(str)'''
+      frames:
+      - label: flow.yaml
+        range: [6, 11, 6, 19]

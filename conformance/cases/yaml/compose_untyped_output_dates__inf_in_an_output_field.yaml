@@ -1,0 +1,22 @@
+kind: load
+rules: [infinity]
+flow: |
+  id: p
+  name: p
+  nodes:
+    b:
+      kind: code
+      code: return 1
+  output:
+    g: .inf
+    h: ${b.output}
+expect:
+  load: ok
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''g'': numbers must be finite (got .inf)'
+      frames:
+      - label: flow.yaml
+        range: [8, 6, 8, 10]

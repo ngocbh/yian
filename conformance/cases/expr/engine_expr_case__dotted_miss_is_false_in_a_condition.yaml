@@ -1,0 +1,7 @@
+kind: expr
+expr: rating.value > 0.7
+values:
+  rating: null
+mode: condition
+expect:
+  value: false

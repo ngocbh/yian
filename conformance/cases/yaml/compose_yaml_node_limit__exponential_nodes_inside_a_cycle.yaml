@@ -1,0 +1,33 @@
+kind: load
+rules: [yaml]
+flow: |
+  id: f
+  name: f
+  x-anchors: [&r [&s0 [*r, *r], &s1 [*s0, *s0], &s2 [*s1, *s1], &s3 [*s2, *s2], &s4 [*s3, *s3], &s5 [*s4, *s4], &s6 [*s5, *s5], &s7 [*s6, *s6], &s8 [*s7, *s7], &s9 [*s8, *s8], &s10 [*s9, *s9], &s11 [*s10, *s10], &s12 [*s11, *s11], &s13 [*s12, *s12], &s14 [*s13, *s13], &s15 [*s14, *s14], &s16 [*s15, *s15], &s17 [*s16, *s16], &s18 [*s17, *s17], &s19 [*s18, *s18], &s20 [*s19, *s19], &s21 [*s20, *s20], &s22 [*s21, *s21], &s23 [*s22, *s22], &s24 [*s23, *s23], &s25 [*s24, *s24], &s26 [*s25, *s25], &s27 [*s26, *s26], &s28 [*s27, *s27], &s29 [*s28, *s28]]]
+  nodes:
+    use:
+      kind: code
+      code: return 1
+      input:
+        topic: *r
+      output: str
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      frames:
+      - label: flow.yaml
+        range: [1, 1, 1, 2]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        invalid YAML: this mapping holds more than 100000 YAML nodes, counting each alias as a copy of what it names; the limit for a YAML document is 100000 (YIAN_MAX_YAML_NODES; each mapping, list, and scalar is a node)
+          in "<unicode string>", line 1, column 1:
+            id: f
+            ^
+      frames:
+      - label: flow.yaml
+        range: [1, 1, 1, 2]

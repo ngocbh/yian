@@ -1,0 +1,23 @@
+kind: value
+rules: [int-in-float]
+typedefs:
+  Score: float(0..1)
+  MaybeScore: Optional(Score)
+  Rating:
+    scores: list(MaybeScore)
+    count: int(1..12)
+  Ratings: list(Rating)
+type: Ratings
+value:
+- scores: [null, 0.5, 1]
+  count: 4
+expect:
+  value:
+  - scores: [null, 0.5, 1]
+    count: 4
+  kind: list[object]
+python_expect:
+  value:
+  - scores: [null, 0.5, 1.0]
+    count: 4
+  kind: list[object]

@@ -1,0 +1,6 @@
+kind: value
+type: topics
+value: [a, b]
+expect:
+  value: [a, b]
+  kind: list[str]

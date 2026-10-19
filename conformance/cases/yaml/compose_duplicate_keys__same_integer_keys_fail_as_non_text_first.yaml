@@ -1,0 +1,21 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  x-meta:
+    017: a
+    17: b
+  nodes:
+    a:
+      kind: code
+      code: return 1
+      output: int
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: the key `017` was read by YAML as an integer, but names in a flow must be text. Quote it ("017") or choose another name.
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 6]

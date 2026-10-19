@@ -1,0 +1,22 @@
+kind: value
+rules: [int-in-float]
+typedefs:
+  Count:
+    n: int
+  Score:
+    n: float
+    label: str
+type: Union(Count, Score)
+value:
+  n: 3
+  label: x
+expect:
+  value:
+    n: 3
+    label: x
+  kind: object
+python_expect:
+  value:
+    n: 3.0
+    label: x
+  kind: object

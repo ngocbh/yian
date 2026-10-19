@@ -1,0 +1,4 @@
+kind: expr
+expr: '"B" < "a"'
+expect:
+  value: true

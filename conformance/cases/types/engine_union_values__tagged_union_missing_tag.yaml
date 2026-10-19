@@ -1,0 +1,16 @@
+kind: value
+typedefs:
+  Buy:
+    action: Literal(buy)
+    qty: int
+  Sell:
+    action: Literal(sell)
+    price: float
+type: Union(Buy, Sell)
+value:
+  qty: 2
+expect:
+  raises:
+    class: TypeCheckError
+    message: missing tag field 'action' (expected one of ['buy', 'sell'])
+    path: [action]

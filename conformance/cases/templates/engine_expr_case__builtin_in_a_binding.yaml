@@ -1,0 +1,6 @@
+kind: expr
+template: ${join(items, ",")}
+values:
+  items: [a, b]
+expect:
+  value: a,b

@@ -1,0 +1,12 @@
+kind: value
+typedefs:
+  Sig:
+    score: float
+    note: Optional(str)
+type: Sig
+value:
+  score: 0.5
+expect:
+  value:
+    score: 0.5
+  kind: object

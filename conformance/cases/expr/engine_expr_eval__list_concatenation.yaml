@@ -1,0 +1,7 @@
+kind: expr
+expr: x + y
+values:
+  x: [1]
+  y: [2]
+expect:
+  value: [1, 2]

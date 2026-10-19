@@ -1,0 +1,11 @@
+kind: expr
+template: J=${render_as_json(briefs, 4)}
+values:
+  briefs: [ab, adf]
+mode: strict
+expect:
+  value: |-
+    J=[
+        "ab",
+        "adf"
+    ]

@@ -1,0 +1,33 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    use:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: x
+      output: {k: {k: {k: {k: {k: {k: "str"}}}}}}
+  output: ${use.output}
+python_flow: |
+  id: f
+  name: f
+  nodes:
+    use:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: x
+      output: {k: {k: {k: {k: {k: {k: "str"}}}}}}
+  output: ${use.output}
+env:
+  YIAN_MAX_TYPE_NESTING: '5'
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: type at k.k.k.k.k nests deeper than 5 levels, the limit for a type (each record and list is a level)
+      frames:
+      - label: flow.yaml
+        range: [9, 33, 9, 43]

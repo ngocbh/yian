@@ -1,0 +1,8 @@
+kind: value
+type: Any
+value:
+  a: [1, null]
+expect:
+  value:
+    a: [1, null]
+  kind: object

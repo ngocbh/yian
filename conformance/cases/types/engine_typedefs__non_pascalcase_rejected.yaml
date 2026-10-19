@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: t
+  name: t
+  typedefs:
+    rating: {x: int}
+  input:
+    n: !int
+  output: 'int'
+  kind: code
+  code: |
+    return 1
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad typedefs: typedef name ''rating'' must be PascalCase (an uppercase identifier)'
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 9]

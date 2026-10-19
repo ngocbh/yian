@@ -1,0 +1,8 @@
+kind: expr
+expr: join(s, "-")
+values:
+  s: abc
+expect:
+  raises:
+    class: ExpressionError
+    message: 'expression function ''join'' failed: join() takes a list, got str'

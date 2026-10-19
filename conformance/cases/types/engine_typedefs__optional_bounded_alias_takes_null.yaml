@@ -1,0 +1,9 @@
+kind: value
+typedefs:
+  Score: float(0..1)
+  MaybeScore: Optional(Score)
+type: MaybeScore
+value: null
+expect:
+  value: null
+  kind: None

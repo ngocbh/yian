@@ -1,0 +1,9 @@
+kind: value
+# Hand-written from tests/engine/test_types.py::test_deep_nesting_is_a_type_error, at the default limit (101 levels): bad type text raises when the type is built.
+type: Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(Optional(str)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+value: 1
+expect:
+  raises:
+    class: TypeCheckError
+    message: "type nested too deeply in 'Optional(Optional(Optional(Optional(Opti'... (at most 100 levels)"
+    path: []

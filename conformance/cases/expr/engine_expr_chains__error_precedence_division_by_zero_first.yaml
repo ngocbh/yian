@@ -1,0 +1,7 @@
+kind: expr
+expr: 1 / 0 + c
+mode: strict
+expect:
+  raises:
+    class: ExpressionError
+    message: 'division by zero: 1 / 0'

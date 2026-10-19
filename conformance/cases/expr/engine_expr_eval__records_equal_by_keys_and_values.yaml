@@ -1,0 +1,11 @@
+kind: expr
+expr: x == y
+values:
+  x:
+    a: 1
+    b: 2
+  y:
+    b: 2
+    a: 1
+expect:
+  value: true

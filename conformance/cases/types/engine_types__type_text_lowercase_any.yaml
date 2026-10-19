@@ -1,0 +1,9 @@
+kind: value
+# Hand-written from the `any` hint in `src/yian/typesys/types.py`: bad type text raises when the type is built.
+type: any
+value: 1
+expect:
+  raises:
+    class: TypeCheckError
+    message: "unknown type 'any'; write Any"
+    path: []

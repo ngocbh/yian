@@ -1,0 +1,9 @@
+kind: value
+# `None` is yian's word here in both implementations (see #736).
+type: list(Any)
+value: [1, null]
+expect:
+  raises:
+    class: TypeCheckError
+    message: None does not match declared type Any
+    path: [1]

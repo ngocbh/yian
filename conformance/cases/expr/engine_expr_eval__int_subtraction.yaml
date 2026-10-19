@@ -1,0 +1,4 @@
+kind: expr
+expr: 10 - 3
+expect:
+  value: 7

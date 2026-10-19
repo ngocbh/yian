@@ -1,0 +1,4 @@
+kind: expr
+template: ${null}
+expect:
+  value: null

@@ -1,0 +1,7 @@
+kind: expr
+expr: a :- ${b}
+mode: condition
+expect:
+  raises:
+    class: ExpressionError
+    message: '`${...}` can''t appear inside an expression; write `a :- b`'

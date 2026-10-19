@@ -274,7 +274,7 @@ output:
     assert _error_line(error) == _line_of(text, "  ok: !bool n")
 
 
-def test_former_boolean_word_in_a_list_literal_names_the_boolean_to_write():
+def test_former_boolean_word_in_a_list_literal_gets_no_fix():
     text = """
 id: checked
 name: checked
@@ -286,7 +286,7 @@ output:
 
     assert str(error.diagnostic.message) == (
         "'ok': the value is not a valid list(bool): 'Off' does not match declared "
-        "type bool (at `ok[1]`); `Off` is text; write `false`"
+        "type bool (at `ok[1]`)"
     )
 
 

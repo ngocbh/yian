@@ -1,0 +1,8 @@
+kind: defaults
+env:
+  YIAN_AGENT_RETRIES: '0'
+  YIAN_MAX_TYPE_NESTING: '125'
+expect:
+  defaults:
+    AGENT_RETRIES: 0
+    MAX_TYPE_NESTING: 125

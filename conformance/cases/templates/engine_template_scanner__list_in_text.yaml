@@ -1,0 +1,9 @@
+kind: expr
+rules: [text-form]
+template: x=${x}
+values:
+  x: [1.5, a "b", null, true]
+expect:
+  value: x=[1.5,"a \"b\"",null,true]
+python_expect:
+  value: x=[1.5, 'a "b"', None, True]

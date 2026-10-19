@@ -1,0 +1,21 @@
+kind: load
+flow: |
+  id: tagged_literal
+  name: tagged_literal
+  nodes:
+    use:
+      kind: code
+      input:
+        x: !int(..) 1
+      code: |
+        return inputs["x"]
+      output: int
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''x'': `!int(..)` is not a type (malformed type expression ''int(..)'': a range needs at least one end; write int for any int)'
+      frames:
+      - label: flow.yaml
+        range: [7, 10, 7, 20]

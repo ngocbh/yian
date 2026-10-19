@@ -1,0 +1,21 @@
+kind: value
+rules: [messages]
+typedefs:
+  Buy:
+    action: Literal(buy)
+    qty: int
+  Sell:
+    action: Literal(sell)
+    price: float
+type: Union(Buy, Sell)
+value: null
+expect:
+  raises:
+    class: TypeCheckError
+    message: null is not an object for a union type
+    path: []
+python_expect:
+  raises:
+    class: TypeCheckError
+    message: None is not an object for a union type
+    path: []

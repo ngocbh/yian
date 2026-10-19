@@ -1,0 +1,21 @@
+kind: load
+flow: |
+  id: tagged_literal
+  name: tagged_literal
+  nodes:
+    use:
+      kind: code
+      input:
+        x: !int(0..) -1
+      code: |
+        return inputs["x"]
+      output: int
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''x'': `-1` is not a valid int(0..)'
+      frames:
+      - label: flow.yaml
+        range: [7, 10, 7, 22]

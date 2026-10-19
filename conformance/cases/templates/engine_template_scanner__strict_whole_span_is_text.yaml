@@ -1,0 +1,7 @@
+kind: expr
+template: ${n}
+values:
+  n: 3
+mode: strict
+expect:
+  value: '3'

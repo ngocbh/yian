@@ -1,0 +1,21 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  nodes:
+    b:
+      kind: code
+      input:
+        d: &d 2026-01-01
+      code: return 1
+  output:
+    g: *d
+    h: ${b.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''g'': `2026-01-01` is not a JSON value (YAML reads it as a date); quote it to keep it as text: `g: "2026-01-01"`'
+      frames:
+      - label: flow.yaml
+        range: [7, 10, 7, 23]

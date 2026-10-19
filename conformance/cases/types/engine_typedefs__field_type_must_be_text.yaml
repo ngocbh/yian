@@ -1,0 +1,10 @@
+kind: value
+# Hand-written from tests/engine/test_typedefs.py::test_record_field_must_be_string: a bad typedef raises when the typedefs are read.
+type: Bad
+typedefs: {Bad: {x: {nested: int}}}
+value: 1
+expect:
+  raises:
+    class: TypeCheckError
+    message: "typedef 'Bad' field 'x': type must be a string expression (got dict)"
+    path: [Bad, x]

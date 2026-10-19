@@ -1,0 +1,11 @@
+kind: expr
+rules: [arithmetic, messages]
+expr: missing + 1 > 5
+expect:
+  raises:
+    class: ExpressionError
+    message: 'type error evaluating null + 1: unsupported operand kinds for `+`: `null` and `int`'
+python_expect:
+  raises:
+    class: ExpressionError
+    message: 'type error evaluating None + 1: unsupported operand type(s) for +: ''NoneType'' and ''int'''

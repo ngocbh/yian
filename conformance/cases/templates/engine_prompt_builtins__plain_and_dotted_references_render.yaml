@@ -1,0 +1,9 @@
+kind: expr
+template: ${name} v=${sig.value}
+values:
+  name: zeta
+  sig:
+    value: 0.8
+mode: strict
+expect:
+  value: zeta v=0.8

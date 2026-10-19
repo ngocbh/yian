@@ -1,0 +1,10 @@
+kind: value
+# Hand-written from tests/engine/test_typedef_nesting.py::test_field_parse_follows_the_type_nesting_limit, at YIAN_MAX_TYPE_NESTING=5: bad type text raises when the type is built.
+type: Optional(Optional(Optional(Optional(Optional(Optional(str))))))
+env: {YIAN_MAX_TYPE_NESTING: "5"}
+value: 1
+expect:
+  raises:
+    class: TypeCheckError
+    message: "type nested too deeply in 'Optional(Optional(Optional(Optional(Opti'... (at most 5 levels)"
+    path: []

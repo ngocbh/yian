@@ -1,0 +1,10 @@
+kind: expr
+expr: render_as_json(d, 0)
+values:
+  d:
+    k: null
+expect:
+  value: |-
+    {
+    "k": null
+    }

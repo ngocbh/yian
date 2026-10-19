@@ -27,8 +27,18 @@
  * `test_zero_and_one_name_record_end_manifests_are_keyed`,
  * `test_two_name_record_end_manifest_is_not_keyed`, `test_flow_fingerprint_covers_each_edge_field`,
  * `test_flow_fingerprint_covers_flow_boundary_ids`,
- * `test_expansion_digest_changes_for_every_builder_topology_component` and
- * `test_expansion_digest_is_stable_across_canonical_mapping_order`.
+ * `test_expansion_digest_changes_for_every_builder_topology_component`,
+ * `test_expansion_digest_is_stable_across_canonical_mapping_order`,
+ * `test_flow_fingerprint_covers_each_included_kind_field` (its 26 non-AGENT rows),
+ * `test_flow_manifest_covers_remaining_kind_execution_fields`,
+ * `test_flow_manifest_includes_human_input_title_but_ignores_inert_map_parallel`,
+ * `test_flow_manifest_allows_shared_child_aliases_but_rejects_child_cycles`,
+ * `test_wait_fingerprint_and_expansion_digest_cover_absolute_until_wiring`,
+ * `test_case_predicate_origins_do_not_affect_program_or_expansion_identity`,
+ * `test_case_manifest_rejects_a_mutated_non_origin_predicate_carrier`,
+ * `test_memory_scope_is_not_authored_identity_but_is_expansion_topology`,
+ * `test_memory_expansion_projection_covers_keys_and_occurrence_topology` and
+ * `test_memory_expansion_projection_fields`.
  *
  * Rebased on hand-built flows (Python builds the baseline with the loader): `fragment()` mirrors
  * Python's `_fragment()`, and `compiled()` stands in for `_compiled()`'s loaded flow.
@@ -50,7 +60,14 @@
  * the flow scope is a loader merge into the node's `env`),
  * `test_templates_under_any_name_keep_their_source_text` and
  * `test_env_values_under_credential_like_names_are_identity` (their other parametrized cases test
- * the same rule and aren't ported one by one).
+ * the same rule and aren't ported one by one), `test_total_loop_manifest_omits_returned_fields`,
+ * `test_loop_without_max_has_null_max_in_manifest_and_its_own_fingerprint` (built twice instead of
+ * loaded twice), `test_memory_expansion_projection_omits_root_id_and_config_but_hashes_keys` (the
+ * memory layout's `memoryScope` and the flow `memories` set by hand),
+ * `test_expansion_digest_applies_topology_only_policy_to_recursive_children` (a CALL child
+ * `CompiledFlow` with a `flowLlmConfig` layer), and
+ * `tests/engine/test_call_subgraph_builder.py::test_growth_metadata_and_execution_topology_have_a_separate_digest_policy`
+ * (a hand-grown `fragment()` instead of `call_subgraph`'s).
  * `test_flow_fingerprint_changes_with_node_kind_and_execution_source` and
  * `test_flow_fingerprint_recursively_includes_static_child_flows` are covered by the kind-literal
  * and kind-field rows.
@@ -66,6 +83,9 @@
  *   typed values (`{"type": "int", "value": "1"}`), not raw JSON numbers.
  * - Python's `ValueError` is a `RangeError`; error names are TS field names (`outputContract`,
  *   `futureField`) in text form (`["futureField"]`).
+ * - `Case` is frozen, so the forged-origin row builds a forged `Case`; `_memory_scope_topology`
+ *   isn't exported, so the projection-fields row compares the expansion digest with the SHA-256 of
+ *   the expected manifest.
  * - The non-JSON row uses a `Map`, a `Uint8Array`, a class instance, a function and `undefined`.
  * - The malformed type-table rows are a record instead of a `Map`, a `Map` with a `bigint` key, and
  *   a `Map` whose value is the string `"int"`.
@@ -91,7 +111,11 @@
  * `ValueTemplate` and `Binding` arms), the LLM value types and adjacency index outside identity,
  * the flow id and flow memories (identity when present, never expansion topology, forged values
  * refused in both modes), and an unknown flow field, a `Flow` subclass, a non-Flow, a wiring
- * value that isn't a `Binding` and a node wiring that isn't a `Map` refused.
+ * value that isn't a `Binding` and a node wiring that isn't a `Map` refused; the HUMAN_INPUT
+ * fields as typed values, a CALL child that isn't a `Flow` refused, a literal in MAP wiring and a
+ * CALL argument literal as identity, LOOP `times` as a typed int (`null` for a `while` loop), forged
+ * LOOP counts and a CASE branch that isn't a `Case` refused, forged memory scopes and segments and a
+ * non-`ExecutionScope` scope refused, and the execution-scope projection.
  *
  * Later (T3-22): the loader rows `test_loaded_flow_stores_only_exact_parameter_carriers`,
  * `test_flow_fingerprint_ignores_comments_and_python_object_identity`,
@@ -109,7 +133,8 @@
  * manifest): `test_flow_fingerprint_includes_authored_llm_layers_but_not_effective_values`,
  * `test_manifest_records_blocks_as_nested_sorted_mappings`,
  * `test_flow_fingerprint_tracks_block_fields_but_not_key_order`,
- * `test_block_field_names_are_not_redacted_as_credentials`, the `test_agent_variable_*` rows and
+ * `test_block_field_names_are_not_redacted_as_credentials`, the five AGENT rows of
+ * `test_flow_fingerprint_covers_each_included_kind_field`, the `test_agent_variable_*` rows and
  * `test_expansion_digest_excludes_effective_but_includes_authored_llm_config`.
  *
  * Later (T4): `test_resume_rejects_a_flow_with_an_edited_literal` (a run and a resume).
@@ -125,26 +150,41 @@
  */
 
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 
 import { expansionDigest, flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
-import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
+import {
+  DeclSite,
+  MemoryDecl,
+  MemoryOccurrenceKind,
+  MemoryOccurrenceSegment,
+  MemoryScope,
+} from "../../src/memory/contracts.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import {
   Assertion,
   Binding,
   ChildFlowBoundary,
   ContractOrigins,
+  ExecutionPosition,
+  ExecutionScope,
   Parameter,
   SeedConnection,
   ValueContract,
   ValueTemplate,
 } from "../../src/nodes/contracts.ts";
+import { CallNode } from "../../src/nodes/call/node.ts";
+import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { type BuiltinCode, CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
+import { HumanInputNode } from "../../src/nodes/human_input/node.ts";
+import { LoopNode } from "../../src/nodes/loop/node.ts";
+import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
+import { WaitNode } from "../../src/nodes/wait/node.ts";
 import { FileRef, Type, typeFor, ValueKind } from "../../src/typesys/index.ts";
 import { canonicalJson, type JsonObject, type JsonValue } from "../../src/typesys/json.ts";
 
@@ -1568,6 +1608,289 @@ test("a node wiring that isn't a Map is refused", () => {
   expectError(() => flowManifest(flow), TypeError, "flow.wiring.body: expected Map, got Object");
 });
 
+// ---- CASE, HUMAN_INPUT, WAIT, CALL, MAP and LOOP ---------------------------------------------
+
+/** A LOOP node `node` over a baked `fragment()` body, with `options` on top. */
+function loopNode(options: Partial<ConstructorParameters<typeof LoopNode>[1]> = {}): LoopNode {
+  return new LoopNode("node", { flowId: "child", child: fragment(), ...options });
+}
+
+/** A flow of the single node `node`, wired with `wiring`. */
+function wiredNodeFlow(node: Node, wiring: [string, unknown][]): Flow {
+  return new Flow(new Map([[node.id, node]]), [], {
+    wiring: new Map([[node.id, new Map(wiring)]]),
+    startId: node.id,
+    endId: node.id,
+  });
+}
+
+test.each([
+  [
+    "code-source",
+    () => new CodeNode("node", { code: 'return "first"' }),
+    () => new CodeNode("node", { code: 'return "second"' }),
+  ],
+  ["tool-id", () => new ToolNode("node", { toolId: "first" }), () => new ToolNode("node", { toolId: "second" })],
+  [
+    "case-handle",
+    () => new CaseNode("node", [new Case("first", { when: "x" })]),
+    () => new CaseNode("node", [new Case("second", { when: "x" })]),
+  ],
+  [
+    "case-when",
+    () => new CaseNode("node", [new Case("branch", { when: "first" })]),
+    () => new CaseNode("node", [new Case("branch", { when: "second" })]),
+  ],
+  [
+    "case-order",
+    () => new CaseNode("node", [new Case("first", { when: "x" }), new Case("second", { when: "y" })]),
+    () => new CaseNode("node", [new Case("second", { when: "y" }), new Case("first", { when: "x" })]),
+  ],
+  [
+    "human-prompt",
+    () => new HumanInputNode("node", { prompt: "first" }),
+    () => new HumanInputNode("node", { prompt: "second" }),
+  ],
+  [
+    "human-answer-schema",
+    () => new HumanInputNode("node", { prompt: "p", answerSchema: [{ name: "first" }] }),
+    () => new HumanInputNode("node", { prompt: "p", answerSchema: [{ name: "second" }] }),
+  ],
+  [
+    "human-questions",
+    () => new HumanInputNode("node", { questions: [{ question: "first" }] }),
+    () => new HumanInputNode("node", { questions: [{ question: "second" }] }),
+  ],
+  [
+    "human-questions-input",
+    () => new HumanInputNode("node", { questionsInput: "first" }),
+    () => new HumanInputNode("node", { questionsInput: "second" }),
+  ],
+  [
+    "human-title",
+    () => new HumanInputNode("node", { prompt: "p", title: "first" }),
+    () => new HumanInputNode("node", { prompt: "p", title: "second" }),
+  ],
+  [
+    "call-flow-id",
+    () => new CallNode("node", { flowId: "first", child: fragment() }),
+    () => new CallNode("node", { flowId: "second", child: fragment() }),
+  ],
+  [
+    "call-flow-version",
+    () => new CallNode("node", { flowId: "child", flowVersion: 1n, child: fragment() }),
+    () => new CallNode("node", { flowId: "child", flowVersion: 2n, child: fragment() }),
+  ],
+  [
+    "call-child",
+    () => new CallNode("node", { flowId: "child", child: fragment() }),
+    () => new CallNode("node", { flowId: "child", child: replaceBody(fragment()) }),
+  ],
+  [
+    "map-flow-id",
+    () => new MapNode("node", { flowId: "first", child: fragment() }),
+    () => new MapNode("node", { flowId: "second", child: fragment() }),
+  ],
+  [
+    "map-flow-version",
+    () => new MapNode("node", { flowId: "child", flowVersion: 1n, child: fragment() }),
+    () => new MapNode("node", { flowId: "child", flowVersion: 2n, child: fragment() }),
+  ],
+  [
+    "map-child",
+    () => new MapNode("node", { flowId: "child", child: fragment() }),
+    () => new MapNode("node", { flowId: "child", child: replaceBody(fragment()) }),
+  ],
+  ["loop-flow-id", () => loopNode({ flowId: "first" }), () => loopNode({ flowId: "second" })],
+  ["loop-flow-version", () => loopNode({ flowVersion: "1" }), () => loopNode({ flowVersion: "2" })],
+  ["loop-child", () => loopNode(), () => loopNode({ child: replaceBody(fragment()) })],
+  ["loop-predicate-kind", () => loopNode({ predicateKind: "while" }), () => loopNode({ predicateKind: "until" })],
+  ["loop-predicate", () => loopNode({ predicate: "first" }), () => loopNode({ predicate: "second" })],
+  ["loop-times", () => loopNode({ times: 1 }), () => loopNode({ times: 2 })],
+  ["loop-max-iters", () => loopNode({ maxIters: 1 }), () => loopNode({ maxIters: 2 })],
+  ["loop-max-iters-none", () => loopNode({ maxIters: null }), () => loopNode({ maxIters: 5 })],
+  ["loop-iteration", () => loopNode({ iteration: 1 }), () => loopNode({ iteration: 2 })],
+  ["loop-returned-fields", () => loopNode({ returnedFields: null }), () => loopNode({ returnedFields: ["x"] })],
+] as const)("test_flow_fingerprint_covers_each_included_kind_field: %s", (_, makeFirst, makeSecond) => {
+  expect(flowFingerprint(singleNodeFlow(makeFirst()))).not.toBe(flowFingerprint(singleNodeFlow(makeSecond())));
+});
+
+test.each([
+  ["tool", () => new ToolNode("node", { toolId: "first" }), () => new ToolNode("node", { toolId: "second" })],
+  [
+    "case-order",
+    () => new CaseNode("node", [new Case("first", { when: "x" }), new Case("second", { when: "y" })]),
+    () => new CaseNode("node", [new Case("second", { when: "y" }), new Case("first", { when: "x" })]),
+  ],
+  [
+    "human-input",
+    () => new HumanInputNode("node", { prompt: "first", answerSchema: [{ name: "answer" }] }),
+    () => new HumanInputNode("node", { prompt: "second", answerSchema: [{ name: "answer" }] }),
+  ],
+  [
+    "call",
+    () => new CallNode("node", { flowId: "first", child: fragment() }),
+    () => new CallNode("node", { flowId: "second", child: fragment() }),
+  ],
+  [
+    "loop",
+    () => loopNode({ predicateKind: "while", predicate: "keep_going", maxIters: 2 }),
+    () => loopNode({ predicateKind: "while", predicate: "still_going", maxIters: 2 }),
+  ],
+  ["end-mode", () => EndNode.record("node", { outputNames: ["result"] }), () => EndNode.list("node", { n: 1 })],
+] as const)("test_flow_manifest_covers_remaining_kind_execution_fields: %s", (_, makeFirst, makeSecond) => {
+  expect(flowFingerprint(singleNodeFlow(makeFirst()))).not.toBe(flowFingerprint(singleNodeFlow(makeSecond())));
+});
+
+test("test_flow_manifest_includes_human_input_title_but_ignores_inert_map_parallel", () => {
+  const firstHuman = new HumanInputNode("node", { prompt: "answer", title: "First title" });
+  const secondHuman = new HumanInputNode("node", { prompt: "answer", title: "Second title" });
+  const serialMap = new MapNode("node", { flowId: "child", child: fragment(), parallel: false });
+  const parallelMap = new MapNode("node", { flowId: "child", child: fragment(), parallel: true });
+
+  expect(flowFingerprint(singleNodeFlow(firstHuman))).not.toBe(flowFingerprint(singleNodeFlow(secondHuman)));
+  expect(flowFingerprint(singleNodeFlow(serialMap))).toBe(flowFingerprint(singleNodeFlow(parallelMap)));
+});
+
+test("a HUMAN_INPUT node writes each field as a value", () => {
+  const node = new HumanInputNode("node", { prompt: "p", questionsInput: "qs", title: "T" });
+
+  expect(nodeManifest(singleNodeFlow(node), "node")).toMatchObject({
+    answer_schema: { items: [], type: "list" },
+    prompt: { type: "str", value: "p" },
+    questions: { type: "null" },
+    questions_input: { type: "str", value: "qs" },
+    title: { type: "str", value: "T" },
+  });
+});
+
+test("test_flow_manifest_allows_shared_child_aliases_but_rejects_child_cycles", () => {
+  const shared = fragment();
+  const aliased = new Flow(
+    new Map<string, Node>([
+      ["left", new CallNode("left", { flowId: "child", child: shared })],
+      ["right", new CallNode("right", { flowId: "child", child: shared })],
+    ]),
+    [],
+    {
+      wiring: new Map([
+        ["left", new Map()],
+        ["right", new Map()],
+      ]),
+      startId: "left",
+      endId: "right",
+    },
+  );
+  expect(() => flowManifest(aliased)).not.toThrow();
+
+  const cyclic = new Flow(new Map(), [], { wiring: new Map(), startId: "call", endId: "call" });
+  cyclic.nodes.set("call", new CallNode("call", { flowId: "self", child: cyclic }));
+  cyclic.wiring.set("call", new Map());
+  expectError(
+    () => flowManifest(cyclic),
+    RangeError,
+    "flow.nodes.call.child: recursive child-flow cycle is not manifestable",
+  );
+});
+
+test("a CALL child that isn't a Flow is refused", () => {
+  expectError(
+    () => flowManifest(singleNodeFlow(new CallNode("c", { flowId: "x" }))),
+    TypeError,
+    "flow.nodes.c.child: expected Flow, got null",
+  );
+});
+
+test("test_wait_fingerprint_and_expansion_digest_cover_absolute_until_wiring", () => {
+  const first = wiredNodeFlow(new WaitNode("node"), [["until", new Binding("2026-01-01T00:00:00+00:00")]]);
+  const second = wiredNodeFlow(new WaitNode("node"), [["until", new Binding("2026-01-02T00:00:00+00:00")]]);
+
+  expect(flowFingerprint(first)).not.toBe(flowFingerprint(second));
+  expect(expansionDigest(first)).not.toBe(expansionDigest(second));
+});
+
+test("a literal in MAP wiring and a CALL argument literal are identity", () => {
+  const map = (over: unknown) =>
+    wiredNodeFlow(new MapNode("node", { flowId: "child", child: fragment() }), [["over", over]]);
+  const call = (x: unknown) => wiredNodeFlow(new CallNode("node", { flowId: "child", child: fragment() }), [["x", x]]);
+
+  expect(flowFingerprint(map(["a"]))).not.toBe(flowFingerprint(map(["b"])));
+  expect(flowFingerprint(call("first"))).not.toBe(flowFingerprint(call("second")));
+  expect((flowManifest(call("first")).wiring as JsonObject).node).toEqual({
+    entries: [{ key: { type: "str", value: "x" }, value: { type: "str", value: "first" } }],
+    type: "mapping",
+  });
+});
+
+test("test_total_loop_manifest_omits_returned_fields", () => {
+  const total = nodeManifest(singleNodeFlow(loopNode()), "node");
+  const partial = nodeManifest(singleNodeFlow(loopNode({ returnedFields: ["x"] })), "node");
+
+  expect(total.kind).toBe("loop");
+  expect("returned_fields" in total).toBe(false);
+  expect(partial.returned_fields).toEqual(["x"]);
+});
+
+test("test_loop_without_max_has_null_max_in_manifest_and_its_own_fingerprint", () => {
+  const withMax = singleNodeFlow(loopNode({ predicate: "n < 3", maxIters: 5 }));
+  const without = singleNodeFlow(loopNode({ predicate: "n < 3" }));
+
+  expect(nodeManifest(without, "node").max_iters).toBeNull();
+  expect(nodeManifest(withMax, "node").max_iters).toBe(5);
+  expect(flowFingerprint(without)).not.toBe(flowFingerprint(withMax));
+  // Building the same loop again gives the same fingerprint.
+  expect(flowFingerprint(without)).toBe(flowFingerprint(singleNodeFlow(loopNode({ predicate: "n < 3" }))));
+});
+
+test("a LOOP's times is a typed int, or null for a while loop", () => {
+  expect(nodeManifest(singleNodeFlow(loopNode({ predicate: "n < 3" })), "node").times).toEqual({ type: "null" });
+  expect(nodeManifest(singleNodeFlow(loopNode({ predicateKind: "times", times: 2 })), "node").times).toEqual({
+    type: "int",
+    value: "2",
+  });
+});
+
+test.each([
+  ["times", 1.5, "1.5"],
+  ["maxIters", Infinity, "Infinity"],
+  ["iteration", 0.5, "0.5"],
+] as const)("a forged LOOP %s count is refused with its path", (field, value, text) => {
+  const node = loopNode();
+  Object.assign(node, { [field]: value });
+
+  expectError(
+    () => flowManifest(singleNodeFlow(node)),
+    TypeError,
+    `flow.nodes.node.${field}: expected a safe integer, got ${text}`,
+  );
+});
+
+test("test_case_predicate_origins_do_not_affect_program_or_expansion_identity", () => {
+  const first = singleNodeFlow(new CaseNode("case", [new Case("branch", { when: "true" })]));
+  const second = singleNodeFlow(
+    new CaseNode("case", [new Case("branch", { when: "true", origin: new OriginRef("case/0/when") })]),
+  );
+
+  expect(flowManifest(first)).toEqual(flowManifest(second));
+  expect(flowFingerprint(first)).toBe(flowFingerprint(second));
+  expect(expansionDigest(first)).toBe(expansionDigest(second));
+});
+
+test("test_case_manifest_rejects_a_mutated_non_origin_predicate_carrier", () => {
+  const forged = Object.assign(Object.create(Case.prototype), new Case("branch", { when: "true" }), {
+    origin: "flow.yaml:12",
+  });
+  const flow = singleNodeFlow(new CaseNode("case", [forged]));
+
+  expectError(() => flowManifest(flow), TypeError, "flow.nodes.case.cases[0].origin: expected OriginRef or null");
+});
+
+test("a CASE branch that isn't a Case is refused", () => {
+  const flow = singleNodeFlow(new CaseNode("case", [{ handle: "branch", when: "true", origin: null } as Case]));
+
+  expectError(() => flowManifest(flow), TypeError, "flow.nodes.case.cases[0]: expected Case, got Object");
+});
+
 // ---- Expansion digests -----------------------------------------------------------------------
 
 /** Python's `_replace_body`: swap the fragment's body for one with a different CODE body. */
@@ -1620,4 +1943,170 @@ test("test_expansion_digest_is_stable_across_canonical_mapping_order", () => {
 
   expect(expansionDigest(shuffled)).toBe(expansionDigest(original));
   expect(() => JSON.stringify(flowManifest(shuffled))).not.toThrow();
+});
+
+// ---- Expansion topology ----------------------------------------------------------------------
+
+/** Return the lowercase SHA-256 the manifest module takes over `manifest`'s RFC 8785 text. */
+function sha256(manifest: JsonValue): string {
+  return createHash("sha256").update(canonicalJson(manifest), "utf8").digest("hex");
+}
+
+test("test_memory_scope_is_not_authored_identity_but_is_expansion_topology", () => {
+  const plain = fragment();
+  const stamped = fragment();
+  code(stamped, "body").memoryScope = new MemoryScope(["body"]);
+
+  expect(flowManifest(stamped)).toEqual(flowManifest(plain));
+  expect(flowFingerprint(stamped)).toBe(flowFingerprint(plain));
+  expect(expansionDigest(stamped)).not.toBe(expansionDigest(plain));
+});
+
+test("test_memory_expansion_projection_covers_keys_and_occurrence_topology", () => {
+  const scopePath = ["nested", "body"];
+  const segment = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["nested"], 0);
+  const baseline = fragment();
+  code(baseline, "body").memoryScope = new MemoryScope(scopePath);
+  const variants = [baseline];
+  for (const [memories, occurrencePath] of [
+    [["notes"], []],
+    [["chat"], []],
+    [["notes", "chat"], []],
+    [["chat", "notes"], []],
+    [["notes"], [segment]],
+  ] as const) {
+    const flow = fragment();
+    code(flow, "body").memoryScope = new MemoryScope(scopePath, { memories, occurrencePath });
+    variants.push(flow);
+  }
+
+  expect(new Set(variants.map(expansionDigest)).size).toBe(6);
+});
+
+test("test_memory_expansion_projection_fields", () => {
+  const segment = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["nested"], 1);
+  const flow = fragment();
+  code(flow, "body").memoryScope = new MemoryScope(["nested", "body"], {
+    memories: ["notes"],
+    occurrencePath: [segment],
+  });
+  const expected = flowManifest(fragment());
+  ((expected.nodes as JsonObject).body as JsonObject).memory_scope = {
+    memories: ["notes"],
+    occurrence_path: [{ index: 1, kind: "map_item", static_path: ["nested"] }],
+    static_path: ["nested", "body"],
+  };
+
+  expect(expansionDigest(flow)).toBe(sha256(expected));
+});
+
+test("a forged memory scope or occurrence segment is refused", () => {
+  const segment = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["nested"], 1);
+  const scoped = (scope: unknown) => {
+    const flow = fragment();
+    Object.assign(code(flow, "body"), { memoryScope: scope });
+    return flow;
+  };
+  const forgedSegment = Object.assign(Object.create(MemoryOccurrenceSegment.prototype), segment, { index: 0.5 });
+  const forgedScope = Object.assign(Object.create(MemoryScope.prototype), new MemoryScope(["nested", "body"]), {
+    occurrencePath: [forgedSegment],
+  });
+
+  expectError(
+    () => expansionDigest(scoped({ staticPath: ["body"] })),
+    TypeError,
+    "expansion.nodes.body.memoryScope: expected exact MemoryScope, got Object",
+  );
+  expectError(() => expansionDigest(scoped(forgedScope)), TypeError, "index must be an integer");
+  // The authored manifest never reads the scope.
+  expect(flowFingerprint(scoped(forgedScope))).toBe(FRAGMENT_FINGERPRINT);
+});
+
+test("test_memory_expansion_projection_omits_root_id_and_config_but_hashes_keys", () => {
+  /** `compiled()` with flow id `rootId`, one `policy` memory of config `{limit}`, scoped on its step. */
+  const withMemory = (rootId: string, policy: string, limit: bigint): CompiledFlow => {
+    const flow = compiled();
+    Object.assign(flow, {
+      flowId: rootId,
+      memories: [new MemoryDecl(policy, policy, { limit }, new DeclSite([], [rootId]))],
+    });
+    code(flow, "step").memoryScope = new MemoryScope(["step"], { memories: [policy] });
+    return flow;
+  };
+  const first = withMemory("first", "outer", 3n);
+  const second = withMemory("second", "outer", 99n);
+  const otherKey = withMemory("first", "inner", 3n);
+
+  expect(flowFingerprint(first)).not.toBe(flowFingerprint(second));
+  expect(expansionDigest(first)).toBe(expansionDigest(second));
+  expect(expansionDigest(first)).not.toBe(expansionDigest(otherKey));
+});
+
+test("test_expansion_digest_applies_topology_only_policy_to_recursive_children", () => {
+  const parent = (child: CompiledFlow) => singleNodeFlow(new CallNode("invoke", { flowId: "child", child }));
+  const original = parent(compiled());
+  const changedChild = compiled();
+  changedChild.flowLlmConfig = { openai: { temperature: 0.7 } };
+  const changed = parent(changedChild);
+
+  expect(expansionDigest(changed)).toBe(expansionDigest(original));
+  expect(flowFingerprint(changed)).not.toBe(flowFingerprint(original));
+});
+
+/** `fragment()` grown as a child: its entry seeded at `seedPath`, with `scope` on the entry. */
+function grown(options: { seedPath?: (string | number)[]; scope?: ExecutionScope | null; metadata?: boolean }): Flow {
+  const { seedPath = [0, "x"], scope = null, metadata = true } = options;
+  const base = fragment();
+  const entry = new StartNode("entry", { params: [new Parameter("x", { contract: intContract() })] });
+  entry.executionScope = scope;
+  base.nodes.set("entry", entry);
+  return new Flow(base.nodes, base.edges, {
+    wiring: new Map<string, ReadonlyMap<string, unknown>>([...base.wiring, ["entry", new Map([["x", 1n]])]]),
+    startId: "entry",
+    endId: "terminal",
+    inputConnections: metadata ? [new SeedConnection("entry", "x", seedPath)] : [],
+    childBoundaries: metadata ? [new ChildFlowBoundary("entry", "terminal")] : [],
+  });
+}
+
+test("growth metadata and execution topology move the expansion digest, not the fingerprint", () => {
+  const scope = new ExecutionScope(["call", "entry"], { flowPath: ["call"], boundary: "start" });
+  const steps = [
+    grown({}),
+    grown({ seedPath: [3, "x"] }),
+    grown({ seedPath: [3, "x"], scope }),
+    grown({ scope, metadata: false }),
+  ];
+  const authored = flowFingerprint(steps[0]!);
+
+  for (const flow of steps) expect(flowFingerprint(flow)).toBe(authored);
+  expect(new Set(steps.map(expansionDigest)).size).toBe(steps.length);
+});
+
+test("an execution scope projects its paths, positions and boundary", () => {
+  const flow = fragment();
+  code(flow, "body").executionScope = new ExecutionScope(["outer", "body"], {
+    flowPath: ["outer"],
+    occurrencePath: [new ExecutionPosition("call", ["outer"]), new ExecutionPosition("map_item", ["outer"], 2)],
+  });
+  const expected = flowManifest(fragment());
+  ((expected.nodes as JsonObject).body as JsonObject).execution_scope = {
+    boundary: null,
+    flow_path: ["outer"],
+    occurrence_path: [
+      { index: null, kind: "call", static_path: ["outer"] },
+      { index: 2, kind: "map_item", static_path: ["outer"] },
+    ],
+    static_path: ["outer", "body"],
+  };
+
+  expect(expansionDigest(flow)).toBe(sha256(expected));
+  expect(flowFingerprint(flow)).toBe(FRAGMENT_FINGERPRINT);
+});
+
+test("an execution scope that isn't an ExecutionScope is refused", () => {
+  const flow = fragment();
+  Object.assign(code(flow, "body"), { executionScope: { staticPath: ["body"] } });
+
+  expectError(() => expansionDigest(flow), TypeError, "expansion.nodes.body.executionScope must be an ExecutionScope");
 });

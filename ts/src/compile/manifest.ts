@@ -20,15 +20,16 @@
 import { createHash } from "node:crypto";
 
 import { compareCodeUnits, OriginRef, reprText } from "../diagnostics.ts";
-import { DeclSite, MemoryDecl } from "../memory/contracts.ts";
+import { DeclSite, MemoryDecl, MemoryOccurrenceSegment, MemoryScope } from "../memory/contracts.ts";
 import { Node, NodeKind } from "../nodes/base.ts";
 import { CallNode } from "../nodes/call/node.ts";
-import { CaseNode } from "../nodes/case/node.ts";
+import { Case, CaseNode } from "../nodes/case/node.ts";
 import { classifyCodeSource, CodeNode } from "../nodes/code/node.ts";
 import {
   Assertion,
   Binding,
   ContractOrigins,
+  ExecutionScope,
   isExactly,
   Parameter,
   PartialRecordContract,
@@ -184,6 +185,7 @@ const PARTIAL_RECORD_CONTRACT_FIELDS = new Set(["fields"]);
 const CONTRACT_ORIGINS_IGNORED_FIELDS = new Set(["default", "entries"]);
 const TYPE_FIELDS = new Set(["kind", "fields", "required", "tags", "element", "nullable", "bounds", "variants"]);
 const MEMORY_DECL_FIELDS = new Set(["name", "type", "config", "site", "origin"]);
+const CASE_FIELDS = new Set(["handle", "when", "origin"]);
 const FLOW_FIELDS = ["nodes", "edges", "wiring", "startId", "endId", "inputConnections", "childBoundaries"];
 const FLOW_FIELD_SET = new Set(FLOW_FIELDS);
 const COMPILED_FLOW_FIELD_SET = new Set([
@@ -610,6 +612,90 @@ function memoriesManifest(values: unknown, ctx: ManifestContext, path: string): 
 }
 
 /**
+ * Canonicalize one ordered CASE arm; its origin is diagnostic-only.
+ *
+ * @throws TypeError when `value` isn't exactly a `Case`, or its origin isn't an `OriginRef` or
+ *   `null`.
+ * @throws RangeError when its fields aren't the policy's.
+ */
+function caseManifest(value: unknown, ctx: ManifestContext, path: string): JsonObject {
+  if (!isExactly(value, Case)) throw new TypeError(`${path}: expected Case, got ${typeName(value)}`);
+  checkFields(value, CASE_FIELDS, path);
+  const origin: unknown = value.origin;
+  if (origin !== null && !(origin instanceof OriginRef)) {
+    throw new TypeError(`${path}.origin: expected OriginRef or null`);
+  }
+  return { handle: value.handle, when: canonicalValue(value.when, ctx, `${path}.when`) };
+}
+
+/**
+ * Project one dynamic memory occurrence segment.
+ *
+ * @throws TypeError or RangeError when `segment` isn't exactly a `MemoryOccurrenceSegment` or
+ *   fails its constructor's checks.
+ */
+function memoryOccurrenceTopology(segment: unknown, path: string): JsonObject {
+  if (!isExactly(segment, MemoryOccurrenceSegment)) {
+    throw new TypeError(`${path}: expected exact MemoryOccurrenceSegment, got ${typeName(segment)}`);
+  }
+  // Rebuilding replays the frozen carrier's checks on a forged segment.
+  new MemoryOccurrenceSegment(segment.kind, segment.staticPath, segment.index);
+  return {
+    index: count(segment.index, `${path}.index`, false),
+    kind: segment.kind,
+    static_path: [...segment.staticPath],
+  };
+}
+
+/**
+ * Project the memory topology needed for deterministic growth identity: the node's path, its
+ * memory keys and its occurrence path, without configs or origins.
+ *
+ * @throws TypeError or RangeError when `value` isn't exactly a `MemoryScope` or fails its
+ *   constructor's checks.
+ */
+function memoryScopeTopology(value: unknown, path: string): JsonObject {
+  if (!isExactly(value, MemoryScope)) {
+    throw new TypeError(`${path}: expected exact MemoryScope, got ${typeName(value)}`);
+  }
+  // Rebuilding replays the frozen carrier's checks on a forged scope.
+  new MemoryScope(value.staticPath, { memories: value.memories, occurrencePath: value.occurrencePath });
+  return {
+    memories: [...value.memories],
+    occurrence_path: value.occurrencePath.map((segment, index) =>
+      memoryOccurrenceTopology(segment, `${path}.occurrencePath[${index}]`),
+    ),
+    static_path: [...value.staticPath],
+  };
+}
+
+/**
+ * Project a node's execution location for growth identity.
+ *
+ * @throws TypeError when `value` isn't exactly an `ExecutionScope`.
+ * @throws TypeError or RangeError when it fails its constructor's checks.
+ */
+function executionScopeTopology(value: unknown, path: string): JsonObject {
+  if (!isExactly(value, ExecutionScope)) throw new TypeError(`${path} must be an ExecutionScope`);
+  // Rebuilding replays the frozen carrier's checks on a forged scope.
+  new ExecutionScope(value.staticPath, {
+    flowPath: value.flowPath,
+    occurrencePath: value.occurrencePath,
+    boundary: value.boundary,
+  });
+  return {
+    static_path: [...value.staticPath],
+    flow_path: [...value.flowPath],
+    occurrence_path: value.occurrencePath.map((position, index) => ({
+      kind: position.kind,
+      static_path: [...position.staticPath],
+      index: count(position.index, `${path}.occurrencePath[${index}].index`, true),
+    })),
+    boundary: value.boundary,
+  };
+}
+
+/**
  * Describe a CODE node's `code`: `{"inline": body}` or `{"ref": "./x.ts:fn"}` for text, or the
  * built-in form `{"builtin": "identity", "field": name}`.
  *
@@ -631,10 +717,12 @@ function codeManifest(code: unknown, path: string): JsonObject {
 /**
  * Canonicalize one concrete node under its exhaustive per-kind field policy.
  *
+ * @param topologyOnly Whether this is the expansion topology, which adds the node's memory and
+ *   execution scopes and encodes baked child flows in topology mode too.
  * @throws TypeError or RangeError when a field breaks the policy or holds a value that isn't
  *   manifestable.
  */
-function nodeManifest(node: Node, ctx: ManifestContext, path: string): JsonObject {
+function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOnly: boolean): JsonObject {
   checkNodeFields(node, path);
   let params: JsonValue = null;
   const declared: unknown = node.params;
@@ -702,8 +790,59 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string): JsonObjec
       if (retries !== 0) manifest.retries = retries;
       break;
     }
+    case NodeKind.CASE: {
+      const cases: unknown = (node as CaseNode).cases;
+      if (!isList(cases)) throw new TypeError(`${path}.cases: expected array, got ${typeName(cases)}`);
+      manifest.cases = cases.map((branch, index) => caseManifest(branch, ctx, `${path}.cases[${index}]`));
+      break;
+    }
+    case NodeKind.HUMAN_INPUT: {
+      const human = node as HumanInputNode;
+      manifest.answer_schema = canonicalValue(human.answerSchema, ctx, `${path}.answerSchema`);
+      manifest.prompt = canonicalValue(human.prompt, ctx, `${path}.prompt`);
+      manifest.questions = canonicalValue(human.questions, ctx, `${path}.questions`);
+      manifest.questions_input = canonicalValue(human.questionsInput, ctx, `${path}.questionsInput`);
+      manifest.title = canonicalValue(human.title, ctx, `${path}.title`);
+      break;
+    }
+    case NodeKind.WAIT:
+      // WAIT owns no constructor state; its absolute deadline is canonicalized through the flow's
+      // ordinary wiring manifest.
+      break;
+    case NodeKind.CALL:
+    case NodeKind.MAP:
+    case NodeKind.LOOP: {
+      const spawner = node as CallNode | MapNode | LoopNode;
+      manifest.child = flowManifestOf(spawner.child, ctx, `${path}.child`, topologyOnly);
+      manifest.flow_id = spawner.flowId;
+      manifest.flow_version = canonicalValue(spawner.flowVersion, ctx, `${path}.flowVersion`);
+      if (spawner instanceof LoopNode) {
+        manifest.iteration = count(spawner.iteration, `${path}.iteration`, false);
+        manifest.max_iters = count(spawner.maxIters, `${path}.maxIters`, true);
+        manifest.predicate = canonicalValue(spawner.predicate, ctx, `${path}.predicate`);
+        manifest.predicate_kind = spawner.predicateKind;
+        // `times` is a typed value, as in Python's manifest; it passes `count` first, so a forged
+        // float is refused rather than written as a float.
+        const times = spawner.times === null ? null : BigInt(count(spawner.times, `${path}.times`, false)!);
+        manifest.times = canonicalValue(times, ctx, `${path}.times`);
+        // Left out for a total loop so the feature doesn't change the identity of flows that don't
+        // use it (the shape follows Python's manifest).
+        if (spawner.returnedFields !== null) manifest.returned_fields = [...spawner.returnedFields];
+      }
+      break;
+    }
     default:
       throw new RangeError(`${path}: unsupported node kind ${reprText(node.kind)}`);
+  }
+
+  // Derived memory and execution state is never authored program identity. A dynamic fragment's
+  // identity includes the scope's root-relative path, key stack and occurrence path, so replay
+  // rejects a structurally different occurrence without persisting configs or source origins.
+  if (topologyOnly && node.memoryScope !== null) {
+    manifest.memory_scope = memoryScopeTopology(node.memoryScope, `${path}.memoryScope`);
+  }
+  if (topologyOnly && node.executionScope !== null) {
+    manifest.execution_scope = executionScopeTopology(node.executionScope, `${path}.executionScope`);
   }
   return manifest;
 }
@@ -768,7 +907,7 @@ function flowManifestOf(flow: unknown, ctx: ManifestContext, path: string, topol
     const nodeEntries = sortedStringKeys(nodes, `${path}.nodes`).map((nodeId): [string, JsonObject] => {
       const node = nodes.get(nodeId);
       if (!(node instanceof Node)) throw new TypeError(`${path}.nodes.${nodeId}: expected Node, got ${typeName(node)}`);
-      return [nodeId, nodeManifest(node, ctx, `${path}.nodes.${nodeId}`)];
+      return [nodeId, nodeManifest(node, ctx, `${path}.nodes.${nodeId}`, topologyOnly)];
     });
 
     const wiring = flow.wiring as Map<string, unknown>;

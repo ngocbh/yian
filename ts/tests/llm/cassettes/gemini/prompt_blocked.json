@@ -1,0 +1,50 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "prompt_blocked: a candidate-less chunk with promptFeedback.blockReason SAFETY: refused, not retried.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-goog-api-key": "<redacted>"
+        },
+        "json": {
+          "contents": [
+            {
+              "role": "user",
+              "parts": [
+                {
+                  "text": "Say hello."
+                }
+              ]
+            }
+          ],
+          "systemInstruction": {
+            "parts": [
+              {
+                "text": "You are terse."
+              }
+            ]
+          },
+          "safetySettings": [],
+          "generationConfig": {
+            "candidateCount": 1
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"promptFeedback\": {\"blockReason\": \"SAFETY\"}, \"usageMetadata\": {\"promptTokenCount\": 12, \"totalTokenCount\": 12}, \"modelVersion\": \"gemini-2.5-flash\", \"responseId\": \"resp-1\"}\r\n\r\n"
+        ]
+      }
+    }
+  ]
+}

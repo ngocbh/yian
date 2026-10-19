@@ -1,0 +1,101 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "placeholder: gemini-3-pro-preview; a tool turn from openai_chat (call call_1, no signature): its functionCall gets the literal placeholder signature.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:streamGenerateContent?alt=sse",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-goog-api-key": "<redacted>"
+        },
+        "json": {
+          "contents": [
+            {
+              "role": "user",
+              "parts": [
+                {
+                  "text": "Double 3."
+                }
+              ]
+            },
+            {
+              "role": "model",
+              "parts": [
+                {
+                  "functionCall": {
+                    "id": "call_1",
+                    "name": "double",
+                    "args": {
+                      "value": 3
+                    }
+                  },
+                  "thoughtSignature": "skip_thought_signature_validator"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "parts": [
+                {
+                  "functionResponse": {
+                    "id": "call_1",
+                    "name": "double",
+                    "response": {
+                      "output": 6
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "systemInstruction": {
+            "parts": [
+              {
+                "text": "You are terse."
+              }
+            ]
+          },
+          "tools": [
+            {
+              "functionDeclarations": [
+                {
+                  "name": "double",
+                  "description": "Double an integer.",
+                  "parametersJsonSchema": {
+                    "properties": {
+                      "value": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "value"
+                    ],
+                    "type": "object"
+                  }
+                }
+              ]
+            }
+          ],
+          "safetySettings": [],
+          "generationConfig": {
+            "candidateCount": 1
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"candidates\": [{\"content\": {\"role\": \"model\", \"parts\": [{\"text\": \"The a\"}]}, \"index\": 0}], \"usageMetadata\": {\"promptTokenCount\": 12, \"candidatesTokenCount\": 40, \"thoughtsTokenCount\": 25, \"cachedContentTokenCount\": 8, \"totalTokenCount\": 77}, \"modelVersion\": \"gemini-3-pro-preview\", \"responseId\": \"resp-1\"}\r\n\r\n",
+          "data: {\"candidates\": [{\"content\": {\"role\": \"model\", \"parts\": [{\"text\": \"nswer is 6.\"}]}, \"index\": 0, \"finishReason\": \"STOP\"}], \"usageMetadata\": {\"promptTokenCount\": 12, \"candidatesTokenCount\": 40, \"thoughtsTokenCount\": 25, \"cachedContentTokenCount\": 8, \"totalTokenCount\": 77}, \"modelVersion\": \"gemini-3-pro-preview\", \"responseId\": \"resp-1\"}\r\n\r\n"
+        ]
+      }
+    }
+  ]
+}

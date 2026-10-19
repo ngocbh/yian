@@ -21,16 +21,17 @@
  * Changed (TS yian): a default holding a lone surrogate (a double-quoted `\ud800` escape) is
  * refused before its tag is read, where Python accepts it.
  *
- * TS-only: the text rules for `float` and `int` inputs (the rules `int-in-float` and `text`). Text for a `float` input
- * reads an int spelling as that int at any size (`"2"` is `2n`, kept an int in the float slot),
- * a float spelling as a float, `inf`/`-inf` as infinity, and refuses a spelling beyond the
- * float range; Python's `float()` reads `"2"` as `2.0` and also takes `nan`, `Infinity` and
- * `+inf`, which stay text here. An `int` input's text has no digit limit and its digits are
- * ASCII. Also TS-only: a parameter without `coerceStrings`, an `Any` input and a non-record
- * `raw`; a 5000-digit `bigint` default, the counterpart of `test_long_int_boundaries.py`'s two
- * `apply_defaults` tests (no digit limit, so it is accepted rather than rejected); and the
- * harvested-case table, which makes the loader's call on the `input:` declarations of the
- * conformance cases these readers decide, comparing the message and the last frame.
+ * TS-only: the text rules for `float` and `int` inputs (the rules `int-in-float` and `text`).
+ * Text for a `float` input reads an int spelling as that int at any size (`"2"` is `2n`, kept an
+ * int in the float slot), a float spelling as a float, `inf`/`-inf` as infinity, and refuses a
+ * spelling beyond the float range; Python's `float()` reads `"2"` as `2.0` and also takes `nan`,
+ * `Infinity` and `+inf`, which stay text here. An `int` input's text has no digit limit and its
+ * digits are ASCII. Also TS-only: a parameter without `coerceStrings`, an `Any` input and a
+ * non-record `raw`; a 5000-digit `bigint` default, the counterpart of
+ * `test_long_int_boundaries.py`'s two `apply_defaults` tests (no digit limit, so it is accepted
+ * rather than rejected); and the harvested-case table, which makes the loader's call on the
+ * `input:` declarations of the conformance cases these readers decide, comparing the message and
+ * the last frame.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

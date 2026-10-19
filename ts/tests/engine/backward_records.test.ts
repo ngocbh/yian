@@ -73,7 +73,9 @@
  * subclasses).
  *
  * Later (T4-4 to T4-8): `test_historical_backward_prepares_recorded_schema_bytes` and the
- * prepare, append, reduce and replay tests (with the reducer, the runtime log and the engine).
+ * prepare, append, reduce and replay tests (with the run state, the runtime log and the engine):
+ * they reach `reduceBackwardRecord` through the run state's prepare and append, so they wait for
+ * it; the reducer's own rules are tested TS-only in `runtime_backward.test.ts`.
  */
 
 import { expect, test } from "bun:test";

@@ -28,11 +28,13 @@ import {
   validateFeedback,
   type ValueRoute,
 } from "../expr/lineage.ts";
+import { sameLearningResult, sameMemoryMutation } from "../memory/contracts.ts";
 import {
   LearningFailure,
   LearningResult,
   MemoryEpisodeStatus,
   MemoryMutation,
+  MemoryOperationFailure,
   PolicyCommitOutcome,
 } from "../memory/index.ts";
 import {
@@ -42,7 +44,7 @@ import {
   sameBackwardResult,
   validateBackwardResult,
 } from "../nodes/base.ts";
-import { isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
+import { isExactly, sameExecutionScope, sameItems, sameOptional } from "../nodes/contracts.ts";
 import { type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
 import { isList, isRecord } from "../typesys/values.ts";
 import {
@@ -50,7 +52,10 @@ import {
   BackwardAttribution,
   BackwardFailure,
   BackwardOutcome,
+  sameAttributedBackwardResult,
   sameBackwardAttribution,
+  sameBackwardFailure,
+  sameBackwardOutcome,
 } from "./contracts.ts";
 import {
   BackwardFinishedRecord,
@@ -828,6 +833,227 @@ export function proposalBatches(
     throw new RangeError("memory proposals must cover the complete recorded memory table in order");
   }
   return ready.proposals.map((proposal) => proposal.mutations);
+}
+
+/**
+ * Require completed feedback and failure dispositions from accepted authority.
+ *
+ * @throws RangeError when the Finished outcome disagrees with the attempt's accepted records.
+ */
+function validateBackwardFinished(
+  trace: RetainedTrace,
+  backward: RuntimeBackwardState,
+  record: BackwardFinishedRecord,
+): void {
+  const current = backward.current!;
+  const outcome = record.outcome;
+  const ready = current.ready;
+  if (ready !== null) {
+    if (!sameOptional(outcome.feedback, ready.rootResult, sameBackwardResult)) {
+      throw new RangeError("Finished feedback must match accepted Ready");
+    }
+    if (
+      record.attributedResults.length > 0 &&
+      !sameItems(record.attributedResults, ready.attributedResults, sameAttributedBackwardResult)
+    ) {
+      throw new RangeError("Finished attribution must match accepted Ready");
+    }
+  }
+  if (outcome.status === "succeeded") {
+    if (ready === null || backward.policyOutcomes.some((policy) => policy.status !== "succeeded")) {
+      throw new RangeError("successful Finished requires Ready and every memory confirmation");
+    }
+    if (!sameOptional(outcome.learning, prefixLearning(backward, { succeeded: true }), sameLearningResult)) {
+      throw new RangeError("successful Finished learning must match accepted memory confirmations");
+    }
+    return;
+  }
+  // A failed outcome always carries a failure.
+  const failure = outcome.failure!;
+  if (sameBackwardFailure(failure, interruptedFailure())) {
+    if (!sameBackwardOutcome(outcome, backward.outcome!) || (ready === null && record.attributedResults.length > 0)) {
+      throw new RangeError("interrupted Finished must exactly project the accepted prefix");
+    }
+    return;
+  }
+  if (ready !== null) {
+    const failed = backward.policyOutcomes.filter((policy) => policy.status === "failed");
+    if (failed.length !== 1) throw new RangeError("failed Finished after Ready requires a recorded commit failure");
+    const policy = failed[0]!;
+    const cause = policy.failure!;
+    const expected = new BackwardFailure("commit", cause.code, cause.message, { memory: policy.memory, cause });
+    if (
+      !sameBackwardFailure(failure, expected) ||
+      !sameOptional(outcome.learning, prefixLearning(backward), sameLearningResult)
+    ) {
+      throw new RangeError("commit Finished must match the exact accepted failure and memory states");
+    }
+    return;
+  }
+  if (failure.stage === "learn") {
+    const { cause, memory } = failure;
+    if (!isExactly(cause, MemoryOperationFailure) || memory === null || !backward.memoryOrder.includes(memory)) {
+      throw new RangeError("learner failure requires one recorded memory key and memory-operation cause");
+    }
+    const expected = new BackwardFailure("learn", cause.code, cause.message, { memory, cause });
+    let unattributed = failure;
+    if (failure.nodeStartedSeq !== null) {
+      validateContextFailureOwner(trace, failure);
+      const { causeType, traceback } = failure;
+      unattributed = new BackwardFailure(failure.stage, failure.code, failure.message, {
+        memory,
+        cause,
+        causeType,
+        traceback,
+      });
+    }
+    if (!sameBackwardFailure(unattributed, expected) || outcome.feedback === null) {
+      throw new RangeError("learner Finished must retain the exact attributed failure and completed feedback");
+    }
+    validateAttributedBackward(trace, current.started.feedback, outcome.feedback, record.attributedResults);
+    const known = new LearningFailure(memory, "learn", cause);
+    if (!sameOptional(outcome.learning, prefixLearning(backward, { learnerFailure: known }), sameLearningResult)) {
+      throw new RangeError("learner Finished learning must contain its exact known failure");
+    }
+    return;
+  }
+  if (failure.stage !== "backward" || outcome.feedback !== null || record.attributedResults.length > 0) {
+    throw new RangeError("incomplete backward computation cannot carry completed or partial results");
+  }
+  seedBackward(trace, current.started.feedback);
+  if (
+    !hasFeedback(current.started.feedback) ||
+    (failure.code !== "backward.execute" && failure.code !== "backward.result")
+  ) {
+    throw new RangeError("backward computation failure requires effective feedback and a driver failure code");
+  }
+  if (failure.runId !== trace.runId || failure.nodeStartedSeq === null || failure.memory !== null) {
+    throw new RangeError("backward computation failure requires accepted occurrence attribution");
+  }
+  const source = new SourceRef(trace.runId, failure.nodeStartedSeq);
+  acceptedOccurrence(trace, source, "backward computation failure requires an accepted occurrence");
+  const context = trace.backwardContext(source);
+  if (failure.nodeId !== context.nodeId || !sameOptional(failure.scope, context.scope, sameExecutionScope)) {
+    throw new RangeError("backward computation failure must match its recorded invocation");
+  }
+  if (!sameOptional(outcome.learning, prefixLearning(backward), sameLearningResult)) {
+    throw new RangeError("failed computation learning must retain incomplete unrequested memories");
+  }
+}
+
+/**
+ * Return the accepted occurrence at `source`.
+ *
+ * @throws RangeError with `message` when the trace has no such occurrence.
+ */
+function acceptedOccurrence(trace: RetainedTrace, source: SourceRef, message: string): TraceOccurrence {
+  try {
+    return trace.occurrence(source);
+  } catch (error) {
+    // Python's `KeyError` from the lookup, replaced by the caller's message.
+    if (error instanceof RangeError) throw new RangeError(message);
+    throw error;
+  }
+}
+
+/**
+ * Require a context failure's node to be an accepted occurrence that receives its memory.
+ *
+ * @throws RangeError when the failure isn't a context failure of this run, or its occurrence isn't
+ *   accepted, doesn't match, or doesn't receive the memory.
+ */
+function validateContextFailureOwner(trace: RetainedTrace, failure: BackwardFailure): void {
+  if (failure.code !== "memory.invalid_context" || failure.runId !== trace.runId) {
+    throw new RangeError("an attributed learner failure must be a context failure of this run");
+  }
+  const source = new SourceRef(trace.runId, failure.nodeStartedSeq!);
+  const occurrence = acceptedOccurrence(trace, source, "a context failure must name an accepted occurrence");
+  const context = trace.backwardContext(source);
+  if (failure.nodeId !== context.nodeId || !sameOptional(failure.scope, context.scope, sameExecutionScope)) {
+    throw new RangeError("a context failure must match its recorded occurrence");
+  }
+  const scope = occurrence.memoryScope;
+  if (scope === null || failure.memory === null || !scope.memories.includes(failure.memory)) {
+    throw new RangeError("a context failure must name an occurrence that receives its memory");
+  }
+}
+
+/** A backward lifecycle or attributed commit record. */
+export type BackwardRecord =
+  | BackwardStartedRecord
+  | BackwardReadyRecord
+  | BackwardFinishedRecord
+  | MemoryCommitRequestedRecord
+  | CommitObservation;
+
+/**
+ * Validate and project one accepted backward record without effects.
+ *
+ * @param trace Recorded terminal forward authority.
+ * @param backward The immutable accepted attempt prefix.
+ * @param record A backward lifecycle or attributed commit record.
+ * @returns The validated next immutable attempt projection.
+ * @throws TypeError when `backward` isn't exactly a `RuntimeBackwardState`, or for malformed
+ *   carriers or result channels.
+ * @throws RangeError for an attempt, transfer, proposal or disposition disagreement.
+ */
+export function reduceBackwardRecord(
+  trace: RetainedTrace,
+  backward: RuntimeBackwardState,
+  record: BackwardRecord,
+): RuntimeBackwardState {
+  if (!isExactly(backward, RuntimeBackwardState)) {
+    throw new TypeError("backward reduction requires RuntimeBackwardState");
+  }
+  if (isExactly(record, BackwardStartedRecord)) {
+    seedBackward(trace, record.feedback);
+    if (!backward.canStart) throw new RangeError("backward attempt cannot start from the accepted prefix");
+    if (record.attemptId !== backward.attempts.length + 1) {
+      throw new RangeError("backward attempt_id must be the next accepted start");
+    }
+    return withAttempts(backward, [...backward.attempts, new BackwardAttempt(record)]);
+  }
+  const current = backward.current;
+  if (current === null || current.finished !== null || record.attemptId !== current.started.attemptId) {
+    throw new RangeError("backward record requires its matching unfinished attempt");
+  }
+  let next: BackwardAttempt;
+  if (isExactly(record, BackwardReadyRecord)) {
+    if (current.ready !== null) throw new RangeError("backward attempt already has a Ready");
+    validateAttributedBackward(trace, current.started.feedback, record.rootResult, record.attributedResults);
+    proposalBatches(backward, record);
+    next = new BackwardAttempt(current.started, { ...current, ready: record });
+  } else if (isExactly(record, BackwardFinishedRecord)) {
+    validateBackwardFinished(trace, backward, record);
+    next = new BackwardAttempt(current.started, { ...current, finished: record });
+  } else if (isExactly(record, MemoryCommitRequestedRecord)) {
+    const pending = backward.policyOutcomes.some((policy) => policy.status === "unknown" || policy.status === "failed");
+    if (current.ready === null || pending) {
+      throw new RangeError("backward commit request requires Ready and no pending or failed memory");
+    }
+    const index = current.requests.length;
+    if (index >= backward.memoryOrder.length || record.memory !== backward.memoryOrder[index]) {
+      throw new RangeError("backward request must name the next recorded memory");
+    }
+    const batch = proposalBatches(backward, current.ready)[index]!;
+    const expectedId = memoryCommitId(trace.runId, record.memory, batch, current.started.attemptId);
+    if (!sameItems(record.mutations, batch, sameMemoryMutation) || record.commitId !== expectedId) {
+      throw new RangeError("backward commit batch and identity must match the ordered Ready proposals");
+    }
+    next = new BackwardAttempt(current.started, { ...current, requests: [...current.requests, record] });
+  } else if (isExactly(record, MemoryCommitSucceededRecord) || isExactly(record, MemoryCommitFailedRecord)) {
+    if (current.requests.length !== current.observations.length + 1) {
+      throw new RangeError("backward commit result requires a matching pending request");
+    }
+    const request = current.requests.at(-1)!;
+    if (record.memory !== request.memory || record.commitId !== request.commitId) {
+      throw new RangeError("backward commit result must match its pending memory and identity");
+    }
+    next = new BackwardAttempt(current.started, { ...current, observations: [...current.observations, record] });
+  } else {
+    throw new RangeError("backward commit requires a completed memory proposal");
+  }
+  return withAttempts(backward, [...backward.attempts.slice(0, -1), next]);
 }
 
 /**

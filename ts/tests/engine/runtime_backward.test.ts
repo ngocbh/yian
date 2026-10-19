@@ -23,6 +23,13 @@
  * unfinished attempt derives, with `prefixLearning`'s statuses and failure order; and
  * `proposalBatches`' table order.
  *
+ * TS-only, the reducer over `chainTrace()` with memory key `notes` and ids from `memoryCommitId`:
+ * a full attempt Started → Ready → Requested → Succeeded → Finished, then a second start; the
+ * accepted Finished of each branch (interrupted before and after Ready, commit failure, learner
+ * failure with and without an attributed context failure, computation failure); and one refusal
+ * per reducer, Finished and context-owner rule, the last record class refused through a forged
+ * record of another class.
+ *
  * Later (T4-6, with the engine): `test_terminal_trace_keeps_actual_root_writer_until_quiescence`,
  * `test_root_inventory_is_retained_without_running_capture_or_defaults`,
  * `test_terminal_trace_append_rejection_leaves_all_indexes_unchanged` and
@@ -48,6 +55,7 @@ import {
   PolicyCommitOutcome,
 } from "../../src/memory/contracts.ts";
 import { BackwardContext, BackwardResult, Node, NodeKind } from "../../src/nodes/base.ts";
+import { ExecutionScope } from "../../src/nodes/contracts.ts";
 import {
   AttributedBackwardResult,
   BackwardAttribution,
@@ -59,11 +67,14 @@ import {
 import {
   BackwardAttempt,
   BackwardMessage,
+  type BackwardRecord,
   ContextCache,
   contextualTransfers,
   materializeContext,
+  memoryCommitId,
   prefixLearning,
   proposalBatches,
+  reduceBackwardRecord,
   RuntimeBackwardState,
   seedBackward,
   takeMessages,
@@ -944,4 +955,537 @@ test("proposalBatches returns each memory's batch in table order and refuses ano
       "memory proposals must cover the complete recorded memory table in order",
     );
   }
+});
+
+// TS-only: the backward attempt reducer, over `chainTrace()` with memory key `notes`.
+
+const NOTES = [new MemoryMutation("n1", { note: "Raise v." })];
+const COMMIT_ID = memoryCommitId(RUN, "notes", NOTES, 1);
+const CHAIN_ROOT = new BackwardResult({ inputFeedback: { x: ["Raise v."] } });
+const UNREQUESTED = [new PolicyCommitOutcome("notes", "unrequested")];
+const INCOMPLETE = new LearningResult("incomplete", { policies: UNREQUESTED });
+const LEARN_CAUSE = new MemoryOperationFailure("learn", "memory.learn_failed", "Bad.", false);
+const CONTEXT_CAUSE = new MemoryOperationFailure("learn", "memory.invalid_context", "Bad context.", false);
+const COMMIT_FAILURE = new BackwardFailure("commit", OPERATION_FAILURE.code, OPERATION_FAILURE.message, {
+  memory: "notes",
+  cause: OPERATION_FAILURE,
+});
+const COMMIT_LEARNING = new LearningResult("failed", {
+  failures: [new LearningFailure("notes", "commit", OPERATION_FAILURE)],
+  policies: [new PolicyCommitOutcome("notes", "failed", { commitId: COMMIT_ID, failure: OPERATION_FAILURE })],
+});
+const SUCCEEDED_LEARNING = new LearningResult("succeeded", {
+  policies: [new PolicyCommitOutcome("notes", "succeeded", { commitId: COMMIT_ID })],
+});
+
+/** The chain's Ready of attempt `id`, proposing `NOTES` for `notes` unless `proposals` is given. */
+function chainReady(id = 1, proposals = [new MemoryProposal("notes", NOTES)]): BackwardReadyRecord {
+  return new BackwardReadyRecord(id, CHAIN_ROOT, chainResults(), proposals);
+}
+
+const chainRequest = () => new MemoryCommitRequestedRecord("notes", COMMIT_ID, NOTES, 1);
+const chainSucceeded = () => new MemoryCommitSucceededRecord("notes", COMMIT_ID, 1);
+const chainFailed = () => new MemoryCommitFailedRecord("notes", COMMIT_ID, OPERATION_FAILURE, 1);
+
+/** A Finished of attempt 1 with a failed outcome. */
+function failedFinish(
+  failure: BackwardFailure,
+  options: { feedback?: BackwardResult | null; learning?: LearningResult | null } = {},
+  attributed: AttributedBackwardResult[] = [],
+): BackwardFinishedRecord {
+  return new BackwardFinishedRecord(1, new BackwardOutcome("failed", { failure, ...options }), attributed);
+}
+
+/** A successful Finished of attempt 1 with the chain's root result. */
+function succeededFinish(learning: LearningResult = SUCCEEDED_LEARNING): BackwardFinishedRecord {
+  return new BackwardFinishedRecord(1, new BackwardOutcome("succeeded", { feedback: CHAIN_ROOT, learning }));
+}
+
+/** The interrupted Finished of attempt 1 before Ready. */
+const chainInterrupted = () => failedFinish(INTERRUPTED, { learning: INCOMPLETE });
+
+/** A learner failure for `notes` from `cause`. */
+function learnerFailure(cause = LEARN_CAUSE, options: ConstructorParameters<typeof BackwardFailure>[3] = {}) {
+  return new BackwardFailure("learn", cause.code, cause.message, { memory: "notes", cause, ...options });
+}
+
+/** A context failure attributed to `p`'s occurrence. */
+function contextFailure(options: ConstructorParameters<typeof BackwardFailure>[3] = {}): BackwardFailure {
+  return learnerFailure(CONTEXT_CAUSE, { runId: RUN, nodeId: "p", nodeStartedSeq: 3, ...options });
+}
+
+/** The learning of a learner failure from `cause` before any request. */
+function learnerLearning(cause = LEARN_CAUSE): LearningResult {
+  const failures = [new LearningFailure("notes", "learn", cause)];
+  return new LearningResult("failed", { failures, policies: UNREQUESTED });
+}
+
+/** A learner's Finished of attempt 1: completed feedback, the chain's results and `learning`. */
+function learnerFinish(failure: BackwardFailure, learning: LearningResult | null = null): BackwardFinishedRecord {
+  return failedFinish(failure, { feedback: CHAIN_ROOT, learning }, chainResults());
+}
+
+/** A computation failure's Finished of attempt 1, with incomplete learning unless given. */
+function computeFinish(
+  failure: BackwardFailure,
+  options: { feedback?: BackwardResult | null; learning?: LearningResult | null } = { learning: INCOMPLETE },
+  attributed: AttributedBackwardResult[] = [],
+): BackwardFinishedRecord {
+  return failedFinish(failure, options, attributed);
+}
+
+/** A backward computation failure attributed to `p`'s occurrence. */
+function computeFailure(
+  options: ConstructorParameters<typeof BackwardFailure>[3] = {},
+  code = "backward.execute",
+  stage = "backward",
+): BackwardFailure {
+  return new BackwardFailure(stage, code, "Broke.", { runId: RUN, nodeId: "p", nodeStartedSeq: 3, ...options });
+}
+
+/** Reduce `records` in order over `trace` from a state with memory key `notes`. */
+function reduced(records: BackwardRecord[], trace: RetainedTrace = chainTrace().trace): RuntimeBackwardState {
+  return records.reduce(
+    (state, record) => reduceBackwardRecord(trace, state, record),
+    new RuntimeBackwardState(["notes"]),
+  );
+}
+
+test("the reducer accepts a full attempt Started → Ready → Requested → Succeeded → Finished", () => {
+  const { trace } = chainTrace();
+  const records = [started(), chainReady(), chainRequest(), chainSucceeded(), succeededFinish()];
+  const empty = new RuntimeBackwardState(["notes"]);
+  const states = [empty];
+  for (const record of records) states.push(reduceBackwardRecord(trace, states.at(-1)!, record));
+  const [, afterStart, afterReady, afterRequest, afterResult, afterFinish] = states as RuntimeBackwardState[];
+  expect(empty.attempts).toEqual([]);
+  expect(afterStart!.started).toBe(records[0] as BackwardStartedRecord);
+  expect(afterStart!.canStart).toBe(false);
+  expect(afterReady!.ready).toBe(records[1] as BackwardReadyRecord);
+  expect(afterRequest!.policyOutcomes).toEqual([new PolicyCommitOutcome("notes", "unknown", { commitId: COMMIT_ID })]);
+  expect(afterResult!.policyOutcomes).toEqual(SUCCEEDED_LEARNING.policies);
+  expect(afterFinish!.finished).toBe(records[4] as BackwardFinishedRecord);
+  expect(afterFinish!.outcome).toBe((records[4] as BackwardFinishedRecord).outcome);
+  expect(afterFinish!.attempts).toHaveLength(1);
+  expect(afterFinish!.canStart).toBe(true);
+  expect(afterFinish!.everRequested).toBe(true);
+  for (const state of states) {
+    expect(Object.isFrozen(state)).toBe(true);
+    expect(state.memoryOrder).toBe(empty.memoryOrder);
+  }
+  const next = reduceBackwardRecord(trace, afterFinish!, started(2));
+  expect(next.attempts).toHaveLength(2);
+  expect(next.commitAttemptKey).toBe(2);
+  expect(next.attempts[0]).toBe(afterFinish!.attempts[0]!);
+});
+
+test.each<[string, () => BackwardRecord[]]>([
+  ["an interrupted attempt before Ready", () => [started(), chainInterrupted()]],
+  [
+    "an interrupted attempt after Ready, with its results",
+    () => [
+      started(),
+      chainReady(),
+      failedFinish(INTERRUPTED, { feedback: CHAIN_ROOT, learning: INCOMPLETE }, chainResults()),
+    ],
+  ],
+  [
+    "a commit failure",
+    () => [
+      started(),
+      chainReady(),
+      chainRequest(),
+      chainFailed(),
+      failedFinish(COMMIT_FAILURE, { feedback: CHAIN_ROOT, learning: COMMIT_LEARNING }),
+    ],
+  ],
+  [
+    "a learner failure",
+    () => [started(), learnerFinish(learnerFailure(), learnerLearning())],
+  ],
+  [
+    "a learner failure with an attributed context failure",
+    () => [started(), learnerFinish(contextFailure(), learnerLearning(CONTEXT_CAUSE))],
+  ],
+  ["a computation failure", () => [started(), computeFinish(computeFailure())]],
+])("the reducer accepts the Finished of %s", (_label, records) => {
+  const list = records();
+  const state = reduced(list);
+  expect(state.finished).toBe(list.at(-1) as BackwardFinishedRecord);
+  expect(state.canStart).toBe(true);
+});
+
+/** A record of another class with the matching attempt id. */
+function forgedRecord(): BackwardRecord {
+  return Object.assign(Object.create(NodeStartedRecord.prototype) as object, { attemptId: 1 }) as BackwardRecord;
+}
+
+test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
+  [
+    "a state of another class",
+    (trace) => reduceBackwardRecord(trace, {} as RuntimeBackwardState, started()),
+    TypeError,
+    "backward reduction requires RuntimeBackwardState",
+  ],
+  [
+    "a Started on a non-terminal trace",
+    (trace) => {
+      trace.terminal = null;
+      return reduced([started()], trace);
+    },
+    RangeError,
+    "backward requires a retained terminal trace",
+  ],
+  [
+    "a Started while an attempt is open",
+    (trace) => reduced([started(1), started(2)], trace),
+    RangeError,
+    "backward attempt cannot start from the accepted prefix",
+  ],
+  [
+    "a Started that skips an attempt id",
+    (trace) => reduced([started(2)], trace),
+    RangeError,
+    "backward attempt_id must be the next accepted start",
+  ],
+  [
+    "a Ready before any start",
+    (trace) => reduced([chainReady()], trace),
+    RangeError,
+    "backward record requires its matching unfinished attempt",
+  ],
+  [
+    "a Ready of another attempt",
+    (trace) => reduced([started(1), chainReady(2)], trace),
+    RangeError,
+    "backward record requires its matching unfinished attempt",
+  ],
+  [
+    "a record after Finished",
+    (trace) => reduced([started(), chainInterrupted(), chainReady()], trace),
+    RangeError,
+    "backward record requires its matching unfinished attempt",
+  ],
+  [
+    "a second Ready",
+    (trace) => reduced([started(), chainReady(), chainReady()], trace),
+    RangeError,
+    "backward attempt already has a Ready",
+  ],
+  [
+    "a Ready whose results disagree with the transfers",
+    (trace) => {
+      const proposals = [new MemoryProposal("notes", NOTES)];
+      return reduced([started(), new BackwardReadyRecord(1, CHAIN_ROOT, [S, P, E].map(unreached), proposals)], trace);
+    },
+    RangeError,
+    TRANSFER_MISMATCH,
+  ],
+  [
+    "a Ready without the table's proposals",
+    (trace) => reduced([started(), chainReady(1, [])], trace),
+    RangeError,
+    "memory proposals must cover the complete recorded memory table in order",
+  ],
+  [
+    "a request before Ready",
+    (trace) => reduced([started(), chainRequest()], trace),
+    RangeError,
+    "backward commit request requires Ready and no pending or failed memory",
+  ],
+  [
+    "a request while one is pending",
+    (trace) => reduced([started(), chainReady(), chainRequest(), chainRequest()], trace),
+    RangeError,
+    "backward commit request requires Ready and no pending or failed memory",
+  ],
+  [
+    "a request after a failed commit",
+    (trace) => reduced([started(), chainReady(), chainRequest(), chainFailed(), chainRequest()], trace),
+    RangeError,
+    "backward commit request requires Ready and no pending or failed memory",
+  ],
+  [
+    "a request for another memory",
+    (trace) => reduced([started(), chainReady(), new MemoryCommitRequestedRecord("other", COMMIT_ID, NOTES, 1)], trace),
+    RangeError,
+    "backward request must name the next recorded memory",
+  ],
+  [
+    "a request after every memory",
+    (trace) => reduced([started(), chainReady(), chainRequest(), chainSucceeded(), chainRequest()], trace),
+    RangeError,
+    "backward request must name the next recorded memory",
+  ],
+  [
+    "a request with another batch",
+    (trace) => reduced([started(), chainReady(), new MemoryCommitRequestedRecord("notes", COMMIT_ID, [], 1)], trace),
+    RangeError,
+    "backward commit batch and identity must match the ordered Ready proposals",
+  ],
+  [
+    "a request with another commit id",
+    (trace) => {
+      const commitId = memoryCommitId(RUN, "notes", NOTES, 2);
+      return reduced([started(), chainReady(), new MemoryCommitRequestedRecord("notes", commitId, NOTES, 1)], trace);
+    },
+    RangeError,
+    "backward commit batch and identity must match the ordered Ready proposals",
+  ],
+  [
+    "a commit result without a request",
+    (trace) => reduced([started(), chainReady(), chainSucceeded()], trace),
+    RangeError,
+    "backward commit result requires a matching pending request",
+  ],
+  [
+    "a commit result for another commit",
+    (trace) =>
+      reduced([started(), chainReady(), chainRequest(), new MemoryCommitSucceededRecord("notes", "other", 1)], trace),
+    RangeError,
+    "backward commit result must match its pending memory and identity",
+  ],
+  [
+    "a record of another class",
+    (trace) => reduced([started(), forgedRecord()], trace),
+    RangeError,
+    "backward commit requires a completed memory proposal",
+  ],
+  [
+    "Finished feedback that differs from Ready",
+    (trace) => {
+      const finish = failedFinish(INTERRUPTED, { feedback: new BackwardResult(), learning: INCOMPLETE });
+      return reduced([started(), chainReady(), finish], trace);
+    },
+    RangeError,
+    "Finished feedback must match accepted Ready",
+  ],
+  [
+    "Finished attribution that differs from Ready",
+    (trace) => {
+      const unreachedResults = [S, P, E].map(unreached);
+      const finish = failedFinish(INTERRUPTED, { feedback: CHAIN_ROOT, learning: INCOMPLETE }, unreachedResults);
+      return reduced([started(), chainReady(), finish], trace);
+    },
+    RangeError,
+    "Finished attribution must match accepted Ready",
+  ],
+  [
+    "a successful Finished before Ready",
+    (trace) => reduced([started(), succeededFinish()], trace),
+    RangeError,
+    "successful Finished requires Ready and every memory confirmation",
+  ],
+  [
+    "a successful Finished before the commit",
+    (trace) => reduced([started(), chainReady(), succeededFinish()], trace),
+    RangeError,
+    "successful Finished requires Ready and every memory confirmation",
+  ],
+  [
+    "a successful Finished with other learning",
+    (trace) => {
+      const finish = succeededFinish(new LearningResult("succeeded"));
+      return reduced([started(), chainReady(), chainRequest(), chainSucceeded(), finish], trace);
+    },
+    RangeError,
+    "successful Finished learning must match accepted memory confirmations",
+  ],
+  [
+    "an interrupted Finished with other learning",
+    (trace) => reduced([started(), failedFinish(INTERRUPTED)], trace),
+    RangeError,
+    "interrupted Finished must exactly project the accepted prefix",
+  ],
+  [
+    "an interrupted Finished before Ready with results",
+    (trace) => reduced([started(), failedFinish(INTERRUPTED, { learning: INCOMPLETE }, chainResults())], trace),
+    RangeError,
+    "interrupted Finished must exactly project the accepted prefix",
+  ],
+  [
+    "a failed Finished after Ready without a commit failure",
+    (trace) => {
+      const finish = failedFinish(COMMIT_FAILURE, { feedback: CHAIN_ROOT, learning: COMMIT_LEARNING });
+      return reduced([started(), chainReady(), finish], trace);
+    },
+    RangeError,
+    "failed Finished after Ready requires a recorded commit failure",
+  ],
+  [
+    "a commit Finished with another failure",
+    (trace) => {
+      const failure = new BackwardFailure("commit", OPERATION_FAILURE.code, "Other.", {
+        memory: "notes",
+        cause: OPERATION_FAILURE,
+      });
+      const finish = failedFinish(failure, { feedback: CHAIN_ROOT, learning: COMMIT_LEARNING });
+      return reduced([started(), chainReady(), chainRequest(), chainFailed(), finish], trace);
+    },
+    RangeError,
+    "commit Finished must match the exact accepted failure and memory states",
+  ],
+  [
+    "a commit Finished with other learning",
+    (trace) => {
+      const finish = failedFinish(COMMIT_FAILURE, { feedback: CHAIN_ROOT, learning: learnerLearning() });
+      return reduced([started(), chainReady(), chainRequest(), chainFailed(), finish], trace);
+    },
+    RangeError,
+    "commit Finished must match the exact accepted failure and memory states",
+  ],
+  [
+    "a learner failure with a Failure cause",
+    (trace) => {
+      const cause = new Failure({ code: "node.execute", message: "Bad.", nodeId: null });
+      const failure = new BackwardFailure("learn", "node.execute", "Bad.", { memory: "notes", cause });
+      return reduced([started(), learnerFinish(failure)], trace);
+    },
+    RangeError,
+    "learner failure requires one recorded memory key and memory-operation cause",
+  ],
+  [
+    "a learner failure for an unrecorded memory",
+    (trace) => {
+      const failure = learnerFailure(LEARN_CAUSE, { memory: "other" });
+      return reduced([started(), learnerFinish(failure)], trace);
+    },
+    RangeError,
+    "learner failure requires one recorded memory key and memory-operation cause",
+  ],
+  [
+    "a learner failure without completed feedback",
+    (trace) => {
+      const finish = failedFinish(learnerFailure(), { learning: learnerLearning() }, chainResults());
+      return reduced([started(), finish], trace);
+    },
+    RangeError,
+    "learner Finished must retain the exact attributed failure and completed feedback",
+  ],
+  [
+    "a learner failure whose code differs from its cause",
+    (trace) => {
+      const failure = new BackwardFailure("learn", "memory.other", "Bad.", { memory: "notes", cause: LEARN_CAUSE });
+      return reduced([started(), learnerFinish(failure)], trace);
+    },
+    RangeError,
+    "learner Finished must retain the exact attributed failure and completed feedback",
+  ],
+  [
+    "learner learning without its failure",
+    (trace) => reduced([started(), learnerFinish(learnerFailure(), INCOMPLETE)], trace),
+    RangeError,
+    "learner Finished learning must contain its exact known failure",
+  ],
+  [
+    "an attributed learner failure that isn't a context failure",
+    (trace) => {
+      const failure = learnerFailure(LEARN_CAUSE, { runId: RUN, nodeId: "p", nodeStartedSeq: 3 });
+      return reduced([started(), learnerFinish(failure)], trace);
+    },
+    RangeError,
+    "an attributed learner failure must be a context failure of this run",
+  ],
+  [
+    "a context failure of another run",
+    (trace) => reduced([started(), learnerFinish(contextFailure({ runId: "other" }))], trace),
+    RangeError,
+    "an attributed learner failure must be a context failure of this run",
+  ],
+  [
+    "a context failure naming no accepted occurrence",
+    (trace) => reduced([started(), learnerFinish(contextFailure({ nodeStartedSeq: 9 }))], trace),
+    RangeError,
+    "a context failure must name an accepted occurrence",
+  ],
+  [
+    "a context failure of another node",
+    (trace) => reduced([started(), learnerFinish(contextFailure({ nodeId: "q" }))], trace),
+    RangeError,
+    "a context failure must match its recorded occurrence",
+  ],
+  [
+    "a context failure of another scope",
+    (trace) => {
+      const failure = contextFailure({ scope: new ExecutionScope(["p"]) });
+      return reduced([started(), learnerFinish(failure)], trace);
+    },
+    RangeError,
+    "a context failure must match its recorded occurrence",
+  ],
+  [
+    "a context failure of an occurrence without the memory",
+    (trace) => {
+      const failure = contextFailure({ nodeId: START_ID, nodeStartedSeq: 1 });
+      return reduced([started(), learnerFinish(failure)], trace);
+    },
+    RangeError,
+    "a context failure must name an occurrence that receives its memory",
+  ],
+  [
+    "a computation failure with completed feedback",
+    (trace) => {
+      const finish = computeFinish(computeFailure(), { feedback: CHAIN_ROOT, learning: INCOMPLETE });
+      return reduced([started(), finish], trace);
+    },
+    RangeError,
+    "incomplete backward computation cannot carry completed or partial results",
+  ],
+  [
+    "a computation failure with results",
+    (trace) => reduced([started(), computeFinish(computeFailure(), { learning: INCOMPLETE }, chainResults())], trace),
+    RangeError,
+    "incomplete backward computation cannot carry completed or partial results",
+  ],
+  [
+    "a failure of another stage before Ready",
+    (trace) => reduced([started(), computeFinish(computeFailure({}, "backward.execute", "commit"))], trace),
+    RangeError,
+    "incomplete backward computation cannot carry completed or partial results",
+  ],
+  [
+    "a computation failure with another code",
+    (trace) => reduced([started(), computeFinish(computeFailure({}, "backward.other"))], trace),
+    RangeError,
+    "backward computation failure requires effective feedback and a driver failure code",
+  ],
+  [
+    "a computation failure after empty feedback",
+    (trace) =>
+      reduced([new BackwardStartedRecord(1, null), computeFinish(computeFailure())], trace),
+    RangeError,
+    "backward computation failure requires effective feedback and a driver failure code",
+  ],
+  [
+    "a computation failure without a run id",
+    (trace) => reduced([started(), computeFinish(computeFailure({ runId: null }))], trace),
+    RangeError,
+    "backward computation failure requires accepted occurrence attribution",
+  ],
+  [
+    "a computation failure with a memory",
+    (trace) => reduced([started(), computeFinish(computeFailure({ memory: "notes" }))], trace),
+    RangeError,
+    "backward computation failure requires accepted occurrence attribution",
+  ],
+  [
+    "a computation failure naming no accepted occurrence",
+    (trace) => reduced([started(), computeFinish(computeFailure({ nodeStartedSeq: 9 }))], trace),
+    RangeError,
+    "backward computation failure requires an accepted occurrence",
+  ],
+  [
+    "a computation failure of another node",
+    (trace) => reduced([started(), computeFinish(computeFailure({ nodeId: "q" }))], trace),
+    RangeError,
+    "backward computation failure must match its recorded invocation",
+  ],
+  [
+    "a computation failure with other learning",
+    (trace) => reduced([started(), computeFinish(computeFailure(), {})], trace),
+    RangeError,
+    "failed computation learning must retain incomplete unrequested memories",
+  ],
+])("the reducer refuses %s", (_label, call, cls, message) => {
+  expectError(() => call(chainTrace().trace), cls, message);
 });

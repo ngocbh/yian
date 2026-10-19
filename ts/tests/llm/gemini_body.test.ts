@@ -47,7 +47,7 @@ function user(...texts: string[]): Message {
 
 /** Return this protocol's own assistant message: it carries this model's message record. */
 function own(...parts: Part[]): Message {
-  return new Message({ role: "assistant", parts, protocol: PROTOCOL, providerPayload: replayRecord(KEY, {}) });
+  return recorded(KEY, ...parts);
 }
 
 function tool(...results: ToolResultPart[]): Message {
@@ -869,7 +869,7 @@ describe("the placeholder signature", () => {
     ]);
   });
 
-  test("a foreign message whose first call is unsigned and second signed: the first only gets it", () => {
+  test("a foreign message whose first call is unsigned and second signed: only the first gets the placeholder", () => {
     const pro = { ...KEY, model: PRO };
     const parts = [call("call_1", ARGS), signedCall("call_2", { value: 4n }, SIG)];
     expect(modelParts(recorded(pro, ...parts))).toEqual([

@@ -8,18 +8,27 @@
  * becomes one `user` content of `functionResponse` parts carrying the call ids, and an assistant
  * message is a `model` content of its text and `functionCall` parts in part order, its reasoning
  * and refusals left out. A text or call part's thought signature goes back from its replay record
- * only to the provider, model and account that wrote it, and a function call Gemini didn't write
- * for this model goes out with Google's placeholder signature. Every tool goes in one
+ * only to the provider, model and account that wrote it. Only the first function call of a model
+ * content can get Google's placeholder signature: when it goes out unsigned and the message is not
+ * this model's own reply, or its records couldn't be used. Every tool goes in one
  * `functionDeclarations` entry with its parameters as written, and a tool choice becomes
  * `toolConfig`, both only with tools. `safetySettings: []` and `generationConfig.candidateCount: 1`
  * are always sent, and the provider block is merged last.
  *
- * Replies are not read yet.
+ * Each streamed chunk is a whole `GenerateContentResponse`, of which the first candidate is read.
+ * Text and thought pieces stream as deltas and join into one text or reasoning part until a call
+ * or a second signature starts another, with dense part indexes; a part whose wire parts carried
+ * a thought signature gets a replay record holding it. A call arrives whole, as one delta, with
+ * `yian_call_<n>` as its id when Gemini sends none or repeats one. Usage counts merge field by
+ * field across chunks, and the finish comes at the end of the stream. A reply that failed, was
+ * refused, blocked or ended early raises `ProviderError`; an error message holds the provider's
+ * text uncapped, which `RouteModel` scrubs of the route's credentials and then caps.
  */
 
-import { mergeRequestBody } from "../body.ts";
+import { encodeBody, mergeRequestBody } from "../body.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
-import type { Event } from "../events.ts";
+import { kindForStatus, ProviderError } from "../errors.ts";
+import { type Event, Finish, PartDone, ReasoningDelta, TextDelta, ToolCallDelta, UsageReport } from "../events.ts";
 import type { SseProtocol } from "../executor.ts";
 import type { SSEEvent } from "../framing.ts";
 import {
@@ -27,27 +36,68 @@ import {
   isPlainObject,
   MediaPart,
   type Message,
+  MessageFormatError,
   NamedTool,
   type Part,
+  ReasoningPart,
   readReplayRecord,
   type ReplayDegradedReason,
   type ReplayKey,
+  replayRecord,
   type Request,
   TextPart,
   ToolCallPart,
   type ToolChoice,
   ToolResultPart,
   type ToolSpec,
+  Usage,
 } from "../messages.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "gemini";
 const NO_MEDIA = "the gemini route does not send media parts yet";
 const EMPTY_USER = "an empty user message was not sent; Gemini rejects empty content";
+// The fields of a text, call or reasoning part's replay record.
 const PART_FIELDS = ["thought_signature"];
+// The fields of a reply's message record, which marks a message as this model's own reply.
 const MESSAGE_FIELDS = ["response_id", "response_model"];
 // Google's documented signature for a function call that Gemini didn't write.
 const PLACEHOLDER = "skip_thought_signature_validator";
+// The usage counts read; Vertex adds count-free fields (`trafficType`), which are ignored.
+const COUNT_FIELDS = [
+  "promptTokenCount",
+  "toolUsePromptTokenCount",
+  "candidatesTokenCount",
+  "thoughtsTokenCount",
+  "cachedContentTokenCount",
+  "totalTokenCount",
+];
+// Finish reasons that mean Gemini refused the content; retrying the same request can't help.
+const REFUSED_FINISH: ReadonlySet<string> = new Set([
+  "SAFETY",
+  "RECITATION",
+  "LANGUAGE",
+  "BLOCKLIST",
+  "PROHIBITED_CONTENT",
+  "SPII",
+  "IMAGE_SAFETY",
+  "IMAGE_PROHIBITED_CONTENT",
+  "IMAGE_RECITATION",
+  "MODEL_ARMOR",
+  "PUP_LIMITED_DISABLED",
+]);
+
+/** A part being streamed, with the thought signature its wire parts carried, `null` for none. */
+type Streamed =
+  | { kind: "text" | "reasoning"; text: string; signature: string | null }
+  | {
+      kind: "call";
+      id: string;
+      name: string;
+      args: JsonObject | null;
+      rawArguments: string | null;
+      signature: string | null;
+    };
 
 /** What `Gemini` is built from. */
 export interface GeminiOptions {
@@ -102,7 +152,7 @@ export class Gemini implements SseProtocol {
    * the run, so a system message or a skipped message in between does not. Its `response` is the
    * result's text read as JSON when that is a plain object, else `{output: <the value>}`, or
    * `{output: <the text>}` when the text is not plain JSON. `isError` is not sent. An assistant
-   * message is a `model` content in part order: a non-empty text part as `{text}`, a call as
+   * message is a `model` content in part order: a text part as `{text}`, a call as
    * `functionCall` with its id, name and arguments (`{}` for an invalid call); reasoning and
    * refusal parts are not sent, and a message rendering no part is skipped. A trailing assistant
    * message goes as written.
@@ -140,9 +190,153 @@ export class Gemini implements SseProtocol {
     return body;
   }
 
-  /** Turn a streamed reply's events into stream events. Not implemented yet. */
-  async *parse(_frames: AsyncIterable<SSEEvent>): AsyncGenerator<Event> {
-    throw new Error("not implemented");
+  /**
+   * Turn a streamed reply's events into stream events.
+   *
+   * Each event's data is a whole `GenerateContentResponse`; empty and non-object data are
+   * skipped, and an explicit `null` reads as absent. The last string `responseId`,
+   * `modelVersion` and `finishReason` win, every chunk is read (usage may come after the
+   * `finishReason`), and only the first candidate's parts are read, in order. A `functionCall`
+   * part is a call; else a part with `text` is a text piece, or a reasoning piece when `thought`
+   * is true; else a part with only a `thoughtSignature` is an empty piece with that signature;
+   * other part kinds are skipped. A piece joins the reply's last part when that is a text or
+   * reasoning part of its kind and not both are signed, else it opens a new part (an empty,
+   * unsigned piece opens nothing); its signature goes to the part it joins. Non-empty pieces
+   * stream as deltas. A call's id is its own unless missing or already in the reply, else
+   * `yian_call_<n>`, `n` its position among the calls, with `_<k>` appended while taken; its
+   * `args` are as sent, `{}` when missing, and anything but an object makes an invalid call with
+   * the raw args. Each of the six usage counts merges across chunks, a missing one replacing
+   * nothing.
+   *
+   * @param frames The reply's server-sent events, in order.
+   * @returns The deltas (one `ToolCallDelta` per call, with its id, name and encoded args), then
+   *   at the end of the stream a `PartDone` for each part in index order (a part with a
+   *   signature carries a record of it), `UsageReport` when any count is above zero, and
+   *   `Finish`: `length` for `MAX_TOKENS`, else `tool_calls` when a call came, else `stop`, with
+   *   a record of the response id and model.
+   * @throws {ProviderError} For an `error` object in a chunk (kind from its `code`), a blocked
+   *   prompt or a safety-type finish reason (`refused`), `CONTINUATION` (`protocol`), any other
+   *   finish reason but `STOP` and `MAX_TOKENS` (`incomplete`, retryable for
+   *   `MALFORMED_RESPONSE`), a stream that ends with no finish reason (`incomplete`, retryable),
+   *   or an event that is not JSON or holds a field or usage that cannot be read (`protocol`).
+   *   The message holds the provider's text uncapped.
+   */
+  async *parse(frames: AsyncIterable<SSEEvent>): AsyncGenerator<Event> {
+    const provider = this.provider;
+    const invalid = (field: string) => new ProviderError("protocol", `invalid ${field} in ${provider} stream event`);
+    // Part index = position, so indexes are dense in the order parts open.
+    const parts: Streamed[] = [];
+    // Every call id in the reply so far, the server's and those generated.
+    const taken = new Set<string>();
+    let calls = 0;
+    const counts = new Map<string, number>();
+    let responseId: string | null = null;
+    let responseModel: string | null = null;
+    let finishReason: string | null = null;
+    let finishMessage: string | null = null;
+    let blockReason: string | null = null;
+    let blockMessage: string | null = null;
+    for await (const frame of frames) {
+      if (frame.data === "") continue;
+      const data = eventData(frame.data, provider);
+      if (!isPlainObject(data)) continue;
+      if (isPlainObject(data["error"])) throw this.#streamFailure(data["error"]);
+      if (typeof data["responseId"] === "string") responseId = data["responseId"];
+      if (typeof data["modelVersion"] === "string") responseModel = data["modelVersion"];
+      mergeUsage(counts, data["usageMetadata"], provider);
+      const feedback = data["promptFeedback"] ?? null;
+      if (feedback !== null) {
+        if (!isPlainObject(feedback)) throw invalid("promptFeedback");
+        const reason = feedback["blockReason"];
+        if (typeof reason === "string" && reason !== "") {
+          blockReason = reason;
+          blockMessage = typeof feedback["blockReasonMessage"] === "string" ? feedback["blockReasonMessage"] : null;
+        }
+      }
+      const candidate = firstCandidate(data, invalid);
+      if (candidate === null) continue;
+      for (const part of candidateParts(candidate, invalid)) {
+        if (part === null) continue;
+        if (!isPlainObject(part)) throw invalid("part");
+        const text = part["text"] ?? null;
+        const rawSignature = part["thoughtSignature"] ?? null;
+        if (text !== null && typeof text !== "string") throw invalid("part");
+        if (rawSignature !== null && typeof rawSignature !== "string") throw invalid("part");
+        const signature = rawSignature || null;
+        const call = part["functionCall"] ?? null;
+        if (call !== null) {
+          const [wireId, name, args, rawArguments] = readCall(call, invalid);
+          const id = callId(wireId, calls++, taken);
+          const index = parts.push({ kind: "call", id, name, args, rawArguments, signature }) - 1;
+          yield new ToolCallDelta({ index, id, name, arguments: rawArguments ?? encodeBody(args) });
+          continue;
+        }
+        if (text === null && signature === null) continue;
+        const kind = part["thought"] === true ? "reasoning" : "text";
+        const piece = text ?? "";
+        const last = parts.at(-1);
+        let index: number;
+        // A call closes the open part; two signatures never share one.
+        if (last !== undefined && last.kind !== "call" && last.kind === kind && !(last.signature && signature)) {
+          last.text += piece;
+          last.signature ??= signature;
+          index = parts.length - 1;
+        } else if (piece === "" && signature === null) {
+          continue;
+        } else {
+          index = parts.push({ kind, text: piece, signature }) - 1;
+        }
+        if (piece !== "") yield kind === "text" ? new TextDelta(index, piece) : new ReasoningDelta(index, piece);
+      }
+      if (typeof candidate["finishReason"] === "string") finishReason = candidate["finishReason"];
+      if (typeof candidate["finishMessage"] === "string") finishMessage = candidate["finishMessage"];
+    }
+    if (blockReason !== null) {
+      throw new ProviderError("refused", withDetail(`${provider} blocked the prompt (${blockReason})`, blockMessage));
+    }
+    if (finishReason === null) {
+      throw new ProviderError("incomplete", `${provider} stream ended before a complete response`, { retryable: true });
+    }
+    const failure = finishFailure(finishReason, finishMessage, provider);
+    if (failure !== null) throw failure;
+    // Counted first, so usage that can't be read fails before any part is done.
+    const usage = usageOf(counts, provider);
+    for (const [index, part] of parts.entries()) yield new PartDone(index, this.#part(part));
+    if (usage !== null) yield new UsageReport(usage);
+    const fields: JsonObject = {};
+    if (responseId !== null) fields["response_id"] = responseId;
+    if (responseModel !== null) fields["response_model"] = responseModel;
+    const providerPayload = replayRecord(this.#key, fields);
+    // `MAX_TOKENS` says the calls may be cut short, so `length` wins over them.
+    const reason = finishReason === "MAX_TOKENS" ? "length" : calls > 0 ? "tool_calls" : "stop";
+    yield new Finish({ reason, responseId, protocol: PROTOCOL, providerPayload });
+  }
+
+  /** Build a streamed part, with a record of its signature when it has one. */
+  #part(part: Streamed): Part {
+    const record = part.signature === null ? null : replayRecord(this.#key, { thought_signature: part.signature });
+    if (part.kind !== "call") {
+      return part.kind === "text" ? new TextPart(part.text, record) : new ReasoningPart(part.text, record);
+    }
+    const { id, name, args, rawArguments } = part;
+    return new ToolCallPart({ id, name, arguments: args, rawArguments, providerPayload: record });
+  }
+
+  /**
+   * Return the error for a chunk's `error` object: its kind from its `code` when that is an HTTP
+   * error status, else `server`; its message from `message`, else `status`.
+   */
+  #streamFailure(error: JsonObject): ProviderError {
+    const code = error["code"];
+    // A 1xx-3xx code would map to kinds that don't fit an error inside a 200 stream.
+    const status = typeof code === "bigint" && code >= 400n && code <= 599n ? Number(code) : null;
+    const kind = status === null ? "server" : kindForStatus(status, encodeBody(error));
+    const text = (key: string): string | null => {
+      const value = error[key];
+      return typeof value === "string" && value !== "" ? value : null;
+    };
+    const message = text("message") ?? text("status") ?? "no message";
+    return new ProviderError(kind, `${this.provider} stream failed (${kind}): ${message}`);
   }
 
   /** Return the `systemInstruction` parts and the `contents`. */
@@ -216,9 +410,10 @@ export class Gemini implements SseProtocol {
     // Gemini 3 refuses a step whose first call is unsigned. This model's own reply goes back as
     // received (Gemini 2.5 leaves calls unsigned); a call yian can't send a signature for, from
     // another model or built by hand, gets the literal Google documents for such calls.
-    const own = readReplayRecord(message.providerPayload, this.#key, MESSAGE_FIELDS).ok;
-    if (firstCall !== null && (!own || degraded) && !Object.hasOwn(firstCall, "thoughtSignature")) {
-      firstCall["thoughtSignature"] = PLACEHOLDER;
+    if (firstCall !== null && !Object.hasOwn(firstCall, "thoughtSignature")) {
+      if (degraded || !readReplayRecord(message.providerPayload, this.#key, MESSAGE_FIELDS).ok) {
+        firstCall["thoughtSignature"] = PLACEHOLDER;
+      }
     }
     return parts;
   }
@@ -339,4 +534,161 @@ function toolConfig(choice: ToolChoice): JsonObject | null {
 function wrongPart(part: Part, role: string): string {
   const article = role === "assistant" ? "an" : "a";
   return `the gemini route cannot send a ${part.constructor.name} in ${article} ${role} message`;
+}
+
+/** Parse one event's JSON, throwing a `ProviderError` that does not echo it. */
+function eventData(data: string, provider: string): JsonValue {
+  try {
+    return parseJson(data, "plain");
+  } catch (error) {
+    if (error instanceof JSONDecodeError) throw new ProviderError("protocol", `invalid JSON in ${provider} stream event`);
+    throw error;
+  }
+}
+
+/**
+ * Return a chunk's first candidate, or `null` when it has none; yian sends `candidateCount: 1`.
+ *
+ * @throws {ProviderError} From `invalid`, when `candidates` is not a list or the candidate not an object.
+ */
+function firstCandidate(data: JsonObject, invalid: (field: string) => ProviderError): JsonObject | null {
+  const candidates = data["candidates"] ?? null;
+  if (candidates === null) return null;
+  if (!Array.isArray(candidates)) throw invalid("candidates");
+  const candidate = candidates[0] ?? null;
+  if (candidate === null) return null;
+  if (!isPlainObject(candidate)) throw invalid("candidate");
+  return candidate;
+}
+
+/**
+ * Return a candidate's `content.parts`, empty when either is absent.
+ *
+ * @throws {ProviderError} From `invalid`, when `content` is not an object or `parts` not a list.
+ */
+function candidateParts(candidate: JsonObject, invalid: (field: string) => ProviderError): JsonValue[] {
+  const content = candidate["content"] ?? null;
+  if (content === null) return [];
+  if (!isPlainObject(content)) throw invalid("content");
+  const parts = content["parts"] ?? null;
+  if (parts === null) return [];
+  if (!Array.isArray(parts)) throw invalid("parts");
+  return parts;
+}
+
+/**
+ * Read a `functionCall`: its id (`null` when missing or empty), name, and arguments: `{}` when
+ * missing, an object as sent, else `null` with the raw args.
+ *
+ * @throws {ProviderError} From `invalid`, when the call is not an object, its id not a string, or
+ *   its name missing, empty or not a string.
+ */
+function readCall(
+  call: JsonValue,
+  invalid: (field: string) => ProviderError,
+): [string | null, string, JsonObject | null, string | null] {
+  if (!isPlainObject(call)) throw invalid("functionCall");
+  const id = call["id"] ?? null;
+  const name = call["name"];
+  if ((id !== null && typeof id !== "string") || typeof name !== "string" || name === "") throw invalid("functionCall");
+  const args = call["args"] ?? null;
+  if (args === null) return [id || null, name, {}, null];
+  return isPlainObject(args) ? [id || null, name, args, null] : [id || null, name, null, encodeBody(args)];
+}
+
+/**
+ * Return a call's id: its own unless missing or in `taken`, else `yian_call_<n>` with `_<k>`
+ * appended while that is in `taken`. The id it gets is added to `taken`.
+ *
+ * @param n The call's position among the reply's calls.
+ * @param taken The ids in the reply so far: the server's and those generated.
+ */
+function callId(id: string | null, n: number, taken: Set<string>): string {
+  let out = id;
+  if (out === null || taken.has(out)) {
+    out = `yian_call_${n}`;
+    for (let k = 1; taken.has(out); k++) out = `yian_call_${n}_${k}`;
+  }
+  taken.add(out);
+  return out;
+}
+
+/**
+ * Merge a chunk's `usageMetadata` counts into `counts`, field by field; a missing or `null` count
+ * replaces nothing, so a count-free object keeps earlier counts.
+ *
+ * @throws {ProviderError} `usageMetadata` is not an object, or a count is not an int within
+ *   `Number.MAX_SAFE_INTEGER` (kind `protocol`).
+ */
+function mergeUsage(counts: Map<string, number>, usage: JsonValue | undefined, provider: string): void {
+  if (usage === undefined || usage === null) return;
+  if (!isPlainObject(usage)) throw new ProviderError("protocol", `${provider} response usage is not an object`);
+  const notInt = notIntMessage(provider);
+  for (const field of COUNT_FIELDS) {
+    const count = tokenCount(usage[field], notInt);
+    if (count !== null) counts.set(field, count);
+  }
+}
+
+/**
+ * Return the usage of the merged counts, or `null` when none is above zero. Input is the prompt
+ * and tool-use prompt, output the candidates and thoughts, and the total their sum
+ * (`totalTokenCount` is not used).
+ *
+ * @throws {ProviderError} A sum is past `Number.MAX_SAFE_INTEGER` (kind `protocol`).
+ */
+function usageOf(counts: Map<string, number>, provider: string): Usage | null {
+  if (![...counts.values()].some((count) => count > 0)) return null;
+  const count = (field: string): number => counts.get(field) ?? 0;
+  const thoughts = count("thoughtsTokenCount");
+  const inputTokens = count("promptTokenCount") + count("toolUsePromptTokenCount");
+  const outputTokens = count("candidatesTokenCount") + thoughts;
+  try {
+    return new Usage({
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      cacheReadTokens: counts.get("cachedContentTokenCount") ?? null,
+      cacheCreationTokens: null,
+      reasoningTokens: thoughts > 0 ? thoughts : null,
+    });
+  } catch (error) {
+    // `Usage` refuses a sum past `Number.MAX_SAFE_INTEGER`, which `Number` arithmetic rounds.
+    if (error instanceof MessageFormatError) throw new ProviderError("protocol", notIntMessage(provider));
+    throw error;
+  }
+}
+
+/** Return the error message for a usage count that is not an int. */
+function notIntMessage(provider: string): string {
+  return `${provider} response usage has a count that is not an int`;
+}
+
+/** Return a usage count as a number, `null` when it is `null` or absent; throw `notInt` otherwise. */
+function tokenCount(value: JsonValue | undefined, notInt: string): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "bigint" || !Number.isSafeInteger(Number(value))) throw new ProviderError("protocol", notInt);
+  return Number(value);
+}
+
+/**
+ * Return the error for a finish reason that means the reply failed, or `null` for `STOP` and
+ * `MAX_TOKENS`: a safety-type reason is `refused`, `CONTINUATION` `protocol`, any other
+ * `incomplete`, retryable only for `MALFORMED_RESPONSE`.
+ */
+function finishFailure(reason: string, message: string | null, provider: string): ProviderError | null {
+  if (reason === "STOP" || reason === "MAX_TOKENS") return null;
+  if (reason === "CONTINUATION") {
+    const text = `${provider} asked to continue the reply in another request, which yian does not send`;
+    return new ProviderError("protocol", text);
+  }
+  const text = withDetail(`${provider} response did not complete (${reason})`, message);
+  if (REFUSED_FINISH.has(reason)) return new ProviderError("refused", text);
+  // Gemini sporadically ends a valid request with `MALFORMED_RESPONSE`, and a resend recovers.
+  return new ProviderError("incomplete", text, { retryable: reason === "MALFORMED_RESPONSE" });
+}
+
+/** Return `text`, followed by `: <detail>` when `detail` is a non-empty string. */
+function withDetail(text: string, detail: string | null): string {
+  return detail ? `${text}: ${detail}` : text;
 }

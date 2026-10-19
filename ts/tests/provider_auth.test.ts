@@ -1,7 +1,7 @@
 /**
- * Mirrors `tests/test_provider_auth.py`: the credential values, the store, `isAuthFailure`,
- * `request`, and `OpenAIAuth`'s sign-in flows, refresh and model catalogs; and the scenarios of
- * `auth_both_runtimes.ts`, on Bun and, with `YIAN_TEST_NODE`, built on Node.
+ * Mirrors `tests/test_provider_auth.py`: `auth/index.ts`'s exports, the credential values, the
+ * store, `isAuthFailure`, `request`, and `OpenAIAuth`'s sign-in flows, refresh and model catalogs;
+ * and the scenarios of `auth_both_runtimes.ts`, on Bun and, with `YIAN_TEST_NODE`, built on Node.
  */
 
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
@@ -54,6 +54,21 @@ async function rejected(promise: Promise<unknown>): Promise<Error> {
   }
   throw new Error("expected a rejection");
 }
+
+test("auth/index.ts exports Python's auth package names", async () => {
+  // The types (AuthState, Credentials) have no runtime value.
+  const names = Object.keys(await import("../src/llm_clients/auth/index.ts")).sort();
+  expect(names).toEqual([
+    "ApiKeyCredentials",
+    "AuthError",
+    "AuthStore",
+    "HttpResponse",
+    "OAuthCredentials",
+    "OpenAIAuth",
+    "ProviderSelection",
+    "isAuthFailure",
+  ]);
+});
 
 describe("ApiKeyCredentials", () => {
   const refusedHeaders: [string, unknown][] = [

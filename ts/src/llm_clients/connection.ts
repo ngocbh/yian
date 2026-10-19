@@ -35,6 +35,7 @@ import {
   type OAuthCredentials,
   type ProviderSelection,
 } from "./auth/common.ts";
+import { OpenAIAuth } from "./auth/openai.ts";
 import { AuthStore } from "./auth/store.ts";
 import {
   AZURE_NEEDS_BASE_URL,
@@ -1138,11 +1139,11 @@ export function legacyConnectionMap(
  *
  * A `store` connection resolves the saved login it was pinned to, so a later login or removal
  * fails instead of switching accounts; an API key comes with the header values saved beside it.
- * `refresh` renews an expiring OpenAI subscription; without it one fails with the store's error.
- * OpenAI also resolves its environment key, checking that it is the recorded one. Another
+ * `refresh` renews an expiring OpenAI subscription and defaults to `OpenAIAuth`'s; other providers
+ * get none. OpenAI also resolves its environment key, checking that it is the recorded one. Another
  * provider's `environment` connection resolves nothing here: its client reads the key variable
  * itself. `provider` is the provider of the config that carries `connection`; `signal` and
- * `scheduler` go to the store.
+ * `scheduler` go to the store and the default refresh.
  *
  * Rejects with `AuthError` if the pinned login changed, was removed, or cannot be read, or an
  * OpenAI key is missing or changed; with `RangeError` if the metadata is invalid for `provider`,
@@ -1166,7 +1167,10 @@ export async function connectionCredentials(
       // `validateConnection` requires a saved login's credential id and absolute store path.
       const store = new AuthStore(checked.store_path, { env, signal, scheduler });
       credentials = await store.credentials(provider, checked.credential_id!, {
-        refresh: provider === "openai" ? refresh : undefined,
+        refresh:
+          provider === "openai"
+            ? (refresh ?? ((current) => new OpenAIAuth({ signal, scheduler }).refresh(current)))
+            : undefined,
       });
     } catch (error) {
       if (error instanceof AuthError) {

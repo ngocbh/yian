@@ -40,7 +40,7 @@ import type { LoadDiagnostics } from "./errors.ts";
 import { formerBooleanFix } from "./yaml_words.ts";
 
 const HEAD_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*/;
-// The `difflib` ratio a name must reach to be offered as a close match.
+/** The `getCloseMatches` ratio a name must reach to be offered as a close match. */
 export const CLOSE_MATCH_CUTOFF = 0.6;
 const FLOW_INDICATORS = /[[\]{}]/;
 // The characters PyYAML reads into a tag, minus YAML 1.2's flow indicators, `!`, and the `%`
@@ -246,7 +246,7 @@ export function suggestedLiteral(text: string, typ: Type): [shown: string, note:
   if (fits(typ, parsed)) return [text, null];
   const fix = formerBooleanFix(parsed, typ);
   if (fix !== null) return [fix[0] ? "true" : "false", fix[1]];
-  if (typeof parsed !== "string") return fits(typ, text) ? [yamlQuoted(text), null] : [text, null];
+  if (typeof parsed !== "string" && fits(typ, text)) return [yamlQuoted(text), null];
   return [text, null];
 }
 
@@ -357,7 +357,7 @@ export function suggestTag(
   options: { registry?: TypeRegistry | null; typeText?: string | null } = {},
 ): string {
   let { typeText = null } = options;
-  const text = tagText(typ, { registry: options.registry ?? null, typeText });
+  const text = tagText(typ, { registry: options.registry, typeText });
   if (text === null) {
     if (typeText === null) {
       if (typ === null) throw new TypeError("suggestTag needs a type or its text");
@@ -394,7 +394,7 @@ export function anySourceHint(
   if (source.kind !== ValueKind.ANY || sink.kind === ValueKind.ANY || requiresFile(sink)) {
     return null;
   }
-  const tag = suggestTag(name, sink, "${...}", { registry: options.registry ?? null });
+  const tag = suggestTag(name, sink, "${...}", { registry: options.registry });
   return (
     `tag the slot (${tag}) to check it at runtime, or narrow it with \`isinstance\` ` +
     "in a `case`"
@@ -416,7 +416,7 @@ export function tagText(
   typ: Type | null,
   options: { registry?: TypeRegistry | null; typeText?: string | null } = {},
 ): string | null {
-  const { registry = null, typeText = null } = options;
+  const { registry, typeText = null } = options;
   if (typeText !== null && writableAsTag(typeText)) return typeText;
   if (typ === null) return null;
   return tagTextOf(typ, registry ?? new Map());

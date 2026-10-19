@@ -6,9 +6,14 @@
  * `closeTypeName`, `suggestedLiteral` (a literal that doesn't parse is kept as written, where
  * Python reads an unbound name), `yamlQuoted`, `pathLabel`, `hasSpan` and `namedTypeLabel`,
  * which Python tests only through `load_flow`; and the fragments of conformance messages these
- * helpers produce, each the exact text in its case.
+ * helpers produce, each the exact text in its case. `suggestTag` with neither a type nor its
+ * text throws `TypeError`, where Python asserts.
  *
- * Later (the next task): the `read_tagged_value` tests.
+ * Not ported: `read_tag_type`'s long-int message (`the tag` in place of a tag that repeats
+ * every digit); ints are unbounded in TS, so the message always shows the tag.
+ *
+ * Not yet ported: the `read_tagged_value`, `reject_tagged_output` and `reject_unread_tags`
+ * tests.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -184,12 +189,6 @@ describe("old typed text", () => {
     expect(spellTypeText("not a type (")).toBeNull();
   });
 
-  test("closeTypeName", () => {
-    expect(closeTypeName("INT", REG)).toBe("int");
-    expect(closeTypeName("list(Strr)", REG)).toBeNull();
-    expect(closeTypeName("(int)", REG)).toBeNull();
-  });
-
   test.each([
     ["30", "str", ['"30"', null]],
     ["no", "bool", ["false", "`no` is text; write `false`"]],
@@ -199,6 +198,14 @@ describe("old typed text", () => {
     ["call(f)", "int", ["call(f)", null]],
   ])("suggestedLiteral(%p) for %p", (text, typeText, expected) => {
     expect(suggestedLiteral(text, t(typeText))).toEqual(expected as [string, string | null]);
+  });
+});
+
+describe("closeTypeName", () => {
+  test("offers the name closest to the leading name", () => {
+    expect(closeTypeName("INT", REG)).toBe("int");
+    expect(closeTypeName("list(Strr)", REG)).toBeNull();
+    expect(closeTypeName("(int)", REG)).toBeNull();
   });
 });
 
@@ -250,6 +257,15 @@ describe("conformance message fragments", () => {
     );
   });
 
+  test.each([
+    ["str", "int"],
+    ["Any", "Optional(Any)"],
+    ["Any", "Any"],
+    ["Any", "file"],
+  ])("anySourceHint has no advice from %p into %p", (source, sink) => {
+    expect(anySourceHint("n", t(source), t(sink))).toBeNull();
+  });
+
   test("suggestTag fragments", () => {
     expect(suggestTag("acc", t("Optional(Any)"), "${mk.output}")).toBe(
       "`acc: !Optional(Any) ${mk.output}`",
@@ -268,5 +284,16 @@ describe("conformance message fragments", () => {
       "`r: !int ${use.output}`",
     );
     expect(yamlQuoted("int = ${use.output}")).toBe('"int = ${use.output}"');
+  });
+
+  test("oldFormSuggestion notes a changed literal and fills in a missing value", () => {
+    const options = { registry: EMPTY, placeholder: "${...}" };
+    expect(oldFormSuggestion("f", t("bool"), "bool", "no", options)).toBe(
+      "`f: !bool false` (`no` is text; write `false`)",
+    );
+    expect(oldFormSuggestion("n", t("int"), "int", "", options)).toBe("`n: !int ${...}`");
+    expect(
+      oldFormSuggestion("n", t("int"), "int", "", { registry: EMPTY, placeholder: null }),
+    ).toBe("`n: !int`");
   });
 });

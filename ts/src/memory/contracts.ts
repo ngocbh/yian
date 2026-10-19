@@ -97,74 +97,98 @@ function requirePath(value: unknown, name: string, allowEmpty = false): readonly
   return Object.freeze([...(value as string[])]);
 }
 
+/** One container `freezeJson` is copying: its source, its path, and the children copied so far. */
+interface FreezeFrame {
+  readonly source: unknown[] | Record<string, unknown>;
+  readonly name: string;
+  readonly nesting: number;
+  /** The object's keys in code-unit order; `null` for an array. */
+  readonly keys: string[] | null;
+  readonly copy: JsonValue[];
+}
+
 /**
- * Validate and copy one JSON value into frozen containers; see `freezeJsonObject`. With
- * `valueNumbers`, numbers follow the yian value rule: NaN refused, `±Infinity` kept, `-0` copied
- * as `0`. With `memo`, a container already frozen through the same memo returns its copy, so a
- * repeated subtree is shared; a memo is for unlimited nesting, since a cached copy isn't measured
- * against `limit` again.
+ * Validate and copy one JSON value into frozen containers at any depth; see `freezeJsonObject`.
+ * With `valueNumbers`, numbers follow the yian value rule: NaN refused, `±Infinity` kept, `-0`
+ * copied as `0`. With `memo`, a container already frozen through the same memo returns its copy,
+ * so a repeated subtree is shared; a memo is for unlimited nesting, since a cached copy isn't
+ * measured against `limit` again.
  */
 function freezeJson(
   value: unknown,
   name: string,
-  active: Set<object> = new Set(),
-  nesting = 0,
   limit = Number.POSITIVE_INFINITY,
   valueNumbers = false,
   memo: Map<object, JsonValue> | null = null,
 ): JsonValue {
-  if (value === null || typeof value === "boolean" || typeof value === "bigint") return value;
-  if (typeof value === "string") return requireString(value, name, false);
-  if (typeof value === "number") {
-    if (!valueNumbers) {
-      if (!Number.isFinite(value)) throw new RangeError(`${name} JSON number must be finite`);
-      return value;
+  // An explicit stack, not recursion, so depth is bounded by memory rather than the call stack.
+  // It visits values in the recursive order, so the first error found is the same.
+  const stack: FreezeFrame[] = [];
+  // The containers on the current path, so a subtree reached twice is not a cycle.
+  const active = new Set<object>();
+
+  // Return a scalar's or a memo'd container's copy, or check a new container and push its frame.
+  const enter = (item: unknown, path: string, nesting: number): JsonValue | undefined => {
+    if (item === null || typeof item === "boolean" || typeof item === "bigint") return item;
+    if (typeof item === "string") return requireString(item, path, false);
+    if (typeof item === "number") {
+      if (!valueNumbers) {
+        if (!Number.isFinite(item)) throw new RangeError(`${path} JSON number must be finite`);
+        return item;
+      }
+      if (Number.isNaN(item)) throw new RangeError(`${path} JSON number must not be NaN`);
+      return Object.is(item, -0) ? 0 : item;
     }
-    if (Number.isNaN(value)) throw new RangeError(`${name} JSON number must not be NaN`);
-    return Object.is(value, -0) ? 0 : value;
-  }
-  const array = isPlainArray(value);
-  if (!array && !isPlainObject(value)) throw new TypeError(`${name} must contain exact JSON values`);
-  if (nesting >= limit) {
-    throw new RangeError(
-      `${name} nests deeper than ${limit} levels, the limit for a yian value (each record and list is a level)`,
-    );
-  }
-  // A memo holds only finished copies, so a container on the active path is never found here.
-  const cached = memo?.get(value);
-  if (cached !== undefined) return cached;
-  // Only the containers on the current path count, so a subtree reached twice is not a cycle.
-  if (active.has(value)) throw new RangeError(`${name} contains a circular JSON value`);
-  active.add(value);
-  let frozen: JsonValue;
-  try {
-    if (array) {
-      const items: JsonValue[] = [];
+    const array = isPlainArray(item);
+    if (!array && !isPlainObject(item)) throw new TypeError(`${path} must contain exact JSON values`);
+    if (nesting >= limit) {
+      throw new RangeError(
+        `${path} nests deeper than ${limit} levels, the limit for a yian value (each record and list is a level)`,
+      );
+    }
+    // A memo holds only finished copies, so a container on the active path is never found here.
+    const cached = memo?.get(item);
+    if (cached !== undefined) return cached;
+    if (active.has(item)) throw new RangeError(`${path} contains a circular JSON value`);
+    let keys: string[] | null = null;
+    if (!array) {
+      if (Object.getOwnPropertySymbols(item).length > 0) {
+        throw new TypeError(`${path} JSON object keys must be strings`);
+      }
+      keys = Object.keys(item);
+      for (const key of keys) requireString(key, `${path} JSON object key`, false);
+      keys.sort(compareCodeUnits);
+    }
+    active.add(item);
+    stack.push({ source: item, name: path, nesting, keys, copy: [] });
+    return undefined;
+  };
+
+  const ready = enter(value, name, 0);
+  if (ready !== undefined) return ready;
+  for (;;) {
+    const frame = stack.at(-1)!;
+    const { source, name: path, nesting, keys, copy } = frame;
+    const index = copy.length;
+    let child: JsonValue | undefined;
+    if (keys === null && index < (source as unknown[]).length) {
       // By index, so a hole reads `undefined` and is refused.
-      for (let i = 0; i < value.length; i++) {
-        items.push(freezeJson(value[i], `${name}[${i}]`, active, nesting + 1, limit, valueNumbers, memo));
-      }
-      frozen = Object.freeze(items);
+      child = enter((source as unknown[])[index], `${path}[${index}]`, nesting + 1);
+    } else if (keys !== null && index < keys.length) {
+      const key = keys[index]!;
+      child = enter((source as Record<string, unknown>)[key], `${path}.${key}`, nesting + 1);
     } else {
-      if (Object.getOwnPropertySymbols(value).length > 0) {
-        throw new TypeError(`${name} JSON object keys must be strings`);
-      }
-      const keys = Object.keys(value);
-      for (const key of keys) requireString(key, `${name} JSON object key`, false);
-      const entries = keys
-        .sort(compareCodeUnits)
-        .map(
-          (key) =>
-            [key, freezeJson(value[key], `${name}.${key}`, active, nesting + 1, limit, valueNumbers, memo)] as const,
-        );
+      stack.pop();
+      active.delete(source);
       // `Object.fromEntries` defines own data properties, so a `__proto__` key stays data.
-      frozen = Object.freeze(Object.fromEntries(entries));
+      child = Object.freeze(keys === null ? copy : Object.fromEntries(keys.map((key, i) => [key, copy[i]!])));
+      memo?.set(source, child);
+      if (stack.length === 0) return child;
+      stack.at(-1)!.copy.push(child);
+      continue;
     }
-  } finally {
-    active.delete(value);
+    if (child !== undefined) copy.push(child);
   }
-  memo?.set(value, frozen);
-  return frozen;
 }
 
 /**
@@ -185,12 +209,12 @@ export function freezeJsonObject(
 ): JsonObject {
   if (!isPlainObject(value)) throw new TypeError(`${name} must be an exact JSON object`);
   const limit = (options.limitNesting ?? true) ? current().maxValueNesting : Number.POSITIVE_INFINITY;
-  return freezeJson(value, name, new Set(), 0, limit, options.valueNumbers ?? false) as JsonObject;
+  return freezeJson(value, name, limit, options.valueNumbers ?? false) as JsonObject;
 }
 
 /** Validate and copy one evidence JSON value at any depth under the yian value number rule. */
 function freezeEvidenceJson(value: unknown, name: string): JsonValue {
-  return freezeJson(value, name, new Set(), 0, Number.POSITIVE_INFINITY, true);
+  return freezeJson(value, name, Number.POSITIVE_INFINITY, true);
 }
 
 /** Return `vocabulary` with the predictable plural form of each term added. */
@@ -1104,7 +1128,7 @@ export function freezeFeedback(
 ): readonly JsonValue[] {
   return Object.freeze(
     Array.from(entries, (item, index) =>
-      freezeJson(item, `feedback[${firstIndex + index}]`, new Set(), 0, Number.POSITIVE_INFINITY, true, memo),
+      freezeJson(item, `feedback[${firstIndex + index}]`, Number.POSITIVE_INFINITY, true, memo),
     ),
   );
 }

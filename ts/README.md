@@ -313,9 +313,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   a learn context's feedback are deep-frozen copies under the same value number rule, with no
   memory nesting limit; a context keeps its episodes by reference. `freezeFeedback` takes a memo
   shared across calls, so a subtree repeated across feedback items is one frozen copy.
-- Changed: a mutation payload and a snapshot envelope's export have no checked depth limit (Python
-  bounds both at the value nesting limit plus 28); a payload deep enough to overflow the stack
-  throws the engine's RangeError.
+- Changed: memory JSON (a mutation payload, a snapshot envelope's export, learn feedback, a stored
+  state) has no depth limit (Python bounds it at the value nesting limit plus 28). It is copied
+  with an explicit stack, not recursion, so a deep value can't overflow the call stack.
 - A config or snapshot is a deep-frozen copy whose keys are inserted in code-unit order; JS still
   lists integer-like keys (`"9"`, `"10"`) first, in numeric order.
 - The declarations are frozen, so `rewriteMemoryDeclOrigins` returns rebuilt declarations and

@@ -169,6 +169,10 @@ the attempt fails with `memory.invalid_context` before any learner runs. The
 the memory limit of 128 levels (derived from YIAN_MAX_VALUE_NESTING)`. Only a failure in
 the root flow's fallback feedback names no node.
 
+Changed (TS yian): there is no 128-level bound. The memory carriers (snapshots, mutation
+payloads, learn feedback, storage state) have no depth limit; values are bounded by value
+nesting where they are produced.
+
 ## Episodic memory
 
 `EpisodicMemory` is the built-in deterministic history memory. Declare it, for

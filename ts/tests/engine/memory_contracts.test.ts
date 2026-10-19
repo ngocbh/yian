@@ -33,7 +33,10 @@
  * `test_freeze_still_detects_cycles`, `test_freeze_shares_a_repeated_subtree` and
  * `test_learn_context_equal_feedback`; plus JavaScript's own
  * values (a `"__proto__"` key, a null-prototype object, a repeated subtree, an array hole), the
- * value nesting limit, the occurrence nesting order, the operation failure's field checks
+ * value nesting limit, the depth-first order of the first error, 100 000-level arrays and objects
+ * copied through a snapshot envelope, a mutation and learn feedback (compared as log JSON text,
+ * since Bun's `toEqual` overflows the stack at that depth) and an error deep inside one naming its
+ * full path, the occurrence nesting order, the operation failure's field checks
  * (Python pins those through the learning outcome and backward records), `validateMutations`, a
  * mutation's id and payload checks (a payload deeper than the value nesting limit is kept), and
  * each learning carrier's field checks in Python's order.
@@ -135,6 +138,7 @@ import {
   MemorySection,
   type MemorySession,
   MemorySetupError,
+  MemorySnapshotEnvelope,
   ModelTextInteraction,
   ModelValueInteraction,
   PolicyCommitOutcome,
@@ -150,6 +154,7 @@ import {
 import * as memoryPackage from "../../src/memory/index.ts";
 import * as runtimeContracts from "../../src/runtime/contracts.ts";
 import { BackwardFailure, MemoryProposal } from "../../src/runtime/contracts.ts";
+import { logJson } from "../../src/typesys/json.ts";
 import { importStatements } from "./source_scan.ts";
 
 /** Build a custom-type declaration, so the built-in key allowlist does not apply. */
@@ -271,6 +276,56 @@ test("a memory config nests at most maxValueNesting levels", () => {
     RangeError,
     "config.a.a.a nests deeper than 3 levels, the limit for a yian value (each record and list is a level)",
   );
+});
+
+test("the first error is the depth-first one, keys checked before any child", () => {
+  expectError(
+    () => decl({ a: { x: new Map() }, b: new Date(0) }),
+    TypeError,
+    "config.a.x must contain exact JSON values",
+  );
+  expectError(
+    () => decl({ a: [new Map()], "\ud800": 1n }),
+    RangeError,
+    "Unicode surrogate is not valid canonical JSON",
+  );
+  expectError(
+    () => decl({ b: [1n, new Map()], a: [Number.NaN] }),
+    RangeError,
+    "config.a[0] JSON number must be finite",
+  );
+});
+
+const DEEP = 100_000;
+
+/** Return `leaf` wrapped in `DEEP` arrays, or one-key objects under `key`, built with a loop. */
+function deepValue(leaf: unknown, key: string | null): unknown {
+  let value = leaf;
+  for (let i = 0; i < DEEP; i++) value = key === null ? [value] : { [key]: value };
+  return value;
+}
+
+// Compared as log JSON text: Bun's `toEqual` overflows the stack at this depth.
+test.each([
+  ["array", null],
+  ["object", "a"],
+] as const)("a 100 000-level %s freezes through the memory carriers", (_kind, key) => {
+  const value = { deep: deepValue(1n, key) };
+  const text = logJson(value);
+  expect(logJson(new MemorySnapshotEnvelope("notes", value).snapshot) === text).toBe(true);
+  expect(logJson(new MemoryMutation("m", value).payload) === text).toBe(true);
+  expect(logJson(new LearnContext("run", "notes", [], [value]).feedback[0]!) === text).toBe(true);
+});
+
+test("an error deep inside a 100 000-level value names its full path", () => {
+  let value: unknown = new Map();
+  const steps: string[] = [];
+  for (let i = 0; i < DEEP; i++) {
+    value = i % 2 === 0 ? [value] : { b: value };
+    steps.push(i % 2 === 0 ? "[0]" : ".b");
+  }
+  const path = `payload${steps.reverse().join("")}`;
+  expectError(() => new MemoryMutation("m", value), TypeError, `${path} must contain exact JSON values`);
 });
 
 // test_identity_values_are_frozen_structured_products

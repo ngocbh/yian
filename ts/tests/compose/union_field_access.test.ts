@@ -1,8 +1,9 @@
 /**
  * Reading fields of a union of records through an output contract, a port of
- * `tests/compose/test_union_field_access.py::test_shared_walk_allows_member_only_fields_when_asked`
- * and `::test_member_only_hint_names_the_union_root`. `typeFor` stands in for compose's
- * `read_type`.
+ * `tests/compose/test_union_field_access.py::test_shared_walk_allows_member_only_fields_when_asked`,
+ * `::test_member_only_hint_names_the_union_root` and
+ * `::test_shared_field_one_member_does_not_require_reads_as_optional`. `typeFor` stands in for
+ * compose's `read_type`.
  *
  * TS-only: the member-only fix hints, which Python checks only through flows the loader builds
  * (a tag comparison hint read from the local path, through a union root and below a shared
@@ -15,9 +16,15 @@
 
 import { expect, test } from "bun:test";
 
-import { outputContractFieldError, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
+import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
+import {
+  isExactly,
+  outputContractFieldError,
+  PartialRecordContract,
+  ValueContract,
+} from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
-import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 
 const DECISION_TYPEDEFS = {
   Buy: { action: "Literal(buy)", qty: "int" },
@@ -131,4 +138,34 @@ test("a file field read continues with the field's type", () => {
   expect(outputContractFieldError(file, ["uri", "x"], "f.uri.x")).toBe(
     "reference ${f.uri.x} reads field 'x' on type str, which has no fields",
   );
+});
+
+test("a shared field one member does not require reads as optional", () => {
+  const text = Type.scalar(ValueKind.STRING);
+  const tag = (value: string) => new Type({ kind: ValueKind.STRING, tags: new Set([value]) });
+  const union = new Type({
+    kind: ValueKind.OBJECT,
+    variants: [
+      new Type({
+        kind: ValueKind.OBJECT,
+        fields: new Map([
+          ["kind", tag("a")],
+          ["note", text],
+        ]),
+        required: new Set(["kind", "note"]),
+      }),
+      new Type({
+        kind: ValueKind.OBJECT,
+        fields: new Map([
+          ["kind", tag("b")],
+          ["note", text],
+        ]),
+        required: new Set(["kind"]),
+      }),
+    ],
+  });
+  const projected = projectOutputContract(new ValueContract(union), ["note"]);
+  expect(isExactly(projected, ValueContract)).toBe(true);
+  const optionalText = new Type({ kind: ValueKind.STRING, nullable: true });
+  expect(typeEquals((projected as ValueContract).type, optionalText)).toBe(true);
 });

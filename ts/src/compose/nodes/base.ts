@@ -27,12 +27,9 @@ import {
   reprText,
   type SourceRange,
 } from "../../diagnostics.ts";
-import { ExpressionError } from "../../expr/expressions.ts";
-import { callSuffixOf, type ExprNode, Tree, wholeSpanInterior } from "../../expr/grammar.ts";
-import { scanTemplate, Span, type TemplateSegment, templateRefs } from "../../expr/template.ts";
+import { wholeSpanInterior } from "../../expr/grammar.ts";
 import type { Node } from "../../nodes/base.ts";
 import {
-  bindingSource,
   isExactly,
   type OutputContract,
   Parameter,
@@ -42,6 +39,7 @@ import {
 import { pythonTypeName, type TypeRegistry } from "../../typesys/types.ts";
 import { isRecord, valueRepr, type ValueRecord } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
+import { directReferencePath } from "../helpers/output_contracts.ts";
 import { hasSpan } from "../helpers/tags.ts";
 import { readType } from "../helpers/types.ts";
 import { checkEnvValues } from "../helpers/value_nesting.ts";
@@ -815,35 +813,4 @@ function holdsSpan(value: unknown): boolean {
   if (isRecord(value)) return Object.values(value).some(holdsSpan);
   if (Array.isArray(value)) return value.some(holdsSpan);
   return false;
-}
-
-/**
- * Return the path a binding reads when it is one lone whole-value reference.
- *
- * Python keeps this in `compose/helpers/output_contracts.py`.
- *
- * @param binding A raw binding value or a `Binding` carrier.
- * @returns The dotted reference path (`item`, `item.name`, `a.output`), or `null` for a
- *   literal, an embedded or computed template, a call, or malformed text.
- */
-function directReferencePath(binding: unknown): string | null {
-  const source = bindingSource(binding);
-  if (typeof source !== "string") return null;
-  let segments: TemplateSegment[];
-  try {
-    segments = scanTemplate(source);
-  } catch (error) {
-    if (error instanceof ExpressionError) return null;
-    throw error;
-  }
-  const [segment] = segments;
-  if (!(segments.length === 1 && segment instanceof Span)) return null;
-  if (!isDirectReference(segment.tree)) return null;
-  const refs = templateRefs(segments);
-  return refs.length === 1 ? refs[0]! : null;
-}
-
-/** Whether a whole-value span's tree is a bare or dotted reference with no call suffix. */
-function isDirectReference(tree: ExprNode): boolean {
-  return tree instanceof Tree && tree.data === "refcall" && callSuffixOf(tree) === undefined;
 }

@@ -26,25 +26,27 @@ import { parseArgs } from "node:util";
 import { Document, isCollection, isMap, isNode, isSeq, parseDocument, visit } from "yaml";
 import type { YAMLMap } from "yaml";
 
+import {
+  expressionTrees,
+  resolveConstructorType,
+  resolveIsinstanceType,
+} from "../src/compose/helpers/isinstance_types.ts";
 import { ENTRIES, forget, nonDefaults, read, reload } from "../src/defaults.ts";
 import type { Env } from "../src/defaults.ts";
-import { reprText } from "../src/diagnostics.ts";
 import {
   constructorNames,
   evalExpr,
   evaluateWhenRecord,
   isinstanceTypeNames,
-  parseCondition,
   ResolveMode,
   resolveInRecord,
-  unknownFunctionMessage,
 } from "../src/expr/expressions.ts";
 import { type ExprNode, parseExpr } from "../src/expr/grammar.ts";
-import { evalBinding, renderTemplateRecord, scanTemplate, Span } from "../src/expr/template.ts";
+import { evalBinding, renderTemplateRecord } from "../src/expr/template.ts";
 import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
 import type { JsonMode } from "../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../src/typesys/types.ts";
-import { buildValueAs, FileRef, isRecord, TypeCheckError } from "../src/typesys/values.ts";
+import { buildValueAs, FileRef, isRecord } from "../src/typesys/values.ts";
 import type { Type, Value as YianValue, ValueRecord } from "../src/typesys/values.ts";
 
 /** A case value: an int is a `bigint`, a float a `number`. */
@@ -975,11 +977,6 @@ export async function main(
 
 // ---- expr ----
 
-// The scalar names `isinstance` takes besides a `typedefs:` name, as compose lists them.
-const ISINSTANCE_BUILTIN_TYPE_NAMES: readonly string[] = [
-  "str", "int", "float", "bool", "date", "datetime", "object",
-];
-
 /** Return `value` in data form: every `FileRef` in it as its mapping `{uri, mime, name}`. */
 function dataForm(value: YianValue): Value {
   if (FileRef.isFileRef(value)) return { uri: value.uri, mime: value.mime, name: value.name };
@@ -1009,24 +1006,15 @@ async function runExpr(case_: Case, ctx: CaseContext): Promise<void> {
       if (template !== null && mode === "strict") return { value: renderTemplateRecord(template, values) };
       const trees: ExprNode[] =
         template !== null
-          ? scanTemplate(template).flatMap((segment) => (segment instanceof Span ? [segment.tree] : []))
-          : [mode === "condition" ? parseCondition(text) : parseExpr(text)];
+          ? expressionTrees(template)
+          : mode === "condition"
+            ? expressionTrees(text, { condition: true })
+            : [parseExpr(text)];
       const registry = readTypedefs((case_["typedefs"] ?? {}) as Record<string, unknown>);
       const types = new Map<string, Type>();
       for (const tree of trees) {
-        for (const name of isinstanceTypeNames(tree)) {
-          if (!registry.has(name) && !ISINSTANCE_BUILTIN_TYPE_NAMES.includes(name)) {
-            throw new TypeCheckError(
-              `unknown type ${reprText(name)}; isinstance takes a typedefs: name or one of ` +
-                ISINSTANCE_BUILTIN_TYPE_NAMES.join(", "),
-            );
-          }
-          types.set(name, typeFor(name, registry));
-        }
-        for (const name of constructorNames(tree)) {
-          if (!registry.has(name)) throw new TypeCheckError(unknownFunctionMessage(name));
-          types.set(name, typeFor(name, registry));
-        }
+        for (const name of isinstanceTypeNames(tree)) types.set(name, resolveIsinstanceType(name, registry));
+        for (const name of constructorNames(tree)) types.set(name, resolveConstructorType(name, registry));
       }
       const resolve = (path: string) => resolveInRecord(path, values);
       if (template !== null) return { value: dataForm(evalBinding(template, resolve, { item, types })) };

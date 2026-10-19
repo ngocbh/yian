@@ -137,7 +137,7 @@ export function loadError(run: () => unknown): LoadError {
 }
 
 /** Return the cursor at `path` from the document root. */
-export function cursorAt(document: SourceDocument, path: readonly string[]): SourceCursor {
+export function cursorAt(document: SourceDocument, path: readonly (string | number)[]): SourceCursor {
   return path.reduce((cursor: SourceCursor, step) => cursor.child(step), document.root);
 }
 

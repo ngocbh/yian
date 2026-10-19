@@ -13,11 +13,11 @@
  * check (`checkMemoryDeclaration`, with `MEMORY_IDENTIFIER_PATTERN` and
  * `BUILTIN_MEMORY_CONFIG_KEYS`), node scopes and their occurrence paths, the setup and operation
  * failures, recorded snapshots, and the host memory objects (`Memory`, its run `MemorySession`,
- * and `isMemory`, Python's runtime-checkable `isinstance`). The declaration origin traversal and
- * rewrite aren't re-exported (Python keeps them out of `__all__`); their callers import
- * `contracts.ts`. The
- * recall, learning evidence, learning and session conversation contracts, and the conversation,
- * session, summary, storage and backend modules, are not ported yet.
+ * and `isMemory`, which stands in for Python's `isinstance` check against the runtime-checkable
+ * `Memory` protocol). The declaration origin traversal and rewrite aren't re-exported (Python
+ * keeps them out of `__all__`); their callers import `contracts.ts`. The recall, learning
+ * evidence, learning and session conversation contracts, and the conversation, session, summary,
+ * storage and backend modules are not ported yet.
  *
  * Knows about: `diagnostics` and `defaults`, through `contracts.ts`.
  * Never imports: `nodes`, `compile`, `compose`, `runtime`, `run`, the CLI, `llm`, or persistence

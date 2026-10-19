@@ -44,6 +44,7 @@ import {
   MemoryStack,
   rewriteMemoryDeclOrigins,
 } from "../../src/memory/contracts.ts";
+import * as memoryPackage from "../../src/memory/index.ts";
 import type { JsonObject, JsonScalar, JsonValue, Memory, MemorySession } from "../../src/memory/index.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
@@ -317,11 +318,8 @@ test("a snapshot envelope takes a snapshot deeper than the value nesting limit",
   expect(new MemorySnapshotEnvelope("notes", deep).snapshot).toEqual(deep);
 });
 
-// The type-only exports; `bun run typecheck` fails if one goes missing.
-type PackageTypes = [JsonScalar, JsonValue, JsonObject, Memory, MemorySession];
-
 // test_package_docstring_and_exports_describe_keyed_memories
-test("the package doc and exports describe keyed memories", async () => {
+test("the package doc and exports describe keyed memories", () => {
   const source = readFileSync(new URL("../../src/memory/index.ts", import.meta.url), "utf8");
   expect(source.startsWith("/**")).toBe(true);
   const doc = source.slice(0, source.indexOf("*/"));
@@ -330,7 +328,7 @@ test("the package doc and exports describe keyed memories", async () => {
     expect(doc).toContain(phrase);
   }
   // Exact, so a leaked internal (the origin traversal or rewrite) fails.
-  expect(Object.keys(await import("../../src/memory/index.ts"))).toEqual([
+  expect(Object.keys(memoryPackage)).toEqual([
     "BUILTIN_MEMORY_CONFIG_KEYS",
     "DeclSite",
     "MEMORY_IDENTIFIER_PATTERN",

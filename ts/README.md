@@ -117,7 +117,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 
 ## Memory
 
-- `src/memory/contracts.ts` holds the memory identities compile records (`DeclSite`,
+- `src/memory/contracts.ts` holds the memory identities that compile records (`DeclSite`,
   `MemoryDecl`, `MemorySpec`, `MemoryStack`, `MemoryScope`), the declaration check
   `checkMemoryDeclaration`, the setup and operation failures, recorded snapshots, and the host
   memory objects (`Memory`, `MemorySession`, `isMemory`). `src/memory/index.ts` re-exports the

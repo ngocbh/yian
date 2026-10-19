@@ -348,11 +348,7 @@ test("an operation error exposes its typed fields", () => {
   expect(operation.name).toBe("MemoryOperationError");
   expect(operation.message).toBe("the session is stale");
   expect([operation.stage, operation.code, operation.retryable]).toEqual(["commit", "stale_revision", false]);
-  expectError(
-    () => new MemoryOperationError("learn", "bad", "failed", 1 as never),
-    TypeError,
-    "retryable must be a boolean",
-  );
+  expectError(() => new MemoryOperationError("learn", "bad", "failed", 1 as never), TypeError, "retryable must be a boolean");
   expectError(() => new MemoryOperationError("", "bad", "failed", true), RangeError, "stage must be non-empty");
   expectError(() => new MemoryOperationError("learn", "", "failed", true), RangeError, "code must be non-empty");
   expectError(() => new MemoryOperationError("learn", "bad", "", true), RangeError, "message must be non-empty");
@@ -387,10 +383,12 @@ function fakeMemory(): Memory & { resets: number; closes: number; opened: (JsonO
     opened: [],
     openRun({ snapshot = null } = {}) {
       this.opened.push(snapshot);
-      const close = (): void => {
-        this.closes++;
+      return {
+        snapshot: { namespace: "test" },
+        close: () => {
+          this.closes++;
+        },
       };
-      return { snapshot: { namespace: "test" }, close };
     },
     reset() {
       this.resets++;

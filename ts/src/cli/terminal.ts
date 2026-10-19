@@ -5,6 +5,21 @@
 
 import { emitKeypressEvents } from "node:readline";
 
+import { reprText } from "../diagnostics.ts";
+import type { Parameter } from "../nodes/contracts.ts";
+import { type JsonValue, JSONDecodeError, parseJson } from "../typesys/json.ts";
+import {
+  buildValueAs,
+  canonicalTypeLabel,
+  isListKind,
+  rejectDeepNesting,
+  type Type,
+  TypeCheckError,
+  type Value,
+  ValueKind,
+  writeAsText,
+} from "../typesys/values.ts";
+
 /** Why a prompt stopped without an answer. */
 type StopReason = "interrupt" | "eof" | "closed";
 
@@ -541,4 +556,82 @@ export class Terminal {
     if ("error" in ended) throw ended.error;
     throw stopped();
   }
+}
+
+/**
+ * An example for the scalars whose accepted text isn't evident from the type name: a date or
+ * datetime (a bare date is not a valid datetime).
+ */
+const FORMAT_EXAMPLE: ReadonlyMap<ValueKind, string> = new Map([
+  [ValueKind.DATE, "2026-05-21"],
+  [ValueKind.DATETIME, "2026-05-21T14:30"],
+]);
+
+/**
+ * The prompt label for one declared input: its name, canonical type, `*` / `[optional]` /
+ * `[default: <text form>]`, and a date/datetime example when there is no default.
+ *
+ * @example
+ * inputLabel(asOf); // "as_of (Optional(date)) [optional] e.g. 2026-05-21"
+ */
+export function inputLabel(decl: Parameter): string {
+  const parts = [decl.name];
+  const type = decl.contract?.type;
+  if (type !== undefined) parts.push(`(${canonicalTypeLabel(type)})`);
+  // Keyed off the kind, so `Optional(date)` gets the example too.
+  const example = type === undefined ? undefined : FORMAT_EXAMPLE.get(type.kind);
+  const hint = example === undefined ? [] : [`e.g. ${example}`];
+  if (decl.required) parts.push("*", ...hint);
+  // A default is a yian value (an int is a bigint); it already shows the format, so no example.
+  else if (decl.hasDefault) parts.push(`[default: ${writeAsText(decl.default as Value)}]`);
+  else parts.push("[optional]", ...hint);
+  return parts.join(" ");
+}
+
+/** A user mistake in a list/object editor answer, shown in the editor for correction. */
+class StructuredInputError extends RangeError {
+  override name = "StructuredInputError";
+}
+
+/**
+ * Parse and recursively validate one list/object editor answer, read as yian's codec JSON.
+ * The root shape is checked before the type, so even a nullable declaration refuses a textual
+ * `null`: an explicit null is its own prompt action.
+ *
+ * @returns The native JSON array or object.
+ * @throws StructuredInputError for invalid JSON, a value nesting too deep, the wrong root shape
+ *   or a value the type refuses (`$<path>: <reason>`).
+ * @throws TypeError when `type` is neither a list nor an object.
+ */
+export function parseStructuredInput(raw: string, type: Type, name: string): JsonValue {
+  let parsed: JsonValue;
+  try {
+    parsed = parseJson(raw, "codec");
+    rejectDeepNesting(parsed, `input ${reprText(name)}`);
+  } catch (error) {
+    if (error instanceof JSONDecodeError) {
+      throw new StructuredInputError(`Invalid JSON at line ${error.line}, column ${error.column}: ${error.reason}`);
+    }
+    if (error instanceof TypeCheckError) throw new StructuredInputError(error.message);
+    throw error;
+  }
+  if (isListKind(type.kind)) {
+    if (!Array.isArray(parsed)) throw new StructuredInputError("Expected a JSON array");
+  } else if (type.kind === ValueKind.OBJECT) {
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new StructuredInputError("Expected a JSON object");
+    }
+  } else {
+    throw new TypeError("structured prompt type must be a list or object");
+  }
+  try {
+    buildValueAs(type, parsed);
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    const path = error.path
+      .map((segment) => (typeof segment === "number" ? `[${segment}]` : `[${JSON.stringify(segment)}]`))
+      .join("");
+    throw new StructuredInputError(`$${path}: ${error.message}`);
+  }
+  return parsed;
 }

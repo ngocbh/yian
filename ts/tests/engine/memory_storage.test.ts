@@ -79,6 +79,7 @@ import { pathToFileURL } from "node:url";
 import { MemoryOperationError } from "../../src/memory/contracts.ts";
 import { checkStoragePath, realStoragePath, SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
 import { openSqlite, type Sqlite } from "../../src/platform.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
 
 /** Assert `fn` throws a storage `MemoryOperationError` with code `storage.<code>`, and return it. */
 function expectStorageError(fn: () => unknown, code: string): MemoryOperationError {
@@ -109,6 +110,26 @@ function pragma(connection: Sqlite, sql: string): unknown {
 /** Return the permission bits of the file at `file`. */
 function mode(file: string): number {
   return fs.statSync(file).mode & 0o777;
+}
+
+/** Open the store at `file`, load its state and close it. */
+function reloaded(file: string): JsonObject | null {
+  const store = new SQLiteStorage(file, "session");
+  try {
+    return store.load();
+  } finally {
+    store.close();
+  }
+}
+
+/** Return a SQLite driver-shaped error whose message is a secret path. */
+function sqliteError(): Error {
+  return Object.assign(new Error("secret-host-path"), { code: "ERR_SQLITE_ERROR", errcode: 1 });
+}
+
+/** Return a system error from `syscall` whose message is a secret path. */
+function systemError(syscall: string): Error {
+  return Object.assign(new Error("secret-host-path"), { code: "EIO", errno: -5, syscall });
 }
 
 /** The `ts/` directory. */
@@ -149,6 +170,7 @@ function attemptOpen(file: string, runtime = BUN): unknown {
   new SQLiteStorage(file, "session").close();
   console.log(JSON.stringify("opened"));
 } catch (error) {
+  if (!error?.stage) throw error;
   console.log(JSON.stringify([error.stage, error.code, error.retryable]));
 }`,
     runtime,
@@ -166,7 +188,8 @@ async function startOwner(file: string, runtime = BUN): Promise<ChildProcess> {
   const body = `const store = new SQLiteStorage(file, "session");
 store.save({ saved: true });
 console.log("ready");
-setInterval(() => {}, 1000);`;
+// A deadline, so an orphan can't hold the lock forever.
+setTimeout(() => process.exit(1), 60_000);`;
   const child = spawn(command!, [...args, childScript(runtime, file, body)], { stdio: ["ignore", "pipe", "pipe"] });
   try {
     await new Promise<void>((resolve, reject) => {
@@ -183,9 +206,10 @@ setInterval(() => {}, 1000);`;
       child.stderr!.on("data", (chunk) => {
         stderr += chunk;
       });
-      child.on("exit", (code) => {
+      child.on("error", reject);
+      child.on("exit", (code, signal) => {
         clearTimeout(timer);
-        reject(new Error(`storage child exited with ${code}: ${stderr}`));
+        reject(new Error(`storage child exited with ${code ?? signal}: ${stderr}`));
       });
     });
   } catch (error) {
@@ -230,12 +254,7 @@ test("a round trip is detached and survives reopening", () => {
   } finally {
     store.close();
   }
-  const reopened = new SQLiteStorage(file, "session");
-  try {
-    expect(reopened.load()).toEqual(expected);
-  } finally {
-    reopened.close();
-  }
+  expect(reloaded(file)).toEqual(expected);
 });
 
 class Opaque {}
@@ -275,12 +294,7 @@ test.each([
   } finally {
     store.close();
   }
-  const reopened = new SQLiteStorage(file, "session");
-  try {
-    expect(reopened.load()).toEqual(expected);
-  } finally {
-    reopened.close();
-  }
+  expect(reloaded(file)).toEqual(expected);
 });
 
 test("cycles are rejected before a transaction", () => {
@@ -380,7 +394,7 @@ test("path I/O errors are sanitized", () => {
   fs.mkdirSync(path.join(dir, "target"));
   fs.symlinkSync(path.join(dir, "target"), path.join(dir, "link"));
   const readlink = spyOn(fs, "readlinkSync").mockImplementation(() => {
-    throw Object.assign(new Error("secret-host-path"), { code: "EIO", errno: -5, syscall: "readlink" });
+    throw systemError("readlink");
   });
   try {
     const error = expectStorageError(() => new SQLiteStorage(path.join(dir, "link", "memory.sqlite"), "session"), "io");
@@ -500,8 +514,8 @@ test.each([
 );
 
 const SAVE_FAILURES: [string, unknown, boolean][] = [
-  ["a SQLite error", Object.assign(new Error("secret-host-path"), { code: "ERR_SQLITE_ERROR", errcode: 1 }), true],
-  ["a system error", Object.assign(new Error("secret-host-path"), { code: "EIO", syscall: "write" }), true],
+  ["a SQLite error", sqliteError(), true],
+  ["a system error", systemError("write"), true],
   ["a plain Error", new Error("stop"), false],
   ["a non-Error value", { thrown: 7 }, false],
 ];
@@ -530,6 +544,8 @@ test.each(
     }
     if (sanitized) {
       expect(caught).toBeInstanceOf(MemoryOperationError);
+      expect((caught as MemoryOperationError).code).toBe("storage.io");
+      expect((caught as MemoryOperationError).retryable).toBe(false);
       expect(String(caught)).not.toContain("secret-host-path");
     } else {
       expect(caught).toBe(failure);
@@ -542,12 +558,7 @@ test.each(
     exec.mockRestore();
     store.close();
   }
-  const reopened = new SQLiteStorage(file, "session");
-  try {
-    expect(reopened.load()).toEqual(cut === "after" ? { new: true } : { old: true });
-  } finally {
-    reopened.close();
-  }
+  expect(reloaded(file)).toEqual(cut === "after" ? { new: true } : { old: true });
 });
 
 test("close is idempotent and a closed handle's methods touch neither the OS nor SQLite", () => {
@@ -571,9 +582,9 @@ test("close is idempotent and a closed handle's methods touch neither the OS nor
 });
 
 test.each([
-  ["a plain Error", new Error("stop")],
-  ["a system error", Object.assign(new Error("secret-host-path"), { code: "EIO", syscall: "stat" })],
-])("a failed constructor (%s) rolls back and releases its connection", (label, failure) => {
+  ["a plain Error", new Error("stop"), false],
+  ["a system error", systemError("stat"), true],
+])("a failed constructor (%s) rolls back and releases its connection", (_label, failure, sanitized) => {
   const file = path.join(dir, "memory.sqlite");
   const realStat = fs.statSync;
   let calls = 0;
@@ -591,19 +602,15 @@ test.each([
     stat.mockRestore();
   }
   expect(calls).toBe(2);
-  if (label === "a system error") {
+  if (sanitized) {
     expect(caught).toBeInstanceOf(MemoryOperationError);
     expect((caught as MemoryOperationError).code).toBe("storage.io");
+    expect((caught as MemoryOperationError).retryable).toBe(false);
     expect(String(caught)).not.toContain("secret-host-path");
   } else {
     expect(caught).toBe(failure);
   }
-  const reopened = new SQLiteStorage(file, "session");
-  try {
-    expect(reopened.load()).toBeNull();
-  } finally {
-    reopened.close();
-  }
+  expect(reloaded(file)).toBeNull();
 });
 
 test("a rollback failure replaces neither the save failure nor the owner", () => {
@@ -625,12 +632,7 @@ test("a rollback failure replaces neither the save failure nor the owner", () =>
     exec.mockRestore();
     store.close();
   }
-  const reopened = new SQLiteStorage(file, "session");
-  try {
-    expect(reopened.load()).toEqual({ old: true });
-  } finally {
-    reopened.close();
-  }
+  expect(reloaded(file)).toEqual({ old: true });
 });
 
 test("a load I/O failure poisons the handle and keeps its owner", () => {
@@ -640,7 +642,7 @@ test("a load I/O failure poisons the handle and keeps its owner", () => {
   const realPrepare = connection.prepare;
   const prepare = spyOn(connection, "prepare").mockImplementation((sql) => {
     if (sql.startsWith("SELECT id")) {
-      throw Object.assign(new Error("secret-host-path"), { code: "ERR_SQLITE_ERROR", errcode: 1 });
+      throw sqliteError();
     }
     return Reflect.apply(realPrepare, connection, [sql]);
   });
@@ -665,25 +667,22 @@ test.each(["before", "after"])(
     } finally {
       store.close();
     }
+    const large = "x".repeat(100_000);
     const { status } = runChild(
       file,
       `const store = new SQLiteStorage(file, "session");
+const cut = ${JSON.stringify(cut)};
 const connection = store["connection"];
 const exec = connection.exec;
 connection.exec = (sql) => {
-  if (sql === "COMMIT" && ${JSON.stringify(cut)} === "before") process.exit(23);
-  exec(sql);
-  if (sql === "COMMIT" && ${JSON.stringify(cut)} === "after") process.exit(23);
+  if (sql === "COMMIT" && cut === "before") process.exit(23);
+  exec.call(connection, sql);
+  if (sql === "COMMIT" && cut === "after") process.exit(23);
 };
-store.save({ value: "new", large: "x".repeat(100_000) });`,
+store.save({ value: "new", large: "x".repeat(${large.length}) });`,
     );
     expect(status).toBe(23);
-    const reopened = new SQLiteStorage(file, "session");
-    try {
-      expect(reopened.load()).toEqual(cut === "before" ? { value: "old" } : { value: "new", large: "x".repeat(100_000) });
-    } finally {
-      reopened.close();
-    }
+    expect(reloaded(file)).toEqual(cut === "before" ? { value: "old" } : { value: "new", large });
   },
   30_000,
 );
@@ -723,12 +722,7 @@ test(
       await kill(child);
     }
     expect(child.signalCode).toBe("SIGKILL");
-    const store = new SQLiteStorage(file, "session");
-    try {
-      expect(store.load()).toEqual({ saved: true });
-    } finally {
-      store.close();
-    }
+    expect(reloaded(file)).toEqual({ saved: true });
   },
   30_000,
 );
@@ -817,7 +811,7 @@ const NODE = ((): string | undefined => {
 })();
 
 describe.skipIf(!NODE)("the built storage on Node", () => {
-  const node = (): ChildRuntime => ({ argv: [NODE!, "--input-type=module", "-e"], module: pathToFileURL(BUILT).href });
+  const node: ChildRuntime = { argv: [NODE!, "--input-type=module", "-e"], module: pathToFileURL(BUILT).href };
 
   test(
     "a round trip, a reopen and damaged stores",
@@ -863,7 +857,7 @@ writeFileSync(unrelated, "caller data, not sqlite");
 assert.equal(code(() => new SQLiteStorage(unrelated, "session")), "storage.corrupt");
 console.log("ok");
 `,
-        node(),
+        node,
       );
       expect(stdout).toBe("ok\n");
       expect(status).toBe(0);
@@ -877,17 +871,17 @@ console.log("ok");
       const file = path.join(dir, "memory.sqlite");
       const store = new SQLiteStorage(file, "session");
       try {
-        expect(attemptOpen(file, node())).toEqual(["storage", "storage.busy", true]);
+        expect(attemptOpen(file, node)).toEqual(["storage", "storage.busy", true]);
       } finally {
         store.close();
       }
-      const child = await startOwner(file, node());
+      const child = await startOwner(file, node);
       try {
         expectStorageError(() => new SQLiteStorage(file, "session"), "busy");
       } finally {
         await kill(child);
       }
-      expect(attemptOpen(file, node())).toBe("opened");
+      expect(attemptOpen(file, node)).toBe("opened");
     },
     30_000,
   );

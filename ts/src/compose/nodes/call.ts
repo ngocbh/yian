@@ -10,7 +10,7 @@
  * `CallNode` otherwise. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
  *
  * Knows about: diagnostics, the CALL and MAP runtime nodes, node contracts, typesys, compose
- * helpers and `resolver.ts`.
+ * helpers, `base.ts` and `resolver.ts`.
  * Never imports: `map.ts`, compose/parse, the runtime engine or the CLI.
  */
 

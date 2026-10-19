@@ -9,7 +9,7 @@
  * that is not a list, at the value: a reference or a `call(...)` directive is typed later, from
  * the graph. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
  *
- * Knows about: diagnostics, compose source and helpers, and `call.ts`.
+ * Knows about: diagnostics, compose source and helpers, `base.ts` and `call.ts`.
  * Never imports: compose/parse, the runtime or the CLI.
  */
 

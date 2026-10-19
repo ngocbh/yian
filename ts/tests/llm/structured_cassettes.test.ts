@@ -10,8 +10,8 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { BearerAuth, SubscriptionAuth } from "../../src/llm/auth.ts";
-import type { ErrorKind } from "../../src/llm/errors.ts";
+import { BearerAuth, HeaderKeyAuth, SubscriptionAuth } from "../../src/llm/auth.ts";
+import { type ErrorKind, ProviderError } from "../../src/llm/errors.ts";
 import { callWithRetries, type RetryInfo, RouteModel } from "../../src/llm/executor.ts";
 import { Message, Request, TextPart } from "../../src/llm/messages.ts";
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
@@ -34,6 +34,15 @@ const DIR = fileURLToPath(new URL("cassettes/structured/", import.meta.url));
 const SCHEMAS: Record<string, JsonObject> = {
   "corpus:Rec": {
     properties: { answer: { title: "Answer", type: "string" }, score: { title: "Score", type: "integer" } },
+    required: ["answer", "score"],
+    title: "Record",
+    type: "object",
+  },
+  "corpus:Bounded": {
+    properties: {
+      answer: { title: "Answer", type: "string" },
+      score: { maximum: 10n, minimum: 0n, title: "Score", type: "integer" },
+    },
     required: ["answer", "score"],
     title: "Record",
     type: "object",
@@ -111,12 +120,23 @@ const MISSING = {
   error: MissingToolCallError,
   message: "the reply did not call the Record tool; call it with the answer",
 };
+const REFUSED = { error: StructuredOutputError, message: "the model refused: I can't help with that." };
+const TRUNCATED = { error: StructuredOutputError, message: 'Invalid json output: {"answer": "x", "score": 1' };
 
-/** What `plan.parse` gives: a value, or an error's class and message. */
-type Expected = { value: JsonObject } | { error: typeof StructuredOutputError; message: string };
+/**
+ * What `plan.parse` gives, a value or an error's class and message; or the kind of the
+ * `ProviderError` the call itself rejects with, leaving nothing to parse.
+ */
+type Expected =
+  | { value: JsonObject }
+  | { error: typeof StructuredOutputError; message: string }
+  | { providerError: ErrorKind };
 
 interface Scenario {
-  /** The route: the OpenAI Responses API with a key, the ChatGPT subscription, or Chat Completions. */
+  /**
+   * The wire: the Responses API with a key (OpenAI's or Azure's), the ChatGPT subscription, or
+   * Chat Completions (a vendor's or an Azure deployment's).
+   */
   family: "responses" | "subscription" | "chat";
   provider: string;
   model: string;
@@ -195,36 +215,91 @@ const SCENARIOS: Record<string, Scenario> = {
     budget: 1,
     retried: ["incomplete"],
   }),
+  az_strict_closed: scenario("chat", "azure", "my-deploy", "corpus:Rec", "json_schema", { value: REC }),
+  // The bounds move into the description.
+  az_strict_moved: scenario("chat", "azure", "my-deploy", "corpus:Bounded", "json_schema", { value: REC }),
+  // `minItems` moves into the description; the schema's title names the format.
+  az_reflection_min_items: scenario("chat", "azure", "my-deploy", "corpus:_ReflectionResponse", "json_schema", {
+    value: { actions: [{ action: "add", lesson_id: null, text: "be terse" }] },
+  }),
+  az_union: scenario("chat", "azure", "my-deploy", "corpus:Union", "json_schema", { value: UNION }),
+  // No `parallel_tool_calls`.
+  az_open_forced: scenario("chat", "azure", "my-deploy", "corpus:Open", "forced_tool", { value: OPEN }),
+  // `parallel_tool_calls: false`.
+  az_gpt4o_open: scenario("chat", "azure", "gpt-4o", "corpus:Open", "forced_tool", { value: OPEN }),
+  // A model too old for `json_schema` gets the schema as a tool.
+  az_legacy_gpt4_turbo: scenario("chat", "azure", "gpt-4-turbo", "corpus:Bounded", "forced_tool", { value: REC }),
+  // The block's `temperature` is sent beside the forced tool.
+  az_open_block: scenario("chat", "azure", "my-deploy", "corpus:Open", "forced_tool", { value: OPEN }, {
+    block: { temperature: 0.2 },
+  }),
+  az_strict_moved_block: scenario("chat", "azure", "my-deploy", "corpus:Bounded", "json_schema", { value: REC }, {
+    block: { temperature: 0.2, max_completion_tokens: 100n },
+  }),
+  az_refusal: scenario("chat", "azure", "my-deploy", "corpus:Rec", "json_schema", REFUSED),
+  // JSON beside a refusal is parsed.
+  az_refusal_and_json: scenario("chat", "azure", "my-deploy", "corpus:Rec", "json_schema", { value: REC }),
+  // Out of the moved bounds: the caller validates.
+  az_out_of_range: scenario("chat", "azure", "my-deploy", "corpus:Bounded", "json_schema", {
+    value: { answer: "x", score: 11n },
+  }),
+  az_unmoved_invalid: scenario("chat", "azure", "my-deploy", "corpus:Rec", "json_schema", {
+    value: { answer: "x", score: "notint" },
+  }),
+  // Finish reason `length`.
+  az_truncated: scenario("chat", "azure", "my-deploy", "corpus:Rec", "json_schema", TRUNCATED),
+  az_content_filter: scenario("chat", "azure", "my-deploy", "corpus:Rec", "json_schema", {
+    providerError: "refused",
+  }),
+  az_resp_closed: scenario("responses", "azure", "gpt-5-codex", "corpus:Rec", "json_schema", { value: REC }),
+  // The tool is sent with `strict: false` and no `parallel_tool_calls`.
+  az_resp_open: scenario("responses", "azure", "gpt-5-codex", "corpus:Open", "forced_tool", { value: OPEN }),
+  az_resp_moved: scenario("responses", "azure", "gpt-5-codex", "corpus:Bounded", "json_schema", { value: REC }),
+  az_resp_refusal: scenario("responses", "azure", "gpt-5-codex", "corpus:Rec", "json_schema", REFUSED),
+  // `response.incomplete` with `max_output_tokens`.
+  az_resp_incomplete: scenario("responses", "azure", "gpt-5-codex", "corpus:Rec", "json_schema", TRUNCATED),
 };
 
-/** Build a scenario's model, as the Responses and Chat cassette tests build theirs. */
+/**
+ * Build a scenario's route as the Responses and Chat cassette tests build theirs: Azure's on
+ * either wire, the ChatGPT subscription's, OpenAI's Responses API, or a Chat vendor's base URL.
+ */
+function route({ family, provider, model }: Scenario): Route {
+  if (family === "subscription") {
+    const account = { accessToken: "test-token-1", accountId: "test-account-1", residency: null };
+    return new Route({
+      provider,
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      path: "responses",
+      auth: new SubscriptionAuth(() => account),
+    });
+  }
+  if (provider === "azure") {
+    // Chat Completions names the deployment in the path; the Responses API takes it as the model.
+    return new Route({
+      provider,
+      baseUrl: family === "chat" ? "https://res.openai.azure.com" : "https://res.openai.azure.com/openai",
+      path: family === "chat" ? `openai/deployments/${model}/chat/completions` : "responses",
+      query: { "api-version": "2025-03-01-preview" },
+      auth: new HeaderKeyAuth("api-key", "test-key-1"),
+    });
+  }
+  return new Route({
+    provider,
+    baseUrl: family === "chat" ? BASE_URLS[provider]! : "https://api.openai.com/v1",
+    path: family === "chat" ? "chat/completions" : "responses",
+    auth: new BearerAuth("test-key-1"),
+  });
+}
+
+/** Build a scenario's model on its route, speaking its family's protocol. */
 function buildModel(scenario: Scenario, send: Send): RouteModel {
   const { family, provider, model, block } = scenario;
-  if (family === "chat") {
-    const route = new Route({
-      provider,
-      baseUrl: BASE_URLS[provider]!,
-      path: "chat/completions",
-      auth: new BearerAuth("test-key-1"),
-    });
-    return new RouteModel({ route, protocol: new OpenAIChat({ model, provider, block }), send });
-  }
-  const subscription = family === "subscription";
-  const account = { accessToken: "test-token-1", accountId: "test-account-1", residency: null };
-  const route = subscription
-    ? new Route({
-        provider,
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        path: "responses",
-        auth: new SubscriptionAuth(() => account),
-      })
-    : new Route({
-        provider,
-        baseUrl: "https://api.openai.com/v1",
-        path: "responses",
-        auth: new BearerAuth("test-key-1"),
-      });
-  return new RouteModel({ route, protocol: new OpenAIResponses({ model, provider, block, subscription }), send });
+  const protocol =
+    family === "chat"
+      ? new OpenAIChat({ model, provider, block })
+      : new OpenAIResponses({ model, provider, block, subscription: family === "subscription" });
+  return new RouteModel({ route: route(scenario), protocol, send });
 }
 
 /** Return the error `run` throws, failing when it returns. */
@@ -244,7 +319,10 @@ const REQUEST = new Request({
   ],
 });
 
-/** Replay a scenario's cassette: check the plan's strategy, the retries, and what the reply parses to. */
+/**
+ * Replay a scenario's cassette: check the plan's strategy, what the reply parses to (or how the
+ * call fails), and the retries.
+ */
 async function runScenario(name: string, scenario: Scenario): Promise<void> {
   const cassette = loadCassette(join(DIR, `${name}.json`));
   const replay = new CassetteReplay(cassette);
@@ -253,24 +331,27 @@ async function runScenario(name: string, scenario: Scenario): Promise<void> {
   const plan = planStructured(structuredTarget(model), SCHEMAS[scenario.schema]!);
   expect(plan.strategy).toBe(scenario.strategy);
   const retried: RetryInfo[] = [];
-  const response = await callWithRetries(model, plan.apply(REQUEST), {
+  const call = callWithRetries(model, plan.apply(REQUEST), {
     budget: scenario.budget ?? 0,
     scheduler: virtualScheduler(),
     random: () => 0,
     onRetry: (retry) => void retried.push(retry),
   });
-  replay.assertDone();
-  expect(retried.map((retry) => retry.error.kind)).toEqual(scenario.retried ?? []);
-
   const { expected } = scenario;
-  if ("value" in expected) {
-    expect(plan.parse(response)).toEqual(expected.value);
+  if ("providerError" in expected) {
+    await expect(call).rejects.toBeInstanceOf(ProviderError);
+    await expect(call).rejects.toMatchObject({ kind: expected.providerError });
+  } else if ("value" in expected) {
+    expect(plan.parse(await call)).toEqual(expected.value);
   } else {
+    const response = await call;
     const error = thrown(() => plan.parse(response));
     expect(error).toBeInstanceOf(expected.error);
     expect(error.name).toBe(expected.error.name);
     expect(error.message).toBe(expected.message);
   }
+  replay.assertDone();
+  expect(retried.map((retry) => retry.error.kind)).toEqual(scenario.retried ?? []);
 
   // CassetteReplay checks that every recorded header was sent; this checks the reverse.
   replay.requests.forEach((received, index) => {

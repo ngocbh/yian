@@ -1,0 +1,77 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "az_resp_open: an open record on Azure Responses: the forced tool with strict false, no parallel_tool_calls. azure/gpt-5-codex on openai_responses. Schema Open (corpus:Open), name Record. Strategy forced_tool. Request: tools [Record the function-tool parameters of Open strict false]; tool_choice {type: \"function\", name: \"Record\"}. Expected: plan.parse(response) returns {\"answer\":\"x\",\"data\":{\"k\":1}}.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://res.openai.azure.com/openai/responses?api-version=2025-03-01-preview",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "api-key": "<redacted>"
+        },
+        "json": {
+          "model": "gpt-5-codex",
+          "input": [
+            {
+              "content": "You are terse.",
+              "role": "system",
+              "type": "message"
+            },
+            {
+              "content": "Answer.",
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "stream": true,
+          "tools": [
+            {
+              "type": "function",
+              "name": "Record",
+              "description": "",
+              "parameters": {
+                "properties": {
+                  "answer": {
+                    "type": "string"
+                  },
+                  "data": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "answer",
+                  "data"
+                ],
+                "type": "object"
+              },
+              "strict": false
+            }
+          ],
+          "tool_choice": {
+            "type": "function",
+            "name": "Record"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "event: response.created\ndata: {\"type\": \"response.created\", \"sequence_number\": 0, \"response\": {\"id\": \"resp_1\", \"object\": \"response\", \"created_at\": 1700000000, \"status\": \"in_progress\", \"model\": \"gpt-5-codex\", \"output\": [], \"error\": null, \"incomplete_details\": null, \"usage\": null, \"parallel_tool_calls\": true, \"tool_choice\": \"auto\", \"tools\": []}}\n\n",
+          "event: response.output_item.added\ndata: {\"type\": \"response.output_item.added\", \"output_index\": 0, \"sequence_number\": 1, \"item\": {\"id\": \"fc_1\", \"type\": \"function_call\", \"name\": \"Record\", \"arguments\": \"\", \"call_id\": \"call_1\", \"status\": \"in_progress\"}}\n\n",
+          "event: response.function_call_arguments.delta\ndata: {\"type\": \"response.function_call_arguments.delta\", \"output_index\": 0, \"item_id\": \"fc_1\", \"sequence_number\": 2, \"delta\": \"{\\\"answer\\\": \\\"x\\\", \"}\n\n",
+          "event: response.function_call_arguments.delta\ndata: {\"type\": \"response.function_call_arguments.delta\", \"output_index\": 0, \"item_id\": \"fc_1\", \"sequence_number\": 3, \"delta\": \"\\\"data\\\": {\\\"k\\\": 1}}\"}\n\n",
+          "event: response.function_call_arguments.done\ndata: {\"type\": \"response.function_call_arguments.done\", \"output_index\": 0, \"item_id\": \"fc_1\", \"sequence_number\": 4, \"arguments\": \"{\\\"answer\\\": \\\"x\\\", \\\"data\\\": {\\\"k\\\": 1}}\"}\n\n",
+          "event: response.output_item.done\ndata: {\"type\": \"response.output_item.done\", \"output_index\": 0, \"sequence_number\": 5, \"item\": {\"id\": \"fc_1\", \"type\": \"function_call\", \"name\": \"Record\", \"arguments\": \"{\\\"answer\\\": \\\"x\\\", \\\"data\\\": {\\\"k\\\": 1}}\", \"call_id\": \"call_1\", \"status\": \"completed\"}}\n\n",
+          "event: response.completed\ndata: {\"type\": \"response.completed\", \"sequence_number\": 6, \"response\": {\"id\": \"resp_1\", \"object\": \"response\", \"created_at\": 1700000000, \"status\": \"completed\", \"model\": \"gpt-5-codex\", \"output\": [{\"id\": \"fc_1\", \"type\": \"function_call\", \"name\": \"Record\", \"arguments\": \"{\\\"answer\\\": \\\"x\\\", \\\"data\\\": {\\\"k\\\": 1}}\", \"call_id\": \"call_1\", \"status\": \"completed\"}], \"error\": null, \"incomplete_details\": null, \"usage\": {\"input_tokens\": 21, \"input_tokens_details\": {\"cached_tokens\": 5}, \"output_tokens\": 40, \"output_tokens_details\": {\"reasoning_tokens\": 30}, \"total_tokens\": 61}, \"parallel_tool_calls\": true, \"tool_choice\": \"auto\", \"tools\": []}}\n\n"
+        ]
+      }
+    }
+  ]
+}

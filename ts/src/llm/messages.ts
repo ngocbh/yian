@@ -764,6 +764,22 @@ export class ToolSpec {
   }
 }
 
+/** A JSON Schema the reply's text must match: the route's native structured output. */
+export class OutputFormat {
+  /** The schema's name, sent where the wire has one. */
+  readonly name: string;
+  /** The JSON Schema; checked and copied like `ToolSpec.parameters`. */
+  readonly schema: JsonObject;
+  /** Ask the provider to enforce the schema strictly; `null` leaves it to the provider. */
+  readonly strict: boolean | null;
+
+  constructor(options: { name: string; schema: JsonObject; strict?: boolean | null }) {
+    this.name = checkString(options.name, "name");
+    this.strict = optionalBoolean(options.strict, "strict");
+    this.schema = checkObject(options.schema, "schema");
+  }
+}
+
 /** A tool choice that forces one named tool. */
 export class NamedTool {
   /** The tool the model must call. */
@@ -789,12 +805,15 @@ export class Request {
   readonly toolChoice: ToolChoice;
   /** Whether the model may call several tools in one turn; `null` leaves the provider default. */
   readonly parallelToolCalls: boolean | null;
+  /** The schema the reply's text must match, or `null` for free text. */
+  readonly outputFormat: OutputFormat | null;
 
   constructor(options: {
     messages: readonly Message[];
     tools?: readonly ToolSpec[];
     toolChoice?: ToolChoice;
     parallelToolCalls?: boolean | null;
+    outputFormat?: OutputFormat | null;
   }) {
     this.messages = frozenArray(options.messages, "messages", (item) => item instanceof Message, "a Message");
     this.tools = frozenArray(options.tools ?? [], "tools", (item) => item instanceof ToolSpec, "a ToolSpec");
@@ -804,6 +823,11 @@ export class Request {
     }
     this.toolChoice = choice as ToolChoice;
     this.parallelToolCalls = optionalBoolean(options.parallelToolCalls, "parallel_tool_calls");
+    const outputFormat: unknown = options.outputFormat ?? null;
+    if (!(outputFormat === null || outputFormat instanceof OutputFormat)) {
+      throw new MessageFormatError("output_format", "expected an OutputFormat or null");
+    }
+    this.outputFormat = outputFormat;
   }
 }
 

@@ -55,6 +55,11 @@ export function sourceKey(ref: SourceRef): string {
   return JSON.stringify([ref.runId, ref.executionSeq, ...ref.path]);
 }
 
+/** Whether two sources have the same key: the same run id, sequence and path. */
+export function sameSource(a: SourceRef, b: SourceRef): boolean {
+  return sourceKey(a) === sourceKey(b);
+}
+
 /** The kinds of recorded composition a `ValueRoute` holds. */
 export type RouteKind =
   | "literal"

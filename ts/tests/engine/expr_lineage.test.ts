@@ -7,8 +7,9 @@
  * fields, the depth bound inside a partial snapshot, the focused `validateFeedback` and
  * `hasFeedback` checks, a scalar route lifting a projected selection, a traced resolver that
  * doesn't return `ResolvedValue`, interpolation spans counting code points (also in
- * `validateRoute`), frozen routed feedback, `sourceKey`, and `sameFeedback` (true for separately
- * built equal values, false for each kind of difference). Python's
+ * `validateRoute`), frozen routed feedback, `sourceKey`, `sameSource` (separately built sources with
+ * the same key), and `sameFeedback` (true for separately built equal values, false for each kind of
+ * difference). Python's
  * `test_routes_are_immutable_serializable_and_keep_opaque_snapshots` is split in two: `routes are
  * immutable and serializable` (hand-built) and `routes keep opaque snapshots` (through a traced
  * binding).
@@ -58,6 +59,7 @@ import {
   routeValue,
   SourceRef,
   sameFeedback,
+  sameSource,
   sourceKey,
   type TracedValue,
   ValueRoute,
@@ -817,6 +819,13 @@ test("sourceKey is equal exactly when run id, sequence and path are equal", () =
   expect(sourceKey(new SourceRef("other", 1, ["a", 0]))).not.toBe(key);
   expect(sourceKey(new SourceRef("run", 2, ["a", 0]))).not.toBe(key);
   expect(sourceKey(new SourceRef("run", 1, ["a"]))).not.toBe(key);
+});
+
+test("sameSource compares two separately built sources by key", () => {
+  const source = new SourceRef("run", 1, ["a", 0]);
+  expect(sameSource(source, new SourceRef("run", 1, ["a", 0]))).toBe(true);
+  expect(sameSource(source, new SourceRef("run", 1, ["a", "0"]))).toBe(false);
+  expect(sameSource(source, new SourceRef("run", 2, ["a", 0]))).toBe(false);
 });
 
 test("sameFeedback compares strings and null exactly, arrays in order and records by key set", () => {

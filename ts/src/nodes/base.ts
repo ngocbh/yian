@@ -232,7 +232,7 @@ export class BackwardResult {
 
 /** Whether two results have equal input, self and variable feedback channels. */
 export function sameBackwardResult(a: BackwardResult, b: BackwardResult): boolean {
-  // Each channel is a record of arrays, itself a feedback value.
+  // Each channel is a feedback value; the casts only drop the `readonly` from the channel types.
   return (
     sameFeedback(a.inputFeedback as FeedbackValue, b.inputFeedback as FeedbackValue) &&
     sameFeedback(a.selfFeedback as FeedbackValue, b.selfFeedback as FeedbackValue) &&

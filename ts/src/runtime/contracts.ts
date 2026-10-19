@@ -15,7 +15,7 @@ import {
   type RouteKind,
   SourceRef,
   sameFeedback,
-  sourceKey,
+  sameSource,
   ValueRoute,
   validateFeedback,
 } from "../expr/lineage.ts";
@@ -455,11 +455,6 @@ export class BackwardAttribution {
     this.parents = Object.freeze(positions);
     Object.freeze(this);
   }
-}
-
-/** Whether two sources have the same key. */
-function sameSource(a: SourceRef, b: SourceRef): boolean {
-  return sourceKey(a) === sourceKey(b);
 }
 
 /** Whether two attributions have the same sender (by key), input name, indexes and parents. */

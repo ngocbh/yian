@@ -724,13 +724,17 @@ test.each<["failed" | "routed", string | null, typeof TypeError | typeof RangeEr
 });
 
 test("sameBackwardAttribution compares sender by key, input, indexes and parents", () => {
-  const transfer = (
-    sender = new SourceRef("run", 3),
-    inputName = "text",
-    messageIndex = 1,
-    contributionIndex = 2,
-    parents = [0, 2],
-  ) => new BackwardAttribution(sender, inputName, messageIndex, contributionIndex, parents);
+  const fields = {
+    sender: new SourceRef("run", 3),
+    inputName: "text",
+    messageIndex: 1,
+    contributionIndex: 2,
+    parents: [0, 2],
+  };
+  const transfer = (changed: Partial<typeof fields> = {}) => {
+    const { sender, inputName, messageIndex, contributionIndex, parents } = { ...fields, ...changed };
+    return new BackwardAttribution(sender, inputName, messageIndex, contributionIndex, parents);
+  };
   const root = () => new BackwardAttribution(null, null, 0, null, []);
   const base = transfer();
 
@@ -740,14 +744,14 @@ test("sameBackwardAttribution compares sender by key, input, indexes and parents
   // One null: a root seed against a transfer, for the sender, input name and contribution index.
   expect(sameBackwardAttribution(root(), base)).toBe(false);
   expect(sameBackwardAttribution(base, root())).toBe(false);
-  expect(sameBackwardAttribution(base, transfer(new SourceRef("run", 4)))).toBe(false);
-  expect(sameBackwardAttribution(base, transfer(new SourceRef("other", 3)))).toBe(false);
-  expect(sameBackwardAttribution(base, transfer(undefined, "other"))).toBe(false);
-  expect(sameBackwardAttribution(base, transfer(undefined, undefined, 0))).toBe(false);
-  expect(sameBackwardAttribution(base, transfer(undefined, undefined, undefined, 3))).toBe(false);
-  expect(sameBackwardAttribution(base, transfer(undefined, undefined, undefined, undefined, [0]))).toBe(false);
-  expect(sameBackwardAttribution(base, transfer(undefined, undefined, undefined, undefined, [0, 3]))).toBe(false);
-  expect(sameBackwardAttribution(base, transfer(undefined, undefined, undefined, undefined, [0, 2, 3]))).toBe(false);
+  expect(sameBackwardAttribution(base, transfer({ sender: new SourceRef("run", 4) }))).toBe(false);
+  expect(sameBackwardAttribution(base, transfer({ sender: new SourceRef("other", 3) }))).toBe(false);
+  expect(sameBackwardAttribution(base, transfer({ inputName: "other" }))).toBe(false);
+  expect(sameBackwardAttribution(base, transfer({ messageIndex: 0 }))).toBe(false);
+  expect(sameBackwardAttribution(base, transfer({ contributionIndex: 3 }))).toBe(false);
+  expect(sameBackwardAttribution(base, transfer({ parents: [0] }))).toBe(false);
+  expect(sameBackwardAttribution(base, transfer({ parents: [0, 3] }))).toBe(false);
+  expect(sameBackwardAttribution(base, transfer({ parents: [0, 2, 3] }))).toBe(false);
 });
 
 test("sameAttributedBackwardResult compares source by key, feedback, attributions, result and invoked", () => {
@@ -822,8 +826,11 @@ test("sameBackwardFailure compares every field and the cause by value", () => {
     causeType: "MemoryOperationError",
     traceback: "backward traceback",
   });
-  const failure = (changed: Options = {}, stage = "learn", code = "memory.learn", message = "Could not propose.") =>
-    new BackwardFailure(stage, code, message, { ...options(), ...changed });
+  type Fields = Options & { stage?: string; code?: string; message?: string };
+  const failure = (changed: Fields = {}) => {
+    const { stage = "learn", code = "memory.learn", message = "Could not propose.", ...rest } = changed;
+    return new BackwardFailure(stage, code, message, { ...options(), ...rest });
+  };
   const base = failure();
 
   const cause = forward();
@@ -835,9 +842,9 @@ test("sameBackwardFailure compares every field and the cause by value", () => {
   const bare = new BackwardFailure("learn", "memory.learn", "Could not propose.");
   expect(sameBackwardFailure(bare, new BackwardFailure("learn", "memory.learn", "Could not propose."))).toBe(true);
 
-  expect(sameBackwardFailure(base, failure({}, "commit"))).toBe(false);
-  expect(sameBackwardFailure(base, failure({}, undefined, "memory.commit"))).toBe(false);
-  expect(sameBackwardFailure(base, failure({}, undefined, undefined, ""))).toBe(false);
+  expect(sameBackwardFailure(base, failure({ stage: "commit" }))).toBe(false);
+  expect(sameBackwardFailure(base, failure({ code: "memory.commit" }))).toBe(false);
+  expect(sameBackwardFailure(base, failure({ message: "" }))).toBe(false);
   expect(sameBackwardFailure(base, failure({ scope: scope(3) }))).toBe(false);
   expect(sameBackwardFailure(base, failure({ cause: forward("Other.") }))).toBe(false);
   expect(sameBackwardFailure(failure({ cause: memoryCause() }), failure({ cause: memoryCause(false) }))).toBe(false);

@@ -71,13 +71,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
+// Local copies of nodes/contracts.ts's isExactly and sameItems: this module imports only
+// diagnostics and defaults, so it can't import nodes/contracts.ts.
 /** Whether `value` is an instance of exactly `cls`, not of a subclass. */
 function isExactly<T>(value: unknown, cls: abstract new (...args: never[]) => T): value is T {
   return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === cls.prototype;
 }
 
 /** Whether two arrays have equal items in order, by `same`. */
-// A copy of nodes/contracts.ts's sameItems: this module imports only diagnostics and defaults.
 function sameItems<T>(a: readonly T[], b: readonly T[], same: (x: T, y: T) => boolean = (x, y) => x === y): boolean {
   return a.length === b.length && a.every((item, i) => same(item, b[i]!));
 }

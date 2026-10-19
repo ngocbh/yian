@@ -42,7 +42,12 @@ import {
   type Credentials,
   OAuthCredentials,
 } from "./auth/common.ts";
-import { azureResourceEndpoint, LLMConfig, splitOllamaBaseUrl, SUPPORTED_LLM_PROVIDERS } from "./config.ts";
+import {
+  azureResourceEndpoint,
+  LLMConfig,
+  splitOllamaBaseUrl,
+  SUPPORTED_LLM_PROVIDERS,
+} from "./config.ts";
 import {
   checkModelConfig,
   type Connection,
@@ -281,7 +286,9 @@ function vendorModel(provider: string, resolved: Resolved, wiring: Wiring): Rout
   // Every Chat Completions vendor has a key variable.
   const variable = getApiKeyEnv(provider)!;
   const key = resolved.keyAtBuild ?? (wiring.env(variable) || null);
-  if (key === null && !OPTIONAL_API_KEY_PROVIDERS.has(provider)) throw missingKey(provider, variable);
+  if (key === null && !OPTIONAL_API_KEY_PROVIDERS.has(provider)) {
+    throw missingKey(provider, variable);
+  }
   const responses = routedToResponses(provider, model, block);
   const envBaseUrl =
     resolved.baseUrl === null && provider === "vllm" ? wiring.env("VLLM_BASE_URL") : undefined;
@@ -446,7 +453,9 @@ function googleModel(resolved: Resolved, wiring: Wiring): RouteModel {
  */
 function ollamaModel(resolved: Resolved, wiring: Wiring): RouteModel {
   const value = wiring.env("OLLAMA_BASE_URL");
-  const [baseUrl, credentials] = value ? splitOllamaBaseUrl(value) : ["http://localhost:11434", null];
+  const [baseUrl, credentials] = value
+    ? splitOllamaBaseUrl(value)
+    : ["http://localhost:11434", null];
   const route = new Route({
     provider: "ollama",
     baseUrl,
@@ -473,7 +482,8 @@ async function subscriptionModel(
   wiring: Wiring,
   read: Read,
 ): Promise<RouteModel> {
-  const access = async () => credentialsOf(await read(connection, "openai"), OAuthCredentials, "openai");
+  const access = async () =>
+    credentialsOf(await read(connection, "openai"), OAuthCredentials, "openai");
   const first = await access();
   const route = new Route({
     provider: "openai",
@@ -538,8 +548,9 @@ export async function chatModelFromConfig(
 ): Promise<RouteModel> {
   const { env = processEnv, snapshot, send, scheduler, signal, onReplayDegraded } = options;
   const onWarning = options.onWarning ?? ((message: string) => warnOnce(WARNED, message));
-  const values =
-    config instanceof LLMConfig ? config : (fromHost(config, "llm_config") as Record<string, unknown>);
+  const values = config instanceof LLMConfig
+    ? config
+    : (fromHost(config, "llm_config") as Record<string, unknown>);
   const [validated, connection] = checkModelConfig(resolveModelConfig(values, { env, snapshot }));
   // `resolveModelConfig` sets both or throws.
   const provider = validated.provider!;
@@ -599,10 +610,12 @@ export async function chatModelFromConfig(
     secretHeaders,
   };
   // After the credential and header reads, as Python warns in `get_llm()`: a removed login or
-  // mismatched header names raise without a warning, while a missing vendor key still warns first.
+  // mismatched header names raise without a warning, while a missing environment key (outside
+  // OpenAI) still warns first.
   if (!validateModel(provider, model)) {
     onWarning(
-      `Model '${model}' is not in the known model list for provider '${provider}'. Continuing anyway.`,
+      `Model '${model}' is not in the known model list for provider '${provider}'. ` +
+        "Continuing anyway.",
     );
   }
   if (provider === "openai") return openaiModel(resolved, wiring);

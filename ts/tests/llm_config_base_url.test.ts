@@ -4,14 +4,17 @@
  * `chatModelFromConfig` half included), and the client tests, which build the model with
  * `chatModelFromConfig` and record what a fake `send` receives (it answers 400, so a test checks
  * the request, not a reply). One redirect test stays: `safeFetch` refuses every 3xx, so the
- * redirect is checked once through the factory for Anthropic and Google, and Python's Azure
- * redirect test, which pins the openai SDK's and httpx's redirect behavior, is left out. The
+ * redirect is checked once through the factory for Anthropic and Google, over two loopback
+ * servers with the default transport, as in Python; Python's Azure redirect test, which pins the
+ * openai SDK's and httpx's redirect behavior, is left out. The
  * `splitOllamaBaseUrl` tests come from s3's planned `split_ollama_base_url` list (not in Python
  * yet); its "pinned against today" half runs each value through LangChain and the ollama SDK, so
  * it is left out.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
@@ -302,15 +305,11 @@ interface Sent {
   body: string;
 }
 
-/**
- * A `send` that records each request and answers it 400, or 307 to another origin when
- * `redirect` is set.
- */
-function recorder(redirect = false): { requests: Sent[]; send: Send } {
+/** A `send` that records each request and answers it 400. */
+function recorder(): { requests: Sent[]; send: Send } {
   const requests: Sent[] = [];
   const send: Send = async (input, init) => {
     requests.push({ url: String(input), headers: new Headers(init.headers), body: String(init.body) });
-    if (redirect) return new Response(null, { status: 307, headers: { location: "https://elsewhere.example.com/" } });
     return new Response(JSON.stringify({ error: { message: "refused" } }), {
       status: 400,
       headers: { "content-type": "application/json" },
@@ -321,9 +320,11 @@ function recorder(redirect = false): { requests: Sent[]; send: Send } {
 
 const HI = new Request({ messages: [new Message({ role: "user", parts: [new TextPart("hi")] })] });
 
-/** Build `config` with `send`, ask it "hi" and return the error the call throws, or `null`. */
-async function ask(config: Record<string, unknown>, send: Send): Promise<unknown> {
-  const model = await chatModelFromConfig(config, { env, send, scheduler: virtualScheduler(), onWarning: () => {} });
+/** Build `config` with `send` (else the default transport), ask "hi" and return the error, or `null`. */
+async function ask(config: Record<string, unknown>, send?: Send): Promise<unknown> {
+  // The default transport does real I/O, which a virtual clock would race to its deadline.
+  const scheduler = send ? virtualScheduler() : undefined;
+  const model = await chatModelFromConfig(config, { env, send, scheduler, onWarning: () => {} });
   return collect(model.stream(HI)).then(
     () => null,
     (thrown: unknown) => thrown,
@@ -383,13 +384,40 @@ test.each(DEDICATED)("dedicated clients send the key to the base_url (%s)", asyn
 
 const REDIRECT = "dedicated clients do not follow a redirect with the key (%s)";
 
+/** Listen on a free loopback port and return the server's root URL. */
+async function listen(server: http.Server): Promise<string> {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
+
+/** Stop `server`, dropping any open connection. */
+async function stop(server: http.Server): Promise<void> {
+  server.closeAllConnections();
+  await new Promise((resolve) => server.close(resolve));
+}
+
 test.each(DEDICATED)(REDIRECT, async (provider, model, header, path) => {
-  const { requests, send } = recorder(true);
-  const error = await ask({ provider, model, base_url: GATEWAY, api_key: SENTINEL }, send);
-  expect(error).toBeInstanceOf(ProviderError);
-  expect((error as ProviderError).kind).toBe("redirect");
-  // Only the configured URL received the key; nothing went to the redirect's target.
-  expect(requests.map(({ url, headers }) => [url, headers.get(header)])).toEqual([[`${GATEWAY}${path}`, SENTINEL]]);
+  // The first server answers 307 to the second, which must never be contacted.
+  const seen: http.IncomingMessage[] = [];
+  let contacted = 0;
+  const second = http.createServer((_req, res) => res.end("{}"));
+  second.on("connection", () => contacted++);
+  const target = `${await listen(second)}/`;
+  const first = http.createServer((req, res) => {
+    seen.push(req);
+    res.writeHead(307, { Location: target, "Content-Length": "0", Connection: "close" });
+    res.end();
+  });
+  const root = await listen(first);
+  try {
+    const error = await ask({ provider, model, base_url: `${root}/`, api_key: SENTINEL });
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).kind).toBe("redirect");
+    expect(seen.map((req) => [req.url, req.headers[header]])).toEqual([[`/${path}`, SENTINEL]]);
+    expect(contacted).toBe(0);
+  } finally {
+    await Promise.all([stop(first), stop(second)]);
+  }
 });
 
 const OLLAMA_SHAPE =

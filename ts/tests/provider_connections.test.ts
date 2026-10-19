@@ -827,6 +827,10 @@ describe("environment table", () => {
     "LC_OUTPUT_VERSION",
     "AZURE_OPENAI_ENDPOINT",
     "OPENAI_API_TYPE",
+    "GOOGLE_VERTEX_BASE_URL",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "SSL_CERT_DIR",
   ];
   const REQUEST = new Request({ messages: [new Message({ role: "user", parts: [new TextPart("Hi")] })] });
   // Every request fails before the wire; only the reads up to it count.

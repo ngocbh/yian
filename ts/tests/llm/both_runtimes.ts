@@ -497,6 +497,8 @@ interface RouteCase {
   reply: string[];
   /** The reply's content type; defaults to Server-Sent Events. */
   contentType?: string;
+  /** A login saved for `openai` before the build. */
+  login?: OAuthCredentials;
 }
 
 const ROUTE_CASES: RouteCase[] = [
@@ -512,6 +514,13 @@ const ROUTE_CASES: RouteCase[] = [
     name: "subscription",
     config: {},
     env: {},
+    login: new OAuthCredentials({
+      accessToken: "test-access-token",
+      refreshToken: "test-refresh-token",
+      // Far ahead, so the build-time read never refreshes.
+      expiresAt: 4_102_444_800,
+      accountId: "test-account-1",
+    }),
     url: "https://chatgpt.com/backend-api/codex/responses",
     credential: { authorization: "Bearer test-access-token", "chatgpt-account-id": "test-account-1" },
     reply: RESPONSES_OK,
@@ -569,16 +578,7 @@ async function resolverRoutes(): Promise<void> {
     for (const each of ROUTE_CASES) {
       const vars = new Map(Object.entries({ ...each.env, YIAN_AUTH_FILE: join(home, `${each.name}.json`) }));
       const env = (name: string) => vars.get(name);
-      if (each.name === "subscription") {
-        const login = new OAuthCredentials({
-          accessToken: "test-access-token",
-          refreshToken: "test-refresh-token",
-          // Far ahead, so the build-time read never refreshes.
-          expiresAt: 4_102_444_800,
-          accountId: "test-account-1",
-        });
-        await new AuthStore(null, { env }).save("openai", login, "gpt-5.5");
-      }
+      if (each.login) await new AuthStore(null, { env }).save("openai", each.login, "gpt-5.5");
       const cassette: Cassette = {
         format: "yian.cassette.v1",
         source: "synthetic",

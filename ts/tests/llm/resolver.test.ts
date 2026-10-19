@@ -1077,6 +1077,29 @@ const CASES: Case[] = [
     expect: sends("google", "tunedModels/x", googKey(ENV_KEY), { warns: true }),
   },
   {
+    name: "google tunedModels/ id percent-encoded in the path",
+    config: { ...GOOGLE, model: "tunedModels/a b/c" },
+    env: { GOOGLE_API_KEY: ENV_KEY },
+    golden: "gemini/plain",
+    edit: {
+      url: "https://generativelanguage.googleapis.com/v1beta/tunedModels/a%20b%2Fc:streamGenerateContent?alt=sse",
+    },
+    expect: sends("google", "tunedModels/a b/c", googKey(ENV_KEY), { warns: true }),
+  },
+  {
+    name: "google models/ id percent-encoded in the path",
+    config: { ...GOOGLE, model: "models/gemini x" },
+    env: { GOOGLE_API_KEY: ENV_KEY },
+    golden: "gemini/plain",
+    edit: {
+      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini%20x:streamGenerateContent?alt=sse",
+    },
+    expect: {
+      ...sends("google", "gemini x", googKey(ENV_KEY)),
+      warnings: [unknownModel("google", "models/gemini x")],
+    },
+  },
+  {
     name: "google config base_url is the API root",
     config: { ...GOOGLE, api_key: HOST_KEY, base_url: "https://gateway.example.com/gemini" },
     env: {},
@@ -1624,10 +1647,12 @@ describe("unknown-model warning", () => {
     const emit = spyOn(process, "emitWarning").mockImplementation(() => {});
     try {
       const { env } = await caseSetup({ XAI_API_KEY: ENV_KEY });
-      const config = { provider: "xai", model: "grok-resolver-default-warning" };
+      // A fresh name per run: the default's seen-set lives for the whole process.
+      const model = `grok-resolver-default-warning-${crypto.randomUUID()}`;
+      const config = { provider: "xai", model };
       await chatModelFromConfig(config, { env });
       await chatModelFromConfig(config, { env });
-      expect(emit.mock.calls.map((args) => [...args])).toEqual([[unknownModel("xai", "grok-resolver-default-warning"), "RuntimeWarning"]]);
+      expect(emit.mock.calls.map((args) => [...args])).toEqual([[unknownModel("xai", model), "RuntimeWarning"]]);
     } finally {
       emit.mockRestore();
     }

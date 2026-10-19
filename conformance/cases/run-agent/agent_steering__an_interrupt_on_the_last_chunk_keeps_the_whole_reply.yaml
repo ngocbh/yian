@@ -1,0 +1,154 @@
+# From tests/engine/test_agent_steering.py::test_interrupt_on_the_last_chunk_keeps_the_complete_reply.
+# The tool-call and usage chunks come first, then the text; an interrupt set once the last chunk
+# is delivered (here the finish chunk, chunk 5) leaves nothing to cut: the output is the whole
+# text "ok go", the ModelCallFinished usage is 500/20/520, and the reply's tool call is skipped
+# (ToolCallFinished error `interrupted`), so lookup never runs.
+kind: run
+flow: |
+  id: steer
+  name: steer
+  llm_config: {provider: openai, model: gpt-5.5}
+  nodes:
+    chat:
+      kind: agent
+      steerable: true
+      tools: [lookup]
+      system_prompt: Help.
+      prompt: Help the user.
+      output: str
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  steering:
+    chat:
+    - after:
+        model_call: 1
+        chunk: 5
+      interrupt: true
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+        required: [topic]
+      results: []
+  models:
+    chat:
+      agent:
+      - chunks:
+        - tool_call:
+            index: 0
+            id: call-1
+            name: lookup
+            arguments: '{"topic": "a"}'
+        - usage:
+            input_tokens: 500
+            output_tokens: 20
+            total_tokens: 520
+        - text: ok
+        - text: ' go'
+        - finish: tool_calls
+expect:
+  output:
+    status: succeeded
+    output: ok go
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        chat:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, chat]
+  - - node_succeeded
+    - chat
+    - value: ok go
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ok go
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: chat
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+      usage:
+        cache_creation_tokens: null
+        cache_read_tokens: null
+        input_tokens: 500
+        output_tokens: 20
+        reasoning_tokens: null
+        total_tokens: 520
+  - - ToolCallStarted
+    - arguments:
+        topic: a
+      call_index: 0
+      exchange_id: <id:1>
+      name: lookup
+      node_id: chat
+      tool_call_id: call-1
+  - - ToolCallFinished
+    - call_index: 0
+      error: interrupted
+      exchange_id: <id:1>
+      name: lookup
+      node_id: chat
+      tool_call_id: call-1
+  - - NodeSucceeded
+    - node_id: chat
+      output: ok go
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: ok go
+  - - RunSucceeded
+    - output: ok go
+  stream:
+  - chunk: ok
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: chat
+  - chunk: ' go'
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: chat
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: chat

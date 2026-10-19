@@ -1,0 +1,25 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    cfg: !object
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: '${input.cfg}'
+  output: ${chat.output}
+inputs:
+  cfg:
+    provider: azure
+    model: dep
+    api_key: sk-from-input
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: LayerFieldError
+    message: 'node ''chat'' llm_config.api_key: credentials and where they are sent stay with the host or yian auth'
+  trace: []
+  events: []

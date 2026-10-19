@@ -1,0 +1,284 @@
+# From tests/engine/test_agent_steering.py::test_interrupted_agent_in_a_loop_lets_the_loop_continue.
+# (tests/engine/test_agent_in_loop.py's FLOW, with the fold CODE replaced by the body's output
+# template). The first occurrence `loop#0/reply` is interrupted once its model call finishes: it
+# keeps "partial" and skips its ping call; the interrupt stays with that occurrence, so
+# `loop#1/reply` runs normally ("turn2"), and the loop continues: "s|partial|turn2".
+kind: run
+flow: |
+  id: t
+  name: t
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    seed: !str
+  defs:
+    body:
+      input:
+        transcript: !str
+      nodes:
+        reply:
+          kind: agent
+          steerable: true
+          tools: [ping]
+          input:
+            transcript: ${input.transcript}
+          system_prompt: Help.
+          prompt: "history ${transcript}"
+          output: str
+      output:
+        transcript: "${input.transcript}|${reply.output}"
+  nodes:
+    loop:
+      kind: loop
+      call: body
+      input:
+        transcript: ${input.seed}
+      times: 2
+  output: ${loop.output.transcript}
+inputs:
+  seed: s
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  steering:
+    loop#0/reply:
+    - after:
+        model_call: 1
+      interrupt: true
+  tools:
+    ping:
+      description: Ping.
+      parameters:
+        type: object
+        properties: {}
+      results: []
+  models:
+    loop#0/reply:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: partial
+          - type: tool_call
+            id: p-1
+            name: ping
+            arguments: {}
+    loop#1/reply:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: turn2
+expect:
+  output:
+    status: succeeded
+    output: s|partial|turn2
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        loop/reply:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      inputs:
+        seed: s
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        seed: s
+  - [node_started, loop]
+  - - node_expanded
+    - loop
+    - prune_ids: []
+      seed:
+      - transcript: s
+      - 0
+  - [node_started, loop#0/__start__]
+  - - node_succeeded
+    - loop#0/__start__
+    - value:
+        transcript: s
+  - [node_started, loop#0/reply]
+  - - node_succeeded
+    - loop#0/reply
+    - value: partial
+  - [node_started, loop#0/__end__]
+  - - node_succeeded
+    - loop#0/__end__
+    - value:
+        transcript: s|partial
+  - [node_started, loop~1]
+  - - node_expanded
+    - loop~1
+    - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/reply, loop~1]
+      seed:
+      - transcript: s|partial
+      - 1
+  - [node_started, loop#1/__start__]
+  - - node_succeeded
+    - loop#1/__start__
+    - value:
+        transcript: s|partial
+  - [node_started, loop#1/reply]
+  - - node_succeeded
+    - loop#1/reply
+    - value: turn2
+  - [node_started, loop#1/__end__]
+  - - node_succeeded
+    - loop#1/__end__
+    - value:
+        transcript: s|partial|turn2
+  - [node_started, loop~2]
+  - - node_succeeded
+    - loop~2
+    - commit_target: loop
+      value:
+        transcript: s|partial|turn2
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: s|partial|turn2
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        seed: s
+  - - NodeStarted
+    - node_id: loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - transcript: s
+        - 0
+      node_id: loop
+  - - NodeStarted
+    - node_id: loop#0/__start__
+  - - NodeSucceeded
+    - node_id: loop#0/__start__
+      output:
+        transcript: s
+  - - NodeStarted
+    - node_id: loop#0/reply
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: loop#0/reply
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: loop#0/reply
+      provider: openai
+      purpose: chat
+  - - ToolCallStarted
+    - arguments: {}
+      call_index: 0
+      exchange_id: <id:1>
+      name: ping
+      node_id: loop#0/reply
+      tool_call_id: p-1
+  - - ToolCallFinished
+    - call_index: 0
+      error: interrupted
+      exchange_id: <id:1>
+      name: ping
+      node_id: loop#0/reply
+      tool_call_id: p-1
+  - - NodeSucceeded
+    - node_id: loop#0/reply
+      output: partial
+  - - NodeStarted
+    - node_id: loop#0/__end__
+  - - NodeSucceeded
+    - node_id: loop#0/__end__
+      output:
+        transcript: s|partial
+  - - NodeStarted
+    - node_id: loop~1
+  - - NodeExpanded
+    - grow:
+        prune: [loop#0/__end__, loop#0/__start__, loop#0/reply, loop~1]
+        seed:
+        - transcript: s|partial
+        - 1
+      node_id: loop~1
+  - - NodeStarted
+    - node_id: loop#1/__start__
+  - - NodeSucceeded
+    - node_id: loop#1/__start__
+      output:
+        transcript: s|partial
+  - - NodeStarted
+    - node_id: loop#1/reply
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: gpt-5.5
+      node_id: loop#1/reply
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: gpt-5.5
+      node_id: loop#1/reply
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: loop#1/reply
+      output: turn2
+  - - NodeStarted
+    - node_id: loop#1/__end__
+  - - NodeSucceeded
+    - node_id: loop#1/__end__
+      output:
+        transcript: s|partial|turn2
+  - - NodeStarted
+    - node_id: loop~2
+  - - NodeSucceeded
+    - commit_as: loop
+      node_id: loop~2
+      output:
+        transcript: s|partial|turn2
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: s|partial|turn2
+  - - RunSucceeded
+    - output: s|partial|turn2
+  stream:
+  - chunk: partial
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: loop#0/reply
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: loop#0/reply
+  - chunk: turn2
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: loop#1/reply
+  - chunk: ''
+    exchange_id: <id:2>
+    final: true
+    key: text
+    node_id: loop#1/reply

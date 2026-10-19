@@ -1,0 +1,32 @@
+kind: run
+rules: [messages]
+flow: |
+  id: f
+  name: f
+  typedefs: {D: "dict(str, str)"}
+  input:
+    d: !D
+    t: !float 1.0
+  llm_config: {provider: openai}
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {model: !str '${input.d.zzz}'}
+  output: ${chat.output}
+inputs:
+  d: {}
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: ValueError
+    message: 'node ''chat'' llm_config.model: null does not match declared type str'
+  trace: []
+  events: []
+python_expect:
+  raises:
+    class: ValueError
+    message: 'node ''chat'' llm_config.model: None does not match declared type str'
+  trace: []
+  events: []

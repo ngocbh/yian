@@ -1,0 +1,22 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input: {cfg: !object }
+  llm_config: ${input.cfg}
+  nodes:
+    chat: {kind: agent, prompt: Go.}
+  output: ${chat.output}
+inputs:
+  cfg:
+    provider: azure
+    model: dep
+    base_url: https://elsewhere.example/v1
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: LayerFieldError
+    message: 'flow llm_config.base_url: credentials and where they are sent stay with the host or yian auth'
+  trace: []
+  events: []

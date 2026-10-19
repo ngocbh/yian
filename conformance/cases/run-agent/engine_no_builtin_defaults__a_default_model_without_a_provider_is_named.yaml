@@ -1,0 +1,18 @@
+# env: YIAN_DEFAULT_MODEL kept on purpose: a default model without a default provider is the case.
+kind: run
+flow: |
+  id: f
+  name: f
+  nodes:
+    write: {kind: agent, prompt: hi}
+  output: ${write.output}
+env:
+  YIAN_DEFAULT_MODEL: m
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: ValueError
+    message: Agent 'write' has no provider or model; set llm_config.provider/model, pass --provider/--model, or run 'yian auth <provider>'; YIAN_DEFAULT_MODEL is set but names no provider; set YIAN_DEFAULT_PROVIDER or run 'yian auth <provider>'
+  trace: []
+  events: []

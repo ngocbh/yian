@@ -1,0 +1,279 @@
+kind: run
+flow: |
+  id: two
+  name: two
+  defs:
+    body:
+      nodes:
+        nested: {kind: agent, prompt: hi, llm_config: {model: nested-model}}
+      output: ${nested.output}
+  nodes:
+    agent: {kind: agent, prompt: hi}
+    child: {kind: call, call: body, depends_on: [agent]}
+    other:
+      kind: agent
+      prompt: hi
+      depends_on: [agent]
+      llm_config: {provider: anthropic, model: claude-sonnet-4-5}
+  output: ${other.output}
+run:
+  num_workers: 0
+  llm_config:
+    provider: openai
+    model: gpt-5.4
+    api_key: <key:1>
+    organization: org-abc
+    project: proj-abc
+    headers:
+      X-Gateway: <key:2>
+      X-Trace: <key:3>
+host:
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: hi
+    other:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: hi
+    child/nested:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: hi
+expect:
+  output:
+    status: succeeded
+    output: ok
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        agent:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: host
+          _header_names: [X-Gateway, X-Trace]
+          _host_key: true
+          model: gpt-5.4
+          organization: org-abc
+          project: proj-abc
+          provider: openai
+        child/nested:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: host
+          _header_names: [X-Gateway, X-Trace]
+          _host_key: true
+          model: nested-model
+          organization: org-abc
+          project: proj-abc
+          provider: openai
+        other:
+          _connection:
+            endpoint: null
+            method: api_key
+            source: environment
+          model: claude-sonnet-4-5
+          provider: anthropic
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, agent]
+  - - node_succeeded
+    - agent
+    - value: ok
+  - [node_started, child]
+  - - node_expanded
+    - child
+    - prune_ids: []
+      seed: {}
+  - [node_started, other]
+  - - node_succeeded
+    - other
+    - value: ok
+  - [node_started, child/__start__]
+  - - node_succeeded
+    - child/__start__
+    - value: {}
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ok
+  - [node_started, child/nested]
+  - - node_succeeded
+    - child/nested
+    - value: ok
+  - [node_started, child/__end__]
+  - - node_succeeded
+    - child/__end__
+    - commit_target: child
+      value: ok
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: agent
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.4
+      node_id: agent
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.4
+      node_id: agent
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: agent
+      output: ok
+  - - NodeStarted
+    - node_id: child
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed: {}
+      node_id: child
+  - - NodeStarted
+    - node_id: other
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: claude-sonnet-4-5
+      node_id: other
+      provider: anthropic
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: claude-sonnet-4-5
+      node_id: other
+      provider: anthropic
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: other
+      output: ok
+  - - NodeStarted
+    - node_id: child/__start__
+  - - NodeSucceeded
+    - node_id: child/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: ok
+  - - NodeStarted
+    - node_id: child/nested
+  - - ModelCallStarted
+    - exchange_id: <id:3>
+      model: nested-model
+      node_id: child/nested
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:3>
+      model: nested-model
+      node_id: child/nested
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: child/nested
+      output: ok
+  - - NodeStarted
+    - node_id: child/__end__
+  - - NodeSucceeded
+    - commit_as: child
+      node_id: child/__end__
+      output: ok
+  - - RunSucceeded
+    - output: ok
+  stream:
+  - chunk: ok
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: agent
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: agent
+  - chunk: ok
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: other
+  - chunk: ''
+    exchange_id: <id:2>
+    final: true
+    key: text
+    node_id: other
+  - chunk: ok
+    exchange_id: <id:3>
+    final: false
+    key: text
+    node_id: child/nested
+  - chunk: ''
+    exchange_id: <id:3>
+    final: true
+    key: text
+    node_id: child/nested

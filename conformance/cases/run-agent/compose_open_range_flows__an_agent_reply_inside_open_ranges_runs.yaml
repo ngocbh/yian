@@ -1,0 +1,200 @@
+kind: run
+rules: [llm]
+flow: |2
+
+  id: open_agent
+  name: open_agent
+  typedefs:
+    Order:
+      qty: int(1..)
+      price: float(..100.0)
+  nodes:
+    writer:
+      kind: agent
+      prompt: write an order
+      retries: 0
+      llm_config:
+        provider: openai
+        model: gpt-4o
+      output: Order
+  output: ${writer.output}
+run:
+  num_workers: 0
+host:
+  models:
+    writer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"qty": 3, "price": 9.5}'
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: write an order
+          schema:
+            properties:
+              qty:
+                minimum: 1
+                type: integer
+              price:
+                maximum: 100.0
+                type: number
+            required: [qty, price]
+            type: object
+expect:
+  output:
+    status: succeeded
+    output:
+      price: 9.5
+      qty: 3
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        writer:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-4o
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, writer]
+  - - node_succeeded
+    - writer
+    - value:
+        price: 9.5
+        qty: 3
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        price: 9.5
+        qty: 3
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: writer
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-4o
+      node_id: writer
+      provider: openai
+      purpose: structured_native
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-4o
+      node_id: writer
+      provider: openai
+      purpose: structured_native
+  - - NodeSucceeded
+    - node_id: writer
+      output:
+        price: 9.5
+        qty: 3
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        price: 9.5
+        qty: 3
+  - - RunSucceeded
+    - output:
+        price: 9.5
+        qty: 3
+python_expect:
+  output:
+    status: succeeded
+    output:
+      price: 9.5
+      qty: 3
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        writer:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-4o
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, writer]
+  - - node_succeeded
+    - writer
+    - value:
+        price: 9.5
+        qty: 3
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        price: 9.5
+        qty: 3
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: writer
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-4o
+      node_id: writer
+      provider: openai
+      purpose: structured_native
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-4o
+      node_id: writer
+      provider: openai
+      purpose: structured_native
+  - - NodeSucceeded
+    - node_id: writer
+      output:
+        price: 9.5
+        qty: 3
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        price: 9.5
+        qty: 3
+  - - RunSucceeded
+    - output:
+        price: 9.5
+        qty: 3

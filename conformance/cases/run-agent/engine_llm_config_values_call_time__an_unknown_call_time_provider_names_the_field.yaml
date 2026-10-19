@@ -1,0 +1,82 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Some: Literal(openai, nope)
+  nodes:
+    pick: {kind: code, output: Some, code: "return 'nope'"}
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {provider: '${pick.output}', model: m}
+  output: ${chat.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      frames:
+      - label: flow.yaml
+        range: [10, 28, 10, 44]
+      message: 'node ''chat'' llm_config.provider: not a known provider; use one of: openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
+      node: chat
+  trace:
+  - - run_started
+    - null
+    - call_time_llm:
+        agents:
+          chat: {}
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, pick]
+  - - node_succeeded
+    - pick
+    - value: nope
+  - [node_started, chat]
+  - - node_failed
+    - chat
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [10, 28, 10, 44]
+        message: 'node ''chat'' llm_config.provider: not a known provider; use one of: openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
+        node: chat
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: pick
+  - - NodeSucceeded
+    - node_id: pick
+      output: nope
+  - - NodeStarted
+    - node_id: chat
+  - - NodeFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [10, 28, 10, 44]
+        message: 'node ''chat'' llm_config.provider: not a known provider; use one of: openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
+        node: chat
+  - - RunFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [10, 28, 10, 44]
+        message: 'node ''chat'' llm_config.provider: not a known provider; use one of: openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
+        node: chat

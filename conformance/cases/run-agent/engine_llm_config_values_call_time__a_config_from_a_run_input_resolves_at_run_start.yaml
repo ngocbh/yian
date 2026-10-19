@@ -1,0 +1,112 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input: {m: !str }
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {provider: openai, model: '${input.m}'}
+  output: ${chat.output}
+inputs:
+  m: gpt-x
+run:
+  num_workers: 0
+host:
+  models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Go.
+expect:
+  output:
+    status: succeeded
+    output: ok
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        chat:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-x
+          provider: openai
+      inputs:
+        m: gpt-x
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        m: gpt-x
+  - [node_started, chat]
+  - - node_succeeded
+    - chat
+    - value: ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ok
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        m: gpt-x
+  - - NodeStarted
+    - node_id: chat
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-x
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-x
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: chat
+      output: ok
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: ok
+  - - RunSucceeded
+    - output: ok
+  stream:
+  - chunk: ok
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: chat
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: chat

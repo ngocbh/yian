@@ -1,0 +1,20 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    m: !str
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {model: '${input.m}'}
+  output: ${chat.output}
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: ValueError
+    message: 'node ''chat'' llm_config.model: input ''m'' is required and was not given'
+  trace: []
+  events: []

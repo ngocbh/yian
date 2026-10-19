@@ -1,0 +1,152 @@
+kind: run
+rules: [messages]
+flow: |
+  id: f
+  name: f
+  nodes:
+    pick: {kind: code, output: Optional(str), code: "return null"}
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {provider: openai, model: !str '${pick.output}'}
+  output: ${chat.output}
+python_flow: |
+  id: f
+  name: f
+  nodes:
+    pick: {kind: code, output: Optional(str), code: "return None"}
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {provider: openai, model: !str '${pick.output}'}
+  output: ${chat.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      frames:
+      - label: flow.yaml
+        range: [8, 43, 8, 64]
+      message: 'node ''chat'' llm_config.model: null does not match declared type str'
+      node: chat
+  trace:
+  - - run_started
+    - null
+    - call_time_llm:
+        agents:
+          chat: {}
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, pick]
+  - [node_succeeded, pick]
+  - [node_started, chat]
+  - - node_failed
+    - chat
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [8, 43, 8, 64]
+        message: 'node ''chat'' llm_config.model: null does not match declared type str'
+        node: chat
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: pick
+  - - NodeSucceeded
+    - node_id: pick
+  - - NodeStarted
+    - node_id: chat
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [8, 43, 8, 64]
+        message: 'node ''chat'' llm_config.model: null does not match declared type str'
+        node: chat
+  - - RunFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [8, 43, 8, 64]
+        message: 'node ''chat'' llm_config.model: null does not match declared type str'
+        node: chat
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      frames:
+      - label: flow.yaml
+        range: [8, 43, 8, 64]
+      message: 'node ''chat'' llm_config.model: None does not match declared type str'
+      node: chat
+  trace:
+  - - run_started
+    - null
+    - call_time_llm:
+        agents:
+          chat: {}
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, pick]
+  - [node_succeeded, pick]
+  - [node_started, chat]
+  - - node_failed
+    - chat
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [8, 43, 8, 64]
+        message: 'node ''chat'' llm_config.model: None does not match declared type str'
+        node: chat
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: pick
+  - - NodeSucceeded
+    - node_id: pick
+  - - NodeStarted
+    - node_id: chat
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [8, 43, 8, 64]
+        message: 'node ''chat'' llm_config.model: None does not match declared type str'
+        node: chat
+  - - RunFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [8, 43, 8, 64]
+        message: 'node ''chat'' llm_config.model: None does not match declared type str'
+        node: chat

@@ -1,0 +1,120 @@
+# From tests/engine/test_agent_streaming.py::test_plain_agent_streams_text_chunks_then_one_final_chunk.
+# A streamed text reply reaches the host chunk by chunk under one exchange id, then one empty
+# final chunk; a usage chunk carries no text, and ModelCallFinished reports its usage (5/3/8).
+kind: run
+flow: |
+  id: stream
+  name: stream
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    writer:
+      kind: agent
+      system_prompt: Help.
+      prompt: hi
+      output: str
+  output: ${writer.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  models:
+    writer:
+      agent:
+      - chunks:
+        - text: hello
+        - text: ' big'
+        - text: ' world'
+        - usage:
+            input_tokens: 5
+            output_tokens: 3
+            total_tokens: 8
+        - finish: stop
+expect:
+  output:
+    status: succeeded
+    output: hello big world
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        writer:
+          _connection:
+            endpoint: null
+            method: api_key
+            source: environment
+          model: claude-test
+          provider: anthropic
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, writer]
+  - - node_succeeded
+    - writer
+    - value: hello big world
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: hello big world
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: writer
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: claude-test
+      node_id: writer
+      provider: anthropic
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: claude-test
+      node_id: writer
+      provider: anthropic
+      purpose: chat
+      usage:
+        cache_creation_tokens: null
+        cache_read_tokens: null
+        input_tokens: 5
+        output_tokens: 3
+        reasoning_tokens: null
+        total_tokens: 8
+  - - NodeSucceeded
+    - node_id: writer
+      output: hello big world
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: hello big world
+  - - RunSucceeded
+    - output: hello big world
+  stream:
+  - chunk: hello
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: writer
+  - chunk: ' big'
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: writer
+  - chunk: ' world'
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: writer
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: writer

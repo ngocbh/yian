@@ -1,0 +1,31 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    x: !object
+  nodes:
+    echo:
+      kind: code
+      input:
+        x: ${input.x}
+      code: |
+        return inputs['x']
+  output: ${echo.output}
+env:
+  YIAN_MAX_VALUE_NESTING: '3'
+inputs:
+  x:
+    a:
+      a:
+        a:
+          a: 1
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: TypeCheckError
+    message: 'input ''x'' at a.a.a: value nests deeper than 3 levels, the limit for a yian value (each record and list is a level)'
+    path: [a, a, a]
+  trace: []
+  events: []

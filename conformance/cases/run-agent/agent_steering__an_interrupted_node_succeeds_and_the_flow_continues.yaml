@@ -1,0 +1,139 @@
+# From tests/engine/test_agent_steering.py::test_interrupted_node_succeeds_and_the_flow_continues.
+# An AGENT interrupted before its first call succeeds with "", and the flow goes on: the next
+# (non-steerable) AGENT renders that empty draft into its prompt ("summarize: ") and its reply
+# is the run's output.
+kind: run
+flow: |
+  id: steer
+  name: steer
+  llm_config: {provider: openai, model: gpt-5.5}
+  nodes:
+    chat:
+      kind: agent
+      steerable: true
+      system_prompt: Help.
+      prompt: Help the user.
+      output: str
+    after:
+      kind: agent
+      input: {draft: "${chat.output}"}
+      system_prompt: Help.
+      prompt: "summarize: ${draft}"
+      output: str
+  output: ${after.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  steering:
+    chat:
+    - interrupt: true
+  models:
+    after:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: summary
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Help.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: 'summarize: '
+expect:
+  output:
+    status: succeeded
+    output: summary
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        after:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+        chat:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, chat]
+  - - node_succeeded
+    - chat
+    - value: ''
+  - [node_started, after]
+  - - node_succeeded
+    - after
+    - value: summary
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: summary
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: chat
+  - - NodeSucceeded
+    - node_id: chat
+      output: ''
+  - - NodeStarted
+    - node_id: after
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: after
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: after
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: after
+      output: summary
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: summary
+  - - RunSucceeded
+    - output: summary
+  stream:
+  - chunk: summary
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: after
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: after

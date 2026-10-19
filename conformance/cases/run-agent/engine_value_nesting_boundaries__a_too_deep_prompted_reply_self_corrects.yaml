@@ -1,0 +1,245 @@
+kind: run
+rules: [llm]
+flow: |
+  id: plain-session
+  name: plain_session
+  llm_config: {provider: vllm, model: no-structured-sentinel}
+  input:
+    question: !str
+  nodes:
+    agent:
+      kind: agent
+      prompt: ${question}
+      input:
+        question: ${input.question}
+      retries: 1
+      output: object
+  output: ${agent.output}
+inputs:
+  question: q
+run:
+  num_workers: 0
+host:
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"value": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": "leaf"}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}'
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: q
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: |-
+                Respond with ONLY a JSON object matching this JSON schema (no prose, no code fences):
+                {"properties": {"value": {"additionalProperties": true, "title": "Value", "type": "object"}}, "required": ["value"], "title": "ScalarWrapper", "type": "object"}
+      structured_retry:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"value": {"k": 1}}'
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: q
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: |-
+                Respond with ONLY a JSON object matching this JSON schema (no prose, no code fences):
+                {"properties": {"value": {"additionalProperties": true, "title": "Value", "type": "object"}}, "required": ["value"], "title": "ScalarWrapper", "type": "object"}
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: 'Your previous output was invalid: structured output at a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a: value nests deeper than 100 levels, the limit for a yian value (each record and list is a level). Respond with ONLY a JSON object matching the schema.'
+expect:
+  output:
+    status: succeeded
+    output:
+      k: 1
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        agent:
+          _connection:
+            endpoint: null
+            method: api_key
+            source: environment
+          model: no-structured-sentinel
+          provider: vllm
+      inputs:
+        question: q
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        question: q
+  - [node_started, agent]
+  - - node_succeeded
+    - agent
+    - value:
+        k: 1
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        k: 1
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        question: q
+  - - NodeStarted
+    - node_id: agent
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: no-structured-sentinel
+      node_id: agent
+      provider: vllm
+      purpose: structured_fallback
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: no-structured-sentinel
+      node_id: agent
+      provider: vllm
+      purpose: structured_fallback
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: no-structured-sentinel
+      node_id: agent
+      provider: vllm
+      purpose: structured_fallback
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: no-structured-sentinel
+      node_id: agent
+      provider: vllm
+      purpose: structured_fallback
+  - - NodeSucceeded
+    - node_id: agent
+      output:
+        k: 1
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        k: 1
+  - - RunSucceeded
+    - output:
+        k: 1
+python_expect:
+  output:
+    status: succeeded
+    output:
+      k: 1
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        agent:
+          _connection:
+            endpoint: null
+            method: api_key
+            source: environment
+          model: no-structured-sentinel
+          provider: vllm
+      inputs:
+        question: q
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        question: q
+  - [node_started, agent]
+  - - node_succeeded
+    - agent
+    - value:
+        k: 1
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        k: 1
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        question: q
+  - - NodeStarted
+    - node_id: agent
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: no-structured-sentinel
+      node_id: agent
+      provider: vllm
+      purpose: structured_fallback
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: no-structured-sentinel
+      node_id: agent
+      provider: vllm
+      purpose: structured_fallback
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: no-structured-sentinel
+      node_id: agent
+      provider: vllm
+      purpose: structured_fallback
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: no-structured-sentinel
+      node_id: agent
+      provider: vllm
+      purpose: structured_fallback
+  - - NodeSucceeded
+    - node_id: agent
+      output:
+        k: 1
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        k: 1
+  - - RunSucceeded
+    - output:
+        k: 1

@@ -1,0 +1,19 @@
+kind: run
+flow: |
+  id: plain
+  name: plain
+  nodes:
+    agent: {kind: agent, prompt: hi}
+  output: ${agent.output}
+run:
+  num_workers: 0
+  llm_config:
+    provider: vllm
+    model: served-model
+    temperature: 0.734519
+expect:
+  raises:
+    class: ValueError
+    message: '`temperature` moved into the provider block: write `vllm: {temperature: <value>}`'
+  trace: []
+  events: []

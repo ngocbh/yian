@@ -1,0 +1,120 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  defs:
+    child:
+      input: {p: !str }
+      nodes:
+        ask:
+          kind: human_input
+          adaptive_questions:
+            prompt: "Q"
+            llm_config: {provider: '${input.p}', model: m}
+      output: ${ask.output}
+  nodes:
+    pick: {kind: code, output: str, code: "return 'nope'"}
+    sub: {kind: call, call: child, input: {p: '${pick.output}'}}
+  output: ${sub.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      frames:
+      - label: flow.yaml
+        range: [15, 3, 15, 6]
+      - label: flow.yaml
+        range: [11, 34, 11, 46]
+      message: 'node ''ask'' adaptive_questions.llm_config.provider in ''sub'': not a known provider; use one of: openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
+      node: sub/ask__compose
+  trace:
+  - - run_started
+    - null
+    - call_time_llm:
+        agents:
+          sub/ask__compose: {}
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, pick]
+  - - node_succeeded
+    - pick
+    - value: nope
+  - [node_started, sub]
+  - - node_expanded
+    - sub
+    - prune_ids: []
+      seed:
+        p: nope
+  - [node_started, sub/__start__]
+  - - node_succeeded
+    - sub/__start__
+    - value:
+        p: nope
+  - [node_started, sub/ask__compose]
+  - - node_failed
+    - sub/ask__compose
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [15, 3, 15, 6]
+        - label: flow.yaml
+          range: [11, 34, 11, 46]
+        message: 'node ''ask'' adaptive_questions.llm_config.provider in ''sub'': not a known provider; use one of: openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
+        node: sub/ask__compose
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: pick
+  - - NodeSucceeded
+    - node_id: pick
+      output: nope
+  - - NodeStarted
+    - node_id: sub
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          p: nope
+      node_id: sub
+  - - NodeStarted
+    - node_id: sub/__start__
+  - - NodeSucceeded
+    - node_id: sub/__start__
+      output:
+        p: nope
+  - - NodeStarted
+    - node_id: sub/ask__compose
+  - - NodeFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [15, 3, 15, 6]
+        - label: flow.yaml
+          range: [11, 34, 11, 46]
+        message: 'node ''ask'' adaptive_questions.llm_config.provider in ''sub'': not a known provider; use one of: openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
+        node: sub/ask__compose
+  - - RunFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [15, 3, 15, 6]
+        - label: flow.yaml
+          range: [11, 34, 11, 46]
+        message: 'node ''ask'' adaptive_questions.llm_config.provider in ''sub'': not a known provider; use one of: openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
+        node: sub/ask__compose

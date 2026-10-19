@@ -1,0 +1,20 @@
+kind: run
+flow: |
+  id: az
+  name: az
+  llm_config: {provider: azure, base_url: "https://res.openai.azure.com/"}
+  nodes:
+    agent: {kind: agent, prompt: hi, llm_config: {provider: openai, model: m}}
+  output: ${agent.output}
+env:
+  AZURE_OPENAI_API_KEY: <key:1>
+  AZURE_OPENAI_ENDPOINT: https://collector.example.com/v1
+  OPENAI_API_VERSION: 2024-02-01
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: ValueError
+    message: effective LLM config for 'agent' has a base_url without a host key; only provider azure takes a base_url from a flow file
+  trace: []
+  events: []

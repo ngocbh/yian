@@ -1,0 +1,30 @@
+kind: run
+rules: [messages]
+flow: |
+  id: f
+  name: f
+  input:
+    topic: !str
+    window: !int 30
+  nodes:
+    agent:
+      kind: agent
+      input: {topic: "${input.topic}", window: "${input.window}"}
+      prompt: "hi ${topic} ${window}"
+  output: ${agent.output}
+run:
+  num_workers: 0
+  llm_config:
+    bogus: 1
+expect:
+  raises:
+    class: ValueError
+    message: 'llm_config has unknown field(s) ["bogus"] (allowed: anthropic, api_key, azure, base_url, deepseek, glm, glm-cn, google, headers, minimax, minimax-cn, model, ollama, openai, openrouter, organization, project, provider, qwen, qwen-cn, vllm, xai)'
+  trace: []
+  events: []
+python_expect:
+  raises:
+    class: ValueError
+    message: 'llm_config has unknown field(s) [''bogus''] (allowed: anthropic, api_key, azure, base_url, deepseek, glm, glm-cn, google, headers, minimax, minimax-cn, model, ollama, openai, openrouter, organization, project, provider, qwen, qwen-cn, vllm, xai)'
+  trace: []
+  events: []

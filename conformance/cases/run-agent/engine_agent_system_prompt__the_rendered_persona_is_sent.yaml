@@ -1,0 +1,189 @@
+kind: run
+flow: |
+  id: chat
+  name: chat
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    name: !str
+    title: !str
+    message: !str
+  nodes:
+    reply:
+      kind: agent
+      input: {name: "${input.name}", title: "${input.title}", message: "${input.message}"}
+      system_prompt: "You are ${name}, ${title}. Speak as ${name} in the first person."
+      prompt: ${message}
+      output: str
+    after:
+      kind: agent
+      input: {draft: "${reply.output}"}
+      prompt: "polish: ${draft}"
+      output: str
+  output: ${after.output}
+inputs:
+  name: Ada
+  title: CTO
+  message: How are we doing?
+run:
+  num_workers: 0
+host:
+  models:
+    reply:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: draft
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are Ada, CTO. Speak as Ada in the first person.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: How are we doing?
+    after:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: final
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: 'polish: draft'
+expect:
+  output:
+    status: succeeded
+    output: final
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        after:
+          _connection:
+            endpoint: null
+            method: api_key
+            source: environment
+          model: claude-test
+          provider: anthropic
+        reply:
+          _connection:
+            endpoint: null
+            method: api_key
+            source: environment
+          model: claude-test
+          provider: anthropic
+      inputs:
+        message: How are we doing?
+        name: Ada
+        title: CTO
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        message: How are we doing?
+        name: Ada
+        title: CTO
+  - [node_started, reply]
+  - - node_succeeded
+    - reply
+    - value: draft
+  - [node_started, after]
+  - - node_succeeded
+    - after
+    - value: final
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: final
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        message: How are we doing?
+        name: Ada
+        title: CTO
+  - - NodeStarted
+    - node_id: reply
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: claude-test
+      node_id: reply
+      provider: anthropic
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: claude-test
+      node_id: reply
+      provider: anthropic
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: reply
+      output: draft
+  - - NodeStarted
+    - node_id: after
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: claude-test
+      node_id: after
+      provider: anthropic
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: claude-test
+      node_id: after
+      provider: anthropic
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: after
+      output: final
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: final
+  - - RunSucceeded
+    - output: final
+  stream:
+  - chunk: draft
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: reply
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: reply
+  - chunk: final
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: after
+  - chunk: ''
+    exchange_id: <id:2>
+    final: true
+    key: text
+    node_id: after

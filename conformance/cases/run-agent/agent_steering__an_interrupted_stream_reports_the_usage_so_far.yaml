@@ -1,0 +1,123 @@
+# From tests/engine/test_agent_steering.py::test_interrupted_stream_reports_the_usage_received_so_far.
+# A text-free first chunk carries the input usage (as Anthropic streams it); an interrupt set
+# once chunk 3 (" big") is delivered keeps "hello big", and the one ModelCallFinished reports
+# the usage received so far (1000/1/1001) with no error.
+kind: run
+flow: |
+  id: steer
+  name: steer
+  llm_config: {provider: openai, model: gpt-5.5}
+  nodes:
+    chat:
+      kind: agent
+      steerable: true
+      system_prompt: Help.
+      prompt: Help the user.
+      output: str
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  steering:
+    chat:
+    - after:
+        model_call: 1
+        chunk: 3
+      interrupt: true
+  models:
+    chat:
+      agent:
+      - chunks:
+        - usage:
+            input_tokens: 1000
+            output_tokens: 1
+            total_tokens: 1001
+        - text: hello
+        - text: ' big'
+        - text: ' world'
+        - finish: stop
+expect:
+  output:
+    status: succeeded
+    output: hello big
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        chat:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, chat]
+  - - node_succeeded
+    - chat
+    - value: hello big
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: hello big
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: chat
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+      usage:
+        cache_creation_tokens: null
+        cache_read_tokens: null
+        input_tokens: 1000
+        output_tokens: 1
+        reasoning_tokens: null
+        total_tokens: 1001
+  - - NodeSucceeded
+    - node_id: chat
+      output: hello big
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: hello big
+  - - RunSucceeded
+    - output: hello big
+  stream:
+  - chunk: hello
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: chat
+  - chunk: ' big'
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: chat
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: chat

@@ -1,0 +1,152 @@
+kind: run
+flow: |2
+
+  id: cc
+  name: cc
+  input:
+    score: !float
+
+  defs:
+    take:
+      input:
+        stance: !str
+      nodes:
+        x:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:took
+          input:
+            stance: ${input.stance}
+          output: str
+      output: ${x.output}
+
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.score >= 0.5"
+          then: call(take, stance="pro")
+      else: call(take, stance="con")
+  output: ${gate.output}
+python_flow: |2
+
+  id: cc
+  name: cc
+  input:
+    score: !float
+
+  defs:
+    take:
+      input:
+        stance: !str
+      nodes:
+        x:
+          kind: code
+          code: tests.engine._compose_codefns:took
+          input:
+            stance: ${input.stance}
+          output: str
+      output: ${x.output}
+
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.score >= 0.5"
+          then: call(take, stance="pro")
+      else: call(take, stance="con")
+  output: ${gate.output}
+inputs:
+  score: 0.2
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: took:con
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        score: 0.2
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        score: 0.2
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: '#else'
+  - [node_started, __call_1]
+  - - node_expanded
+    - __call_1
+    - prune_ids: []
+      seed:
+        stance: con
+  - [node_started, __call_1/__start__]
+  - - node_succeeded
+    - __call_1/__start__
+    - value:
+        stance: con
+  - [node_started, __call_1/x]
+  - - node_succeeded
+    - __call_1/x
+    - value: took:con
+  - [node_started, __call_1/__end__]
+  - - node_succeeded
+    - __call_1/__end__
+    - commit_target: __call_1
+      value: took:con
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: took:con
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        score: 0.2
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: gate
+  - - NodeSkipped
+    - node_id: __call_0
+  - - NodeStarted
+    - node_id: __call_1
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          stance: con
+      node_id: __call_1
+  - - NodeStarted
+    - node_id: __call_1/__start__
+  - - NodeSucceeded
+    - node_id: __call_1/__start__
+      output:
+        stance: con
+  - - NodeStarted
+    - node_id: __call_1/x
+  - - NodeSucceeded
+    - node_id: __call_1/x
+      output: took:con
+  - - NodeStarted
+    - node_id: __call_1/__end__
+  - - NodeSucceeded
+    - commit_as: __call_1
+      node_id: __call_1/__end__
+      output: took:con
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: took:con
+  - - RunSucceeded
+    - output: took:con

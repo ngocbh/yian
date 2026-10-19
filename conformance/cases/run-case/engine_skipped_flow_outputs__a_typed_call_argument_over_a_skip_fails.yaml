@@ -1,0 +1,290 @@
+kind: run
+rules: [messages]
+flow: |
+  id: f
+  name: f
+  input:
+    approve: !bool
+  defs:
+    child:
+      input:
+        approve: !bool
+      nodes:
+        gate:
+          kind: case
+          cases:
+            - when: ${input.approve}
+              then: order
+          else: rejected
+        order:
+          kind: code
+          output: str
+          code: |
+            return "filled"
+        rejected:
+          kind: code
+          output: str
+          code: |
+            return "no"
+      output:
+        order: ${order.output}
+    use:
+      input:
+        s: !str
+      nodes:
+        x:
+          kind: code
+          output: str
+          input:
+            s: ${input.s}
+          code: |
+            return inputs["s"]
+      output: ${x.output}
+  nodes:
+    c1:
+      kind: call
+      call: child
+      input:
+        approve: ${input.approve}
+    c2:
+      kind: call
+      call: use
+      input:
+        s: !str ${c1.output.order}
+  output: ${c2.output}
+inputs:
+  approve: false
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      frames:
+      - label: flow.yaml
+        range: [50, 10, 50, 33]
+      message: 'binding ''s'': null does not match declared type str'
+      node: c2
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        approve: false
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        approve: false
+  - [node_started, c1]
+  - - node_expanded
+    - c1
+    - prune_ids: []
+      seed:
+        approve: false
+  - [node_started, c1/__start__]
+  - - node_succeeded
+    - c1/__start__
+    - value:
+        approve: false
+  - [node_started, c1/gate]
+  - - node_routed
+    - c1/gate
+    - handle: '#else'
+  - [node_started, c1/__end__]
+  - - node_succeeded
+    - c1/__end__
+    - commit_target: c1
+      value:
+        order: null
+  - [node_started, c1/rejected]
+  - - node_succeeded
+    - c1/rejected
+    - value: no
+  - [node_started, c2]
+  - - node_failed
+    - c2
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [50, 10, 50, 33]
+        message: 'binding ''s'': null does not match declared type str'
+        node: c2
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        approve: false
+  - - NodeStarted
+    - node_id: c1
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          approve: false
+      node_id: c1
+  - - NodeStarted
+    - node_id: c1/__start__
+  - - NodeSucceeded
+    - node_id: c1/__start__
+      output:
+        approve: false
+  - - NodeStarted
+    - node_id: c1/gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: c1/gate
+  - - NodeSkipped
+    - node_id: c1/order
+  - - NodeStarted
+    - node_id: c1/__end__
+  - - NodeSucceeded
+    - commit_as: c1
+      node_id: c1/__end__
+      output:
+        order: null
+  - - NodeStarted
+    - node_id: c1/rejected
+  - - NodeSucceeded
+    - node_id: c1/rejected
+      output: no
+  - - NodeStarted
+    - node_id: c2
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [50, 10, 50, 33]
+        message: 'binding ''s'': null does not match declared type str'
+        node: c2
+  - - RunFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [50, 10, 50, 33]
+        message: 'binding ''s'': null does not match declared type str'
+        node: c2
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      frames:
+      - label: flow.yaml
+        range: [50, 10, 50, 33]
+      message: 'binding ''s'': None does not match declared type str'
+      node: c2
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        approve: false
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        approve: false
+  - [node_started, c1]
+  - - node_expanded
+    - c1
+    - prune_ids: []
+      seed:
+        approve: false
+  - [node_started, c1/__start__]
+  - - node_succeeded
+    - c1/__start__
+    - value:
+        approve: false
+  - [node_started, c1/gate]
+  - - node_routed
+    - c1/gate
+    - handle: '#else'
+  - [node_started, c1/__end__]
+  - - node_succeeded
+    - c1/__end__
+    - commit_target: c1
+      value:
+        order: null
+  - [node_started, c1/rejected]
+  - - node_succeeded
+    - c1/rejected
+    - value: no
+  - [node_started, c2]
+  - - node_failed
+    - c2
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [50, 10, 50, 33]
+        message: 'binding ''s'': None does not match declared type str'
+        node: c2
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        approve: false
+  - - NodeStarted
+    - node_id: c1
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          approve: false
+      node_id: c1
+  - - NodeStarted
+    - node_id: c1/__start__
+  - - NodeSucceeded
+    - node_id: c1/__start__
+      output:
+        approve: false
+  - - NodeStarted
+    - node_id: c1/gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: c1/gate
+  - - NodeSkipped
+    - node_id: c1/order
+  - - NodeStarted
+    - node_id: c1/__end__
+  - - NodeSucceeded
+    - commit_as: c1
+      node_id: c1/__end__
+      output:
+        order: null
+  - - NodeStarted
+    - node_id: c1/rejected
+  - - NodeSucceeded
+    - node_id: c1/rejected
+      output: no
+  - - NodeStarted
+    - node_id: c2
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [50, 10, 50, 33]
+        message: 'binding ''s'': None does not match declared type str'
+        node: c2
+  - - RunFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [50, 10, 50, 33]
+        message: 'binding ''s'': None does not match declared type str'
+        node: c2

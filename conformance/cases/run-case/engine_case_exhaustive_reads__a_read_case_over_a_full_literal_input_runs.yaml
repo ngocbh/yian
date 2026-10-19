@@ -1,0 +1,87 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Choice: Literal(a, b)
+  input:
+    choice: !Choice
+  nodes:
+    gate:
+      kind: case
+      on: ${input.choice}
+      cases:
+        - when: a
+          then: pa
+        - when: b
+          then: pb
+    pa:
+      kind: code
+      code: |
+        return "A"
+      output: str
+    pb:
+      kind: code
+      code: |
+        return "B"
+      output: str
+  output: ${gate.output}
+inputs:
+  choice: b
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: B
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        choice: b
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        choice: b
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: pb
+  - [node_started, pb]
+  - - node_succeeded
+    - pb
+    - value: B
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: B
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        choice: b
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: pb
+      node_id: gate
+  - - NodeSkipped
+    - node_id: pa
+  - - NodeStarted
+    - node_id: pb
+  - - NodeSucceeded
+    - node_id: pb
+      output: B
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: B
+  - - RunSucceeded
+    - output: B

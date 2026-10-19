@@ -1,0 +1,310 @@
+# From tests/engine/test_lifted_node_gating.py::test_inline_call_in_a_mapped_child_flow_runs_once_per_taken_element.
+# Pins: in a MAP over a child flow, the child's lifted call runs only for the element on its route.
+# The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
+kind: run
+flow: |
+  id: t
+  name: t
+  input:
+    go: !bool
+    other: !bool
+  defs:
+    side:
+      input:
+        tag: !str
+      nodes:
+        fx:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:record
+          input:
+            tag: ${input.tag}
+          output: str
+      output: ${fx.output}
+    child:
+      input:
+        go: !bool
+      nodes:
+        gate:
+          kind: case
+          cases:
+            - when: ${input.go}
+              then: publish
+          else: skip_it
+        publish:
+          kind: code
+          input:
+            draft: call(side, tag="child")
+          output: str
+          code: return inputs["draft"]
+        skip_it:
+          kind: code
+          output: str
+          code: return "skipped"
+      output: ${gate.output}
+  nodes:
+    m:
+      kind: map
+      call: child
+      over: ${[input.go, input.other]}
+      input:
+        go: ${item}
+  output:
+    r: ${m.output}
+python_flow: |
+  id: t
+  name: t
+  input:
+    go: !bool
+    other: !bool
+  defs:
+    side:
+      input:
+        tag: !str
+      nodes:
+        fx:
+          kind: code
+          code: tests.engine._compose_codefns:record
+          input:
+            tag: ${input.tag}
+          output: str
+      output: ${fx.output}
+    child:
+      input:
+        go: !bool
+      nodes:
+        gate:
+          kind: case
+          cases:
+            - when: ${input.go}
+              then: publish
+          else: skip_it
+        publish:
+          kind: code
+          input:
+            draft: call(side, tag="child")
+          output: str
+          code: return inputs["draft"]
+        skip_it:
+          kind: code
+          output: str
+          code: return "skipped"
+      output: ${gate.output}
+  nodes:
+    m:
+      kind: map
+      call: child
+      over: ${[input.go, input.other]}
+      input:
+        go: ${item}
+  output:
+    r: ${m.output}
+inputs:
+  go: true
+  other: false
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      r: [child, skipped]
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        go: true
+        other: false
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        go: true
+        other: false
+  - [node_started, m]
+  - - node_expanded
+    - m
+    - prune_ids: []
+      seed:
+      - go: true
+      - go: false
+  - [node_started, m/__start__]
+  - - node_succeeded
+    - m/__start__
+    - value: {}
+  - [node_started, m#0/__start__]
+  - - node_succeeded
+    - m#0/__start__
+    - value:
+        go: true
+  - [node_started, m#1/__start__]
+  - - node_succeeded
+    - m#1/__start__
+    - value:
+        go: false
+  - [node_started, m#0/gate]
+  - - node_routed
+    - m#0/gate
+    - handle: publish
+  - [node_started, m#1/gate]
+  - - node_routed
+    - m#1/gate
+    - handle: '#else'
+  - [node_started, m#0/__call_0]
+  - - node_expanded
+    - m#0/__call_0
+    - prune_ids: []
+      seed:
+        tag: child
+  - [node_started, m#1/skip_it]
+  - - node_succeeded
+    - m#1/skip_it
+    - value: skipped
+  - [node_started, m#0/__call_0/__start__]
+  - - node_succeeded
+    - m#0/__call_0/__start__
+    - value:
+        tag: child
+  - [node_started, m#1/__end__]
+  - - node_succeeded
+    - m#1/__end__
+    - value: skipped
+  - [node_started, m#0/__call_0/fx]
+  - - node_succeeded
+    - m#0/__call_0/fx
+    - value: child
+  - [node_started, m#0/__call_0/__end__]
+  - - node_succeeded
+    - m#0/__call_0/__end__
+    - commit_target: m#0/__call_0
+      value: child
+  - [node_started, m#0/publish]
+  - - node_succeeded
+    - m#0/publish
+    - value: child
+  - [node_started, m#0/__end__]
+  - - node_succeeded
+    - m#0/__end__
+    - value: child
+  - [node_started, m/__end__]
+  - - node_succeeded
+    - m/__end__
+    - commit_target: m
+      value: [child, skipped]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        r: [child, skipped]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        go: true
+        other: false
+  - - NodeStarted
+    - node_id: m
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - go: true
+        - go: false
+      node_id: m
+  - - NodeStarted
+    - node_id: m/__start__
+  - - NodeSucceeded
+    - node_id: m/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: m#0/__start__
+  - - NodeSucceeded
+    - node_id: m#0/__start__
+      output:
+        go: true
+  - - NodeStarted
+    - node_id: m#1/__start__
+  - - NodeSucceeded
+    - node_id: m#1/__start__
+      output:
+        go: false
+  - - NodeStarted
+    - node_id: m#0/gate
+  - - NodeRouted
+    - handle: publish
+      node_id: m#0/gate
+  - - NodeSkipped
+    - node_id: m#0/skip_it
+  - - NodeStarted
+    - node_id: m#1/gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: m#1/gate
+  - - NodeSkipped
+    - node_id: m#1/publish
+  - - NodeSkipped
+    - node_id: m#1/__call_0
+  - - NodeStarted
+    - node_id: m#0/__call_0
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          tag: child
+      node_id: m#0/__call_0
+  - - NodeStarted
+    - node_id: m#1/skip_it
+  - - NodeSucceeded
+    - node_id: m#1/skip_it
+      output: skipped
+  - - NodeStarted
+    - node_id: m#0/__call_0/__start__
+  - - NodeSucceeded
+    - node_id: m#0/__call_0/__start__
+      output:
+        tag: child
+  - - NodeStarted
+    - node_id: m#1/__end__
+  - - NodeSucceeded
+    - node_id: m#1/__end__
+      output: skipped
+  - - NodeStarted
+    - node_id: m#0/__call_0/fx
+  - - NodeSucceeded
+    - node_id: m#0/__call_0/fx
+      output: child
+  - - NodeStarted
+    - node_id: m#0/__call_0/__end__
+  - - NodeSucceeded
+    - commit_as: m#0/__call_0
+      node_id: m#0/__call_0/__end__
+      output: child
+  - - NodeStarted
+    - node_id: m#0/publish
+  - - NodeSucceeded
+    - node_id: m#0/publish
+      output: child
+  - - NodeStarted
+    - node_id: m#0/__end__
+  - - NodeSucceeded
+    - node_id: m#0/__end__
+      output: child
+  - - NodeStarted
+    - node_id: m/__end__
+  - - NodeSucceeded
+    - commit_as: m
+      node_id: m/__end__
+      output: [child, skipped]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        r: [child, skipped]
+  - - RunSucceeded
+    - output:
+        r: [child, skipped]

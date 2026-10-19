@@ -1,0 +1,207 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    flip: !bool
+  nodes:
+    repeat:
+      kind: loop
+      times: 1
+      input:
+        n: 0
+        note: !str "start"
+        flip: ${input.flip}
+      nodes:
+          gate:
+            kind: case
+            cases:
+              - when: ${input.flip}
+                then: mk
+          mk:
+            kind: code
+            output: str
+            code: |
+              return "made"
+          bump:
+            kind: code
+            input:
+              n: ${input.n}
+            output: int
+            code: |
+              return inputs["n"] + 1n
+      output:
+        n: ${bump.output}
+        note: ${mk.output}
+  output: ${repeat.output}
+python_flow: |
+  id: f
+  name: f
+  input:
+    flip: !bool
+  nodes:
+    repeat:
+      kind: loop
+      times: 1
+      input:
+        n: 0
+        note: !str "start"
+        flip: ${input.flip}
+      nodes:
+          gate:
+            kind: case
+            cases:
+              - when: ${input.flip}
+                then: mk
+          mk:
+            kind: code
+            output: str
+            code: |
+              return "made"
+          bump:
+            kind: code
+            input:
+              n: ${input.n}
+            output: int
+            code: |
+              return inputs["n"] + 1
+      output:
+        n: ${bump.output}
+        note: ${mk.output}
+  output: ${repeat.output}
+inputs:
+  flip: false
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      flip: false
+      n: 1
+      note: null
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        flip: false
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        flip: false
+  - [node_started, repeat]
+  - - node_expanded
+    - repeat
+    - prune_ids: []
+      seed:
+      - flip: false
+        n: 0
+        note: start
+      - 0
+  - [node_started, repeat#0/__start__]
+  - - node_succeeded
+    - repeat#0/__start__
+    - value:
+        flip: false
+        n: 0
+        note: start
+  - [node_started, repeat#0/bump]
+  - - node_succeeded
+    - repeat#0/bump
+    - value: 1
+  - [node_started, repeat#0/gate]
+  - - node_routed
+    - repeat#0/gate
+    - handle: '#else'
+  - [node_started, repeat#0/__end__]
+  - - node_succeeded
+    - repeat#0/__end__
+    - value:
+        n: 1
+        note: null
+  - [node_started, repeat~1]
+  - - node_succeeded
+    - repeat~1
+    - commit_target: repeat
+      value:
+        flip: false
+        n: 1
+        note: null
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        flip: false
+        n: 1
+        note: null
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        flip: false
+  - - NodeStarted
+    - node_id: repeat
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - flip: false
+          n: 0
+          note: start
+        - 0
+      node_id: repeat
+  - - NodeStarted
+    - node_id: repeat#0/__start__
+  - - NodeSucceeded
+    - node_id: repeat#0/__start__
+      output:
+        flip: false
+        n: 0
+        note: start
+  - - NodeStarted
+    - node_id: repeat#0/bump
+  - - NodeSucceeded
+    - node_id: repeat#0/bump
+      output: 1
+  - - NodeStarted
+    - node_id: repeat#0/gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: repeat#0/gate
+  - - NodeSkipped
+    - node_id: repeat#0/mk
+  - - NodeStarted
+    - node_id: repeat#0/__end__
+  - - NodeSucceeded
+    - node_id: repeat#0/__end__
+      output:
+        n: 1
+        note: null
+  - - NodeStarted
+    - node_id: repeat~1
+  - - NodeSucceeded
+    - commit_as: repeat
+      node_id: repeat~1
+      output:
+        flip: false
+        n: 1
+        note: null
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        flip: false
+        n: 1
+        note: null
+  - - RunSucceeded
+    - output:
+        flip: false
+        n: 1
+        note: null

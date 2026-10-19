@@ -1,0 +1,99 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    pick: !str
+  nodes:
+    src:
+      kind: code
+      input:
+        p: ${input.pick}
+      code: |
+        return "1"
+    route:
+      kind: case
+      on: ${src.output}
+      cases:
+        - when: 1
+          then: one
+      else: other
+    one:
+      kind: code
+      code: |
+        return "one"
+      output: str
+    other:
+      kind: code
+      code: |
+        return "other"
+      output: str
+  output: ${one.output | other.output}
+inputs:
+  pick: x
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: other
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        pick: x
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        pick: x
+  - [node_started, src]
+  - - node_succeeded
+    - src
+    - value: '1'
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: '#else'
+  - [node_started, other]
+  - - node_succeeded
+    - other
+    - value: other
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: other
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        pick: x
+  - - NodeStarted
+    - node_id: src
+  - - NodeSucceeded
+    - node_id: src
+      output: '1'
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: '#else'
+      node_id: route
+  - - NodeSkipped
+    - node_id: one
+  - - NodeStarted
+    - node_id: other
+  - - NodeSucceeded
+    - node_id: other
+      output: other
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: other
+  - - RunSucceeded
+    - output: other

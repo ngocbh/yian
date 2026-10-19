@@ -1,0 +1,78 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    gate:
+      kind: case
+      on: ${input.x}
+      cases:
+        - when: a
+          then: pa
+        - when: b
+          then: pb
+    pa:
+      kind: code
+      code: |
+        return "A"
+      output: str
+    pb:
+      kind: code
+      code: |
+        return "B"
+      output: str
+  output: ${pa.output | pb.output:-'none'}
+inputs:
+  x: c
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: none
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        x: c
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        x: c
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: '#else'
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: none
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        x: c
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: gate
+  - - NodeSkipped
+    - node_id: pa
+  - - NodeSkipped
+    - node_id: pb
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: none
+  - - RunSucceeded
+    - output: none

@@ -1,0 +1,159 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  defs:
+    g:
+      input:
+        n: !int
+      nodes:
+        v: !object
+          n: ${input.n}
+          where: def
+      output: ${v.output}
+  input:
+    name: !str
+  nodes:
+    a:
+      kind: code
+      output: int
+      code: |
+        return 2
+    b:
+      kind: code
+      output: int
+      code: |
+        return 3
+    x: !object call(g, n=${a.output})
+  output: ${x.output}
+inputs:
+  name: Ada
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      n: 2
+      where: def
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        name: Ada
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        name: Ada
+  - [node_started, a]
+  - - node_succeeded
+    - a
+    - value: 2
+  - [node_started, b]
+  - - node_succeeded
+    - b
+    - value: 3
+  - [node_started, __call_0]
+  - - node_expanded
+    - __call_0
+    - prune_ids: []
+      seed:
+        n: 2
+  - [node_started, __call_0/__start__]
+  - - node_succeeded
+    - __call_0/__start__
+    - value:
+        n: 2
+  - [node_started, __call_0/v]
+  - - node_succeeded
+    - __call_0/v
+    - value:
+        n: 2
+        where: def
+  - [node_started, __call_0/__end__]
+  - - node_succeeded
+    - __call_0/__end__
+    - commit_target: __call_0
+      value:
+        n: 2
+        where: def
+  - [node_started, x]
+  - - node_succeeded
+    - x
+    - value:
+        n: 2
+        where: def
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        n: 2
+        where: def
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        name: Ada
+  - - NodeStarted
+    - node_id: a
+  - - NodeSucceeded
+    - node_id: a
+      output: 2
+  - - NodeStarted
+    - node_id: b
+  - - NodeSucceeded
+    - node_id: b
+      output: 3
+  - - NodeStarted
+    - node_id: __call_0
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          n: 2
+      node_id: __call_0
+  - - NodeStarted
+    - node_id: __call_0/__start__
+  - - NodeSucceeded
+    - node_id: __call_0/__start__
+      output:
+        n: 2
+  - - NodeStarted
+    - node_id: __call_0/v
+  - - NodeSucceeded
+    - node_id: __call_0/v
+      output:
+        n: 2
+        where: def
+  - - NodeStarted
+    - node_id: __call_0/__end__
+  - - NodeSucceeded
+    - commit_as: __call_0
+      node_id: __call_0/__end__
+      output:
+        n: 2
+        where: def
+  - - NodeStarted
+    - node_id: x
+  - - NodeSucceeded
+    - node_id: x
+      output:
+        n: 2
+        where: def
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        n: 2
+        where: def
+  - - RunSucceeded
+    - output:
+        n: 2
+        where: def

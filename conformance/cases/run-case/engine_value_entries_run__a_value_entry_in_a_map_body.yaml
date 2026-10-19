@@ -1,0 +1,187 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    name: !str
+  nodes:
+    a:
+      kind: code
+      output: int
+      code: |
+        return 2
+    b:
+      kind: code
+      output: int
+      code: |
+        return 3
+    items: !list(str) [a, b]
+    x:
+      kind: map
+      over: ${items.output}
+      input:
+        v: ${item}
+      nodes:
+        wrap: !str got ${input.v}
+      output: ${wrap.output}
+  output: ${x.output}
+inputs:
+  name: Ada
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: [got a, got b]
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        name: Ada
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        name: Ada
+  - [node_started, a]
+  - - node_succeeded
+    - a
+    - value: 2
+  - [node_started, b]
+  - - node_succeeded
+    - b
+    - value: 3
+  - [node_started, items]
+  - - node_succeeded
+    - items
+    - value: [a, b]
+  - [node_started, x]
+  - - node_expanded
+    - x
+    - prune_ids: []
+      seed:
+      - v: a
+      - v: b
+  - [node_started, x/__start__]
+  - - node_succeeded
+    - x/__start__
+    - value: {}
+  - [node_started, x#0/__start__]
+  - - node_succeeded
+    - x#0/__start__
+    - value:
+        v: a
+  - [node_started, x#1/__start__]
+  - - node_succeeded
+    - x#1/__start__
+    - value:
+        v: b
+  - [node_started, x#0/wrap]
+  - - node_succeeded
+    - x#0/wrap
+    - value: got a
+  - [node_started, x#1/wrap]
+  - - node_succeeded
+    - x#1/wrap
+    - value: got b
+  - [node_started, x#0/__end__]
+  - - node_succeeded
+    - x#0/__end__
+    - value: got a
+  - [node_started, x#1/__end__]
+  - - node_succeeded
+    - x#1/__end__
+    - value: got b
+  - [node_started, x/__end__]
+  - - node_succeeded
+    - x/__end__
+    - commit_target: x
+      value: [got a, got b]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: [got a, got b]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        name: Ada
+  - - NodeStarted
+    - node_id: a
+  - - NodeSucceeded
+    - node_id: a
+      output: 2
+  - - NodeStarted
+    - node_id: b
+  - - NodeSucceeded
+    - node_id: b
+      output: 3
+  - - NodeStarted
+    - node_id: items
+  - - NodeSucceeded
+    - node_id: items
+      output: [a, b]
+  - - NodeStarted
+    - node_id: x
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - v: a
+        - v: b
+      node_id: x
+  - - NodeStarted
+    - node_id: x/__start__
+  - - NodeSucceeded
+    - node_id: x/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: x#0/__start__
+  - - NodeSucceeded
+    - node_id: x#0/__start__
+      output:
+        v: a
+  - - NodeStarted
+    - node_id: x#1/__start__
+  - - NodeSucceeded
+    - node_id: x#1/__start__
+      output:
+        v: b
+  - - NodeStarted
+    - node_id: x#0/wrap
+  - - NodeSucceeded
+    - node_id: x#0/wrap
+      output: got a
+  - - NodeStarted
+    - node_id: x#1/wrap
+  - - NodeSucceeded
+    - node_id: x#1/wrap
+      output: got b
+  - - NodeStarted
+    - node_id: x#0/__end__
+  - - NodeSucceeded
+    - node_id: x#0/__end__
+      output: got a
+  - - NodeStarted
+    - node_id: x#1/__end__
+  - - NodeSucceeded
+    - node_id: x#1/__end__
+      output: got b
+  - - NodeStarted
+    - node_id: x/__end__
+  - - NodeSucceeded
+    - commit_as: x
+      node_id: x/__end__
+      output: [got a, got b]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: [got a, got b]
+  - - RunSucceeded
+    - output: [got a, got b]

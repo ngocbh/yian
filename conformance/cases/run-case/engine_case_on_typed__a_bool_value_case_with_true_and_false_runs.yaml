@@ -1,0 +1,77 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    n: !bool
+  nodes:
+    route:
+      kind: case
+      on: ${input.n}
+      cases:
+        - when: true
+          then: v0
+        - when: false
+          then: v1
+    v0: !str "yes"
+    v1: !str "no"
+  output: ${route.output}
+inputs:
+  n: false
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: no
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        n: false
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        n: false
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: v1
+  - [node_started, v1]
+  - - node_succeeded
+    - v1
+    - value: no
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: no
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        n: false
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: v1
+      node_id: route
+  - - NodeSkipped
+    - node_id: v0
+  - - NodeStarted
+    - node_id: v1
+  - - NodeSucceeded
+    - node_id: v1
+      output: no
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: no
+  - - RunSucceeded
+    - output: no

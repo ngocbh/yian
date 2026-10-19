@@ -1,0 +1,151 @@
+# From tests/engine/test_lifted_node_gating.py::test_nested_branch_call_does_not_run_its_inner_call_on_an_untaken_route.
+# Pins: the inner call of a nested `then: call(wrap, x=call(side, ...))` never starts when `else:` is taken.
+# The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
+kind: run
+flow: |
+  id: t
+  name: t
+  input:
+    go: !bool
+  defs:
+    side:
+      input:
+        tag: !str
+      nodes:
+        fx:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:record
+          input:
+            tag: ${input.tag}
+          output: str
+      output: ${fx.output}
+    wrap:
+      input:
+        x: !str
+      nodes:
+        w:
+          kind: code
+          input:
+            x: ${input.x}
+          output: str
+          code: return "wrapped " + inputs["x"]
+      output: ${w.output}
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.go}
+          then: call(wrap, x=call(side, tag="inner"))
+      else: b
+    b:
+      kind: code
+      output: str
+      code: return "B"
+  output:
+    r: ${gate.output}
+python_flow: |
+  id: t
+  name: t
+  input:
+    go: !bool
+  defs:
+    side:
+      input:
+        tag: !str
+      nodes:
+        fx:
+          kind: code
+          code: tests.engine._compose_codefns:record
+          input:
+            tag: ${input.tag}
+          output: str
+      output: ${fx.output}
+    wrap:
+      input:
+        x: !str
+      nodes:
+        w:
+          kind: code
+          input:
+            x: ${input.x}
+          output: str
+          code: return "wrapped " + inputs["x"]
+      output: ${w.output}
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.go}
+          then: call(wrap, x=call(side, tag="inner"))
+      else: b
+    b:
+      kind: code
+      output: str
+      code: return "B"
+  output:
+    r: ${gate.output}
+inputs:
+  go: false
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      r: B
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        go: false
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        go: false
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: '#else'
+  - [node_started, b]
+  - - node_succeeded
+    - b
+    - value: B
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        r: B
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        go: false
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: gate
+  - - NodeSkipped
+    - node_id: __call_1
+  - - NodeSkipped
+    - node_id: __call_0
+  - - NodeStarted
+    - node_id: b
+  - - NodeSucceeded
+    - node_id: b
+      output: B
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        r: B
+  - - RunSucceeded
+    - output:
+        r: B

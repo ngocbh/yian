@@ -1,0 +1,159 @@
+kind: run
+flow: |2
+
+  id: parent
+  name: parent
+  input:
+    approve: !bool
+  defs:
+    child:
+      input:
+        approve: !bool
+      nodes:
+        gate:
+          kind: case
+          cases:
+            - when: ${input.approve}
+              then: order
+          else: rejected
+        order:
+          kind: code
+          output: str
+          code: |
+            return "filled"
+        rejected:
+          kind: code
+          output: str
+          code: |
+            return "no"
+        c:
+          kind: code
+          input:
+            x: {a: '${order.output}', t: 'got ${order.output}'}
+          code: |
+            return inputs["x"]
+      output:
+        c: ${c.output}
+        r: {b: '${order.output}'}
+  nodes:
+    k:
+      kind: call
+      call: child
+      input:
+        approve: ${input.approve}
+  output: ${k.output}
+inputs:
+  approve: false
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      c: null
+      r:
+        b: null
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        approve: false
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        approve: false
+  - [node_started, k]
+  - - node_expanded
+    - k
+    - prune_ids: []
+      seed:
+        approve: false
+  - [node_started, k/__start__]
+  - - node_succeeded
+    - k/__start__
+    - value:
+        approve: false
+  - [node_started, k/gate]
+  - - node_routed
+    - k/gate
+    - handle: '#else'
+  - [node_started, k/__end__]
+  - - node_succeeded
+    - k/__end__
+    - commit_target: k
+      value:
+        c: null
+        r:
+          b: null
+  - [node_started, k/rejected]
+  - - node_succeeded
+    - k/rejected
+    - value: no
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        c: null
+        r:
+          b: null
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        approve: false
+  - - NodeStarted
+    - node_id: k
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          approve: false
+      node_id: k
+  - - NodeStarted
+    - node_id: k/__start__
+  - - NodeSucceeded
+    - node_id: k/__start__
+      output:
+        approve: false
+  - - NodeStarted
+    - node_id: k/gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: k/gate
+  - - NodeSkipped
+    - node_id: k/order
+  - - NodeSkipped
+    - node_id: k/c
+  - - NodeStarted
+    - node_id: k/__end__
+  - - NodeSucceeded
+    - commit_as: k
+      node_id: k/__end__
+      output:
+        c: null
+        r:
+          b: null
+  - - NodeStarted
+    - node_id: k/rejected
+  - - NodeSucceeded
+    - node_id: k/rejected
+      output: no
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        c: null
+        r:
+          b: null
+  - - RunSucceeded
+    - output:
+        c: null
+        r:
+          b: null

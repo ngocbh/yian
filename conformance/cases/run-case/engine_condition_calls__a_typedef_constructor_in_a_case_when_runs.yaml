@@ -1,0 +1,78 @@
+kind: run
+flow: |2
+
+  id: f
+  name: f
+  typedefs:
+    Small: int(0..9)
+  input:
+    v: !int
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "Small(input.v) > 4"
+          then: hot
+      else: cold
+    hot: {kind: code, code: "return 'hot'", output: str}
+    cold: {kind: code, code: "return 'cold'", output: str}
+  output: ${hot.output | cold.output}
+inputs:
+  v: 7
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: hot
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        v: 7
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        v: 7
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: hot
+  - [node_started, hot]
+  - - node_succeeded
+    - hot
+    - value: hot
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: hot
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        v: 7
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: hot
+      node_id: gate
+  - - NodeSkipped
+    - node_id: cold
+  - - NodeStarted
+    - node_id: hot
+  - - NodeSucceeded
+    - node_id: hot
+      output: hot
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: hot
+  - - RunSucceeded
+    - output: hot

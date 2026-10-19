@@ -1,0 +1,158 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Buy:
+      action: Literal(buy)
+      qty: int
+    Sell:
+      action: Literal(sell)
+      price: float
+  input:
+    kind: !str
+  nodes:
+    d:
+      kind: code
+      input:
+        kind: ${input.kind}
+      code: |
+        if (inputs["kind"] === "buy")
+          return {action: "buy", qty: 3n}
+        return {action: "sell", price: 1.5}
+      output: Union(Buy, Sell)
+    route:
+      kind: case
+      on: ${d.output.action}
+      cases:
+        - when: buy
+          then: inner
+      else: sold
+    inner:
+      kind: case
+      on: ${d.output.action}
+      cases:
+        - when: buy
+          then: bought
+    bought: !str "bought ${d.output.qty}"
+    sold: !str sold
+  output: ${route.output}
+python_flow: |
+  id: f
+  name: f
+  typedefs:
+    Buy:
+      action: Literal(buy)
+      qty: int
+    Sell:
+      action: Literal(sell)
+      price: float
+  input:
+    kind: !str
+  nodes:
+    d:
+      kind: code
+      input:
+        kind: ${input.kind}
+      code: |
+        if inputs["kind"] == "buy":
+            return {"action": "buy", "qty": 3}
+        return {"action": "sell", "price": 1.5}
+      output: Union(Buy, Sell)
+    route:
+      kind: case
+      on: ${d.output.action}
+      cases:
+        - when: buy
+          then: inner
+      else: sold
+    inner:
+      kind: case
+      on: ${d.output.action}
+      cases:
+        - when: buy
+          then: bought
+    bought: !str "bought ${d.output.qty}"
+    sold: !str sold
+  output: ${route.output}
+inputs:
+  kind: buy
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: bought 3
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        kind: buy
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        kind: buy
+  - [node_started, d]
+  - - node_succeeded
+    - d
+    - value:
+        action: buy
+        qty: 3
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: inner
+  - [node_started, inner]
+  - - node_routed
+    - inner
+    - handle: bought
+  - [node_started, bought]
+  - - node_succeeded
+    - bought
+    - value: bought 3
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: bought 3
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        kind: buy
+  - - NodeStarted
+    - node_id: d
+  - - NodeSucceeded
+    - node_id: d
+      output:
+        action: buy
+        qty: 3
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: inner
+      node_id: route
+  - - NodeSkipped
+    - node_id: sold
+  - - NodeStarted
+    - node_id: inner
+  - - NodeRouted
+    - handle: bought
+      node_id: inner
+  - - NodeStarted
+    - node_id: bought
+  - - NodeSucceeded
+    - node_id: bought
+      output: bought 3
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: bought 3
+  - - RunSucceeded
+    - output: bought 3

@@ -1,0 +1,160 @@
+kind: run
+flow: |2
+
+  id: cvc
+  name: case_value_consumer
+  input:
+    seed: !float
+    topic: !str
+  nodes:
+    s:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:score
+      input:
+        seed: ${input.seed}
+      output: float
+    gate:
+      kind: case
+      cases:
+        - when: "s.output >= 0.5"
+          then: pro
+      else: caut
+    pro:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:positive
+      input:
+        topic: ${input.topic}
+      output: str
+    caut:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:cautious
+      input:
+        topic: ${input.topic}
+      output: str
+    summary:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: ${gate.output}
+      output: str
+  output: ${summary.output}
+python_flow: |2
+
+  id: cvc
+  name: case_value_consumer
+  input:
+    seed: !float
+    topic: !str
+  nodes:
+    s:
+      kind: code
+      code: tests.engine._compose_codefns:score
+      input:
+        seed: ${input.seed}
+      output: float
+    gate:
+      kind: case
+      cases:
+        - when: "s.output >= 0.5"
+          then: pro
+      else: caut
+    pro:
+      kind: code
+      code: tests.engine._compose_codefns:positive
+      input:
+        topic: ${input.topic}
+      output: str
+    caut:
+      kind: code
+      code: tests.engine._compose_codefns:cautious
+      input:
+        topic: ${input.topic}
+      output: str
+    summary:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: ${gate.output}
+      output: str
+  output: ${summary.output}
+inputs:
+  seed: 0.9
+  topic: ACME
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: pro case for ACME
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        seed: 0.9
+        topic: ACME
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        seed: 0.9
+        topic: ACME
+  - [node_started, s]
+  - - node_succeeded
+    - s
+    - value: 0.9
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: pro
+  - [node_started, pro]
+  - - node_succeeded
+    - pro
+    - value: pro case for ACME
+  - [node_started, summary]
+  - - node_succeeded
+    - summary
+    - value: pro case for ACME
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: pro case for ACME
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        seed: 0.9
+        topic: ACME
+  - - NodeStarted
+    - node_id: s
+  - - NodeSucceeded
+    - node_id: s
+      output: 0.9
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: pro
+      node_id: gate
+  - - NodeSkipped
+    - node_id: caut
+  - - NodeStarted
+    - node_id: pro
+  - - NodeSucceeded
+    - node_id: pro
+      output: pro case for ACME
+  - - NodeStarted
+    - node_id: summary
+  - - NodeSucceeded
+    - node_id: summary
+      output: pro case for ACME
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: pro case for ACME
+  - - RunSucceeded
+    - output: pro case for ACME

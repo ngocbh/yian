@@ -1,0 +1,101 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    approve: !bool
+  defs:
+    take:
+      input:
+        stance: !str
+      nodes:
+        x:
+          kind: code
+          output: str
+          input:
+            stance: ${input.stance}
+          code: |
+            return inputs["stance"]
+      output: ${x.output}
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: c
+      else: rejected
+    c:
+      kind: call
+      call: take
+      input:
+        stance: "pro"
+    rejected:
+      kind: code
+      output: str
+      code: |
+        return "no"
+  output:
+    v: ${c.output}
+inputs:
+  approve: false
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      v: null
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        approve: false
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        approve: false
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: '#else'
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        v: null
+  - [node_started, rejected]
+  - - node_succeeded
+    - rejected
+    - value: no
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        approve: false
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: gate
+  - - NodeSkipped
+    - node_id: c
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        v: null
+  - - NodeStarted
+    - node_id: rejected
+  - - NodeSucceeded
+    - node_id: rejected
+      output: no
+  - - RunSucceeded
+    - output:
+        v: null

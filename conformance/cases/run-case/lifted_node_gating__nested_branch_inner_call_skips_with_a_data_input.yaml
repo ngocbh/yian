@@ -1,0 +1,183 @@
+# From tests/engine/test_lifted_node_gating.py::test_nested_branch_inner_call_is_skipped_with_the_branch_calls_data_input.
+# Pins: on the taken route, a nested branch call's inner call is skipped with the branch call's skipped argument.
+# The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
+kind: run
+flow: |
+  id: t
+  name: t
+  input:
+    go: !bool
+    other: !bool
+  defs:
+    pair:
+      input:
+        x: !str
+        y: !str
+      nodes:
+        j:
+          kind: code
+          input:
+            x: ${input.x}
+            y: ${input.y}
+          output: str
+          code: return inputs["x"] + inputs["y"]
+      output: ${j.output}
+    side:
+      input:
+        tag: !str
+      nodes:
+        fx:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:record
+          input:
+            tag: ${input.tag}
+          output: str
+      output: ${fx.output}
+  nodes:
+    pick:
+      kind: case
+      cases:
+        - when: ${input.other}
+          then: maybe
+    maybe:
+      kind: code
+      output: str
+      code: return "m"
+    gate:
+      kind: case
+      cases:
+        - when: ${input.go}
+          then: call(pair, x=call(side, tag="inner"), y=${maybe.output})
+      else: b
+    b:
+      kind: code
+      output: str
+      code: return "B"
+  output:
+    r: ${gate.output}
+python_flow: |
+  id: t
+  name: t
+  input:
+    go: !bool
+    other: !bool
+  defs:
+    pair:
+      input:
+        x: !str
+        y: !str
+      nodes:
+        j:
+          kind: code
+          input:
+            x: ${input.x}
+            y: ${input.y}
+          output: str
+          code: return inputs["x"] + inputs["y"]
+      output: ${j.output}
+    side:
+      input:
+        tag: !str
+      nodes:
+        fx:
+          kind: code
+          code: tests.engine._compose_codefns:record
+          input:
+            tag: ${input.tag}
+          output: str
+      output: ${fx.output}
+  nodes:
+    pick:
+      kind: case
+      cases:
+        - when: ${input.other}
+          then: maybe
+    maybe:
+      kind: code
+      output: str
+      code: return "m"
+    gate:
+      kind: case
+      cases:
+        - when: ${input.go}
+          then: call(pair, x=call(side, tag="inner"), y=${maybe.output})
+      else: b
+    b:
+      kind: code
+      output: str
+      code: return "B"
+  output:
+    r: ${gate.output}
+inputs:
+  go: true
+  other: false
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      r: null
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        go: true
+        other: false
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        go: true
+        other: false
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: __call_1
+  - [node_started, pick]
+  - - node_routed
+    - pick
+    - handle: '#else'
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        r: null
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        go: true
+        other: false
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: __call_1
+      node_id: gate
+  - - NodeSkipped
+    - node_id: b
+  - - NodeStarted
+    - node_id: pick
+  - - NodeRouted
+    - handle: '#else'
+      node_id: pick
+  - - NodeSkipped
+    - node_id: maybe
+  - - NodeSkipped
+    - node_id: __call_1
+  - - NodeSkipped
+    - node_id: __call_0
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        r: null
+  - - RunSucceeded
+    - output:
+        r: null

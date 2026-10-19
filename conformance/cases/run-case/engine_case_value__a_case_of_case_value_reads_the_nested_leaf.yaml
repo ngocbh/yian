@@ -1,0 +1,153 @@
+kind: run
+flow: |2
+
+  id: coc
+  name: coc
+  input:
+    a: !float
+    b: !float
+  nodes:
+    outer:
+      kind: case
+      cases:
+        - when: "input.a >= 0.5"
+          then: inner
+      else: x
+    inner:
+      kind: case
+      cases:
+        - when: "input.b >= 0.5"
+          then: hi
+      else: lo
+    hi:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: "HI"
+      output: str
+    lo:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: "LO"
+      output: str
+    x:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: "X"
+      output: str
+  output: ${outer.output}
+python_flow: |2
+
+  id: coc
+  name: coc
+  input:
+    a: !float
+    b: !float
+  nodes:
+    outer:
+      kind: case
+      cases:
+        - when: "input.a >= 0.5"
+          then: inner
+      else: x
+    inner:
+      kind: case
+      cases:
+        - when: "input.b >= 0.5"
+          then: hi
+      else: lo
+    hi:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: "HI"
+      output: str
+    lo:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: "LO"
+      output: str
+    x:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: "X"
+      output: str
+  output: ${outer.output}
+inputs:
+  a: 0.9
+  b: 0.2
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: LO
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        a: 0.9
+        b: 0.2
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        a: 0.9
+        b: 0.2
+  - [node_started, outer]
+  - - node_routed
+    - outer
+    - handle: inner
+  - [node_started, inner]
+  - - node_routed
+    - inner
+    - handle: '#else'
+  - [node_started, lo]
+  - - node_succeeded
+    - lo
+    - value: LO
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: LO
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        a: 0.9
+        b: 0.2
+  - - NodeStarted
+    - node_id: outer
+  - - NodeRouted
+    - handle: inner
+      node_id: outer
+  - - NodeSkipped
+    - node_id: x
+  - - NodeStarted
+    - node_id: inner
+  - - NodeRouted
+    - handle: '#else'
+      node_id: inner
+  - - NodeSkipped
+    - node_id: hi
+  - - NodeStarted
+    - node_id: lo
+  - - NodeSucceeded
+    - node_id: lo
+      output: LO
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: LO
+  - - RunSucceeded
+    - output: LO

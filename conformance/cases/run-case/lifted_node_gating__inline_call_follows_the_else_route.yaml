@@ -1,0 +1,141 @@
+# From tests/engine/test_lifted_node_gating.py::test_inline_call_follows_the_else_route.
+# Pins: a call lifted from an `else:` host is skipped when the `then:` route is taken.
+# The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
+kind: run
+flow: |
+  id: t
+  name: t
+  input:
+    go: !bool
+  defs:
+    side:
+      input:
+        tag: !str
+      nodes:
+        fx:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:record
+          input:
+            tag: ${input.tag}
+          output: str
+      output: ${fx.output}
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.go}
+          then: skip_it
+      else: publish
+    publish:
+      kind: code
+      input:
+        draft: call(side, tag="publish")
+      output: str
+      code: return "published " + inputs["draft"]
+    skip_it:
+      kind: code
+      output: str
+      code: return "skipped"
+  output:
+    r: ${gate.output}
+python_flow: |
+  id: t
+  name: t
+  input:
+    go: !bool
+  defs:
+    side:
+      input:
+        tag: !str
+      nodes:
+        fx:
+          kind: code
+          code: tests.engine._compose_codefns:record
+          input:
+            tag: ${input.tag}
+          output: str
+      output: ${fx.output}
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.go}
+          then: skip_it
+      else: publish
+    publish:
+      kind: code
+      input:
+        draft: call(side, tag="publish")
+      output: str
+      code: return "published " + inputs["draft"]
+    skip_it:
+      kind: code
+      output: str
+      code: return "skipped"
+  output:
+    r: ${gate.output}
+inputs:
+  go: true
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      r: skipped
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        go: true
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        go: true
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: skip_it
+  - [node_started, skip_it]
+  - - node_succeeded
+    - skip_it
+    - value: skipped
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        r: skipped
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        go: true
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: skip_it
+      node_id: gate
+  - - NodeSkipped
+    - node_id: publish
+  - - NodeSkipped
+    - node_id: __call_0
+  - - NodeStarted
+    - node_id: skip_it
+  - - NodeSucceeded
+    - node_id: skip_it
+      output: skipped
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        r: skipped
+  - - RunSucceeded
+    - output:
+        r: skipped

@@ -1,0 +1,91 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    name: !str
+  nodes:
+    a:
+      kind: code
+      output: int
+      code: |
+        return 2
+    b:
+      kind: code
+      output: int
+      code: |
+        return 3
+    r: !object
+      p:
+        q: [1, 2]
+  output: ${r.output.p.q}
+inputs:
+  name: Ada
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: [1, 2]
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        name: Ada
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        name: Ada
+  - [node_started, a]
+  - - node_succeeded
+    - a
+    - value: 2
+  - [node_started, b]
+  - - node_succeeded
+    - b
+    - value: 3
+  - [node_started, r]
+  - - node_succeeded
+    - r
+    - value:
+        p:
+          q: [1, 2]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: [1, 2]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        name: Ada
+  - - NodeStarted
+    - node_id: a
+  - - NodeSucceeded
+    - node_id: a
+      output: 2
+  - - NodeStarted
+    - node_id: b
+  - - NodeSucceeded
+    - node_id: b
+      output: 3
+  - - NodeStarted
+    - node_id: r
+  - - NodeSucceeded
+    - node_id: r
+      output:
+        p:
+          q: [1, 2]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: [1, 2]
+  - - RunSucceeded
+    - output: [1, 2]

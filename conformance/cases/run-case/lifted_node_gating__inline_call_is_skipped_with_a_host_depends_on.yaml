@@ -1,0 +1,171 @@
+# From tests/engine/test_lifted_node_gating.py::test_inline_call_is_skipped_with_a_host_depends_on.
+# Pins: the lifted call co-skips with its host's `depends_on:` target.
+# The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
+kind: run
+flow: |
+  id: t
+  name: t
+  input:
+    go: !bool
+    other: !bool
+  defs:
+    side:
+      input:
+        tag: !str
+      nodes:
+        fx:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:record
+          input:
+            tag: ${input.tag}
+          output: str
+      output: ${fx.output}
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.go}
+          then: publish
+      else: skip_it
+    pick:
+      kind: case
+      cases:
+        - when: ${input.other}
+          then: maybe
+    maybe:
+      kind: code
+      output: str
+      code: return "m"
+    publish:
+      kind: code
+      depends_on: [maybe]
+      input:
+        draft: call(side, tag="publish")
+      output: str
+      code: return "published " + inputs["draft"]
+    skip_it:
+      kind: code
+      output: str
+      code: return "skipped"
+  output:
+    r: ${gate.output}
+python_flow: |
+  id: t
+  name: t
+  input:
+    go: !bool
+    other: !bool
+  defs:
+    side:
+      input:
+        tag: !str
+      nodes:
+        fx:
+          kind: code
+          code: tests.engine._compose_codefns:record
+          input:
+            tag: ${input.tag}
+          output: str
+      output: ${fx.output}
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.go}
+          then: publish
+      else: skip_it
+    pick:
+      kind: case
+      cases:
+        - when: ${input.other}
+          then: maybe
+    maybe:
+      kind: code
+      output: str
+      code: return "m"
+    publish:
+      kind: code
+      depends_on: [maybe]
+      input:
+        draft: call(side, tag="publish")
+      output: str
+      code: return "published " + inputs["draft"]
+    skip_it:
+      kind: code
+      output: str
+      code: return "skipped"
+  output:
+    r: ${gate.output}
+inputs:
+  go: true
+  other: false
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      r: null
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        go: true
+        other: false
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        go: true
+        other: false
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: publish
+  - [node_started, pick]
+  - - node_routed
+    - pick
+    - handle: '#else'
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        r: null
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        go: true
+        other: false
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: publish
+      node_id: gate
+  - - NodeSkipped
+    - node_id: skip_it
+  - - NodeStarted
+    - node_id: pick
+  - - NodeRouted
+    - handle: '#else'
+      node_id: pick
+  - - NodeSkipped
+    - node_id: maybe
+  - - NodeSkipped
+    - node_id: __call_0
+  - - NodeSkipped
+    - node_id: publish
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        r: null
+  - - RunSucceeded
+    - output:
+        r: null

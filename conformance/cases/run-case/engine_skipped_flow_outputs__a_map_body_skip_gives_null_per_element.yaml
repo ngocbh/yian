@@ -1,0 +1,166 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    approve: !bool
+  nodes:
+    each:
+      kind: map
+      over: [true, false]
+      input:
+        flag: ${item}
+      nodes:
+        gate:
+          kind: case
+          cases:
+            - when: ${input.flag}
+              then: mk
+        mk:
+          kind: code
+          output: str
+          code: |
+            return "made"
+      output: ${mk.output}
+  output: ${each.output}
+inputs:
+  approve: true
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: [made, null]
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        approve: true
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        approve: true
+  - [node_started, each]
+  - - node_expanded
+    - each
+    - prune_ids: []
+      seed:
+      - flag: true
+      - flag: false
+  - [node_started, each/__start__]
+  - - node_succeeded
+    - each/__start__
+    - value: {}
+  - [node_started, each#0/__start__]
+  - - node_succeeded
+    - each#0/__start__
+    - value:
+        flag: true
+  - [node_started, each#1/__start__]
+  - - node_succeeded
+    - each#1/__start__
+    - value:
+        flag: false
+  - [node_started, each#0/gate]
+  - - node_routed
+    - each#0/gate
+    - handle: mk
+  - [node_started, each#1/gate]
+  - - node_routed
+    - each#1/gate
+    - handle: '#else'
+  - [node_started, each#0/mk]
+  - - node_succeeded
+    - each#0/mk
+    - value: made
+  - [node_started, each#1/__end__]
+  - [node_succeeded, each#1/__end__]
+  - [node_started, each#0/__end__]
+  - - node_succeeded
+    - each#0/__end__
+    - value: made
+  - [node_started, each/__end__]
+  - - node_succeeded
+    - each/__end__
+    - commit_target: each
+      value: [made, null]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: [made, null]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        approve: true
+  - - NodeStarted
+    - node_id: each
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - flag: true
+        - flag: false
+      node_id: each
+  - - NodeStarted
+    - node_id: each/__start__
+  - - NodeSucceeded
+    - node_id: each/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: each#0/__start__
+  - - NodeSucceeded
+    - node_id: each#0/__start__
+      output:
+        flag: true
+  - - NodeStarted
+    - node_id: each#1/__start__
+  - - NodeSucceeded
+    - node_id: each#1/__start__
+      output:
+        flag: false
+  - - NodeStarted
+    - node_id: each#0/gate
+  - - NodeRouted
+    - handle: mk
+      node_id: each#0/gate
+  - - NodeStarted
+    - node_id: each#1/gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: each#1/gate
+  - - NodeSkipped
+    - node_id: each#1/mk
+  - - NodeStarted
+    - node_id: each#0/mk
+  - - NodeSucceeded
+    - node_id: each#0/mk
+      output: made
+  - - NodeStarted
+    - node_id: each#1/__end__
+  - - NodeSucceeded
+    - node_id: each#1/__end__
+  - - NodeStarted
+    - node_id: each#0/__end__
+  - - NodeSucceeded
+    - node_id: each#0/__end__
+      output: made
+  - - NodeStarted
+    - node_id: each/__end__
+  - - NodeSucceeded
+    - commit_as: each
+      node_id: each/__end__
+      output: [made, null]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: [made, null]
+  - - RunSucceeded
+    - output: [made, null]

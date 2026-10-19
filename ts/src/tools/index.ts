@@ -7,7 +7,9 @@
  * mapping (with its `ask_user` handler) that replaces it. `tools/types` reads a tool's declared
  * argument types as yian types. `tools/context` holds `ToolContext`, the call's identity, the
  * host's app object and the call's abort signal. `tools/function_tools` holds `FunctionTool` (a
- * tool given as a name, description, JSON Schema and `execute`). `tools/errors` holds
+ * tool given as a name, description, JSON Schema and `execute`, with optional Standard Schema
+ * validators and an output JSON Schema) and `tool()`, which builds one from a Standard Schema
+ * validator or a raw JSON Schema. `tools/errors` holds
  * `ReportedToolError`, which a tool throws for a failure an AGENT's model reads as the call's
  * result, `PermanentToolError` and `TransientToolError`, which a tool throws to stop or steer a
  * TOOL node's retries, and `ToolCheckError`, thrown when a check yian runs on a call fails; yian
@@ -34,7 +36,13 @@ export {
   type ToolErrorKind,
   TransientToolError,
 } from "./errors.ts";
-export { FunctionTool } from "./function_tools.ts";
+export {
+  FunctionTool,
+  type StandardIssue,
+  type StandardResult,
+  type StandardSchemaV1,
+  tool,
+} from "./function_tools.ts";
 export {
   isMcpError,
   McpCallCancelled,

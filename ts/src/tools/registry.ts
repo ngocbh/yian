@@ -166,6 +166,9 @@ export function registerTool(
           parametersJsonSchema: tool.parametersJsonSchema,
           execute: tool.execute,
           isConcurrencySafe: tool.isConcurrencySafe,
+          parametersValidator: tool.parametersValidator,
+          outputJsonSchema: tool.outputJsonSchema,
+          outputValidator: tool.outputValidator,
         })
       : tool,
   );

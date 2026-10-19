@@ -1,6 +1,10 @@
 /**
  * Host tools given as a name, a description, a JSON Schema and a call.
  *
+ * `FunctionTool` describes a tool by its argument JSON Schema and an `execute` function, and may
+ * carry Standard Schema v1 validators and an output JSON Schema. `tool()` builds one from a
+ * validator (zod, valibot, ArkType, ...) or a raw JSON Schema; yian imports no validator library.
+ *
  * Knows about: `tools/context`, `llm/messages` (the JSON check), typesys and diagnostics.
  */
 
@@ -16,6 +20,31 @@ import type { ToolContext } from "./context.ts";
  */
 const FUNCTION_TOOL = Symbol.for("yian.function_tool");
 
+/** The members of a Standard Schema v1 validator yian reads (standardschema.dev). */
+export interface StandardSchemaV1<Input = unknown, Output = Input> {
+  readonly "~standard": {
+    readonly version: 1;
+    readonly vendor: string;
+    readonly validate: (value: unknown) => StandardResult<Output> | Promise<StandardResult<Output>>;
+    readonly types?: { readonly input: Input; readonly output: Output } | undefined;
+  };
+}
+
+/** A validation result: the output, or the issues. */
+export type StandardResult<Output> =
+  | { readonly value: Output; readonly issues?: undefined }
+  | { readonly issues: ReadonlyArray<StandardIssue> };
+
+/** One issue: a message and the path to the value it is about. */
+export interface StandardIssue {
+  readonly message: string;
+  readonly path?: ReadonlyArray<PropertyKey | { readonly key: PropertyKey }> | undefined;
+}
+
+// any: the inferred input and output types are the validator's own; only their use here is typed.
+type ArgsOf<P> = P extends StandardSchemaV1<any, infer O> ? O : Record<string, unknown>;
+type ResultOf<O> = O extends StandardSchemaV1<infer I, any> ? I : unknown;
+
 /**
  * A host tool given by its name, description, argument JSON Schema and call.
  *
@@ -24,9 +53,10 @@ const FUNCTION_TOOL = Symbol.for("yian.function_tool");
  * keys, and values whose JSON Schema yian can translate to a type. A property yian can't
  * translate is passed unchecked.
  *
- * @throws {TypeError} `name` or `description` is not a string, `parametersJsonSchema` is not a
- *   plain object or not JSON, `execute` is not a function, or `isConcurrencySafe` is neither a
- *   function nor `null`.
+ * @throws {TypeError} `name` or `description` is not a string, `parametersJsonSchema` or
+ *   `outputJsonSchema` is not a plain object or not JSON, `parametersValidator` or
+ *   `outputValidator` is not a Standard Schema v1 validator, `execute` is not a function, or
+ *   `isConcurrencySafe` is neither a function nor `null`.
  * @throws {RangeError} `name` is empty, or `parametersJsonSchema`'s `type` is not `"object"`.
  *
  * @example
@@ -59,6 +89,12 @@ export class FunctionTool {
    * given. It must be synchronous: a Promise result counts as unsafe.
    */
   readonly isConcurrencySafe: ((args: Record<string, unknown>) => boolean) | null;
+  /** The Standard Schema v1 validator of the arguments, or `null` when none was given. */
+  readonly parametersValidator: StandardSchemaV1 | null;
+  /** The result's JSON Schema, a deep-frozen copy of the one given, or `null` when none was given. */
+  readonly outputJsonSchema: JsonObject | null;
+  /** The Standard Schema v1 validator of the result, or `null` when none was given. */
+  readonly outputValidator: StandardSchemaV1 | null;
 
   /** Check the fields and build a frozen tool. */
   constructor(options: {
@@ -67,8 +103,12 @@ export class FunctionTool {
     parametersJsonSchema: JsonObject;
     execute: (args: Record<string, unknown>, ctx: ToolContext<any>) => unknown;
     isConcurrencySafe?: ((args: Record<string, unknown>) => boolean) | null;
+    parametersValidator?: StandardSchemaV1 | null;
+    outputJsonSchema?: JsonObject | null;
+    outputValidator?: StandardSchemaV1 | null;
   }) {
     const { name, description, parametersJsonSchema, execute, isConcurrencySafe } = options;
+    const { parametersValidator, outputJsonSchema, outputValidator } = options;
     if (typeof name !== "string") {
       throw new TypeError(`FunctionTool name must be a string, got ${jsTypeName(name)}`);
     }
@@ -85,13 +125,22 @@ export class FunctionTool {
     if (!Object.hasOwn(parametersJsonSchema, "type") || parametersJsonSchema.type !== "object") {
       throw new RangeError(`${prefix} parametersJsonSchema must have type 'object'`);
     }
-    let schema: JsonObject;
-    try {
-      // The model sees the schema, so it must be JSON: no Infinity, Date or runaway nesting.
-      schema = checkJsonValue(parametersJsonSchema, "parametersJsonSchema") as JsonObject;
-    } catch (error) {
-      if (error instanceof MessageFormatError) throw new TypeError(`${prefix} ${error.message}`);
-      throw error;
+    // The model sees the schema, so it must be JSON: no Infinity, Date or runaway nesting.
+    const schema = jsonCopy(prefix, parametersJsonSchema, "parametersJsonSchema");
+    let output: JsonObject | null = null;
+    if (outputJsonSchema !== undefined && outputJsonSchema !== null) {
+      if (!isRecord(outputJsonSchema)) {
+        throw new TypeError(`${prefix} outputJsonSchema must be an object, got ${jsTypeName(outputJsonSchema)}`);
+      }
+      output = jsonCopy(prefix, outputJsonSchema, "outputJsonSchema");
+    }
+    for (const [option, validator] of [
+      ["parametersValidator", parametersValidator],
+      ["outputValidator", outputValidator],
+    ] as const) {
+      if (validator !== undefined && validator !== null && !isStandardSchema(validator)) {
+        throw new TypeError(`${prefix} ${option} must be a Standard Schema v1 validator`);
+      }
     }
     if (typeof execute !== "function") throw new TypeError(`${prefix} execute must be a function`);
     if (
@@ -106,6 +155,9 @@ export class FunctionTool {
     this.parametersJsonSchema = deepFreeze(schema);
     this.execute = execute;
     this.isConcurrencySafe = isConcurrencySafe ?? null;
+    this.parametersValidator = parametersValidator ?? null;
+    this.outputJsonSchema = output === null ? null : deepFreeze(output);
+    this.outputValidator = outputValidator ?? null;
     Object.freeze(this);
   }
 }
@@ -128,6 +180,126 @@ export function isFunctionTool(value: unknown): value is FunctionTool {
     );
   } catch {
     return false;
+  }
+}
+
+/**
+ * Build a `FunctionTool` from a Standard Schema v1 validator or a raw JSON Schema.
+ *
+ * `parameters` and `output` each take a raw JSON Schema object, or a validator. A validator's JSON
+ * Schema is `parametersJsonSchema` (`outputJsonSchema`) when given, else the one its Standard JSON
+ * Schema interface (`~standard.jsonSchema.input`) gives for draft 2020-12. The tool keeps the
+ * validators as `parametersValidator` and `outputValidator`.
+ *
+ * @throws {TypeError} a validator has no Standard JSON Schema and no JSON Schema was passed beside
+ *   it, its converter throws (the error is the `cause`), or `parametersJsonSchema`
+ *   (`outputJsonSchema`) is given beside a raw JSON Schema; and as `FunctionTool` throws.
+ * @throws {RangeError} as `FunctionTool` throws, for example when the arguments' schema is not of
+ *   type `"object"`.
+ *
+ * @example
+ * const place = tool({
+ *   name: "place",
+ *   description: "Place an order.",
+ *   parameters: z.object({ sym: z.string(), qty: z.number().int().min(1) }),
+ *   output: z.object({ filled: z.number().int() }),
+ *   execute: (args, ctx) => ctx.context.submit(args.sym, args.qty),
+ * });
+ */
+export function tool<
+  P extends StandardSchemaV1 | JsonObject,
+  O extends StandardSchemaV1 | JsonObject | undefined = undefined,
+>(options: {
+  name: string;
+  description: string;
+  parameters: P;
+  parametersJsonSchema?: JsonObject;
+  output?: O;
+  outputJsonSchema?: JsonObject;
+  execute: (args: ArgsOf<P>, ctx: ToolContext<any>) => ResultOf<O> | Promise<ResultOf<O>>;
+  isConcurrencySafe?: ((args: ArgsOf<P>) => boolean) | null;
+}): FunctionTool {
+  const { name, description, execute, isConcurrencySafe } = options;
+  // `String`, so a non-string name reaches `FunctionTool`'s own check.
+  const prefix = `tool ${reprText(String(name))}`;
+  const [parametersJsonSchema, parametersValidator] = schemaOf(
+    prefix,
+    "parameters",
+    options.parameters,
+    options.parametersJsonSchema,
+  );
+  const [outputJsonSchema, outputValidator] = schemaOf(prefix, "output", options.output, options.outputJsonSchema);
+  return new FunctionTool({
+    name,
+    description,
+    parametersJsonSchema: parametersJsonSchema as JsonObject,
+    // The typed signatures narrow the arguments to what the validator describes.
+    execute: execute as FunctionTool["execute"],
+    isConcurrencySafe: isConcurrencySafe as FunctionTool["isConcurrencySafe"] | undefined,
+    parametersValidator,
+    // `undefined` when no output was given, which `FunctionTool` stores as `null`.
+    outputJsonSchema: outputJsonSchema as JsonObject | undefined,
+    outputValidator,
+  });
+}
+
+/**
+ * Return the JSON Schema and the validator `value` gives for `role`: a raw JSON Schema is its own
+ * schema with no validator; a validator's schema is `given`, else its Standard JSON Schema.
+ */
+function schemaOf(
+  prefix: string,
+  role: "parameters" | "output",
+  value: unknown,
+  given: JsonObject | undefined,
+): [unknown, StandardSchemaV1 | null] {
+  const option = `${role}JsonSchema`;
+  const isValidator =
+    ((typeof value === "object" && value !== null) || typeof value === "function") && "~standard" in value;
+  if (!isValidator) {
+    if (given !== undefined) throw new TypeError(`${prefix} ${option} is only for a validator`);
+    return [value, null];
+  }
+  const validator = value as StandardSchemaV1;
+  if (given !== undefined) return [given, validator];
+  const standard: unknown = validator["~standard"];
+  const { vendor, jsonSchema } = (typeof standard === "object" && standard !== null ? standard : {}) as {
+    vendor?: unknown;
+    jsonSchema?: unknown;
+  };
+  const input =
+    typeof jsonSchema === "object" && jsonSchema !== null ? (jsonSchema as { input?: unknown }).input : undefined;
+  if (typeof input !== "function") {
+    throw new TypeError(
+      `${prefix} ${role}: the ${String(vendor)} validator has no Standard JSON Schema (~standard.jsonSchema); ` +
+        `pass ${option} too`,
+    );
+  }
+  try {
+    return [input.call(jsonSchema, { target: "draft-2020-12" }), validator];
+  } catch (error) {
+    const what = role === "parameters" ? "an argument" : "an output";
+    const message = error instanceof Error ? error.message : String(error);
+    throw new TypeError(`${prefix} has ${what} type with no JSON Schema: ${message}`, { cause: error });
+  }
+}
+
+/** Return whether `value` is a Standard Schema v1 validator: an object or function with a v1 `~standard`. */
+function isStandardSchema(value: unknown): boolean {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") return false;
+  const standard: unknown = (value as { "~standard"?: unknown })["~standard"];
+  if (typeof standard !== "object" || standard === null) return false;
+  const props = standard as { version?: unknown; validate?: unknown };
+  return props.version === 1 && typeof props.validate === "function";
+}
+
+/** Return a checked JSON copy of `schema`, the option `label`, or throw a `TypeError` naming it. */
+function jsonCopy(prefix: string, schema: JsonObject, label: string): JsonObject {
+  try {
+    return checkJsonValue(schema, label) as JsonObject;
+  } catch (error) {
+    if (error instanceof MessageFormatError) throw new TypeError(`${prefix} ${error.message}`);
+    throw error;
   }
 }
 

@@ -1,15 +1,18 @@
 /**
- * `FunctionTool` construction, the types `toolTypes` reads from its JSON Schema, and a
- * `FunctionTool` in a `ToolSet` and the registry, a port of `tests/engine/test_function_tool.py`
- * and of the JSON Schema rows of `test_tool_types.py` that read a tool. Not ported: the
- * `function_tool` and decorator rows and `test_replace_drops_the_function_schema` (a later
- * `tool()` builds a tool from a function),
+ * `FunctionTool` construction, `tool()`, the types `toolTypes` reads from a tool's JSON Schemas,
+ * and a `FunctionTool` in a `ToolSet` and the registry, a port of
+ * `tests/engine/test_function_tool.py` and of the JSON Schema and output rows of
+ * `test_tool_types.py` that read a tool. The `function_tool` rows are ported as `tool()` rows, with
+ * a Standard Schema validator or a JSON Schema in place of the function's signature. Not ported:
+ * the decorator form and the docstring defaults (TS has no runtime signatures), the async refusal
+ * (TS awaits an async `execute`), the unresolvable annotation row (TS has no runtime annotations),
+ * Python's lax `"2"` to 2 coercion (yian's argument check refuses `"2"` for an integer first),
+ * `test_replace_drops_the_function_schema` (no `dataclasses.replace`),
  * `test_run_entry_points_and_tool_set_annotate_function_tool_entries` (needs the run entry
- * points), `test_function_tool_without_a_signature_cannot_be_called_directly`, the async-refusal
- * rows (TS accepts and awaits an async `execute`), and the LangChain binding rows. The exports
- * row, `test_tool_names_are_exported_from_yian_and_yian_tools`, is in `tool_errors.test.ts`. With
- * `YIAN_TEST_NODE` set to a Node binary, the built tools code on Node, beside a second copy of its
- * leaves.
+ * points), `test_function_tool_without_a_signature_cannot_be_called_directly`, and the LangChain
+ * binding rows. The exports row, `test_tool_names_are_exported_from_yian_and_yian_tools`, is in
+ * `tool_errors.test.ts`. With `YIAN_TEST_NODE` set to a Node binary, the built tools code on Node,
+ * beside a second copy of its leaves.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -18,9 +21,12 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import * as v from "valibot";
+import { z } from "zod";
+
 import { ToolContext } from "../../src/tools/context.ts";
-import { FunctionTool, isFunctionTool } from "../../src/tools/function_tools.ts";
-import { registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
+import { FunctionTool, isFunctionTool, type StandardSchemaV1, tool } from "../../src/tools/function_tools.ts";
+import { registeredTools, registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
 import { toolTypes } from "../../src/tools/types.ts";
 import { type JsonObject, parseJson } from "../../src/typesys/json.ts";
 import { canonicalTypeLabel, Type, TypeCheckError, typeEquals, ValueKind } from "../../src/typesys/values.ts";
@@ -98,6 +104,18 @@ describe("FunctionTool construction", () => {
       TypeError,
       "FunctionTool 'echo' isConcurrencySafe must be a function",
     ],
+    [
+      "a non-object output schema",
+      { outputJsonSchema: [1] },
+      TypeError,
+      "FunctionTool 'echo' outputJsonSchema must be an object, got Array",
+    ],
+    [
+      "an infinite number in the output schema",
+      { outputJsonSchema: { maximum: Infinity } },
+      TypeError,
+      "FunctionTool 'echo' outputJsonSchema.maximum: float is not finite",
+    ],
   ];
 
   for (const [what, changes, error, message] of ROWS) {
@@ -112,6 +130,50 @@ describe("FunctionTool construction", () => {
       expect((thrown as Error).message).toBe(message);
     });
   }
+
+  for (const option of ["parametersValidator", "outputValidator"]) {
+    const bad: [string, unknown][] = [
+      ["an object with no ~standard", {}],
+      ["a version 2 ~standard", { "~standard": { version: 2, validate() {} } }],
+      ["a ~standard with no validate", { "~standard": { version: 1 } }],
+      ["a string", "zod"],
+    ];
+    for (const [what, validator] of bad) {
+      test(`refuses ${what} as ${option}`, () => {
+        expect(() => build({ [option]: validator })).toThrow(
+          new TypeError(`FunctionTool 'echo' ${option} must be a Standard Schema v1 validator`),
+        );
+      });
+    }
+  }
+
+  test("accepts a callable validator, as ArkType's types are", () => {
+    const validator = Object.assign(() => null, {
+      "~standard": { version: 1 as const, vendor: "fn", validate: (value: unknown) => ({ value }) },
+    });
+    expect(build({ parametersValidator: validator }).parametersValidator).toBe(validator);
+  });
+
+  test("its validator and output fields are null by default, and it stays frozen", () => {
+    const tool = build({});
+    expect(tool.parametersValidator).toBeNull();
+    expect(tool.outputJsonSchema).toBeNull();
+    expect(tool.outputValidator).toBeNull();
+    expect(build({ parametersValidator: null, outputJsonSchema: null, outputValidator: null }).outputJsonSchema).toBeNull();
+    expect(Object.isFrozen(tool)).toBe(true);
+  });
+
+  test("stores a frozen copy of the output schema", () => {
+    const schema = { type: "object", properties: { n: { type: "integer" } } };
+    const tool = build({ outputJsonSchema: schema });
+    schema.properties.n.type = "string";
+    expect(tool.outputJsonSchema).toEqual({ type: "object", properties: { n: { type: "integer" } } });
+    const properties = tool.outputJsonSchema!.properties as Record<string, JsonObject>;
+    expect(() => {
+      properties.n!.type = "string";
+    }).toThrow(TypeError);
+    expect(Object.isFrozen(tool.outputJsonSchema)).toBe(true);
+  });
 
   test("refuses a Date in the schema", () => {
     const schema = { type: "object", properties: { x: { type: "string", default: new Date(0) } } };
@@ -594,6 +656,250 @@ describe("FunctionTool invocation", () => {
       expect(promise).toBeInstanceOf(Promise);
       expect(await rejection(promise, Error)).toBe(boom);
     }
+  });
+});
+
+describe("tool()", () => {
+  let saved: [string, FunctionTool][] = [];
+
+  // Keep process-global registrations isolated between tests.
+  beforeEach(() => {
+    saved = [...TOOL_REGISTRY];
+  });
+  afterEach(() => {
+    TOOL_REGISTRY.clear();
+    for (const [id, tool] of saved) TOOL_REGISTRY.set(id, tool);
+  });
+
+  const PLACE_PARAMETERS = z.object({
+    sym: z.string().describe("The ticker."),
+    qty: z.number().int().min(1),
+    mode: z.enum(["a", "b"]).optional(),
+  });
+  const FILLED = z.object({ filled: z.number().int() });
+
+  /** Build the zod `place` tool. */
+  function place(): FunctionTool {
+    return tool({
+      name: "place",
+      description: "Place an order.",
+      parameters: PLACE_PARAMETERS,
+      output: FILLED,
+      execute: (args) => ({ filled: args.qty }),
+    });
+  }
+
+  /** Check `place`'s types as `toolTypes` reads them. */
+  function expectPlaceTypes(placed: FunctionTool): void {
+    const types = toolTypes(placed);
+    expect(inputLabels(placed)).toEqual({ sym: "str", qty: "int(1..9007199254740991)", mode: "Literal(a, b)" });
+    expect(types.required).toEqual(new Set(["sym", "qty"]));
+    const filled = new Type({
+      kind: ValueKind.OBJECT,
+      fields: new Map([["filled", new Type({ kind: ValueKind.INTEGER, bounds: [-9007199254740991n, 9007199254740991n] })]]),
+      required: new Set(["filled"]),
+    });
+    expect(types.output).not.toBeNull();
+    expect(typeEquals(types.output!, filled)).toBe(true);
+  }
+
+  /** Return the error `build` throws, after checking its class. */
+  function thrown(build: () => unknown, kind: abstract new (...args: never[]) => Error): Error {
+    try {
+      build();
+    } catch (error) {
+      expect((error as Error).constructor).toBe(kind);
+      return error as Error;
+    }
+    throw new Error("expected a throw");
+  }
+
+  test("test_function_tool_builds_a_function_tool_from_a_function", () => {
+    const placed = place();
+
+    expect(isFunctionTool(placed)).toBe(true);
+    expect(placed.name).toBe("place");
+    expect(placed.description).toBe("Place an order.");
+    expect(placed.parametersJsonSchema).toEqual(
+      PLACE_PARAMETERS["~standard"].jsonSchema.input({ target: "draft-2020-12" }) as JsonObject,
+    );
+    expect(placed.parametersValidator).toBe(PLACE_PARAMETERS);
+    expect(placed.outputJsonSchema).toEqual(FILLED["~standard"].jsonSchema.input({ target: "draft-2020-12" }) as JsonObject);
+    expect(placed.outputValidator).toBe(FILLED);
+  });
+
+  test("a description in the validator reaches the JSON Schema", () => {
+    const properties = place().parametersJsonSchema.properties as Record<string, JsonObject>;
+    expect(properties.sym!.description).toBe("The ticker.");
+  });
+
+  test("test_function_tool_result_binds_and_reads_types_like_a_function, test_function_tool_types", () => {
+    expectPlaceTypes(place());
+  });
+
+  test("test_function_tool_registers_with_register_tool: the registry, a mapping entry and a group item read the same types", () => {
+    const placed = place();
+    registerTool("place", placed);
+
+    expectPlaceTypes(TOOL_REGISTRY.get("place")!);
+    expectPlaceTypes(new ToolSet().resolve(["place"])[0]!);
+    expectPlaceTypes(new ToolSet({ place: placed }).resolve(["place"])[0]!);
+    expectPlaceTypes(new ToolSet({ g: [placed] }).resolve(["place"])[0]!);
+  });
+
+  test("test_register_tool_description_override_on_a_function_tool_from_a_function", () => {
+    const placed = place();
+    registerTool("place", placed, { descriptionOverride: "Buy." });
+
+    const stored = TOOL_REGISTRY.get("place")!;
+    expect(stored).not.toBe(placed);
+    expect(stored.description).toBe("Buy.");
+    expect(stored.parametersValidator).toBe(PLACE_PARAMETERS);
+    expect(stored.outputValidator).toBe(FILLED);
+    expect(stored.outputJsonSchema).toEqual(placed.outputJsonSchema!);
+    expectPlaceTypes(stored);
+  });
+
+  test("test_registered_tools_copy_keeps_the_output_type", () => {
+    registerTool("place", place());
+
+    expectPlaceTypes(new ToolSet(registeredTools()).resolve(["place"])[0]!);
+  });
+
+  test("a raw JSON Schema has no validators and its output type is read", () => {
+    const echoed = tool({
+      name: "echo",
+      description: "Echo.",
+      parameters: ECHO_SCHEMA,
+      output: { type: "string" },
+      execute: (args) => String(args.text),
+    });
+
+    expect(echoed.parametersJsonSchema).toEqual(ECHO_SCHEMA);
+    expect(echoed.parametersValidator).toBeNull();
+    expect(echoed.outputValidator).toBeNull();
+    expect(echoed.outputJsonSchema).toEqual({ type: "string" });
+    expect(typeEquals(toolTypes(echoed).output!, Type.scalar(ValueKind.STRING))).toBe(true);
+    expect(tool({ name: "echo", description: "", parameters: ECHO_SCHEMA, execute: () => null }).outputJsonSchema).toBeNull();
+  });
+
+  test("test_explicit_none_return_is_none_kind", () => {
+    const nothing = tool({ name: "echo", description: "", parameters: ECHO_SCHEMA, output: { type: "null" }, execute: () => null });
+
+    expect(typeEquals(toolTypes(nothing).output!, Type.scalar(ValueKind.NONE))).toBe(true);
+  });
+
+  for (const output of [{}, { allOf: [{ type: "string" }, { minLength: 1 }] }] as JsonObject[]) {
+    test(`test_return_without_a_json_like_type_has_no_output[${JSON.stringify(output)}]`, () => {
+      const untyped = tool({ name: "echo", description: "", parameters: ECHO_SCHEMA, output, execute: () => null });
+
+      expect(untyped.outputJsonSchema).toEqual(output);
+      expect(toolTypes(untyped).output).toBeNull();
+    });
+  }
+
+  test("a validator with no Standard JSON Schema needs parametersJsonSchema", () => {
+    const hand: StandardSchemaV1 = { "~standard": { version: 1, vendor: "hand", validate: (value) => ({ value }) } };
+
+    const error = thrown(() => tool({ name: "x", description: "", parameters: hand, execute: () => null }), TypeError);
+    expect(error.message).toBe(
+      "tool 'x' parameters: the hand validator has no Standard JSON Schema (~standard.jsonSchema); " +
+        "pass parametersJsonSchema too",
+    );
+    const built = tool({ name: "x", description: "", parameters: hand, parametersJsonSchema: ECHO_SCHEMA, execute: () => null });
+    expect(built.parametersJsonSchema).toEqual(ECHO_SCHEMA);
+    expect(built.parametersValidator).toBe(hand);
+
+    const outputError = thrown(
+      () => tool({ name: "x", description: "", parameters: ECHO_SCHEMA, output: hand, execute: () => null }),
+      TypeError,
+    );
+    expect(outputError.message).toBe(
+      "tool 'x' output: the hand validator has no Standard JSON Schema (~standard.jsonSchema); pass outputJsonSchema too",
+    );
+    const withOutput = tool({
+      name: "x",
+      description: "",
+      parameters: ECHO_SCHEMA,
+      output: hand,
+      outputJsonSchema: { type: "string" },
+      execute: () => null,
+    });
+    expect(withOutput.outputJsonSchema).toEqual({ type: "string" });
+    expect(withOutput.outputValidator).toBe(hand);
+  });
+
+  test("a plain valibot schema needs parametersJsonSchema", () => {
+    const error = thrown(
+      () => tool({ name: "x", description: "", parameters: v.object({ symbol: v.string() }), execute: () => null }),
+      TypeError,
+    );
+    expect(error.message).toBe(
+      "tool 'x' parameters: the valibot validator has no Standard JSON Schema (~standard.jsonSchema); " +
+        "pass parametersJsonSchema too",
+    );
+  });
+
+  test("test_function_tool_names_the_tool_when_an_argument_has_no_json_schema", () => {
+    const error = thrown(
+      () => tool({ name: "when", description: "", parameters: z.object({ when: z.coerce.date() }), execute: () => null }),
+      TypeError,
+    );
+    expect(error.message).toBe("tool 'when' has an argument type with no JSON Schema: Date cannot be represented in JSON Schema");
+    expect(error.cause).toBeInstanceOf(Error);
+
+    const outputError = thrown(
+      () => tool({ name: "x", description: "", parameters: ECHO_SCHEMA, output: z.date(), execute: () => new Date(0) }),
+      TypeError,
+    );
+    expect(outputError.message).toBe("tool 'x' has an output type with no JSON Schema: Date cannot be represented in JSON Schema");
+  });
+
+  test("parametersJsonSchema and outputJsonSchema are only for a validator", () => {
+    expect(() =>
+      tool({ name: "x", description: "", parameters: ECHO_SCHEMA, parametersJsonSchema: ECHO_SCHEMA, execute: () => null }),
+    ).toThrow(new TypeError("tool 'x' parametersJsonSchema is only for a validator"));
+    expect(() =>
+      tool({
+        name: "x",
+        description: "",
+        parameters: ECHO_SCHEMA,
+        output: { type: "string" },
+        outputJsonSchema: { type: "string" },
+        execute: () => null,
+      }),
+    ).toThrow(new TypeError("tool 'x' outputJsonSchema is only for a validator"));
+  });
+
+  test("parametersJsonSchema given with a zod validator replaces zod's schema", () => {
+    const built = tool({ name: "x", description: "", parameters: PLACE_PARAMETERS, parametersJsonSchema: ECHO_SCHEMA, execute: () => null });
+
+    expect(built.parametersJsonSchema).toEqual(ECHO_SCHEMA);
+    expect(built.parametersValidator).toBe(PLACE_PARAMETERS);
+  });
+
+  test("a zod parameter that isn't an object gets FunctionTool's check", () => {
+    expect(() => tool({ name: "x", description: "", parameters: z.string(), execute: () => null })).toThrow(
+      new RangeError("FunctionTool 'x' parametersJsonSchema must have type 'object'"),
+    );
+  });
+
+  test("execute and isConcurrencySafe get the validator's output type", () => {
+    const counted = tool({
+      name: "count",
+      description: "Count.",
+      parameters: z.object({ n: z.number() }),
+      output: z.number(),
+      execute: (args) => {
+        // @ts-expect-error `missing` is not a parameter.
+        void args.missing;
+        return args.n + 1;
+      },
+      isConcurrencySafe: (args) => args.n > 0,
+    });
+    expect(counted.isConcurrencySafe!({ n: 1 })).toBe(true);
+    // @ts-expect-error a string is not the output type.
+    tool({ name: "bad", description: "", parameters: ECHO_SCHEMA, output: z.number(), execute: () => "no" });
   });
 });
 

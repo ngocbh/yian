@@ -75,6 +75,11 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   located `LoadError`. `checkEnvValues` does the same for `env:`, and also refuses a value that
   holds itself through an alias.
 - `src/compose/helpers/` reads documents through `compose/source` and never imports `yaml`.
+- `src/compose/helpers/tags.ts` reads every slot through its tags (`readTaggedValue`) and
+  records each tag it reads in the load's ledger; `rejectUnreadTags` refuses the rest.
+- `src/compose/helpers/types.ts` reads `output:` types and `input:`/`variables:` declarations:
+  the tag is the type and the value after it the default, checked with `checkWrittenValue`
+  first.
 
 ## Skills
 

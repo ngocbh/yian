@@ -63,6 +63,12 @@ value gets its ISO text, so YAML forms such as `2026-05-21 14:30:00 -5` work the
 typed default must be quoted (see [syntax](syntax.md#types)), and so must a timestamp
 anywhere else.
 
+Changed (TS yian): an unquoted date or timestamp is text everywhere (see the note in
+[YAML values](syntax.md#yaml-values)), so this paragraph doesn't apply. A default fills a
+`str` slot, and a `date` or `datetime` slot checks its text: `!date 2026-01-01` loads, and
+`!date 2026-10-14T10:00:00Z` fails with `date must look like 2026-05-21`. A YAML timestamp
+form such as `2026-05-21 14:30:00 -5` is a load error.
+
 `file` is a file reference, held as a `FileRef` with `uri` (text), `mime`, and `name`
 (text or null). Where the loader knows a value is a `file`, a field read on it is typed
 at load: `${f.uri}` is `str`, `${f.mime}` and `${f.name}` are `Optional(str)`, and any

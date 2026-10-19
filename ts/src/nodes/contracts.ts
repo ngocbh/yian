@@ -74,8 +74,11 @@ function validatePath(path: unknown, fieldName: string): asserts path is ValuePa
   }
 }
 
-/** Order two paths totally: strings before integers, a prefix before its descendants. */
-function comparePaths(a: ValuePath, b: ValuePath): number {
+/**
+ * Order two paths in the source-neutral canonical order `ContractOrigins` requires: strings
+ * before integers, a prefix before its descendants. A comparator for `Array.prototype.sort`.
+ */
+export function comparePaths(a: ValuePath, b: ValuePath): number {
   for (let i = 0; i < Math.min(a.length, b.length); i++) {
     const x = a[i]!;
     const y = b[i]!;

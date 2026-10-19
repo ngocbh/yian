@@ -52,6 +52,7 @@ export class FunctionTool {
    * Receives a deep copy of the checked arguments and the call's `ToolContext`, and returns the
    * result or a Promise of it. Changing that copy doesn't change the caller's values.
    */
+  // `any`, not `unknown`: a tool typed for its own context (`ToolContext<Broker>`) must be accepted.
   readonly execute: (args: Record<string, unknown>, ctx: ToolContext<any>) => unknown;
   /** Says whether a call with these arguments may run beside other calls; `null` when none was given. */
   readonly isConcurrencySafe: ((args: Record<string, unknown>) => boolean) | null;

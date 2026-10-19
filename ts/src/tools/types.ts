@@ -5,8 +5,8 @@
  * run-start check against the result from reporting a binding as disjoint when the tool would
  * accept it. A schema with no yian equivalent translates to `null`, which means "do not check".
  *
- * Knows about: typesys and `tools/context`. Never imports: nodes, compile, compose, runtime, the run boundary, or
- * CLI.
+ * Knows about: typesys, `tools/context` and, for types only, `tools/function_tools`.
+ * Never imports: nodes, compile, compose, runtime, the run boundary, or CLI.
  */
 
 import {
@@ -344,11 +344,11 @@ export interface ToolTypes {
    * The model-visible inputs by name. `null` when the argument schema cannot be read, so no input
    * is checked. A `null` value means that input is not checked.
    */
-  inputs: ReadonlyMap<string, Type | null> | null;
+  readonly inputs: ReadonlyMap<string, Type | null> | null;
   /** The names of the inputs a call must pass. */
-  required: ReadonlySet<string>;
+  readonly required: ReadonlySet<string>;
   /** The return type, or `null` when it is not checked. */
-  output: Type | null;
+  readonly output: Type | null;
 }
 
 /**

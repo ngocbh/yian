@@ -531,6 +531,7 @@ interface ToHostFrame {
   readonly source: Value[] | ValueRecord;
   /** The record's keys, or `null` for an array. */
   readonly keys: readonly string[] | null;
+  /** The number of entries: the array's length or the record's key count, read once. */
   readonly size: number;
   readonly copy: Value[] | ValueRecord;
   index: number;

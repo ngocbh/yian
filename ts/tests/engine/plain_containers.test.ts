@@ -356,6 +356,6 @@ describe("toHost", () => {
 
   test("fromHost reads toHost's result back as the same value", () => {
     const value: ValueRecord = { a: [1n, 2.5, -(2n ** 70n)], b: { c: 0n, d: "x", e: null } };
-    expect(fromHost(toHost(value), "x")).toEqual(value);
+    expect(fromHost(toHost(value), "x")).toStrictEqual(value);
   });
 });

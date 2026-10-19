@@ -1,8 +1,8 @@
 /**
  * A node's binding labels replace a param's name in its binding errors: a port of
- * `test_label_replaces_the_param_name` and `test_without_a_label_the_default_text_stays` of
- * `tests/engine/test_binding_labels.py`. Without a label each message keeps its default
- * `input '<p>'` / `binding '<p>'` text.
+ * `test_label_replaces_the_param_name`, `test_without_a_label_the_default_text_stays` and
+ * `test_fresh_node_has_no_binding_labels` of `tests/engine/test_binding_labels.py`. Without a
+ * label each message keeps its default `input '<p>'` / `binding '<p>'` text.
  *
  * Changed (rule: infinity is a float value, NaN is not a yian value): the `nonfinite` and
  * `nonfinite-at-path` cases computed infinity (`${input.x * 10}` with `1e308`), which now binds;
@@ -13,8 +13,6 @@
  *
  * TS-only: `${input.x * 10}` with `1e308` delivers `Infinity`, and a function label passed to
  * `resolveSource` names a failing template leaf by its path.
- *
- * Ported: `test_fresh_node_has_no_binding_labels`.
  *
  * Later (T4-6): `test_eval_node_uses_the_node_binding_labels` lands with the runtime's `evalNode`.
  */

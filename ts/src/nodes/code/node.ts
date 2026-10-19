@@ -11,14 +11,16 @@
  *   reference by moving it into a file.
  *
  * Both modes call with the node's bound typed input record (only its declared inputs, not the
- * pool) and return the node's one output value. Nothing is compiled or imported at construction;
- * the running comes with the body.
+ * pool) and return the node's one output value.
  *
- * Inline source is author-written and static (it lives in the flow file), and running the
- * operator's own code in-process is the capability reference mode already has (author is the
- * operator). That holds only while flows are operator-authored: CODE runs in-process with the
- * host's privileges and no isolation, so running a flow from an untrusted or agent-generated
- * source runs that source's code.
+ * Only the node's shell is here. Nothing is compiled or imported at construction; the body
+ * (importing a reference, running an inline body, and mapping a failure to its line) is not
+ * ported yet and comes with `forward`.
+ *
+ * Inline source is author-written and static (it lives in the version-controlled flow file), so
+ * there is no injection vector into the code itself, and running it in-process is the same
+ * capability reference mode already has. Loading a flow from an untrusted or agent-generated
+ * source runs that source's code when the flow runs.
  *
  * Knows about:   nodes/base, nodes/contracts and diagnostics.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
@@ -28,8 +30,8 @@ import { OriginRef, reprText } from "../../diagnostics.ts";
 import { Node, NodeKind } from "../base.ts";
 import { mapOrigin, type OriginMapper, validateOptionalOrigin } from "../contracts.ts";
 
-// A reference is a relative path to a TS or JS file, one colon and an export name. Anchored,
-// so a body never matches.
+// A reference is a relative path to a TS or JS file, one colon and an ASCII identifier export
+// name. Anchoring plus a whitespace-free path keep multi-token bodies out.
 const REFERENCE_RE = /^\.\.?\/[^\s:]+\.(?:ts|js|mjs):[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /**
@@ -61,27 +63,21 @@ export function selectInlineCodeOrigin(
   },
 ): OriginRef | null {
   const { codeOrigin, codeLineOrigins, nodeOrigin } = origins;
-  validateOptionalOrigin(codeOrigin, "CODE source origin");
-  validateOptionalOrigin(nodeOrigin, "node origin");
-  validateLineOrigins(codeLineOrigins);
+  validateCodeOrigins(codeOrigin, codeLineOrigins, nodeOrigin);
   if (typeof line === "number" && Number.isInteger(line) && line >= 1 && line <= codeLineOrigins.length) {
     return codeLineOrigins[line - 1]!;
   }
   return codeOrigin ?? nodeOrigin;
 }
 
-/** Require the exact-line origins to be an array of `OriginRef`s. */
-function validateLineOrigins(codeLineOrigins: unknown): void {
+/** Require source-neutral CODE diagnostic carriers; only the selector passes a node origin. */
+function validateCodeOrigins(codeOrigin: unknown, codeLineOrigins: unknown, nodeOrigin: unknown = null): void {
+  validateOptionalOrigin(codeOrigin, "CODE source origin");
+  validateOptionalOrigin(nodeOrigin, "node origin");
   if (!Array.isArray(codeLineOrigins)) throw new TypeError("CODE line origins must be an array");
   for (const origin of codeLineOrigins) {
     if (!(origin instanceof OriginRef)) throw new TypeError("CODE line origins must contain only OriginRef values");
   }
-}
-
-/** Require source-neutral CODE diagnostic carriers. */
-function validateCodeOrigins(codeOrigin: unknown, codeLineOrigins: unknown): void {
-  validateOptionalOrigin(codeOrigin, "CODE source origin");
-  validateLineOrigins(codeLineOrigins);
 }
 
 /**

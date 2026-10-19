@@ -2586,8 +2586,7 @@ Changed (TS yian): a reference is a relative path to a `.ts`, `.js`, or `.mjs` f
 `:fn` (`./helpers.ts:fn`, `../lib/x.ts:fn`), resolved against the flow's base directory.
 An inline body is TypeScript or JavaScript that reads `inputs`. Any other `code:` value
 is read as an inline body, so `./helpers.ts` (no `:fn`) is a body, not a reference. The
-rest of this section (running, `return`, imports) is updated when CODE execution is
-ported.
+rest of this section (running, `return`, imports) describes Python yian.
 
 Inline notes:
 

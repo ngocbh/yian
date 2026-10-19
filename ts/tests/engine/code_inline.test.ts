@@ -3,13 +3,13 @@
  * `tests/engine/test_code_inline.py`.
  *
  * Ported (adapted): `test_classify_reference_inline_reject` and
- * `test_wrapped_line_selector_uses_exact_whole_then_node_fallback`.
+ * `test_wrapped_line_selector_uses_exact_whole_then_node_fallback` (its `True` line is `true`).
  *
  * Changed: a reference is a relative path to a `.ts`, `.js` or `.mjs` file plus `:fn`
  * (`./mod.ts:fn`); any other value is an inline body, so there is no reject bucket and
  * `./helpers.ts`, `pkg.mod:fn` and `./x.py:fn` classify as inline. The selector takes the line of
  * the authored body (line 1 is the body's first line), not the line of Python's
- * `def main(inputs):` wrapper, and a `true` line is not a number, so it selects no line.
+ * `def main(inputs):` wrapper.
  *
  * TS-only: the constructor compiles nothing, so a body that doesn't parse constructs; the node's
  * `mode`; a non-integer line selects no line; the selector's origin shape checks; `run` rejects as
@@ -24,12 +24,15 @@
  *
  * Later (T4-9): `test_inline_reads_inputs_dict_and_returns`,
  * `test_inline_calling_convention_matches_reference`, `test_inline_multi_statement_body_with_helpers`,
- * `test_inline_body_that_prints_still_returns_value`, `test_syntax_error_rejected_at_construction`,
+ * `test_inline_body_that_prints_still_returns_value`,
  * `test_inline_exception_selects_deepest_owned_code_line`,
  * `test_inline_non_owned_failure_uses_whole_code_origin`,
  * `test_reference_failure_uses_code_then_node_fallback`, `test_inline_return_comes_back_unchecked`,
  * `test_reference_mode_still_dispatches_in_process`, `test_inline_flow_loads_and_runs` and
  * `test_inline_raise_becomes_failed_run`.
+ *
+ * Later (T4-9), adapted: `test_syntax_error_rejected_at_construction`; the syntax check moves to
+ * the awaited load step.
  */
 
 import { expect, test } from "bun:test";

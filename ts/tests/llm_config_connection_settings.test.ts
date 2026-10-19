@@ -1,11 +1,15 @@
 /**
- * Mirrors `tests/test_llm_config_connection_settings.py`. This file ports the module-function
- * tests; the `LLMConfig` tests come with `config.ts`.
+ * Mirrors `tests/test_llm_config_connection_settings.py`: all but
+ * `test_secret_str_header_values_are_accepted` (TS has no `SecretStr`; the `SecretStr` rows of
+ * other tests are dropped too).
  */
+
+import { inspect } from "node:util";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { BUILTIN, install } from "../src/defaults.ts";
+import { LLMConfig } from "../src/llm_clients/config.ts";
 
 import {
   OPENAI_REFUSED_HEADER_NAMES,
@@ -16,9 +20,11 @@ import {
   validateHeaderValue,
   validateOrganization,
 } from "../src/llm_clients/connection_settings.ts";
+import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
 
 afterEach(() => install(BUILTIN));
 
+const KEY = "sk-sentinel-7d1f3b20";
 const GATEWAY = "gw-secret-91c4e2";
 const CREDENTIAL_NAMES = ["Authorization", "Proxy-Authorization", "x-api-key", "api-key", "x-goog-api-key"];
 const TRANSPORT_NAMES = ["Host", "Content-Length", "Transfer-Encoding", "Connection", "Content-Type"];
@@ -32,6 +38,199 @@ function thrown(run: () => unknown): Error {
   }
   throw new Error("expected a throw");
 }
+
+/** Return an `openai` config with `KEY` and `fields`. */
+function config(fields: Record<string, unknown>): LLMConfig {
+  return new LLMConfig({ provider: "openai", api_key: KEY, ...fields });
+}
+
+/** Assert that `fields` are refused with `part` and that no value is echoed; return the message. */
+function refused(part: string, fields: Record<string, unknown>): string {
+  const error = thrown(() => new LLMConfig(fields));
+  expect(error).toBeInstanceOf(ValidationError);
+  expect(error.message).toContain(part);
+  expect(error.message).not.toContain(KEY);
+  expect(error.message).not.toContain(GATEWAY);
+  return error.message;
+}
+
+test("valid settings are kept", () => {
+  const kept = config({
+    organization: "org-abc123",
+    project: "proj_XYZ",
+    headers: { "X-Gateway": GATEWAY, "X-Trace": "a b\tc" },
+  });
+  expect(kept.organization).toBe("org-abc123");
+  expect(kept.project).toBe("proj_XYZ");
+  expect(new Set(Object.keys(kept.headers!))).toEqual(new Set(["X-Gateway", "X-Trace"]));
+  expect(kept.headers!["X-Gateway"]).toBe(GATEWAY);
+  expect(Object.isFrozen(kept.headers)).toBe(true);
+});
+
+test("header values stay out of dumps and inspect", () => {
+  const kept = config({ headers: { "X-Gateway": GATEWAY } });
+  for (const text of [inspect(kept), String(kept), JSON.stringify(kept)]) {
+    expect(text).not.toContain(GATEWAY);
+  }
+  expect(Object.hasOwn(kept.dump(), "headers")).toBe(false);
+});
+
+test("organization and project dump when set and add nothing when unset", () => {
+  expect(config({ model: "gpt-5.5", organization: "org-1", project: "proj-1" }).dump()).toEqual({
+    provider: "openai",
+    model: "gpt-5.5",
+    organization: "org-1",
+    project: "proj-1",
+  });
+  // Recorded snapshots compare full dumps, so unset settings must add nothing.
+  expect(new LLMConfig({ provider: "openai" }).dump()).toEqual({ provider: "openai", model: null });
+});
+
+test("an empty header mapping is no headers", () => {
+  expect(new LLMConfig({ provider: "openai", headers: {} }).headers).toBeNull();
+});
+
+test("credential header names are refused for every provider", () => {
+  const spellings = [
+    (name: string) => name,
+    (name: string) => name.toLowerCase(),
+    (name: string) => name.toUpperCase(),
+  ];
+  for (const provider of ["openai", "deepseek", "anthropic", "google", "azure"]) {
+    for (const name of CREDENTIAL_NAMES) {
+      for (const spell of spellings) {
+        refused("yian sends the credential itself", { provider, api_key: KEY, headers: { [spell(name)]: GATEWAY } });
+      }
+    }
+  }
+});
+
+test.each(TRANSPORT_NAMES)("transport header name %s is refused", (name) => {
+  refused("yian's client sets it", { provider: "deepseek", api_key: KEY, headers: { [name.toLowerCase()]: GATEWAY } });
+});
+
+test.each(["OpenAI-Organization", "openai-project"])("openai id header %s is refused for openai only", (name) => {
+  refused("use llm_config.organization / project", { provider: "openai", api_key: KEY, headers: { [name]: GATEWAY } });
+  const kept = new LLMConfig({ provider: "deepseek", api_key: KEY, headers: { [name]: "proj-1" } });
+  expect(Object.keys(kept.headers!)).toEqual([name]);
+});
+
+test("duplicate names by case are refused", () => {
+  refused("more than once", {
+    provider: "openai",
+    api_key: KEY,
+    headers: { "X-Gateway": GATEWAY, "x-gateway": GATEWAY },
+  });
+});
+
+const NOT_TOKENS = ["", "X Gateway", "X:Gateway", "X-Gätway", "X\nY", "(x)"];
+
+test.each(NOT_TOKENS)("name %p that is not a token is refused", (name) => {
+  const text = refused("HTTP token", { provider: "openai", api_key: KEY, headers: { [name]: GATEWAY } });
+  if (name) expect(text).not.toContain(name);
+});
+
+test.each([
+  `${GATEWAY}\r`,
+  `${GATEWAY}\nX-Evil: 1`,
+  `${GATEWAY}\x00`,
+  `${GATEWAY}\x01`,
+  `${GATEWAY}\x7f`,
+  `${GATEWAY}é`,
+  ` ${GATEWAY}`,
+  `${GATEWAY} `,
+  `${GATEWAY}\t`,
+  "",
+])("bad header value %p is refused", (value) => {
+  refused("visible ASCII", { provider: "openai", api_key: KEY, headers: { "X-Gateway": value } });
+});
+
+test("header value and count caps", () => {
+  install({ ...BUILTIN, maxHeaderValueChars: 10, maxConnectionHeaders: 2 });
+  expect(config({ headers: { A: "x".repeat(10), B: "y" } }).headers!["A"]).toBe("x".repeat(10));
+  const over = "secret-val!";
+  const text = refused("at most 10 characters", { provider: "openai", api_key: KEY, headers: { A: over } });
+  expect(text).not.toContain(over);
+  refused("at most 2 headers", { provider: "openai", api_key: KEY, headers: { A: "1", B: "2", C: "3" } });
+});
+
+test("header names share the value cap", () => {
+  install({ ...BUILTIN, maxHeaderValueChars: 10 });
+  expect(Object.keys(config({ headers: { ["X".repeat(10)]: "1" } }).headers!)).toEqual(["X".repeat(10)]);
+  const longName = "X-Long-Name";
+  const text = refused("header names must be at most 10 characters", {
+    provider: "openai",
+    api_key: KEY,
+    headers: { [longName]: "1" },
+  });
+  expect(text).not.toContain(longName);
+});
+
+test("a non-string header value is refused", () => {
+  const error = thrown(() => config({ headers: { "X-V": 2024n } }));
+  expect(error).toBeInstanceOf(ValidationError);
+  expect(error.message).not.toContain("2024");
+});
+
+test.each(["organization", "project"])("%s values", (field) => {
+  install({ ...BUILTIN, maxOrganizationChars: 8 });
+  expect(config({ [field]: "org-1234" })[field as "organization" | "project"]).toBe("org-1234");
+  const secretish = "org-45678";
+  const text = refused("at most 8 characters", { provider: "openai", api_key: KEY, [field]: secretish });
+  expect(text).not.toContain(secretish);
+  for (const bad of ["", "org 1", "org\n1", "orgé", "org\x7f"]) {
+    refused("visible ASCII", { provider: "openai", api_key: KEY, [field]: bad });
+  }
+});
+
+test("organization and project are openai only", () => {
+  for (const provider of ["deepseek", "azure", "anthropic", "vllm"]) {
+    for (const field of ["organization", "project"]) {
+      refused("only to provider openai", { provider, api_key: KEY, [field]: "org-1" });
+    }
+  }
+});
+
+test("headers are refused for ollama", () => {
+  refused("provider ollama does not take llm_config.headers", {
+    provider: "ollama",
+    api_key: KEY,
+    headers: { "X-Gateway": GATEWAY },
+  });
+});
+
+test.each(["organization", "project"])("a wrong provider is reported before a missing key (%s)", (field) => {
+  refused("only to provider openai", { provider: "deepseek", [field]: "org-1" });
+});
+
+test("ollama headers are reported before a missing key", () => {
+  refused("provider ollama does not take llm_config.headers", {
+    provider: "ollama",
+    headers: { "X-Gateway": GATEWAY },
+  });
+});
+
+test("an openai id header is reported before a missing key", () => {
+  refused("use llm_config.organization / project", { provider: "openai", headers: { "OpenAI-Project": GATEWAY } });
+});
+
+test("each setting needs key and provider in the same config", () => {
+  for (const fields of [{ organization: "org-1" }, { project: "proj-1" }, { headers: { "X-Gateway": GATEWAY } }]) {
+    for (const missing of ["api_key", "provider"]) {
+      const given: Record<string, unknown> = { provider: "openai", api_key: KEY, ...fields };
+      delete given[missing];
+      refused("needs llm_config.api_key and llm_config.provider", given);
+    }
+  }
+});
+
+test("azure settings need the key too", () => {
+  refused("needs llm_config.api_key", {
+    provider: "azure",
+    base_url: "https://res.openai.azure.com/",
+    headers: { "X-G": GATEWAY },
+  });
+});
 
 test("refused name tables are lowercase", () => {
   expect(new Set(Object.keys(REFUSED_HEADER_NAMES))).toEqual(

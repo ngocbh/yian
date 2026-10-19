@@ -15,7 +15,7 @@ import { expect, test } from "bun:test";
 
 import { notTextError } from "../../src/compose/nodes/base.ts";
 
-test("not_text_error names the field", () => {
+test("notTextError names the field", () => {
   expect(notTextError("prompt", 5n)).toBe(
     "`prompt:` must be text, but YAML read it as an integer; put it in quotes",
   );
@@ -27,7 +27,7 @@ test("not_text_error names the field", () => {
   );
 });
 
-test("not_text_error takes a fix", () => {
+test("notTextError takes a fix", () => {
   expect(notTextError("kind", [1n], "write one of a, b")).toBe(
     "`kind:` must be text, but YAML read it as a list; write one of a, b",
   );

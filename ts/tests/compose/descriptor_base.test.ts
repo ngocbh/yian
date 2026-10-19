@@ -16,7 +16,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
+import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import {
   inputShapeProblem,
   rejectContainerSpans,
@@ -26,20 +26,10 @@ import {
 } from "../../src/compose/nodes/base.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
+import { loadError } from "./declarations.ts";
 
 const RANGE = new SourceRange(2, 5, 2, 9);
 const DIAGNOSTICS = new LoadDiagnostics("f.yaml", "nodes:\n  a: 1234\n");
-
-/** Run `fn`, expect it to throw a `LoadError`, and return the error. */
-function loadError(fn: () => void): LoadError {
-  try {
-    fn();
-  } catch (error) {
-    if (error instanceof LoadError) return error;
-    throw error;
-  }
-  throw new Error("expected a LoadError");
-}
 
 describe("message builders", () => {
   test("valueTypeError names what YAML read the value as", () => {

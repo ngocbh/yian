@@ -10,7 +10,7 @@
 import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { ExpressionError } from "../../expr/expressions.ts";
 import { callSuffixOf, type ExprNode, Tree, wholeSpanInterior } from "../../expr/grammar.ts";
-import { scanTemplate, Span, templateRefs } from "../../expr/template.ts";
+import { scanTemplate, Span, type TemplateSegment, templateRefs } from "../../expr/template.ts";
 import { bindingSource } from "../../nodes/contracts.ts";
 import { isRecord, valueRepr } from "../../typesys/values.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
@@ -37,15 +37,12 @@ export function siteKey(kind: "field" | "input" | "llm_config", name: string): s
  *   gets the example `<field>: ${R.<field>}`.
  */
 export function inputShapeProblem(kind: string, value: unknown): string {
-  let noun: string;
-  let verb: string;
-  if (kind === "loop") {
-    [noun, verb] = ["carried fields", "list each carried field"];
-  } else if (kind === "call" || kind === "map") {
-    [noun, verb] = ["the child's arguments", "bind each argument"];
-  } else {
-    [noun, verb] = ["parameter names to bindings", "bind each parameter"];
-  }
+  const [noun, verb] =
+    kind === "loop"
+      ? ["carried fields", "list each carried field"]
+      : kind === "call" || kind === "map"
+        ? ["the child's arguments", "bind each argument"]
+        : ["parameter names to bindings", "bind each parameter"];
   const path = directReferencePath(value);
   let got: string;
   let fix: string;
@@ -162,7 +159,7 @@ export function rejectNonText(
   const { required = false, fix = null } = options;
   if (typeof value !== "string" && (value !== null || required)) {
     throw diagnostics.error(
-      `node ${reprText(nodeId)} (kind=${kind}): ` + notTextError(key, value, fix),
+      `node ${reprText(nodeId)} (kind=${kind}): ${notTextError(key, value, fix)}`,
       { range },
     );
   }
@@ -188,7 +185,7 @@ function holdsSpan(value: unknown): boolean {
 function directReferencePath(binding: unknown): string | null {
   const source = bindingSource(binding);
   if (typeof source !== "string") return null;
-  let segments;
+  let segments: TemplateSegment[];
   try {
     segments = scanTemplate(source);
   } catch (error) {

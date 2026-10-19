@@ -25,7 +25,6 @@ python_flow: |
   output: ${use.output}
 env:
   YIAN_MAX_VALUE_NESTING: '5'
-  YIAN_MAX_YAML_NODES: '10000000'
 expect:
   load:
     diagnostics:

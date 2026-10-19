@@ -19,24 +19,6 @@ python_flow: |
   output: {y: "${a.output}"}
   uses:
     m: 'name@'
-files:
-  child.yaml: |
-    id: child
-    name: child
-    input:
-      x: !str
-    nodes:
-      c: {kind: code, code: ./fixtures/seeds.ts:one_line_summary, input: {x: "${input.x}"}}
-    output: {y: "${c.output}"}
-python_files:
-  child.yaml: |
-    id: child
-    name: child
-    input:
-      x: !str
-    nodes:
-      c: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
-    output: {y: "${c.output}"}
 expect:
   load:
     diagnostics:

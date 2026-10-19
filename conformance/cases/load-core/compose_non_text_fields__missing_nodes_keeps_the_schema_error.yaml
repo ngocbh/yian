@@ -1,4 +1,4 @@
-# No `message`: it is pydantic's text (a validation library's message), not yian's.
+# No `message`: the text is pydantic's, not yian's.
 kind: load
 flow: |
   id: f

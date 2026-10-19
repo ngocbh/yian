@@ -1,4 +1,4 @@
-# TS spells the versions as JSON text (rules: messages; loader.py `{child.version!r}`, `{version!r}`); Python's repr in python_expect.
+# TS spells the versions as JSON text (rules: messages); Python's repr in python_expect.
 kind: load
 rules: [messages]
 flow: |
@@ -43,18 +43,6 @@ files:
     output: {y: "${a.output}"}
     uses:
       c: child@v2
-  p.yaml: |
-    id: p
-    name: p
-    input:
-      x: !str
-    nodes:
-      a: {kind: call, call: a1, input: {x: "${input.x}"}}
-      b: {kind: call, call: a2, input: {x: "${a.output}"}}
-    output: {y: "${b.output}"}
-    uses:
-      a1: m1
-      a2: m2
 python_files:
   child.yaml: |
     id: child
@@ -85,18 +73,6 @@ python_files:
     output: {y: "${a.output}"}
     uses:
       c: child@v2
-  p.yaml: |
-    id: p
-    name: p
-    input:
-      x: !str
-    nodes:
-      a: {kind: call, call: a1, input: {x: "${input.x}"}}
-      b: {kind: call, call: a2, input: {x: "${a.output}"}}
-    output: {y: "${b.output}"}
-    uses:
-      a1: m1
-      a2: m2
 expect:
   load:
     diagnostics:

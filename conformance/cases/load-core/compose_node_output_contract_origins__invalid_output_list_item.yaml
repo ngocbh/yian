@@ -1,4 +1,4 @@
-# TS spells the list item as JSON text (rules: messages; types.py `{element!r}`); Python's repr in python_expect.
+# TS spells the list item as JSON text (rules: messages); Python's repr in python_expect.
 kind: load
 rules: [messages]
 flow: |

@@ -1,4 +1,4 @@
-# TS spells the versions as JSON text (rules: messages; loader.py `{child.version!r}`, `{version!r}`); Python's repr in python_expect.
+# TS spells the versions as JSON text (rules: messages); Python's repr in python_expect.
 kind: load
 rules: [messages]
 flow: |
@@ -21,16 +21,6 @@ files:
     nodes:
       a: {kind: code, code: ./fixtures/seeds.ts:one_line_summary, input: {x: "${input.x}"}}
     output: {y: "${a.output}"}
-  p.yaml: |
-    id: p
-    name: p
-    input:
-      x: !str
-    nodes:
-      a: {kind: call, call: ch, input: {x: "${input.x}"}}
-    output: {y: "${a.output}"}
-    uses:
-      ch: child@v1
 python_files:
   child.yaml: |
     id: child
@@ -41,16 +31,6 @@ python_files:
     nodes:
       a: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
     output: {y: "${a.output}"}
-  p.yaml: |
-    id: p
-    name: p
-    input:
-      x: !str
-    nodes:
-      a: {kind: call, call: ch, input: {x: "${input.x}"}}
-    output: {y: "${a.output}"}
-    uses:
-      ch: child@v1
 expect:
   load:
     diagnostics:

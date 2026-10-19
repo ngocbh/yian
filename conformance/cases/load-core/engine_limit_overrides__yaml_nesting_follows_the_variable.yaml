@@ -1,4 +1,4 @@
-# No TS `message`: it is PyYAML's text (rules: yaml); python_expect keeps it.
+# No TS `message`: Python's carries PyYAML's location trailer (rules: yaml).
 kind: load
 rules: [yaml]
 flow: |

@@ -1,4 +1,4 @@
-# TS spells the compared value as JSON text (rules: messages; narrowing_facts.py `{check.value!r}`); Python's repr in python_expect.
+# TS spells the compared value as JSON text (rules: messages); Python's repr in python_expect.
 kind: load
 rules: [messages]
 flow: |

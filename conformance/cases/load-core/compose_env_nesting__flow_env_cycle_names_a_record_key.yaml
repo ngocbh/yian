@@ -23,8 +23,6 @@ python_flow: |
       input:
         topic: x
   output: ${use.output}
-env:
-  YIAN_MAX_YAML_NODES: '10000000'
 expect:
   load:
     diagnostics:

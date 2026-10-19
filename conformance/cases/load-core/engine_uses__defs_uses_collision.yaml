@@ -1,5 +1,4 @@
 # TS spells the name list as JSON text (rules: messages); Python's repr in python_expect.
-# The harvest tagged it `code`, but the frame is flow structure, the same in both languages.
 kind: load
 rules: [messages]
 flow: |
@@ -36,24 +35,6 @@ python_flow: |
       nodes:
         c: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${x}"}}
       output: {y: "${c.output}"}
-files:
-  child.yaml: |
-    id: child
-    name: child
-    input:
-      x: !str
-    nodes:
-      c: {kind: code, code: ./fixtures/seeds.ts:one_line_summary, input: {x: "${input.x}"}}
-    output: {y: "${c.output}"}
-python_files:
-  child.yaml: |
-    id: child
-    name: child
-    input:
-      x: !str
-    nodes:
-      c: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
-    output: {y: "${c.output}"}
 expect:
   load:
     diagnostics:

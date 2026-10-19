@@ -10,11 +10,13 @@
  * points, `SourceDocument.parse` and `parseYamlLiteral`, read the shared rows, explicit core
  * tags included. The literal's merge rows quote Python's `017:` key; the document's keep it.
  * `test_pyyaml_globals_are_untouched` has no counterpart, since eemeli/yaml has no global
- * tables.
+ * tables. The harvested `yaml/compose_source_scalars__*` cases are pinned at the end through
+ * `parseSourceDocument`.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
+import { parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { SourceSyntaxError } from "../../src/compose/source/common.ts";
 import { SourceDocument } from "../../src/compose/source/document.ts";
 import { parseYamlLiteral, readPlainScalar } from "../../src/compose/source/literals.ts";
@@ -34,9 +36,13 @@ import {
   STR_TAG,
   TIMESTAMP_TAG,
 } from "../../src/compose/source/scalars.ts";
+import { forget } from "../../src/defaults.ts";
 import { reprText, SourceRange } from "../../src/diagnostics.ts";
 import { isRecord, type Value } from "../../src/typesys/index.ts";
 import { parseDatetime } from "../../src/typesys/temporal.ts";
+import { runTextCase } from "./declarations.ts";
+
+afterEach(() => forget());
 
 const DATETIME_MSG = "datetime must look like 2026-05-21T14:30[:00][Z|+07:00]";
 const QUOTE_FIX = "; quote it to keep it as text";
@@ -610,3 +616,21 @@ describe("parseYamlLiteral", () => {
     },
   );
 });
+
+// The cases leave out Python's message, which adds PyYAML's mark to yian's text.
+test.each([
+  [
+    "yaml/compose_source_scalars__explicit_bool_tag_refuses_yes",
+    "invalid YAML: expected a YAML 1.2 core boolean, but found 'yes'",
+  ],
+  [
+    "yaml/compose_source_scalars__explicit_int_tag_refuses_non_core_form",
+    "invalid YAML: expected a YAML 1.2 core integer, but found '1_000'",
+  ],
+  [
+    "yaml/compose_source_scalars__unbuildable_date_as_a_key",
+    "invalid YAML: not a valid date: month must be in 1..12" + QUOTE_FIX,
+  ],
+])("parseSourceDocument: %s", (id, message) =>
+  runTextCase({ id, message, call: parseSourceDocument }),
+);

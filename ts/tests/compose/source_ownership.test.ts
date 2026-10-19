@@ -7,17 +7,21 @@
  * slots. Each check is a function of `{path, text}` sources, so snippets prove the
  * rules the real tree is held to.
  *
- * The Python file's `parse_file`, `load_flow` and root-variant tests need the
- * loader and live with its port; the legacy-module check has no counterpart, and
- * Python's `_root_node` and `_index` slots don't exist in TypeScript.
+ * The two `parse_file` rows spy on `SourceDocument.parse`, which TS's parse goes
+ * through, where Python patches its document loader. The `load_flow` and root-variant
+ * tests need the loader and live with its port; the legacy-module check has no
+ * counterpart, and Python's `_root_node` and `_index` slots don't exist in TypeScript.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, posix, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
+import { SourceDocument } from "../../src/compose/source/index.ts";
 import { blank, importStatements } from "../engine/source_scan.ts";
+import { loadError } from "./declarations.ts";
 
 const SRC = fileURLToPath(new URL("../../src/", import.meta.url));
 
@@ -155,5 +159,40 @@ describe("source ownership snippets", () => {
       "const v = cursor.value + cursor._values + cursor._rootDefinitionId;",
     ].join("\n");
     expect(slotReads([{ path, text: other }])).toEqual([]);
+  });
+});
+
+const FLOW = `id: owned
+name: owned
+nodes:
+  echo:
+    kind: code
+    code: tests.engine._compose_codefns:echo
+    input:
+      value: hello
+    output: str
+output: \${echo.output}
+`;
+
+describe("parse ownership", () => {
+  test("parseFile reuses a supplied document", () => {
+    const document = SourceDocument.parse(FLOW);
+    const parse = spyOn(SourceDocument, "parse");
+    try {
+      const parsed = parseFile(document);
+
+      expect(parse).not.toHaveBeenCalled();
+      expect(parsed.id).toBe("owned");
+      expect((parsed.nodes["echo"] as Record<string, unknown>)["kind"]).toBe("code");
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
+  test("parseSourceDocument translates a syntax error", () => {
+    const error = loadError(() => parseSourceDocument("id: [", "broken.yaml"));
+
+    expect(error.message).toContain("invalid YAML");
+    expect(error.diagnostic.frames.at(-1)!.range!.startLine).toBe(1);
   });
 });

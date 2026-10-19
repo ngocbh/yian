@@ -1,4 +1,6 @@
+# TS reads the unquoted date key as text (rules: dates); Python's error in python_expect.
 kind: load
+rules: [dates]
 flow: |
   id: f
   name: f
@@ -50,6 +52,8 @@ flow: |
   x-meta:
     n_x_block: v
 expect:
+  load: ok
+python_expect:
   load:
     diagnostics:
     - code: compose.load

@@ -1,17 +1,20 @@
 /**
  * Local YAML tags kept by the source layer: a port of `tests/compose/test_source_tags.py`.
  *
- * The Compose-dependent tests (the signature projection, the single-node def and the compact
- * flow bindings) come with Compose. The merge-source, bare-tag, unknown-tag and tag-hint
- * errors live in `source_document.test.ts`. `test_space_ends_the_tag`: a tag written with `,`
- * is now a YAML syntax error with the tag hint (YAML 1.2 tag syntax; `source_document.test.ts`,
- * "the tag hint"). `test_bare_tag_check_does_not_shrink_nesting_depth` and
+ * The merge-source, bare-tag, unknown-tag and tag-hint errors live in `source_document.test.ts`.
+ * `test_space_ends_the_tag`: a tag written with `,` is now a YAML syntax error with the tag hint
+ * (YAML 1.2 tag syntax; `source_document.test.ts`, "the tag hint").
+ * `test_bare_tag_check_does_not_shrink_nesting_depth` and
  * `test_parse_leaves_the_composed_node_tags_unchanged` have no counterpart: the TS build walks
  * with an explicit stack and keeps no composed tree.
+ *
+ * Later (T3-22): `test_single_node_def_generated_binding_has_no_tag`.
  */
 
 import { describe, expect, test } from "bun:test";
 
+import { flowNodesCursor } from "../../src/compose/parse/file.ts";
+import { normalizeNodeSignatureCursor } from "../../src/compose/parse/nodes.ts";
 import { type MapStep, type TaggedNode } from "../../src/compose/source/common.ts";
 import { SourceCursor } from "../../src/compose/source/cursor.ts";
 import { SourceDocument } from "../../src/compose/source/document.ts";
@@ -135,6 +138,39 @@ describe("tagged values", () => {
     expect(m.child("a").hasValue).toBe(false);
     expect(m.child("b").tag).toBe("str");
     expect(m.child("b").hasValue).toBe(false);
+  });
+});
+
+const NODE_FLOW = `nodes:
+  n:
+    kind: code
+    input:
+      d: !Buy
+        conviction: 1
+      h: !list(str) []
+`;
+
+describe("the node signature projection", () => {
+  test.each([
+    ["d", "Buy"],
+    ["h", "list(str)"],
+  ])("tagged node inputs keep tags through signature projection: %s", (name, tag) => {
+    const nodes = cur(NODE_FLOW, "nodes");
+    const entry = normalizeNodeSignatureCursor(nodes.child("n")).child("inputs").child(name);
+
+    expect(entry.tag).toBe(tag);
+    expect(entry.withValue(structuredClone(entry.value)).tag).toBe(tag);
+    expect(entry.withValue({ other: 2n }).tag).toBeNull();
+  });
+
+  test("a compact flow's generated binding has no tag", () => {
+    const document = SourceDocument.parse("id: f\nkind: code\ninput:\n  p: !int\n");
+    const section = { f: { kind: "code", inputs: { p: "${input.p}" } } };
+    const binding = flowNodesCursor(document, section).child("f").child("inputs").child("p");
+
+    expect(binding.value).toBe("${input.p}");
+    expect(binding.tag).toBeNull();
+    expect(binding.hasValue).toBe(true);
   });
 });
 

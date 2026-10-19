@@ -12,7 +12,8 @@
  * `source_tags.test.ts`, with the cursor. TS-era rows: a mapping key YAML reads as
  * non-text is kept in the value as written, lone CRs are line breaks while NEL, U+2028 and
  * U+2029 are not, an undefined alias follows YAML 1.2, a local tag never changes how its
- * scalar reads, and the tag hint names a tag glued to `,`, `[`, `]`, `{` or `}`.
+ * scalar reads, and the tag hint names a tag glued to `,`, `[`, `]`, `{` or `}`. The harvested
+ * `yaml/compose_source_document__*` cases are pinned at the end through `parseSourceDocument`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -20,6 +21,7 @@ import { readFileSync } from "node:fs";
 
 import { parse as parseYaml } from "yaml";
 
+import { parseSourceDocument } from "../../src/compose/parse/file.ts";
 import {
   type ArcSequence,
   type Definition,
@@ -31,9 +33,12 @@ import {
   SourceDocument,
   TAG_HINT,
 } from "../../src/compose/source/document.ts";
-import { BUILTIN, install } from "../../src/defaults.ts";
+import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import type { Value } from "../../src/typesys/index.ts";
+import { runTextCase } from "./declarations.ts";
+
+afterEach(() => forget());
 
 /** Return the `SourceSyntaxError` parsing `text` throws, failing if it throws none. */
 function refusal(text: string): SourceSyntaxError {
@@ -957,3 +962,9 @@ describe("merges", () => {
     expect(value["root"]!["value"]).toBe("leaf");
   });
 });
+
+test.each([
+  "yaml/compose_source_document__syntax_error_after_crlf_lines",
+  "yaml/compose_source_document__syntax_error_after_lone_cr_lines",
+  "yaml/compose_source_document__syntax_error_after_yaml11_only_line_breaks",
+])("parseSourceDocument: %s", (id) => runTextCase({ id, call: parseSourceDocument }));

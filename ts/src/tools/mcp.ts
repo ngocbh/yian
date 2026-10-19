@@ -4,28 +4,39 @@
  * `mcpServer` describes a Model Context Protocol server: a command started as a subprocess that
  * speaks over stdio, or a streamable HTTP endpoint. `McpServer.open` starts the server's client,
  * lists the server's tools once and exposes each as a `FunctionTool`; `close` stops the client and
- * the subprocess. A failed call throws an `McpError` whose tool error kinds tell an AGENT's tool
- * loop whether its model reads the error and a TOOL node whether `retries:` apply.
+ * the subprocess. A call returns the server's structured content, or its content rendered as text.
+ * A failed call throws an `McpError` whose tool error kinds tell an AGENT's tool loop whether its
+ * model reads the error and a TOOL node whether `retries:` apply; a stop of the calling run or
+ * `close()` ends a waiting call.
  *
  * Knows about: the MCP SDK client (`@modelcontextprotocol/client`, imported when a server opens),
  * `defaults`, `platform` (the version), `tools/context`, `tools/errors`, `tools/function_tools`,
- * `llm/body` (exact JSON writes), typesys and diagnostics.
+ * `tools/types` (the output schema check), `llm/body` (exact JSON writes), typesys and diagnostics.
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
 import type { Writable } from "node:stream";
 
-import type { Client } from "@modelcontextprotocol/client";
+import type * as Sdk from "@modelcontextprotocol/client";
 
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
 import { encodeBody } from "../llm/body.ts";
 import { VERSION } from "../platform.ts";
 import { type JsonObject, parseJson } from "../typesys/json.ts";
-import { isRecord, jsTypeName, writeAsText } from "../typesys/values.ts";
+import {
+  buildValueAs,
+  fromHost,
+  isRecord,
+  jsTypeName,
+  renderValuePath,
+  TypeCheckError,
+  writeAsText,
+} from "../typesys/values.ts";
 import type { ToolContext } from "./context.ts";
-import { TOOL_ERROR, type ToolErrorKind } from "./errors.ts";
+import { TOOL_ERROR, ToolCheckError, type ToolErrorKind } from "./errors.ts";
 import { FunctionTool } from "./function_tools.ts";
+import { inputTypeFromJsonSchema } from "./types.ts";
 
 /**
  * The brands of `McpError` and `McpServer`. yian checks them rather than `instanceof`, so an error
@@ -361,11 +372,19 @@ const MAX_PAGES = 100;
 /** The owner of a server the host opened. */
 const HOST = "host";
 
+/** The longest delay `setTimeout` takes; a longer one fires at once. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/** JSON-RPC codes for a request the server can't parse, route or accept. */
+const INVALID_REQUEST_CODES: ReadonlySet<number> = new Set([-32700, -32600, -32601, -32602]);
+
 /** One connection of a server: what one `open()` started, and what `close()` ends. */
 interface Generation {
   /** Aborted when the open fails, times out or is closed; ends a pending connect or listing. */
   readonly stop: AbortController;
-  client: Client | undefined;
+  /** The SDK module, once loaded; its error classes classify a failed call. */
+  sdk: typeof Sdk | undefined;
+  client: Sdk.Client | undefined;
   transport: StdioTransport | undefined;
   /** `"host"`, or the token of the run that opened the server, once its tools are listed. */
   owner: string | undefined;
@@ -402,6 +421,8 @@ export class McpServer {
   private readonly spec: McpServerSpec;
   /** The connection from `open()` until `close()`; a later open replaces it. */
   private generation: Generation | undefined;
+  /** Whether `close()` ran since the last `open()`, so a call fails as closed, not as never opened. */
+  private closeRequested = false;
 
   /** Keep a spec `mcpServer` checked; build a server with `mcpServer`, not this constructor. */
   constructor(spec: McpServerSpec) {
@@ -477,6 +498,7 @@ export class McpServer {
    * that is still running when the server is opened again leaves the new connection alone.
    */
   close(): Promise<void> {
+    this.closeRequested = true;
     const generation = this.generation;
     if (generation === undefined) return Promise.resolve();
     generation.closed = true;
@@ -494,8 +516,10 @@ export class McpServer {
   private async start(owner: string, signal: AbortSignal | undefined): Promise<this> {
     // Checked and set before the first `await`, so two racing opens can't both start.
     if (this.generation !== undefined) throw new AlreadyOpenError(`MCP server '${this.label}' is already open`);
+    this.closeRequested = false;
     const generation: Generation = {
       stop: new AbortController(),
+      sdk: undefined,
       client: undefined,
       transport: undefined,
       owner: undefined,
@@ -537,22 +561,29 @@ export class McpServer {
       stop.abort();
       void generation.transport?.close();
     };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      halt();
-    }, connectTimeout * 1000);
+    const timer = setTimeout(
+      () => {
+        timedOut = true;
+        halt();
+      },
+      Math.min(connectTimeout * 1000, MAX_TIMER_MS),
+    );
     signal?.addEventListener("abort", halt, { once: true });
     // Run after every `await`: a timeout, `close()` or abort that landed while nothing could be
     // closed still wins.
     const check = () => {
       if (stop.signal.aborted || generation.closed || signal?.aborted) throw new Error("stopped while starting");
     };
-    const request = () => ({ signal: stop.signal, timeout: Math.max(1, deadline - performance.now()) });
+    const request = () => ({
+      signal: stop.signal,
+      timeout: Math.min(Math.max(1, deadline - performance.now()), MAX_TIMER_MS),
+    });
     try {
       check();
-      const sdk = await loadSdk(this.spec.command !== undefined);
+      const { sdk, defaultEnv } = await loadSdk(this.spec.command !== undefined);
       check();
-      const transport = (generation.transport = this.createTransport(sdk.defaultEnv, settings.maxMcpMessageBytes));
+      generation.sdk = sdk;
+      const transport = (generation.transport = this.createTransport(defaultEnv, settings.maxMcpMessageBytes));
       const client = new sdk.Client({ name: "yian", version: VERSION }, { capabilities: {}, listMaxPages: MAX_PAGES });
       generation.client = client;
       client.onclose = () => {
@@ -569,7 +600,7 @@ export class McpServer {
         {
           label,
           concurrencySafe: this.spec.concurrencySafe,
-          call: (name, args, ctx) => this.callTool(name, args, ctx),
+          call: (tool, args, ctx) => this.callTool(tool, args, ctx),
           ...request(),
         },
       );
@@ -617,10 +648,149 @@ export class McpServer {
     })());
   }
 
-  /** Call the server's tool `name`. */
-  private callTool(_name: string, _args: Record<string, unknown>, _ctx: ToolContext<unknown>): Promise<unknown> {
-    return Promise.reject(new Error("MCP calls are not ported yet"));
+  /**
+   * Call the server's tool `tool.name` with the checked `args` and return its result as a yian
+   * value: the structured content when the server sent it, else the content rendered as text.
+   *
+   * @throws {ToolCheckError} An argument is `Infinity`, which JSON can't carry; nothing is sent.
+   * @throws {Error} The server was never opened.
+   * @throws {McpToolError} The server returned an error result, a result that breaks the tool's
+   *   `outputSchema`, or the call failed in a way no other error here covers.
+   * @throws {McpRequestError} The server answered with a JSON-RPC error; `McpInvalidRequestError`
+   *   for a malformed or unknown request.
+   * @throws {McpTimeoutError} The call outlasted the call timeout.
+   * @throws {McpServerClosed} The server is closed or gone.
+   * @throws {McpCallCancelled} `ctx.signal` aborted before or while the call waited.
+   */
+  private async callTool(tool: ListedTool, args: Record<string, unknown>, ctx: ToolContext<unknown>): Promise<unknown> {
+    const { name, inputSchema } = tool;
+    const path = infinityPath(args);
+    if (path !== null) {
+      const at = path.length > 0 ? ` at ${renderValuePath(path)}` : "";
+      throw new ToolCheckError(`tool call '${name}' arguments${at}: Infinity can't be sent to an MCP server`);
+    }
+    // The connection this call goes to; a later open replaces it.
+    const generation = this.generation;
+    if (this.closeRequested || generation?.gone) throw this.closedError();
+    if (generation?.owner === undefined || generation.client === undefined) {
+      throw new Error(`MCP server '${this.label}' is not open`);
+    }
+    if (ctx.signal.aborted) throw cancelledError(name);
+    const call = new AbortController();
+    // A listener removed when the call settles, not `AbortSignal.any`, which would keep a
+    // long-lived run signal holding every call it ever saw.
+    const onAbort = () => call.abort();
+    ctx.signal.addEventListener("abort", onAbort, { once: true });
+    generation.calls.add(call);
+    // The SDK starts its timer before sending, and `maxTotalTimeout` bounds input-required rounds.
+    const ms = Math.min(generation.callTimeout * 1000, MAX_TIMER_MS);
+    let result: unknown;
+    try {
+      result = await generation.client.callTool(
+        { name, arguments: args, _meta: { "yian/call_id": ctx.callId, "yian/attempt": ctx.attempt } },
+        // No `outputSchema`, so the SDK never validates the output itself; yian checks it below.
+        {
+          toolDefinition: { name, inputSchema: inputSchema as Sdk.Tool["inputSchema"] },
+          signal: call.signal,
+          timeout: ms,
+          maxTotalTimeout: ms,
+        },
+      );
+    } catch (error) {
+      throw this.callError(generation, name, error, ctx.signal);
+    } finally {
+      ctx.signal.removeEventListener("abort", onAbort);
+      generation.calls.delete(call);
+    }
+    const outputSchema = generation.outputSchemas.get(name);
+    if (outputSchema !== undefined) this.checkOutput(name, outputSchema, result as CallResult);
+    return resultValue(result as CallResult);
   }
+
+  /**
+   * Return the error a failed call to `name` on `generation` throws. yian's own state comes first,
+   * since the SDK reports any abort as a request timeout.
+   */
+  private callError(generation: Generation, name: string, error: unknown, signal: AbortSignal): Error {
+    const label = this.label;
+    if (generation.closed || generation.gone) return this.closedError(generation);
+    if (signal.aborted) return cancelledError(name);
+    const sdk = generation.sdk!;
+    if (error instanceof sdk.SdkError) {
+      if (error.code === sdk.SdkErrorCode.RequestTimeout) {
+        return new McpTimeoutError(`MCP server '${label}' tool '${name}' timed out after ${generation.callTimeout} s`);
+      }
+      if (error.code === sdk.SdkErrorCode.ConnectionClosed || error.code === sdk.SdkErrorCode.NotConnected) {
+        return this.closedError(generation);
+      }
+    } else if (error instanceof sdk.ProtocolError) {
+      const text = `MCP server '${label}' tool '${name}': ${error.message} (code ${error.code})`;
+      return INVALID_REQUEST_CODES.has(error.code)
+        ? new McpInvalidRequestError(text, error.code)
+        : new McpRequestError(text, error.code);
+    } else if (error instanceof Error && error.message === "Not connected") {
+      // The SDK's own error for a request sent after the transport closed.
+      return this.closedError(generation);
+    }
+    return new McpToolError(`MCP server '${label}' tool '${name}' failed (${errorName(error)})`, { cause: error });
+  }
+
+  /** Mark `generation` gone, when given, and return the `McpServerClosed` a call throws. */
+  private closedError(generation?: Generation): McpServerClosed {
+    if (generation !== undefined) generation.gone = true;
+    return new McpServerClosed(`MCP server '${this.label}' is closed`);
+  }
+
+  /**
+   * Check a non-error result of the tool `name`, which listed `outputSchema`, as the registry
+   * checks a declared output: its structured content must be there and fit the schema read open.
+   *
+   * @throws {McpToolError} The structured content is missing, or isn't a yian value or doesn't
+   *   fit the schema (the `TypeCheckError` is the `cause`).
+   */
+  private checkOutput(name: string, outputSchema: JsonObject, result: CallResult): void {
+    if (result.isError) return;
+    const failed = `MCP server '${this.label}' tool '${name}' failed`;
+    if (result.structuredContent == null) throw new McpToolError(`${failed} (no structured content)`);
+    try {
+      const value = fromHost(result.structuredContent, `MCP server '${this.label}' tool '${name}' structured content`);
+      const type = inputTypeFromJsonSchema(outputSchema);
+      if (type !== null) buildValueAs(type, value);
+    } catch (error) {
+      if (error instanceof TypeCheckError) throw new McpToolError(`${failed} (TypeCheckError)`, { cause: error });
+      throw error;
+    }
+  }
+}
+
+/** The `McpCallCancelled` for a call to `name`. */
+function cancelledError(name: string): McpCallCancelled {
+  return new McpCallCancelled(`MCP call to '${name}' cancelled by a run stop`);
+}
+
+/** An error's class name, as Python's `type(error).__name__`. */
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : jsTypeName(error);
+}
+
+/**
+ * Return the path to the first `Infinity` or `-Infinity` in `args`, depth first and in order, or
+ * `null` when there is none.
+ */
+function infinityPath(args: unknown): (string | number)[] | null {
+  const stack: [unknown, (string | number)[]][] = [[args, []]];
+  while (stack.length > 0) {
+    const [value, path] = stack.pop()!;
+    if (value === Infinity || value === -Infinity) return path;
+    // Pushed in reverse, so entries pop in order.
+    if (Array.isArray(value)) {
+      for (let i = value.length - 1; i >= 0; i--) stack.push([value[i], [...path, i]]);
+    } else if (isRecord(value)) {
+      const keys = Object.keys(value);
+      for (let i = keys.length - 1; i >= 0; i--) stack.push([value[keys[i]!], [...path, keys[i]!]]);
+    }
+  }
+  return null;
 }
 
 Object.defineProperty(McpServer.prototype, MCP_SERVER, { value: true });
@@ -631,15 +801,15 @@ export function isMcpServer(value: unknown): value is McpServer {
 }
 
 /**
- * Import the MCP SDK client: its `Client`, and for a stdio server its default environment.
+ * Import the MCP SDK client module, and for a stdio server its default environment.
  *
  * @throws {Error} The SDK is not installed; the import error is the `cause`.
  */
-async function loadSdk(stdio: boolean): Promise<{ Client: typeof Client; defaultEnv: Record<string, string> }> {
+async function loadSdk(stdio: boolean): Promise<{ sdk: typeof Sdk; defaultEnv: Record<string, string> }> {
   try {
     const sdk = await import("@modelcontextprotocol/client");
     const defaultEnv = stdio ? (await import("@modelcontextprotocol/client/stdio")).getDefaultEnvironment() : {};
-    return { Client: sdk.Client, defaultEnv };
+    return { sdk, defaultEnv };
   } catch (cause) {
     throw new Error("MCP servers need the MCP SDK; install @modelcontextprotocol/client 2.3.1", { cause });
   }
@@ -661,14 +831,20 @@ export interface ToolLister {
   getServerCapabilities(): { readonly tools?: unknown } | undefined;
 }
 
+/** A listed tool as a call needs it: its name and its input schema. */
+export interface ListedTool {
+  readonly name: string;
+  readonly inputSchema: JsonObject;
+}
+
 /** The options of `listAll`. */
 export interface ListOptions {
   /** The server's label, for errors. */
   label: string;
   /** The server's `concurrencySafe` option. */
   concurrencySafe: boolean | readonly string[];
-  /** Runs one call of the server's tool `name`; each tool's `execute` delegates to it. */
-  call: (name: string, args: Record<string, unknown>, ctx: ToolContext<unknown>) => Promise<unknown>;
+  /** Runs one call of the listed `tool`; each tool's `execute` delegates to it. */
+  call: (tool: ListedTool, args: Record<string, unknown>, ctx: ToolContext<unknown>) => Promise<unknown>;
   /** Aborts the listing. */
   signal?: AbortSignal;
   /** The listing's timeout in milliseconds. */
@@ -713,6 +889,7 @@ export async function listAll(
         );
       }
       const marked = concurrencySafe === true || (concurrencySafe !== false && concurrencySafe.includes(name as string));
+      const listed: ListedTool = { name: name as string, inputSchema: inputSchema as JsonObject };
       try {
         tools.push(
           new FunctionTool({
@@ -720,7 +897,7 @@ export async function listAll(
             description: (description || title || name) as string,
             parametersJsonSchema: inputSchema as JsonObject,
             isConcurrencySafe: marked ? () => true : null,
-            execute: (args, ctx) => call(name as string, args, ctx),
+            execute: (args, ctx) => call(listed, args, ctx),
           }),
         );
       } catch (error) {
@@ -741,6 +918,99 @@ export async function listAll(
     }
   }
   return { tools: Object.freeze(tools), outputSchemas };
+}
+
+/** What `resultValue` reads from a `tools/call` result. */
+export interface CallResult {
+  readonly content?: readonly unknown[];
+  readonly structuredContent?: unknown;
+  readonly isError?: boolean;
+}
+
+/**
+ * Return a tool call's result as a yian value: the structured content when the server sent it,
+ * else the content rendered as one string (see `renderContent`).
+ *
+ * @throws {McpToolError} The result is an error result; its message is the rendered content.
+ */
+export function resultValue(result: CallResult): unknown {
+  if (result.isError) throw new McpToolError(renderContent(result.content ?? []));
+  if (result.structuredContent != null) return result.structuredContent;
+  return renderContent(result.content ?? []);
+}
+
+/**
+ * Render MCP content blocks as text, joined by blank lines.
+ *
+ * Text blocks and embedded text resources give their text. Images, audio, embedded blob resources
+ * and resource links give a one-line marker with the mime type, when known, and the decoded size;
+ * their bytes are dropped. Empty content renders as `""`.
+ */
+function renderContent(content: readonly unknown[]): string {
+  const parts: string[] = [];
+  const head = (uri: unknown, mimeType: unknown) => [uri, mimeType].filter(Boolean).map(String).join(" ");
+  for (const item of content) {
+    const block = (isRecord(item) ? item : {}) as Record<string, unknown>;
+    const kind = block.type;
+    if (kind === "text") {
+      parts.push(String(block.text));
+    } else if (kind === "image" || kind === "audio") {
+      parts.push(`[${kind} ${String(block.mimeType)}, ${size(String(block.data))}]`);
+    } else if (kind === "resource") {
+      const resource = (isRecord(block.resource) ? block.resource : {}) as Record<string, unknown>;
+      if (typeof resource.text === "string") parts.push(resource.text);
+      else parts.push(`[resource ${head(resource.uri, resource.mimeType)}, ${size(String(resource.blob))}]`);
+    } else if (kind === "resource_link") {
+      parts.push(`[resource ${head(block.uri, block.mimeType)}]`);
+    } else {
+      parts.push(`[${String(kind)}]`);
+    }
+  }
+  return parts.join("\n\n");
+}
+
+/** The base64 alphabet, as Python's `base64.b64decode` reads it. */
+const BASE64_CHAR = /[A-Za-z0-9+/]/;
+
+/** Return the size of base64 `data` once decoded: `<n> B`, `<x.y> KB` or `<x.y> MB`. */
+function size(data: string): string {
+  // Estimated from the encoded length when the server sent malformed base64.
+  const bytes = decodedSize(data) ?? Math.floor((data.length * 3) / 4);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${oneDecimal(bytes, 1024)} KB`;
+  return `${oneDecimal(bytes, 1024 * 1024)} MB`;
+}
+
+/**
+ * Return how many bytes Python's `base64.b64decode(data)` gives, or `null` where it raises:
+ * characters outside the alphabet are skipped, decoding stops where padding completes a group of
+ * four, and a final partial group without padding is an error.
+ */
+function decodedSize(data: string): number | null {
+  let group = 0;
+  let pads = 0;
+  let bytes = 0;
+  for (const char of data) {
+    if (char === "=") {
+      if (group >= 2 && group + ++pads >= 4) return bytes;
+      continue;
+    }
+    if (!BASE64_CHAR.test(char)) continue;
+    pads = 0;
+    if (group > 0) bytes += 1;
+    group = (group + 1) % 4;
+  }
+  return group === 0 ? bytes : null;
+}
+
+/** `bytes / unit` with one decimal, rounded half to even as Python's `.1f` rounds. */
+function oneDecimal(bytes: number, unit: number): string {
+  // Exact: `bytes * 10` is a safe integer and `unit` a power of two.
+  const scaled = (bytes * 10) / unit;
+  let tenths = Math.floor(scaled);
+  const rest = scaled - tenths;
+  if (rest > 0.5 || (rest === 0.5 && tenths % 2 === 1)) tenths += 1;
+  return `${Math.floor(tenths / 10)}.${tenths % 10}`;
 }
 
 /** How much of a stdio server's stderr yian keeps, and how many of its last lines an error shows. */

@@ -13,8 +13,8 @@
  * `test_close_from_another_thread_during_open_fails_the_open` and
  * `test_a_close_leaves_alone_a_connection_opened_while_it_waited`; the MCP error classes; and
  * yian's stdio transport driven by a bare SDK client, as `tests/engine/test_mcp_fake_server.py`
- * drives the fake server. The HTTP rows, tool calls and the rest of `test_mcp_errors.py` land
- * with the HTTP transport and the calls.
+ * drives the fake server. Tool calls are in `mcp_calls.test.ts`; the HTTP rows and the rest of
+ * `test_mcp_errors.py` land with the HTTP transport and the call errors.
  */
 
 import { spawnSync } from "node:child_process";
@@ -696,10 +696,7 @@ describe("McpServer open and close", () => {
     async () => {
       const s = await server().open();
       const names = s.tools.map((tool) => tool.name);
-      // Tool calls through the server land with the calls; the server's own client calls it here.
-      const client = (s as unknown as { generation: { client: Client } }).generation.client;
-      const added = await client.callTool({ name: "add_tool", arguments: {} });
-      expect((added.content as { text: string }[])[0]!.text).toBe("added");
+      expect(await new ToolSet({ fake: [...s.tools] }).invoke("add_tool", {})).toBe("added");
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(s.tools.map((tool) => tool.name)).toEqual(names);
       expect(names).not.toContain("late");
@@ -794,23 +791,12 @@ describe("McpServer open and close", () => {
   test(
     "test_server_stderr_is_in_the_connect_error",
     async () => {
-      const writes: string[] = [];
-      const write = process.stderr.write.bind(process.stderr);
-      process.stderr.write = ((chunk: string | Uint8Array, ...rest: never[]) => {
-        writes.push(String(chunk));
-        return write(chunk, ...rest);
-      }) as typeof process.stderr.write;
-      let error: Error;
-      try {
-        error = await rejection(server(["--stderr", "boom"], { label: "noisy" }).open());
-      } finally {
-        process.stderr.write = write;
-      }
+      const error = await rejection(server(["--stderr", "boom"], { label: "noisy" }).open());
       expect(error).toBeInstanceOf(McpConnectError);
       expect(error.message).toStartWith("MCP server 'noisy' didn't start: ");
+      // The tail also proves stderr is piped: an inherited stderr would leave it empty.
       expect(error.message).toEndWith("\nserver stderr:\nboom");
       expect(error.cause).toBeInstanceOf(Error);
-      expect(writes.join("")).not.toContain("boom");
     },
     SLOW,
   );

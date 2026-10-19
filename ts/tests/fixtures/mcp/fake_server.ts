@@ -29,7 +29,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
 
 /** A 1x1 transparent PNG. */
-const PNG_BASE64 =
+export const PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
 // Shared by every server in this process: `gate` and `peak` measure concurrency, `calls` counts
@@ -257,10 +257,14 @@ const OUTPUT_SCHEMA = {
 
 /**
  * A low-level server whose tools break their `outputSchema`: `bad_output` returns structured
- * content the schema rejects, `no_structured` returns only text.
+ * content the schema rejects, `no_structured` returns only text. `add_tool` only tells the client
+ * the tool list changed.
  */
 function badOutputServer(): Server {
-  const server = new Server({ name: "bad-output", version: "0" }, { capabilities: { tools: {} } });
+  const server = new Server(
+    { name: "bad-output", version: "0" },
+    { capabilities: { tools: { listChanged: true } } },
+  );
   const inputSchema = { type: "object", properties: {} } as const;
   server.setRequestHandler("tools/list", () => ({
     tools: [
@@ -276,13 +280,18 @@ function badOutputServer(): Server {
         inputSchema,
         outputSchema: OUTPUT_SCHEMA,
       },
+      { name: "add_tool", description: "Tell the client the tool list changed.", inputSchema },
     ],
   }));
-  server.setRequestHandler("tools/call", (request) =>
-    request.params.name === "bad_output"
+  server.setRequestHandler("tools/call", async (request) => {
+    if (request.params.name === "add_tool") {
+      await server.sendToolListChanged();
+      return text("added");
+    }
+    return request.params.name === "bad_output"
       ? { content: [{ type: "text", text: '{"n": "x"}' }], structuredContent: { n: "x" } }
-      : text('{"n": 1}'),
-  );
+      : text('{"n": 1}');
+  });
   return server;
 }
 

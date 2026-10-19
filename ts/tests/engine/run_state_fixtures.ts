@@ -6,16 +6,37 @@
  * more run-state test files use lives here.
  */
 
+import { expect } from "bun:test";
+
 import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { ValueRoute } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
 import type { MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { encodePool, MemoryRunLog, type RecordEnvelope, type RunLog, type RunRecord } from "../../src/runtime/log.ts";
-import { commitPrepared, prepareRunStarted, type RunStartData, RunState } from "../../src/runtime/state.ts";
+import { ForwardCapture } from "../../src/runtime/contracts.ts";
+import type { RunEvent } from "../../src/events.ts";
+import {
+  decodePool,
+  encodePool,
+  MemoryRunLog,
+  type RecordEnvelope,
+  type RunLog,
+  type RunRecord,
+  RunStartedRecord,
+} from "../../src/runtime/log.ts";
+import {
+  commitPrepared,
+  prepareNodeStarted,
+  prepareNodeSucceeded,
+  prepareRecord,
+  prepareRunStarted,
+  type RunStartData,
+  RunState,
+} from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 
 /** The run id the run-state tests record. */
@@ -243,6 +264,134 @@ export function stateSnapshot(state: RunState): Record<string, unknown> {
     input: structuredClone(state.input),
     effectiveLlmByStaticPath: structuredClone(state.effectiveLlmByStaticPath),
   };
+}
+
+/** The root containers whose identity a commit keeps. */
+export function roots(state: RunState): unknown[] {
+  return [
+    state.pool,
+    state.pool.store,
+    state.nodeState,
+    state.edgeState,
+    state.ready,
+    state.inFlight,
+    state.acceptedStarts,
+    state.depth,
+    state.wiringOverrides,
+    state.input,
+    state.effectiveLlmByStaticPath,
+  ];
+}
+
+/** Every reducer coordinate in a detached form, plus the root containers by reference. */
+export interface Snapshot {
+  values: Record<string, unknown>;
+  roots: unknown[];
+}
+
+/** Return `state`'s snapshot: `stateSnapshot` with the latch, start counts and steps as well. */
+export function snapshot(state: RunState): Snapshot {
+  return {
+    values: {
+      ...stateSnapshot(state),
+      terminalUnreachableFailure: state.terminalUnreachableFailure,
+      nodeStarts: [...state.nodeStarts],
+      nodeSteps: [...state.nodeSteps],
+    },
+    roots: roots(state),
+  };
+}
+
+/** Assert `state` still has `before`'s values and root containers. */
+export function expectUnchanged(state: RunState, before: Snapshot): void {
+  const after = snapshot(state);
+  expect(after.values).toEqual(before.values);
+  after.roots.forEach((root, index) => expect(root).toBe(before.roots[index]));
+}
+
+/** Return `state`'s values without the flow, for comparing independent replays. */
+export function reducerSnapshot(state: RunState): Record<string, unknown> {
+  const { flow: _flow, ...values } = snapshot(state).values;
+  return values;
+}
+
+/**
+ * Return a state and log of `flow` after a replay-valid RunStarted (START primed with
+ * `{items: ["seed"]}`, two workers) and START's dispatch.
+ */
+export function initializedAndStarted(
+  flow: CompiledFlow,
+  options: { learnable?: boolean } = {},
+): { state: RunState; log: MemoryRunLog } {
+  const initialPool = new VariablePool(flow.startId);
+  initialPool.set(flow.startId, { items: ["seed"] });
+  initialPool.addSystem("run_id", RUN_ID);
+  const state = new RunState(flow);
+  const log = new MemoryRunLog(RUN_ID);
+  commitPrepared(
+    log,
+    state,
+    prepareRunStarted(state, {
+      runId: RUN_ID,
+      flowFingerprint: FINGERPRINT,
+      initialPool,
+      startWiringOverride: {},
+      effectiveLlmByStaticPath: {},
+      numWorkers: 2,
+      learnable: options.learnable ?? false,
+    }),
+  );
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  return { state, log };
+}
+
+/**
+ * Commit START's success (`output`, by default `{items: ["canonical"]}`), so its successors enter
+ * the ready FIFO. A learnable state records an empty binding capture.
+ */
+export function commitStartSuccess(state: RunState, log: MemoryRunLog, output?: unknown): void {
+  const start = state.flow.nodes.get(START_ID)!;
+  commitPrepared(
+    log,
+    state,
+    prepareNodeSucceeded(state, START_ID, output === undefined ? { items: ["canonical"] } : output, {
+      forwardCapture: state.learnable
+        ? new ForwardCapture({}, ValueRoute.record([]), { scope: start.executionScope })
+        : null,
+    }),
+  );
+}
+
+/**
+ * Replay `source`'s records over a fresh state of `flow` through `prepareRunStarted` (from the
+ * recorded RunStarted fields) and `prepareRecord`; return the state, the new log and each
+ * transition's observers.
+ */
+export function replayOutcomeLog(
+  flow: CompiledFlow,
+  source: MemoryRunLog,
+): { state: RunState; log: MemoryRunLog; observers: (readonly RunEvent[])[] } {
+  const records = source.records().map((envelope) => envelope.record);
+  const started = records[0];
+  if (!(started instanceof RunStartedRecord)) throw new Error("the log must start with RunStarted");
+  const state = new RunState(flow);
+  const log = new MemoryRunLog(RUN_ID);
+  const observers = [
+    commitPrepared(
+      log,
+      state,
+      prepareRunStarted(state, {
+        runId: RUN_ID,
+        flowFingerprint: started.flowFingerprint,
+        initialPool: decodePool(started.initialPool),
+        startWiringOverride: started.startWiringOverride,
+        effectiveLlmByStaticPath: started.effectiveLlmByStaticPath,
+        numWorkers: started.numWorkers,
+      }),
+    ),
+  ];
+  for (const record of records.slice(1)) observers.push(commitPrepared(log, state, prepareRecord(state, record)));
+  return { state, log, observers };
 }
 
 /** A memory log, holding `prior`'s records, whose append fails before it retains the record. */

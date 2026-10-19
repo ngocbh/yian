@@ -8,28 +8,68 @@
  * and relinquishes direct mutation of its execution fields; chronological reducer transitions are
  * the only topology writers. Everything here is synchronous.
  *
- * Knows about:   compile/model, defaults, diagnostics, events, memory, nodes, runtime/common,
- *                runtime/learning, runtime/log, runtime/trace, typesys.
+ * Knows about:   compile/model, defaults, diagnostics, events, expr/lineage, memory, nodes,
+ *                runtime/common, runtime/contracts, runtime/learning, runtime/log, runtime/trace,
+ *                typesys.
  * Never imports: engine, run, backward, compose, or the CLI.
  */
 
-import { CompiledFlow, type Edge, type Flow } from "../compile/model.ts";
+import { CompiledFlow, Edge, type Flow } from "../compile/model.ts";
 import { BUILTIN, type Defaults, fromRecorded } from "../defaults.ts";
-import { Failure, reprText } from "../diagnostics.ts";
-import { NodeStarted, RunResumed, RunStarted, type RunEvent, type RunFailed, type RunSucceeded } from "../events.ts";
-import type { MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../memory/index.ts";
-import type { Grow, Node } from "../nodes/base.ts";
-import { type Binding, isExactly, type OutputContract, sameItems } from "../nodes/contracts.ts";
-import { type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
+import { compareCodeUnits, Failure, type OriginRef, reprText, sameFailure } from "../diagnostics.ts";
+import {
+  NodeStarted,
+  NodeSucceeded,
+  RunFailed,
+  RunResumed,
+  RunStarted,
+  type RunEvent,
+  RunSucceeded,
+} from "../events.ts";
+import { SourceRef, sameSource } from "../expr/lineage.ts";
+import {
+  EvaluationEvidence,
+  MemoryScope,
+  type MemorySnapshotEnvelope,
+  type MemorySpec,
+  type MemoryStack,
+} from "../memory/index.ts";
+import { sameMemoryScope } from "../memory/contracts.ts";
+import { type Grow, Node } from "../nodes/base.ts";
+import {
+  type Binding,
+  comparePaths,
+  fileFieldsType,
+  isExactly,
+  type OutputContract,
+  outputContractFileType,
+  outputContractOrigin,
+  outputContractType,
+  PartialRecordContract,
+  sameItems,
+  sameOptional,
+  validateOutputContract,
+} from "../nodes/contracts.ts";
+import { type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
-import { isRecord, rejectDeepNesting, type Type, writeAsText } from "../typesys/values.ts";
+import {
+  isRecord,
+  normalizeTypedFiles,
+  rejectDeepNesting,
+  type Type,
+  TypeCheckError,
+  TypedValue,
+  writeAsText,
+} from "../typesys/values.ts";
 import { NodeState } from "./common.ts";
+import { validateSource } from "./contracts.ts";
 import { RuntimeBackwardState } from "./learning.ts";
 import {
   BackwardFinishedRecord,
   BackwardReadyRecord,
   BackwardStartedRecord,
   canonicalSeed,
+  canonicalTyped,
   decodePool,
   decodeRecord,
   encodePool,
@@ -53,10 +93,64 @@ import {
   RunStoppedRecord,
   SCHEMA_VERSION,
 } from "./log.ts";
-import { type PrepareTraceOptions, prepareTrace, RetainedTrace, TraceDelta } from "./trace.ts";
+import {
+  checkMemoryScope,
+  type PrepareTraceOptions,
+  prepareTrace,
+  RetainedTrace,
+  SourceEntry,
+  sameSourceEntry,
+  TraceDelta,
+  TraceOccurrence,
+  TraceTerminal,
+} from "./trace.ts";
 
 /** The injected kind-aware interpreter from a spawner and its canonical seed to a fragment. */
 export type GrowBuilder = (spawner: Node, seed: JsonValue) => Flow;
+
+/** A typed value's wire object `{kind, value}`, as `canonicalTyped` returns it. */
+type TypedWire = ReturnType<typeof canonicalTyped>[0];
+
+/** Project a whole-value type while validating the closed contract sum. */
+function nodeOutputType(node: Node): Type | null {
+  return outputContractType(node.outputContract);
+}
+
+/**
+ * @internal Canonicalize a live or replayed output through the same contract path: a partial
+ * record's contract runs first, then `canonicalTyped` against `declaredType`.
+ *
+ * @throws TypeCheckError when the output violates the contract or isn't a yian value.
+ */
+export function canonicalOutputValue(
+  output: unknown,
+  contract: OutputContract | null,
+  declaredType: Type | null,
+): [TypedWire, TypedValue] {
+  if (isExactly(contract, PartialRecordContract)) output = validateOutputContract(contract, output);
+  return canonicalTyped(output, declaredType);
+}
+
+/**
+ * Return the type a value committed to `node` is read through to restore its files.
+ *
+ * The node's output contract gives it (`outputContractFileType`); a node without one that commits
+ * its input record reads through its typed parameters. The run record stores each file as its
+ * JSON form; reading through this type gives a reader a `FileRef` at each position typed `file`,
+ * without touching the record text, so live and replayed runs read the same value.
+ *
+ * @returns The reading type, or `null` when no position may hold a file.
+ */
+function fileReadingType(node: Node): Type | null {
+  if (node.outputContract === null && node.commitsInputRecord) {
+    return fileFieldsType(
+      (node.params ?? []).flatMap((param) =>
+        param.contract === null ? [] : [[param.name, param.contract.type] as const],
+      ),
+    );
+  }
+  return outputContractFileType(node.outputContract);
+}
 
 /** @internal Immutable identity roots established by canonical RunStarted decoding. Frozen. */
 export class MemoryAuthority {
@@ -85,6 +179,26 @@ export class MemoryAuthority {
     this.memoryStacks = memoryStacks;
     this.memoryOrder = memoryOrder;
     Object.freeze(this);
+  }
+}
+
+/**
+ * @internal An outcome-owned value rejected before durability: it fails the node, not the run.
+ *
+ * It carries the original error's message; `original` is also its `cause`.
+ */
+export class NodeDataError extends Error {
+  override name = "NodeDataError";
+  /** The error the value check threw. */
+  readonly original: unknown;
+  /** The authored origin of the rejected value, if known. */
+  readonly origin: OriginRef | null;
+
+  /** Wrap `original`, keeping its message. */
+  constructor(original: unknown, origin: OriginRef | null = null) {
+    super(original instanceof Error ? original.message : String(original), { cause: original });
+    this.original = original;
+    this.origin = origin;
   }
 }
 
@@ -565,6 +679,74 @@ export function prepareNodeStep(state: RunState, nodeId: string, step: unknown):
 }
 
 /**
+ * Prepare one canonical output commit and its newly ready successors.
+ *
+ * @param state An initialized nonterminal state with `nodeId` in flight.
+ * @param nodeId The exact id of the executing node that produced `output`.
+ * @param output The yian value (or `TypedValue`) to check against the effective target's output
+ *   type; the checks and the stored value read it as given.
+ * @param options.commitAs The explicit commit target; `null` (the default) falls back to the
+ *   executing node's baked target, then to `nodeId` itself.
+ * @param options.evidence Frozen visible evidence captured during this exact evaluation.
+ * @param options.forwardCapture The canonical binding capture, required exactly when learning.
+ * @returns The canonical `NodeSucceededRecord` and a detached append-before-apply plan.
+ * @throws TypeError when a carrier has the wrong type or the target's contract is malformed.
+ * @throws RangeError when the state, the executing node or its baked target is invalid.
+ * @throws NodeDataError when `commitAs` or `output` is rejected: the output nests too deep,
+ *   violates its target's type, or isn't a yian value. `original` holds the value layer's error.
+ */
+export function prepareNodeSucceeded(
+  state: RunState,
+  nodeId: string,
+  output: unknown,
+  options: { commitAs?: string | null } & OutcomeCarriers = {},
+): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeSucceeded expects a RunState");
+  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  const commitAs: unknown = options.commitAs ?? null;
+  if (commitAs !== null && typeof commitAs !== "string") {
+    throw new NodeDataError(new TypeError("commit_as must be a string or None"));
+  }
+  if (commitAs === "") throw new NodeDataError(new RangeError("commit_as must be non-empty when supplied"));
+  requireInitializedNonterminal(state);
+  requireSucceedingNode(state, nodeId);
+
+  const node = state.flow.nodes.get(nodeId)!;
+  const nodeTarget: unknown = node.commitAs;
+  if (nodeTarget !== null && (typeof nodeTarget !== "string" || !nodeTarget)) {
+    throw new RangeError(`node ${reprText(nodeId)} has an invalid baked commit target`);
+  }
+  const target = commitAs ?? nodeTarget ?? nodeId;
+  const targetNode = state.flow.nodes.get(target);
+  if (targetNode === undefined) {
+    const error = new RangeError(`success commit target ${reprText(target)} does not exist in the flow`);
+    throw commitAs !== null ? new NodeDataError(error) : error;
+  }
+  const declaredType = nodeOutputType(targetNode);
+  const outputContract = targetNode.outputContract;
+  // Replay (`validateSuccessValue`) skips the nesting check on purpose, so logs recorded before
+  // the limit still replay.
+  const enclosingLevels = node.commitsInputRecord ? -1 : 0;
+  let valueWire: TypedWire;
+  let typed: TypedValue;
+  try {
+    rejectDeepNesting(output, "output", { enclosingLevels });
+    [valueWire, typed] = canonicalOutputValue(output, outputContract, declaredType);
+  } catch (error) {
+    const path = error instanceof TypeCheckError ? error.path : [];
+    throw new NodeDataError(error, outputContractOrigin(outputContract, path));
+  }
+  return prepareSuccessTransition(
+    state,
+    new NodeSucceededRecord(nodeId, target, valueWire, {
+      evidence: options.evidence ?? null,
+      forwardCapture: options.forwardCapture ?? null,
+    }),
+    typed,
+  );
+}
+
+/**
  * Prepare a recovery segment from the state's ordered unfinished starts.
  *
  * The retry list comes only from the insertion-ordered `state.inFlight`; the caller chooses only
@@ -641,6 +823,10 @@ export function prepareRecord(
 
   requireInitializedNonterminal(state);
 
+  if (isExactly(record, NodeSucceededRecord)) {
+    const typed = validateSuccessValue(state, record);
+    return prepareSuccessTransition(state, record, typed);
+  }
   if (isExactly(record, NodeExpandedRecord)) {
     if (typeof options.growBuilder !== "function") {
       throw new TypeError("NodeExpandedRecord replay requires a callable grow_builder");
@@ -705,6 +891,62 @@ export function prepareRecord(
     traceDelta: prepareRecordTrace(state, envelope),
     delta: Object.freeze(delta),
   });
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
+}
+
+/** Freeze one fully validated success delta and its canonical public record. */
+function prepareSuccessTransition(state: RunState, record: NodeSucceededRecord, typed: TypedValue): PreparedTransition {
+  validateNodeEvidence(state, record.nodeId, record.evidence);
+  const delta = prepareSuccessDelta(state, record, typed);
+  const terminal = prepareTerminalDelta(state, {
+    completingNodeId: delta.nodeId,
+    newlyReadyIds: delta.newlyReadyIds,
+    pendingCommitTarget: delta.commitTarget,
+    pendingValueJson: delta.valueJson,
+    terminalUnreachableFailure: state.terminalUnreachableFailure,
+  });
+  const runId = state.runId;
+  // Established by the initialized-state check.
+  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
+  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
+  const envelope = decodeRecord(envelopeJson);
+  const canonical = envelope.record;
+  if (!isExactly(canonical, NodeSucceededRecord)) {
+    throw new TypeError("node-success envelope decoded to a different record kind");
+  }
+  if (encodeRecord(envelope) !== envelopeJson) {
+    throw new RangeError("NodeSucceededRecord is not in canonical wire form");
+  }
+  const startId = state.flow.startId;
+  const endId = state.flow.endId;
+  const files = fileReadingType(state.flow.nodes.get(delta.commitTarget)!);
+  const plan: SuccessPlan = Object.freeze({
+    kind: "success",
+    originatingState: state,
+    originatingFlow: state.flow,
+    envelopeJson,
+    startId,
+    startNode: state.flow.nodes.get(startId)!,
+    endId,
+    endNode: state.flow.nodes.get(endId) ?? null,
+    traceDelta: prepareRecordTrace(state, envelope, {
+      terminalSucceeded: terminal?.succeeded ?? null,
+      terminalOutputJson: terminal?.outputJson ?? null,
+      terminalFailure: terminal?.failure ?? null,
+      writerFiles: files,
+    }),
+    delta,
+    terminal,
+    files,
+  });
+  const observers: RunEvent[] = [
+    new NodeSucceeded({
+      nodeId: delta.nodeId,
+      output: normalizeTypedFiles(files, decodeTyped(delta.valueJson)).toObject(),
+      commitAs: delta.observerCommitAs,
+    }),
+  ];
+  if (terminal !== null) observers.push(terminalObserver(terminal));
   return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
 }
 
@@ -785,6 +1027,9 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
     case "frontier":
       observers = commitFrontier(log, state, prepared);
       break;
+    case "success":
+      observers = commitSuccess(log, state, prepared);
+      break;
     case "growth":
       observers = commitGrowth(log, state, prepared);
       break;
@@ -825,6 +1070,152 @@ function outcomeNodeId(record: RunRecord): string | null {
   if (isExactly(record, NodeExpandedRecord)) return record.spawnerId;
   if (isExactly(record, NodeSucceededRecord) || isExactly(record, NodeRoutedRecord)) return record.nodeId;
   return null;
+}
+
+/**
+ * Match the detached scope to the canonical physical node before append and prune.
+ *
+ * Callers have checked the record against its immutable prepared envelope. The adopted graph stays
+ * the authority until apply; neither a commit target nor a substituted occurrence can select the
+ * historical owner.
+ */
+function requireOutcomeTraceScope(state: RunState, prepared: PreparedTransition): void {
+  const delta = prepared._plan.traceDelta;
+  if (state.trace === null) {
+    if (delta !== null) throw new RangeError("an unretained outcome cannot carry a trace delta");
+    return;
+  }
+  if (!isExactly(delta, TraceDelta) || !isExactly(delta.occurrence, TraceOccurrence)) {
+    throw new RangeError("a retained outcome requires its physical trace occurrence");
+  }
+  const nodeId = outcomeNodeId(prepared.record);
+  const node = nodeId === null ? undefined : state.flow.nodes.get(nodeId);
+  if (!(node instanceof Node)) throw new RangeError("outcome memory scope requires its physical executing node");
+  if (!sameOptional(delta.occurrence.memoryScope, checkMemoryScope(node.memoryScope), sameMemoryScope)) {
+    throw new RangeError("outcome memory scope disagrees with the physical executing node");
+  }
+}
+
+/**
+ * Match the physical occurrence, the terminal facts and the source latches to authority.
+ *
+ * The terminal disposition was already derived during preparation; this validates its trace
+ * projection without repeating quiescence or invoking node hooks. Writer and route-latch updates
+ * also constrain later terminal projections. Runs after `requireOutcomeTraceScope`.
+ */
+function requireOutcomeTraceTerminal(state: RunState, prepared: PreparedTransition): void {
+  const trace = state.trace;
+  if (trace === null) return;
+  const plan = prepared._plan;
+  const record = prepared.record;
+  // Established by `requireOutcomeTraceScope`.
+  const delta = plan.traceDelta!;
+  if (
+    !Number.isSafeInteger(delta.sequence) ||
+    delta.sequence !== prepared.expectedSequence ||
+    delta.initialized !== null ||
+    delta.started !== null ||
+    delta.resumed !== false
+  ) {
+    throw new RangeError("outcome trace cannot change initialization or dispatch authority");
+  }
+  const nodeId = outcomeNodeId(record)!;
+  const occurrence = delta.occurrence!;
+  const startSeq = trace.started.get(nodeId);
+  if (startSeq === undefined) throw new RangeError("physical trace occurrence disagrees with the accepted outcome");
+  const source = new SourceRef(state.runId!, startSeq);
+  validateSource(occurrence.source);
+  if (
+    !sameSource(occurrence.source, source) ||
+    typeof occurrence.nodeId !== "string" ||
+    occurrence.nodeId !== nodeId ||
+    !Number.isSafeInteger(occurrence.outcomeSeq) ||
+    occurrence.outcomeSeq !== prepared.expectedSequence ||
+    occurrence.recordJson !== plan.envelopeJson
+  ) {
+    throw new RangeError("physical trace occurrence disagrees with the accepted outcome");
+  }
+  const rootStartSource = nodeId === trace.startId && trace.rootStartSource === null ? source : null;
+  if (delta.rootStartSource !== null) validateSource(delta.rootStartSource);
+  if (!sameOptional(delta.rootStartSource, rootStartSource, sameSource)) {
+    throw new RangeError("terminal trace root START source disagrees with the accepted outcome");
+  }
+  let writer: SourceEntry | null = null;
+  let rootWriter: SourceEntry | null = null;
+  if (plan.kind === "success" && isExactly(record, NodeSucceededRecord)) {
+    const installed: unknown = delta.writer;
+    if (
+      !Array.isArray(installed) ||
+      installed.length !== 2 ||
+      typeof installed[0] !== "string" ||
+      installed[0] !== record.commitTarget
+    ) {
+      throw new RangeError("physical trace writer disagrees with the accepted output target");
+    }
+    writer = new SourceEntry(source, prepared.expectedSequence, plan.delta.valueJson, plan.files);
+    if (record.commitTarget === state.flow.endId) rootWriter = writer;
+  } else if (delta.writer !== null) {
+    throw new RangeError("only an accepted output can install a physical trace writer");
+  }
+  const entries = [
+    [delta.writer?.[1] ?? null, writer, "physical trace writer"],
+    [delta.rootWriter, rootWriter, "terminal trace root writer"],
+  ] as const;
+  for (const [actual, expected, label] of entries) {
+    if (actual !== null) {
+      if (
+        !isExactly(actual, SourceEntry) ||
+        !Number.isSafeInteger(actual.outcomeSeq) ||
+        typeof actual.valueJson !== "string"
+      ) {
+        throw new RangeError(`${label} must be an exact accepted entry`);
+      }
+      if (actual.source !== null) validateSource(actual.source);
+    }
+    if (!sameOptional(actual, expected, sameSourceEntry)) {
+      throw new RangeError(`${label} disagrees with the accepted outcome`);
+    }
+  }
+
+  const causalSource =
+    isExactly(record, NodeRoutedRecord) && record.terminalFailure !== null && trace.causalRouteSource === null
+      ? source
+      : null;
+  if (delta.causalRouteSource !== null) validateSource(delta.causalRouteSource);
+  if (!sameOptional(delta.causalRouteSource, causalSource, sameSource)) {
+    throw new RangeError("terminal trace causal source disagrees with the accepted outcome");
+  }
+
+  const expected: TerminalDelta | null =
+    plan.kind === "failure"
+      ? { succeeded: false, outputJson: null, failure: plan.failure, files: null }
+      : plan.kind === "success" || plan.kind === "route"
+        ? plan.terminal
+        : null;
+  const terminal = delta.terminal;
+  if (expected === null) {
+    if (terminal !== null) throw new RangeError("nonterminal outcome cannot install a terminal trace");
+    return;
+  }
+  // Python revalidates the frozen terminal; a TS `TraceTerminal` validated itself when built.
+  if (!isExactly(terminal, TraceTerminal)) throw new RangeError("terminal outcome requires an exact terminal trace");
+  let terminalSource: SourceRef | null;
+  if (expected.succeeded) {
+    const acceptedWriter = rootWriter ?? trace.rootWriter;
+    if (acceptedWriter === null) throw new RangeError("terminal trace requires its accepted root writer");
+    terminalSource = acceptedWriter.source;
+  } else {
+    terminalSource = plan.kind === "failure" ? source : (causalSource ?? trace.causalRouteSource);
+    if (terminalSource === null) throw new RangeError("terminal trace failure requires its accepted causal occurrence");
+  }
+  if (
+    terminal.succeeded !== expected.succeeded ||
+    !sameOptional(terminal.source, terminalSource, sameSource) ||
+    terminal.outputJson !== expected.outputJson ||
+    !sameOptional(terminal.failure, expected.failure, sameFailure)
+  ) {
+    throw new RangeError("terminal trace disagrees with the prepared terminal outcome");
+  }
 }
 
 /**
@@ -934,6 +1325,37 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
   }
   state.nextSequence = prepared.expectedSequence + 1;
   return observers;
+}
+
+/** Validate, append and install one successful outcome. */
+function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
+  const plan = prepared._plan;
+  if (plan.kind !== "success") throw new TypeError("success commit requires a success plan");
+  const record = prepared.record;
+  if (!isExactly(record, NodeSucceededRecord)) throw new TypeError("success plan requires a NodeSucceededRecord");
+  requirePreparedOrigin(state, plan);
+  requireInitializedNonterminal(state);
+  requireAuthorityCoordinates(log, state, prepared, true);
+  requireUnchangedRecord(prepared, plan.envelopeJson);
+  requireOutcomeTraceScope(state, prepared);
+  requireOutcomeTraceTerminal(state, prepared);
+  const delta = plan.delta;
+  if (!(record.nodeId === delta.nodeId && record.commitTarget === delta.commitTarget)) {
+    throw new RangeError("success record and prevalidated delta disagree");
+  }
+  const apply = materializeSuccess(plan);
+
+  appendAndVerify(log, prepared);
+  state.pool.store.set(delta.commitTarget, apply.value);
+  state.nodeState.set(delta.nodeId, NodeState.TAKEN);
+  for (const edgeId of delta.outgoingEdgeIds) state.edgeState.set(edgeId, NodeState.TAKEN);
+  state.inFlight.delete(delta.nodeId);
+  state.acceptedStarts.delete(delta.nodeId);
+  forgetNodeSteps(state, delta.nodeId);
+  for (const nodeId of delta.newlyReadyIds) state.ready.push(nodeId);
+  if (apply.terminal !== null) state.result = apply.terminal.result;
+  state.nextSequence = prepared.expectedSequence + 1;
+  return apply.observers;
 }
 
 /** Append and apply one prepared expansion. Not ported yet (T4-5): it always throws. */
@@ -1310,10 +1732,276 @@ function forgetNodeSteps(state: RunState, nodeId: string): void {
   state.nodeSteps.delete(nodeId);
 }
 
+/** Require an existing unknown node in the in-flight frontier. */
+function requireSucceedingNode(state: RunState, nodeId: string): void {
+  if (!state.flow.nodes.has(nodeId)) {
+    throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} does not exist in the flow`);
+  }
+  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
+    throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} must have UNKNOWN disposition`);
+  }
+  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} is not in-flight`);
+}
+
 /** Whether two sets of ids hold the same ids, in any order. */
 function sameIds(a: { readonly size: number; has(id: string): boolean }, b: Iterable<string>): boolean {
   const other = new Set(b);
   return a.size === other.size && [...other].every((id) => a.has(id));
+}
+
+/** Return the recorded stack at `locator` by binary search over the sorted stacks, or `null`. */
+function recordedStack(stacks: readonly MemoryStack[], locator: readonly string[]): MemoryStack | null {
+  let low = 0;
+  let high = stacks.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (comparePaths(stacks[middle]!.locator, locator) < 0) low = middle + 1;
+    else high = middle;
+  }
+  return low < stacks.length && sameItems(stacks[low]!.locator, locator) ? stacks[low]! : null;
+}
+
+/** Enforce recorded learning authority for one accepted graph outcome. */
+function validateNodeEvidence(state: RunState, nodeId: string, evidence: EvaluationEvidence | null): void {
+  const node = state.flow.nodes.get(nodeId);
+  if (node === undefined) throw new RangeError(`evidence node ${reprText(nodeId)} does not exist in the flow`);
+  const scope = node.memoryScope;
+
+  if (state.learnable !== true || node.needsEvaluationTrace !== true) {
+    if (evidence !== null) throw new RangeError(`node ${reprText(nodeId)} is ineligible for evaluation evidence`);
+    return;
+  }
+  if (scope !== null) {
+    // Python rebuilds the frozen scope to revalidate it; a TS scope validated itself when built.
+    if (!isExactly(scope, MemoryScope)) {
+      throw new RangeError(`node ${reprText(nodeId)} has no exact compiled memory scope`);
+    }
+    let expected: readonly string[] = [];
+    if (state.memoryStacks !== null) {
+      const recorded = recordedStack(state.memoryStacks, scope.staticPath);
+      if (recorded === null) throw new RangeError(`node ${reprText(nodeId)} has no recorded memory stack`);
+      expected = recorded.memories;
+    }
+    if (!sameItems(scope.memories, expected)) {
+      throw new RangeError(`node ${reprText(nodeId)} memory scope must carry its exact recorded memory stack`);
+    }
+  } else if (state.memories !== null && state.memories.length > 0) {
+    throw new RangeError(`node ${reprText(nodeId)} has no exact compiled memory scope`);
+  }
+  if (evidence === null) {
+    throw new RangeError(`eligible node ${reprText(nodeId)} requires evaluation evidence while learning`);
+  }
+  if (!isExactly(evidence, EvaluationEvidence)) {
+    throw new TypeError("node evidence must be an EvaluationEvidence or None");
+  }
+  if (!sameOptional(evidence.scope, scope, sameMemoryScope)) {
+    throw new RangeError(`node ${reprText(nodeId)} evidence scope does not match its compiled scope`);
+  }
+}
+
+/** Validate one replayed value against its explicit commit target exactly once. */
+function validateSuccessValue(state: RunState, record: NodeSucceededRecord): TypedValue {
+  if (typeof record.nodeId !== "string") throw new TypeError("NodeSucceededRecord node_id must be a string");
+  if (typeof record.commitTarget !== "string") {
+    throw new TypeError("NodeSucceededRecord commit_target must be a string");
+  }
+  requireSucceedingNode(state, record.nodeId);
+  const targetNode = state.flow.nodes.get(record.commitTarget);
+  if (targetNode === undefined) {
+    throw new RangeError(`success commit target ${reprText(record.commitTarget)} does not exist in the flow`);
+  }
+  let typed: TypedValue;
+  try {
+    typed = TypedValue.fromWire(record.value);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    throw new RangeError("NodeSucceededRecord value is not a typed value", { cause: error });
+  }
+  const [wire, decoded] = canonicalOutputValue(typed, targetNode.outputContract, nodeOutputType(targetNode));
+  if (logJson(wire) !== logJson(record.value)) {
+    throw new RangeError("NodeSucceededRecord value is not canonical for its target");
+  }
+  return decoded;
+}
+
+/** Validate the touched topology and freeze one sparse successful-output delta. */
+function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, typed: TypedValue): SuccessDelta {
+  if (!isExactly(state.pool.store, Map)) throw new RangeError("success requires an exact variable-pool store");
+  const target = record.commitTarget;
+  const outgoingEdgeIds: string[] = [];
+  const newlyReadyIds: string[] = [];
+  const settledEdgeIds = new Set<string>();
+  const seenOutgoingEdgeIds = new Set<string>();
+  const remainingBySuccessor = new Map<string, number>();
+  const edgeIdsBySuccessor = new Map<string, string[]>();
+  const outgoing = state.flow.outgoing(target);
+
+  for (const edge of outgoing) {
+    if (!(edge instanceof Edge) || edge.from !== target) {
+      throw new RangeError(`success target ${reprText(target)} has an invalid outgoing adjacency`);
+    }
+    const edgeId: unknown = edge.id;
+    if (typeof edgeId !== "string" || !edgeId) throw new RangeError("success target has an invalid outgoing edge ID");
+    if (seenOutgoingEdgeIds.has(edgeId)) {
+      throw new RangeError(`success target outgoing edge ${reprText(edgeId)} is duplicated`);
+    }
+    if (!state.edgeState.has(edgeId)) {
+      throw new RangeError(`success target outgoing edge ${reprText(edgeId)} has no disposition`);
+    }
+    if (state.edgeState.get(edgeId) !== NodeState.UNKNOWN) {
+      throw new RangeError(`success target outgoing edge ${reprText(edgeId)} must be UNKNOWN`);
+    }
+    if (!state.flow.nodes.has(edge.to) || !state.nodeState.has(edge.to)) {
+      throw new RangeError(
+        `success target outgoing edge ${reprText(edgeId)} has unknown successor ${reprText(edge.to)}`,
+      );
+    }
+    outgoingEdgeIds.push(edgeId);
+    seenOutgoingEdgeIds.add(edgeId);
+    remainingBySuccessor.set(edge.to, (remainingBySuccessor.get(edge.to) ?? 0) + 1);
+    const ids = edgeIdsBySuccessor.get(edge.to);
+    if (ids === undefined) edgeIdsBySuccessor.set(edge.to, [edgeId]);
+    else ids.push(edgeId);
+  }
+
+  for (const edge of outgoing) {
+    settledEdgeIds.add(edge.id);
+    const successor = edge.to;
+    const remaining = remainingBySuccessor.get(successor)! - 1;
+    remainingBySuccessor.set(successor, remaining);
+    if (remaining) continue;
+    const required = new Set(edgeIdsBySuccessor.get(successor));
+    if (sparseDisposition(state.flow, state.edgeState, settledEdgeIds, successor, required) !== "ready") continue;
+    if (state.nodeState.get(successor) !== NodeState.UNKNOWN) {
+      throw new RangeError(`newly-ready successor ${reprText(successor)} must have UNKNOWN disposition`);
+    }
+    newlyReadyIds.push(successor);
+  }
+
+  return Object.freeze({
+    nodeId: record.nodeId,
+    commitTarget: target,
+    valueJson: logJson(typed.toWire()),
+    outgoingEdgeIds: Object.freeze(outgoingEdgeIds),
+    newlyReadyIds: Object.freeze(newlyReadyIds),
+    observerCommitAs: target === record.nodeId ? null : target,
+  });
+}
+
+/**
+ * Derive an optional terminal result from one predicted post-outcome state.
+ *
+ * Quiescence depends only on the two frontier roots and the sparse additions of the causal
+ * outcome. A successful END write is read from its pending typed text; an already committed END
+ * value is re-encoded, so the plan never aliases the live pool.
+ */
+function prepareTerminalDelta(
+  state: RunState,
+  outcome: {
+    completingNodeId: string;
+    newlyReadyIds: readonly string[];
+    pendingCommitTarget: string | null;
+    pendingValueJson: string | null;
+    terminalUnreachableFailure: Failure | null;
+  },
+): TerminalDelta | null {
+  if (
+    state.result !== null ||
+    state.ready.length > 0 ||
+    outcome.newlyReadyIds.length > 0 ||
+    state.inFlight.size !== 1 ||
+    !state.inFlight.has(outcome.completingNodeId)
+  ) {
+    return null;
+  }
+
+  const endId = state.flow.endId;
+  const files = outputContractFileType(state.resultContract);
+  if (outcome.pendingCommitTarget === endId) {
+    if (typeof outcome.pendingValueJson !== "string") {
+      throw new RangeError("pending END output must be canonical typed text");
+    }
+    return Object.freeze({ succeeded: true, outputJson: outcome.pendingValueJson, failure: null, files });
+  }
+  const stored = state.pool.store.get(endId);
+  if (stored !== undefined) {
+    return Object.freeze({ succeeded: true, outputJson: logJson(stored.toWire()), failure: null, files });
+  }
+  if (outcome.terminalUnreachableFailure === null) {
+    throw new RangeError("run quiesced without END output or a causal terminal failure");
+  }
+  return Object.freeze({
+    succeeded: false,
+    outputJson: null,
+    failure: outcome.terminalUnreachableFailure,
+    files: null,
+  });
+}
+
+/** Every `NodeState` value, for checking a disposition read from a state map. */
+const NODE_STATES: ReadonlySet<unknown> = new Set(Object.values(NodeState));
+
+/**
+ * Classify one touched join over the live edge states plus the sparse TAKEN overlay
+ * `takenEdgeIds`; `requiredEdgeIds` are the settling edges that must be among its incoming ones.
+ */
+function sparseDisposition(
+  flow: CompiledFlow,
+  edgeState: ReadonlyMap<string, NodeState>,
+  takenEdgeIds: ReadonlySet<string>,
+  nodeId: string,
+  requiredEdgeIds: ReadonlySet<string>,
+): "ready" | "wait" | "dead" {
+  const absent = (ids: Iterable<string>) =>
+    `success edges ${writeAsText([...ids].sort(compareCodeUnits))} are absent from successor ` +
+    `${reprText(nodeId)} incoming adjacency`;
+  const incoming = flow.incoming(nodeId);
+  if (incoming.length === 0) throw new RangeError(absent(requiredEdgeIds));
+
+  const foundRequired = new Set<string>();
+  let sawControl = false;
+  let allControlSkipped = true;
+  let requiredOrderingSkipped = false;
+  let anyUnknown = false;
+  const dataGroups = new Map<string | null, readonly [boolean, boolean]>();
+  const seenIncomingIds = new Set<string>();
+  for (const edge of incoming) {
+    if (!(edge instanceof Edge) || edge.to !== nodeId) {
+      throw new RangeError(`successor ${reprText(nodeId)} has an invalid incoming adjacency`);
+    }
+    const edgeId: unknown = edge.id;
+    if (typeof edgeId !== "string" || !edgeId || seenIncomingIds.has(edgeId)) {
+      throw new RangeError(`successor ${reprText(nodeId)} has invalid incoming edge IDs`);
+    }
+    seenIncomingIds.add(edgeId);
+    if (requiredEdgeIds.has(edgeId)) foundRequired.add(edgeId);
+    if (!edgeState.has(edgeId)) throw new RangeError(`successor incoming edge ${reprText(edgeId)} has no disposition`);
+    const disposition = takenEdgeIds.has(edgeId) ? NodeState.TAKEN : edgeState.get(edgeId);
+    if (!NODE_STATES.has(disposition)) {
+      throw new RangeError(`successor incoming edge ${reprText(edgeId)} has an invalid disposition`);
+    }
+    anyUnknown ||= disposition === NodeState.UNKNOWN;
+    if (edge.sourceHandle !== null) {
+      sawControl = true;
+      allControlSkipped &&= disposition === NodeState.SKIPPED;
+    } else if (edge.ordering) {
+      requiredOrderingSkipped ||= !edge.optional && disposition === NodeState.SKIPPED;
+    } else {
+      const [optional, allSkipped] = dataGroups.get(edge.inputGroup) ?? [edge.optional, true];
+      dataGroups.set(edge.inputGroup, [optional, allSkipped && disposition === NodeState.SKIPPED]);
+    }
+  }
+
+  if (foundRequired.size !== requiredEdgeIds.size) {
+    throw new RangeError(absent([...requiredEdgeIds].filter((id) => !foundRequired.has(id))));
+  }
+  if (sawControl && allControlSkipped) return "dead";
+  for (const [optional, allSkipped] of dataGroups.values()) {
+    if (!optional && allSkipped) return "dead";
+  }
+  if (requiredOrderingSkipped) return "dead";
+  if (anyUnknown) return "wait";
+  return "ready";
 }
 
 /** Reject any state that no longer has its constructor-created empty frontier. */
@@ -1529,4 +2217,58 @@ function applyRunStarted(state: RunState, apply: RunStartedApply): void {
   state.backwardState = apply.backwardState;
   state.memoryAuthority = apply.memoryAuthority;
   state.nextSequence = apply.nextSequence;
+}
+
+/** The detached values one success commit installs, all built before the durable append. */
+interface SuccessApply {
+  value: TypedValue;
+  terminal: TerminalApply | null;
+  observers: readonly RunEvent[];
+}
+
+/** Decode independent pool, observer and terminal copies before append. */
+function materializeSuccess(plan: SuccessPlan): SuccessApply {
+  const value = normalizeTypedFiles(plan.files, decodeTyped(plan.delta.valueJson));
+  const observerValue = normalizeTypedFiles(plan.files, decodeTyped(plan.delta.valueJson)).toObject();
+  const terminal = plan.terminal !== null ? materializeTerminal(plan.terminal) : null;
+  const observers: RunEvent[] = [
+    new NodeSucceeded({ nodeId: plan.delta.nodeId, output: observerValue, commitAs: plan.delta.observerCommitAs }),
+  ];
+  if (terminal !== null) observers.push(terminal.observer);
+  return { value, terminal, observers };
+}
+
+/** Decode a typed value from its canonical log text, a fresh copy. */
+function decodeTyped(text: string): TypedValue {
+  return TypedValue.fromWire(parseJson(text, "codec"));
+}
+
+/**
+ * Materialize one detached terminal event from immutable plan authority.
+ *
+ * A success output is read through `delta.files`, so each file the run's result contract types as
+ * `file` is a `FileRef`.
+ */
+function terminalObserver(delta: TerminalDelta): RunSucceeded | RunFailed {
+  if (delta.succeeded) {
+    if (typeof delta.outputJson !== "string") {
+      throw new RangeError("successful terminal delta requires typed output text");
+    }
+    if (delta.failure !== null) throw new RangeError("successful terminal delta cannot carry a failure");
+    return new RunSucceeded({ output: normalizeTypedFiles(delta.files, decodeTyped(delta.outputJson)).toObject() });
+  }
+  if (delta.outputJson !== null) throw new RangeError("failed terminal delta cannot carry output text");
+  if (!isExactly(delta.failure, Failure)) throw new RangeError("failed terminal delta requires one Failure");
+  return new RunFailed({ failure: delta.failure });
+}
+
+/** Independent state and callback terminal values. */
+interface TerminalApply {
+  result: RunSucceeded | RunFailed;
+  observer: RunSucceeded | RunFailed;
+}
+
+/** Build independent state and callback terminal values before the durable append. */
+function materializeTerminal(delta: TerminalDelta): TerminalApply {
+  return { result: terminalObserver(delta), observer: terminalObserver(delta) };
 }

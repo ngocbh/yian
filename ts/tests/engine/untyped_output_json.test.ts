@@ -4,6 +4,9 @@
  *
  * Ported: `test_canonical_typed_accepts_untyped_files` (field, item; the exact wire).
  *
+ * Ported, the state module's output canonicalization: `test_a_partial_record_checks_its_opaque_field_as_json`,
+ * with the value layer's wording (`<Set object> is not a JSON value`, no `output at g: ` prefix).
+ *
  * Changed:
  * - `test_canonical_typed_rejects_untyped_non_json_values`: the `Date` and `Set` rows, with the
  *   value layer's wording (`<Date object> is not a JSON value`, no `output at <path>: ` prefix) at
@@ -19,8 +22,6 @@
  * - `test_canonical_typed_records_a_text_subclass_key_as_plain_text` (a `str` subclass key);
  * - `test_canonical_typed_does_not_walk_a_built_value`: it spies on the module's
  *   `reject_non_json`, which an ESM export can't be replaced with;
- * - `test_a_partial_record_checks_its_opaque_field_as_json`: it checks the state module's output
- *   canonicalization, ported with that module;
  * - the flow and resume tests: they run flows, ported with the run module;
  * - the `reject_non_json`, `value_repr` and date-literal tests: they test the value layer and
  *   the flow loader, not the log.
@@ -28,8 +29,10 @@
 
 import { expect, test } from "bun:test";
 
+import { PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { canonicalTyped } from "../../src/runtime/log.ts";
-import { FileRef, type StorageKind, TypeCheckError, type Value, ValueKind } from "../../src/typesys/index.ts";
+import { canonicalOutputValue } from "../../src/runtime/state.ts";
+import { FileRef, type StorageKind, Type, TypeCheckError, type Value, ValueKind } from "../../src/typesys/index.ts";
 
 /** Assert `fn` throws a `TypeCheckError` with exactly `message` at `path`. */
 function expectTypeCheck(fn: () => unknown, message: string, path: readonly (string | number)[]): void {
@@ -75,4 +78,20 @@ test.each<[string, unknown, ValueKind | null, (string | number)[]]>([
   ["untyped", "\ud800", null, []],
 ])("canonicalTyped still rejects a lone surrogate: %s", (_name, value, declared, path) => {
   expectTypeCheck(() => canonicalTyped(value, declared), "text holding a lone surrogate is not a yian value", path);
+});
+
+test("a partial record checks its opaque field as JSON", () => {
+  // A typed `file` field `f` and an opaque field `g`.
+  const contract = new PartialRecordContract([
+    ["f", new ValueContract(Type.scalar(ValueKind.FILE))],
+    ["g", null],
+  ]);
+  const [wire] = canonicalOutputValue({ f: new FileRef({ uri: "f" }), g: [1n] }, contract, null);
+  expect(wire.value).toEqual({ f: FILE_WIRE, g: [1n] });
+
+  expectTypeCheck(
+    () => canonicalOutputValue({ f: new FileRef({ uri: "f" }), g: new Set([1n, 2n]) }, contract, null),
+    "<Set object> is not a JSON value",
+    ["g"],
+  );
 });

@@ -12,6 +12,7 @@
  * `test_run_resumed_appends_before_applying_the_frontier_delta`,
  * `test_run_resumed_requires_an_exact_nonnegative_worker_count` (5 rows),
  * `test_run_resumed_allows_an_empty_retry_segment_and_changes_workers`,
+ * `test_run_resumed_preserves_wide_ready_work_without_copying_it`,
  * `test_run_resumed_rejects_invalid_retry_frontiers` (2 rows),
  * `test_prepare_record_requires_the_exact_ordered_resume_retry_list` (4 rows),
  * `test_prepare_record_accepts_exact_dispatch_and_resume_records`,
@@ -58,9 +59,6 @@
  *
  * Not ported (ESM): the module patches of `test_frontier_commit_uses_only_the_prevalidated_delta`
  * (`_validate_node_started`, `_validate_run_resumed`, `encode_pool`, `decode_pool`).
- *
- * Later (T4-4 task 3): `test_run_resumed_preserves_wide_ready_work_without_copying_it`, which
- * needs a committed success.
  */
 
 import { expect, test } from "bun:test";
@@ -92,6 +90,7 @@ import {
   PreparedTransition,
   prepareNodeStarted,
   prepareNodeStep,
+  prepareNodeSucceeded,
   prepareRecord,
   prepareRunResumed,
   prepareRunStarted,
@@ -100,7 +99,16 @@ import {
 } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { blank, closing } from "./source_scan.ts";
-import { FailingLog, FINGERPRINT, FuncNode, ReturningLog, RUN_ID, stateSnapshot } from "./run_state_fixtures.ts";
+import {
+  expectUnchanged,
+  FailingLog,
+  FINGERPRINT,
+  FuncNode,
+  ReturningLog,
+  roots,
+  RUN_ID,
+  snapshot,
+} from "./run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` whose message matches, or is, `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: RegExp | string): void {
@@ -177,48 +185,6 @@ function expectCommittedPath(log: MemoryRunLog, ...tail: RunRecord[]): void {
 function startFrontier(state: RunState, log: MemoryRunLog, ...nodeIds: string[]): void {
   state.ready = [...nodeIds];
   for (const nodeId of nodeIds) commitPrepared(log, state, prepareNodeStarted(state, nodeId));
-}
-
-/** The root containers whose identity a frontier commit keeps. */
-function roots(state: RunState): unknown[] {
-  return [
-    state.pool,
-    state.nodeState,
-    state.edgeState,
-    state.ready,
-    state.inFlight,
-    state.acceptedStarts,
-    state.depth,
-    state.wiringOverrides,
-    state.input,
-    state.effectiveLlmByStaticPath,
-  ];
-}
-
-/** Every reducer coordinate in a detached form, plus the root containers by reference. */
-interface Snapshot {
-  values: Record<string, unknown>;
-  roots: unknown[];
-}
-
-/** Return `state`'s snapshot, with its start counts and steps as well. */
-function snapshot(state: RunState): Snapshot {
-  return {
-    values: {
-      ...stateSnapshot(state),
-      terminalUnreachableFailure: state.terminalUnreachableFailure,
-      nodeStarts: [...state.nodeStarts],
-      nodeSteps: [...state.nodeSteps],
-    },
-    roots: roots(state),
-  };
-}
-
-/** Assert `state` still has `before`'s values and root containers. */
-function expectUnchanged(state: RunState, before: Snapshot): void {
-  const after = snapshot(state);
-  expect(after.values).toEqual(before.values);
-  after.roots.forEach((root, index) => expect(root).toBe(before.roots[index]));
 }
 
 test("NodeStarted requires and removes the exact ready head", () => {
@@ -422,6 +388,39 @@ test.each([
 
   expectUnchanged(state, before);
   expect(log.nextSequence).toBe(1);
+});
+
+/** Return a START fan-out whose first successor can be retried over wide ready work. */
+function wideResumeFlow(width: number): CompiledFlow {
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID)],
+    ["retry", new FuncNode("retry", (inputs) => inputs)],
+    [END_ID, EndNode.value(END_ID, { outputName: null })],
+  ]);
+  const edges = [new Edge("start-retry", START_ID, "retry")];
+  for (let index = 0; index < width; index++) {
+    nodes.set(`queued-${index}`, new FuncNode(`queued-${index}`, (inputs) => inputs));
+    edges.push(new Edge(`start-queued-${index}`, START_ID, `queued-${index}`));
+  }
+  return CompiledFlow.fromParts(nodes, edges);
+}
+
+test("RunResumed keeps wide ready work without copying it", () => {
+  const { state, log } = initialized(wideResumeFlow(512));
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, { started: true }));
+  commitPrepared(log, state, prepareNodeStarted(state, "retry"));
+
+  const prepared = prepareRunResumed(state, { numWorkers: 3 });
+  const ready = state.ready;
+  commitPrepared(log, state, prepared);
+
+  expect(state.ready).toBe(ready);
+  expect(state.ready.length).toBe(513);
+  expect(state.ready[0]).toBe("retry");
+  expect(state.ready.slice(1)).toEqual(Array.from({ length: 512 }, (_, index) => `queued-${index}`));
+  expect(state.inFlight).toEqual(new Set());
+  expect(prepared.record).toStrictEqual(new RunResumedRecord(["retry"], 3));
 });
 
 test("RunResumed allows an empty retry segment and changes the workers", () => {

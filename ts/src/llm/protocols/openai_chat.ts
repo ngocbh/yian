@@ -233,9 +233,9 @@ export class OpenAIChat implements SseProtocol {
    * reasoning is its first non-empty source of `reasoning_content`, `reasoning` and the
    * `reasoning.text` items of `reasoning_details`; on a route that echoes reasoning an empty
    * `reasoning_content` opens the part too. A list `content` counts its text items and strings,
-   * joined with newlines. The finish reason is the last one sent, and is held until `[DONE]` or
-   * the end of the stream, so a usage chunk after it is read. Chunks without choices contribute
-   * only usage, unknown keys are ignored, and empty or non-object event data is skipped.
+   * joined with newlines. The finish reason is the last non-empty one sent, and is held until
+   * `[DONE]` or the end of the stream, so a usage chunk after it is read. Chunks without choices
+   * contribute only usage, unknown keys are ignored, and empty or non-object event data is skipped.
    *
    * @param frames The reply's server-sent events, in order.
    * @returns The deltas, then one `PartDone` per part in index order (reasoning with its replay
@@ -304,7 +304,8 @@ export class OpenAIChat implements SseProtocol {
       const choice = choiceOf(data["choices"], provider);
       if (choice === null) continue;
       const reason = choice["finish_reason"];
-      if (typeof reason === "string") finishReason = reason;
+      // An empty reason is no finish, as in langchain_openai, which reads it by truthiness.
+      if (typeof reason === "string" && reason !== "") finishReason = reason;
       const delta = isPlainObject(choice["delta"]) ? choice["delta"] : {};
       checkDelta(delta, provider);
       const pieces = callPieces(delta["tool_calls"], provider);

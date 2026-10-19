@@ -612,6 +612,38 @@ describe("incomplete streams", () => {
     }
   });
 
+  test("an empty finish reason is no finish: a cut stream carrying only empty reasons is incomplete", async () => {
+    const chunks = [chunk({ content: "Hi" }, { finishReason: "" }), chunk({}, { finishReason: "" })];
+    for (const done of [false, true]) {
+      const [events, error] = await failing(chunks, xai(), done);
+      expect(error.kind).toBe("incomplete");
+      expect(error.retryable).toBe(true);
+      expect(error.message).toBe("xai stream ended before a complete response");
+      expect(events).toEqual([new TextDelta(0, "Hi")]);
+    }
+  });
+
+  test("an empty finish reason after stop keeps stop", async () => {
+    const events = await parse([chunk({ content: "Hi" }), STOP, chunk({}, { finishReason: "", usage: USAGE })]);
+    expect(events.slice(-2)).toEqual([new UsageReport(USAGE_COUNTS), finish("stop")]);
+  });
+
+  test("a consumer that stops early closes the frame source", async () => {
+    let closed = false;
+    async function* source(): AsyncGenerator<SSEEvent> {
+      try {
+        yield* sse([chunk({ content: "Hi" }), chunk({ content: " there" }), STOP]);
+      } finally {
+        closed = true;
+      }
+    }
+    for await (const event of xai().parse(source())) {
+      expect(event).toEqual(new TextDelta(0, "Hi"));
+      break;
+    }
+    expect(closed).toBe(true);
+  });
+
   test("a finish without [DONE] is complete", async () => {
     const events = await parse(streamChunks({ content: "Hello there." }), xai(), false);
     expect(events.at(-1)).toEqual(finish("stop"));

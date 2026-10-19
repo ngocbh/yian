@@ -94,7 +94,7 @@ const BAD_REQUEST_CODES = [
   "failed_to_download_image",
 ];
 // In-stream error codes; any other code, or none, is a server error.
-const STREAM_ERROR_KINDS: ReadonlyMap<string, ErrorKind> = new Map<string, ErrorKind>([
+export const STREAM_ERROR_KINDS: ReadonlyMap<string, ErrorKind> = new Map<string, ErrorKind>([
   ["rate_limit_exceeded", "rate_limit"],
   ["server_error", "server"],
   ["vector_store_timeout", "server"],

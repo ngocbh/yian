@@ -8,39 +8,73 @@
  * as `reasoning_content`, MiniMax's reasoning models get `reasoning_split`, some models refuse a
  * named tool choice, and most Azure deployments refuse `parallel_tool_calls`.
  *
- * Reasoning parts carry replay records naming the wire field they came from, so only reasoning
- * this route parsed from `reasoning_content` is echoed. An error message holds the provider's
- * text uncapped; `RouteModel` scrubs it of the route's credentials and then caps it.
+ * Replies stream text and reasoning as deltas; a refusal is collected into one part. The finish
+ * is held until the stream ends, so the usage chunk that follows it is read. Reasoning parts
+ * carry replay records naming the wire field they came from, so only reasoning this route parsed
+ * from `reasoning_content` is echoed. A reply that failed, was filtered, ran out of capacity or
+ * ended early raises `ProviderError`. An error message holds the provider's text uncapped;
+ * `RouteModel` scrubs it of the route's credentials and then caps it.
  */
 
-import type { JsonObject, JsonValue } from "../../typesys/json.ts";
+import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody } from "../body.ts";
 import { getCapabilities } from "../capabilities.ts";
-import type { Event } from "../events.ts";
+import { type ErrorKind, kindForStatus, ProviderError } from "../errors.ts";
+import { type Event, Finish, PartDone, ReasoningDelta, TextDelta, UsageReport } from "../events.ts";
 import type { SseProtocol } from "../executor.ts";
 import type { SSEEvent } from "../framing.ts";
 import {
   copyJson,
+  isPlainObject,
   MediaPart,
   type Message,
+  MessageFormatError,
   NamedTool,
   type Part,
   ReasoningPart,
   readReplayRecord,
+  RefusalPart,
   type ReplayDegradedReason,
   type ReplayKey,
+  replayRecord,
   type Request,
   TextPart,
   ToolCallPart,
   type ToolSpec,
   ToolResultPart,
+  Usage,
 } from "../messages.ts";
+import { STREAM_ERROR_KINDS } from "./openai_responses.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "openai_chat";
 const NO_MEDIA = "the openai_chat route does not send media parts yet";
 // The wire field a reasoning record names when its text may be echoed.
 const ECHOED_FIELD = "reasoning_content";
+// Error chunk codes: the Responses table, plus OpenRouter's content filter codes. Any other
+// code, or none, is a server error.
+const CHUNK_ERROR_KINDS: ReadonlyMap<string, ErrorKind> = new Map<string, ErrorKind>([
+  ...STREAM_ERROR_KINDS,
+  ["content_filter", "refused"],
+  ["content_policy_violation", "refused"],
+]);
+// Finish reasons that mean the reply failed; any other reason is passed through.
+const FAILED_FINISH: ReadonlyMap<string, ErrorKind> = new Map<string, ErrorKind>([
+  ["content_filter", "refused"],
+  // DeepSeek: its inference system ran out of capacity.
+  ["insufficient_system_resource", "overloaded"],
+  // OpenRouter's normalized failure when it sent no error object, and DeepSeek's abort.
+  ["error", "server"],
+  ["aborted", "server"],
+]);
+
+/** A part being streamed; its index is its position among the reply's parts. */
+interface Assembly {
+  kind: "reasoning" | "text" | "refusal";
+  text: string;
+  /** For reasoning, the wire field of the piece that opened it. */
+  field: string | null;
+}
 
 /** The request rules that differ between Chat Completions routes. */
 export interface ChatOptions {
@@ -85,13 +119,16 @@ export function chatOptions(provider: string, model: string): ChatOptions {
 export interface OpenAIChatOptions {
   /** The model name sent as `model` (the deployment name on Azure). */
   model: string;
-  /** The route's provider name, for messages and replay records. */
+  /** The route's provider name, for error messages and replay records. */
   provider: string;
   /** The route's request rules; defaults to `chatOptions(provider, model)`. */
   options?: ChatOptions;
   /** The provider block, merged into every body after yian's fields; copied. */
   block?: JsonObject | null;
-  /** Called once per assistant message holding a reasoning record that can't be used. */
+  /**
+   * Called once per assistant message, on a route that echoes reasoning, holding a reasoning
+   * record that can't be used.
+   */
   onReplayDegraded?: (reason: ReplayDegradedReason) => void;
 }
 
@@ -150,9 +187,128 @@ export class OpenAIChat implements SseProtocol {
     return body;
   }
 
-  /** Turn a streamed reply's events into stream events; not implemented yet. */
-  async *parse(_frames: AsyncIterable<SSEEvent>): AsyncGenerator<Event> {
-    throw new Error("not implemented");
+  /**
+   * Turn a streamed reply's chunks into stream events.
+   *
+   * Reasoning and text stream as deltas; refusal pieces are collected. Part indexes are dense,
+   * in the order each part gets its first non-empty piece; inside one chunk the order is
+   * reasoning, text, refusal. A chunk's reasoning is its first non-empty source of
+   * `reasoning_content`, `reasoning` and the `reasoning.text` items of `reasoning_details`; on
+   * a route that echoes reasoning an empty `reasoning_content` opens the part too. A list
+   * `content` counts its text items and strings, joined with newlines. The finish reason is
+   * the last one sent, and is held until `[DONE]` or the end of the stream, so a usage chunk
+   * after it is read. Chunks without choices contribute only usage, unknown keys are ignored,
+   * and empty or non-object event data is skipped.
+   *
+   * @param frames The reply's server-sent events, in order.
+   * @returns The deltas, then one `PartDone` per part in index order (reasoning with its replay
+   *   record), then `UsageReport` (when any usage came; the last one wins) and `Finish`.
+   * @throws {ProviderError} For an error chunk (kind from its HTTP code, else its code or
+   *   type), a failing finish reason (`refused` for a content filter, `overloaded` for
+   *   `insufficient_system_resource`, `server` for `error` or `aborted`), a stream that ends
+   *   with no finish reason (`incomplete`, retryable), or an event that is not JSON or holds a
+   *   choice, delta or usage that cannot be read (`protocol`). The message holds the
+   *   provider's text uncapped.
+   */
+  async *parse(frames: AsyncIterable<SSEEvent>): AsyncGenerator<Event> {
+    const provider = this.provider;
+    // The reply's parts by index: dense, in the order each is first seen.
+    const parts: Assembly[] = [];
+    // A reply has one choice, so at most one reasoning, text and refusal part.
+    const slot = (kind: Assembly["kind"], field: string | null = null): number => {
+      let index = parts.findIndex((part) => part.kind === kind);
+      if (index === -1) index = parts.push({ kind, text: "", field }) - 1;
+      return index;
+    };
+    let finishReason: string | null = null;
+    let usage: Usage | null = null;
+    let responseId: string | null = null;
+    let responseModel: string | null = null;
+    for await (const frame of frames) {
+      // The openai SDK stops at a `[DONE]` sentinel; the stream is then over.
+      if (frame.data.startsWith("[DONE]")) break;
+      // Some gateways send keep-alive frames with empty data.
+      if (frame.data === "") continue;
+      const data = eventData(frame.data, provider);
+      if (!isPlainObject(data)) continue;
+      const error = data["error"];
+      if (isPlainObject(error)) throw this.#streamFailure(error);
+      if (typeof error === "string" && error) {
+        throw new ProviderError("server", `${provider} stream failed (server): ${error}`);
+      }
+      // Azure's prompt filter chunk comes first with an empty id and model, so empty ones count as none.
+      const id = data["id"];
+      if (responseId === null && typeof id === "string" && id) responseId = id;
+      const model = data["model"];
+      if (responseModel === null && typeof model === "string" && model) responseModel = model;
+      usage = usageOf(data["usage"], provider) ?? usage;
+      const choices = data["choices"];
+      if (choices === undefined || choices === null) continue;
+      if (!Array.isArray(choices)) throw invalidChoice(provider);
+      if (choices.length === 0) continue;
+      const choice = choices[0];
+      if (!isPlainObject(choice)) throw invalidChoice(provider);
+      const reason = choice["finish_reason"];
+      if (typeof reason === "string") finishReason = reason;
+      else if (reason !== undefined && reason !== null) throw invalidChoice(provider);
+      const delta = isPlainObject(choice["delta"]) ? choice["delta"] : {};
+      checkDelta(delta, provider);
+      const reasoning = reasoningPiece(delta, this.options.echoReasoningContent);
+      if (reasoning !== null) {
+        const [text, field] = reasoning;
+        const index = slot("reasoning", field);
+        parts[index]!.text += text;
+        if (text) yield new ReasoningDelta(index, text);
+      }
+      const text = contentPiece(delta["content"]);
+      if (text) {
+        const index = slot("text");
+        parts[index]!.text += text;
+        yield new TextDelta(index, text);
+      }
+      const refusal = delta["refusal"];
+      if (typeof refusal === "string" && refusal) parts[slot("refusal")]!.text += refusal;
+    }
+    if (finishReason === null) {
+      throw new ProviderError("incomplete", `${provider} stream ended before a complete response`, { retryable: true });
+    }
+    const failed = FAILED_FINISH.get(finishReason);
+    if (failed !== undefined) {
+      throw new ProviderError(failed, `${provider} response did not complete (${finishReason})`);
+    }
+    for (const [index, part] of parts.entries()) yield new PartDone(index, this.#part(part));
+    if (usage !== null) yield new UsageReport(usage);
+    const fields: JsonObject = {};
+    if (responseId !== null) fields["response_id"] = responseId;
+    // The model that answered, which may differ from the one asked for (an Azure deployment name).
+    if (responseModel !== null) fields["response_model"] = responseModel;
+    const providerPayload = replayRecord(this.#key, fields);
+    yield new Finish({ reason: finishReason, responseId, protocol: PROTOCOL, providerPayload });
+  }
+
+  /** Build a streamed part; a reasoning part carries a record naming its wire field. */
+  #part(assembly: Assembly): Part {
+    if (assembly.kind === "reasoning") {
+      return new ReasoningPart(assembly.text, replayRecord(this.#key, { field: assembly.field }));
+    }
+    if (assembly.kind === "refusal") return new RefusalPart(assembly.text);
+    return new TextPart(assembly.text);
+  }
+
+  /** Return the error for an error chunk's error object; its kind from its HTTP code, else its code or type. */
+  #streamFailure(error: JsonObject): ProviderError {
+    const rawMessage = error["message"];
+    const message = typeof rawMessage === "string" ? rawMessage : "";
+    const code = error["code"];
+    let kind: ErrorKind;
+    if (typeof code === "bigint" && code >= 400n && code <= 599n) {
+      kind = kindForStatus(Number(code), message);
+    } else {
+      // An error without a string code may still name its kind in `type` (`invalid_request_error`).
+      const name = typeof code === "string" ? code : error["type"];
+      kind = (typeof name === "string" ? CHUNK_ERROR_KINDS.get(name) : undefined) ?? "server";
+    }
+    return new ProviderError(kind, `${this.provider} stream failed (${kind}): ${message || "no message"}`);
   }
 
   /** Render the conversation as chat messages, in order. */
@@ -231,6 +387,129 @@ function readField(
   if (!read.ok) return read;
   const field = read.fields["field"];
   return typeof field === "string" ? { ok: true, field } : { ok: false, reason: "malformed" };
+}
+
+/** Parse one event's JSON, throwing a `ProviderError` that does not echo it. */
+function eventData(data: string, provider: string): JsonValue {
+  try {
+    return parseJson(data, "plain");
+  } catch (error) {
+    if (error instanceof JSONDecodeError)
+      throw new ProviderError("protocol", `invalid JSON in ${provider} stream event`);
+    throw error;
+  }
+}
+
+function invalidChoice(provider: string): ProviderError {
+  return new ProviderError("protocol", `invalid choice in ${provider} stream event`);
+}
+
+/**
+ * Check the types of a delta's text fields.
+ *
+ * @throws {ProviderError} `content` is not a string or a list, `reasoning_content`, `reasoning`
+ *   or `refusal` is not a string, or `reasoning_details` is not a list, when present and not
+ *   `null` (kind `protocol`).
+ */
+function checkDelta(delta: JsonObject, provider: string): void {
+  const absent = (value: JsonValue | undefined) => value === undefined || value === null;
+  const content = delta["content"];
+  const details = delta["reasoning_details"];
+  const strings = [delta["reasoning_content"], delta["reasoning"], delta["refusal"]];
+  if (
+    !(absent(content) || typeof content === "string" || Array.isArray(content)) ||
+    !strings.every((value) => absent(value) || typeof value === "string") ||
+    !(absent(details) || Array.isArray(details))
+  ) {
+    throw new ProviderError("protocol", `invalid delta in ${provider} stream event`);
+  }
+}
+
+/**
+ * Return a delta's reasoning piece and its wire field, or `null` when it has none.
+ *
+ * The piece is the first non-empty of `reasoning_content`, `reasoning` and the joined `text` of
+ * `reasoning_details` items of type `reasoning.text`. vLLM and OpenRouter send two sources with
+ * the same text, which this counts once.
+ *
+ * @param echo Whether the route echoes reasoning, so an empty `reasoning_content` is a piece.
+ */
+function reasoningPiece(delta: JsonObject, echo: boolean): [string, string] | null {
+  const details = delta["reasoning_details"];
+  const texts: string[] = [];
+  for (const item of Array.isArray(details) ? details : []) {
+    if (isPlainObject(item) && item["type"] === "reasoning.text" && typeof item["text"] === "string") {
+      texts.push(item["text"]);
+    }
+  }
+  const sources: [string, JsonValue | undefined][] = [
+    ["reasoning_content", delta["reasoning_content"]],
+    ["reasoning", delta["reasoning"]],
+    ["reasoning_details", texts.join("")],
+  ];
+  for (const [field, value] of sources) {
+    if (typeof value === "string" && value) return [value, field];
+  }
+  // Opened even when empty, so the next turn echoes `reasoning_content` back.
+  if (echo && typeof delta["reasoning_content"] === "string") return ["", ECHOED_FIELD];
+  return null;
+}
+
+/** Return a delta's text: a string `content`, or a list's strings and `text` items joined with newlines. */
+function contentPiece(content: JsonValue | undefined): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const texts: string[] = [];
+  for (const item of content) {
+    if (typeof item === "string") texts.push(item);
+    else if (isPlainObject(item) && item["type"] === "text" && typeof item["text"] === "string")
+      texts.push(item["text"]);
+  }
+  return texts.join("\n");
+}
+
+/**
+ * Return the token counts of a Chat Completions `usage` object; `null` when it is not an object.
+ *
+ * Missing or `null` prompt and completion counts are 0, and a missing total is their sum.
+ * Cache reads come from `prompt_tokens_details.cached_tokens`, else DeepSeek's
+ * `prompt_cache_hit_tokens`. `null` details are empty, and the service tier is ignored.
+ *
+ * @throws {ProviderError} A count is not an int within `Number.MAX_SAFE_INTEGER`, or the
+ *   details are not objects (kind `protocol`).
+ */
+function usageOf(usage: JsonValue | undefined, provider: string): Usage | null {
+  if (!isPlainObject(usage)) return null;
+  const promptDetails = usage["prompt_tokens_details"] ?? {};
+  const completionDetails = usage["completion_tokens_details"] ?? {};
+  if (!isPlainObject(promptDetails) || !isPlainObject(completionDetails)) {
+    throw new ProviderError("protocol", `${provider} response usage details are not objects`);
+  }
+  const notInt = `${provider} response usage has a count that is not an int`;
+  const inputTokens = tokenCount(usage["prompt_tokens"], notInt) ?? 0;
+  const outputTokens = tokenCount(usage["completion_tokens"], notInt) ?? 0;
+  try {
+    return new Usage({
+      inputTokens,
+      outputTokens,
+      totalTokens: tokenCount(usage["total_tokens"], notInt) ?? inputTokens + outputTokens,
+      cacheReadTokens:
+        tokenCount(promptDetails["cached_tokens"], notInt) ?? tokenCount(usage["prompt_cache_hit_tokens"], notInt),
+      cacheCreationTokens: tokenCount(promptDetails["cache_write_tokens"], notInt),
+      reasoningTokens: tokenCount(completionDetails["reasoning_tokens"], notInt),
+    });
+  } catch (error) {
+    // `Usage` refuses a count past `Number.MAX_SAFE_INTEGER`, which `Number()` rounds.
+    if (error instanceof MessageFormatError) throw new ProviderError("protocol", notInt);
+    throw error;
+  }
+}
+
+/** Return a usage count as a number, `null` when it is `null` or absent; throw `notInt` otherwise. */
+function tokenCount(value: JsonValue | undefined, notInt: string): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "bigint") throw new ProviderError("protocol", notInt);
+  return Number(value);
 }
 
 /** Render a tool call with its arguments text. */

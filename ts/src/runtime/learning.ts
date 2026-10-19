@@ -28,7 +28,6 @@ import {
   validateFeedback,
   type ValueRoute,
 } from "../expr/lineage.ts";
-import { sameLearningResult, sameMemoryMutation } from "../memory/contracts.ts";
 import {
   LearningFailure,
   LearningResult,
@@ -36,7 +35,9 @@ import {
   MemoryMutation,
   MemoryOperationFailure,
   PolicyCommitOutcome,
-} from "../memory/index.ts";
+  sameLearningResult,
+  sameMemoryMutation,
+} from "../memory/contracts.ts";
 import {
   type BackwardContext,
   BackwardResult,
@@ -592,6 +593,7 @@ export class BackwardAttempt {
    * Require exact record classes of this attempt; the records are held by reference and the
    * arrays copied and frozen.
    *
+   * @param started The attempt's accepted start, whose attempt id every other record must share.
    * @param options Each record defaults to `null`, each array to empty.
    * @throws TypeError when a record isn't exactly its class, or a commit array isn't an array.
    * @throws RangeError when a record belongs to another attempt.
@@ -920,6 +922,7 @@ function validateBackwardFinished(
   if (failure.stage !== "backward" || outcome.feedback !== null || record.attributedResults.length > 0) {
     throw new RangeError("incomplete backward computation cannot carry completed or partial results");
   }
+  // Called only for its checks: the trace must be terminal and the submitted feedback must fit it.
   seedBackward(trace, current.started.feedback);
   if (
     !hasFeedback(current.started.feedback) ||
@@ -1006,6 +1009,7 @@ export function reduceBackwardRecord(
     throw new TypeError("backward reduction requires RuntimeBackwardState");
   }
   if (isExactly(record, BackwardStartedRecord)) {
+    // Called only for its checks: the trace must be terminal and the feedback must fit it.
     seedBackward(trace, record.feedback);
     if (!backward.canStart) throw new RangeError("backward attempt cannot start from the accepted prefix");
     if (record.attemptId !== backward.attempts.length + 1) {
@@ -1021,14 +1025,17 @@ export function reduceBackwardRecord(
   if (isExactly(record, BackwardReadyRecord)) {
     if (current.ready !== null) throw new RangeError("backward attempt already has a Ready");
     validateAttributedBackward(trace, current.started.feedback, record.rootResult, record.attributedResults);
+    // Called only for its check that the proposals cover the recorded memory table in order.
     proposalBatches(backward, record);
-    next = new BackwardAttempt(current.started, { ...current, ready: record });
+    // Requests need a Ready, so before one the attempt has no commit records to carry over.
+    next = new BackwardAttempt(current.started, { ready: record });
   } else if (isExactly(record, BackwardFinishedRecord)) {
     validateBackwardFinished(trace, backward, record);
-    next = new BackwardAttempt(current.started, { ...current, finished: record });
+    const { ready, requests, observations } = current;
+    next = new BackwardAttempt(current.started, { ready, finished: record, requests, observations });
   } else if (isExactly(record, MemoryCommitRequestedRecord)) {
-    const pending = backward.policyOutcomes.some((policy) => policy.status === "unknown" || policy.status === "failed");
-    if (current.ready === null || pending) {
+    const blocked = backward.policyOutcomes.some((policy) => policy.status === "unknown" || policy.status === "failed");
+    if (current.ready === null || blocked) {
       throw new RangeError("backward commit request requires Ready and no pending or failed memory");
     }
     const index = current.requests.length;
@@ -1040,7 +1047,8 @@ export function reduceBackwardRecord(
     if (!sameItems(record.mutations, batch, sameMemoryMutation) || record.commitId !== expectedId) {
       throw new RangeError("backward commit batch and identity must match the ordered Ready proposals");
     }
-    next = new BackwardAttempt(current.started, { ...current, requests: [...current.requests, record] });
+    const { ready, observations } = current;
+    next = new BackwardAttempt(current.started, { ready, requests: [...current.requests, record], observations });
   } else if (isExactly(record, MemoryCommitSucceededRecord) || isExactly(record, MemoryCommitFailedRecord)) {
     if (current.requests.length !== current.observations.length + 1) {
       throw new RangeError("backward commit result requires a matching pending request");
@@ -1049,7 +1057,8 @@ export function reduceBackwardRecord(
     if (record.memory !== request.memory || record.commitId !== request.commitId) {
       throw new RangeError("backward commit result must match its pending memory and identity");
     }
-    next = new BackwardAttempt(current.started, { ...current, observations: [...current.observations, record] });
+    const { ready, requests } = current;
+    next = new BackwardAttempt(current.started, { ready, requests, observations: [...current.observations, record] });
   } else {
     throw new RangeError("backward commit requires a completed memory proposal");
   }

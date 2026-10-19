@@ -102,6 +102,7 @@ import {
   sameBackwardFailure,
   sameBackwardOutcome,
 } from "../../src/runtime/contracts.ts";
+import { RuntimeBackwardState } from "../../src/runtime/learning.ts";
 import {
   BackwardFinishedRecord,
   BackwardReadyRecord,
@@ -118,7 +119,6 @@ import {
   type RunRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
-import { RuntimeBackwardState } from "../../src/runtime/learning.ts";
 import { TraceDelta } from "../../src/runtime/trace.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 

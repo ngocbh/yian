@@ -1004,13 +1004,16 @@ function succeededFinish(learning: LearningResult = SUCCEEDED_LEARNING): Backwar
 /** The interrupted Finished of attempt 1 before Ready. */
 const chainInterrupted = () => failedFinish(INTERRUPTED, { learning: INCOMPLETE });
 
+/** The options of a `BackwardFailure`. */
+type FailureOptions = ConstructorParameters<typeof BackwardFailure>[3];
+
 /** A learner failure for `notes` from `cause`. */
-function learnerFailure(cause = LEARN_CAUSE, options: ConstructorParameters<typeof BackwardFailure>[3] = {}) {
+function learnerFailure(cause = LEARN_CAUSE, options: FailureOptions = {}): BackwardFailure {
   return new BackwardFailure("learn", cause.code, cause.message, { memory: "notes", cause, ...options });
 }
 
 /** A context failure attributed to `p`'s occurrence. */
-function contextFailure(options: ConstructorParameters<typeof BackwardFailure>[3] = {}): BackwardFailure {
+function contextFailure(options: FailureOptions = {}): BackwardFailure {
   return learnerFailure(CONTEXT_CAUSE, { runId: RUN, nodeId: "p", nodeStartedSeq: 3, ...options });
 }
 
@@ -1025,21 +1028,8 @@ function learnerFinish(failure: BackwardFailure, learning: LearningResult | null
   return failedFinish(failure, { feedback: CHAIN_ROOT, learning }, chainResults());
 }
 
-/** A computation failure's Finished of attempt 1, with incomplete learning unless given. */
-function computeFinish(
-  failure: BackwardFailure,
-  options: { feedback?: BackwardResult | null; learning?: LearningResult | null } = { learning: INCOMPLETE },
-  attributed: AttributedBackwardResult[] = [],
-): BackwardFinishedRecord {
-  return failedFinish(failure, options, attributed);
-}
-
 /** A backward computation failure attributed to `p`'s occurrence. */
-function computeFailure(
-  options: ConstructorParameters<typeof BackwardFailure>[3] = {},
-  code = "backward.execute",
-  stage = "backward",
-): BackwardFailure {
+function computeFailure(options: FailureOptions = {}, code = "backward.execute", stage = "backward"): BackwardFailure {
   return new BackwardFailure(stage, code, "Broke.", { runId: RUN, nodeId: "p", nodeStartedSeq: 3, ...options });
 }
 
@@ -1107,7 +1097,7 @@ test.each<[string, () => BackwardRecord[]]>([
     "a learner failure with an attributed context failure",
     () => [started(), learnerFinish(contextFailure(), learnerLearning(CONTEXT_CAUSE))],
   ],
-  ["a computation failure", () => [started(), computeFinish(computeFailure())]],
+  ["a computation failure", () => [started(), failedFinish(computeFailure(), { learning: INCOMPLETE })]],
 ])("the reducer accepts the Finished of %s", (_label, records) => {
   const list = records();
   const state = reduced(list);
@@ -1425,7 +1415,7 @@ test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
   [
     "a computation failure with completed feedback",
     (trace) => {
-      const finish = computeFinish(computeFailure(), { feedback: CHAIN_ROOT, learning: INCOMPLETE });
+      const finish = failedFinish(computeFailure(), { feedback: CHAIN_ROOT, learning: INCOMPLETE });
       return reduced([started(), finish], trace);
     },
     RangeError,
@@ -1433,56 +1423,61 @@ test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
   ],
   [
     "a computation failure with results",
-    (trace) => reduced([started(), computeFinish(computeFailure(), { learning: INCOMPLETE }, chainResults())], trace),
+    (trace) => reduced([started(), failedFinish(computeFailure(), { learning: INCOMPLETE }, chainResults())], trace),
     RangeError,
     "incomplete backward computation cannot carry completed or partial results",
   ],
   [
     "a failure of another stage before Ready",
-    (trace) => reduced([started(), computeFinish(computeFailure({}, "backward.execute", "commit"))], trace),
+    (trace) => {
+      const finish = failedFinish(computeFailure({}, "backward.execute", "commit"), { learning: INCOMPLETE });
+      return reduced([started(), finish], trace);
+    },
     RangeError,
     "incomplete backward computation cannot carry completed or partial results",
   ],
   [
     "a computation failure with another code",
-    (trace) => reduced([started(), computeFinish(computeFailure({}, "backward.other"))], trace),
+    (trace) =>
+      reduced([started(), failedFinish(computeFailure({}, "backward.other"), { learning: INCOMPLETE })], trace),
     RangeError,
     "backward computation failure requires effective feedback and a driver failure code",
   ],
   [
     "a computation failure after empty feedback",
     (trace) =>
-      reduced([new BackwardStartedRecord(1, null), computeFinish(computeFailure())], trace),
+      reduced([new BackwardStartedRecord(1, null), failedFinish(computeFailure(), { learning: INCOMPLETE })], trace),
     RangeError,
     "backward computation failure requires effective feedback and a driver failure code",
   ],
   [
     "a computation failure without a run id",
-    (trace) => reduced([started(), computeFinish(computeFailure({ runId: null }))], trace),
+    (trace) => reduced([started(), failedFinish(computeFailure({ runId: null }), { learning: INCOMPLETE })], trace),
     RangeError,
     "backward computation failure requires accepted occurrence attribution",
   ],
   [
     "a computation failure with a memory",
-    (trace) => reduced([started(), computeFinish(computeFailure({ memory: "notes" }))], trace),
+    (trace) => reduced([started(), failedFinish(computeFailure({ memory: "notes" }), { learning: INCOMPLETE })], trace),
     RangeError,
     "backward computation failure requires accepted occurrence attribution",
   ],
   [
     "a computation failure naming no accepted occurrence",
-    (trace) => reduced([started(), computeFinish(computeFailure({ nodeStartedSeq: 9 }))], trace),
+    (trace) =>
+      reduced([started(), failedFinish(computeFailure({ nodeStartedSeq: 9 }), { learning: INCOMPLETE })], trace),
     RangeError,
     "backward computation failure requires an accepted occurrence",
   ],
   [
     "a computation failure of another node",
-    (trace) => reduced([started(), computeFinish(computeFailure({ nodeId: "q" }))], trace),
+    (trace) => reduced([started(), failedFinish(computeFailure({ nodeId: "q" }), { learning: INCOMPLETE })], trace),
     RangeError,
     "backward computation failure must match its recorded invocation",
   ],
   [
     "a computation failure with other learning",
-    (trace) => reduced([started(), computeFinish(computeFailure(), {})], trace),
+    (trace) => reduced([started(), failedFinish(computeFailure())], trace),
     RangeError,
     "failed computation learning must retain incomplete unrequested memories",
   ],

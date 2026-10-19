@@ -94,14 +94,18 @@ function validateAuthoredPath(path: unknown, name: string): asserts path is read
   }
 }
 
-/** Whether two paths have equal segments. */
-function samePath(a: ValuePath, b: ValuePath): boolean {
-  return a.length === b.length && a.every((segment, i) => segment === b[i]);
-}
-
 /** Whether `value` is an instance of exactly `cls`, not of a subclass. Used by node kinds. */
 export function isExactly<T>(value: unknown, cls: abstract new (...args: never[]) => T): value is T {
   return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === cls.prototype;
+}
+
+/** Whether two arrays have equal items in order, by `same`; Python's tuple `==`. */
+export function sameItems<T>(
+  a: readonly T[],
+  b: readonly T[],
+  same: (x: T, y: T) => boolean = (x, y) => x === y,
+): boolean {
+  return a.length === b.length && a.every((item, i) => same(item, b[i]!));
 }
 
 /** Copy `entries` of `(path, origin)` pairs into frozen arrays. */
@@ -195,6 +199,8 @@ export class ExecutionScope {
       if (!isExactly(position, ExecutionPosition)) {
         throw new TypeError("occurrence_path items must be ExecutionPosition values");
       }
+      // Rebuilding checks a position that may have bypassed the constructor.
+      new ExecutionPosition(position.kind, position.staticPath, position.index);
     }
     if (boundary !== null && boundary !== "start" && boundary !== "end") {
       throw new RangeError("execution boundary must be 'start', 'end', or null");
@@ -205,6 +211,21 @@ export class ExecutionScope {
     this.boundary = boundary;
     Object.freeze(this);
   }
+}
+
+/** Whether two positions have the same kind, index and static path. */
+export function sameExecutionPosition(a: ExecutionPosition, b: ExecutionPosition): boolean {
+  return a.kind === b.kind && a.index === b.index && sameItems(a.staticPath, b.staticPath);
+}
+
+/** Whether two scopes have the same static path, flow path, occurrence positions and boundary. */
+export function sameExecutionScope(a: ExecutionScope, b: ExecutionScope): boolean {
+  return (
+    sameItems(a.staticPath, b.staticPath) &&
+    sameItems(a.flowPath, b.flowPath) &&
+    sameItems(a.occurrencePath, b.occurrencePath, sameExecutionPosition) &&
+    a.boundary === b.boundary
+  );
 }
 
 /**
@@ -380,7 +401,7 @@ export class ValueTemplate {
   /** Return the authored site registered for `path`, or `null`. */
   originAt(path: ValuePath): OriginRef | null {
     for (const [entryPath, origin] of this.origins) {
-      if (samePath(entryPath, path)) return origin;
+      if (sameItems(entryPath, path)) return origin;
     }
     return null;
   }
@@ -576,7 +597,7 @@ export class ContractOrigins {
         throw new RangeError("contract origin entry path cannot be empty; use default for the root");
       }
       if (!(origin instanceof OriginRef)) throw new TypeError("contract origin entry value must be an OriginRef");
-      if (paths.some((seen) => samePath(seen, path))) {
+      if (paths.some((seen) => sameItems(seen, path))) {
         throw new RangeError(`duplicate contract origin path: ${valueRepr(path)}`);
       }
       paths.push(path);
@@ -599,7 +620,7 @@ export class ContractOrigins {
     validatePath(path, "contract lookup");
     for (let length = path.length; length > 0; length--) {
       const prefix = path.slice(0, length);
-      const entry = this.entries.find(([entryPath]) => samePath(entryPath, prefix));
+      const entry = this.entries.find(([entryPath]) => sameItems(entryPath, prefix));
       if (entry !== undefined) return entry[1];
     }
     return this.default;

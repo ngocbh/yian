@@ -45,6 +45,7 @@ import {
   type OriginMapper,
   Parameter,
   rewriteOriginCarrier,
+  sameExecutionPosition,
 } from "../contracts.ts";
 
 /**
@@ -57,16 +58,6 @@ import {
  */
 export class LoopMaxExceeded extends Error {
   override name = "LoopMaxExceeded";
-}
-
-/** Whether two positions have the same kind, index and static path. */
-function samePosition(a: ExecutionPosition, b: ExecutionPosition): boolean {
-  return (
-    a.kind === b.kind &&
-    a.index === b.index &&
-    a.staticPath.length === b.staticPath.length &&
-    a.staticPath.every((segment, i) => segment === b.staticPath[i])
-  );
 }
 
 /**
@@ -327,7 +318,7 @@ export class LoopNode extends Node {
       new ExecutionScope(staticPath, { flowPath, occurrencePath, boundary });
       const current = new ExecutionPosition("loop_driver", staticPath, this.iteration);
       const last = occurrencePath.at(-1);
-      if (last === undefined || !samePosition(last, current)) {
+      if (last === undefined || !sameExecutionPosition(last, current)) {
         throw new RangeError("loop scope must end in its current driver position");
       }
       clone.executionScope = new ExecutionScope(staticPath, {

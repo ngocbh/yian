@@ -4,10 +4,14 @@
  *
  * The cases are raw JSON Schema objects, so the same rules cover function tools and MCP tools
  * that only publish a schema. Python ints beyond 2^53 are `bigint`s here.
+ *
+ * It also ports `test_translation_never_reports_an_accepted_value_as_disjoint` (with
+ * `typeRelation`).
  */
 
 import { describe, expect, test } from "bun:test";
 
+import { typeRelation } from "../../src/compile/validation.ts";
 import { inputTypeFromJsonSchema, typeFromJsonSchema } from "../../src/tools/types.ts";
 import { canonicalTypeLabel, Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 
@@ -306,6 +310,72 @@ test("an invalid shape has no type", () => {
   // An empty property name is not a valid record field.
   const schema = { type: "object", properties: { "": { type: "integer" } } };
   expect(typeFromJsonSchema(schema, { closed: true })).toBeNull();
+});
+
+const INT = Type.scalar(ValueKind.INTEGER);
+
+/** A record of `fields`, every one required. */
+function record(fields: Record<string, Type>): Type {
+  return new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map(Object.entries(fields)),
+    required: new Set(Object.keys(fields)),
+  });
+}
+
+describe("translation never reports an accepted value as disjoint", () => {
+  test.each([
+    [
+      { type: "object", properties: { a: { type: "integer" } } },
+      false,
+      record({ a: INT, b: INT }),
+    ],
+    [
+      { type: "object", properties: { a: {} }, additionalProperties: false },
+      true,
+      record({ a: INT }),
+    ],
+    [
+      {
+        type: "object",
+        properties: { a: { type: "integer" }, d: { type: "integer" } },
+        required: ["a"],
+      },
+      true,
+      record({ a: INT }),
+    ],
+    [
+      TAGGED_UNION,
+      false,
+      record({
+        action: new Type({ kind: ValueKind.STRING, tags: new Set(["buy"]) }),
+        qty: INT,
+        note: Type.scalar(ValueKind.STRING),
+      }),
+    ],
+    [{ anyOf: [{ type: "integer" }, { type: "null" }] }, true, INT],
+    [{ type: "string", format: "date" }, true, Type.scalar(ValueKind.DATE)],
+    [{ type: "array", items: { type: "number" } }, true, Type.scalar(ValueKind.LIST_INTEGER)],
+    [
+      { type: "array", prefixItems: [{ type: "integer" }] },
+      true,
+      Type.scalar(ValueKind.LIST_INTEGER),
+    ],
+    [{ type: "integer" }, true, Type.scalar(ValueKind.NUMBER)],
+    [{ type: "integer", minimum: 0, maximum: 9 }, true, Type.scalar(ValueKind.NUMBER)],
+    [{ type: "integer", minimum: 0 }, true, Type.scalar(ValueKind.NUMBER)],
+    [{ type: "number", maximum: 0 }, true, INT],
+    [{ type: "number", exclusiveMinimum: 0 }, true, INT],
+    [
+      { anyOf: [{ type: "integer", minimum: 0 }, { type: "integer", maximum: -5 }] },
+      true,
+      INT,
+    ],
+  ] as [Schema, boolean, Type][])("%j closed=%p", (schema, closed, inferred) => {
+    const declared = typeFromJsonSchema(schema, { closed });
+    expect(declared).not.toBeNull();
+    expect(typeRelation(inferred, declared!)).not.toBe("disjoint");
+  });
 });
 
 // The schema pydantic generates for a field `v: Union[_Inner, str]`, `_Inner` holding `x: int`.

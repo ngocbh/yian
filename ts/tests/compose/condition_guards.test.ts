@@ -5,6 +5,9 @@
  * Changed: guards and checks compare with `toStrictEqual`, which also compares classes, so
  * `NOTHING` (an empty `AllOf`) never equals `NEVER` (an empty `AnyOf`). A literal compares as
  * `[context, check, value, negated]`, leaving out its `node`, as Python's dataclass equality does.
+ *
+ * TS-only: `sameGuard`, `sameCheck` and `unknownCheck`, which stand in for Python's dataclass
+ * equality and its `TypeError` for an unhandled check kind.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -14,7 +17,7 @@ import {
   AnyOf,
   allOf,
   anyOf,
-  type CheckLiteral,
+  type Check,
   checkIn,
   conjuncts,
   falsified,
@@ -30,7 +33,10 @@ import {
   NOTHING,
   NotNullCheck,
   proves,
+  sameCheck,
+  sameGuard,
   TagCheck,
+  unknownCheck,
 } from "../../src/compose/helpers/condition_guards.ts";
 import { conditionReads, exprRefs, parseCondition } from "../../src/expr/index.ts";
 
@@ -80,7 +86,7 @@ test("constructors flatten and drop nothing", () => {
 // --------------------------------------------------------------------------- //
 
 describe("checkIn recognizes isinstance, tag and null comparisons", () => {
-  const rows: [string, [IsinstanceCheck | TagCheck | NotNullCheck, boolean] | null][] = [
+  const rows: [string, [Check, boolean] | null][] = [
     ["isinstance(d.output, Buy)", [new IsinstanceCheck("d.output", "Buy"), true]],
     ["${isinstance(d.output, Buy)}", [new IsinstanceCheck("d.output", "Buy"), true]],
     ['v.action == "buy"', [new TagCheck("v", "action", "buy"), true]],
@@ -278,7 +284,7 @@ test("guardChecks and conjuncts", () => {
 // --------------------------------------------------------------------------- //
 
 /** Each literal of `text` with its context, as `[context, check, value, negated]`. */
-function literals(text: string): [Guard, CheckLiteral["check"], boolean, boolean][] {
+function literals(text: string): [Guard, Check, boolean, boolean][] {
   return literalsInContext(parseCondition(text)).map((literal) => [
     literal.context,
     literal.check,
@@ -351,7 +357,9 @@ test("NEVER absorbs an allOf and drops out of an anyOf", () => {
 
 test("falsified checks prove NEVER for the value they never have", () => {
   const tree = parseCondition("isinstance(v, Buy) and v.action != 'sell' and v.qty > 0");
-  const [first, second] = literalsInContext(tree).map((literal) => literal.node!);
+  const nodes = literalsInContext(tree).map((literal) => literal.node!);
+  expect(nodes).toHaveLength(2);
+  const [first, second] = nodes;
   let reads = guardedRefs(falsified(tree, [[first!, true]]));
   expect(reads.at(-1)).toStrictEqual(["v.qty", NEVER]);
   // The other value proves nothing, and the reads keep their order.
@@ -361,4 +369,16 @@ test("falsified checks prove NEVER for the value they never have", () => {
   // A `!=` sub-tree that is never false: the read after it still runs.
   expect(guardedRefs(falsified(tree, [[second!, false]])).at(-1)).toStrictEqual(["v.qty", new Holds(A, true)]);
   expect(guardedRefs(falsified(tree, [[second!, true]])).at(-1)).toStrictEqual(["v.qty", NEVER]);
+});
+
+test("sameGuard, sameCheck and unknownCheck", () => {
+  const [a, b] = [new Holds(A, true), new Holds(B, false)];
+  expect(sameGuard(NOTHING, NEVER)).toBe(false);
+  expect(sameGuard(new AllOf([a, b]), new AllOf([b, a]))).toBe(false);
+  expect(sameGuard(new AllOf([a, b]), new AllOf([a, b]))).toBe(true);
+  expect(sameCheck(new TagCheck("v", "f", "x"), new TagCheck("v", "f", "y"))).toBe(false);
+  class OtherCheck {}
+  const error = unknownCheck(new OtherCheck());
+  expect(error).toBeInstanceOf(TypeError);
+  expect(error.message).toBe("unhandled check kind OtherCheck");
 });

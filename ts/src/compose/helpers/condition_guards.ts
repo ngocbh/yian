@@ -102,9 +102,8 @@ export type Check = IsinstanceCheck | TagCheck | NotNullCheck;
  * @param check The check.
  * @returns The error, naming the check's class.
  */
-export function unknownCheck(check: unknown): TypeError {
-  const name = (check as { constructor?: { name: string } } | null | undefined)?.constructor?.name ?? String(check);
-  return new TypeError(`unhandled check kind ${name}`);
+export function unknownCheck(check: object): TypeError {
+  return new TypeError(`unhandled check kind ${check.constructor.name}`);
 }
 
 /** Return whether two checks are the same check (the same kind and fields). */
@@ -167,9 +166,13 @@ export const NEVER: Guard = new AnyOf([]);
 /** Return whether two guards are the same formula (the same kinds, checks and parts, in order). */
 export function sameGuard(a: Guard, b: Guard): boolean {
   if (a instanceof Holds) return b instanceof Holds && a.value === b.value && sameCheck(a.check, b.check);
-  if (a.constructor !== b.constructor) return false;
-  const other = (b as AllOf | AnyOf).parts;
-  return a.parts.length === other.length && a.parts.every((part, i) => sameGuard(part, other[i]!));
+  if (a instanceof AllOf) return b instanceof AllOf && sameParts(a.parts, b.parts);
+  return b instanceof AnyOf && sameParts(a.parts, b.parts);
+}
+
+/** Whether two part lists are the same guards, in order. */
+function sameParts(a: readonly Guard[], b: readonly Guard[]): boolean {
+  return a.length === b.length && a.every((part, i) => sameGuard(part, b[i]!));
 }
 
 /**
@@ -217,6 +220,15 @@ export function anyOf(...parts: Guard[]): Guard {
   }
   return flat.length === 1 ? flat[0]! : new AnyOf(flat);
 }
+
+/** The data of a node `masked` wraps a check in; no rule here reads it as a check. */
+const MASKED = "masked_check";
+
+/**
+ * The data of a node `falsified` wraps a check in; its first child is the value the check never
+ * has.
+ */
+const NEVER_HAS = "never_has";
 
 /** The operands of an `and_expr` or `or_expr`, without the operator tokens. */
 function operandsOf(node: Tree): ExprNode[] {
@@ -310,10 +322,10 @@ export function proves(tree: ExprNode, value: boolean): Guard {
   if (decided.some((guard) => sameGuard(guard, NOTHING))) return NOTHING;
   const branches: Guard[] = [];
   const passed: Guard[] = [];
-  operands.forEach((operand, i) => {
+  for (const [i, operand] of operands.entries()) {
     branches.push(allOf(...passed, decided[i]!));
     passed.push(proves(operand, !deciding));
-  });
+  }
   return anyOf(...branches);
 }
 
@@ -446,9 +458,6 @@ export function literalsInContext(tree: ExprNode): CheckLiteral[] {
   return literals;
 }
 
-/** The data of a node `masked` wraps a check in; no rule here reads it as a check. */
-const MASKED = "masked_check";
-
 /**
  * Return a copy of a condition in which the given sub-trees prove nothing.
  *
@@ -475,12 +484,6 @@ export function masked(tree: ExprNode, nodes: Iterable<ExprNode>): ExprNode {
 
   return copy(tree);
 }
-
-/**
- * The data of a node `falsified` wraps a check in; its first child is the value the check never
- * has.
- */
-const NEVER_HAS = "never_has";
 
 /**
  * Return a copy of a condition in which the given checks never have the given values.
@@ -557,7 +560,7 @@ export function literalText(literal: CheckLiteral): string {
  * @param guard The guard.
  * @returns The checks in first-seen order, without duplicates.
  */
-export function guardChecks(guard: Guard): Check[] {
+export function guardChecks(guard: Guard): readonly Check[] {
   const found: Check[] = [];
 
   const walk = (node: Guard): void => {
@@ -569,7 +572,7 @@ export function guardChecks(guard: Guard): Check[] {
   };
 
   walk(guard);
-  return found;
+  return Object.freeze(found);
 }
 
 /**

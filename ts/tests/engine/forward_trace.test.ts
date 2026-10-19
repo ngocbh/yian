@@ -1349,7 +1349,8 @@ test("prepareTrace and apply build the trace record by record", () => {
   expect([...trace.started]).toEqual([["a", 1]]);
   expect(trace.nextSequence).toBe(2);
 
-  expect(step(trace, succeeded!, node)).toBe(trace);
+  const files = Type.scalar(ValueKind.FILE);
+  expect(step(trace, succeeded!, node, { writerFiles: files })).toBe(trace);
   const source = new SourceRef(RUN, 1);
   const occurrence = trace.occurrences[0]!;
   expect(occurrence.source).toEqual(source);
@@ -1361,7 +1362,8 @@ test("prepareTrace and apply build the trace record by record", () => {
   expect([...occurrence.hiddenInputs]).toEqual(["v"]);
   expect(trace.occurrence(source)).toBe(occurrence);
   expect(trace.started.size).toBe(0);
-  const writer = new SourceEntry(source, 2, logJson({ kind: "int", value: 2n }));
+  expect(trace.currentWriters.get("a")!.files).toBe(files);
+  const writer = new SourceEntry(source, 2, logJson({ kind: "int", value: 2n }), files);
   expect(sameSourceEntry(trace.currentWriters.get("a")!, writer)).toBe(true);
   expect(trace.sources.get(sourceKey(source))).toBe(trace.currentWriters.get("a"));
   expect(trace.rootStartSource).toBeNull();
@@ -1416,7 +1418,7 @@ test("prepareTrace returns null for a run that doesn't learn and for records bef
 
 test("terminals take the root writer, the failed occurrence or the first causal route", () => {
   const output = typedJson(2n);
-  const succeeded = drivenTrace(new TraceNode("a"), {});
+  const succeeded = drivenTrace();
   const root = runNode(succeeded, 3, new TraceNode("b"), success("b", "end", 2n), {
     terminalSucceeded: true,
     terminalOutputJson: output,
@@ -1471,14 +1473,20 @@ function scopedNode(scope: ExecutionScope | null): TraceNode {
   return node;
 }
 
-/** Prepare `a`'s success at seq 2 over `trace` with `capture`, `node` and `options`. */
-function prepareA(
-  capture: ForwardCapture = captureV(),
-  options: PrepareTraceOptions = {},
-  node: Node | null = new TraceNode("a"),
-  trace: RetainedTrace = startedTrace(true),
+/** Prepare `a`'s success at seq 2 to `target` over `trace` with `capture`, `node` and `options`. */
+function prepareA({
+  capture = captureV(),
+  options = {},
+  node = new TraceNode("a"),
+  trace = startedTrace(true),
   target = "a",
-): () => unknown {
+}: {
+  capture?: ForwardCapture | null;
+  options?: PrepareTraceOptions;
+  node?: Node | null;
+  trace?: RetainedTrace;
+  target?: string;
+} = {}): () => unknown {
   return () => prepareTrace(trace, at(2, success("a", target, 2n, capture)), node, options);
 }
 
@@ -1541,133 +1549,131 @@ test.each<[string, () => unknown, ErrorClass, string]>([
   ],
   [
     "an outcome without a capture",
-    prepareA(null as unknown as ForwardCapture),
+    prepareA({ capture: null }),
     RangeError,
     "accepted outcome requires forward capture while learning",
   ],
   [
     "an outcome without a node",
-    prepareA(captureV(), {}, null),
+    prepareA({ node: null }),
     RangeError,
     "trace outcome requires its accepted start",
   ],
   [
     "an outcome of a node that didn't start",
-    prepareA(captureV(), {}, new TraceNode("b")),
+    prepareA({ node: new TraceNode("b") }),
     RangeError,
     "trace outcome requires its accepted start",
   ],
   [
     "a scoped capture on a node without a scope",
-    prepareA(captureV({ scope: SCOPE_A }), {}, scopedNode(null)),
+    prepareA({ capture: captureV({ scope: SCOPE_A }), node: scopedNode(null) }),
     RangeError,
     "forward capture scope does not match the executing node",
   ],
   [
     "a capture without a scope on a scoped node",
-    prepareA(captureV(), {}, scopedNode(SCOPE_A)),
+    prepareA({ node: scopedNode(SCOPE_A) }),
     RangeError,
     "forward capture scope does not match the executing node",
   ],
   [
     "a capture and a node with different scopes",
-    prepareA(captureV({ scope: SCOPE_A }), {}, scopedNode(new ExecutionScope(["b"]))),
+    prepareA({ capture: captureV({ scope: SCOPE_A }), node: scopedNode(new ExecutionScope(["b"])) }),
     RangeError,
     "forward capture scope does not match the executing node",
   ],
   [
     "a route to an unaccepted source",
-    prepareA(new ForwardCapture({ v: 1n }, ValueRoute.record([["v", sourceRoute(5)]]))),
+    prepareA({ capture: new ForwardCapture({ v: 1n }, ValueRoute.record([["v", sourceRoute(5)]])) }),
     RangeError,
     "route source must name an earlier accepted producer",
   ],
   [
     "a route to a source accepted at this record",
-    prepareA(
-      captureV(),
-      {},
-      new TraceNode("a"),
-      editedTrace((trace) => install(trace, "b", new SourceEntry(new SourceRef(RUN, 0), 2, typedJson({ x: 1n })))),
-    ),
+    prepareA({
+      trace: editedTrace((trace) =>
+        install(trace, "b", new SourceEntry(new SourceRef(RUN, 0), 2, typedJson({ x: 1n }))),
+      ),
+    }),
     RangeError,
     "route source must name an earlier accepted producer",
   ],
   [
     "an item route to an unaccepted source",
-    prepareA(
-      captureV({ items: [[0, new ForwardCapture({ n: 1n }, ValueRoute.record([["n", sourceRoute(5)]]))]] }),
-    ),
+    prepareA({
+      capture: captureV({ items: [[0, new ForwardCapture({ n: 1n }, ValueRoute.record([["n", sourceRoute(5)]]))]] }),
+    }),
     RangeError,
     "route source must name an earlier accepted producer",
   ],
   [
     "a seed route to an unaccepted source",
-    prepareA(
-      captureV(),
-      {},
-      new TraceNode("a"),
-      editedTrace((trace) =>
+    prepareA({
+      trace: editedTrace((trace) =>
         trace._pendingConnections.set("a", new SeedRoutes(new SourceRef(RUN, 0), [["v", sourceRoute(5)]])),
       ),
-    ),
+    }),
     RangeError,
     "route source must name an earlier accepted producer",
   ],
   [
     "a seed field that wasn't captured",
-    prepareA(captureV(), { inputConnections: [new SeedConnection("child", "w", ["w"])] }),
+    prepareA({ options: { inputConnections: [new SeedConnection("child", "w", ["w"])] } }),
     RangeError,
     "seed connection field or item was not captured",
   ],
   [
     "a seed item that wasn't captured",
-    prepareA(captureV(), { inputConnections: [new SeedConnection("child", "n", [0, "n"])] }),
+    prepareA({ options: { inputConnections: [new SeedConnection("child", "n", [0, "n"])] } }),
     RangeError,
     "seed connection field or item was not captured",
   ],
   [
     "a seed target that already has an owner",
-    prepareA(
-      captureV(),
-      { inputConnections: [new SeedConnection("child", "p", ["v"])] },
-      new TraceNode("a"),
-      editedTrace((trace) => trace._pendingConnections.set("child", new SeedRoutes(new SourceRef(RUN, 0), []))),
-    ),
+    prepareA({
+      options: { inputConnections: [new SeedConnection("child", "p", ["v"])] },
+      trace: editedTrace((trace) => trace._pendingConnections.set("child", new SeedRoutes(new SourceRef(RUN, 0), []))),
+    }),
     RangeError,
     "seed connection target already has an accepted owner",
   ],
   [
     "a child boundary endpoint that already has an owner",
-    prepareA(
-      captureV(),
-      { childBoundaries: [new ChildFlowBoundary("cs", "ce")] },
-      new TraceNode("a"),
-      editedTrace((trace) => trace.currentBoundaries.set("ce", [0, "endSource"])),
-    ),
+    prepareA({
+      options: { childBoundaries: [new ChildFlowBoundary("cs", "ce")] },
+      trace: editedTrace((trace) => trace.currentBoundaries.set("ce", [0, "endSource"])),
+    }),
     RangeError,
     "child boundary target already has an accepted owner",
   ],
   [
     "a node whose backward isn't a function",
-    prepareA(captureV(), {}, Object.assign(new TraceNode("a"), { backward: "not callable" })),
+    prepareA({ node: Object.assign(new TraceNode("a"), { backward: "not callable" }) }),
     TypeError,
     "node backward handler must be callable",
   ],
   [
     "terminal output without a root writer",
-    prepareA(captureV(), { terminalSucceeded: true, terminalOutputJson: TYPED_TWO }),
+    prepareA({ options: { terminalSucceeded: true, terminalOutputJson: TYPED_TWO } }),
     RangeError,
     "terminal output disagrees with the accepted root writer",
   ],
   [
     "terminal output other than the root writer's",
-    prepareA(captureV(), { terminalSucceeded: true, terminalOutputJson: typedJson(3n) }, undefined, undefined, "end"),
+    prepareA({ options: { terminalSucceeded: true, terminalOutputJson: typedJson(3n) }, target: "end" }),
+    RangeError,
+    "terminal output disagrees with the accepted root writer",
+  ],
+  [
+    "a successful terminal without output",
+    prepareA({ options: { terminalSucceeded: true }, target: "end" }),
     RangeError,
     "terminal output disagrees with the accepted root writer",
   ],
   [
     "a terminal failure without a causal occurrence",
-    prepareA(captureV(), { terminalSucceeded: false, terminalFailure: TERMINAL_FAILURE }),
+    prepareA({ options: { terminalSucceeded: false, terminalFailure: TERMINAL_FAILURE } }),
     RangeError,
     "accepted failure requires an accepted causal occurrence",
   ],
@@ -1676,14 +1682,20 @@ test.each<[string, () => unknown, ErrorClass, string]>([
 });
 
 test("prepareTrace keeps the lookup error as the cause of an absent source path", () => {
-  const prepare = prepareA(new ForwardCapture({ v: 1n }, ValueRoute.record([["v", sourceRoute(0, ["y"])]])));
-  expectError(prepare, RangeError, "route source path is absent from its accepted value");
+  const prepare = prepareA({
+    capture: new ForwardCapture({ v: 1n }, ValueRoute.record([["v", sourceRoute(0, ["y"])]])),
+  });
+  let caught: Error | undefined;
   try {
     prepare();
   } catch (error) {
-    expect((error as Error).cause).toBeInstanceOf(RangeError);
-    expect(((error as Error).cause as Error).message).toBe("source path is absent from its accepted value");
+    caught = error as Error;
   }
+  expect(caught!.constructor).toBe(RangeError);
+  expect(caught!.message).toBe("route source path is absent from its accepted value");
+  const cause = caught!.cause as Error;
+  expect(cause.constructor).toBe(RangeError);
+  expect(cause.message).toBe("source path is absent from its accepted value");
 });
 
 test("a trace delta's terminal compare reads the output text canonically", () => {

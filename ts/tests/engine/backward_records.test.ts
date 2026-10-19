@@ -915,7 +915,7 @@ test("sameBackwardOutcome compares status, feedback, failure and learning", () =
 });
 
 test("the post-terminal trace delta validation covers the closed field inventory", () => {
-  expect(new Set(Object.keys(new TraceDelta(null, 0, {})))).toEqual(
+  expect(new Set(Object.keys(new TraceDelta(null, 0)))).toEqual(
     new Set([
       "originatingTrace",
       "sequence",

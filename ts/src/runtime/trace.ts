@@ -735,12 +735,7 @@ function frozenPair<A, B>(pair: readonly [A, B] | null): readonly [A, B] | null 
 }
 
 /** The record classes that accept a node outcome. */
-const OUTCOME_RECORDS: readonly (abstract new (...args: never[]) => OutcomeRecord)[] = [
-  NodeSucceededRecord,
-  NodeRoutedRecord,
-  NodeExpandedRecord,
-  NodeFailedRecord,
-];
+const OUTCOME_RECORDS = [NodeSucceededRecord, NodeRoutedRecord, NodeExpandedRecord, NodeFailedRecord] as const;
 
 /** The options of `prepareTrace`. */
 export interface PrepareTraceOptions {
@@ -778,7 +773,8 @@ export interface PrepareTraceOptions {
  *   differs from the node's, a route source isn't an earlier accepted producer or lacks its path,
  *   a seed connection isn't captured or its target or a boundary endpoint already has an owner,
  *   or a terminal disagrees with the root writer or has no causal occurrence.
- * @throws TypeError when the node's backward isn't a function.
+ * @throws TypeError when the node's backward isn't a function or its memory scope isn't `null` or
+ *   exactly a `MemoryScope`.
  */
 export function prepareTrace(
   trace: RetainedTrace | null,
@@ -836,7 +832,7 @@ export function prepareTrace(
     }
     return new TraceDelta(trace, envelope.seq, { resumed: true });
   }
-  if (!OUTCOME_RECORDS.some((cls) => isExactly(record, cls))) return new TraceDelta(trace, envelope.seq);
+  if (!OUTCOME_RECORDS.some((cls) => isExactly<OutcomeRecord>(record, cls))) return new TraceDelta(trace, envelope.seq);
   if (!isExactly(capture, ForwardCapture)) {
     throw new RangeError("accepted outcome requires forward capture while learning");
   }
@@ -925,6 +921,7 @@ export function prepareTrace(
     if (terminalSucceeded) {
       const acceptedWriter = rootWriter ?? trace.rootWriter;
       // Python compares decoded typed values; canonical text is equal exactly when they are.
+      // A missing output fails here, where Python fails inside pydantic.
       if (
         acceptedWriter === null ||
         terminalOutputJson === null ||

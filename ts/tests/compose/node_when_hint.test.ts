@@ -6,11 +6,11 @@
  * Changed: `test_when_on_non_case_node_suggests_a_case_node` runs on the `code` stand-in, and
  * its per-kind sweep over the registered kinds but `case`, through `parseNodes` where Python
  * loads the flow; `test_when_on_case_node_points_at_cases_entries` runs on a `case` stand-in
- * carrying the case kind's `whenHint`. The harvested
- * `load-core/compose_node_when_hint__when_on_an_agent_node` is pinned.
+ * carrying the case kind's `whenHint`. The harvested `compose_node_when_hint__when_on_*` cases of
+ * the registered kinds are pinned.
  *
- * Later (T3-15/T3-16): the sweep's rows for the kinds not registered yet, and the real `case`
- * kind's hint.
+ * Later (T3-15/T3-16): the sweep's rows and pinned cases for the kinds not registered yet, and the
+ * real `case` kind's hint.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -84,7 +84,10 @@ output: \${x.output}
   },
 );
 
-test.each<CaseRow>([{ id: "load-core/compose_node_when_hint__when_on_an_agent_node", call: parsedNodes }])(
+test.each<CaseRow>([
+  { id: "load-core/compose_node_when_hint__when_on_an_agent_node", call: parsedNodes },
+  { id: "load-core/compose_node_when_hint__when_on_a_tool_node", call: parsedNodes },
+])(
   "parseNodes: $id",
   runCase,
 );

@@ -2510,6 +2510,8 @@ The default is 0 (`YIAN_TOOL_RETRIES`; see [Defaults and limits](defaults.md)), 
 the tool is called once unless the flow opts in. `retries:` must be a non-negative
 integer; anything else fails at load.
 
+Changed (TS yian): `retries:` is at most 9,007,199,254,740,991 (JavaScript's largest safe integer).
+
 ```yaml
 quote:
   kind: tool

@@ -1,15 +1,14 @@
 /**
  * The keyed-map flat-body node descriptors `parseNodes` reads: a port of
- * `tests/engine/test_node_parse.py`. Agent rows parse with the registered `agent` kind; kinds not
- * yet ported use the stand-ins of `tests/compose/stand_ins.ts` (`StandInCode`, and a `tool`
- * stand-in taking `tool_id` and `input:`).
+ * `tests/engine/test_node_parse.py`. Agent and tool rows parse with the registered kinds; kinds not
+ * yet ported use the stand-ins of `tests/compose/stand_ins.ts` (`StandInCode`).
  *
  * TS-only: `inf` is an expression keyword, so it is a rejected node id too.
  *
- * Changed: `test_agent_knobs_parse` reads seed 14 through the conformance case
- * `load-agent/seed_14_agent_tools`.
+ * Changed: `test_agent_knobs_parse` and `test_tool_parses` read seeds 14 and 08 through the
+ * conformance cases `load-agent/seed_14_agent_tools` and `load-leaves/seed_08_tool_news`.
  *
- * Later (T3-15): `test_code_parses`, `test_tool_parses`, `test_seed_11_anchored_nodes_parse`.
+ * Later (T3-15): `test_code_parses`, `test_seed_11_anchored_nodes_parse`.
  * Later (T3-16): `test_case_searched_parses`, `test_case_on_parses`,
  * `test_case_carries_no_inputs`, `test_call_ref_form_parses`, `test_node_asserts_rejected_on_case`,
  * `test_call_map_form_parses`, `test_map_without_over_is_loud`, `test_over_on_kind_call_is_loud`.
@@ -29,6 +28,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
+import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
@@ -191,12 +191,20 @@ describe("tool", () => {
     expect(error.diagnostic.frames.at(-1)!.range!.startLine).toBe(3);
   });
 
+  test("tool parses", () => {
+    const { text, label } = caseText("load-leaves/seed_08_tool_news");
+    const node = nodesOf(text, [], label).get("news") as ToolDescriptor;
+
+    expect(node).toBeInstanceOf(ToolDescriptor);
+    expect(node.toolId).toBe("get_facts");
+    expect(node.inputs).toEqual({ symbol: "${input.topic}", limit: 10n });
+  });
+
   test("tool legacy args key is loud", () => {
     // `args:` was retired in favor of `input:`: the old key is an unknown field, no silent alias.
-    const tool = standIn("tool", { allow: ["tool_id", "inputs"] });
     const text =
       "\nnews:\n  kind: tool\n  tool_id: get_facts\n  args:\n    symbol: ${input.topic}\n";
-    const error = loadError(() => nodes(text, [tool]));
+    const error = loadError(() => nodes(text));
 
     expect(error.message).toContain("args");
     expect(error.message).toContain("not allowed");

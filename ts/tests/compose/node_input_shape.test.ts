@@ -2,8 +2,8 @@
  * A node's `input:` must be a mapping; any other value is a located load error naming the kind's
  * binding noun and showing a fix: the parse half of `tests/compose/test_node_input_shape.py`
  * (rows 1-4 and 6), through each kind's `parse` on the node's cursor with `input:` renamed to
- * `inputs` as the parse phase does: the registered `AgentDescriptor` for `agent`, a stand-in's
- * template `parse` for each kind not yet ported. A text value is spelled by `valueRepr` (`"abc"`
+ * `inputs` as the parse phase does: the registered `AgentDescriptor` and `ToolDescriptor` for
+ * `agent` and `tool`, a stand-in's template `parse` for each kind not yet ported. A text value is spelled by `valueRepr` (`"abc"`
  * and `true` where Python shows `'abc'` and `True`).
  *
  * Dropped: the date row of `test_non_mapping_input_is_a_load_error` (TS reads an unquoted date
@@ -20,6 +20,7 @@ import { expect, test } from "bun:test";
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
+import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { SourceDocument } from "../../src/compose/source/document.ts";
 import { loadError } from "./declarations.ts";
 import { StandInCode, standIn } from "./stand_ins.ts";
@@ -29,7 +30,7 @@ const CLASSES: ReadonlyMap<string, DescriptorClass> = new Map([
   ["call", standIn("call", { allow: ["call", "inputs"] })],
   ["map", standIn("map", { allow: ["over", "call", "inputs"] })],
   ["code", StandInCode],
-  ["tool", standIn("tool", { allow: ["tool_id", "inputs"] })],
+  ["tool", ToolDescriptor],
   ["agent", AgentDescriptor],
   ["human_input", standIn("human_input", { allow: ["prompt", "inputs"] })],
 ]);

@@ -4,20 +4,20 @@
  * kinds of `ALL_KIND_NAMES`, and the agreement row also runs on the nine stand-ins registered
  * with `withKinds`.
  *
- * Ported: the `agent` half of `test_kinds_maps_string_to_descriptor_class`.
+ * Ported: the `agent` and `tool` rows of `test_kinds_maps_string_to_descriptor_class`.
  *
  * TS-only: `withKinds` restores the tables after its function returns or throws.
  *
  * Dropped: `test_retired_kindspec_is_not_public` (a Python import).
  *
- * Later (T3-15): the `tool` half of `test_kinds_maps_string_to_descriptor_class`. Later (T3-16):
- * `test_all_authored_kinds_registered`.
+ * Later (T3-16): `test_all_authored_kinds_registered`.
  */
 
 import { expect, test } from "bun:test";
 
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { BINDING_FIELDS, KINDS, REMOVED_KINDS } from "../../src/compose/nodes/index.ts";
+import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { ALL_KIND_NAMES, StandInCode, standIn, withKinds } from "./stand_ins.ts";
 
 /** Expect `KINDS` and `BINDING_FIELDS` to name the same kinds, each with its class's fields. */
@@ -37,6 +37,7 @@ test("the kind tables are maps of authored kinds", () => {
 
 test("KINDS maps the kind text to its descriptor class", () => {
   expect(KINDS.get("agent")).toBe(AgentDescriptor);
+  expect(KINDS.get("tool")).toBe(ToolDescriptor);
   for (const [kind, cls] of KINDS) expect(cls.kind).toBe(kind);
 });
 

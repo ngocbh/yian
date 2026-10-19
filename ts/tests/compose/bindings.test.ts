@@ -1,8 +1,9 @@
 /**
- * The kind-blind binding-field walk: a port of `tests/compose/test_bindings.py`. The agent rows use
- * the real `AgentDescriptor`; each other row uses a stand-in of the kind Python uses (`standIn` for
- * the kinds whose only binding field is `inputs`, test-local `StandInCall` and `StandInMap` for the
- * kinds with a scalar `over`), since those kinds aren't ported yet. Every row passes an explicit
+ * The kind-blind binding-field walk: a port of `tests/compose/test_bindings.py`. The agent and tool
+ * rows use the real `AgentDescriptor` and `ToolDescriptor`; each other row uses a stand-in of the
+ * kind Python uses (`standIn` for the kinds whose only binding field is `inputs`, test-local
+ * `StandInCall` and `StandInMap` for the kinds with a scalar `over`), since those kinds aren't
+ * ported yet. Every row passes an explicit
  * `bindingFields` table built from the classes' `bindingFields`.
  *
  * TS-only: `mapBindingSources` hands the mapper a `ValueTemplate` whole, in a record field and in
@@ -15,6 +16,7 @@ import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { NodeDescriptor, type NodeDescriptorFields } from "../../src/compose/nodes/base.ts";
 import { keyless, mapBindingSources, mapBindingStrings } from "../../src/compose/nodes/bindings.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
+import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { ValueTemplate } from "../../src/nodes/contracts.ts";
 import { StandInCase, standIn } from "./stand_ins.ts";
@@ -36,14 +38,13 @@ class StandInMap extends StandInCall {
   static override readonly kind = "map";
 }
 
-const StandInTool = standIn("tool", { bindingFields: ["inputs"] });
 const StandInHumanInput = standIn("human_input", { bindingFields: ["inputs"] });
 const StandInLoop = standIn("loop", { bindingFields: ["inputs"] });
 const StandInWait = standIn("wait");
 
 const CLASSES: readonly DescriptorClass[] = [
   AgentDescriptor,
-  StandInTool,
+  ToolDescriptor,
   StandInHumanInput,
   StandInLoop,
   StandInWait,
@@ -69,7 +70,7 @@ describe("mapBindingStrings", () => {
   });
 
   test("tool inputs rewritten", () => {
-    const desc = new StandInTool({ id: "t", inputs: { url: "${u}", n: 3 } });
+    const desc = new ToolDescriptor({ id: "t", toolId: "fetch", inputs: { url: "${u}", n: 3 } });
     const out = mapBindingStrings(desc, up, { bindingFields });
     expect(out.inputs).toEqual({ url: "${U}", n: 3 });
   });

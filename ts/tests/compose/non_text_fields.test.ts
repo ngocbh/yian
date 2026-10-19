@@ -19,9 +19,12 @@
  * Dropped: the date rows (TS reads an unquoted date as text) and
  * `test_not_text_detail_reads_the_first_string_error` (`not_text_detail` reads a pydantic error).
  *
- * Later (T3-15): the `code:` and `tool_id:` rows (`test_non_text_code_is_a_load_error`,
- * `test_non_text_tool_id_is_a_load_error`, `test_null_code_and_tool_id_are_empty`,
- * `test_tagged_non_text_tool_id`, `test_text_code_and_tool_id_still_load`). Later (T3-16): the
+ * The `tool_id:` rows (`test_non_text_tool_id_is_a_load_error`, the `tool_id` half of
+ * `test_null_code_and_tool_id_are_empty`, `test_tagged_non_text_tool_id`) parse with the
+ * registered `tool` kind.
+ *
+ * Later (T3-15): the `code:` rows (`test_non_text_code_is_a_load_error`, the `code` half of
+ * `test_null_code_and_tool_id_are_empty`, `test_text_code_and_tool_id_still_load`). Later (T3-16): the
  * `call:`, `on:` and loop/case rows (`test_non_text_call_is_a_load_error`,
  * `test_null_call_is_empty`, `test_text_call_still_loads`, `test_non_text_case_on_is_a_load_error`,
  * `test_null_case_on_is_absent`, `test_text_case_on_still_loads`, and the while, until,
@@ -40,7 +43,16 @@ import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { notTextError } from "../../src/compose/nodes/base.ts";
 import { parseFile } from "../../src/compose/parse/file.ts";
 import { forget } from "../../src/defaults.ts";
-import { assembled, assembleText, fileOf, loadError, nodesOf, runCase, runTextCase } from "./declarations.ts";
+import {
+  assembled,
+  assembleText,
+  fileOf,
+  loadError,
+  nodesOf,
+  parsedNodes,
+  runCase,
+  runTextCase,
+} from "./declarations.ts";
 import { ALL_KIND_NAMES, StandInCode, standIn } from "./stand_ins.ts";
 
 afterEach(() => forget());
@@ -137,6 +149,19 @@ nodes:
     node_name: ${v}
     output: str
     code: "return 'x'"
+output: \${a.output}
+`;
+}
+
+/** A flow whose TOOL node `a` has `tool_id: <v>`. */
+function toolFlow(v: string): string {
+  return `id: f
+name: f
+nodes:
+  a:
+    kind: tool
+    tool_id: ${v}
+    input: {symbol: x}
 output: \${a.output}
 `;
 }
@@ -327,12 +352,44 @@ describe("parseNodes", () => {
     expect(startLine(error)).toBe(lineOf(text, "asserts: "));
   });
 
+  test.each(NON_TEXT)("non-text tool id is a load error: %s", (value, phrase) => {
+    const text = toolFlow(value);
+
+    const error = loadError(() => nodesOf(text, []));
+
+    expect(error.message).toContain(
+      `node 'a' (kind=tool): \`tool_id:\` must be text, but YAML read it as ${phrase}; put it in quotes`,
+    );
+    expect(startLine(error)).toBe(lineOf(text, "tool_id: "));
+  });
+
+  test("null tool id is empty", () => {
+    const text = toolFlow("null");
+
+    const error = loadError(() => nodesOf(text, []));
+
+    expect(error.message).toContain("node 'a' (kind=tool): `tool_id:` must be text, but it is empty; write the text");
+    expect(startLine(error)).toBe(lineOf(text, "tool_id: "));
+  });
+
+  test("tagged non-text tool id", () => {
+    // `!str 5` still reads as an integer here; the tag's own error comes once it is quoted.
+    expect(loadError(() => nodesOf(toolFlow("!str 5"), [])).message).toContain(
+      "`tool_id:` must be text, but YAML read it as an integer; put it in quotes",
+    );
+  });
+
   test.each([
     ["load-core/compose_non_text_fields__non_text_kind", ALL_KINDS],
     ["load-core/compose_non_text_fields__null_kind", []],
   ] as const)("case %s", (id, kinds) =>
     runTextCase({ id, call: (text, label) => nodesOf(text, kinds, label) }),
   );
+
+  test.each([
+    "load-core/compose_non_text_fields__non_text_tool_id",
+    "load-core/compose_non_text_fields__null_tool_id",
+  ])("case %s", (id) => runCase({ id, call: parsedNodes }));
 });
 
 describe("llm_config", () => {

@@ -138,47 +138,44 @@ test("aliased child targets are rejected before any scope is stamped", () => {
     [],
   );
   const layout = resolveExecutionLayout(flow);
+  expect(() => applyExecutionLayout(flow, layout)).toThrow(RangeError);
   expect(() => applyExecutionLayout(flow, layout)).toThrow(/multiple static paths/);
   expect(layout.targets.every((target) => target.node.executionScope === null)).toBe(true);
 });
 
-describe.each(["new-target", "replaced-target", "invalid-key"])(
+test.each(["new-target", "replaced-target", "invalid-key"])(
   "stale graph is rejected without stamping any target (%s)",
   (change) => {
-    test("rejects", () => {
-      const [flow, layout] = twoNodeLayout();
-      if (change === "new-target") {
-        flow.nodes.set("new", new CodeNode("new", { code: "return 3" }));
-      } else if (change === "replaced-target") {
-        flow.nodes.set("last", copyGraph(flow.nodes.get("last")!));
-      } else {
-        const last = flow.nodes.get("last")!;
-        flow.nodes.delete("last");
-        flow.nodes.set("bad-key", last);
-      }
-      expect(() => applyExecutionLayout(flow, layout)).toThrow(RangeError);
-      expect([...flow.nodes.values()].every((node) => node.executionScope === null)).toBe(true);
-      expect(layout.targets.every((target) => target.node.executionScope === null)).toBe(true);
-    });
+    const [flow, layout] = twoNodeLayout();
+    if (change === "new-target") {
+      flow.nodes.set("new", new CodeNode("new", { code: "return 3" }));
+    } else if (change === "replaced-target") {
+      flow.nodes.set("last", copyGraph(flow.nodes.get("last")!));
+    } else {
+      const last = flow.nodes.get("last")!;
+      flow.nodes.delete("last");
+      flow.nodes.set("bad-key", last);
+    }
+    expect(() => applyExecutionLayout(flow, layout)).toThrow(RangeError);
+    expect([...flow.nodes.values()].every((node) => node.executionScope === null)).toBe(true);
+    expect(layout.targets.every((target) => target.node.executionScope === null)).toBe(true);
   },
 );
 
-describe.each(["missing-target", "duplicate-target", "mutable-targets"])(
+test.each(["missing-target", "duplicate-target", "mutable-targets"])(
   "invalid layout is rejected without stamping any target (%s)",
   (change) => {
-    test("rejects", () => {
-      const [flow, real] = twoNodeLayout();
-      let layout: ResolvedExecutionLayout;
-      if (change === "missing-target") {
-        layout = new ResolvedExecutionLayout(real.targets.slice(0, -1));
-      } else if (change === "duplicate-target") {
-        layout = new ResolvedExecutionLayout([...real.targets, real.targets.at(-1)!]);
-      } else {
-        layout = forge(ResolvedExecutionLayout.prototype, { targets: new Set(real.targets) });
-      }
-      expectRejected(() => applyExecutionLayout(flow, layout));
-      expect([...flow.nodes.values()].every((node) => node.executionScope === null)).toBe(true);
-    });
+    const [flow, real] = twoNodeLayout();
+    let layout: ResolvedExecutionLayout;
+    if (change === "missing-target") {
+      layout = new ResolvedExecutionLayout(real.targets.slice(0, -1));
+    } else if (change === "duplicate-target") {
+      layout = new ResolvedExecutionLayout([...real.targets, real.targets.at(-1)!]);
+    } else {
+      layout = forge(ResolvedExecutionLayout.prototype, { targets: new Set(real.targets) });
+    }
+    expectRejected(() => applyExecutionLayout(flow, layout));
+    expect([...flow.nodes.values()].every((node) => node.executionScope === null)).toBe(true);
   },
 );
 
@@ -213,6 +210,7 @@ test("recursive static child cycle is rejected without mutation", () => {
   const flow = new Flow(new Map(), []);
   const node = new CallNode("recurse", { flowId: "child", child: flow });
   flow.nodes.set(node.id, node);
+  expect(() => resolveExecutionLayout(flow)).toThrow(RangeError);
   expect(() => resolveExecutionLayout(flow)).toThrow(/recursive child-flow cycle/);
   expect(node.executionScope).toBeNull();
 });
@@ -266,24 +264,23 @@ test("static loop scope starts at driver zero and reapplies atomically", () => {
   expect(flow.nodes.get("first")!.executionScope!.occurrencePath).toEqual([]);
 });
 
-describe.each([
+test.each([
   ["empty", []],
   ["driver one", [new ExecutionPosition("loop_driver", ["loop"], 1)]],
   ["other driver", [new ExecutionPosition("loop_driver", ["other"], 0)]],
   ["body zero", [new ExecutionPosition("loop_body", ["loop"], 0)]],
   ["nested driver", [new ExecutionPosition("call", ["outer"]), new ExecutionPosition("loop_driver", ["loop"], 0)]],
 ])("static loop layout rejects nonbootstrap positions before stamping (%s)", (_name, position) => {
-  test("rejects", () => {
-    const node = new LoopNode("loop", { flowId: "body" });
-    const flow = new Flow(new Map<string, Node>([["first", code("first")], ["loop", node]]), []);
-    const layout = resolveExecutionLayout(flow);
-    const target = layout.targets.find((item) => item.node === node)!;
-    const scope = forge(ExecutionScope.prototype, { ...target.scope, occurrencePath: position });
-    const forged = forge(ResolvedExecutionTarget.prototype, { ...target, scope });
-    const applied = forge(ResolvedExecutionLayout.prototype, {
-      targets: layout.targets.map((item) => (item === target ? forged : item)),
-    });
-    expect(() => applyExecutionLayout(flow, applied)).toThrow(RangeError);
-    expect([...flow.nodes.values()].every((item) => item.executionScope === null)).toBe(true);
+  const node = new LoopNode("loop", { flowId: "body" });
+  const flow = new Flow(new Map<string, Node>([["first", code("first")], ["loop", node]]), []);
+  const layout = resolveExecutionLayout(flow);
+  const target = layout.targets.find((item) => item.node === node)!;
+  const scope = forge(ExecutionScope.prototype, { ...target.scope, occurrencePath: position });
+  const forged = forge(ResolvedExecutionTarget.prototype, { ...target, scope });
+  const applied = forge(ResolvedExecutionLayout.prototype, {
+    targets: layout.targets.map((item) => (item === target ? forged : item)),
   });
+  expect(() => applyExecutionLayout(flow, applied)).toThrow(RangeError);
+  expect(() => applyExecutionLayout(flow, applied)).toThrow(/initial driver position/);
+  expect([...flow.nodes.values()].every((item) => item.executionScope === null)).toBe(true);
 });

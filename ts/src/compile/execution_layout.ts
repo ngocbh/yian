@@ -6,7 +6,7 @@
  * stamping any node. LOOP templates begin at driver zero; all other dynamic occurrence paths
  * belong to growth preparation.
  *
- * Knows about:   compile/model, nodes/base, nodes/contracts, nodes/start, nodes/end.
+ * Knows about:   compile/model, nodes/base, nodes/contracts, nodes/start, nodes/end, diagnostics and typesys.
  * Never imports: memory, compose, runtime, or the package-root run boundary.
  */
 
@@ -18,16 +18,12 @@ import {
   isExactly,
   sameExecutionPosition,
   sameExecutionScope,
+  sameItems,
 } from "../nodes/contracts.ts";
 import { EndNode } from "../nodes/end/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import { writeAsText } from "../typesys/values.ts";
 import { CompiledFlow, Flow } from "./model.ts";
-
-/** Whether two paths have equal components. */
-function samePath(a: readonly string[], b: readonly string[]): boolean {
-  return a.length === b.length && a.every((part, i) => part === b[i]);
-}
 
 /** Replay exact nested invariants before accepting an existing frozen scope. */
 function revalidateScope(scope: unknown): asserts scope is ExecutionScope {
@@ -64,17 +60,13 @@ export class ResolvedExecutionTarget {
       throw new TypeError("target locator components must be non-empty exact strings");
     }
     revalidateScope(scope);
-    if (!samePath(scope.staticPath, locator)) throw new RangeError("target scope static_path must match its locator");
-    if (!samePath(scope.flowPath, locator.slice(0, -1))) {
+    if (!sameItems(scope.staticPath, locator)) throw new RangeError("target scope static_path must match its locator");
+    if (!sameItems(scope.flowPath, locator.slice(0, -1))) {
       throw new RangeError("target scope flow_path must name its containing flow");
     }
     if (!(node instanceof Node)) throw new TypeError("target node must be a Node");
     const initial = node.isLoop ? [new ExecutionPosition("loop_driver", locator, 0)] : [];
-    const occurrences = scope.occurrencePath;
-    if (
-      occurrences.length !== initial.length ||
-      !occurrences.every((position, i) => sameExecutionPosition(position, initial[i]!))
-    ) {
+    if (!sameItems(scope.occurrencePath, initial, sameExecutionPosition)) {
       throw new RangeError("static execution layout requires only the initial driver position");
     }
     this.locator = Object.freeze([...locator]);
@@ -108,12 +100,10 @@ export class ResolvedExecutionLayout {
 
 /** Whether two layouts have equal locators and scopes, target by target; nodes aren't compared. */
 function sameLayout(a: ResolvedExecutionLayout, b: ResolvedExecutionLayout): boolean {
-  return (
-    a.targets.length === b.targets.length &&
-    a.targets.every((target, i) => {
-      const other = b.targets[i]!;
-      return samePath(target.locator, other.locator) && sameExecutionScope(target.scope, other.scope);
-    })
+  return sameItems(
+    a.targets,
+    b.targets,
+    (x, y) => sameItems(x.locator, y.locator) && sameExecutionScope(x.scope, y.scope),
   );
 }
 
@@ -199,6 +189,7 @@ export function resolveExecutionLayout(flow: Flow): ResolvedExecutionLayout {
 
 /** Reject duplicate paths or one node object reached through several paths. */
 function validateUniqueTargets(layout: ResolvedExecutionLayout): void {
+  // Keyed by the JSON of the locator, which no two distinct string paths share; never shown.
   const locators = new Set<string>();
   const nodes = new Set<Node>();
   for (const target of layout.targets) {
@@ -236,7 +227,7 @@ export function applyExecutionLayout(flow: Flow, layout: ResolvedExecutionLayout
   validateUniqueTargets(current);
   if (!sameLayout(current, layout)) throw new RangeError("execution layout no longer matches the compiled flow");
 
-  layout.targets.forEach((target, i) => {
+  for (const [i, target] of layout.targets.entries()) {
     const actual = current.targets[i]!;
     if (actual.node !== target.node) {
       throw new RangeError(
@@ -250,7 +241,7 @@ export function applyExecutionLayout(flow: Flow, layout: ResolvedExecutionLayout
         throw new RangeError(`node at ${writeAsText([...target.locator])} already has a different execution scope`);
       }
     }
-  });
+  }
 
   for (const target of layout.targets) target.node.executionScope = target.scope;
 }

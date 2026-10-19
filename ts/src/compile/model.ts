@@ -29,6 +29,7 @@ import {
   isExactly,
   Parameter,
   sameExecutionPosition,
+  sameItems,
   SeedConnection,
   type ValuePath,
   type ValueTemplate,
@@ -231,11 +232,6 @@ export class Flow {
     this.inputConnections = inputConnections;
     this.childBoundaries = childBoundaries;
   }
-}
-
-/** Whether `a` and `b` have the same length and pairwise `same` items. */
-function sameItems<T>(a: readonly T[], b: readonly T[], same: (x: T, y: T) => boolean = (x, y) => x === y): boolean {
-  return a.length === b.length && a.every((item, i) => same(item, b[i]!));
 }
 
 /**

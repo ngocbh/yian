@@ -6,7 +6,8 @@
  * `test_memory_decl_origins_traverse_and_rewrite_shared_carriers_once`,
  * `test_memory_spec_requires_sorted_owners_and_derived_eligibility`,
  * `test_memory_stack_requires_locator_and_unique_keys`,
- * `test_snapshot_envelope_names_its_memory_key`, `test_learning_carriers_name_their_memory_key`
+ * `test_snapshot_envelope_names_its_memory_key`, `test_learning_carriers_name_their_memory_key`,
+ * the `BackwardFailure` line of `test_backward_failure_and_commit_records_name_their_memory_key`
  * and `test_package_docstring_and_exports_describe_keyed_memories`; plus a lone-surrogate node
  * id, a compiled spec whose key and config the declaration check would refuse, and a snapshot
  * deeper than the value nesting limit.
@@ -27,8 +28,7 @@
  * `MemoryDecl` checked its origin when built.
  *
  * Later (T4-2): the commit-record half of
- * `test_backward_failure_and_commit_records_name_their_memory_key`, with the runtime log; its
- * `BackwardFailure` line lands with `BackwardFailure`.
+ * `test_backward_failure_and_commit_records_name_their_memory_key`, with the runtime log.
  */
 
 import { expect, test } from "bun:test";
@@ -60,6 +60,7 @@ import type {
   MemorySession,
   PolicyCommitStatus,
 } from "../../src/memory/index.ts";
+import { BackwardFailure } from "../../src/runtime/contracts.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
@@ -345,6 +346,11 @@ test("learning carriers name their memory key", () => {
     RangeError,
     "learning memory keys must be unique",
   );
+});
+
+// test_backward_failure_and_commit_records_name_their_memory_key (the BackwardFailure line)
+test("a backward failure names its memory key", () => {
+  expect(new BackwardFailure("commit", "declined", "", { memory: "notes" }).memory).toBe("notes");
 });
 
 // test_package_docstring_and_exports_describe_keyed_memories

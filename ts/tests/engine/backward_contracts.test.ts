@@ -2,10 +2,14 @@
  * Backward contracts: a port of `tests/engine/test_backward_contracts.py`. Ported: the feedback
  * value checks, `BackwardResult`, `validateBackwardResult`, the `ExecutionScope` and
  * `ExecutionPosition` tests,
- * `test_declared_variables_supply_local_backward_targets_without_activating_hooks` (2 rows), and
- * the `BackwardContext` halves of
+ * `test_declared_variables_supply_local_backward_targets_without_activating_hooks` (2 rows),
+ * `test_attributed_backward_result_detaches_messages_and_keeps_reference_coordinates`,
+ * `test_backward_attribution_rejects_malformed_root_coordinates`,
+ * `test_backward_outcome_does_not_normalize_its_caller_owned_failure`,
+ * `test_backward_outcome_can_succeed_without_memory`,
+ * `test_backward_outcome_copy_preserves_ordered_policy_dispositions`,
  * `test_backward_context_and_outcome_do_not_expose_mutable_authority`,
- * `test_retained_failure_origins_drop_mutable_subclass_state` (the two `context` cases) and
+ * `test_retained_failure_origins_drop_mutable_subclass_state` and
  * `test_backward_contracts_reject_invalid_snapshots_and_outcomes`.
  *
  * TS-only: `copyBackwardValue` keeps a `__proto__` key as data, writes `-0` as `0`, keeps a
@@ -15,28 +19,28 @@
  * `projectStructuralFeedback` selects through `input_output_paths`; record membership reads own
  * keys only (`constructor`, `toString`); an `ExecutionScope` rebuilds each occurrence position, so
  * a forged one is refused; `sameExecutionPosition` and `sameExecutionScope` compare by value, field
- * by field.
+ * by field. One row per check, with its class and message, for the transfer half of
+ * `BackwardAttribution`, `AttributedBackwardResult`, `MemoryProposal`'s memory key,
+ * `BackwardFailure` (stage before code) and `BackwardOutcome`; a `MemoryOperationFailure` cause is
+ * kept by identity.
  *
  * Changed:
  * - Infinity is a backward JSON value (decision 34), so the `output=float("inf")` row is accepted;
  *   an `output: NaN` row is refused instead.
- * - `BackwardResult` and `BackwardContext` hold frozen copies, with no copy on read: a reader's
- *   edit throws a `TypeError` where Python changes a private copy. `FrozenInstanceError` is the
- *   `TypeError` an assignment to a frozen object throws in a module.
- * - Message batches and declared names are arrays, not tuples. Dataclass `!=` is `not.toEqual`;
- *   each rejected row names its one error class, where Python accepts either `TypeError` or
- *   `ValueError` (`RangeError`).
+ * - `BackwardResult`, `BackwardContext` and `AttributedBackwardResult` hold frozen copies, with no
+ *   copy on read: a reader's edit throws a `TypeError` where Python changes a private copy.
+ *   `FrozenInstanceError` is the `TypeError` an assignment to a frozen object throws in a module.
+ * - `BackwardOutcome` and `BackwardFailure` keep the frozen carriers they were given (feedback,
+ *   failure, learning, scope, a `MemoryOperationFailure` cause), where Python copies them: where
+ *   Python asserts `is not`, the test asserts the same frozen value. With no `replace`, the
+ *   outcome copy is a second outcome built from the first's fields.
+ * - Message batches, declared names and parents are arrays, not tuples. Dataclass `!=` is
+ *   `not.toEqual`; each rejected row names its one error class, where Python accepts either
+ *   `TypeError` or `ValueError` (`RangeError`).
  * - Changed (rule `messages`, decision 43): a quoted key in a value path is spelled in the text
  *   form, `value["a"][0]`, `input_feedback["text"]`, never Python's `value['a'][0]`.
  * - The declared-variables row builds the AGENT's `tone` variable by hand where Python reads it
  *   from YAML.
- *
- * Later (T4-1): `test_attributed_backward_result_detaches_messages_and_keeps_reference_coordinates`,
- * `test_backward_attribution_rejects_malformed_root_coordinates`,
- * `test_backward_outcome_does_not_normalize_its_caller_owned_failure`,
- * `test_backward_outcome_can_succeed_without_memory` and
- * `test_backward_outcome_copy_preserves_ordered_policy_dispositions` need the runtime contracts,
- * as do the outcome and failure halves of the three partly ported tests.
  *
  * Not ported: the rows that pass a list where Python wants a tuple (`static_path=["node"]`,
  * `occurrence_path=[]`, `input_names=["text"]`, a list batch, `{"path": (1,)}`) and the tuple
@@ -49,6 +53,13 @@ import { expect, test } from "bun:test";
 
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { type FeedbackValue, hasFeedback, validateFeedback } from "../../src/expr/index.ts";
+import { SourceRef } from "../../src/expr/lineage.ts";
+import {
+  LearningFailure,
+  LearningResult,
+  MemoryOperationFailure,
+  PolicyCommitOutcome,
+} from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import {
   BackwardContext,
@@ -66,6 +77,13 @@ import {
   sameExecutionScope,
   ValueContract,
 } from "../../src/nodes/contracts.ts";
+import {
+  AttributedBackwardResult,
+  BackwardAttribution,
+  BackwardFailure,
+  BackwardOutcome,
+  MemoryProposal,
+} from "../../src/runtime/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 
 test.each([
@@ -420,43 +438,55 @@ class AnnotatedOrigin extends OriginRef {
   }
 }
 
-test.each(["argument", "public view"])(
-  "retained failure origins drop mutable subclass state (context, %s)",
-  (mutation) => {
-    const origin = new AnnotatedOrigin("writer.prompt", ["authored note"]);
-    const failure = new Failure({
+test.each([
+  ["context", "argument"],
+  ["context", "public view"],
+  ["failure", "argument"],
+  ["failure", "public view"],
+  ["outcome", "argument"],
+  ["outcome", "public view"],
+])("retained failure origins drop mutable subclass state (%s, %s)", (carrier, mutation) => {
+  const origin = new AnnotatedOrigin("writer.prompt", ["authored note"]);
+  const failure = new Failure({
+    code: "node.execute",
+    message: "Forward failed.",
+    nodeId: "writer",
+    trace: [origin, new OriginRef("writer"), origin],
+    causeType: "LookupError",
+    traceback: "original debugging detail",
+  });
+  const context = new BackwardContext(null, { failure });
+  const backwardFailure = new BackwardFailure("backward", "node.backward", "Reverse failed.", { cause: failure });
+  const outcome = new BackwardOutcome("failed", { failure: backwardFailure });
+  const retained = {
+    context: context.failure,
+    failure: backwardFailure.cause,
+    outcome: outcome.failure!.cause,
+  }[carrier] as Failure;
+
+  if (mutation === "argument") {
+    origin.notes.push("changed through the constructor argument");
+  } else {
+    for (const item of retained.trace) {
+      if (item instanceof AnnotatedOrigin) item.notes.push("changed through a public diagnostic view");
+    }
+  }
+
+  expect(retained).toStrictEqual(
+    new Failure({
       code: "node.execute",
       message: "Forward failed.",
       nodeId: "writer",
-      trace: [origin, new OriginRef("writer"), origin],
+      trace: [new OriginRef("writer.prompt"), new OriginRef("writer"), new OriginRef("writer.prompt")],
       causeType: "LookupError",
       traceback: "original debugging detail",
-    });
-    const retained = new BackwardContext(null, { failure }).failure!;
-
-    if (mutation === "argument") {
-      origin.notes.push("changed through the constructor argument");
-    } else {
-      for (const item of retained.trace) {
-        if (item instanceof AnnotatedOrigin) item.notes.push("changed through a public diagnostic view");
-      }
-    }
-
-    expect(retained).toStrictEqual(
-      new Failure({
-        code: "node.execute",
-        message: "Forward failed.",
-        nodeId: "writer",
-        trace: [new OriginRef("writer.prompt"), new OriginRef("writer"), new OriginRef("writer.prompt")],
-        causeType: "LookupError",
-        traceback: "original debugging detail",
-      }),
-    );
-    expect(retained.trace.every((item) => Object.getPrototypeOf(item) === OriginRef.prototype)).toBe(true);
-    expect(retained.trace.every((item) => Object.isFrozen(item))).toBe(true);
-    expect(failure.trace[0]).toBe(origin);
-  },
-);
+    }),
+  );
+  expect(retained.trace.every((item) => Object.getPrototypeOf(item) === OriginRef.prototype)).toBe(true);
+  expect(retained.trace.every((item) => Object.isFrozen(item))).toBe(true);
+  expect(Object.isFrozen(retained)).toBe(true);
+  expect(failure.trace[0]).toBe(origin);
+});
 
 test.each<[string, () => unknown, typeof TypeError | typeof RangeError]>([
   ["array inputs", () => new BackwardContext([] as never), TypeError],
@@ -467,7 +497,26 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError]>([
   ["a boolean start sequence", () => new BackwardContext({}, { nodeStartedSeq: true as never }), TypeError],
   ["a zero start sequence", () => new BackwardContext({}, { nodeStartedSeq: 0 }), RangeError],
   ["array node data", () => new BackwardContext({}, { nodeData: [] as never }), TypeError],
-])("backward contracts reject invalid snapshots (%s)", (_name, factory, cls) => {
+  ["an unknown backward status", () => new BackwardOutcome("incomplete" as never), RangeError],
+  ["a failed outcome without a failure", () => new BackwardOutcome("failed"), RangeError],
+  ["record feedback", () => new BackwardOutcome("succeeded", { feedback: {} as never }), TypeError],
+  [
+    "a succeeded outcome with a failure",
+    () => new BackwardOutcome("succeeded", { failure: new BackwardFailure("learn", "x", "x") }),
+    RangeError,
+  ],
+  ["an empty failure code", () => new BackwardFailure("learn", "", "detail"), RangeError],
+  [
+    "a boolean failure start sequence",
+    () => new BackwardFailure("learn", "x", "detail", { nodeStartedSeq: true as never }),
+    TypeError,
+  ],
+  [
+    "an error as a failure cause",
+    () => new BackwardFailure("learn", "x", "detail", { cause: new RangeError("bad") as never }),
+    TypeError,
+  ],
+])("backward contracts reject invalid snapshots and outcomes (%s)", (_name, factory, cls) => {
   expect(factory).toThrow(cls);
 });
 
@@ -567,4 +616,462 @@ test("input feedback for an unrecorded toString input is refused", () => {
   const context = new BackwardContext({}, { inputNames: ["toString"] });
   expect(() => validateBackwardResult(result, context)).toThrow(RangeError);
   expect(() => validateBackwardResult(result, context)).toThrow("input_feedback has no recorded input 'toString'");
+});
+
+/** Assert that `fn` throws exactly `cls` with exactly `message`. */
+function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
+  let caught: unknown;
+  try {
+    fn();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(cls);
+  expect((caught as Error).constructor).toBe(cls);
+  expect((caught as Error).message).toBe(message);
+}
+
+const SENDER = new SourceRef("run", 4);
+
+test("attributed backward result detaches messages and keeps reference coordinates", () => {
+  const source = new SourceRef("run", 1);
+  const attribution = new BackwardAttribution(SENDER, "items", 0, 1, [0, 2]);
+  const message: FeedbackValue[] = ["first", null];
+  const result = new AttributedBackwardResult(
+    source,
+    [message],
+    [attribution],
+    new BackwardResult({ selfFeedback: ["note"] }),
+    true,
+  );
+  message[0] = "changed";
+  expect(() => {
+    (result.feedback[0] as FeedbackValue[])[0] = "also changed";
+  }).toThrow(TypeError);
+  expect(result.feedback).toEqual([["first", null]]);
+  expect(result.attribution).toEqual([attribution]);
+  expect(result.attribution[0]).toBe(attribution);
+  expect(result.result.selfFeedback).toEqual(["note"]);
+  expect("order" in attribution).toBe(false);
+  for (const value of [result, result.feedback, result.attribution, attribution, attribution.parents]) {
+    expect(Object.isFrozen(value)).toBe(true);
+  }
+});
+
+test("a backward attribution copies its parents", () => {
+  const parents = [0, 2];
+  const attribution = new BackwardAttribution(SENDER, "items", 0, 1, parents);
+  parents.push(3);
+  expect(attribution.parents).toEqual([0, 2]);
+  const root = new BackwardAttribution(null, null, 0, null, []);
+  expect([root.sender, root.inputName, root.messageIndex, root.contributionIndex, root.parents]).toEqual([
+    null,
+    null,
+    0,
+    null,
+    [],
+  ]);
+});
+
+/** Build a `BackwardAttribution` from untyped arguments. */
+function attribute(args: unknown[]): BackwardAttribution {
+  return new BackwardAttribution(...(args as ConstructorParameters<typeof BackwardAttribution>));
+}
+
+const ROOT_COORDINATES = "root attribution cannot carry sender coordinates";
+
+test.each<[unknown[], typeof TypeError | typeof RangeError, string]>([
+  [[null, "input", 0, null, []], RangeError, ROOT_COORDINATES],
+  [[null, null, 1, null, []], RangeError, ROOT_COORDINATES],
+  [[null, null, 0, 0, []], RangeError, ROOT_COORDINATES],
+  [[null, null, 0, null, [0]], RangeError, ROOT_COORDINATES],
+  [["sender", "input", 0, 0, []], TypeError, "source must be an exact SourceRef"],
+])("backward attribution rejects malformed root coordinates (row %#)", (args, cls, message) => {
+  expectError(() => attribute(args), cls, message);
+});
+
+const PARENTS_TYPE = "parents must be an array of non-negative integer positions";
+const PARENTS_ORDER = "parents must be distinct ordered positions";
+const ACCEPTED_SENDER = "attribution sender must identify an accepted occurrence";
+const CONTRIBUTION = "transfer attribution requires a non-negative contribution index";
+
+test.each<[string, unknown[], typeof TypeError | typeof RangeError, string]>([
+  [
+    "a negative message index",
+    [SENDER, "items", -1, 0, [0]],
+    RangeError,
+    "message_index must be a non-negative integer",
+  ],
+  ["fractional parents", [SENDER, "items", 0, 0, [1.5]], TypeError, PARENTS_TYPE],
+  ["sparse parents", [SENDER, "items", 0, 0, [, 1]], TypeError, PARENTS_TYPE],
+  ["duplicate parents", [SENDER, "items", 0, 0, [0, 0]], RangeError, PARENTS_ORDER],
+  ["misordered parents", [SENDER, "items", 0, 0, [2, 0]], RangeError, PARENTS_ORDER],
+  ["a run-input sender", [new SourceRef("run", 0), "items", 0, 0, [0]], RangeError, ACCEPTED_SENDER],
+  ["a sender with a path", [new SourceRef("run", 4, ["a"]), "items", 0, 0, [0]], RangeError, ACCEPTED_SENDER],
+  ["an empty input name", [SENDER, "", 0, 0, [0]], RangeError, "transfer attribution requires an input name"],
+  ["a missing contribution index", [SENDER, "items", 0, null, [0]], RangeError, CONTRIBUTION],
+  ["a negative contribution index", [SENDER, "items", 0, -1, [0]], RangeError, CONTRIBUTION],
+  ["empty parents", [SENDER, "items", 0, 0, []], RangeError, "transfer attribution requires incoming parent positions"],
+])("a transfer attribution rejects %s", (_name, args, cls, message) => {
+  expectError(() => attribute(args), cls, message);
+});
+
+const OCCURRENCE = new SourceRef("run", 1);
+const LINK = new BackwardAttribution(SENDER, "items", 0, 0, [0]);
+const ACCEPTED_SOURCE = "backward result source must identify an accepted occurrence";
+const ARRAYS = "feedback and attribution must be arrays";
+const RESULT_AND_INVOKED = "result and invoked must be a BackwardResult and boolean";
+const UNREACHED = "unreached occurrences cannot carry backward material";
+
+test.each<[string, unknown[], typeof TypeError | typeof RangeError, string]>([
+  [
+    "a source that isn't a SourceRef",
+    [{}, ["x"], [LINK], new BackwardResult(), true],
+    TypeError,
+    "source must be an exact SourceRef",
+  ],
+  [
+    "a run-input source",
+    [new SourceRef("run", 0), ["x"], [LINK], new BackwardResult(), true],
+    RangeError,
+    ACCEPTED_SOURCE,
+  ],
+  [
+    "a source with a path",
+    [new SourceRef("run", 1, [0]), ["x"], [LINK], new BackwardResult(), true],
+    RangeError,
+    ACCEPTED_SOURCE,
+  ],
+  ["feedback that isn't an array", [OCCURRENCE, new Set(["x"]), [LINK], new BackwardResult(), true], TypeError, ARRAYS],
+  ["attribution that isn't an array", [OCCURRENCE, ["x"], LINK, new BackwardResult(), true], TypeError, ARRAYS],
+  [
+    "misaligned batches",
+    [OCCURRENCE, ["x", "y"], [LINK], new BackwardResult(), true],
+    RangeError,
+    "feedback and attribution must align",
+  ],
+  [
+    "a number message",
+    [OCCURRENCE, [7], [LINK], new BackwardResult(), true],
+    TypeError,
+    "feedback must be a string, object, list, or None",
+  ],
+  [
+    "a plain attribution",
+    [OCCURRENCE, ["x"], [{ ...LINK }], new BackwardResult(), true],
+    TypeError,
+    "attribution requires exact BackwardAttribution values",
+  ],
+  ["a record result", [OCCURRENCE, ["x"], [LINK], {}, true], TypeError, RESULT_AND_INVOKED],
+  ["a number invoked flag", [OCCURRENCE, ["x"], [LINK], new BackwardResult(), 1], TypeError, RESULT_AND_INVOKED],
+  [
+    "an unreached occurrence with messages",
+    [OCCURRENCE, ["x"], [LINK], new BackwardResult(), false],
+    RangeError,
+    UNREACHED,
+  ],
+  [
+    "an unreached occurrence with self feedback",
+    [OCCURRENCE, [], [], new BackwardResult({ selfFeedback: ["x"] }), false],
+    RangeError,
+    UNREACHED,
+  ],
+  [
+    "an unreached occurrence with an empty input batch",
+    [OCCURRENCE, [], [], new BackwardResult({ inputFeedback: { topic: [] } }), false],
+    RangeError,
+    UNREACHED,
+  ],
+  [
+    "an unreached occurrence with an empty variable batch",
+    [OCCURRENCE, [], [], new BackwardResult({ variableFeedback: { tone: [] } }), false],
+    RangeError,
+    UNREACHED,
+  ],
+  [
+    "an invoked occurrence without messages",
+    [OCCURRENCE, [], [], new BackwardResult(), true],
+    RangeError,
+    "invoked occurrences require received feedback",
+  ],
+])("an attributed backward result rejects %s", (_name, args, cls, message) => {
+  expectError(
+    () => new AttributedBackwardResult(...(args as ConstructorParameters<typeof AttributedBackwardResult>)),
+    cls,
+    message,
+  );
+});
+
+test("an unreached occurrence carries no material", () => {
+  const result = new AttributedBackwardResult(OCCURRENCE, [], [], new BackwardResult(), false);
+  expect([result.feedback, result.attribution, result.invoked]).toEqual([[], [], false]);
+});
+
+test.each<[unknown, typeof TypeError | typeof RangeError, string]>([
+  [1, TypeError, "memory must be a string"],
+  ["", RangeError, "memory must be non-empty"],
+])("a memory proposal rejects the memory key %p", (memory, cls, message) => {
+  expectError(() => new MemoryProposal(memory as string, []), cls, message);
+});
+
+test("backward outcome does not expose mutable authority", () => {
+  const scope = new ExecutionScope(["writer"]);
+  const cause = new MemoryOperationFailure("learn", "model.failed", "Model failed.", true);
+  const failure = new BackwardFailure("learn", "memory.learn", "Could not compute a learning proposal.", {
+    scope,
+    memory: "history",
+    cause,
+    causeType: "MemoryOperationError",
+    traceback: "debugging detail",
+  });
+  const learning = new LearningResult("failed", { failures: [new LearningFailure("history", "learn", cause)] });
+  const feedback = new BackwardResult({ inputFeedback: { tags: [[null, "Irrelevant."]] } });
+  const outcome = new BackwardOutcome("failed", { feedback, failure, learning });
+  expect(() => {
+    (outcome.feedback!.inputFeedback.tags![0] as FeedbackValue[]).length = 0;
+  }).toThrow(TypeError);
+  expect(outcome.feedback!.inputFeedback).toEqual({ tags: [[null, "Irrelevant."]] });
+  expect(outcome.status).toBe("failed");
+  expect(outcome.failure!.cause).toBe(cause);
+  expect((outcome.failure!.cause as MemoryOperationFailure).retryable).toBe(true);
+  expect(outcome.failure!.scope).toBe(scope);
+  expect(outcome.failure!.traceback).toBe("debugging detail");
+  expect(outcome.learning).toBe(learning);
+  expect(Object.isFrozen(failure)).toBe(true);
+  expect(() => {
+    (outcome as { status: string }).status = "succeeded";
+  }).toThrow(TypeError);
+  expect(() => {
+    (failure as { memory: string | null }).memory = "other";
+  }).toThrow(TypeError);
+});
+
+test("backward outcome does not normalize its caller-owned failure", () => {
+  const cause = new Failure({
+    code: "node.execute",
+    message: "Forward failed.",
+    nodeId: "writer",
+    trace: [new OriginRef("writer")],
+  });
+  const trace = cause.trace;
+  const origin = cause.trace[0];
+  const failure = new BackwardFailure("backward", "node.backward", "Reverse failed.", { cause });
+  const originalCause = failure.cause;
+
+  const outcome = new BackwardOutcome("failed", { failure });
+
+  expect(failure.cause).toBe(originalCause);
+  expect(failure.cause).not.toBe(cause);
+  expect(cause.trace).toBe(trace);
+  expect(cause.trace[0]).toBe(origin!);
+  expect(Object.isFrozen(cause)).toBe(false);
+  // Changed: the outcome keeps the same frozen failure, where Python copies it.
+  expect(outcome.failure).toBe(failure);
+  expect(Object.isFrozen(outcome.failure)).toBe(true);
+});
+
+test("backward outcome can succeed without memory", () => {
+  const result = new BackwardResult();
+  const outcome = new BackwardOutcome("succeeded", { feedback: result });
+  expect(outcome.feedback).toBe(result);
+  expect(outcome.failure).toBeNull();
+  expect(outcome.learning).toBeNull();
+});
+
+test("backward outcome copy preserves ordered policy dispositions", () => {
+  const policies = [
+    new PolicyCommitOutcome("second", "unknown", { commitId: "commit-2" }),
+    new PolicyCommitOutcome("first", "unrequested"),
+  ];
+  const learning = new LearningResult("incomplete", { policies });
+  const feedback = new BackwardResult();
+  const outcome = new BackwardOutcome("failed", {
+    feedback,
+    failure: new BackwardFailure("commit", "interrupted", ""),
+    learning,
+  });
+  const copied = new BackwardOutcome(outcome.status, {
+    feedback: outcome.feedback,
+    failure: outcome.failure,
+    learning: outcome.learning,
+  });
+  expect(copied).toEqual(outcome);
+  expect(copied.feedback).toBe(feedback);
+  // Changed: the copy shares the frozen learning result and its policies, where Python copies them.
+  expect(copied.learning).toBe(learning);
+  expect(copied.learning!.policies).toEqual(policies);
+  expect(copied.learning!.policies[0]).toBe(policies[0]!);
+  expect(Object.isFrozen(copied.learning!.policies)).toBe(true);
+});
+
+class SubFailure extends Failure {}
+
+const FAILURE_SEQ_TYPE = "node_started_seq must be an integer or null";
+const FAILURE_CAUSE = "cause must be a Failure, MemoryOperationFailure, or null";
+
+test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>([
+  [
+    "a number stage",
+    () => new BackwardFailure(1 as never, "x", "y"),
+    TypeError,
+    "backward failure stage must be a string",
+  ],
+  ["an empty stage", () => new BackwardFailure("", "x", "y"), RangeError, "backward failure stage must be non-empty"],
+  [
+    "a number code",
+    () => new BackwardFailure("learn", 1 as never, "y"),
+    TypeError,
+    "backward failure code must be a string",
+  ],
+  ["an empty code", () => new BackwardFailure("learn", "", "y"), RangeError, "backward failure code must be non-empty"],
+  [
+    "an empty stage and a number code",
+    () => new BackwardFailure("", 1 as never, "y"),
+    RangeError,
+    "backward failure stage must be non-empty",
+  ],
+  [
+    "a number message",
+    () => new BackwardFailure("learn", "x", 1 as never),
+    TypeError,
+    "backward failure message must be a string",
+  ],
+  [
+    "a number run id",
+    () => new BackwardFailure("learn", "x", "y", { runId: 1 as never }),
+    TypeError,
+    "backward failure run_id must be a string or null",
+  ],
+  [
+    "a number node id",
+    () => new BackwardFailure("learn", "x", "y", { nodeId: 1 as never }),
+    TypeError,
+    "backward failure node_id must be a string or null",
+  ],
+  [
+    "a number memory",
+    () => new BackwardFailure("learn", "x", "y", { memory: 1 as never }),
+    TypeError,
+    "backward failure memory must be a string or null",
+  ],
+  [
+    "a number cause type",
+    () => new BackwardFailure("learn", "x", "y", { causeType: 1 as never }),
+    TypeError,
+    "backward failure cause_type must be a string or null",
+  ],
+  [
+    "a number traceback",
+    () => new BackwardFailure("learn", "x", "y", { traceback: 1 as never }),
+    TypeError,
+    "backward failure traceback must be a string or null",
+  ],
+  [
+    "a fractional start sequence",
+    () => new BackwardFailure("learn", "x", "y", { nodeStartedSeq: 1.5 }),
+    TypeError,
+    FAILURE_SEQ_TYPE,
+  ],
+  [
+    "a bigint start sequence",
+    () => new BackwardFailure("learn", "x", "y", { nodeStartedSeq: 1n as never }),
+    TypeError,
+    FAILURE_SEQ_TYPE,
+  ],
+  [
+    "a zero start sequence",
+    () => new BackwardFailure("learn", "x", "y", { nodeStartedSeq: 0 }),
+    RangeError,
+    "node_started_seq must be positive",
+  ],
+  [
+    "a plain scope",
+    () => new BackwardFailure("learn", "x", "y", { scope: { staticPath: [] } as never }),
+    TypeError,
+    "scope must be an ExecutionScope or null",
+  ],
+  [
+    "a plain cause",
+    () => new BackwardFailure("learn", "x", "y", { cause: { code: "node.execute" } as never }),
+    TypeError,
+    FAILURE_CAUSE,
+  ],
+  [
+    "a Failure subclass cause",
+    () => {
+      const cause = new SubFailure({ code: "node.execute", message: "", nodeId: null });
+      return new BackwardFailure("learn", "x", "y", { cause });
+    },
+    TypeError,
+    FAILURE_CAUSE,
+  ],
+])("a backward failure rejects %s", (_name, factory, cls, message) => {
+  expectError(factory, cls, message);
+});
+
+test("a backward failure keeps its attribution", () => {
+  const scope = new ExecutionScope(["writer"]);
+  const failure = new BackwardFailure("backward", "node.backward", "", {
+    scope,
+    runId: "run-1",
+    nodeId: "writer",
+    nodeStartedSeq: 3,
+    memory: "notes",
+  });
+  expect([failure.stage, failure.code, failure.message]).toEqual(["backward", "node.backward", ""]);
+  expect([failure.scope, failure.runId, failure.nodeId, failure.nodeStartedSeq, failure.memory]).toEqual([
+    scope,
+    "run-1",
+    "writer",
+    3,
+    "notes",
+  ]);
+  expect([failure.cause, failure.causeType, failure.traceback]).toEqual([null, null, null]);
+});
+
+test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>([
+  [
+    "an unknown status",
+    () => new BackwardOutcome("incomplete" as never),
+    RangeError,
+    "backward status must be 'succeeded' or 'failed'",
+  ],
+  [
+    "record feedback",
+    () => new BackwardOutcome("succeeded", { feedback: {} as never }),
+    TypeError,
+    "feedback must be a BackwardResult or null",
+  ],
+  [
+    "a plain failure",
+    () => new BackwardOutcome("failed", { failure: {} as never }),
+    TypeError,
+    "failure must be a BackwardFailure or null",
+  ],
+  [
+    "a succeeded outcome with a failure",
+    () => new BackwardOutcome("succeeded", { failure: new BackwardFailure("learn", "x", "y") }),
+    RangeError,
+    "succeeded backward cannot carry a failure",
+  ],
+  [
+    "a failed outcome without a failure",
+    () => new BackwardOutcome("failed"),
+    RangeError,
+    "failed backward requires a failure",
+  ],
+  [
+    "a plain learning result",
+    () => new BackwardOutcome("succeeded", { learning: {} as never }),
+    TypeError,
+    "learning must be a LearningResult or null",
+  ],
+  [
+    "a succeeded outcome with incomplete learning",
+    () => new BackwardOutcome("succeeded", { learning: new LearningResult("incomplete") }),
+    RangeError,
+    "succeeded backward requires succeeded learning",
+  ],
+])("a backward outcome rejects %s", (_name, factory, cls, message) => {
+  expectError(factory, cls, message);
 });

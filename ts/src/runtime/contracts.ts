@@ -9,8 +9,21 @@
  * Never imports: runtime log, state, trace, engine or run, compile, compose, or the CLI.
  */
 
-import { type RouteKind, SourceRef, ValueRoute } from "../expr/lineage.ts";
-import { copyBackwardValue, validateDeclaredNames, validateInputOutputPaths } from "../nodes/base.ts";
+import { Failure } from "../diagnostics.ts";
+import { type FeedbackValue, type RouteKind, SourceRef, ValueRoute, validateFeedback } from "../expr/lineage.ts";
+import {
+  LearningResult,
+  type MemoryMutation,
+  MemoryOperationFailure,
+  validateMutations,
+} from "../memory/contracts.ts";
+import {
+  BackwardResult,
+  copyBackwardValue,
+  retainFailure,
+  validateDeclaredNames,
+  validateInputOutputPaths,
+} from "../nodes/base.ts";
 import { ExecutionScope, isExactly } from "../nodes/contracts.ts";
 import { type JsonValue, parseJson } from "../typesys/json.ts";
 import { isList, isRecord } from "../typesys/values.ts";
@@ -348,6 +361,338 @@ export class ForwardCapture {
     this.nodeData = copyBackwardValue(nodeData, "node_data") as typeof this.nodeData;
     this.inputNames = Object.freeze([...inputNames]);
     this.variableNames = Object.freeze([...variableNames]);
+    Object.freeze(this);
+  }
+}
+
+/**
+ * One input message transfer and its sender's incoming positions. Frozen.
+ *
+ * Sender, input and message identify a returned input batch slot; the contribution is its ordinal
+ * in the existing pure route transfer. Parents index the sender's ordered received messages. A
+ * root seed has no sender or parents. These coordinates keep expression stops and contexts
+ * without copying source data.
+ */
+export class BackwardAttribution {
+  /** The accepted occurrence that sent the message, or `null` for a root seed. */
+  readonly sender: SourceRef | null;
+  /** The sender's input whose batch holds the message, or `null` for a root seed. */
+  readonly inputName: string | null;
+  /** The message's position in that batch; `0` for a root seed. */
+  readonly messageIndex: number;
+  /** The message's ordinal in the route transfer, or `null` for a root seed. */
+  readonly contributionIndex: number | null;
+  /** Distinct increasing positions in the sender's received messages; empty for a root seed. */
+  readonly parents: readonly number[];
+
+  /**
+   * Validate root or transfer coordinates and keep a frozen copy of `parents`.
+   *
+   * @throws TypeError when `parents` isn't an array of non-negative integers or `sender` isn't
+   *   exactly a `SourceRef`.
+   * @throws RangeError for a negative or fractional message index, repeated or misordered parents,
+   *   a root seed with sender coordinates, or a transfer without an accepted sender, an input name,
+   *   a contribution index or parents.
+   */
+  constructor(
+    sender: SourceRef | null,
+    inputName: string | null,
+    messageIndex: number,
+    contributionIndex: number | null,
+    parents: readonly number[],
+  ) {
+    if (!isIndex(messageIndex)) throw new RangeError("message_index must be a non-negative integer");
+    // Spread, so a hole reads as `undefined` and fails, where `every` would skip it.
+    if (!isList(parents) || ![...parents].every(isIndex)) {
+      throw new TypeError("parents must be an array of non-negative integer positions");
+    }
+    if (parents.some((parent, index) => index > 0 && parent <= parents[index - 1]!)) {
+      throw new RangeError("parents must be distinct ordered positions");
+    }
+    if (sender === null) {
+      if (inputName !== null || messageIndex !== 0 || contributionIndex !== null || parents.length > 0) {
+        throw new RangeError("root attribution cannot carry sender coordinates");
+      }
+    } else {
+      validateSource(sender);
+      if (sender.executionSeq === 0 || sender.path.length > 0) {
+        throw new RangeError("attribution sender must identify an accepted occurrence");
+      }
+      if (typeof inputName !== "string" || !inputName) {
+        throw new RangeError("transfer attribution requires an input name");
+      }
+      if (!isIndex(contributionIndex)) {
+        throw new RangeError("transfer attribution requires a non-negative contribution index");
+      }
+      if (parents.length === 0) throw new RangeError("transfer attribution requires incoming parent positions");
+    }
+    this.sender = sender;
+    this.inputName = inputName;
+    this.messageIndex = messageIndex;
+    this.contributionIndex = contributionIndex;
+    this.parents = Object.freeze([...parents]);
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Detached feedback and a result for one accepted forward occurrence. Frozen.
+ *
+ * The messages are deep-frozen copies made by the constructor, with no copy on read; copy one
+ * before you modify it. The attributions and the result are frozen carriers, kept by reference.
+ */
+export class AttributedBackwardResult {
+  /** The accepted forward occurrence, never source zero. */
+  readonly source: SourceRef;
+  /** Ordered ordinary messages delivered to its callback. */
+  readonly feedback: readonly FeedbackValue[];
+  /** One source-neutral transfer reference per message. */
+  readonly attribution: readonly BackwardAttribution[];
+  /** Its validated three-channel result, empty when unreached. */
+  readonly result: BackwardResult;
+  /** Whether the fold invoked this occurrence's callback. */
+  readonly invoked: boolean;
+
+  /**
+   * Validate aligned attribution and keep frozen copies of the messages.
+   *
+   * @throws TypeError for a carrier of another class, a batch that isn't an array, or a message
+   *   that isn't ordinary feedback.
+   * @throws RangeError for an invalid source, misaligned batches, material on an unreached
+   *   occurrence, or an invoked occurrence without messages.
+   */
+  constructor(
+    source: SourceRef,
+    feedback: readonly FeedbackValue[],
+    attribution: readonly BackwardAttribution[],
+    result: BackwardResult,
+    invoked: boolean,
+  ) {
+    validateSource(source);
+    if (source.executionSeq === 0 || source.path.length > 0) {
+      throw new RangeError("backward result source must identify an accepted occurrence");
+    }
+    if (!isList(feedback) || !isList(attribution)) throw new TypeError("feedback and attribution must be arrays");
+    if (feedback.length !== attribution.length) throw new RangeError("feedback and attribution must align");
+    for (const message of feedback) validateFeedback(message, message);
+    for (const item of attribution) {
+      if (!isExactly(item, BackwardAttribution)) {
+        throw new TypeError("attribution requires exact BackwardAttribution values");
+      }
+    }
+    if (!isExactly(result, BackwardResult) || typeof invoked !== "boolean") {
+      throw new TypeError("result and invoked must be a BackwardResult and boolean");
+    }
+    const material =
+      Object.keys(result.inputFeedback).length > 0 ||
+      result.selfFeedback.length > 0 ||
+      Object.keys(result.variableFeedback).length > 0;
+    if (!invoked && (feedback.length > 0 || material)) {
+      throw new RangeError("unreached occurrences cannot carry backward material");
+    }
+    if (invoked && feedback.length === 0) throw new RangeError("invoked occurrences require received feedback");
+    this.source = source;
+    this.feedback = Object.freeze(feedback.map((message) => copyBackwardValue(message, "feedback") as FeedbackValue));
+    this.attribution = Object.freeze([...attribution]);
+    this.result = result;
+    this.invoked = invoked;
+    Object.freeze(this);
+  }
+}
+
+/** The ordered mutations one memory proposed in a backward attempt. Frozen. */
+export class MemoryProposal {
+  /** The recorded memory key. */
+  readonly memory: string;
+  /** Mutations with unique ids, in proposal order, kept by reference; an empty batch is valid. */
+  readonly mutations: readonly MemoryMutation[];
+
+  /**
+   * Validate the key and keep a frozen copy of the mutation batch.
+   *
+   * @throws TypeError when `memory` isn't a string, `mutations` isn't an array, or an item isn't
+   *   exactly a `MemoryMutation`.
+   * @throws RangeError for an empty `memory` or two mutations with one id.
+   */
+  constructor(memory: string, mutations: readonly MemoryMutation[]) {
+    if (typeof memory !== "string") throw new TypeError("memory must be a string");
+    if (!memory) throw new RangeError("memory must be non-empty");
+    this.memory = memory;
+    this.mutations = validateMutations(mutations);
+    Object.freeze(this);
+  }
+}
+
+/** The optional `BackwardFailure` fields checked as strings, with their names in messages. */
+const FAILURE_TEXT_FIELDS = [
+  ["runId", "run_id"],
+  ["nodeId", "node_id"],
+  ["memory", "memory"],
+  ["causeType", "cause_type"],
+  ["traceback", "traceback"],
+] as const;
+
+/**
+ * An attributed failure from one backward or memory operation. Frozen.
+ *
+ * Callers branch on `stage` and `code`; `causeType` and `traceback` are for debugging only.
+ */
+export class BackwardFailure {
+  /** The non-empty operation stage, such as backward, learn, or commit. */
+  readonly stage: string;
+  /** The stable, non-empty semantic failure code, from the backward driver or a memory backend. */
+  readonly code: string;
+  /** Human-readable detail; it may be empty. */
+  readonly message: string;
+  /** The responsible authored owner and child position. */
+  readonly scope: ExecutionScope | null;
+  /** The recorded run id, when available. */
+  readonly runId: string | null;
+  /** The executing node's display id, when applicable. */
+  readonly nodeId: string | null;
+  /** The positive accepted start sequence identifying a node occurrence with its run id. */
+  readonly nodeStartedSeq: number | null;
+  /** The responsible memory key, when applicable. */
+  readonly memory: string | null;
+  /**
+   * The underlying source-neutral diagnostic, including a backend retryability hint when one
+   * exists. A `Failure`'s origins keep only their keys.
+   */
+  readonly cause: Failure | MemoryOperationFailure | null;
+  /** The thrown error's class name, kept for debugging. */
+  readonly causeType: string | null;
+  /** Opaque debugging traceback text. */
+  readonly traceback: string | null;
+
+  /**
+   * Validate the attribution; a `Failure` cause is copied by `retainFailure`, and a scope or
+   * `MemoryOperationFailure` cause is kept by reference.
+   *
+   * @param options Each field defaults to `null`.
+   * @throws TypeError when a field has the wrong type, or the scope or cause is of another class.
+   * @throws RangeError for an empty stage or code, a start sequence that isn't positive, or a
+   *   `Failure` cause whose fields break its contract.
+   */
+  constructor(
+    stage: string,
+    code: string,
+    message: string,
+    options: {
+      scope?: ExecutionScope | null;
+      runId?: string | null;
+      nodeId?: string | null;
+      nodeStartedSeq?: number | null;
+      memory?: string | null;
+      cause?: Failure | MemoryOperationFailure | null;
+      causeType?: string | null;
+      traceback?: string | null;
+    } = {},
+  ) {
+    const {
+      scope = null,
+      runId = null,
+      nodeId = null,
+      nodeStartedSeq = null,
+      memory = null,
+      cause = null,
+      causeType = null,
+      traceback = null,
+    } = options;
+    for (const [name, value] of [["stage", stage], ["code", code]] as const) {
+      if (typeof value !== "string") throw new TypeError(`backward failure ${name} must be a string`);
+      if (!value) throw new RangeError(`backward failure ${name} must be non-empty`);
+    }
+    if (typeof message !== "string") throw new TypeError("backward failure message must be a string");
+    const text = { runId, nodeId, memory, causeType, traceback };
+    for (const [field, name] of FAILURE_TEXT_FIELDS) {
+      if (text[field] !== null && typeof text[field] !== "string") {
+        throw new TypeError(`backward failure ${name} must be a string or null`);
+      }
+    }
+    if (nodeStartedSeq !== null) {
+      if (!Number.isSafeInteger(nodeStartedSeq)) throw new TypeError("node_started_seq must be an integer or null");
+      if (nodeStartedSeq <= 0) throw new RangeError("node_started_seq must be positive");
+    }
+    if (scope !== null && !isExactly(scope, ExecutionScope)) {
+      throw new TypeError("scope must be an ExecutionScope or null");
+    }
+    let retained: Failure | MemoryOperationFailure | null = cause;
+    if (isExactly(cause, Failure)) {
+      retained = retainFailure(cause);
+    } else if (cause !== null && !isExactly(cause, MemoryOperationFailure)) {
+      throw new TypeError("cause must be a Failure, MemoryOperationFailure, or null");
+    }
+    this.stage = stage;
+    this.code = code;
+    this.message = message;
+    this.scope = scope;
+    this.runId = runId;
+    this.nodeId = nodeId;
+    this.nodeStartedSeq = nodeStartedSeq;
+    this.memory = memory;
+    this.cause = retained;
+    this.causeType = causeType;
+    this.traceback = traceback;
+    Object.freeze(this);
+  }
+}
+
+/** How a backward attempt ended. */
+export type BackwardStatus = "succeeded" | "failed";
+
+/**
+ * A backward attempt's disposition, separate from its forward run result. Frozen.
+ *
+ * The feedback, failure and learning result are frozen carriers, kept by reference.
+ */
+export class BackwardOutcome {
+  /** Whether the backward attempt succeeded. */
+  readonly status: BackwardStatus;
+  /** The completed flow-level feedback, when available, also when a later learning operation fails. */
+  readonly feedback: BackwardResult | null;
+  /** The failed attempt's diagnostic; `null` on success. */
+  readonly failure: BackwardFailure | null;
+  /** The memory learning disposition, or `null` when no memory participates. */
+  readonly learning: LearningResult | null;
+
+  /**
+   * Validate the disposition.
+   *
+   * @param options Each field defaults to `null`.
+   * @throws TypeError when a carrier is of another class.
+   * @throws RangeError for an unknown status, a failure on success or none on failure, or a
+   *   succeeded outcome whose learning didn't succeed.
+   */
+  constructor(
+    status: BackwardStatus,
+    options: {
+      feedback?: BackwardResult | null;
+      failure?: BackwardFailure | null;
+      learning?: LearningResult | null;
+    } = {},
+  ) {
+    const { feedback = null, failure = null, learning = null } = options;
+    if (status !== "succeeded" && status !== "failed") {
+      throw new RangeError("backward status must be 'succeeded' or 'failed'");
+    }
+    if (feedback !== null && !isExactly(feedback, BackwardResult)) {
+      throw new TypeError("feedback must be a BackwardResult or null");
+    }
+    if (failure !== null && !isExactly(failure, BackwardFailure)) {
+      throw new TypeError("failure must be a BackwardFailure or null");
+    }
+    if (status === "succeeded" && failure !== null) throw new RangeError("succeeded backward cannot carry a failure");
+    if (status === "failed" && failure === null) throw new RangeError("failed backward requires a failure");
+    if (learning !== null) {
+      if (!isExactly(learning, LearningResult)) throw new TypeError("learning must be a LearningResult or null");
+      if (status === "succeeded" && learning.status !== "succeeded") {
+        throw new RangeError("succeeded backward requires succeeded learning");
+      }
+    }
+    this.status = status;
+    this.feedback = feedback;
+    this.failure = failure;
+    this.learning = learning;
     Object.freeze(this);
   }
 }

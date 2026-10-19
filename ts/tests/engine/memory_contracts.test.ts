@@ -9,8 +9,9 @@
  * `test_scope_carries_a_root_relative_path_and_memory_keys`, the declaration rows of
  * `test_memory_strings_must_have_a_canonical_utf8_representation`, the declaration and mutation
  * thirds of `test_json_scalar_identity_preserves_exact_types_at_every_depth`, the mutation half of
- * `test_context_episode_and_mutation_keep_json_snapshots`, the `MemoryMutation` and
- * `LearningFailure` rows of `test_episodes_contexts_mutations_and_failures_name_the_memory_key`,
+ * `test_context_episode_and_mutation_keep_json_snapshots`, the `MemoryMutation`, `MemoryProposal`,
+ * `LearningFailure` and `BackwardFailure` rows of
+ * `test_episodes_contexts_mutations_and_failures_name_the_memory_key`,
  * `test_learning_result_keeps_primary_independent_failure_attribution`,
  * `test_policy_commit_outcome_keeps_protocol_identity_and_backend_hints`,
  * `test_learning_completion_is_independent_of_retryability_and_policy_confirmation`,
@@ -20,8 +21,8 @@
  * `test_memory_errors_expose_typed_fields_and_origin`, the `Memory` half of
  * `test_protocols_accept_narrow_structural_implementations`, the scope row of
  * `test_nested_memory_carriers_reject_forged_subclass_values` and the subclass row of
- * `test_memory_origins_revalidate_subclass_keys_without_losing_identity`, the memory package and
- * `contracts.ts` halves of `test_frame_types_are_gone` and
+ * `test_memory_origins_revalidate_subclass_keys_without_losing_identity`, the memory package,
+ * `contracts.ts` and `runtime/contracts.ts` rows of `test_frame_types_are_gone` and
  * `test_importing_memory_contracts_does_not_load_heavy_backends`; plus JavaScript's own
  * values (a `"__proto__"` key, a null-prototype object, a repeated subtree, an array hole), the
  * value nesting limit, the occurrence nesting order, the operation failure's field checks
@@ -58,17 +59,15 @@
  * `test_memory_origins_revalidate_subclass_keys_without_losing_identity` (a JS subclass can't skip
  * its base constructor, so no carrier holds an unvalidated segment or origin);
  * `test_memory_operation_error_survives_copy_and_pickle` (no `copy` or `pickle`); dataclass `==`
- * and `hash` (Bun's `toEqual` replaces equality); the `runtime/contracts.ts` and `MemorySession`
- * rows of `test_frame_types_are_gone` (the runtime contracts aren't ported, and `MemorySession` is
- * an interface, with no runtime members to check); the forged rows of
+ * and `hash` (Bun's `toEqual` replaces equality); the `MemorySession` row of
+ * `test_frame_types_are_gone` (`MemorySession` is an interface, with no runtime members to check);
+ * the forged rows of
  * `test_learning_result_revalidates_exact_nested_policy_carriers` (Python's `object.__setattr__`
  * on a frozen dataclass; a TS carrier is frozen by its constructor, so none holds an unchecked
  * `commitId` or `retryable`).
  *
  * Left for later: the recall, learning evidence and conversation tests, with their carriers
- * (`MemoryEpisode`, `LearnContext` and the rest); the `MemoryProposal` and `BackwardFailure` rows
- * of `test_episodes_contexts_mutations_and_failures_name_the_memory_key`, with those carriers; and
- * the `recall`, `learn` and `commit` rows of
+ * (`MemoryEpisode`, `LearnContext` and the rest); and the `recall`, `learn` and `commit` rows of
  * `test_protocols_accept_narrow_structural_implementations`.
  */
 
@@ -99,6 +98,8 @@ import {
   validateMutations,
 } from "../../src/memory/contracts.ts";
 import * as memoryPackage from "../../src/memory/index.ts";
+import * as runtimeContracts from "../../src/runtime/contracts.ts";
+import { BackwardFailure, MemoryProposal } from "../../src/runtime/contracts.ts";
 import { importStatements } from "./source_scan.ts";
 
 /** Build a custom-type declaration, so the built-in key allowlist does not apply. */
@@ -473,12 +474,13 @@ test("a scope carries a root-relative path and memory keys", () => {
   );
 });
 
-// test_frame_types_are_gone (the memory package and contracts.ts halves)
+// test_frame_types_are_gone (the memory package, contracts.ts and runtime/contracts.ts rows)
 test("the frame types are gone", () => {
   for (const name of ["MemoryFrame", "MemoryFrameRef", "MemoryFrameSpec", "MemoryOccurrenceRef", "MemoryOwner"]) {
     expect(name in memoryPackage).toBe(false);
     expect(name in contracts).toBe(false);
   }
+  expect("FrameProposal" in runtimeContracts).toBe(false);
 });
 
 // test_importing_memory_contracts_does_not_load_heavy_backends
@@ -554,14 +556,21 @@ test("validateMutations keeps an array of unique mutations by reference", () => 
   expectError(() => validateMutations([a, new MemoryMutation("a", {})]), RangeError, "mutation IDs must be unique");
 });
 
-// test_episodes_contexts_mutations_and_failures_name_the_memory_key (the mutation and failure rows)
-test("mutations and learning failures name the memory key", () => {
+// test_episodes_contexts_mutations_and_failures_name_the_memory_key (the mutation, proposal and
+// failure rows)
+test("mutations, proposals and failures name the memory key", () => {
   const mutation = new MemoryMutation("m1", { add: 1n });
   expect([mutation.mutationId, mutation.payload]).toEqual(["m1", { add: 1n }]);
   expect("frameRef" in mutation).toBe(false);
+  const proposal = new MemoryProposal("notes", [mutation]);
+  expect(proposal.memory).toBe("notes");
+  expect(proposal.mutations).toEqual([mutation]);
+  expect(() => new MemoryProposal("notes", [mutation, new MemoryMutation("m1", {})])).toThrow(RangeError);
+  expect(() => new MemoryProposal("notes", [mutation, new MemoryMutation("m1", {})])).toThrow(/unique/);
   const cause = new MemoryOperationFailure("learn", "notes.failed", "boom", false);
   expect(new LearningFailure("notes", "learn", cause).memory).toBe("notes");
   expect("frameRef" in new LearningFailure("notes", "commit", cause)).toBe(false);
+  expect("frameRef" in new BackwardFailure("learn", "x", "y", { memory: "notes" })).toBe(false);
 });
 
 test("a learning failure checks its attribution and failure", () => {

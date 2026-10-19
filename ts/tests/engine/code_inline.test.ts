@@ -13,7 +13,8 @@
  *
  * TS-only: the constructor compiles nothing, so a body that doesn't parse constructs; the node's
  * `mode`; a non-integer line selects no line; the selector's origin shape checks; `run` rejects as
- * not ported yet.
+ * not ported yet; the built-in identity form a value entry lowers to (its `"builtin"` mode, its
+ * frozen copy, and the shape and type checks on `code`).
  *
  * Not ported: `test_inline_stdlib_import_in_body_works_in_process` (a Python `import`);
  * `test_no_return_body_rejected_at_construction` and `test_return_only_in_nested_def_still_rejected`
@@ -39,6 +40,18 @@ import { expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
 import { classifyCodeSource, CodeNode, selectInlineCodeOrigin } from "../../src/nodes/code/node.ts";
+
+/** Assert that `fn` throws exactly `cls` with exactly `message`. */
+function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
+  let caught: unknown;
+  try {
+    fn();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(cls);
+  expect((caught as Error).message).toBe(message);
+}
 
 test("classify reference inline reject", () => {
   expect(classifyCodeSource("./mod.ts:fn")).toBe("reference");
@@ -115,5 +128,50 @@ test("the node's mode follows the classification", () => {
 test("a CODE forward is not ported yet", async () => {
   await expect(new CodeNode("c", { code: "return 1" }).run({})).rejects.toThrow(
     "node 'c' (CodeNode) forward is not ported yet (T4-9)",
+  );
+});
+
+test("the built-in identity form has builtin mode and keeps a frozen copy", () => {
+  const form = { builtin: "identity" as const, field: "x" };
+  const node = new CodeNode("x", { code: form });
+
+  expect(node.mode).toBe("builtin");
+  expect(node.code).not.toBe(form);
+  expect(node.code).toEqual(form);
+  expect(Object.isFrozen(node.code)).toBe(true);
+});
+
+test("a CODE built-in of the wrong shape is rejected", () => {
+  const message = 'CODE built-in must be {builtin: "identity", field: <input name>}';
+  for (const code of [
+    { builtin: "other", field: "x" },
+    { builtin: "identity" },
+    { builtin: "identity", field: "x", extra: 1 },
+    { builtin: "identity", field: 1 },
+  ]) {
+    expectError(() => new CodeNode("x", { code: code as never }), TypeError, message);
+  }
+  expectError(
+    () => new CodeNode("x", { code: { builtin: "identity", field: "" } }),
+    RangeError,
+    "CODE built-in field must be non-empty",
+  );
+});
+
+test("a CODE code that is neither text nor a built-in is rejected", () => {
+  expectError(
+    () => new CodeNode("x", { code: 42 as never }),
+    TypeError,
+    "CODE code must be text or a built-in operation, got number",
+  );
+  expectError(
+    () => new CodeNode("x", { code: [] as never }),
+    TypeError,
+    "CODE code must be text or a built-in operation, got Array",
+  );
+  expectError(
+    () => new CodeNode("x", { code: null as never }),
+    TypeError,
+    "CODE code must be text or a built-in operation, got null",
   );
 });

@@ -2,7 +2,8 @@
  * Memory-independent static execution paths and atomic scope application
  * (`compile/execution_layout.ts`): rows of `tests/engine/test_execution_layout.py`.
  *
- * Ported: `test_execution_layout_exists_without_memory_policies` (both flow classes),
+ * Ported: `test_execution_scope_has_an_explicit_manifest_policy`,
+ * `test_execution_layout_exists_without_memory_policies` (both flow classes),
  * `test_aliased_child_targets_are_rejected_before_any_scope_is_stamped`,
  * `test_stale_graph_is_rejected_without_stamping_any_target`,
  * `test_invalid_layout_is_rejected_without_stamping_any_target`,
@@ -24,8 +25,6 @@
  * - The invalid-layout row's "mutable-targets" is a forged layout whose `targets` isn't an array.
  * - The atomic-scope row's string subclass is a path holding `new String("last")`.
  *
- * Later (T3-21): `test_execution_scope_has_an_explicit_manifest_policy`.
- *
  * Later (T3-22): `test_callsites_to_one_definition_have_distinct_paths`,
  * `test_agent_variable_owners_are_authored_callsites_and_survive_call_cloning`,
  * `test_map_items_and_loop_iterations_share_the_authored_agent_variable_owner` and
@@ -40,6 +39,7 @@ import {
   ResolvedExecutionTarget,
   resolveExecutionLayout,
 } from "../../src/compile/execution_layout.ts";
+import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph, END_ID, Flow, START_ID } from "../../src/compile/model.ts";
 import { compareCodeUnits, OriginRef } from "../../src/diagnostics.ts";
 import { Node, NodeKind } from "../../src/nodes/base.ts";
@@ -76,6 +76,19 @@ function expectRejected(fn: () => void): void {
   expect(caught instanceof TypeError || caught instanceof RangeError).toBe(true);
 }
 
+/** Expect `fn` to throw exactly `cls` with exactly `message`. */
+function expectError(fn: () => unknown, cls: typeof Error, message: string): void {
+  let caught: unknown;
+  try {
+    fn();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(cls);
+  expect((caught as Error).constructor).toBe(cls);
+  expect((caught as Error).message).toBe(message);
+}
+
 /** A two-node flow and its resolved layout. */
 function twoNodeLayout(): [CompiledFlow, ResolvedExecutionLayout] {
   const flow = new CompiledFlow(
@@ -87,6 +100,25 @@ function twoNodeLayout(): [CompiledFlow, ResolvedExecutionLayout] {
   );
   return [flow, resolveExecutionLayout(flow)];
 }
+
+test("execution scope has an explicit manifest policy", () => {
+  const node = code("plain");
+  const flow = new CompiledFlow(new Map<string, Node>([["plain", node]]), []);
+  expect(node.executionScope).toBeNull();
+  const before = flowManifest(flow);
+  const fingerprint = flowFingerprint(flow);
+
+  node.executionScope = new ExecutionScope(["plain"]);
+
+  expect(flowManifest(flow)).toEqual(before);
+  expect(flowFingerprint(flow)).toBe(fingerprint);
+  Object.assign(node, { misspelledExecutionScope: node.executionScope });
+  expectError(
+    () => flowManifest(flow),
+    RangeError,
+    'flow.nodes.plain: unknown noncanonical execution field(s) for code: ["misspelledExecutionScope"]',
+  );
+});
 
 describe.each([
   ["Flow", (nodes: Map<string, Node>) => new Flow(nodes, [])],

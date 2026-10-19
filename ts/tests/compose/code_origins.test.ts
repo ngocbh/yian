@@ -9,6 +9,8 @@
  * `whole-not-origin` and `line-item-not-origin`.
  *
  * Changed: the line origins are an array, not a tuple; a rewrite assigns a fresh array.
+ * `test_code_origins_are_noncanonical_manifest_and_fingerprint_metadata` builds its CompiledFlow by
+ * hand instead of loading it.
  *
  * TS-only: the node keeps a frozen copy of the line origins it is given, and a rewrite assigns a
  * fresh frozen array; a line-origins value that isn't an array is rejected.
@@ -30,15 +32,19 @@
  * `test_generated_child_clone_preserves_code_origins_for_original_resolver` and
  * `test_formatting_moves_resolved_ranges_without_changing_semantic_keys`.
  *
- * Later (T3-21): `test_code_origins_are_noncanonical_manifest_and_fingerprint_metadata`.
- *
  * Later (T4-9): `test_runtime_failure_diagnoses_exact_line_across_composition_paths`.
  */
 
 import { expect, test } from "bun:test";
 
+import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
+import { CompiledFlow, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
+import { rewriteFlowOrigins } from "../../src/compile/origins.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
+import type { Node } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
+import { StartNode } from "../../src/nodes/start/node.ts";
 
 test("source-free code accepts empty origin carriers", () => {
   const node = new CodeNode("worker", { code: "return 1", codeOrigin: null, codeLineOrigins: [] });
@@ -82,6 +88,37 @@ test.each([
   ],
 ])("code origin carriers reject invalid shapes: node, %s", (_id, origins, message) => {
   expect(() => new CodeNode("worker", { code: "return 1", ...(origins as object) })).toThrow(new TypeError(message));
+});
+
+test("code origins are noncanonical manifest and fingerprint metadata", () => {
+  const worker = new CodeNode("worker", {
+    code: "const value = 1\nreturn value",
+    codeOrigin: new OriginRef("worker/code"),
+    codeLineOrigins: [new OriginRef("worker/code/line/0"), new OriginRef("worker/code/line/1")],
+  });
+  const original = CompiledFlow.fromParts(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID, { params: [] })],
+      ["worker", worker],
+      [END_ID, EndNode.value(END_ID, { outputName: "result" })],
+    ]),
+    [new Edge(`worker->${END_ID}`, "worker", END_ID, { inputGroup: "result" })],
+    {
+      wiring: new Map([
+        [START_ID, new Map()],
+        ["worker", new Map()],
+        [END_ID, new Map([["result", "${worker.output}"]])],
+      ]),
+    },
+  );
+  const rewritten = rewriteFlowOrigins(original, (origin) => new OriginRef(`rewritten/${origin.key}`));
+
+  const originalNode = original.nodes.get("worker") as CodeNode;
+  const rewrittenNode = rewritten.nodes.get("worker") as CodeNode;
+  expect(rewrittenNode.codeOrigin).not.toEqual(originalNode.codeOrigin);
+  expect(rewrittenNode.codeLineOrigins).not.toEqual(originalNode.codeLineOrigins);
+  expect(flowManifest(rewritten)).toEqual(flowManifest(original));
+  expect(flowFingerprint(rewritten)).toBe(flowFingerprint(original));
 });
 
 // --- TS-only rows --- //

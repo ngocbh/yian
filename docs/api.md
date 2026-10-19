@@ -2096,6 +2096,12 @@ passes the check and the restarted nodes run the new code. Tool implementations,
 skill contents, and model behavior are likewise outside it. Keep them unchanged
 until the run finishes, or start a fresh run.
 
+Changed (TS yian): the fingerprint is SHA-256 over the RFC 8785 (JCS) text of TS
+yian's own manifest, so it differs from Python yian's for the same flow; a
+reference-mode CODE node contributes its `./file.ts:fn` text, a tagged value
+entry contributes the built-in identity operation, and the directory the flow
+was loaded from isn't covered.
+
 If the original run enabled memory and forward execution is unfinished,
 recovery requires backends under the same memory keys. Each session
 must reproduce the exact snapshot stored by `RunStarted`; this prevents a resumed

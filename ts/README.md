@@ -197,6 +197,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - A CODE `code:` value is a reference (`./file.ts:fn`, also `.js` or `.mjs` and `../` paths,
   resolved against the node's `baseDir`) or an inline TS/JS body. The constructor classifies it
   by shape into `mode` and compiles or imports nothing.
+- `code` may also be `{builtin: "identity", field}` (`mode: "builtin"`), the form a tagged value
+  entry lowers to.
 - WAIT's `until` takes a date or datetime string only: dates are text in TS yian.
 - Counts on nodes (LOOP `times`, `maxIters` and `iteration`, END `n`, TOOL `retries`) are
   safe-integer `number`s, not `bigint`. END keeps its mode in public `mode`, `names` and `n`
@@ -239,7 +241,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - `src/compile/model.ts` holds the graph (`Flow`, `CompiledFlow`, `Edge`, `FlowOutput`), the
   growth-metadata check and `copyGraph`; `origins.ts` the origin traversal and rewrites;
   `execution_layout.ts` the static execution scopes; `validation.ts` the cycle, path and type
-  checks. `src/compile/index.ts` re-exports Python's `__all__` only.
+  checks; `manifest.ts` `flowManifest`, `flowFingerprint` (SHA-256 hex over the manifest's
+  `canonicalJson`, RFC 8785) and `expansionDigest`. `src/compile/index.ts` re-exports Python's
+  `__all__` only.
 - A `Flow`'s `nodes` and `wiring` are `Map`s: they keep insertion order, so node and wiring order
   is Python's (a record would list index-like keys first and could collide with `__proto__`).
 - `copyGraph` is the one graph copier (Python's `copy.deepcopy` of a flow or node). Each call uses
@@ -250,6 +254,17 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `CompiledFlow`, through `addSubgraph`/`removeSubgraph`.
 - `rewriteFlowOrigins` and `rebaseFlowOrigins` return a rewritten copy and never touch the input;
   a payload stays shared, except that the records and lists around a nested binding are rebuilt.
+- Every manifest value is a typed wrapper: an int `{"type": "int", "value": "<digits>"}`, a float
+  its IEEE-754 big-endian hex (`inf` is `7ff0000000000000`, `-0` is written as `0`), a mapping's
+  entries sorted by key, a `FileRef` its `{uri, mime, name}` mapping. NaN is refused (V8 and
+  JavaScriptCore write its bits differently). Counts (TOOL `retries`, LOOP `iteration` and
+  `maxIters`, END `n`, indexes) are raw JSON ints and must be safe integers; LOOP `times` is an int
+  wrapper.
+- A node's or flow's fields are its own enumerable keys; a field the manifest doesn't know throws.
+  `kind` is emitted; trait fields are ignored: the kind fixes them.
+- A CODE node contributes `{"inline": body}`, `{"ref": "./x.ts:fn"}` or
+  `{"builtin": "identity", "field": "x"}`; `baseDir`, `mode` and its origins aren't identity. The
+  AGENT manifest is not ported yet: an AGENT node throws.
 - In `typesCompatible` and `typeRelation`, an open numeric end is `null`.
 - Compare positions and scopes with `sameExecutionPosition`/`sameExecutionScope`, and arrays with
   `sameItems` (`src/nodes/contracts.ts`).

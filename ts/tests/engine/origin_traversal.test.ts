@@ -15,7 +15,9 @@
  * `test_invalid_mutable_node_origin_fails_before_iteration_or_mapping`,
  * `test_rewrite_flow_origins_rejects_invalid_mapper_results`,
  * `test_rewrite_flow_origins_propagates_mapper_exceptions`,
+ * `test_rewriting_origins_preserves_manifest_and_stable_identity`,
  * `test_rebase_maps_equal_origins_once_and_routes_the_exact_old_identity`,
+ * `test_rebase_is_chainable_and_preserves_graph_identity_and_manifests`,
  * `test_rebase_rejects_missing_resolution_and_distinct_origin_collisions`,
  * `test_rebase_rejects_invalid_mapper_results`,
  * `test_rebase_source_free_graph_returns_an_independent_copy_and_empty_table` and
@@ -39,8 +41,7 @@
  *   mapper is never called.
  * - The equal-origins rebase row's `DerivedOrigin` is a subclass of `OriginRef`, and
  *   `table.origins == {x}` reads `table.size === 1 && table.has(x)`.
- * - `test_rebase_is_chainable_and_preserves_graph_identity_and_manifests`: the chaining half, over
- *   a hand-built CODE flow.
+ * - The manifest rows build Python's `_manifestable_flow` as `codeFlow()`, a hand-built CODE flow.
  * - `test_rebase_revalidates_origin_subclass_keys`: the invalid origin is forged with
  *   `Object.create(OriginRef.prototype)` and an empty `key`, since a subclass can't skip the base
  *   constructor's check.
@@ -56,9 +57,6 @@
  *
  * Later (T3-9): `test_agent_variable_origins_rewrite_shared_carriers_once`.
  *
- * Later (T3-21): `test_rewriting_origins_preserves_manifest_and_stable_identity`, and the
- * manifest and fingerprint lines of the chaining rebase row.
- *
  * Not ported: `test_rewrite_preserves_payload_back_references_to_frozen_graph_objects` (payloads
  * holding carriers must be acyclic, and payloads are shared, not copied) and
  * `test_rewrite_rebuilds_payload_hash_containers_after_origin_changes` (there are no hash
@@ -67,6 +65,7 @@
 
 import { expect, test } from "bun:test";
 
+import { expansionDigest, flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, END_ID, Edge, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { iterFlowOrigins, rebaseFlowOrigins, rewriteFlowOrigins } from "../../src/compile/origins.ts";
 import { DiagnosticFrame, OriginRef, ResolverTable, SourceRange } from "../../src/diagnostics.ts";
@@ -1037,10 +1036,31 @@ function codeFlow(): CompiledFlow {
   );
 }
 
-test("rebase is chainable and preserves graph identity", () => {
+test("rewriting origins preserves manifest and stable identity", () => {
+  // Diagnostic rebasing cannot change authored or dynamic program identity.
+  const flow = codeFlow();
+  const beforeManifest = flowManifest(flow);
+  const beforeFingerprint = flowFingerprint(flow);
+  const beforeExpansion = expansionDigest(flow);
+
+  const rewritten = rewriteFlowOrigins(flow, (o) => origin(`mapped/${o.key}`));
+
+  expect(flowManifest(rewritten)).toEqual(beforeManifest);
+  expect(flowFingerprint(rewritten)).toBe(beforeFingerprint);
+  expect(expansionDigest(rewritten)).toBe(beforeExpansion);
+  expect(flowManifest(flow)).toEqual(beforeManifest);
+  expect(flowFingerprint(flow)).toBe(beforeFingerprint);
+  expect(expansionDigest(flow)).toBe(beforeExpansion);
+  expect(keys(iterFlowOrigins(rewritten)).every((k) => k.startsWith("mapped/"))).toBe(true);
+});
+
+test("rebase is chainable and preserves graph identity and manifests", () => {
   // A later namespace delegates through the earlier table without graph mutation.
   const flow = codeFlow();
   const originalOrigins = [...iterFlowOrigins(flow)];
+  const originalManifest = flowManifest(flow);
+  const originalFingerprint = flowFingerprint(flow);
+  const originalDigest = expansionDigest(flow);
   const resolver = {
     resolve: (o: OriginRef) =>
       new DiagnosticFrame({ label: o.key, text: "value\n", range: new SourceRange(1, 1, 1, 6) }),
@@ -1056,6 +1076,9 @@ test("rebase is chainable and preserves graph identity", () => {
   expect(keys(iterFlowOrigins(second)).every((k) => k.startsWith("second/first/"))).toBe(true);
   const sample = originalOrigins[0]!;
   expect(secondTable.resolve(origin(`second/first/${sample.key}`))!.label).toBe(sample.key);
+  expect(flowManifest(second)).toEqual(originalManifest);
+  expect(flowFingerprint(second)).toBe(originalFingerprint);
+  expect(expansionDigest(second)).toBe(originalDigest);
 });
 
 test("rebase rejects missing resolution and distinct origin collisions", () => {

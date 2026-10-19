@@ -1150,6 +1150,8 @@ describe("tool() checking order", () => {
   test.each<[string, unknown, string]>([
     ["undefined", undefined, "undefined"],
     ["an object with neither issues nor value", {}, "Object"],
+    ["issues that aren't an array", { issues: 5 }, "Object"],
+    ["null issues", { issues: null }, "Object"],
   ])("a validator that returns %s is a TypeError", async (_label, result, name) => {
     const tools = new ToolSet({ x: handTool(() => result as never) });
 
@@ -1358,6 +1360,30 @@ describe("tool() results", () => {
     );
     expect(opaque.message).toBe("tool 'x' result: the output validator threw: object");
     expect(opaque.cause).toBe(bare);
+    // A thrown Proxy runs no trap, and an `Error` whose message isn't text still gives a message.
+    const trapped = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error("trap");
+        },
+      },
+    );
+    const proxy = await checkFailure(
+      handReturning(() => {
+        throw trapped;
+      }),
+    );
+    expect(proxy.message).toBe("tool 'x' result: the output validator threw: Proxy");
+    expect(proxy.cause).toBe(trapped);
+    const symbolMessage = Object.assign(new Error(), { message: Symbol("s") as unknown as string });
+    const symbol = await checkFailure(
+      handReturning(() => {
+        throw symbolMessage;
+      }),
+    );
+    expect(symbol.message).toBe("tool 'x' result: the output validator threw: Symbol(s)");
+    expect(symbol.cause).toBe(symbolMessage);
     const none = await checkFailure(handReturning(() => undefined));
     expect(none.message).toBe("tool 'x' result: the output validator returned undefined, not a Standard Schema result");
   });

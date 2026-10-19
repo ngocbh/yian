@@ -33,7 +33,7 @@ import {
   writeAsText,
 } from "../typesys/values.ts";
 import { ASK_USER, ToolContext } from "./context.ts";
-import { ToolCheckError } from "./errors.ts";
+import { isToolCheckError, ToolCheckError } from "./errors.ts";
 import { FunctionTool, isFunctionTool, type StandardIssue, type StandardResult } from "./function_tools.ts";
 import { isMcpServer, type McpServer } from "./mcp.ts";
 import { inputTypeFromJsonSchema } from "./types.ts";
@@ -810,18 +810,11 @@ export class ToolSet {
         }
         output = checked.value;
       } catch (error) {
-        if (error instanceof ToolCheckError) throw error;
+        // The guard, not `instanceof`, which would run a thrown Proxy's traps.
+        if (isToolCheckError(error)) throw error;
         // `execute` has run, so a retry would repeat it: any other throw here, from the validator
         // or from reading its result, fails the call for good.
-        let message: string;
-        try {
-          message = error instanceof Error ? error.message : String(error);
-        } catch {
-          // A thrown value `String` can't convert (a null-prototype object) must not escape as a
-          // retried TypeError.
-          message = jsTypeName(error);
-        }
-        throw new ToolCheckError(`${where}: the output validator threw: ${message}`, { cause: error });
+        throw new ToolCheckError(`${where}: the output validator threw: ${thrownText(error)}`, { cause: error });
       }
       // The validator's output is what yian records, so it must be a yian value too.
       value = intake(output);
@@ -831,7 +824,20 @@ export class ToolSet {
 }
 
 /**
- * Return a validator's result when it is a Standard Schema result: an object holding `issues` or
+ * Return a thrown value's text for a message: an `Error`'s message, else the value as text, else
+ * its type name. Never throws, so a hostile thrown value (a Proxy, a Symbol message) can't escape.
+ */
+function thrownText(error: unknown): string {
+  try {
+    return String(error instanceof Error ? error.message : error);
+  } catch {
+    return jsTypeName(error);
+  }
+}
+
+/**
+ * Return a validator's result as `{ issues }` or `{ value }`, each read once, when it is a Standard
+ * Schema result: an object whose `issues` is an array, or whose `issues` is absent and which holds
  * `value`.
  *
  * @throws `kind`, with the message `<head> returned <type>, not a Standard Schema result`, for
@@ -842,8 +848,10 @@ function standardResult(
   head: string,
   kind: new (message: string) => Error,
 ): StandardResult<unknown> {
-  if (typeof result === "object" && result !== null && ("issues" in result || "value" in result)) {
-    return result as StandardResult<unknown>;
+  if (typeof result === "object" && result !== null) {
+    const issues: unknown = (result as { issues?: unknown }).issues;
+    if (Array.isArray(issues)) return { issues };
+    if (issues === undefined && "value" in result) return { value: (result as { value: unknown }).value };
   }
   throw new kind(`${head} returned ${jsTypeName(result)}, not a Standard Schema result`);
 }

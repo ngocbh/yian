@@ -3,11 +3,21 @@
  * the parts of `tests/engine/test_mcp_server.py` that need no running server:
  * `test_bad_arguments_raise_naming_the_field_and_start_nothing`, the label half of
  * `test_label_option_names_the_thread_and_url_label_is_the_host` and the closed half of
- * `test_open_twice_and_tools_when_closed_raise_and_close_is_idempotent`. Opening a server, and the
- * rest of `test_mcp_server.py` and `test_mcp_errors.py`, land with the MCP client.
+ * `test_open_twice_and_tools_when_closed_raise_and_close_is_idempotent`; and yian's stdio
+ * transport driven by a bare SDK client, as `tests/engine/test_mcp_fake_server.py` drives the fake
+ * server. Opening a server, and the rest of `test_mcp_server.py` and `test_mcp_errors.py`, land
+ * with the MCP client.
  */
 
-import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { Client } from "@modelcontextprotocol/client";
+import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+
+import { BUILTIN, current, install } from "../../src/defaults.ts";
 
 import {
   isPermanentToolError,
@@ -32,7 +42,9 @@ import {
   McpTimeoutError,
   McpToolError,
   McpTransportError,
+  StdioTransport,
 } from "../../src/tools/mcp.ts";
+import { childAlive, killMarkers, pids, stdioOptions, strayProcesses, trackServers, waitFor } from "./mcp_helpers.ts";
 
 /** Call `mcpServer` with `options`, which may be ill-typed on purpose. */
 function build(options: Record<string, unknown>): McpServer {
@@ -241,5 +253,222 @@ describe("MCP errors", () => {
     );
     expect(isMcpError(hostile)).toBe(false);
     expect(isMcpServer(hostile)).toBe(false);
+  });
+});
+
+describe("StdioTransport", () => {
+  // Process tests get 15 s; the `< N s` assertions are the real check.
+  const SLOW = 15_000;
+  const dir = mkdtempSync(join(tmpdir(), "yian-mcp-stdio-"));
+  const markers: string[] = [];
+  const tracker = trackServers();
+
+  /** A path in the test directory, remembered so `afterAll` kills the pids it lists. */
+  const marker = (name: string): string => {
+    const file = join(dir, name);
+    markers.push(file);
+    return file;
+  };
+
+  /** A transport running the fake server with `flags`, closed in `afterEach`. */
+  const transport = (flags: string[] = [], env?: Record<string, string>): StdioTransport =>
+    tracker.track(
+      new StdioTransport({
+        ...stdioOptions(...flags),
+        env,
+        maxMessageBytes: current().maxMcpMessageBytes,
+        defaultEnv: getDefaultEnvironment(),
+      }),
+    );
+
+  /** A bare SDK client connected over `t`, closed in `afterEach`. */
+  const connect = async (t: StdioTransport): Promise<Client> => {
+    const client = tracker.track(new Client({ name: "test", version: "0" }));
+    await client.connect(t);
+    return client;
+  };
+
+  /** The first text block of a tool result. */
+  const textOf = (result: unknown): string =>
+    ((result as { content: { text: string }[] }).content[0] as { text: string }).text;
+
+  afterEach(async () => {
+    await tracker.closeAll();
+    install(BUILTIN);
+  });
+
+  afterAll(() => {
+    killMarkers(markers);
+    rmSync(dir, { recursive: true, force: true });
+    expect(strayProcesses()).toEqual([]);
+  });
+
+  test(
+    "the server sees the default environment and env, not the host's other variables",
+    async () => {
+      process.env.YIAN_T62_PROBE = "leaked";
+      try {
+        const client = await connect(transport([], { PASSED: "yes" }));
+        const env = async (name: string) => textOf(await client.callTool({ name: "env", arguments: { name } }));
+        expect(await env("PATH")).toBe(process.env.PATH!);
+        expect(await env("HOME")).toBe(process.env.HOME!);
+        expect(await env("PASSED")).toBe("yes");
+        expect(await env("YIAN_T62_PROBE")).toBe("");
+      } finally {
+        delete process.env.YIAN_T62_PROBE;
+      }
+    },
+    SLOW,
+  );
+
+  test(
+    "close ends the server's whole process group",
+    async () => {
+      const grandchild = marker("grandchild");
+      const t = transport(["--grandchild", grandchild]);
+      const client = await connect(t);
+      const server = Number(textOf(await client.callTool({ name: "pid", arguments: {} })));
+      expect(server).toBe(t.pid!);
+      expect(await waitFor(() => pids(grandchild).length === 1, 5000)).toBe(true);
+      const [sleeper] = pids(grandchild);
+      expect(childAlive(sleeper!)).toBe(true);
+      await t.close();
+      expect(childAlive(server)).toBe(false);
+      expect(await waitFor(() => !childAlive(sleeper!), 1000)).toBe(true);
+    },
+    SLOW,
+  );
+
+  test(
+    "a server that ignores SIGTERM ends by SIGKILL within about 5 s",
+    async () => {
+      const t = transport(["--stubborn"]);
+      await connect(t);
+      const pid = t.pid!;
+      const start = performance.now();
+      await t.close();
+      expect(performance.now() - start).toBeLessThan(6000);
+      expect(childAlive(pid)).toBe(false);
+    },
+    SLOW,
+  );
+
+  test(
+    "a message over the cap is an error and closes the transport",
+    async () => {
+      install({ ...BUILTIN, maxMcpMessageBytes: 1024 });
+      const t = transport(["--flood", "2048"]);
+      const client = await connect(t);
+      const errors: Error[] = [];
+      let closed = 0;
+      client.onerror = (error) => errors.push(error);
+      client.onclose = () => (closed += 1);
+      await expect(client.callTool({ name: "echo", arguments: { text: "hi" } })).rejects.toThrow();
+      expect(errors.map((error) => error.message)).toContain("MCP server sent a message over 1024 bytes");
+      expect(await waitFor(() => closed === 1, 3000)).toBe(true);
+    },
+    SLOW,
+  );
+
+  test(
+    "a message under the cap passes",
+    async () => {
+      install({ ...BUILTIN, maxMcpMessageBytes: 1024 });
+      // The response wraps the text in about 80 bytes of JSON-RPC.
+      const client = await connect(transport(["--flood", "900"]));
+      expect(textOf(await client.callTool({ name: "echo", arguments: { text: "hi" } }))).toBe("x".repeat(900));
+    },
+    SLOW,
+  );
+
+  test(
+    "multibyte text split across pipe chunks echoes intact",
+    async () => {
+      const client = await connect(transport());
+      const text = "é".repeat(50_000);
+      expect(textOf(await client.callTool({ name: "echo", arguments: { text } }))).toBe(text);
+    },
+    SLOW,
+  );
+
+  test(
+    "the server's stderr goes to the tail, not the host's stderr",
+    async () => {
+      const writes: string[] = [];
+      const write = process.stderr.write.bind(process.stderr);
+      process.stderr.write = ((chunk: string | Uint8Array, ...rest: never[]) => {
+        writes.push(String(chunk));
+        return write(chunk, ...rest);
+      }) as typeof process.stderr.write;
+      try {
+        const t = transport(["--stderr", "boom"]);
+        await expect(connect(t)).rejects.toThrow();
+        expect(t.stderrTail()).toBe("\nserver stderr:\nboom");
+      } finally {
+        process.stderr.write = write;
+      }
+      expect(writes.join("")).not.toContain("boom");
+      expect(transport().stderrTail()).toBe("");
+    },
+    SLOW,
+  );
+
+  test(
+    "a response that arrives after its request timed out leaves the server running",
+    async () => {
+      const file = marker("late");
+      const t = transport(["--ignore-cancel", "--marker", file]);
+      const client = await connect(t);
+      const errors: Error[] = [];
+      client.onerror = (error) => errors.push(error);
+      await expect(
+        client.callTool({ name: "slow_big", arguments: { seconds: 1 } }, { timeout: 300 }),
+      ).rejects.toThrow();
+      expect(await waitFor(() => readFileSync(file, "utf8").includes("answered"), 5000)).toBe(true);
+      // The SDK `JSON.stringify`s the late response for its unknown id, which throws on the
+      // `bigint`; the transport hands that to `onerror` instead of crashing.
+      expect(await waitFor(() => errors.length > 0, 2000)).toBe(true);
+      expect(errors[0]).toBeInstanceOf(TypeError);
+      expect(childAlive(t.pid!)).toBe(true);
+      expect(textOf(await client.callTool({ name: "echo", arguments: { text: "still" } }))).toBe("still");
+    },
+    SLOW,
+  );
+
+  test(
+    "big ints survive under structuredContent and safe ones are numbers",
+    async () => {
+      const client = await connect(transport());
+      const big = await client.callTool({ name: "big", arguments: {} });
+      expect(big.structuredContent).toEqual({ n: 18446744073709552000n });
+      const added = await client.callTool({ name: "add", arguments: { a: 1, b: 2 } });
+      expect(added.structuredContent).toEqual({ result: 3 });
+      expect(typeof (added.structuredContent as { result: unknown }).result).toBe("number");
+    },
+    SLOW,
+  );
+
+  test(
+    "send after close rejects and close twice is fine",
+    async () => {
+      const t = transport();
+      await connect(t);
+      await t.close();
+      await t.close();
+      await expect(t.send({ jsonrpc: "2.0", method: "notifications/initialized" })).rejects.toThrow();
+    },
+    SLOW,
+  );
+
+  test("start rejects with the spawn error", async () => {
+    const t = tracker.track(
+      new StdioTransport({
+        command: join(dir, "missing"),
+        args: [],
+        maxMessageBytes: 1024,
+        defaultEnv: getDefaultEnvironment(),
+      }),
+    );
+    await expect(t.start()).rejects.toThrow(/ENOENT/);
   });
 });

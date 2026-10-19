@@ -7,10 +7,15 @@
  * the subprocess. A failed call throws an `McpError` whose tool error kinds tell an AGENT's tool
  * loop whether its model reads the error and a TOOL node whether `retries:` apply.
  *
- * Knows about: `tools/errors`, `tools/function_tools`, typesys and diagnostics.
+ * Knows about: `tools/errors`, `tools/function_tools`, `llm/body` (exact JSON writes), `defaults`,
+ * typesys and diagnostics.
  */
 
+import { type ChildProcess, spawn } from "node:child_process";
+
 import { reprText } from "../diagnostics.ts";
+import { encodeBody } from "../llm/body.ts";
+import { parseJson } from "../typesys/json.ts";
 import { isRecord, jsTypeName } from "../typesys/values.ts";
 import { TOOL_ERROR, type ToolErrorKind } from "./errors.ts";
 import type { FunctionTool } from "./function_tools.ts";
@@ -400,4 +405,329 @@ Object.defineProperty(McpServer.prototype, MCP_SERVER, { value: true });
 /** Return whether `value` is an `McpServer` from any copy of yian. */
 export function isMcpServer(value: unknown): value is McpServer {
   return hasBrand(value, MCP_SERVER);
+}
+
+/** How much of a stdio server's stderr yian keeps, and how many of its last lines an error shows. */
+const STDERR_KEEP_CHARS = 16 * 1024;
+const STDERR_LINES = 20;
+
+/** The options of `StdioTransport`. */
+export interface StdioTransportOptions {
+  /** The executable to start. */
+  command: string;
+  /** Its arguments. */
+  args: readonly string[];
+  /** Variables merged over `defaultEnv`. */
+  env?: Readonly<Record<string, string>>;
+  /** The working directory; the host's when absent. */
+  cwd?: string;
+  /** The longest line read from the server, in bytes. */
+  maxMessageBytes: number;
+  /** The MCP SDK's `getDefaultEnvironment()`, the base of the server's environment. */
+  defaultEnv: Readonly<Record<string, string>>;
+}
+
+/**
+ * The stdio transport yian gives the MCP SDK client: it starts the server in its own process
+ * group, writes and reads newline-delimited JSON-RPC with exact big ints, keeps the tail of the
+ * server's stderr, and on close ends the whole group, so a wrapper (`npx`, `uvx`) leaves no
+ * grandchildren behind. It has the SDK `Transport` shape without naming the SDK's types.
+ */
+export class StdioTransport {
+  onclose?: () => void;
+  onerror?: (error: Error) => void;
+  onmessage?: (message: unknown) => void;
+  /** Always `null`: stderr is read into `stderrTail()`. The SDK reads it to see a stdio transport. */
+  readonly stderr = null;
+  private readonly options: StdioTransportOptions;
+  private child: ChildProcess | undefined;
+  /** stdout bytes after the last newline, and their total length. */
+  private pending: Buffer[] = [];
+  private pendingBytes = 0;
+  private stderrText = "";
+  private stderrEnded = false;
+  private exited = false;
+  private closed = false;
+  private ended = false;
+  private closeFired = false;
+  private closing: Promise<void> | undefined;
+  private readonly settled: Promise<void>;
+  private settle!: () => void;
+
+  /** Keep `options`; nothing starts until `start()`. */
+  constructor(options: StdioTransportOptions) {
+    this.options = options;
+    this.settled = new Promise((resolve) => (this.settle = resolve));
+  }
+
+  /** The server's process id, or `null` before it started. */
+  get pid(): number | null {
+    return this.child?.pid ?? null;
+  }
+
+  /** The last lines the server wrote to stderr, as an error message suffix, or `""`. */
+  stderrTail(): string {
+    if (this.stderrText === "") return "";
+    const lines = this.stderrText.split(/\r\n|\r|\n/);
+    if (lines[lines.length - 1] === "") lines.pop();
+    return "\nserver stderr:\n" + lines.slice(-STDERR_LINES).join("\n");
+  }
+
+  /** Start the server; reject with the spawn error when it can't start. */
+  start(): Promise<void> {
+    if (this.child !== undefined || this.closed) return Promise.reject(new Error("StdioTransport already started"));
+    const { command, args, env, cwd, defaultEnv } = this.options;
+    return new Promise((resolve, reject) => {
+      let child: ChildProcess;
+      try {
+        child = spawn(command, [...args], {
+          cwd,
+          env: { ...defaultEnv, ...env },
+          stdio: ["pipe", "pipe", "pipe"],
+          // Its own process group, so close can signal the server and everything it started.
+          detached: true,
+          windowsHide: true,
+        });
+      } catch (error) {
+        // Bun may throw here where Node emits `error`.
+        this.closed = true;
+        reject(error);
+        return;
+      }
+      this.child = child;
+      let spawned = false;
+      child.once("spawn", () => {
+        spawned = true;
+        resolve();
+      });
+      child.on("error", (error) => {
+        if (spawned) this.report(error);
+        else {
+          this.closed = true;
+          reject(error);
+        }
+      });
+      child.once("exit", () => {
+        this.exited = true;
+        this.end();
+      });
+      child.stdin!.on("error", (error) => this.report(error));
+      child.stdout!.on("error", (error) => this.report(error));
+      child.stdout!.on("data", (chunk: Buffer) => this.read(chunk));
+      child.stdout!.once("end", () => this.end());
+      child.stderr!.on("error", () => {});
+      child.stderr!.setEncoding("utf8");
+      child.stderr!.on("data", (text: string) => {
+        this.stderrText = (this.stderrText + text).slice(-STDERR_KEEP_CHARS);
+      });
+      child.stderr!.once("close", () => (this.stderrEnded = true));
+    });
+  }
+
+  /** Write `message` as one line; reject when closed or the write fails. */
+  send(message: unknown): Promise<void> {
+    const stdin = this.child?.stdin;
+    if (this.closed || this.ended || stdin == null) return Promise.reject(new Error("Not connected"));
+    let line: string;
+    try {
+      line = encodeBody(message, "MCP message") + "\n";
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return new Promise((resolve, reject) => {
+      const flushed = stdin.write(line, (error) => {
+        if (error) reject(error);
+      });
+      if (flushed) {
+        resolve();
+        return;
+      }
+      const onDrain = () => {
+        stdin.off("close", onClose);
+        resolve();
+      };
+      const onClose = () => {
+        stdin.off("drain", onDrain);
+        reject(new Error("Not connected"));
+      };
+      stdin.once("drain", onDrain);
+      stdin.once("close", onClose);
+    });
+  }
+
+  /**
+   * End the server: close its stdin, give it 2 s to exit, then SIGTERM its process group, give
+   * the group 2 s, then SIGKILL it. Never rejects; a second call returns the first one's promise.
+   */
+  close(): Promise<void> {
+    return (this.closing ??= this.shutdown());
+  }
+
+  /** The body of `close()`, run once. */
+  private async shutdown(): Promise<void> {
+    this.closed = true;
+    const child = this.child;
+    const pid = child?.pid;
+    if (child === undefined || pid === undefined) {
+      this.fireClose();
+      return;
+    }
+    const exit = new Promise<void>((resolve) => {
+      if (this.exited) resolve();
+      else child.once("exit", () => resolve());
+    });
+    try {
+      child.stdin?.end();
+    } catch {
+      // Already gone.
+    }
+    await Promise.race([exit, sleep(2000)]);
+    // Even when the leader exited, what it started may still run in its group.
+    if (signalGroup(pid, "SIGTERM")) {
+      const deadline = Date.now() + 2000;
+      while (signalGroup(pid, 0) && Date.now() < deadline) await sleep(50);
+      signalGroup(pid, "SIGKILL");
+    }
+    await Promise.race([exit, sleep(1000)]);
+    // Let `onclose` fire with the stderr tail settled.
+    await Promise.race([this.settled, sleep(500)]);
+    this.fireClose();
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    child.stdin?.destroy();
+  }
+
+  /** Split `chunk` into lines on newline bytes and handle each; close past the size cap. */
+  private read(chunk: Buffer): void {
+    if (this.closed) return;
+    const max = this.options.maxMessageBytes;
+    let start = 0;
+    for (let newline = chunk.indexOf(0x0a); newline >= 0; newline = chunk.indexOf(0x0a, start)) {
+      const piece = chunk.subarray(start, newline);
+      start = newline + 1;
+      const size = this.pendingBytes + piece.length;
+      const line = this.pending.length === 0 ? piece : Buffer.concat([...this.pending, piece], size);
+      this.pending = [];
+      this.pendingBytes = 0;
+      if (size > max) return this.overflow(max);
+      this.handleLine(line);
+      if (this.closed) return;
+    }
+    if (start < chunk.length) {
+      this.pending.push(chunk.subarray(start));
+      this.pendingBytes += chunk.length - start;
+      if (this.pendingBytes > max) this.overflow(max);
+    }
+  }
+
+  /** Report a line longer than `max` bytes and close. */
+  private overflow(max: number): void {
+    this.pending = [];
+    this.pendingBytes = 0;
+    this.report(new Error(`MCP server sent a message over ${max} bytes`));
+    void this.close();
+  }
+
+  /** Decode one line and hand it to `onmessage`. */
+  private handleLine(bytes: Buffer): void {
+    let text = bytes.toString("utf8");
+    if (text.endsWith("\r")) text = text.slice(0, -1);
+    if (text === "") return;
+    let message: unknown;
+    try {
+      message = parseJson(text, "plain");
+    } catch (error) {
+      // The strict reader refuses duplicate keys and lone surrogates, which the SDK would read.
+      try {
+        message = JSON.parse(text);
+      } catch {
+        this.report(error);
+        return;
+      }
+    }
+    try {
+      this.onmessage?.(hostInts(message));
+    } catch (error) {
+      // The SDK `JSON.stringify`s a late response for an unknown id, which throws on a `bigint`.
+      this.report(error);
+    }
+  }
+
+  /** Hand `error` to `onerror`; a throwing handler must not crash the host. */
+  private report(error: unknown): void {
+    try {
+      this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+    } catch {
+      // Nothing left to tell.
+    }
+  }
+
+  /** Fire `onclose` once the process exited or stdout ended, after stderr drained or 200 ms. */
+  private end(): void {
+    if (this.ended) return;
+    this.ended = true;
+    if (this.stderrEnded) return this.fireClose();
+    const timer = setTimeout(() => this.fireClose(), 200);
+    this.child?.stderr?.once("close", () => {
+      clearTimeout(timer);
+      this.fireClose();
+    });
+  }
+
+  /** Call `onclose`, once. */
+  private fireClose(): void {
+    if (this.closeFired) return;
+    this.closeFired = true;
+    this.settle();
+    try {
+      this.onclose?.();
+    } catch (error) {
+      this.report(error);
+    }
+  }
+}
+
+/** Resolve after `ms`, without keeping the process alive. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms).unref());
+}
+
+/** Send `signal` to process group `pid`; return whether the group still existed. */
+function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH" || code === "EPERM") return false;
+    throw error;
+  }
+}
+
+/**
+ * Turn the `bigint`s of a decoded message into what a host reads: a safe integer becomes a
+ * `number`; a bigger one stays a `bigint` only inside a response's `result.structuredContent`,
+ * where it is a tool's value, and elsewhere (ids, schema bounds) becomes a `number`. Mutates
+ * `message` in place and returns it.
+ */
+function hostInts(message: unknown): unknown {
+  const result = isRecord(message) && "id" in message && isRecord(message.result) ? message.result : undefined;
+  const fix = (value: unknown, keep: boolean): unknown => {
+    if (typeof value !== "bigint") return value;
+    const n = Number(value);
+    return keep && !Number.isSafeInteger(n) ? value : n;
+  };
+  if (typeof message !== "object" || message === null) return fix(message, false);
+  const stack: [Record<string, unknown> | unknown[], boolean][] = [[message as Record<string, unknown>, false]];
+  while (stack.length > 0) {
+    const [container, keep] = stack.pop()!;
+    for (const key of Object.keys(container)) {
+      const value = (container as Record<string, unknown>)[key];
+      if (typeof value === "bigint") (container as Record<string, unknown>)[key] = fix(value, keep);
+      else if (typeof value === "object" && value !== null) {
+        stack.push([value as Record<string, unknown>, keep || (container === result && key === "structuredContent")]);
+      }
+    }
+  }
+  return message;
 }

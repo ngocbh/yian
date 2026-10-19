@@ -68,10 +68,6 @@ const USAGE = new Usage({
   cacheCreationTokens: 30,
 });
 const THINKING_ON: JsonObject = { thinking: { type: "enabled", budget_tokens: 2048n } };
-const REQUIRED_SIGNATURE =
-  "the last assistant turn came from anthropic/claude-opus-4-5; anthropic needs its signed thinking to continue " +
-  "a tool call with thinking on; finish the tool turn on the original model or turn thinking off in the " +
-  "anthropic block";
 
 /** Build a scenario's route: the Anthropic API (or `baseUrl`) with `v1/messages` and the API version header. */
 function route(baseUrl = "https://api.anthropic.com", headers: Record<string, string> = {}): Route {
@@ -141,6 +137,8 @@ interface Scenario {
   baseUrl?: string;
   /** Connection headers beside `anthropic-version`. */
   headers?: Record<string, string>;
+  /** The protocol's replay account; defaults to none. */
+  account?: string;
   block?: JsonObject;
   turns: Turn[];
   /** One per turn, unless the last turn fails. */
@@ -187,7 +185,7 @@ function toolsTurn2(name: string, parser?: AnthropicMessages): Turn {
 const REPLY_TURN2: Turn = ([first]) =>
   request([...TOOLS, first!.message, toolResult("toolu_01", "6")], { tools: [DOUBLE] });
 
-/** A protocol for `claude-opus-4-5`, whose records a `claude-sonnet-4-5` protocol can't replay. */
+/** A protocol for `claude-opus-4-5`, whose records a `claude-sonnet-4-5` protocol replays. */
 const opus45 = () => new AnthropicMessages({ model: OPUS_45, provider: PROVIDER });
 
 // LangChain's warning for a hoisted system message.
@@ -281,13 +279,15 @@ const SCENARIOS: Record<string, Scenario> = {
       answer6,
     ],
   },
-  replay_degraded: { turns: [toolsTurn2("thinking_tools", opus45())], replies: [answer6], degraded: ["other_model"] },
-  signature_required: {
+  thinking_model_switch: { block: THINKING_ON, turns: [toolsTurn2("thinking_tools", opus45())], replies: [answer6] },
+  replay_degraded: {
     block: THINKING_ON,
-    turns: [toolsTurn2("thinking_tools", opus45())],
-    replies: [],
-    error: { kind: "bad_request", retryable: false, message: REQUIRED_SIGNATURE },
-    degraded: ["other_model"],
+    account: "acct-new",
+    turns: [
+      toolsTurn2("thinking_tools", new AnthropicMessages({ model: SONNET, provider: PROVIDER, account: "acct-old" })),
+    ],
+    replies: [answer6],
+    degraded: ["other_account"],
   },
 
   user_merge: {
@@ -472,12 +472,13 @@ async function runScenario(name: string, scenario: Scenario): Promise<void> {
   const protocol = new AnthropicMessages({
     model: modelName,
     provider: PROVIDER,
+    account: scenario.account,
     block: scenario.block,
     onReplayDegraded: (reason) => degraded.push(reason),
   });
   const model = new RouteModel({ route: route(scenario.baseUrl, scenario.headers), protocol, send: replay.send });
   expect(model.provider).toBe(protocol.provider);
-  const key: ReplayKey = { protocol: PROTOCOL, provider: PROVIDER, model: modelName };
+  const key: ReplayKey = { protocol: PROTOCOL, provider: PROVIDER, model: modelName, account: scenario.account };
 
   const retried: RetryInfo[] = [];
   const send = (req: Request): Promise<Response> =>

@@ -2211,12 +2211,11 @@ A few providers need a note:
     allows (overloaded, rate limit, server and timeout errors; an unknown type counts as a
     server error). A `refusal` stop is `provider.refused`, `pause_turn` fails the call,
     and a full context window is `provider.context_length`; `billing_error` is
-    `provider.quota`. Thinking goes back with its signature only to the provider, model,
-    and account that wrote it. With `thinking: {type: enabled}`, continuing a tool loop
-    whose first reply's signed thinking can't go back (after a model or provider switch)
-    fails before sending, naming the fix. An assistant turn goes back block by block in
-    the order received, several text blocks join with a newline in the node's text, and
-    cache writes count the TTL breakdown.
+    `provider.quota`. Thinking goes back with its signature to the provider and account
+    (API key) that wrote it, from any Claude model; after a switch to another provider or
+    key it is left out, and the turn's text and tool calls still go back. An assistant
+    turn goes back block by block in the order received, several text blocks join with a
+    newline in the node's text, and cache writes count the TTL breakdown.
 
 - `ollama` takes what the Ollama client sends: `think` (`true`, `false`, or a level),
   `options` (`temperature`, `num_ctx`, …), `keep_alive`, `logprobs`, and

@@ -178,12 +178,12 @@ const PLAIN_TURN: Turn = () => request(PLAIN);
 const TOOLS_TURN: Turn = () => request(TOOLS, { tools: [DOUBLE] });
 
 /** The second turn after a tools cassette, its prior parsed by `parser` (the scenario's protocol by default). */
-function toolsTurn2(name: string, parser?: AnthropicMessages, result = toolResult("toolu_01", "6")): Turn {
+function toolsTurn2(name: string, parser?: AnthropicMessages): Turn {
   return async (_, protocol) =>
-    request([...TOOLS, await priorFrom(name, parser ?? protocol), result], { tools: [DOUBLE] });
+    request([...TOOLS, await priorFrom(name, parser ?? protocol), toolResult("toolu_01", "6")], { tools: [DOUBLE] });
 }
 
-/** The second turn after the first turn's tool call reply, with the tool's result `6`. */
+/** The second turn after the first turn's tool call reply */
 const REPLY_TURN2: Turn = ([first]) =>
   request([...TOOLS, first!.message, toolResult("toolu_01", "6")], { tools: [DOUBLE] });
 
@@ -205,7 +205,12 @@ const SCENARIOS: Record<string, Scenario> = {
   tools: { turns: [TOOLS_TURN], replies: [helloCall] },
   turn2: { turns: [toolsTurn2("tools")], replies: [answer6] },
   turn2_tool_error: {
-    turns: [toolsTurn2("tools", undefined, toolResult("toolu_01", "error: boom", true))],
+    turns: [
+      async (_, protocol) =>
+        request([...TOOLS, await priorFrom("tools", protocol), toolResult("toolu_01", "error: boom", true)], {
+          tools: [DOUBLE],
+        }),
+    ],
     replies: [answer6],
   },
   turn2_text_tool_text: {
@@ -497,7 +502,7 @@ async function runScenario(name: string, scenario: Scenario): Promise<void> {
       }
       responses.push(await send(req));
     }
-    expect(emit.mock.calls.map((args) => [...args])).toEqual((scenario.warnings ?? []).map((each) => [each]));
+    expect(emit.mock.calls).toEqual((scenario.warnings ?? []).map((each) => [each]));
   } finally {
     emit.mockRestore();
   }

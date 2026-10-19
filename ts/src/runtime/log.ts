@@ -951,9 +951,12 @@ function requireSchema(schema: unknown): void {
  * @throws RangeError when it isn't the int token `SCHEMA_VERSION`, naming Python yian for 9.
  */
 function requireWireSchema(schema: unknown): void {
-  // Only an int token (a `bigint`) names a schema: a float token such as `10.0` reads as a number.
-  if (schema === 9n || schema === BigInt(SCHEMA_VERSION)) requireSchema(Number(schema));
-  else throw new RangeError(`unsupported run-record schema: ${valueRepr(schema)}`);
+  if (schema === BigInt(SCHEMA_VERSION)) return;
+  if (schema === 9n) requireSchema(9);
+  // Only an int token (a `bigint`) names a schema; a float token reads as a number, shown as the
+  // log writes floats (`10.0`), so it doesn't read as a supported schema.
+  const shown = typeof schema === "number" ? logJson(schema) : valueRepr(schema);
+  throw new RangeError(`unsupported run-record schema: ${shown}`);
 }
 
 /**
@@ -1070,9 +1073,9 @@ export function decodeRecord(data: string | Uint8Array): RecordEnvelope {
     if (error instanceof JSONDecodeError) throw new RangeError("invalid run-record JSON", { cause: error });
     throw error;
   }
-  if (!isRecord(raw)) throw new TypeError("run-record envelope must be an object");
-  if (Object.hasOwn(raw, "schema")) requireWireSchema(raw["schema"]);
-  const envelope = wireObject(raw, "run-record envelope", ["schema", "run_id", "seq", "kind", "payload"]);
+  const envelope = wireObject(raw, "run-record envelope");
+  if (Object.hasOwn(envelope, "schema")) requireWireSchema(envelope["schema"]);
+  requireFields(envelope, ["schema", "run_id", "seq", "kind", "payload"], "run-record envelope");
   const runId = wireName(envelope["run_id"], "run-record envelope run_id");
   const seq = wireInt(envelope["seq"], "run-record envelope seq");
   const kind = wireText(envelope["kind"], "run-record envelope kind");
@@ -1117,7 +1120,6 @@ function failureFromPayload(value: unknown, label: string): Failure {
 
 /** Build the canonical JSON payload of one record; counters are written as `bigint`s. */
 function payloadForRecord(record: RunRecord): JsonObject {
-  const kind = kindForRecord(record);
   if (record instanceof RunResumedRecord) {
     return { retry_node_ids: [...record.retryNodeIds], num_workers: BigInt(record.numWorkers) };
   }
@@ -1132,7 +1134,7 @@ function payloadForRecord(record: RunRecord): JsonObject {
     }
     return { failure: failurePayload(record.failure), evidence: null, forward_capture: null };
   }
-  throw new Error(`${kind} records are not encoded yet`);
+  throw new Error(`${kindForRecord(record)} records are not encoded yet`);
 }
 
 /**

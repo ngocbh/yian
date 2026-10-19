@@ -131,7 +131,7 @@ import {
   ValueKind,
   VariablePool,
 } from "../../src/typesys/index.ts";
-import { JSONDecodeError, parseJson } from "../../src/typesys/json.ts";
+import { JSONDecodeError, type JsonObject, parseJson } from "../../src/typesys/json.ts";
 
 /** Assert `fn` throws a `TypeCheckError` with exactly `message` at `path`. */
 function expectTypeCheck(fn: () => unknown, message: string, path: readonly (string | number)[]): void {
@@ -146,8 +146,8 @@ function expectTypeCheck(fn: () => unknown, message: string, path: readonly (str
   expect((caught as TypeCheckError).path).toEqual(path);
 }
 
-/** Assert `fn` throws an error of exactly class `cls` with exactly `message`. */
-function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): void {
+/** Assert `fn` throws an error of exactly class `cls` with exactly `message`, and return it. */
+function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): Error {
   let caught: unknown;
   try {
     fn();
@@ -156,6 +156,7 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
   }
   expect((caught as Error | undefined)?.constructor).toBe(cls);
   expect((caught as Error).message).toBe(message);
+  return caught as Error;
 }
 
 const TOPOLOGY_DIGEST = "b".repeat(64);
@@ -760,26 +761,6 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
   expectError(fn, cls, message);
 });
 
-/** Return `wire` as one JSON line; a JS number is written as an int token when it is integral. */
-function line(wire: unknown): string {
-  return JSON.stringify(wire);
-}
-
-/** Assert that decoding `data` throws RangeError `invalid run-record JSON` caused by `cause`. */
-function expectInvalidJson(data: string | Uint8Array, cause: new (...args: never[]) => Error, reason: string): void {
-  let caught: unknown;
-  try {
-    decodeRecord(data);
-  } catch (error) {
-    caught = error;
-  }
-  expect((caught as Error | undefined)?.constructor).toBe(RangeError);
-  expect((caught as Error).message).toBe("invalid run-record JSON");
-  const why = (caught as Error).cause as Error;
-  expect(why.constructor).toBe(cause);
-  expect(why.message).toStartWith(reason);
-}
-
 const ROUND_TRIP_RECORDS: [string, RunRecord][] = [
   ["RunResumedRecord", new RunResumedRecord(["slow", "later"], 4)],
   ["RunStoppedRecord", new RunStoppedRecord("callback", "the host callback threw", ["b", "a"])],
@@ -810,7 +791,7 @@ test.each(ROUND_TRIP_RECORDS)("every record round trips through a validated enve
   expect(decoded.record.constructor).toBe(record.constructor);
   expect(encodeRecord(decoded)).toBe(encoded);
   expect(decoded.kind).toBe(envelope.kind);
-  expect(decoded.payload).toEqual((parseJson(encoded, "codec") as { payload: unknown }).payload as never);
+  expect(decoded.payload).toEqual((parseJson(encoded, "codec") as JsonObject)["payload"] as JsonObject);
   expect(Object.isFrozen(decoded.payload)).toBe(true);
   expect(decodeRecord(new TextEncoder().encode(encoded))).toEqual(envelope);
 });
@@ -834,28 +815,21 @@ test.each([
       ...extra,
     },
   };
-  expectError(() => decodeRecord(line(wire)), RangeError, `run-record kind '${kind}' is unsupported in schema 10`);
+  const message = `run-record kind '${kind}' is unsupported in schema 10`;
+  expectError(() => decodeRecord(JSON.stringify(wire)), RangeError, message);
 });
 
-const CONVERSATION_KINDS = [
-  "conversation_admitted",
-  "conversation_effect_requested",
-  "conversation_effect_observed",
-  "conversation_closed",
-];
-
-test.each(CONVERSATION_KINDS)(
-  "removed conversation wire kinds are rejected: %s",
-  (kind) => {
-    const wire = { schema: SCHEMA_VERSION, run_id: "run", seq: 0, kind, payload: { checkpoint: {} } };
-    expectError(() => decodeRecord(line(wire)), RangeError, `run-record kind '${kind}' is unsupported in schema 10`);
-    const recordName = `${kind
-      .split("_")
-      .map((part) => part[0]!.toUpperCase() + part.slice(1))
-      .join("")}Record`;
-    expect(Object.hasOwn(runLog, recordName)).toBe(false);
-  },
-);
+test.each([
+  ["conversation_admitted", "ConversationAdmittedRecord"],
+  ["conversation_effect_requested", "ConversationEffectRequestedRecord"],
+  ["conversation_effect_observed", "ConversationEffectObservedRecord"],
+  ["conversation_closed", "ConversationClosedRecord"],
+])("removed conversation wire kinds are rejected: %s", (kind, recordName) => {
+  const wire = { schema: SCHEMA_VERSION, run_id: "run", seq: 0, kind, payload: { checkpoint: {} } };
+  const message = `run-record kind '${kind}' is unsupported in schema 10`;
+  expectError(() => decodeRecord(JSON.stringify(wire)), RangeError, message);
+  expect(Object.hasOwn(runLog, recordName)).toBe(false);
+});
 
 test("record encoding is canonical, newline-free and byte-stable", () => {
   const envelope = new RecordEnvelope(SCHEMA_VERSION, "run-canonical", 0, new NodeStartedRecord("work"));
@@ -919,12 +893,12 @@ test.each<[string, string, new (...args: never[]) => Error, string]>([
     RangeError,
     "unsupported run-record schema: true",
   ],
-  // A float token reads as a number, never as a schema.
+  // A float token reads as a number, never as a schema; it is shown as the log writes floats.
   [
     "schema 10.0",
     `{"schema":10.0,"run_id":"run","seq":0,${NODE_STARTED}}`,
     RangeError,
-    "unsupported run-record schema: 10",
+    "unsupported run-record schema: 10.0",
   ],
   [
     "an empty run id",
@@ -1010,34 +984,32 @@ test.each<[string, string, new (...args: never[]) => Error, string]>([
   expectError(() => decodeRecord(text), cls, message);
 });
 
-test.each<[string, unknown, new (...args: never[]) => Error, string]>([
+test.each<[string, string, unknown, new (...args: never[]) => Error, string]>([
   [
     "an unknown node_started field",
+    "node_started",
     { node_id: "work", unexpected: true },
     RangeError,
     'invalid node_started payload fields; missing=[], extra=["unexpected"]',
   ],
   [
     "a missing node_started field",
+    "node_started",
     {},
     RangeError,
     'invalid node_started payload fields; missing=["node_id"], extra=[]',
   ],
-  ["a non-text node id", { node_id: 7 }, TypeError, "node_started payload node_id must be a non-empty string"],
-  // TS-only.
-  ["an empty node id", { node_id: "" }, RangeError, "node_started payload node_id must be a non-empty string"],
-])("decode rejects unknown, missing and wrong payload fields: %s", (_name, payload, cls, message) => {
-  const wire = { schema: 10, run_id: "run", seq: 0, kind: "node_started", payload };
-  expectError(() => decodeRecord(line(wire)), cls, message);
-});
-
-test("decode rejects a node failure with a legacy locator and no carriers", () => {
-  const wire = {
-    schema: 10,
-    run_id: "run",
-    seq: 0,
-    kind: "node_failed",
-    payload: {
+  [
+    "a non-text node id",
+    "node_started",
+    { node_id: 7 },
+    TypeError,
+    "node_started payload node_id must be a non-empty string",
+  ],
+  [
+    "a legacy node_failed locator without carriers",
+    "node_failed",
+    {
       failure: {
         code: "node.execute",
         message: "boom",
@@ -1048,12 +1020,20 @@ test("decode rejects a node failure with a legacy locator and no carriers", () =
       },
       locator: null,
     },
-  };
-  expectError(
-    () => decodeRecord(line(wire)),
     RangeError,
     'invalid node_failed payload fields; missing=["evidence","forward_capture"], extra=["locator"]',
-  );
+  ],
+  // TS-only.
+  [
+    "an empty node id",
+    "node_started",
+    { node_id: "" },
+    RangeError,
+    "node_started payload node_id must be a non-empty string",
+  ],
+])("decode rejects unknown, missing and wrong payload fields: %s", (_name, kind, payload, cls, message) => {
+  const wire = { schema: 10, run_id: "run", seq: 0, kind, payload };
+  expectError(() => decodeRecord(JSON.stringify(wire)), cls, message);
 });
 
 type FailureWire = {
@@ -1087,7 +1067,7 @@ function nodeFailureWire(): FailureWire {
 }
 
 test("a valid node-failure wire decodes", () => {
-  const decoded = decodeRecord(line(nodeFailureWire()));
+  const decoded = decodeRecord(JSON.stringify(nodeFailureWire()));
   expect((decoded.record as NodeFailedRecord).failure.trace[0]!.key).toBe("root/nodes/work/code");
 });
 
@@ -1216,14 +1196,14 @@ test.each<[string, (payload: FailureWire["payload"]) => void, new (...args: neve
 ])("decode rejects a malformed nested failure: %s", (_name, mutate, cls, message) => {
   const wire = nodeFailureWire();
   mutate(wire.payload);
-  expectError(() => decodeRecord(line(wire)), cls, message);
+  expectError(() => decodeRecord(JSON.stringify(wire)), cls, message);
 });
 
 test.each(["locator", "range"])("a node failure rejects the legacy location field %s", (field) => {
   const wire = nodeFailureWire();
   wire.payload[field] = null;
   expectError(
-    () => decodeRecord(line(wire)),
+    () => decodeRecord(JSON.stringify(wire)),
     RangeError,
     `invalid node_failed payload fields; missing=[], extra=[${JSON.stringify(field)}]`,
   );
@@ -1236,7 +1216,7 @@ test.each([1, 2, 3, 4, 5, 6, 7, 8, 9])("decode rejects old schema %d even with a
     schema === 9
       ? "run log schema 9 was written by Python yian; resume it with Python yian"
       : `unsupported run-record schema: ${schema}`;
-  expectError(() => decodeRecord(line(wire)), RangeError, message);
+  expectError(() => decodeRecord(JSON.stringify(wire)), RangeError, message);
 });
 
 test("decode rejects flattened failure aliases", () => {
@@ -1250,27 +1230,33 @@ test("decode rejects flattened failure aliases", () => {
     traceback: "trace",
   } as never;
   expectError(
-    () => decodeRecord(line(wire)),
+    () => decodeRecord(JSON.stringify(wire)),
     RangeError,
     'invalid node_failed payload fields; missing=["evidence","failure","forward_capture"], ' +
       'extra=["error","error_type","locator","node_id","range","traceback"]',
   );
 });
 
+/** Assert decoding `data` throws RangeError `invalid run-record JSON`; return its cause. */
+function invalidJsonCause(data: string | Uint8Array): Error {
+  return expectError(() => decodeRecord(data), RangeError, "invalid run-record JSON").cause as Error;
+}
+
 test("decode rejects duplicate keys at any object depth", () => {
-  expectInvalidJson(
+  const payloadKey = invalidJsonCause(
     '{"schema":10,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"first","node_id":"second"}}',
-    JSONDecodeError,
-    'duplicate JSON object key: "node_id"',
   );
-  expectInvalidJson(
+  expect(payloadKey).toBeInstanceOf(JSONDecodeError);
+  expect(payloadKey.message).toStartWith('duplicate JSON object key: "node_id"');
+
+  const originKey = invalidJsonCause(
     '{"schema":10,"run_id":"run","seq":0,"kind":"node_failed",' +
       '"payload":{"failure":{"code":"node.execute","message":"boom",' +
       '"node_id":"work","trace":[{"key":"one","key":"two"}],' +
       '"cause_type":null,"traceback":null}}}',
-    JSONDecodeError,
-    'duplicate JSON object key: "key"',
   );
+  expect(originKey).toBeInstanceOf(JSONDecodeError);
+  expect(originKey.message).toStartWith('duplicate JSON object key: "key"');
 });
 
 test("encode validates programmatically constructed envelopes", () => {
@@ -1295,23 +1281,27 @@ test("canonical JSON rejects lone Unicode surrogates", () => {
     RangeError,
     "Unicode surrogate is not valid canonical JSON",
   );
-  expectInvalidJson(
+  const cause = invalidJsonCause(
     '{"schema":10,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"\\ud800"}}',
-    JSONDecodeError,
-    "string has an unpaired surrogate",
   );
+  expect(cause).toBeInstanceOf(JSONDecodeError);
+  expect(cause.message).toStartWith("string has an unpaired surrogate");
 });
 
 test("invalid record JSON keeps its message", () => {
-  expectInvalidJson(new TextEncoder().encode('{"schema": 9, '), JSONDecodeError, "Expecting property name");
+  const cause = invalidJsonCause(new TextEncoder().encode('{"schema": 9, '));
+  expect(cause).toBeInstanceOf(JSONDecodeError);
+  expect(cause.message).toStartWith("Expecting property name");
 });
 
 test("a line with a UTF-8 BOM is invalid record JSON", () => {
   const envelope = new RecordEnvelope(SCHEMA_VERSION, "run", 0, new NodeStartedRecord("work"));
-  const encoded = new TextEncoder().encode(encodeRecord(envelope));
-  const withBom = new Uint8Array([0xef, 0xbb, 0xbf, ...encoded]);
-  expectInvalidJson(withBom, JSONDecodeError, "Unexpected UTF-8 BOM");
-  expectInvalidJson(`\ufeff${new TextDecoder().decode(encoded)}`, JSONDecodeError, "Unexpected UTF-8 BOM");
+  const encoded = encodeRecord(envelope);
+  for (const data of [new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode(encoded)]), `\ufeff${encoded}`]) {
+    const cause = invalidJsonCause(data);
+    expect(cause).toBeInstanceOf(JSONDecodeError);
+    expect(cause.message).toStartWith("Unexpected UTF-8 BOM");
+  }
 });
 
 test("a line that isn't UTF-8 is invalid record JSON", () => {
@@ -1319,7 +1309,8 @@ test("a line that isn't UTF-8 is invalid record JSON", () => {
     '{"schema":10,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"x"}}',
   );
   bytes[bytes.indexOf(0x78)] = 0xff;
-  expectInvalidJson(bytes, TypeError, "");
+  // Only the class is checked: the decoder's message differs between Bun and Node.
+  expect(invalidJsonCause(bytes).constructor).toBe(TypeError);
 });
 
 test("decode refuses data that is neither text nor bytes", () => {
@@ -1359,7 +1350,7 @@ test.each<[string, unknown, new (...args: never[]) => Error, string]>([
   ],
 ])("decode rejects a run_stopped payload with %s", (_name, payload, cls, message) => {
   const wire = { schema: 10, run_id: "run", seq: 0, kind: "run_stopped", payload };
-  expectError(() => decodeRecord(line(wire)), cls, message);
+  expectError(() => decodeRecord(JSON.stringify(wire)), cls, message);
 });
 
 test.each<[string, string, new (...args: never[]) => Error, string]>([

@@ -19,7 +19,7 @@
  * loaded flow never co-skips END through an output. Hidden from authors: a reserved
  * `__`-prefixed id, never parseable.
  *
- * Knows about:   nodes/base and nodes/binding (peer or lower) only.
+ * Knows about:   nodes/base, nodes/contracts and expr (types).
  * Never imports: anything above nodes; the loader synthesizes it and the engine reads it as the
  *   terminal.
  */
@@ -126,10 +126,13 @@ export class EndNode extends Node {
 
   /** Return the flow's value, record of named outputs, or list of element outputs. */
   override forward(inputs: Record<string, unknown>): Output {
-    if (this.mode === "value") return new Output(this.names.length > 0 ? inputs[this.names[0]!] : null);
+    if (this.mode === "value") {
+      const [name] = this.names;
+      return new Output(name === undefined ? null : inputs[name]);
+    }
     if (this.mode === "record") return new Output(Object.fromEntries(this.names.map((name) => [name, inputs[name]])));
     // List mode (the MAP fan-in): join in over order (index); n = 0 gives [].
-    return new Output(Array.from({ length: this.n! }, (_, index) => inputs[`e${index}`]));
+    return new Output(this.backwardInputNames().map((name) => inputs[name]));
   }
 
   /**

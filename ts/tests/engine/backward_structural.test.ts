@@ -1,7 +1,7 @@
 /**
  * Default and structural backward on nodes: a port of `tests/engine/test_backward_structural.py`.
  * Ported: `test_behavioral_backward_stops_with_empty_channels_and_static_capture` (Python's bare
- * `Node` is a minimal subclass), `test_end_projects_its_zero_one_and_many_output_layouts`,
+ * `Node` is a minimal subclass),
  * `test_list_end_keeps_whole_list_text_unchanged_and_records_each_output_position`,
  * `test_failed_boundaries_forward_text_only_when_inputs_and_layout_were_captured`,
  * `test_successful_null_output_is_a_bare_contributor_but_zero_output_has_none`.
@@ -11,8 +11,9 @@
  * LOOP do. `test_start_projects_named_delivered_inputs_including_defaults_but_not_absence` binds
  * the inputs with `applyDefaults` and builds the output with START's `forward` instead of
  * `eval_node`. `test_end_backward_uses_captured_layout_after_live_node_fields_change` changes END's
- * public `names`, `mode` and `n` (Python's private `_names`, `_mode`, `_n`). An END's extra
- * assertion param is appended by replacing `params`, which TS types as read-only.
+ * public `names`, `mode` and `n` (Python's private `_names`, `_mode`, `_n`).
+ * `test_end_projects_its_zero_one_and_many_output_layouts` appends an END's extra assertion param
+ * by replacing `params`, which TS types as read-only.
  *
  * Later (T3-8): `test_case_backward_inventory_excludes_generated_control_inputs`,
  * `test_stopping_loop_projects_all_carried_fields_without_reevaluating_predicate`,
@@ -147,7 +148,15 @@ test.each([
     { left: ["Review both."], right: ["Review both.", "Check."] },
     { left: ["left"], right: ["right"] },
   ],
-] as [string, boolean, string[], Record<string, unknown>, FeedbackValue[], unknown, unknown][])(
+] as [
+  string,
+  boolean,
+  string[],
+  Record<string, unknown>,
+  FeedbackValue[],
+  Record<string, FeedbackValue[]>,
+  Record<string, unknown[]>,
+][])(
   "end projects its zero one and many output layouts: %s",
   (_label, record, names, inputs, feedback, expected, paths) => {
     const node = record
@@ -161,7 +170,7 @@ test.each([
 
     expect(context.inputNames).toEqual(names);
     expect(context.nodeData).toEqual({ input_output_paths: paths });
-    expect(result.inputFeedback).toEqual(expected as never);
+    expect(result.inputFeedback).toEqual(expected);
     validateBackwardResult(result, context);
   },
 );

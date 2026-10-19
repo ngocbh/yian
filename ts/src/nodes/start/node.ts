@@ -12,7 +12,7 @@
  * boundary asserts share one seam. Not START's job: system, clock or run id. Hidden from authors:
  * a reserved `__`-prefixed id, never parseable.
  *
- * Knows about:   nodes/base, nodes/binding (peer or lower) and typesys (lower).
+ * Knows about:   nodes/base, nodes/contracts, expr (types) and typesys.
  * Never imports: anything above nodes; the loader synthesizes and seeds it.
  */
 
@@ -37,6 +37,7 @@ export class StartNode extends Node {
   static readonly ID = "__start__";
 
   readonly kind = NodeKind.START;
+  /** Commits its bound input record as the node's output. */
   override readonly commitsInputRecord: boolean = true;
 
   /**

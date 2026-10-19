@@ -22,7 +22,7 @@
 import { expect, test } from "bun:test";
 
 import { NodeKind, Output } from "../../src/nodes/base.ts";
-import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { isExactly, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 
@@ -42,7 +42,7 @@ test("start kind and params are input names", () => {
   expect(node.kind).toBe(NodeKind.START);
   // params = the input NAMES (so the evaluator's binder reads their wired sources).
   expect(node.params!.map((p) => p.name)).toEqual(["topic", "window"]);
-  expect(node.params!.every((p) => p instanceof Parameter)).toBe(true);
+  expect(node.params!.every((p) => isExactly(p, Parameter))).toBe(true);
 });
 
 test("start through eval node fills omitted default", async () => {

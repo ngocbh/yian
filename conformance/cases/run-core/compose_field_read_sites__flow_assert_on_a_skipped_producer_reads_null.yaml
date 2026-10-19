@@ -1,0 +1,161 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: "return ({a: \"x\"})"
+    route:
+      kind: case
+      cases:
+        - when: "input.s == 'go'"
+          then: d
+      else: e
+    d:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Order
+      code: "return null"
+    e:
+      kind: code
+      input:
+        s: ${input.s}
+      code: return 1
+  output: ${step.output}
+  asserts:
+    - "not isinstance(d.output, Order) or d.output.action == 'sell'"
+python_flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: return dict(a='x')
+    route:
+      kind: case
+      cases:
+        - when: "input.s == 'go'"
+          then: d
+      else: e
+    d:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Order
+      code: return None
+    e:
+      kind: code
+      input:
+        s: ${input.s}
+      code: return 1
+  output: ${step.output}
+  asserts:
+    - "not isinstance(d.output, Order) or d.output.action == 'sell'"
+inputs:
+  s: stop
+  r:
+    a: x
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      a: x
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        r:
+          a: x
+        s: stop
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        r:
+          a: x
+        s: stop
+  - [node_started, step]
+  - - node_succeeded
+    - step
+    - value:
+        a: x
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: '#else'
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        a: x
+  - [node_started, e]
+  - - node_succeeded
+    - e
+    - value: 1
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        r:
+          a: x
+        s: stop
+  - - NodeStarted
+    - node_id: step
+  - - NodeSucceeded
+    - node_id: step
+      output:
+        a: x
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: '#else'
+      node_id: route
+  - - NodeSkipped
+    - node_id: d
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        a: x
+  - - NodeStarted
+    - node_id: e
+  - - NodeSucceeded
+    - node_id: e
+      output: 1
+  - - RunSucceeded
+    - output:
+        a: x

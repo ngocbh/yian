@@ -1,0 +1,276 @@
+kind: run
+rules: [messages]
+flow: |
+  id: f
+  name: f
+
+  defs:
+    child:
+      input:
+        y: !float
+      nodes:
+        c:
+          kind: code
+          code: "return inputs['y']"
+          input:
+            y: ${input.y}
+          output: float
+      output: ${c.output}
+    check:
+      input:
+        y: !float
+      nodes:
+        c:
+          kind: code
+          code: "return true"
+          input:
+            y: ${input.y}
+          output: bool
+      output: ${c.output}
+    lister:
+      input:
+        n: !float
+      nodes:
+        c:
+          kind: code
+          code: "return [inputs['n']]"
+          input:
+            n: ${input.n}
+          output: list(float)
+      output: ${c.output}
+
+  nodes:
+    m:
+      kind: code
+      code: return "x"
+    n:
+      kind: code
+      code: "return inputs['a']"
+      input:
+        a: call(child, y=${m.output})
+      output: float
+  output: ${n.output}
+python_flow: |
+  id: f
+  name: f
+
+  defs:
+    child:
+      input:
+        y: !float
+      nodes:
+        c:
+          kind: code
+          code: "return inputs['y']"
+          input:
+            y: ${input.y}
+          output: float
+      output: ${c.output}
+    check:
+      input:
+        y: !float
+      nodes:
+        c:
+          kind: code
+          code: "return True"
+          input:
+            y: ${input.y}
+          output: bool
+      output: ${c.output}
+    lister:
+      input:
+        n: !float
+      nodes:
+        c:
+          kind: code
+          code: "return [inputs['n']]"
+          input:
+            n: ${input.n}
+          output: list(float)
+      output: ${c.output}
+
+  nodes:
+    m:
+      kind: code
+      code: return "x"
+    n:
+      kind: code
+      code: "return inputs['a']"
+      input:
+        a: call(child, y=${m.output})
+      output: float
+  output: ${n.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      frames:
+      - label: flow.yaml
+        range: [47, 10, 47, 36]
+      - label: flow.yaml
+        range: [7, 10, 7, 16]
+      message: 'input ''y'': "x" does not match declared type float'
+      node: __call_0/__start__
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, m]
+  - - node_succeeded
+    - m
+    - value: x
+  - [node_started, __call_0]
+  - - node_expanded
+    - __call_0
+    - prune_ids: []
+      seed:
+        y: x
+  - [node_started, __call_0/__start__]
+  - - node_failed
+    - __call_0/__start__
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [47, 10, 47, 36]
+        - label: flow.yaml
+          range: [7, 10, 7, 16]
+        message: 'input ''y'': "x" does not match declared type float'
+        node: __call_0/__start__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: m
+  - - NodeSucceeded
+    - node_id: m
+      output: x
+  - - NodeStarted
+    - node_id: __call_0
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          y: x
+      node_id: __call_0
+  - - NodeStarted
+    - node_id: __call_0/__start__
+  - - NodeFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [47, 10, 47, 36]
+        - label: flow.yaml
+          range: [7, 10, 7, 16]
+        message: 'input ''y'': "x" does not match declared type float'
+        node: __call_0/__start__
+  - - RunFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [47, 10, 47, 36]
+        - label: flow.yaml
+          range: [7, 10, 7, 16]
+        message: 'input ''y'': "x" does not match declared type float'
+        node: __call_0/__start__
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      frames:
+      - label: flow.yaml
+        range: [47, 10, 47, 36]
+      - label: flow.yaml
+        range: [7, 10, 7, 16]
+      message: 'input ''y'': ''x'' does not match declared type float'
+      node: __call_0/__start__
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, m]
+  - - node_succeeded
+    - m
+    - value: x
+  - [node_started, __call_0]
+  - - node_expanded
+    - __call_0
+    - prune_ids: []
+      seed:
+        y: x
+  - [node_started, __call_0/__start__]
+  - - node_failed
+    - __call_0/__start__
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [47, 10, 47, 36]
+        - label: flow.yaml
+          range: [7, 10, 7, 16]
+        message: 'input ''y'': ''x'' does not match declared type float'
+        node: __call_0/__start__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: m
+  - - NodeSucceeded
+    - node_id: m
+      output: x
+  - - NodeStarted
+    - node_id: __call_0
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          y: x
+      node_id: __call_0
+  - - NodeStarted
+    - node_id: __call_0/__start__
+  - - NodeFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [47, 10, 47, 36]
+        - label: flow.yaml
+          range: [7, 10, 7, 16]
+        message: 'input ''y'': ''x'' does not match declared type float'
+        node: __call_0/__start__
+  - - RunFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [47, 10, 47, 36]
+        - label: flow.yaml
+          range: [7, 10, 7, 16]
+        message: 'input ''y'': ''x'' does not match declared type float'
+        node: __call_0/__start__

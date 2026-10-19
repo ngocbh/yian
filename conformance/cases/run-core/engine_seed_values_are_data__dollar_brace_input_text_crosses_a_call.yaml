@@ -1,0 +1,120 @@
+kind: run
+flow: |2
+
+  id: seed-call
+  name: seed_call
+  input:
+    text: !str
+  nodes:
+    probe:
+      kind: code
+      output: str
+      code: |
+        return "SECRET"
+    echo:
+      kind: call
+      input:
+        text: ${input.text}
+      nodes:
+        inner:
+          kind: code
+          input:
+            text: ${input.text}
+          output: str
+          code: |
+            return inputs["text"]
+      output: ${inner.output}
+  output: ${echo.output}
+inputs:
+  text: ${input.text}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: ${input.text}
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        text: ${input.text}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        text: ${input.text}
+  - [node_started, echo]
+  - - node_expanded
+    - echo
+    - prune_ids: []
+      seed:
+        text: ${input.text}
+  - [node_started, probe]
+  - - node_succeeded
+    - probe
+    - value: SECRET
+  - [node_started, echo/__start__]
+  - - node_succeeded
+    - echo/__start__
+    - value:
+        text: ${input.text}
+  - [node_started, echo/inner]
+  - - node_succeeded
+    - echo/inner
+    - value: ${input.text}
+  - [node_started, echo/__end__]
+  - - node_succeeded
+    - echo/__end__
+    - commit_target: echo
+      value: ${input.text}
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ${input.text}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        text: ${input.text}
+  - - NodeStarted
+    - node_id: echo
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          text: ${input.text}
+      node_id: echo
+  - - NodeStarted
+    - node_id: probe
+  - - NodeSucceeded
+    - node_id: probe
+      output: SECRET
+  - - NodeStarted
+    - node_id: echo/__start__
+  - - NodeSucceeded
+    - node_id: echo/__start__
+      output:
+        text: ${input.text}
+  - - NodeStarted
+    - node_id: echo/inner
+  - - NodeSucceeded
+    - node_id: echo/inner
+      output: ${input.text}
+  - - NodeStarted
+    - node_id: echo/__end__
+  - - NodeSucceeded
+    - commit_as: echo
+      node_id: echo/__end__
+      output: ${input.text}
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: ${input.text}
+  - - RunSucceeded
+    - output: ${input.text}

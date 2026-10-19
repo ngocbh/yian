@@ -1,0 +1,168 @@
+kind: run
+flow: |2
+
+  id: nested-call-loop-maxed
+  name: nested_call_loop_maxed
+  defs:
+    keep:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: code
+          code: 'return {"n": inputs["n"]}'
+          input:
+            n: ${input.n}
+          output:
+            n: int
+      output: ${step.output}
+    runaway:
+      nodes:
+        repeat:
+          kind: loop
+          call: keep
+          input:
+            n: 0
+          while: "true"
+          max: 1
+      output: ${repeat.output}
+  nodes:
+    outer:
+      kind: call
+      call: runaway
+  output: ${outer.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: loop.max_exceeded
+      frames:
+      - label: flow.yaml
+        range: [28, 3, 28, 8]
+      - label: flow.yaml
+        range: [19, 7, 19, 13]
+      message: loop 'outer/repeat' exceeded max (1)
+      node: outer/repeat~1
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, outer]
+  - - node_expanded
+    - outer
+    - prune_ids: []
+      seed: {}
+  - [node_started, outer/__start__]
+  - - node_succeeded
+    - outer/__start__
+    - value: {}
+  - [node_started, outer/repeat]
+  - - node_expanded
+    - outer/repeat
+    - prune_ids: []
+      seed:
+      - n: 0
+      - 0
+  - [node_started, outer/repeat#0/__start__]
+  - - node_succeeded
+    - outer/repeat#0/__start__
+    - value:
+        n: 0
+  - [node_started, outer/repeat#0/step]
+  - - node_succeeded
+    - outer/repeat#0/step
+    - value:
+        n: 0
+  - [node_started, outer/repeat#0/__end__]
+  - - node_succeeded
+    - outer/repeat#0/__end__
+    - value:
+        n: 0
+  - [node_started, outer/repeat~1]
+  - - node_failed
+    - outer/repeat~1
+    - failure:
+        code: loop.max_exceeded
+        frames:
+        - label: flow.yaml
+          range: [28, 3, 28, 8]
+        - label: flow.yaml
+          range: [19, 7, 19, 13]
+        message: loop 'outer/repeat' exceeded max (1)
+        node: outer/repeat~1
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: outer
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed: {}
+      node_id: outer
+  - - NodeStarted
+    - node_id: outer/__start__
+  - - NodeSucceeded
+    - node_id: outer/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: outer/repeat
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: 0
+        - 0
+      node_id: outer/repeat
+  - - NodeStarted
+    - node_id: outer/repeat#0/__start__
+  - - NodeSucceeded
+    - node_id: outer/repeat#0/__start__
+      output:
+        n: 0
+  - - NodeStarted
+    - node_id: outer/repeat#0/step
+  - - NodeSucceeded
+    - node_id: outer/repeat#0/step
+      output:
+        n: 0
+  - - NodeStarted
+    - node_id: outer/repeat#0/__end__
+  - - NodeSucceeded
+    - node_id: outer/repeat#0/__end__
+      output:
+        n: 0
+  - - NodeStarted
+    - node_id: outer/repeat~1
+  - - NodeFailed
+    - failure:
+        code: loop.max_exceeded
+        frames:
+        - label: flow.yaml
+          range: [28, 3, 28, 8]
+        - label: flow.yaml
+          range: [19, 7, 19, 13]
+        message: loop 'outer/repeat' exceeded max (1)
+        node: outer/repeat~1
+  - - RunFailed
+    - failure:
+        code: loop.max_exceeded
+        frames:
+        - label: flow.yaml
+          range: [28, 3, 28, 8]
+        - label: flow.yaml
+          range: [19, 7, 19, 13]
+        message: loop 'outer/repeat' exceeded max (1)
+        node: outer/repeat~1

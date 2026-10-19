@@ -1,0 +1,85 @@
+kind: run
+flow: |
+  id: nested
+  name: nested
+  nodes:
+    n:
+      kind: code
+      output: str
+      code: |
+        return "hi"
+    score:
+      kind: code
+      output: float
+      code: |
+        return 0.75
+    c:
+      kind: code
+      input:
+        p:
+          - !float ${score.output}
+          - ${n.output}
+      code: |
+        return inputs["p"]
+  output: ${c.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: [0.75, hi]
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, n]
+  - - node_succeeded
+    - n
+    - value: hi
+  - [node_started, score]
+  - - node_succeeded
+    - score
+    - value: 0.75
+  - [node_started, c]
+  - - node_succeeded
+    - c
+    - value: [0.75, hi]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: [0.75, hi]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: n
+  - - NodeSucceeded
+    - node_id: n
+      output: hi
+  - - NodeStarted
+    - node_id: score
+  - - NodeSucceeded
+    - node_id: score
+      output: 0.75
+  - - NodeStarted
+    - node_id: c
+  - - NodeSucceeded
+    - node_id: c
+      output: [0.75, hi]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: [0.75, hi]
+  - - RunSucceeded
+    - output: [0.75, hi]

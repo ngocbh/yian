@@ -1,0 +1,151 @@
+# The TS CODE body returns null; the message shows it in the text form (rules: messages).
+kind: run
+rules: [messages]
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    mk:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Any
+      code: |
+        return null
+  output: ${mk.output}
+python_flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    mk:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Any
+      code: |
+        return None
+  output: ${mk.output}
+inputs:
+  s: x
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      frames:
+      - label: flow.yaml
+        range: [10, 13, 10, 16]
+      message: null does not match declared type Any
+      node: mk
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        s: x
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        s: x
+  - [node_started, mk]
+  - - node_failed
+    - mk
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [10, 13, 10, 16]
+        message: null does not match declared type Any
+        node: mk
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        s: x
+  - - NodeStarted
+    - node_id: mk
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [10, 13, 10, 16]
+        message: null does not match declared type Any
+        node: mk
+  - - RunFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [10, 13, 10, 16]
+        message: null does not match declared type Any
+        node: mk
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      frames:
+      - label: flow.yaml
+        range: [10, 13, 10, 16]
+      message: None does not match declared type Any
+      node: mk
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        s: x
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        s: x
+  - [node_started, mk]
+  - - node_failed
+    - mk
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [10, 13, 10, 16]
+        message: None does not match declared type Any
+        node: mk
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        s: x
+  - - NodeStarted
+    - node_id: mk
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [10, 13, 10, 16]
+        message: None does not match declared type Any
+        node: mk
+  - - RunFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [10, 13, 10, 16]
+        message: None does not match declared type Any
+        node: mk

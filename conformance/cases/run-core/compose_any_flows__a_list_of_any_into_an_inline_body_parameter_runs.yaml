@@ -1,0 +1,119 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    mk:
+      kind: code
+      input:
+        s: ${input.s}
+      output: list(Any)
+      code: |
+        return [1, "two"]
+    c:
+      kind: call
+      input:
+        xs: ${mk.output}
+      nodes:
+        inner:
+          kind: code
+          input:
+            xs: ${input.xs}
+          code: return inputs['xs']
+      output: ${inner.output}
+  output: ${c.output}
+inputs:
+  s: x
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: [1, two]
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        s: x
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        s: x
+  - [node_started, mk]
+  - - node_succeeded
+    - mk
+    - value: [1, two]
+  - [node_started, c]
+  - - node_expanded
+    - c
+    - prune_ids: []
+      seed:
+        xs: [1, two]
+  - [node_started, c/__start__]
+  - - node_succeeded
+    - c/__start__
+    - value:
+        xs: [1, two]
+  - [node_started, c/inner]
+  - - node_succeeded
+    - c/inner
+    - value: [1, two]
+  - [node_started, c/__end__]
+  - - node_succeeded
+    - c/__end__
+    - commit_target: c
+      value: [1, two]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: [1, two]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        s: x
+  - - NodeStarted
+    - node_id: mk
+  - - NodeSucceeded
+    - node_id: mk
+      output: [1, two]
+  - - NodeStarted
+    - node_id: c
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          xs: [1, two]
+      node_id: c
+  - - NodeStarted
+    - node_id: c/__start__
+  - - NodeSucceeded
+    - node_id: c/__start__
+      output:
+        xs: [1, two]
+  - - NodeStarted
+    - node_id: c/inner
+  - - NodeSucceeded
+    - node_id: c/inner
+      output: [1, two]
+  - - NodeStarted
+    - node_id: c/__end__
+  - - NodeSucceeded
+    - commit_as: c
+      node_id: c/__end__
+      output: [1, two]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: [1, two]
+  - - RunSucceeded
+    - output: [1, two]

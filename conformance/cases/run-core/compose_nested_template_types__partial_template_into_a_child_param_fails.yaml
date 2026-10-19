@@ -1,0 +1,124 @@
+kind: run
+flow: |
+  typedefs:
+    Rec:
+      a: str
+      n: int
+    Buy:
+      conviction: float
+    Obj:
+      n: int
+    Trade:
+      action: Literal(buy)
+      conviction: float
+  id: nested_call
+  name: nested_call
+  defs:
+    child:
+      input:
+        p: !Rec
+      nodes: {}
+      output: ${input.p}
+  nodes:
+    n:
+      kind: code
+      code: |
+        return 5
+    c:
+      kind: call
+      call: child
+      input:
+        p: {a: '${n.output}', n: 1}
+  output: ${c.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      frames:
+      - label: flow.yaml
+        range: [25, 3, 25, 4]
+      - label: flow.yaml
+        range: [17, 10, 17, 14]
+      message: 'input ''p'': 5 does not match declared type str'
+      node: c/__start__
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, n]
+  - - node_succeeded
+    - n
+    - value: 5
+  - [node_started, c]
+  - - node_expanded
+    - c
+    - prune_ids: []
+      seed:
+        p:
+          a: 5
+          n: 1
+  - [node_started, c/__start__]
+  - - node_failed
+    - c/__start__
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [25, 3, 25, 4]
+        - label: flow.yaml
+          range: [17, 10, 17, 14]
+        message: 'input ''p'': 5 does not match declared type str'
+        node: c/__start__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: n
+  - - NodeSucceeded
+    - node_id: n
+      output: 5
+  - - NodeStarted
+    - node_id: c
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          p:
+            a: 5
+            n: 1
+      node_id: c
+  - - NodeStarted
+    - node_id: c/__start__
+  - - NodeFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [25, 3, 25, 4]
+        - label: flow.yaml
+          range: [17, 10, 17, 14]
+        message: 'input ''p'': 5 does not match declared type str'
+        node: c/__start__
+  - - RunFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [25, 3, 25, 4]
+        - label: flow.yaml
+          range: [17, 10, 17, 14]
+        message: 'input ''p'': 5 does not match declared type str'
+        node: c/__start__

@@ -1,0 +1,78 @@
+kind: run
+flow: |2
+
+  id: nesting
+  name: nesting
+  nodes:
+    deep:
+      kind: code
+
+      code: |
+        let v = "leaf"
+        for (let i = 0; i < 100; i++)
+            v = [v]
+        return v
+  output: ${deep.output}
+python_flow: |2
+
+  id: nesting
+  name: nesting
+  nodes:
+    deep:
+      kind: code
+
+      code: |
+        v = "leaf"
+        for _ in range(100):
+            v = [v]
+        return v
+  output: ${deep.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - [leaf]
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, deep]
+  - - node_succeeded
+    - deep
+    - value:
+      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - [leaf]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - [leaf]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: deep
+  - - NodeSucceeded
+    - node_id: deep
+      output:
+      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - [leaf]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - [leaf]
+  - - RunSucceeded
+    - output:
+      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - [leaf]

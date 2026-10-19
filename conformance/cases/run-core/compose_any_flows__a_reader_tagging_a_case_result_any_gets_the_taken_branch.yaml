@@ -1,0 +1,89 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    route:
+      kind: case
+      cases:
+        - when: ${input.s == 'i'}
+          then: one
+      else: a
+    one: !int 1
+    a: !str "a"
+    use:
+      kind: code
+      input:
+        v: !Any ${route.output}
+      code: return inputs['v']
+  output: ${use.output}
+inputs:
+  s: i
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: 1
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        s: i
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        s: i
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: one
+  - [node_started, one]
+  - - node_succeeded
+    - one
+    - value: 1
+  - [node_started, use]
+  - - node_succeeded
+    - use
+    - value: 1
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: 1
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        s: i
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: one
+      node_id: route
+  - - NodeSkipped
+    - node_id: a
+  - - NodeStarted
+    - node_id: one
+  - - NodeSucceeded
+    - node_id: one
+      output: 1
+  - - NodeStarted
+    - node_id: use
+  - - NodeSucceeded
+    - node_id: use
+      output: 1
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: 1
+  - - RunSucceeded
+    - output: 1

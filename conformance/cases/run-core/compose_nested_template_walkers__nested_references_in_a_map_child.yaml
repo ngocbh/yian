@@ -1,0 +1,269 @@
+kind: run
+flow: |2
+
+  id: nested_map
+  name: nested_map
+  defs:
+    wrap:
+      input:
+        v: !int
+      nodes:
+        e:
+          kind: code
+          input:
+            v: ${input.v}
+          code: "return inputs[\"v\"] * 10n"
+        w:
+          kind: code
+          input:
+            x:
+              v: ${input.v}
+              e: ['${e.output}']
+              note: v=${input.v}
+          code: return inputs["x"]
+      output: ${w.output}
+  nodes:
+    m:
+      kind: map
+      call: wrap
+      over: [1, 2]
+      input:
+        v: ${item}
+  output: ${m.output}
+python_flow: |2
+
+  id: nested_map
+  name: nested_map
+  defs:
+    wrap:
+      input:
+        v: !int
+      nodes:
+        e:
+          kind: code
+          input:
+            v: ${input.v}
+          code: return inputs["v"] * 10
+        w:
+          kind: code
+          input:
+            x:
+              v: ${input.v}
+              e: ['${e.output}']
+              note: v=${input.v}
+          code: return inputs["x"]
+      output: ${w.output}
+  nodes:
+    m:
+      kind: map
+      call: wrap
+      over: [1, 2]
+      input:
+        v: ${item}
+  output: ${m.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+    - e: [10]
+      note: v=1
+      v: 1
+    - e: [20]
+      note: v=2
+      v: 2
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, m]
+  - - node_expanded
+    - m
+    - prune_ids: []
+      seed:
+      - v: 1
+      - v: 2
+  - [node_started, m/__start__]
+  - - node_succeeded
+    - m/__start__
+    - value: {}
+  - [node_started, m#0/__start__]
+  - - node_succeeded
+    - m#0/__start__
+    - value:
+        v: 1
+  - [node_started, m#1/__start__]
+  - - node_succeeded
+    - m#1/__start__
+    - value:
+        v: 2
+  - [node_started, m#0/e]
+  - - node_succeeded
+    - m#0/e
+    - value: 10
+  - [node_started, m#1/e]
+  - - node_succeeded
+    - m#1/e
+    - value: 20
+  - [node_started, m#0/w]
+  - - node_succeeded
+    - m#0/w
+    - value:
+        e: [10]
+        note: v=1
+        v: 1
+  - [node_started, m#1/w]
+  - - node_succeeded
+    - m#1/w
+    - value:
+        e: [20]
+        note: v=2
+        v: 2
+  - [node_started, m#0/__end__]
+  - - node_succeeded
+    - m#0/__end__
+    - value:
+        e: [10]
+        note: v=1
+        v: 1
+  - [node_started, m#1/__end__]
+  - - node_succeeded
+    - m#1/__end__
+    - value:
+        e: [20]
+        note: v=2
+        v: 2
+  - [node_started, m/__end__]
+  - - node_succeeded
+    - m/__end__
+    - commit_target: m
+      value:
+      - e: [10]
+        note: v=1
+        v: 1
+      - e: [20]
+        note: v=2
+        v: 2
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+      - e: [10]
+        note: v=1
+        v: 1
+      - e: [20]
+        note: v=2
+        v: 2
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: m
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - v: 1
+        - v: 2
+      node_id: m
+  - - NodeStarted
+    - node_id: m/__start__
+  - - NodeSucceeded
+    - node_id: m/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: m#0/__start__
+  - - NodeSucceeded
+    - node_id: m#0/__start__
+      output:
+        v: 1
+  - - NodeStarted
+    - node_id: m#1/__start__
+  - - NodeSucceeded
+    - node_id: m#1/__start__
+      output:
+        v: 2
+  - - NodeStarted
+    - node_id: m#0/e
+  - - NodeSucceeded
+    - node_id: m#0/e
+      output: 10
+  - - NodeStarted
+    - node_id: m#1/e
+  - - NodeSucceeded
+    - node_id: m#1/e
+      output: 20
+  - - NodeStarted
+    - node_id: m#0/w
+  - - NodeSucceeded
+    - node_id: m#0/w
+      output:
+        e: [10]
+        note: v=1
+        v: 1
+  - - NodeStarted
+    - node_id: m#1/w
+  - - NodeSucceeded
+    - node_id: m#1/w
+      output:
+        e: [20]
+        note: v=2
+        v: 2
+  - - NodeStarted
+    - node_id: m#0/__end__
+  - - NodeSucceeded
+    - node_id: m#0/__end__
+      output:
+        e: [10]
+        note: v=1
+        v: 1
+  - - NodeStarted
+    - node_id: m#1/__end__
+  - - NodeSucceeded
+    - node_id: m#1/__end__
+      output:
+        e: [20]
+        note: v=2
+        v: 2
+  - - NodeStarted
+    - node_id: m/__end__
+  - - NodeSucceeded
+    - commit_as: m
+      node_id: m/__end__
+      output:
+      - e: [10]
+        note: v=1
+        v: 1
+      - e: [20]
+        note: v=2
+        v: 2
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+      - e: [10]
+        note: v=1
+        v: 1
+      - e: [20]
+        note: v=2
+        v: 2
+  - - RunSucceeded
+    - output:
+      - e: [10]
+        note: v=1
+        v: 1
+      - e: [20]
+        note: v=2
+        v: 2

@@ -1,0 +1,215 @@
+kind: run
+rules: [messages]
+flow: |2
+
+  id: gatekeeper
+  name: gatekeeper
+  defs:
+    gate:
+      input:
+        ok: !bool
+      nodes:
+        e:
+          kind: code
+          input:
+            ok: ${input.ok}
+          code: |
+            return inputs["ok"]
+      output: ${e.output}
+  input:
+    answer: !str
+  nodes:
+    src:
+      kind: code
+      input:
+        a: ${input.answer}
+      code: |
+        return inputs["a"]
+    g:
+      kind: call
+      call: gate
+      input:
+        ok: ${src.output}
+  output: ${g.output}
+inputs:
+  answer: yes
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      frames:
+      - label: flow.yaml
+        range: [25, 3, 25, 4]
+      - label: flow.yaml
+        range: [7, 11, 7, 16]
+      message: 'input ''ok'': "yes" does not match declared type bool'
+      node: g/__start__
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        answer: yes
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        answer: yes
+  - [node_started, src]
+  - - node_succeeded
+    - src
+    - value: yes
+  - [node_started, g]
+  - - node_expanded
+    - g
+    - prune_ids: []
+      seed:
+        ok: yes
+  - [node_started, g/__start__]
+  - - node_failed
+    - g/__start__
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [25, 3, 25, 4]
+        - label: flow.yaml
+          range: [7, 11, 7, 16]
+        message: 'input ''ok'': "yes" does not match declared type bool'
+        node: g/__start__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        answer: yes
+  - - NodeStarted
+    - node_id: src
+  - - NodeSucceeded
+    - node_id: src
+      output: yes
+  - - NodeStarted
+    - node_id: g
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          ok: yes
+      node_id: g
+  - - NodeStarted
+    - node_id: g/__start__
+  - - NodeFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [25, 3, 25, 4]
+        - label: flow.yaml
+          range: [7, 11, 7, 16]
+        message: 'input ''ok'': "yes" does not match declared type bool'
+        node: g/__start__
+  - - RunFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [25, 3, 25, 4]
+        - label: flow.yaml
+          range: [7, 11, 7, 16]
+        message: 'input ''ok'': "yes" does not match declared type bool'
+        node: g/__start__
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      frames:
+      - label: flow.yaml
+        range: [25, 3, 25, 4]
+      - label: flow.yaml
+        range: [7, 11, 7, 16]
+      message: 'input ''ok'': ''yes'' does not match declared type bool'
+      node: g/__start__
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        answer: yes
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        answer: yes
+  - [node_started, src]
+  - - node_succeeded
+    - src
+    - value: yes
+  - [node_started, g]
+  - - node_expanded
+    - g
+    - prune_ids: []
+      seed:
+        ok: yes
+  - [node_started, g/__start__]
+  - - node_failed
+    - g/__start__
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [25, 3, 25, 4]
+        - label: flow.yaml
+          range: [7, 11, 7, 16]
+        message: 'input ''ok'': ''yes'' does not match declared type bool'
+        node: g/__start__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        answer: yes
+  - - NodeStarted
+    - node_id: src
+  - - NodeSucceeded
+    - node_id: src
+      output: yes
+  - - NodeStarted
+    - node_id: g
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          ok: yes
+      node_id: g
+  - - NodeStarted
+    - node_id: g/__start__
+  - - NodeFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [25, 3, 25, 4]
+        - label: flow.yaml
+          range: [7, 11, 7, 16]
+        message: 'input ''ok'': ''yes'' does not match declared type bool'
+        node: g/__start__
+  - - RunFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [25, 3, 25, 4]
+        - label: flow.yaml
+          range: [7, 11, 7, 16]
+        message: 'input ''ok'': ''yes'' does not match declared type bool'
+        node: g/__start__

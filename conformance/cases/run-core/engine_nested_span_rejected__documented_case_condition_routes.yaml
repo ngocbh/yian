@@ -1,0 +1,96 @@
+kind: run
+flow: |2
+
+  id: f
+  name: f
+  input:
+    n: !Optional(int) null
+    approve: !bool false
+    label: !str none
+  nodes:
+    score:
+      kind: code
+      code: "return inputs['n']"
+      input: {n: '${input.n}'}
+      output: Optional(int)
+    gate:
+      kind: case
+      cases:
+        - when: "score.output > 0 and score.output < 10"
+          then: hot
+      else: cold
+    hot: {kind: code, code: "return 'hot'", output: str}
+    cold: {kind: code, code: "return 'cold'", output: str}
+  output: ${hot.output | cold.output}
+inputs:
+  n: 50
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: cold
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        n: 50
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        approve: false
+        label: none
+        n: 50
+  - [node_started, score]
+  - - node_succeeded
+    - score
+    - value: 50
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: '#else'
+  - [node_started, cold]
+  - - node_succeeded
+    - cold
+    - value: cold
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: cold
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        approve: false
+        label: none
+        n: 50
+  - - NodeStarted
+    - node_id: score
+  - - NodeSucceeded
+    - node_id: score
+      output: 50
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: gate
+  - - NodeSkipped
+    - node_id: hot
+  - - NodeStarted
+    - node_id: cold
+  - - NodeSucceeded
+    - node_id: cold
+      output: cold
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: cold
+  - - RunSucceeded
+    - output: cold

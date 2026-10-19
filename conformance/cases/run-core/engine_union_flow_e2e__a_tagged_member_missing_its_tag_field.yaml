@@ -1,0 +1,323 @@
+kind: run
+rules: [messages]
+flow: |2
+
+  id: unions
+  name: unions
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', qty: int, price: float}
+    Hold: {action: 'Literal(hold)', note: str}
+    Decision: Union(Buy, Sell, Hold)
+    Text: {text: str}
+    Num: {num: int}
+    Note: Union(Text, Num)
+  input:
+    decision: !object
+    note: !object
+  defs:
+    sell_flow:
+      input:
+        order: !Sell
+      nodes:
+        fill:
+          kind: code
+          input:
+            qty: ${input.order.qty}
+            price: ${input.order.price}
+          code: |
+            return Number(inputs["qty"]) * inputs["price"]
+          output: float
+      output: ${fill.output}
+  nodes:
+    d:
+      kind: code
+      input:
+        decision: ${input.decision}
+      code: |
+        return inputs["decision"]
+      output: Decision
+    route:
+      kind: case
+      on: ${d.output.action}
+      cases:
+        - when: buy
+          then: place_buy
+        - when: sell
+          then: call(sell_flow, order=${d.output})
+      else: log_hold
+    place_buy:
+      kind: code
+      input:
+        qty: ${d.output.qty}
+      code: |
+        return "buy " + String(inputs["qty"])
+      output: str
+    log_hold:
+      kind: code
+      input:
+        note: ${d.output.note}
+      code: |
+        return "hold: " + inputs["note"]
+      output: str
+    n:
+      kind: code
+      input:
+        note: ${input.note}
+      code: |
+        return inputs["note"]
+      output: Note
+    kind_of:
+      kind: case
+      cases:
+        - when: isinstance(n.output, Text)
+          then: shout
+      else: double
+    shout:
+      kind: code
+      input:
+        text: ${n.output.text}
+      code: |
+        return inputs["text"].toUpperCase()
+      output: str
+    double:
+      kind: code
+      depends_on: [n]
+      code: |
+        return "number"
+      output: str
+  output:
+    action: ${d.output.action}
+    trade: ${place_buy.output | __call_0.output | log_hold.output}
+    note: ${shout.output | double.output}
+python_flow: |2
+
+  id: unions
+  name: unions
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', qty: int, price: float}
+    Hold: {action: 'Literal(hold)', note: str}
+    Decision: Union(Buy, Sell, Hold)
+    Text: {text: str}
+    Num: {num: int}
+    Note: Union(Text, Num)
+  input:
+    decision: !object
+    note: !object
+  defs:
+    sell_flow:
+      input:
+        order: !Sell
+      nodes:
+        fill:
+          kind: code
+          input:
+            qty: ${input.order.qty}
+            price: ${input.order.price}
+          code: |
+            return inputs["qty"] * inputs["price"]
+          output: float
+      output: ${fill.output}
+  nodes:
+    d:
+      kind: code
+      input:
+        decision: ${input.decision}
+      code: |
+        return inputs["decision"]
+      output: Decision
+    route:
+      kind: case
+      on: ${d.output.action}
+      cases:
+        - when: buy
+          then: place_buy
+        - when: sell
+          then: call(sell_flow, order=${d.output})
+      else: log_hold
+    place_buy:
+      kind: code
+      input:
+        qty: ${d.output.qty}
+      code: |
+        return "buy " + str(inputs["qty"])
+      output: str
+    log_hold:
+      kind: code
+      input:
+        note: ${d.output.note}
+      code: |
+        return "hold: " + inputs["note"]
+      output: str
+    n:
+      kind: code
+      input:
+        note: ${input.note}
+      code: |
+        return inputs["note"]
+      output: Note
+    kind_of:
+      kind: case
+      cases:
+        - when: isinstance(n.output, Text)
+          then: shout
+      else: double
+    shout:
+      kind: code
+      input:
+        text: ${n.output.text}
+      code: |
+        return inputs["text"].upper()
+      output: str
+    double:
+      kind: code
+      depends_on: [n]
+      code: |
+        return "number"
+      output: str
+  output:
+    action: ${d.output.action}
+    trade: ${place_buy.output | __call_0.output | log_hold.output}
+    note: ${shout.output | double.output}
+inputs:
+  decision:
+    qty: 2
+  note:
+    num: 1
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      frames:
+      - label: flow.yaml
+        range: [36, 13, 36, 21]
+      message: missing tag field 'action' (expected one of ["buy","hold","sell"])
+      node: d
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        decision:
+          qty: 2
+        note:
+          num: 1
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        decision:
+          qty: 2
+        note:
+          num: 1
+  - [node_started, d]
+  - - node_failed
+    - d
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [36, 13, 36, 21]
+        message: missing tag field 'action' (expected one of ["buy","hold","sell"])
+        node: d
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        decision:
+          qty: 2
+        note:
+          num: 1
+  - - NodeStarted
+    - node_id: d
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [36, 13, 36, 21]
+        message: missing tag field 'action' (expected one of ["buy","hold","sell"])
+        node: d
+  - - RunFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [36, 13, 36, 21]
+        message: missing tag field 'action' (expected one of ["buy","hold","sell"])
+        node: d
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      frames:
+      - label: flow.yaml
+        range: [36, 13, 36, 21]
+      message: missing tag field 'action' (expected one of ['buy', 'hold', 'sell'])
+      node: d
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        decision:
+          qty: 2
+        note:
+          num: 1
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        decision:
+          qty: 2
+        note:
+          num: 1
+  - [node_started, d]
+  - - node_failed
+    - d
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [36, 13, 36, 21]
+        message: missing tag field 'action' (expected one of ['buy', 'hold', 'sell'])
+        node: d
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        decision:
+          qty: 2
+        note:
+          num: 1
+  - - NodeStarted
+    - node_id: d
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [36, 13, 36, 21]
+        message: missing tag field 'action' (expected one of ['buy', 'hold', 'sell'])
+        node: d
+  - - RunFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [36, 13, 36, 21]
+        message: missing tag field 'action' (expected one of ['buy', 'hold', 'sell'])
+        node: d

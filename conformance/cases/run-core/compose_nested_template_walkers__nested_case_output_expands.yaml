@@ -1,0 +1,119 @@
+kind: run
+flow: |2
+
+  id: nested_case
+  name: nested_case
+  input:
+    go: !bool
+  nodes:
+    route:
+      kind: case
+      cases:
+        - when: ${input.go}
+          then: yes_branch
+      else: no_branch
+    yes_branch:
+      kind: code
+      code: return "yes"
+    no_branch:
+      kind: code
+      code: return "no"
+    c:
+      kind: code
+      input:
+        x:
+          picked: ${route.output}
+          note: took ${route.output}
+      code: return inputs["x"]
+  output:
+    c: ${c.output}
+    direct:
+      - ${route.output}
+inputs:
+  go: true
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      c:
+        note: took yes
+        picked: yes
+      direct: [yes]
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        go: true
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        go: true
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: yes_branch
+  - [node_started, yes_branch]
+  - - node_succeeded
+    - yes_branch
+    - value: yes
+  - [node_started, c]
+  - - node_succeeded
+    - c
+    - value:
+        note: took yes
+        picked: yes
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        c:
+          note: took yes
+          picked: yes
+        direct: [yes]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        go: true
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: yes_branch
+      node_id: route
+  - - NodeSkipped
+    - node_id: no_branch
+  - - NodeStarted
+    - node_id: yes_branch
+  - - NodeSucceeded
+    - node_id: yes_branch
+      output: yes
+  - - NodeStarted
+    - node_id: c
+  - - NodeSucceeded
+    - node_id: c
+      output:
+        note: took yes
+        picked: yes
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        c:
+          note: took yes
+          picked: yes
+        direct: [yes]
+  - - RunSucceeded
+    - output:
+        c:
+          note: took yes
+          picked: yes
+        direct: [yes]

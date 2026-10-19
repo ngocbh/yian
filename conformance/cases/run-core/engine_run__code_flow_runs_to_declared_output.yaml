@@ -1,0 +1,97 @@
+kind: run
+flow: |2
+
+  id: run-plan
+  name: plan_flow
+  input:
+    topic: !str
+  nodes:
+    plan:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:make_plan
+      input:
+        topic: ${input.topic}
+      output:
+        rating: str
+        score: float
+  output:
+    rating: ${plan.output.rating}
+    score: ${plan.output.score}
+python_flow: |2
+
+  id: run-plan
+  name: plan_flow
+  input:
+    topic: !str
+  nodes:
+    plan:
+      kind: code
+      code: tests.engine._compose_codefns:make_plan
+      input:
+        topic: ${input.topic}
+      output:
+        rating: str
+        score: float
+  output:
+    rating: ${plan.output.rating}
+    score: ${plan.output.score}
+inputs:
+  topic: ACME
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      rating: plan for ACME
+      score: 0.9
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        topic: ACME
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        topic: ACME
+  - [node_started, plan]
+  - - node_succeeded
+    - plan
+    - value:
+        rating: plan for ACME
+        score: 0.9
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        rating: plan for ACME
+        score: 0.9
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        topic: ACME
+  - - NodeStarted
+    - node_id: plan
+  - - NodeSucceeded
+    - node_id: plan
+      output:
+        rating: plan for ACME
+        score: 0.9
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        rating: plan for ACME
+        score: 0.9
+  - - RunSucceeded
+    - output:
+        rating: plan for ACME
+        score: 0.9

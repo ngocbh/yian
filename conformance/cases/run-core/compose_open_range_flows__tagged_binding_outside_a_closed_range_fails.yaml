@@ -1,0 +1,94 @@
+kind: run
+flow: |2
+
+  id: tagged_binding
+  name: tagged_binding
+  input:
+    v: !int
+  nodes:
+    a:
+      kind: code
+      input:
+        v: ${input.v}
+      code: |
+        return inputs["v"]
+      output: int(0..)
+    use:
+      kind: code
+      input:
+        x: !int(0..100) ${a.output}
+      code: |
+        return inputs["x"]
+      output: int
+  output: ${use.output}
+inputs:
+  v: 500
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      frames:
+      - label: flow.yaml
+        range: [17, 10, 17, 34]
+      message: 'binding ''x'': 500 is outside inclusive int bounds (0, 100)'
+      node: use
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        v: 500
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        v: 500
+  - [node_started, a]
+  - - node_succeeded
+    - a
+    - value: 500
+  - [node_started, use]
+  - - node_failed
+    - use
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [17, 10, 17, 34]
+        message: 'binding ''x'': 500 is outside inclusive int bounds (0, 100)'
+        node: use
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        v: 500
+  - - NodeStarted
+    - node_id: a
+  - - NodeSucceeded
+    - node_id: a
+      output: 500
+  - - NodeStarted
+    - node_id: use
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [17, 10, 17, 34]
+        message: 'binding ''x'': 500 is outside inclusive int bounds (0, 100)'
+        node: use
+  - - RunFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [17, 10, 17, 34]
+        message: 'binding ''x'': 500 is outside inclusive int bounds (0, 100)'
+        node: use

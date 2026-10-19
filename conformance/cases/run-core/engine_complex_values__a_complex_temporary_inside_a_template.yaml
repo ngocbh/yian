@@ -1,0 +1,112 @@
+kind: run
+rules: [arithmetic]
+flow: |2
+
+  id: complex
+  name: complex
+  nodes:
+    c:
+      kind: code
+      input:
+        y: v=${(0 - 8) ** 0.5}
+      code: |
+        return inputs["y"]
+  output: ${c.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.evaluate
+      frames:
+      - label: flow.yaml
+        range: [8, 10, 8, 29]
+      message: '** on -8 and 0.5 has no numeric result'
+      node: c
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, c]
+  - - node_failed
+    - c
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [8, 10, 8, 29]
+        message: '** on -8 and 0.5 has no numeric result'
+        node: c
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: c
+  - - NodeFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [8, 10, 8, 29]
+        message: '** on -8 and 0.5 has no numeric result'
+        node: c
+  - - RunFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [8, 10, 8, 29]
+        message: '** on -8 and 0.5 has no numeric result'
+        node: c
+python_expect:
+  output:
+    status: succeeded
+    output: v=(1.7319121124709868e-16+2.8284271247461903j)
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, c]
+  - - node_succeeded
+    - c
+    - value: v=(1.7319121124709868e-16+2.8284271247461903j)
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: v=(1.7319121124709868e-16+2.8284271247461903j)
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: c
+  - - NodeSucceeded
+    - node_id: c
+      output: v=(1.7319121124709868e-16+2.8284271247461903j)
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: v=(1.7319121124709868e-16+2.8284271247461903j)
+  - - RunSucceeded
+    - output: v=(1.7319121124709868e-16+2.8284271247461903j)

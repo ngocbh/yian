@@ -1,0 +1,151 @@
+kind: run
+flow: |2
+
+  id: case-source
+  name: case_source
+  input:
+    score: !float
+    topic: !str
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.score >= 0.5"
+          then: pro
+    pro:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:pick_pro
+      input:
+        topic: ${input.topic}
+      output: str
+    con:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:pick_con
+      input:
+        topic: ${input.topic}
+      output: str
+    note:
+      kind: code
+      depends_on: [gate]
+      code: ./fixtures/compose_codefns.ts:cautious
+      input:
+        topic: ${input.topic}
+      output: str
+  output:
+    pick: "${pro.output}"
+    note: ${note.output}
+python_flow: |2
+
+  id: case-source
+  name: case_source
+  input:
+    score: !float
+    topic: !str
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.score >= 0.5"
+          then: pro
+    pro:
+      kind: code
+      code: tests.engine._compose_codefns:pick_pro
+      input:
+        topic: ${input.topic}
+      output: str
+    con:
+      kind: code
+      code: tests.engine._compose_codefns:pick_con
+      input:
+        topic: ${input.topic}
+      output: str
+    note:
+      kind: code
+      depends_on: [gate]
+      code: tests.engine._compose_codefns:cautious
+      input:
+        topic: ${input.topic}
+      output: str
+  output:
+    pick: "${pro.output}"
+    note: ${note.output}
+inputs:
+  score: 0.2
+  topic: ACME
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      note: cautious note for ACME
+      pick: null
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        score: 0.2
+        topic: ACME
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        score: 0.2
+        topic: ACME
+  - [node_started, con]
+  - - node_succeeded
+    - con
+    - value: 'con: ACME'
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: '#else'
+  - [node_started, note]
+  - - node_succeeded
+    - note
+    - value: cautious note for ACME
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        note: cautious note for ACME
+        pick: null
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        score: 0.2
+        topic: ACME
+  - - NodeStarted
+    - node_id: con
+  - - NodeSucceeded
+    - node_id: con
+      output: 'con: ACME'
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: gate
+  - - NodeSkipped
+    - node_id: pro
+  - - NodeStarted
+    - node_id: note
+  - - NodeSucceeded
+    - node_id: note
+      output: cautious note for ACME
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        note: cautious note for ACME
+        pick: null
+  - - RunSucceeded
+    - output:
+        note: cautious note for ACME
+        pick: null

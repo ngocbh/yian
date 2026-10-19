@@ -1,0 +1,98 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    mk:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Any
+      code: |
+        return "a"
+    route:
+      kind: case
+      on: ${mk.output}
+      cases:
+        - when: a
+          then: hit
+      else: miss
+    hit:
+      kind: code
+      output: str
+      code: return 'hit'
+    miss:
+      kind: code
+      output: str
+      code: return 'miss'
+  output: ${hit.output | miss.output}
+inputs:
+  s: x
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: hit
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        s: x
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        s: x
+  - [node_started, mk]
+  - - node_succeeded
+    - mk
+    - value: a
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: hit
+  - [node_started, hit]
+  - - node_succeeded
+    - hit
+    - value: hit
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: hit
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        s: x
+  - - NodeStarted
+    - node_id: mk
+  - - NodeSucceeded
+    - node_id: mk
+      output: a
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: hit
+      node_id: route
+  - - NodeSkipped
+    - node_id: miss
+  - - NodeStarted
+    - node_id: hit
+  - - NodeSucceeded
+    - node_id: hit
+      output: hit
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: hit
+  - - RunSucceeded
+    - output: hit

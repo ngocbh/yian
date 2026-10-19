@@ -1,0 +1,157 @@
+kind: run
+rules: [messages]
+flow: |2
+
+  id: tagged_buy
+  name: tagged_buy
+  typedefs:
+    Buy:
+      action: Literal(buy)
+      conviction: float
+  nodes:
+    d:
+      kind: code
+      output: object
+      code: |
+        return {"conviction": 0.5}
+    use:
+      kind: code
+      input:
+        decision: !Buy ${d.output}
+      code: |
+        return inputs["decision"]
+  output: ${use.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      frames:
+      - label: flow.yaml
+        range: [17, 17, 17, 33]
+      message: 'binding ''decision'': record missing required fields: ["action"]'
+      node: use
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, d]
+  - - node_succeeded
+    - d
+    - value:
+        conviction: 0.5
+  - [node_started, use]
+  - - node_failed
+    - use
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [17, 17, 17, 33]
+        message: 'binding ''decision'': record missing required fields: ["action"]'
+        node: use
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: d
+  - - NodeSucceeded
+    - node_id: d
+      output:
+        conviction: 0.5
+  - - NodeStarted
+    - node_id: use
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [17, 17, 17, 33]
+        message: 'binding ''decision'': record missing required fields: ["action"]'
+        node: use
+  - - RunFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [17, 17, 17, 33]
+        message: 'binding ''decision'': record missing required fields: ["action"]'
+        node: use
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      frames:
+      - label: flow.yaml
+        range: [17, 17, 17, 33]
+      message: 'binding ''decision'': record missing required fields: [''action'']'
+      node: use
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, d]
+  - - node_succeeded
+    - d
+    - value:
+        conviction: 0.5
+  - [node_started, use]
+  - - node_failed
+    - use
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [17, 17, 17, 33]
+        message: 'binding ''decision'': record missing required fields: [''action'']'
+        node: use
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: d
+  - - NodeSucceeded
+    - node_id: d
+      output:
+        conviction: 0.5
+  - - NodeStarted
+    - node_id: use
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [17, 17, 17, 33]
+        message: 'binding ''decision'': record missing required fields: [''action'']'
+        node: use
+  - - RunFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [17, 17, 17, 33]
+        message: 'binding ''decision'': record missing required fields: [''action'']'
+        node: use

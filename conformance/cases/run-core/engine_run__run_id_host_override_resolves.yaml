@@ -1,0 +1,78 @@
+kind: run
+flow: |2
+
+  id: run-runid
+  name: runid_flow
+  input:
+    topic: !str
+  nodes:
+    echo:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo_rid
+      input:
+        rid: ${system.run_id}
+      output: str
+  output: ${echo.output}
+python_flow: |2
+
+  id: run-runid
+  name: runid_flow
+  input:
+    topic: !str
+  nodes:
+    echo:
+      kind: code
+      code: tests.engine._compose_codefns:echo_rid
+      input:
+        rid: ${system.run_id}
+      output: str
+  output: ${echo.output}
+inputs:
+  topic: ACME
+run:
+  run_id: rid-123
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: rid-123
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs:
+        topic: ACME
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        topic: ACME
+  - [node_started, echo]
+  - - node_succeeded
+    - echo
+    - value: rid-123
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: rid-123
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        topic: ACME
+  - - NodeStarted
+    - node_id: echo
+  - - NodeSucceeded
+    - node_id: echo
+      output: rid-123
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: rid-123
+  - - RunSucceeded
+    - output: rid-123

@@ -1,0 +1,76 @@
+kind: run
+flow: |2
+
+  id: tagged_isinstance
+  name: tagged_isinstance
+  typedefs:
+    Buy:
+      action: Literal(buy)
+      conviction: float
+  nodes:
+    d:
+      kind: code
+      output: object
+      code: |
+        return {"conviction": 0.5}
+    check:
+      kind: code
+      input:
+        is_buy: ${isinstance(d.output, Buy)}
+      code: |
+        return inputs["is_buy"]
+  output: ${check.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: false
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, d]
+  - - node_succeeded
+    - d
+    - value:
+        conviction: 0.5
+  - [node_started, check]
+  - - node_succeeded
+    - check
+    - value: false
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: false
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: d
+  - - NodeSucceeded
+    - node_id: d
+      output:
+        conviction: 0.5
+  - - NodeStarted
+    - node_id: check
+  - - NodeSucceeded
+    - node_id: check
+      output: false
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: false
+  - - RunSucceeded
+    - output: false

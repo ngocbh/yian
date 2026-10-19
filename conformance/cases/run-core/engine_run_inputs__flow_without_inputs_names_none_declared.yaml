@@ -1,0 +1,31 @@
+kind: run
+rules: [messages]
+flow: |
+  id: hello
+  name: hello
+  nodes:
+    greet:
+      kind: code
+      input:
+        t: x
+      output: str
+      code: |
+        return "hello " + inputs["t"]
+  output: ${greet.output}
+inputs:
+  b: 1
+  a: 2
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: ValueError
+    message: 'unknown inputs "a", "b"; declared inputs: (none)'
+  trace: []
+  events: []
+python_expect:
+  raises:
+    class: ValueError
+    message: 'unknown inputs ''a'', ''b''; declared inputs: (none)'
+  trace: []
+  events: []

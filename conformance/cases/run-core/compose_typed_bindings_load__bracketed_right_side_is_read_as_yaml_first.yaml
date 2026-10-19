@@ -1,0 +1,63 @@
+kind: run
+flow: |2
+
+  id: value
+  name: value
+  input:
+    a: !int
+  nodes:
+    use:
+      kind: code
+      input:
+        v: !list(str) ["$${input.a}"]
+      code: |
+        return inputs["v"]
+  output: ${use.output}
+inputs:
+  a: 1
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: ['${input.a}']
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        a: 1
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        a: 1
+  - [node_started, use]
+  - - node_succeeded
+    - use
+    - value: ['${input.a}']
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ['${input.a}']
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        a: 1
+  - - NodeStarted
+    - node_id: use
+  - - NodeSucceeded
+    - node_id: use
+      output: ['${input.a}']
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: ['${input.a}']
+  - - RunSucceeded
+    - output: ['${input.a}']

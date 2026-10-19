@@ -1,0 +1,77 @@
+kind: run
+flow: |
+  id: nested
+  name: nested
+  nodes:
+    n:
+      kind: code
+      output: str
+      code: |
+        return "hi"
+    c:
+      kind: code
+      input:
+        p:
+          q:
+            - got ${n.output}!
+      code: |
+        return inputs["p"]
+  output: ${c.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      q: [got hi!]
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, n]
+  - - node_succeeded
+    - n
+    - value: hi
+  - [node_started, c]
+  - - node_succeeded
+    - c
+    - value:
+        q: [got hi!]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        q: [got hi!]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: n
+  - - NodeSucceeded
+    - node_id: n
+      output: hi
+  - - NodeStarted
+    - node_id: c
+  - - NodeSucceeded
+    - node_id: c
+      output:
+        q: [got hi!]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        q: [got hi!]
+  - - RunSucceeded
+    - output:
+        q: [got hi!]

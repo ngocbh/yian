@@ -1,0 +1,126 @@
+kind: run
+rules: [arithmetic]
+flow: |2
+
+  id: complex
+  name: complex
+  nodes:
+    n:
+      kind: code
+      input:
+        v: ${(0 - 8) ** 0.5}
+      code: |
+        return inputs["v"]
+  output: ${n.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.evaluate
+      frames:
+      - label: flow.yaml
+        range: [8, 10, 8, 27]
+      message: '** on -8 and 0.5 has no numeric result'
+      node: n
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, n]
+  - - node_failed
+    - n
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [8, 10, 8, 27]
+        message: '** on -8 and 0.5 has no numeric result'
+        node: n
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: n
+  - - NodeFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [8, 10, 8, 27]
+        message: '** on -8 and 0.5 has no numeric result'
+        node: n
+  - - RunFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [8, 10, 8, 27]
+        message: '** on -8 and 0.5 has no numeric result'
+        node: n
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: binding.evaluate
+      frames:
+      - label: flow.yaml
+        range: [8, 10, 8, 27]
+      message: 'input ''v'': complex number (1.7319121124709868e-16+2.8284271247461903j) is not a yian value'
+      node: n
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, n]
+  - - node_failed
+    - n
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [8, 10, 8, 27]
+        message: 'input ''v'': complex number (1.7319121124709868e-16+2.8284271247461903j) is not a yian value'
+        node: n
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: n
+  - - NodeFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [8, 10, 8, 27]
+        message: 'input ''v'': complex number (1.7319121124709868e-16+2.8284271247461903j) is not a yian value'
+        node: n
+  - - RunFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [8, 10, 8, 27]
+        message: 'input ''v'': complex number (1.7319121124709868e-16+2.8284271247461903j) is not a yian value'
+        node: n

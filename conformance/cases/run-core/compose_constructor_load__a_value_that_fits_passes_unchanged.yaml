@@ -1,0 +1,107 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: Literal(buy), conviction: float}
+    Sell: {action: Literal(sell), price: float}
+    Decision: Union(Buy, Sell)
+    Size: Literal(s, m, l)
+  input:
+    order: !object
+  nodes:
+    d:
+      kind: code
+      input:
+        order: ${input.order}
+      output: object
+      code: |
+        return inputs["order"]
+    c:
+      kind: code
+      input:
+        x: ${Buy(d.output)}
+      code: |
+        return inputs["x"]
+  output: ${c.output}
+inputs:
+  order:
+    action: buy
+    conviction: 0.5
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      action: buy
+      conviction: 0.5
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        order:
+          action: buy
+          conviction: 0.5
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        order:
+          action: buy
+          conviction: 0.5
+  - [node_started, d]
+  - - node_succeeded
+    - d
+    - value:
+        action: buy
+        conviction: 0.5
+  - [node_started, c]
+  - - node_succeeded
+    - c
+    - value:
+        action: buy
+        conviction: 0.5
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        action: buy
+        conviction: 0.5
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        order:
+          action: buy
+          conviction: 0.5
+  - - NodeStarted
+    - node_id: d
+  - - NodeSucceeded
+    - node_id: d
+      output:
+        action: buy
+        conviction: 0.5
+  - - NodeStarted
+    - node_id: c
+  - - NodeSucceeded
+    - node_id: c
+      output:
+        action: buy
+        conviction: 0.5
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        action: buy
+        conviction: 0.5
+  - - RunSucceeded
+    - output:
+        action: buy
+        conviction: 0.5

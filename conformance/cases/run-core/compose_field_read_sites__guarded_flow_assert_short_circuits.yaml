@@ -1,0 +1,141 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+    Short: {action: 'Literal(short)', qty: int}
+    Hold: {action: 'Literal(hold)'}
+    Trade: Union(Buy, Short, Hold)
+    Sized: Union(Buy, Short)
+    A: {x: int}
+    B: {y: str}
+    AB: Union(A, B)
+  input:
+    s: !str
+    r: !Rec
+    o: !Order
+    ab: !AB
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: "return ({a: \"x\"})"
+  output: ${step.output}
+  asserts:
+    - "not isinstance(input.o, Buy) or input.o.qty > 0"
+python_flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+    Short: {action: 'Literal(short)', qty: int}
+    Hold: {action: 'Literal(hold)'}
+    Trade: Union(Buy, Short, Hold)
+    Sized: Union(Buy, Short)
+    A: {x: int}
+    B: {y: str}
+    AB: Union(A, B)
+  input:
+    s: !str
+    r: !Rec
+    o: !Order
+    ab: !AB
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: return dict(a='x')
+  output: ${step.output}
+  asserts:
+    - "not isinstance(input.o, Buy) or input.o.qty > 0"
+inputs:
+  s: x
+  r:
+    a: x
+  o:
+    action: sell
+  ab:
+    x: 1
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      a: x
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        ab:
+          x: 1
+        o:
+          action: sell
+        r:
+          a: x
+        s: x
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        ab:
+          x: 1
+        o:
+          action: sell
+        r:
+          a: x
+        s: x
+  - [node_started, step]
+  - - node_succeeded
+    - step
+    - value:
+        a: x
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        a: x
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        ab:
+          x: 1
+        o:
+          action: sell
+        r:
+          a: x
+        s: x
+  - - NodeStarted
+    - node_id: step
+  - - NodeSucceeded
+    - node_id: step
+      output:
+        a: x
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        a: x
+  - - RunSucceeded
+    - output:
+        a: x

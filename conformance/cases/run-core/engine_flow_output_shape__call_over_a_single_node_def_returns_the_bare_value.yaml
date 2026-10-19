@@ -1,0 +1,91 @@
+kind: run
+flow: |2
+
+  id: parent
+  name: parent
+  defs:
+    greet:
+      kind: code
+      output: str
+      code: |
+        return "hi"
+  nodes:
+    c:
+      kind: call
+      call: greet
+  output: ${c.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: hi
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, c]
+  - - node_expanded
+    - c
+    - prune_ids: []
+      seed: {}
+  - [node_started, c/__start__]
+  - - node_succeeded
+    - c/__start__
+    - value: {}
+  - [node_started, c/greet]
+  - - node_succeeded
+    - c/greet
+    - value: hi
+  - [node_started, c/__end__]
+  - - node_succeeded
+    - c/__end__
+    - commit_target: c
+      value: hi
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: hi
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: c
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed: {}
+      node_id: c
+  - - NodeStarted
+    - node_id: c/__start__
+  - - NodeSucceeded
+    - node_id: c/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: c/greet
+  - - NodeSucceeded
+    - node_id: c/greet
+      output: hi
+  - - NodeStarted
+    - node_id: c/__end__
+  - - NodeSucceeded
+    - commit_as: c
+      node_id: c/__end__
+      output: hi
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: hi
+  - - RunSucceeded
+    - output: hi

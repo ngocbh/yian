@@ -801,6 +801,29 @@ describe("error chunks", () => {
     expect(error.message).toBe(`xai stream failed (${kind}): ${message}`);
   });
 
+  // The whole error object is classified, as on the HTTP path, so text outside `message` counts.
+  test.each([
+    [503, "overloaded_error", "Try later.", "overloaded", true],
+    [429, "insufficient_quota", "Slow down.", "quota", false],
+  ] as const)("int code %p with type %p raises %s", async (code, type, message, kind, retryable) => {
+    const error = await failure([errorChunk({ code, type, message })]);
+    expect(error.kind).toBe(kind);
+    expect(error.retryable).toBe(retryable);
+    expect(error.message).toBe(`xai stream failed (${kind}): ${message}`);
+  });
+
+  test("a 403 content-policy error is refused; a plain 403 is permission", async () => {
+    // OpenRouter's moderation error.
+    const metadata = { error_type: "content_policy_violation" };
+    const flagged = await failure([errorChunk({ code: 403, message: "Input was flagged.", metadata })]);
+    expect(flagged.kind).toBe("refused");
+    expect(flagged.retryable).toBe(false);
+    expect(flagged.message).toBe("xai stream failed (refused): Input was flagged.");
+    const forbidden = await failure([errorChunk({ code: 403, message: "Forbidden." })]);
+    expect(forbidden.kind).toBe("permission");
+    expect(forbidden.message).toBe("xai stream failed (permission): Forbidden.");
+  });
+
   test("codes that aren't strings or ints in 400-599, and no code, are server errors", async () => {
     // Raw JSON, so `502.0` reaches the parser as a float.
     for (const code of ["0", "200", "399", "600", "true", "502.0", "null", "[502]"]) {

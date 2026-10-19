@@ -381,14 +381,18 @@ export class OpenAIChat implements SseProtocol {
     return new TextPart(assembly.text);
   }
 
-  /** Return the error for an error chunk's error object; its kind from its HTTP code, else its code or type. */
+  /**
+   * Return the error for an error chunk's error object; its kind from its HTTP code with the whole
+   * error object classified, else from its code or type.
+   */
   #streamFailure(error: JsonObject): ProviderError {
     const rawMessage = error["message"];
     const message = typeof rawMessage === "string" ? rawMessage : "";
     const code = error["code"];
     let kind: ErrorKind;
     if (typeof code === "bigint" && code >= 400n && code <= 599n) {
-      kind = kindForStatus(Number(code), message);
+      // Classified as the HTTP path classifies the same body, so a content-filter code in it counts.
+      kind = kindForStatus(Number(code), encodeBody({ error }, "stream error"));
     } else {
       // An error without a string code may still name its kind in `type` (`invalid_request_error`).
       const name = typeof code === "string" ? code : error["type"];

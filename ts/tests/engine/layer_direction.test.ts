@@ -164,17 +164,17 @@ const RULES: Rule[] = [
     },
   },
   {
-    name: "memory/conversation.ts imports only memory/contracts",
+    name: "memory/conversation.ts imports only memory/contracts and typesys/json",
     files: only("memory/conversation.ts"),
-    allow: ["memory/contracts"],
+    allow: ["memory/contracts", "typesys/json"],
     why: "lower memory imports undeclared dependencies",
     samples: {
       file: "memory/conversation.ts",
       bad: [
         ...["nodes", "compile", "compose", "runtime", "run", "llm_clients", "index", "diagnostics"],
-        ...["memory/episodic", "memory/session", "memory/index"],
+        ...["memory/episodic", "memory/session", "memory/index", "typesys", "typesys/index", "typesys/values"],
       ],
-      good: ["memory/contracts"],
+      good: ["memory/contracts", "typesys/json"],
     },
   },
   {
@@ -593,7 +593,7 @@ describe("layer rule snippets", () => {
   });
 
   test("an allowed import never exempts another on the same line", () => {
-    const conversation = RULES.find((r) => r.name === "memory/conversation.ts imports only memory/contracts")!;
+    const conversation = RULES.find((r) => r.name === "memory/conversation.ts imports only memory/contracts and typesys/json")!;
     const contracts = RULES.find((r) => r.name === "memory/contracts.ts imports only diagnostics and defaults")!;
     const check = (rule: Rule, path: string, text: string) =>
       ruleViolations(rule, [{ path, text }]).map((v) => v.slice(v.lastIndexOf(" -> ") + 4));

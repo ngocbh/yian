@@ -30,6 +30,28 @@
  * `sameConversationInvocation`, ledger identities compared by value, a `RecallContext` subclass
  * refused by `MemoryContextRequest`, and `MemoryContext`'s section checks.
  *
+ * From the same file, the `conversation.ts` fold, codecs and digests:
+ * `test_content_digest_excludes_ledger`, `test_admission_advances_revision_once`,
+ * `test_request_appends_new_items_and_pending_effect`,
+ * `test_observation_changes_only_matching_effect`, `test_close_preserves_unresolved_effects`,
+ * `test_transition_rejects_skipped_ordinal`, `test_admission_preserves_unresolved_or_unclosed_effects`,
+ * `test_admission_can_follow_effect_free_unclosed_invocation`,
+ * `test_conversation_codecs_round_trip_complete_history_and_detach`,
+ * `test_view_codec_rejects_wrong_closed_wire_shape`, `test_view_codec_rejects_broken_digest_chain`,
+ * `test_view_codec_rejects_impossible_history_even_with_matching_final_digest`,
+ * `test_invalid_transitions_preserve_input_evidence`,
+ * `test_later_invocation_reuses_local_ordinals_without_replacing_prior_effects`,
+ * `test_checkpoint_codec_rejects_malformed_closed_wire`, `test_codecs_reject_non_json_nested_values`,
+ * `test_codecs_reject_cycles_and_non_string_keys`,
+ * `test_checkpoint_digest_includes_complete_admission_ledger`,
+ * `test_view_codec_rejects_invalid_nested_values`,
+ * `test_view_codec_accepts_admission_after_unclosed_effectful_invocation`,
+ * `test_fold_does_not_mask_unexpected_host_fault` and
+ * `test_checkpoint_codec_rejects_retired_native_state_without_rewriting`; plus JavaScript's own
+ * checks: a 10 000-level payload through the checkpoint and view codecs and the fold, a `-0`
+ * payload that round-trips and digests as `0`, a counter past 2^53 refused, and the exact-class
+ * checks of the codecs and the fold.
+ *
  * Changed: nested carriers are kept by reference, so where Python asserts a detached copy `is not`
  * the carrier passed in, the test checks that it is the same frozen value. The JSON fields are
  * deep-frozen snapshots, so editing them throws `TypeError` (Python returns a fresh copy). A frozen
@@ -58,6 +80,27 @@
  * throws `TypeError` and that the request holds the same values. `MemoryContent` takes an options
  * object (`{ text, transcript }`); its rows check each class and message.
  *
+ * Changed (conversation): wire JSON is frozen, so a row damages a mutable `structuredClone` copy
+ * (Python edits the returned dict), and the detach check clears a copy and asserts that editing the
+ * frozen wire throws `TypeError`. Wire counters are `bigint`s and checkpoint digests hash `logJson`
+ * text (Python's canonical `json.dumps`). Python's `pytest.raises((TypeError, ValueError))` rows
+ * check the exact class and message. Python's `1.0` is a `number`, its ints `bigint`s. The `inf`
+ * row of `test_codecs_reject_non_json_nested_values` is accepted under the value number rule and
+ * moves to its own round-trip row; the tuple and `object()` rows pass a `Set` and a class
+ * instance, and the `{1: "invalid"}` row of `test_codecs_reject_cycles_and_non_string_keys` is a
+ * symbol key. A conflict's message is checked too. Where Python compares the input view against a
+ * `_copy_conversation_view` copy, the test compares its wire's `logJson` text before and after; the
+ * host-fault row spies on `crypto.createHash` (Python patches `hashlib.sha256`). The deep row
+ * compares `logJson` text, not `toEqual`.
+ *
+ * Not ported (conversation): the wire-nesting tests
+ * `test_wire_nesting_is_checked_before_fold_and_encoder_return` (`:1055`),
+ * `test_publishable_view_can_complete_and_become_the_next_admission_baseline` (`:1091`) and
+ * `test_view_codec_reserves_the_next_admission_baseline_wrapper` (`:1130`): TS memory JSON has no
+ * nesting limit, so the 10 000-level row replaces them; and
+ * `test_fold_and_codecs_revalidate_tampered_exact_carriers` (`:1239`): frozen carriers can't be
+ * tampered with.
+ *
  * Not ported: the `object.__setattr__` rows of
  * `test_nested_view_carriers_are_revalidated_and_detached` and all of
  * `test_nested_corrupted_identity_is_revalidated` (Python forges a frozen dataclass; a TS carrier is
@@ -68,10 +111,11 @@
  * Left for later: `test_conversation_contracts_are_exported_without_concrete_backend` (`:361`), the
  * `memory.__all__` half of `test_memory_context_carriers_are_contracts_only_exports` (`:1357`) and
  * the export half of `test_conversation_carriers_have_no_owner_key` (`:1367`), with the package
- * exports; and the fold and codec tests (`:523`–`:1277`), with `conversation.ts`.
+ * exports.
  */
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import crypto from "node:crypto";
 
 import * as contracts from "../../src/memory/contracts.ts";
 import {
@@ -98,6 +142,7 @@ import {
   MemoryContent,
   MemoryContext,
   MemoryContextRequest,
+  MemoryOperationError,
   MemoryOperationFailure,
   MemorySection,
   type MemorySession,
@@ -105,6 +150,16 @@ import {
   sameConversationInvocation,
   type TranscriptSource,
 } from "../../src/memory/contracts.ts";
+import {
+  advanceConversation,
+  checkpointDigest,
+  conversationCheckpointFromJson,
+  conversationCheckpointToJson,
+  conversationContentDigest,
+  conversationViewFromJson,
+  conversationViewToJson,
+} from "../../src/memory/conversation.ts";
+import { logJson } from "../../src/typesys/json.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError;
 
@@ -992,4 +1047,633 @@ test("every conversation carrier and its arrays are frozen", () => {
     new ConversationClosed(stamp(3, 3), "completed"),
   ];
   for (const carrier of carriers) expect(Object.isFrozen(carrier)).toBe(true);
+});
+
+// The conversation fold, codecs and digests.
+
+/** Wire JSON a row reaches into at any field. */
+type Wire = any;
+
+/** A mutable deep copy of frozen wire JSON, so a row can damage it as Python edits its dict. */
+function thaw(value: unknown): Wire {
+  return structuredClone(value);
+}
+
+/** The canonical text of a view's wire: equal text means an unchanged view. */
+function viewText(value: ConversationView): string {
+  return logJson(conversationViewToJson(value));
+}
+
+/** Assert that `fn` throws a non-retryable `session.conflict` with `message`. */
+function expectConflict(fn: () => unknown, message: string): void {
+  let caught: unknown;
+  try {
+    fn();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(MemoryOperationError);
+  const error = caught as MemoryOperationError;
+  expect([error.stage, error.code, error.retryable, error.message]).toEqual([
+    "conversation",
+    "session.conflict",
+    false,
+    message,
+  ]);
+}
+
+function nextStamp(revision: number, ordinal = 0, runId = "next", startSequence = 1): ConversationStamp {
+  return new ConversationStamp(new ConversationInvocation(runId, startSequence), "namespace", 0, revision, ordinal);
+}
+
+function admitted(): ConversationView {
+  const baseline = view();
+  return advanceConversation(baseline, new ConversationAdmitted(stamp(), baseline));
+}
+
+function requested(): ConversationView {
+  return advanceConversation(admitted(), new ConversationEffectRequested(stamp(1, 1), "model", {}, []));
+}
+
+function completeHistory(): [ConversationView[], ConversationCheckpoint[]] {
+  const baseline = view({ compatibility: { provider: "fake", options: [true, 1n, 1] } });
+  const events: ConversationCheckpoint[] = [
+    new ConversationAdmitted(stamp(), baseline),
+    new ConversationEffectRequested(stamp(1, 1), "model", { arguments: [true, 1n, 1] }, [
+      new ConversationItem("user", "message", { text: "héllo" }),
+    ]),
+    new ConversationEffectObserved(
+      stamp(2, 2),
+      1,
+      "completed",
+      [new ConversationItem("assistant", "message", { text: "hello" })],
+      null,
+    ),
+    new ConversationClosed(stamp(3, 3), "completed"),
+  ];
+  const views = [baseline];
+  for (const event of events) views.push(advanceConversation(views.at(-1)!, event));
+  return [views, events];
+}
+
+function changedView(value: ConversationView, changes: Partial<ViewFields>): ConversationView {
+  return view({
+    namespace: value.namespace,
+    generation: value.generation,
+    revision: value.revision,
+    compatibility: value.compatibility,
+    items: value.items,
+    effects: value.effects,
+    closedInvocations: value.closedInvocations,
+    applied: value.applied,
+    ...changes,
+  });
+}
+
+function withDigest(entry: ConversationApplied, fields: { event?: string; after?: string }): ConversationApplied {
+  return new ConversationApplied(
+    entry.operationId,
+    fields.event ?? entry.eventDigest,
+    entry.beforeDigest,
+    fields.after ?? entry.afterDigest,
+  );
+}
+
+function reseal(value: ConversationView): ConversationView {
+  return changedView(value, {
+    applied: [...value.applied.slice(0, -1), withDigest(value.applied.at(-1)!, { after: conversationContentDigest(value) })],
+  });
+}
+
+// test_content_digest_excludes_ledger
+test("the content digest excludes the ledger", () => {
+  const first = view({ revision: 1, applied: [applied()] });
+  const second = view({ revision: 1, applied: [withDigest(applied(), { event: "d".repeat(64) })] });
+  expect(conversationContentDigest(first)).toBe(conversationContentDigest(second));
+  expect(conversationContentDigest(first)).not.toBe(conversationContentDigest(view()));
+  expect(conversationContentDigest(first)).toHaveLength(64);
+  const variants = [true, 1n, 1].map((value) => view({ compatibility: { number: value } }));
+  expect(new Set(variants.map(conversationContentDigest)).size).toBe(3);
+});
+
+// test_admission_advances_revision_once
+test("admission advances the revision once", () => {
+  const before = view();
+  const checkpoint = new ConversationAdmitted(stamp(), before);
+  const after = advanceConversation(before, checkpoint);
+  expect(before).toEqual(view());
+  expect(after.revision).toBe(1);
+  expect([after.items, after.effects, after.closedInvocations]).toEqual([[], [], []]);
+  expect(after.applied).toEqual([
+    new ConversationApplied(
+      '["run",1,0]',
+      checkpointDigest(checkpoint),
+      conversationContentDigest(before),
+      conversationContentDigest(after),
+    ),
+  ]);
+  expectConflict(() => advanceConversation(after, checkpoint), "checkpoint does not name the current predecessor");
+});
+
+// test_request_appends_new_items_and_pending_effect
+test("a request appends new items and a pending effect", () => {
+  const before = admitted();
+  const item = new ConversationItem("user-1", "message", { role: "user", text: "Hi" });
+  const after = advanceConversation(before, new ConversationEffectRequested(stamp(1, 1), "model", { model: "fake" }, [item]));
+  expect([before.items, before.effects]).toEqual([[], []]);
+  expect(after.items).toEqual([item]);
+  expect(after.effects).toEqual([
+    new ConversationEffectState(invocation(), 1, "model", { model: "fake" }, "pending", [], null),
+  ]);
+  expect(after.revision).toBe(2);
+  const appended = advanceConversation(
+    after,
+    new ConversationEffectRequested(stamp(2, 2), "tool", { arguments: [1n] }, []),
+  );
+  expect(appended.items).toEqual(after.items);
+  expect(appended.effects[0]).toEqual(after.effects[0]!);
+  expect(appended.effects[1]!.effectOrdinal).toBe(2);
+});
+
+// test_observation_changes_only_matching_effect
+test("an observation changes only the matching effect", () => {
+  const before = advanceConversation(requested(), new ConversationEffectRequested(stamp(2, 2), "tool", {}, []));
+  const item = new ConversationItem("assistant-1", "message", { text: "Hi" });
+  const after = advanceConversation(before, new ConversationEffectObserved(stamp(3, 3), 1, "pending", [item], null));
+  expect(before.items).toEqual([]);
+  expect(before.effects[0]!.observationOrdinals).toEqual([]);
+  expect(after.items).toEqual([item]);
+  expect(after.effects[0]!.observationOrdinals).toEqual([3]);
+  expect(after.effects[0]!.status).toBe("pending");
+  expect(after.effects[1]).toEqual(before.effects[1]!);
+  const complete = advanceConversation(after, new ConversationEffectObserved(stamp(4, 4), 1, "completed", [], null));
+  expect(complete.effects[0]!.status).toBe("completed");
+  expect(complete.effects[0]!.observationOrdinals).toEqual([3, 4]);
+  expect(complete.items).toEqual([item]);
+  expect(complete.effects[1]).toEqual(before.effects[1]!);
+});
+
+// test_close_preserves_unresolved_effects
+test.each<ConversationTurnStatus>(["failed", "interrupted"])("closing as %s keeps unresolved effects", (status) => {
+  const before = requested();
+  const after = advanceConversation(before, new ConversationClosed(stamp(2, 2), status));
+  expect(after.effects).toEqual(before.effects);
+  expect(after.items).toEqual(before.items);
+  expect(after.closedInvocations).toEqual([new ConversationCompletion(invocation(), 2, status)]);
+  expectConflict(
+    () => advanceConversation(before, new ConversationClosed(stamp(2, 2), "completed")),
+    "successful closure cannot leave pending effects",
+  );
+  expect(before.closedInvocations).toEqual([]);
+  expect(before.revision).toBe(2);
+});
+
+// test_transition_rejects_skipped_ordinal
+test("a transition refuses a skipped ordinal", () => {
+  const before = admitted();
+  const event = new ConversationEffectRequested(stamp(2, 1), "model", {}, []);
+  const original = viewText(before);
+  expectConflict(() => advanceConversation(before, event), "checkpoint must be the current invocation's next ordinal");
+  expect(viewText(before)).toBe(original);
+  expect(event.stamp.ordinal).toBe(2);
+});
+
+// test_admission_preserves_unresolved_or_unclosed_effects
+test.each([null, "pending", "completed", "closed_failed"])(
+  "admission keeps unresolved or unclosed effects (%p)",
+  (status) => {
+    let before = requested();
+    if (status === "pending" || status === "completed") {
+      before = advanceConversation(before, new ConversationEffectObserved(stamp(2, 2), 1, status, [], null));
+    } else if (status === "closed_failed") {
+      before = advanceConversation(before, new ConversationClosed(stamp(2, 2), "failed"));
+    }
+    const original = viewText(before);
+    const after = advanceConversation(before, new ConversationAdmitted(nextStamp(before.revision), before));
+    expect(after.effects).toEqual(before.effects);
+    expect(after.closedInvocations).toEqual(before.closedInvocations);
+    expect(after.revision).toBe(before.revision + 1);
+    expect(viewText(before)).toBe(original);
+  },
+);
+
+// test_admission_can_follow_effect_free_unclosed_invocation
+test("admission can follow an effect-free unclosed invocation", () => {
+  const before = admitted();
+  const after = advanceConversation(before, new ConversationAdmitted(nextStamp(1), before));
+  expect(after.revision).toBe(2);
+  expect(after.closedInvocations).toEqual([]);
+});
+
+// test_conversation_codecs_round_trip_complete_history_and_detach
+test("the conversation codecs round-trip a complete history and detach it", () => {
+  const [views, events] = completeHistory();
+  for (const value of views) {
+    const encoded = conversationViewToJson(value);
+    const decoded = conversationViewFromJson(encoded);
+    expect(decoded).toEqual(value);
+    expect(decoded).not.toBe(value);
+    expect(conversationViewToJson(decoded)).toEqual(encoded);
+    expect(() => (encoded.compatibility as Wire).options.splice(0)).toThrow(TypeError);
+    const copy = thaw(encoded);
+    const fromCopy = conversationViewFromJson(copy);
+    copy.compatibility.options.length = 0;
+    expect(fromCopy.compatibility.options).toEqual([true, 1n, 1]);
+    expect(decoded.compatibility.options).toEqual([true, 1n, 1]);
+  }
+  for (const event of events) {
+    const encoded = conversationCheckpointToJson(event);
+    const decoded = conversationCheckpointFromJson(encoded);
+    expect(decoded).toEqual(event);
+    expect(decoded).not.toBe(event);
+    expect(Object.isFrozen(encoded)).toBe(true);
+    const digest = crypto.createHash("sha256").update(logJson(encoded)).digest("hex");
+    expect(checkpointDigest(event)).toBe(digest);
+  }
+});
+
+const VIEW_NAMES = "namespace generation revision compatibility items reference effects closed_invocations applied";
+
+// test_view_codec_rejects_wrong_closed_wire_shape
+test.each<[string, ErrorClass, string]>([
+  ["missing", RangeError, `conversation wire record requires exactly: ${VIEW_NAMES}`],
+  ["extra", RangeError, `conversation wire record requires exactly: ${VIEW_NAMES}`],
+  ["tuple", TypeError, "conversation wire.items must contain exact JSON values"],
+  ["bool", TypeError, "revision must be an integer"],
+  ["key", RangeError, `conversation wire record requires exactly: ${VIEW_NAMES}`],
+])("the view codec refuses a wrong closed wire shape (%s)", (damage, cls, message) => {
+  const wire = thaw(conversationViewToJson(view()));
+  if (damage === "missing") delete wire.reference;
+  else if (damage === "extra") wire.extra = null;
+  else if (damage === "tuple") wire.items = new Set();
+  else if (damage === "bool") wire.revision = false;
+  else wire.key = null;
+  expectError(() => conversationViewFromJson(wire), cls, message);
+});
+
+// test_view_codec_rejects_broken_digest_chain
+test.each([
+  ["final", "ledger final digest does not match conversation content"],
+  ["adjacency", "ledger digest chain does not match its predecessor"],
+  ["anchor", "ledger digest chain does not match its predecessor"],
+  ["ordinal", "ledger operation ordinals must be contiguous"],
+  ["length", "conversation revision requires one applied entry per checkpoint"],
+])("the view codec refuses a broken digest chain (%s)", (damage, message) => {
+  const [views] = completeHistory();
+  const wire = thaw(conversationViewToJson(views.at(-1)!));
+  if (damage === "final") wire.applied.at(-1).after_digest = "0".repeat(64);
+  else if (damage === "adjacency") wire.applied[1].before_digest = "0".repeat(64);
+  else if (damage === "anchor") wire.applied[0].before_digest = "0".repeat(64);
+  else if (damage === "ordinal") wire.applied[1].operation_id = '["run",1,8]';
+  else wire.applied.pop();
+  expectError(() => conversationViewFromJson(wire), RangeError, message);
+  expectError(
+    () => conversationViewToJson(view({ revision: 1, applied: [applied()] })),
+    RangeError,
+    "ledger digest chain does not match its predecessor",
+  );
+});
+
+// test_view_codec_rejects_impossible_history_even_with_matching_final_digest
+test.each([
+  ["missing_effect", "every positive operation must have retained effect or closure evidence"],
+  ["foreign_effect", "history must name unique accepted operation ordinals"],
+  ["overlap", "history must name unique accepted operation ordinals"],
+  ["early_close", "history must name unique accepted operation ordinals"],
+  ["pending_success", "successful closure cannot retain pending effects"],
+  ["foreign_close", "history must name unique accepted operation ordinals"],
+])("the view codec refuses impossible history with a matching final digest (%s)", (damage, message) => {
+  const [views] = completeHistory();
+  let value = views.at(-1)!;
+  if (damage === "missing_effect") {
+    value = changedView(value, { effects: [] });
+  } else if (damage === "foreign_effect") {
+    const effect = new ConversationEffectState(
+      new ConversationInvocation("foreign", 1),
+      1,
+      "model",
+      {},
+      "completed",
+      [2],
+      null,
+    );
+    value = changedView(value, { effects: [effect] });
+  } else if (damage === "overlap") {
+    value = changedView(value, {
+      effects: [new ConversationEffectState(invocation(), 1, "model", {}, "completed", [3], null)],
+    });
+  } else if (damage === "early_close") {
+    value = changedView(value, { closedInvocations: [new ConversationCompletion(invocation(), 2, "completed")] });
+  } else if (damage === "pending_success") {
+    value = changedView(value, {
+      effects: [new ConversationEffectState(invocation(), 1, "model", {}, "pending", [2], null)],
+    });
+  } else {
+    value = changedView(value, {
+      closedInvocations: [new ConversationCompletion(new ConversationInvocation("foreign", 1), 3, "completed")],
+    });
+  }
+  expectError(() => conversationViewToJson(reseal(value)), RangeError, message);
+});
+
+// test_invalid_transitions_preserve_input_evidence
+test.each([
+  ["before_admit", "checkpoint requires an admitted invocation"],
+  ["terminal_effect", "a terminal effect cannot receive more observations"],
+  ["closed", "invocation is already closed"],
+  ["missing_request", "observation has no matching requested effect"],
+  ["foreign_invocation", "checkpoint must be the current invocation's next ordinal"],
+  ["namespace", "checkpoint does not name the current predecessor"],
+  ["generation", "checkpoint does not name the current predecessor"],
+  ["revision", "checkpoint does not name the current predecessor"],
+  ["duplicate_request_item", "checkpoint repeats an existing conversation item ID"],
+  ["duplicate_observed_item", "checkpoint repeats an existing conversation item ID"],
+  ["baseline_descriptor", "admission baseline does not match the complete predecessor"],
+])("an invalid transition keeps its input evidence (%s)", (scenario, message) => {
+  const [views] = completeHistory();
+  let before = views[1]!;
+  let event: ConversationCheckpoint = new ConversationEffectRequested(stamp(1, 1), "model", {}, []);
+  if (scenario === "before_admit") {
+    before = views[0]!;
+    event = new ConversationEffectRequested(stamp(1, 0), "model", {}, []);
+  } else if (scenario === "terminal_effect") {
+    before = views[3]!;
+    event = new ConversationEffectObserved(stamp(3, 3), 1, "completed", [], null);
+  } else if (scenario === "closed") {
+    before = views[4]!;
+    event = new ConversationEffectRequested(stamp(4, 4), "model", {}, []);
+  } else if (scenario === "missing_request") {
+    before = advanceConversation(requested(), new ConversationEffectObserved(stamp(2, 2), 1, "pending", [], null));
+    event = new ConversationEffectObserved(stamp(3, 3), 2, "completed", [], null);
+  } else if (scenario === "duplicate_request_item") {
+    before = views[2]!;
+    event = new ConversationEffectRequested(stamp(2, 2), "tool", {}, before.items);
+  } else if (scenario === "duplicate_observed_item") {
+    before = views[2]!;
+    event = new ConversationEffectObserved(stamp(2, 2), 1, "pending", before.items, null);
+  } else if (scenario === "baseline_descriptor") {
+    before = view({ compatibility: { value: true } });
+    event = new ConversationAdmitted(stamp(), view({ compatibility: { value: 1n } }));
+  } else {
+    const fields = { invocation: invocation(), namespace: "namespace", generation: 0, expectedRevision: 1 };
+    if (scenario === "foreign_invocation") fields.invocation = new ConversationInvocation("foreign", 1);
+    else if (scenario === "namespace") fields.namespace = "foreign";
+    else if (scenario === "generation") fields.generation = 1;
+    else fields.expectedRevision = 2;
+    const changed = new ConversationStamp(fields.invocation, fields.namespace, fields.generation, fields.expectedRevision, 1);
+    event = new ConversationEffectRequested(changed, "model", {}, []);
+  }
+  const original = viewText(before);
+  const originalEvent = logJson(conversationCheckpointToJson(event));
+  expectConflict(() => advanceConversation(before, event), message);
+  expect(viewText(before)).toBe(original);
+  expect(logJson(conversationCheckpointToJson(event))).toBe(originalEvent);
+});
+
+// test_later_invocation_reuses_local_ordinals_without_replacing_prior_effects
+test("a later invocation reuses local ordinals without replacing prior effects", () => {
+  const [views] = completeHistory();
+  const first = views.at(-1)!;
+  const second = new ConversationInvocation("second", 2);
+  const stamps = [0, 1, 2, 3].map((ordinal) => nextStamp(4 + ordinal, ordinal, "second", 2));
+  const events: ConversationCheckpoint[] = [
+    new ConversationAdmitted(stamps[0]!, first),
+    new ConversationEffectRequested(stamps[1]!, "tool", { tool: "fake" }, []),
+    new ConversationEffectObserved(stamps[2]!, 1, "failed", [], failure()),
+    new ConversationClosed(stamps[3]!, "failed"),
+  ];
+  let after = first;
+  for (const event of events) after = advanceConversation(after, event);
+  expect(after.effects.map((effect) => effect.effectOrdinal)).toEqual([1, 1]);
+  expect(after.effects[0]).toEqual(first.effects[0]!);
+  expect(sameConversationInvocation(after.effects[1]!.invocation, second)).toBe(true);
+  expect(after.items).toEqual(first.items);
+  expect(conversationViewFromJson(conversationViewToJson(after))).toEqual(after);
+});
+
+const CHECKPOINT_NAMES = [
+  "type stamp baseline",
+  "type stamp kind payload items",
+  "type stamp effect_ordinal status items reference failure",
+  "type stamp status",
+];
+
+// test_checkpoint_codec_rejects_malformed_closed_wire
+test.each(
+  [0, 1, 2, 3].flatMap((index) =>
+    (
+      [
+        ["extra", RangeError, `conversation wire record requires exactly: ${CHECKPOINT_NAMES[index]}`],
+        ["missing", RangeError, `conversation wire record requires exactly: ${CHECKPOINT_NAMES[index]}`],
+        ["discriminator", RangeError, "unsupported conversation checkpoint type"],
+        ["stamp", RangeError, "conversation wire record requires exactly: run_id start_sequence"],
+        ["bool", TypeError, "ordinal must be an integer"],
+        ["array", TypeError, "namespace must be a string"],
+      ] as const
+    ).map(([damage, cls, message]) => [index, damage, cls, message] as const),
+  ),
+)("the checkpoint codec refuses malformed closed wire (event %p, %s)", (index, damage, cls, message) => {
+  const [, events] = completeHistory();
+  const wire = thaw(conversationCheckpointToJson(events[index]!));
+  if (damage === "extra") wire.extra = null;
+  else if (damage === "missing") delete wire.stamp;
+  else if (damage === "discriminator") wire.type = "unknown";
+  else if (damage === "stamp") wire.stamp.invocation.extra = null;
+  else if (damage === "bool") wire.stamp.ordinal = true;
+  else wire.stamp.namespace = ["namespace"];
+  expectError(() => conversationCheckpointFromJson(wire), cls, message);
+});
+
+// test_codecs_reject_non_json_nested_values
+test.each<[string, unknown, ErrorClass, string]>([
+  ["NaN", Number.NaN, RangeError, "conversation wire.compatibility.bad JSON number must not be NaN"],
+  ["a lone surrogate", "\ud800", RangeError, "Unicode surrogate is not valid canonical JSON"],
+  ["a Set", new Set(), TypeError, "conversation wire.compatibility.bad must contain exact JSON values"],
+  ["a class instance", new Point(), TypeError, "conversation wire.compatibility.bad must contain exact JSON values"],
+])("the codecs refuse a non-JSON nested value (%s)", (_name, bad, cls, message) => {
+  const wire = thaw(conversationViewToJson(view()));
+  wire.compatibility.bad = bad;
+  expectError(() => conversationViewFromJson(wire), cls, message);
+});
+
+test("the codecs keep an infinite nested value", () => {
+  const wire = thaw(conversationViewToJson(view()));
+  wire.compatibility.bad = Number.NEGATIVE_INFINITY;
+  const decoded = conversationViewFromJson(wire);
+  expect(decoded.compatibility.bad).toBe(Number.NEGATIVE_INFINITY);
+  expect(conversationViewFromJson(conversationViewToJson(decoded))).toEqual(decoded);
+});
+
+// test_codecs_reject_cycles_and_non_string_keys
+test("the codecs refuse cycles and symbol keys", () => {
+  let wire = thaw(conversationViewToJson(view()));
+  wire.compatibility.cycle = wire;
+  expectError(
+    () => conversationViewFromJson(wire),
+    RangeError,
+    "conversation wire.compatibility.cycle contains a circular JSON value",
+  );
+  wire = thaw(conversationViewToJson(view()));
+  wire.compatibility[Symbol("key")] = "invalid";
+  expectError(
+    () => conversationViewFromJson(wire),
+    TypeError,
+    "conversation wire.compatibility JSON object keys must be strings",
+  );
+});
+
+test("a 10 000-level payload goes through the view codec and the fold", () => {
+  let nested: unknown = "value";
+  for (let i = 0; i < 10_000; i++) nested = { nested };
+  const item = new ConversationItem("deep", "message", nested);
+  const event = new ConversationEffectRequested(stamp(1, 1), "model", {}, [item]);
+  const wire = conversationCheckpointToJson(event);
+  expect(logJson(conversationCheckpointToJson(conversationCheckpointFromJson(wire)))).toBe(logJson(wire));
+  const after = advanceConversation(admitted(), event);
+  const encoded = conversationViewToJson(after);
+  const decoded = conversationViewFromJson(encoded);
+  expect(logJson(conversationViewToJson(decoded))).toBe(logJson(encoded));
+  expect(logJson(decoded.items[0]!.payload)).toBe(logJson(nested));
+});
+
+test("a view with a -0 payload round-trips and digests as 0", () => {
+  const history = (zero: number) => {
+    const baseline = view({ compatibility: { v: zero } });
+    const before = advanceConversation(baseline, new ConversationAdmitted(stamp(), baseline));
+    const item = new ConversationItem("item", "message", { v: [zero] });
+    return advanceConversation(before, new ConversationEffectRequested(stamp(1, 1), "model", { v: zero }, [item]));
+  };
+  const negative = history(-0);
+  const decoded = conversationViewFromJson(conversationViewToJson(negative));
+  expect(decoded).toEqual(negative);
+  expect(Object.is((decoded.items[0]!.payload.v as number[])[0], 0)).toBe(true);
+  expect(conversationContentDigest(negative)).toBe(conversationContentDigest(history(0)));
+  expect(viewText(negative)).toBe(viewText(history(0)));
+  const wire = thaw(conversationViewToJson(view()));
+  wire.compatibility.v = -0;
+  expect(Object.is(conversationViewFromJson(wire).compatibility.v, 0)).toBe(true);
+});
+
+// test_checkpoint_digest_includes_complete_admission_ledger
+test("the checkpoint digest includes the complete admission ledger", () => {
+  const [views] = completeHistory();
+  const baseline = views.at(-1)!;
+  const changed = changedView(baseline, {
+    applied: [withDigest(baseline.applied[0]!, { event: "0".repeat(64) }), ...baseline.applied.slice(1)],
+  });
+  expect(checkpointDigest(new ConversationAdmitted(nextStamp(4), baseline))).not.toBe(
+    checkpointDigest(new ConversationAdmitted(nextStamp(4), changed)),
+  );
+});
+
+// test_view_codec_rejects_invalid_nested_values
+test.each<[string, ErrorClass, string]>([
+  ["duplicate_item", RangeError, "conversation item IDs must be unique"],
+  ["duplicate_operation", RangeError, "applied operation IDs must be unique"],
+  ["bad_status", RangeError, "invalid conversation effect status"],
+  ["failure_type", TypeError, "retryable must be a boolean"],
+  ["key_extra", RangeError, `conversation wire record requires exactly: ${VIEW_NAMES}`],
+  ["float_sequence", TypeError, "start_sequence must be an integer"],
+])("the view codec refuses an invalid nested value (%s)", (damage, cls, message) => {
+  const [views] = completeHistory();
+  const wire = thaw(conversationViewToJson(views.at(-1)!));
+  if (damage === "duplicate_item") wire.items.push(wire.items[0]);
+  else if (damage === "duplicate_operation") wire.applied.at(-1).operation_id = wire.applied[0].operation_id;
+  else if (damage === "bad_status") wire.effects[0].status = "unknown";
+  else if (damage === "failure_type") {
+    wire.effects[0].status = "failed";
+    wire.effects[0].failure = { stage: "effect", code: "fake.failed", message: "Failed", retryable: 0n };
+  } else if (damage === "key_extra") wire.key = {};
+  else wire.effects[0].invocation.start_sequence = 1;
+  const original = logJson(wire);
+  expectError(() => conversationViewFromJson(wire), cls, message);
+  expect(logJson(wire)).toBe(original);
+});
+
+test("a counter beyond the safe integer range is refused", () => {
+  const wire = thaw(conversationViewToJson(view()));
+  wire.generation = 2n ** 53n;
+  expectError(() => conversationViewFromJson(wire), RangeError, "generation must be a safe integer");
+});
+
+// test_view_codec_accepts_admission_after_unclosed_effectful_invocation
+test("the view codec accepts admission after an unclosed effectful invocation", () => {
+  const [views] = completeHistory();
+  const before = views[3]!;
+  const after = advanceConversation(before, new ConversationAdmitted(nextStamp(before.revision), before));
+  expect(conversationViewFromJson(conversationViewToJson(after))).toEqual(after);
+});
+
+test("the codecs and the fold require exact carriers", () => {
+  class SubView extends ConversationView {}
+  const sub = new SubView("namespace", 0, 0, {}, [], [], [], []);
+  for (const value of [{ ...view() }, sub]) {
+    expectError(() => conversationViewToJson(value as never), TypeError, "baseline must be a ConversationView");
+    expectError(() => conversationContentDigest(value as never), TypeError, "baseline must be a ConversationView");
+    expectError(
+      () => advanceConversation(value as never, new ConversationAdmitted(stamp(), view())),
+      TypeError,
+      "baseline must be a ConversationView",
+    );
+  }
+  class SubClosed extends ConversationClosed {}
+  const message = "checkpoints must contain exact ConversationCheckpoint values";
+  for (const value of [{ ...new ConversationClosed(stamp(1, 1), "failed") }, new SubClosed(stamp(1, 1), "failed")]) {
+    expectError(() => conversationCheckpointToJson(value as never), TypeError, message);
+    expectError(() => checkpointDigest(value as never), TypeError, message);
+    expectError(() => advanceConversation(admitted(), value as never), TypeError, message);
+  }
+  expectError(() => conversationViewFromJson([] as never), TypeError, "conversation view wire must be an exact JSON object");
+  expectError(() => conversationCheckpointFromJson({ type: 1n } as never), TypeError, "checkpoint type must be a string");
+  expectError(
+    () => conversationCheckpointFromJson({ type: "constructor" } as never),
+    RangeError,
+    "unsupported conversation checkpoint type",
+  );
+});
+
+// test_fold_does_not_mask_unexpected_host_fault
+test("the fold doesn't mask an unexpected host fault", () => {
+  const before = admitted();
+  const checkpoint = new ConversationEffectRequested(stamp(1, 1), "model", {}, []);
+  const fault = new Error("host digest fault");
+  const spy = spyOn(crypto, "createHash").mockImplementation(() => {
+    throw fault;
+  });
+  let caught: unknown;
+  try {
+    advanceConversation(before, checkpoint);
+  } catch (error) {
+    caught = error;
+  } finally {
+    spy.mockRestore();
+  }
+  expect(caught).toBe(fault);
+  expect(before.revision).toBe(1);
+  expect(before.effects).toEqual([]);
+});
+
+// test_checkpoint_codec_rejects_retired_native_state_without_rewriting
+test.each([0, 1, 2])("the checkpoint codec refuses retired native state without rewriting it (event %p)", (index) => {
+  const [, events] = completeHistory();
+  const wire = thaw(conversationCheckpointToJson(events[index]!));
+  if (index === 0) wire.baseline.reference = { provider: "codex", session_id: "thread" };
+  else if (index === 1) wire.kind = "native_session";
+  else wire.reference = { provider: "codex", session_id: "thread" };
+  const original = thaw(wire);
+  let caught: unknown;
+  try {
+    conversationCheckpointFromJson(wire);
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(MemoryOperationError);
+  const error = caught as MemoryOperationError;
+  expect([error.stage, error.code, error.retryable, error.message]).toEqual([
+    "snapshot",
+    "session.unsupported_history",
+    false,
+    "Native session history is unsupported; use fresh SessionMemory.",
+  ]);
+  expect(wire).toEqual(original);
 });

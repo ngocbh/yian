@@ -609,7 +609,8 @@ describe("RouteModel reply", () => {
     test("from an OpenAI Responses error event", async () => {
       const { send } = fake(sseReply(JSON.stringify({ type: "error", code: "server_error", message: text })));
       const protocol = new OpenAIResponses({ model: "gpt-5.5", provider: "openai" });
-      const error = (await rejection(drain(model(send, protocol, { auth: new BearerAuth(KEY) }).stream(REQUEST)))) as ProviderError;
+      const auth = new BearerAuth(KEY);
+      const error = (await rejection(drain(model(send, protocol, { auth }).stream(REQUEST)))) as ProviderError;
       expectNoPrefix(error);
       expect(error.message).toStartWith("openai stream failed (server): xxx");
       expect(error.message).toEndWith("…");

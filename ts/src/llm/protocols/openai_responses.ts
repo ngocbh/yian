@@ -29,6 +29,7 @@ import {
 import type { SseProtocol } from "../executor.ts";
 import type { SSEEvent } from "../framing.ts";
 import {
+  checkJsonValue,
   copyJson,
   isPlainObject,
   MediaPart,
@@ -203,11 +204,13 @@ export class OpenAIResponses implements SseProtocol {
    *
    * @param frames The reply's server-sent events, in order.
    * @returns The deltas and parts, then `UsageReport` (when the reply has usage) and `Finish` on
-   *   `response.completed` (or `response.done`) or a length-truncated `response.incomplete`.
-   * @throws {ProviderError} For `response.failed` or an `error` event (kind from the error code),
-   *   a stream that ends without a terminal event or a reply that did not complete (kind
-   *   `incomplete`, or `refused` for a content filter), or an event that is not JSON, lacks the
-   *   output index it needs, or holds an item or usage that cannot be read (kind `protocol`).
+   *   `response.completed` (or `response.done`) or a length-truncated `response.incomplete` (or
+   *   `response.done`).
+   * @throws {ProviderError} For `response.failed` or an `error` event (kind from the error code,
+   *   else its type), a stream that ends without a terminal event or a reply that did not
+   *   complete (kind `incomplete`, or `refused` for a content filter), or an event that is not
+   *   JSON, lacks the output index it needs, or holds an item or usage that cannot be read (kind
+   *   `protocol`). The message holds the provider's text uncapped.
    */
   async *parse(frames: AsyncIterable<SSEEvent>): AsyncGenerator<Event> {
     // Part index by output index, then content index.
@@ -237,6 +240,8 @@ export class OpenAIResponses implements SseProtocol {
     for await (const frame of frames) {
       // The openai SDK stops at a `[DONE]` sentinel; the stream is then over.
       if (frame.data.startsWith("[DONE]")) break;
+      // Some gateways send keep-alive frames with empty data.
+      if (frame.data === "") continue;
       const data = eventData(frame.data);
       if (!isPlainObject(data)) continue;
       const rawType = data["type"] || frame.event;
@@ -357,10 +362,11 @@ export class OpenAIResponses implements SseProtocol {
   /**
    * Return a finished reply's `UsageReport` and `Finish`, or throw if it did not finish.
    *
-   * `response.completed` and `response.done` must carry status `completed`. Among incomplete
-   * replies only a stop at `max_output_tokens` signalled by `response.incomplete` counts as
-   * finished; it finishes with `length` even when the reply has calls, since a truncated call
-   * cannot be trusted.
+   * `response.completed` must carry status `completed`, and `response.done` status `completed`
+   * or `incomplete`. Among incomplete replies only a stop at `max_output_tokens` signalled by
+   * `response.incomplete`, or by `response.done` with status `incomplete`, counts as finished;
+   * it finishes with `length` even when the reply has calls, since a truncated call cannot be
+   * trusted.
    *
    * @param response The terminal event's response.
    * @param hasCalls Whether the reply holds a function call.
@@ -370,13 +376,13 @@ export class OpenAIResponses implements SseProtocol {
    *   content filter), or its usage cannot be read (kind `protocol`).
    */
   #finish(response: JsonObject, hasCalls: boolean, responseId: string | null, type: string): Event[] {
-    const incomplete = type === "response.incomplete";
+    const status = type === "response.incomplete" ? "incomplete" : response["status"];
     const details = response["incomplete_details"];
     const reason = isPlainObject(details) ? details["reason"] : undefined;
     let finishReason: string;
-    if (!incomplete && response["status"] === "completed") {
+    if (status === "completed") {
       finishReason = hasCalls ? "tool_calls" : "stop";
-    } else if (incomplete && reason === "max_output_tokens") {
+    } else if (status === "incomplete" && reason === "max_output_tokens" && type !== "response.completed") {
       finishReason = "length";
     } else {
       const prefix = this.subscription ? "OpenAI subscription response" : "openai response";
@@ -389,14 +395,19 @@ export class OpenAIResponses implements SseProtocol {
     if (usage !== null) events.push(new UsageReport(usage));
     // `||`, not `??`: an empty id counts as none.
     const id = strOrNull(response["id"]) || responseId;
-    const providerPayload = replayRecord(this.#key, id === null ? {} : { response_id: id });
+    const fields: JsonObject = {};
+    if (id !== null) fields["response_id"] = id;
+    // The model that answered, which may differ from the one asked for (an Azure deployment name).
+    if (typeof response["model"] === "string") fields["response_model"] = response["model"];
+    const providerPayload = replayRecord(this.#key, fields);
     events.push(new Finish({ reason: finishReason, responseId: id, protocol: PROTOCOL, providerPayload }));
     return events;
   }
 
-  /** Return the error for `response.failed` or an `error` event. */
+  /** Return the error for `response.failed` or an `error` event; its kind from the error's code, else its type. */
   #streamFailure(error: JsonObject): ProviderError {
-    const code = error["code"];
+    // An error without a string code may still name its kind in `type` (`invalid_request_error`).
+    const code = typeof error["code"] === "string" ? error["code"] : error["type"];
     const kind = (typeof code === "string" ? STREAM_ERROR_KINDS.get(code) : undefined) ?? "server";
     const rawMessage = error["message"];
     const message = typeof rawMessage === "string" && rawMessage ? rawMessage : "no message";
@@ -557,8 +568,8 @@ export class OpenAIResponses implements SseProtocol {
  * Read a part's replay record and check its shape for the part.
  *
  * A reasoning or call record's `item` must be an object of the part's item type, a call's with
- * the part's call id; a text or refusal record's `id` must be a string and its `annotations` an
- * array, when present.
+ * the part's call id; a text or refusal record's `id` and `phase` must be strings and its
+ * `annotations` an array, when present.
  */
 function readRecord(
   part: ReplayPart,
@@ -577,6 +588,7 @@ function readRecord(
   } else {
     fits =
       (!Object.hasOwn(fields, "id") || typeof fields["id"] === "string") &&
+      (!Object.hasOwn(fields, "phase") || typeof fields["phase"] === "string") &&
       (!Object.hasOwn(fields, "annotations") || Array.isArray(fields["annotations"]));
   }
   return fits ? read : { ok: false, reason: "malformed" };
@@ -659,6 +671,8 @@ function itemParts(item: JsonValue, key: ReplayKey): [number, Part][] {
   }
   const type = item["type"];
   try {
+    // Bounds the depth before the builders recurse into the item.
+    checkJsonValue(item, "item");
     if (type === "reasoning") return [[0, reasoningPart(item, key)]];
     if (type === "message") return messageParts(item, key);
     if (type === "function_call") return [[0, callPart(item, key)]];
@@ -709,24 +723,17 @@ function messageParts(item: JsonObject, key: ReplayKey): [number, Part][] {
  * Build a refusal part from streamed text, for an item the reply never finished.
  *
  * @param item The added message item, whose id and phase go in the record.
- * @throws {ProviderError} The record cannot be built (kind `protocol`).
  */
 function refusalPart(text: string, item: JsonObject, key: ReplayKey): RefusalPart {
-  try {
-    return new RefusalPart(text, replayRecord(key, contentFields(item["id"], item["phase"])));
-  } catch (error) {
-    if (error instanceof MessageFormatError) {
-      throw new ProviderError("protocol", `openai stream has an invalid refusal: ${error.message}`);
-    }
-    throw error;
-  }
+  // The record holds only strings the JSON parser checked, so it always builds.
+  return new RefusalPart(text, replayRecord(key, contentFields(item["id"], item["phase"])));
 }
 
-/** Return a text or refusal part's record fields: the message id when a string, its phase when set. */
+/** Return a text or refusal part's record fields: the message id and its phase, each when a string. */
 function contentFields(id: JsonValue | undefined, phase: JsonValue | undefined): JsonObject {
   const fields: JsonObject = {};
   if (typeof id === "string") fields["id"] = id;
-  if (phase !== null && phase !== undefined) fields["phase"] = phase;
+  if (typeof phase === "string") fields["phase"] = phase;
   return fields;
 }
 

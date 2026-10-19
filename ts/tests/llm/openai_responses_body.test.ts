@@ -473,6 +473,8 @@ describe("assistant messages: replay records", () => {
     ["a call item for another call id", { call: record({ item: { ...CALL_ITEM, call_id: "call_2" } }) }, "malformed"],
     ["a non-string id", { text: record({ ...TEXT_FIELDS, id: 5n }) }, "malformed"],
     ["non-array annotations", { text: record({ ...TEXT_FIELDS, annotations: "x" }) }, "malformed"],
+    ["a non-string text phase", { text: record({ ...TEXT_FIELDS, phase: 5n }) }, "malformed"],
+    ["a non-string refusal phase", { refusal: record({ id: "msg_1", phase: ["final_answer"] }) }, "malformed"],
   ];
   for (const [name, payloads, reason] of unusable) {
     test(`a record with ${name} renders the whole message neutrally and signals ${reason} once`, () => {
@@ -512,12 +514,13 @@ describe("assistant messages: replay records", () => {
   });
 
   for (const subscription of [false, true]) {
-    test(`reasoning without a payload beside usable records renders the message neutrally without a signal (subscription: ${subscription})`, () => {
+    const route = subscription ? "subscription" : "api key";
+    test(`reasoning without a payload renders the whole message neutrally without a signal (${route})`, () => {
       const message = assistant(
         new ReasoningPart("r"),
         new TextPart("Hello.", record(TEXT_FIELDS)),
         new RefusalPart("No.", record({ id: "msg_1" })),
-        new ToolCallPart({ id: "call_1", name: "double", arguments: { value: 3n }, providerPayload: record({ item: CALL_ITEM }) }),
+        call("call_1", { value: 3n }, CALL_ITEM),
       );
       expect(degraded([message], { subscription })).toEqual([NEUTRAL, []]);
     });

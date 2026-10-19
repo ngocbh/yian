@@ -108,7 +108,7 @@ function finish(reason: string, responseId = "resp_1"): Finish {
     reason,
     responseId,
     protocol: PROTOCOL,
-    providerPayload: replayRecord(KEY, { response_id: responseId }),
+    providerPayload: replayRecord(KEY, { response_id: responseId, response_model: "gpt-5.5" }),
   });
 }
 
@@ -118,7 +118,7 @@ function expected(parts: Part[], finishReason: string): Response {
     role: "assistant",
     parts,
     protocol: PROTOCOL,
-    providerPayload: replayRecord(KEY, { response_id: "resp_1" }),
+    providerPayload: replayRecord(KEY, { response_id: "resp_1", response_model: "gpt-5.5" }),
   });
   return new Response({ message, usage: USAGE_COUNTS, finishReason, responseId: "resp_1" });
 }
@@ -514,6 +514,13 @@ describe("deltas and parts", () => {
     ]);
   });
 
+  test("a non-string phase is left out of a done message's records", async () => {
+    for (const phase of [5n, true, ["final_answer"], { name: "final_answer" }]) {
+      const events = await parse([done(0, { ...MESSAGE, phase }), completed()]);
+      expect(partsDone(events)).toEqual([new PartDone(0, TEXT_PART)]);
+    }
+  });
+
   test("a refusal is collected into a refusal part", async () => {
     const item = { ...MESSAGE, content: [{ type: "refusal", refusal: "I can't help with that." }] };
     const where = { output_index: 0, content_index: 0, item_id: "msg_1" };
@@ -637,6 +644,11 @@ describe("deltas and parts", () => {
     expect(await parse([frame])).toEqual([new UsageReport(USAGE_COUNTS), finish("stop")]);
   });
 
+  test("a frame with empty data is skipped", async () => {
+    const events = await parse([new SSEEvent({ data: "" }), completed([MESSAGE])]);
+    expect(events).toEqual([new PartDone(0, TEXT_PART), new UsageReport(USAGE_COUNTS), finish("stop")]);
+  });
+
   test("[DONE] ends the stream", async () => {
     const error = await failure([created(), new SSEEvent({ data: "[DONE]" }), completed()]);
     expect(error.kind).toBe("incomplete");
@@ -698,12 +710,10 @@ describe("terminal output", () => {
     expect(partsDone(events)).toEqual([new PartDone(0, part)]);
   });
 
-  test("a refusal built from deltas whose record can't be built is a protocol error", async () => {
-    install({ ...BUILTIN, maxValueNesting: 3 });
-    const phase = [[["deep"]]];
-    const error = await failure([added(0, { ...started(MESSAGE), phase }), refusalDelta(0, 0, "No."), completed()]);
-    expect(error.kind).toBe("protocol");
-    expect(error.message).toMatch(/^openai stream has an invalid refusal: .*nests deeper than 3 levels$/);
+  test("a non-string phase is left out of a delta-built refusal's record", async () => {
+    const item = { ...started(MESSAGE), phase: [5n] };
+    const events = await parse([added(0, item), refusalDelta(0, 0, "No."), completed()]);
+    expect(partsDone(events)).toEqual([new PartDone(0, new RefusalPart("No.", replayRecord(KEY, { id: "msg_1" })))]);
   });
 
   test("a refusal missing from the terminal output takes its done text", async () => {
@@ -769,6 +779,31 @@ describe("item errors", () => {
     const error = await failure([done(0, REASONING), completed()]);
     expect(error.kind).toBe("protocol");
     expect(error.message).toMatch(/^openai response has an invalid reasoning item: .*nests deeper than 3 levels$/);
+  });
+
+  test("an item nested deeper than the limit is a protocol error naming its path", async () => {
+    install({ ...BUILTIN, maxValueNesting: 3 });
+    const items: [string, JsonObject][] = [
+      ["reasoning", { ...REASONING, x: { a: { b: {} } } }],
+      ["function_call", { ...CALL, x: { a: { b: [] } } }],
+      ["message", { ...MESSAGE, content: [{ type: "output_text", text: "Hi", annotations: [{ a: { b: {} } }] }] }],
+    ];
+    for (const [type, item] of items) {
+      const error = await failure([done(0, item), completed()]);
+      expect(error.kind).toBe("protocol");
+      expect(error.message).toStartWith(`openai response has an invalid ${type} item: item.`);
+      expect(error.message).toEndWith("nests deeper than 3 levels");
+    }
+  });
+
+  test("a very deeply nested item is a protocol error, not a stack overflow", async () => {
+    const depth = 200_000;
+    const deep = "[".repeat(depth) + "]".repeat(depth);
+    const item = `{"type":"function_call","call_id":"c1","name":"f","arguments":"{}","x":${deep}}`;
+    const data = `{"type":"response.output_item.done","output_index":0,"item":${item}}`;
+    const error = await failure([new SSEEvent({ data }), completed()]);
+    expect(error.kind).toBe("protocol");
+    expect(error.message).toEndWith("nests deeper than 100 levels");
   });
 
   describe.each(ITEM_EVENTS)("%s", (type) => {
@@ -850,12 +885,22 @@ describe("usage and finish", () => {
     expect(events.at(-1)).toEqual(finish("stop"));
   });
 
-  test("a reply without an id finishes with an empty message record", async () => {
-    const final = completed();
-    delete (final["response"] as JsonObject)["id"];
-    const events = await parse([final]);
-    const providerPayload = replayRecord(KEY, {});
-    expect(events.at(-1)).toEqual(new Finish({ reason: "stop", protocol: PROTOCOL, providerPayload }));
+  test("a reply without an id or a string model finishes with an empty message record", async () => {
+    for (const model of [undefined, null, 5n]) {
+      const final = completed([], { model: model as JsonValue });
+      delete (final["response"] as JsonObject)["id"];
+      if (model === undefined) delete (final["response"] as JsonObject)["model"];
+      const events = await parse([final]);
+      const providerPayload = replayRecord(KEY, {});
+      expect(events.at(-1)).toEqual(new Finish({ reason: "stop", protocol: PROTOCOL, providerPayload }));
+    }
+  });
+
+  test("the message record names the model that answered", async () => {
+    const events = await parse([completed([], { model: "gpt-5.5-2026-08-01" })]);
+    const providerPayload = replayRecord(KEY, { response_id: "resp_1", response_model: "gpt-5.5-2026-08-01" });
+    const responseId = "resp_1";
+    expect(events.at(-1)).toEqual(new Finish({ reason: "stop", responseId, protocol: PROTOCOL, providerPayload }));
   });
 
   test.each([
@@ -985,14 +1030,23 @@ describe("incomplete replies", () => {
     });
   });
 
-  test("a completed event with incomplete status raises even at max_output_tokens", async () => {
+  test("response.completed with incomplete status raises even at max_output_tokens", async () => {
     const details = { incomplete_details: { reason: "max_output_tokens" } };
-    for (const type of ["response.completed", "response.done"]) {
-      const event = { type, response: reply([MESSAGE], { status: "incomplete", ...details }) };
-      const error = await failure([event]);
-      expect(error.kind).toBe("incomplete");
-      expect(error.message).toBe("openai response did not complete (max_output_tokens)");
-    }
+    const event = { type: "response.completed", response: reply([MESSAGE], { status: "incomplete", ...details }) };
+    const error = await failure([event]);
+    expect(error.kind).toBe("incomplete");
+    expect(error.message).toBe("openai response did not complete (max_output_tokens)");
+  });
+
+  test("response.done with incomplete status is read like response.incomplete", async () => {
+    const done = (reason: string) => {
+      const response = reply([MESSAGE], { status: "incomplete", incomplete_details: { reason } });
+      return { type: "response.done", response };
+    };
+    expect((await parse([done("max_output_tokens")], subscription())).at(-1)).toEqual(finish("length"));
+    const refused = await failure([done("content_filter")], subscription());
+    expect(refused.kind).toBe("refused");
+    expect(refused.message).toBe("OpenAI subscription response did not complete (content_filter)");
   });
 
   test("deltas before a truncation are still emitted", async () => {
@@ -1077,6 +1131,22 @@ describe("stream failures", () => {
     });
   });
 
+  test("an error whose code isn't a string takes its kind from its type", async () => {
+    const error = { code: null, type: "invalid_request_error", message: "Bad input." };
+    const events: JsonObject[] = [
+      { type: "response.failed", response: reply([], { status: "failed", error }) },
+      { type: "error", error },
+    ];
+    for (const event of events) {
+      const raised = await failure([event]);
+      expect(raised.kind).toBe("bad_request");
+      expect(raised.message).toBe("openai stream failed (bad_request): Bad input.");
+    }
+    // A string code wins over the type, even an unknown one.
+    const unknown = await failure([{ type: "error", error: { ...error, code: "something_new" } }]);
+    expect(unknown.kind).toBe("server");
+  });
+
   test("a failed response without an error is a server error with no message", async () => {
     const error = await failure([created(), failed(null, null)]);
     expect(error.kind).toBe("server");
@@ -1156,10 +1226,11 @@ describe("replay records", () => {
       expect(payload).toMatchObject({ kind: PROTOCOL, v: 1n, provider: "openai", model: "gpt-5.5", account: "acct_1" });
       expect(readReplayRecord(payload, ACCOUNT_KEY, allowed)).toEqual({ ok: true, fields });
     }
-    expect(response.message.providerPayload).toEqual(replayRecord(ACCOUNT_KEY, { response_id: "resp_1" }));
-    expect(readReplayRecord(response.message.providerPayload, ACCOUNT_KEY, ["response_id"])).toEqual({
+    const messageFields = { response_id: "resp_1", response_model: "gpt-5.5" };
+    expect(response.message.providerPayload).toEqual(replayRecord(ACCOUNT_KEY, messageFields));
+    expect(readReplayRecord(response.message.providerPayload, ACCOUNT_KEY, ["response_id", "response_model"])).toEqual({
       ok: true,
-      fields: { response_id: "resp_1" },
+      fields: messageFields,
     });
   });
 

@@ -6,7 +6,8 @@
  *
  * Ported: `test_kinds_maps_string_to_descriptor_class`.
  *
- * TS-only: a `code` row; `withKinds` restores the tables after its function returns or throws.
+ * TS-only: the `code`, `human_input` and `wait` rows; `withKinds` restores the tables after its
+ * function returns or throws.
  *
  * Dropped: `test_retired_kindspec_is_not_public` (a Python import).
  *

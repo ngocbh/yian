@@ -38,9 +38,6 @@ import { JSONDecodeError } from "../../src/typesys/json.ts";
 /** One valid source leaf shared by the route error trees. */
 const SOURCE = new ValueRoute("source", { source: new SourceRef("run", 1) });
 
-/** A source route whose expression is not a string. */
-const BAD = new ValueRoute("source", { source: new SourceRef("run", 1), expression: 5 as unknown as string });
-
 /** Return the error class and message `call` throws. */
 function raised(call: () => unknown): [unknown, string] {
   try {
@@ -55,6 +52,9 @@ function raised(call: () => unknown): [unknown, string] {
 function forged(kind: string, fields: Record<string, unknown> = {}): ValueRoute {
   return new ValueRoute(kind as RouteKind, fields as never);
 }
+
+/** A source route whose expression is not a string. */
+const BAD = forged("source", { source: new SourceRef("run", 1), expression: 5 });
 
 test.each([
   [
@@ -93,8 +93,6 @@ test.each([
   expect(raised(() => validateRoute(tree))).toEqual([cls, message]);
 });
 
-const SPANS = "interpolation spans must be ordered within the result";
-
 test.each([
   ["not a ValueRoute", { kind: "literal", valueJson: "1" }, TypeError, "route must be an exact ValueRoute"],
   ["an unknown kind", forged("bogus"), RangeError, "unknown route kind"],
@@ -118,6 +116,7 @@ test.each([
     RangeError,
     "route list cannot carry source",
   ],
+  ["an empty array as a list's source", forged("list", { source: [] }), RangeError, "route list cannot carry source"],
   [
     "a negative path part",
     new ValueRoute("project", { children: [SOURCE], path: [-1] }),
@@ -242,7 +241,7 @@ test.each([
     "a span past the result",
     new ValueRoute("interpolation", { children: [SOURCE], valueJson: '"ab"', spans: [[0, 3]] }),
     RangeError,
-    SPANS,
+    "interpolation spans must be ordered within the result",
   ],
   [
     "misordered spans",
@@ -255,7 +254,7 @@ test.each([
       ],
     }),
     RangeError,
-    SPANS,
+    "interpolation spans must be ordered within the result",
   ],
 ] as [string, unknown, unknown, string][])("validateRoute refuses %s", (_name, route, cls, message) => {
   expect(raised(() => validateRoute(route))).toEqual([cls, message]);

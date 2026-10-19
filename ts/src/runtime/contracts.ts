@@ -38,6 +38,9 @@ const ROUTE_FIELDS: readonly (readonly [RouteField, string])[] = [
   ["snapshot", "snapshot"],
 ];
 
+/** The route fields whose default is `null`; every other field defaults to an empty array. */
+const NULLABLE_FIELDS: ReadonlySet<RouteField> = new Set(["source", "valueJson", "resultType", "snapshot"]);
+
 /** The fields each route kind may carry; every other field stays at its default. */
 const ROUTE_VARIANTS: Readonly<Record<RouteKind, readonly RouteField[]>> = {
   literal: ["valueJson", "resultType", "snapshot"],
@@ -105,7 +108,7 @@ export function validateRoute(route: unknown, options: { deep?: boolean } = {}):
   const variant = ROUTE_VARIANTS[kind];
   for (const [field, name] of ROUTE_FIELDS) {
     const value = route[field];
-    const isDefault = Array.isArray(value) ? value.length === 0 : value === null;
+    const isDefault = NULLABLE_FIELDS.has(field) ? value === null : (value as readonly unknown[]).length === 0;
     if (!variant.includes(field) && !isDefault) throw new RangeError(`route ${kind} cannot carry ${name}`);
   }
   validateRoutePath(route.path);

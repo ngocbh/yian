@@ -21,8 +21,9 @@ import {
   validateFeedback,
 } from "../expr/lineage.ts";
 import {
+  DeclSite,
   EvaluationEvidence,
-  type MemoryMutation,
+  MemoryMutation,
   MemoryOccurrenceKind,
   MemoryOccurrenceSegment,
   MemoryOperationFailure,
@@ -1202,6 +1203,91 @@ function scopeFromPayload(value: unknown, label: string): MemoryScope {
   });
 }
 
+/**
+ * Return memory JSON as the log writes it. Memory's carriers keep `-0`, which canonical JSON
+ * refuses, so it is written as `0`.
+ */
+function memoryJson(value: unknown): JsonValue {
+  return jsonPart(value, [], "refuse") as JsonValue;
+}
+
+/** Encode one named memory snapshot. */
+function snapshotPayload(snapshot: MemorySnapshotEnvelope): JsonObject {
+  return { memory: snapshot.memory, snapshot: memoryJson(snapshot.snapshot) };
+}
+
+/**
+ * Decode one named memory snapshot; `label` names it in errors.
+ *
+ * @throws RangeError for missing or extra fields or an empty memory key, besides the envelope's
+ *   own errors.
+ * @throws TypeError when a field has the wrong JSON type.
+ */
+function snapshotFromPayload(value: unknown, label: string): MemorySnapshotEnvelope {
+  const wire = wireObject(value, label, ["memory", "snapshot"]);
+  return new MemorySnapshotEnvelope(
+    wireName(wire["memory"], `${label} memory`),
+    wireObject(wire["snapshot"], `${label} snapshot`),
+  );
+}
+
+/** Encode one memory key-table entry. */
+function memorySpecPayload(spec: MemorySpec): JsonObject {
+  return {
+    key: spec.key,
+    type: spec.type,
+    config: memoryJson(spec.config),
+    owners: spec.owners.map((site) => ({ scope: [...site.scope], owner: [...site.owner], node: site.node })),
+    conversation_eligible: spec.conversationEligible,
+  };
+}
+
+/**
+ * Decode one memory key-table entry; `label` names it in errors.
+ *
+ * @throws RangeError for missing or extra fields or an empty key or type, besides the sites' and
+ *   spec's own errors (a private config key among them).
+ * @throws TypeError when a field has the wrong JSON type.
+ */
+function memorySpecFromPayload(value: unknown, label: string): MemorySpec {
+  const wire = wireObject(value, label, ["key", "type", "config", "owners", "conversation_eligible"]);
+  const owners = wireArray(wire["owners"], `${label} owners`).map((item) => {
+    const siteLabel = `${label} owners item`;
+    const site = wireObject(item, siteLabel, ["scope", "owner", "node"]);
+    return new DeclSite(
+      wireTextArray(site["scope"], `${siteLabel} scope`),
+      wireTextArray(site["owner"], `${siteLabel} owner`),
+      wireNullableText(site["node"], `${siteLabel} node`),
+    );
+  });
+  return new MemorySpec(
+    wireName(wire["key"], `${label} key`),
+    wireName(wire["type"], `${label} type`),
+    wireObject(wire["config"], `${label} config`),
+    owners,
+    wireBool(wire["conversation_eligible"], `${label} conversation_eligible`),
+  );
+}
+
+/** Encode one target's memory key stack. */
+function memoryStackPayload(stack: MemoryStack): JsonObject {
+  return { locator: [...stack.locator], memories: [...stack.memories] };
+}
+
+/**
+ * Decode one target's memory key stack; `label` names it in errors.
+ *
+ * @throws RangeError for missing or extra fields, besides the stack's own errors.
+ * @throws TypeError when a field has the wrong JSON type.
+ */
+function memoryStackFromPayload(value: unknown, label: string): MemoryStack {
+  const wire = wireObject(value, label, ["locator", "memories"]);
+  return new MemoryStack(
+    wireTextArray(wire["locator"], `${label} locator`),
+    wireTextArray(wire["memories"], `${label} memories`),
+  );
+}
+
 /** Encode one recalled-memory section. */
 function memorySectionPayload(section: MemorySection): JsonObject {
   return { memory: section.memory, text: section.text };
@@ -1405,10 +1491,10 @@ const ROUTE_WIRE_FIELDS = [
  * Decode a route payload, then check its variant.
  *
  * Every field's JSON type is checked first: `ValueRoute`'s constructor would reshape a string or
- * a span of another length, and would turn a missing `expression`, `value_json` or `result_type`
- * into its default; checking them here also reports a node's own shape errors before its
- * children's. Then each child and the snapshot are decoded and checked by their own call, so the
- * new node is checked without its subtree and each node once.
+ * a span of another length, and would turn a null `expression` into `""`; checking the scalar
+ * fields here also reports a node's own shape errors before its children's. Then each child and
+ * the snapshot are decoded and checked by their own call, so the new node is checked without its
+ * subtree and each node once.
  *
  * @throws TypeError when a field has the wrong JSON type, or for `validateRoute`'s type errors.
  * @throws RangeError for missing or extra fields, or when a field or variant breaks the route
@@ -1573,6 +1659,44 @@ function evidenceFromPayload(value: unknown, label: string): EvaluationEvidence 
   );
 }
 
+/** Encode one memory mutation. */
+function mutationPayload(mutation: MemoryMutation): JsonObject {
+  return { mutation_id: mutation.mutationId, payload: memoryJson(mutation.payload) };
+}
+
+/**
+ * Decode one memory mutation; `label` names it in errors.
+ *
+ * @throws RangeError for missing or extra fields or an empty id, besides the mutation's own
+ *   errors.
+ * @throws TypeError when a field has the wrong JSON type.
+ */
+function mutationFromPayload(value: unknown, label: string): MemoryMutation {
+  const wire = wireObject(value, label, ["mutation_id", "payload"]);
+  return new MemoryMutation(wireName(wire["mutation_id"], `${label} mutation_id`), wire["payload"]);
+}
+
+/** Encode one sanitized memory-operation failure. */
+function memoryFailurePayload(failure: MemoryOperationFailure): JsonObject {
+  return { stage: failure.stage, code: failure.code, message: failure.message, retryable: failure.retryable };
+}
+
+/**
+ * Decode one sanitized memory-operation failure; `label` names it in errors.
+ *
+ * @throws RangeError for missing or extra fields or an empty string field.
+ * @throws TypeError when a field has the wrong JSON type.
+ */
+function memoryFailureFromPayload(value: unknown, label: string): MemoryOperationFailure {
+  const wire = wireObject(value, label, ["stage", "code", "message", "retryable"]);
+  return new MemoryOperationFailure(
+    wireName(wire["stage"], `${label} stage`),
+    wireName(wire["code"], `${label} code`),
+    wireName(wire["message"], `${label} message`),
+    wireBool(wire["retryable"], `${label} retryable`),
+  );
+}
+
 /** Encode an outcome record's optional evidence and capture. */
 function outcomePayload(record: OutcomeCarriers): JsonObject {
   const { evidence = null, forwardCapture = null } = record;
@@ -1596,8 +1720,39 @@ function outcomeFromPayload(payload: JsonObject, label: string): OutcomeCarriers
   };
 }
 
+/** The fields of a `run_started` payload; schema 10 writes every one. */
+const RUN_STARTED_FIELDS = [
+  "flow_fingerprint",
+  "initial_pool",
+  "start_wiring_override",
+  "effective_llm_by_static_path",
+  "num_workers",
+  "memory_snapshots",
+  "learnable",
+  "memories",
+  "memory_stacks",
+  "defaults",
+  "call_time_llm",
+];
+
 /** Build the canonical JSON payload of one record; counters are written as `bigint`s. */
 function payloadForRecord(record: RunRecord): JsonObject {
+  if (record instanceof RunStartedRecord) {
+    return {
+      flow_fingerprint: record.flowFingerprint,
+      initial_pool: record.initialPool as unknown as JsonObject,
+      start_wiring_override: record.startWiringOverride as JsonObject,
+      effective_llm_by_static_path: record.effectiveLlmByStaticPath as JsonObject,
+      num_workers: BigInt(record.numWorkers),
+      memory_snapshots: record.memorySnapshots === null ? null : record.memorySnapshots.map(snapshotPayload),
+      learnable: record.learnable,
+      memories: record.memories === null ? null : record.memories.map(memorySpecPayload),
+      memory_stacks: record.memoryStacks === null ? null : record.memoryStacks.map(memoryStackPayload),
+      // The writer sorts every object's keys, so the defaults come out sorted by name.
+      defaults: record.defaults as JsonObject,
+      call_time_llm: record.callTimeLlm as JsonObject | null,
+    };
+  }
   if (record instanceof RunResumedRecord) {
     return { retry_node_ids: [...record.retryNodeIds], num_workers: BigInt(record.numWorkers) };
   }
@@ -1632,6 +1787,25 @@ function payloadForRecord(record: RunRecord): JsonObject {
     };
   }
   if (record instanceof NodeFailedRecord) return { failure: failurePayload(record.failure), ...outcomePayload(record) };
+  if (record instanceof MemoryCommitRequestedRecord) {
+    return {
+      memory: record.memory,
+      commit_id: record.commitId,
+      attempt_id: BigInt(record.attemptId),
+      mutations: record.mutations.map(mutationPayload),
+    };
+  }
+  if (record instanceof MemoryCommitSucceededRecord) {
+    return { memory: record.memory, commit_id: record.commitId, attempt_id: BigInt(record.attemptId) };
+  }
+  if (record instanceof MemoryCommitFailedRecord) {
+    return {
+      memory: record.memory,
+      commit_id: record.commitId,
+      attempt_id: BigInt(record.attemptId),
+      failure: memoryFailurePayload(record.failure),
+    };
+  }
   throw new Error(`${kindForRecord(record)} records are not encoded yet`);
 }
 
@@ -1646,6 +1820,30 @@ function payloadForRecord(record: RunRecord): JsonObject {
 function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
   const label = `${kind} payload`;
   switch (kind) {
+    case "run_started":
+      requireFields(payload, RUN_STARTED_FIELDS, label);
+      return new RunStartedRecord({
+        flowFingerprint: wireText(payload["flow_fingerprint"], `${label} flow_fingerprint`),
+        initialPool: wireObject(payload["initial_pool"], `${label} initial_pool`) as unknown as PoolWire,
+        startWiringOverride: wireObject(payload["start_wiring_override"], `${label} start_wiring_override`),
+        effectiveLlmByStaticPath: wireObject(
+          payload["effective_llm_by_static_path"],
+          `${label} effective_llm_by_static_path`,
+        ) as Record<string, JsonObject>,
+        numWorkers: wireInt(payload["num_workers"], `${label} num_workers`),
+        memorySnapshots: wireNullableItems(
+          payload["memory_snapshots"],
+          `${label} memory_snapshots`,
+          snapshotFromPayload,
+        ),
+        learnable: wireBool(payload["learnable"], `${label} learnable`),
+        memories: wireNullableItems(payload["memories"], `${label} memories`, memorySpecFromPayload),
+        memoryStacks: wireNullableItems(payload["memory_stacks"], `${label} memory_stacks`, memoryStackFromPayload),
+        // The record checks each value, so a bad default is named by its entry.
+        defaults: wireObject(payload["defaults"], `${label} defaults`) as Record<string, bigint>,
+        // The record checks the call-time agents' shape, `null` included.
+        callTimeLlm: payload["call_time_llm"] as JsonObject | null,
+      });
     case "run_resumed":
       requireFields(payload, ["retry_node_ids", "num_workers"], label);
       return new RunResumedRecord(
@@ -1707,6 +1905,31 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         failureFromPayload(payload["failure"], `${label} failure`),
         outcomeFromPayload(payload, label),
       );
+    case "memory_commit_requested":
+      requireFields(payload, ["memory", "commit_id", "attempt_id", "mutations"], label);
+      return new MemoryCommitRequestedRecord(
+        wireName(payload["memory"], `${label} memory`),
+        wireName(payload["commit_id"], `${label} commit_id`),
+        wireArray(payload["mutations"], `${label} mutations`).map((item) =>
+          mutationFromPayload(item, `${label} mutations item`),
+        ),
+        wireInt(payload["attempt_id"], `${label} attempt_id`),
+      );
+    case "memory_commit_succeeded":
+      requireFields(payload, ["memory", "commit_id", "attempt_id"], label);
+      return new MemoryCommitSucceededRecord(
+        wireName(payload["memory"], `${label} memory`),
+        wireName(payload["commit_id"], `${label} commit_id`),
+        wireInt(payload["attempt_id"], `${label} attempt_id`),
+      );
+    case "memory_commit_failed":
+      requireFields(payload, ["memory", "commit_id", "attempt_id", "failure"], label);
+      return new MemoryCommitFailedRecord(
+        wireName(payload["memory"], `${label} memory`),
+        wireName(payload["commit_id"], `${label} commit_id`),
+        memoryFailureFromPayload(payload["failure"], `${label} failure`),
+        wireInt(payload["attempt_id"], `${label} attempt_id`),
+      );
     default:
       throw new Error(`${kind} records are not encoded yet`);
   }
@@ -1754,6 +1977,28 @@ function wireTextArray(value: unknown, label: string): string[] {
     throw new TypeError(`${label} must be an array of strings`);
   }
   return value as string[];
+}
+
+/**
+ * Return `null` for `null`, else each item of the JSON array `value` decoded by `decode` with the
+ * label `<label> item`.
+ *
+ * @throws TypeError when `value` is neither an array nor `null`, besides `decode`'s errors.
+ */
+function wireNullableItems<T>(value: unknown, label: string, decode: (item: unknown, label: string) => T): T[] | null {
+  if (value === null) return null;
+  if (!isList(value)) throw new TypeError(`${label} must be an array or null`);
+  return value.map((item) => decode(item, `${label} item`));
+}
+
+/**
+ * Return `value` when it is a boolean.
+ *
+ * @throws TypeError otherwise.
+ */
+function wireBool(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") throw new TypeError(`${label} must be a boolean`);
+  return value;
 }
 
 /**

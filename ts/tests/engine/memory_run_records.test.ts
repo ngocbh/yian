@@ -54,8 +54,31 @@
  * the evidence half of `test_memory_payloads_name_keys_on_the_wire`, each rejection with its
  * class and message.
  *
- * Later: the other wire tests of the module (the round trips of the run-start tests above, the
- * commit and backward records, their schema and payload rejections), with the record codec.
+ * Ported, the run-start and memory-commit wire: `test_public_token_policy_options_round_trip_durably`,
+ * `test_snapshot_envelope_preserves_opaque_public_memory_state`,
+ * `test_run_started_uses_learnable_as_its_only_wire_retention_field`, the wire rows of
+ * `test_run_started_records_a_key_table_and_stacks` (with the snapshots' wire and a round trip),
+ * `test_every_memory_commit_record_round_trips`,
+ * `test_memory_commit_wire_requires_an_explicit_positive_attempt_slot`, the mutation half of
+ * `test_proposals_preserve_order_and_reject_duplicate_ids`, the schema row of
+ * `test_schema_four_rejects_old_schema_and_nested_extra_or_unknown_fields`,
+ * `test_schema_four_rejects_origin_and_extra_memory_operation_fields`,
+ * `test_schema_four_rejects_plural_private_memory_config` and the commit row of
+ * `test_memory_payloads_name_keys_on_the_wire`, each rejection with its class and message (the
+ * private-key messages are `MemorySpec`'s).
+ *
+ * TS-only (run-start and commit wire): rows for a memory key, config, owner, eligibility flag,
+ * snapshot, stack, mutation and memory operation failure of the wrong shape, each with its message;
+ * memory JSON holding `-0` (a snapshot, a spec config and a mutation payload, which memory's carriers
+ * keep) is written as `0.0` and read back as `0`.
+ *
+ * Changed (run-start and commit wire): `test_run_log_copying_isolated_from_new_carrier_accessors`:
+ * a decoded mutation payload is frozen, so a reader's edit throws `TypeError` (Python edits a
+ * private copy).
+ *
+ * Later: the `MemoryProposal` half of `test_proposals_preserve_order_and_reject_duplicate_ids` and
+ * the backward-ready half of `test_memory_payloads_name_keys_on_the_wire`, with the backward
+ * records' codec.
  */
 
 import { expect, test } from "bun:test";
@@ -68,6 +91,7 @@ import {
   type JsonObject,
   MemoryMutation,
   MemoryOccurrenceSegment,
+  MemoryOperationFailure,
   MemoryScope,
   MemorySection,
   MemorySnapshotEnvelope,
@@ -82,7 +106,9 @@ import {
   decodeRecord,
   encodePool,
   encodeRecord,
+  MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
+  MemoryCommitSucceededRecord,
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
@@ -704,4 +730,386 @@ test("memory payloads name keys on the wire", () => {
     { memory: "reflective", text: "agent memory" },
   ]);
   expect(roundTrip(record)).toEqual(record);
+});
+
+// --------------------------------------------------------------------------------------- //
+// Run start and memory commits on the run log
+// --------------------------------------------------------------------------------------- //
+
+test("public token policy options round trip durably", () => {
+  const config = { stop_token: "semantic-stop-marker", continuationToken: "semantic-continuation-marker" };
+  const record = started({
+    memories: [spec("reflective", config)],
+    memoryStacks: [],
+    memorySnapshots: [new MemorySnapshotEnvelope("reflective", { state: [] })],
+  });
+
+  const encoded = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "run", 0, record));
+  const decoded = decodeRecord(encoded).record;
+
+  expect(encoded).toContain("semantic-stop-marker");
+  expect(encoded).toContain("semantic-continuation-marker");
+  expect(decoded.constructor).toBe(RunStartedRecord);
+  expect((decoded as RunStartedRecord).memories![0]!.config).toEqual(config);
+});
+
+test("a snapshot envelope preserves opaque public memory state", () => {
+  const publicState = {
+    lessons: [
+      { text: "Never place an api_key in durable memory configuration.", tags: ["security", "configuration"] },
+    ],
+    profile: { preferred_runtime: "local" },
+  };
+  expect(new MemorySnapshotEnvelope("reflective", publicState).snapshot).toEqual(publicState);
+});
+
+test("run started uses learnable as its only wire retention field", () => {
+  const wire = wireOf(started({ learnable: true }));
+  expect(wire.payload.learnable).toBe(true);
+  expect("learn" in wire.payload).toBe(false);
+
+  wire.payload.learn = wire.payload.learnable;
+  delete wire.payload.learnable;
+  expectError(
+    () => decodeRecord(logJson(wire)),
+    RangeError,
+    'invalid run_started payload fields; missing=["learnable"], extra=["learn"]',
+  );
+});
+
+// The wire rows of test_run_started_records_a_key_table_and_stacks.
+test("run started writes its key table and stacks on the wire", () => {
+  const memories = [spec("profile", { mode: "flow" }, ROOT), spec("reflective", { mode: "agent" })];
+  const record = started({
+    memories,
+    memoryStacks: [new MemoryStack(["agent"], ["profile", "reflective"])],
+    memorySnapshots: [
+      new MemorySnapshotEnvelope("profile", { state: 1n }),
+      new MemorySnapshotEnvelope("reflective", { state: 2n }),
+    ],
+  });
+  const wire = wireOf(record);
+
+  expect("memory_layout" in wire.payload).toBe(false);
+  expect(wire.payload.memories).toEqual([
+    {
+      key: "profile",
+      type: "profile",
+      config: { mode: "flow" },
+      owners: [{ scope: [], owner: ["root"], node: null }],
+      conversation_eligible: false,
+    },
+    {
+      key: "reflective",
+      type: "reflective",
+      config: { mode: "agent" },
+      owners: [{ scope: [], owner: ["root"], node: "agent" }],
+      conversation_eligible: true,
+    },
+  ]);
+  expect(wire.payload.memory_stacks).toEqual([{ locator: ["agent"], memories: ["profile", "reflective"] }]);
+  expect(wire.payload.memory_snapshots).toEqual([
+    { memory: "profile", snapshot: { state: 1n } },
+    { memory: "reflective", snapshot: { state: 2n } },
+  ]);
+  expect(roundTrip(record)).toEqual(record);
+  const disabled = wireOf(started());
+  expect([disabled.payload.memories, disabled.payload.memory_stacks, disabled.payload.memory_snapshots]).toEqual([
+    null,
+    null,
+    null,
+  ]);
+
+  for (const field of ["memory_stacks", "memories"]) {
+    const missing = wireOf(record);
+    delete missing.payload[field];
+    expectError(
+      () => decodeRecord(logJson(missing)),
+      RangeError,
+      `invalid run_started payload fields; missing=["${field}"], extra=[]`,
+    );
+  }
+  const legacy = wireOf(record);
+  legacy.payload.memory_layout = null;
+  expectError(
+    () => decodeRecord(logJson(legacy)),
+    RangeError,
+    'invalid run_started payload fields; missing=[], extra=["memory_layout"]',
+  );
+});
+
+const COMMIT_FAILURE = new MemoryOperationFailure("learn", "provider.error", "failed", true);
+
+test("every memory commit record round trips", () => {
+  const mutations = [new MemoryMutation("m1", { action: "add" }), new MemoryMutation("m2", { action: "revise" })];
+  for (const record of [
+    new MemoryCommitRequestedRecord("reflective", "commit-1", mutations, 1),
+    new MemoryCommitSucceededRecord("reflective", "commit-1", 1),
+    new MemoryCommitFailedRecord("reflective", "commit-1", COMMIT_FAILURE, 1),
+  ]) {
+    expect(roundTrip(record)).toEqual(record);
+  }
+});
+
+test.each([1, 2])("the memory commit wire requires an explicit positive attempt slot: %d", (attemptId) => {
+  const failure = new MemoryOperationFailure("backend", "failed", "Failed.", false);
+  for (const record of [
+    new MemoryCommitRequestedRecord("history", "commit-1", [], attemptId),
+    new MemoryCommitSucceededRecord("history", "commit-1", attemptId),
+    new MemoryCommitFailedRecord("history", "commit-1", failure, attemptId),
+  ]) {
+    const wire = wireOf(record);
+    expect(wire.payload.attempt_id).toBe(BigInt(attemptId));
+    delete wire.payload.attempt_id;
+    expectError(
+      () => decodeRecord(logJson(wire)),
+      RangeError,
+      `invalid ${wire.kind} payload fields; missing=["attempt_id"], extra=[]`,
+    );
+  }
+});
+
+// The mutation half of test_proposals_preserve_order_and_reject_duplicate_ids.
+test("a commit request keeps its mutation order and rejects duplicate ids", () => {
+  const ordered = [new MemoryMutation("m2", { sequence: 1n }), new MemoryMutation("m1", { sequence: 2n })];
+  expect(new MemoryCommitRequestedRecord("reflective", "commit", ordered, 1).mutations).toEqual(ordered);
+  expectError(
+    () => {
+      const same = [new MemoryMutation("same", {}), new MemoryMutation("same", {})];
+      return new MemoryCommitRequestedRecord("reflective", "commit", same, 1);
+    },
+    RangeError,
+    "mutation IDs must be unique",
+  );
+});
+
+// The schema row of test_schema_four_rejects_old_schema_and_nested_extra_or_unknown_fields.
+test("the wire rejects an old schema", () => {
+  const wire = wireOf(new NodeSucceededRecord("agent", "agent", DONE, { evidence: evidence() }));
+  wire.schema = 3n;
+  expectError(() => decodeRecord(logJson(wire)), RangeError, "unsupported run-record schema: 3");
+});
+
+/** A memory-enabled run start with one flow-owned key, `reflective`. */
+function flowMemoryStarted(): RunStartedRecord {
+  return started({
+    memories: [spec("reflective", {}, ROOT)],
+    memoryStacks: [],
+    memorySnapshots: [new MemorySnapshotEnvelope("reflective", {})],
+  });
+}
+
+test("the wire rejects an origin, a private config and extra memory operation fields", () => {
+  const withOrigin = wireOf(flowMemoryStarted());
+  withOrigin.payload.memories[0].origin = { key: "source" };
+  expectError(
+    () => decodeRecord(logJson(withOrigin)),
+    RangeError,
+    'invalid run_started payload memories item fields; missing=[], extra=["origin"]',
+  );
+
+  const privateConfig = wireOf(flowMemoryStarted());
+  privateConfig.payload.memories[0].config = { nested: { api_key: "private" } };
+  expectError(
+    () => decodeRecord(logJson(privateConfig)),
+    RangeError,
+    "config.nested contains forbidden private key 'api_key'",
+  );
+
+  const failed = wireOf(
+    new MemoryCommitFailedRecord(
+      "reflective",
+      "commit",
+      new MemoryOperationFailure("commit", "provider.error", "sanitized", false),
+      1,
+    ),
+  );
+  failed.payload.failure.credentials = "secret";
+  expectError(
+    () => decodeRecord(logJson(failed)),
+    RangeError,
+    'invalid memory_commit_failed payload failure fields; missing=[], extra=["credentials"]',
+  );
+});
+
+test.each<[Record<string, unknown>, string]>([
+  [{ nested: { secretTokens: ["private"] } }, "secretTokens"],
+  [{ nested: { apiKeys: ["private"] } }, "apiKeys"],
+  [{ nested: { backendPaths: ["/private/backend"] } }, "backendPaths"],
+  [{ nested: { pythonModules: ["package.policy"] } }, "pythonModules"],
+])("the wire rejects a plural private memory config: %o", (config, key) => {
+  const wire = wireOf(flowMemoryStarted());
+  wire.payload.memories[0].config = config;
+  expectError(() => decodeRecord(logJson(wire)), RangeError, `config.nested contains forbidden private key '${key}'`);
+});
+
+test("a decoded commit's mutation payloads are frozen", () => {
+  const record = roundTrip(
+    new MemoryCommitRequestedRecord("reflective", "commit", [new MemoryMutation("m1", { items: [1n] })], 1),
+  ) as MemoryCommitRequestedRecord;
+
+  expect(() => ((record.mutations[0]!.payload as { items: unknown[] }).items as unknown[]).push(2n)).toThrow(TypeError);
+  expect(record.mutations[0]!.payload).toEqual({ items: [1n] });
+});
+
+// The commit half of test_memory_payloads_name_keys_on_the_wire.
+test("a commit request names its mutations on the wire", () => {
+  const commit = new MemoryCommitRequestedRecord("reflective", "c1", [new MemoryMutation("m1", { add: 1n })], 1);
+  expect(wireOf(commit).payload.mutations).toEqual([{ mutation_id: "m1", payload: { add: 1n } }]);
+});
+
+const MEMORY_LABEL = "run_started payload memories item";
+
+test.each<[string, (payload: Record<string, any>) => void, ErrorClass, string]>([
+  [
+    "an empty memory key",
+    (payload) => (payload.memories[0].key = ""),
+    RangeError,
+    `${MEMORY_LABEL} key must be a non-empty string`,
+  ],
+  [
+    "a config that isn't an object",
+    (payload) => (payload.memories[0].config = []),
+    TypeError,
+    `${MEMORY_LABEL} config must be an object`,
+  ],
+  [
+    "no owner",
+    (payload) => (payload.memories[0].owners = []),
+    RangeError,
+    "owners must be non-empty",
+  ],
+  [
+    "an owner with an extra field",
+    (payload) => (payload.memories[0].owners[0].extra = null),
+    RangeError,
+    `invalid ${MEMORY_LABEL} owners item fields; missing=[], extra=["extra"]`,
+  ],
+  [
+    "an empty owner path",
+    (payload) => (payload.memories[0].owners[0].owner = []),
+    RangeError,
+    "owner must be non-empty",
+  ],
+  [
+    "a non-text owner node",
+    (payload) => (payload.memories[0].owners[0].node = 1n),
+    TypeError,
+    `${MEMORY_LABEL} owners item node must be a string or null`,
+  ],
+  [
+    "a non-boolean eligibility flag",
+    (payload) => (payload.memories[0].conversation_eligible = null),
+    TypeError,
+    `${MEMORY_LABEL} conversation_eligible must be a boolean`,
+  ],
+  [
+    "a snapshot that isn't an object",
+    (payload) => (payload.memory_snapshots[0].snapshot = []),
+    TypeError,
+    "run_started payload memory_snapshots item snapshot must be an object",
+  ],
+  [
+    "a snapshot with an extra field",
+    (payload) => (payload.memory_snapshots[0].extra = true),
+    RangeError,
+    'invalid run_started payload memory_snapshots item fields; missing=[], extra=["extra"]',
+  ],
+  [
+    "an empty stack locator",
+    (payload) => (payload.memory_stacks = [{ locator: [], memories: [] }]),
+    RangeError,
+    "locator must be non-empty",
+  ],
+  [
+    "a non-text stack key",
+    (payload) => (payload.memory_stacks = [{ locator: ["agent"], memories: [1n] }]),
+    TypeError,
+    "run_started payload memory_stacks item memories must be an array of strings",
+  ],
+])("decode rejects a run_started memory payload with %s (TS-only)", (_name, edit, cls, message) => {
+  const wire = wireOf(flowMemoryStarted());
+  edit(wire.payload);
+  expectError(() => decodeRecord(logJson(wire)), cls, message);
+});
+
+test.each<[string, (payload: Record<string, any>) => void, ErrorClass, string]>([
+  [
+    "an empty mutation id",
+    (payload) => (payload.mutations[0].mutation_id = ""),
+    RangeError,
+    "memory_commit_requested payload mutations item mutation_id must be a non-empty string",
+  ],
+  [
+    "a mutation with an extra field",
+    (payload) => (payload.mutations[0].extra = null),
+    RangeError,
+    'invalid memory_commit_requested payload mutations item fields; missing=[], extra=["extra"]',
+  ],
+  [
+    "mutations that aren't an array",
+    (payload) => (payload.mutations = {}),
+    TypeError,
+    "memory_commit_requested payload mutations must be an array",
+  ],
+  [
+    "repeated mutation ids",
+    (payload) => payload.mutations.push(payload.mutations[0]),
+    RangeError,
+    "mutation IDs must be unique",
+  ],
+])("decode rejects a memory_commit_requested payload with %s (TS-only)", (_name, edit, cls, message) => {
+  const wire = wireOf(new MemoryCommitRequestedRecord("notes", "c1", [new MemoryMutation("m1", {})], 1));
+  edit(wire.payload);
+  expectError(() => decodeRecord(logJson(wire)), cls, message);
+});
+
+test.each<[string, (failure: Record<string, any>) => void, ErrorClass, string]>([
+  [
+    "an empty stage",
+    (failure) => (failure.stage = ""),
+    RangeError,
+    "memory_commit_failed payload failure stage must be a non-empty string",
+  ],
+  [
+    "a non-boolean retry flag",
+    (failure) => (failure.retryable = "yes"),
+    TypeError,
+    "memory_commit_failed payload failure retryable must be a boolean",
+  ],
+])("decode rejects a memory_commit_failed failure with %s (TS-only)", (_name, edit, cls, message) => {
+  const wire = wireOf(new MemoryCommitFailedRecord("notes", "c1", COMMIT_FAILURE, 1));
+  edit(wire.payload.failure);
+  expectError(() => decodeRecord(logJson(wire)), cls, message);
+});
+
+test("memory JSON holding -0 is written as 0 (TS-only)", () => {
+  const snapshot = new MemorySnapshotEnvelope("reflective", { score: -0 });
+  const memory = spec("reflective", { weight: -0 });
+  const mutation = new MemoryMutation("m1", [-0]);
+  expect(Object.is(snapshot.snapshot["score"], -0)).toBe(true);
+  expect(Object.is(memory.config["weight"], -0)).toBe(true);
+  expect(Object.is((mutation.payload as number[])[0], -0)).toBe(true);
+
+  const startedLine = encodeRecord(
+    new RecordEnvelope(
+      SCHEMA_VERSION,
+      "run",
+      0,
+      started({ memories: [memory], memoryStacks: [], memorySnapshots: [snapshot] }),
+    ),
+  );
+  const commitLine = encodeRecord(
+    new RecordEnvelope(SCHEMA_VERSION, "run", 0, new MemoryCommitRequestedRecord("reflective", "c", [mutation], 1)),
+  );
+
+  expect(startedLine).toContain('"config":{"weight":0.0}');
+  expect(startedLine).toContain('"snapshot":{"score":0.0}');
+  expect(commitLine).toContain('"payload":[0.0]');
+  const decoded = decodeRecord(startedLine).record as RunStartedRecord;
+  expect(Object.is(decoded.memorySnapshots![0]!.snapshot["score"], 0)).toBe(true);
+  expect(Object.is(decoded.memories![0]!.config["weight"], 0)).toBe(true);
+  const commit = decodeRecord(commitLine).record as MemoryCommitRequestedRecord;
+  expect(Object.is((commit.mutations[0]!.payload as number[])[0], 0)).toBe(true);
+  expect(encodeRecord(decodeRecord(commitLine))).toBe(commitLine);
 });

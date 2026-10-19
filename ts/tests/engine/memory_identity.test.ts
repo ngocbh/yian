@@ -7,7 +7,7 @@
  * `test_memory_spec_requires_sorted_owners_and_derived_eligibility`,
  * `test_memory_stack_requires_locator_and_unique_keys`,
  * `test_snapshot_envelope_names_its_memory_key`, `test_learning_carriers_name_their_memory_key`,
- * the `BackwardFailure` line of `test_backward_failure_and_commit_records_name_their_memory_key`
+ * `test_backward_failure_and_commit_records_name_their_memory_key` (with the run-log codec)
  * and `test_package_docstring_and_exports_describe_keyed_memories`; plus a lone-surrogate node
  * id, a compiled spec whose key and config the declaration check would refuse, and a snapshot
  * deeper than the value nesting limit.
@@ -26,9 +26,6 @@
  * Not ported: the list-for-tuple row (TS has only arrays); the origin re-check during traversal
  * and rewrite (`memory declaration origin must be an OriginRef or None`), since a frozen
  * `MemoryDecl` checked its origin when built.
- *
- * Later (T4-2): the commit-record half of
- * `test_backward_failure_and_commit_records_name_their_memory_key`, with the runtime log.
  */
 
 import { expect, test } from "bun:test";
@@ -62,6 +59,15 @@ import type {
   VisibleInteraction,
 } from "../../src/memory/index.ts";
 import { BackwardFailure } from "../../src/runtime/contracts.ts";
+import {
+  decodeRecord,
+  encodeRecord,
+  MemoryCommitFailedRecord,
+  MemoryCommitRequestedRecord,
+  MemoryCommitSucceededRecord,
+  RecordEnvelope,
+  SCHEMA_VERSION,
+} from "../../src/runtime/log.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
@@ -349,9 +355,20 @@ test("learning carriers name their memory key", () => {
   );
 });
 
-// test_backward_failure_and_commit_records_name_their_memory_key (the BackwardFailure line)
-test("a backward failure names its memory key", () => {
+// test_backward_failure_and_commit_records_name_their_memory_key
+test("a backward failure and the commit records name their memory key", () => {
   expect(new BackwardFailure("commit", "declined", "", { memory: "notes" }).memory).toBe("notes");
+  const cause = new MemoryOperationFailure("commit", "declined", "Declined.", true);
+  for (const record of [
+    new MemoryCommitRequestedRecord("notes", "c1", [], 1),
+    new MemoryCommitSucceededRecord("notes", "c1", 1),
+    new MemoryCommitFailedRecord("notes", "c1", cause, 1),
+  ]) {
+    expect(record.memory).toBe("notes");
+    const wire = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "run", 0, record));
+    expect(JSON.parse(wire).payload.memory).toBe("notes");
+    expect(decodeRecord(wire).record).toEqual(record);
+  }
 });
 
 // test_package_docstring_and_exports_describe_keyed_memories

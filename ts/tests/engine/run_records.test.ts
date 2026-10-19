@@ -28,9 +28,10 @@
  * `test_decode_rejects_duplicate_keys_at_any_object_depth` (`invalid run-record JSON`, caused by
  * the reader's `JSONDecodeError` `duplicate JSON object key: "node_id"`, double-quoted),
  * `test_invalid_record_json_keeps_its_message`, and the round-trip rows of
- * `test_every_record_round_trips_through_a_validated_envelope` for `run_resumed`,
- * `run_stopped`, `node_started`, `node_step`, `node_succeeded`, `node_routed`, `node_expanded`
- * and `node_failed` (each also decoded from bytes).
+ * `test_every_record_round_trips_through_a_validated_envelope` for `run_started`, `run_resumed`,
+ * `run_stopped`, `node_started`, `node_step`, `node_succeeded`, `node_routed`, `node_expanded`,
+ * `node_failed`, `memory_commit_requested`, `memory_commit_succeeded` and `memory_commit_failed`
+ * (each also decoded from bytes).
  *
  * TS-only: a seed keeps `±Infinity` as a float (a TS yian value, unlike Python's); a seed's
  * record keys come out in code-unit order; the envelope's schema rows (7, 8 and 11 are
@@ -52,7 +53,9 @@
  * and schema 9 named before anything else is checked; an empty `node_started` node id, a
  * non-text failure code, a failure or origin that isn't an object; a byte-pinned `node_succeeded`
  * line whose capture holds route sizes, spans and path indexes, an item index and an occurrence
- * index, all written as ints.
+ * index, all written as ints; a memory commit's `attempt_id` of 0 or -1; `run_started` rows for a
+ * missing field, a non-text fingerprint, a pool, memory table or defaults of the wrong JSON type, a
+ * float or negative worker count and a non-boolean `learnable`.
  *
  * Changed:
  * - `test_encode_validates_programmatically_constructed_envelopes`: the record's constructor
@@ -80,6 +83,12 @@
  *   contains itself` (Python's seed helper says `cyclic container`).
  * - `test_pool_codec_is_canonical_and_lossless_for_typed_values`: no date value; the tuple is an
  *   array.
+ * - `test_memory_commit_wire_requires_a_positive_attempt`: a `null` attempt is a `TypeError` (a
+ *   field of the wrong JSON type), with its message pinned.
+ * - `test_expansion_record_with_nonfinite_seed_does_not_append` and
+ *   `test_run_started_record_with_nonfinite_llm_config_does_not_append`: the record's constructor
+ *   refuses the NaN (the value layer's `NaN is not a yian value`, at its path), so no log is
+ *   involved.
  *
  * Not ported: the two list rows of `test_encode_rejects_invalid_id_tuple_carriers` (a TS id
  * carrier is an array); the `inf` and `-inf` rows (a TS float may be infinite) and the tuple,
@@ -95,7 +104,7 @@ import { expect, test } from "bun:test";
 
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
-import { EvaluationEvidence, MemoryOperationFailure } from "../../src/memory/contracts.ts";
+import { EvaluationEvidence, MemoryMutation, MemoryOperationFailure } from "../../src/memory/contracts.ts";
 import { BackwardResult } from "../../src/nodes/base.ts";
 import { ExecutionPosition, ExecutionScope } from "../../src/nodes/contracts.ts";
 import { BackwardOutcome, ForwardCapture } from "../../src/runtime/contracts.ts";
@@ -138,7 +147,7 @@ import {
   ValueKind,
   VariablePool,
 } from "../../src/typesys/index.ts";
-import { JSONDecodeError, type JsonObject, parseJson } from "../../src/typesys/json.ts";
+import { JSONDecodeError, type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 
 /** Assert `fn` throws a `TypeCheckError` with exactly `message` at `path`. */
 function expectTypeCheck(fn: () => unknown, message: string, path: readonly (string | number)[]): void {
@@ -768,7 +777,21 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
   expectError(fn, cls, message);
 });
 
+/** The run-start record of the round trips: a one-entry pool, a wiring override and one agent. */
+function roundTripRunStarted(): RunStartedRecord {
+  const pool = new VariablePool("start");
+  pool.set("start", { name: "Ada" });
+  return new RunStartedRecord({
+    flowFingerprint: "a".repeat(64),
+    initialPool: encodePool(pool),
+    startWiringOverride: { name: "Ada" },
+    effectiveLlmByStaticPath: { agent: { provider: "openai", model: "gpt-test" } },
+    numWorkers: 2,
+  });
+}
+
 const ROUND_TRIP_RECORDS: [string, RunRecord][] = [
+  ["RunStartedRecord", roundTripRunStarted()],
   ["RunResumedRecord", new RunResumedRecord(["slow", "later"], 4)],
   ["RunStoppedRecord", new RunStoppedRecord("callback", "the host callback threw", ["b", "a"])],
   ["NodeStartedRecord", new NodeStartedRecord("agent")],
@@ -792,7 +815,109 @@ const ROUND_TRIP_RECORDS: [string, RunRecord][] = [
       }),
     ),
   ],
+  [
+    "MemoryCommitRequestedRecord",
+    new MemoryCommitRequestedRecord("history", "commit-1", [new MemoryMutation("m1", { text: "Remember." })], 1),
+  ],
+  ["MemoryCommitSucceededRecord", new MemoryCommitSucceededRecord("history", "commit-1", 1)],
+  [
+    "MemoryCommitFailedRecord",
+    new MemoryCommitFailedRecord(
+      "history",
+      "commit-1",
+      new MemoryOperationFailure("backend", "backend.failed", "Failed.", true),
+      1,
+    ),
+  ],
 ];
+
+test.each<[string, Record<string, unknown>]>([
+  ["memory_commit_requested", { mutations: [] }],
+  ["memory_commit_succeeded", {}],
+  ["memory_commit_failed", { failure: { stage: "commit", code: "declined", message: "Declined.", retryable: true } }],
+])("the memory commit wire requires a positive attempt: %s", (kind, extra) => {
+  const wire = {
+    schema: 10,
+    run_id: "run",
+    seq: 0,
+    kind,
+    payload: { memory: "history", commit_id: "commit-1", attempt_id: null as number | null, ...extra },
+  };
+  expectError(() => decodeRecord(JSON.stringify(wire)), TypeError, `${kind} payload attempt_id must be an integer`);
+  for (const attemptId of [0, -1]) {
+    wire.payload.attempt_id = attemptId;
+    expectError(() => decodeRecord(JSON.stringify(wire)), RangeError, "attempt_id must be positive");
+  }
+});
+
+// A TS record refuses NaN when it is built, so no log ever sees it.
+test.each<[string, () => unknown, (string | number)[]]>([
+  ["an expansion seed", () => new NodeExpandedRecord("n", { limit: NaN }, [], "0".repeat(64)), ["limit"]],
+  [
+    "a run-start LLM config",
+    () => runStarted({ effectiveLlmByStaticPath: { a: { temperature: NaN } } }),
+    ["a", "temperature"],
+  ],
+])("a record holding NaN is refused before it is appended: %s", (_name, build, path) => {
+  expectTypeCheck(build, "NaN is not a yian value", path);
+});
+
+const RUN_STARTED_WIRE = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "run", 0, roundTripRunStarted()));
+
+test.each<[string, (payload: Record<string, unknown>) => void, new (...args: never[]) => Error, string]>([
+  [
+    "a missing field",
+    (payload) => delete payload["defaults"],
+    RangeError,
+    'invalid run_started payload fields; missing=["defaults"], extra=[]',
+  ],
+  [
+    "a non-text flow fingerprint",
+    (payload) => (payload["flow_fingerprint"] = 7n),
+    TypeError,
+    "run_started payload flow_fingerprint must be a string",
+  ],
+  [
+    "a pool that isn't an object",
+    (payload) => (payload["initial_pool"] = []),
+    TypeError,
+    "run_started payload initial_pool must be an object",
+  ],
+  [
+    "a float worker count",
+    (payload) => (payload["num_workers"] = 2),
+    TypeError,
+    "run_started payload num_workers must be an integer",
+  ],
+  [
+    "a negative worker count",
+    (payload) => (payload["num_workers"] = -1n),
+    RangeError,
+    "num_workers must be non-negative",
+  ],
+  [
+    "a non-boolean learnable",
+    (payload) => (payload["learnable"] = 1n),
+    TypeError,
+    "run_started payload learnable must be a boolean",
+  ],
+  [
+    "memories that aren't an array",
+    (payload) => (payload["memories"] = {}),
+    TypeError,
+    "run_started payload memories must be an array or null",
+  ],
+  [
+    "defaults that aren't an object",
+    (payload) => (payload["defaults"] = []),
+    TypeError,
+    "run_started payload defaults must be an object",
+  ],
+])("decode rejects a run_started payload with %s (TS-only)", (_name, edit, cls, message) => {
+  const wire = parseJson(RUN_STARTED_WIRE, "codec") as { payload: Record<string, unknown> };
+  edit(wire.payload);
+  expectError(() => decodeRecord(logJson(wire)), cls, message);
+});
 
 test.each(ROUND_TRIP_RECORDS)("every record round trips through a validated envelope: %s", (_name, record) => {
   const envelope = new RecordEnvelope(SCHEMA_VERSION, "run-123", 0, record);

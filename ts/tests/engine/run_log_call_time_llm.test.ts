@@ -4,26 +4,38 @@
  * `RangeError` here.
  *
  * Ported: `test_the_record_keeps_its_own_copy`, `test_a_malformed_record_is_rejected` (11 rows,
- * each message and class pinned; Python matches `call_time_llm` only).
+ * each message and class pinned; Python matches `call_time_llm` only), `test_call_time_llm_round_trips`.
  *
  * TS-only: the copy is deep-frozen with its keys in code-unit order, `-0` becomes `0`; omitted, the
  * field is `null`; a NaN refusal's `cause` is the value layer's `TypeCheckError`.
  *
  * Changed:
- * - `test_the_schema_stays_nine`: TS writes schema 10, so the constant is 10 (its encoded half
- *   comes with the record codec).
+ * - `test_the_schema_stays_nine`: TS writes schema 10, so the constant and the encoded line's
+ *   `schema` are 10.
  * - The NaN row's message is the value layer's (`RunStarted call_time_llm: NaN is not a yian
  *   value`), where Python's canonical JSON copy says `non-finite numbers are not valid canonical
  *   JSON`.
+ * - `test_a_run_without_call_time_agents_writes_the_same_bytes`: schema 10 always writes both
+ *   fields, so the golden line holds `"call_time_llm":null,"defaults":{}` and `"schema":10`.
+ * - `test_a_malformed_payload_is_rejected`: `null` is valid in schema 10 (no call-time agents), so
+ *   its row is dropped; the other 10 rows are pinned with the record's class and message (a part of
+ *   the wrong JSON type is a `TypeError`, where Python's pydantic raises `ValueError`).
  *
- * Later: the round-trip, golden-bytes and payload tests, with the record codec; the run-start
- * tests, with the run state.
+ * Later: the run-start tests, with the run state.
  */
 
 import { expect, test } from "bun:test";
 
-import { encodePool, RunStartedRecord, SCHEMA_VERSION } from "../../src/runtime/log.ts";
+import {
+  decodeRecord,
+  encodePool,
+  encodeRecord,
+  RecordEnvelope,
+  RunStartedRecord,
+  SCHEMA_VERSION,
+} from "../../src/runtime/log.ts";
 import { TypeCheckError, VariablePool } from "../../src/typesys/index.ts";
+import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`, and return it. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): Error {
@@ -73,8 +85,40 @@ function record(callTimeLlm?: unknown): RunStartedRecord {
   });
 }
 
+/** Encode `record` as the first line of run `r1`. */
+function encode(record: RunStartedRecord): string {
+  return encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r1", 0, record));
+}
+
+// A run without call-time agents writes `call_time_llm` as null.
+const GOLDEN =
+  '{"kind":"run_started","payload":{"call_time_llm":null,"defaults":{},"effective_llm_by_static_path":{"agent":' +
+  '{"model":"gpt-test","provider":"openai"}},"flow_fingerprint":"' +
+  "a".repeat(64) +
+  '","initial_pool":{"start_id":"start","store":{"start":{"kind":"object","value":' +
+  '{"name":"Ada"}}},"system":{"run_id":{"kind":"str","value":"r1"}}},"learnable":false,' +
+  '"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":2,' +
+  '"start_wiring_override":{"name":"${input.name}"}},"run_id":"r1","schema":10,"seq":0}';
+
 test("the schema is ten", () => {
   expect(SCHEMA_VERSION).toBe(10);
+  expect((parseJson(encode(record(CALL_TIME)), "codec") as JsonObject)["schema"]).toBe(10n);
+});
+
+test("call_time_llm round trips", () => {
+  const data = encode(record(structuredClone(CALL_TIME)));
+  expect(((parseJson(data, "codec") as JsonObject)["payload"] as JsonObject)["call_time_llm"]).toEqual(CALL_TIME);
+  const decoded = decodeRecord(data).record as RunStartedRecord;
+  expect(decoded.callTimeLlm).toEqual(CALL_TIME);
+  expect(decoded).toEqual(record(CALL_TIME));
+  expect(encode(decoded)).toBe(data);
+});
+
+test("a run without call-time agents writes the same bytes", () => {
+  const plain = record();
+  expect(plain.callTimeLlm).toBeNull();
+  expect(encode(plain)).toBe(GOLDEN);
+  expect((decodeRecord(GOLDEN).record as RunStartedRecord).callTimeLlm).toBeNull();
 });
 
 test("the record keeps its own copy", () => {
@@ -99,7 +143,7 @@ test("the record holds a canonical copy, and null when omitted", () => {
 
 const NOT_EXACTLY = "RunStarted call_time_llm must have exactly selection and agents";
 
-test.each<[string, unknown, new (...args: never[]) => Error, string]>([
+const MALFORMED: [string, unknown, new (...args: never[]) => Error, string][] = [
   ["an array", [], TypeError, "RunStarted call_time_llm must be a dict"],
   ["an empty object", {}, RangeError, NOT_EXACTLY],
   ["no selection", { agents: CALL_TIME.agents }, RangeError, NOT_EXACTLY],
@@ -131,8 +175,17 @@ test.each<[string, unknown, new (...args: never[]) => Error, string]>([
     RangeError,
     "RunStarted call_time_llm: NaN is not a yian value",
   ],
-])("a malformed record is rejected: %s", (_name, value, cls, message) => {
+];
+
+test.each(MALFORMED)("a malformed record is rejected: %s", (_name, value, cls, message) => {
   expectError(() => record(value), cls, message);
+});
+
+// The log can't hold a NaN, so its row has no wire form.
+test.each(MALFORMED.slice(0, -1))("a malformed payload is rejected: %s", (_name, value, cls, message) => {
+  const wire = parseJson(encode(record()), "codec") as { payload: Record<string, unknown> };
+  wire.payload["call_time_llm"] = value;
+  expectError(() => decodeRecord(logJson(wire)), cls, message);
 });
 
 test("a NaN in the record keeps the value layer's error as its cause", () => {

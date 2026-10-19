@@ -14,14 +14,30 @@
  * `test_append_revalidates_the_recorded_values` (it forges the frozen record with
  * `object.__setattr__`).
  *
- * Later: the encode and decode tests, with the record codec; the run, resume and mismatch tests,
- * with the engine.
+ * Ported, the codec: `test_recorded_values_encode_and_decode`,
+ * `test_recorded_values_are_sorted_by_name` (also pinned as bytes),
+ * `test_decode_rejects_a_bad_recorded_value` (each row with its class and message; the line is
+ * built from a record, not from `_RECORDED_ROUTE`).
+ *
+ * Changed (TS yian): the log half of `test_default_run_log_is_unchanged`: schema 10 always writes
+ * `defaults`, so an all-default run writes `"defaults":{}` and reads it back as `{}` (Python omits
+ * the field for byte compatibility within schema 9).
+ *
+ * Later: the run, resume and mismatch tests, with the engine.
  */
 
 import { expect, test } from "bun:test";
 
-import { encodePool, RunStartedRecord } from "../../src/runtime/log.ts";
+import {
+  decodeRecord,
+  encodePool,
+  encodeRecord,
+  RecordEnvelope,
+  RunStartedRecord,
+  SCHEMA_VERSION,
+} from "../../src/runtime/log.ts";
 import { VariablePool } from "../../src/typesys/index.ts";
+import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): void {
@@ -76,4 +92,49 @@ test("the record keeps its own copy of the values", () => {
   expect(record.defaults).toEqual({ MAX_TOTAL_NODES: 5000n });
   expect(Object.isFrozen(record.defaults)).toBe(true);
   expect(runStarted().defaults).toEqual({});
+});
+
+/** Encode `record` as the first line of run `direct-engine-test`. */
+function encode(record: RunStartedRecord): string {
+  return encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "direct-engine-test", 0, record));
+}
+
+/** The decoded payload of `line`, ints as `bigint`s. */
+function payloadOf(line: string): JsonObject {
+  return (parseJson(line, "codec") as JsonObject)["payload"] as JsonObject;
+}
+
+test("recorded values encode and decode", () => {
+  const encoded = encode(runStarted({ MAX_TOTAL_NODES: 5000n }));
+
+  expect(payloadOf(encoded)["defaults"]).toEqual({ MAX_TOTAL_NODES: 5000n });
+  expect((decodeRecord(encoded).record as RunStartedRecord).defaults).toEqual({ MAX_TOTAL_NODES: 5000n });
+});
+
+test("recorded values are sorted by name", () => {
+  const encoded = encode(runStarted({ MAX_TOTAL_NODES: 5000n, AGENT_RETRIES: 0n }));
+
+  expect(Object.keys(payloadOf(encoded)["defaults"] as JsonObject)).toEqual(["AGENT_RETRIES", "MAX_TOTAL_NODES"]);
+  expect(encoded).toContain('"defaults":{"AGENT_RETRIES":0,"MAX_TOTAL_NODES":5000}');
+});
+
+test.each<[string, unknown, new (...args: never[]) => Error, string]>([
+  ["string", { MAX_TOTAL_NODES: "5000" }, TypeError, NOT_AN_INT],
+  ["bool", { MAX_TOTAL_NODES: true }, TypeError, NOT_AN_INT],
+  // A JS number is written as a float token, `5.0`.
+  ["float", { MAX_TOTAL_NODES: 5 }, TypeError, NOT_AN_INT],
+  ["empty-name", { "": 1n }, RangeError, "RunStarted defaults names must be non-empty strings"],
+])("decode rejects a bad recorded value: %s", (_name, recorded, cls, message) => {
+  const envelope = parseJson(encode(runStarted()), "codec") as { payload: Record<string, unknown> };
+  envelope.payload["defaults"] = recorded;
+  expectError(() => decodeRecord(logJson(envelope)), cls, message);
+});
+
+test("the default run log writes empty defaults", () => {
+  const encoded = encode(runStarted());
+  const decoded = decodeRecord(encoded);
+
+  expect(encoded).toContain('"defaults":{}');
+  expect((decoded.record as RunStartedRecord).defaults).toEqual({});
+  expect(encodeRecord(decoded)).toBe(encoded);
 });

@@ -27,10 +27,10 @@
  * `test_null_max_still_gets_the_never_ending_error`, `test_dotted_condition_ref_names_the_carried_field`,
  * `test_never_ending_error_does_not_stack_on_other_loop_errors` (5),
  * `test_never_changing_condition_with_max_loads`, `test_condition_reading_one_returned_field_loads`,
- * `test_unknown_returned_fields_get_only_the_record_error`, the build halves of
+ * `test_unknown_returned_fields_get_only_the_record_error`; the build halves of
  * `test_predicate_nested_field_read_builds` (2),
  * `test_predicate_tagged_member_field_error_points_at_isinstance` and
- * `test_predicate_isinstance_check_on_an_object_field_checks_reads_on_the_type`,
+ * `test_predicate_isinstance_check_on_an_object_field_checks_reads_on_the_type`;
  * `test_predicate_unknown_nested_field_is_rejected` (3),
  * `test_predicate_field_read_on_scalar_is_rejected`,
  * `test_predicate_unknown_field_on_omitted_typed_seed_is_rejected`,
@@ -941,7 +941,7 @@ test("a predicate's field on an omitted literal seed is not checked", () => {
   expect(build(text, omittedBody(), { nodeId: "repeat" }).node).toBeInstanceOf(LoopNode);
 });
 
-/** A loop `ask` whose `body` def reads `n` and returns `{n: int, r: <r>}`, over `typedefs`. */
+/** One variant of the `ask` loop: its flow text, its typedefs, and the type name of `r`. */
 interface AskState {
   readonly text: string;
   readonly typedefs: Readonly<Record<string, unknown>>;
@@ -1083,11 +1083,13 @@ test("a predicate's tagged member field error points at isinstance", () => {
   expect(buildAsk(TAGGED_STATE, "until: isinstance(r, Done) and r.answer == 'ok'").node).toBeInstanceOf(LoopNode);
 });
 
+/** The message of a tag comparison against `"dnoe"`, which is no tag of `r.kind`. */
+const NOT_A_TAG =
+  'loop node \'ask\': `until:` `r.kind == "dnoe"` compares r.kind with "dnoe", which is not one of its tags ' +
+  '(done, more); did you mean "done"?';
+
 test("a predicate's tag comparison with a value that is no tag is rejected", () => {
-  expect(askError(TAGGED_STATE, "until: r.kind == 'dnoe'")).toBe(
-    'loop node \'ask\': `until:` `r.kind == "dnoe"` compares r.kind with "dnoe", which is not one of its tags ' +
-      '(done, more); did you mean "done"?',
-  );
+  expect(askError(TAGGED_STATE, "until: r.kind == 'dnoe'")).toBe(NOT_A_TAG);
 });
 
 test.each([
@@ -1126,10 +1128,7 @@ test("a predicate's read past a check the checks before it decide is checked und
 });
 
 test("a predicate's read after a value that is no tag is not checked", () => {
-  expect(askError(TAGGED_STATE, "until: r.kind == 'dnoe' and r.zz == 'x'")).toBe(
-    'loop node \'ask\': `until:` `r.kind == "dnoe"` compares r.kind with "dnoe", which is not one of its tags ' +
-      '(done, more); did you mean "done"?',
-  );
+  expect(askError(TAGGED_STATE, "until: r.kind == 'dnoe' and r.zz == 'x'")).toBe(NOT_A_TAG);
 });
 
 // `ask` calls the `body` def, which returns `r: Done`; the type contract doesn't force the seed to

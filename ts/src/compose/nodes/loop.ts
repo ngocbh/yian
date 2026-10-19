@@ -428,7 +428,7 @@ function contractFieldNames(contract: OutputContract | null): Set<string> | null
   return new Set(contract.type.fields.keys());
 }
 
-/** Return the declared type of a carried-record path, or `null` when it is unproven. */
+/** Return a lookup of a carried-record path's declared type (`null` when it is unproven). */
 function carriedBaseType(contract: OutputContract): BaseTypeOf {
   return (base) => {
     const projected = projectOutputContract(contract, base.split("."));
@@ -437,9 +437,9 @@ function carriedBaseType(contract: OutputContract): BaseTypeOf {
 }
 
 /**
- * Return the type a carried-record path has on every evaluation of a `while:`, the seed's
- * included: the carried type when the seed's type fits it, the seed's when the carried type fits
- * the seed's, and otherwise, or when either is unproven, `null`.
+ * Return a lookup of the type a carried-record path has on every evaluation of a `while:`, the
+ * seed's included: the carried type when the seed's type fits it, the seed's when the carried type
+ * fits the seed's, and otherwise, or when either is unproven, `null`.
  *
  * @param carried The carried record's declared types, from `carriedBaseType`.
  * @param seeds Each carried field the predicate reads, to its seed's contract (`null` unproven).
@@ -470,12 +470,12 @@ function predicateErrors(
   registry: TypeRegistry,
 ): string[] {
   const messages = impossibleChecks(tree, baseTypeOf, registry).map(impossibleCheckMessage);
-  const checked: [string, Guard][] = [];
+  const seen: [string, Guard][] = [];
   for (const [ref, guard] of checkedRefs(tree, baseTypeOf, registry)) {
     // A read after a reported check is reached by no value.
     if (guard === null) continue;
-    if (checked.some(([seen, seenGuard]) => seen === ref && sameGuard(seenGuard, guard))) continue;
-    checked.push([ref, guard]);
+    if (seen.some(([seenRef, seenGuard]) => seenRef === ref && sameGuard(seenGuard, guard))) continue;
+    seen.push([ref, guard]);
     const message = predicateFieldError(contract, ref, guard, baseTypeOf, registry);
     if (message !== null) messages.push(message);
   }

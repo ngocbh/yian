@@ -119,7 +119,9 @@ test("body inputs keep their declared types after load", () => {
   });
   const desc = nodesOf(PAGE).get("pages")!;
 
-  const node = desc.build(new BuildContext({ registry: new Map(), resolver: () => body })).node as LoopNode;
+  const built = desc.build(new BuildContext({ registry: new Map(), resolver: () => body })).node;
+  expect(built).toBeInstanceOf(LoopNode);
+  const node = built as LoopNode;
 
   const [cursor] = node.childInputs;
   expect(node.childInputs).toHaveLength(1);
@@ -266,12 +268,15 @@ test.each<["until" | "times", string | null]>([
 test("carriedFieldTypes gives an exact record's field types", () => {
   const contract = new ValueContract(recordType({ n: INT, cursor: STR }));
 
-  expect(carriedFieldTypes(contract)).toEqual(
+  const types = carriedFieldTypes(contract);
+
+  expect(types).toStrictEqual(
     new Map([
       ["n", INT],
       ["cursor", STR],
     ]),
   );
+  expect([...types.keys()]).toEqual(["n", "cursor"]);
 });
 
 test("carriedFieldTypes gives a partly typed record's proven field types", () => {

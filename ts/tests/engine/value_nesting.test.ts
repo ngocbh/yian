@@ -4,6 +4,9 @@
  * `recursiveEntryPath`). The levels are arrays, records and `FileRef`s; a `TypedValue` is
  * unwrapped.
  *
+ * New in TS: `rejectLoneSurrogates`, which refuses text or a record key holding a lone
+ * surrogate on the same walk.
+ *
  * Also here: `test_limit_overrides.py::test_value_nesting_follows_the_variable`.
  *
  * Not ported: `test_tuple_dataclass_and_model_each_count_as_a_level` and
@@ -20,8 +23,11 @@ import {
   FileRef,
   recursiveEntryPath,
   rejectDeepNesting,
+  rejectLoneSurrogates,
   TypeCheckError,
+  TypedValue,
   type Value,
+  ValueKind,
 } from "../../src/typesys/values.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
@@ -195,5 +201,43 @@ describe("recursiveEntryPath", () => {
 
     expect(recursiveEntryPath({ a: shared, b: [shared] })).toBeNull();
     expect(recursiveEntryPath(1n)).toBeNull();
+  });
+});
+
+describe("rejectLoneSurrogates", () => {
+  const reason = "text holding a lone surrogate is not a yian value";
+
+  test("refuses root text", () => {
+    const error = typeCheckError(() => rejectLoneSurrogates("\uD800", "out"));
+    expect(error.message).toBe(`out: ${reason}`);
+    expect(error.path).toEqual([]);
+  });
+
+  test("refuses nested text at its path", () => {
+    const error = typeCheckError(() => rejectLoneSurrogates(["a", ["\uDC00"]], "out"));
+    expect(error.message).toBe(`out at [1][0]: ${reason}`);
+    expect(error.path).toEqual([1, 0]);
+  });
+
+  test("refuses a record key at its record's path", () => {
+    const error = typeCheckError(() => rejectLoneSurrogates({ a: { "\uD800": 1n } }, "out"));
+    expect(error.message).toBe(`out at a: ${reason}`);
+    expect(error.path).toEqual(["a"]);
+  });
+
+  test("passes a surrogate pair, a recursive list and a TypedValue of good text", () => {
+    const items: Value[] = ["ok"];
+    items.push(items);
+
+    rejectLoneSurrogates(["\uD83D\uDE00", { "\uD83D\uDE00": "x" }], "out");
+    rejectLoneSurrogates(items, "out");
+    rejectLoneSurrogates(new TypedValue(ValueKind.STRING, "ok"), "out");
+  });
+
+  test("refuses a TypedValue wrapping bad text", () => {
+    const error = typeCheckError(() =>
+      rejectLoneSurrogates([new TypedValue(ValueKind.STRING, "\uD800")], "out"),
+    );
+    expect(error.message).toBe(`out at [0]: ${reason}`);
   });
 });

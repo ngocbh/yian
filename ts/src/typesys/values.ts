@@ -323,6 +323,28 @@ export function recursiveEntryPath(value: unknown): ValuePath | null {
   return null;
 }
 
+/**
+ * Throw if text in a value, or a record key, holds a lone surrogate. Root text is checked
+ * itself; inside containers the walk is `walkNesting`'s, depth first and in order.
+ *
+ * @throws TypeCheckError `<where>[ at <path>]: text holding a lone surrogate is not a yian value`
+ *   (a key: at its record's path, as `fromHost` reports it), with `path`.
+ */
+export function rejectLoneSurrogates(value: unknown, where: string): void {
+  const root = unwrapTyped(value);
+  if (typeof root === "string" && !root.isWellFormed()) {
+    throw locatedError(where, [], LONE_SURROGATE_REASON);
+  }
+  for (const [stack, key, child] of walkNesting(value)) {
+    if (typeof key === "string" && !key.isWellFormed()) {
+      throw locatedError(where, framePath(stack), LONE_SURROGATE_REASON);
+    }
+    if (typeof child === "string" && !child.isWellFormed()) {
+      throw locatedError(where, [...framePath(stack), key], LONE_SURROGATE_REASON);
+    }
+  }
+}
+
 /** An open container in the nesting walk. */
 interface NestingFrame {
   readonly container: object;

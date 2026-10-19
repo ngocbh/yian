@@ -99,7 +99,8 @@ Changed (TS yian): infinity and minus infinity are float values; an open range e
 infinity (`float(0.0..)` takes infinity), and a range closed at that end refuses it. NaN is
 refused by the build boundary and host intake with `NaN is not a yian value`. Text or a record
 key holding a lone surrogate is not a yian value (`text holding a lone surrogate is not a yian
-value`). `-0` becomes `0` when a float becomes a value.
+value`) (a value written in a flow file fails the load; see [Nesting limit](#nesting-limit)).
+`-0` becomes `0` when a float becomes a value.
 
 A temporary inside an expression may be infinite or complex; only a binding's final
 value is checked.
@@ -180,6 +181,10 @@ deeper is a located load error, even when YAML aliases build its depth while the
 stays shallow. A record flow output's fields count the record's level. `${...}` text
 counts as a scalar there, so the boundaries below still check computed values and
 values in a flow built in Python.
+
+Changed (TS yian): that load check also refuses text or a record key holding a lone surrogate
+(only a double-quoted `\uD800` escape can write one): `node 'use' input 'topic': text holding a
+lone surrogate is not a yian value`, at the value. Python yian loads such a value.
 
 A type nests at most 100 levels by default (`YIAN_MAX_TYPE_NESTING`). In type text
 every constructor is a level, `Optional(` and `Union(` included, so `list(Optional(int))`

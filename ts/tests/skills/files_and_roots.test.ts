@@ -195,6 +195,7 @@ test.skipIf(!NODE)(
   "the built skills code runs on Node",
   () => {
     const url = (file: string) => JSON.stringify(pathToFileURL(join(ROOT, file)).href);
+    // `String.raw` leaves the `\n` and `\r\n` escapes for Node to read; `skillMd` uses `+` since `${}` would fill in here.
     const script = String.raw`
       import assert from "node:assert/strict";
       import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -223,10 +224,10 @@ test.skipIf(!NODE)(
         symlinkSync(join(tmp, "elsewhere", "linked"), join(tmp, "a", "linked"));
         write(join(tmp, "a", ".hidden", "SKILL.md"), skillMd("hidden", "Hidden."));
         write(join(tmp, "b", "api", "SKILL.md"), skillMd("api", "Shadowed."));
-        write(join(tmp, "b", "zeta", "SKILL.md"), skillMd("zeta", "Zeta."));
+        write(join(tmp, "b", "beta", "SKILL.md"), skillMd("beta", "Beta."));
         const skills = loadSkills([join(tmp, "a"), join(tmp, "b")]);
         assert.ok(skills instanceof Map);
-        assert.deepEqual([...skills.keys()], ["api", "linked", "zeta"]);
+        assert.deepEqual([...skills.keys()], ["api", "beta", "linked"]);
         assert.equal(skills.get("api").description, "Call the API.");
 
         write(join(api, "references", "api.md"), "GET /items\n");

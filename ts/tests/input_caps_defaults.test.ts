@@ -51,5 +51,5 @@ test("skill name cap", () => {
 test("skill description cap", () => {
   install({ ...BUILTIN, maxSkillDescriptionChars: 5 });
   const prompt = systemPromptWithSkills("base", [new Skill({ name: "a", description: "abcdefgh", instructions: "" })]);
-  expect(prompt.endsWith("- a: abcd…")).toBe(true);
+  expect(prompt).toEndWith("- a: abcd…");
 });

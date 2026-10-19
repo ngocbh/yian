@@ -12,7 +12,7 @@ import { current } from "../defaults.ts";
 import { isRecord } from "../typesys/index.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { validateHeaderName, validateHeaders, validateOrganization } from "./connection_settings.ts";
-import { blockSchema, checkBlock, type Issue, ValidationError } from "./provider_blocks.ts";
+import { blockSchema, checkBlock, choices, type Issue, ValidationError } from "./provider_blocks.ts";
 
 // One provider vocabulary shared by the validated config carrier and the factory that consumes it.
 /** Every provider an `llm_config` may name, in Python yian's order. */
@@ -37,10 +37,6 @@ export const SUPPORTED_LLM_PROVIDERS = Object.freeze([
 /** A provider name `llm_config.provider` takes. */
 export type LLMProvider = (typeof SUPPORTED_LLM_PROVIDERS)[number];
 
-// The native Ollama client sends no key, so it cannot take a host base_url.
-const OLLAMA_NO_BASE_URL =
-  "provider ollama does not take llm_config.base_url; it sends no api_key, so set OLLAMA_BASE_URL instead";
-
 /** The error for an Azure call without its resource endpoint. */
 export const AZURE_NEEDS_BASE_URL =
   "provider azure needs llm_config.base_url, the Azure OpenAI resource endpoint " +
@@ -61,10 +57,7 @@ const URL_CHARACTERS = /^[A-Za-z0-9\-._~:/\[\]@!$&'()*+,;=%]*$/;
 const URL_SHAPE =
   /^(?<scheme>https?):\/\/(?<host>[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::(?<port>[0-9]{1,5}))?(?<path>\/.*)?$/;
 
-const PROVIDER_CHOICES = (() => {
-  const quoted = SUPPORTED_LLM_PROVIDERS.map((provider) => `'${provider}'`);
-  return `Input should be ${quoted.slice(0, -1).join(", ")} or ${quoted.at(-1)!}`;
-})();
+const PROVIDER_CHOICES = `Input should be ${choices(SUPPORTED_LLM_PROVIDERS)}`;
 
 /** Every top-level `llm_config` key, spelled as authored. */
 export const LLM_CONFIG_KEYS: ReadonlySet<string> = new Set([
@@ -129,7 +122,7 @@ function valueError(loc: readonly (string | number)[], message: string): Issue {
  * The retired keys are `anthropic_effort`, `openai_reasoning_effort`, `google_thinking_level` and
  * top-level `temperature`; each now lives in a provider block. A key counts whatever its value
  * (`null` too), and the message never echoes it. A non-record has no retired key. The
- * `temperature` message names the layer's `provider` when it is a supported one; otherwise `null`
+ * `temperature` message names the layer's `provider` when it is a supported one. Returns `null`
  * when there is no retired key.
  *
  * Example: `retiredKeyError({provider: "ollama", temperature: 0.2})` gives
@@ -261,28 +254,33 @@ interface Connection {
  * A provider that does not take a setting is reported before a missing key, since adding the key
  * would not fix it. Throws `RangeError`.
  */
-function bindConnectionToKey(c: Connection): void {
-  if (c.baseUrl !== null && c.provider !== "azure") {
-    if (c.apiKey === null || c.provider === null) {
+function bindConnectionToKey(connection: Connection): void {
+  if (connection.baseUrl !== null && connection.provider !== "azure") {
+    if (connection.apiKey === null || connection.provider === null) {
       throw new RangeError(
         "llm_config.base_url needs llm_config.api_key and llm_config.provider in the same config, " +
           "since it decides where that key is sent",
       );
     }
-    if (c.provider === "ollama") throw new RangeError(OLLAMA_NO_BASE_URL);
+    // The native Ollama client sends no key, so it cannot take a host base_url.
+    if (connection.provider === "ollama") {
+      throw new RangeError(
+        "provider ollama does not take llm_config.base_url; it sends no api_key, so set OLLAMA_BASE_URL instead",
+      );
+    }
   }
-  if (c.provider !== null) {
-    if ((c.organization !== null || c.project !== null) && c.provider !== "openai") {
+  if (connection.provider !== null) {
+    if ((connection.organization !== null || connection.project !== null) && connection.provider !== "openai") {
       throw new RangeError("llm_config.organization and llm_config.project apply only to provider openai");
     }
-    if (c.headers !== null && c.provider === "ollama") {
+    if (connection.headers !== null && connection.provider === "ollama") {
       throw new RangeError("provider ollama does not take llm_config.headers; it sends no api_key");
     }
     // The field check could not see the provider; openai refuses more names.
-    for (const name of Object.keys(c.headers ?? {})) validateHeaderName(name, c.provider);
+    for (const name of Object.keys(connection.headers ?? {})) validateHeaderName(name, connection.provider);
   }
   for (const field of ["organization", "project", "headers"] as const) {
-    if (c[field] !== null && (c.apiKey === null || c.provider === null)) {
+    if (connection[field] !== null && (connection.apiKey === null || connection.provider === null)) {
       throw new RangeError(
         `llm_config.${field} needs llm_config.api_key and llm_config.provider in the same config, ` +
           "since it goes wherever that key is sent",
@@ -448,6 +446,7 @@ export class LLMConfig {
    * `{do_sample: false}`.
    */
   blockFor(provider: string): JsonObject {
+    // Refuses a name with no block.
     blockSchema(provider);
     const block = this.#blocks.get(provider);
     return block === undefined ? {} : structuredClone(block);

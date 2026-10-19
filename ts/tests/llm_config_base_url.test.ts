@@ -107,7 +107,7 @@ test.each([
 ])("other url %# is rejected without echoing it", (url) => {
   const message = thrown({ provider: "openai", base_url: url, api_key: SENTINEL }).message;
   expect(message).toContain("base_url");
-  // Every base_url message contains "https://", so only longer values are checked.
+  // The shape message contains "https://", so the bare "https://" value can't be checked for an echo.
   if (url !== "https://") expect(message).not.toContain(url);
   expect(message).not.toContain(SENTINEL);
 });

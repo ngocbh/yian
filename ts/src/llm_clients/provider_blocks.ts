@@ -178,7 +178,7 @@ function checkBounds(bounds: Options<"int"> | Options<"float">, value: bigint | 
 }
 
 /** Return pydantic's list of literal choices: `'a', 'b' or 'c'`. */
-function choices(values: readonly string[]): string {
+export function choices(values: readonly string[]): string {
   const quoted = values.map((v) => `'${v}'`);
   return quoted.length > 1 ? `${quoted.slice(0, -1).join(", ")} or ${quoted.at(-1)!}` : quoted.join("");
 }

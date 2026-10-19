@@ -1,6 +1,6 @@
 /**
  * Mirrors `tests/test_llm_config_api_key.py`: the 4 `LLMConfig` tests, the empty-key test without
- * its `model_from_config` half. `split_model_config`, `resolve_model_config`,
+ * its `model_from_config` half (that half goes with the factory). `split_model_config`, `resolve_model_config`,
  * `connection_credentials` and `validate_connection` go with `connection.ts`; `scrub_key(s)` and
  * `redact_key` with `redact.ts`; the client tests with the factory.
  */

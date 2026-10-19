@@ -7,9 +7,9 @@
  * environment variable; OpenAI also a host key, subscription, or missing key), and
  * `recordSelection` records the selection an agent whose config resolves only when it runs binds
  * from. `connectionCredentials` resolves the credentials a model call sends, `callCredentials`
- * lists them, and `scrubCallCredentials` scrubs them from the call's errors. Recorded metadata is internal, never a YAML
- * option, and never contains a token, API key or header value; its keys are snake_case because it
- * goes into run logs as Python yian writes them.
+ * lists them, and `scrubCallCredentials` scrubs them from the call's errors. Recorded metadata is
+ * internal, never a YAML option, and never contains a token, API key or header value; its keys
+ * are snake_case because it goes into run logs as Python yian writes them.
  *
  * The `YIAN_*` limits, such as `YIAN_MAX_BASE_URL_CHARS`, come through `defaults.ts`'s `current()`;
  * everything else is read only through the `env` parameter (default `processEnv`), one variable
@@ -1294,8 +1294,7 @@ export function scrubCallCredentials<T>(
   options: { env?: Env; sent?: Iterable<string> } = {},
 ): T {
   try {
-    const { env = processEnv, sent = [] } = options;
-    const keys = [...callCredentials(config, { env }), ...sent];
+    const keys = [...callCredentials(config, options), ...(options.sent ?? [])];
     return scrubError(error, (text) => redactKeys(text, keys));
   } catch {
     // Scrubbing is best effort; the provider error must survive it.

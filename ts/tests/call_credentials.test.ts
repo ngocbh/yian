@@ -1,8 +1,9 @@
 /**
  * Mirrors `tests/test_call_credentials.py`; each `scrub_call_credentials` test runs twice, on text
- * through `redactKeys` and on errors through `scrubCallCredentials`. The scrub set follows what yian's own clients send: Azure
- * doesn't fall back to `OPENAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN` is never listed, and a
- * subscription lists its account id. TS has no `SecretStr`, so the rows that pass one are left out.
+ * through `redactKeys` and on errors through `scrubCallCredentials`. The scrub set follows what
+ * yian's own clients send: Azure doesn't fall back to `OPENAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN` is
+ * never listed, and a subscription lists its account id. TS has no `SecretStr`, so the rows that
+ * pass one are left out.
  */
 
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -224,6 +225,8 @@ test("a masked saved key is removed from a ProviderError cause", async () => {
   const config = resolved("anthropic", "claude-x");
   const cause = new ProviderError("auth", `invalid x-api-key: ${key.slice(0, 8)}****${key.slice(-4)}`);
   const error = new Error("model call failed", { cause });
+  // Bun builds a stack on its first read; reading it now, as a logger may have, makes the scrub rewrite it.
+  expect(cause.stack).toContain(key.slice(0, 8));
   expect(scrubCallCredentials(error, config, { env })).toBe(error);
   expect(cause.message).toBe("invalid x-api-key: [REDACTED]");
   for (const text of [cause.message, cause.stack!]) {

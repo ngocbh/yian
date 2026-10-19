@@ -4,8 +4,9 @@
  * through `splitModelConfig`, the `resolve_model_config`, `connection_credentials` and
  * `validate_connection` tests, and the resolve half of the saved-subscription test; the client
  * tests go with the factory. The `redact_key(s)` text tests are here, in `describe("redact")`,
- * with the text half of the `scrub_key(s)` chain tests; the exception-walk tests go with
- * `scrubError` in `llm/errors.ts`.
+ * with the text half of the `scrub_key(s)` chain tests; `describe("scrub")` runs the `scrub_key(s)`
+ * exception tests through `scrubError`, with `cause` for Python's chaining and `AggregateError`
+ * members for exception groups (notes have no analog).
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -17,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import type { Env } from "../src/defaults.ts";
 import { REDACTED as AUTH_REDACTED } from "../src/llm/auth.ts";
+import { ProviderError, scrubError } from "../src/llm/errors.ts";
 import { AuthError, OAuthCredentials } from "../src/llm_clients/auth/common.ts";
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import { LLMConfig } from "../src/llm_clients/config.ts";
@@ -267,5 +269,90 @@ describe("redact", () => {
 
   test("REDACTED is llm/auth.ts's marker", () => {
     expect(REDACTED).toBe(AUTH_REDACTED);
+  });
+});
+
+/** Return the message and stack of `error` and each of its causes, as a Python traceback shows a chain. */
+function traceback(error: unknown): string {
+  const parts: string[] = [];
+  for (let current = error; current instanceof Error; current = current.cause) {
+    parts.push(current.message, String(current.stack));
+  }
+  return parts.join("\n");
+}
+
+describe("scrub", () => {
+  const KEY = "sk-sentinel-scrub-zqxw";
+
+  test("the key and its masked fragments leave a chain", () => {
+    const inner = new Error(`Incorrect API key provided: ${KEY.slice(0, 8)}****${KEY.slice(-4)}.`);
+    const error = new Error(KEY, { cause: new Error(`wrapped: ${KEY}`, { cause: inner }) });
+    scrubError(error, (text) => redactKey(text, KEY));
+    const text = traceback(error);
+    for (const fragment of [KEY, KEY.slice(0, 8), "*" + KEY.slice(-4)]) expect(text).not.toContain(fragment);
+    expect(text).toContain("Incorrect API key provided: [REDACTED].");
+    expect(text).toContain("wrapped: [REDACTED]");
+  });
+
+  test("aggregate members are reached", () => {
+    const member = new Error(`member ${KEY}`);
+    const group = new AggregateError([member, `note ${KEY.slice(0, 8)}***`], "group");
+    scrubError(group, (text) => redactKey(text, KEY));
+    const text = [traceback(group), traceback(member), group.errors[1]].join("\n");
+    expect(text).not.toContain(KEY);
+    expect(text).not.toContain(KEY.slice(0, 8));
+    expect(group.errors[1]).toBe("note [REDACTED]");
+  });
+
+  test("errors it cannot rewrite are skipped", () => {
+    const deepest = new Error(`deepest ${KEY}`);
+    const frozen = Object.freeze(new Error("frozen", { cause: deepest }));
+    const broken = Object.defineProperty(new Error(`broken ${KEY}`, { cause: frozen }), "message", {
+      get() {
+        throw new Error("no message");
+      },
+    });
+    const strings = Object.assign(new Error(`strings ${KEY}`, { cause: broken }), { errors: { member: `text ${KEY}` } });
+    const number = Object.assign(new Error(`number ${KEY}`, { cause: strings }), { errors: 5 });
+    scrubError(number, (text) => redactKey(text, KEY));
+    for (const error of [number, strings, deepest]) {
+      for (const text of [error.message, String(error.stack)]) {
+        expect(text).not.toContain(KEY);
+        expect(text).toContain(REDACTED);
+      }
+    }
+    // Bun reads the message when the stack is first read, so the throwing getter leaves a stack without it.
+    expect(String(broken.stack)).not.toContain(KEY);
+  });
+
+  test("a ProviderError message is rewritten", () => {
+    const error = new ProviderError("auth", `Incorrect API key provided: ${KEY.slice(0, 8)}****${KEY.slice(-4)}.`);
+    scrubError(error, (text) => redactKey(text, KEY));
+    expect(error.message).toBe("Incorrect API key provided: [REDACTED].");
+  });
+
+  test("each key leaves a chain", () => {
+    // Distinct prefixes and suffixes, so each masked echo matches only its own key.
+    const first = "ak-first-sentinel-zqxw";
+    const second = "sk-second-sentinel-yvkt";
+    const inner = new Error(
+      `Incorrect API key provided: ${second.slice(0, 8)}****${second.slice(-4)}. Also ${first.slice(0, 8)}...${first.slice(-4)}`,
+    );
+    const error = new Error(`wrapped: ${first}`, { cause: inner });
+    scrubError(error, (text) => redactKeys(text, [first, second, null, undefined, ""]));
+    const text = traceback(error);
+    for (const fragment of [first, second, first.slice(0, 8), second.slice(0, 8), "." + first.slice(-4), "*" + second.slice(-4)]) {
+      expect(text).not.toContain(fragment);
+    }
+    expect(text).toContain("wrapped: [REDACTED]");
+    expect(text).toContain("Incorrect API key provided: [REDACTED]. Also [REDACTED]");
+  });
+
+  test("a containing key is redacted whole", () => {
+    const [short, long] = ["abcdefgh", "abcdefgh-longer-1234"];
+    const error = new Error(`rejected ${long} here`);
+    scrubError(error, (text) => redactKeys(text, [short, long]));
+    expect(error.message).toBe("rejected [REDACTED] here");
+    expect(String(error.stack)).not.toContain("-longer-1234");
   });
 });

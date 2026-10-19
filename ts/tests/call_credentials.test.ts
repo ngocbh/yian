@@ -1,6 +1,6 @@
 /**
- * Mirrors `tests/test_call_credentials.py`; the `scrub_call_credentials` halves go with
- * `scrubError` in `llm/errors.ts`. The scrub set follows what yian's own clients send: Azure
+ * Mirrors `tests/test_call_credentials.py`; each `scrub_call_credentials` test runs twice, on text
+ * through `redactKeys` and on errors through `scrubCallCredentials`. The scrub set follows what yian's own clients send: Azure
  * doesn't fall back to `OPENAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN` is never listed, and a
  * subscription lists its account id. TS has no `SecretStr`, so the rows that pass one are left out.
  */
@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import type { Env } from "../src/defaults.ts";
+import { ProviderError } from "../src/llm/errors.ts";
 import { ApiKeyCredentials, OAuthCredentials } from "../src/llm_clients/auth/common.ts";
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import { LLMConfig } from "../src/llm_clients/config.ts";
@@ -21,6 +22,7 @@ import {
   type Connection,
   legacyConnectionConfig,
   resolveModelConfig,
+  scrubCallCredentials,
 } from "../src/llm_clients/connection.ts";
 import { redactKeys } from "../src/llm_clients/redact.ts";
 
@@ -216,6 +218,20 @@ test("a masked saved key is removed through redactKeys", async () => {
   expect(message).not.toContain(key.slice(-4));
 });
 
+test("a masked saved key is removed from a ProviderError cause", async () => {
+  const key = "sk-saved-sentinel-zqxw";
+  await authStore().save("anthropic", new ApiKeyCredentials(key), "claude-x");
+  const config = resolved("anthropic", "claude-x");
+  const cause = new ProviderError("auth", `invalid x-api-key: ${key.slice(0, 8)}****${key.slice(-4)}`);
+  const error = new Error("model call failed", { cause });
+  expect(scrubCallCredentials(error, config, { env })).toBe(error);
+  expect(cause.message).toBe("invalid x-api-key: [REDACTED]");
+  for (const text of [cause.message, cause.stack!]) {
+    expect(text).not.toContain(key.slice(0, 8));
+    expect(text).not.toContain(key.slice(-4));
+  }
+});
+
 test("a keyless provider sends nothing", () => {
   vars.set("OLLAMA_API_KEY", "env-ollama-key");
   expect(listed({ provider: "ollama", model: "m" })).toEqual([]);
@@ -268,4 +284,53 @@ test("a short header value is removed through redactKeys", () => {
   expect(redactKeys("gateway rejected X-Env=prod for tenant prod-eu", listed(config))).toBe(
     "gateway rejected X-Env=[REDACTED] for tenant [REDACTED]-eu",
   );
+});
+
+test("a short header value is removed from a ProviderError", () => {
+  const config = {
+    provider: "deepseek",
+    model: "m",
+    api_key: "sk-host-sentinel-zqxw",
+    headers: { "X-Env": "prod" },
+  };
+  const error = new ProviderError("auth", "gateway rejected X-Env=prod for tenant prod-eu");
+  scrubCallCredentials(error, config, { env });
+  expect(error.message).toBe("gateway rejected X-Env=[REDACTED] for tenant [REDACTED]-eu");
+});
+
+test("a sent credential is removed with the listed ones", () => {
+  const config = { provider: "deepseek", model: "m", api_key: "sk-host-sentinel-zqxw" };
+  const error = new Error("rejected sk-host-sentinel-zqxw and route-token-sentinel");
+  scrubCallCredentials(error, config, { env, sent: ["route-token-sentinel"] });
+  expect(error.message).toBe("rejected [REDACTED] and [REDACTED]");
+});
+
+test("a saved subscription's account id is removed", async () => {
+  await authStore().save(
+    "openai",
+    new OAuthCredentials({
+      accessToken: "access-secret",
+      refreshToken: "refresh-secret",
+      expiresAt: Date.now() / 1000 + 3600,
+      accountId: "acct-sentinel-zqxw",
+    }),
+    "gpt-x",
+  );
+  const error = new ProviderError("auth", "account acct-sentinel-zqxw has no access-secret");
+  scrubCallCredentials(error, resolved("openai", "gpt-x"), { env });
+  expect(error.message).toBe("account [REDACTED] has no [REDACTED]");
+});
+
+describe("scrubbing with a garbage config never throws", () => {
+  test.each([["not a config"], [5n], [{ _connection: "junk" }], [{ provider: 3n }]])("%#", (config) => {
+    const error = new Error("rejected route-token-sentinel");
+    expect(scrubCallCredentials(error, config, { env, sent: ["route-token-sentinel"] })).toBe(error);
+    expect(error.message).toBe("rejected [REDACTED]");
+    const broken: Iterable<string> = {
+      [Symbol.iterator]() {
+        throw new Error("no credentials");
+      },
+    };
+    expect(scrubCallCredentials(error, config, { env, sent: broken })).toBe(error);
+  });
 });

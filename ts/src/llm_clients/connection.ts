@@ -6,8 +6,8 @@
  * records on every keyed agent which connection it uses (the saved login or the provider's key
  * environment variable; OpenAI also a host key, subscription, or missing key), and
  * `recordSelection` records the selection an agent whose config resolves only when it runs binds
- * from. `connectionCredentials` resolves the credentials a model call sends, and `callCredentials`
- * lists them so its errors can be scrubbed of them. Recorded metadata is internal, never a YAML
+ * from. `connectionCredentials` resolves the credentials a model call sends, `callCredentials`
+ * lists them, and `scrubCallCredentials` scrubs them from the call's errors. Recorded metadata is internal, never a YAML
  * option, and never contains a token, API key or header value; its keys are snake_case because it
  * goes into run logs as Python yian writes them.
  *
@@ -25,6 +25,7 @@ import { isAbsolute } from "node:path";
 
 import { type Env, processEnv } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import { scrubError } from "../llm/errors.ts";
 import type { Scheduler } from "../platform.ts";
 import { isList, isRecord, valueRepr } from "../typesys/values.ts";
 import { getApiKeyEnv } from "./api_key_env.ts";
@@ -48,6 +49,7 @@ import {
 } from "./config.ts";
 import { validateHeaderName, validateOrganization } from "./connection_settings.ts";
 import { blockSchema, checkBlock, type Issue } from "./provider_blocks.ts";
+import { redactKeys } from "./redact.ts";
 
 /** The OpenAI API endpoint used when nothing configures another. */
 export const OPENAI_API_ENDPOINT = "https://api.openai.com/v1";
@@ -1277,4 +1279,26 @@ export function callCredentials(config: unknown, options: { env?: Env } = {}): r
     }
   } catch {}
   return [...new Set(found)];
+}
+
+/**
+ * Redact every credential `callCredentials` lists for `config`, and each of `sent`, from
+ * `error` as `scrubError` does, and return `error` (a string error comes back redacted). Never
+ * throws.
+ *
+ * `sent` is what the route's auth reported sending; `env` is read only through `callCredentials`.
+ */
+export function scrubCallCredentials<T>(
+  error: T,
+  config: unknown,
+  options: { env?: Env; sent?: Iterable<string> } = {},
+): T {
+  try {
+    const { env = processEnv, sent = [] } = options;
+    const keys = [...callCredentials(config, { env }), ...sent];
+    return scrubError(error, (text) => redactKeys(text, keys));
+  } catch {
+    // Scrubbing is best effort; the provider error must survive it.
+    return error;
+  }
 }

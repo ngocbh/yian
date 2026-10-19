@@ -158,7 +158,7 @@ const text = (value: string, extra: Partial<Reply> = {}): Reply => ({ text: valu
 const hello = text("Hello there.");
 const answer6 = text("The answer is 6.");
 const thoughtHello: Reply = { ...hello, parts: ["reasoning", "text"], reasoning: "Let me think.", records: [{}, null] };
-const doubleCall: Reply = { text: "", parts: ["tool_call"], calls: [call("yian_call_0", 3n)], finish: "tool_calls" };
+const doubleReply: Reply = { text: "", parts: ["tool_call"], calls: [call("yian_call_0", 3n)], finish: "tool_calls" };
 const thoughtCall: Reply = {
   text: "",
   parts: ["reasoning", "tool_call"],
@@ -196,7 +196,7 @@ const SCENARIOS: Record<string, Scenario> = {
   think_true: { block: { think: true }, turns: [PLAIN_TURN], replies: [thoughtHello] },
   think_high: { block: { think: "high" }, turns: [PLAIN_TURN], replies: [thoughtHello] },
 
-  tools: { turns: [TOOLS_TURN], replies: [doubleCall] },
+  tools: { turns: [TOOLS_TURN], replies: [doubleReply] },
   turn2: {
     turns: [
       async (_, protocol) =>
@@ -320,7 +320,7 @@ const SCENARIOS: Record<string, Scenario> = {
     turns: [PLAIN_TURN],
     replies: [text("Hello there.", { usage: new Usage({ inputTokens: 0, outputTokens: 9, totalTokens: 9 }) })],
   },
-  length: { turns: [TOOLS_TURN], replies: [{ ...doubleCall, finish: "length" }] },
+  length: { turns: [TOOLS_TURN], replies: [{ ...doubleReply, finish: "length" }] },
 
   error_404: {
     retries: true,

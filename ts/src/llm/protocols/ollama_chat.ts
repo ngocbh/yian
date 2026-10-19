@@ -240,8 +240,9 @@ export class OllamaChat implements NdjsonProtocol {
    *   that is not a string); a line that is not a JSON object, a `message` that is not an object,
    *   `content` or `thinking` neither a string nor `null`, `tool_calls` not a list, a call or its
    *   `function` not an object, a call id neither a string nor `null`, a call with no name, a
-   *   `done_reason` neither a string nor `null`, or a count that is not an int (`protocol`); or a
-   *   reply that ends with no `done` line (`incomplete`, retryable).
+   *   `done_reason` neither a string nor `null`, or a count or total that is not an int within
+   *   `Number.MAX_SAFE_INTEGER` (`protocol`); or a reply that ends with no `done` line
+   *   (`incomplete`, retryable).
    */
   async *parse(frames: AsyncIterable<JsonValue>): AsyncGenerator<Event> {
     const provider = this.provider;
@@ -312,7 +313,9 @@ export class OllamaChat implements NdjsonProtocol {
    * message` when that is blank, or the JSON of a value that is not a string.
    */
   #streamFailure(error: JsonValue): ProviderError {
-    const text = typeof error !== "string" ? encodeBody(error) : error.trim() === "" ? "no message" : error;
+    let text: string;
+    if (typeof error === "string") text = error.trim() === "" ? "no message" : error;
+    else text = encodeBody(error);
     return new ProviderError("server", `${this.provider} stream failed (server): ${text}`);
   }
 

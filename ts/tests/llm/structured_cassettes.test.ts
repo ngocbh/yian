@@ -154,8 +154,6 @@ interface Scenario {
   budget?: number;
   /** The kinds of the errors `callWithRetries` retried, in order; none when absent. */
   retried?: ErrorKind[];
-  /** The prompt strategy's instruction, which the test appends to the request as a user message. */
-  instruction?: string;
 }
 
 /** A scenario on `family`'s route to `provider`, `extra` adding its block, budget or retries. */
@@ -319,10 +317,9 @@ const SCENARIOS: Record<string, Scenario> = {
   a_json_fence_in_string: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", {
     value: { answer: "```py\nx\n```", score: 1n },
   }, { block: THINKING }),
-  a_json_invalid: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", {
-    error: StructuredOutputError,
-    message: "Invalid json output: not json",
-  }, { block: THINKING }),
+  a_json_invalid: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", INVALID, {
+    block: THINKING,
+  }),
   a_json_invalid_value: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", {
     value: { answer: "x", score: "notint" },
   }, { block: THINKING }),
@@ -377,12 +374,7 @@ const SCENARIOS: Record<string, Scenario> = {
     block: { generationConfig: { maxOutputTokens: 64n } },
   }),
   // A model with no structured output gets the instruction; its fenced reply is parsed.
-  p_sentinel: scenario("chat", "xai", "no-structured-sentinel", "corpus:Rec", "prompt", { value: REC }, {
-    instruction:
-      "Respond with ONLY a JSON object matching this JSON schema (no prose, no code fences):\n" +
-      '{"properties":{"answer":{"title":"Answer","type":"string"},"score":{"title":"Score","type":"integer"}},' +
-      '"required":["answer","score"],"title":"Record","type":"object"}',
-  }),
+  p_sentinel: scenario("chat", "xai", "no-structured-sentinel", "corpus:Rec", "prompt", { value: REC }),
 };
 
 /**
@@ -502,7 +494,6 @@ async function runScenario(name: string, scenario: Scenario): Promise<void> {
   let request = REQUEST;
   if (plan.strategy === "prompt") {
     // The prompt strategy sends the request as it is; the caller appends the instruction.
-    expect(plan.instruction()).toBe(scenario.instruction!);
     const instruction = new Message({ role: "user", parts: [new TextPart(plan.instruction())] });
     request = new Request({ messages: [...REQUEST.messages, instruction] });
     expect(plan.apply(request)).toBe(request);

@@ -6,7 +6,12 @@
  * before a record's entries are read (an alias-built record), the empty and surrogate field
  * names refused at their key, the origins `readValueContract` registers, a list of fields
  * holding a map that isn't single-key, and the harvested conformance cases a node's or compact
- * flow's `output:` declaration raises through `readValueContract`.
+ * flow's `output:` declaration raises through `readValueContract`. Also TS-only: the declared
+ * types of the conformance cases a load validator rejects by comparing two types, each read as
+ * the loader reads it (a flow input with `readSourceFlowInputs`, a node output with
+ * `readValueContract`, a tagged binding with `readTaggedValue`) and found, labelled with
+ * `canonicalTypeLabel`, in the expected message; the messages themselves are T3-19's
+ * `call_types` and `typed_bindings` and T3-20's `case_exhaustive`.
  *
  * Changed: an empty or surrogate field name is refused without a source too, as an unranged
  * `LoadError`, where Python's `read_type({"": "int"}, {})` returns a type.
@@ -15,13 +20,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
-import { readType, readValueContract } from "../../src/compose/helpers/types.ts";
+import { readTaggedValue } from "../../src/compose/helpers/tags.ts";
+import { readSourceFlowInputs, readType, readValueContract } from "../../src/compose/helpers/types.ts";
 import { encodeSitePath, SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { BUILTIN, forget, install, reload } from "../../src/defaults.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
+import type { ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
-import { type Type, ValueKind } from "../../src/typesys/values.ts";
+import { canonicalTypeLabel, type Type, ValueKind } from "../../src/typesys/values.ts";
 import { caseDocument } from "../compose/declarations.ts";
 import type { Case } from "../conformance.ts";
 
@@ -224,6 +231,14 @@ function output(path: readonly string[], nodeId: string): Call {
     });
 }
 
+/** Read the flow's `input:` declarations as the loader does. */
+const flowInputs: Call = (document, registry, diagnostics) =>
+  readSourceFlowInputs(document.root.child("input"), registry, {
+    sitePath: [],
+    catalogBuilder: new SourceCatalogBuilder(),
+    diagnostics,
+  });
+
 const RECORD_NESTING = "types/compose_record_type_nesting__";
 const UNION_TYPEDEFS = "types/engine_union_typedefs__";
 const OUTPUT_ORIGINS = "load-core/compose_node_output_contract_origins__";
@@ -248,6 +263,7 @@ test.each([
   { id: `${OUTPUT_ORIGINS}invalid_output_list_item`, call: emit },
   { id: `${OUTPUT_ORIGINS}non_text_nested_output_type`, call: emit },
   { id: `${OUTPUT_ORIGINS}unknown_nested_output_type`, call: emit },
+  { id: `${UNION_TYPEDEFS}load_flow_accepts_union_typedef`, call: flowInputs },
 ])("$id", ({ id, call }) => {
   const { case_, document } = caseDocument(id);
   const flow = document.root.value as Record<string, unknown>;
@@ -268,4 +284,60 @@ test.each([
     frame["label"] as string,
     new SourceRange(...((frame["range"] as bigint[]).map(Number) as [number, number, number, number])),
   ]);
+});
+
+/** Return the label of input `name`'s type in the `input:` declarations at `path`. */
+function inputLabel(document: SourceDocument, registry: TypeRegistry, path: string[], name: string): string {
+  const parameters = readSourceFlowInputs(cursorAt(document.root, path), registry, {
+    sitePath: [],
+    catalogBuilder: new SourceCatalogBuilder(),
+  });
+  return canonicalTypeLabel(parameters.find((parameter) => parameter.name === name)!.contract!.type);
+}
+
+/** Return the label of node `nodeId`'s declared `output:` type. */
+function outputLabel(document: SourceDocument, registry: TypeRegistry, nodeId: string): string {
+  const read = output(["nodes", nodeId, "output"], nodeId);
+  const contract = read(document, registry, LoadDiagnostics.fromDocument(document)) as ValueContract;
+  return canonicalTypeLabel(contract.type);
+}
+
+/** Return the label of the type tagged on the slot at `path`. */
+function taggedLabel(document: SourceDocument, registry: TypeRegistry, path: string[]): string {
+  const catalogBuilder = new SourceCatalogBuilder();
+  const slot = readTaggedValue(cursorAt(document.root, path), registry, {
+    label: path.at(-1)!,
+    sitePath: path,
+    catalogBuilder,
+    diagnostics: LoadDiagnostics.fromDocument(document),
+    ledger: catalogBuilder.consumedTags,
+  });
+  return canonicalTypeLabel(slot.contract!.type);
+}
+
+const OPEN_RANGE = "types/compose_open_range_flows__";
+
+test.each<{ id: string; fragment: (document: SourceDocument, registry: TypeRegistry) => string }>([
+  {
+    id: `${OPEN_RANGE}call_with_a_wider_open_range_source`,
+    fragment: (document, registry) =>
+      `child expects '${inputLabel(document, registry, ["defs", "child", "input"], "t")}', ` +
+      `source is '${outputLabel(document, registry, "a")}'`,
+  },
+  {
+    id: `${OPEN_RANGE}case_when_outside_an_open_range`,
+    fragment: (document, registry) => `(\`${inputLabel(document, registry, ["input"], "n")}\`)`,
+  },
+  {
+    id: `${OPEN_RANGE}tagged_binding_disjoint_from_an_open_range`,
+    fragment: (document, registry) =>
+      `declared ${taggedLabel(document, registry, ["nodes", "use", "input", "x"])}, ` +
+      `but the value is ${outputLabel(document, registry, "a")}`,
+  },
+])("the compared types of $id", ({ id, fragment }) => {
+  const { case_, document } = caseDocument(id);
+  const root = document.root;
+  const registry = root.has("typedefs") ? readTypedefs(root.mapping("typedefs")) : new Map();
+  const wanted = (((case_["expect"] as Case)["load"] as Case)["diagnostics"] as Case[])[0]!;
+  expect(wanted["message"] as string).toContain(fragment(document, registry));
 });

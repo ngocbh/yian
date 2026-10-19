@@ -9,11 +9,13 @@
  * `test_type_to_schema.py::test_large_numeric_schema_bounds_match_resolved_type` (its schema
  * half comes with `typeToSchema`).
  *
- * Also here: the `applyDefaults` half of
- * `test_bounded_type_defaults_preserve_compatible_integer_payloads`, with a hand-built `Parameter`.
+ * Also here: `test_bounded_type_defaults_preserve_compatible_integer_payloads`, its
+ * `applyDefaults` half with a hand-built `Parameter` and its `LoadError` half reading the
+ * declarations with `parametersFromYaml`.
  *
- * Later: the `LoadError` half of `test_bounded_type_defaults_preserve_compatible_integer_payloads`
- * (with the loader).
+ * TS-only: the harvested-case table of the conformance cases whose typedefs `readTypedefs`
+ * refuses, comparing its message, its path and the range the loader picks for that path. The
+ * loader (T3-22) adds the `bad typedefs: ` prefix and the range.
  *
  * Not ported: `test_type_for_preserves_its_public_keyword_name` (TypeScript has no keyword
  * arguments) and `test_record_stores_a_tuple_field_as_a_list` (no tuples in TS);
@@ -22,8 +24,10 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
+import { LoadError } from "../../src/compose/helpers/errors.ts";
+import type { SourceCursor } from "../../src/compose/source/index.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
-import { compareCodeUnits, reprText } from "../../src/diagnostics.ts";
+import { compareCodeUnits, reprText, SourceRange } from "../../src/diagnostics.ts";
 import { applyDefaults } from "../../src/nodes/binding.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import * as typesys from "../../src/typesys/index.ts";
@@ -54,6 +58,8 @@ import {
   ValueKind,
   type ValueRecord,
 } from "../../src/typesys/values.ts";
+import { caseDocument, parametersFromYaml } from "../compose/declarations.ts";
+import type { Case } from "../conformance.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));
@@ -1330,6 +1336,12 @@ describe("bounded numeric values", () => {
 
       expect(resolved).toEqual({ score: 1n });
       expect(typeof resolved.score).toBe("bigint");
+
+      const read = parametersFromYaml("input:\n  score: !float(0..1) 1\n", EMPTY);
+      expect(applyDefaults(read, {})).toEqual({ score: 1n });
+      for (const declaration of ["!int(1..12) 13", "!float(0..1) 1.01", "!int(0..1) true"]) {
+        expect(() => parametersFromYaml(`input:\n  score: ${declaration}\n`, EMPTY)).toThrow(LoadError);
+      }
     },
   );
 });
@@ -1415,3 +1427,43 @@ type _PublicTypes = [
   typesys.ValueRecord,
   typesys.VariantDef,
 ];
+
+// ---------- harvested conformance cases ----------
+
+/**
+ * Return the range the loader points a typedef error at `path` to: the field's value range,
+ * else the typedef's key range, else the `typedefs:` key range.
+ */
+function typedefErrorRange(root: SourceCursor, path: readonly (string | number)[]): SourceRange | null {
+  const typedefs = root.child("typedefs");
+  const [name, field] = path;
+  if (typeof name !== "string" || !typedefs.has(name)) return root.keyRangeOf("typedefs");
+  const entry = typedefs.child(name);
+  if (typeof field === "string" && entry.has(field)) return entry.rangeOf(field);
+  return typedefs.keyRangeOf(name);
+}
+
+const TYPE_NAME_CHECKS = "types/compose_type_name_checks__";
+const TYPEDEF_NESTING = "types/engine_typedef_nesting__";
+
+test.each<{ id: string; path: string[] }>([
+  { id: `${TYPE_NAME_CHECKS}empty_typedef_field_name`, path: [] },
+  { id: `${TYPE_NAME_CHECKS}surrogate_typedef_field_name`, path: [] },
+  { id: `${TYPEDEF_NESTING}alias_chain_fails_on_its_length`, path: ["A5"] },
+  { id: `${TYPEDEF_NESTING}record_chain_fails_on_levels`, path: ["T5", "a"] },
+  { id: "types/engine_typedefs__alias_cycle_rejected", path: ["A"] },
+  { id: "types/engine_typedefs__non_pascalcase_rejected", path: ["rating"] },
+  { id: "types/engine_union_typedefs__load_flow_locates_bad_union_at_its_typedef", path: ["Mood"] },
+])("readTypedefs: $id", ({ id, path }) => {
+  const { case_, document } = caseDocument(id);
+  const root = document.root;
+  // Read from the parsed document: these typedefs fail to read.
+  const error = typeCheckError(() => readTypedefs(root.child("typedefs").value as ValueRecord));
+  const diagnostic = (((case_["expect"] as Case)["load"] as Case)["diagnostics"] as Case[])[0]!;
+  const frame = (diagnostic["frames"] as Case[]).at(-1)!;
+  expect(["bad typedefs: " + error.message, error.path, typedefErrorRange(root, error.path)]).toEqual([
+    diagnostic["message"] as string,
+    path,
+    new SourceRange(...((frame["range"] as bigint[]).map(Number) as [number, number, number, number])),
+  ]);
+});

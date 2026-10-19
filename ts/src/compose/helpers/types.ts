@@ -13,13 +13,31 @@
  * opaque `ContractOrigins` without leaking YAML concepts below Compose.
  */
 
-import { type OriginRef, reprText } from "../../diagnostics.ts";
+import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
 import { current } from "../../defaults.ts";
-import { comparePaths, ContractOrigins, ValueContract, type ValuePath } from "../../nodes/contracts.ts";
-import type { SourceCatalogBuilder, SourceSitePath } from "../source/catalog.ts";
-import { SourceAccessError, type SourceCursor } from "../source/index.ts";
-import { encodesAsUtf8, pythonTypeName, type TypeRegistry, typeFor } from "../../typesys/types.ts";
 import {
+  comparePaths,
+  ContractOrigins,
+  Parameter,
+  ValueContract,
+  type ValuePath,
+} from "../../nodes/contracts.ts";
+import type { SourceCatalogBuilder, SourceSitePath } from "../source/catalog.ts";
+import {
+  parseYamlLiteral,
+  SourceAccessError,
+  type SourceCursor,
+  SourceSyntaxError,
+} from "../source/index.ts";
+import {
+  BUILTIN_TYPE_NAMES,
+  encodesAsUtf8,
+  pythonTypeName,
+  type TypeRegistry,
+  typeFor,
+} from "../../typesys/types.ts";
+import {
+  boundText,
   isRecord,
   renderValuePath,
   Type,
@@ -28,7 +46,22 @@ import {
   ValueKind,
   valueRepr,
 } from "../../typesys/values.ts";
-import { LoadDiagnostics } from "./errors.ts";
+import { LoadDiagnostics, LoadError } from "./errors.ts";
+import {
+  closeTypeName,
+  oldFormSuggestion,
+  readTaggedValue,
+  resolveTypeText,
+  spellTypeText,
+  splitTypedText,
+  suggestTag,
+  yamlQuoted,
+} from "./tags.ts";
+import { checkWrittenValue } from "./value_nesting.ts";
+
+const HEAD_NAME = /^[A-Za-z_][A-Za-z0-9_]*/;
+// Text this plain is safe to show unquoted after a tag, once it reads back as text.
+const PLAIN_TEXT = /^[A-Za-z][A-Za-z0-9 _.,'-]*$/;
 
 /** One physically authored record field: its path from the declaration's root and source. */
 type Site = readonly [ValuePath, SourceCursor];
@@ -224,4 +257,374 @@ export function readValueContract(
     if (!(error instanceof SourceAccessError)) throw error;
     throw diagnostics.error(error.message, { range: error.range, cause: error });
   }
+}
+
+// ---------- flow `input:` declarations ----------
+
+const SOURCE_FREE_DEFAULT = "source-free declarations take a type only; write defaults in YAML with a tag";
+
+/**
+ * Read one source-free input declaration, which is type text with no default.
+ *
+ * @throws LoadError, unranged, when the value is not text, or holds a default (`T = default`)
+ *   or is not a type.
+ */
+function readTypeOnly(
+  name: string,
+  value: unknown,
+  registry: TypeRegistry,
+  options: { diagnostics: LoadDiagnostics },
+): Parameter {
+  const { diagnostics } = options;
+  if (typeof value !== "string") {
+    throw diagnostics.error(
+      `input ${reprText(name)}: a source-free declaration is type text, got ${pythonTypeName(value)}`,
+    );
+  }
+  let typ: Type;
+  try {
+    typ = typeFor(value, registry);
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    if (value.includes("=")) throw diagnostics.error(`input ${reprText(name)}: ${SOURCE_FREE_DEFAULT}`);
+    throw diagnostics.error(
+      `input ${reprText(name)}: bad type expression ${reprText(value)}: ${error.message}`,
+      { cause: error },
+    );
+  }
+  return new Parameter(name, {
+    contract: new ValueContract(typ),
+    required: !typ.nullable,
+    coerceStrings: true,
+  });
+}
+
+/**
+ * Read source-free `input:` declarations, each a type text such as `Optional(int)`.
+ *
+ * A source-free declaration has no default: defaults are written in YAML after a tag. This
+ * entry point deliberately emits no origins.
+ *
+ * @param ranges Each declaration's range, given to an error the declaration raises without
+ *   one.
+ * @throws LoadError when a declaration is not type text or holds a default.
+ */
+export function readFlowInputs(
+  mapping: unknown,
+  registry: TypeRegistry,
+  ranges: ReadonlyMap<string, SourceRange | null> | null = null,
+  options: { diagnostics?: LoadDiagnostics | null } = {},
+): Parameter[] {
+  const diagnostics = options.diagnostics ?? new LoadDiagnostics();
+  const parameters: Parameter[] = [];
+  for (const [name, value] of Object.entries((mapping || {}) as Record<string, unknown>)) {
+    const sourceRange = ranges?.get(name) ?? null;
+    try {
+      parameters.push(readTypeOnly(name, value, registry, { diagnostics }));
+    } catch (error) {
+      if (!(error instanceof LoadError) || error.diagnostic.frames.length > 0 || sourceRange === null) {
+        throw error;
+      }
+      throw diagnostics.prepend(error, { range: sourceRange, cause: error });
+    }
+  }
+  return parameters;
+}
+
+/**
+ * Read source-free local declarations: only an empty mapping succeeds.
+ *
+ * A variable needs a default, and a source-free declaration can't carry one; defaults are
+ * written in YAML after a tag (`n: !int 4`) and read by `readSourceParameters`.
+ *
+ * @param mapping The `variables:` section.
+ * @param registry The flow's typedefs; unused, since no declaration is read.
+ * @param options.diagnostics Factory for load errors.
+ * @returns Always empty.
+ * @throws LoadError, unranged, when `mapping` is not a mapping, a name is empty, or it declares
+ *   any variable.
+ */
+export function readVariables(
+  mapping: unknown,
+  registry: TypeRegistry,
+  options: { diagnostics?: LoadDiagnostics | null } = {},
+): Parameter[] {
+  const diagnostics = options.diagnostics ?? new LoadDiagnostics();
+  if (!isRecord(mapping)) throw diagnostics.error("variables must be a mapping");
+  for (const name of Object.keys(mapping)) {
+    if (name === "") throw diagnostics.error("variable names must be non-empty strings");
+    throw diagnostics.error(`variable ${reprText(name)}: a variable needs a default; ${SOURCE_FREE_DEFAULT}`);
+  }
+  return [];
+}
+
+/** Compile authored flow inputs using the shared located declaration reader. */
+export function readSourceFlowInputs(
+  cursor: SourceCursor,
+  registry: TypeRegistry,
+  options: {
+    sitePath: SourceSitePath;
+    catalogBuilder: SourceCatalogBuilder;
+    diagnostics?: LoadDiagnostics | null;
+  },
+): Parameter[] {
+  return readSourceParameters(cursor, registry, options);
+}
+
+/**
+ * Read one tagged declaration: the tag is its type, a value after it its default.
+ *
+ * A declaration with no value after the tag (`qty: !int`) has no default and is required
+ * unless its type is nullable. No default may nest deeper than a yian value may.
+ *
+ * @throws LoadError when the default nests too deep or holds a lone surrogate, the tag or the
+ *   default can't be read, or a required default is missing.
+ */
+function readTaggedParameter(
+  name: string,
+  cursor: SourceCursor,
+  registry: TypeRegistry,
+  options: {
+    parameterPath: SourceSitePath;
+    parameterOrigin: OriginRef | null;
+    catalogBuilder: SourceCatalogBuilder;
+    diagnostics: LoadDiagnostics;
+    declarationLabel: string;
+    requireDefault: boolean;
+  },
+): Parameter {
+  const { parameterPath, parameterOrigin, catalogBuilder, diagnostics } = options;
+  const { declarationLabel, requireDefault } = options;
+  if (cursor.hasValue) {
+    // First: the tag read below recurses through the value.
+    const where = `${declarationLabel} ${reprText(name)} default`;
+    checkWrittenValue(cursor.value, where, cursor.range, diagnostics);
+  }
+  const slot = readTaggedValue(cursor, registry, {
+    label: name,
+    // The same contract prefix an untagged declaration's type registers under.
+    sitePath: [...parameterPath, "contract"],
+    catalogBuilder,
+    diagnostics,
+    ledger: catalogBuilder.consumedTags,
+    literalOnly: true,
+  });
+  const contract = slot.contract!;
+  if (requireDefault && !slot.hasValue) {
+    const spelled = suggestTag(name, contract.type, "<default>", { typeText: cursor.tag });
+    throw diagnostics.error(
+      `${declarationLabel} ${reprText(name)}: a ${declarationLabel} needs a default: ${spelled}`,
+      { range: cursor.range },
+    );
+  }
+  return new Parameter(name, {
+    contract,
+    required: !contract.type.nullable && !slot.hasValue,
+    hasDefault: slot.hasValue,
+    default: slot.value,
+    coerceStrings: true,
+    origin: parameterOrigin,
+    defaultOrigin: slot.hasValue ? catalogBuilder.register([...parameterPath, "default"], cursor) : null,
+  });
+}
+
+/**
+ * Explain how to write an untagged input or variable declaration with a tag.
+ *
+ * @param name The declared name.
+ * @param value The untagged value: old `T` or `T = default` text, a record map, or anything
+ *   else.
+ * @param registry The flow's typedefs the old type text resolves against.
+ * @param options.declarationLabel `"input"` or `"variable"`.
+ * @param options.requireDefault Whether the declaration needs a default.
+ * @returns The error message.
+ */
+function untaggedDeclarationError(
+  name: string,
+  value: unknown,
+  registry: TypeRegistry,
+  options: { declarationLabel: string; requireDefault: boolean },
+): string {
+  const { declarationLabel, requireDefault } = options;
+  const noun = declarationLabel === "input" ? "flow input" : declarationLabel;
+  const head = `${noun} ${reprText(name)}`;
+  if (isRecord(value)) {
+    const record = name
+      .split("_")
+      .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+      .join("");
+    return (
+      `${head}: name the record in \`typedefs:\` and tag the ${declarationLabel} ` +
+      `with it, e.g. \`${name}: !${record || "Record"}\``
+    );
+  }
+  if (typeof value === "string") {
+    // The whole text first: a type such as `Literal("a = b")` may hold ` = `.
+    const split = splitTypedText(value);
+    const candidates: [string, string][] = [[value.trim(), ""], ...(split !== null ? [split] : [])];
+    for (const [text, fallback] of candidates) {
+      const typeText = typeTextWithKnownHead(text, registry);
+      if (typeText === null) continue; // value text, not a type
+      const resolved = resolveTypeText(typeText, registry);
+      // Text whose leading name is a type but whose arguments name none still gets its tag,
+      // so pasting it back reaches the tag reader's unknown-type error.
+      const [typ, spelled] = resolved ?? [null, spellTypeText(typeText)];
+      if (spelled !== null) {
+        const suggestion = oldFormSuggestion(name, typ, spelled, fallback, {
+          registry,
+          placeholder: requireDefault ? "<default>" : null,
+        });
+        return `${head}: write the type as a tag: ${suggestion}`;
+      }
+    }
+  }
+  const [tag, example] = exampleDefault(value);
+  if (requireDefault) {
+    return `${head}: a ${declarationLabel} is a tag with a default, e.g. \`${name}: !${tag} ${example}\``;
+  }
+  return (
+    `${head}: an ${declarationLabel} is a tag with an optional default, ` +
+    `e.g. \`${name}: !${tag}\` or \`${name}: !${tag} ${example}\``
+  );
+}
+
+/**
+ * Return type text whose leading name is a type name, else `null`.
+ *
+ * A leading name close to a builtin or typedef name is replaced with that name (`strr` gives
+ * `str`); text whose leading name is neither is a value.
+ *
+ * @param text Authored text that may be a type.
+ * @param registry The flow's typedefs, offered with the builtins.
+ * @returns The text with a type name in front, or `null`.
+ */
+function typeTextWithKnownHead(text: string, registry: TypeRegistry): string | null {
+  const trimmed = text.trim();
+  const head = HEAD_NAME.exec(trimmed)?.[0];
+  if (head === undefined) return null;
+  if (BUILTIN_TYPE_NAMES.has(head) || registry.has(head)) return trimmed;
+  const close = closeTypeName(trimmed, registry);
+  return close === null ? null : close + trimmed.slice(head.length);
+}
+
+/**
+ * Spell a tag and a default for an untagged value, as in `!str hello`.
+ *
+ * A finite float is spelled as Python's `repr` spells it (`2.0`, `1e-07`) and infinity as
+ * `.inf` or `-.inf`, which YAML reads back as a float.
+ *
+ * @param value The untagged value.
+ * @returns The tag's type and the default written after it: the value itself when it is text
+ *   or a scalar, else `int` and `30`.
+ */
+function exampleDefault(value: unknown): [tag: string, example: string] {
+  if (typeof value === "boolean") return ["bool", value ? "true" : "false"];
+  if (typeof value === "bigint") return ["int", value.toString()];
+  if (typeof value === "number") {
+    return ["float", Number.isFinite(value) ? boundText(value) : value > 0 ? ".inf" : "-.inf"];
+  }
+  if (typeof value === "string" && value.trim()) {
+    return ["str", readsAsText(value) ? value : yamlQuoted(value)];
+  }
+  return ["int", "30"];
+}
+
+/** Whether `text` written unquoted after a tag reads back as exactly that text. */
+function readsAsText(text: string): boolean {
+  if (!PLAIN_TEXT.test(text)) return false;
+  try {
+    return parseYamlLiteral(text) === text;
+  } catch (error) {
+    if (error instanceof SourceSyntaxError) return false;
+    throw error;
+  }
+}
+
+/**
+ * Compile authored input or variable declarations into located parameters.
+ *
+ * A declaration takes its type from its tag and its default from the value after it
+ * (`n: !int(1..12) 4`); with no value (`qty: !int`) it has no default. An untagged declaration
+ * is an error that shows the tagged spelling. `sitePath` identifies the containing owner;
+ * `fieldName` its section (default `input`). `declarationLabel` (default `input`) names
+ * individual errors, and `requireDefault` (default `false`) selects declarations whose values
+ * must include a typed literal default. Each parameter receives stable child identities for
+ * its key declaration, contract tree, and packed default. The resulting carriers retain only
+ * `OriginRef` values.
+ *
+ * @throws LoadError, located, when the section is not a mapping, a name is empty, a
+ *   declaration is untagged or can't be read, or the source can't be read or registered.
+ */
+export function readSourceParameters(
+  cursor: SourceCursor,
+  registry: TypeRegistry,
+  options: {
+    sitePath: SourceSitePath;
+    catalogBuilder: SourceCatalogBuilder;
+    diagnostics?: LoadDiagnostics | null;
+    fieldName?: string;
+    declarationLabel?: string;
+    requireDefault?: boolean;
+  },
+): Parameter[] {
+  const { sitePath, catalogBuilder, fieldName = "input" } = options;
+  const { declarationLabel = "input", requireDefault = false } = options;
+  const diagnostics = options.diagnostics ?? LoadDiagnostics.fromCursor(cursor);
+  const mapping = cursor.value;
+  const sectionLabel = fieldName === "input" ? "flow input" : fieldName;
+  if (!isRecord(mapping)) {
+    throw diagnostics.error(`${sectionLabel} must be a mapping, got ${pythonTypeName(mapping)}`, {
+      range: cursor.range,
+    });
+  }
+
+  const parameters: Parameter[] = [];
+  try {
+    for (const [name, value] of Object.entries(mapping)) {
+      const declarationCursor = cursor.child(name);
+      if (name === "") {
+        throw diagnostics.error(`${sectionLabel} names must be non-empty strings`, {
+          range: declarationCursor.keyRange ?? declarationCursor.range,
+        });
+      }
+      const parameterPath = [...sitePath, fieldName, name];
+      const parameterOrigin = catalogBuilder.register(
+        [...parameterPath, "parameter"],
+        declarationCursor,
+        "key",
+      );
+
+      try {
+        if (declarationCursor.tag === null) {
+          throw diagnostics.error(
+            untaggedDeclarationError(name, value, registry, { declarationLabel, requireDefault }),
+            { range: declarationCursor.range },
+          );
+        }
+        parameters.push(
+          readTaggedParameter(name, declarationCursor, registry, {
+            parameterPath,
+            parameterOrigin,
+            catalogBuilder,
+            diagnostics,
+            declarationLabel,
+            requireDefault,
+          }),
+        );
+      } catch (error) {
+        if (
+          !(error instanceof LoadError) ||
+          error.diagnostic.frames.length > 0 ||
+          declarationCursor.range === null
+        ) {
+          throw error;
+        }
+        throw diagnostics.prepend(error, { range: declarationCursor.range, cause: error });
+      }
+    }
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw diagnostics.error(error.message, { range: error.range, cause: error });
+  }
+  return parameters;
 }

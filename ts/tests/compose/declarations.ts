@@ -3,19 +3,47 @@
  * `tests/compose/_declarations.py`.
  *
  * TS-only: `caseDocument`, which reads a conformance case's flow as a parsed document.
- *
- * Not yet ported: `parameters_from_yaml`, which comes with the declaration readers.
  */
 
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { readSourceParameters } from "../../src/compose/helpers/types.ts";
+import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { reload } from "../../src/defaults.ts";
+import type { Parameter } from "../../src/nodes/contracts.ts";
+import type { TypeRegistry } from "../../src/typesys/types.ts";
 import { type Case, prepare, readCase } from "../conformance.ts";
 
 const CASES = fileURLToPath(new URL("../../../conformance/cases/", import.meta.url));
+
+/**
+ * Parse `text` and read its `field` section as located parameters.
+ *
+ * @param text A YAML document holding a `field:` mapping.
+ * @param registry Typedefs the declarations resolve against.
+ * @param options.field The section to read (default `input`).
+ * @param options.requireDefault Read the section as agent variables, each needing a default
+ *   (default `false`).
+ * @returns One parameter per declaration, in source order.
+ */
+export function parametersFromYaml(
+  text: string,
+  registry: TypeRegistry,
+  options: { field?: string; requireDefault?: boolean } = {},
+): Parameter[] {
+  const { field = "input", requireDefault = false } = options;
+  const cursor = SourceDocument.parse(text).root.child(field);
+  return readSourceParameters(cursor, registry, {
+    sitePath: ["test"],
+    catalogBuilder: new SourceCatalogBuilder(),
+    fieldName: field,
+    declarationLabel: requireDefault ? "variable" : "input",
+    requireDefault,
+  });
+}
 
 /**
  * Read conformance case `id` (`group/name`) as the TS runner runs it: the prepared case and its

@@ -7,6 +7,8 @@
  * executor can replace those exact values in error text without calling a source again.
  */
 
+import { current } from "../defaults.ts";
+
 /** A key, or a function that returns it on each request. */
 export type Secret = string | (() => string | Promise<string>);
 
@@ -177,6 +179,88 @@ export class SubscriptionAuth implements Auth {
 
   credentials(): readonly string[] {
     return this.seen.snapshot();
+  }
+}
+
+/** Send a user name and password as `Authorization: Basic <base64 of user:password>`. */
+export class BasicAuth implements Auth {
+  private readonly token: string;
+  private readonly seen = new Seen();
+
+  /**
+   * @param username The user name.
+   * @param password The password; may be empty.
+   */
+  constructor(username: string, password: string) {
+    this.token = Buffer.from(`${username}:${password}`, "utf8").toString("base64");
+    this.seen.add(password, this.token);
+  }
+
+  async headers(): Promise<Record<string, string>> {
+    return { Authorization: `Basic ${this.token}` };
+  }
+
+  credentials(): readonly string[] {
+    return this.seen.snapshot();
+  }
+}
+
+// Visible ASCII with spaces or tabs only between characters, as connection settings allow.
+const FIELD_VALUE = /^[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*$/;
+
+/**
+ * Return a connection header value unchanged if it may be sent, never echoing it on failure.
+ *
+ * The same rule and messages as `validateHeaderValue` in `llm_clients/connection_settings.ts`,
+ * which this layer may not import, but throwing `TypeError`.
+ *
+ * @param name The header's name; messages name it.
+ * @param value The value to check.
+ * @returns `value` unchanged.
+ * @throws TypeError If `value` is not a string, is longer than `maxHeaderValueChars`
+ *   characters, or is not non-empty visible ASCII with spaces or tabs only between characters.
+ */
+function checkFieldValue(name: string, value: unknown): string {
+  if (typeof value !== "string") throw new TypeError(`header ${name} value must be a string`);
+  const limit = current().maxHeaderValueChars;
+  if ([...value].length > limit) throw new TypeError(`header ${name} value must be at most ${limit} characters`);
+  if (!FIELD_VALUE.test(value)) {
+    throw new TypeError(
+      `header ${name} value must be non-empty visible ASCII, with spaces or tabs only between characters`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Send secret extra headers alongside another auth object's, so the scrub knows their values.
+ *
+ * The inner auth's headers win a name clash.
+ */
+export class ExtraHeadersAuth implements Auth {
+  private readonly auth: Auth;
+  private readonly extra: Readonly<Record<string, string>>;
+
+  /**
+   * @param auth The auth object whose headers are sent too.
+   * @param headers The extra header names mapped to their values; copied.
+   * @throws TypeError If a value may not be sent; the message names the header, never the value.
+   */
+  constructor(auth: Auth, headers: Record<string, string>) {
+    this.auth = auth;
+    // Copied so a caller mutating its own object cannot change what is sent.
+    this.extra = Object.freeze(Object.fromEntries(Object.entries(headers)));
+    for (const [name, value] of Object.entries(this.extra)) checkFieldValue(name, value);
+  }
+
+  async headers(): Promise<Record<string, string>> {
+    return { ...this.extra, ...(await this.auth.headers()) };
+  }
+
+  credentials(): readonly string[] {
+    const seen = new Seen();
+    seen.add(...this.auth.credentials(), ...Object.values(this.extra));
+    return seen.snapshot();
   }
 }
 

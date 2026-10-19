@@ -4,7 +4,7 @@
  * `node:sqlite`, loaded lazily for the runtime in use, an exclusive file lock
  * built on it, the scheduler that clocks and timed waits go through, the
  * TypeScript stripper for CODE bodies, loaded lazily too, and `safeFetch`, the one way out
- * to the network: no redirects, yian's User-Agent.
+ * to the network: no redirects, yian's User-Agent, and a warning when TLS checks are off.
  */
 
 import type { Database } from "bun:sqlite";
@@ -12,6 +12,8 @@ import type { Database } from "bun:sqlite";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import type { DatabaseSync } from "node:sqlite";
+
+import { processEnv } from "./defaults.ts";
 
 /** The JavaScript runtime yian is running on, detected once at load. */
 export const runtime: "bun" | "node" = typeof Bun !== "undefined" ? "bun" : "node";
@@ -676,6 +678,18 @@ export function redirectDetail(location: string | null): string {
 }
 
 /**
+ * Return the warning for a `NODE_TLS_REJECT_UNAUTHORIZED` value, or `null` unless it is `"0"`,
+ * the value that turns certificate checks off in both runtimes.
+ */
+export function insecureTlsWarning(value: string | undefined): string | null {
+  return value === "0"
+    ? "NODE_TLS_REJECT_UNAUTHORIZED=0 turns off TLS certificate checks for every request; unset it and trust a private CA with NODE_EXTRA_CA_CERTS instead"
+    : null;
+}
+
+let warnedInsecureTls = false;
+
+/**
  * Send one HTTP request through `send` (default the runtime's fetch) without following
  * redirects: every outbound request goes through here.
  *
@@ -685,7 +699,9 @@ export function redirectDetail(location: string | null): string {
  * whatever it says, `timeout: false` (Bun's own request timeout off; Node ignores the key)
  * and `User-Agent: USER_AGENT` unless the caller set one. Returns any non-3xx response as
  * is; for a 3xx it cancels the body and throws `RedirectError`, so credential headers never
- * reach a second origin.
+ * reach a second origin. The first request sent while the process environment has
+ * `NODE_TLS_REJECT_UNAUTHORIZED=0` emits `insecureTlsWarning`'s text through
+ * `process.emitWarning`, once per process.
  */
 export async function safeFetch(
   input: string | URL,
@@ -712,6 +728,14 @@ export async function safeFetch(
   }
   if (!headers.has("user-agent")) headers.set("user-agent", USER_AGENT);
   const sent: RequestInit & { timeout: false } = { ...init, headers, redirect: "manual", timeout: false };
+  if (!warnedInsecureTls) {
+    // The runtime reads the process environment, not a host's injected one, so this does too.
+    const warning = insecureTlsWarning(processEnv("NODE_TLS_REJECT_UNAUTHORIZED"));
+    if (warning) {
+      warnedInsecureTls = true;
+      process.emitWarning(warning);
+    }
+  }
   const response = await send(input, sent);
   // Only the status: the response type for a manual redirect differs between runtimes.
   if (response.status >= 300 && response.status < 400) {

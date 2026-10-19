@@ -3,7 +3,9 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  BasicAuth,
   BearerAuth,
+  ExtraHeadersAuth,
   HeaderKeyAuth,
   NoAuth,
   REDACTED,
@@ -13,6 +15,10 @@ import {
   scrub,
   secretForms,
 } from "../../src/llm/auth.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
+import { RouteModel } from "../../src/llm/executor.ts";
+import { Request } from "../../src/llm/messages.ts";
+import { Route } from "../../src/llm/route.ts";
 
 /** Return a source yielding `values` in turn, and a counter of its calls. */
 function countingSource<T>(...values: T[]): [() => T, { count: number }] {
@@ -266,5 +272,98 @@ describe("scrub", () => {
     expect(scrub("key sk-1", ["sk-1"], "<redacted>")).toBe("key <redacted>");
     expect(scrub("key sk-1", ["sk-1"], "$&")).toBe("key $&");
     expect(scrub("\\u0073\\u006B\\u0031", ["sk1"], "$&")).toBe("$&");
+  });
+});
+
+describe("BasicAuth", () => {
+  test("sends Basic and the base64 of user:password", async () => {
+    const auth = new BasicAuth("u", "p");
+    expect(await auth.headers()).toEqual({ Authorization: "Basic dTpw" });
+    expect(auth.credentials()).toEqual(["p", "dTpw"]);
+  });
+
+  test("encodes a non-ASCII user as UTF-8", async () => {
+    const auth = new BasicAuth("üser", "pw");
+    // base64 of the UTF-8 bytes c3 bc 73 65 72 3a 70 77.
+    expect(await auth.headers()).toEqual({ Authorization: "Basic w7xzZXI6cHc=" });
+    expect(auth.credentials()).toEqual(["pw", "w7xzZXI6cHc="]);
+  });
+
+  test("an empty password leaves only the token in the credentials", async () => {
+    const auth = new BasicAuth("u", "");
+    expect(await auth.headers()).toEqual({ Authorization: "Basic dTo=" });
+    expect(auth.credentials()).toEqual(["dTo="]);
+  });
+
+  test("a 401 echoing the password is scrubbed from the error", async () => {
+    const password = "hunter2-secret-pw";
+    const send = async () =>
+      new Response(JSON.stringify({ error: `bad password ${password}` }), { status: 401 });
+    const model = new RouteModel({
+      route: new Route({
+        provider: "ollama",
+        baseUrl: "http://gpu-box:11434",
+        path: "api/chat",
+        auth: new BasicAuth("me", password),
+      }),
+      protocol: {
+        name: "test",
+        model: "m",
+        framing: "sse",
+        buildBody: () => ({}),
+        async *parse() {},
+      },
+      send,
+    });
+    const error = await rejection(
+      (async () => {
+        for await (const _ of model.stream(new Request({ messages: [] })));
+      })(),
+    );
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error.message).toContain(REDACTED);
+    expect(error.message).not.toContain(password);
+    expect(error.stack ?? "").not.toContain(password);
+  });
+});
+
+describe("ExtraHeadersAuth", () => {
+  test("merges the headers, the inner auth's winning a clash", async () => {
+    const auth = new ExtraHeadersAuth(new BearerAuth("sk-1"), { "x-extra": "e1", Authorization: "lost" });
+    expect(await auth.headers()).toEqual({ "x-extra": "e1", Authorization: "Bearer sk-1" });
+  });
+
+  test("lists the header values after the inner auth's credentials, without duplicates", () => {
+    const auth = new ExtraHeadersAuth(new BearerAuth("sk-1"), { "x-a": "v-a", "x-b": "sk-1", "x-c": "v-c" });
+    expect(auth.credentials()).toEqual(["sk-1", "v-a", "v-c"]);
+  });
+
+  test("accepts an inner tab", async () => {
+    const auth = new ExtraHeadersAuth(new NoAuth(), { "x-tab": "a\tb" });
+    expect(await auth.headers()).toEqual({ "x-tab": "a\tb" });
+  });
+
+  for (const value of ["sec\rret", "\tsecret", "secret ", "", "sécret"]) {
+    test(`refuses ${JSON.stringify(value)} without echoing it`, () => {
+      let error: unknown;
+      try {
+        new ExtraHeadersAuth(new NoAuth(), { "x-bad": value });
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(TypeError);
+      expect((error as TypeError).message).toBe(
+        "header x-bad value must be non-empty visible ASCII, with spaces or tabs only between characters",
+      );
+      if (value) expect((error as TypeError).stack ?? "").not.toContain(value);
+    });
+  }
+
+  test("copies its input", async () => {
+    const headers = { "x-extra": "before" };
+    const auth = new ExtraHeadersAuth(new NoAuth(), headers);
+    headers["x-extra"] = "after";
+    expect(await auth.headers()).toEqual({ "x-extra": "before" });
+    expect(auth.credentials()).toEqual(["before"]);
   });
 });

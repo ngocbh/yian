@@ -1820,7 +1820,7 @@ test.each(TAMPERED)("the prepared record tamper check uses the frozen schema: %s
   if (change === "payload") {
     const started = record as RunStartedRecord;
     const tampered = new RunStartedRecord({
-      ...(started as unknown as RunStartedFields),
+      ...started,
       startWiringOverride: { ...started.startWiringOverride, new: "tampered" },
     });
     prepared = new PreparedTransition(tampered, expectedRunId, expectedSequence, plan, observers);

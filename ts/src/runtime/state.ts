@@ -577,10 +577,8 @@ const PLAN_KINDS: ReadonlySet<string> = new Set([
 export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   if (!isExactly(state, RunState)) throw new TypeError("commitPrepared expects a RunState");
   if (!isExactly(prepared, PreparedTransition)) throw new TypeError("commitPrepared expects a PreparedTransition");
-  const plan: unknown = prepared._plan;
-  if (typeof plan !== "object" || plan === null || !PLAN_KINDS.has((plan as { kind: unknown }).kind as string)) {
-    throw new TypeError("unsupported prepared transition plan");
-  }
+  const kind = (prepared._plan as { kind?: unknown } | null)?.kind;
+  if (typeof kind !== "string" || !PLAN_KINDS.has(kind)) throw new TypeError("unsupported prepared transition plan");
   const traceDelta = prepared._plan.traceDelta;
   if (prepared._plan.kind === "backward") requirePostterminalTraceDelta(state, traceDelta);
   if (traceDelta !== null) traceDelta.validateOrigin(state.trace);
@@ -807,7 +805,7 @@ function requireInitialized(state: RunState): void {
   }
   const sequences = [...state.acceptedStarts.values()];
   if (
-    !sameIds(state.inFlight, state.acceptedStarts.keys()) ||
+    !sameIds(state.acceptedStarts, state.inFlight) ||
     sequences.some((sequence) => !Number.isSafeInteger(sequence) || !(0 < sequence && sequence < state.nextSequence)) ||
     new Set(sequences).size !== sequences.length
   ) {
@@ -886,7 +884,7 @@ function validateRuntimeMemoryConfiguration(state: RunState): void {
 }
 
 /** Whether two sets of ids hold the same ids, in any order. */
-function sameIds(a: ReadonlySet<string>, b: Iterable<string>): boolean {
+function sameIds(a: { readonly size: number; has(id: string): boolean }, b: Iterable<string>): boolean {
   const other = new Set(b);
   return a.size === other.size && [...other].every((id) => a.has(id));
 }
@@ -918,9 +916,9 @@ function requirePristine(state: RunState): void {
     state.pool.startId === flow.startId &&
     state.pool.store.size === 0 &&
     state.pool.system.size === 0 &&
-    sameIds(new Set(state.nodeState.keys()), flow.nodes.keys()) &&
+    sameIds(state.nodeState, flow.nodes.keys()) &&
     [...state.nodeState.values()].every((value) => value === NodeState.UNKNOWN) &&
-    sameIds(new Set(state.edgeState.keys()), flow.edges.map((edge) => edge.id)) &&
+    sameIds(state.edgeState, flow.edges.map((edge) => edge.id)) &&
     [...state.edgeState.values()].every((value) => value === NodeState.UNKNOWN) &&
     state.ready.length === 0 &&
     state.inFlight.size === 0 &&

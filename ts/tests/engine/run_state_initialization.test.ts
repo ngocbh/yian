@@ -20,7 +20,8 @@
  * Changed:
  * - `test_private_plan_contains_no_mutable_transition_payload`: the plan is a frozen plain object;
  *   each own field is a primitive (the envelope is canonical text, not bytes), a `Node`, the
- *   originating state or flow, `null`, or a frozen value, and assigning a field is a `TypeError`.
+ *   originating state or flow, `null`, or a frozen value; assigning a field, or writing into the
+ *   envelope text's characters, is a `TypeError`.
  * - `test_run_started_preparation_is_immutable_and_commit_restores_complete_state`: `RunStartData`
  *   is an interface, so its freeze half has no counterpart; assigning a `PreparedTransition` field
  *   is a `TypeError`; the tuple START value is an array, and its int is a `bigint`.
@@ -64,7 +65,6 @@ import {
   NodeStartedRecord,
   RecordEnvelope,
   type RunRecord,
-  type RunStartedFields,
   RunStartedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
@@ -92,7 +92,7 @@ const APPEND_MISMATCH = /^run-log append result does not match prepared transiti
 
 /** Return a run-start record with `record`'s fields and `wiring` as its START wiring override. */
 function withWiring(record: RunStartedRecord, wiring: Record<string, unknown>): RunStartedRecord {
-  return new RunStartedRecord({ ...(record as unknown as RunStartedFields), startWiringOverride: wiring });
+  return new RunStartedRecord({ ...record, startWiringOverride: wiring });
 }
 
 /** Assert `fn` throws an error of exactly class `cls` whose message matches `message`. */
@@ -166,7 +166,11 @@ test("prepareRunStarted requires a pristine state with a START node", () => {
   const state = new RunState(owned);
   state.ready.push("work");
 
-  expectError(() => prepareRunStarted(state, startData(owned)), RangeError, /pristine/);
+  expectError(
+    () => prepareRunStarted(state, startData(owned)),
+    RangeError,
+    /^RunStarted requires a pristine RunState at sequence 0$/,
+  );
 
   const missingStart = flow();
   missingStart.nodes.delete(missingStart.startId);
@@ -253,6 +257,10 @@ test("the private plan contains no mutable transition payload", () => {
   }
   expect(() => {
     (plan as { envelopeJson: string }).envelopeJson = "changed";
+  }).toThrow(TypeError);
+  // Strict-mode code can't write into a string's characters, as Python can't into bytes.
+  expect(() => {
+    (plan.envelopeJson as unknown as string[])[0] = "x";
   }).toThrow(TypeError);
 });
 
@@ -380,7 +388,7 @@ test("commitPrepared append failure leaves state and observers untouched", () =>
   const prepared = prepareRunStarted(state, startData(owned));
   const before = stateSnapshot(state);
 
-  expect(() => commitPrepared(new FailingLog(RUN_ID), state, prepared)).toThrow("disk full");
+  expectError(() => commitPrepared(new FailingLog(RUN_ID), state, prepared), Error, /^disk full$/);
 
   expect(stateSnapshot(state)).toEqual(before);
   expect(prepared.observers).toEqual([new RunStarted()]);

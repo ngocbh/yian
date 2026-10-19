@@ -259,6 +259,7 @@ export class AnthropicMessages implements SseProtocol {
     let unusable: JsonObject | null = null;
     let unsigned = false;
     for (const part of message.parts) {
+      // Refused here so a bad message never fires onReplayDegraded first.
       if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, message.role));
       if (!(part instanceof ReasoningPart)) {
         blocks.push(null);
@@ -437,19 +438,18 @@ function sourceOf(message: Message, record: JsonObject): string {
  */
 function degradedTurnStart(rendered: JsonObject[], degraded: Map<JsonObject, string>): string | null {
   const isUser = (turn: JsonObject) => turn["role"] === "user";
-  const hasResult = (turn: JsonObject) =>
-    Array.isArray(turn["content"]) && turn["content"].some((block) => (block as JsonObject)["type"] === "tool_result");
   const last = rendered.findLast(isUser);
-  if (last === undefined || !hasResult(last)) return null;
-  const start = rendered.findLastIndex((turn) => isUser(turn) && !hasResult(turn));
+  if (last === undefined || !hasBlock(last, "tool_result")) return null;
+  const start = rendered.findLastIndex((turn) => isUser(turn) && !hasBlock(turn, "tool_result"));
   const [first, ...later] = rendered.slice(start + 1).filter((turn) => turn["role"] === "assistant");
-  const thinks = (turn: JsonObject) =>
-    Array.isArray(turn["content"]) &&
-    turn["content"].some((block) => {
-      const type = (block as JsonObject)["type"];
-      return type === "thinking" || type === "redacted_thinking";
-    });
+  const thinks = (turn: JsonObject) => hasBlock(turn, "thinking", "redacted_thinking");
   return first === undefined || later.some(thinks) ? null : (degraded.get(first) ?? null);
+}
+
+/** Return whether a rendered turn's content is a list holding a block of one of `types`. */
+function hasBlock(turn: JsonObject, ...types: string[]): boolean {
+  const content = turn["content"];
+  return Array.isArray(content) && content.some((block) => types.includes((block as JsonObject)["type"] as string));
 }
 
 /** Return the text of `blocks` when they are one text block, else `null`. */

@@ -1062,6 +1062,16 @@ describe("the required-signature error", () => {
     expect(() => bodyOf(steps, { block: ENABLED })).not.toThrow();
   });
 
+  test("a later step sending its own redacted thinking started a new turn, so nothing is refused", () => {
+    const steps = [
+      ...loop(foreign()),
+      user("Also, hurry."),
+      recorded(KEY, redacted(), call("call_2", { value: 6n })),
+      tool(result("call_2", "12")),
+    ];
+    expect(() => bodyOf(steps, { block: ENABLED })).not.toThrow();
+  });
+
   test("a skipped empty assistant message is not the turn's first", () => {
     const skipped = recorded(OPUS, thinking("Hm.", "sig-1", OPUS));
     expect(() =>

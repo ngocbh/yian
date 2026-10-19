@@ -76,8 +76,8 @@ export class StandInCase extends NodeDescriptor {
 }
 
 /**
- * Return a one-off descriptor class of `kind` that adds `allow` and `require` to the base sets
- * and keeps only the base fields.
+ * Return a one-off descriptor class of `kind` that adds `allow` and `require` to the base sets,
+ * takes the other options as its statics, and keeps only the base fields.
  */
 export function standIn(
   kind: string,
@@ -86,15 +86,23 @@ export function standIn(
     require?: readonly string[];
     bindingFields?: readonly string[];
     keywordRemap?: ReadonlyMap<string, string>;
+    inputsAreLocals?: boolean;
   } = {},
 ): DescriptorClass {
-  const { allow = [], require = [], bindingFields = [], keywordRemap = new Map() } = options;
+  const {
+    allow = [],
+    require = [],
+    bindingFields = [],
+    keywordRemap = new Map(),
+    inputsAreLocals = true,
+  } = options;
   return class extends NodeDescriptor {
     static override readonly kind = kind;
     static override readonly allowed = this.allow(...allow);
     static override readonly required = this.require(...require);
     static override readonly bindingFields = bindingFields;
     static override readonly keywordRemap = keywordRemap;
+    static override readonly inputsAreLocals = inputsAreLocals;
   };
 }
 

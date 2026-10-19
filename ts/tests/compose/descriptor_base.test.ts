@@ -8,7 +8,7 @@
  * `allow` unioning its parent's set. And the `message builders` rows, which Python tests
  * through `load_flow` or its docstrings: `valueTypeError` (its docstring examples),
  * `rejectNonText`, `rejectContainerSpans`, `inputShapeProblem`'s binding noun per kind (the
- * shapes run through `parse` in `node_input_shape.test.ts`) and `siteKey`.
+ * shapes run through `parse` in `node_input_shape.test.ts`), `rejectInfinityName` and `siteKey`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -19,6 +19,7 @@ import {
   NodeDescriptor,
   type NodeDescriptorFields,
   rejectContainerSpans,
+  rejectInfinityName,
   rejectNonText,
   siteKey,
   valueTypeError,
@@ -243,6 +244,21 @@ describe("message builders", () => {
       `\`input:\` must be a mapping of ${noun} (got the expression '\${seed.output.n + 1}'); ` +
         `${verb}, such as \`<field>: \${...}\``,
     );
+  });
+
+  test("rejectInfinityName refuses inf at its range", () => {
+    const error = loadError(() =>
+      rejectInfinityName("node 'a' input 'inf'", "inf", RANGE, DIAGNOSTICS),
+    );
+    expect(error.diagnostic.message).toBe(
+      "node 'a' input 'inf': `inf` is infinity in an expression, so ${inf} can't read this " +
+        "input; rename it",
+    );
+    expect(error.diagnostic.frames.map((frame) => frame.range)).toEqual([RANGE]);
+  });
+
+  test.each(["infinity", "Inf", "x"])("rejectInfinityName lets %s through", (name) => {
+    rejectInfinityName(`node 'a' input '${name}'`, name, RANGE, DIAGNOSTICS);
   });
 
   test("siteKey joins the range kind and the name", () => {

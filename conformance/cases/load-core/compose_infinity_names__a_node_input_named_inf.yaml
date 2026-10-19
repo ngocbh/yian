@@ -1,0 +1,26 @@
+# TS reads `${inf}` as infinity, so a node input named `inf` is refused (rules: infinity); Python loads it.
+kind: load
+rules: [infinity]
+flow: |
+  id: f
+  name: f
+  input:
+    x: !int
+  nodes:
+    a:
+      kind: code
+      code: return 1
+      input:
+        inf: ${input.x}
+      output: int
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'' input ''inf'': `inf` is infinity in an expression, so ${inf} can''t read this input; rename it'
+      frames:
+      - label: flow.yaml
+        range: [10, 7, 10, 10]
+python_expect:
+  load: ok

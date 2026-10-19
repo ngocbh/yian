@@ -193,6 +193,30 @@ export function rejectNonText(
   }
 }
 
+/**
+ * Reject a name a node reads by bare name in its expressions when it is `inf`, since `${inf}`
+ * reads infinity, not the name.
+ *
+ * @param where What the name is, for the message, such as `node 'a' input 'inf'`.
+ * @param name The authored name.
+ * @param range Where the error points: the name's key.
+ * @param diagnostics Factory for located load errors.
+ * @throws LoadError when `name` is `inf`.
+ */
+export function rejectInfinityName(
+  where: string,
+  name: string,
+  range: SourceRange | null,
+  diagnostics: LoadDiagnostics,
+): void {
+  if (name === "inf") {
+    throw diagnostics.error(
+      `${where}: \`inf\` is infinity in an expression, so \${inf} can't read this input; rename it`,
+      { range },
+    );
+  }
+}
+
 /** Resolves a child flow by id and version for call, map and loop. */
 export type ChildResolver = (flowId: string, version: string | null) => unknown;
 
@@ -391,6 +415,11 @@ export class NodeDescriptor {
    * `else` is `else_`); other keys take their camelCase name.
    */
   static readonly keywordRemap: ReadonlyMap<string, string> = new Map();
+  /**
+   * Whether the node reads its `input:` names as bare locals (in prompts, conditions and node
+   * asserts), so an input named `inf` is refused; `map`'s names are its child's parameters.
+   */
+  static readonly inputsAreLocals: boolean = true;
 
   /** The node's key in the `nodes:` map. */
   readonly id: string;

@@ -7,7 +7,8 @@
  * `field_ranges` excluded; TS compares its class and fields.
  *
  * TS-only: the `input:` binding ranges and positional `asserts:` ranges stamped after the kind
- * parse, which Python tests through later phases.
+ * parse, which Python tests through later phases; and a node input named `inf`, refused where
+ * the node reads its inputs by bare name (`inputsAreLocals`), with its harvested case.
  */
 
 import { expect, test } from "bun:test";
@@ -15,8 +16,8 @@ import { expect, test } from "bun:test";
 import { siteKey } from "../../src/compose/nodes/base.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
-import { loadError } from "./declarations.ts";
-import { StandInAgent, StandInCase, StandInCode, withKinds } from "./stand_ins.ts";
+import { loadError, nodesOf, runTextCase } from "./declarations.ts";
+import { StandInAgent, StandInCase, StandInCode, standIn, withKinds } from "./stand_ins.ts";
 
 /** Return the physical cursor over a flow document's `nodes:` mapping. */
 function nodesReader(text: string): SourceCursor {
@@ -154,3 +155,47 @@ test("input binding and assert ranges are stamped after the kind parse", () => {
   // The node-level range is the node's key line.
   expect(desc.range).toEqual(nodes.keyRangeOf("x"));
 });
+
+/** A node `a` of `kind` whose `input:` binds `name`. */
+function inputNamed(kind: string, name: string): string {
+  return `id: f
+name: f
+nodes:
+  a:
+    kind: ${kind}
+    code: return 1
+    input:
+      ${name}: \${input.x}
+output: \${a.output}
+`;
+}
+
+test("a node input named inf is refused at its key", () => {
+  const text = inputNamed("code", "inf");
+  const error = loadError(() => nodesOf(text, [StandInCode]));
+
+  expect(error.message).toBe(
+    "node 'a' input 'inf': `inf` is infinity in an expression, so ${inf} can't read this " +
+      "input; rename it",
+  );
+  const key = SourceDocument.parse(text).root.child("nodes").child("a").child("input");
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(key.keyRangeOf("inf")!);
+});
+
+test("an input named inf parses where the inputs aren't locals", () => {
+  const map = standIn("map", { allow: ["code", "inputs"], inputsAreLocals: false });
+
+  expect(nodesOf(inputNamed("map", "inf"), [map]).get("a")!.inputs).toEqual({ inf: "${input.x}" });
+});
+
+test("an input named infinity parses", () => {
+  const desc = nodesOf(inputNamed("code", "infinity"), [StandInCode]).get("a")!;
+
+  expect(desc.inputs).toEqual({ infinity: "${input.x}" });
+});
+
+test("parseNodes: load-core/compose_infinity_names__a_node_input_named_inf", () =>
+  runTextCase({
+    id: "load-core/compose_infinity_names__a_node_input_named_inf",
+    call: (text, label) => nodesOf(text, [StandInCode], label),
+  }));

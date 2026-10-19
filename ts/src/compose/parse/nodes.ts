@@ -15,7 +15,8 @@
  * `input:` binding's own range is stamped into the descriptor's `fieldRanges` under
  * `siteKey("input", name)`, and each `asserts:` item range is appended positionally to its
  * `assertRanges`. This metadata stays inside Compose; `_finish` copies node and field locations
- * to the `BuildResult` for validation.
+ * to the `BuildResult` for validation. Then, for a kind whose `inputsAreLocals`, an `input:` key
+ * named `inf` is refused at the key, since `${inf}` reads infinity.
  *
  * Knows about: diagnostics, compose source, helpers and node kinds, compile model, expr and
  * typesys.
@@ -43,7 +44,7 @@ import { LoadDiagnostics } from "../helpers/errors.ts";
 import { oneLineText } from "../helpers/source.ts";
 import { QUOTED_STYLES, suggestTag, yamlQuoted } from "../helpers/tags.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
-import { type NodeDescriptor, notTextError, siteKey } from "../nodes/base.ts";
+import { type NodeDescriptor, notTextError, rejectInfinityName, siteKey } from "../nodes/base.ts";
 import { KINDS, REMOVED_KINDS } from "../nodes/index.ts";
 import type { ScalarStyle } from "../source/common.ts";
 import {
@@ -201,6 +202,13 @@ function parseNode(
     desc.fieldRanges.set(siteKey("input", name), range);
   }
   desc.assertRanges.push(...normalized.itemRangeList("asserts"));
+  if (cls.inputsAreLocals) {
+    for (const name of Object.keys(desc.inputs)) {
+      const where = `node ${reprText(nodeId)} input ${reprText(name)}`;
+      const range = normalized.child("inputs").keyRangeOf(name);
+      rejectInfinityName(where, name, range, diagnostics);
+    }
+  }
   return desc;
 }
 

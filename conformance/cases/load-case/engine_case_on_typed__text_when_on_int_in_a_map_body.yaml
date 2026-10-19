@@ -1,0 +1,40 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    xs: !list(int)
+  nodes:
+    each:
+      kind: map
+      over: ${input.xs}
+      input:
+        x: ${item}
+      nodes:
+        route:
+          kind: case
+          on: ${input.x}
+          cases:
+            - when: "1"
+              then: one
+          else: other
+        one:
+          kind: code
+          code: |
+            return "one"
+          output: str
+        other:
+          kind: code
+          code: |
+            return "other"
+          output: str
+      output: ${one.output | other.output}
+  output: ${each.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'': `when: "1"` is text but `on: ${input.x}` is `int`; drop the quotes: `when: 1`'
+      frames:
+      - label: flow.yaml
+        range: [16, 19, 16, 22]

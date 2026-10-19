@@ -1,0 +1,21 @@
+kind: load
+flow: |
+  id: d
+  name: d
+  defs:
+    body:
+      llm_config: {api_key: sk-sentinel-5b2e8d41}
+      nodes:
+        nested: {kind: agent, prompt: hi}
+      output: ${nested.output}
+  nodes:
+    child: {kind: call, call: body}
+  output: ${child.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''body'': llm_config.api_key is a host credential; pass it in the run''s llm_config, not in a flow file'
+      frames:
+      - label: flow.yaml
+        range: [5, 17, 5, 48]

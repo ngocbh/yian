@@ -1,0 +1,43 @@
+kind: load
+flow: |2
+
+  id: na
+  name: na
+  input:
+    v: !int
+  nodes:
+    x:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:double
+      input:
+        n: ${input.v}
+      output: int
+      asserts:
+        - "output.field >= 0"
+  output: ${x.output}
+python_flow: |2
+
+  id: na
+  name: na
+  input:
+    v: !int
+  nodes:
+    x:
+      kind: code
+      code: tests.engine._compose_codefns:double
+      input:
+        n: ${input.v}
+      output: int
+      asserts:
+        - "output.field >= 0"
+  output: ${x.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'x' assert: ${output.field} — the node output is not a record, so it has no field 'field'
+      frames:
+      - label: flow.yaml
+        range: [14, 9, 14, 28]

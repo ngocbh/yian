@@ -1,0 +1,51 @@
+# From tests/compose/test_any_name_literals.py::test_a_case_call_target_with_a_credential_keyword_loads.
+# A literal argument of a CASE branch's `call(...)` target is identity.
+kind: fingerprint
+flow: |
+  id: f
+  name: f
+  input:
+    score: !float
+  defs:
+    g:
+      input:
+        password: !Optional(str) null
+      nodes:
+        run:
+          kind: tool
+          tool_id: run
+          output: str
+      output: ${run.output}
+  nodes:
+    c:
+      kind: case
+      cases:
+        - when: input.score >= 0.5
+          then: call(g, password=hunter2)
+      else: call(g)
+  output: ${c.output}
+other: |
+  id: f
+  name: f
+  input:
+    score: !float
+  defs:
+    g:
+      input:
+        password: !Optional(str) null
+      nodes:
+        run:
+          kind: tool
+          tool_id: run
+          output: str
+      output: ${run.output}
+  nodes:
+    c:
+      kind: case
+      cases:
+        - when: input.score >= 0.5
+          then: call(g, password=hunter3)
+      else: call(g)
+  output: ${c.output}
+expect:
+  fingerprint: different

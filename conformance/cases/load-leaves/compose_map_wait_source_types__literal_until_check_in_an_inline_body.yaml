@@ -1,0 +1,27 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    a:
+      kind: call
+      nodes:
+        pause:
+          kind: wait
+          until: 5
+        worker:
+          kind: code
+          depends_on: [pause]
+          output: int
+          code: |
+            return 1
+      output: ${worker.output}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''pause'' (kind=wait): `until:` must be a date or datetime, but YAML read it as an integer; write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`'
+      frames:
+      - label: flow.yaml
+        range: [9, 16, 9, 17]

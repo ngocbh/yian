@@ -1,0 +1,17 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    a:
+      kind: null
+      prompt: hi
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'': an entry in `nodes:` is a node or a value; add `kind:` for a node, or a tag (`!object`, `!Buy`, ...) for a value'
+      frames:
+      - label: flow.yaml
+        range: [5, 5, 7, 1]

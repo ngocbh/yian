@@ -1,0 +1,34 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    body:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: agent
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          prompt: Count from ${n}.
+      output: ${step.output}
+  nodes:
+    lp:
+      kind: loop
+      call: body
+      input:
+        n: 0
+      until: not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not true
+      max: 5
+  output: ${lp.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''lp'': `until:` is not a valid boolean expression: expression nests deeper than 100 levels, the limit for a yian expression (each call, list, unary operator, comparison, and chain of operators is a level); split it into smaller bindings or steps'
+      frames:
+      - label: flow.yaml
+        range: [22, 12, 22, 420]

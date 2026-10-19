@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    t: !str
+  nodes:
+    s:
+      kind: code
+      output: float
+      code: |
+        return 0.5
+    x: !object [1]
+  output: ${x.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''x'': the value is not a valid object: [1] does not match declared type object'
+      frames:
+      - label: flow.yaml
+        range: [11, 6, 11, 17]

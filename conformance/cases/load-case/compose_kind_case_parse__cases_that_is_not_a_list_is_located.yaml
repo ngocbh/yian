@@ -1,0 +1,23 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    n: !int
+  nodes:
+    gate:
+      kind: case
+      cases: 7
+    done:
+      kind: code
+      code: return 1
+      output: int
+  output: ${done.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''gate'': `cases:` must be a list of {when:, then:} mappings (got 7)'
+      frames:
+      - label: flow.yaml
+        range: [8, 12, 8, 13]

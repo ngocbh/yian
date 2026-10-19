@@ -1,0 +1,31 @@
+kind: load
+flow: |2
+
+  id: named
+  name: named
+  input:
+    z: !int
+  defs:
+    step:
+      input:
+        n: !float
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": 1}
+      output: ${bump.output}
+  nodes:
+    repeat:
+      kind: loop
+      times: 2
+      call: step
+      input:
+        n: ${input.z}
+  output: ${repeat.output}
+expect:
+  load: ok

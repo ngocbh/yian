@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: variable-collision
+  name: variable-collision
+  nodes:
+    writer:
+      kind: agent
+      input:
+        topic: supplied
+      variables:
+        topic: !str fallback
+      prompt: ${topic}
+      output: str
+  output: ${writer.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''writer'': variable ''topic'' collides with an input name'
+      frames:
+      - label: flow.yaml
+        range: [9, 7, 9, 12]

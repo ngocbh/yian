@@ -1,0 +1,37 @@
+# From tests/compose/test_typed_bindings_load.py::test_typed_binding_changes_the_flow_fingerprint.
+# A type tag on an input binding changes the fingerprint.
+kind: fingerprint
+flow: |
+  id: typed
+  name: typed
+  nodes:
+    size:
+      kind: tool
+      tool_id: size
+      output:
+        qty: int
+    use:
+      kind: tool
+      tool_id: use
+      input:
+        qty: ${size.output.qty}
+      output: int
+  output: ${use.output}
+other: |
+  id: typed
+  name: typed
+  nodes:
+    size:
+      kind: tool
+      tool_id: size
+      output:
+        qty: int
+    use:
+      kind: tool
+      tool_id: use
+      input:
+        qty: !int ${size.output.qty}
+      output: int
+  output: ${use.output}
+expect:
+  fingerprint: different

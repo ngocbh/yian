@@ -1,0 +1,70 @@
+kind: load
+flow: |
+  id: root
+  name: root
+  input:
+    x: !str
+  uses:
+    first: u0
+  nodes:
+    step:
+      kind: code
+      code: return inputs["x"]
+      input:
+        x: ${input.x}
+      output: str
+  output: ${step.output}
+files:
+  u0.yaml: |
+    id: u0
+    name: u0
+    input:
+      x: !str
+    uses:
+      nxt: u1
+    nodes:
+      step:
+        kind: code
+        code: return inputs["x"]
+        input:
+          x: ${input.x}
+        output: str
+    output: ${step.output}
+  u1.yaml: |
+    id: u1
+    name: u1
+    input:
+      x: !str
+    defs:
+      c0:
+        input:
+          x: !str
+        nodes:
+          step:
+            kind: call
+            call: c1
+            input:
+              x: ${input.x}
+        output: ${step.output}
+      c1:
+        input:
+          x: !str
+        nodes:
+          step:
+            kind: code
+            code: return inputs["x"]
+            input:
+              x: ${input.x}
+            output: str
+        output: ${step.output}
+    nodes:
+      top:
+        kind: call
+        call: c0
+        input:
+          x: ${input.x}
+    output: ${top.output}
+env:
+  YIAN_MAX_CALL_NESTING: '2'
+expect:
+  load: ok

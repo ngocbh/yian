@@ -1,0 +1,28 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    s: !Verdict
+  typedefs:
+    Verdict: Literal(go, no_go)
+  nodes:
+    route:
+      kind: case
+      on: ${input.s}
+      cases:
+        - when: nogo
+          then: a
+      else: a
+    a:
+      kind: code
+      code: return 1
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'': `when: nogo` is not a tag of `on: ${input.s}` (`Literal(go, no_go)`); use one of: go, no_go'
+      frames:
+      - label: flow.yaml
+        range: [12, 15, 12, 19]

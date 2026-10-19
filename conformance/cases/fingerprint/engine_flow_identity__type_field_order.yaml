@@ -1,0 +1,23 @@
+# From tests/engine/test_flow_identity.py::test_flow_fingerprint_preserves_structural_field_order_used_by_agent_schema.
+# The order of a record type's fields is identity.
+kind: fingerprint
+flow: |
+  id: typed
+  name: typed
+  nodes:
+    body:
+      kind: tool
+      tool_id: body
+      output: {first: int, second: str}
+  output: ${body.output}
+other: |
+  id: typed
+  name: typed
+  nodes:
+    body:
+      kind: tool
+      tool_id: body
+      output: {second: str, first: int}
+  output: ${body.output}
+expect:
+  fingerprint: different

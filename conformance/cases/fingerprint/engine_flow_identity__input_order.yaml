@@ -1,0 +1,33 @@
+# From tests/engine/test_flow_identity.py::test_flow_fingerprint_preserves_start_parameter_order.
+# The order of flow inputs is identity.
+kind: fingerprint
+flow: |
+  id: params
+  name: params
+  input:
+    first: !int
+    second: !int
+  nodes:
+    body:
+      kind: tool
+      tool_id: body
+      input:
+        first: ${input.first}
+        second: ${input.second}
+  output: ${body.output}
+other: |
+  id: params
+  name: params
+  input:
+    second: !int
+    first: !int
+  nodes:
+    body:
+      kind: tool
+      tool_id: body
+      input:
+        first: ${input.first}
+        second: ${input.second}
+  output: ${body.output}
+expect:
+  fingerprint: different

@@ -1,0 +1,34 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int, note: str}
+    Hold: {action: 'Literal(hold)', note: str}
+    Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}
+    Decision: Union(Buy, Hold, Sell)
+    Text: {text: str}
+    Num: {num: int}
+    Reply: Union(Text, Num)
+  input:
+    s: !str
+  nodes:
+    d:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Decision
+      code: "return null"
+      asserts:
+        - output.qty > 0
+  output: ${d.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'd' assert: reference ${output.qty} reads field 'qty', which only union members with action buy, sell have; check the member first with `isinstance(output, <Type>) and ...`
+      frames:
+      - label: flow.yaml
+        range: [21, 9, 21, 23]

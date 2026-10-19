@@ -1,0 +1,27 @@
+# From tests/engine/test_flow_identity.py::test_flow_fingerprint_changes_with_node_kind_and_execution_source.
+# A node's kind is identity: CODE and TOOL with the same output differ.
+kind: fingerprint
+rules: [code]
+flow: |
+  id: kind
+  name: kind
+  nodes:
+    leaf:
+      kind: code
+      output: str
+      code: |
+        return "ok"
+  output: ${leaf.output}
+other: |
+  id: kind
+  name: kind
+  nodes:
+    leaf:
+      kind: tool
+      tool_id: leaf
+      output: str
+  output: ${leaf.output}
+expect:
+  fingerprint: different
+python_expect:
+  fingerprint: different

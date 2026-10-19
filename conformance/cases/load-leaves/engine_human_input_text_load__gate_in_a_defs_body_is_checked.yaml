@@ -1,0 +1,37 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    proj: !str
+  defs:
+    confirm:
+      input:
+        proj: !str
+      nodes:
+        ask:
+          kind: human_input
+          input:
+            proj: ${input.proj}
+          prompt: "${nope}"
+      output: ${ask.output}
+  nodes:
+    run:
+      kind: call
+      call: confirm
+      input:
+        proj: ${input.proj}
+  output: ${run.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        defs entry 'confirm': flow has unresolved references:
+          node 'ask' prompt: ${nope} is not a declared input
+      frames:
+      - label: flow.yaml
+        range: [7, 5, 16, 1]
+        note: definition 'confirm'
+      - label: flow.yaml
+        range: [14, 17, 14, 26]

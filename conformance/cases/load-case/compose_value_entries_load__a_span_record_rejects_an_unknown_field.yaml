@@ -1,0 +1,32 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    n: !int
+  nodes:
+    p:
+      kind: code
+      output: str
+      code: |
+        return 'hi'
+    r: !object
+      a: ${p.output}
+      b: 1
+    use:
+      kind: code
+      input:
+        c: ${r.output.c}
+      code: |
+        return inputs['c']
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'use' input 'c' from: reference ${r.output.c} reads unknown field 'c' on record
+      frames:
+      - label: flow.yaml
+        range: [17, 10, 17, 23]

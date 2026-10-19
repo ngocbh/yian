@@ -1,0 +1,32 @@
+kind: load
+flow: |2
+
+  id: loop-never-ends-two
+  name: loop_never_ends_two
+  defs:
+    body:
+      input:
+        a: !bool
+        b: !bool
+        n: !int
+      nodes: {}
+      output:
+        n: ${input.n + 1}
+  nodes:
+    wait:
+      kind: loop
+      call: body
+      input:
+        a: false
+        b: false
+        n: 0
+      until: a or b
+  output: ${wait.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''wait'': this loop can never end: `until: a or b` reads `a`, `b`, which the body never updates; return `a` or `b` from the body, or add `max:`'
+      frames:
+      - label: flow.yaml
+        range: [14, 3, 14, 7]

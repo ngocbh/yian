@@ -1,0 +1,27 @@
+# From tests/compose/test_any_name_literals.py::test_a_flow_output_under_a_credential_name_is_identity.
+# A literal flow output is identity, even under a credential-like name.
+kind: fingerprint
+flow: |
+  id: f
+  name: f
+  nodes:
+    step:
+      kind: tool
+      tool_id: step
+      output: str
+  output:
+    step: ${step.output}
+    password: hunter2
+other: |
+  id: f
+  name: f
+  nodes:
+    step:
+      kind: tool
+      tool_id: step
+      output: str
+  output:
+    step: ${step.output}
+    password: hunter3
+expect:
+  fingerprint: different

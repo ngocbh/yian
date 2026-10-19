@@ -1,0 +1,23 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    m:
+      kind: map
+      over: [1]
+      nodes:
+        keep:
+          kind: agent
+          prompt: hi
+          output: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: int}}}}}}}}}}}}}}}}}
+      output: ${keep.output}
+  output: ${m.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''keep'': this AGENT''s `output:` nests 17 levels, deeper than 16, the limit for a model''s structured reply (each record and list is a level); flatten it, or build the deeper value in a CODE node'
+      frames:
+      - label: flow.yaml
+        range: [11, 17, 11, 105]

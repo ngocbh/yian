@@ -1,0 +1,32 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input:
+    n: !Optional(int) null
+    approve: !bool false
+    label: !str none
+  nodes:
+    score:
+      kind: code
+      code: "return inputs['n']"
+      input: {n: '${input.n}'}
+      output: Optional(int)
+    gate:
+      kind: case
+      cases:
+        - when: "${score.output} > 5"
+          then: hot
+      else: cold
+    hot: {kind: code, code: "return 'hot'", output: str}
+    cold: {kind: code, code: "return 'cold'", output: str}
+  output: ${hot.output | cold.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''gate'': `when:` ''${score.output} > 5'' is not a valid boolean expression: `${...}` can''t appear inside an expression; write `score.output > 5`'
+      frames:
+      - label: flow.yaml
+        range: [17, 15, 17, 36]

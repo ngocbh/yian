@@ -1,0 +1,79 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    flip: !bool
+  nodes:
+    repeat:
+      kind: loop
+      times: 1
+      input:
+        n: 0
+        note: "start"
+        flip: ${input.flip}
+      nodes:
+          gate:
+            kind: case
+            cases:
+              - when: ${input.flip}
+                then: mk
+          mk:
+            kind: code
+            output: str
+            code: |
+              return "made"
+          bump:
+            kind: code
+            input:
+              n: ${input.n}
+            output: int
+            code: |
+              return inputs["n"] + 1n
+      output:
+        n: ${bump.output}
+        note: ${mk.output}
+  output: ${repeat.output}
+python_flow: |
+  id: f
+  name: f
+  input:
+    flip: !bool
+  nodes:
+    repeat:
+      kind: loop
+      times: 1
+      input:
+        n: 0
+        note: "start"
+        flip: ${input.flip}
+      nodes:
+          gate:
+            kind: case
+            cases:
+              - when: ${input.flip}
+                then: mk
+          mk:
+            kind: code
+            output: str
+            code: |
+              return "made"
+          bump:
+            kind: code
+            input:
+              n: ${input.n}
+            output: int
+            code: |
+              return inputs["n"] + 1
+      output:
+        n: ${bump.output}
+        note: ${mk.output}
+  output: ${repeat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''repeat'': the body returns ''note'' as Optional(str), but the carried field is typed str from its seed; declare the seed''s type: `note: !Optional(str) "start"`'
+      frames:
+      - label: flow.yaml
+        range: [11, 13, 11, 20]

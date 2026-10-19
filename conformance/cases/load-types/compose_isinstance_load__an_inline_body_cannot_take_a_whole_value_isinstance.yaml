@@ -1,0 +1,40 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', price: float}
+    Order: Union(Buy, Sell)
+    Running: Literal(running)
+  input:
+    order: !object
+  nodes:
+    d:
+      kind: code
+      input:
+        order: ${input.order}
+      output: Order
+      code: |
+        return inputs["order"]
+    c:
+      kind: call
+      input:
+        is_buy: ${isinstance(d.output, Buy)}
+      nodes:
+        e:
+          kind: code
+          input:
+            is_buy: ${input.is_buy}
+          code: |
+            return inputs["is_buy"]
+      output: ${e.output}
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'cannot infer type for inline binding ''c.input.is_buy'': a whole-value expression has no supported static scalar type; declare its type with a tag (`is_buy: !<type> ...`) or use an explicitly typed named `defs:` body'
+      frames:
+      - label: flow.yaml
+        range: [21, 15, 21, 43]

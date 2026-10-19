@@ -1,0 +1,27 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    m: !str
+    p: !str
+    t: !float
+    u: !str
+    i: !bool
+    a: !object
+    cfg: !object
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config:
+        model: call(pick)
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''llm_config.model'': a `call(...)` inside a value isn''t supported; compute it in a node and read that node''s output with `${...}`, or reword the text'
+      frames:
+      - label: flow.yaml
+        range: [16, 14, 16, 24]

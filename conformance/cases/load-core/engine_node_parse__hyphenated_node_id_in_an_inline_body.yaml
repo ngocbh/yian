@@ -1,0 +1,24 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input: {}
+  nodes:
+    outer:
+      kind: call
+      input: {}
+      nodes:
+        inner-step:
+          kind: code
+          code: "return 1"
+      output: ${inner-step.output}
+  output: ${outer.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: node id 'inner-step' must be an identifier (ASCII letters, digits, and _, not starting with a digit) so ${inner-step.output} can reference it; try 'inner_step'
+      frames:
+      - label: flow.yaml
+        range: [11, 9, 13, 5]

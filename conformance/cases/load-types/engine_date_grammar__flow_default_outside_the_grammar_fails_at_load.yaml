@@ -1,0 +1,16 @@
+# Shared: both languages add the datetime grammar hint.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    at: !datetime "20200101T000000"
+  nodes: {}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''at'': `"20200101T000000"` is not a valid datetime (datetime must look like 2026-05-21T14:30[:00][Z|+07:00])'
+      frames:
+      - label: flow.yaml
+        range: [4, 7, 4, 34]

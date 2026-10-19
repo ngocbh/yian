@@ -1,0 +1,26 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    m: !str
+    p: !str
+    t: !float
+    u: !str
+    i: !bool
+    a: !object
+    cfg: !object
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config: gpt-4
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'': llm_config must be a mapping'
+      frames:
+      - label: flow.yaml
+        range: [15, 17, 15, 22]

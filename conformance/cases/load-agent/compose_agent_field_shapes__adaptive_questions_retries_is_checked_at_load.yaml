@@ -1,0 +1,19 @@
+kind: load
+flow: |
+  id: gate
+  name: gate
+  nodes:
+    ask:
+      kind: human_input
+      adaptive_questions:
+        prompt: Ask what you need.
+        retries: -1
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''ask'' (kind=human_input): `adaptive_questions.retries:` must be a non-negative integer, got -1'
+      frames:
+      - label: flow.yaml
+        range: [7, 7, 9, 1]

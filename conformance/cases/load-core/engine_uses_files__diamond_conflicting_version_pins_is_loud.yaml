@@ -1,0 +1,99 @@
+# TS spells the versions as JSON text (rules: messages); Python's repr in python_expect.
+kind: load
+rules: [messages]
+flow: |
+  id: p
+  name: p
+  input:
+    x: !str
+  nodes:
+    a: {kind: call, call: a1, input: {x: "${input.x}"}}
+    b: {kind: call, call: a2, input: {x: "${a.output}"}}
+  output: {y: "${b.output}"}
+  uses:
+    a1: m1
+    a2: m2
+files:
+  child.yaml: |
+    id: child
+    name: child
+    version: "v1"
+    input:
+      x: !str
+    nodes:
+      a: {kind: code, code: ./fixtures/seeds.ts:one_line_summary, input: {x: "${input.x}"}}
+    output: {y: "${a.output}"}
+  m1.yaml: |
+    id: m1
+    name: m1
+    input:
+      x: !str
+    nodes:
+      a: {kind: call, call: c, input: {x: "${input.x}"}}
+    output: {y: "${a.output}"}
+    uses:
+      c: child@v1
+  m2.yaml: |
+    id: m2
+    name: m2
+    input:
+      x: !str
+    nodes:
+      a: {kind: call, call: c, input: {x: "${input.x}"}}
+    output: {y: "${a.output}"}
+    uses:
+      c: child@v2
+python_files:
+  child.yaml: |
+    id: child
+    name: child
+    version: "v1"
+    input:
+      x: !str
+    nodes:
+      a: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
+    output: {y: "${a.output}"}
+  m1.yaml: |
+    id: m1
+    name: m1
+    input:
+      x: !str
+    nodes:
+      a: {kind: call, call: c, input: {x: "${input.x}"}}
+    output: {y: "${a.output}"}
+    uses:
+      c: child@v1
+  m2.yaml: |
+    id: m2
+    name: m2
+    input:
+      x: !str
+    nodes:
+      a: {kind: call, call: c, input: {x: "${input.x}"}}
+    output: {y: "${a.output}"}
+    uses:
+      c: child@v2
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'uses: ref pinned child@v2 but the resolved file declares version: "v1" (file-per-version: name a file that declares "v2")'
+      frames:
+      - label: flow.yaml
+        range: [11, 7, 11, 9]
+        note: uses alias 'a2'
+      - label: m2.yaml
+        range: [9, 6, 9, 14]
+        note: uses alias 'c'
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'uses: ref pinned child@v2 but the resolved file declares version: ''v1'' (file-per-version: name a file that declares ''v2'')'
+      frames:
+      - label: flow.yaml
+        range: [11, 7, 11, 9]
+        note: uses alias 'a2'
+      - label: m2.yaml
+        range: [9, 6, 9, 14]
+        note: uses alias 'c'

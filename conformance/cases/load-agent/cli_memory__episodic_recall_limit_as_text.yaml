@@ -1,0 +1,19 @@
+kind: load
+flow: |
+  id: cli-memory
+  name: cli_memory
+  long_term_memory: {episodic: {type: episodic, config: {recall_limit: two}}}
+  nodes:
+    work:
+      kind: code
+      code: return 7
+      output: int
+  output: ${work.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'long_term_memory ''episodic'': episodic memory config recall_limit must be an integer or null, got "two"'
+      frames:
+      - label: flow.yaml
+        range: [3, 19, 3, 76]

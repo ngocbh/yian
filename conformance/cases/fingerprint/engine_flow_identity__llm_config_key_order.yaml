@@ -1,0 +1,53 @@
+# From tests/engine/test_flow_identity.py::test_flow_fingerprint_tracks_block_fields_but_not_key_order.
+# The key order of llm_config mappings is not identity.
+kind: fingerprint
+flow: |
+  id: blocks
+  name: blocks
+  llm_config:
+    provider: anthropic
+    anthropic:
+      max_tokens: 2048
+      output_config:
+        effort: low
+    openai:
+      reasoning:
+        effort: high
+  nodes:
+    ask:
+      kind: agent
+      prompt: Answer briefly.
+      output: str
+      llm_config:
+        anthropic:
+          max_tokens: 512
+          thinking:
+            type: enabled
+            budget_tokens: 1024
+  output: ${ask.output}
+other: |
+  id: blocks
+  name: blocks
+  llm_config:
+    provider: anthropic
+    openai:
+      reasoning:
+        effort: high
+    anthropic:
+      output_config:
+        effort: low
+      max_tokens: 2048
+  nodes:
+    ask:
+      kind: agent
+      prompt: Answer briefly.
+      output: str
+      llm_config:
+        anthropic:
+          max_tokens: 512
+          thinking:
+            budget_tokens: 1024
+            type: enabled
+  output: ${ask.output}
+expect:
+  fingerprint: same

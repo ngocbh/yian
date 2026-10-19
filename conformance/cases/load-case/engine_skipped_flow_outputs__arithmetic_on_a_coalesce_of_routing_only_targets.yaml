@@ -1,0 +1,35 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    approve: !bool
+    other: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: a
+        - when: ${input.other}
+          then: b
+    a:
+      kind: code
+      output: int
+      code: |
+        return 1
+    b:
+      kind: code
+      output: int
+      code: |
+        return 2
+  output:
+    v: ${(a.output | b.output) + 1}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'output ''v'': ${(a.output | b.output) + 1} does arithmetic on (a.output | b.output), which is null when nodes ''a'' and ''b'' are skipped; give it a default with :-, e.g. ((a.output | b.output) :- <default>)'
+      frames:
+      - label: flow.yaml
+        range: [25, 6, 25, 34]

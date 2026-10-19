@@ -1,0 +1,47 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    d:
+      env:
+        K: &a [*a]
+      nodes:
+        keep:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:echo
+          input:
+            topic: x
+      output: ${keep.output}
+  nodes:
+    use:
+      kind: call
+      call: d
+  output: ${use.output}
+python_flow: |
+  id: f
+  name: f
+  defs:
+    d:
+      env:
+        K: &a [*a]
+      nodes:
+        keep:
+          kind: code
+          code: tests.engine._compose_codefns:echo
+          input:
+            topic: x
+      output: ${keep.output}
+  nodes:
+    use:
+      kind: call
+      call: d
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''d'': env ''K'' at [0]: cannot descend through a recursive alias occurrence'
+      frames:
+      - label: flow.yaml
+        range: [6, 10, 6, 17]

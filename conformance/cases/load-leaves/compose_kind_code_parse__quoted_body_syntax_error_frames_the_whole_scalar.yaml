@@ -1,0 +1,21 @@
+# `return (` is a syntax error in Python and TS, so this CODE case is shared and carries no rule;
+# a non-literal `code:` scalar puts the frame on the whole scalar (seed_e30 frames a block line).
+kind: load
+flow: |
+  id: syntax-fallback
+  name: syntax-fallback
+  nodes:
+    broken:
+      kind: code
+      output: string
+      code: "return (\n"
+  output: ${broken.output}
+expect:
+  load:
+    diagnostics:
+    # No `message`: it is the language runtime's syntax-error text, which yian doesn't write.
+    - code: compose.load
+      # The whole quoted `code:` scalar on line 7.
+      frames:
+      - label: flow.yaml
+        range: [7, 11, 7, 23]

@@ -1,0 +1,26 @@
+kind: load
+flow: |
+  id: wait_refs
+  name: wait_refs
+  input:
+    deadline: !datetime
+  nodes:
+    clock:
+      kind: code
+      output: datetime
+      code: |
+        return "2026-01-01T00:00:00Z"
+    settle:
+      kind: wait
+      until: ${item}
+  output: ${settle.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'settle' wait until: reference ${item} uses unknown namespace 'item'
+      frames:
+      - label: flow.yaml
+        range: [13, 12, 13, 19]

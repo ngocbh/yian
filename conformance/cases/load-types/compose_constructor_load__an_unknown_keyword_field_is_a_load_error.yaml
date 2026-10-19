@@ -1,0 +1,36 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: Literal(buy), conviction: float}
+    Sell: {action: Literal(sell), price: float}
+    Decision: Union(Buy, Sell)
+    Size: Literal(s, m, l)
+  input:
+    order: !object
+  nodes:
+    d:
+      kind: code
+      input:
+        order: ${input.order}
+      output: object
+      code: |
+        return inputs["order"]
+    c:
+      kind: code
+      input:
+        x: ${Buy(action="buy", conviction=1, size="m")}
+      code: |
+        return inputs["x"]
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has constructor calls that can never succeed:
+          node 'c' input 'x' from: Buy has no field 'size' (fields: action, conviction)
+      frames:
+      - label: flow.yaml
+        range: [21, 10, 21, 54]

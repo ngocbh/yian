@@ -1,0 +1,50 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input:
+    s: !str
+
+  defs:
+    inner:
+      input:
+        z: !str
+      nodes:
+        x:
+          kind: code
+          code: "return inputs['z']"
+          input:
+            z: ${input.z}
+          output: str
+      output: ${x.output}
+    child:
+      input:
+        y: !str
+      nodes:
+        x:
+          kind: code
+          code: "return inputs['y']"
+          input:
+            y: ${input.y}
+          output: str
+      output: ${x.output}
+
+  nodes:
+    n:
+      kind: code
+      code: "return inputs['a']"
+      input:
+        a: call(child, y=call(inner, z=${nosuch.output}))
+      output: str
+  output: ${n.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'n' input 'a' call(inner) argument 'z' from: reference ${nosuch.output} uses unknown namespace 'nosuch'
+      frames:
+      - label: flow.yaml
+        range: [36, 10, 36, 56]

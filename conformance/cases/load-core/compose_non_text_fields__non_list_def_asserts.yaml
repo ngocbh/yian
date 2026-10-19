@@ -1,0 +1,26 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    b:
+      nodes:
+        c:
+          kind: code
+          output: int
+          code: return 1
+      output: ${c.output}
+      asserts: output > 0
+  nodes:
+    a:
+      kind: call
+      call: b
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''b'': `asserts:` must be a list of strings'
+      frames:
+      - label: flow.yaml
+        range: [11, 14, 11, 24]

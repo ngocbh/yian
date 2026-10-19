@@ -1,0 +1,31 @@
+# From tests/engine/test_flow_identity.py::test_flow_fingerprint_changes_with_wiring_types_asserts_and_env.
+# A node's output type is identity.
+kind: fingerprint
+flow: |
+  id: stable
+  name: stable
+  input:
+    x: !int
+  nodes:
+    step:
+      kind: tool
+      tool_id: step
+      input:
+        x: ${input.x}
+      output: int
+  output: ${step.output}
+other: |
+  id: stable
+  name: stable
+  input:
+    x: !int
+  nodes:
+    step:
+      kind: tool
+      tool_id: step
+      input:
+        x: ${input.x}
+      output: float
+  output: ${step.output}
+expect:
+  fingerprint: different

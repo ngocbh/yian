@@ -1,0 +1,63 @@
+kind: load
+flow: |2
+
+  id: nested_buy
+  name: nested_buy
+  typedefs:
+    Buy:
+      action: Literal(buy)
+      conviction: float
+    Order:
+      decision: Buy
+      qty: int
+  nodes:
+    score:
+      kind: code
+      output: float
+      code: |
+        return 0.5
+    c:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo_x
+      input:
+        x: ${score.output}
+        p: !Order
+          qty: 1
+          decision:
+            conviction: ${score.output}
+  output: ${c.output}
+python_flow: |2
+
+  id: nested_buy
+  name: nested_buy
+  typedefs:
+    Buy:
+      action: Literal(buy)
+      conviction: float
+    Order:
+      decision: Buy
+      qty: int
+  nodes:
+    score:
+      kind: code
+      output: float
+      code: |
+        return 0.5
+    c:
+      kind: code
+      code: tests.engine._compose_codefns:echo_x
+      input:
+        x: ${score.output}
+        p: !Order
+          qty: 1
+          decision:
+            conviction: ${score.output}
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''c'' input ''p'': declared Order, but the value is {"decision":{"conviction":float},"qty":1} (missing required `action` at `p.decision`)'
+      frames:
+      - label: flow.yaml
+        range: [22, 10, 26, 1]

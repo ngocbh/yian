@@ -1,0 +1,16 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    sub:
+      input: {m: !str , cfg: !object }
+      llm_config: !object ${input.cfg}
+      nodes:
+        a: {kind: agent, prompt: Go.}
+      output: ${a.output}
+  nodes:
+    s: {kind: call, call: sub, input: {m: x, cfg: {}}}
+  output: ${s.output}
+expect:
+  load: ok

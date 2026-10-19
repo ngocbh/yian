@@ -1,0 +1,29 @@
+# The frames sit on def lines (flow structure), not CODE text: shared.
+kind: load
+flow: |
+  id: invalid-def-default
+  name: invalid_def_default
+  defs:
+    child:
+      kind: code
+      code: |
+        return inputs["value"]
+      input:
+        value: !int null
+      output: int
+  nodes:
+    go:
+      kind: call
+      call: child
+  output: ${go.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''child'': ''value'': `null` is not a valid int'
+      frames:
+      - label: flow.yaml
+        range: [5, 5, 11, 1]
+        note: definition 'child'
+      - label: flow.yaml
+        range: [9, 14, 9, 23]

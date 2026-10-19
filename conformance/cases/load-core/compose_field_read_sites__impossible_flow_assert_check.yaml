@@ -1,0 +1,48 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: "return ({a: \"x\"})"
+    route:
+      kind: case
+      cases:
+        - when: "input.s == 'go'"
+          then: d
+      else: e
+    d:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Order
+      code: "return null"
+    e:
+      kind: code
+      input:
+        s: ${input.s}
+      code: return 1
+  output: ${step.output}
+  asserts:
+    - "isinstance(d.output, Buy) and isinstance(d.output, Sell)"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'assert ''isinstance(d.output, Buy) and isinstance(d.output, Sell)'': `isinstance(d.output, Sell)` can never be true here: d.output is Buy, by the checks before it'
+      frames:
+      - label: flow.yaml
+        range: [38, 5, 38, 63]

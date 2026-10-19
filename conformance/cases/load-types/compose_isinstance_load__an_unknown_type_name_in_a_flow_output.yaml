@@ -1,0 +1,30 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', price: float}
+    Order: Union(Buy, Sell)
+    Running: Literal(running)
+  input:
+    order: !object
+  nodes:
+    d:
+      kind: code
+      input:
+        order: ${input.order}
+      output: Order
+      code: |
+        return inputs["order"]
+  output:
+    order: ${d.output}
+    is_buy: ${isinstance(d.output, Bye)}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'flow output ''is_buy'': unknown type ''Bye''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object'
+      frames:
+      - label: flow.yaml
+        range: [20, 11, 20, 39]

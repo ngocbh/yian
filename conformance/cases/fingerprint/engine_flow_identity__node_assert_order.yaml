@@ -1,0 +1,37 @@
+# From tests/engine/test_flow_identity.py::test_flow_fingerprint_changes_with_wiring_types_asserts_and_env.
+# The order of a node's asserts is identity.
+kind: fingerprint
+flow: |
+  id: common
+  name: common
+  input:
+    x: !int
+  nodes:
+    body:
+      kind: tool
+      tool_id: body
+      input:
+        x: ${input.x}
+      output: int
+      asserts:
+        - x >= 0
+        - x < 100
+  output: ${body.output}
+other: |
+  id: common
+  name: common
+  input:
+    x: !int
+  nodes:
+    body:
+      kind: tool
+      tool_id: body
+      input:
+        x: ${input.x}
+      output: int
+      asserts:
+        - x < 100
+        - x >= 0
+  output: ${body.output}
+expect:
+  fingerprint: different

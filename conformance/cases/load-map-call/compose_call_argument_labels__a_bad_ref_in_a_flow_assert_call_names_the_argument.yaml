@@ -1,0 +1,32 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  defs:
+    check:
+      input:
+        y: !str
+      nodes:
+        x:
+          kind: code
+          code: "return true"
+          input:
+            y: ${input.y}
+          output: bool
+      output: ${x.output}
+  nodes:
+    n: {kind: code, code: "return 'a'", output: str}
+  output: ${n.output}
+  asserts:
+    - call(check, y=${nosuch.output})
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          flow assert 'call(check, y=${nosuch.output})' call(check) argument 'y' from: reference ${nosuch.output} uses unknown namespace 'nosuch'
+      frames:
+      - label: flow.yaml
+        range: [20, 5, 20, 36]

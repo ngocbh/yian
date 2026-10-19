@@ -1,0 +1,18 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    n:
+      kind: tool
+      tool_id: place_order
+      output: !str
+  output: ${n.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '`output:` declares a type; write `output: str`, without a tag'
+      frames:
+      - label: flow.yaml
+        range: [7, 13, 7, 17]

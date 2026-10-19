@@ -1,0 +1,36 @@
+# TS spells the node list as JSON text (rules: messages); Python's repr in python_expect.
+kind: load
+rules: [messages]
+flow: |
+  id: f
+  name: f
+  input: {m: !str , n: !Optional(str) }
+  llm_config: {model: '${pick.output}'}
+  nodes:
+    pick:
+      kind: agent
+      prompt: Pick a model.
+      output: str
+      llm_config: {model: '${input.n}'}
+    chat:
+      kind: agent
+      prompt: Go.
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'flow has a cycle involving ["pick"]; flows must be acyclic'
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 7]
+      notes: [pick depends on pick (pick.input.__llm_config/flow/model)]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: flow has a cycle involving ['pick']; flows must be acyclic
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 7]
+      notes: [pick depends on pick (pick.input.__llm_config/flow/model)]

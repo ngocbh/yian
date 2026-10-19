@@ -1,0 +1,26 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    m: !str
+    p: !str
+    t: !float
+    u: !str
+    i: !bool
+    a: !object
+    cfg: !object
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config: !object {model: '${input.m}'}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'': llm_config: a tag on the whole mapping types nothing; tag a field''s value, or write the whole record as one value: `llm_config: !T ${...}`'
+      frames:
+      - label: flow.yaml
+        range: [15, 17, 15, 46]

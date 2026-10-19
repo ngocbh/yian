@@ -1,0 +1,73 @@
+kind: load
+flow: |2
+
+  id: cv_bad
+  name: cv_bad
+  input:
+    seed: !float
+  nodes:
+    s:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:score
+      input:
+        seed: ${input.seed}
+      output: float
+    gate:
+      kind: case
+      cases:
+        - when: "s.output >= 0.5"
+          then: a
+      else: b
+    a:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        seed: ${input.seed}
+      output: float
+    b:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        seed: ${input.seed}
+      output: float
+  output: ${gate.output | s.output}
+python_flow: |2
+
+  id: cv_bad
+  name: cv_bad
+  input:
+    seed: !float
+  nodes:
+    s:
+      kind: code
+      code: tests.engine._compose_codefns:score
+      input:
+        seed: ${input.seed}
+      output: float
+    gate:
+      kind: case
+      cases:
+        - when: "s.output >= 0.5"
+          then: a
+      else: b
+    a:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        seed: ${input.seed}
+      output: float
+    b:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        seed: ${input.seed}
+      output: float
+  output: ${gate.output | s.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'flow outputs: ${gate.output} — a case value can''t be read in a coalesce operand, a default, an expression, a condition, or an assert; read it as a whole binding or inside text'
+      frames:
+      - label: flow.yaml
+        range: [31, 9, 31, 34]

@@ -1,0 +1,43 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    A:
+      b: Optional(str)
+      m: Literal(p, q)
+  input:
+    a: !Optional(A)
+  nodes:
+    route:
+      kind: case
+      cases:
+        - when: "input.a == null"
+          then: inner
+      else: e
+    inner:
+      kind: case
+      on: ${input.a.m}
+      cases:
+        - when: p
+          then: np
+        - when: q
+          then: nq
+    np:
+      kind: code
+      code: return 1
+    nq:
+      kind: code
+      code: return 2
+    e:
+      kind: code
+      code: return 3
+  output: ${route.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''inner'' produces a value, so it must be exhaustive: add an `else:` (${input.a.m} may be null)'
+      frames:
+      - label: flow.yaml
+        range: [16, 3, 16, 8]

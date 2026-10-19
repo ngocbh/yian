@@ -1,0 +1,18 @@
+kind: load
+flow: |
+  id: shapes
+  name: shapes
+  nodes:
+    a:
+      kind: agent
+      prompt: Help the user.
+      retries: -1
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'' (kind=agent): `retries:` must be a non-negative integer, got -1'
+      frames:
+      - label: flow.yaml
+        range: [7, 14, 7, 16]

@@ -1,0 +1,51 @@
+kind: load
+flow: |
+  id: inline-closed-scope
+  name: inline_closed_scope
+  nodes:
+    parent:
+      kind: code
+      code: |
+        return 'parent'
+      output: str
+    wrapper:
+      kind: call
+      nodes:
+        leak:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:echo_x
+          input:
+            x: ${parent.output}
+          output: str
+      output: ${leak.output}
+  output: ${wrapper.output}
+python_flow: |
+  id: inline-closed-scope
+  name: inline_closed_scope
+  nodes:
+    parent:
+      kind: code
+      code: |
+        return 'parent'
+      output: str
+    wrapper:
+      kind: call
+      nodes:
+        leak:
+          kind: code
+          code: tests.engine._compose_codefns:echo_x
+          input:
+            x: ${parent.output}
+          output: str
+      output: ${leak.output}
+  output: ${wrapper.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'leak' input 'x' from: reference ${parent.output} uses unknown namespace 'parent'
+      frames:
+      - label: flow.yaml
+        range: [16, 14, 16, 30]

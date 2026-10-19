@@ -1,0 +1,38 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    A: {b: Optional(str)}
+  input:
+    a: !A
+  nodes:
+    route:
+      kind: case
+      cases:
+        - when: "input.a.b == null"
+          then: call(need, v=${input.a.b})
+      else: e
+    e:
+      kind: code
+      code: return 1
+  output: ${route.output}
+  defs:
+    need:
+      input:
+        v: !str
+      nodes:
+        p:
+          kind: code
+          input:
+            o: ${input.v}
+          code: return 1
+      output: ${p.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: node 'route' cases[0].then call(need) argument 'v' — child expects 'str', source is 'Optional(str)'
+      frames:
+      - label: flow.yaml
+        range: [12, 15, 12, 41]

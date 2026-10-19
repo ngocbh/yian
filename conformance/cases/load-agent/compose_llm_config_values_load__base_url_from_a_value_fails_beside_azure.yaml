@@ -1,0 +1,29 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    m: !str
+    p: !str
+    t: !float
+    u: !str
+    i: !bool
+    a: !object
+    cfg: !object
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config:
+        provider: azure
+        model: m
+        base_url: ${input.u}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'': llm_config.base_url can''t come from a value: it decides where the key is sent, which stays with the host or `yian auth`; write the Azure resource endpoint as literal text'
+      frames:
+      - label: flow.yaml
+        range: [18, 17, 18, 27]

@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    BadProvider: Literal(nope, other)
+  input:
+    p: !BadProvider
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {provider: '${input.p}'}
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''chat'' llm_config.provider: none of nope, other is a known provider; known providers are openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
+      frames:
+      - label: flow.yaml
+        range: [11, 28, 11, 40]

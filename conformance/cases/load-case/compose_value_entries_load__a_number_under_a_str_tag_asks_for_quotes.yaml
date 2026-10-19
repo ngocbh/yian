@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    t: !str
+  nodes:
+    s:
+      kind: code
+      output: float
+      code: |
+        return 0.5
+    x: !str 30
+  output: ${x.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''x'': `30` is not a valid str; quote it to keep it as text: `x: !str "30"`'
+      frames:
+      - label: flow.yaml
+        range: [11, 6, 11, 13]

@@ -1,0 +1,19 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  nodes:
+    n:
+      kind: code
+      input:
+        x: !Any null
+      code: return inputs['x']
+  output: ${n.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''x'': `null` is not a valid Any; to allow null, write `x: !Optional(Any) null`'
+      frames:
+      - label: flow.yaml
+        range: [7, 10, 7, 19]

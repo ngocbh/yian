@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    R: {a: str}
+  input:
+    s: !str
+    r: !R
+    tags: !list(str)
+    o: !object
+    d: !file
+  nodes:
+    step:
+      kind: code
+      input:
+        v: ${input.d.uri}
+      output: str
+      code: return 'x'
+  output: ${step.output}
+expect:
+  load: ok

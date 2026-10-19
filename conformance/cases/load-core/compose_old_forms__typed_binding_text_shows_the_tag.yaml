@@ -1,0 +1,31 @@
+kind: load
+flow: |
+  id: old_bindings
+  name: old_bindings
+  typedefs:
+    Buy: {action: Literal(buy)}
+    Sell: {action: Literal(sell)}
+  input:
+    n: !int
+  nodes:
+    size:
+      kind: code
+      code: "return {'qty': inputs['n']}"
+      input:
+        n: ${input.n}
+      output: {qty: int}
+    use:
+      kind: code
+      code: return inputs['n']
+      input:
+        n: int = 5
+      output: str
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'binding ''n'': write the type as a tag: `n: !int 5`. If you meant the text, quote it: `n: "int = 5"`'
+      frames:
+      - label: flow.yaml
+        range: [19, 10, 19, 17]

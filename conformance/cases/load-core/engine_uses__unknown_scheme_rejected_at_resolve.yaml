@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    a: {kind: call, call: m, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+  uses:
+    m: git:q/f@1
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'callable ''m'' (uses: ''git:q/f@1''): unknown scheme ''git'': (recognized: a local ref, or hub:)'
+      frames:
+      - label: flow.yaml
+        range: [9, 6, 9, 15]
+        note: uses alias 'm'

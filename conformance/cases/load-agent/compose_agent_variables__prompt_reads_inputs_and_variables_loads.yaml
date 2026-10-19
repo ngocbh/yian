@@ -1,0 +1,19 @@
+kind: load
+flow: |
+  id: local-variables
+  name: local-variables
+  typedefs:
+    Tone: Literal(concise, detailed)
+  nodes:
+    writer:
+      kind: agent
+      input:
+        topic: supplied
+      variables:
+        tone: !Tone concise
+        instruction: !str ${missing.output}
+      prompt: "${topic}: ${tone}, ${instruction}"
+      output: str
+  output: ${writer.output}
+expect:
+  load: ok

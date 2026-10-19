@@ -1,0 +1,24 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input: {proj: !str }
+  nodes:
+    ask:
+      kind: human_input
+      input: {proj: '${input.proj}'}
+      prompt: "${a}"
+      adaptive_questions:
+        prompt: "${b}"
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'ask' adaptive_questions.prompt: ${b} is not a declared input or variable
+          node 'ask' prompt: ${a} is not a declared input
+      frames:
+      - label: flow.yaml
+        range: [10, 15, 10, 21]

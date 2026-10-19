@@ -1,0 +1,25 @@
+# From tests/engine/test_flow_identity.py::test_env_literals_are_identity.
+# A flow env literal is identity.
+kind: fingerprint
+flow: |
+  id: literal-env
+  name: literal_env
+  env:
+    token: "first-value"
+  nodes:
+    step:
+      kind: tool
+      tool_id: step
+  output: ${step.output}
+other: |
+  id: literal-env
+  name: literal_env
+  env:
+    token: "second-value"
+  nodes:
+    step:
+      kind: tool
+      tool_id: step
+  output: ${step.output}
+expect:
+  fingerprint: different

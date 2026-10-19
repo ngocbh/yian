@@ -1,0 +1,23 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    f: !file
+  nodes:
+    b:
+      kind: call
+      input:
+        s: ${input.f.urii}
+      nodes:
+        k: {kind: code, input: {s: "${input.s}"}, code: "return inputs['s']"}
+      output: ${k.output}
+  output: ${b.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'cannot infer type for inline binding ''b.input.s'': reference ${input.f.urii} reads field ''urii'' on a file, which has only uri, mime, and name; declare its type with a tag (`s: !<type> ...`) or use an explicitly typed named `defs:` body'
+      frames:
+      - label: flow.yaml
+        range: [9, 10, 9, 25]

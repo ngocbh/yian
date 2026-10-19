@@ -1,0 +1,56 @@
+# TS writes the value in compact text form, [true,"no"], and quotes the element as JSON text, "no"
+# (rules: messages); Python's shown_literal text [true, "no"] and repr 'no' in python_expect.
+kind: load
+rules: [messages]
+flow: |
+  id: p
+  name: p
+  input:
+    m: !Optional(str)
+    n: !Optional(int)
+    s: !str
+    xs: !list(int)
+    ds: !list(str)
+    rs: !list(R)
+    os: !list(Optional(str))
+    d: !Optional(date)
+  typedefs:
+    R:
+      a: int
+    AB: Literal(a, b)
+  defs:
+    child:
+      input:
+        t: !list(bool)
+      nodes:
+        n:
+          kind: code
+          input:
+            t: ${input.t}
+          output: str
+          code: "return String(inputs[\"t\"])"
+      output: ${n.output}
+  nodes:
+    c:
+      kind: call
+
+      call: child
+      input:
+        t: [true, no]
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'call node ''c'': binding ''t'' — child expects ''list(bool)'', but the value [true,"no"] does not fit ("no" does not match declared type bool)'
+      frames:
+      - label: flow.yaml
+        range: [34, 7, 35, 1]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'call node ''c'': binding ''t'' — child expects ''list(bool)'', but the value [true, "no"] does not fit (''no'' does not match declared type bool)'
+      frames:
+      - label: flow.yaml
+        range: [34, 7, 35, 1]

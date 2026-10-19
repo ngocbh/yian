@@ -1,0 +1,25 @@
+# From tests/engine/test_flow_identity.py::test_node_input_literals_are_identity.
+# A node input literal is identity, even a URL query value.
+kind: fingerprint
+flow: |
+  id: literal-input
+  name: literal_input
+  nodes:
+    step:
+      kind: tool
+      tool_id: step
+      input:
+        url: "https://example.com/search?key=apples"
+  output: ${step.output}
+other: |
+  id: literal-input
+  name: literal_input
+  nodes:
+    step:
+      kind: tool
+      tool_id: step
+      input:
+        url: "https://example.com/search?key=pears"
+  output: ${step.output}
+expect:
+  fingerprint: different

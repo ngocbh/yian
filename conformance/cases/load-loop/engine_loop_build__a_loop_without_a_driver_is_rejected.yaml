@@ -1,0 +1,67 @@
+kind: load
+flow: |2
+
+  id: loop-good
+  name: loop_good
+  defs:
+    bump:
+      input:
+        n: !int
+        exited: !bool
+      nodes:
+        step:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:make_report
+          input:
+            n: ${input.n}
+            exited: ${input.exited}
+          output:
+            n: int
+            exited: bool
+      output: ${step.output}
+  nodes:
+    chat_loop:
+      kind: loop
+      call: bump
+      input:
+        n: 0
+        exited: false
+      max: 5
+  output: ${chat_loop.output}
+python_flow: |2
+
+  id: loop-good
+  name: loop_good
+  defs:
+    bump:
+      input:
+        n: !int
+        exited: !bool
+      nodes:
+        step:
+          kind: code
+          code: tests.engine._compose_codefns:make_report
+          input:
+            n: ${input.n}
+            exited: ${input.exited}
+          output:
+            n: int
+            exited: bool
+      output: ${step.output}
+  nodes:
+    chat_loop:
+      kind: loop
+      call: bump
+      input:
+        n: 0
+        exited: false
+      max: 5
+  output: ${chat_loop.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''chat_loop'': exactly one of while:/until:/times: is required (got [])'
+      frames:
+      - label: flow.yaml
+        range: [21, 3, 21, 12]

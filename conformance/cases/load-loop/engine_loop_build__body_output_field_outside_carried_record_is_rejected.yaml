@@ -1,0 +1,41 @@
+# TS spells the lists as JSON text (rules: messages); Python's reprs in python_expect.
+kind: load
+rules: [messages]
+flow: |2
+
+  id: loop-outside-carried
+  name: loop_outside_carried
+  defs:
+    bump:
+      input:
+        n: !int
+      nodes: {}
+      output:
+        n: ${input.n}
+        extra: ${input.n}
+  nodes:
+    chat_loop:
+      kind: loop
+      call: bump
+      input:
+        n: 0
+        exited: false
+      while: not exited
+      max: 5
+  output: ${chat_loop.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''chat_loop'': body output field(s) ["extra"] are not carried record fields ["exited","n"] (a body returns a subset of the carried record)'
+      frames:
+      - label: flow.yaml
+        range: [13, 3, 13, 12]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''chat_loop'': body output field(s) [''extra''] are not carried record fields [''exited'', ''n''] (a body returns a subset of the carried record)'
+      frames:
+      - label: flow.yaml
+        range: [13, 3, 13, 12]

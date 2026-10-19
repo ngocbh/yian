@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: old_variables
+  name: old_variables
+  nodes:
+    ask:
+      kind: agent
+      prompt: Count to ${n}.
+      variables:
+        n: int = 4
+      output: str
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'variable ''n'': write the type as a tag: `n: !int 4`'
+      frames:
+      - label: flow.yaml
+        range: [8, 10, 8, 17]

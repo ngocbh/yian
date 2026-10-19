@@ -1,0 +1,69 @@
+kind: load
+flow: |2
+
+  id: downstream-loop
+  name: downstream_loop
+  defs:
+    bump:
+      input:
+        n: !Any
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output: int
+          code: |
+            return inputs["n"] + 1n
+      output:
+        n: ${step.output}
+  nodes:
+    opaque:
+      kind: code
+      code: |
+        return 1
+    loop:
+      kind: loop
+      times: 2
+      input:
+        n: !str ${opaque.output}
+      call: bump
+  output: ${loop.output}
+python_flow: |2
+
+  id: downstream-loop
+  name: downstream_loop
+  defs:
+    bump:
+      input:
+        n: !Any
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output: int
+          code: |
+            return inputs["n"] + 1
+      output:
+        n: ${step.output}
+  nodes:
+    opaque:
+      kind: code
+      code: |
+        return 1
+    loop:
+      kind: loop
+      times: 2
+      input:
+        n: !str ${opaque.output}
+      call: bump
+  output: ${loop.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''loop'': carried field ''n'' — body output is ''int'', carried source is ''str'' (a returned field must keep its carried type)'
+      frames:
+      - label: flow.yaml
+        range: [27, 7, 28, 5]

@@ -1,0 +1,17 @@
+kind: load
+flow: |
+  id: rank
+  name: rank
+  input:
+    topic: !str
+  output: float
+  kind: model
+  model_id: x
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'compact (single-node) flow: kind ''model'' was removed; serve the model behind a host tool and call it with kind: tool (set tool_id: and input:)'
+      frames:
+      - label: flow.yaml
+        range: [6, 7, 6, 12]

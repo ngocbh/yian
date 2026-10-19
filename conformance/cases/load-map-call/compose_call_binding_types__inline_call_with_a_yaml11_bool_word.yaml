@@ -1,0 +1,44 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    m: !Optional(str)
+    n: !Optional(int)
+    s: !str
+    xs: !list(int)
+    ds: !list(str)
+    rs: !list(R)
+    os: !list(Optional(str))
+    d: !Optional(date)
+  typedefs:
+    R:
+      a: int
+    AB: Literal(a, b)
+  defs:
+    child:
+      input:
+        t: !bool
+      nodes:
+        n:
+          kind: code
+          input:
+            t: ${input.t}
+          output: str
+          code: "return String(inputs[\"t\"])"
+      output: ${n.output}
+  nodes:
+    c:
+      kind: code
+      input:
+        x: call(child, t=yes)
+      code: return 1
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: node 'c' input 'x' call(child) argument 't' — child expects 'bool', but the value "yes" does not fit; `yes` is text; write `true`
+      frames:
+      - label: flow.yaml
+        range: [32, 10, 32, 28]

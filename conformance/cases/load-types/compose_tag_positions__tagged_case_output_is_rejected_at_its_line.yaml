@@ -1,0 +1,29 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    score: !str
+  nodes:
+    route:
+      kind: case
+      on: ${input.score}
+      cases:
+        - when: high
+          then: one
+      else: one
+      output: !int
+    one:
+      kind: code
+      code: |
+        return 1
+      output: int
+  output: ${route.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'': a `case` routes and has no `output:`; tag its result where you read it, e.g. `x: !int ${route.output}`'
+      frames:
+      - label: flow.yaml
+        range: [13, 5, 13, 11]

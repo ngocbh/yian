@@ -1,0 +1,30 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    m: !str
+    p: !str
+    t: !float
+    u: !str
+    i: !bool
+    a: !object
+    cfg: !object
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config:
+        provider: anthropic
+        anthropic:
+          temperature: ${input.t}
+          max_tokns: 100
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'': llm_config: `anthropic.max_tokns` is not a supported field of the Anthropic Messages API request; allowed: cache_control, inference_geo, max_tokens, metadata, output_config, service_tier, stop_sequences, temperature, thinking, top_k, top_p'
+      frames:
+      - label: flow.yaml
+        range: [19, 20, 19, 23]

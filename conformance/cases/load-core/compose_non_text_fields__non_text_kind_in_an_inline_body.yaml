@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    a:
+      kind: call
+      nodes:
+        echo:
+          kind: [a]
+          output: str
+          code: "return 'x'"
+      output: ${echo.output}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''echo'': `kind:` must be text, but YAML read it as a list; write one of agent, call, case, code, human_input, loop, map, tool, wait'
+      frames:
+      - label: flow.yaml
+        range: [8, 15, 8, 18]

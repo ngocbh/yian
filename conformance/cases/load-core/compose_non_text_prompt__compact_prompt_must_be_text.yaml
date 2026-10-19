@@ -1,0 +1,17 @@
+kind: load
+flow: |
+  id: reply
+  name: reply
+  input:
+    proj: !str
+  output: str
+  kind: human_input
+  prompt: 5
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''reply'' (kind=human_input): `prompt:` must be text, but YAML read it as an integer; put it in quotes'
+      frames:
+      - label: flow.yaml
+        range: [7, 9, 7, 10]

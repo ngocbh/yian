@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    WithInherit: {model: str, inherit: bool}
+  input:
+    cfg: !WithInherit
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: ${input.cfg}
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''chat'' llm_config: its type declares `inherit`, which decides which layers apply before any value is known; write it as true or false in the agent''s own llm_config'
+      frames:
+      - label: flow.yaml
+        range: [11, 17, 11, 29]

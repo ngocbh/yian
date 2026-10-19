@@ -1,0 +1,62 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', price: float}
+    Order: Union(Buy, Sell)
+    Running: Literal(running)
+  input:
+    order: !object
+  defs:
+    classify:
+      input:
+        order: !object
+      nodes:
+        inner:
+          kind: code
+          input:
+            is_sell: ${isinstance(input.order, Sell)}
+          code: |
+            return inputs["is_sell"]
+      output: ${inner.output}
+  nodes:
+    named:
+      kind: call
+      call: classify
+      asserts:
+        - isinstance(output, bool)
+      input:
+        order: ${input.order}
+    inline:
+      kind: call
+      input:
+        order: ${input.order}
+      nodes:
+        outer:
+          kind: call
+          input:
+            order: ${input.order}
+          nodes:
+            inner:
+              kind: code
+              input:
+                is_buy: ${isinstance(input.order, Buy)}
+              code: |
+                return inputs["is_buy"]
+          output: ${inner.output}
+      output: ${outer.output}
+  output:
+    sell: ${named.output}
+    buy: ${inline.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'named' assert 'isinstance(output, bool)': isinstance in a call node's asserts is not supported; assert inside the child flow
+      frames:
+      - label: flow.yaml
+        range: [27, 9, 27, 33]

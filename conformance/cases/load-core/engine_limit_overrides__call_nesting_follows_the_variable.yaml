@@ -1,0 +1,99 @@
+kind: load
+flow: |
+  id: chain3
+  name: chain3
+  input:
+    x: !str
+  defs:
+    c0:
+      input:
+        x: !str
+      nodes:
+        step:
+          kind: call
+          call: c1
+          input:
+            x: ${input.x}
+      output: ${step.output}
+    c1:
+      input:
+        x: !str
+      nodes:
+        step:
+          kind: call
+          call: c2
+          input:
+            x: ${input.x}
+      output: ${step.output}
+    c2:
+      input:
+        x: !str
+      nodes:
+        step:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:echo
+          input:
+            topic: ${input.x}
+          output: str
+      output: ${step.output}
+  nodes:
+    top:
+      kind: call
+      call: c0
+      input:
+        x: ${input.x}
+  output: ${top.output}
+python_flow: |
+  id: chain3
+  name: chain3
+  input:
+    x: !str
+  defs:
+    c0:
+      input:
+        x: !str
+      nodes:
+        step:
+          kind: call
+          call: c1
+          input:
+            x: ${input.x}
+      output: ${step.output}
+    c1:
+      input:
+        x: !str
+      nodes:
+        step:
+          kind: call
+          call: c2
+          input:
+            x: ${input.x}
+      output: ${step.output}
+    c2:
+      input:
+        x: !str
+      nodes:
+        step:
+          kind: code
+          code: tests.engine._compose_codefns:echo
+          input:
+            topic: ${input.x}
+          output: str
+      output: ${step.output}
+  nodes:
+    top:
+      kind: call
+      call: c0
+      input:
+        x: ${input.x}
+  output: ${top.output}
+env:
+  YIAN_MAX_CALL_NESTING: '2'
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'call node ''top'': calling callable ''c0'' nests calls 3 levels deep, past the call nesting limit of 2 (each call, map, or loop body is a level); flatten the chain'
+      frames:
+      - label: flow.yaml
+        range: [40, 11, 40, 13]

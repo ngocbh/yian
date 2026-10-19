@@ -1,0 +1,34 @@
+kind: load
+flow: |
+  typedefs:
+    P:
+      x: int
+
+  id: named
+  name: named
+  input:
+    p: !P
+  defs:
+    step:
+      input:
+        n: !P
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: Optional(P)
+          code: |
+            return {"n": inputs["n"]}
+      output: ${bump.output}
+  nodes:
+    repeat:
+      kind: loop
+      times: 2
+      call: step
+      input:
+        n: !P ${input.p}
+  output: ${repeat.output}
+expect:
+  load: ok

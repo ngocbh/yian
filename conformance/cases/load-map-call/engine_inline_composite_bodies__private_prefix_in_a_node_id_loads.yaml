@@ -1,0 +1,27 @@
+kind: load
+flow: |
+  id: prefix-node
+  name: prefix_node
+  input:
+    x: !str
+  nodes:
+    __inline_flow_host:
+      kind: code
+      code: ./fixtures/seeds.ts:one_line_summary
+      input:
+        x: ${input.x}
+  output: ${__inline_flow_host.output}
+python_flow: |
+  id: prefix-node
+  name: prefix_node
+  input:
+    x: !str
+  nodes:
+    __inline_flow_host:
+      kind: code
+      code: tests.seeds.fns:one_line_summary
+      input:
+        x: ${input.x}
+  output: ${__inline_flow_host.output}
+expect:
+  load: ok

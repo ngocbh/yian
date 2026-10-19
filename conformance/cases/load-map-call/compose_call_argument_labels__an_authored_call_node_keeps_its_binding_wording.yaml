@@ -1,0 +1,32 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input:
+    s: !str
+
+  defs:
+    child:
+      input:
+        y: !int
+      nodes:
+        x:
+          kind: code
+          code: "return inputs['y']"
+          input:
+            y: ${input.y}
+          output: int
+      output: ${x.output}
+
+  nodes:
+    c: {kind: call, call: child, input: {z: 1, y: 1}}
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'call node ''c'': binding ''z'' is not a declared input of callable ''child'''
+      frames:
+      - label: flow.yaml
+        range: [21, 3, 21, 4]

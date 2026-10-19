@@ -1,0 +1,19 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input: {d: !str }
+  nodes:
+    w: {kind: wait, until: '${upper(input.d, 1)}'}
+  output: ok
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'w' wait until: expression function 'upper' takes (s): too many positional arguments
+      frames:
+      - label: flow.yaml
+        range: [6, 26, 6, 48]

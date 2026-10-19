@@ -1,0 +1,40 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    A: {b: Optional(str)}
+  input:
+    a: !A
+  nodes:
+    route:
+      kind: case
+      cases:
+        - when: "input.a.b != null"
+          then: inner
+      else: e
+    inner:
+      kind: case
+      on: ${input.a.b}
+      cases:
+        - when: null
+          then: n
+      else: e2
+    n:
+      kind: code
+      code: return 1
+    e:
+      kind: code
+      code: return 1
+    e2:
+      kind: code
+      code: return 1
+  output: ${route.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''inner'': each on:-form case needs a `when:` value and a `then:`'
+      frames:
+      - label: flow.yaml
+        range: [18, 15, 18, 19]

@@ -1,0 +1,36 @@
+kind: load
+flow: |2
+
+  id: rec
+  name: rec
+  input:
+    topic: !str
+  defs:
+    a:
+      input:
+        topic: !str
+      nodes:
+        step:
+          kind: call
+          call: a
+          input:
+            topic: ${input.topic}
+      output: ${step.output}
+  nodes:
+    go:
+      kind: call
+      call: a
+      input:
+        topic: ${input.topic}
+  output: ${go.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''a'': recursive defs reference: callable ''a'' is defined in terms of itself (the baked call graph must be finite)'
+      frames:
+      - label: flow.yaml
+        range: [8, 5, 17, 1]
+        note: definition 'a'
+      - label: flow.yaml
+        range: [8, 5, 17, 1]

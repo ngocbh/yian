@@ -1,0 +1,21 @@
+# `7 (type int)` is yian's wording for the non-text value and its kind, shared by both languages.
+kind: load
+flow: |
+  id: unsupported-nested-output-type
+  name: unsupported-nested-output-type
+  nodes:
+    emit:
+      kind: code
+      code: 'return {"profile": {"age": 7}}'
+      output:
+        profile:
+          age: 7
+  output: ${emit.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: cannot read type from 7 (type int)
+      frames:
+      - label: flow.yaml
+        range: [9, 14, 9, 15]

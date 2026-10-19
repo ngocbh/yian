@@ -1,0 +1,18 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    writer:
+      kind: agent
+      prompt: !str write
+      output: str
+  output: ${writer.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: a tag types a value — a flow input, a binding, a flow output, an agent variable, an `llm_config` value, a value entry in `nodes:`, or a value inside one; `prompt:` is not one
+      frames:
+      - label: flow.yaml
+        range: [6, 13, 6, 23]

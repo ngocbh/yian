@@ -1,0 +1,46 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  defs:
+    lister:
+      input:
+        n: !str
+      nodes:
+        x:
+          kind: code
+          code: "return [inputs['n']]"
+          input:
+            n: ${input.n}
+          output: list(str)
+      output: ${x.output}
+    one:
+      input:
+        topic: !str
+      nodes:
+        x:
+          kind: code
+          code: "return inputs['topic']"
+          input:
+            topic: ${input.topic}
+          output: str
+      output: ${x.output}
+  nodes:
+    m:
+      kind: map
+      call: one
+      over: call(lister, n=${nosuch.output})
+      input:
+        topic: ${item}
+  output: ${m.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'm' map over call(lister) argument 'n' from: reference ${nosuch.output} uses unknown namespace 'nosuch'
+      frames:
+      - label: flow.yaml
+        range: [31, 11, 31, 43]

@@ -1,0 +1,30 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    N: Literal(a, b)
+  input:
+    n: !N
+  nodes:
+    route:
+      kind: case
+      on: ${input.n}
+      cases:
+        - when: a
+          then: one
+        - when: b
+          then: two
+    one:
+      kind: code
+      code: |
+        return "one"
+      output: str
+    two:
+      kind: code
+      code: |
+        return "two"
+      output: str
+  output: ${one.output | two.output}
+expect:
+  load: ok

@@ -1,0 +1,49 @@
+# From tests/engine/test_skipped_flow_outputs.py::test_rewritten_output_fingerprints_as_the_explicit_null_default.
+# An output from a skippable node fingerprints the same as its written `:-null` default.
+kind: fingerprint
+flow: |
+  id: f
+  name: f
+  input:
+    approve: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: order
+      else: rejected
+    order:
+      kind: tool
+      tool_id: order
+      output: str
+    rejected:
+      kind: tool
+      tool_id: rejected
+      output: str
+  output:
+    order: ${order.output}
+other: |
+  id: f
+  name: f
+  input:
+    approve: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: order
+      else: rejected
+    order:
+      kind: tool
+      tool_id: order
+      output: str
+    rejected:
+      kind: tool
+      tool_id: rejected
+      output: str
+  output:
+    order: ${order.output:-null}
+expect:
+  fingerprint: same

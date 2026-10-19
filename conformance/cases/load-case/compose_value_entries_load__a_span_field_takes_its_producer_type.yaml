@@ -1,0 +1,30 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    n: !int
+  nodes:
+    p:
+      kind: code
+      output: str
+      code: |
+        return 'hi'
+    r: !object
+      a: ${p.output}
+      b: 1
+    use:
+      kind: code
+      input:
+        c: !int ${r.output.a}
+      code: |
+        return inputs['c']
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''use'' input ''c'': declared int, but the value is str'
+      frames:
+      - label: flow.yaml
+        range: [17, 10, 17, 28]

@@ -1,0 +1,39 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: "return ({a: \"x\"})"
+    c:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Order
+      code: "return ({action: \"sell\"})"
+      asserts:
+        - "isinstance(output, Rec)"
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'c' assert: `isinstance(output, Rec)` can never be true: output is declared Order, and no Order value fits Rec
+      frames:
+      - label: flow.yaml
+        range: [26, 9, 26, 34]

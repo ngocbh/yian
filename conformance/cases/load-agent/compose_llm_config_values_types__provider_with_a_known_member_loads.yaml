@@ -1,0 +1,16 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    SomeProvider: Literal(openai, nope)
+  input:
+    p: !SomeProvider
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {provider: '${input.p}'}
+  output: ${chat.output}
+expect:
+  load: ok

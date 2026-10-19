@@ -1,0 +1,17 @@
+# From tests/compose/test_value_entries_load.py::test_fingerprint_is_stable_and_tracks_the_literal.
+# A value entry's literal is identity.
+kind: fingerprint
+flow: |
+  id: f
+  name: f
+  nodes:
+    x: !object {exited: true, reply: ''}
+  output: ${x.output}
+other: |
+  id: f
+  name: f
+  nodes:
+    x: !object {exited: false, reply: ''}
+  output: ${x.output}
+expect:
+  fingerprint: different

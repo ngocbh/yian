@@ -1,0 +1,24 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input:
+    a: !Optional(str) null
+    b: !Optional(str) null
+  nodes:
+    n:
+      kind: code
+      code: "return inputs['v']"
+      input:
+        v: ${input.a :- ${input.b}}
+      output: Optional(str)
+  output: ${n.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'n: `${...}` can''t appear inside an expression; write `${input.a :- input.b}`'
+      frames:
+      - label: flow.yaml
+        range: [12, 10, 12, 34]

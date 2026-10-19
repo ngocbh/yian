@@ -1,0 +1,23 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    f: !file
+  nodes:
+    b:
+      kind: code
+      input:
+        x: ${input.f.urii}
+      code: return inputs['x']
+  output: ${b.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'b' input 'x' from: reference ${input.f.urii} reads field 'urii' on a file, which has only uri, mime, and name
+      frames:
+      - label: flow.yaml
+        range: [9, 10, 9, 25]

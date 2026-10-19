@@ -1,0 +1,30 @@
+kind: load
+flow: |2
+
+  id: loop-never-ends
+  name: loop_never_ends
+  defs:
+    body:
+      input:
+        done: !bool
+        attempts: !int
+      nodes: {}
+      output:
+        attempts: ${input.attempts + 1}
+  nodes:
+    wait:
+      kind: loop
+      call: body
+      input:
+        done: false
+        attempts: 0
+      until: done
+  output: ${wait.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''wait'': this loop can never end: `until: done` reads `done`, which the body never updates; return `done` from the body, or add `max:`'
+      frames:
+      - label: flow.yaml
+        range: [13, 3, 13, 7]

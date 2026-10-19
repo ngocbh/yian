@@ -1,0 +1,45 @@
+kind: load
+flow: |
+  id: inline-map-no-output
+  name: inline_map_no_output
+  input:
+    items: !list(str)
+  nodes:
+    each:
+      kind: map
+      over: ${input.items}
+      nodes:
+        constant:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:echo
+          input:
+            topic: inline-ok
+          output: str
+      output:
+  output: ${each.output}
+python_flow: |
+  id: inline-map-no-output
+  name: inline_map_no_output
+  input:
+    items: !list(str)
+  nodes:
+    each:
+      kind: map
+      over: ${input.items}
+      nodes:
+        constant:
+          kind: code
+          code: tests.engine._compose_codefns:echo
+          input:
+            topic: inline-ok
+          output: str
+      output:
+  output: ${each.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'map node ''each'': inline body of node ''each'' must declare a non-empty `output:`; a mapped call (over:) returns a list of the child''s results'
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 7]

@@ -1,0 +1,43 @@
+# The frame sits on def/inline-body structure, not CODE text: shared.
+kind: load
+flow: |
+  id: inline3
+  name: inline3
+  input:
+    x: !str
+  nodes:
+    top:
+      kind: call
+      input:
+        x: ${input.x}
+      nodes:
+        step:
+          kind: call
+          input:
+            x: ${input.x}
+          nodes:
+            step:
+              kind: call
+              input:
+                x: ${input.x}
+              nodes:
+                step:
+                  kind: code
+                  code: return inputs["x"]
+                  input:
+                    x: ${input.x}
+                  output: str
+              output: ${step.output}
+          output: ${step.output}
+      output: ${step.output}
+  output: ${top.output}
+env:
+  YIAN_MAX_CALL_NESTING: '2'
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'call node ''step'': calling inline body of node ''step'' nests calls more than 2 levels deep, past the call nesting limit of 2 (each call, map, or loop body is a level); flatten the chain'
+      frames:
+      - label: flow.yaml
+        range: [21, 15, 27, 13]

@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    WithBogus: {model: str, bogus: int}
+  input:
+    cfg: !WithBogus
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: ${input.cfg}
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''chat'' llm_config: its type declares `bogus`, which is not a field of llm_config'
+      frames:
+      - label: flow.yaml
+        range: [11, 17, 11, 29]

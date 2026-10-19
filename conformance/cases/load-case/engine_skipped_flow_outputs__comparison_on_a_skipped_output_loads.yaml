@@ -1,0 +1,28 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    approve: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: order
+      else: rejected
+    order:
+      kind: code
+      output:
+        qty: int
+      code: |
+        return {"qty": 2}
+    rejected:
+      kind: code
+      output: str
+      code: |
+        return "no"
+  output:
+    c: ${order.output.qty > 1}
+expect:
+  load: ok

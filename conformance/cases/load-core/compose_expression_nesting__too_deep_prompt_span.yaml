@@ -1,0 +1,24 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    topic: !str
+  nodes:
+    note:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: Write about ${upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(topic)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))}.
+  output: ${note.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'note' prompt: expression nests deeper than 100 levels, the limit for a yian expression (each call, list, unary operator, comparison, and chain of operators is a level); split it into smaller bindings or steps
+      frames:
+      - label: flow.yaml
+        range: [11, 13, 11, 741]

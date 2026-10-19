@@ -1,0 +1,24 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    n: !int
+  nodes:
+    r: !object
+      b: [1, 2]
+    use:
+      kind: code
+      input:
+        c: !str ${r.output.b}
+      code: |
+        return inputs['c']
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''use'' input ''c'': declared str, but the value is list(int)'
+      frames:
+      - label: flow.yaml
+        range: [11, 10, 11, 28]

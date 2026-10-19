@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: bad-over
+  name: bad
+  input:
+    xs: !list(str)
+  nodes:
+    m:
+      kind: map
+      call: child
+      over: ${input.xs}
+      input:
+        over: ${item}
+  output: ${m.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'map node ''m'': input name ''over'' is reserved (the iteration source); rename the `input:` entry'
+      frames:
+      - label: flow.yaml
+        range: [11, 13, 11, 20]

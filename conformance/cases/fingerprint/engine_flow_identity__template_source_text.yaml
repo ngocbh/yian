@@ -1,0 +1,29 @@
+# From tests/engine/test_flow_identity.py::test_templates_under_any_name_keep_their_source_text.
+# A template's literal text is identity.
+kind: fingerprint
+flow: |
+  id: template-input
+  name: template_input
+  input:
+    t: !str
+  nodes:
+    step:
+      kind: tool
+      tool_id: step
+      input:
+        authorization: "Bearer ${input.t}"
+  output: ${step.output}
+other: |
+  id: template-input
+  name: template_input
+  input:
+    t: !str
+  nodes:
+    step:
+      kind: tool
+      tool_id: step
+      input:
+        authorization: "Basic ${input.t}"
+  output: ${step.output}
+expect:
+  fingerprint: different

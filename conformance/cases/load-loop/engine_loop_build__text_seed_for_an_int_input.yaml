@@ -1,0 +1,65 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  defs:
+    body:
+      input:
+        n: !int
+        k: !int
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+            k: ${input.k}
+          output:
+            k: int
+          code: 'return {k: inputs["k"] + 1n}'
+      output: ${step.output}
+  nodes:
+    loop:
+      kind: loop
+      times: 1
+      input:
+        n: "abc"
+        k: 0
+        extra: "abc"
+      call: body
+  output: ${loop.output}
+python_flow: |
+  id: p
+  name: p
+  defs:
+    body:
+      input:
+        n: !int
+        k: !int
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+            k: ${input.k}
+          output:
+            k: int
+          code: return dict(k=inputs["k"] + 1)
+      output: ${step.output}
+  nodes:
+    loop:
+      kind: loop
+      times: 1
+      input:
+        n: "abc"
+        k: 0
+        extra: "abc"
+      call: body
+  output: ${loop.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''loop'': binding ''n'' — child expects ''int'', but the value "abc" does not fit'
+      frames:
+      - label: flow.yaml
+        range: [23, 7, 26, 5]

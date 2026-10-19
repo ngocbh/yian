@@ -1,0 +1,19 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input: {}
+  nodes:
+    fetch-data:
+      kind: code
+      code: "return 1"
+  output: ${fetch-data.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: node id 'fetch-data' must be an identifier (ASCII letters, digits, and _, not starting with a digit) so ${fetch-data.output} can reference it; try 'fetch_data'
+      frames:
+      - label: flow.yaml
+        range: [7, 5, 9, 1]

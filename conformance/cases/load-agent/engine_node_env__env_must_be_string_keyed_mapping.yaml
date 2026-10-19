@@ -1,0 +1,19 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  nodes:
+    a:
+      kind: agent
+      prompt: hi
+      env: [1, 2, 3]
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'' (kind=agent): `env:` must be a mapping with string keys'
+      frames:
+      - label: flow.yaml
+        range: [8, 10, 8, 19]

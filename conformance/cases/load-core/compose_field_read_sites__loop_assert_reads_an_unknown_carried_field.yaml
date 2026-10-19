@@ -1,0 +1,47 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: "return ({a: \"x\"})"
+    drive:
+      kind: loop
+      times: 1
+      input:
+        st: ${step.output}
+      asserts:
+        - "st.zz == 'x'"
+      nodes:
+        bump:
+          kind: code
+          input:
+            st: ${input.st}
+          output:
+            st: Rec3
+          code: "return ({st: {a: \"x\", b: \"y\"}})"
+      output: ${bump.output}
+  output: ${drive.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'drive' assert: reference ${st.zz} reads unknown field 'zz' on record
+      frames:
+      - label: flow.yaml
+        range: [25, 9, 25, 23]

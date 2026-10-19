@@ -1,0 +1,78 @@
+kind: load
+# The call text is quoted as written, the Python-repr way (TS reprText): shared.
+flow: |2
+
+  id: bad
+  name: bad
+  input:
+    score: !float
+
+  defs:
+    take:
+      input:
+        stance: !str
+      nodes:
+        x:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:took
+          input:
+            stance: ${input.stance}
+          output: str
+      output: ${x.output}
+
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.score >= 0.5"
+          then: call(take stance="a")
+      else: nope
+    nope:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:took
+      input:
+        stance: x
+      output: str
+  output: ${gate.output}
+python_flow: |2
+
+  id: bad
+  name: bad
+  input:
+    score: !float
+
+  defs:
+    take:
+      input:
+        stance: !str
+      nodes:
+        x:
+          kind: code
+          code: tests.engine._compose_codefns:took
+          input:
+            stance: ${input.stance}
+          output: str
+      output: ${x.output}
+
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.score >= 0.5"
+          then: call(take stance="a")
+      else: nope
+    nope:
+      kind: code
+      code: tests.engine._compose_codefns:took
+      input:
+        stance: x
+      output: str
+  output: ${gate.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''gate'' then: a branch target must be a node id or a single call: a call(...) must start with a flow id (a bare name) and a comma, got ''take stance="a"''. For the text, add a value entry and name it: `gate_then_0: !str ''call(take stance="a")''`'
+      frames:
+      - label: flow.yaml
+        range: [25, 15, 25, 36]

@@ -1,0 +1,27 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input: {}
+  defs:
+    my-def:
+      kind: code
+      code: "return 1"
+      output: int
+  nodes:
+    a:
+      kind: call
+      call: my-def
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''my-def'': node id ''my-def'' must be an identifier (ASCII letters, digits, and _, not starting with a digit) so ${my-def.output} can reference it; try ''my_def'''
+      frames:
+      - label: flow.yaml
+        range: [7, 5, 10, 1]
+        note: definition 'my-def'
+      - label: flow.yaml
+        range: [7, 5, 10, 1]

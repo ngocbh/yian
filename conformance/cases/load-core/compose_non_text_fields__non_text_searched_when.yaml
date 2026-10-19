@@ -1,0 +1,30 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    proj: !str
+  nodes:
+    a:
+      kind: case
+      cases:
+        - when: 5
+          then: b
+      else: c
+    b:
+      kind: code
+      output: str
+      code: "return 'b'"
+    c:
+      kind: code
+      output: str
+      code: "return 'c'"
+  output: ${b.output | c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''a'': each searched case needs a string `when:` expression'
+      frames:
+      - label: flow.yaml
+        range: [9, 15, 9, 16]

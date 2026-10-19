@@ -1,0 +1,30 @@
+# No `message`: it carries pydantic's "Input should be ..." phrase, which yian doesn't write.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    m: !str
+    p: !str
+    t: !float
+    u: !str
+    i: !bool
+    a: !object
+    cfg: !object
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config:
+        provider: anthropic
+        anthropic:
+          temperature: ${input.t}
+          thinking: {type: enabled, budget_tokens: 10}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      frames:
+      - label: flow.yaml
+        range: [19, 50, 19, 52]

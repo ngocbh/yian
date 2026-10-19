@@ -1,0 +1,55 @@
+# From tests/engine/test_flow_identity.py::test_flow_manifest_includes_human_input_title_but_ignores_inert_map_parallel.
+# A MAP's inert `parallel:` is not identity.
+kind: fingerprint
+flow: |
+  id: map
+  name: map
+  defs:
+    step:
+      input:
+        n: !int
+      nodes:
+        bump:
+          kind: tool
+          tool_id: bump
+          input:
+            n: ${input.n}
+          output:
+            n: int
+      output: ${bump.output}
+  nodes:
+    node:
+      kind: map
+      over: [1, 2]
+      call: step
+      parallel: false
+      input:
+        n: ${item}
+  output: ${node.output}
+other: |
+  id: map
+  name: map
+  defs:
+    step:
+      input:
+        n: !int
+      nodes:
+        bump:
+          kind: tool
+          tool_id: bump
+          input:
+            n: ${input.n}
+          output:
+            n: int
+      output: ${bump.output}
+  nodes:
+    node:
+      kind: map
+      over: [1, 2]
+      call: step
+      parallel: true
+      input:
+        n: ${item}
+  output: ${node.output}
+expect:
+  fingerprint: same

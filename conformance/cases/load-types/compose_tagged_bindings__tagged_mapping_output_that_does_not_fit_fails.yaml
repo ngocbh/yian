@@ -1,0 +1,39 @@
+# TS spells the value as JSON text (rules: messages); Python's repr in python_expect.
+kind: load
+rules: [messages]
+flow: |2
+
+  id: sized
+  name: sized
+  typedefs:
+    Size:
+      qty: int
+    T:
+      a: int
+  nodes:
+    size:
+      kind: code
+      code: |
+        return {"qty": 1}
+    note:
+      kind: code
+      output: str
+      code: |
+        return "hi"
+  output: !T {a: x}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''output'': the value is not a valid T: "x" does not match declared type int (at `output.a`)'
+      frames:
+      - label: flow.yaml
+        range: [19, 9, 19, 18]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''output'': the value is not a valid T: ''x'' does not match declared type int (at `output.a`)'
+      frames:
+      - label: flow.yaml
+        range: [19, 9, 19, 18]

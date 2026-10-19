@@ -1,0 +1,49 @@
+# TS reads the unquoted date as text, which fills the `str` input (rules: dates); Python's error in python_expect.
+kind: load
+rules: [dates]
+flow: |
+  id: p
+  name: p
+  input:
+    m: !Optional(str)
+    n: !Optional(int)
+    s: !str
+    xs: !list(int)
+    ds: !list(str)
+    rs: !list(R)
+    os: !list(Optional(str))
+    d: !Optional(date)
+  typedefs:
+    R:
+      a: int
+    AB: Literal(a, b)
+  defs:
+    child:
+      input:
+        t: !str
+      nodes:
+        n:
+          kind: code
+          input:
+            t: ${input.t}
+          output: str
+          code: "return String(inputs[\"t\"])"
+      output: ${n.output}
+  nodes:
+    c:
+      kind: call
+
+      call: child
+      input:
+        t: 2026-01-01
+  output: ${c.output}
+expect:
+  load: ok
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'call node ''c'': binding ''t'' — child expects ''str'', but the value 2026-01-01 does not fit; quote it to keep it as text: "2026-01-01"'
+      frames:
+      - label: flow.yaml
+        range: [34, 7, 35, 1]

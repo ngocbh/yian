@@ -1,0 +1,38 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  defs:
+    child:
+      input:
+        s: !str
+      nodes:
+        step:
+          kind: code
+          input:
+            v: ${input.s.first}
+          output: str
+          code: return 'x'
+      output: ${step.output}
+  nodes:
+    c:
+      kind: call
+      call: child
+      input:
+        s: ${input.s}
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        defs entry 'child': flow has unresolved references:
+          node 'step' input 'v' from: reference ${input.s.first} reads field 'first' on type str, which has no fields
+      frames:
+      - label: flow.yaml
+        range: [7, 5, 17, 1]
+        note: definition 'child'
+      - label: flow.yaml
+        range: [13, 14, 13, 30]

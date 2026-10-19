@@ -1,0 +1,45 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: "return ({a: \"x\"})"
+    d:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Order
+      code: "return null"
+    c:
+      kind: code
+      input:
+        v: ${d.output}
+      output: str
+      code: return 'x'
+      asserts:
+        - "v.qty > 0 and isinstance(v, Buy)"
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'c' assert: reference ${v.qty} reads field 'qty', which only union members with action buy have; check the member first with `isinstance(v, <Type>) and ...`
+      frames:
+      - label: flow.yaml
+        range: [32, 9, 32, 43]

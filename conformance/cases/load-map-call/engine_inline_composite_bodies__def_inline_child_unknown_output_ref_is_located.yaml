@@ -1,0 +1,59 @@
+# The frames sit on def lines (flow structure), not CODE text: shared.
+kind: load
+flow: |
+  id: eager-def-inline-output-range
+  name: eager_def_inline_output_range
+  defs:
+    outer:
+      nodes:
+        wrapper:
+          kind: call
+          nodes:
+            constant:
+              kind: code
+              code: ./fixtures/compose_codefns.ts:echo
+              input:
+                topic: ready
+              output: str
+          output: ${missing.output}
+      output: ${wrapper.output}
+  nodes:
+    invoke:
+      kind: call
+      call: outer
+  output: ${invoke.output}
+python_flow: |
+  id: eager-def-inline-output-range
+  name: eager_def_inline_output_range
+  defs:
+    outer:
+      nodes:
+        wrapper:
+          kind: call
+          nodes:
+            constant:
+              kind: code
+              code: tests.engine._compose_codefns:echo
+              input:
+                topic: ready
+              output: str
+          output: ${missing.output}
+      output: ${wrapper.output}
+  nodes:
+    invoke:
+      kind: call
+      call: outer
+  output: ${invoke.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        defs entry 'outer': flow has unresolved references:
+          flow output from: reference ${missing.output} uses unknown namespace 'missing'
+      frames:
+      - label: flow.yaml
+        range: [5, 5, 17, 1]
+        note: definition 'outer'
+      - label: flow.yaml
+        range: [15, 17, 15, 34]

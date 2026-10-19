@@ -1,0 +1,33 @@
+kind: load
+# TS spells the mapping as JSON text (rules: messages); Python's repr in python_expect.
+rules: [messages]
+flow: |
+  id: f
+  name: f
+  input:
+    n: !int
+  nodes:
+    gate:
+      kind: case
+      cases: {when: "input.n > 1", then: done}
+    done:
+      kind: code
+      code: return 1
+      output: int
+  output: ${done.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''gate'': `cases:` must be a list of {when:, then:} mappings (got {"when":"input.n > 1","then":"done"}); start each case with `- `'
+      frames:
+      - label: flow.yaml
+        range: [8, 12, 8, 45]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''gate'': `cases:` must be a list of {when:, then:} mappings (got {''when'': ''input.n > 1'', ''then'': ''done''}); start each case with `- `'
+      frames:
+      - label: flow.yaml
+        range: [8, 12, 8, 45]

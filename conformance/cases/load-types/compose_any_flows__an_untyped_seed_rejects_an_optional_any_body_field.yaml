@@ -1,0 +1,33 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  nodes:
+    mk:
+      kind: code
+      output: Any
+      code: return 0
+    loop:
+      kind: loop
+      times: 2
+      input:
+        acc: ${mk.output}
+      nodes:
+        step:
+          kind: code
+          input:
+            acc: ${input.acc}
+          output: Optional(Any)
+          code: |
+            return inputs['acc']
+      output:
+        acc: ${step.output}
+  output: ${loop.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''loop'': the body returns ''acc'' as Optional(Any), but the carried field is typed Any from its seed; declare the seed''s type: `acc: !Optional(Any) ${mk.output}`'
+      frames:
+      - label: flow.yaml
+        range: [12, 12, 12, 24]

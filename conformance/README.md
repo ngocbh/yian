@@ -348,6 +348,8 @@ are the case names.
   `TypeCheckError`, `DefaultsError` and `DefaultsMismatchError`, have the same name in both
   implementations. `IntTooLongError` is Python-only (TS has no digit limit), so a case holding it
   carries `rules: [numbers]`.
+- In `raises`, a Python class whose name starts with `_` is private, and its case name is its
+  nearest public base class's (`_NoUnionMember` is `TypeCheckError`).
 - Any other class compares by its name as given, a stub's declared class included.
 - A row mapping a TS class to a different case name is added by the change that introduces that
   TS class; rows are only added.

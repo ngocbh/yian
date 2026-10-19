@@ -1,0 +1,30 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    c:
+      kind: call
+      input:
+        v: ${input.s}
+      nodes:
+        inner:
+          kind: code
+          input:
+            w: ${input.v.z}
+          output: str
+          code: return 'x'
+      output: ${inner.output}
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'inner' input 'w' from: reference ${input.v.z} reads field 'z' on type str, which has no fields
+      frames:
+      - label: flow.yaml
+        range: [14, 14, 14, 26]

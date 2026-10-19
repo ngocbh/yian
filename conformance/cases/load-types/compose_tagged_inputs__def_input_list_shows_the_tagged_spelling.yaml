@@ -1,0 +1,29 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    child:
+      input: [topic]
+      kind: code
+      output: object
+      code: "return {...inputs}"
+  nodes: {}
+python_flow: |
+  id: f
+  name: f
+  defs:
+    child:
+      input: [topic]
+      kind: code
+      output: object
+      code: return dict(inputs)
+  nodes: {}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''child'': single-node `input:` must be a param map (`name: !TYPE`, e.g. `topic: !str`)'
+      frames:
+      - label: flow.yaml
+        range: [5, 12, 5, 19]

@@ -1,0 +1,31 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    proj: !str
+  nodes:
+    a:
+      kind: case
+      on: ${input.proj}
+      cases:
+        - when: [a]
+          then: b
+      else: c
+    b:
+      kind: code
+      output: str
+      code: "return 'b'"
+    c:
+      kind: code
+      output: str
+      code: "return 'c'"
+  output: ${b.output | c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''a'': an on: case''s when: takes text, a number, or a bool, got a list'
+      frames:
+      - label: flow.yaml
+        range: [10, 15, 10, 18]

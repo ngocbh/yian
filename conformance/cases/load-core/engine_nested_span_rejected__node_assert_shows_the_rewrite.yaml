@@ -1,0 +1,28 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input:
+    n: !int
+  nodes:
+    n:
+      kind: code
+      code: "return inputs['n']"
+      input: {n: '${input.n}'}
+      output: int
+      asserts:
+        - ${output} < 0
+  output: ${n.output}
+  asserts:
+    - input.n > 0
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'n' assert '${output} < 0': not a valid boolean expression (`${...}` can't appear inside an expression; write `output < 0`)
+      frames:
+      - label: flow.yaml
+        range: [13, 9, 13, 22]

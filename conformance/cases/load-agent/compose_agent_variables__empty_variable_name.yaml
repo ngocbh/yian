@@ -1,0 +1,19 @@
+kind: load
+flow: |
+  id: invalid-variable-name
+  name: invalid-variable-name
+  nodes:
+    writer:
+      kind: agent
+      variables:
+        '': !int 4
+      output: str
+  output: ${writer.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: variables names must be non-empty strings
+      frames:
+      - label: flow.yaml
+        range: [7, 7, 7, 9]

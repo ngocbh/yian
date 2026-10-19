@@ -1,0 +1,51 @@
+# TS writes the seed value in compact text form, {"n":0} (rules: messages); Python's text from yian's
+# shown_literal (compose/validate/typed_bindings.py), {"n": 0}, in python_expect.
+kind: load
+rules: [messages]
+flow: |
+  id: mn
+  name: mn
+  typedefs:
+    Page:
+      next: Optional(str)
+      n: int
+    Strict:
+      next: str
+      n: int
+  defs:
+    step:
+      input:
+        page: !Strict
+      nodes:
+        get:
+          kind: code
+          input:
+            page: ${input.page}
+          output:
+            page: Optional(Strict)
+          code: "return {page: null}"
+      output: ${get.output}
+  nodes:
+    pages:
+      kind: loop
+      while: page.next != null
+      input:
+        page: {n: 0}
+      call: step
+  output: ${pages.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''pages'': binding ''page'' — child expects ''{"n":int,"next":str}'', but the value {"n":0} does not fit (record missing required fields: ["next"])'
+      frames:
+      - label: flow.yaml
+        range: [28, 7, 29, 5]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''pages'': binding ''page'' — child expects ''{"n":int,"next":str}'', but the value {"n": 0} does not fit (record missing required fields: [''next''])'
+      frames:
+      - label: flow.yaml
+        range: [28, 7, 29, 5]

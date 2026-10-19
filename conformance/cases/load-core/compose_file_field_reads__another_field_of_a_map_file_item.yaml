@@ -1,0 +1,37 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  defs:
+    child:
+      input:
+        s: !str
+      nodes:
+        k: {kind: code, input: {s: "${input.s}"}, code: "return inputs['s']", output: str}
+      output: ${k.output}
+    child_int:
+      input:
+        s: !int
+      nodes:
+        k: {kind: code, input: {s: "${input.s}"}, code: "return 1", output: int}
+      output: ${k.output}
+  input:
+    fs: !list(file)
+  nodes:
+    b:
+      kind: map
+      over: ${input.fs}
+      call: child
+      input:
+        s: ${item.urii}
+  output: ${b.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'b' map input 's' from: reference ${item.urii} reads field 'urii' on a file, which has only uri, mime, and name
+      frames:
+      - label: flow.yaml
+        range: [24, 10, 24, 22]

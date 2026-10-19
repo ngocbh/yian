@@ -1,0 +1,87 @@
+kind: load
+flow: |
+  id: counter
+  name: counter
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', price: float}
+    Order: Union(Buy, Sell)
+    Running: Literal(running)
+  defs:
+    bump:
+      input:
+        n: !int
+        status: !str
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+            status: ${input.status}
+          code: |
+            const n = inputs["n"] + 1n
+            return {n: n, status: n >= 4n ? "done" : "running"}
+          output:
+            n: int
+            status: str
+      output: ${step.output}
+  nodes:
+    loop:
+      kind: loop
+      call: bump
+      input:
+        n: 0
+        status: running
+      while: isinstance(status, Running)
+      max: 10
+      asserts:
+        - isinstance(output, Buy)
+  output: ${loop.output}
+python_flow: |
+  id: counter
+  name: counter
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', price: float}
+    Order: Union(Buy, Sell)
+    Running: Literal(running)
+  defs:
+    bump:
+      input:
+        n: !int
+        status: !str
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+            status: ${input.status}
+          code: |
+            n = inputs["n"] + 1
+            return {"n": n, "status": "done" if n >= 4 else "running"}
+          output:
+            n: int
+            status: str
+      output: ${step.output}
+  nodes:
+    loop:
+      kind: loop
+      call: bump
+      input:
+        n: 0
+        status: running
+      while: isinstance(status, Running)
+      max: 10
+      asserts:
+        - isinstance(output, Buy)
+  output: ${loop.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'loop' assert 'isinstance(output, Buy)': isinstance in a loop node's asserts is not supported; assert inside the child flow
+      frames:
+      - label: flow.yaml
+        range: [36, 9, 36, 32]

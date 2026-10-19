@@ -1,0 +1,27 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input: {proj: !str }
+  nodes:
+    ask:
+      kind: human_input
+      input: {proj: '${input.proj}'}
+      prompt: "${proj}"
+      questions:
+        - question: "${proj}"
+          header: Framework
+          options:
+            - label: "${nosuch(proj)}"
+              description: "${proj}"
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'ask' questions[0].options[0].label: unknown prompt function 'nosuch'; prompts call only formatting builtins (join, lower, render_as_json, upper); build or check a typed value with a `typedefs:` constructor `T(...)` in an input binding
+      frames:
+      - label: flow.yaml
+        range: [13, 20, 13, 37]

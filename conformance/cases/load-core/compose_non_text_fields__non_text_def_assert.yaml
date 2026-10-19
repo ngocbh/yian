@@ -1,0 +1,28 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    b:
+      nodes:
+        c:
+          kind: code
+          output: int
+          code: return 1
+      output: ${c.output}
+      asserts:
+        - "true"
+        - {}
+  nodes:
+    a:
+      kind: call
+      call: b
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''b'': `asserts[1]:` must be text, but YAML read it as a mapping; put it in quotes'
+      frames:
+      - label: flow.yaml
+        range: [13, 9, 13, 11]

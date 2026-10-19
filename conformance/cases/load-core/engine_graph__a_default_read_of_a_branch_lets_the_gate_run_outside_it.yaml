@@ -1,0 +1,59 @@
+kind: load
+flow: |2
+
+  id: bg
+  name: bg
+  typedefs:
+    Buy: {action: 'Literal(buy)', limit: float}
+    Sell: {action: 'Literal(sell)'}
+    Decision: Union(Buy, Sell)
+  input:
+    s: !str
+  nodes:
+    d:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Decision
+      code: "return null"
+    router:
+      kind: case
+      on: ${d.output.action}
+      cases:
+        - when: buy
+          then: a
+      else: e
+    a:
+      kind: code
+      input:
+        s: ${input.s}
+      output: int
+      code: return 1
+    e:
+      kind: code
+      code: return 1
+    gate:
+      kind: case
+      cases:
+        - when: "(a.output :- 0) >= 1"
+          then: hot
+      else: cold
+    hot:
+      kind: code
+      input:
+        v: ${d.output.limit}
+      code: return 1
+    cold:
+      kind: code
+      code: return 1
+  output: ${hot.output | cold.output | e.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'hot' input 'v' from: reference ${d.output.limit} reads field 'limit', which only union members with action buy have; read it inside a case on ${d.output.action}
+      frames:
+      - label: flow.yaml
+        range: [42, 10, 42, 27]

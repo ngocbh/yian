@@ -1,0 +1,19 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input: {v: !str }
+  nodes:
+    a: {kind: agent, input: {t: '${input.v}'}, output: str, prompt: 'Say ${upper(t, 1)}', system_prompt: 'S'}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'a' prompt: expression function 'upper' takes (s): too many positional arguments
+      frames:
+      - label: flow.yaml
+        range: [6, 67, 6, 87]

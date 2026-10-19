@@ -1,0 +1,23 @@
+# From tests/engine/test_flow_identity.py::test_numeric_bounds_are_part_of_type_identity_only_when_present.
+# Numeric bounds on a type are identity.
+kind: fingerprint
+flow: |
+  id: typed
+  name: typed
+  nodes:
+    body:
+      kind: tool
+      tool_id: body
+      output: int
+  output: ${body.output}
+other: |
+  id: typed
+  name: typed
+  nodes:
+    body:
+      kind: tool
+      tool_id: body
+      output: int(1..12)
+  output: ${body.output}
+expect:
+  fingerprint: different

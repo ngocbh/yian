@@ -1,0 +1,19 @@
+kind: load
+flow: |
+  id: flat
+  name: flat
+  long_term_memory: session
+  nodes:
+    ask:
+      kind: agent
+      prompt: hi
+      output: str
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: session memory 'session' cannot be declared on a flow (root); declare it on one AGENT
+      frames:
+      - label: flow.yaml
+        range: [3, 19, 3, 26]

@@ -1,0 +1,25 @@
+kind: load
+flow: |2
+
+  id: loop-nullable-seed
+  name: loop_nullable_seed
+  defs:
+    keep:
+      input:
+        maybe: !Optional(str)
+        done: !bool
+      nodes: {}
+      output:
+        maybe: ${input.maybe}
+        done: ${input.done}
+  nodes:
+    chat_loop:
+      kind: loop
+      call: keep
+      input:
+        maybe: ${null}
+        done: false
+      times: 1
+  output: ${chat_loop.output}
+expect:
+  load: ok

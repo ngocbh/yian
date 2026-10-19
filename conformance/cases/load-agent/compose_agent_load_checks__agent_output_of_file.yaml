@@ -1,0 +1,19 @@
+# Shared text: `None` and `file` are yian type names, not values.
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      output: file
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'': an AGENT can''t produce this `output:`; a model generates only str, int, float, bool, date, datetime, Literal, record, union, object, Any, and list values, not `file` or `None`. Produce the value in a CODE node.'
+      frames:
+      - label: flow.yaml
+        range: [7, 13, 7, 17]

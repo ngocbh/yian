@@ -1,0 +1,20 @@
+kind: load
+flow: |2
+
+  id: checked
+  name: checked
+  nodes:
+    note:
+      kind: code
+      code: |
+        return "hi"
+      output: str
+  output: !int ${note.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'output: declared int, but the value is str'
+      frames:
+      - label: flow.yaml
+        range: [10, 9, 10, 28]

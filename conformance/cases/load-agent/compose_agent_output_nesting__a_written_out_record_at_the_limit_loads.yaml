@@ -1,0 +1,12 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    a:
+      kind: agent
+      prompt: hi
+      output: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: int}}}}}}}}}}}}}}}}
+  output: ${a.output}
+expect:
+  load: ok

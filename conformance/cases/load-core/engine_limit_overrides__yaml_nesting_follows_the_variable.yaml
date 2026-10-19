@@ -1,0 +1,47 @@
+# No TS `message`: Python's carries PyYAML's location trailer (rules: yaml).
+kind: load
+rules: [yaml]
+flow: |
+  id: f
+  name: f
+  nodes:
+    use:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: [[1]]
+      output: str
+  output: ${use.output}
+python_flow: |
+  id: f
+  name: f
+  nodes:
+    use:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: [[1]]
+      output: str
+  output: ${use.output}
+env:
+  YIAN_MAX_VALUE_NESTING: '4'
+  YIAN_MAX_YAML_NESTING: '5'
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      frames:
+      - label: flow.yaml
+        range: [8, 15, 8, 16]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        invalid YAML: this list nests deeper than 5 levels, the limit for a YAML document (each mapping and list is a level; a yian value nests at most 4); flatten it
+          in "<unicode string>", line 8, column 15:
+                  topic: [[1]]
+                          ^
+      frames:
+      - label: flow.yaml
+        range: [8, 15, 8, 16]

@@ -1,0 +1,37 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    x: !int
+    s: !str
+  defs:
+    g:
+      input:
+        d: !int
+      nodes:
+        run:
+          kind: code
+          output: str
+          code: |
+            return 'x'
+      output: ${run.output}
+  nodes:
+    use:
+      kind: code
+      input:
+        topic: call(g, d=${-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(1)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))})
+      output: str
+      code: |
+        return String(inputs['topic'])
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'use' input 'topic' call(g) argument 'd' from: expression nests deeper than 100 levels, the limit for a yian expression (each call, list, unary operator, comparison, and chain of operators is a level); split it into smaller bindings or steps
+      frames:
+      - label: flow.yaml
+        range: [21, 14, 21, 332]

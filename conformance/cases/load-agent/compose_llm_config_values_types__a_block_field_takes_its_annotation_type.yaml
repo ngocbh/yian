@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    s: !str
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {anthropic: {thinking: {type: enabled, budget_tokens: '${input.s}'}}}
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''chat'' llm_config.anthropic.thinking.budget_tokens: must be int(1024..), but the value is str'
+      frames:
+      - label: flow.yaml
+        range: [9, 71, 9, 83]

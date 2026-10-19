@@ -1,0 +1,51 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    cmd: !str
+  nodes:
+    route:
+      kind: case
+      on: ${input.cmd}
+      output: bool
+      cases:
+        - when: a
+          then: "yes"
+      else: reply
+    reply:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: replied
+      output: str
+  output: ${route.output}
+python_flow: |
+  id: f
+  name: f
+  input:
+    cmd: !str
+  nodes:
+    route:
+      kind: case
+      on: ${input.cmd}
+      output: bool
+      cases:
+        - when: a
+          then: "yes"
+      else: reply
+    reply:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: replied
+      output: str
+  output: ${route.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'' then: a branch names a node or calls a flow; put the value in its own entry in `nodes:` and name it: `route_then_0: !bool true` (`yes` is text; write `true`) and `then: route_then_0`'
+      frames:
+      - label: flow.yaml
+        range: [12, 15, 12, 20]

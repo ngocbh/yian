@@ -1,0 +1,121 @@
+kind: load
+flow: |
+  id: inline-composites
+  name: inline_composites
+  description: Define one-off CALL, MAP, and LOOP child bodies in place.
+
+  input:
+    seed: !int
+    items: !list(int)
+
+  nodes:
+    call_once:
+      kind: call
+      input:
+        value: ${input.seed}
+      nodes:
+        increment:
+          kind: code
+          input:
+            value: ${input.value}
+          output: int
+          code: |
+            return inputs["value"] + 1n
+      output: ${increment.output}
+
+    map_each:
+      kind: map
+      over: ${input.items}
+      input:
+        value: ${item}
+      nodes:
+        double:
+          kind: code
+          input:
+            value: ${input.value}
+          output: int
+          code: |
+            return inputs["value"] * 2n
+      output: ${double.output}
+
+    loop_three:
+      kind: loop
+      times: 3
+      input:
+        n: ${input.seed}
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": inputs["n"] + 1n}
+      output: ${bump.output}
+
+  output:
+    call: ${call_once.output}
+    map: ${map_each.output}
+    loop: ${loop_three.output}
+python_flow: |
+  id: inline-composites
+  name: inline_composites
+  description: Define one-off CALL, MAP, and LOOP child bodies in place.
+
+  input:
+    seed: !int
+    items: !list(int)
+
+  nodes:
+    call_once:
+      kind: call
+      input:
+        value: ${input.seed}
+      nodes:
+        increment:
+          kind: code
+          input:
+            value: ${input.value}
+          output: int
+          code: |
+            return inputs["value"] + 1
+      output: ${increment.output}
+
+    map_each:
+      kind: map
+      over: ${input.items}
+      input:
+        value: ${item}
+      nodes:
+        double:
+          kind: code
+          input:
+            value: ${input.value}
+          output: int
+          code: |
+            return inputs["value"] * 2
+      output: ${double.output}
+
+    loop_three:
+      kind: loop
+      times: 3
+      input:
+        n: ${input.seed}
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": inputs["n"] + 1}
+      output: ${bump.output}
+
+  output:
+    call: ${call_once.output}
+    map: ${map_each.output}
+    loop: ${loop_three.output}
+expect:
+  load: ok

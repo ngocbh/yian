@@ -1,0 +1,57 @@
+kind: load
+flow: |2
+
+  id: bg
+  name: bg
+  typedefs:
+    Buy: {action: 'Literal(buy)', limit: float}
+    Sell: {action: 'Literal(sell)'}
+    Decision: Union(Buy, Sell)
+  input:
+    s: !str
+  nodes:
+    d:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Decision
+      code: "return null"
+    router:
+      kind: case
+      on: ${d.output.action}
+      cases:
+        - when: buy
+          then: a
+      else: e
+    a:
+      kind: code
+      input:
+        s: ${input.s}
+      output: int
+      code: return 1
+    e:
+      kind: code
+      code: return 1
+    gate:
+      kind: case
+      cases:
+        - when: "(a.output :- 0) >= 1"
+          then: hot
+      else: cold
+    hot:
+      kind: code
+      input:
+        v: ${a.output + 1}
+      code: return 1
+    cold:
+      kind: code
+      code: return 1
+  output: ${hot.output | cold.output | e.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''hot'' input ''v'': ${a.output + 1} does arithmetic on a.output, which is null when node ''a'' is skipped; give it a default with :-, e.g. (a.output :- <default>)'
+      frames:
+      - label: flow.yaml
+        range: [42, 10, 42, 25]

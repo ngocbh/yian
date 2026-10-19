@@ -1,0 +1,44 @@
+kind: load
+# The assert text is quoted as written, the Python-repr way (TS reprText): shared.
+flow: |2
+
+  id: f
+  name: f
+  input:
+    v: !int
+  nodes:
+    x:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:double
+      input:
+        n: ${input.v}
+      output: int
+      asserts:
+        - "upper(n, n) == 'A'"
+  output: ${x.output}
+python_flow: |2
+
+  id: f
+  name: f
+  input:
+    v: !int
+  nodes:
+    x:
+      kind: code
+      code: tests.engine._compose_codefns:double
+      input:
+        n: ${input.v}
+      output: int
+      asserts:
+        - "upper(n, n) == 'A'"
+  output: ${x.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'x' assert "upper(n, n) == 'A'": not a valid boolean expression (expression function 'upper' takes (s): too many positional arguments)
+      frames:
+      - label: flow.yaml
+        range: [14, 9, 14, 29]

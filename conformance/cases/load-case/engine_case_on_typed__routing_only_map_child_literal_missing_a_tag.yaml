@@ -1,0 +1,46 @@
+kind: load
+# TS spells the uncovered tags as JSON text (rules: messages); Python's repr in python_expect.
+rules: [messages]
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Xs: list(Literal(a, b))
+  input:
+    xs: !Xs
+  nodes:
+    each:
+      kind: map
+      over: ${input.xs}
+      input:
+        x: ${item}
+      nodes:
+        route:
+          kind: case
+          on: ${input.x}
+          cases:
+            - when: a
+              then: one
+        one:
+          kind: code
+          code: |
+            return "one"
+          output: str
+      output: ${one.output}
+  output: ${each.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'' on ${input.x}: non-exhaustive — enum tag(s) ["b"] not covered by a case `when:` or an `else:`'
+      frames:
+      - label: flow.yaml
+        range: [14, 7, 14, 12]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'' on ${input.x}: non-exhaustive — enum tag(s) [''b''] not covered by a case `when:` or an `else:`'
+      frames:
+      - label: flow.yaml
+        range: [14, 7, 14, 12]

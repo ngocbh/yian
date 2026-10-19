@@ -1,0 +1,65 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  defs:
+    bump:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output: int
+          code: "return inputs[\"n\"] + 1n"
+      output:
+        n: ${step.output}
+  nodes:
+    seed:
+      kind: code
+      output: Any
+      code: return 1
+    loop:
+      kind: loop
+      times: 2
+      input:
+        n: ${seed.output}
+      call: bump
+  output: ${loop.output}
+python_flow: |
+  id: p
+  name: p
+  defs:
+    bump:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output: int
+          code: return inputs["n"] + 1
+      output:
+        n: ${step.output}
+  nodes:
+    seed:
+      kind: code
+      output: Any
+      code: return 1
+    loop:
+      kind: loop
+      times: 2
+      input:
+        n: ${seed.output}
+      call: bump
+  output: ${loop.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''loop'': binding ''n'' — child expects ''int'', source is ''Any''; tag the slot (`n: !int ${...}`) to check it at runtime, or narrow it with `isinstance` in a `case`'
+      frames:
+      - label: flow.yaml
+        range: [25, 7, 26, 5]

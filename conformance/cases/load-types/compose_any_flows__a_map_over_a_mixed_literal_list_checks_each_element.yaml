@@ -1,0 +1,40 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  defs:
+    child:
+      input:
+        x: !str
+      nodes:
+        n:
+          kind: code
+          input:
+            x: ${input.x}
+          output: str
+          code: "return String(inputs['x'])"
+      output: ${n.output}
+  input:
+    s: !str
+  nodes:
+    mk:
+      kind: code
+      input:
+        s: ${input.s}
+      code: |
+        return null
+    m:
+      kind: map
+      over: ['a', 1]
+      call: child
+      input:
+        x: ${item}
+  output: ${m.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'call node ''m'': binding ''x'' — child expects ''str'', but the element 1 does not fit; quote it to keep it as text: "1"'
+      frames:
+      - label: flow.yaml
+        range: [29, 7, 30, 1]

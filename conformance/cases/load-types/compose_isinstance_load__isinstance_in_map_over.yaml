@@ -1,0 +1,39 @@
+kind: load
+flow: |
+  id: m
+  name: m
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', price: float}
+    Order: Union(Buy, Sell)
+    Running: Literal(running)
+  input:
+    items: !list(int)
+  defs:
+    one:
+      input:
+        x: !int
+      nodes:
+        e:
+          kind: code
+          input:
+            x: ${input.x}
+          code: |
+            return inputs["x"]
+      output: ${e.output}
+  nodes:
+    each:
+      kind: map
+      call: one
+      over: ${isinstance(input.items, Buy)}
+      input:
+        x: ${item}
+  output: ${each.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''each'': isinstance is not supported in a map node''s over:'
+      frames:
+      - label: flow.yaml
+        range: [26, 11, 26, 42]

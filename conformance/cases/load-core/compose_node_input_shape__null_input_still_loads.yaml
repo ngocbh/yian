@@ -1,0 +1,67 @@
+kind: load
+flow: |
+  id: input-shape
+  name: input_shape
+  input:
+    z: !int
+  defs:
+    step:
+      input:
+        n: !int
+      nodes:
+        b:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": inputs["n"] + 1n}
+      output: ${b.output}
+  nodes:
+    seed:
+      kind: code
+      input:
+        z: ${input.z}
+      output:
+        n: int
+      code: |
+        return {"n": inputs["z"]}
+    c:
+      kind: code
+      code: return 1
+      input:
+python_flow: |
+  id: input-shape
+  name: input_shape
+  input:
+    z: !int
+  defs:
+    step:
+      input:
+        n: !int
+      nodes:
+        b:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": inputs["n"] + 1}
+      output: ${b.output}
+  nodes:
+    seed:
+      kind: code
+      input:
+        z: ${input.z}
+      output:
+        n: int
+      code: |
+        return {"n": inputs["z"]}
+    c:
+      kind: code
+      code: return 1
+      input:
+expect:
+  load: ok

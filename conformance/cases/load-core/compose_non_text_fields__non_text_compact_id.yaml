@@ -1,0 +1,15 @@
+kind: load
+flow: |
+  id: 0
+  name: f
+  output: int
+  kind: code
+  code: return 1
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'compact (single-node) flow: `id:` must be text, but YAML read it as an integer; put it in quotes'
+      frames:
+      - label: flow.yaml
+        range: [1, 5, 1, 6]

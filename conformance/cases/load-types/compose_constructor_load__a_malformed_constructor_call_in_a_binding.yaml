@@ -1,0 +1,36 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: Literal(buy), conviction: float}
+    Sell: {action: Literal(sell), price: float}
+    Decision: Union(Buy, Sell)
+    Size: Literal(s, m, l)
+  input:
+    order: !object
+  nodes:
+    d:
+      kind: code
+      input:
+        order: ${input.order}
+      output: object
+      code: |
+        return inputs["order"]
+    c:
+      kind: code
+      input:
+        x: ${Buy(d.output, action="buy")}
+      code: |
+        return inputs["x"]
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has constructor calls that can never succeed:
+          node 'c' input 'x' from: Buy(...) takes keyword fields, as in Buy(name=value, ...), or one value to check, as in Buy(x)
+      frames:
+      - label: flow.yaml
+        range: [21, 10, 21, 40]

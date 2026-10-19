@@ -1,0 +1,28 @@
+kind: load
+flow: |
+  id: chat
+  name: chat
+  input:
+    name: !str
+    title: !str
+    message: !str
+  nodes:
+    reply:
+      kind: agent
+      input: {name: "${input.name}", title: "${input.title}", message: "${input.message}"}
+      variables:
+        tone: !str warm
+      system_prompt: "You are ${input.name}."
+      prompt: ${message}
+      output: str
+  output: ${reply.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'reply' system_prompt: ${input.name} is not a declared input or variable (a pool ref belongs in an input `from:`, not a strict AGENT prompt)
+      frames:
+      - label: flow.yaml
+        range: [13, 20, 13, 44]

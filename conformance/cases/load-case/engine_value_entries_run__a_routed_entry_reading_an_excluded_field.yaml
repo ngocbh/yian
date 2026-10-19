@@ -1,0 +1,79 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Buy:
+      action: Literal(buy)
+      qty: int
+    Sell:
+      action: Literal(sell)
+      price: float
+  input:
+    kind: !str
+  nodes:
+    d:
+      kind: code
+      input:
+        kind: ${input.kind}
+      code: |
+        if (inputs["kind"] === "buy")
+          return {action: "buy", qty: 3n}
+        return {action: "sell", price: 1.5}
+      output: Union(Buy, Sell)
+    route:
+      kind: case
+      on: ${d.output.action}
+      cases:
+        - when: buy
+          then: buy
+      else: other
+    buy: !object
+      qty: 0
+    other: !object
+      qty: "${d.output.qty}"
+  output: ${route.output}
+python_flow: |
+  id: f
+  name: f
+  typedefs:
+    Buy:
+      action: Literal(buy)
+      qty: int
+    Sell:
+      action: Literal(sell)
+      price: float
+  input:
+    kind: !str
+  nodes:
+    d:
+      kind: code
+      input:
+        kind: ${input.kind}
+      code: |
+        if inputs["kind"] == "buy":
+            return {"action": "buy", "qty": 3}
+        return {"action": "sell", "price": 1.5}
+      output: Union(Buy, Sell)
+    route:
+      kind: case
+      on: ${d.output.action}
+      cases:
+        - when: buy
+          then: buy
+      else: other
+    buy: !object
+      qty: 0
+    other: !object
+      qty: "${d.output.qty}"
+  output: ${route.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          value entry 'other' from: reference ${d.output.qty} reads unknown field 'qty' on record
+      frames:
+      - label: flow.yaml
+        range: [32, 10, 32, 27]

@@ -1,0 +1,29 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    child:
+      input:
+        qty: int
+      kind: code
+      code: return 1
+      output: int
+  nodes:
+    c:
+      kind: call
+      call: child
+      input:
+        qty: 1
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''child'': flow input ''qty'': write the type as a tag: `qty: !int`'
+      frames:
+      - label: flow.yaml
+        range: [5, 5, 10, 1]
+        note: definition 'child'
+      - label: flow.yaml
+        range: [6, 12, 6, 15]

@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    ask:
+      kind: human_input
+      input:
+        x: ${input.x}
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''ask'' (kind=human_input): needs `prompt:`, `questions:`, or `adaptive_questions:`'
+      frames:
+      - label: flow.yaml
+        range: [7, 5, 10, 1]

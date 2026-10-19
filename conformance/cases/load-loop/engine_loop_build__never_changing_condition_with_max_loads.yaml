@@ -1,0 +1,25 @@
+kind: load
+flow: |2
+
+  id: loop-never-ends
+  name: loop_never_ends
+  defs:
+    body:
+      input:
+        done: !bool
+        attempts: !int
+      nodes: {}
+      output:
+        attempts: ${input.attempts + 1}
+  nodes:
+    wait:
+      kind: loop
+      call: body
+      input:
+        done: false
+        attempts: 0
+      until: done
+      max: 3
+  output: ${wait.output}
+expect:
+  load: ok

@@ -1,0 +1,24 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  llm_config:
+    provider: anthropic
+    anthropic: {max_tokens: 8000}
+  defs:
+    sub:
+      llm_config:
+        minimax-cn: {thinking: {type: adaptive}}
+      nodes:
+        a: {kind: agent, prompt: hi}
+      output: ${a.output}
+  nodes:
+    s: {kind: call, call: sub}
+    b:
+      kind: agent
+      prompt: hi
+      llm_config:
+        google: {generationConfig: {thinkingConfig: {thinkingLevel: HIGH}}}
+  output: ${s.output}
+expect:
+  load: ok

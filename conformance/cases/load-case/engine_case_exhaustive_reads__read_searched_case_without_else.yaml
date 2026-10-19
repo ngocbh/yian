@@ -1,0 +1,31 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.x == 'a'"
+          then: pa
+    pa:
+      kind: code
+      code: |
+        return "A"
+      output: str
+    pb:
+      kind: code
+      code: |
+        return "B"
+      output: str
+  output: ${gate.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''gate'' produces a value, so it must be exhaustive: add an `else:` (a searched case needs an else:)'
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 7]

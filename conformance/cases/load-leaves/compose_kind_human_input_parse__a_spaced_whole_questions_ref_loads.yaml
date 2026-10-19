@@ -1,0 +1,14 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    qs: !list(object)
+  nodes:
+    ask:
+      kind: human_input
+      input: {qs: "${input.qs}"}
+      questions: "${ qs }"
+  output: ${ask.output}
+expect:
+  load: ok

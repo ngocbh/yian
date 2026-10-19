@@ -1,0 +1,35 @@
+# From tests/engine/test_flow_identity.py::test_flow_fingerprint_covers_each_included_kind_field.
+# The input a HUMAN_INPUT reads its questions from is identity.
+kind: fingerprint
+flow: |
+  id: human
+  name: human
+  nodes:
+    src:
+      kind: tool
+      tool_id: src
+      output: list(object)
+    node:
+      kind: human_input
+      input:
+        first: ${src.output}
+        second: ${src.output}
+      questions: ${first}
+  output: ${node.output}
+other: |
+  id: human
+  name: human
+  nodes:
+    src:
+      kind: tool
+      tool_id: src
+      output: list(object)
+    node:
+      kind: human_input
+      input:
+        first: ${src.output}
+        second: ${src.output}
+      questions: ${second}
+  output: ${node.output}
+expect:
+  fingerprint: different

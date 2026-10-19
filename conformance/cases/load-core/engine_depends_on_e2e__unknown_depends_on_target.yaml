@@ -1,0 +1,39 @@
+kind: load
+flow: |2
+
+  id: bad-dep
+  name: bad_dep
+  input:
+    topic: !str
+  nodes:
+    fetch:
+      kind: code
+      depends_on: [nope]
+      code: ./fixtures/compose_codefns.ts:pick_pro
+      input:
+        topic: ${input.topic}
+      output: str
+  output: ${fetch.output}
+python_flow: |2
+
+  id: bad-dep
+  name: bad_dep
+  input:
+    topic: !str
+  nodes:
+    fetch:
+      kind: code
+      depends_on: [nope]
+      code: tests.engine._compose_codefns:pick_pro
+      input:
+        topic: ${input.topic}
+      output: str
+  output: ${fetch.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''fetch'': `depends_on` references unknown node ''nope'''
+      frames:
+      - label: flow.yaml
+        range: [7, 3, 7, 8]

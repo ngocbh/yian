@@ -1,0 +1,22 @@
+# From tests/engine/test_defaults_recorded.py::test_mismatch_is_reported_before_the_fingerprint.
+# The AGENT retries default is baked into identity, so no retries key fingerprints like an explicit `retries: 2`.
+kind: fingerprint
+flow: |
+  id: talk
+  name: talk
+  nodes:
+    ask:
+      kind: agent
+      prompt: say hi
+  output: ${ask.output}
+other: |
+  id: talk
+  name: talk
+  nodes:
+    ask:
+      kind: agent
+      prompt: say hi
+      retries: 2
+  output: ${ask.output}
+expect:
+  fingerprint: same

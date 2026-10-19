@@ -1,0 +1,30 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Cfg:
+      model: str
+      api_key: str
+  input:
+    m: !str
+    p: !str
+    t: !float
+    u: !str
+    i: !bool
+    a: !object
+    cfg: !object
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config: !Cfg ${input.cfg}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'': llm_config: its type declares `api_key`; llm_config.api_key is a host credential; pass it in the run''s llm_config, not in a flow file'
+      frames:
+      - label: flow.yaml
+        range: [19, 17, 19, 34]

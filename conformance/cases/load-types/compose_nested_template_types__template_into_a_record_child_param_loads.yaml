@@ -1,0 +1,35 @@
+kind: load
+flow: |
+  typedefs:
+    Rec:
+      a: str
+      n: int
+    Buy:
+      conviction: float
+    Obj:
+      n: int
+    Trade:
+      action: Literal(buy)
+      conviction: float
+  id: nested_call
+  name: nested_call
+  defs:
+    child:
+      input:
+        p: !Rec
+      nodes: {}
+      output: ${input.p}
+  nodes:
+    n:
+      kind: code
+      output: str
+      code: |
+        return "hi"
+    c:
+      kind: call
+      call: child
+      input:
+        p: {a: '${n.output}', n: 1}
+  output: ${c.output}
+expect:
+  load: ok

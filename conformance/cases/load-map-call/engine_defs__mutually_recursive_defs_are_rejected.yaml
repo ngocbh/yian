@@ -1,0 +1,49 @@
+kind: load
+flow: |2
+
+  id: mutual
+  name: mutual
+  input:
+    topic: !str
+  defs:
+    a:
+      input:
+        topic: !str
+      nodes:
+        to_b:
+          kind: call
+          call: b
+          input:
+            topic: ${input.topic}
+      output: ${to_b.output}
+    b:
+      input:
+        topic: !str
+      nodes:
+        to_a:
+          kind: call
+          call: a
+          input:
+            topic: ${input.topic}
+      output: ${to_a.output}
+  nodes:
+    go:
+      kind: call
+      call: a
+      input:
+        topic: ${input.topic}
+  output: ${go.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''a'': defs entry ''b'': recursive defs reference: callable ''a'' is defined in terms of itself (the baked call graph must be finite)'
+      frames:
+      - label: flow.yaml
+        range: [8, 5, 17, 3]
+        note: definition 'a'
+      - label: flow.yaml
+        range: [18, 5, 27, 1]
+        note: definition 'b'
+      - label: flow.yaml
+        range: [8, 5, 17, 3]

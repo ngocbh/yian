@@ -1,0 +1,42 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: Literal(buy), conviction: float}
+    Sell: {action: Literal(sell), price: float}
+    Decision: Union(Buy, Sell)
+    Size: Literal(s, m, l)
+  input:
+    order: !object
+  defs:
+    check:
+      input:
+        order: !object
+      nodes:
+        e:
+          kind: code
+          input:
+            order: ${input.order}
+          code: |
+            return inputs["order"]
+      output: ${e.output}
+  nodes:
+    run:
+      kind: call
+      call: check
+      input:
+        order: ${input.order}
+      asserts:
+        - Buy(output).conviction > 0
+  output: ${run.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'run' assert 'Buy(output).conviction > 0': Buy(...) in a call node's asserts is not supported; assert inside the child flow
+      frames:
+      - label: flow.yaml
+        range: [29, 9, 29, 35]

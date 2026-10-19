@@ -1,0 +1,26 @@
+kind: load
+# The condition text is quoted as written, the Python-repr way (TS reprText): shared.
+flow: |2
+
+  id: f
+  name: f
+  input:
+    v: !int
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "upper('a', 'b') == 'A'"
+          then: hot
+      else: cold
+    hot: {kind: code, code: "return 'hot'", output: str}
+    cold: {kind: code, code: "return 'cold'", output: str}
+  output: ${hot.output | cold.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''gate'': `when:` "upper(''a'', ''b'') == ''A''" is not a valid boolean expression: expression function ''upper'' takes (s): too many positional arguments'
+      frames:
+      - label: flow.yaml
+        range: [10, 15, 10, 39]

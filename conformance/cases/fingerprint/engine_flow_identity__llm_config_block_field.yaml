@@ -1,0 +1,35 @@
+# From tests/engine/test_flow_identity.py::test_flow_fingerprint_tracks_block_fields_but_not_key_order.
+# A field in an llm_config provider block is identity.
+kind: fingerprint
+flow: |
+  id: blocks
+  name: blocks
+  llm_config:
+    provider: anthropic
+    anthropic:
+      max_tokens: 2048
+      output_config:
+        effort: low
+  nodes:
+    ask:
+      kind: agent
+      prompt: Answer briefly.
+      output: str
+  output: ${ask.output}
+other: |
+  id: blocks
+  name: blocks
+  llm_config:
+    provider: anthropic
+    anthropic:
+      max_tokens: 2048
+      output_config:
+        effort: high
+  nodes:
+    ask:
+      kind: agent
+      prompt: Answer briefly.
+      output: str
+  output: ${ask.output}
+expect:
+  fingerprint: different

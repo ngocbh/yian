@@ -1,0 +1,27 @@
+# From tests/engine/test_flow_identity.py::test_agent_variable_identity_tracks_names_domains_defaults_and_order_only.
+# An AGENT variable's domain is identity.
+kind: fingerprint
+flow: |
+  id: agent
+  name: agent
+  nodes:
+    ask:
+      kind: agent
+      prompt: p
+      variables:
+        count: !int(1..12) 4
+      output: str
+  output: ${ask.output}
+other: |
+  id: agent
+  name: agent
+  nodes:
+    ask:
+      kind: agent
+      prompt: p
+      variables:
+        count: !int(1..8) 4
+      output: str
+  output: ${ask.output}
+expect:
+  fingerprint: different

@@ -1,0 +1,30 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    R: {a: str}
+  input:
+    s: !str
+    r: !R
+    tags: !list(str)
+    o: !object
+    d: !file
+  nodes:
+    step:
+      kind: code
+      input:
+        v: ${input.r.b}
+      output: str
+      code: return 'x'
+  output: ${step.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'step' input 'v' from: reference ${input.r.b} reads unknown field 'b' on record
+      frames:
+      - label: flow.yaml
+        range: [15, 10, 15, 22]

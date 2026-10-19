@@ -1,0 +1,42 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: "return ({a: \"x\"})"
+    d:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Order
+      code: "return null"
+    ag:
+      kind: agent
+      input:
+        v: !Order ${d.output}
+      prompt: "${v.qty}"
+  output: ${ag.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'ag' prompt: reference ${v.qty} reads field 'qty', which only union members with action buy have; read it inside a case on ${d.output.action}
+      frames:
+      - label: flow.yaml
+        range: [29, 13, 29, 23]

@@ -1,0 +1,43 @@
+kind: load
+# TS spells the text value JSON-quoted (rules: messages); Python's repr in python_expect.
+rules: [messages]
+flow: |
+  id: f
+  name: f
+  input:
+    n: !date
+  nodes:
+    route:
+      kind: case
+      on: ${input.n}
+      cases:
+        - when: "2026-1-2"
+          then: one
+      else: other
+    one:
+      kind: code
+      code: |
+        return "one"
+      output: str
+    other:
+      kind: code
+      code: |
+        return "other"
+      output: str
+  output: ${one.output | other.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'': `when: "2026-1-2"` is not a value of `on: ${input.n}` (`date`): "2026-1-2" does not match declared type date: date must look like 2026-05-21'
+      frames:
+      - label: flow.yaml
+        range: [10, 15, 10, 25]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'': `when: "2026-1-2"` is not a value of `on: ${input.n}` (`date`): ''2026-1-2'' does not match declared type date: date must look like 2026-05-21'
+      frames:
+      - label: flow.yaml
+        range: [10, 15, 10, 25]

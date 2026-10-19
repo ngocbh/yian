@@ -1,0 +1,45 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    m: !Optional(str)
+    n: !Optional(int)
+    s: !str
+    xs: !list(int)
+    ds: !list(str)
+    rs: !list(R)
+    os: !list(Optional(str))
+    d: !Optional(date)
+  typedefs:
+    R:
+      a: int
+    AB: Literal(a, b)
+  defs:
+    child:
+      input:
+        t: !int
+      nodes:
+        n:
+          kind: code
+          input:
+            t: ${input.t}
+          output: str
+          code: "return String(inputs[\"t\"])"
+      output: ${n.output}
+  nodes:
+    c:
+      kind: call
+
+      call: child
+      input:
+        t: "abc"
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'call node ''c'': binding ''t'' — child expects ''int'', but the value "abc" does not fit'
+      frames:
+      - label: flow.yaml
+        range: [34, 7, 35, 1]

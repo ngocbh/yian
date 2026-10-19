@@ -1,0 +1,27 @@
+kind: load
+flow: |2
+
+  id: bad
+  name: bad
+  input:
+    topic: !str
+  defs:
+    oops:
+      input:
+        topic: !str
+      output: ${nope.output}
+  nodes:
+    go:
+      kind: call
+      call: oops
+      input:
+        topic: ${input.topic}
+  output: ${go.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''oops'': a child flow needs a `nodes:` body (input?/nodes/output?) OR a single-node `kind:` form'
+      frames:
+      - label: flow.yaml
+        range: [8, 5, 11, 1]

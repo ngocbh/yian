@@ -1,0 +1,23 @@
+# TS spells the name list as JSON text (rules: messages); Python's repr in python_expect.
+kind: load
+rules: [messages]
+flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    a: {kind: call, call: a, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+  uses:
+    a: child
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'uses: alias ["a"] collides with a node id'
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'uses: alias [''a''] collides with a node id'

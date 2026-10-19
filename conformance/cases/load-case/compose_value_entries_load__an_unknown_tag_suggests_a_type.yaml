@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    t: !str
+  nodes:
+    s:
+      kind: code
+      output: float
+      code: |
+        return 0.5
+    x: !Strr hi
+  output: ${x.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''x'': `!Strr` is not a type (unknown type ''Strr''). Did you mean `str`?'
+      frames:
+      - label: flow.yaml
+        range: [11, 6, 11, 14]

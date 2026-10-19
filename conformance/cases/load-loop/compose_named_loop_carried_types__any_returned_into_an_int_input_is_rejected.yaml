@@ -1,0 +1,37 @@
+kind: load
+flow: |2
+
+  id: named
+  name: named
+  input:
+    z: !int
+  defs:
+    step:
+      input:
+        n: !int
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: Any
+          code: |
+            return {"n": 1}
+      output: ${bump.output}
+  nodes:
+    repeat:
+      kind: loop
+      times: 2
+      call: step
+      input:
+        n: ${input.z}
+  output: ${repeat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''repeat'': the body ''step'' returns ''n'' as Any, but takes ''n'' as int; narrow it in the body with isinstance in a case, or declare its producer''s type'
+      frames:
+      - label: flow.yaml
+        range: [26, 10, 26, 20]

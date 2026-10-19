@@ -1,0 +1,16 @@
+kind: load
+flow: |
+  id: routed
+  name: routed
+  llm_config: {provider: openai, headers: {X-Gateway: gw-token-91c3d0aa}}
+  nodes:
+    agent: {kind: agent, prompt: hi}
+  output: ${agent.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'flow: llm_config.headers goes wherever the host''s api_key is sent; pass it with that key in the run''s llm_config, or save it with the login by `yian auth`, not in a flow file'
+      frames:
+      - label: flow.yaml
+        range: [3, 13, 3, 72]

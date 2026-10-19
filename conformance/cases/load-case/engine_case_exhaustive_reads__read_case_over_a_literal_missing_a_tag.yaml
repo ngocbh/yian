@@ -1,0 +1,44 @@
+kind: load
+# TS spells the uncovered tags as JSON text (rules: messages); Python's repr in python_expect.
+rules: [messages]
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Choice: Literal(a, b)
+  input:
+    choice: !Choice
+  nodes:
+    gate:
+      kind: case
+      on: ${input.choice}
+      cases:
+        - when: a
+          then: pa
+    pa:
+      kind: code
+      code: |
+        return "A"
+      output: str
+    pb:
+      kind: code
+      code: |
+        return "B"
+      output: str
+  output: ${gate.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''gate'' produces a value, so it must be exhaustive: add an `else:` (enum tag(s) ["b"] not covered)'
+      frames:
+      - label: flow.yaml
+        range: [8, 3, 8, 7]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''gate'' produces a value, so it must be exhaustive: add an `else:` (enum tag(s) [''b''] not covered)'
+      frames:
+      - label: flow.yaml
+        range: [8, 3, 8, 7]

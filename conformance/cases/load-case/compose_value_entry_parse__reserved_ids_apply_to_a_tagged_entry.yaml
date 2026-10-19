@@ -1,0 +1,19 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    input: !int 5
+    step:
+      kind: code
+      code: |
+        return 1
+  output: ${step.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: node id 'input' is reserved (used as `${input.X}` as a resolver head — pick a different node id)
+      frames:
+      - label: flow.yaml
+        range: [4, 10, 4, 16]

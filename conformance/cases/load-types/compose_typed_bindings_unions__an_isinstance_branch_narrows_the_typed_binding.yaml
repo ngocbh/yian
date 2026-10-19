@@ -1,0 +1,45 @@
+kind: load
+flow: |
+  id: unions
+  name: unions
+
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', qty: int, price: float}
+    Hold: {action: 'Literal(hold)', note: str}
+    Decision: Union(Buy, Sell, Hold)
+    BuyOrSell: Union(Buy, Sell)
+  input:
+    decision: !object
+  nodes:
+    decide:
+      kind: code
+      input:
+        decision: ${input.decision}
+      code: return inputs['decision']
+      output: Decision
+    route:
+      kind: case
+      cases:
+        - when: isinstance(decide.output, Buy)
+          then: on_buy
+      else: other
+    on_buy:
+      kind: code
+      input:
+        sell: !Sell ${decide.output}
+      code: return 1
+    other:
+      kind: code
+      input:
+        sell: !Sell ${decide.output}
+      code: return 1
+  output: ${decide.output.action}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''on_buy'' input ''sell'': declared Sell, but the value is {"action":Literal(buy),"qty":int}'
+      frames:
+      - label: flow.yaml
+        range: [28, 13, 28, 35]

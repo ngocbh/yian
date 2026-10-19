@@ -1,0 +1,30 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input: {v: !str }
+  defs:
+    body:
+      input: {w: !str }
+      nodes:
+        s: {kind: code, code: "return inputs['n']", input: {n: '${input.w}'}, output: str}
+      output: ${s.output}
+  nodes:
+    x:
+      kind: code
+      code: "return inputs['n']"
+      output: str
+      input:
+        n: call(body, w=${upper(input.v, 1)})
+  output: ${x.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'x' input 'n' call(body) argument 'w' from: expression function 'upper' takes (s): too many positional arguments
+      frames:
+      - label: flow.yaml
+        range: [17, 10, 17, 44]

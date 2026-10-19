@@ -1,0 +1,31 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: "return ({a: \"x\"})"
+  output: ${step.output}
+  asserts:
+    - "input.r.b == 'x'"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'assert "input.r.b == ''x''": reference ${input.r.b} reads unknown field ''b'' on record'
+      frames:
+      - label: flow.yaml
+        range: [21, 5, 21, 23]

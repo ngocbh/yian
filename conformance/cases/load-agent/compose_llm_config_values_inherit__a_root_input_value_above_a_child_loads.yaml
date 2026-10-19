@@ -1,0 +1,27 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input: {m: !str }
+  llm_config: {model: '${input.m}'}
+  defs:
+    child:
+      nodes:
+        a:
+          kind: agent
+          prompt: Go.
+      output: ${a.output}
+  nodes:
+    pick:
+      kind: agent
+      prompt: Pick a model.
+      output: str
+      llm_config: {model: m0}
+    c:
+      kind: call
+      call: child
+      input: {}
+      depends_on: [pick]
+  output: ${c.output}
+expect:
+  load: ok

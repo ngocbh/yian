@@ -1,0 +1,16 @@
+kind: load
+flow: |2
+
+  id: checked
+  name: checked
+  nodes: {}
+  output:
+    x: !int null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''x'': `null` is not a valid int'
+      frames:
+      - label: flow.yaml
+        range: [6, 6, 6, 15]

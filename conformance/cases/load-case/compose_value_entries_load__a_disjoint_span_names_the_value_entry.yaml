@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    t: !str
+  nodes:
+    s:
+      kind: code
+      output: float
+      code: |
+        return 0.5
+    x: !str ${s.output}
+  output: ${x.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'value entry ''x'': declared str, but the value is float'
+      frames:
+      - label: flow.yaml
+        range: [11, 6, 11, 22]

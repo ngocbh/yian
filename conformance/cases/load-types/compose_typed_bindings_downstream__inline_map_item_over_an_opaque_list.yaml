@@ -1,0 +1,33 @@
+kind: load
+flow: |2
+
+  id: inline-map-item
+  name: inline_map_item
+  nodes:
+    opaque:
+      kind: code
+      code: |
+        return ["a", "b"]
+    each:
+      kind: map
+      over: ${opaque.output}
+      input:
+        t: ${item}
+      nodes:
+        shout:
+          kind: code
+          input:
+            t: ${input.t}
+          output: str
+          code: |
+            return inputs["t"].toUpperCase()
+      output: ${shout.output}
+  output: ${each.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'cannot infer type for inline binding ''each.input.t'': producer ''opaque'' has no available static type; declare its type with a tag (`t: !<type> ...`) or use an explicitly typed named `defs:` body'
+      frames:
+      - label: flow.yaml
+        range: [13, 10, 13, 17]

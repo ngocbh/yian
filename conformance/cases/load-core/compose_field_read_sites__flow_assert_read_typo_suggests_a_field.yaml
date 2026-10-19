@@ -1,0 +1,37 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: "return ({a: \"x\"})"
+    d:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Order
+      code: "return null"
+  output: ${step.output}
+  asserts:
+    - "isinstance(d.output, Sell) or d.output.qtty > 0"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'assert ''isinstance(d.output, Sell) or d.output.qtty > 0'': reference ${d.output.qtty} reads field ''qtty'', which Buy doesn''t have; d.output is Buy here, by the checks before this read; did you mean ''qty''?'
+      frames:
+      - label: flow.yaml
+        range: [27, 5, 27, 54]

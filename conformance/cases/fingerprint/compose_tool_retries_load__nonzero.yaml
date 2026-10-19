@@ -1,0 +1,22 @@
+# From tests/compose/test_tool_retries_load.py::test_nonzero_retries_changes_the_flow_fingerprint.
+# Nonzero TOOL retries change the fingerprint.
+kind: fingerprint
+flow: |
+  id: retries
+  name: retries
+  nodes:
+    place:
+      kind: tool
+      tool_id: place
+  output: ${place.output}
+other: |
+  id: retries
+  name: retries
+  nodes:
+    place:
+      kind: tool
+      tool_id: place
+      retries: 1
+  output: ${place.output}
+expect:
+  fingerprint: different

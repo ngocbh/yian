@@ -1,0 +1,22 @@
+kind: load
+flow: |2
+
+  id: keyed
+  name: Keyed
+  llm_config:
+    provider: openai
+    api_key: sk-flow-secret
+  nodes:
+    ask:
+      kind: agent
+      prompt: Answer briefly.
+      output: str
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'flow: llm_config.api_key is a host credential; pass it in the run''s llm_config, not in a flow file'
+      frames:
+      - label: flow.yaml
+        range: [5, 3, 7, 1]

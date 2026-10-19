@@ -1,0 +1,57 @@
+kind: load
+flow: |2
+
+  id: checked
+  name: checked
+  nodes:
+    note:
+      kind: code
+      output: str
+      code: |
+        return "hi"
+    wrap:
+      kind: call
+      input:
+        n: !int ${note.output}
+      nodes:
+        twice:
+          kind: code
+          input:
+            n: ${input.n}
+          output: int
+          code: |
+            return inputs["n"] * 2n
+      output: ${twice.output}
+  output: ${wrap.output}
+python_flow: |2
+
+  id: checked
+  name: checked
+  nodes:
+    note:
+      kind: code
+      output: str
+      code: |
+        return "hi"
+    wrap:
+      kind: call
+      input:
+        n: !int ${note.output}
+      nodes:
+        twice:
+          kind: code
+          input:
+            n: ${input.n}
+          output: int
+          code: |
+            return inputs["n"] * 2
+      output: ${twice.output}
+  output: ${wrap.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''wrap'' input ''n'': declared int, but the value is str'
+      frames:
+      - label: flow.yaml
+        range: [13, 10, 13, 29]

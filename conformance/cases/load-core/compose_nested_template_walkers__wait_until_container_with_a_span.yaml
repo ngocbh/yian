@@ -1,0 +1,22 @@
+kind: load
+flow: |2
+
+  id: w
+  name: w
+  nodes:
+    a:
+      kind: code
+      code: return '2030-01-01'
+    w:
+      kind: wait
+      until:
+        - ${a.output}
+  output: ${w.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'wait node ''w'' until: a value holding ${...} can''t be a list or mapping; write the list as an expression, e.g. `${[a.output, b.output]}`'
+      frames:
+      - label: flow.yaml
+        range: [11, 7, 12, 1]

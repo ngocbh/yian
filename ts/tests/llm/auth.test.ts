@@ -1,9 +1,14 @@
 /** Tests for the auth objects, their headers and credentials, and the scrub in `src/llm/auth.ts`. */
 
+import { inspect } from "node:util";
+
 import { describe, expect, test } from "bun:test";
 
 import {
+  type Auth,
+  BasicAuth,
   BearerAuth,
+  ExtraHeadersAuth,
   HeaderKeyAuth,
   NoAuth,
   REDACTED,
@@ -13,6 +18,12 @@ import {
   scrub,
   secretForms,
 } from "../../src/llm/auth.ts";
+import { current } from "../../src/defaults.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
+import { RouteModel } from "../../src/llm/executor.ts";
+import { Request } from "../../src/llm/messages.ts";
+import { Route } from "../../src/llm/route.ts";
+import { validateHeaderValue } from "../../src/llm_clients/connection_settings.ts";
 
 /** Return a source yielding `values` in turn, and a counter of its calls. */
 function countingSource<T>(...values: T[]): [() => T, { count: number }] {
@@ -267,4 +278,151 @@ describe("scrub", () => {
     expect(scrub("key sk-1", ["sk-1"], "$&")).toBe("key $&");
     expect(scrub("\\u0073\\u006B\\u0031", ["sk1"], "$&")).toBe("$&");
   });
+});
+
+/** Return the error a `RouteModel` over `auth` ends with when the server answers 401 echoing `secret`. */
+async function errorEchoing(secret: string, auth: Auth): Promise<ProviderError> {
+  const send = async () => new Response(JSON.stringify({ error: `bad credential ${secret}` }), { status: 401 });
+  const model = new RouteModel({
+    route: new Route({ provider: "ollama", baseUrl: "http://gpu-box:11434", path: "api/chat", auth }),
+    protocol: { name: "test", model: "m", framing: "sse", buildBody: () => ({}), async *parse() {} },
+    send,
+  });
+  const error = await rejection(
+    (async () => {
+      for await (const _ of model.stream(new Request({ messages: [] })));
+    })(),
+  );
+  expect(error).toBeInstanceOf(ProviderError);
+  return error as ProviderError;
+}
+
+describe("BasicAuth", () => {
+  test("sends Basic and the base64 of user:password", async () => {
+    const auth = new BasicAuth("u", "p");
+    expect(await auth.headers()).toEqual({ Authorization: "Basic dTpw" });
+    expect(auth.credentials()).toEqual(["p", "dTpw"]);
+  });
+
+  test("encodes a non-ASCII user as UTF-8", async () => {
+    const auth = new BasicAuth("üser", "pw");
+    // base64 of the UTF-8 bytes c3 bc 73 65 72 3a 70 77.
+    expect(await auth.headers()).toEqual({ Authorization: "Basic w7xzZXI6cHc=" });
+    expect(auth.credentials()).toEqual(["pw", "w7xzZXI6cHc="]);
+  });
+
+  test("an empty password leaves only the token in the credentials", async () => {
+    const auth = new BasicAuth("u", "");
+    expect(await auth.headers()).toEqual({ Authorization: "Basic dTo=" });
+    expect(auth.credentials()).toEqual(["dTo="]);
+  });
+
+  test("a 401 echoing the password is scrubbed from the error", async () => {
+    const password = "hunter2-secret-pw";
+    const error = await errorEchoing(password, new BasicAuth("me", password));
+    expect(error.message).toContain(REDACTED);
+    expect(error.message).not.toContain(password);
+    expect(error.stack ?? "").not.toContain(password);
+  });
+});
+
+describe("ExtraHeadersAuth", () => {
+  test("merges the headers, the inner auth's winning a clash", async () => {
+    const auth = new ExtraHeadersAuth(new BearerAuth("sk-1"), { "x-extra": "e1", Authorization: "lost" });
+    expect(await auth.headers()).toEqual({ "x-extra": "e1", Authorization: "Bearer sk-1" });
+  });
+
+  test("lists the header values after the inner auth's credentials, without duplicates", () => {
+    const auth = new ExtraHeadersAuth(new BearerAuth("sk-1"), { "x-a": "v-a", "x-b": "sk-1", "x-c": "v-c" });
+    expect(auth.credentials()).toEqual(["sk-1", "v-a", "v-c"]);
+  });
+
+  test("accepts an inner tab", async () => {
+    const auth = new ExtraHeadersAuth(new NoAuth(), { "x-tab": "a\tb" });
+    expect(await auth.headers()).toEqual({ "x-tab": "a\tb" });
+  });
+
+  for (const value of ["sec\rret", "\tsecret", "secret ", "", "sécret"]) {
+    test(`refuses ${JSON.stringify(value)} without echoing it`, () => {
+      let error: unknown;
+      try {
+        new ExtraHeadersAuth(new NoAuth(), { "x-bad": value });
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(TypeError);
+      expect((error as TypeError).message).toBe(
+        "header x-bad value must be non-empty visible ASCII, with spaces or tabs only between characters",
+      );
+      if (value) expect((error as TypeError).stack ?? "").not.toContain(value);
+    });
+  }
+
+  test("an extra header value is scrubbed from the error", async () => {
+    const value = "org-secret-header-value";
+    const error = await errorEchoing(value, new ExtraHeadersAuth(new NoAuth(), { "x-org-secret": value }));
+    expect(error.message).toContain(REDACTED);
+    expect(error.message).not.toContain(value);
+    expect(error.stack ?? "").not.toContain(value);
+  });
+
+  test("checks values exactly as validateHeaderValue does", () => {
+    const limit = current().maxHeaderValueChars;
+    const values: unknown[] = [
+      ...["a\tb", "a b", " a", "a ", "\ta", "a\t", "a\nb", "é", ""],
+      "x".repeat(limit),
+      "x".repeat(limit + 1),
+      42,
+    ];
+    /** Return `"ok"` or the message `check` throws, and the class it throws. */
+    const outcome = (check: () => unknown): [string, string] => {
+      try {
+        check();
+        return ["ok", ""];
+      } catch (error) {
+        return [(error as Error).message, (error as Error).constructor.name];
+      }
+    };
+    for (const value of values) {
+      const ours = outcome(() => new ExtraHeadersAuth(new NoAuth(), { x: value as string }));
+      const theirs = outcome(() => validateHeaderValue("x", value));
+      expect(ours[0], JSON.stringify(value)).toBe(theirs[0]);
+      if (ours[0] !== "ok") expect([ours[1], theirs[1]]).toEqual(["TypeError", "RangeError"]);
+    }
+    // Both accept exactly these.
+    expect(values.filter((value) => outcome(() => validateHeaderValue("x", value))[0] === "ok")).toEqual([
+      "a\tb",
+      "a b",
+      "x".repeat(limit),
+    ]);
+  });
+
+  test("copies its input", async () => {
+    const headers = { "x-extra": "before" };
+    const auth = new ExtraHeadersAuth(new NoAuth(), headers);
+    headers["x-extra"] = "after";
+    expect(await auth.headers()).toEqual({ "x-extra": "before" });
+    expect(auth.credentials()).toEqual(["before"]);
+  });
+});
+
+describe("inspect", () => {
+  const cases: [string, () => Auth][] = [
+    ["BearerAuth", () => new BearerAuth("sk-bearer-secret")],
+    ["BearerAuth with a callable key", () => new BearerAuth(() => "sk-callable-secret")],
+    ["HeaderKeyAuth", () => new HeaderKeyAuth("x-api-key", "k-header-secret")],
+    ["SubscriptionAuth", () => new SubscriptionAuth(() => access("tok-secret", "acct-secret", "us"))],
+    ["BasicAuth", () => new BasicAuth("user", "pw-secret")],
+    ["ExtraHeadersAuth", () => new ExtraHeadersAuth(new BearerAuth("sk-inner-secret"), { "x-gateway": "gw-secret" })],
+  ];
+  for (const [name, make] of cases) {
+    test(`${name} shows no secret, even after sending them`, async () => {
+      const auth = make();
+      await auth.headers();
+      const secrets = auth.credentials();
+      expect(secrets.length).toBeGreaterThan(0);
+      const shown = [Bun.inspect(auth), inspect(auth, { depth: Infinity })];
+      for (const text of shown) for (const secret of secrets) expect(text).not.toContain(secret);
+    });
+  }
 });

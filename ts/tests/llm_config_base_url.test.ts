@@ -1,11 +1,20 @@
 /**
  * Mirrors `tests/test_llm_config_base_url.py`: the `LLMConfig`, `host_only_field_error`,
- * `pop_host_credentials` and `check_model_config` tests, and the `resolve_model_config` and
- * `split_model_config` halves of the pinned-connection tests; the client and redirect tests go
- * with the factory.
+ * `pop_host_credentials` and `check_model_config` tests, the pinned-connection tests (their
+ * `chatModelFromConfig` half included), and the client tests, which build the model with
+ * `chatModelFromConfig` and record what a fake `send` receives (it answers 400, so a test checks
+ * the request, not a reply). One redirect test stays: `safeFetch` refuses every 3xx, so the
+ * redirect is checked once through the factory for Anthropic and Google, over two loopback
+ * servers with the default transport, as in Python; Python's Azure redirect test, which pins the
+ * openai SDK's and httpx's redirect behavior, is left out. The
+ * `splitOllamaBaseUrl` tests come from s3's planned `split_ollama_base_url` list (not in Python
+ * yet); its "pinned against today" half runs each value through LangChain and the ollama SDK, so
+ * it is left out.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
@@ -13,7 +22,11 @@ import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import type { Env } from "../src/defaults.ts";
-
+import { ProviderError } from "../src/llm/errors.ts";
+import { collect } from "../src/llm/events.ts";
+import { Message, Request, TextPart } from "../src/llm/messages.ts";
+import { OAuthCredentials } from "../src/llm_clients/auth/common.ts";
+import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import {
   azureResourceEndpoint,
   HostConnection,
@@ -21,6 +34,7 @@ import {
   LLMConfig,
   popApiKey,
   popHostCredentials,
+  splitOllamaBaseUrl,
 } from "../src/llm_clients/config.ts";
 import {
   checkModelConfig,
@@ -28,7 +42,9 @@ import {
   resolveModelConfig,
   splitModelConfig,
 } from "../src/llm_clients/connection.ts";
+import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
 import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
+import { type Send, virtualScheduler } from "../src/platform.ts";
 
 const SENTINEL = "sk-sentinel-7d1f3b20";
 const AZURE_V1 = "https://res.openai.azure.com/openai/v1/";
@@ -252,7 +268,7 @@ test("an openai base_url pins a host connection to that endpoint", () => {
   expect([validated.baseUrl, connection!.endpoint]).toEqual([AZURE_V1, AZURE_V1]);
 });
 
-test("a base_url must match its pinned connection", () => {
+test("a base_url must match its pinned connection", async () => {
   const resolved = resolveModelConfig(
     { provider: "openai", model: "gpt-5.4", base_url: AZURE_V1, api_key: SENTINEL },
     { env },
@@ -275,7 +291,211 @@ test("a base_url must match its pinned connection", () => {
     const error = caught(() => splitModelConfig(config));
     expect(error).toBeInstanceOf(RangeError);
     expect(error.message).toContain("host connection endpoint");
+    const built = await chatModelFromConfig(config, { env, onWarning: () => {} }).catch((thrown: Error) => thrown);
+    expect(built).toBeInstanceOf(RangeError);
+    expect((built as Error).message).toContain("host connection endpoint");
   }
+});
+
+// --- clients send the key to the base_url --- //
+
+interface Sent {
+  url: string;
+  headers: Headers;
+  body: string;
+}
+
+/** A `send` that records each request and answers it 400. */
+function recorder(): { requests: Sent[]; send: Send } {
+  const requests: Sent[] = [];
+  const send: Send = async (input, init) => {
+    requests.push({ url: String(input), headers: new Headers(init.headers), body: String(init.body) });
+    return new Response(JSON.stringify({ error: { message: "refused" } }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  return { requests, send };
+}
+
+const HI = new Request({ messages: [new Message({ role: "user", parts: [new TextPart("hi")] })] });
+
+/** Build `config` with `send` (else the default transport), ask "hi" and return the error, or `null`. */
+async function ask(config: Record<string, unknown>, send?: Send): Promise<unknown> {
+  // The default transport does real I/O, which a virtual clock would race to its deadline.
+  const scheduler = send ? virtualScheduler() : undefined;
+  const model = await chatModelFromConfig(config, { env, send, scheduler, onWarning: () => {} });
+  return collect(model.stream(HI)).then(
+    () => null,
+    (thrown: unknown) => thrown,
+  );
+}
+
+const COMPATIBLE = ["vllm", "deepseek", "openrouter"];
+
+test.each(COMPATIBLE)("openai-compatible clients send the key to the base_url (%s)", async (provider) => {
+  // The provider's own endpoint variable and key must not win over the config.
+  vars.set("VLLM_BASE_URL", "http://127.0.0.1:9/v1");
+  vars.set(`${provider.toUpperCase()}_API_KEY`, "sk-environment-key");
+  const { requests, send } = recorder();
+  await ask({ provider, model: "m", base_url: "https://gateway.example.com/v1", api_key: SENTINEL }, send);
+  expect(requests.map(({ url }) => url)).toEqual(["https://gateway.example.com/v1/chat/completions"]);
+  expect(requests[0]!.headers.get("authorization")).toBe(`Bearer ${SENTINEL}`);
+});
+
+test("openai sends the key to an azure v1 base_url", async () => {
+  vars.set("OPENAI_API_KEY", "sk-environment-key");
+  vars.set("OPENAI_BASE_URL", "https://proxy.example.com/v1");
+  // A saved subscription must not take over a keyed config either.
+  await new AuthStore(null, { env }).save(
+    "openai",
+    new OAuthCredentials({
+      accessToken: "access-secret",
+      refreshToken: "refresh-secret",
+      expiresAt: 4102444800,
+      accountId: "account",
+    }),
+    "gpt-5.5",
+  );
+  const { requests, send } = recorder();
+  await ask({ provider: "openai", model: "gpt-5.4", base_url: AZURE_V1, api_key: SENTINEL }, send);
+  expect(requests.map(({ url }) => url)).toEqual(["https://res.openai.azure.com/openai/v1/responses"]);
+  expect(requests[0]!.headers.get("authorization")).toBe(`Bearer ${SENTINEL}`);
+  expect(JSON.parse(requests[0]!.body).model).toBe("gpt-5.4");
+});
+
+// Gemini's base_url is the API root, and the route streams with `alt=sse`.
+const DEDICATED: [string, string, string, string][] = [
+  ["anthropic", "claude-sonnet-4-5", "x-api-key", "v1/messages"],
+  ["google", "gemini-2.5-flash", "x-goog-api-key", "v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"],
+];
+
+test.each(DEDICATED)("dedicated clients send the key to the base_url (%s)", async (provider, model, header, path) => {
+  // Neither the provider's own key nor its endpoint variables may win over the config.
+  for (const name of ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_URL", "GOOGLE_GEMINI_BASE_URL"]) {
+    vars.set(name, "https://decoy.example.com");
+  }
+  vars.set(`${provider.toUpperCase()}_API_KEY`, "sk-environment-key");
+  const { requests, send } = recorder();
+  const error = await ask({ provider, model, base_url: GATEWAY, api_key: SENTINEL }, send);
+  expect(error).toBeInstanceOf(ProviderError);
+  expect(requests.map(({ url, headers }) => [url, headers.get(header)])).toEqual([[`${GATEWAY}${path}`, SENTINEL]]);
+});
+
+const REDIRECT = "dedicated clients do not follow a redirect with the key (%s)";
+
+/** Listen on a free loopback port and return the server's root URL. */
+async function listen(server: http.Server): Promise<string> {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
+
+/** Stop `server`, dropping any open connection. */
+async function stop(server: http.Server): Promise<void> {
+  server.closeAllConnections();
+  await new Promise((resolve) => server.close(resolve));
+}
+
+test.each(DEDICATED)(REDIRECT, async (provider, model, header, path) => {
+  // The first server answers 307 to the second, which must never be contacted.
+  const seen: http.IncomingMessage[] = [];
+  let contacted = 0;
+  const second = http.createServer((_req, res) => res.end("{}"));
+  second.on("connection", () => contacted++);
+  const target = `${await listen(second)}/`;
+  const first = http.createServer((req, res) => {
+    seen.push(req);
+    res.writeHead(307, { Location: target, "Content-Length": "0", Connection: "close" });
+    res.end();
+  });
+  const root = await listen(first);
+  try {
+    const error = await ask({ provider, model, base_url: `${root}/`, api_key: SENTINEL });
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).kind).toBe("redirect");
+    expect(seen.map((req) => [req.url, req.headers[header]])).toEqual([[`/${path}`, SENTINEL]]);
+    expect(contacted).toBe(0);
+  } finally {
+    await Promise.all([stop(first), stop(second)]);
+  }
+});
+
+const OLLAMA_SHAPE =
+  "OLLAMA_BASE_URL must be an http:// or https:// URL of a host, an optional port, and a path, " +
+  "without a query or fragment";
+const OLLAMA_PORT = "OLLAMA_BASE_URL port must be a number from 1 to 65535";
+
+test.each<[string, string, [string, string] | null]>([
+  ["http://gpu-box:11434", "http://gpu-box:11434", null],
+  ["https://gpu-box", "https://gpu-box", null],
+  ["gpu-box:11434", "http://gpu-box:11434", null],
+  ["localhost:11434", "http://localhost:11434", null],
+  ["[::1]:11434", "http://[::1]:11434", null],
+  ["gpu-box:11434/v1", "http://gpu-box:11434", null],
+  ["u:p@gpu-box:11434", "http://gpu-box:11434", ["u", "p"]],
+  ["http://ollama_1:11434", "http://ollama_1:11434", null],
+  ["http://[FE80::1]:11434", "http://[fe80::1]:11434", null],
+  ["http://GPU-Box:11434", "http://gpu-box:11434", null],
+  ["HTTP://gpu-box", "http://gpu-box:11434", null],
+  ["HTTPS://gpu-box", "https://gpu-box:11434", null],
+  ["Http://gpu-box:8080", "http://gpu-box:8080", null],
+  ["HTTP://:pw@gpu-box", "http://gpu-box:11434", null],
+  ["HTTP://u:p@gpu-box", "http://gpu-box", ["u", "p"]],
+  ["http://h/v1", "http://h", null],
+  ["http://h/v1/", "http://h", null],
+  ["http://h/v1//", "http://h", null],
+  ["http://h/a//", "http://h/a", null],
+  ["http://h//a/b/", "http://h/a/b", null],
+  ["http://h:", "http://h", null],
+  ["http://h:011434", "http://h:11434", null],
+  ["http://u%40x:p%3Ab@h", "http://h", ["u@x", "p:b"]],
+  ["http://u:p@x@h:1", "http://h:1", ["u", "p@x"]],
+  ["http://u@h", "http://h", ["u", ""]],
+  ["http://@h", "http://h", null],
+  ["http://:pw@h", "http://h", null],
+])("ollama base url %p is accepted", (value, url, credentials) => {
+  expect(splitOllamaBaseUrl(value)).toEqual([url, credentials]);
+});
+
+test("ollama userinfo decodes like unquote", () => {
+  const user = (userinfo: string) => splitOllamaBaseUrl(`http://${userinfo}@h`)[1];
+  expect(user("u%zz:p")).toEqual(["u%zz", "p"]);
+  expect(user("%C3%A9:%e2%82%ac")).toEqual(["\u00e9", "\u20ac"]);
+  // Invalid UTF-8 becomes U+FFFD per maximal subpart; a BOM stays; a bad escape stays as written.
+  expect(user("%FF:%F0%80%80a")).toEqual(["\ufffd", "\ufffd\ufffd\ufffda"]);
+  expect(user("%EF%BB%BFx:%E2%82")).toEqual(["\ufeffx", "\ufffd"]);
+  expect(user("%zz%41%:%4")).toEqual(["%zzA%", "%4"]);
+  expect(user("\u00fc%41:p")).toEqual(["\u00fcA", "p"]);
+});
+
+test.each<[unknown, string]>([
+  ["gpu-box", OLLAMA_SHAPE],
+  ["ftp://h", OLLAMA_SHAPE],
+  ["//gpu-box:11434", OLLAMA_SHAPE],
+  ["http://:11434", OLLAMA_SHAPE],
+  [":11434", OLLAMA_SHAPE],
+  ["http:///p", OLLAMA_SHAPE],
+  ["http://h:1/p?q=1", OLLAMA_SHAPE],
+  ["http://h:1/p#f", OLLAMA_SHAPE],
+  [" http://h:1", OLLAMA_SHAPE],
+  ["http://h:1\n", OLLAMA_SHAPE],
+  ["http://gpu box:1", OLLAMA_SHAPE],
+  ["http://h:1/a b", OLLAMA_SHAPE],
+  ["http://gp\u00fc-box:1", OLLAMA_SHAPE],
+  ["http://h%41:1", OLLAMA_SHAPE],
+  ["http://h:abc", OLLAMA_SHAPE],
+  ["http://u:secret-pw-9@h:1/?q", OLLAMA_SHAPE],
+  [11434, OLLAMA_SHAPE],
+  [null, OLLAMA_SHAPE],
+  ["http://h:0", OLLAMA_PORT],
+  ["http://h:70000", OLLAMA_PORT],
+  ["http://u:secret-pw-9@h:0", OLLAMA_PORT],
+])("ollama base url %p is refused", (value, message) => {
+  const error = caught(() => splitOllamaBaseUrl(value));
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe(message);
+  if (typeof value === "string") expect(error.message).not.toContain(value);
+  expect(error.message).not.toContain("secret-pw-9");
 });
 
 describe("TS additions", () => {

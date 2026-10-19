@@ -1,10 +1,12 @@
 /**
- * Mirrors `tests/test_llm_config_api_key.py`: the 4 `LLMConfig` tests, the empty-key test without
- * its `model_from_config` half (that half goes with the factory), the host-key marker test
- * through `splitModelConfig`, the `resolve_model_config`, `connection_credentials` and
- * `validate_connection` tests, and the resolve half of the saved-subscription test; the client
- * tests go with the factory. The `redact_key(s)` text tests are here, in `describe("redact")`,
- * with the text half of the `scrub_key(s)` chain tests; `describe("scrub")` runs the `scrub_key(s)`
+ * Mirrors `tests/test_llm_config_api_key.py`: the 4 `LLMConfig` tests, the empty-key and host-key
+ * marker tests with their `chatModelFromConfig` halves, the `resolve_model_config`,
+ * `connection_credentials` and `validate_connection` tests, the saved-subscription test, and the
+ * client tests, which check the built route's auth headers in place of the LangChain key field, or
+ * the request a fake `send` receives (it answers 400, so a test checks the request, not a reply).
+ * The empty-key test's `SecretStr("")` case is left out: TS has no `SecretStr`. The
+ * `redact_key(s)` text tests are here, in `describe("redact")`, with the text half of the
+ * `scrub_key(s)` chain tests; `describe("scrub")` runs the `scrub_key(s)`
  * exception tests through `scrubError`, with `cause` for Python's chaining, `AggregateError`
  * members for exception groups, and a string member for an exception note.
  */
@@ -19,6 +21,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Env } from "../src/defaults.ts";
 import { REDACTED as AUTH_REDACTED } from "../src/llm/auth.ts";
 import { ProviderError, scrubError } from "../src/llm/errors.ts";
+import { collect } from "../src/llm/events.ts";
+import { Message, Request, TextPart } from "../src/llm/messages.ts";
 import { AuthError, OAuthCredentials } from "../src/llm_clients/auth/common.ts";
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import { LLMConfig } from "../src/llm_clients/config.ts";
@@ -29,8 +33,10 @@ import {
   splitModelConfig,
   validateConnection,
 } from "../src/llm_clients/connection.ts";
+import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
 import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
 import { REDACTED, redactKey, redactKeys } from "../src/llm_clients/redact.ts";
+import { type Send, virtualScheduler } from "../src/platform.ts";
 
 const SENTINEL = "sk-sentinel-3f9c1a7e";
 
@@ -91,15 +97,65 @@ test.each([
   }
 });
 
-test("an empty key is rejected instead of falling back", () => {
+/** Build `config` with this test's environment, keeping warnings quiet. */
+function build(config: Record<string, unknown>, send?: Send) {
+  return chatModelFromConfig(config, { env, send, scheduler: virtualScheduler(), onWarning: () => {} });
+}
+
+/** Return what `promise` rejects with; `null` if it resolves. */
+function rejection(promise: Promise<unknown>): Promise<unknown> {
+  return promise.then(
+    () => null,
+    (thrown: unknown) => thrown,
+  );
+}
+
+interface Sent {
+  url: string;
+  headers: Headers;
+}
+
+/** A `send` that records each request and answers it 400. */
+function recorder(): { requests: Sent[]; send: Send } {
+  const requests: Sent[] = [];
+  const send: Send = async (input, init) => {
+    requests.push({ url: String(input), headers: new Headers(init.headers) });
+    return new Response(JSON.stringify({ error: { message: "refused" } }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  return { requests, send };
+}
+
+const HI = new Request({ messages: [new Message({ role: "user", parts: [new TextPart("hi")] })] });
+
+/** Build `config` with a recording `send`, ask it "hi", and return the requests sent. */
+async function requestsOf(config: Record<string, unknown>): Promise<Sent[]> {
+  const { requests, send } = recorder();
+  const model = await build(config, send);
+  await rejection(collect(model.stream(HI)));
+  return requests;
+}
+
+test("an empty key is rejected instead of falling back", async () => {
+  vars.set("GOOGLE_API_KEY", "sk-environment-key");
   expect(thrown({ provider: "google", api_key: "" }).message).toContain("api_key");
+  const error = await rejection(build({ provider: "google", model: "gemini-2.5-flash", api_key: "" }));
+  expect(error).toBeInstanceOf(ValidationError);
+  expect((error as Error).message).toContain("api_key");
 });
 
 test.each([
   ["vllm", "served-model"],
   ["anthropic", "claude-sonnet-4-5"],
-])("a host key marker without the key fails before the environment (%s)", (provider, model) => {
+])("a host key marker without the key fails before the environment (%s)", async (provider, model) => {
+  vars.set("VLLM_API_KEY", "sk-environment-key");
+  vars.set("ANTHROPIC_API_KEY", "sk-environment-key");
   const marked = { provider, model, _host_key: true };
+  const built = await rejection(build(marked));
+  expect(built).toBeInstanceOf(AuthError);
+  expect((built as AuthError).message).toMatch(/llm_config\.api_key/);
   let error: unknown;
   try {
     splitModelConfig(marked);
@@ -139,6 +195,45 @@ test("openai config key wins a saved subscription", async () => {
   expect(connection.source).toBe("host");
   expect(connection.credential_id).toBeNull();
   expect(JSON.stringify(connection)).not.toContain(SENTINEL);
+  const requests = await requestsOf(resolved);
+  expect(new URL(requests[0]!.url).host).toBe("api.openai.com");
+  expect(requests[0]!.headers.get("authorization")).toBe(`Bearer ${SENTINEL}`);
+});
+
+// --- clients prefer the config key --- //
+
+// The key header each provider's route sends, in place of Python's LangChain key field.
+const KEYED: [string, string, string, string, string][] = [
+  ["openai", "gpt-5.5", "OPENAI_API_KEY", "Authorization", `Bearer ${SENTINEL}`],
+  ["vllm", "served-model", "VLLM_API_KEY", "Authorization", `Bearer ${SENTINEL}`],
+  ["deepseek", "deepseek-chat", "DEEPSEEK_API_KEY", "Authorization", `Bearer ${SENTINEL}`],
+  ["openrouter", "some/model", "OPENROUTER_API_KEY", "Authorization", `Bearer ${SENTINEL}`],
+  ["anthropic", "claude-sonnet-4-5", "ANTHROPIC_API_KEY", "x-api-key", SENTINEL],
+  ["google", "gemini-2.5-flash", "GOOGLE_API_KEY", "x-goog-api-key", SENTINEL],
+  ["azure", "gpt-4o", "AZURE_OPENAI_API_KEY", "api-key", SENTINEL],
+];
+
+for (const envValue of [null, "sk-environment-key"]) {
+  test.each(KEYED)(
+    `every keyed client prefers the config key (%s, env ${envValue ?? "unset"})`,
+    async (provider, model, variable, header, value) => {
+      const config: Record<string, unknown> = { provider, model, api_key: SENTINEL };
+      if (provider === "azure") {
+        vars.set("OPENAI_API_VERSION", "2024-02-01");
+        config["base_url"] = "https://res.openai.azure.com/";
+      }
+      if (envValue !== null) vars.set(variable, envValue);
+      const chat = await build(config);
+      expect(await chat.route.auth.headers()).toEqual({ [header]: value });
+    },
+  );
+}
+
+test("openai-compatible endpoint receives the config key", async () => {
+  vars.set("VLLM_BASE_URL", "http://127.0.0.1:9/v1");
+  const requests = await requestsOf({ provider: "vllm", model: "served-model", api_key: SENTINEL });
+  expect(requests.map(({ url }) => url)).toEqual(["http://127.0.0.1:9/v1/chat/completions"]);
+  expect(requests[0]!.headers.get("authorization")).toBe(`Bearer ${SENTINEL}`);
 });
 
 test("host connection needs the config key", async () => {

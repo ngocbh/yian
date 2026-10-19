@@ -3,7 +3,8 @@
  *
  * Lives with the clients that consume it: the AGENT node and the Compose loader's `llm_config:`
  * field carry an `LLMConfig` (or the plain record that normalizes to one), and the factory turns
- * API selections into ready chat models.
+ * API selections into ready chat models. `validateBaseUrl` checks a configured endpoint, and
+ * `splitOllamaBaseUrl` checks an `OLLAMA_BASE_URL` value and splits off its credentials.
  */
 
 import { isIPv6 } from "node:net";
@@ -185,6 +186,67 @@ export function validateBaseUrl(value: unknown): string {
     throw new RangeError("base_url must use https; http is allowed only for localhost, 127.0.0.1, and ::1");
   }
   return value;
+}
+
+// LangChain's test for a value that already names its scheme; anything else holding a ":" gets
+// "http://" prefixed, as `parse_url_with_auth` does.
+const HAS_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
+// The userinfo is greedy and the host holds no "@", so the userinfo runs to the last "@" of the
+// authority, as `urlparse` splits it.
+const OLLAMA_URL =
+  /^(?<scheme>https?):\/\/(?:(?<userinfo>[^/?#\x00-\x20\x7f]*)@)?(?<host>[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::(?<port>[0-9]*))?(?<path>\/[^?#\x00-\x20\x7f]*)?$/i;
+const OLLAMA_SHAPE =
+  "OLLAMA_BASE_URL must be an http:// or https:// URL of a host, an optional port, and a path, " +
+  "without a query or fragment";
+// Python's UTF-8 codec keeps a leading BOM, so the decoder must too.
+const UTF8 = new TextDecoder("utf-8", { ignoreBOM: true });
+
+/** Decode `text` like Python's `urllib.parse.unquote`; invalid escapes stay as written. */
+function unquote(text: string): string {
+  return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) =>
+    UTF8.decode(Uint8Array.from(run.slice(1).split("%"), (hex) => parseInt(hex, 16))),
+  );
+}
+
+/**
+ * Split an `OLLAMA_BASE_URL` value into the base URL Ollama is called at and its Basic auth
+ * credentials, rebuilding the URL as LangChain and the ollama SDK do.
+ *
+ * A value with no scheme that contains `:` gets `http://` prefixed. The value must then be an
+ * `http://` or `https://` URL (any case) of a host (letters, digits, `.`, `_`, `-`, or a bracketed
+ * IPv6 address), an optional port from 1 to 65535, and a path, with no query, fragment,
+ * whitespace or control characters. The userinfo, split at its first `:` and percent-decoded,
+ * gives `[user, password]` when the user is non-empty, else `null`. The rebuilt URL drops the
+ * userinfo; lowercases the scheme and host; keeps a non-empty port as an integer, or adds `:11434`
+ * when the scheme is not all lower case and there are no credentials; and strips trailing `/`
+ * from the path, then a final `/v1`, then `/` at both ends. Throws `RangeError` if `value` is not
+ * such a URL; messages never echo the value, which may hold a password.
+ */
+export function splitOllamaBaseUrl(value: unknown): [baseUrl: string, credentials: [string, string] | null] {
+  if (typeof value !== "string") throw new RangeError(OLLAMA_SHAPE);
+  const text = !HAS_SCHEME.test(value) && value.includes(":") ? `http://${value}` : value;
+  const groups = OLLAMA_URL.exec(text)?.groups;
+  if (groups === undefined) throw new RangeError(OLLAMA_SHAPE);
+  // The pattern always matches `scheme` and `host`; the defaults only satisfy the group types.
+  const { scheme = "", userinfo, host = "", port, path = "" } = groups;
+  if (port && !(Number(port) >= 1 && Number(port) <= 65535)) {
+    throw new RangeError("OLLAMA_BASE_URL port must be a number from 1 to 65535");
+  }
+  let credentials: [string, string] | null = null;
+  if (userinfo !== undefined) {
+    const colon = userinfo.indexOf(":");
+    const user = colon < 0 ? userinfo : userinfo.slice(0, colon);
+    if (user) credentials = [unquote(user), unquote(colon < 0 ? "" : userinfo.slice(colon + 1))];
+  }
+  // The ollama SDK gives 80/443 only to an exact "http"/"https" and 11434 to anything else, and
+  // LangChain lowercases the scheme only when it rebuilds the URL, which it does for credentials.
+  let suffix = port ? `:${Number(port)}` : "";
+  if (!port && scheme !== scheme.toLowerCase() && credentials === null) suffix = ":11434";
+  let trimmed = path.replace(/\/+$/, "");
+  if (trimmed.endsWith("/v1")) trimmed = trimmed.slice(0, -3);
+  trimmed = trimmed.replace(/^\/+|\/+$/g, "");
+  if (trimmed) suffix += `/${trimmed}`;
+  return [`${scheme.toLowerCase()}://${host.toLowerCase()}${suffix}`, credentials];
 }
 
 /**

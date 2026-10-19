@@ -15,9 +15,9 @@
  * everything else is read only through the `env` parameter (default `processEnv`), one variable
  * at a time: `YIAN_DEFAULT_PROVIDER`, `YIAN_DEFAULT_MODEL`, `OPENAI_BASE_URL` and `OPENAI_API_KEY`
  * for the snapshot and OpenAI's credentials; for `callCredentials`, each provider's key variable
- * (`PROVIDER_API_KEY_ENV`), `GEMINI_API_KEY` after Google's, and `AZURE_OPENAI_AD_TOKEN` for Azure;
- * and, through `AuthStore`, `YIAN_AUTH_FILE`, `XDG_CONFIG_HOME` and `HOME` for the store path. An
- * empty value counts as unset.
+ * (`PROVIDER_API_KEY_ENV`), `GEMINI_API_KEY` after Google's, `AZURE_OPENAI_AD_TOKEN` for Azure and
+ * `OLLAMA_BASE_URL` for Ollama; and, through `AuthStore`, `YIAN_AUTH_FILE`, `XDG_CONFIG_HOME` and
+ * `HOME` for the store path. An empty value counts as unset.
  */
 
 import { createHash } from "node:crypto";
@@ -25,6 +25,7 @@ import { isAbsolute } from "node:path";
 
 import { type Env, processEnv } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import { BasicAuth } from "../llm/auth.ts";
 import { scrubError } from "../llm/errors.ts";
 import type { Scheduler } from "../platform.ts";
 import { isList, isRecord, valueRepr } from "../typesys/values.ts";
@@ -44,6 +45,7 @@ import {
   type HostConnection,
   LLMConfig,
   RETIRED_LLM_CONFIG_KEYS,
+  splitOllamaBaseUrl,
   SUPPORTED_LLM_PROVIDERS,
   validateBaseUrl,
 } from "./config.ts";
@@ -1213,9 +1215,11 @@ export async function connectionCredentials(
  * and account id, expired ones too. Otherwise (an `environment` or `legacy_environment`
  * connection, or none) the client reads the first set variable of the provider's key variable,
  * then its fallbacks (`GEMINI_API_KEY` for Google). `AZURE_OPENAI_AD_TOKEN` is listed for `azure`
- * whenever set. A config without connection metadata is resolved first, as the factory does. Each
- * step is guarded, so a failing one still leaves the others' credentials. Every header value is
- * listed however short, so a value such as `prod` is scrubbed wherever it appears.
+ * whenever set. For `ollama`, a non-empty `OLLAMA_BASE_URL` whose userinfo has a non-empty user
+ * lists the Basic auth password and token the route sends (`splitOllamaBaseUrl`); a malformed
+ * value lists nothing. A config without connection metadata is resolved first, as the factory
+ * does. Each step is guarded, so a failing one still leaves the others' credentials. Every header
+ * value is listed however short, so a value such as `prod` is scrubbed wherever it appears.
  */
 export function callCredentials(config: unknown, options: { env?: Env } = {}): readonly string[] {
   const { env = processEnv } = options;
@@ -1278,6 +1282,13 @@ export function callCredentials(config: unknown, options: { env?: Env } = {}): r
       if (token) found.push(token);
     }
   } catch {}
+  if (name === "ollama") {
+    try {
+      const url = env("OLLAMA_BASE_URL");
+      const credentials = url ? splitOllamaBaseUrl(url)[1] : null;
+      if (credentials !== null) found.push(...new BasicAuth(...credentials).credentials());
+    } catch {}
+  }
   return [...new Set(found)];
 }
 

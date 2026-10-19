@@ -1,15 +1,24 @@
 /**
- * Mirrors `tests/test_provider_connections.py`; the factory tests go with
- * `llm_clients/factory.ts`, `test_run_records_connections` with `runFlow`.
+ * Mirrors `tests/test_provider_connections.py`; `test_run_records_connections` goes with
+ * `runFlow`. The factory tests build the model with `chatModelFromConfig` and check what a
+ * recording `send` receives (it answers 400, so a test checks the request), in place of the
+ * kwargs Python's fake `create_llm_client` captured. Adapted:
+ * `test_saved_openai_ids_without_headers_read_no_credentials_at_build` becomes "read the
+ * credentials once, at build", since TS reads an OpenAI key at build for the replay account; and
+ * where Python leaves an environment key to the SDK, the test sets it and checks it is sent. The
+ * environment table test also builds and calls a model for every provider and connection source,
+ * so the factory's reads are held to the same table.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import { ENTRIES, type Env } from "../src/defaults.ts";
+import { collect } from "../src/llm/events.ts";
+import { Message, Request, TextPart } from "../src/llm/messages.ts";
 import { PROVIDER_API_KEY_ENV } from "../src/llm_clients/api_key_env.ts";
 import {
   ApiKeyCredentials,
@@ -44,7 +53,9 @@ import {
   splitModelConfig,
   validateConnection,
 } from "../src/llm_clients/connection.ts";
+import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
 import { requireConcreteSelection, validateLayer } from "../src/llm_clients/layers.ts";
+import type { Send } from "../src/platform.ts";
 
 const STORE: Connection = {
   method: "api_key",
@@ -775,6 +786,223 @@ test("snapshot records saved settings without values", async () => {
   expect(JSON.stringify(connections)).not.toContain(savedHeader);
 });
 
+/** One request a `recorder` received. */
+interface Sent {
+  url: string;
+  headers: Headers;
+}
+
+/** A `send` that records each request and answers it 400, so a test checks the request, not a reply. */
+function recorder(): { requests: Sent[]; send: Send } {
+  const requests: Sent[] = [];
+  const send: Send = async (input, init) => {
+    requests.push({ url: String(input), headers: new Headers(init.headers) });
+    return new Response(JSON.stringify({ error: { message: "refused" } }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  return { requests, send };
+}
+
+const HI = new Request({ messages: [new Message({ role: "user", parts: [new TextPart("hi")] })] });
+
+/** Build `config` with `send` and ask it "hi"; the recorder's 400 is swallowed. */
+async function ask(config: Record<string, unknown>, send: Send): Promise<void> {
+  const model = await chatModelFromConfig(config, { env, send, onWarning: () => {} });
+  await collect(model.stream(HI)).catch(() => null);
+}
+
+/** The values of `names` in `headers`, by lower-case name; a missing header is `null`. */
+function picked(headers: Headers, names: string[]): Record<string, string | null> {
+  return Object.fromEntries(names.map((name) => [name, headers.get(name)]));
+}
+
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+const SAVED_HEADER = "saved-gw-7c2e91";
+const SETTING_HEADERS = ["openai-organization", "openai-project", "x-gateway"];
+
+/** Remove every provider key and endpoint variable the factory tests could pick up. */
+function noProviderKeys(): void {
+  for (const name of ["OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"]) vars.delete(name);
+}
+
+/** Save an OpenAI key login with organization, project and an `X-Gateway` header. */
+function saveOpenAIWithSettings(options: { makeDefault?: boolean } = {}): Promise<ProviderSelection> {
+  return authStore().save(
+    "openai",
+    new ApiKeyCredentials("sk-saved-4b1f", { "X-Gateway": SAVED_HEADER }),
+    "gpt-x",
+    { organization: "org-saved", project: "proj-saved", ...options },
+  );
+}
+
+test("non-OpenAI connection adds no OpenAI route", async () => {
+  vars.set("ANTHROPIC_API_KEY", "env-key");
+  const { requests, send } = recorder();
+  await ask({ provider: "anthropic", model: "m", _connection: ENVIRONMENT }, send);
+  await ask({ provider: "anthropic", model: "m", api_key: "host-key", _connection: ENVIRONMENT }, send);
+  expect(requests.map(({ url, headers }) => [url, headers.get("x-api-key")])).toEqual([
+    [ANTHROPIC_URL, "env-key"],
+    [ANTHROPIC_URL, "host-key"],
+  ]);
+});
+
+test("saved key reaches the client", async () => {
+  await authStore().save("anthropic", new ApiKeyCredentials("saved-anth-key"), "claude-x", { makeDefault: false });
+  const { requests, send } = recorder();
+  await ask({ provider: "anthropic", model: "claude-x" }, send);
+  vars.set("ANTHROPIC_API_KEY", "env-key");
+  await ask({ provider: "anthropic", model: "claude-x" }, send);
+  expect(requests).toHaveLength(2);
+  for (const { url, headers } of requests) {
+    expect(url).toBe(ANTHROPIC_URL);
+    expect(headers.get("x-api-key")).toBe("saved-anth-key");
+  }
+});
+
+test("env key used without saved login", async () => {
+  vars.set("ANTHROPIC_API_KEY", "env-key");
+  const { requests, send } = recorder();
+  await ask({ provider: "anthropic", model: "claude-x" }, send);
+  expect(requests.map(({ headers }) => headers.get("x-api-key"))).toEqual(["env-key"]);
+});
+
+test("host key beats saved login and sets no endpoint", async () => {
+  await authStore().save("anthropic", new ApiKeyCredentials("saved-anth-key"), "m", { makeDefault: false });
+  const { requests, send } = recorder();
+  await ask({ provider: "anthropic", model: "m", api_key: "host" }, send);
+  const recorded = legacyConnectionConfig({ provider: "anthropic", model: "m", [HOST_KEY_MARKER]: true });
+  await ask({ ...recorded, api_key: "host" }, send);
+  expect(requests.map(({ url, headers }) => [url, headers.get("x-api-key")])).toEqual([
+    [ANTHROPIC_URL, "host"],
+    [ANTHROPIC_URL, "host"],
+  ]);
+});
+
+test("azure saved login reaches client", async () => {
+  await authStore().save("azure", new ApiKeyCredentials("az-key"), "dep", {
+    endpoint: "https://r.openai.azure.com/",
+    makeDefault: false,
+  });
+  vars.set("OPENAI_API_VERSION", "2025-03-01-preview");
+  // A config base_url on another resource reads the environment key instead of the saved one.
+  vars.set("AZURE_OPENAI_API_KEY", "az-env-key");
+  const { requests, send } = recorder();
+  await ask({ provider: "azure" }, send);
+  await ask({ provider: "azure", model: "dep", base_url: "https://other.openai.azure.com/" }, send);
+  const path = "openai/deployments/dep/chat/completions?api-version=2025-03-01-preview";
+  expect(requests.map(({ url, headers }) => [url, headers.get("api-key")])).toEqual([
+    [`https://r.openai.azure.com/${path}`, "az-key"],
+    [`https://other.openai.azure.com/${path}`, "az-env-key"],
+  ]);
+});
+
+test("saved OpenAI settings reach the client", async () => {
+  noProviderKeys();
+  await saveOpenAIWithSettings();
+  const reads = spyOn(AuthStore.prototype, "credentials");
+  try {
+    const { requests, send } = recorder();
+    await ask({ provider: "openai", model: "gpt-x" }, send);
+    expect(picked(requests[0]!.headers, [...SETTING_HEADERS, "authorization"])).toEqual({
+      "openai-organization": "org-saved",
+      "openai-project": "proj-saved",
+      "x-gateway": SAVED_HEADER,
+      authorization: "Bearer sk-saved-4b1f",
+    });
+    // The key is still resolved per request: once at build, once for the request.
+    expect(reads).toHaveBeenCalledTimes(2);
+  } finally {
+    reads.mockRestore();
+  }
+});
+
+test("saved OpenAI ids without headers read the credentials once, at build", async () => {
+  // Python reads none at build; TS reads the key once there for the replay account.
+  noProviderKeys();
+  await authStore().save("openai", new ApiKeyCredentials("sk-saved"), "gpt-x", { organization: "org-saved" });
+  const reads = spyOn(AuthStore.prototype, "credentials");
+  try {
+    const { requests, send } = recorder();
+    const model = await chatModelFromConfig({ provider: "openai", model: "gpt-x" }, { env, send, onWarning: () => {} });
+    expect(reads).toHaveBeenCalledTimes(1);
+    await collect(model.stream(HI)).catch(() => null);
+    expect(picked(requests[0]!.headers, SETTING_HEADERS)).toEqual({
+      "openai-organization": "org-saved",
+      "openai-project": null,
+      "x-gateway": null,
+    });
+  } finally {
+    reads.mockRestore();
+  }
+});
+
+test("saved Anthropic headers reach the client", async () => {
+  noProviderKeys();
+  await authStore().save("anthropic", new ApiKeyCredentials("sk-ant", { "X-Gateway": SAVED_HEADER }), "m");
+  const { requests, send } = recorder();
+  await ask({ provider: "anthropic", model: "m" }, send);
+  expect(picked(requests[0]!.headers, ["x-api-key", "x-gateway"])).toEqual({
+    "x-api-key": "sk-ant",
+    "x-gateway": SAVED_HEADER,
+  });
+});
+
+test("environment and host keys never get saved settings", async () => {
+  noProviderKeys();
+  await saveOpenAIWithSettings({ makeDefault: false });
+  await authStore().save("azure", new ApiKeyCredentials("az-saved", { "X-Gateway": SAVED_HEADER }), "dep", {
+    endpoint: "https://r.openai.azure.com/",
+    makeDefault: false,
+  });
+  vars.set("GOOGLE_API_KEY", "env-key");
+  vars.set("AZURE_OPENAI_API_KEY", "az-env-key");
+  vars.set("OPENAI_API_VERSION", "2025-03-01-preview");
+  const { requests, send } = recorder();
+  await ask({ provider: "google", model: "g" }, send);
+  // An Azure base_url on another resource reads the environment key.
+  await ask({ provider: "azure", model: "dep", base_url: "https://other.openai.azure.com/" }, send);
+  await ask({ provider: "openai", model: "gpt-x", api_key: "sk-host" }, send);
+  await ask({ provider: "azure", model: "dep", api_key: "az-host", base_url: "https://r.openai.azure.com/" }, send);
+  expect(requests).toHaveLength(4);
+  for (const { headers } of requests) {
+    expect(picked(headers, SETTING_HEADERS)).toEqual({
+      "openai-organization": null,
+      "openai-project": null,
+      "x-gateway": null,
+    });
+  }
+});
+
+test("resaving the login fails the build", async () => {
+  noProviderKeys();
+  await saveOpenAIWithSettings();
+  const recorded = resolveModelConfig({ provider: "openai", model: "gpt-x" }, { env });
+  await saveOpenAIWithSettings();
+  const { requests, send } = recorder();
+  const error = await rejected(chatModelFromConfig(recorded, { env, send, onWarning: () => {} }));
+  expect(error).toBeInstanceOf(AuthError);
+  expect(error.message).toContain("yian auth openai");
+  expect(requests).toEqual([]);
+});
+
+describe("saved headers must match the recorded names", () => {
+  test.each([[["X-Other"]], [["X-Gateway", "X-Trace"]], [null]])("%p", async (names) => {
+    noProviderKeys();
+    await authStore().save("anthropic", new ApiKeyCredentials("sk-ant", { "X-Gateway": SAVED_HEADER }), "m");
+    const recorded = resolveModelConfig({ provider: "anthropic", model: "m" }, { env });
+    const { header_names: _, ...connection } = recorded["_connection"] as Connection;
+    const changed = { ...recorded, _connection: names === null ? connection : { ...connection, header_names: names } };
+    const { requests, send } = recorder();
+    const error = await rejected(chatModelFromConfig(changed, { env, send, onWarning: () => {} }));
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toContain("yian auth anthropic");
+    expect(error.message).not.toContain(SAVED_HEADER);
+    expect(requests).toEqual([]);
+  });
+});
+
 describe("environment table", () => {
   const AZURE = "https://r.openai.azure.com/";
   // Design 7.4's table of the variables yian reads. Later readers (the factory) add their calls
@@ -808,7 +1036,29 @@ describe("environment table", () => {
     "AZURE_OPENAI_DEPLOYMENT_NAME",
     "CODEX_HOME",
     "SSL_CERT_FILE",
+    "OLLAMA_HOST",
+    "GOOGLE_GEMINI_BASE_URL",
+    "GOOGLE_GENAI_USE_ENTERPRISE",
+    "ANTHROPIC_API_URL",
+    "OPENAI_API_BASE",
+    "LANGSMITH_GATEWAY",
+    "LANGSMITH_GATEWAY_API_KEY",
+    "LANGSMITH_API_KEY",
+    "OPENAI_PROXY",
+    "ANTHROPIC_PROXY",
+    "LC_OUTPUT_VERSION",
+    "AZURE_OPENAI_ENDPOINT",
+    "OPENAI_API_TYPE",
+    "GOOGLE_VERTEX_BASE_URL",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "SSL_CERT_DIR",
   ];
+  const REQUEST = new Request({ messages: [new Message({ role: "user", parts: [new TextPart("Hi")] })] });
+  // Every request fails before the wire; only the reads up to it count.
+  const fake: Send = async () => {
+    throw new Error("not sent");
+  };
 
   /** Return the logins of each kind `provider` can save. */
   function logins(provider: string): (Credentials | null)[] {
@@ -830,7 +1080,7 @@ describe("environment table", () => {
     };
     for (const name of NEVER_READ) vars.set(name, "never-read");
 
-    /** Snapshot, resolve, list and resolve credentials for `provider`'s configs. */
+    /** Snapshot, resolve, list and resolve credentials for `provider`'s configs, then build and call each. */
     const drive = async (provider: string) => {
       const base: AgentConfig = provider === "azure" ? { provider, model: "m", base_url: AZURE } : { provider, model: "m" };
       connectionSnapshot({ env: recording });
@@ -846,6 +1096,9 @@ describe("environment table", () => {
           // Only the reads count; an environment connection outside OpenAI refuses.
           await connectionCredentials(config["_connection"], provider, { env: recording }).catch(() => null);
         }
+        await chatModelFromConfig(config, { env: recording, send: fake, onWarning: () => {} })
+          .then((model) => collect(model.stream(REQUEST)))
+          .catch(() => null);
       }
     };
 
@@ -855,6 +1108,10 @@ describe("environment table", () => {
     for (const name of READ) if (name.endsWith("_API_KEY")) vars.set(name, `env-${name}`);
     vars.set("AZURE_OPENAI_AD_TOKEN", "env-ad-token");
     vars.set("OPENAI_BASE_URL", "https://api.example/v1");
+    vars.set("ANTHROPIC_BASE_URL", "https://anthropic.example");
+    vars.set("VLLM_BASE_URL", "http://gpu-box:8000/v1");
+    vars.set("OLLAMA_BASE_URL", "http://user:pw@gpu-box:11434");
+    vars.set("OPENAI_API_VERSION", "2025-03-01-preview");
     for (const provider of SUPPORTED_LLM_PROVIDERS) await drive(provider);
     // Each login kind, over the key variables.
     const store = new AuthStore(null, { env: recording });
@@ -885,6 +1142,10 @@ describe("environment table", () => {
         "GEMINI_API_KEY",
         "AZURE_OPENAI_API_KEY",
         "AZURE_OPENAI_AD_TOKEN",
+        "OPENAI_API_VERSION",
+        "ANTHROPIC_BASE_URL",
+        "VLLM_BASE_URL",
+        "OLLAMA_BASE_URL",
         "XDG_CONFIG_HOME",
         "HOME",
       ]),

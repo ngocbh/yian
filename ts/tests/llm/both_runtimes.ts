@@ -5,8 +5,11 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { RedirectError, realScheduler, safeFetch, type Scheduler, type Send, USER_AGENT, virtualScheduler } from "../../src/platform.ts";
@@ -16,8 +19,11 @@ import { type ChatModel, collect, Finish, TextDelta } from "../../src/llm/events
 import { callWithRetries, type RetryInfo, RouteModel, type SseProtocol } from "../../src/llm/executor.ts";
 import { Message, Request, Response as ModelResponse, TextPart } from "../../src/llm/messages.ts";
 import { Route } from "../../src/llm/route.ts";
-import { CASSETTE_REDACTED, CassetteRecorder, ScriptedModel } from "../../src/llm/testing.ts";
+import { type Cassette, CASSETTE_REDACTED, CassetteRecorder, CassetteReplay, ScriptedModel } from "../../src/llm/testing.ts";
 import { openExchange, shortRequest } from "../../src/llm/transport.ts";
+import { OAuthCredentials } from "../../src/llm_clients/auth/common.ts";
+import { AuthStore } from "../../src/llm_clients/auth/store.ts";
+import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
 import { redactKeys } from "../../src/llm_clients/redact.ts";
 
 // The "/" gives the key a JSON-escaped form (`\/`) that differs from the plain one.
@@ -441,6 +447,166 @@ async function scrubbedErrors(): Promise<void> {
   assert.ok(inner instanceof ProviderError && inner.kind === "auth");
 }
 
+/** A Server-Sent Events body: one `data:` line per object, optionally named by `event`. */
+function sse(events: [event: string | null, data: object][]): string[] {
+  return events.map(([event, data]) => `${event === null ? "" : `event: ${event}\n`}data: ${JSON.stringify(data)}\n\n`);
+}
+
+// A one-word reply ("ok") in each wire protocol.
+const RESPONSES_OK = sse([
+  ["response.output_item.added", { type: "response.output_item.added", output_index: 0, item: { id: "m", type: "message", role: "assistant", content: [] } }],
+  ["response.output_text.delta", { type: "response.output_text.delta", output_index: 0, content_index: 0, item_id: "m", delta: "ok" }],
+  [
+    "response.completed",
+    {
+      type: "response.completed",
+      response: {
+        id: "r",
+        status: "completed",
+        output: [{ id: "m", type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      },
+    },
+  ],
+]);
+const CHAT_OK = [
+  ...sse([
+    [null, { choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }] }],
+    [null, { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }],
+  ]),
+  "data: [DONE]\n\n",
+];
+const ANTHROPIC_OK = sse([
+  ["message_start", { type: "message_start", message: { id: "m", type: "message", role: "assistant", content: [], usage: { input_tokens: 1, output_tokens: 1 } } }],
+  ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
+  ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } }],
+  ["content_block_stop", { type: "content_block_stop", index: 0 }],
+  ["message_delta", { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } }],
+  ["message_stop", { type: "message_stop" }],
+]);
+const GEMINI_OK = sse([[null, { candidates: [{ content: { role: "model", parts: [{ text: "ok" }] }, finishReason: "STOP", index: 0 }] }]]);
+const OLLAMA_OK = [`${JSON.stringify({ model: "qwen3", message: { role: "assistant", content: "ok" }, done: true, done_reason: "stop" })}\n`];
+
+/** One family's route: the config and environment, the URL and credential headers it must send, and the reply. */
+interface RouteCase {
+  name: string;
+  config: Record<string, unknown>;
+  env: Record<string, string>;
+  url: string;
+  credential: Record<string, string>;
+  reply: string[];
+  /** The reply's content type; defaults to Server-Sent Events. */
+  contentType?: string;
+  /** A login saved for `openai` before the build. */
+  login?: OAuthCredentials;
+}
+
+const ROUTE_CASES: RouteCase[] = [
+  {
+    name: "openai key",
+    config: { provider: "openai", model: "gpt-5.5", api_key: "test-openai-key" },
+    env: {},
+    url: "https://api.openai.com/v1/responses",
+    credential: { authorization: "Bearer test-openai-key" },
+    reply: RESPONSES_OK,
+  },
+  {
+    name: "subscription",
+    config: {},
+    env: {},
+    login: new OAuthCredentials({
+      accessToken: "test-access-token",
+      refreshToken: "test-refresh-token",
+      // Far ahead, so the build-time read never refreshes.
+      expiresAt: 4_102_444_800,
+      accountId: "test-account-1",
+    }),
+    url: "https://chatgpt.com/backend-api/codex/responses",
+    credential: { authorization: "Bearer test-access-token", "chatgpt-account-id": "test-account-1" },
+    reply: RESPONSES_OK,
+  },
+  {
+    name: "xai",
+    config: { provider: "xai", model: "grok-4" },
+    env: { XAI_API_KEY: "test-xai-key" },
+    url: "https://api.x.ai/v1/chat/completions",
+    credential: { authorization: "Bearer test-xai-key" },
+    reply: CHAT_OK,
+  },
+  {
+    name: "azure",
+    config: { provider: "azure", model: "my-deploy", base_url: "https://res.openai.azure.com/", api_key: "test-azure-key" },
+    env: { OPENAI_API_VERSION: "2025-03-01-preview" },
+    url: "https://res.openai.azure.com/openai/deployments/my-deploy/chat/completions?api-version=2025-03-01-preview",
+    credential: { "api-key": "test-azure-key" },
+    reply: CHAT_OK,
+  },
+  {
+    name: "anthropic",
+    config: { provider: "anthropic", model: "claude-sonnet-4-5" },
+    env: { ANTHROPIC_API_KEY: "test-anthropic-key" },
+    url: "https://api.anthropic.com/v1/messages",
+    credential: { "x-api-key": "test-anthropic-key", "anthropic-version": "2023-06-01" },
+    reply: ANTHROPIC_OK,
+  },
+  {
+    name: "google",
+    config: { provider: "google", model: "gemini-2.5-flash" },
+    env: { GOOGLE_API_KEY: "test-google-key" },
+    url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
+    credential: { "x-goog-api-key": "test-google-key" },
+    reply: GEMINI_OK,
+  },
+  {
+    name: "ollama with userinfo",
+    config: { provider: "ollama", model: "qwen3" },
+    env: { OLLAMA_BASE_URL: "http://user:pw@gpu-box:11434" },
+    url: "http://gpu-box:11434/api/chat",
+    credential: { authorization: "Basic dXNlcjpwdw==" },
+    reply: OLLAMA_OK,
+    contentType: "application/x-ndjson",
+  },
+];
+
+/**
+ * `chatModelFromConfig` builds one model per route family, each sending to its URL with its
+ * credential, against inline cassettes (the built tree holds no cassette files).
+ */
+async function resolverRoutes(): Promise<void> {
+  const home = mkdtempSync(join(tmpdir(), "yian-routes-"));
+  try {
+    for (const each of ROUTE_CASES) {
+      const vars = new Map(Object.entries({ ...each.env, YIAN_AUTH_FILE: join(home, `${each.name}.json`) }));
+      const env = (name: string) => vars.get(name);
+      if (each.login) await new AuthStore(null, { env }).save("openai", each.login, "gpt-5.5");
+      const cassette: Cassette = {
+        format: "yian.cassette.v1",
+        source: "synthetic",
+        description: each.name,
+        interactions: [
+          {
+            request: { method: "POST", url: each.url, headers: each.credential, json: CASSETTE_REDACTED },
+            response: { status: 200, headers: { "content-type": each.contentType ?? "text/event-stream" }, chunks: each.reply },
+          },
+        ],
+      };
+      const replay = new CassetteReplay(cassette);
+      const model = await chatModelFromConfig(each.config, {
+        env,
+        send: replay.send,
+        scheduler: virtualScheduler(0),
+        onWarning: () => {},
+      });
+      const reply = await collect(model.stream(new Request({ messages: [new Message({ role: "user", parts: [new TextPart("Hi")] })] })));
+      assert.equal(reply.message.text(), "ok", each.name);
+      replay.assertDone();
+      assert.equal(replay.requests[0]!.url, each.url, each.name);
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
 /** The scenarios by name, in the order `main` runs them. */
 export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "redirects, every client": redirects,
@@ -450,6 +616,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "retry table": retryTable,
   redaction,
   scrubbedErrors,
+  resolverRoutes,
 };
 
 /** Run every scenario, printing `{"name", "ok", "error"?}` per line; return how many failed. */

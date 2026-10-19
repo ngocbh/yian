@@ -1,8 +1,13 @@
 /**
- * Mirrors `tests/test_openai_connection.py`; model calls go with the factory,
- * `llm_clients/factory.ts`; runs with `runFlow`; the cascade with `compile/llm_cascade.ts`; the key
- * preflight with the CLI. `test_missing_identity_does_not_adopt_later_environment_key` is here as
- * its `connectionCredentials` twin.
+ * Mirrors `tests/test_openai_connection.py`. The model calls build with `chatModelFromConfig` and
+ * answer from a recording `send` that replies with one Responses stream. Adapted:
+ * `test_snapshot_does_not_follow_reconnect` fails at build with 0 requests, since TS reads the
+ * pinned login at build too; the structured output test keeps the route half (the strategy table
+ * is `llm/structured.test.ts`'s); `test_saved_api_key_and_preflight_ignore_incidental_environment`
+ * and `test_subscription_preflight_needs_no_api_key` keep their factory halves (the key preflight
+ * goes with the CLI). `test_missing_identity_does_not_adopt_later_environment_key` is here as its
+ * `connectionCredentials` twin. Elsewhere: the runs go with `runFlow`, the cascade with
+ * `compile/llm_cascade.ts`.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -12,6 +17,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import type { Env } from "../src/defaults.ts";
+import { collect } from "../src/llm/events.ts";
+import { Message, Request, TextPart } from "../src/llm/messages.ts";
+import { planStructured, structuredTarget } from "../src/llm/structured.ts";
 import { ApiKeyCredentials, AuthError, OAuthCredentials, type ProviderSelection } from "../src/llm_clients/auth/common.ts";
 import { OpenAIAuth } from "../src/llm_clients/auth/openai.ts";
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
@@ -25,6 +33,8 @@ import {
   resolveModelConfig,
   splitModelConfig,
 } from "../src/llm_clients/connection.ts";
+import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
+import type { Send } from "../src/platform.ts";
 
 // Each test's environment: a private store in a fresh directory and no default provider, model,
 // OpenAI key or endpoint, as Python's `isolated_auth` leaves it.
@@ -80,6 +90,54 @@ async function rejected(promise: Promise<unknown>): Promise<Error> {
   throw new Error("expected a rejection");
 }
 
+/** One request a `recorder` received; `body` is its parsed JSON. */
+interface Sent {
+  url: string;
+  headers: Headers;
+  body: Record<string, unknown>;
+}
+
+/** A `send` that records each request and answers it 200 with the Server-Sent Events `reply`. */
+function recorder(reply: string[]): { requests: Sent[]; send: Send } {
+  const requests: Sent[] = [];
+  const send: Send = async (input, init) => {
+    requests.push({ url: String(input), headers: new Headers(init.headers), body: JSON.parse(String(init.body)) });
+    return new Response(reply.join(""), { status: 200, headers: { "content-type": "text/event-stream" } });
+  };
+  return { requests, send };
+}
+
+/** Server-Sent Events, one per `[event, data]`. */
+function sse(events: [string, Record<string, unknown>][]): string[] {
+  return events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify({ type: event, ...data })}\n\n`);
+}
+
+const MESSAGE = { id: "msg_1", type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] };
+/** A Responses stream that answers "ok". */
+const TEXT_REPLY = sse([
+  ["response.output_item.added", { output_index: 0, item: { ...MESSAGE, content: [] } }],
+  ["response.output_text.delta", { output_index: 0, content_index: 0, item_id: "msg_1", delta: "ok" }],
+  ["response.completed", { response: { id: "resp_1", status: "completed", output: [MESSAGE] } }],
+]);
+
+/** A Responses stream that calls `name` once with `args`. */
+function toolReply(name: string, args: string): string[] {
+  const call = { id: "fc_1", type: "function_call", name, arguments: args, call_id: "call_1", status: "completed" };
+  return sse([
+    ["response.output_item.added", { output_index: 0, item: { ...call, arguments: "", status: "in_progress" } }],
+    ["response.function_call_arguments.delta", { output_index: 0, item_id: "fc_1", delta: args }],
+    ["response.output_item.done", { output_index: 0, item: call }],
+    ["response.completed", { response: { id: "resp_1", status: "completed", output: [call] } }],
+  ]);
+}
+
+const HI = new Request({ messages: [new Message({ role: "user", parts: [new TextPart("hi")] })] });
+
+/** Build `config` with this test's environment and `send`. */
+function build(config: Record<string, unknown>, send?: Send) {
+  return chatModelFromConfig(config, { env, send, onWarning: () => {} });
+}
+
 test("no builtin provider or model", () => {
   let error = thrown(() => resolveModelConfig({}, { env }));
   expect(error).toBeInstanceOf(RangeError);
@@ -110,6 +168,30 @@ test("saved selection wins incidental key and is nonsecret", async () => {
 test("authored model wins saved default", async () => {
   await subscription();
   expect(resolveModelConfig({ model: "explicit" }, { env })["model"]).toBe("explicit");
+});
+
+test("snapshot does not follow reconnect", async () => {
+  // Python fails the first request; TS reads the pinned login at build, so the build fails.
+  await subscription();
+  const config = resolveModelConfig({}, { env });
+  await authStore().save("openai", new ApiKeyCredentials("new-secret"), "other");
+  const { requests, send } = recorder(TEXT_REPLY);
+  const error = await rejected(build(config, send));
+  expect(error).toBeInstanceOf(AuthError);
+  expect(error.message).toContain("changed");
+  expect(requests).toEqual([]);
+});
+
+test("api environment identity checked on every request", async () => {
+  vars.set("OPENAI_API_KEY", "first-secret");
+  const config = resolveModelConfig({ provider: "openai", model: "gpt-5.5" }, { env });
+  const { requests, send } = recorder(TEXT_REPLY);
+  const model = await build(config, send);
+  vars.set("OPENAI_API_KEY", "second-secret");
+  const error = await rejected(collect(model.stream(HI)));
+  expect(error).toBeInstanceOf(AuthError);
+  expect(error.message).toContain("changed");
+  expect(requests).toEqual([]);
 });
 
 test("changed environment key says start a new run", async () => {
@@ -159,6 +241,46 @@ test("internal metadata is not YAML configuration", () => {
   expect(() => new LLMConfig(config)).toThrow(/Extra inputs/);
   (config["_connection"] as Record<string, unknown>)["token"] = "bad";
   expect(() => splitModelConfig(config)).toThrow(/connection/);
+});
+
+test("factory subscription supports structured output on responses", async () => {
+  // The route half; the strategy table is `llm/structured.test.ts`'s.
+  await subscription();
+  const { requests, send } = recorder(toolReply("Answer", '{"value": 3}'));
+  const model = await build(resolveModelConfig({}, { env }), send);
+  const target = structuredTarget(model);
+  expect(target.subscription).toBe(true);
+  const schema = {
+    title: "Answer",
+    type: "object",
+    properties: { value: { type: "integer" } },
+    required: ["value"],
+  };
+  const plan = planStructured(target, schema);
+  const request = new Request({ messages: [new Message({ role: "user", parts: [new TextPart("Give an integer")] })] });
+  const reply = await collect(model.stream(plan.apply(request)));
+  expect(plan.parse(reply)).toEqual({ value: 3n });
+  expect((requests[0]!.body["tools"] as { name: string }[])[0]!.name).toBe("Answer");
+  expect(requests[0]!.headers.get("authorization")).toBe("Bearer access-secret");
+});
+
+test("saved api key ignores incidental environment", async () => {
+  // The factory half; the key preflight goes with the CLI.
+  await authStore().save("openai", new ApiKeyCredentials("saved-key"), "gpt-5.5");
+  vars.set("OPENAI_API_KEY", "incidental-key");
+  const { requests, send } = recorder(TEXT_REPLY);
+  await collect((await build({}, send)).stream(HI));
+  expect(new URL(requests[0]!.url).host).toBe("api.openai.com");
+  expect(requests[0]!.headers.get("authorization")).toBe("Bearer saved-key");
+});
+
+test("subscription needs no api key", async () => {
+  // The factory half; the key preflight goes with the CLI.
+  await subscription();
+  const { requests, send } = recorder(TEXT_REPLY);
+  await collect((await build({}, send)).stream(HI));
+  expect(new URL(requests[0]!.url).host).toBe("chatgpt.com");
+  expect(requests[0]!.headers.get("authorization")).toBe("Bearer access-secret");
 });
 
 /** Save an OpenAI subscription for `gpt-5.5` that expires in a second and make it the default. */
@@ -260,4 +382,12 @@ describe("check model config accepts the openai block on an api key connection",
     expect((config["_connection"] as Connection).method).toBe("api_key");
     checkModelConfig(config);
   });
+});
+
+test("factory subscription sends the openai block", async () => {
+  await subscription();
+  const { requests, send } = recorder(TEXT_REPLY);
+  const model = await build(resolveModelConfig({ openai: { reasoning: { effort: "low" } } }, { env }), send);
+  await collect(model.stream(HI));
+  expect((requests[0]!.body["reasoning"] as { effort: string }).effort).toBe("low");
 });

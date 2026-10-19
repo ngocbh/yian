@@ -26,6 +26,7 @@ import { pathToFileURL } from "node:url";
 import {
   type FileLock,
   FileLockError,
+  insecureTlsWarning,
   isLocked,
   lockFile,
   openSqlite,
@@ -993,6 +994,31 @@ describe("safeFetch", () => {
     expect(headers.get("user-agent")).toBe(USER_AGENT);
   });
 
+  test("insecureTlsWarning gives the text for 0 and null otherwise", () => {
+    expect(insecureTlsWarning("0")).toBe(TLS_WARNING);
+    for (const value of [undefined, "", "1", "false", " 0"]) expect(insecureTlsWarning(value)).toBeNull();
+  });
+
+  test(
+    "warns once per process when NODE_TLS_REJECT_UNAUTHORIZED is 0",
+    () => {
+      const result = runTlsWarningChild("bun");
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr.split(TLS_WARNING)).toHaveLength(2);
+    },
+    SPAWNED_MS,
+  );
+
+  test.skipIf(!NODE)(
+    "warns once per process on Node when NODE_TLS_REJECT_UNAUTHORIZED is 0",
+    () => {
+      const result = runTlsWarningChild("node");
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr.split(TLS_WARNING)).toHaveLength(2);
+    },
+    SPAWNED_MS,
+  );
+
   test("a 3xx from send throws RedirectError and cancels the body", async () => {
     let cancelled = false;
     const body = new ReadableStream({
@@ -1136,6 +1162,34 @@ for await (const line of createInterface({ input: process.stdin })) {
   const line = await nextLine(holder);
   if (line !== "locked") throw new Error(`the holder printed ${line}; stderr:\n${holder.stderr}`);
   return holder;
+}
+
+const TLS_WARNING =
+  "NODE_TLS_REJECT_UNAUTHORIZED=0 turns off TLS certificate checks for every request; unset it and trust a private CA with NODE_EXTRA_CA_CERTS instead";
+
+/**
+ * Run a child with `NODE_TLS_REJECT_UNAUTHORIZED=0` that calls `safeFetch` twice against its own
+ * plain-http server: `"bun"` runs the source on this Bun, `"node"` the build on `NODE`.
+ */
+function runTlsWarningChild(kind: "bun" | "node"): { status: number | null; stderr: string } {
+  // The server lives in the child, since spawnSync blocks this process's event loop.
+  const script = `
+const { safeFetch } = await import(${JSON.stringify(kind === "node" ? BUILT_URL : SOURCE_URL)});
+const http = await import("node:http");
+const server = http.createServer((req, res) => res.end("ok"));
+await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+const url = "http://127.0.0.1:" + server.address().port + "/";
+for (let i = 0; i < 2; i++) await (await safeFetch(url)).text();
+server.closeAllConnections();
+server.close();
+`;
+  const argv = kind === "node" ? [NODE!, "--input-type=module", "-e", script] : [process.execPath, "-e", script];
+  const result = spawnSync(argv[0]!, argv.slice(1), {
+    cwd: ROOT,
+    env: { ...process.env, NODE_TLS_REJECT_UNAUTHORIZED: "0" },
+    encoding: "utf8",
+  });
+  return { status: result.status, stderr: result.stderr };
 }
 
 /** SIGKILL the holder and wait for it to exit and close its pipes. */

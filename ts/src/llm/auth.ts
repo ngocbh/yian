@@ -5,7 +5,11 @@
  * Each object resolves its headers per request, so a key source that rotates or refreshes is
  * read every time. `credentials()` lists every secret the object holds or has resolved, so the
  * executor can replace those exact values in error text without calling a source again.
+ * Secrets and their sources live in `#private` fields, so inspecting an auth object, or a model
+ * that holds one, never prints them.
  */
+
+import { current } from "../defaults.ts";
 
 /** A key, or a function that returns it on each request. */
 export type Secret = string | (() => string | Promise<string>);
@@ -49,30 +53,30 @@ export function checkHeaderValue(name: string, value: unknown): string {
 
 /** An ordered set of the secrets an auth object has resolved. */
 class Seen {
-  private readonly values = new Set<string>();
+  readonly #values = new Set<string>();
 
   /** Record each non-empty string in `values`; anything else was never sent. */
   add(...values: unknown[]): void {
     for (const value of values) {
-      if (typeof value === "string" && value) this.values.add(value);
+      if (typeof value === "string" && value) this.#values.add(value);
     }
   }
 
   /** Return the recorded values in first-seen order. */
   snapshot(): readonly string[] {
-    return [...this.values];
+    return [...this.#values];
   }
 }
 
 /** Shared resolution for a key that is a string or a function returning one. */
 abstract class KeyAuth implements Auth {
-  private readonly key: Secret;
-  private readonly seen = new Seen();
+  readonly #key: Secret;
+  readonly #seen = new Seen();
 
   /** @param key The key, or a function that returns it on each request. */
   constructor(key: Secret) {
-    this.key = key;
-    this.seen.add(key);
+    this.#key = key;
+    this.#seen.add(key);
   }
 
   abstract headers(): Promise<Record<string, string>>;
@@ -84,15 +88,15 @@ abstract class KeyAuth implements Auth {
    * @throws TypeError If the key is not valid header text.
    */
   protected async resolve(): Promise<string> {
-    const key: unknown = typeof this.key === "function" ? await this.key() : this.key;
+    const key: unknown = typeof this.#key === "function" ? await this.#key() : this.#key;
     // Record before checking: a value that fails the check may still reach error text
     // elsewhere, and listing it only widens the scrub.
-    this.seen.add(key);
+    this.#seen.add(key);
     return checkHeaderValue("API key", key);
   }
 
   credentials(): readonly string[] {
-    return this.seen.snapshot();
+    return this.#seen.snapshot();
   }
 }
 
@@ -143,12 +147,12 @@ export interface SubscriptionAccess {
 
 /** Send a ChatGPT subscription login's access token and account id. */
 export class SubscriptionAuth implements Auth {
-  private readonly source: () => SubscriptionAccess | Promise<SubscriptionAccess>;
-  private readonly seen = new Seen();
+  readonly #source: () => SubscriptionAccess | Promise<SubscriptionAccess>;
+  readonly #seen = new Seen();
 
   /** @param source Called once per request; returns the current access, refreshed as it sees fit. */
   constructor(source: () => SubscriptionAccess | Promise<SubscriptionAccess>) {
-    this.source = source;
+    this.#source = source;
   }
 
   /**
@@ -159,11 +163,11 @@ export class SubscriptionAuth implements Auth {
    * @throws TypeError If a resolved value is not valid header text.
    */
   async headers(): Promise<Record<string, string>> {
-    const access: Partial<SubscriptionAccess> | null | undefined = await this.source();
+    const access: Partial<SubscriptionAccess> | null | undefined = await this.#source();
     const token: unknown = access?.accessToken;
     const accountId: unknown = access?.accountId;
     const residency: unknown = access?.residency;
-    this.seen.add(token, accountId);
+    this.#seen.add(token, accountId);
     const headers: Record<string, string> = {
       Authorization: `Bearer ${checkHeaderValue("Subscription accessToken", token)}`,
       "ChatGPT-Account-Id": checkHeaderValue("Subscription accountId", accountId),
@@ -176,7 +180,90 @@ export class SubscriptionAuth implements Auth {
   }
 
   credentials(): readonly string[] {
-    return this.seen.snapshot();
+    return this.#seen.snapshot();
+  }
+}
+
+/** Send a user name and password as `Authorization: Basic <base64 of user:password>`. */
+export class BasicAuth implements Auth {
+  readonly #token: string;
+  readonly #seen = new Seen();
+
+  /**
+   * @param username The user name.
+   * @param password The password; may be empty.
+   */
+  constructor(username: string, password: string) {
+    this.#token = Buffer.from(`${username}:${password}`, "utf8").toString("base64");
+    this.#seen.add(password, this.#token);
+  }
+
+  async headers(): Promise<Record<string, string>> {
+    return { Authorization: `Basic ${this.#token}` };
+  }
+
+  credentials(): readonly string[] {
+    return this.#seen.snapshot();
+  }
+}
+
+// Visible ASCII with spaces or tabs only between characters, as connection settings allow.
+const FIELD_VALUE = /^[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*$/;
+
+/**
+ * Return a connection header value unchanged if it may be sent, never echoing it on failure.
+ *
+ * The same rule and messages as `validateHeaderValue` in `llm_clients/connection_settings.ts`,
+ * which this layer may not import, but throwing `TypeError`.
+ *
+ * @param name The header's name; messages name it.
+ * @param value The value to check.
+ * @returns `value` unchanged.
+ * @throws TypeError If `value` is not a string, is longer than `maxHeaderValueChars`
+ *   characters, or is not non-empty visible ASCII with spaces or tabs only between characters.
+ */
+function checkFieldValue(name: string, value: unknown): string {
+  if (typeof value !== "string") throw new TypeError(`header ${name} value must be a string`);
+  const limit = current().maxHeaderValueChars;
+  // Spread counts code points, as Python's len does, not UTF-16 units.
+  if ([...value].length > limit) throw new TypeError(`header ${name} value must be at most ${limit} characters`);
+  if (!FIELD_VALUE.test(value)) {
+    throw new TypeError(
+      `header ${name} value must be non-empty visible ASCII, with spaces or tabs only between characters`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Send secret extra headers alongside another auth object's, so the scrub knows their values.
+ *
+ * The inner auth's headers win a name clash.
+ */
+export class ExtraHeadersAuth implements Auth {
+  readonly #auth: Auth;
+  readonly #extra: Readonly<Record<string, string>>;
+
+  /**
+   * @param auth The auth object whose headers are sent too.
+   * @param headers The extra header names mapped to their values; copied.
+   * @throws TypeError If a value may not be sent; the message names the header, never the value.
+   */
+  constructor(auth: Auth, headers: Record<string, string>) {
+    this.#auth = auth;
+    // Copied so a caller mutating its own object cannot change what is sent.
+    this.#extra = Object.freeze({ ...headers });
+    for (const [name, value] of Object.entries(this.#extra)) checkFieldValue(name, value);
+  }
+
+  async headers(): Promise<Record<string, string>> {
+    return { ...this.#extra, ...(await this.#auth.headers()) };
+  }
+
+  credentials(): readonly string[] {
+    const seen = new Seen();
+    seen.add(...this.#auth.credentials(), ...Object.values(this.#extra));
+    return seen.snapshot();
   }
 }
 

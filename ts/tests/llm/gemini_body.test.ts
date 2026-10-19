@@ -1,7 +1,7 @@
 /**
  * Tests for Gemini body building in `src/llm/protocols/gemini.ts`: the protocol object, the
- * contents (system, user, tool and assistant messages), tool results and their ids, and the media
- * and wrong-part refusals.
+ * contents (system, user, tool and assistant messages), tool results and their ids, the media and
+ * wrong-part refusals, tools, the tool choice, the block and determinism.
  */
 
 import { describe, expect, spyOn, test } from "bun:test";
@@ -10,6 +10,7 @@ import { encodeBody } from "../../src/llm/body.ts";
 import {
   MediaPart,
   Message,
+  NamedTool,
   type Part,
   ReasoningPart,
   RefusalPart,
@@ -19,10 +20,12 @@ import {
   type Role,
   TextPart,
   ToolCallPart,
+  type ToolChoice,
   ToolResultPart,
+  ToolSpec,
 } from "../../src/llm/messages.ts";
 import { Gemini, PROTOCOL } from "../../src/llm/protocols/gemini.ts";
-import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
+import { type JsonObject, type JsonValue, parseJson } from "../../src/typesys/json.ts";
 
 const FLASH = "gemini-2.5-flash";
 const KEY: ReplayKey = { protocol: PROTOCOL, provider: "google", model: FLASH };
@@ -61,12 +64,32 @@ function call(id: string, args: JsonObject): ToolCallPart {
   return new ToolCallPart({ id, name: "double", arguments: args });
 }
 
-function gemini(): Gemini {
-  return new Gemini({ model: FLASH, provider: "google" });
+const DOUBLE = new ToolSpec({
+  name: "double",
+  description: "Double an integer.",
+  parameters: { type: "object", properties: { value: { type: "integer" } }, required: ["value"] },
+});
+
+function gemini(block: JsonObject | null = null): Gemini {
+  return new Gemini({ model: FLASH, provider: "google", block });
 }
 
-function bodyOf(messages: Message[]): JsonObject {
-  return gemini().buildBody(new Request({ messages }));
+interface BodyOptions {
+  block?: JsonObject | null;
+  tools?: ToolSpec[];
+  toolChoice?: ToolChoice;
+  parallelToolCalls?: boolean | null;
+}
+
+function bodyOf(messages: Message[], options: BodyOptions = {}): JsonObject {
+  return gemini(options.block ?? null).buildBody(
+    new Request({
+      messages,
+      tools: options.tools,
+      toolChoice: options.toolChoice,
+      parallelToolCalls: options.parallelToolCalls,
+    }),
+  );
 }
 
 /** Return the `contents` of a body built from `messages`. */
@@ -368,5 +391,212 @@ describe("refusals", () => {
       () => bodyOf([message("system", new ReasoningPart("x"))]),
       "the gemini route cannot send a ReasoningPart in a system message",
     );
+  });
+});
+
+describe("tools", () => {
+  test("every tool goes in one functionDeclarations entry, in order, description always", () => {
+    const blank = new ToolSpec({ name: "blank", description: "", parameters: { type: "object" } });
+    expect(bodyOf([user("Hi.")], { tools: [DOUBLE, blank] })["tools"]).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "double",
+            description: "Double an integer.",
+            parametersJsonSchema: {
+              type: "object",
+              properties: { value: { type: "integer" } },
+              required: ["value"],
+            },
+          },
+          { name: "blank", description: "", parametersJsonSchema: { type: "object" } },
+        ],
+      },
+    ]);
+  });
+
+  test("parameters go as written", () => {
+    const parameters: JsonObject = {
+      title: "Pick",
+      type: "object",
+      properties: {
+        kind: { const: "a" },
+        count: { type: "integer", minimum: 0n, default: 1n },
+        value: { anyOf: [{ type: "integer" }, { type: "string" }] },
+      },
+      additionalProperties: false,
+    };
+    const pick = new ToolSpec({ name: "pick", description: "Pick.", parameters });
+    const [entry] = bodyOf([user("Hi.")], { tools: [pick] })["tools"] as JsonObject[];
+    const [declaration] = entry!["functionDeclarations"] as JsonObject[];
+    expect(declaration!["parametersJsonSchema"]).toEqual(parameters);
+  });
+
+  test("tool parameters are copied", () => {
+    const [entry] = bodyOf([user("Hi.")], { tools: [DOUBLE] })["tools"] as JsonObject[];
+    const [declaration] = entry!["functionDeclarations"] as JsonObject[];
+    ((declaration!["parametersJsonSchema"] as JsonObject)["required"] as JsonValue[]).push("x");
+    expect(DOUBLE.parameters["required"]).toEqual(["value"]);
+  });
+
+  test("strict is not sent", () => {
+    const strict = new ToolSpec({ name: "s", description: "S.", parameters: { type: "object" }, strict: true });
+    const body = bodyOf([user("Hi.")], { tools: [strict] });
+    expect(body["tools"]).toEqual([
+      { functionDeclarations: [{ name: "s", description: "S.", parametersJsonSchema: { type: "object" } }] },
+    ]);
+    expect(encodeBody(body)).not.toContain("strict");
+  });
+
+  test("no tools sends no tools", () => {
+    expect(Object.hasOwn(bodyOf([user("Hi.")]), "tools")).toBe(false);
+  });
+});
+
+describe("tool choice", () => {
+  const choices: [ToolChoice, JsonObject][] = [
+    ["required", { functionCallingConfig: { mode: "ANY" } }],
+    ["none", { functionCallingConfig: { mode: "NONE" } }],
+    [new NamedTool("double"), { functionCallingConfig: { mode: "ANY", allowedFunctionNames: ["double"] } }],
+  ];
+  for (const [choice, expected] of choices) {
+    test(`tool choice ${JSON.stringify(expected)}`, () => {
+      expect(bodyOf([user("Hi.")], { tools: [DOUBLE], toolChoice: choice })["toolConfig"]).toEqual(expected);
+    });
+  }
+
+  test("a null or auto choice sends no toolConfig", () => {
+    for (const toolChoice of [null, "auto"] as ToolChoice[]) {
+      expect(Object.hasOwn(bodyOf([user("Hi.")], { tools: [DOUBLE], toolChoice }), "toolConfig")).toBe(false);
+    }
+  });
+
+  test("no tools sends no toolConfig, even with a choice set", () => {
+    for (const [toolChoice] of choices) {
+      const body = bodyOf([user("Hi.")], { toolChoice });
+      expect(Object.hasOwn(body, "toolConfig")).toBe(false);
+      expect(Object.hasOwn(body, "tools")).toBe(false);
+    }
+  });
+
+  test("parallelToolCalls is never sent", () => {
+    for (const parallelToolCalls of [false, true]) {
+      for (const toolChoice of [null, "auto", "required", "none", new NamedTool("double")] as ToolChoice[]) {
+        const body = bodyOf([user("Hi.")], { tools: [DOUBLE], toolChoice, parallelToolCalls });
+        expect(encodeBody(body)).not.toMatch(/parallel/i);
+      }
+    }
+  });
+});
+
+describe("the block", () => {
+  test("block is merged last: a generationConfig beside candidateCount, safetySettings replaced", () => {
+    const block: JsonObject = {
+      generationConfig: { thinkingConfig: { thinkingBudget: 1024n, includeThoughts: true }, maxOutputTokens: 512n },
+      safetySettings: [{ category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" }],
+    };
+    const body = bodyOf([system("S."), user("Hi.")], { block, tools: [DOUBLE], toolChoice: "required" });
+    expect(body).toEqual({
+      contents: [{ role: "user", parts: [{ text: "Hi." }] }],
+      systemInstruction: { parts: [{ text: "S." }] },
+      tools: [
+        {
+          functionDeclarations: [
+            {
+              name: "double",
+              description: "Double an integer.",
+              parametersJsonSchema: {
+                type: "object",
+                properties: { value: { type: "integer" } },
+                required: ["value"],
+              },
+            },
+          ],
+        },
+      ],
+      toolConfig: { functionCallingConfig: { mode: "ANY" } },
+      safetySettings: [{ category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" }],
+      generationConfig: {
+        candidateCount: 1n,
+        thinkingConfig: { thinkingBudget: 1024n, includeThoughts: true },
+        maxOutputTokens: 512n,
+      },
+    });
+    expect(Object.keys(body)).toEqual([
+      "contents",
+      "systemInstruction",
+      "tools",
+      "toolConfig",
+      "safetySettings",
+      "generationConfig",
+    ]);
+  });
+
+  test("a block candidateCount replaces yian's", () => {
+    // Refusing a count other than 1 is the route's job, not the protocol's.
+    const body = bodyOf([user("Hi.")], { block: { generationConfig: { candidateCount: 3n } } });
+    expect(body["generationConfig"]).toEqual({ candidateCount: 3n });
+  });
+
+  test("a null block leaf is not sent and a __proto__ key stays an ordinary key", () => {
+    // Built with parseJson: an object literal's "__proto__" would set the prototype instead.
+    const block = parseJson(
+      '{"cachedContent": null, "generationConfig": {"temperature": null, "__proto__": "x"}}',
+      "plain",
+    ) as JsonObject;
+    const body = bodyOf([user("Hi.")], { block });
+    expect(Object.hasOwn(body, "cachedContent")).toBe(false);
+    const config = body["generationConfig"] as JsonObject;
+    expect(Object.hasOwn(config, "temperature")).toBe(false);
+    expect(Object.hasOwn(config, "__proto__")).toBe(true);
+    expect(encodeBody(body)).toContain('"generationConfig":{"candidateCount":1,"__proto__":"x"}');
+  });
+
+  test("block is not shared with the body", () => {
+    const block: JsonObject = { safetySettings: [{ category: "C", threshold: "T" }] };
+    const protocol = gemini(block);
+    const request = new Request({ messages: [user("Hi.")] });
+    const body = protocol.buildBody(request);
+    ((body["safetySettings"] as JsonObject[])[0]!)["threshold"] = "changed";
+    expect(block).toEqual({ safetySettings: [{ category: "C", threshold: "T" }] });
+    expect(protocol.buildBody(request)["safetySettings"]).toEqual([{ category: "C", threshold: "T" }]);
+  });
+
+  test("later changes to the caller's block do not change bodies", () => {
+    const block: JsonObject = { generationConfig: { temperature: 0.2 } };
+    const protocol = gemini(block);
+    (block["generationConfig"] as JsonObject)["temperature"] = 0.9;
+    block["safetySettings"] = [{ category: "C", threshold: "T" }];
+    const body = protocol.buildBody(new Request({ messages: [user("Hi.")] }));
+    expect(body["generationConfig"]).toEqual({ candidateCount: 1n, temperature: 0.2 });
+    expect(body["safetySettings"]).toEqual([]);
+  });
+});
+
+describe("determinism", () => {
+  const history = [
+    system("S."),
+    user("Double 3."),
+    own(text("Calling."), call("call_1", { value: 3n })),
+    tool(result("call_1", "6")),
+    own(text("It is 6.")),
+  ];
+
+  test("the same request built twice encodes to the same bytes", () => {
+    const request = new Request({ messages: history, tools: [DOUBLE], toolChoice: "required" });
+    const protocol = gemini({ generationConfig: { temperature: 0.2 } });
+    expect(encodeBody(protocol.buildBody(request))).toBe(encodeBody(protocol.buildBody(request)));
+  });
+
+  test("appending a user turn after a tool loop leaves every earlier content equal", () => {
+    const before = bodyOf(history);
+    const after = bodyOf([...history, user("Thanks.")]);
+    const earlier = before["contents"] as JsonObject[];
+    const later = after["contents"] as JsonObject[];
+    expect(later).toHaveLength(earlier.length + 1);
+    expect(later.slice(0, earlier.length).map((each) => encodeBody(each))).toEqual(
+      earlier.map((each) => encodeBody(each)),
+    );
+    expect(encodeBody(after["systemInstruction"]!)).toBe(encodeBody(before["systemInstruction"]!));
   });
 });

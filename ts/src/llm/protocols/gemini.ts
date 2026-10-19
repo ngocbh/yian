@@ -7,12 +7,14 @@
  * is its own `user` content (an empty one is not sent, with a warning), each run of tool messages
  * becomes one `user` content of `functionResponse` parts carrying the call ids, and an assistant
  * message is a `model` content of its text and `functionCall` parts in part order, its reasoning
- * and refusals left out. `safetySettings: []` and `generationConfig.candidateCount: 1` are always
- * sent.
+ * and refusals left out. Every tool goes in one `functionDeclarations` entry with its parameters
+ * as written, and a tool choice becomes `toolConfig`, both only with tools. `safetySettings: []`
+ * and `generationConfig.candidateCount: 1` are always sent, and the provider block is merged last.
  *
  * Replies are not read yet.
  */
 
+import { mergeRequestBody } from "../body.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
 import type { Event } from "../events.ts";
 import type { SseProtocol } from "../executor.ts";
@@ -22,13 +24,16 @@ import {
   isPlainObject,
   MediaPart,
   type Message,
+  NamedTool,
   type Part,
   type ReplayDegradedReason,
   type ReplayKey,
   type Request,
   TextPart,
   ToolCallPart,
+  type ToolChoice,
   ToolResultPart,
+  type ToolSpec,
 } from "../messages.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
@@ -78,7 +83,8 @@ export class Gemini implements SseProtocol {
 
   /**
    * Build the `generateContent` request body: `contents`, `systemInstruction` when a system
-   * message has text, `safetySettings: []` and `generationConfig: {candidateCount: 1}`.
+   * message has text, `tools` and `toolConfig`, `safetySettings: []` and
+   * `generationConfig: {candidateCount: 1}`, then the block merged over them.
    *
    * Every system message's non-empty text parts, wherever the message is, join
    * `systemInstruction.parts` in order. A user message is a `user` content of its non-empty text
@@ -93,6 +99,13 @@ export class Gemini implements SseProtocol {
    * refusal parts are not sent, and a message rendering no part is skipped. A trailing assistant
    * message goes as written.
    *
+   * Every tool goes in one `functionDeclarations` entry: its name, description and parameters
+   * (copied, as written) as `parametersJsonSchema`; `strict` is not sent. The tool choice is sent
+   * only with tools, as `toolConfig.functionCallingConfig`: `required` is `ANY`, `none` is `NONE`,
+   * a named tool is `ANY` limited to that name, and `auto` or no choice sends nothing.
+   * `parallelToolCalls` is not sent. The block is merged last: its lists and scalars replace
+   * yian's, its maps merge into them, and a `null` leaf is not sent.
+   *
    * @throws {TypeError} If a message holds a media part (checked first) or a part its role
    *   cannot carry.
    */
@@ -100,8 +113,14 @@ export class Gemini implements SseProtocol {
     const [system, contents] = this.#contents(request.messages);
     const body: JsonObject = { contents };
     if (system.length > 0) body["systemInstruction"] = { parts: system };
+    if (request.tools.length > 0) {
+      body["tools"] = [{ functionDeclarations: request.tools.map(functionDeclaration) }];
+      const config = toolConfig(request.toolChoice);
+      if (config !== null) body["toolConfig"] = config;
+    }
     body["safetySettings"] = [];
     body["generationConfig"] = { candidateCount: 1n };
+    if (this.#block) mergeRequestBody(body, this.#block);
     return body;
   }
 
@@ -216,6 +235,22 @@ function toolResponse(content: string): JsonObject {
     throw error;
   }
   return isPlainObject(value) ? value : { output: value };
+}
+
+/** Render a tool as a function declaration; Gemini has no per-tool `strict`. */
+function functionDeclaration(spec: ToolSpec): JsonObject {
+  // Copied so changing a body cannot change the spec it came from.
+  return { name: spec.name, description: spec.description, parametersJsonSchema: copyJson(spec.parameters) };
+}
+
+/** Render the tool choice as a `toolConfig`, or `null` for none. */
+function toolConfig(choice: ToolChoice): JsonObject | null {
+  if (choice instanceof NamedTool) {
+    return { functionCallingConfig: { mode: "ANY", allowedFunctionNames: [choice.name] } };
+  }
+  if (choice === "required") return { functionCallingConfig: { mode: "ANY" } };
+  if (choice === "none") return { functionCallingConfig: { mode: "NONE" } };
+  return null;
 }
 
 /** Return the error text for a part a message of `role` cannot carry. */

@@ -255,6 +255,16 @@ describe("lone surrogates", () => {
     expectError('id: f\nenv:\n  K: "\\uD800"\n', "flow env 'K'", SURROGATE);
   });
 
+  test("an env key holding one is refused at the key", () => {
+    const text = 'id: f\nenv:\n  "\\uD800": 1\n';
+    const document = SourceDocument.parse(text);
+    const { diagnostic } = loadError(() => checkFlowEnv(text));
+    expect(diagnostic.message).toBe(`flow env '\\ud800': ${SURROGATE}`);
+    expect(diagnostic.frames.map((frame) => frame.range)).toEqual([
+      document.root.child("env").keyRangeOf("\uD800")!,
+    ]);
+  });
+
   test("a value past the limit that also holds one gets the depth message", () => {
     const deep = "[".repeat(MAX_VALUE_NESTING + 1) + '"\\uD800"' + "]".repeat(MAX_VALUE_NESTING + 1);
     expectLimitError(flowEnv(["", deep]));

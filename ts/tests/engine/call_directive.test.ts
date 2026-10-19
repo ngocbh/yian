@@ -9,7 +9,7 @@
  *
  * Later (T3-22): the `load_flow` tests.
  *
- * Added: the recognizer rows those tests reach through `desugar_inline_calls`, each matching the
+ * TS-only: the recognizer rows those tests reach through `desugar_inline_calls`, each matching the
  * whole message, with the harvested
  * `load-types/compose_tagged_bindings__malformed_unquoted_call_after_a_tag` message, and direct
  * rows for `findParenEnd`, `splitCallsAware` and `InlineCall`.

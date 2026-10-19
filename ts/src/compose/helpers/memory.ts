@@ -2,7 +2,8 @@
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { type DeclSite, MemoryDecl } from "../../memory/contracts.ts";
-import { isRecord, type Value, type ValueRecord, writeAsText } from "../../typesys/values.ts";
+import { isRecord, type Value, type ValueRecord } from "../../typesys/index.ts";
+import { writeAsText } from "../../typesys/values.ts";
 import type { LoadDiagnostics } from "./errors.ts";
 
 const LONG_FORM_KEYS: ReadonlySet<string> = new Set(["type", "config"]);
@@ -11,7 +12,7 @@ const LONG_FORM_KEYS: ReadonlySet<string> = new Set(["type", "config"]);
 const RESERVED_NAMES: readonly string[] = ["config", "name", "type"];
 
 /** Where `parseMemoryDeclarations` reports errors and what it stamps on each declaration. */
-interface MemoryParseOptions {
+export interface MemoryParseOptions {
   /** Source context for errors. */
   diagnostics: LoadDiagnostics;
   /** Range of the whole value. */

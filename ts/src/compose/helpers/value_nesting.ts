@@ -50,11 +50,13 @@ export function checkWrittenValue(
 }
 
 /**
- * Reject an `env:` value that nests too deep, holds a lone surrogate, or holds itself through
- * an alias, checked in that order per entry.
+ * Reject an `env:` key holding a lone surrogate, or a value that nests too deep, holds a lone
+ * surrogate, or holds itself through an alias, checked in that order per entry.
  *
  * @param prefix Starts the message before `env '<key>'`, e.g. `"flow "`.
  * @param envCursor Cursor over the `env:` mapping, for ranges.
+ * @throws LoadError at the entry's key (else at `env:`) when the key holds a lone surrogate:
+ *   `<prefix>env '<key>': text holding a lone surrogate is not a yian value`.
  * @throws LoadError at the entry's value (else at `env:`) as `checkWrittenValue` throws it, or
  *   when an entry in the value refers back to a container enclosing it: `<prefix>env '<key>' at
  *   <path>: cannot descend through a recursive alias occurrence`.
@@ -66,8 +68,10 @@ export function checkEnvValues(
   diagnostics: LoadDiagnostics,
 ): void {
   for (const [key, value] of Object.entries(env)) {
-    const range = envCursor?.rangeOf(key) ?? envCursor?.range ?? null;
     const where = `${prefix}env ${reprText(key)}`;
+    // The key is text, so this checks only its lone surrogates.
+    checkWrittenValue(key, where, envCursor?.keyRangeOf(key) ?? envCursor?.range ?? null, diagnostics);
+    const range = envCursor?.rangeOf(key) ?? envCursor?.range ?? null;
     checkWrittenValue(value, where, range, diagnostics);
     const path = recursiveEntryPath(value);
     if (path !== null) {

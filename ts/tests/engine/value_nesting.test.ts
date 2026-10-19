@@ -4,7 +4,7 @@
  * `recursiveEntryPath`). The levels are arrays, records and `FileRef`s; a `TypedValue` is
  * unwrapped.
  *
- * New in TS: `rejectLoneSurrogates`, which refuses text or a record key holding a lone
+ * TS-only: `rejectLoneSurrogates`, which refuses text or a record key holding a lone
  * surrogate on the same walk.
  *
  * Also here: `test_limit_overrides.py::test_value_nesting_follows_the_variable`.

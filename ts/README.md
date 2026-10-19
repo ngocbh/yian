@@ -200,9 +200,10 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   checks. `src/compile/index.ts` re-exports Python's `__all__` only.
 - A `Flow`'s `nodes` and `wiring` are `Map`s: they keep insertion order, so node and wiring order
   is Python's (a record would list index-like keys first and could collide with `__proto__`).
-- `copyGraph` is the one graph copier (Python's `copy.deepcopy` of a flow or node). A node copy is
-  shallow, with a fresh memo per call; a flow reached through a node field is copied once; each
-  flow copy gets fresh `nodes`, `edges` and `wiring` containers and a rebuilt adjacency index.
+- `copyGraph` is the one graph copier (Python's `copy.deepcopy` of a flow or node). Each call uses
+  a fresh memo, so sharing and cycles carry over; a node copy is shallow; a flow reached through a
+  node field is copied once; each flow copy gets fresh `nodes`, `edges` and `wiring` containers
+  and, for a `CompiledFlow`, a rebuilt adjacency index.
   Carriers and payloads stay shared, so change a copy by reassigning a field or, on a
   `CompiledFlow`, through `addSubgraph`/`removeSubgraph`.
 - `rewriteFlowOrigins` and `rebaseFlowOrigins` return a rewritten copy and never touch the input;

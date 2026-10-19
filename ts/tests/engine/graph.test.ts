@@ -29,7 +29,9 @@
 
 import { expect, test } from "bun:test";
 
+import * as layoutModule from "../../src/compile/execution_layout.ts";
 import * as compilePackage from "../../src/compile/index.ts";
+import * as modelModule from "../../src/compile/model.ts";
 import {
   CompiledFlow,
   copyGraph,
@@ -40,7 +42,7 @@ import {
   START_ID,
   validateGrowthMetadata,
 } from "../../src/compile/model.ts";
-import { compareCodeUnits } from "../../src/diagnostics.ts";
+import * as originsModule from "../../src/compile/origins.ts";
 import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
@@ -585,17 +587,19 @@ test.each([
 });
 
 test("compile/index.ts exports exactly Python's yian.compile.__all__", () => {
-  expect(Object.keys(compilePackage).sort(compareCodeUnits)).toEqual([
-    "CompiledFlow",
-    "END_ID",
-    "Edge",
-    "START_ID",
-    "applyExecutionLayout",
-    "iterFlowOrigins",
-    "rebaseFlowOrigins",
-    "resolveExecutionLayout",
-    "rewriteFlowOrigins",
-  ]);
-  expect(compilePackage.CompiledFlow).toBe(CompiledFlow);
-  expect(compilePackage.Edge).toBe(Edge);
+  // Each name and the module that defines it; a namespace lists its keys code-unit sorted.
+  const sources: Record<string, Record<string, unknown>> = {
+    CompiledFlow: modelModule,
+    END_ID: modelModule,
+    Edge: modelModule,
+    START_ID: modelModule,
+    applyExecutionLayout: layoutModule,
+    iterFlowOrigins: originsModule,
+    rebaseFlowOrigins: originsModule,
+    resolveExecutionLayout: layoutModule,
+    rewriteFlowOrigins: originsModule,
+  };
+  expect(Object.keys(compilePackage)).toEqual(Object.keys(sources));
+  const exported: Record<string, unknown> = compilePackage;
+  for (const [name, source] of Object.entries(sources)) expect(exported[name]).toBe(source[name]);
 });

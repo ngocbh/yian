@@ -3256,6 +3256,9 @@ The block takes only `prompt:`, `llm_config:`, and `retries:`. Any other key is 
 error at that key that lists the allowed keys. `adaptive_questions.mode:` was removed;
 writing it is a load error.
 
+Changed (TS yian): `adaptive_questions.retries:` is at most 9,007,199,254,740,991 (JavaScript's
+largest safe integer).
+
 Changed: a bad brief used to be reported on `node 'ask__compose' prompt` and point at
 the gate's `prompt:` line, or at the node when the gate had no `prompt:`. An
 `llm_config:` error and an input error also used to name `ask__compose`, the

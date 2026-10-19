@@ -6,7 +6,8 @@
  *
  * Ported: `test_kinds_maps_string_to_descriptor_class`.
  *
- * TS-only: a `code` row; `withKinds` restores the tables after its function returns or throws.
+ * TS-only: a `code` row; the five leaf kinds are registered; `withKinds` restores the tables after
+ * its function returns or throws.
  *
  * Dropped: `test_retired_kindspec_is_not_public` (a Python import).
  *
@@ -17,8 +18,10 @@ import { expect, test } from "bun:test";
 
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
+import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import { BINDING_FIELDS, KINDS, REMOVED_KINDS } from "../../src/compose/nodes/index.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
+import { WaitDescriptor } from "../../src/compose/nodes/wait.ts";
 import { ALL_KIND_NAMES, StandInCode, standIn, withKinds } from "./stand_ins.ts";
 
 /** Expect `KINDS` and `BINDING_FIELDS` to name the same kinds, each with its class's fields. */
@@ -41,6 +44,15 @@ test("KINDS maps the kind text to its descriptor class", () => {
   expect(KINDS.get("code")).toBe(CodeDescriptor);
   expect(KINDS.get("tool")).toBe(ToolDescriptor);
   for (const [kind, cls] of KINDS) expect(cls.kind).toBe(kind);
+});
+
+test("the leaf kinds are registered", () => {
+  expect(KINDS.get("human_input")).toBe(HumanInputDescriptor);
+  expect(KINDS.get("wait")).toBe(WaitDescriptor);
+  for (const kind of ["agent", "code", "tool", "wait", "human_input"]) {
+    expect(KINDS.has(kind)).toBe(true);
+    expect(BINDING_FIELDS.has(kind)).toBe(true);
+  }
 });
 
 test("removed kinds are not registered", () => {

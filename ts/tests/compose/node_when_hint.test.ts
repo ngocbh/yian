@@ -9,8 +9,8 @@
  * carrying the case kind's `whenHint`. The harvested `compose_node_when_hint__when_on_*` cases of
  * the registered kinds are pinned.
  *
- * Later (T3-15/T3-16): the sweep's rows and pinned cases for the kinds not registered yet, and the
- * real `case` kind's hint.
+ * Later (T3-16): the sweep's rows and pinned cases for the kinds not registered yet, and the real
+ * `case` kind's hint.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -87,6 +87,7 @@ output: \${x.output}
 test.each<CaseRow>([
   { id: "load-core/compose_node_when_hint__when_on_an_agent_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_code_node", call: parsedNodes },
+  { id: "load-core/compose_node_when_hint__when_on_a_human_input_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_tool_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_wait_node", call: parsedNodes },
 ])(

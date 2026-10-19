@@ -1,21 +1,27 @@
 /**
- * The effect-node parser arms: a port of `tests/engine/test_parser_effects.py`'s WAIT rows,
- * through `parseNodes` over a virtual cursor.
- *
- * Later (T3-15, the HUMAN_INPUT reader): `test_human_input_missing_prompt_loud` and the
- * HUMAN_INPUT half of `test_parse_human_input_and_wait`.
+ * The effect-node parser arms: a port of `tests/engine/test_parser_effects.py`, through
+ * `parseNodes` over a virtual cursor.
  */
 
 import { expect, test } from "bun:test";
 
+import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import { WaitDescriptor } from "../../src/compose/nodes/wait.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor } from "../../src/compose/source/index.ts";
 import { loadError } from "../compose/declarations.ts";
 
-test("parse human_input and wait: the WAIT half", () => {
-  const nodes = parseNodes(SourceCursor.virtual({ settle: { kind: "wait", until: "${input.settle_at}" } }));
+test("parse human_input and wait", () => {
+  const nodes = parseNodes(
+    SourceCursor.virtual({
+      approve: { kind: "human_input", prompt: "ok? ${a}", inputs: { a: "${p.output}" }, outputs: "Approval" },
+      settle: { kind: "wait", until: "${input.settle_at}" },
+    }),
+  );
 
+  const approve = nodes.get("approve");
+  expect(approve).toBeInstanceOf(HumanInputDescriptor);
+  expect((approve as HumanInputDescriptor).prompt).toBe("ok? ${a}");
   const settle = nodes.get("settle");
   expect(settle).toBeInstanceOf(WaitDescriptor);
   expect((settle as WaitDescriptor).until).toBe("${input.settle_at}");
@@ -27,4 +33,8 @@ test("wait rejects inputs field", () => {
   );
 
   expect(error.message).toContain("field 'inputs' is not allowed");
+});
+
+test("human_input missing prompt loud", () => {
+  loadError(() => parseNodes(SourceCursor.virtual({ h: { kind: "human_input" } })));
 });

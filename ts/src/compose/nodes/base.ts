@@ -52,11 +52,12 @@ import type { ChildResolver } from "./resolver.ts";
 
 /**
  * Return the key of a descriptor's `fieldRanges` entry for the site named `name`: a field, an
- * `input:` binding or an `llm_config` field.
+ * `input:` binding, an `llm_config` field, or a text a HUMAN_INPUT renders as a template.
  *
- * Example: `siteKey("field", "inputs")` is `"field:inputs"`.
+ * Example: `siteKey("field", "inputs")` is `"field:inputs"`;
+ * `siteKey("text", "questions[0].question")` is `"text:questions[0].question"`.
  */
-export function siteKey(kind: "field" | "input" | "llm_config", name: string): string {
+export function siteKey(kind: "field" | "input" | "llm_config" | "text", name: string): string {
   // One text key, since a Map compares a [kind, name] pair by identity, not by value.
   return `${kind}:${name}`;
 }

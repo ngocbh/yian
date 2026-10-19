@@ -48,6 +48,9 @@ const CONTEXT_PHRASES = [
   "prompt is too long",
   "maximum context length",
   "exceeds the maximum number of tokens allowed",
+  // Ollama's own prompt-too-long text, and llama-server's, which Ollama passes through.
+  "longer than the context length",
+  "exceeds the available context size",
 ];
 const MAX_DETAIL_CHARS = 2000;
 
@@ -169,8 +172,9 @@ function parseHttpDate(text: string): number | null {
  * - 3xx: redirect.
  * - A 400 naming `API_KEY_INVALID`: auth (Gemini's invalid key).
  * - A 400, 413 or 422 whose body names a context overflow ("context_length_exceeded",
- *   "prompt is too long", "maximum context length", or Gemini's "exceeds the maximum
- *   number of tokens allowed"): context length.
+ *   "prompt is too long", "maximum context length", Gemini's "exceeds the maximum
+ *   number of tokens allowed", Ollama's "longer than the context length", or llama-server's
+ *   "exceeds the available context size"): context length.
  * - Any other 4xx: bad request.
  * - Anything else: protocol.
  */
@@ -260,7 +264,7 @@ function bodyDetail(body: string): string {
   return capDetail(jsonDetail(body) ?? (body.replace(/\s+/g, " ").trim() || "no body"));
 }
 
-/** Return the body's JSON `error.message`, `message` or `detail` string, or `null`. */
+/** Return the body's JSON `error.message`, `message` or `detail` string, or a string `error`, or `null`. */
 function jsonDetail(body: string): string | null {
   let data;
   try {
@@ -271,7 +275,7 @@ function jsonDetail(body: string): string | null {
   if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
   const error = data["error"];
   const isObject = typeof error === "object" && error !== null && !Array.isArray(error);
-  for (const candidate of [isObject ? error["message"] : undefined, data["message"], data["detail"]]) {
+  for (const candidate of [isObject ? error["message"] : undefined, data["message"], data["detail"], error]) {
     if (typeof candidate === "string" && candidate.trim()) return candidate;
   }
   return null;

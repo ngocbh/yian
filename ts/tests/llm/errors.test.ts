@@ -65,6 +65,32 @@ describe("kinds", () => {
     },
   );
 
+  const ollamaTooLong =
+    "the prompt is longer than the context length currently available to the model; shorten the prompt, adjust the context length in settings, or use a model with a longer context length";
+  const llamaServerTooLong = "request (302 tokens) exceeds the available context size (256 tokens), try increasing it";
+
+  test("Ollama's prompt-too-long 400 is context_length", () => {
+    expect(reply(400, {}, ollamaTooLong).kind).toBe("context_length");
+    expect(reply(400, {}, JSON.stringify({ error: ollamaTooLong })).kind).toBe("context_length");
+    expect(reply(400, {}, ollamaTooLong.toUpperCase()).kind).toBe("context_length");
+  });
+
+  test("llama-server's context-size 400, passed through by Ollama, is context_length", () => {
+    expect(reply(400, {}, llamaServerTooLong).kind).toBe("context_length");
+    expect(reply(400, {}, JSON.stringify({ error: llamaServerTooLong })).kind).toBe("context_length");
+  });
+
+  test("Ollama's context texts on a 500 stay server", () => {
+    expect(reply(500, {}, ollamaTooLong).kind).toBe("server");
+    expect(reply(500, {}, llamaServerTooLong).kind).toBe("server");
+  });
+
+  test("Ollama's busy 503 is server and retryable", () => {
+    const err = reply(503, {}, '{"error": "server busy, please try again.  maximum pending requests exceeded"}');
+    expect(err.kind).toBe("server");
+    expect(err.retryable).toBe(true);
+  });
+
   test("context phrase on other status is not context_length", () => {
     expect(reply(500, {}, "maximum context length").kind).toBe("server");
   });
@@ -354,6 +380,24 @@ describe("message", () => {
     expect(reply(422, {}, '{"error": {"message": " "}, "detail": "bad field"}').message.endsWith(": bad field")).toBe(
       true,
     );
+  });
+
+  test("Ollama's string error", () => {
+    expect(reply(404, {}, '{"error": "model \'qwen3\' not found"}').message).toBe(
+      "p returned HTTP 404 (not_found): model 'qwen3' not found",
+    );
+    const missing = reply(404, {}, '{"error": "model \\"qwen3\\" not found, try pulling it first"}');
+    expect(missing.kind).toBe("not_found");
+    expect(detailOf(missing)).toBe('model "qwen3" not found, try pulling it first');
+    const signin = reply(401, {}, '{"error": "unauthorized", "signin_url": "https://ollama.com/connect?x"}');
+    expect(signin.kind).toBe("auth");
+    expect(detailOf(signin)).toBe("unauthorized");
+  });
+
+  test("a string error gives way to message and detail; a blank one falls back to the text", () => {
+    expect(detailOf(reply(400, {}, '{"error": "a", "message": "b"}'))).toBe("b");
+    expect(detailOf(reply(400, {}, '{"error": "a", "detail": "c"}'))).toBe("c");
+    expect(detailOf(reply(400, {}, '{"error": " "}'))).toBe('{"error": " "}');
   });
 
   test("plain text body collapses whitespace", () => {

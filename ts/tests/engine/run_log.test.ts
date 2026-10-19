@@ -38,7 +38,9 @@
  * incomplete tail ignored and left in place, an empty file, a corrupt line named by path, line and
  * seq, a line that isn't UTF-8); a failed resume whose descriptor close also fails throws the
  * original error; a write that fails and whose rollback truncate also fails; closing a poisoned
- * log, after which an append throws `run log is closed`.
+ * log, after which an append throws `run log is closed`; with `YIAN_TEST_NODE` set to a Node
+ * binary, the built log on Node through a failed sync, a failed write, a short write and a write
+ * whose rollback truncate also fails.
  *
  * Changed:
  * - `test_schema_version_is_nine`: `SCHEMA_VERSION` is 10.
@@ -92,11 +94,12 @@
  * `test_flush_failure_rolls_back_to_the_prior_complete_prefix` (there is no flush).
  */
 
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { FileLockError, isLocked, lockFile } from "../../src/platform.ts";
 import {
@@ -1117,4 +1120,191 @@ test("a tail repair failure releases the lock", () => {
   }
   expect(caught).toBe(failure);
   expectUnlocked(file);
+});
+
+/** The `ts/` directory. */
+const ROOT = path.resolve(import.meta.dir, "../..");
+const BUILT = path.join(ROOT, "dist/src/runtime/log.js");
+
+/**
+ * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
+ * value that can't run, a Node older than the `engines` floor, or a missing build
+ * fails the whole file, so a typo can't pass as a run with the Node case skipped.
+ * A copy of `tests/engine/platform.test.ts`'s: importing a test file would run its tests.
+ */
+const NODE = ((): string | undefined => {
+  const node = process.env.YIAN_TEST_NODE;
+  if (!node) return undefined;
+  let version: string;
+  try {
+    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
+  } catch (error) {
+    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
+  }
+  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18)) {
+    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
+  }
+  if (!fs.existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
+  return node;
+})();
+
+describe.skipIf(!NODE)("the built jsonl log on Node", () => {
+  test(
+    "rollback and poisoning survive failed writes and syncs",
+    () => {
+      const url = (file: string) => JSON.stringify(pathToFileURL(path.join(ROOT, file)).href);
+      const script = String.raw`
+        import assert from "node:assert/strict";
+        import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+        import { tmpdir } from "node:os";
+        import { join } from "node:path";
+
+        // log.js calls the operations on this default export, so replacing them here is seen.
+        const fs = (await import("node:fs")).default;
+        const { JsonlRunLog, NodeStartedRecord } = await import(${url("dist/src/runtime/log.js")});
+        const { isLocked } = await import(${url("dist/src/platform.js")});
+
+        const tmp = mkdtempSync(join(tmpdir(), "yian-log-node-"));
+        const isDescriptorOf = (fd, file) => {
+          if (typeof fd !== "number") return false;
+          const open = fs.fstatSync(fd);
+          const named = fs.statSync(file);
+          return open.dev === named.dev && open.ino === named.ino;
+        };
+        // Run fn with fs[name] replaced: a call on a descriptor of file runs onLog(real, args),
+        // every other call (the lock's own) goes to the original.
+        const patched = (name, file, onLog, fn) => {
+          const original = fs[name];
+          const real = (...args) => Reflect.apply(original, fs, args);
+          fs[name] = (...args) => (isDescriptorOf(args[0], file) ? onLog(real, args) : real(...args));
+          try {
+            return fn();
+          } finally {
+            fs[name] = original;
+          }
+        };
+        const caught = (fn) => {
+          try {
+            fn();
+          } catch (error) {
+            return error;
+          }
+          assert.fail("expected a throw");
+        };
+        const appendSecond = (log) => caught(() => log.append(new NodeStartedRecord("second")));
+        const baseline = (name) => {
+          const file = join(tmp, name + ".jsonl");
+          const log = JsonlRunLog.create(file, "run");
+          log.append(new NodeStartedRecord("first"));
+          return { file, log, prefix: readFileSync(file) };
+        };
+        const expectPoisoned = (log, file, cause) => {
+          const error = caught(() => log.append(new NodeStartedRecord("late")));
+          assert.equal(error.constructor, Error);
+          assert.equal(error.message, "run log " + file + " refuses appends after a failed append");
+          assert.equal(error.cause, cause);
+          assert.equal(isLocked(file + ".lock"), true);
+        };
+        const expectRolledBack = (log, file, prefix) => {
+          assert.deepEqual(readFileSync(file), prefix);
+          assert.equal(log.nextSequence, 1);
+          assert.equal(log.records().length, 1);
+        };
+        // Close the log, check the lock is free, and resume to read nodeIds.
+        const expectClean = (log, file, nodeIds) => {
+          log.close();
+          assert.equal(isLocked(file + ".lock"), false);
+          const resumed = JsonlRunLog.resume(file);
+          try {
+            assert.deepEqual([...resumed].map((envelope) => envelope.record.nodeId), nodeIds);
+          } finally {
+            resumed.close();
+          }
+        };
+
+        try {
+          {
+            const { file, log, prefix } = baseline("fsync");
+            const failure = new Error("fsync failed");
+            let calls = 0;
+            const onLog = (real, args) => {
+              calls++;
+              if (calls === 1) throw failure;
+              return real(...args);
+            };
+            const error = patched("fsyncSync", file, onLog, () => appendSecond(log));
+            assert.equal(error, failure);
+            assert.equal(calls, 2);
+            expectRolledBack(log, file, prefix);
+            expectPoisoned(log, file, failure);
+            expectClean(log, file, ["first"]);
+            console.log("ok fsync fails once");
+          }
+          {
+            const { file, log, prefix } = baseline("write");
+            const failure = new Error("write failed");
+            const onLog = (real, [fd, buffer, offset, length, position]) => {
+              real(fd, buffer, offset, Math.max(1, Math.floor(length / 2)), position);
+              throw failure;
+            };
+            const error = patched("writeSync", file, onLog, () => appendSecond(log));
+            assert.equal(error, failure);
+            expectRolledBack(log, file, prefix);
+            expectPoisoned(log, file, failure);
+            expectClean(log, file, ["first"]);
+            console.log("ok write fails halfway");
+          }
+          {
+            const { file, log, prefix } = baseline("short");
+            let calls = 0;
+            const onLog = (real, [fd, buffer, offset, length, position]) => {
+              calls++;
+              return real(fd, buffer, offset, calls === 1 ? length - 1 : length, position);
+            };
+            const envelope = patched("writeSync", file, onLog, () => log.append(new NodeStartedRecord("second")));
+            assert.equal(envelope.seq, 1);
+            assert.equal(calls, 2);
+            const line = ${JSON.stringify(`${wireLine({ seq: 1, nodeId: "second" })}\n`)};
+            assert.equal(readFileSync(file, "utf8"), prefix.toString("utf8") + line);
+            expectClean(log, file, ["first", "second"]);
+            console.log("ok short write completes");
+          }
+          {
+            const { file, log, prefix } = baseline("truncate");
+            const writeFailure = new Error("write failed");
+            const truncateFailure = new Error("ftruncate failed");
+            const onWrite = (real, [fd, buffer, offset, length, position]) => {
+              real(fd, buffer, offset, Math.floor(length / 2), position);
+              throw writeFailure;
+            };
+            const onTruncate = () => {
+              throw truncateFailure;
+            };
+            const error = patched("writeSync", file, onWrite, () =>
+              patched("ftruncateSync", file, onTruncate, () => appendSecond(log)),
+            );
+            assert.equal(error.constructor, AggregateError);
+            assert.equal(error.message, "run log " + file + " append failed and its rollback also failed");
+            assert.equal(error.errors.length, 2);
+            assert.equal(error.errors[0], writeFailure);
+            assert.equal(error.errors[1], truncateFailure);
+            // The truncate failed, so the half line stays until a resume repairs it.
+            assert.ok(readFileSync(file).length > prefix.length);
+            assert.equal(log.nextSequence, 1);
+            expectPoisoned(log, file, writeFailure);
+            expectClean(log, file, ["first"]);
+            assert.deepEqual(readFileSync(file), prefix);
+            console.log("ok rollback truncate fails");
+          }
+        } finally {
+          rmSync(tmp, { recursive: true, force: true });
+        }
+      `;
+      expect(execFileSync(NODE!, ["--input-type=module", "-e", script], { encoding: "utf8" })).toBe(
+        "ok fsync fails once\nok write fails halfway\nok short write completes\nok rollback truncate fails\n",
+      );
+    },
+    30_000,
+  );
 });

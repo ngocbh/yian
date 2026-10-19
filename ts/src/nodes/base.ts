@@ -38,7 +38,7 @@ import {
   type Value,
   type ValueRecord,
 } from "../typesys/values.ts";
-import { type ReservedBinder, validateParameters } from "./binding.ts";
+import { type BindingError, type ReservedBinder, validateParameters } from "./binding.ts";
 import {
   type Assertion,
   ExecutionScope,
@@ -566,6 +566,113 @@ export function projectStructuralFeedback(
 }
 
 /**
+ * A node-local `asserts:` clause was false, or couldn't be evaluated: thrown by a node's own
+ * `run` template around its kind body (START included, after binding).
+ *
+ * `assertion` is the exact carrier the template checked, or `null` when the error was thrown
+ * outside the template. Only the template's instance, marked as an assertion stage, gets the
+ * failure code `failureCode`; the same class thrown by node code stays `node.execute`.
+ */
+export class NodeAssertFailed extends Error {
+  override name = "NodeAssertFailed";
+  /** The assertion that failed, or `null` outside the run template. */
+  readonly assertion: Assertion | null;
+  /** `assertion.failed` for a false condition, `condition.evaluate` for one that threw. */
+  readonly failureCode: "assertion.failed" | "condition.evaluate";
+
+  /**
+   * Retain the assertion that classifies this template-owned failure; `assertion` defaults to
+   * `null` and `failureCode` to `assertion.failed`.
+   */
+  constructor(
+    message: string,
+    options: {
+      assertion?: Assertion | null;
+      failureCode?: "assertion.failed" | "condition.evaluate";
+      cause?: unknown;
+    } = {},
+  ) {
+    const { assertion = null, failureCode = "assertion.failed", cause } = options;
+    super(message, cause === undefined ? undefined : { cause });
+    this.assertion = assertion;
+    this.failureCode = failureCode;
+  }
+}
+
+/** Return a stage marker's message: an `Error`'s own message, else the thrown value as text. */
+function markerMessage(original: unknown): string {
+  return original instanceof Error ? original.message : String(original);
+}
+
+/** A stage marker retaining one value thrown by a node's body. Used by the evaluator. */
+export class NodeBodyError extends Error {
+  override name = "NodeBodyError";
+  /** The exact value the body threw. */
+  readonly original: unknown;
+
+  /** Keep the exact thrown value, also as the `cause`. */
+  constructor(original: unknown) {
+    super(markerMessage(original), { cause: original });
+    this.original = original;
+  }
+}
+
+/** A stage marker for a failure of an evaluator-owned binding stage. Used by the evaluator. */
+export class BindingStageError extends Error {
+  override name = "BindingStageError";
+  /** The binder's error. */
+  readonly original: BindingError;
+
+  /** Keep the binder's error apart from any error a node body throws, also as the `cause`. */
+  constructor(original: BindingError) {
+    super(markerMessage(original), { cause: original });
+    this.original = original;
+  }
+}
+
+/**
+ * A carrier for an unexpected error from the deferred per-item binder, which must escape the
+ * node. Used by the evaluator.
+ */
+export class DeferredBindingFault extends Error {
+  override name = "DeferredBindingFault";
+  /** The exact value the injected binder threw. */
+  readonly original: unknown;
+
+  /** Keep the exact host or setup fault, also as the `cause`. */
+  constructor(original: unknown) {
+    super(markerMessage(original), { cause: original });
+    this.original = original;
+  }
+}
+
+/** A carrier for an unexpected host fault from an injected capability. Used by the evaluator. */
+export class CapabilityFault extends Error {
+  override name = "CapabilityFault";
+  /** The exact value the capability threw. */
+  readonly original: unknown;
+
+  /** Keep the exact host fault, so the evaluator can pass it on as it was, also as the `cause`. */
+  constructor(original: unknown) {
+    super(markerMessage(original), { cause: original });
+    this.original = original;
+  }
+}
+
+/** A stage marker for an assertion failure of the base run template. Used by the evaluator. */
+export class AssertionStageError extends Error {
+  override name = "AssertionStageError";
+  /** The template's assertion failure. */
+  readonly original: NodeAssertFailed;
+
+  /** Keep the template's assertion failure apart from node-body errors, also as the `cause`. */
+  constructor(original: NodeAssertFailed) {
+    super(markerMessage(original), { cause: original });
+    this.original = original;
+  }
+}
+
+/**
  * The capabilities a node's `run` and `forward` receive, as one object. The evaluator passes
  * only what the node's traits ask for.
  */
@@ -902,6 +1009,24 @@ export abstract class Node {
   }
 
   /**
+   * Reject malformed node-owned execution setup before the body runs.
+   *
+   * The base requires a kind's own `forward`, then parses every condition through
+   * `validateConditions`, so a malformed post-assert or predicate is reported before the body
+   * has effects. A composite kind extends this for its own invariants, such as requiring its
+   * compiled child flow.
+   *
+   * @throws Error when the node's class defines no `forward`.
+   * @throws ExpressionError when a condition doesn't parse.
+   */
+  validateExecutionSetup(): void {
+    if (this.forward === Node.prototype.forward) {
+      throw new Error(`node ${reprText(this.id)} (${this.constructor.name}) defines no forward`);
+    }
+    this.validateConditions();
+  }
+
+  /**
    * Parse every condition this node evaluates. The base parses the node's assertions; a kind
    * that evaluates its own predicate (CASE `when`, LOOP `while`/`until`) extends this.
    *
@@ -945,6 +1070,24 @@ export abstract class Node {
     if (assertion.expression !== assertion.display) shown += ` (\`${assertion.expression}\`)`;
     // `||`, as Python's `or`: an empty path names the node by its id.
     parseNamedCondition(assertion.expression, `node ${reprText(where || this.id)} ${label} ${shown}`, this.types);
+  }
+
+  /**
+   * Run the node as a pure function of its bound input record: the kind's body, which the `run`
+   * template wraps.
+   *
+   * Every concrete kind defines it; the evaluator drives `run`, which checks the assertions
+   * around this body exactly once. A kind that omits it gets this loud error (the setup check
+   * reports it first). The evaluator gives a body error the code the node's `exceptionCode`
+   * names (default `node.execute`).
+   *
+   * @param inputs The bound input record; the body may change it.
+   * @param caps The capabilities the node's traits ask for.
+   * @returns One `Output | Route | Grow`, or a promise of one.
+   * @throws Error always, on the base.
+   */
+  forward(inputs: Record<string, unknown>, caps: NodeCaps): NodeResult | Promise<NodeResult> {
+    throw new Error(`node ${reprText(this.id)} (${this.constructor.name}) defines no forward`);
   }
 
   /** Return this node's local variable declarations; the base declares none. */

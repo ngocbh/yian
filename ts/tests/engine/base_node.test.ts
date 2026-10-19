@@ -6,7 +6,9 @@
  *
  * TS-only: a new node's defaults, a subclass overriding traits, the constructor's origin check, the
  * parse error's `cause`, the node's type table reaching the assertion parse, `checkNamedPrompt`'s
- * prefix and `cause`, and `validatePrompts` being a no-op on the base.
+ * prefix and `cause`, `validatePrompts` being a no-op on the base, `validateExecutionSetup`
+ * (a missing `forward`, then the assertion parse), the stage markers' `original`, `cause` and
+ * message, and `NodeAssertFailed`'s defaults.
  *
  * Changed: Python's `vars(node)` is `Object.hasOwn`, and `hasattr` is the `in` operator.
  *
@@ -24,13 +26,34 @@ import { expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
 import { ExpressionError } from "../../src/expr/index.ts";
-import { checkNamedPrompt, Node, NodeKind } from "../../src/nodes/base.ts";
+import {
+  AssertionStageError,
+  BindingStageError,
+  CapabilityFault,
+  checkNamedPrompt,
+  DeferredBindingFault,
+  Node,
+  NodeAssertFailed,
+  NodeBodyError,
+  NodeKind,
+  Output,
+} from "../../src/nodes/base.ts";
+import { BindingError } from "../../src/nodes/binding.ts";
 import { Assertion, ContractOrigins, type OutputContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 
 /** A minimal concrete node; the base constructor is the subject. */
 class FuncNode extends Node {
   readonly kind = NodeKind.CODE;
+}
+
+/** A minimal node with a body, so the setup check reaches the assertions. */
+class BodyNode extends Node {
+  readonly kind = NodeKind.CODE;
+
+  override forward(): Output {
+    return new Output(null);
+  }
 }
 
 /** Overrides two traits, so the type check pins that a kind may set a trait to `true`. */
@@ -154,4 +177,76 @@ test("validatePrompts checks nothing on the base", () => {
 
   expect(node.validatePrompts()).toBeUndefined();
   expect(node.validatePrompts({ path: "call/n" })).toBeUndefined();
+});
+
+test("the setup check rejects a node that defines no forward", () => {
+  const node = new FuncNode("n");
+
+  expect(() => node.validateExecutionSetup()).toThrow(Error);
+  expect(() => node.validateExecutionSetup()).toThrow("node 'n' (FuncNode) defines no forward");
+  expect(() => node.forward({}, {})).toThrow("node 'n' (FuncNode) defines no forward");
+});
+
+test("the setup check parses the assertions of a node with a body", () => {
+  const node = new BodyNode("n");
+  node.postAsserts = [new Assertion("output > 0", "output is positive")];
+
+  expect(node.validateExecutionSetup()).toBeUndefined();
+  node.postAsserts = [new Assertion("output >", "output >")];
+  let error: unknown;
+  try {
+    node.validateExecutionSetup();
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(ExpressionError);
+  expect((error as Error).name).toBe("ExpressionError");
+  expect((error as Error).message).toStartWith("node 'n' post-assert 'output >' is not a valid boolean expression: ");
+});
+
+test.each([
+  ["NodeBodyError", NodeBodyError],
+  ["BindingStageError", BindingStageError],
+  ["AssertionStageError", AssertionStageError],
+  ["DeferredBindingFault", DeferredBindingFault],
+  ["CapabilityFault", CapabilityFault],
+] as const)("the %s marker keeps its original", (name, Marker) => {
+  const original = name === "BindingStageError"
+    ? new BindingError("bad default", { failureCode: "binding.evaluate" })
+    : new NodeAssertFailed("bad default");
+  const marker = new (Marker as new (original: unknown) => Error & { original: unknown })(original);
+
+  expect(marker).toBeInstanceOf(Error);
+  expect(marker.name).toBe(name);
+  expect(marker.original).toBe(original);
+  expect(marker.cause).toBe(original);
+  expect(marker.message).toBe("bad default");
+
+  const thrown = new (Marker as new (original: unknown) => Error & { original: unknown })("boom");
+  expect(thrown.original).toBe("boom");
+  expect(thrown.cause).toBe("boom");
+  expect(thrown.message).toBe("boom");
+  expect(new (Marker as new (original: unknown) => Error)(7n).message).toBe("7");
+});
+
+test("NodeAssertFailed defaults its failure code and keeps its assertion and cause", () => {
+  const plain = new NodeAssertFailed("bad");
+
+  expect(plain).toBeInstanceOf(Error);
+  expect(plain.name).toBe("NodeAssertFailed");
+  expect(plain.message).toBe("bad");
+  expect(plain.failureCode).toBe("assertion.failed");
+  expect(plain.assertion).toBeNull();
+  expect("cause" in plain).toBe(false);
+
+  const assertion = new Assertion("output > 0", "output is positive");
+  const cause = new ExpressionError("cannot compare");
+  const failed = new NodeAssertFailed("could not be evaluated", {
+    assertion,
+    failureCode: "condition.evaluate",
+    cause,
+  });
+  expect(failed.assertion).toBe(assertion);
+  expect(failed.failureCode).toBe("condition.evaluate");
+  expect(failed.cause).toBe(cause);
 });

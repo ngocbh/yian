@@ -310,6 +310,36 @@ A case can't hold code, so its host is declared under `host`.
   shared by all runs in order; `tool_calls` lists every run's calls; `trace`, `events`,
   `stream`, `output` and `backward` are the main run's. A profile is seeded by a `files` entry
   at its storage path, `memory/<flow id>/<scope...>/<name>.md`.
+- **`steering`**: `{<node id>: [<action>, ...]}`, the host inbox a steerable AGENT polls (Python:
+  the `steering` argument of `run_flow` and `resume_flow`). The node id is the occurrence id, as
+  in `tool_calls`' `node` (`loop#0/chat` inside a LOOP or MAP). An action is
+  `{after: <point>, steer: [<text>, ...]}`, which queues steer messages, or
+  `{after: <point>, interrupt: true}`, which sets the node's interrupt. An action without `after`
+  is queued before the run. The points:
+  - `{model_call: n}`: once the node's `n`th `agent` model call has finished (its last chunk
+    taken); not when the call raises;
+  - `{model_call: n, chunk: k}`: once chunk `k` of that call has been delivered (a `reply`
+    streams as one chunk);
+  - `{tool_call: i}`: once the node's `i`th tool call has returned, counted as in
+    `expect.tool_calls` (`ask_user` included). Stub tools run one at a time, so this is call order.
+
+  Counts start at 1. In a `resume` case they run across the cut run and the resume, as the
+  scripts do. Steering acts in the main run (and its resume), never in a `host.memory` `before`
+  run, whose calls aren't counted. Steers are drained once; an interrupt stays set. An action
+  whose point is never reached fails the case after the comparisons, like a leftover entry.
+
+  The AGENT reads its inbox only at fixed places: steers and the interrupt at the top of each
+  loop iteration (just before a model call), the interrupt before each later chunk of a
+  streamed reply and before each tool call. A polled inbox can't act "before" a point, so:
+  - a steer before model call `n` is `after: {model_call: n-1}`;
+  - an interrupt before tool call `i` is `after: {tool_call: i-1}`, or `after: {model_call: n}`
+    for the first call of reply `n`;
+  - an interrupt after chunk `k` is `after: {model_call: n, chunk: k}`.
+
+  An interrupted AGENT succeeds with its text so far (`""` before any reply): mid-stream it keeps
+  the chunks shown and ends the stream with a final `""` chunk, and on the last chunk it keeps the
+  whole reply. The tool calls it skips finish with error `interrupted`. Only an AGENT authored
+  `steerable: true` (with `str` output) reads the inbox.
 - **`crash_after_record`**: `resume` cases only (above).
 
 `expect.tool_calls` lists, per tool that was called, each call in order as `{args, call_id,
@@ -328,8 +358,8 @@ contract: a session is checked through a later run's `request`.
 The format reserves these host keys; a runner that doesn't support one yet fails the case that
 uses it:
 
-- **`steering`** and **`stop`**: a steer, interrupt or stop at a point: before model call `n` of
-  a node, after chunk `k` of model call `n`, or before tool call `i`.
+- **`stop`**: a stop at a point: before model call `n` of a node, after chunk `k` of model call
+  `n`, or before tool call `i`.
 - **`skills`**: skill directories, given as `files`.
 
 Not in the format yet (each comes as an addition when a case needs it): file values in

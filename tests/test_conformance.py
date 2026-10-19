@@ -194,8 +194,8 @@ _ALL_EXPECT_KEYS = set().union(*_EXPECT_KEYS.values())
 _RUN_KEYS = {"run_id", "num_workers", "learnable", "llm_config", "context"}
 _RESUME_KEYS = {"num_workers", "api_key", "headers", "context"}
 # Host keys the format reserves and this runner doesn't support yet.
-_RESERVED_HOST_KEYS = ("steering", "stop", "skills")
-_HOST_KEYS = {"tools", "human", "jitter", "models", "memory", *_RESERVED_HOST_KEYS}
+_RESERVED_HOST_KEYS = ("stop", "skills")
+_HOST_KEYS = {"tools", "human", "jitter", "models", "memory", "steering", *_RESERVED_HOST_KEYS}
 # `host.models` consumers, besides `memory:<key>` under `_LEARNER_NODE`.
 _CONSUMERS = ("agent", "structured_retry", "compose", "backward", "summary")
 # The node id memory learners' model calls are scripted under.
@@ -432,6 +432,37 @@ def _check_memory(memory: object) -> None:
                 raise ValueError(f"`{where}.backward` needs `{where}.run.learnable: true`")
 
 
+def _check_steering(steering: object) -> None:
+    """Raise unless `steering` is `host.steering`: node ids to lists of actions.
+
+    An action is `{after, steer: [text, ...]}` or `{after, interrupt: true}`, `after` optional
+    and one of `{model_call: n, chunk: k}`, `{model_call: n}` and `{tool_call: i}`, counted from 1.
+    """
+    for node, actions in _mapping("host.steering", steering).items():
+        if not isinstance(actions, list):
+            raise ValueError("`host.steering` maps node ids to lists of actions")
+        for index, action in enumerate(actions):
+            where = f"host.steering.{node}[{index}]"
+            _keys(where, action, {"after", "steer", "interrupt"})
+            if ("steer" in action) == ("interrupt" in action):
+                raise ValueError(f"`{where}` takes `steer` or `interrupt`")
+            steer = action.get("steer", ["text"])
+            if not isinstance(steer, list) or not steer or any(
+                not isinstance(text, str) for text in steer
+            ):
+                raise ValueError(f"`{where}.steer` must be a non-empty list of text")
+            if action.get("interrupt", True) is not True:
+                raise ValueError(f"`{where}.interrupt` must be `true`")
+            if "after" not in action:
+                continue
+            after = _mapping(f"{where}.after", action["after"])
+            if set(after) not in ({"model_call", "chunk"}, {"model_call"}, {"tool_call"}):
+                raise ValueError(f"`{where}.after` is `{{model_call, chunk}}`, `{{model_call}}` "
+                                 "or `{tool_call}`")
+            if any(type(count) is not int or count < 1 for count in after.values()):
+                raise ValueError(f"`{where}.after` counts must be ints from 1")
+
+
 def _check_host(host: object, kind: str) -> None:
     """Raise unless `host`, its tools, models and their scripts use only the format's keys."""
     allowed = _RESUME_HOST_KEYS if kind == "resume" else _HOST_KEYS
@@ -461,6 +492,7 @@ def _check_host(host: object, kind: str) -> None:
     _check_models(host.get("models", {}))
     if "memory" in host:
         _check_memory(host["memory"])
+    _check_steering(host.get("steering", {}))
     human = _mapping("host.human", host.get("human", {}))
     if any(not isinstance(answers, list) for answers in human.values()):
         raise ValueError("`host.human` maps node ids to lists of answers")
@@ -1019,7 +1051,66 @@ def _raise(error: dict) -> NoReturn:
     raise exc
 
 
-def _scripted_model(take, problems: list) -> object:
+class _Inbox:
+    """The `host.steering` inbox yian polls (`Steering`): steers and interrupts by node id.
+
+    An action without `after` is queued at once, the others when the run reaches their point.
+    Steers are drained once; an interrupt stays set. Calls are counted, and points reached,
+    only once `armed`, so `host.memory.before` runs neither count nor steer.
+    """
+
+    def __init__(self, steering: dict) -> None:
+        self.armed = False
+        self.lock = threading.Lock()
+        self.steers: dict = {}
+        self.interrupts: set = set()
+        self.counts: dict = {}
+        self.pending = []
+        for node, actions in steering.items():
+            for index, action in enumerate(actions):
+                if "after" in action:
+                    self.pending.append((f"host.steering.{node}[{index}]", node, action))
+                else:
+                    self.act(node, action)
+
+    def act(self, node: str, action: dict) -> None:
+        """Queue `action`'s steers for `node`, or set its interrupt."""
+        self.steers.setdefault(node, []).extend(action.get("steer", []))
+        if action.get("interrupt"):
+            self.interrupts.add(node)
+
+    def count(self, node: str, what: str) -> int | None:
+        """Count a `model_call` or `tool_call` of `node`; return its number, None unarmed."""
+        if not self.armed:
+            return None
+        with self.lock:
+            number = self.counts[node, what] = self.counts.get((node, what), 0) + 1
+        return number
+
+    def reached(self, node: str, point: dict) -> None:
+        """Act on the pending actions of `node` whose `after` is `point`."""
+        with self.lock:
+            for item in [item for item in self.pending
+                         if item[1] == node and item[2]["after"] == point]:
+                self.pending.remove(item)
+                self.act(node, item[2])
+
+    def drain(self, node_id: str) -> list[str]:
+        """Remove and return the steers queued for `node_id`."""
+        with self.lock:
+            return self.steers.pop(node_id, [])
+
+    def interrupted(self, node_id: str) -> bool:
+        """Whether `node_id`'s interrupt is set."""
+        with self.lock:
+            return node_id in self.interrupts
+
+    def left(self) -> list[str]:
+        """Return a message per action whose point was never reached."""
+        return [f"`{label}` was never reached" for label, _, _ in self.pending]
+
+
+def _scripted_model(take, problems: list, inbox: _Inbox) -> object:
     """Return a chat model that serves each call the next `host.models` entry of its seat.
 
     Each `invoke` or `stream` call takes the entry for `_take_model_key()` through `take`. `invoke`
@@ -1027,11 +1118,12 @@ def _scripted_model(take, problems: list) -> object:
     chunks. An entry with `raise` raises after its chunks. `bind_tools` returns a model that
     sends its tools, and `with_structured_output` a `Runnable` that returns the reply's text
     read as its schema. A call's request that differs from its entry's `request` is added to
-    `problems`.
+    `problems`. An `agent` call reaches its `inbox` points after each chunk is taken and when it
+    ends without raising.
     """
     taken: dict = {}
 
-    def served(messages: list, tools: list, schema: type | None) -> dict:
+    def served(messages: list, tools: list, schema: type | None) -> tuple:
         key = _take_model_key()
         if key is None:
             return take(None, "a model call was made outside any AGENT (no seat)")
@@ -1044,21 +1136,29 @@ def _scripted_model(take, problems: list) -> object:
                                              messages, tools, schema)
             if difference:
                 problems.append(difference)
-        return entry
+        return entry, (node, inbox.count(node, "model_call") if consumer == "agent" else None)
 
-    def replay(entry: dict):
+    def replay(entry: dict, at: tuple):
+        # A point is reached when the next chunk is asked for, which is when yian polls.
+        def reached(point: dict) -> None:
+            inbox.reached(at[0], {"model_call": at[1], **point})
+
         if "reply" in entry:
             reply = _langchain_reply(entry)
             yield AIMessageChunk(content=reply.content, tool_calls=reply.tool_calls,
                                  invalid_tool_calls=reply.invalid_tool_calls,
                                  usage_metadata=reply.usage_metadata)
-            return
-        yield from map(_langchain_chunk, entry["chunks"])
-        if "raise" in entry:
-            _raise(entry["raise"])
+            reached({"chunk": 1})
+        else:
+            for number, chunk in enumerate(entry["chunks"], 1):
+                yield _langchain_chunk(chunk)
+                reached({"chunk": number})
+            if "raise" in entry:
+                _raise(entry["raise"])
+        reached({})
 
-    def summed(entry: dict) -> AIMessage:
-        return message_chunk_to_message(reduce(add, replay(entry)))
+    def summed(entry: dict, at: tuple) -> AIMessage:
+        return message_chunk_to_message(reduce(add, replay(entry, at)))
 
     class ScriptedModel:
         def __init__(self, tools: list) -> None:
@@ -1072,11 +1172,11 @@ def _scripted_model(take, problems: list) -> object:
             return StructuredModel(schema)
 
         def invoke(self, messages: list, **kwargs: object) -> AIMessage:
-            return summed(served(messages, self.tools, None))
+            return summed(*served(messages, self.tools, None))
 
         def stream(self, messages: list, **kwargs: object):
             # The entry is taken when the call is made, not when its first chunk is read.
-            return replay(served(messages, self.tools, None))
+            return replay(*served(messages, self.tools, None))
 
     # A Runnable, since yian hands its usage callback only to one.
     class StructuredModel(Runnable):
@@ -1084,7 +1184,7 @@ def _scripted_model(take, problems: list) -> object:
             self.schema = schema
 
         def invoke(self, messages: list, config: dict | None = None, **kwargs: object) -> object:
-            reply = summed(served(messages, [], self.schema))
+            reply = summed(*served(messages, [], self.schema))
             # What a chat model reports to the callbacks, which is where yian reads the usage.
             result = LLMResult(generations=[[ChatGeneration(message=reply)]])
             for handler in (config or {}).get("callbacks", []):
@@ -1095,7 +1195,7 @@ def _scripted_model(take, problems: list) -> object:
 
 
 def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
-    """Build the case's host and return `(tools, calls, check)`.
+    """Build the case's host and return `(tools, calls, check, inbox)`.
 
     `tools` holds a stub per `host.tools` entry and `ask_user` for `host.human`; each call is
     recorded in `calls`, by tool, and takes its script's next entry, as each TOOL backoff takes
@@ -1103,13 +1203,15 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
     consumer. Every model yian builds (the memory learners' included) is the scripted one,
     after yian resolves and checks its config. `check()` fails the case when a script ran out
     or was missing or a model call's request differed from its entry's, and returns a message
-    per script with entries left.
+    per script with entries left and per `host.steering` action never reached. `inbox` is the
+    `host.steering` inbox; each stub call reaches its point once it takes its entry.
     """
     host = case.get("host", {})
     calls: dict = {}
     problems: list = []
     scripts = {f"host.human.{node}": list(answers)
                for node, answers in host.get("human", {}).items()}
+    inbox = _Inbox(host.get("steering", {}))
 
     def take(label: str | None, what: str) -> object:
         if label is None:
@@ -1129,7 +1231,10 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
         calls.setdefault(name, []).append(
             {"args": args, "call_id": ctx.call_id, "attempt": ctx.attempt, "node": ctx.node}
         )
-        return take(label, f"a call to `{name}` from node {ctx.node!r}")
+        number = inbox.count(ctx.node, "tool_call")
+        entry = take(label, f"a call to `{name}` from node {ctx.node!r}")
+        inbox.reached(ctx.node, {"tool_call": number})
+        return entry
 
     def stub(name: str, by_node: bool):
         def on_invoke(ctx: ToolContext, args: dict) -> object:
@@ -1166,7 +1271,7 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
     scripts.update({f"host.models.{node}.{consumer}": list(script)
                     for node, consumers in host.get("models", {}).items()
                     for consumer, script in consumers.items()})
-    model = _scripted_model(take, problems)
+    model = _scripted_model(take, problems, inbox)
 
     def model_from_config(config: object) -> object:
         # The script replaces only the provider: the config is resolved and checked as yian's
@@ -1186,9 +1291,9 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
         return [
             f"`{label}` has {len(script)} {'entry' if len(script) == 1 else 'entries'} left"
             for label, script in scripts.items() if script
-        ]
+        ] + inbox.left()
 
-    return tools, calls, check
+    return tools, calls, check, inbox
 
 
 def _failure(failure, flow) -> dict:
@@ -1457,7 +1562,8 @@ def _actual_run(case: dict, case_dir: Path) -> dict:
     With `host.memory`, each `before` run runs first (its backward calls included), and every
     run gets the flow's memories built afresh under `<case dir>/memory`, closed after its
     backward calls. A `resume` case's first run is cut after record `host.crash_after_record`
-    and resumed; a `backward` case then calls backward once per `backward` entry. The results
+    and resumed; a `backward` case then calls backward once per `backward` entry. `host.steering`
+    steers the main run (and the cut run and the resume), never a `before` run. The results
     are `trace`, `events`, `stream`, `tool_calls` (every run's), `backward` for a `backward`
     case, `memory` when `expect.memory` lists keys, `output` or the host error as `raises` and
     `error` (as `_catching` gives them), and `left`, a message per script with entries left.
@@ -1496,7 +1602,7 @@ def _actual_run(case: dict, case_dir: Path) -> dict:
         return outcomes
 
     with pytest.MonkeyPatch.context() as patch:
-        tools, calls, check = _host(case, patch)
+        tools, calls, check, inbox = _host(case, patch)
         earlier, logs = [], {}
         for index, entry in enumerate((host_memory or {}).get("before", [])):
             path, arguments = case_dir / f"before-{index + 1}.jsonl", dict(entry["run"])
@@ -1519,12 +1625,14 @@ def _actual_run(case: dict, case_dir: Path) -> dict:
             trace = _trace(text.splitlines(), flow)
             pooled = arguments.get("num_workers", 8) != 0
             earlier.append(_grouped(trace, lambda record: record[1]) if pooled else trace)
+        inbox.armed = True
         run, resume = dict(case.get("run", {})), dict(case.get("resume", {}))
         for arguments in (run, resume):
             if "context" in arguments:
                 arguments["context"] = object()
         hooks = {"log": log, "tools": tools, "on_event": events.append,
-                 "on_stream": chunks.append}
+                 "on_stream": chunks.append,
+                 **({"steering": inbox} if "steering" in case.get("host", {}) else {})}
 
         def start(memory: object) -> RunResult:
             return run_flow(flow, case.get("inputs", {}), **hooks, **run, memory=memory)
@@ -3873,6 +3981,98 @@ def test_memory_expect_refuses_a_session_key(tmp_path: Path) -> None:
     }
     with pytest.raises(pytest.fail.Exception, match="`expect.memory.chat`"):
         results(case, tmp_path, candidate=True)
+
+
+def _steering_case(steering: dict, agent: list, tools: dict | None = None) -> dict:
+    """Return a `run` case of one steerable AGENT `chat`, granted the stub `tools`, its `agent`
+    model script and `host.steering` `steering`."""
+    flow = ("id: steer\nname: steer\nllm_config: {provider: openai, model: gpt-5.5}\n"
+            "nodes:\n  chat:\n    kind: agent\n    steerable: true\n"
+            f"    tools: [{', '.join(tools or {})}]\n    system_prompt: Help.\n    prompt: Go.\n"
+            "    output: str\noutput: ${chat.output}\n")
+    return {"kind": "run", "flow": flow, "run": {"num_workers": 0},
+            "host": {"steering": steering, "tools": tools or {},
+                     "models": {"chat": {"agent": agent}}}}
+
+
+def test_steering_steer_reaches_the_next_request(tmp_path: Path) -> None:
+    """A steer queued once tool call 1 returns joins the next `agent` request."""
+    call = {"type": "tool_call", "id": "c1", "name": "lookup", "arguments": {"q": "x"}}
+    lookup = {"parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+              "results": [{"return": "X1"}]}
+    case = _steering_case(
+        {"chat": [{"after": {"tool_call": 1}, "steer": ["only 2024"]}]},
+        [{"reply": {"format": "yian.message.v1", "role": "assistant", "parts": [call]}},
+         {**_reply("done"), "request": {
+             "messages": [
+                 _message("system", "Help."), _message("user", "Go."),
+                 {"format": "yian.message.v1", "role": "assistant", "parts": [call]},
+                 {"format": "yian.message.v1", "role": "tool", "parts": [
+                     {"type": "tool_result", "call_id": "c1", "name": "lookup", "content": "X1"}
+                 ]},
+                 _message("user", "only 2024"),
+             ],
+             "tools": [{"name": "lookup", "description": "",
+                        "parameters": lookup["parameters"]}],
+         }}],
+        {"lookup": lookup},
+    )
+    case["expect"] = {"output": {"status": "succeeded", "output": "done"}}
+    _check_results(case, results(case, tmp_path, candidate=True))
+
+
+def test_steering_interrupt_mid_stream(tmp_path: Path) -> None:
+    """An interrupt after chunk 1 keeps that chunk's text and ends the stream with `""`."""
+    chunks = [{"text": "Hel"}, {"text": "lo"}, {"finish": "stop"}]
+    case = _steering_case({"chat": [{"after": {"model_call": 1, "chunk": 1}, "interrupt": True}]},
+                          [{"chunks": chunks}])
+    actual = results(case, tmp_path, candidate=True)
+    assert actual["output"] == {"status": "succeeded", "output": "Hel"}
+    assert [(chunk["chunk"], chunk["final"]) for chunk in actual["stream"]] == [
+        ("Hel", False), ("", True)
+    ]
+    assert actual["left"] == []
+
+
+def test_steering_unreached_action_fails(tmp_path: Path) -> None:
+    """An action whose point the run never reaches fails the case after the comparisons."""
+    case = _steering_case({"chat": [{"steer": ["early"]},
+                                    {"after": {"tool_call": 1}, "interrupt": True}]},
+                          [_reply("done")])
+    case["expect"] = {"output": {"status": "succeeded", "output": "other"}}
+    actual = results(case, tmp_path, candidate=True)
+    assert actual["left"] == ["`host.steering.chat[1]` was never reached"]
+    # A divergence shows first.
+    with pytest.raises(pytest.fail.Exception, match="output"):
+        _check_results(case, actual)
+    case["expect"] = {"output": {"status": "succeeded", "output": "done"}}
+    with pytest.raises(pytest.fail.Exception, match=re.escape("`host.steering.chat[1]`")):
+        _check_results(case, actual)
+
+
+def test_steering_checks() -> None:
+    """`host.steering` actions are checked: their point, and one of `steer` and `interrupt`."""
+    problems = {
+        "`host.steering` maps node ids to lists of actions": {"chat": {"steer": ["x"]}},
+        "`host.steering.chat[0]` takes `steer` or `interrupt`": {
+            "chat": [{"steer": ["x"], "interrupt": True}]},
+        "`host.steering.chat[1]` takes `steer` or `interrupt`": {
+            "chat": [{"steer": ["x"]}, {"after": {"model_call": 1}}]},
+        "`host.steering.chat[0].steer` must be a non-empty list of text": {
+            "chat": [{"steer": "x"}]},
+        "`host.steering.chat[0].interrupt` must be `true`": {"chat": [{"interrupt": False}]},
+        "unknown key `host.steering.chat[0].stop`": {"chat": [{"stop": True}]},
+        "`host.steering.chat[0].after` is `{model_call, chunk}`, `{model_call}` or "
+        "`{tool_call}`": {"chat": [{"after": {"chunk": 1}, "interrupt": True}]},
+        "`host.steering.chat[1].after` is": {
+            "chat": [{"interrupt": True},
+                     {"after": {"model_call": 1, "tool_call": 1}, "interrupt": True}]},
+        "`host.steering.chat[0].after` counts must be ints from 1": {
+            "chat": [{"after": {"tool_call": 0}, "interrupt": True}]},
+    }
+    for message, steering in problems.items():
+        with pytest.raises(ValueError, match=re.escape(message)):
+            _check(_steering_case(steering, []), candidate=True)
 
 
 _CODE_TESTS = '''

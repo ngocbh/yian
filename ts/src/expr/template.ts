@@ -37,7 +37,11 @@
  * With `trace`, `evalTemplate` and `evalBinding` also record the value's `ValueRoute`: a whole
  * single span's route, or an `interpolation` route over each embedded span's route with its
  * half-open span of code points in the rendered text, so feedback on the text can go back to its
- * sources. The call-parsing helpers land with compose's `call(...)` directive.
+ * sources.
+ *
+ * Compose's `call(...)` directive shares its call-parsing helpers with this module: `InlineCall`,
+ * the record a desugared call produces, and `findParenEnd` and `splitCallsAware`, the paren-,
+ * quote- and span-aware splitters the directive's recognizer reuses.
  *
  * Knows about: `expressions` (the evaluator, `ResolveMode`, `exprRefs`, `rewriteExprRefs`,
  * `checkCalls`, `valueArgs`, `conversionHint`, `ISINSTANCE`, `resolveInRecord`,
@@ -140,6 +144,121 @@ export function scanTemplate(text: string): TemplateSegment[] {
   }
   if (literal) segments.push(new Literal(literal));
   return segments;
+}
+
+/**
+ * One desugared inline call: the synth node `id`, the `callee` name and its keyword `args` (name
+ * to a YAML-scalar literal value or a `${...}` binding text).
+ */
+export class InlineCall {
+  readonly id: string;
+  readonly callee: string;
+  readonly args: ValueRecord;
+
+  constructor(id: string, callee: string, args: ValueRecord) {
+    this.id = id;
+    this.callee = callee;
+    this.args = args;
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Find the `)` closing a call whose arguments begin at `start`.
+ *
+ * Paren depth is counted, skipping `${...}` spans (their inner parens) and quoted text.
+ *
+ * @param text The text holding the call.
+ * @param start The index just past the call's `(`.
+ * @returns The index of the closing `)`, or `null` when the parens, a quote or a span never close.
+ */
+export function findParenEnd(text: string, start: number): number | null {
+  let depth = 1;
+  let quote: string | null = null;
+  let i = start;
+  while (i < text.length) {
+    const c = text[i];
+    if (quote !== null) {
+      if (c === quote) quote = null;
+      i += 1;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+    } else if (c === "$" && text[i + 1] === "{") {
+      const end = findSpanEnd(text, i + 2);
+      if (end === null) return null;
+      i = end + 1;
+      continue;
+    } else if (c === "(") {
+      depth += 1;
+    } else if (c === ")") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+    i += 1;
+  }
+  return null;
+}
+
+/**
+ * Split `text` on the single character `sep` at top level.
+ *
+ * A `sep` inside quotes, a `${...}` span (brace depth) or parentheses (call arguments) doesn't
+ * split, so a call's own arguments stay in one part.
+ *
+ * @param text The text to split.
+ * @param sep The one-character separator.
+ * @returns The parts in order, separators dropped; one part when nothing splits.
+ */
+export function splitCallsAware(text: string, sep: string): string[] {
+  const out: string[] = [];
+  let buf = "";
+  let quote: string | null = null;
+  let brace = 0;
+  let paren = 0;
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (quote !== null) {
+      buf += c;
+      if (c === quote) quote = null;
+      i += 1;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      buf += c;
+    } else if (c === "$" && text[i + 1] === "{") {
+      brace += 1;
+      buf += "${";
+      i += 2;
+      continue;
+    } else if (c === "{" && brace > 0) {
+      brace += 1;
+      buf += c;
+    } else if (c === "}" && brace > 0) {
+      brace -= 1;
+      buf += c;
+    } else if (brace > 0) {
+      buf += c;
+    } else if (c === "(") {
+      paren += 1;
+      buf += c;
+    } else if (c === ")") {
+      // Clamped so a stray `)` doesn't disable the later top-level splits.
+      paren = Math.max(0, paren - 1);
+      buf += c;
+    } else if (c === sep && paren === 0) {
+      out.push(buf);
+      buf = "";
+    } else {
+      buf += c;
+    }
+    i += 1;
+  }
+  out.push(buf);
+  return out;
 }
 
 /**

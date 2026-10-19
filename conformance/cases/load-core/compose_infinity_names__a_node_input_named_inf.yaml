@@ -18,7 +18,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''a'' input ''inf'': `inf` is infinity in an expression, so ${inf} can''t read this input; rename it'
+      message: 'node ''a'' input ''inf'': `inf` is infinity in an expression, so ${inf} can''t read it; rename it'
       frames:
       - label: flow.yaml
         range: [10, 7, 10, 10]

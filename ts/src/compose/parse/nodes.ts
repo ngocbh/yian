@@ -202,11 +202,12 @@ function parseNode(
     desc.fieldRanges.set(siteKey("input", name), range);
   }
   desc.assertRanges.push(...normalized.itemRangeList("asserts"));
-  if (cls.inputsAreLocals) {
-    for (const name of Object.keys(desc.inputs)) {
+  const localNames = cls.inputsAreLocals ? Object.keys(desc.inputs) : [];
+  if (localNames.length > 0) {
+    const inputs = normalized.child("inputs");
+    for (const name of localNames) {
       const where = `node ${reprText(nodeId)} input ${reprText(name)}`;
-      const range = normalized.child("inputs").keyRangeOf(name);
-      rejectInfinityName(where, name, range, diagnostics);
+      rejectInfinityName(where, name, inputs.keyRangeOf(name), diagnostics);
     }
   }
   return desc;

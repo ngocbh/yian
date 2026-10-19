@@ -211,7 +211,7 @@ export function rejectInfinityName(
 ): void {
   if (name === "inf") {
     throw diagnostics.error(
-      `${where}: \`inf\` is infinity in an expression, so \${inf} can't read this input; rename it`,
+      `${where}: \`inf\` is infinity in an expression, so \${inf} can't read it; rename it`,
       { range },
     );
   }

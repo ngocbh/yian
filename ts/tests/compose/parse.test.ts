@@ -175,8 +175,7 @@ test("a node input named inf is refused at its key", () => {
   const error = loadError(() => nodesOf(text, [StandInCode]));
 
   expect(error.message).toBe(
-    "node 'a' input 'inf': `inf` is infinity in an expression, so ${inf} can't read this " +
-      "input; rename it",
+    "node 'a' input 'inf': `inf` is infinity in an expression, so ${inf} can't read it; rename it",
   );
   const key = SourceDocument.parse(text).root.child("nodes").child("a").child("input");
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(key.keyRangeOf("inf")!);

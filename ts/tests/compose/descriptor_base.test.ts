@@ -251,8 +251,7 @@ describe("message builders", () => {
       rejectInfinityName("node 'a' input 'inf'", "inf", RANGE, DIAGNOSTICS),
     );
     expect(error.diagnostic.message).toBe(
-      "node 'a' input 'inf': `inf` is infinity in an expression, so ${inf} can't read this " +
-        "input; rename it",
+      "node 'a' input 'inf': `inf` is infinity in an expression, so ${inf} can't read it; rename it",
     );
     expect(error.diagnostic.frames.map((frame) => frame.range)).toEqual([RANGE]);
   });

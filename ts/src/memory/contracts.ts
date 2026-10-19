@@ -1668,6 +1668,553 @@ export class MemoryOperationError extends Error {
   }
 }
 
+/**
+ * Return one counter: a safe integer, not a boolean or a `bigint`.
+ *
+ * @throws TypeError when `value` isn't a safe-integer number.
+ * @throws RangeError when it's below 1 with `positive` set, or below 0 otherwise.
+ */
+function requireCounter(value: unknown, name: string, positive = false): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new TypeError(`${name} must be an integer`);
+  if (value < (positive ? 1 : 0)) throw new RangeError(`${name} must be ${positive ? "positive" : "non-negative"}`);
+  return value;
+}
+
+/** Copy one conversation JSON object at any depth under the yian value number rule. */
+function freezeConversationJson(value: unknown, name: string): JsonObject {
+  return freezeJsonObject(value, name, { limitNesting: false, valueNumbers: true });
+}
+
+/** One run's accepted node start, independent of its conversation owner. Frozen. */
+export class ConversationInvocation {
+  readonly runId: string;
+  readonly startSequence: number;
+
+  /**
+   * Require a non-empty run identifier and a positive start sequence.
+   *
+   * @throws TypeError when `runId` isn't a string or `startSequence` isn't a safe integer.
+   * @throws RangeError for an empty `runId`, a lone surrogate, or a start sequence below 1.
+   */
+  constructor(runId: string, startSequence: number) {
+    this.runId = requireString(runId, "run_id");
+    this.startSequence = requireCounter(startSequence, "start_sequence", true);
+    Object.freeze(this);
+  }
+}
+
+/** Whether two invocations have equal fields (Python's dataclass equality). */
+export function sameConversationInvocation(a: ConversationInvocation, b: ConversationInvocation): boolean {
+  return a.runId === b.runId && a.startSequence === b.startSequence;
+}
+
+/** Return `value` when it's exactly a `ConversationInvocation`. */
+function requireInvocation(value: unknown): ConversationInvocation {
+  if (!isExactly(value, ConversationInvocation)) throw new TypeError("invocation must be a ConversationInvocation");
+  return value;
+}
+
+/** An invocation's authored consumer and snapshotted compatibility descriptor. Frozen. */
+export class ConversationRequest {
+  /** The non-empty authored leaf path. */
+  readonly consumerStaticPath: readonly string[];
+  readonly invocation: ConversationInvocation;
+  /** The deep-frozen opaque descriptor, keys in code-unit order; any depth. */
+  readonly compatibility: JsonObject;
+
+  /**
+   * Validate the identity and snapshot the descriptor under the yian value number rule; the path
+   * is copied and the invocation kept by reference.
+   *
+   * @throws TypeError when the path isn't an array of strings, `invocation` isn't exactly a
+   *   `ConversationInvocation`, or `compatibility` isn't an exact JSON object.
+   * @throws RangeError for an empty path or component, a lone surrogate, NaN or a cycle.
+   */
+  constructor(consumerStaticPath: readonly string[], invocation: ConversationInvocation, compatibility: unknown) {
+    this.consumerStaticPath = requirePath(consumerStaticPath, "consumer_static_path");
+    this.invocation = requireInvocation(invocation);
+    this.compatibility = freezeConversationJson(compatibility, "compatibility");
+    Object.freeze(this);
+  }
+}
+
+/** One immutable, uniquely identified opaque conversation payload. Frozen. */
+export class ConversationItem {
+  /** Stable identifier, unique in its conversation. */
+  readonly itemId: string;
+  /** Opaque payload format identifier. */
+  readonly format: string;
+  /** The deep-frozen payload, keys in code-unit order; any depth. */
+  readonly payload: JsonObject;
+
+  /**
+   * Require non-empty identifiers and snapshot the payload under the yian value number rule.
+   *
+   * @throws TypeError when an identifier isn't a string or `payload` isn't an exact JSON object.
+   * @throws RangeError for an empty identifier, a lone surrogate, NaN or a cycle.
+   */
+  constructor(itemId: string, format: string, payload: unknown) {
+    this.itemId = requireString(itemId, "item_id");
+    this.format = requireString(format, "format");
+    this.payload = freezeConversationJson(payload, "payload");
+    Object.freeze(this);
+  }
+}
+
+/** The conversation generation, predecessor revision and operation identity. Frozen. */
+export class ConversationStamp {
+  readonly invocation: ConversationInvocation;
+  readonly namespace: string;
+  readonly generation: number;
+  readonly expectedRevision: number;
+  /** The operation's ordinal within its invocation; 0 only for admission. */
+  readonly ordinal: number;
+
+  /**
+   * Validate the namespace, the invocation (kept by reference) and the non-negative counters, in
+   * Python's order.
+   *
+   * @throws TypeError when `namespace` isn't a string, `invocation` isn't exactly a
+   *   `ConversationInvocation`, or a counter isn't a safe integer.
+   * @throws RangeError for an empty namespace, a lone surrogate, or a negative counter.
+   */
+  constructor(
+    invocation: ConversationInvocation,
+    namespace: string,
+    generation: number,
+    expectedRevision: number,
+    ordinal: number,
+  ) {
+    const checkedNamespace = requireString(namespace, "namespace");
+    this.invocation = requireInvocation(invocation);
+    this.namespace = checkedNamespace;
+    this.generation = requireCounter(generation, "generation");
+    this.expectedRevision = requireCounter(expectedRevision, "expected_revision");
+    this.ordinal = requireCounter(ordinal, "ordinal");
+    Object.freeze(this);
+  }
+}
+
+const CONVERSATION_EFFECT_KINDS = ["model", "tool"] as const;
+const CONVERSATION_EFFECT_STATUSES = ["pending", "completed", "failed", "interrupted"] as const;
+const CONVERSATION_TURN_STATUSES = ["completed", "failed", "interrupted"] as const;
+
+/** A conversation's external effect: a model or a tool call. */
+export type ConversationEffectKind = (typeof CONVERSATION_EFFECT_KINDS)[number];
+/** An effect's latest actual disposition. */
+export type ConversationEffectStatus = (typeof CONVERSATION_EFFECT_STATUSES)[number];
+/** An invocation's terminal disposition. */
+export type ConversationTurnStatus = (typeof CONVERSATION_TURN_STATUSES)[number];
+
+/** Return one member of the closed effect vocabulary. */
+function requireEffectKind(value: unknown): ConversationEffectKind {
+  requireString(value, "kind");
+  if (!CONVERSATION_EFFECT_KINDS.includes(value as ConversationEffectKind)) {
+    throw new RangeError("unsupported conversation effect kind");
+  }
+  return value as ConversationEffectKind;
+}
+
+/** Return a terminal disposition without interpreting its cause. */
+function requireTurnStatus(value: unknown): ConversationTurnStatus {
+  requireString(value, "status");
+  if (!CONVERSATION_TURN_STATUSES.includes(value as ConversationTurnStatus)) {
+    throw new RangeError("invalid conversation turn status");
+  }
+  return value as ConversationTurnStatus;
+}
+
+/** Validate an effect disposition and return its optional known failure. */
+function requireEffectFailure(status: unknown, failure: unknown): MemoryOperationFailure | null {
+  requireString(status, "status");
+  if (!CONVERSATION_EFFECT_STATUSES.includes(status as ConversationEffectStatus)) {
+    throw new RangeError("invalid conversation effect status");
+  }
+  if (failure !== null && !isExactly(failure, MemoryOperationFailure)) {
+    throw new TypeError("failure must be a MemoryOperationFailure or null");
+  }
+  if ((status === "pending" || status === "completed") && failure !== null) {
+    throw new RangeError("pending or completed effect cannot carry a failure");
+  }
+  if (status === "failed" && failure === null) throw new RangeError("failed effect requires a failure");
+  return failure;
+}
+
+/** One requested effect with its actual ordered observation disposition. Frozen. */
+export class ConversationEffectState {
+  readonly invocation: ConversationInvocation;
+  /** The positive request ordinal within the invocation. */
+  readonly effectOrdinal: number;
+  readonly kind: ConversationEffectKind;
+  /** The deep-frozen original effect request; any depth. */
+  readonly request: JsonObject;
+  readonly status: ConversationEffectStatus;
+  /** Strictly increasing ordinals after the request; non-empty for a terminal disposition. */
+  readonly observationOrdinals: readonly number[];
+  /** Required for `failed`, optional for `interrupted`, `null` for `pending` and `completed`. */
+  readonly failure: MemoryOperationFailure | null;
+
+  /**
+   * Snapshot the request and validate the ordered, later observation ordinals; the ordinals are
+   * copied, the invocation and failure kept by reference.
+   *
+   * @throws TypeError when `invocation` isn't exactly a `ConversationInvocation`, a counter isn't a
+   *   safe integer, `kind` or `status` isn't a string, `request` isn't an exact JSON object,
+   *   `failure` is neither `null` nor exactly a `MemoryOperationFailure`, or the ordinals aren't an
+   *   array.
+   * @throws RangeError for an effect ordinal below 1, an unknown kind or status, a bad JSON value,
+   *   a failure the status doesn't allow, ordinals that don't increase after the request, or a
+   *   terminal effect without an observation.
+   */
+  constructor(
+    invocation: ConversationInvocation,
+    effectOrdinal: number,
+    kind: ConversationEffectKind,
+    request: unknown,
+    status: ConversationEffectStatus,
+    observationOrdinals: readonly number[],
+    failure: MemoryOperationFailure | null,
+  ) {
+    this.invocation = requireInvocation(invocation);
+    this.effectOrdinal = requireCounter(effectOrdinal, "effect_ordinal", true);
+    this.kind = requireEffectKind(kind);
+    this.request = freezeConversationJson(request, "request");
+    const checkedFailure = requireEffectFailure(status, failure);
+    if (!isPlainArray(observationOrdinals)) throw new TypeError("observation_ordinals must be an array");
+    let previous = effectOrdinal;
+    for (const ordinal of observationOrdinals) {
+      requireCounter(ordinal, "observation ordinal", true);
+      if (ordinal <= previous) throw new RangeError("observation ordinals must increase after the request");
+      previous = ordinal;
+    }
+    if (status !== "pending" && observationOrdinals.length === 0) {
+      throw new RangeError("terminal effect requires an observation");
+    }
+    this.status = status;
+    this.observationOrdinals = Object.freeze([...observationOrdinals]);
+    this.failure = checkedFailure;
+    Object.freeze(this);
+  }
+}
+
+/** An invocation's actual closed ordinal and terminal disposition. Frozen. */
+export class ConversationCompletion {
+  readonly invocation: ConversationInvocation;
+  readonly closedOrdinal: number;
+  readonly status: ConversationTurnStatus;
+
+  /**
+   * Require an exact invocation (kept by reference), a positive ordinal and a terminal status.
+   *
+   * @throws TypeError when `invocation` isn't exactly a `ConversationInvocation`, `closedOrdinal`
+   *   isn't a safe integer, or `status` isn't a string.
+   * @throws RangeError for an ordinal below 1 or a status that isn't terminal.
+   */
+  constructor(invocation: ConversationInvocation, closedOrdinal: number, status: ConversationTurnStatus) {
+    this.invocation = requireInvocation(invocation);
+    this.closedOrdinal = requireCounter(closedOrdinal, "closed_ordinal", true);
+    this.status = requireTurnStatus(status);
+    Object.freeze(this);
+  }
+}
+
+const SHA256_DIGEST = /^[0-9a-f]{64}$/;
+
+/** Content evidence for one exactly identified applied checkpoint. Frozen. */
+export class ConversationApplied {
+  /** The canonical JSON text `[run_id, start_sequence, ordinal]`. */
+  readonly operationId: string;
+  readonly eventDigest: string;
+  readonly beforeDigest: string;
+  readonly afterDigest: string;
+
+  /**
+   * Validate the canonical operation identity, then each digest's lowercase SHA-256 shape.
+   *
+   * @throws TypeError when a field isn't a string, or an encoded counter isn't a safe integer.
+   * @throws RangeError when `operationId` isn't JSON for `[run_id, start_sequence, ordinal]` or
+   *   isn't its canonical text, an encoded field is out of range, or a digest is empty or isn't 64
+   *   lowercase hex digits.
+   */
+  constructor(operationId: string, eventDigest: string, beforeDigest: string, afterDigest: string) {
+    requireString(operationId, "operation_id");
+    const shape = "operation_id must encode [run_id, start_sequence, ordinal]";
+    let parts: unknown;
+    try {
+      parts = JSON.parse(operationId);
+    } catch (error) {
+      if (error instanceof SyntaxError) throw new RangeError(shape);
+      throw error;
+    }
+    if (!isPlainArray(parts) || parts.length !== 3) throw new RangeError(shape);
+    requireString(parts[0], "run_id");
+    requireCounter(parts[1], "start_sequence", true);
+    requireCounter(parts[2], "ordinal");
+    // Equal to Python's `json.dumps(ensure_ascii=False, separators=(",", ":"))` for these parts.
+    if (JSON.stringify(parts) !== operationId) throw new RangeError("operation_id must be canonical JSON");
+    const digests = [
+      ["event_digest", eventDigest],
+      ["before_digest", beforeDigest],
+      ["after_digest", afterDigest],
+    ] as const;
+    for (const [name, digest] of digests) {
+      if (!SHA256_DIGEST.test(requireString(digest, name))) {
+        throw new RangeError(`${name} must be a lowercase SHA-256 digest`);
+      }
+    }
+    this.operationId = operationId;
+    this.eventDigest = eventDigest;
+    this.beforeDigest = beforeDigest;
+    this.afterDigest = afterDigest;
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Return a frozen copy of one item array with unique ids; the items are kept by reference.
+ *
+ * @throws TypeError when `value` isn't an array or an item isn't exactly a `ConversationItem`.
+ * @throws RangeError when two items share an id.
+ */
+function requireConversationItems(value: unknown): readonly ConversationItem[] {
+  if (!isPlainArray(value)) throw new TypeError("items must be an array");
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!isExactly(item, ConversationItem)) throw new TypeError("items must contain ConversationItem values");
+    if (seen.has(item.itemId)) throw new RangeError("conversation item IDs must be unique");
+    seen.add(item.itemId);
+  }
+  return Object.freeze([...(value as ConversationItem[])]);
+}
+
+/**
+ * Complete conversation state with shaped application evidence. Frozen.
+ *
+ * Construction checks carrier shape and identity uniqueness. The pure conversation fold separately
+ * proves cross-event ordering and content digests.
+ */
+export class ConversationView {
+  readonly namespace: string;
+  /** The non-negative reset generation. */
+  readonly generation: number;
+  /** The non-negative count of accepted checkpoints. */
+  readonly revision: number;
+  /** The deep-frozen retained compatibility descriptor; any depth. */
+  readonly compatibility: JsonObject;
+  /** Ordered items with unique ids. */
+  readonly items: readonly ConversationItem[];
+  /** Unique invocation and request-ordinal pairs, in retained order. */
+  readonly effects: readonly ConversationEffectState[];
+  /** One actual completion per closed invocation, in retained order. */
+  readonly closedInvocations: readonly ConversationCompletion[];
+  /** One unique operation entry per revision; the digest chain is the fold's to prove. */
+  readonly applied: readonly ConversationApplied[];
+
+  /**
+   * Validate the state in Python's order; the arrays are copied and their carriers kept by
+   * reference, and `compatibility` is snapshotted under the yian value number rule.
+   *
+   * @throws TypeError when `namespace` isn't a string, a counter isn't a safe integer,
+   *   `compatibility` isn't an exact JSON object, an array isn't an array, or an item isn't exactly
+   *   its carrier class.
+   * @throws RangeError for an empty namespace, a lone surrogate, a negative counter, a bad JSON
+   *   value, a repeated item id, effect identity, closed invocation or operation id, an applied
+   *   count other than `revision`, or history at revision zero.
+   */
+  constructor(
+    namespace: string,
+    generation: number,
+    revision: number,
+    compatibility: unknown,
+    items: readonly ConversationItem[],
+    effects: readonly ConversationEffectState[],
+    closedInvocations: readonly ConversationCompletion[],
+    applied: readonly ConversationApplied[],
+  ) {
+    this.namespace = requireString(namespace, "namespace");
+    this.generation = requireCounter(generation, "generation");
+    this.revision = requireCounter(revision, "revision");
+    this.compatibility = freezeConversationJson(compatibility, "compatibility");
+    this.items = requireConversationItems(items);
+
+    if (!isPlainArray(effects)) throw new TypeError("effects must be an array");
+    const effectIds = new Set<string>();
+    for (const effect of effects) {
+      if (!isExactly(effect, ConversationEffectState)) {
+        throw new TypeError("effects must contain ConversationEffectState values");
+      }
+      const { runId, startSequence } = effect.invocation;
+      const identity = JSON.stringify([runId, startSequence, effect.effectOrdinal]);
+      if (effectIds.has(identity)) throw new RangeError("conversation effect identities must be unique");
+      effectIds.add(identity);
+    }
+    this.effects = Object.freeze([...effects]);
+
+    if (!isPlainArray(closedInvocations)) throw new TypeError("closed_invocations must be an array");
+    const closedIds = new Set<string>();
+    for (const completion of closedInvocations) {
+      if (!isExactly(completion, ConversationCompletion)) {
+        throw new TypeError("closed_invocations must contain ConversationCompletion values");
+      }
+      const identity = JSON.stringify([completion.invocation.runId, completion.invocation.startSequence]);
+      if (closedIds.has(identity)) throw new RangeError("closed invocation identities must be unique");
+      closedIds.add(identity);
+    }
+    this.closedInvocations = Object.freeze([...closedInvocations]);
+
+    if (!isPlainArray(applied)) throw new TypeError("applied must be an array");
+    const operationIds = new Set<string>();
+    for (const entry of applied) {
+      if (!isExactly(entry, ConversationApplied)) {
+        throw new TypeError("applied must contain ConversationApplied values");
+      }
+      if (operationIds.has(entry.operationId)) throw new RangeError("applied operation IDs must be unique");
+      operationIds.add(entry.operationId);
+    }
+    this.applied = Object.freeze([...applied]);
+
+    if (applied.length !== revision) {
+      throw new RangeError("conversation revision requires one applied entry per checkpoint");
+    }
+    if (revision === 0 && (items.length > 0 || effects.length > 0 || closedInvocations.length > 0)) {
+      throw new RangeError("revision-zero conversation must have empty history");
+    }
+    Object.freeze(this);
+  }
+}
+
+/** Return `value` when it's exactly a stamp in its operation's ordinal domain. */
+function requireStamp(value: unknown, admission = false): ConversationStamp {
+  if (!isExactly(value, ConversationStamp)) throw new TypeError("stamp must be a ConversationStamp");
+  if ((value.ordinal === 0) !== admission) throw new RangeError("only conversation admission has ordinal zero");
+  return value;
+}
+
+/** Admission checkpoint with the complete predecessor conversation view. Frozen. */
+export class ConversationAdmitted {
+  readonly stamp: ConversationStamp;
+  readonly baseline: ConversationView;
+
+  /**
+   * Require an ordinal-zero stamp that matches its baseline; both are kept by reference.
+   *
+   * @throws TypeError when `stamp` isn't exactly a `ConversationStamp` or `baseline` exactly a
+   *   `ConversationView`.
+   * @throws RangeError for a non-zero ordinal, or a namespace, generation or expected revision
+   *   other than the baseline's.
+   */
+  constructor(stamp: ConversationStamp, baseline: ConversationView) {
+    const checkedStamp = requireStamp(stamp, true);
+    if (!isExactly(baseline, ConversationView)) throw new TypeError("baseline must be a ConversationView");
+    if (
+      checkedStamp.namespace !== baseline.namespace ||
+      checkedStamp.generation !== baseline.generation ||
+      checkedStamp.expectedRevision !== baseline.revision
+    ) {
+      throw new RangeError("admission stamp must match its baseline");
+    }
+    this.stamp = checkedStamp;
+    this.baseline = baseline;
+    Object.freeze(this);
+  }
+}
+
+/** One effect request carrying only newly retained conversation items. Frozen. */
+export class ConversationEffectRequested {
+  readonly stamp: ConversationStamp;
+  readonly kind: ConversationEffectKind;
+  /** The deep-frozen external-effect request; any depth. */
+  readonly payload: JsonObject;
+  /** Newly retained items only, unique by id. */
+  readonly items: readonly ConversationItem[];
+
+  /**
+   * Validate a positive-ordinal stamp, the kind, the payload snapshot and the new items; the items
+   * array is copied and the carriers kept by reference.
+   *
+   * @throws TypeError when `stamp` isn't exactly a `ConversationStamp`, `kind` isn't a string,
+   *   `payload` isn't an exact JSON object, `items` isn't an array, or an item isn't exactly a
+   *   `ConversationItem`.
+   * @throws RangeError for ordinal zero, an unknown kind, a bad JSON value, or a repeated item id.
+   */
+  constructor(
+    stamp: ConversationStamp,
+    kind: ConversationEffectKind,
+    payload: unknown,
+    items: readonly ConversationItem[],
+  ) {
+    this.stamp = requireStamp(stamp);
+    this.kind = requireEffectKind(kind);
+    this.payload = freezeConversationJson(payload, "payload");
+    this.items = requireConversationItems(items);
+    Object.freeze(this);
+  }
+}
+
+/** An actual observation of a prior requested effect within one invocation. Frozen. */
+export class ConversationEffectObserved {
+  readonly stamp: ConversationStamp;
+  readonly effectOrdinal: number;
+  readonly status: ConversationEffectStatus;
+  readonly items: readonly ConversationItem[];
+  readonly failure: MemoryOperationFailure | null;
+
+  /**
+   * Validate the observation without inventing a terminal disposition; the items array is copied
+   * and the carriers kept by reference.
+   *
+   * @throws TypeError when `stamp` isn't exactly a `ConversationStamp`, `effectOrdinal` isn't a safe
+   *   integer, `items` isn't an array, an item isn't exactly a `ConversationItem`, `status` isn't a
+   *   string, or `failure` is neither `null` nor exactly a `MemoryOperationFailure`.
+   * @throws RangeError for ordinal zero, an effect ordinal below 1 or not before the stamp's, a
+   *   repeated item id, an unknown status, or a failure the status doesn't allow.
+   */
+  constructor(
+    stamp: ConversationStamp,
+    effectOrdinal: number,
+    status: ConversationEffectStatus,
+    items: readonly ConversationItem[],
+    failure: MemoryOperationFailure | null,
+  ) {
+    this.stamp = requireStamp(stamp);
+    this.effectOrdinal = requireCounter(effectOrdinal, "effect_ordinal", true);
+    if (effectOrdinal >= this.stamp.ordinal) {
+      throw new RangeError("observed effect ordinal must precede the observation");
+    }
+    const checkedItems = requireConversationItems(items);
+    const checkedFailure = requireEffectFailure(status, failure);
+    this.status = status;
+    this.items = checkedItems;
+    this.failure = checkedFailure;
+    Object.freeze(this);
+  }
+}
+
+/** A positive-ordinal checkpoint closing one admitted invocation. Frozen. */
+export class ConversationClosed {
+  readonly stamp: ConversationStamp;
+  readonly status: ConversationTurnStatus;
+
+  /**
+   * Require a positive-ordinal stamp (kept by reference) and an actual terminal disposition.
+   *
+   * @throws TypeError when `stamp` isn't exactly a `ConversationStamp` or `status` isn't a string.
+   * @throws RangeError for ordinal zero or a status that isn't terminal.
+   */
+  constructor(stamp: ConversationStamp, status: ConversationTurnStatus) {
+    this.stamp = requireStamp(stamp);
+    this.status = requireTurnStatus(status);
+    Object.freeze(this);
+  }
+}
+
+/** One checkpoint of the closed conversation checkpoint sum. */
+export type ConversationCheckpoint =
+  | ConversationAdmitted
+  | ConversationEffectRequested
+  | ConversationEffectObserved
+  | ConversationClosed;
+
 /** One run session over a host-provided memory object. */
 export interface MemorySession {
   /**

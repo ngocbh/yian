@@ -87,7 +87,7 @@ Changed (TS yian): `inf` is an expression keyword too, so a node named `inf` mus
 renamed. So must a node input named `inf`, since `${inf}` reads infinity, not the input; a
 `map` argument may keep the name (the child reads it as `${input.inf}`, and a `map` has no
 node asserts). A compact flow's input named `inf` must be renamed too, since its node reads
-it by bare name, and so must an AGENT variable named `inf`.
+it by bare name. So must an AGENT variable named `inf`, since its prompts read it the same way.
 
 Changed: a node id that isn't an identifier, or is an expression keyword, used to load,
 and failed only when a `${...}` referenced it, with an error that didn't name the node

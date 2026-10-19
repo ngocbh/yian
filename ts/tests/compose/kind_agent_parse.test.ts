@@ -22,8 +22,8 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { BuildContext, siteKey } from "../../src/compose/nodes/base.ts";
 import { AgentDescriptor, retriesError } from "../../src/compose/nodes/agent.ts";
+import { BuildContext, siteKey } from "../../src/compose/nodes/base.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";

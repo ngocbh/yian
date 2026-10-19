@@ -180,7 +180,10 @@ export function notTextError(field: string, value: unknown, fix: string | null =
  * @returns The field's path as authored (such as `anthropic.inference_geo`) and its value, or
  *   `null` when the first issue is not a text field read as non-text.
  */
-export function notTextDetail(error: ValidationError, cfg: Readonly<Record<string, unknown>>): [string, unknown] | null {
+export function notTextDetail(
+  error: ValidationError,
+  cfg: Readonly<Record<string, unknown>>,
+): [string, unknown] | null {
   const first = error.issues[0];
   if (first === undefined || first.type !== "string_type") return null;
   const { loc } = first;

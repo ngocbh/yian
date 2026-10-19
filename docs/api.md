@@ -868,6 +868,8 @@ raises `ValueError` at run start (`tools['github']: MCP server 'github' is close
 A stdio server whose process died quietly is found on the first call, which raises
 `McpServerClosed`.
 
+Changed (TS yian): the key is quoted in the text form, `tools["github"]`.
+
 Opening starts the server, waits until it lists its tools, and keeps that list:
 `server.tools` is a tuple of `FunctionTool`s in the server's order, and a later
 change to the server's tool list is ignored until it is opened again. Each tool's

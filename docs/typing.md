@@ -325,7 +325,10 @@ Changed (TS yian): JSON values are `null`, a boolean, an int (`bigint`), a float
 text, and arrays and records of those, so the dict and tuple wording above reads as records and
 arrays; anything else (a `Date`, a `Map` or `Set`, a class instance) is `<value> is not a JSON
 value` (`<Date object> is not a JSON value`). A value shown in a type-check message is in the text form (`"bad" does not match
-declared type int`, where Python writes `'bad'`); names keep Python's repr.
+declared type int`, where Python writes `'bad'`); a single name keeps Python's repr. A list
+of names and a quoted key in a value path are in the text form too: `record missing required
+fields: ["confidence","value"]` and `output at a["my key"]`, where Python writes
+`['confidence', 'value']` and `a['my key']`.
 
 Changed (TS yian): host intake replaces the plain-container read. A host value (such as a tool's
 result or a CODE body's return value) enters through `fromHost(value, where)`, which returns a

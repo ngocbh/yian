@@ -7,7 +7,7 @@ value: approve
 expect:
   raises:
     class: TypeCheckError
-    message: '"approve" is not a member of variant [''Approve'', ''Defer'', ''Reject'']'
+    message: '"approve" is not a member of variant ["Approve","Defer","Reject"]'
     path: []
 python_expect:
   raises:

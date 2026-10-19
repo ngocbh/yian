@@ -74,11 +74,11 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import {
+  BackwardStartedRecord,
   MemoryRunLog,
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeStartedRecord,
-  BackwardStartedRecord,
   NodeStepRecord,
   RecordEnvelope,
   RunResumedRecord,
@@ -99,7 +99,7 @@ import {
   RunState,
 } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { blank } from "./source_scan.ts";
+import { blank, closing } from "./source_scan.ts";
 import { FailingLog, FINGERPRINT, FuncNode, ReturningLog, RUN_ID, stateSnapshot } from "./run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` whose message matches, or is, `message`. */
@@ -116,6 +116,13 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
 }
 
 const TERMINAL = /^terminal run state cannot prepare another graph transition$/;
+
+/** Return the frontier delta of `prepared`'s plan; throw unless the plan is a frontier plan. */
+function frontierDelta(prepared: PreparedTransition) {
+  const plan = prepared._plan;
+  if (plan.kind !== "frontier") throw new Error(`expected a frontier plan, found ${plan.kind}`);
+  return plan.delta;
+}
 
 /** Return a graph with several nodes available for isolated frontier tests. */
 function dispatchFlow(): CompiledFlow {
@@ -310,7 +317,7 @@ test("NodeStarted preparation keeps the existing frontier live", () => {
   const prepared = prepareNodeStarted(state, "ordinary");
 
   expect(prepared.record).toStrictEqual(new NodeStartedRecord("ordinary"));
-  expect(prepared._plan.kind === "frontier" && prepared._plan.delta).toEqual({ kind: "started", nodeId: "ordinary" });
+  expect(frontierDelta(prepared)).toEqual({ kind: "started", nodeId: "ordinary" });
   expect(state.ready).toEqual(["ordinary"]);
   expect([...state.inFlight]).toEqual(["first", "second"]);
   expectCommittedPath(log, new NodeStartedRecord("first"), new NodeStartedRecord("second"));
@@ -381,7 +388,7 @@ test("RunResumed preparation keeps the retry order ahead of ready work", () => {
   expectUnchanged(state, before);
   expect(prepared.record).toStrictEqual(new RunResumedRecord(["first", "second"], 5));
   expect(prepared.observers).toStrictEqual([new RunResumed()]);
-  expect(prepared._plan.kind === "frontier" && prepared._plan.delta).toEqual({
+  expect(frontierDelta(prepared)).toEqual({
     kind: "resumed",
     retryNodeIds: ["first", "second"],
     numWorkers: 5,
@@ -436,14 +443,7 @@ test("RunResumed validation doesn't read the ready frontier", () => {
   expect(start).toBeGreaterThan(-1);
   // Brace-match the body: strings and comments are blanked, so every brace is code.
   const open = source.indexOf("{", source.indexOf(")", start));
-  let depth = 0;
-  let end = open;
-  do {
-    if (source[end] === "{") depth += 1;
-    else if (source[end] === "}") depth -= 1;
-    end += 1;
-  } while (depth > 0);
-  const body = source.slice(open, end);
+  const body = source.slice(open, closing(source, open) + 1);
 
   expect(body).toContain("state.inFlight");
   expect(body).not.toMatch(/\bstate\s*\.\s*ready\b/);
@@ -752,7 +752,7 @@ test("prepareRunStopped lists the in-flight nodes in dispatch order", () => {
   expectUnchanged(state, before);
   expect(prepared.record).toStrictEqual(new RunStoppedRecord("signal", "SIGINT", ["second", "first"]));
   expect(prepared.observers).toEqual([]);
-  expect(prepared._plan.kind === "frontier" && prepared._plan.delta).toEqual({
+  expect(frontierDelta(prepared)).toEqual({
     kind: "stopped",
     nodeIds: ["second", "first"],
   });

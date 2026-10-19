@@ -40,7 +40,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 
-import { blank, importStatements } from "./source_scan.ts";
+import { blank, closing, importStatements } from "./source_scan.ts";
 
 const SRC = new URL("../../src/", import.meta.url);
 
@@ -87,17 +87,6 @@ const KIND_REFERENCES = [
 const KIND_IS_LITERAL = /\bkind\s*[!=]==?\s*(["'`])( *)\1/dg;
 const LITERAL_IS_KIND = /(["'`])( *)\1\s*[!=]==?\s*(?:[\w$]+[?!]?\.)*kind(?![\w$])/dg;
 const CASE_LITERAL = /\bcase\s*(["'`])( *)\1\s*:/dg;
-
-/** Return the index of the bracket closing the `(` or `{` at `open` in `code`. */
-function closing(code: string, open: number): number {
-  const [opener, closer] = code[open] === "(" ? ["(", ")"] : ["{", "}"];
-  let depth = 0;
-  for (let i = open; i < code.length; i++) {
-    if (code[i] === opener) depth++;
-    else if (code[i] === closer && --depth === 0) return i;
-  }
-  return code.length;
-}
 
 /**
  * Return the 1-based numbers of the distinct lines of `text` that dispatch on a

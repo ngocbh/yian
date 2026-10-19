@@ -14,10 +14,10 @@
  * `$ref`.
  *
  * Where pydantic's output is an accident of Python, it differs: keys are sorted at every level
- * but a `properties` map (pydantic leaves the schema of a field named `properties` or `default`
- * unsorted); a `properties` map follows JS key order, so integer-like field names come first,
- * then the others in field order; fields starting with `_` are kept, `__proto__` included
- * (pydantic drops them).
+ * but a `properties` map (pydantic leaves unsorted the schema of a field named `properties` or
+ * `default` and of a definition named `properties`); a `properties` map follows JS key order,
+ * so integer-like field names come first, then the others in field order; fields starting with
+ * `_` are kept, `__proto__` included (pydantic drops them).
  *
  * Only the schema is here. Union schemas, generating a value and checking the reply are not
  * ported yet.
@@ -199,11 +199,6 @@ function wrapper(title: string, field: string, typ: Type, defs: Defs): JsonObjec
   return { properties, required: [field], title, type: "object" };
 }
 
-/** Whether `typ` is a non-nullable record, which maps to an unwrapped schema. */
-function isBareRecord(typ: Type): boolean {
-  return typ.kind === ValueKind.OBJECT && (typ.fields?.size ?? 0) > 0 && !typ.nullable;
-}
-
 /**
  * Return the JSON Schema of a value of `typ`, or `null` when the agent should stay a text
  * producer (an untagged `str`, nullable or not).
@@ -222,7 +217,7 @@ export function typeToSchema(typ: Type): JsonObject | null {
   }
   const defs: Defs = new Map();
   let schema: JsonObject;
-  if (isBareRecord(typ)) {
+  if (isRecord(typ) && !typ.nullable) {
     schema = recordSchema(typ, defs, "");
   } else if (isListKind(typ.kind)) {
     schema = wrapper("ListWrapper", "items", typ, defs);
@@ -247,15 +242,22 @@ function sortKeys(schema: JsonObject): JsonObject {
   for (const key of Object.keys(schema).sort(compareCodeUnits)) {
     const value = schema[key]!;
     if (key === "properties") {
-      const properties: JsonObject = {};
-      for (const [name, field] of Object.entries(value as JsonObject)) {
-        setField(properties, name, sortKeys(field as JsonObject));
-      }
-      setField(sorted, key, properties);
+      setField(sorted, key, sortSchemas(value as JsonObject, Object.keys(value as JsonObject)));
+    } else if (key === "$defs") {
+      // Its keys are names, not keywords: a definition named `properties` is a schema.
+      const names = Object.keys(value as JsonObject).sort(compareCodeUnits);
+      setField(sorted, key, sortSchemas(value as JsonObject, names));
     } else {
       setField(sorted, key, sortValue(value));
     }
   }
+  return sorted;
+}
+
+/** Return a copy of the map `schemas` (name to schema) with its `names` in order, each sorted. */
+function sortSchemas(schemas: JsonObject, names: string[]): JsonObject {
+  const sorted: JsonObject = {};
+  for (const name of names) setField(sorted, name, sortKeys(schemas[name] as JsonObject));
   return sorted;
 }
 

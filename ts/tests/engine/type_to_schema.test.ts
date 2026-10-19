@@ -12,9 +12,9 @@
  * hand.
  *
  * Differences from pydantic, by design: keys are sorted at every level but a `properties` map
- * (pydantic leaves the schema of a field named `properties` unsorted); in `properties`,
- * integer-like field names come first (JS key order), then the others in field order; fields
- * starting with `_` are kept, `__proto__` too (pydantic drops them).
+ * (pydantic leaves the schema of a field or definition named `properties` unsorted); in
+ * `properties`, integer-like field names come first (JS key order), then the others in field
+ * order; fields starting with `_` are kept, `__proto__` too (pydantic drops them).
  *
  * TS-only: a root `Optional(str)` gives `null`; titles follow Python's `str.title()` (the
  * expected titles are Python's); `_x` and `__proto__` fields; integer-like field names; a field
@@ -111,12 +111,18 @@ function expectSortedKeys(schema: JsonValue): void {
     if (key === "properties") {
       Object.values(obj(value)).forEach(expectSortedKeys);
     } else if (key === "$defs") {
+      // Its keys are names: a definition named `properties` is a schema, not a properties map.
       expect(Object.keys(obj(value))).toEqual(sortedOrder(Object.keys(obj(value))));
       Object.values(obj(value)).forEach(expectSortedKeys);
     } else {
       expectSortedKeys(value);
     }
   }
+}
+
+/** The wrapper property of a root schema: `items` for a list, else `value`. */
+function wrapped(typ: Type): JsonObject {
+  return obj(obj(schemaOf(typ).properties)[isListKind(typ.kind) ? "items" : "value"]);
 }
 
 /** Expect `typ`'s schema to be `expected` exactly, keys sorted but in `properties`. */
@@ -402,6 +408,17 @@ const CAPTURES: [string, () => Type, string][] = [
     `{"properties":{"properties":{"type":"integer","maximum":3,"minimum":0,"title":"Properties"},"default":{"anyOf":[{"maximum":2,"minimum":1,"type":"integer"},{"type":"null"}],"default":null,"title":"Default"},"minimum":{"title":"Minimum","type":"string"},"title":{"enum":["a","z"],"title":"Title","type":"string"}},"required":["properties","minimum","title"],"title":"Record","type":"object"}`,
   ],
   [
+    // pydantic leaves the `properties` definition unsorted; TS sorts it (checked by key order).
+    "Odd2 (a record field named properties)",
+    () => t("Odd2", readTypedefs({ P: { x: "int" }, Odd2: { properties: "P", n: "int" } })),
+    `{"$defs":{"properties":{"type":"object","properties":{"x":{"title":"X","type":"integer"}},"required":["x"],"title":"properties"}},"properties":{"properties":{"$ref":"#/$defs/properties"},"n":{"title":"N","type":"integer"}},"required":["properties","n"],"title":"Record","type":"object"}`,
+  ],
+  [
+    "Odd3 (an optional record field named properties)",
+    () => t("Odd3", readTypedefs({ P: { x: "int" }, Odd3: { properties: "Optional(P)" } })),
+    `{"$defs":{"properties":{"type":"object","properties":{"x":{"title":"X","type":"integer"}},"required":["x"],"title":"properties"}},"properties":{"properties":{"anyOf":[{"$ref":"#/$defs/properties"},{"type":"null"}],"default":null}},"title":"Record","type":"object"}`,
+  ],
+  [
     "Optional(Pair)",
     () => t("Optional(Pair)", readTypedefs({ Pair: { b_side: "int", a_side: "Optional(str)" } })),
     `{"$defs":{"Record":{"properties":{"b_side":{"title":"B Side","type":"integer"},"a_side":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"A Side"}},"required":["b_side"],"title":"Record","type":"object"}},"properties":{"value":{"anyOf":[{"$ref":"#/$defs/Record"},{"type":"null"}]}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
@@ -564,15 +581,13 @@ test("test_bounded_numeric_schemas_preserve_nested_lists_records_and_nullable_fi
   expect([obj(fields.count).minimum, obj(fields.count).maximum]).toEqual([1n, 12n]);
   const scalar = obj(obj(obj(fields.scores).items).items);
   expect([scalar.minimum, scalar.maximum]).toEqual([0n, 1n]);
-  const numeric = arms(fields.confidence).find((arm) => arm.type === "number")!;
-  expect([numeric.minimum, numeric.maximum]).toEqual([0n, 1n]);
+  expect(arms(fields.confidence)).toContainEqual({ maximum: 1n, minimum: 0n, type: "number" });
 });
 
 test("test_nullable_bounded_scalars_keep_explicit_null_in_schema (schema half)", () => {
   const schema = schemaOf(t("list(Optional(int(1..12)))"));
   const items = obj(obj(obj(schema.properties).items).items);
-  const numeric = arms(items).find((arm) => arm.type === "integer")!;
-  expect([numeric.minimum, numeric.maximum]).toEqual([1n, 12n]);
+  expect(arms(items)).toContainEqual({ maximum: 12n, minimum: 1n, type: "integer" });
   expect(arms(items)).toContainEqual({ type: "null" });
 });
 
@@ -632,11 +647,6 @@ test("test_record_type and test_list_of_records (schema titles)", () => {
   );
 });
 
-/** The wrapper property of a root schema: `items` for a list, else `value`. */
-function wrapped(typ: Type): JsonObject {
-  return obj(obj(schemaOf(typ).properties)[isListKind(typ.kind) ? "items" : "value"]);
-}
-
 describe("test_nullable_root_schema_accepts_null (schema half)", () => {
   test.each([
     "Optional(int)",
@@ -689,19 +699,13 @@ test("test_list_of_any_items_reject_null_and_list_of_optional_any_items_accept_i
 });
 
 test("test_flow_fingerprint_preserves_structural_field_order_used_by_agent_schema (schema half)", () => {
-  const first = new Type({
-    kind: ValueKind.OBJECT,
-    fields: new Map([
-      ["first", Type.scalar(ValueKind.INTEGER)],
-      ["second", Type.scalar(ValueKind.STRING)],
-    ]),
+  const first = record({
+    first: Type.scalar(ValueKind.INTEGER),
+    second: Type.scalar(ValueKind.STRING),
   });
-  const second = new Type({
-    kind: ValueKind.OBJECT,
-    fields: new Map([
-      ["second", Type.scalar(ValueKind.STRING)],
-      ["first", Type.scalar(ValueKind.INTEGER)],
-    ]),
+  const second = record({
+    second: Type.scalar(ValueKind.STRING),
+    first: Type.scalar(ValueKind.INTEGER),
   });
   const firstField = `{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"First"}`;
   const secondField = `{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Second"}`;

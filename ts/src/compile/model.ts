@@ -129,6 +129,9 @@ export class FlowOutput {
   }
 }
 
+/** The wiring a flow constructor accepts: raw sources or bindings by node id, then parameter. */
+type WiringInput = ReadonlyMap<string, ReadonlyMap<string, unknown>> | null;
+
 /**
  * Copy flow-owned wiring into its canonical carrier representation.
  *
@@ -137,9 +140,7 @@ export class FlowOutput {
  * @returns A fresh two-level table whose values are bindings.
  * @throws TypeError when a node id or parameter name isn't a string.
  */
-function normalizeWiring(
-  wiring: ReadonlyMap<string, ReadonlyMap<string, unknown>> | null,
-): Map<string, ReadonlyMap<string, Binding>> {
+function normalizeWiring(wiring: WiringInput): Map<string, ReadonlyMap<string, Binding>> {
   const normalized = new Map<string, ReadonlyMap<string, Binding>>();
   if (wiring === null) return normalized;
   for (const [nodeId, nodeWiring] of wiring) {
@@ -161,9 +162,6 @@ function normalizeWiring(
   return normalized;
 }
 
-/** The wiring a flow constructor accepts: raw sources or bindings by node id, then parameter. */
-type WiringInput = ReadonlyMap<string, ReadonlyMap<string, unknown>> | null;
-
 /**
  * The shared topology core every flow carries: nodes, edges, wiring and its boundary ids.
  *
@@ -174,7 +172,7 @@ type WiringInput = ReadonlyMap<string, ReadonlyMap<string, unknown>> | null;
  *
  * Topology only: a `Flow` holds no run state, so one instance can back many independent runs. A
  * compile-owned copy shares everything but its `nodes`, `edges` and `wiring` (and a compiled
- * flow's adjacency index), so change a copy by reassigning a field or through
+ * flow's adjacency index), so change a copy by reassigning a field or, on a `CompiledFlow`, through
  * `addSubgraph`/`removeSubgraph`, never by mutating a shared carrier.
  */
 export class Flow {
@@ -355,7 +353,7 @@ export class CompiledFlow extends Flow {
   addSubgraph(
     nodes: ReadonlyMap<string, Node>,
     edges: readonly Edge[],
-    wiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+    wiring: NonNullable<WiringInput>,
   ): void {
     const normalizedWiring = normalizeWiring(wiring);
     for (const [id, node] of nodes) this.nodes.set(id, node);
@@ -392,4 +390,44 @@ export class CompiledFlow extends Flow {
     this.outgoingEdges = outgoing;
     this.incomingEdges = incoming;
   }
+}
+
+/**
+ * Return a private copy of `value` for one run, rewrite or callsite.
+ *
+ * A flow copy gets fresh `nodes`, `edges` and `wiring` containers (the inner wiring maps are
+ * read-only and stay shared) and, for a `CompiledFlow`, a fresh adjacency index. A node copy is
+ * shallow, except that each own field holding a `Flow` (the static child of CALL, MAP and LOOP)
+ * holds that flow's copy. Each flow and node is copied once per call, so sharing and cycles carry
+ * over to the copy. Carriers, payloads, `env`, type tables and labels stay shared: change a copy
+ * only by reassigning a field.
+ */
+export function copyGraph<T extends Flow | Node>(value: T): T {
+  return copyOnce(value, new Map()) as T;
+}
+
+/** Return the copy of `value` recorded in `memo`, making and recording it on first reach. */
+function copyOnce(value: Flow | Node, memo: Map<object, object>): Flow | Node {
+  const known = memo.get(value);
+  if (known !== undefined) return known as Flow | Node;
+  // Same prototype and own fields, without running the constructor.
+  const copy = Object.assign(Object.create(Object.getPrototypeOf(value)), value) as Flow | Node;
+  // Recorded before recursing, so a cycle back to `value` reaches this copy.
+  memo.set(value, copy);
+  if (copy instanceof Flow) {
+    copy.edges = [...copy.edges];
+    copy.wiring = new Map(copy.wiring);
+    copy.nodes = new Map([...copy.nodes].map(([id, node]) => [id, copyOnce(node, memo) as Node]));
+    if (copy instanceof CompiledFlow) {
+      copy.incomingEdges = new Map();
+      copy.outgoingEdges = new Map();
+      indexEdges(copy.edges, copy.incomingEdges, copy.outgoingEdges);
+    }
+  } else {
+    const fields = copy as unknown as Record<string, unknown>;
+    for (const [key, field] of Object.entries(fields)) {
+      if (field instanceof Flow) fields[key] = copyOnce(field, memo);
+    }
+  }
+  return copy;
 }

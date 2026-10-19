@@ -11,7 +11,12 @@
  * TS-only: `GrowthRejected` keeps `original` and refuses a non-`Error`; the `CompiledFlow`
  * `flowId` and `memories` checks; `terminalId` is `END_ID` on a hand-built flow holding an END
  * node and `null` once that node is removed (the model half of
- * `test_compiled_flow_is_flow_and_keeps_boundary_and_terminal`).
+ * `test_compiled_flow_is_flow_and_keeps_boundary_and_terminal`); `copyGraph`, the shared graph
+ * copier that stands in for Python's `copy.deepcopy` of a flow or node: a copied flow and its
+ * nodes are distinct instances of their classes with fresh containers, and splicing or pruning the
+ * copy leaves the original; a node or child flow reached twice is copied once; a cycle copies to a
+ * cycle; a node copy takes its child flow along; each call gets a fresh memo; a reassigned field
+ * on a copy leaves the original.
  *
  * Later (T3-17/T3-22): `test_compiled_flow_is_flow_and_keeps_boundary_and_terminal` and the
  * compose rows (`test_data_edge_optional_reflects_binding_escape`, the CASE escape rows, the
@@ -21,11 +26,14 @@
 
 import { expect, test } from "bun:test";
 
-import { CompiledFlow, Edge, END_ID, Flow, GrowthRejected, START_ID } from "../../src/compile/model.ts";
+import { CompiledFlow, copyGraph, Edge, END_ID, Flow, GrowthRejected, START_ID } from "../../src/compile/model.ts";
 import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
-import { Binding } from "../../src/nodes/contracts.ts";
+import { CallNode } from "../../src/nodes/call/node.ts";
+import { Binding, ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
+import { LoopNode } from "../../src/nodes/loop/node.ts";
+import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 
 /** A minimal concrete node standing in for Python's `FuncNode`. */
@@ -175,4 +183,147 @@ test("terminal id is END_ID while the END node is present and null once it is re
   expect(g.terminalId).toBe(END_ID);
   g.nodes.delete(END_ID);
   expect(g.terminalId).toBeNull();
+});
+
+/** Return a flow holding `nodes` (by id) with no edges. */
+function flowOf(...nodes: Node[]): Flow {
+  return new Flow(new Map(nodes.map((node) => [node.id, node])), []);
+}
+
+test("a copied flow has fresh containers and nodes, and changing it leaves the original", () => {
+  const edges = [new Edge("e0", START_ID, "a"), new Edge("e1", "a", "b"), new Edge("e2", "b", END_ID)];
+  const wiring = new Map([
+    ["a", new Map([["x", "${input.x}"]])],
+    ["b", new Map([["y", "${a.output}"]])],
+  ]);
+  const g = CompiledFlow.fromParts(withBoundary(nodesOf("a", "b")), edges, { wiring, flowId: "flow" });
+  const before = {
+    nodes: [...g.nodes],
+    edges: [...g.edges],
+    wiring: [...g.wiring],
+    incoming: [...g.incomingEdges].map(([id, list]) => [id, [...list]]),
+    outgoing: [...g.outgoingEdges].map(([id, list]) => [id, [...list]]),
+  };
+
+  const copy = copyGraph(g);
+
+  expect(copy).not.toBe(g);
+  expect(Object.getPrototypeOf(copy)).toBe(CompiledFlow.prototype);
+  expect(copy.flowId).toBe("flow");
+  expect(copy.nodes).not.toBe(g.nodes);
+  expect([...copy.nodes.keys()]).toEqual([...g.nodes.keys()]);
+  for (const [id, node] of g.nodes) {
+    const copied = copy.nodes.get(id);
+    expect(copied).not.toBe(node);
+    expect(Object.getPrototypeOf(copied)).toBe(Object.getPrototypeOf(node));
+    expect(copied).toStrictEqual(node);
+  }
+  expect(copy.edges).not.toBe(g.edges);
+  expect(copy.edges).toEqual(g.edges);
+  expect(copy.wiring).not.toBe(g.wiring);
+  expect([...copy.wiring.keys()]).toEqual([...g.wiring.keys()]);
+  for (const [id, nodeWiring] of g.wiring) expect(copy.wiring.get(id)).toBe(nodeWiring);
+  expect(copy.incomingEdges).not.toBe(g.incomingEdges);
+  expect(copy.incoming("b")).not.toBe(g.incoming("b"));
+  expect(copy.incoming("b")).toEqual(g.incoming("b"));
+  expect(copy.outgoing("a")).not.toBe(g.outgoing("a"));
+  expect(copy.outgoing("a")).toEqual(g.outgoing("a"));
+
+  copy.addSubgraph(
+    nodesOf("c"),
+    [new Edge("e3", "b", "c"), new Edge("e4", "a", "c")],
+    new Map([["c", new Map([["z", "${b.output}"]])]]),
+  );
+  copy.removeSubgraph(new Set(["b"]));
+  expect([...g.nodes]).toEqual(before.nodes);
+  expect(g.edges).toEqual(before.edges);
+  expect([...g.wiring]).toEqual(before.wiring);
+  expect([...g.incomingEdges].map(([id, list]) => [id, [...list]])).toEqual(before.incoming);
+  expect([...g.outgoingEdges].map(([id, list]) => [id, [...list]])).toEqual(before.outgoing);
+});
+
+test("a node shared by a root flow and its child is copied once", () => {
+  const shared = new FuncNode("shared");
+  const child = flowOf(shared);
+  const root = flowOf(shared, new CallNode("call", { flowId: "child", child }));
+
+  const copy = copyGraph(root);
+  const copiedChild = (copy.nodes.get("call") as CallNode).child as Flow;
+
+  expect(copy.nodes.get("shared")).not.toBe(shared);
+  expect(copiedChild.nodes.get("shared")).toBe(copy.nodes.get("shared"));
+});
+
+test("a child flow shared by CALL, MAP and LOOP drivers is copied once", () => {
+  const child = flowOf(new FuncNode("leaf"));
+  const root = flowOf(
+    new CallNode("call", { flowId: "child", child }),
+    new MapNode("map", { flowId: "child", child }),
+    new LoopNode("loop", { flowId: "child", child, predicateKind: "times", times: 1, maxIters: 1 }),
+  );
+
+  const copy = copyGraph(root);
+  const children = ["call", "map", "loop"].map((id) => (copy.nodes.get(id) as CallNode | MapNode | LoopNode).child);
+
+  expect(children[0]).toBeInstanceOf(Flow);
+  expect(children[0]).not.toBe(child);
+  expect(children[1]).toBe(children[0]);
+  expect(children[2]).toBe(children[0]);
+  expect((children[0] as Flow).nodes.get("leaf")).not.toBe(child.nodes.get("leaf"));
+});
+
+test("a cyclic flow copies to a cycle", () => {
+  const flow = flowOf();
+  flow.nodes.set("call", new CallNode("call", { flowId: "self", child: flow }));
+
+  const copy = copyGraph(flow);
+  const call = copy.nodes.get("call") as CallNode;
+
+  expect(copy).not.toBe(flow);
+  expect(call).not.toBe(flow.nodes.get("call"));
+  expect(call.child).toBe(copy);
+});
+
+test("copying a node copies its child flow and leaves the original's child", () => {
+  const child = flowOf(new FuncNode("leaf"));
+  const call = new CallNode("call", { flowId: "child", child });
+
+  const copy = copyGraph(call);
+
+  expect(copy).not.toBe(call);
+  expect(copy).toBeInstanceOf(CallNode);
+  expect(copy.flowId).toBe("child");
+  expect(copy.child).toBeInstanceOf(Flow);
+  expect(copy.child).not.toBe(child);
+  expect((copy.child as Flow).nodes.get("leaf")).not.toBe(child.nodes.get("leaf"));
+  expect(call.child).toBe(child);
+});
+
+test("two copies of one flow share no graph-owned objects", () => {
+  const child = flowOf(new FuncNode("leaf"));
+  const root = flowOf(new CallNode("call", { flowId: "child", child }));
+
+  const first = copyGraph(root);
+  const second = copyGraph(root);
+  const firstCall = first.nodes.get("call") as CallNode;
+  const secondCall = second.nodes.get("call") as CallNode;
+
+  expect(second).not.toBe(first);
+  expect(second.nodes).not.toBe(first.nodes);
+  expect(secondCall).not.toBe(firstCall);
+  expect(secondCall.child).not.toBe(firstCall.child);
+  expect((secondCall.child as Flow).nodes.get("leaf")).not.toBe((firstCall.child as Flow).nodes.get("leaf"));
+});
+
+test("a field reassigned on a node copy leaves the original", () => {
+  const params = [new Parameter("x")];
+  const node = new FuncNode("a");
+  node.params = params;
+  const copy = copyGraph(node);
+
+  copy.params = [new Parameter("y")];
+  copy.executionScope = new ExecutionScope(["a"]);
+
+  expect(node.params).toBe(params);
+  expect(node.executionScope).toBeNull();
 });

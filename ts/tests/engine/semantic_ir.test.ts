@@ -22,9 +22,20 @@
  *   `RangeError`. The messages read `node origin_context ...`.
  * - The bad-splice row also checks the adjacency index is unchanged.
  *
- * Later (T3-14…T3-22): the compose, output-contract, child-signature and edge rows.
+ * Later (T3-14…T3-22): the compose/load rows
+ * (`test_loaded_compose_flow_has_only_canonical_binding_storage`,
+ * `test_boundary_reads_wrapped_output_but_preserves_it_in_end_wiring` and
+ * `test_reference_validation_checks_a_wrapped_flow_output`); the output-contract and
+ * child-signature rows (`test_output_contract_*` and `test_child_signature_*`); the CALL/LOOP
+ * type-check and composite-builder rows (`test_call_type_*`, `test_loop_type_check_*` and
+ * `test_composite_builders_preserve_or_deliberately_wrap_child_contract`); inline binding type
+ * inference (`test_inline_binding_type_inference_reads_one_carrier_layer`); and edge inference
+ * (`test_data_edge_inference_is_identical_for_raw_and_wrapped_sources`,
+ * `test_producer_scan_unwraps_exactly_one_carrier_layer` and
+ * `test_case_edge_inference_reads_wrapped_lowered_wiring`).
  *
- * Later (T3-21): the manifest and identity rows.
+ * Later (T3-21): the identity and manifest rows (`test_*_identity_*`, `test_*manifest*` and
+ * `test_assertion_*`) and `test_wrapped_wiring_keeps_its_source_text_and_identity`.
  */
 
 import { expect, test } from "bun:test";

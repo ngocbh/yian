@@ -54,9 +54,21 @@
  * TS-only (trace), with entries installed by setting the trace's internal maps: `captureBindings`
  * over a hand-built `BindingCapture` with one item and its two type errors; `SourceEntry.value`
  * restoring files through `files` where `storedValue` doesn't, each read fresh; `sameSourceEntry`
- * over each field; one row per `TraceTerminal` message and its `output`; `checkMemoryScope`; a `TraceOccurrence` keeping a decoded
- * copy of its envelope; `selectSeedRoute`; `RetainedTrace`'s defaults, `lookupSource`, `resolve`,
- * `occurrence` and `backwardContext`.
+ * over each field; one row per `TraceTerminal` message and its `output`; `checkMemoryScope`; a
+ * `TraceOccurrence` keeping a decoded copy of its envelope; `selectSeedRoute`; `RetainedTrace`'s
+ * defaults, `lookupSource`, `resolve`, `occurrence` and `backwardContext`.
+ *
+ * TS-only (trace deltas), driving `prepareTrace` and `TraceDelta.apply` over `learnableRun()`: the
+ * trace after each apply (started, occurrence, writer, sources, handler), a learnable RunStarted's
+ * pool entries, root writer and system values, and the terminals (root writer, failed occurrence,
+ * first causal route) and the root START source; `null` for a RunStarted that doesn't learn and
+ * for records before one; one row per `prepareTrace` message with its class, the lookup error as
+ * the cause of an absent source path, and the canonical terminal compare; one row per
+ * `validateOrigin` message (another trace, a stale sequence, a forged occurrence, a consumed
+ * connection gone); seed connections sorted, then consumed by the child start with evaluated keys
+ * winning; boundaries sorted and filled by the child's endpoints; an expansion pruning current
+ * names only; a resume clearing unfinished starts; an applied delta leaving earlier occurrences
+ * alone; a `TraceDelta`'s defaults and frozen arrays.
  *
  * Later (T4-3): the trace tests, which run flows.
  */
@@ -66,11 +78,19 @@ import { afterEach, expect, test } from "bun:test";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
-import { ResolvedValue, routeFeedback, SourceRef, sourceKey, ValueRoute } from "../../src/expr/lineage.ts";
+import {
+  type FeedbackValue,
+  ResolvedValue,
+  routeFeedback,
+  SourceRef,
+  sourceKey,
+  ValueRoute,
+} from "../../src/expr/lineage.ts";
 import { evalBinding } from "../../src/expr/template.ts";
 import { EvaluationEvidence, MemoryScope, MemorySection } from "../../src/memory/contracts.ts";
 import { BindingCapture } from "../../src/nodes/binding.ts";
-import { ExecutionPosition, ExecutionScope, SeedConnection } from "../../src/nodes/contracts.ts";
+import { BackwardContext, BackwardResult, Node, NodeKind } from "../../src/nodes/base.ts";
+import { ChildFlowBoundary, ExecutionPosition, ExecutionScope, SeedConnection } from "../../src/nodes/contracts.ts";
 import { BackwardCapture, ForwardCapture } from "../../src/runtime/contracts.ts";
 import {
   canonicalSeed,
@@ -79,10 +99,14 @@ import {
   encodePool,
   encodeRecord,
   evidencePayload,
+  NodeExpandedRecord,
+  NodeFailedRecord,
   NodeRoutedRecord,
   NodeStartedRecord,
   NodeSucceededRecord,
   RecordEnvelope,
+  type RunRecord,
+  RunResumedRecord,
   RunStartedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
@@ -90,10 +114,14 @@ import {
   captureBindings,
   checkMemoryScope,
   type OutcomeRecord,
+  type PrepareTraceOptions,
+  prepareTrace,
   RetainedTrace,
+  SeedRoutes,
   SourceEntry,
   sameSourceEntry,
   selectSeedRoute,
+  TraceDelta,
   TraceOccurrence,
   TraceTerminal,
 } from "../../src/runtime/trace.ts";
@@ -1220,4 +1248,622 @@ test("backwardContext takes a routed terminal failure and reads output only for 
   expect(context.failure).toEqual(failure);
   expect(context.output).toBeNull();
   expect(context.nodeData).toEqual({ k: "kept", _evaluation_evidence: null });
+});
+
+// TS-only (trace): trace deltas and `prepareTrace`, driven over `learnableRun()`.
+
+/** A CODE node with a settable scope, memory scope and hidden inputs, recording its backward calls. */
+class TraceNode extends Node {
+  readonly kind = NodeKind.CODE;
+  /** The inputs `modelHiddenInputs` reports. */
+  hidden: ReadonlySet<string> = new Set();
+  /** Each backward call's context and feedback, in call order. */
+  readonly calls: [BackwardContext, readonly FeedbackValue[]][] = [];
+
+  override modelHiddenInputs(): ReadonlySet<string> {
+    return this.hidden;
+  }
+
+  override backward(context: BackwardContext, feedback: readonly FeedbackValue[]): BackwardResult {
+    this.calls.push([context, feedback]);
+    return new BackwardResult();
+  }
+}
+
+/** The root metadata a learnable RunStarted is prepared with. */
+const ROOT: PrepareTraceOptions = { rootEndId: "end", rootInputNames: ["x"] };
+
+/** `learnableRun()`'s capture: input `v` routed to source 0 path `["x"]`. */
+function captureV(options: ConstructorParameters<typeof ForwardCapture>[2] = {}): ForwardCapture {
+  return new ForwardCapture({ v: 1n }, ValueRoute.record([["v", sourceRoute(0, ["x"])]]), {
+    inputNames: ["v"],
+    ...options,
+  });
+}
+
+/** An envelope of `record` at `seq`. */
+function at(seq: number, record: RunRecord): RecordEnvelope {
+  return new RecordEnvelope(SCHEMA_VERSION, RUN, seq, record);
+}
+
+/** A success of `nodeId` writing the int `value` under `target`, captured by `capture`. */
+function success(nodeId: string, target = nodeId, value = 2n, capture: ForwardCapture | null = captureV()) {
+  return new NodeSucceededRecord(nodeId, target, { kind: "int", value }, { forwardCapture: capture });
+}
+
+/** Prepare `envelope`, check the delta's origin and apply it; the trace unchanged when there is no delta. */
+function step(
+  trace: RetainedTrace | null,
+  envelope: RecordEnvelope,
+  node: Node | null = null,
+  options: PrepareTraceOptions = {},
+): RetainedTrace | null {
+  const delta = prepareTrace(trace, envelope, node, options);
+  if (delta === null) return trace;
+  delta.validateOrigin(trace);
+  return delta.apply();
+}
+
+/** The trace after `learnableRun()`'s RunStarted, and after `NodeStarted("a")` too when `started`. */
+function startedTrace(started = false): RetainedTrace {
+  const [run, start] = learnableRun();
+  const trace = step(null, run!, null, ROOT)!;
+  return started ? step(trace, start!)! : trace;
+}
+
+/** The trace after all of `learnableRun()`, with `node` as `a`. */
+function drivenTrace(node: TraceNode = new TraceNode("a"), options: PrepareTraceOptions = {}): RetainedTrace {
+  return step(startedTrace(true), learnableRun()[2]!, node, options)!;
+}
+
+/** Start `node` at `seq` and accept `record` for it at `seq + 1`. */
+function runNode(
+  trace: RetainedTrace,
+  seq: number,
+  node: TraceNode,
+  record: RunRecord,
+  options: PrepareTraceOptions = {},
+): RetainedTrace {
+  return step(step(trace, at(seq, new NodeStartedRecord(node.id)))!, at(seq + 1, record), node, options)!;
+}
+
+test("prepareTrace and apply build the trace record by record", () => {
+  const [run, start, succeeded] = learnableRun();
+  const node = new TraceNode("a");
+  node.hidden = new Set(["v"]);
+  node.memoryScope = new MemoryScope(["a"], { memories: ["notes"] });
+
+  const trace = step(null, run!, null, ROOT)!;
+  expect(trace.runId).toBe(RUN);
+  expect(trace.startId).toBe("__start__");
+  expect(trace.endId).toBe("end");
+  expect(trace.rootInputNames).toEqual(["x"]);
+  expect(trace.nextSequence).toBe(1);
+  const startEntry = new SourceEntry(new SourceRef(RUN, 0), 0, typedJson({ x: 1n }));
+  expect(sameSourceEntry(trace.currentWriters.get("__start__")!, startEntry)).toBe(true);
+  expect(trace.sources.get(sourceKey(new SourceRef(RUN, 0)))).toBe(trace.currentWriters.get("__start__"));
+  expect(trace.rootWriter).toBeNull();
+  expect(trace.started.size).toBe(0);
+
+  expect(step(trace, start!)).toBe(trace);
+  expect([...trace.started]).toEqual([["a", 1]]);
+  expect(trace.nextSequence).toBe(2);
+
+  expect(step(trace, succeeded!, node)).toBe(trace);
+  const source = new SourceRef(RUN, 1);
+  const occurrence = trace.occurrences[0]!;
+  expect(occurrence.source).toEqual(source);
+  expect(occurrence.nodeId).toBe("a");
+  expect(occurrence.outcomeSeq).toBe(2);
+  expect(occurrence.recordJson).toBe(encodeRecord(succeeded!));
+  expect(occurrence.inputRoute).toBe((succeeded!.record as NodeSucceededRecord).forwardCapture!.route);
+  expect(occurrence.memoryScope).toBe(node.memoryScope);
+  expect([...occurrence.hiddenInputs]).toEqual(["v"]);
+  expect(trace.occurrence(source)).toBe(occurrence);
+  expect(trace.started.size).toBe(0);
+  const writer = new SourceEntry(source, 2, logJson({ kind: "int", value: 2n }));
+  expect(sameSourceEntry(trace.currentWriters.get("a")!, writer)).toBe(true);
+  expect(trace.sources.get(sourceKey(source))).toBe(trace.currentWriters.get("a"));
+  expect(trace.rootStartSource).toBeNull();
+  expect(trace.rootWriter).toBeNull();
+  expect(trace.terminal).toBeNull();
+  expect(trace.nextSequence).toBe(3);
+
+  const handler = trace.backwardHandlers.get(sourceKey(source))!;
+  const context = trace.backwardContext(source);
+  handler(context, ["Review."]);
+  expect(node.calls).toEqual([[context, ["Review."]]]);
+});
+
+test("a learnable RunStarted installs every pool entry, the root writer and the system values", () => {
+  const pool = new VariablePool("__start__");
+  pool.set("__start__", { x: 1n });
+  pool.set("end", "done");
+  pool.addSystem("k", "ambient");
+  const record = new RunStartedRecord({
+    flowFingerprint: "a".repeat(64),
+    initialPool: encodePool(pool),
+    startWiringOverride: {},
+    effectiveLlmByStaticPath: {},
+    numWorkers: 0,
+    learnable: true,
+  });
+
+  const trace = step(null, at(0, record), null, ROOT)!;
+
+  const end = trace.currentWriters.get("end")!;
+  expect(sameSourceEntry(end, new SourceEntry(null, 0, typedJson("done")))).toBe(true);
+  expect(trace.rootWriter).toBe(end);
+  expect([...trace.sources.keys()]).toEqual([sourceKey(new SourceRef(RUN, 0))]);
+  expect(trace.resolve("system.k")).toEqual(new ResolvedValue("ambient", true));
+});
+
+test("prepareTrace returns null for a run that doesn't learn and for records before its RunStarted", () => {
+  const [run, start, succeeded] = learnableRun();
+  const { flowFingerprint, initialPool } = run!.record as RunStartedRecord;
+  const plain = new RunStartedRecord({
+    flowFingerprint,
+    initialPool,
+    startWiringOverride: {},
+    effectiveLlmByStaticPath: {},
+    numWorkers: 0,
+  });
+  expect(prepareTrace(null, at(0, plain), null, ROOT)).toBeNull();
+  expect(prepareTrace(null, start!, null)).toBeNull();
+  expect(prepareTrace(null, at(2, success("a", "a", 2n, null)), new TraceNode("a"))).toBeNull();
+  expect(prepareTrace(startedTrace(true), succeeded!, new TraceNode("a"))).not.toBeNull();
+});
+
+test("terminals take the root writer, the failed occurrence or the first causal route", () => {
+  const output = typedJson(2n);
+  const succeeded = drivenTrace(new TraceNode("a"), {});
+  const root = runNode(succeeded, 3, new TraceNode("b"), success("b", "end", 2n), {
+    terminalSucceeded: true,
+    terminalOutputJson: output,
+  });
+  const writer = root.currentWriters.get("end")!;
+  expect(root.rootWriter).toBe(writer);
+  expect(root.terminal!.succeeded).toBe(true);
+  expect(root.terminal!.source).toEqual(new SourceRef(RUN, 3));
+  expect(root.terminal!.outputJson).toBe(output);
+
+  const failure = new Failure({ code: "node.execute", message: "Failed.", nodeId: "b" });
+  const failedRecord = new NodeFailedRecord(failure, { forwardCapture: captureV() });
+  const failed = runNode(drivenTrace(), 3, new TraceNode("b"), failedRecord, {
+    terminalSucceeded: false,
+    terminalFailure: failure,
+  });
+  expect(failed.terminal!.source).toEqual(new SourceRef(RUN, 3));
+  expect(failed.terminal!.failure).toEqual(failure);
+
+  const unreachable = new Failure({ code: "graph.terminal_unreachable", message: "Unreachable.", nodeId: "r" });
+  const routedRecord = new NodeRoutedRecord("r", "next", { terminalFailure: unreachable, forwardCapture: captureV() });
+  const routed = runNode(drivenTrace(), 3, new TraceNode("r"), routedRecord);
+  expect(routed.causalRouteSource).toEqual(new SourceRef(RUN, 3));
+  expect(routed.terminal).toBeNull();
+  const second = new NodeRoutedRecord("q", "next", { terminalFailure: unreachable, forwardCapture: captureV() });
+  const later = runNode(routed, 5, new TraceNode("q"), second, {
+    terminalSucceeded: false,
+    terminalFailure: unreachable,
+  });
+  expect(later.causalRouteSource).toEqual(new SourceRef(RUN, 3));
+  expect(later.terminal!.source).toEqual(new SourceRef(RUN, 3));
+});
+
+test("the root START's first outcome sets the root start source", () => {
+  const node = new TraceNode("__start__");
+  const trace = runNode(startedTrace(), 1, node, success("__start__", "__start__", 2n));
+  expect(trace.rootStartSource).toEqual(new SourceRef(RUN, 1));
+  expect(trace.currentWriters.get("__start__")!.outcomeSeq).toBe(2);
+});
+
+/** A trace after `a` started, with `edit` applied to it, for one failing preparation. */
+function editedTrace(edit: (trace: RetainedTrace) => void): RetainedTrace {
+  const trace = startedTrace(true);
+  edit(trace);
+  return trace;
+}
+
+/** `a` with the execution scope `scope`. */
+function scopedNode(scope: ExecutionScope | null): TraceNode {
+  const node = new TraceNode("a");
+  node.executionScope = scope;
+  return node;
+}
+
+/** Prepare `a`'s success at seq 2 over `trace` with `capture`, `node` and `options`. */
+function prepareA(
+  capture: ForwardCapture = captureV(),
+  options: PrepareTraceOptions = {},
+  node: Node | null = new TraceNode("a"),
+  trace: RetainedTrace = startedTrace(true),
+  target = "a",
+): () => unknown {
+  return () => prepareTrace(trace, at(2, success("a", target, 2n, capture)), node, options);
+}
+
+const SCOPE_A = new ExecutionScope(["a"]);
+const TYPED_TWO = typedJson(2n);
+
+test.each<[string, () => unknown, ErrorClass, string]>([
+  [
+    "a learnable RunStarted without a root end",
+    () => prepareTrace(null, learnableRun()[0]!, null, { rootInputNames: ["x"] }),
+    RangeError,
+    "retained RunStarted requires verified root metadata",
+  ],
+  [
+    "a learnable RunStarted without root input names",
+    () => prepareTrace(null, learnableRun()[0]!, null, { rootEndId: "end" }),
+    RangeError,
+    "retained RunStarted requires verified root metadata",
+  ],
+  [
+    "a capture with no trace",
+    () => prepareTrace(null, learnableRun()[2]!, new TraceNode("a")),
+    RangeError,
+    "forward capture requires recorded learning",
+  ],
+  [
+    "a record at another sequence",
+    () => prepareTrace(startedTrace(), learnableRun()[2]!, new TraceNode("a")),
+    RangeError,
+    "trace disagrees with accepted record coordinates",
+  ],
+  [
+    "a record of another run",
+    () =>
+      prepareTrace(
+        startedTrace(),
+        new RecordEnvelope(SCHEMA_VERSION, "other", 1, new NodeStartedRecord("a")),
+        null,
+      ),
+    RangeError,
+    "trace disagrees with accepted record coordinates",
+  ],
+  [
+    "terminal output without a disposition",
+    () => prepareTrace(startedTrace(), learnableRun()[1]!, null, { terminalOutputJson: TYPED_TWO }),
+    RangeError,
+    "terminal payload requires a terminal disposition",
+  ],
+  [
+    "a terminal failure without a disposition",
+    () => prepareTrace(startedTrace(), learnableRun()[1]!, null, { terminalFailure: TERMINAL_FAILURE }),
+    RangeError,
+    "terminal payload requires a terminal disposition",
+  ],
+  [
+    "a resume naming other starts",
+    () => prepareTrace(startedTrace(true), at(2, new RunResumedRecord(["b"], 0)), null),
+    RangeError,
+    "trace unfinished starts disagree with retry frontier",
+  ],
+  [
+    "an outcome without a capture",
+    prepareA(null as unknown as ForwardCapture),
+    RangeError,
+    "accepted outcome requires forward capture while learning",
+  ],
+  [
+    "an outcome without a node",
+    prepareA(captureV(), {}, null),
+    RangeError,
+    "trace outcome requires its accepted start",
+  ],
+  [
+    "an outcome of a node that didn't start",
+    prepareA(captureV(), {}, new TraceNode("b")),
+    RangeError,
+    "trace outcome requires its accepted start",
+  ],
+  [
+    "a scoped capture on a node without a scope",
+    prepareA(captureV({ scope: SCOPE_A }), {}, scopedNode(null)),
+    RangeError,
+    "forward capture scope does not match the executing node",
+  ],
+  [
+    "a capture without a scope on a scoped node",
+    prepareA(captureV(), {}, scopedNode(SCOPE_A)),
+    RangeError,
+    "forward capture scope does not match the executing node",
+  ],
+  [
+    "a capture and a node with different scopes",
+    prepareA(captureV({ scope: SCOPE_A }), {}, scopedNode(new ExecutionScope(["b"]))),
+    RangeError,
+    "forward capture scope does not match the executing node",
+  ],
+  [
+    "a route to an unaccepted source",
+    prepareA(new ForwardCapture({ v: 1n }, ValueRoute.record([["v", sourceRoute(5)]]))),
+    RangeError,
+    "route source must name an earlier accepted producer",
+  ],
+  [
+    "a route to a source accepted at this record",
+    prepareA(
+      captureV(),
+      {},
+      new TraceNode("a"),
+      editedTrace((trace) => install(trace, "b", new SourceEntry(new SourceRef(RUN, 0), 2, typedJson({ x: 1n })))),
+    ),
+    RangeError,
+    "route source must name an earlier accepted producer",
+  ],
+  [
+    "an item route to an unaccepted source",
+    prepareA(
+      captureV({ items: [[0, new ForwardCapture({ n: 1n }, ValueRoute.record([["n", sourceRoute(5)]]))]] }),
+    ),
+    RangeError,
+    "route source must name an earlier accepted producer",
+  ],
+  [
+    "a seed route to an unaccepted source",
+    prepareA(
+      captureV(),
+      {},
+      new TraceNode("a"),
+      editedTrace((trace) =>
+        trace._pendingConnections.set("a", new SeedRoutes(new SourceRef(RUN, 0), [["v", sourceRoute(5)]])),
+      ),
+    ),
+    RangeError,
+    "route source must name an earlier accepted producer",
+  ],
+  [
+    "a seed field that wasn't captured",
+    prepareA(captureV(), { inputConnections: [new SeedConnection("child", "w", ["w"])] }),
+    RangeError,
+    "seed connection field or item was not captured",
+  ],
+  [
+    "a seed item that wasn't captured",
+    prepareA(captureV(), { inputConnections: [new SeedConnection("child", "n", [0, "n"])] }),
+    RangeError,
+    "seed connection field or item was not captured",
+  ],
+  [
+    "a seed target that already has an owner",
+    prepareA(
+      captureV(),
+      { inputConnections: [new SeedConnection("child", "p", ["v"])] },
+      new TraceNode("a"),
+      editedTrace((trace) => trace._pendingConnections.set("child", new SeedRoutes(new SourceRef(RUN, 0), []))),
+    ),
+    RangeError,
+    "seed connection target already has an accepted owner",
+  ],
+  [
+    "a child boundary endpoint that already has an owner",
+    prepareA(
+      captureV(),
+      { childBoundaries: [new ChildFlowBoundary("cs", "ce")] },
+      new TraceNode("a"),
+      editedTrace((trace) => trace.currentBoundaries.set("ce", [0, "endSource"])),
+    ),
+    RangeError,
+    "child boundary target already has an accepted owner",
+  ],
+  [
+    "a node whose backward isn't a function",
+    prepareA(captureV(), {}, Object.assign(new TraceNode("a"), { backward: "not callable" })),
+    TypeError,
+    "node backward handler must be callable",
+  ],
+  [
+    "terminal output without a root writer",
+    prepareA(captureV(), { terminalSucceeded: true, terminalOutputJson: TYPED_TWO }),
+    RangeError,
+    "terminal output disagrees with the accepted root writer",
+  ],
+  [
+    "terminal output other than the root writer's",
+    prepareA(captureV(), { terminalSucceeded: true, terminalOutputJson: typedJson(3n) }, undefined, undefined, "end"),
+    RangeError,
+    "terminal output disagrees with the accepted root writer",
+  ],
+  [
+    "a terminal failure without a causal occurrence",
+    prepareA(captureV(), { terminalSucceeded: false, terminalFailure: TERMINAL_FAILURE }),
+    RangeError,
+    "accepted failure requires an accepted causal occurrence",
+  ],
+])("prepareTrace refuses %s", (_label, prepare, cls, message) => {
+  expectError(prepare, cls, message);
+});
+
+test("prepareTrace keeps the lookup error as the cause of an absent source path", () => {
+  const prepare = prepareA(new ForwardCapture({ v: 1n }, ValueRoute.record([["v", sourceRoute(0, ["y"])]])));
+  expectError(prepare, RangeError, "route source path is absent from its accepted value");
+  try {
+    prepare();
+  } catch (error) {
+    expect((error as Error).cause).toBeInstanceOf(RangeError);
+    expect(((error as Error).cause as Error).message).toBe("source path is absent from its accepted value");
+  }
+});
+
+test("a trace delta's terminal compare reads the output text canonically", () => {
+  // The same int written with other spacing is the same decoded typed value.
+  const trace = step(startedTrace(true), at(2, success("a", "end")), new TraceNode("a"), {
+    terminalSucceeded: true,
+    terminalOutputJson: '{ "value": 2, "kind": "int" }',
+  })!;
+  expect(trace.terminal!.source).toEqual(new SourceRef(RUN, 1));
+});
+
+test.each<[string, (trace: RetainedTrace) => RetainedTrace | null, string]>([
+  ["another trace", () => startedTrace(true), "trace transition requires its originating trace"],
+  ["no trace", () => null, "trace transition requires its originating trace"],
+  [
+    "a stale sequence",
+    (trace) => {
+      trace.nextSequence += 1;
+      return trace;
+    },
+    "trace transition has a stale sequence",
+  ],
+])("validateOrigin refuses %s", (_label, target, message) => {
+  const trace = startedTrace(true);
+  const delta = prepareTrace(trace, learnableRun()[2]!, new TraceNode("a"))!;
+  expectError(() => delta.validateOrigin(target(trace)), RangeError, message);
+});
+
+test("validateOrigin refuses an occurrence that isn't exactly a TraceOccurrence", () => {
+  const trace = startedTrace(true);
+  const { occurrence } = prepareTrace(trace, learnableRun()[2]!, new TraceNode("a"))!;
+  // Reads every field of the real occurrence through its prototype.
+  const forged = new TraceDelta(trace, 2, { occurrence: Object.create(occurrence) as TraceOccurrence });
+  expectError(() => forged.validateOrigin(trace), TypeError, "trace delta requires an exact occurrence");
+});
+
+test("validateOrigin refuses a consumed connection that is no longer pending", () => {
+  const trace = drivenTrace(new TraceNode("a"), { inputConnections: [new SeedConnection("c", "p", ["v"])] });
+  step(trace, at(3, new NodeStartedRecord("c")));
+  const capture = new ForwardCapture({ p: 1n }, ValueRoute.record([["p", ValueRoute.literal(1n)]]));
+  const delta = prepareTrace(trace, at(4, success("c", "c", 1n, capture)), new TraceNode("c"))!;
+  const { owner, fields } = trace.pendingConnections.get("c")!;
+  trace._pendingConnections.set("c", new SeedRoutes(owner, fields));
+  expectError(() => delta.validateOrigin(trace), RangeError, "seed connection no longer has its prepared owner");
+  trace._pendingConnections.delete("c");
+  expectError(() => delta.validateOrigin(trace), RangeError, "seed connection no longer has its prepared owner");
+});
+
+test("seed connections install sorted by target and input, and the child start consumes them", () => {
+  const connections = [
+    new SeedConnection("c", "q", ["v"]),
+    new SeedConnection("b", "p", ["v"]),
+    new SeedConnection("c", "p", ["v"]),
+  ];
+  const trace = drivenTrace(new TraceNode("a"), { inputConnections: connections });
+  const seeded = (learnableRun()[2]!.record as NodeSucceededRecord).forwardCapture!.route.children[0]!;
+  expect([...trace.pendingConnections.keys()]).toEqual(["b", "c"]);
+  const c = trace.pendingConnections.get("c")!;
+  expect(c.owner).toEqual(new SourceRef(RUN, 1));
+  expect(c.fields.map(([name]) => name)).toEqual(["p", "q"]);
+  expect(c.fields[0]![1].source).toEqual(seeded.source);
+
+  const literal = ValueRoute.literal(1n);
+  const evaluated = ValueRoute.literal(1n);
+  const capture = new ForwardCapture(
+    { p: 1n, q: 1n },
+    ValueRoute.record([
+      ["p", literal],
+      ["q", evaluated],
+    ]),
+    { evaluatedKeys: new Set(["q"]) },
+  );
+  runNode(trace, 3, new TraceNode("c"), success("c", "c", 1n, capture));
+
+  const route = trace.occurrence(new SourceRef(RUN, 3)).inputRoute;
+  expect(route.names).toEqual(["p", "q"]);
+  expect(route.children[0]).toBe(c.fields[0]![1]);
+  expect(route.children[1]).toBe(evaluated);
+  expect([...trace.pendingConnections.keys()]).toEqual(["b"]);
+});
+
+test("child boundaries install sorted and take their endpoints' accepted starts", () => {
+  const boundaries = [new ChildFlowBoundary("s2", "e2"), new ChildFlowBoundary("s1", "e1")];
+  const trace = drivenTrace(new TraceNode("a"), { childBoundaries: boundaries });
+  const installed = trace.boundaries;
+  expect(installed.map((item) => [item.startId, item.endId])).toEqual([
+    ["s1", "e1"],
+    ["s2", "e2"],
+  ]);
+  expect(installed[0]!.owner).toEqual(new SourceRef(RUN, 1));
+  expect(installed[0]!.startSource).toBeNull();
+
+  runNode(trace, 3, new TraceNode("s1"), success("s1"));
+  expect(trace.boundaries[0]!.startSource).toEqual(new SourceRef(RUN, 3));
+  expect(trace.boundaries[0]!.endSource).toBeNull();
+  expect(trace.currentBoundaries.has("s1")).toBe(false);
+  runNode(trace, 5, new TraceNode("e1"), success("e1"));
+  expect(trace.boundaries[0]!.startSource).toEqual(new SourceRef(RUN, 3));
+  expect(trace.boundaries[0]!.endSource).toEqual(new SourceRef(RUN, 5));
+  expect(trace.boundaries[0]!.owner).toEqual(new SourceRef(RUN, 1));
+  expect(installed[0]!.startSource).toBeNull();
+  expect(trace.boundaries[1]).toBe(installed[1]);
+});
+
+test("an expansion prunes current names only, and other outcomes ignore retired ids", () => {
+  const trace = drivenTrace(new TraceNode("a"), {
+    inputConnections: [new SeedConnection("b", "p", ["v"])],
+    childBoundaries: [new ChildFlowBoundary("s1", "e1")],
+    retiredIds: ["a"],
+  });
+  expect(trace.currentWriters.has("a")).toBe(true);
+
+  const expanded = new NodeExpandedRecord("g", { v: 1n }, ["a", "b"], "b".repeat(64), { forwardCapture: captureV() });
+  runNode(trace, 3, new TraceNode("g"), expanded, { retiredIds: ["a", "b", "s1"] });
+
+  expect(trace.currentWriters.has("a")).toBe(false);
+  expect(trace.pendingConnections.has("b")).toBe(false);
+  expect(trace.currentBoundaries.has("s1")).toBe(false);
+  expect(trace.currentBoundaries.has("e1")).toBe(true);
+  expect(trace.sources.has(sourceKey(new SourceRef(RUN, 1)))).toBe(true);
+  expect(trace.occurrences.map((item) => item.nodeId)).toEqual(["a", "g"]);
+  expect(trace.boundaries).toHaveLength(1);
+  expect(trace.resolve("a.output")).toEqual(new ResolvedValue(null, false));
+});
+
+test("a resumed record clears the unfinished starts", () => {
+  const trace = startedTrace(true);
+  step(trace, at(2, new RunResumedRecord(["a"], 0)));
+  expect(trace.started.size).toBe(0);
+  expect(trace.nextSequence).toBe(3);
+});
+
+test("an applied delta never changes an earlier occurrence", () => {
+  const trace = drivenTrace();
+  const occurrences = trace.occurrences;
+  const [occurrence] = occurrences;
+  const { recordJson, inputRoute } = occurrence!;
+
+  runNode(trace, 3, new TraceNode("b"), success("b", "a", 5n), { childBoundaries: [new ChildFlowBoundary("s", "e")] });
+
+  expect(trace.occurrences[0]).toBe(occurrence);
+  expect(occurrence!.recordJson).toBe(recordJson);
+  expect(occurrence!.inputRoute).toBe(inputRoute);
+  expect(Object.isFrozen(occurrence)).toBe(true);
+  expect(occurrences).toHaveLength(1);
+  expect(trace.lookupSource(new SourceRef(RUN, 1))).toBe(2n);
+  expect(trace.resolve("a.output")).toEqual(new ResolvedValue(5n, true, new SourceRef(RUN, 3)));
+});
+
+test("a trace delta holds frozen copies of its arrays and defaults to an empty change", () => {
+  const trace = startedTrace();
+  const empty = new TraceDelta(trace, 1, {});
+  expect(empty.originatingTrace).toBe(trace);
+  expect(empty.sequence).toBe(1);
+  for (const field of [
+    "initialized",
+    "started",
+    "occurrence",
+    "handler",
+    "writer",
+    "consumedConnection",
+    "boundaryUpdate",
+    "rootStartSource",
+    "rootWriter",
+    "causalRouteSource",
+    "terminal",
+  ] as const) {
+    expect(empty[field]).toBeNull();
+  }
+  expect(empty.resumed).toBe(false);
+  expect([empty.pruneIds, empty.connections, empty.boundaries]).toEqual([[], [], []]);
+
+  const pruneIds = ["a"];
+  const started: [string, number] = ["a", 1];
+  const delta = new TraceDelta(trace, 1, { started, pruneIds });
+  pruneIds.push("b");
+  started[1] = 9;
+  expect(delta.pruneIds).toEqual(["a"]);
+  expect(delta.started).toEqual(["a", 1]);
+  expect(Object.isFrozen(delta)).toBe(true);
+  expect(Object.isFrozen(delta.pruneIds)).toBe(true);
+  expect(Object.isFrozen(delta.started)).toBe(true);
 });

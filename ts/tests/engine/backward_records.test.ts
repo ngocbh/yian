@@ -61,7 +61,12 @@
  * attribution's nullable fields are null together, on a root seed; an outcome's failure is null
  * exactly on success).
  *
- * Later (T4-3 to T4-8): `test_historical_backward_prepares_recorded_schema_bytes` and the
+ * Ported, the trace delta:
+ * `test_postterminal_trace_delta_validation_covers_the_closed_field_inventory`. Changed: it reads
+ * the own keys of a constructed `TraceDelta`, in camelCase, where Python reads the dataclass
+ * fields.
+ *
+ * Later (T4-4 to T4-8): `test_historical_backward_prepares_recorded_schema_bytes` and the
  * prepare, append, reduce and replay tests (with the reducer, the runtime log and the engine).
  */
 
@@ -105,6 +110,7 @@ import {
   type RunRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
+import { TraceDelta } from "../../src/runtime/trace.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
@@ -906,4 +912,28 @@ test("sameBackwardOutcome compares status, feedback, failure and learning", () =
   expect(sameBackwardOutcome(base, succeeded({ learning: null }))).toBe(false);
   expect(sameBackwardOutcome(succeeded({ learning: null }), base)).toBe(false);
   expect(sameBackwardOutcome(failed(), failed({ learning: new LearningResult("incomplete") }))).toBe(false);
+});
+
+test("the post-terminal trace delta validation covers the closed field inventory", () => {
+  expect(new Set(Object.keys(new TraceDelta(null, 0, {})))).toEqual(
+    new Set([
+      "originatingTrace",
+      "sequence",
+      "initialized",
+      "started",
+      "resumed",
+      "occurrence",
+      "handler",
+      "writer",
+      "pruneIds",
+      "connections",
+      "consumedConnection",
+      "boundaries",
+      "boundaryUpdate",
+      "rootStartSource",
+      "rootWriter",
+      "causalRouteSource",
+      "terminal",
+    ]),
+  );
 });

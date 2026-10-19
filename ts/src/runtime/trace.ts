@@ -20,14 +20,27 @@
  * Never imports: runtime state, learning or backward, engine or run, compile, compose, or the CLI.
  */
 
-import { Failure } from "../diagnostics.ts";
+import { compareCodeUnits, Failure } from "../diagnostics.ts";
 import { ExpressionError } from "../expr/expressions.ts";
-import { ResolvedValue, SourceRef, sameSource, sourceKey, ValueRoute } from "../expr/lineage.ts";
+import { type FeedbackValue, ResolvedValue, SourceRef, sameSource, sourceKey, ValueRoute } from "../expr/lineage.ts";
 import { MemoryScope } from "../memory/index.ts";
-import { BackwardContext, type Node, retainFailure, validateDeclaredNames } from "../nodes/base.ts";
+import {
+  BackwardContext,
+  type BackwardResult,
+  type Node,
+  retainFailure,
+  validateDeclaredNames,
+} from "../nodes/base.ts";
 import { BindingCapture } from "../nodes/binding.ts";
-import { isExactly, type SeedConnection, sameOptional } from "../nodes/contracts.ts";
-import { type JsonValue, parseJson } from "../typesys/json.ts";
+import {
+  type ChildFlowBoundary,
+  isExactly,
+  type SeedConnection,
+  sameExecutionScope,
+  sameItems,
+  sameOptional,
+} from "../nodes/contracts.ts";
+import { type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import {
   fieldOf,
   isList,
@@ -44,18 +57,24 @@ import {
   decodeRecord,
   encodeRecord,
   evidencePayload,
-  type NodeExpandedRecord,
+  NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
+  NodeStartedRecord,
   NodeSucceededRecord,
   type RecordEnvelope,
+  RunResumedRecord,
+  RunStartedRecord,
 } from "./log.ts";
 
 /** An accepted outcome record, the record a trace occurrence holds. */
 export type OutcomeRecord = NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord;
 
 /** A node's bound backward handler, kept in the trace's private index. */
-type BackwardHandler = Node["backward"];
+type BackwardHandler = (
+  context: BackwardContext,
+  feedback: readonly FeedbackValue[],
+) => BackwardResult | Promise<BackwardResult>;
 
 /** Decode a typed value from its canonical log text. */
 function decodeTyped(text: string): TypedValue {
@@ -540,4 +559,427 @@ export class RetainedTrace {
       producer === null ? null : new SourceRef(producer.runId, producer.executionSeq, projection),
     );
   }
+}
+
+/** The optional parts of a `TraceDelta`; each defaults to `null`, `false` or an empty array. */
+export interface TraceDeltaFields {
+  /** The trace a learnable RunStarted creates. */
+  initialized?: RetainedTrace | null;
+  /** A started node's id and start sequence. */
+  started?: readonly [string, number] | null;
+  /** Whether a resume clears the unfinished starts. */
+  resumed?: boolean;
+  /** The accepted outcome's occurrence. */
+  occurrence?: TraceOccurrence | null;
+  /** The occurrence node's bound backward handler. */
+  handler?: BackwardHandler | null;
+  /** The accepted output's commit target and its source entry. */
+  writer?: readonly [string, SourceEntry] | null;
+  /** The current names an expansion retires. */
+  pruneIds?: readonly string[];
+  /** The child seed routes the outcome installs, by target node id. */
+  connections?: readonly (readonly [string, SeedRoutes])[];
+  /** The pending seed routes the outcome consumes, with their target node id. */
+  consumedConnection?: readonly [string, SeedRoutes] | null;
+  /** The child boundaries the outcome installs. */
+  boundaries?: readonly TraceBoundary[];
+  /** A boundary index and the boundary with the outcome's endpoint source filled in. */
+  boundaryUpdate?: readonly [number, TraceBoundary] | null;
+  /** The root START's first accepted start. */
+  rootStartSource?: SourceRef | null;
+  /** The new writer of the root END target. */
+  rootWriter?: SourceEntry | null;
+  /** The first routed occurrence that proves a terminal failure. */
+  causalRouteSource?: SourceRef | null;
+  /** The run's terminal result. */
+  terminal?: TraceTerminal | null;
+}
+
+/** A fully prepared sparse change, applied only after its record is accepted. Frozen. */
+export class TraceDelta {
+  /** The trace the delta was prepared against; `null` for a learnable RunStarted. */
+  readonly originatingTrace: RetainedTrace | null;
+  /** The accepted record's sequence. */
+  readonly sequence: number;
+  /** The trace a learnable RunStarted creates, or `null`. */
+  readonly initialized: RetainedTrace | null;
+  /** A started node's id and start sequence, or `null`. */
+  readonly started: readonly [string, number] | null;
+  /** Whether a resume clears the unfinished starts. */
+  readonly resumed: boolean;
+  /** The accepted outcome's occurrence, or `null`. */
+  readonly occurrence: TraceOccurrence | null;
+  /** The occurrence node's bound backward handler, or `null`. */
+  readonly handler: BackwardHandler | null;
+  /** The accepted output's commit target and its source entry, or `null`. */
+  readonly writer: readonly [string, SourceEntry] | null;
+  /** The current names an expansion retires. */
+  readonly pruneIds: readonly string[];
+  /** The child seed routes the outcome installs, by target node id. */
+  readonly connections: readonly (readonly [string, SeedRoutes])[];
+  /** The pending seed routes the outcome consumes, with their target node id, or `null`. */
+  readonly consumedConnection: readonly [string, SeedRoutes] | null;
+  /** The child boundaries the outcome installs. */
+  readonly boundaries: readonly TraceBoundary[];
+  /** A boundary index and its updated boundary, or `null`. */
+  readonly boundaryUpdate: readonly [number, TraceBoundary] | null;
+  /** The root START's first accepted start, or `null`. */
+  readonly rootStartSource: SourceRef | null;
+  /** The new writer of the root END target, or `null`. */
+  readonly rootWriter: SourceEntry | null;
+  /** The first routed occurrence that proves a terminal failure, or `null`. */
+  readonly causalRouteSource: SourceRef | null;
+  /** The run's terminal result, or `null`. */
+  readonly terminal: TraceTerminal | null;
+
+  /** Hold the fields as given, with frozen copies of the arrays. */
+  constructor(originatingTrace: RetainedTrace | null, sequence: number, fields: TraceDeltaFields = {}) {
+    this.originatingTrace = originatingTrace;
+    this.sequence = sequence;
+    this.initialized = fields.initialized ?? null;
+    this.started = frozenPair(fields.started ?? null);
+    this.resumed = fields.resumed ?? false;
+    this.occurrence = fields.occurrence ?? null;
+    this.handler = fields.handler ?? null;
+    this.writer = frozenPair(fields.writer ?? null);
+    this.pruneIds = Object.freeze([...(fields.pruneIds ?? [])]);
+    const connections = fields.connections ?? [];
+    this.connections = Object.freeze(connections.map(([nodeId, routes]) => Object.freeze([nodeId, routes] as const)));
+    this.consumedConnection = frozenPair(fields.consumedConnection ?? null);
+    this.boundaries = Object.freeze([...(fields.boundaries ?? [])]);
+    this.boundaryUpdate = frozenPair(fields.boundaryUpdate ?? null);
+    this.rootStartSource = fields.rootStartSource ?? null;
+    this.rootWriter = fields.rootWriter ?? null;
+    this.causalRouteSource = fields.causalRouteSource ?? null;
+    this.terminal = fields.terminal ?? null;
+    Object.freeze(this);
+  }
+
+  /**
+   * Reject stale or replaced trace authority before durable append.
+   *
+   * @throws RangeError when `trace` isn't the originating trace, its sequence moved, or the
+   *   consumed seed routes are no longer pending for their target.
+   * @throws TypeError when the occurrence isn't exactly a `TraceOccurrence` or its memory scope
+   *   isn't `null` or exactly a `MemoryScope`.
+   */
+  validateOrigin(trace: RetainedTrace | null): void {
+    if (trace !== this.originatingTrace) throw new RangeError("trace transition requires its originating trace");
+    if (trace !== null && trace.nextSequence !== this.sequence) {
+      throw new RangeError("trace transition has a stale sequence");
+    }
+    if (this.occurrence !== null) {
+      if (!isExactly(this.occurrence, TraceOccurrence)) throw new TypeError("trace delta requires an exact occurrence");
+      checkMemoryScope(this.occurrence.memoryScope);
+    }
+    if (this.consumedConnection !== null) {
+      const [nodeId, routes] = this.consumedConnection;
+      if (trace === null || trace._pendingConnections.get(nodeId) !== routes) {
+        throw new RangeError("seed connection no longer has its prepared owner");
+      }
+    }
+  }
+
+  /** Install only prevalidated index updates after the record is accepted, and return the trace. */
+  apply(): RetainedTrace {
+    // A delta always has its initialized or originating trace.
+    const trace = (this.initialized ?? this.originatingTrace)!;
+    if (this.started !== null) {
+      const [nodeId, sequence] = this.started;
+      trace._started.set(nodeId, sequence);
+    }
+    if (this.resumed) trace._started.clear();
+    if (this.occurrence !== null) {
+      const key = sourceKey(this.occurrence.source);
+      trace._occurrences.push(this.occurrence);
+      trace.occurrenceBySource.set(key, this.occurrence);
+      trace._backwardHandlers.set(key, this.handler!);
+      trace._started.delete(this.occurrence.nodeId);
+      trace.currentBoundaries.delete(this.occurrence.nodeId);
+    }
+    if (this.consumedConnection !== null) trace._pendingConnections.delete(this.consumedConnection[0]);
+    if (this.boundaryUpdate !== null) {
+      const [index, boundary] = this.boundaryUpdate;
+      trace._boundaries[index] = boundary;
+    }
+    for (const nodeId of this.pruneIds) {
+      trace._currentWriters.delete(nodeId);
+      trace._pendingConnections.delete(nodeId);
+      trace.currentBoundaries.delete(nodeId);
+    }
+    for (const [nodeId, routes] of this.connections) trace._pendingConnections.set(nodeId, routes);
+    for (const boundary of this.boundaries) {
+      const index = trace._boundaries.length;
+      trace._boundaries.push(boundary);
+      trace.currentBoundaries.set(boundary.startId, Object.freeze([index, "startSource"] as const));
+      trace.currentBoundaries.set(boundary.endId, Object.freeze([index, "endSource"] as const));
+    }
+    if (this.writer !== null) {
+      const [target, entry] = this.writer;
+      trace._currentWriters.set(target, entry);
+      // An outcome's writer always has its occurrence's source.
+      trace._sources.set(sourceKey(entry.source!), entry);
+    }
+    if (this.rootStartSource !== null) trace.rootStartSource = this.rootStartSource;
+    if (this.rootWriter !== null) trace.rootWriter = this.rootWriter;
+    if (this.causalRouteSource !== null) trace.causalRouteSource = this.causalRouteSource;
+    if (this.terminal !== null) trace.terminal = this.terminal;
+    trace.nextSequence = this.sequence + 1;
+    return trace;
+  }
+}
+
+/** A frozen copy of `pair`, or `null`. */
+function frozenPair<A, B>(pair: readonly [A, B] | null): readonly [A, B] | null {
+  return pair === null ? null : Object.freeze([pair[0], pair[1]] as const);
+}
+
+/** The record classes that accept a node outcome. */
+const OUTCOME_RECORDS: readonly (abstract new (...args: never[]) => OutcomeRecord)[] = [
+  NodeSucceededRecord,
+  NodeRoutedRecord,
+  NodeExpandedRecord,
+  NodeFailedRecord,
+];
+
+/** The options of `prepareTrace`. */
+export interface PrepareTraceOptions {
+  /** The seed connections the outcome's growth installs; defaults to none. */
+  inputConnections?: readonly SeedConnection[];
+  /** The child flows the outcome's growth installs; defaults to none. */
+  childBoundaries?: readonly ChildFlowBoundary[];
+  /** The settled prune ids, earlier deferred ones and the nodes grown under them; defaults to none. */
+  retiredIds?: readonly string[];
+  /** The root END id, required for a learnable RunStarted. */
+  rootEndId?: string | null;
+  /** The root START's backward input names, required for a learnable RunStarted. */
+  rootInputNames?: readonly string[] | null;
+  /** The terminal disposition the record makes, if any. */
+  terminalSucceeded?: boolean | null;
+  /** A successful terminal's output as canonical typed log text. */
+  terminalOutputJson?: string | null;
+  /** A failed terminal's failure. */
+  terminalFailure?: Failure | null;
+  /** The type an accepted output's commit target reads it through to restore its files. */
+  writerFiles?: Type | null;
+}
+
+/**
+ * Validate capture authority and prepare a detached accepted-record delta.
+ *
+ * A learnable RunStarted creates the trace from the record's initial pool; a RunStarted that
+ * doesn't learn, and any record before one, prepares `null`. Outcomes join pending seed routes
+ * into their input route (evaluated keys keep their own routes) and install their writer, seed
+ * connections, child boundaries and terminal.
+ *
+ * @throws RangeError when the root metadata is missing, a capture has no trace, the record's
+ *   coordinates or terminal payload disagree with the trace, a resume disagrees with the
+ *   unfinished starts, an outcome lacks its capture or its accepted start, the capture's scope
+ *   differs from the node's, a route source isn't an earlier accepted producer or lacks its path,
+ *   a seed connection isn't captured or its target or a boundary endpoint already has an owner,
+ *   or a terminal disagrees with the root writer or has no causal occurrence.
+ * @throws TypeError when the node's backward isn't a function.
+ */
+export function prepareTrace(
+  trace: RetainedTrace | null,
+  envelope: RecordEnvelope,
+  node: Node | null,
+  options: PrepareTraceOptions = {},
+): TraceDelta | null {
+  const {
+    inputConnections = [],
+    childBoundaries = [],
+    retiredIds = [],
+    rootEndId = null,
+    rootInputNames = null,
+    terminalSucceeded = null,
+    terminalOutputJson = null,
+    terminalFailure = null,
+    writerFiles = null,
+  } = options;
+  const record = envelope.record;
+  if (isExactly(record, RunStartedRecord)) {
+    if (!record.learnable) return null;
+    if (typeof rootEndId !== "string" || rootInputNames === null) {
+      throw new RangeError("retained RunStarted requires verified root metadata");
+    }
+    // The record validated its pool, so each stored wire is already canonical.
+    const pool = record.initialPool;
+    const initial = new RetainedTrace(envelope.runId, pool.start_id, rootEndId, rootInputNames);
+    for (const [target, wire] of Object.entries(pool.store)) {
+      const source = target === pool.start_id ? new SourceRef(envelope.runId, 0) : null;
+      const entry = new SourceEntry(source, 0, logJson(wire));
+      initial._currentWriters.set(target, entry);
+      if (source !== null) initial._sources.set(sourceKey(source), entry);
+    }
+    initial.rootWriter = initial._currentWriters.get(rootEndId) ?? null;
+    initial.system = new Map(Object.entries(pool.system).map(([key, wire]) => [key, logJson(wire)]));
+    return new TraceDelta(null, envelope.seq, { initialized: initial });
+  }
+  const capture = (record as { forwardCapture?: ForwardCapture | null }).forwardCapture ?? null;
+  if (trace === null) {
+    if (capture !== null) throw new RangeError("forward capture requires recorded learning");
+    return null;
+  }
+  if (trace.runId !== envelope.runId || trace.nextSequence !== envelope.seq) {
+    throw new RangeError("trace disagrees with accepted record coordinates");
+  }
+  if (terminalSucceeded === null && (terminalOutputJson !== null || terminalFailure !== null)) {
+    throw new RangeError("terminal payload requires a terminal disposition");
+  }
+  if (isExactly(record, NodeStartedRecord)) {
+    return new TraceDelta(trace, envelope.seq, { started: [record.nodeId, envelope.seq] });
+  }
+  if (isExactly(record, RunResumedRecord)) {
+    if (!sameItems([...trace._started.keys()], record.retryNodeIds)) {
+      throw new RangeError("trace unfinished starts disagree with retry frontier");
+    }
+    return new TraceDelta(trace, envelope.seq, { resumed: true });
+  }
+  if (!OUTCOME_RECORDS.some((cls) => isExactly(record, cls))) return new TraceDelta(trace, envelope.seq);
+  if (!isExactly(capture, ForwardCapture)) {
+    throw new RangeError("accepted outcome requires forward capture while learning");
+  }
+  if (node === null || !trace._started.has(node.id)) throw new RangeError("trace outcome requires its accepted start");
+  if (!sameOptional(capture.scope, node.executionScope, sameExecutionScope)) {
+    throw new RangeError("forward capture scope does not match the executing node");
+  }
+  const pending = [capture];
+  while (pending.length > 0) {
+    const binding = pending.pop()!;
+    validateSources(trace, binding.route, envelope.seq);
+    pending.push(...binding.items.map(([, item]) => item));
+  }
+  const source = new SourceRef(envelope.runId, trace._started.get(node.id)!);
+  const candidates = trace._pendingConnections.get(node.id) ?? null;
+  let inputRoute = capture.route;
+  if (candidates !== null) {
+    const fields = new Map(candidates.fields);
+    inputRoute = ValueRoute.record(
+      capture.route.names.map((name, index) => {
+        const route = capture.route.children[index]!;
+        return [name, capture.evaluatedKeys.has(name) ? route : (fields.get(name) ?? route)] as const;
+      }),
+    );
+  }
+  validateSources(trace, inputRoute, envelope.seq);
+  const occurrence = new TraceOccurrence(
+    source,
+    node.id,
+    envelope.seq,
+    envelope,
+    inputRoute,
+    node.memoryScope,
+    node.modelHiddenInputs(),
+  );
+  let boundaryUpdate: readonly [number, TraceBoundary] | null = null;
+  const boundaryTarget = trace.currentBoundaries.get(node.id);
+  if (boundaryTarget !== undefined) {
+    const [index, role] = boundaryTarget;
+    const { owner, startId, endId, startSource, endSource } = trace._boundaries[index]!;
+    boundaryUpdate = [
+      index,
+      role === "startSource"
+        ? new TraceBoundary(owner, startId, endId, source, endSource)
+        : new TraceBoundary(owner, startId, endId, startSource, source),
+    ];
+  }
+  const connections = new Map<string, (readonly [string, ValueRoute])[]>();
+  const sortedConnections = [...inputConnections].sort(
+    (a, b) => compareCodeUnits(a.childStartId, b.childStartId) || compareCodeUnits(a.inputName, b.inputName),
+  );
+  for (const connection of sortedConnections) {
+    // An owner that is itself a connection target (a LOOP driver whose omitted field binds a
+    // default) forwards its joined route rather than the raw default, so lineage survives every
+    // iteration.
+    const route = selectSeedRoute(capture, connection, inputRoute);
+    if (route === null) throw new RangeError("seed connection field or item was not captured");
+    const fields = connections.get(connection.childStartId) ?? [];
+    fields.push([connection.inputName, route]);
+    connections.set(connection.childStartId, fields);
+  }
+  for (const nodeId of connections.keys()) {
+    if (trace._pendingConnections.has(nodeId)) {
+      throw new RangeError("seed connection target already has an accepted owner");
+    }
+  }
+  const boundaries = [...childBoundaries]
+    .sort((a, b) => compareCodeUnits(a.startId, b.startId) || compareCodeUnits(a.endId, b.endId))
+    .map((boundary) => new TraceBoundary(source, boundary.startId, boundary.endId));
+  if (boundaries.some((boundary) => [boundary.startId, boundary.endId].some((id) => trace.currentBoundaries.has(id)))) {
+    throw new RangeError("child boundary target already has an accepted owner");
+  }
+  if (typeof node.backward !== "function") throw new TypeError("node backward handler must be callable");
+  const handler: BackwardHandler = node.backward.bind(node);
+  const writer = isExactly(record, NodeSucceededRecord)
+    ? ([record.commitTarget, new SourceEntry(source, envelope.seq, logJson(record.value), writerFiles)] as const)
+    : null;
+  const rootWriter = writer !== null && writer[0] === trace.endId ? writer[1] : null;
+  const causalRouteSource =
+    isExactly(record, NodeRoutedRecord) && record.terminalFailure !== null && trace.causalRouteSource === null
+      ? source
+      : null;
+  let terminal: TraceTerminal | null = null;
+  if (terminalSucceeded !== null) {
+    let terminalSource: SourceRef | null;
+    if (terminalSucceeded) {
+      const acceptedWriter = rootWriter ?? trace.rootWriter;
+      // Python compares decoded typed values; canonical text is equal exactly when they are.
+      if (
+        acceptedWriter === null ||
+        terminalOutputJson === null ||
+        canonicalText(acceptedWriter.valueJson) !== canonicalText(terminalOutputJson)
+      ) {
+        throw new RangeError("terminal output disagrees with the accepted root writer");
+      }
+      terminalSource = acceptedWriter.source;
+    } else {
+      terminalSource = isExactly(record, NodeFailedRecord)
+        ? source
+        : (causalRouteSource ?? trace.causalRouteSource);
+      if (terminalSource === null) throw new RangeError("accepted failure requires an accepted causal occurrence");
+    }
+    terminal = new TraceTerminal(terminalSucceeded, terminalSource, terminalOutputJson, terminalFailure);
+  }
+  return new TraceDelta(trace, envelope.seq, {
+    occurrence,
+    handler,
+    writer,
+    pruneIds: isExactly(record, NodeExpandedRecord) ? retiredIds : [],
+    connections: [...connections].map(([nodeId, fields]) => [nodeId, new SeedRoutes(source, fields)] as const),
+    consumedConnection: candidates === null ? null : [node.id, candidates],
+    boundaries,
+    boundaryUpdate,
+    rootStartSource: node.id === trace.startId && trace.rootStartSource === null ? source : null,
+    rootWriter,
+    causalRouteSource,
+    terminal,
+  });
+}
+
+/** Canonical log text of the JSON `text`. */
+function canonicalText(text: string): string {
+  return logJson(parseJson(text, "codec"));
+}
+
+/**
+ * Require sources accepted before the consumer outcome, regardless of starts.
+ *
+ * @throws RangeError when a route source's root isn't accepted before `outcomeSeq`, or its path
+ *   is absent from the accepted value (the lookup error as `cause`).
+ */
+function validateSources(trace: RetainedTrace, route: ValueRoute, outcomeSeq: number): void {
+  const source = route.source;
+  if (source !== null) {
+    const entry = trace._sources.get(sourceKey(new SourceRef(source.runId, source.executionSeq)));
+    if (entry === undefined || entry.outcomeSeq >= outcomeSeq) {
+      throw new RangeError("route source must name an earlier accepted producer");
+    }
+    try {
+      trace.lookupSource(source);
+    } catch (error) {
+      throw new RangeError("route source path is absent from its accepted value", { cause: error });
+    }
+  }
+  for (const child of route.children) validateSources(trace, child, outcomeSeq);
 }

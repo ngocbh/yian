@@ -1205,6 +1205,98 @@ describe("tool() checking order", () => {
   });
 });
 
+describe("tool() results", () => {
+  /** Call a tool `name` with no arguments, whose `execute` returns `result`, declaring `output`. */
+  function returning(
+    output: StandardSchemaV1 | JsonObject | undefined,
+    result: unknown,
+    name = "x",
+  ): Promise<unknown> {
+    const made = tool({
+      name,
+      description: "",
+      parameters: { type: "object", properties: {} },
+      output,
+      // Each row returns what its check must see, whatever the output type says.
+      execute: () => result as never,
+    });
+    return new ToolSet({ [name]: made }).invoke(name, {});
+  }
+
+  /** Return the `ToolCheckError` `promise` rejects with, after checking the TOOL node won't retry it. */
+  async function checkFailure(promise: Promise<unknown>): Promise<Error> {
+    const error = await rejection(promise, ToolCheckError);
+    expect(isToolCheckError(error)).toBe(true);
+    return error;
+  }
+
+  const OBJECT_SCHEMA: JsonObject = {
+    type: "object",
+    properties: { filled: { type: "integer" } },
+    required: ["filled"],
+  };
+
+  test("a raw JSON Schema output checks the result's yian type", async () => {
+    const integer: JsonObject = { type: "integer" };
+
+    const fraction = await checkFailure(returning(integer, 2.5, "count"));
+    expect(fraction.message).toStartWith("tool 'count' result: ");
+    expect(fraction.cause).toBeInstanceOf(TypeCheckError);
+    const nan = await checkFailure(returning(integer, NaN, "count"));
+    expect(nan.message).toBe("tool 'count' result: NaN is not a yian value");
+    expect(nan.cause).toBeInstanceOf(TypeCheckError);
+    expect(await returning(integer, 3, "count")).toBe(3);
+    expect(await returning(integer, 2n ** 70n, "count")).toBe(2n ** 70n);
+  });
+
+  test("a zod output passes yian's open check, then its validator checks and strips", async () => {
+    const output = z.object({ filled: z.number() });
+
+    const error = await checkFailure(returning(output, { filled: "x" }, "place"));
+    expect(error.message).toBe(
+      "tool 'place' result failed its output validator: filled: Invalid input: expected number, received string",
+    );
+    expect(await returning(output, { filled: 1, extra: "x" }, "place")).toEqual({ filled: 1 });
+  });
+
+  test("an open object schema checks only that the result is an object", async () => {
+    expect(await returning(OBJECT_SCHEMA, { filled: "x" })).toEqual({ filled: "x" });
+    const list = await checkFailure(returning(OBJECT_SCHEMA, []));
+    expect(list.message).toBe("tool 'x' result: [] does not match declared type object");
+  });
+
+  test("a closed object schema and an array schema check inside, at a path", async () => {
+    const closed = await checkFailure(returning({ ...OBJECT_SCHEMA, additionalProperties: false }, { filled: "x" }));
+    expect(closed.message).toBe('tool \'x\' result at filled: "x" does not match declared type int');
+    expect(closed.cause).toBeInstanceOf(TypeCheckError);
+    const items = await checkFailure(returning({ type: "array", items: { type: "integer" } }, [1, 2.5]));
+    expect(items.message).toBe("tool 'x' result at [1]: 2.5 does not match declared type int");
+  });
+
+  test("a validator's issues on the result fail the call", async () => {
+    const error = await checkFailure(returning(z.string().regex(/^ok/), "no"));
+    expect(error.message).toStartWith("tool 'x' result failed its output validator: ");
+  });
+
+  test("the validator's output passes intake again and is what invoke returns", async () => {
+    const dated = await checkFailure(returning(z.string().transform((s) => new Date(s)), "2026-01-01"));
+    expect(dated.message).toBe("tool 'x' result: Date is not a yian value");
+    expect(dated.cause).toBeInstanceOf(TypeCheckError);
+    expect(await returning(z.string().transform((s) => s.trim()), " a ")).toBe("a");
+  });
+
+  test("an untranslatable output schema still runs intake", async () => {
+    const nan = await checkFailure(returning({}, NaN));
+    expect(nan.message).toBe("tool 'x' result: NaN is not a yian value");
+    expect(await returning({}, { a: [1, "b"] })).toEqual({ a: [1, "b"] });
+  });
+
+  test("a tool without an output returns its raw result", async () => {
+    const date = new Date(0);
+    expect(await returning(undefined, date)).toBe(date);
+  });
+});
+
 /** The `ts/` directory. */
 const ROOT = resolve(import.meta.dir, "../..");
 const BUILT = join(ROOT, "dist/src/tools/index.js");

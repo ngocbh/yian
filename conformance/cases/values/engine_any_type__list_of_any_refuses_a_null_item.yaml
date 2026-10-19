@@ -1,8 +1,13 @@
 kind: value
-# `None` is yian's word here in both implementations (see #736).
+rules: [messages]
 type: list(Any)
 value: [1, null]
 expect:
+  raises:
+    class: TypeCheckError
+    message: null does not match declared type Any
+    path: [1]
+python_expect:
   raises:
     class: TypeCheckError
     message: None does not match declared type Any

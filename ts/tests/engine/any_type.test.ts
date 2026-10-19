@@ -276,7 +276,7 @@ describe("Any values", () => {
 
   test.each<[string, unknown, string, (string | number)[]]>([
     // The message names yian's `None`, as Python's does.
-    ["null", null, "None does not match declared type Any", []],
+    ["null", null, "null does not match declared type Any", []],
     ["a Set", new Set([1n, 2n]), "<Set object> is not a JSON value", []],
     ["bytes", new Uint8Array([120]), "<Uint8Array object> is not a JSON value", []],
     ["a Date", new Date(0), "<Date object> is not a JSON value", []],

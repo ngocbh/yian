@@ -2195,7 +2195,7 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
 
   if (typ.kind === ValueKind.ANY) {
     if (value === null) {
-      throw new TypeCheckError("None does not match declared type Any", { path });
+      throw new TypeCheckError("null does not match declared type Any", { path });
     }
     const json = jsonPart(value, path, "refuse");
     return new TypedValue(isList(json) ? ValueKind.LIST_ANY : inferScalarKind(json)!, json);

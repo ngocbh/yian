@@ -23,7 +23,10 @@
  * Changed: facts and environments compare with `toStrictEqual`, which also compares classes;
  * `Members` takes an array. `declaredImpossible` and `neverValue` are exported for these tests
  * (Python's `_declared_impossible` and `_never_value`). The pinned `compose_null_narrowing__*`
- * cases sit in `narrowing_core.test.ts`'s table.
+ * cases sit in `narrowing_core.test.ts`'s table, except
+ * `compose_null_narrowing__a_null_when_is_no_on_value_even_on_a_narrowed_field`, whose error the
+ * CASE build raises: it is pinned at the end (`assemble`), for
+ * `test_a_null_when_is_no_on_value_even_on_a_narrowed_field`.
  *
  * Later (T3-20): `test_a_non_null_field_is_present_in_every_record_around_it`,
  * `test_a_nullable_field_leaves_the_records_around_it_alone` and
@@ -35,7 +38,6 @@
  * `test_a_narrowed_optional_field_fills_a_required_input`,
  * `test_a_narrowed_field_makes_its_parent_non_null`,
  * `test_an_unnarrowed_optional_field_still_cannot_fill_a_required_input`,
- * `test_a_null_when_is_no_on_value_even_on_a_narrowed_field`,
  * `test_a_null_check_on_a_field_or_its_parent_makes_a_sibling_tag_exhaustive` and
  * `test_a_field_of_an_unchecked_optional_parent_may_still_be_null`.
  */
@@ -73,6 +75,7 @@ import { readType } from "../../src/compose/helpers/types.ts";
 import { parseCondition } from "../../src/expr/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { assembled, runCase } from "./declarations.ts";
 
 const REGISTRY = readTypedefs({
   A: { kind: "Literal(a)", n: "int" },
@@ -340,4 +343,14 @@ test("a null check the routing proves null is reported", () => {
     "`x != null` can never be true here: x is None, by the case branch that routes this node",
   ]);
   expect(impossible("x == null", new Map([["x", new Members([], true)]]))).toEqual([]);
+});
+
+// ---------- harvested conformance cases ----------
+
+test("assembled: load-types/compose_null_narrowing__a_null_when_is_no_on_value_even_on_a_narrowed_field", () => {
+  // YAML `null` is no `when:` value at all; the build rejects it before any typing.
+  runCase({
+    id: "load-types/compose_null_narrowing__a_null_when_is_no_on_value_even_on_a_narrowed_field",
+    call: assembled,
+  });
 });

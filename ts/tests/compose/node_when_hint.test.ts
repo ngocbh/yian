@@ -5,12 +5,10 @@
  *
  * Changed: `test_when_on_non_case_node_suggests_a_case_node` sweeps the registered kinds but
  * `case`, through `parseNodes` where Python loads the flow;
- * `test_when_on_case_node_points_at_cases_entries` runs on a `case` stand-in carrying the case
- * kind's `whenHint`. The harvested `compose_node_when_hint__when_on_*` cases of the registered
- * kinds are pinned.
+ * `test_when_on_case_node_points_at_cases_entries` runs on the real `case` kind. The harvested
+ * `compose_node_when_hint__when_on_*` cases of the registered kinds are pinned.
  *
- * Later (T3-16): the sweep's rows and pinned cases for the kinds not registered yet, and the real
- * `case` kind's hint.
+ * Later (T3-16): the sweep's rows and pinned cases for the call, map and loop kinds.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -21,18 +19,11 @@ import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { compareCodeUnits } from "../../src/diagnostics.ts";
 import { type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "./declarations.ts";
-import { StandInCase } from "./stand_ins.ts";
 
 afterEach(() => forget());
 
 const NON_CASE_HINT = "route to it from a `case` node";
 const CASE_HINT = "goes in each entry of `cases:`";
-
-/** A `case` stand-in with the case kind's `when:` hint. */
-class HintedCase extends StandInCase {
-  static override readonly whenHint =
-    "; `when:` goes in each entry of `cases:` (`cases: [{when: ..., then: <node>}]`)";
-}
 
 /**
  * Return the message of the `LoadError` parsing flow `text`'s nodes throws, with `kinds` (default
@@ -72,14 +63,12 @@ output: \${x.output}
 
 test.each<CaseRow>([
   { id: "load-core/compose_node_when_hint__when_on_an_agent_node", call: parsedNodes },
+  { id: "load-core/compose_node_when_hint__when_on_a_case_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_code_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_human_input_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_tool_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_wait_node", call: parsedNodes },
-])(
-  "parseNodes: $id",
-  runCase,
-);
+])("parseNodes: $id", runCase);
 
 test("when on a case node points at cases entries", () => {
   const text = `id: f
@@ -100,7 +89,7 @@ nodes:
 output: \${b.output}
 `;
 
-  const message = nodesMessage(text, [HintedCase]);
+  const message = nodesMessage(text);
 
   expect(message).toContain("field 'when' is not allowed");
   expect(message).toContain(CASE_HINT);

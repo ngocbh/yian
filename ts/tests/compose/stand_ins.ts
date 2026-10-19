@@ -1,6 +1,6 @@
 /**
  * Stand-in node kinds for the Compose tests, for kinds not ported yet or rows that need a minimal
- * kind: `StandInCode` and `StandInCase` shaped like the real kinds, `standIn` for one-off classes,
+ * kind: `StandInCode` shaped like the real kind, `standIn` for one-off classes,
  * `UNREGISTERED_KIND_NAMES`, and `withKinds`, which registers classes in `KINDS` and
  * `BINDING_FIELDS` for one call.
  */
@@ -47,23 +47,6 @@ export class StandInCode extends NodeDescriptor {
   /** Build a node shell carrying this descriptor's origin and `input:` wiring. */
   override build(_ctx: BuildContext): BuildResult {
     return this._finish(new StartNode(this.id), this.sinkWiring());
-  }
-}
-
-/** A `case` stand-in taking `on`, `cases` and `else`, which it reads as `else_`. */
-export class StandInCase extends NodeDescriptor {
-  static override readonly kind = "case";
-  static override readonly allowed = this.allow("on", "cases", "else");
-  static override readonly keywordRemap: ReadonlyMap<string, string> = new Map([["else", "else_"]]);
-  readonly on: unknown;
-  readonly cases: unknown;
-  readonly else_: unknown;
-
-  constructor(fields: NodeDescriptorFields & { on?: unknown; cases?: unknown; else_?: unknown }) {
-    super(fields);
-    this.on = fields.on ?? null;
-    this.cases = fields.cases ?? null;
-    this.else_ = fields.else_ ?? null;
   }
 }
 

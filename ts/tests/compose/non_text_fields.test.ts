@@ -6,13 +6,15 @@
  * the kind list).
  *
  * Changed: a flow with no `nodes:` says "missing required top-level key 'nodes'", where Python's
- * text is pydantic's. The null and text `node_name:` rows and the null optional flow field rows
- * check the parsed value, where Python loads the flow. `test_text_code_and_tool_id_still_load`
- * assembles the root flow with `assembleText`, where Python loads it.
+ * text is pydantic's. The null and text `node_name:` rows, the null optional flow field rows and
+ * the null and text `on:` rows check the parsed value, where Python loads the flow.
+ * `test_text_code_and_tool_id_still_load` assembles the root flow with `assembleText`, where
+ * Python loads it.
  *
  * The `llm_config` rows (`test_non_text_llm_config_field_is_a_load_error`,
  * `test_nested_llm_config_text_field`, `test_other_llm_config_errors_are_unchanged`) load the node
- * site with `assembleText`, as the loader assembles the root flow.
+ * site with `assembleText`, as the loader assembles the root flow. So do the searched-when and
+ * on-when rows of `test_already_located_fields_are_unchanged`, whose errors the CASE build raises.
  *
  * The harvested `load-core/compose_non_text_fields__*` cases are pinned at the end of each block,
  * by the call that raises their error; the inline-body ones are Later (T3-17).
@@ -20,10 +22,11 @@
  * Dropped: the date rows (TS reads an unquoted date as text) and
  * `test_not_text_detail_reads_the_first_string_error` (`not_text_detail` reads a pydantic error).
  *
- * Later (T3-16): the `call:`, `on:` and loop/case rows (`test_non_text_call_is_a_load_error`,
- * `test_null_call_is_empty`, `test_text_call_still_loads`, `test_non_text_case_on_is_a_load_error`,
- * `test_null_case_on_is_absent`, `test_text_case_on_still_loads`, and the while, until,
- * searched-when, on-when, then and else rows of `test_already_located_fields_are_unchanged`).
+ * Later (T3-16): the `call:` and loop rows (`test_non_text_call_is_a_load_error`,
+ * `test_null_call_is_empty`, `test_text_call_still_loads`), and the while and until rows of
+ * `test_already_located_fields_are_unchanged`. Later (T3-20): its then and else rows.
+ * Later (T3-18, T3-22): the unresolved-reference error of `test_null_case_on_is_absent`. Later
+ * (T3-22): the loading of `test_text_case_on_still_loads`.
  * Later (T3-17): the inline-body rows of `test_code_in_def_compact_merge_and_inline_body` and
  * `test_non_text_kind_in_a_def_and_inline_body`, and the `adaptive_questions.llm_config` site of
  * the `llm_config` rows. Later (T3-22): their defs, compact and merge rows, the flow and def sites
@@ -36,6 +39,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { notTextError } from "../../src/compose/nodes/base.ts";
+import type { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { parseFile } from "../../src/compose/parse/file.ts";
 import { forget } from "../../src/defaults.ts";
 import {
@@ -173,6 +177,35 @@ nodes:
 output: \${a.output}
 `;
 }
+
+/** A flow whose CASE node `a` has `on: <v>`, routing to CODE nodes `b` and `c`. */
+function caseOn(v: string): string {
+  return `id: f
+name: f
+input:
+  proj: !str
+nodes:
+  a:
+    kind: case
+    on: ${v}
+    cases:
+      - when: x
+        then: b
+    else: c
+  b:
+    kind: code
+    output: str
+    code: "return 'b'"
+  c:
+    kind: code
+    output: str
+    code: "return 'c'"
+output: \${b.output | c.output}
+`;
+}
+
+/** `caseOn`'s flow without `on:`: a searched CASE whose case reads `when: x`. */
+const SEARCHED_CASE = caseOn("null").replace("    on: null\n", "");
 
 const FLOW = `id: f
 name: f
@@ -351,6 +384,27 @@ describe("parseNodes", () => {
     expect(loadError(() => nodesOf(kindFlow(value), UNREGISTERED_KINDS)).message).toContain(fragment);
   });
 
+  test.each(NON_TEXT)("non-text case on is a load error: %s", (value, phrase) => {
+    const text = caseOn(value);
+
+    const error = loadError(() => nodesOf(text, []));
+
+    expect(error.message).toContain(
+      `node 'a' (kind=case): \`on:\` must be text, but YAML read it as ${phrase}; ` +
+        "write a reference such as `on: ${input.x}`",
+    );
+    expect(startLine(error)).toBe(lineOf(text, "on: "));
+  });
+
+  test("null case on is absent", () => {
+    // `on: null` is the searched form.
+    expect((nodesOf(caseOn("null"), []).get("a") as CaseDescriptor).on).toBeNull();
+  });
+
+  test("text case on still parses", () => {
+    expect((nodesOf(caseOn("${input.proj}"), []).get("a") as CaseDescriptor).on).toBe("${input.proj}");
+  });
+
   test("a node's asserts must be a list of strings, located", () => {
     const text = FLOW.replace("    output: str\n", '    output: str\n    asserts: ["true", 5]\n');
 
@@ -414,11 +468,37 @@ describe("parseNodes", () => {
 
   test.each([
     "load-core/compose_non_text_fields__node_asserts_holding_a_number",
+    "load-core/compose_non_text_fields__non_text_case_on",
     "load-core/compose_non_text_fields__non_text_code",
     "load-core/compose_non_text_fields__non_text_node_name",
     "load-core/compose_non_text_fields__non_text_tool_id",
     "load-core/compose_non_text_fields__null_tool_id",
   ])("case %s", (id) => runCase({ id, call: parsedNodes }));
+});
+
+describe("the CASE build", () => {
+  test("a searched-when error is located as before", () => {
+    const text = SEARCHED_CASE.replace("when: x", "when: 5");
+
+    const error = loadError(() => assembleText(text));
+
+    expect(error.message).toContain("each searched case needs a string `when:` expression");
+    expect(startLine(error)).toBe(lineOf(text, "when: 5"));
+  });
+
+  test("an on-when error is located as before", () => {
+    const text = caseOn("${input.proj}").replace("when: x", "when: [a]");
+
+    const error = loadError(() => assembleText(text));
+
+    expect(error.message).toContain("takes text, a number, or a bool");
+    expect(startLine(error)).toBe(lineOf(text, "when: [a]"));
+  });
+
+  test.each([
+    "load-core/compose_non_text_fields__list_on_when",
+    "load-core/compose_non_text_fields__non_text_searched_when",
+  ])("case %s", (id) => runCase({ id, call: assembled }));
 });
 
 describe("llm_config", () => {

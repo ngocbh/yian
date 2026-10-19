@@ -193,7 +193,8 @@ Changed (TS yian): that load check also refuses text or a record key holding a l
 lone surrogate is not a yian value`, at the value. It refuses an AGENT's `prompt:` and
 `system_prompt:` text holding one too, at the field (`node 'a' field 'prompt': ...`), and a
 HUMAN_INPUT's `prompt:`, `adaptive_questions.prompt:` and literal `questions:` text, the last at
-the text (`node 'ask' field 'questions' at [0].question: ...`). Python yian loads such a value.
+the text (`node 'ask' field 'questions' at [0].question: ...`), and a CASE's `on:` and `when:`
+text, at the field (`node 'g' field 'cases[1].when': ...`). Python yian loads such a value.
 
 A type nests at most 100 levels by default (`YIAN_MAX_TYPE_NESTING`). In type text
 every constructor is a level, `Optional(` and `Union(` included, so `list(Optional(int))`

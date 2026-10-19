@@ -4,19 +4,21 @@
  * kinds of `ALL_KIND_NAMES`, and the agreement row also runs on the nine stand-ins registered
  * with `withKinds`.
  *
- * Ported: `test_kinds_maps_string_to_descriptor_class`.
+ * Ported: `test_kinds_maps_string_to_descriptor_class`, and the `case` kind's entries in both
+ * tables.
  *
  * TS-only: the `code`, `human_input` and `wait` rows; `withKinds` restores the tables after its
  * function returns or throws.
  *
  * Dropped: `test_retired_kindspec_is_not_public` (a Python import).
  *
- * Later (T3-16): `test_all_authored_kinds_registered`.
+ * Later (T3-16, the call, map and loop kinds): `test_all_authored_kinds_registered`.
  */
 
 import { expect, test } from "bun:test";
 
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
+import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import { BINDING_FIELDS, KINDS, REMOVED_KINDS } from "../../src/compose/nodes/index.ts";
@@ -45,7 +47,12 @@ test("KINDS maps the kind text to its descriptor class", () => {
   expect(KINDS.get("tool")).toBe(ToolDescriptor);
   expect(KINDS.get("human_input")).toBe(HumanInputDescriptor);
   expect(KINDS.get("wait")).toBe(WaitDescriptor);
+  expect(KINDS.get("case")).toBe(CaseDescriptor);
   for (const [kind, cls] of KINDS) expect(cls.kind).toBe(kind);
+});
+
+test("a case carries no binding fields", () => {
+  expect(BINDING_FIELDS.get("case")).toEqual([]);
 });
 
 test("removed kinds are not registered", () => {

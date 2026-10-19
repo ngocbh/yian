@@ -26,7 +26,8 @@
  * `test_output_contract_resolution_validates_embedded_reference_contracts`,
  * `test_output_contract_resolution_rebases_nested_origins`,
  * `test_output_contract_projection_propagates_optional_field_path` and
- * `test_output_contract_resolution_projects_proven_partial_record_fields`.
+ * `test_output_contract_resolution_projects_proven_partial_record_fields`; and the CASE edge row
+ * `test_case_edge_inference_reads_wrapped_lowered_wiring`.
  *
  * TS-only: the `compose/helpers/output_contracts.ts` rows Python covers only through `load_flow`:
  * `literalType` (an int, a float, ±Infinity, text, empty text, a bool, null, a record, a value
@@ -49,6 +50,8 @@
  *   list, and a forged origin is made with `Object.create(OriginRef.prototype)`, its key error a
  *   `RangeError`. The messages read `node origin_context ...`.
  * - The bad-splice row also checks the adjacency index is unchanged.
+ * - The CASE edge row builds an `on:` `CaseDescriptor` whose `onOrigin` wraps the `__on` wiring
+ *   in a `Binding`, where Python calls `_data_edges`, which stays module-private.
  * - Binding, Assertion and FlowOutput are frozen, so `object.__setattr__(carrier, ...)` is a forged
  *   carrier (`Object.assign(Object.create(prototype), carrier, {futureSemanticField: true})`); the
  *   raw-output row sets a forged `FlowOutput` whose binding is a string. Python's `ValueError` is a
@@ -63,9 +66,8 @@
  * type-check and composite-builder rows (`test_call_type_*`, `test_loop_type_check_*` and
  * `test_composite_builders_preserve_or_deliberately_wrap_child_contract`); inline binding type
  * inference (`test_inline_binding_type_inference_reads_one_carrier_layer`); and edge inference
- * (`test_data_edge_inference_is_identical_for_raw_and_wrapped_sources`,
- * `test_producer_scan_unwraps_exactly_one_carrier_layer` and
- * `test_case_edge_inference_reads_wrapped_lowered_wiring`).
+ * (`test_data_edge_inference_is_identical_for_raw_and_wrapped_sources` and
+ * `test_producer_scan_unwraps_exactly_one_carrier_layer`).
  */
 
 import { expect, test } from "bun:test";
@@ -87,6 +89,8 @@ import {
   resolveOutputBindingContract,
   templateContract,
 } from "../../src/compose/helpers/output_contracts.ts";
+import { BuildContext } from "../../src/compose/nodes/base.ts";
+import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { parseExpr } from "../../src/expr/index.ts";
 import { Token, Tree } from "../../src/expr/grammar.ts";
@@ -942,4 +946,22 @@ test("projectOutputContract rejects a non-contract", () => {
     TypeError,
     "output contract must be an exact ValueContract or PartialRecordContract, got Type",
   );
+});
+
+test("CASE edge inference reads wrapped lowered wiring", () => {
+  // CASE-owned data dependencies can't disappear behind a carrier.
+  const desc = new CaseDescriptor({
+    id: "gate",
+    on: "${producer.output}",
+    onOrigin: origin("case-on"),
+    cases: [{ when: "x", then: "a" }],
+  });
+
+  const result = desc.build(new BuildContext({ registry: new Map() }));
+
+  expect(result.wiring.get("__on")).toStrictEqual(new Binding("${producer.output}", { origin: origin("case-on") }));
+  const data = result.edges.filter((edge) => edge.sourceHandle === null);
+  expect(data.map((edge) => [edge.from, edge.to, edge.inputGroup, edge.optional])).toEqual([
+    ["producer", "gate", "__on", false],
+  ]);
 });

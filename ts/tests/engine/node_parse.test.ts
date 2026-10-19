@@ -5,15 +5,16 @@
  *
  * TS-only: `inf` is an expression keyword, so it is a rejected node id too.
  *
- * Changed: `test_agent_knobs_parse`, `test_code_parses`, `test_tool_parses` and
- * `test_seed_11_anchored_nodes_parse` read seeds 14, 01, 08 and 11 through the conformance cases
- * `load-agent/seed_14_agent_tools`, `load-agent/seed_01_structured_agent`,
- * `load-leaves/seed_08_tool_news` and `load-core/seed_11_reuse_anchors`; seed 01's CODE reference
- * is the TS form (`./fixtures/seeds.ts:one_line_summary`).
+ * Changed: `test_agent_knobs_parse`, `test_code_parses`, `test_tool_parses`,
+ * `test_seed_11_anchored_nodes_parse`, `test_case_searched_parses` and `test_case_on_parses` read
+ * seeds 14, 01, 08, 11, 02 and 06 through the conformance cases `load-agent/seed_14_agent_tools`,
+ * `load-agent/seed_01_structured_agent`, `load-leaves/seed_08_tool_news`,
+ * `load-core/seed_11_reuse_anchors`, `load-case/seed_02_case` and `load-case/seed_06_case_on`;
+ * seed 01's CODE reference is the TS form (`./fixtures/seeds.ts:one_line_summary`).
+ * `test_case_carries_no_inputs` also pins that a CASE has no authored local, so no `inf` name.
  *
- * Later (T3-16): `test_case_searched_parses`, `test_case_on_parses`,
- * `test_case_carries_no_inputs`, `test_call_ref_form_parses`, `test_node_asserts_rejected_on_case`,
- * `test_call_map_form_parses`, `test_map_without_over_is_loud`, `test_over_on_kind_call_is_loud`.
+ * Later (T3-16): `test_call_ref_form_parses`, `test_call_map_form_parses`,
+ * `test_map_without_over_is_loud`, `test_over_on_kind_call_is_loud`.
  * Later (T3-17): `test_hyphenated_node_in_inline_body_rejected`.
  * Later (T3-22): `test_hyphenated_single_node_def_rejected_but_multi_node_def_name_loads`.
  *
@@ -29,6 +30,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
+import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
@@ -226,6 +228,53 @@ describe("tool", () => {
   });
 });
 
+describe("case", () => {
+  test("case searched parses", () => {
+    // seed 02 gate: the searched form (no on:)
+    const { text, label } = caseText("load-case/seed_02_case");
+    const node = nodesOf(text, [], label).get("gate") as CaseDescriptor;
+
+    expect(node).toBeInstanceOf(CaseDescriptor);
+    expect(node.on).toBeNull();
+    expect(node.cases).toEqual([{ when: "score.output >= 0.5", then: "positive" }]);
+    expect(node.else_).toBe("cautious");
+  });
+
+  test("case on parses", () => {
+    // seed 06 route: the on: form
+    const { text, label } = caseText("load-case/seed_06_case_on");
+    const node = nodesOf(text, [], label).get("route") as CaseDescriptor;
+
+    expect(node).toBeInstanceOf(CaseDescriptor);
+    expect(node.on).toBe("${classify.output}");
+    expect(node.cases).toEqual([
+      { when: "pro", then: "pro_note" },
+      { when: "con", then: "con_note" },
+      { when: "mixed", then: "choppy_note" },
+    ]);
+    expect(node.else_).toBe("choppy_note");
+  });
+
+  test("case carries no inputs", () => {
+    // A CASE's locals are generated, so it has no `input:` name (and no `inf` local) to author.
+    const text = `
+gate:
+  kind: case
+  input:
+    x: \${score.output}
+  cases:
+    - when: "score.output >= 0.5"
+      then: a
+  else: b
+`;
+
+    expect(loadError(() => nodes(text)).message).toBe(
+      "node 'gate' (kind=case): field 'inputs' is not allowed " +
+        "(allowed: cases, depends_on, else, env, kind, node_name, on, output, runs_after)",
+    );
+  });
+});
+
 describe("node-level asserts: surface", () => {
   test("node asserts parse on code", () => {
     const text = `
@@ -248,6 +297,23 @@ x:
     const error = loadError(() => nodes(text));
 
     expect(error.message).toBe("node 'x' (kind=code): `asserts:` must be a list of strings");
+  });
+
+  test("node asserts rejected on case", () => {
+    const text = `
+gate:
+  kind: case
+  cases:
+    - when: "s.output > 0"
+      then: a
+  asserts:
+    - "output >= 0"
+`;
+
+    expect(loadError(() => nodes(text)).message).toBe(
+      "node 'gate' (kind=case): field 'asserts' is not allowed " +
+        "(allowed: cases, depends_on, else, env, kind, node_name, on, output, runs_after)",
+    );
   });
 
   test("legacy ref kind is unknown", () => {

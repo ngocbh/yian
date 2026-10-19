@@ -3,8 +3,6 @@
  * the built node: a port of `tests/compose/test_field_ranges_guard.py`.
  *
  * Adapted: row 3 drops its equality half (TS has no dataclass `==`).
- *
- * Later (T3-16): `test_case_generated_input_range_stays_in_build_result`.
  */
 
 import { expect, test } from "bun:test";
@@ -47,6 +45,27 @@ test("building moves the descriptor's ranges to the build result only", () => {
   expect(result.fieldRanges).not.toBe(descriptor.fieldRanges);
   expect(result.fieldRanges.get(siteKey("input", "topic"))!.startLine).toBe(10);
   expect("range" in result.node).toBe(false);
+  expect("fieldRanges" in result.node).toBe(false);
+});
+
+test("a CASE's generated input range stays in the build result", () => {
+  // The CASE build adds its generated inputs' ranges to the same transient carrier.
+  const text = `
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: missing.output > 0
+        then: done
+    else: done
+`;
+  const descriptor = parseNodes(SourceDocument.parse(text).root.child("nodes")).get("gate")!;
+
+  const result = descriptor.build(CTX);
+
+  // The whole `when:` value `missing.output > 0`.
+  const range = result.fieldRanges.get(siteKey("input", "__r0"))!;
+  expect([range.startLine, range.startCol, range.endLine, range.endCol]).toEqual([6, 15, 6, 33]);
   expect("fieldRanges" in result.node).toBe(false);
 });
 

@@ -4,8 +4,8 @@
  * converting only its file and object representation, and fails with `binding.type`; the
  * receiving parameter's own contract still runs afterwards.
  *
- * Later: `test_binding_type_failure_keeps_the_route_without_usable_inputs` lands with
- * `nodes/base.ts` and the runtime's `evalNode`; the three run tests
+ * Later: `test_binding_type_failure_keeps_the_route_without_usable_inputs` waits for the
+ * runtime's `evalNode`; the three run tests
  * (`test_run_fails_the_consumer_with_binding_type`, `test_map_run_fails_an_item_with_binding_type`,
  * `test_run_fails_a_typed_flow_output_with_binding_type`) land with compose and the runner.
  */

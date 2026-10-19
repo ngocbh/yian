@@ -9,7 +9,11 @@
  * `test_type_to_schema.py::test_large_numeric_schema_bounds_match_resolved_type` (its schema
  * half comes with `typeToSchema`).
  *
- * Later: `test_bounded_type_defaults_preserve_compatible_integer_payloads` (with the loader).
+ * Also here: the `applyDefaults` half of
+ * `test_bounded_type_defaults_preserve_compatible_integer_payloads`, with a hand-built `Parameter`.
+ *
+ * Later: the `LoadError` half of `test_bounded_type_defaults_preserve_compatible_integer_payloads`
+ * (with the loader).
  *
  * Not ported: `test_type_for_preserves_its_public_keyword_name` (TypeScript has no keyword
  * arguments) and `test_record_stores_a_tuple_field_as_a_list` (no tuples in TS);
@@ -20,6 +24,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { compareCodeUnits, reprText } from "../../src/diagnostics.ts";
+import { applyDefaults } from "../../src/nodes/binding.ts";
+import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import * as typesys from "../../src/typesys/index.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import {
@@ -1310,6 +1316,20 @@ describe("bounded numeric values", () => {
       const scores = pool.get("scores") as ValueRecord[];
       expect(scores).toEqual([{ value: 1n }]);
       expect(typeof scores[0]!.value).toBe("bigint");
+    },
+  );
+
+  test(
+    "a bounded default keeps a compatible int " +
+      "(test_bounded_type_defaults_preserve_compatible_integer_payloads)",
+    () => {
+      const contract = new ValueContract(typeFor("float(0..1)", EMPTY));
+      const params = [new Parameter("score", { contract, hasDefault: true, default: 1n })];
+
+      const resolved = applyDefaults(params, {});
+
+      expect(resolved).toEqual({ score: 1n });
+      expect(typeof resolved.score).toBe("bigint");
     },
   );
 });

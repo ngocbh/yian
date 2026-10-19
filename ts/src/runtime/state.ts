@@ -16,13 +16,13 @@
 import { CompiledFlow, type Edge, type Flow } from "../compile/model.ts";
 import { BUILTIN, type Defaults, fromRecorded } from "../defaults.ts";
 import { Failure, reprText } from "../diagnostics.ts";
-import { NodeStarted, RunStarted, type RunEvent, type RunFailed, type RunSucceeded } from "../events.ts";
+import { NodeStarted, RunResumed, RunStarted, type RunEvent, type RunFailed, type RunSucceeded } from "../events.ts";
 import type { MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../memory/index.ts";
 import type { Grow, Node } from "../nodes/base.ts";
-import { type Binding, isExactly, type OutputContract } from "../nodes/contracts.ts";
-import type { JsonObject, JsonValue } from "../typesys/json.ts";
+import { type Binding, isExactly, type OutputContract, sameItems } from "../nodes/contracts.ts";
+import { type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
-import { isRecord, type Type, writeAsText } from "../typesys/values.ts";
+import { isRecord, rejectDeepNesting, type Type, writeAsText } from "../typesys/values.ts";
 import { NodeState } from "./common.ts";
 import { RuntimeBackwardState } from "./learning.ts";
 import {
@@ -41,12 +41,16 @@ import {
   NodeFailedRecord,
   NodeRoutedRecord,
   NodeStartedRecord,
+  NodeStepRecord,
   NodeSucceededRecord,
   type OutcomeCarriers,
   RecordEnvelope,
   type RunLog,
   type RunRecord,
+  RunResumedRecord,
   RunStartedRecord,
+  type RunStopReason,
+  RunStoppedRecord,
   SCHEMA_VERSION,
 } from "./log.ts";
 import { type PrepareTraceOptions, prepareTrace, RetainedTrace, TraceDelta } from "./trace.ts";
@@ -537,6 +541,69 @@ export function prepareNodeStarted(state: RunState, nodeId: string): PreparedTra
   return prepareRecord(state, new NodeStartedRecord(nodeId));
 }
 
+/**
+ * Prepare appending one step an in-flight node recorded while it runs.
+ *
+ * @param state An initialized nonterminal state in which `nodeId` is in flight.
+ * @param nodeId The exact id of the in-flight node recording the step.
+ * @param step A JSON object nested no deeper than the value nesting limit; only the node gives
+ *   it meaning.
+ * @returns The canonical `NodeStepRecord` and a detached append-before-apply plan, with no
+ *   observers.
+ * @throws TypeError when `state`, `nodeId` or `step` has the wrong type.
+ * @throws RangeError when the state is uninitialized or terminal, or `nodeId` isn't in flight.
+ * @throws TypeCheckError when `step` nests too deep or isn't a JSON value.
+ */
+export function prepareNodeStep(state: RunState, nodeId: string, step: unknown): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeStep expects a RunState");
+  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  if (!isRecord(step)) throw new TypeError("node step must be a JSON object");
+  // Live steps only, like live outputs: replay folds recorded steps without the process limit,
+  // so a log stays readable under a different limit.
+  rejectDeepNesting(step, "node step");
+  return prepareRecord(state, new NodeStepRecord(nodeId, step));
+}
+
+/**
+ * Prepare a recovery segment from the state's ordered unfinished starts.
+ *
+ * The retry list comes only from the insertion-ordered `state.inFlight`; the caller chooses only
+ * the worker count of the new segment.
+ *
+ * @param state An initialized nonterminal state rebuilt through a complete log prefix.
+ * @param options.numWorkers The exact non-negative worker count; zero selects serial execution.
+ * @returns The canonical `RunResumedRecord`, whose retries keep dispatch order.
+ * @throws TypeError when `state` has the wrong type or the worker count isn't a safe integer.
+ * @throws RangeError when the worker count is negative, or the state is uninitialized or terminal.
+ */
+export function prepareRunResumed(state: RunState, options: { numWorkers: number }): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareRunResumed expects a RunState");
+  const { numWorkers } = options;
+  if (!Number.isSafeInteger(numWorkers)) throw new TypeError("num_workers must be a non-negative integer");
+  if (numWorkers < 0) throw new RangeError("num_workers must be a non-negative integer");
+  requireInitializedNonterminal(state);
+  return prepareRecord(state, new RunResumedRecord([...state.inFlight], numWorkers));
+}
+
+/**
+ * Prepare recording that the host stopped the run, naming the in-flight nodes in dispatch order.
+ *
+ * The record isn't terminal and changes nothing but the sequence: steps may still follow it, and
+ * a later `RunResumed` retries the nodes it names.
+ *
+ * @param state An initialized nonterminal state.
+ * @param reason Why the run stopped.
+ * @param message The reason's text, such as the callback's error message.
+ * @returns The canonical `RunStoppedRecord` and its plan, with no observers.
+ * @throws TypeError when `state` has the wrong type or `reason` or `message` isn't a string.
+ * @throws RangeError when the state is uninitialized or terminal, or `reason` is unknown.
+ */
+export function prepareRunStopped(state: RunState, reason: RunStopReason, message: string): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareRunStopped expects a RunState");
+  requireInitializedNonterminal(state);
+  return prepareRecord(state, new RunStoppedRecord(reason, message, [...state.inFlight]));
+}
+
 /** The post-terminal records `prepareRecord` hands to the backward reducer. */
 const BACKWARD_RECORDS = [
   BackwardStartedRecord,
@@ -582,6 +649,12 @@ export function prepareRecord(
   }
   if (isExactly(record, NodeStartedRecord)) {
     validateNodeStarted(state, record);
+  } else if (isExactly(record, RunResumedRecord)) {
+    validateRunResumed(state, record);
+  } else if (isExactly(record, NodeStepRecord)) {
+    validateNodeStep(state, record);
+  } else if (isExactly(record, RunStoppedRecord)) {
+    validateRunStopped(state, record);
   } else {
     const name = (record as { constructor?: { name?: unknown } } | null)?.constructor?.name;
     throw new TypeError(`unsupported run record for state preparation: ${String(name)}`);
@@ -599,6 +672,20 @@ export function prepareRecord(
     validateNodeStarted(state, canonical);
     delta = { kind: "started", nodeId: canonical.nodeId };
     observers = [new NodeStarted({ nodeId: canonical.nodeId })];
+  } else if (isExactly(canonical, RunResumedRecord)) {
+    validateRunResumed(state, canonical);
+    delta = { kind: "resumed", retryNodeIds: canonical.retryNodeIds, numWorkers: canonical.numWorkers };
+    observers = [new RunResumed()];
+  } else if (isExactly(canonical, NodeStepRecord)) {
+    validateNodeStep(state, canonical);
+    // The decoded copy keeps the applied step apart from the returned record.
+    delta = { kind: "step", nodeId: canonical.nodeId, step: canonicalSeed(canonical.step)[1] as JsonObject };
+    // A step is node-owned detail; no observer event announces it.
+    observers = [];
+  } else if (isExactly(canonical, RunStoppedRecord)) {
+    validateRunStopped(state, canonical);
+    delta = { kind: "stopped", nodeIds: canonical.nodeIds };
+    observers = [];
   } else {
     // An exhaustive codec invariant.
     throw new TypeError("frontier envelope decoded to a different record kind");
@@ -776,7 +863,14 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
   const plan = prepared._plan;
   if (plan.kind !== "frontier") throw new TypeError("frontier commit requires a frontier plan");
   const record = prepared.record;
-  if (!isExactly(record, NodeStartedRecord)) {
+  if (
+    !(
+      isExactly(record, NodeStartedRecord) ||
+      isExactly(record, RunResumedRecord) ||
+      isExactly(record, NodeStepRecord) ||
+      isExactly(record, RunStoppedRecord)
+    )
+  ) {
     throw new TypeError("frontier plan requires a dispatch, resume, step or stop record");
   }
   requirePreparedOrigin(state, plan);
@@ -788,6 +882,25 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
   if (isExactly(record, NodeStartedRecord) && delta.kind === "started") {
     if (delta.nodeId !== record.nodeId) throw new RangeError("frontier start delta disagrees with its record");
     observers = [new NodeStarted({ nodeId: delta.nodeId })];
+  } else if (isExactly(record, RunResumedRecord) && delta.kind === "resumed") {
+    if (
+      !sameItems(delta.retryNodeIds, record.retryNodeIds) ||
+      !Number.isSafeInteger(delta.numWorkers) ||
+      delta.numWorkers !== record.numWorkers
+    ) {
+      throw new RangeError("frontier resume delta disagrees with its record");
+    }
+    observers = [new RunResumed()];
+  } else if (isExactly(record, NodeStepRecord) && delta.kind === "step") {
+    if (delta.nodeId !== record.nodeId || logJson(delta.step) !== logJson(record.step)) {
+      throw new RangeError("frontier step delta disagrees with its record");
+    }
+    observers = [];
+  } else if (isExactly(record, RunStoppedRecord) && delta.kind === "stopped") {
+    if (!sameItems(delta.nodeIds, record.nodeIds)) {
+      throw new RangeError("frontier stop delta disagrees with its record");
+    }
+    observers = [];
   } else {
     throw new TypeError("frontier record and prevalidated delta disagree");
   }
@@ -799,6 +912,24 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       state.inFlight.add(delta.nodeId);
       state.acceptedStarts.set(delta.nodeId, prepared.expectedSequence);
       state.nodeStarts.set(delta.nodeId, (state.nodeStarts.get(delta.nodeId) ?? 0) + 1);
+      break;
+    case "resumed":
+      // Steps and start counts outlive the segment: a retried node reads them back. One `unshift`
+      // per id, last first, puts the retries ahead in order without spreading a wide list.
+      for (let index = delta.retryNodeIds.length - 1; index >= 0; index--) {
+        state.ready.unshift(delta.retryNodeIds[index]!);
+      }
+      state.inFlight.clear();
+      state.acceptedStarts.clear();
+      state.numWorkers = delta.numWorkers;
+      break;
+    case "step":
+      state.nodeSteps.set(
+        delta.nodeId,
+        Object.freeze([...(state.nodeSteps.get(delta.nodeId) ?? []), delta.step]),
+      );
+      break;
+    case "stopped":
       break;
   }
   state.nextSequence = prepared.expectedSequence + 1;
@@ -870,6 +1001,18 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
       delta.resumed !== false
     ) {
       throw new RangeError("frontier trace start disagrees with its canonical record");
+    }
+  } else if (isExactly(record, RunResumedRecord)) {
+    if (delta.started !== null || delta.resumed !== true) {
+      throw new RangeError("frontier trace resume disagrees with its canonical record");
+    }
+  } else if (isExactly(record, NodeStepRecord)) {
+    if (delta.started !== null || delta.resumed !== false) {
+      throw new RangeError("frontier trace step must only advance the accepted sequence");
+    }
+  } else if (isExactly(record, RunStoppedRecord)) {
+    if (delta.started !== null || delta.resumed !== false) {
+      throw new RangeError("frontier trace stop must only advance the accepted sequence");
     }
   } else {
     throw new RangeError("frontier trace requires a dispatch, resume, step or stop record");
@@ -1094,6 +1237,73 @@ function validateNodeStarted(state: RunState, record: NodeStartedRecord): void {
     throw new RangeError(`NodeStarted node ${reprText(nodeId)} must have UNKNOWN disposition`);
   }
   if (state.inFlight.has(nodeId)) throw new RangeError(`NodeStarted node ${reprText(nodeId)} is already in-flight`);
+}
+
+/** Require a resume record to name the exact ordered unfinished frontier. */
+function validateRunResumed(state: RunState, record: RunResumedRecord): void {
+  if (!Number.isSafeInteger(record.numWorkers)) throw new TypeError("num_workers must be a non-negative integer");
+  if (record.numWorkers < 0) throw new RangeError("num_workers must be a non-negative integer");
+  const retries: unknown = record.retryNodeIds;
+  if (!Array.isArray(retries) || retries.some((nodeId) => typeof nodeId !== "string")) {
+    throw new TypeError("RunResumedRecord retry_node_ids must be an array of strings");
+  }
+  const expected = [...state.inFlight];
+  if (!sameItems(record.retryNodeIds, expected)) {
+    throw new RangeError(
+      "RunResumedRecord retry_node_ids must exactly equal ordered in-flight nodes: " +
+        `expected ${writeAsText(expected)}, found ${writeAsText([...record.retryNodeIds])}`,
+    );
+  }
+  for (const nodeId of record.retryNodeIds) {
+    if (!state.flow.nodes.has(nodeId)) {
+      throw new RangeError(`RunResumed retry node ${reprText(nodeId)} does not exist in the flow`);
+    }
+    if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
+      throw new RangeError(`RunResumed retry node ${reprText(nodeId)} must have UNKNOWN disposition`);
+    }
+  }
+}
+
+/** Require a stop record to name the exact ordered in-flight nodes. */
+function validateRunStopped(state: RunState, record: RunStoppedRecord): void {
+  const nodeIds: unknown = record.nodeIds;
+  if (!Array.isArray(nodeIds) || nodeIds.some((nodeId) => typeof nodeId !== "string")) {
+    throw new TypeError("RunStoppedRecord node_ids must be an array of strings");
+  }
+  const expected = [...state.inFlight];
+  if (!sameItems(record.nodeIds, expected)) {
+    throw new RangeError(
+      "RunStoppedRecord node_ids must exactly equal ordered in-flight nodes: " +
+        `expected ${writeAsText(expected)}, found ${writeAsText([...record.nodeIds])}`,
+    );
+  }
+  for (const nodeId of record.nodeIds) {
+    if (!state.flow.nodes.has(nodeId)) {
+      throw new RangeError(`RunStopped node ${reprText(nodeId)} does not exist in the flow`);
+    }
+    if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
+      throw new RangeError(`RunStopped node ${reprText(nodeId)} must have UNKNOWN disposition`);
+    }
+  }
+}
+
+/** Require a step record to name an existing unknown in-flight node. */
+function validateNodeStep(state: RunState, record: NodeStepRecord): void {
+  const nodeId: unknown = record.nodeId;
+  if (typeof nodeId !== "string") throw new TypeError("NodeStepRecord node_id must be a string");
+  if (!state.flow.nodes.has(nodeId)) {
+    throw new RangeError(`NodeStep node ${reprText(nodeId)} does not exist in the flow`);
+  }
+  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
+    throw new RangeError(`NodeStep node ${reprText(nodeId)} must have UNKNOWN disposition`);
+  }
+  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeStep node ${reprText(nodeId)} is not in-flight`);
+}
+
+/** Drop a settled node's start count and recorded steps. */
+function forgetNodeSteps(state: RunState, nodeId: string): void {
+  state.nodeStarts.delete(nodeId);
+  state.nodeSteps.delete(nodeId);
 }
 
 /** Whether two sets of ids hold the same ids, in any order. */

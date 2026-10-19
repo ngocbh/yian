@@ -21,6 +21,8 @@ import {
   strictJsonSchema,
 } from "./json_schema.ts";
 import { copyJson, isPlainObject, NamedTool, OutputFormat, type ToolChoice, type ToolSpec } from "./messages.ts";
+import { AnthropicMessages } from "./protocols/anthropic_messages.ts";
+import { OpenAIResponses } from "./protocols/openai_responses.ts";
 
 /**
  * How a structured call is sent: a tool the model must call, a tool it may call, the route's
@@ -67,9 +69,8 @@ export function sendsJsonSchemaAsTool(model: string): boolean {
 /**
  * Return the target `planStructured` reads off `model`.
  *
- * A `RouteModel` gives its protocol's name, its `block` (only `AnthropicMessages` exposes one)
- * and its `subscription` flag (only `OpenAIResponses` has one); any other `ChatModel` has no wire
- * protocol.
+ * A `RouteModel` gives its protocol's name, an `AnthropicMessages` block and an `OpenAIResponses`
+ * subscription flag; any other `ChatModel` has no wire protocol.
  */
 export function structuredTarget(model: ChatModel): StructuredTarget {
   if (!(model instanceof RouteModel)) {
@@ -80,9 +81,17 @@ export function structuredTarget(model: ChatModel): StructuredTarget {
     provider: model.provider,
     model: model.model,
     protocol: protocol.name,
-    block: "block" in protocol ? (protocol.block as JsonObject | null) : null,
-    subscription: "subscription" in protocol && protocol.subscription === true,
+    block: protocol instanceof AnthropicMessages ? protocol.block : null,
+    subscription: protocol instanceof OpenAIResponses && protocol.subscription,
   };
+}
+
+/** The request fields a plan sets; omitted ones are empty. */
+interface PlanFields {
+  tools?: readonly ToolSpec[];
+  toolChoice?: ToolChoice;
+  parallelToolCalls?: boolean | null;
+  outputFormat?: OutputFormat | null;
 }
 
 /** How one structured call is sent: its strategy and the request fields it sets. */
@@ -102,15 +111,7 @@ export class StructuredPlan {
   /** The request's output format, or `null`. */
   readonly outputFormat: OutputFormat | null;
 
-  constructor(options: {
-    strategy: Strategy;
-    name: string;
-    schema: JsonObject;
-    tools?: readonly ToolSpec[];
-    toolChoice?: ToolChoice;
-    parallelToolCalls?: boolean | null;
-    outputFormat?: OutputFormat | null;
-  }) {
+  constructor(options: { strategy: Strategy; name: string; schema: JsonObject } & PlanFields) {
     this.strategy = options.strategy;
     this.name = options.name;
     this.schema = copyJson(options.schema);
@@ -153,8 +154,8 @@ export function planStructured(target: StructuredTarget, schema: JsonObject): St
   if (typeof name !== "string" || name === "") {
     throw new TypeError("a structured output schema needs a title, its name");
   }
-  const plan = (strategy: Strategy, fields: Partial<ConstructorParameters<typeof StructuredPlan>[0]> = {}) =>
-    new StructuredPlan({ strategy, name, schema, ...fields });
+  const plan = (strategy: Strategy, fields: PlanFields = {}) =>
+    new StructuredPlan({ ...fields, strategy, name, schema });
   const format = (formatSchema: JsonObject, strict: boolean | null = null) =>
     new OutputFormat({ name, schema: formatSchema, strict });
   const tools = (strict: boolean | null) => [functionTool(schema, strict)];
@@ -188,13 +189,13 @@ export function planStructured(target: StructuredTarget, schema: JsonObject): St
     if (sendsJsonSchemaAsTool(target.model)) {
       return plan("forced_tool", { tools: tools(null), toolChoice: new NamedTool(name), parallelToolCalls });
     }
-    const strict = strictJsonSchema(schema);
-    return plan("json_schema", { outputFormat: format(moveAzureKeywords(strict) ?? strict, true) });
+    const strictSchema = strictJsonSchema(schema);
+    return plan("json_schema", { outputFormat: format(moveAzureKeywords(strictSchema) ?? strictSchema, true) });
   }
 
-  const tool = tools(responses && open ? false : null);
+  const strict = responses && open ? false : null;
   if (target.subscription || getCapabilities(target.model).supportsToolChoice) {
-    return plan("forced_tool", { tools: tool, toolChoice: new NamedTool(name), parallelToolCalls: false });
+    return plan("forced_tool", { tools: tools(strict), toolChoice: new NamedTool(name), parallelToolCalls: false });
   }
-  return plan("unforced_tool", { tools: tool, parallelToolCalls: false });
+  return plan("unforced_tool", { tools: tools(strict), parallelToolCalls: false });
 }

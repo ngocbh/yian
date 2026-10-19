@@ -211,7 +211,7 @@ describe("planStructured: row 1, no native structured output", () => {
     ["openai", "openai_responses"],
     ["openai", null],
     ["xai", null],
-  ] as const)("the sentinel on %s over %s is prompted", (provider, protocol) => {
+  ] as const)("the sentinel on %s over %p is prompted", (provider, protocol) => {
     const plan = planStructured(target({ provider, model: "no-structured-sentinel", protocol }), REC);
     expectSame(fields(plan), want({ strategy: "prompt" }));
   });
@@ -226,9 +226,8 @@ describe("planStructured: row 1, no native structured output", () => {
 
   test("azure with the sentinel stays native (row 10)", () => {
     const azure = target({ provider: "azure", model: "no-structured-sentinel", protocol: "openai_chat" });
-    const plan = planStructured(azure, REC);
-    expect(plan.strategy).toBe("json_schema");
-    expect(plan.outputFormat?.strict).toBe(true);
+    const format = { schema: strictJsonSchema(REC), strict: true };
+    expectSame(fields(planStructured(azure, REC)), want({ strategy: "json_schema", format }));
   });
 
   test("anthropic with the sentinel stays native (row 4)", () => {
@@ -294,9 +293,14 @@ describe("planStructured: Anthropic Messages (rows 2-5)", () => {
     expect(m["additionalProperties"]).toBe(true);
   });
 
-  test.each(["corpus:Rec", "corpus:Union"])("row 3: thinking with the closed %s sends the Anthropic output schema", (key) => {
+  test.each([
+    ["adaptive", "corpus:Rec"],
+    ["adaptive", "corpus:Union"],
+    ["enabled", "corpus:Rec"],
+    ["enabled", "corpus:Union"],
+  ])("row 3: thinking %s with the closed %s sends the Anthropic output schema", (type, key) => {
     const schema = SCHEMAS[key]!;
-    const plan = planStructured(anthropic("claude-opus-5-5", { thinking: { type: "adaptive" } }), schema);
+    const plan = planStructured(anthropic("claude-opus-5-5", { thinking: { type } }), schema);
     const name = schema["title"] as string;
     const format = { schema: anthropicOutputSchema(schema) };
     expectSame(fields(plan), want({ strategy: "json_schema", name, format }));
@@ -529,11 +533,16 @@ describe("structuredTarget", () => {
     });
   });
 
+  // Only Anthropic's block is read: each of these carries one that must come out as `null`.
   test.each([
-    ["deepseek", new OpenAIChat({ model: "deepseek-chat", provider: "deepseek" }), "openai_chat"],
-    ["ollama", new OllamaChat({ model: "llama3", provider: "ollama", block: { options: {} } }), "ollama_chat"],
-    ["google", new Gemini({ model: "gemini-2.5-pro", provider: "google", block: { generationConfig: {} } }), "gemini"],
-  ] as const)("%s over %s", (provider, protocol, name) => {
+    [
+      "deepseek",
+      "openai_chat",
+      new OpenAIChat({ model: "deepseek-chat", provider: "deepseek", block: { temperature: 0n } }),
+    ],
+    ["ollama", "ollama_chat", new OllamaChat({ model: "llama3", provider: "ollama", block: { options: {} } })],
+    ["google", "gemini", new Gemini({ model: "gemini-2.5-pro", provider: "google", block: { generationConfig: {} } })],
+  ] as const)("%s over %s: the block is not read", (provider, name, protocol) => {
     expectSame(structuredTarget(routeModel(provider, protocol)), {
       provider,
       model: protocol.model,

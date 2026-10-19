@@ -197,7 +197,8 @@ export interface McpServerSpec {
  *
  * @returns The server, not yet open.
  * @throws {TypeError} An option has the wrong type: `args` a string or holding a non-string, `env`
- *   or `headers` not a record of strings to strings, a timeout not a number.
+ *   or `headers` not a record of strings to strings, a timeout not a number, `concurrencySafe`
+ *   neither a boolean nor an array of strings.
  * @throws {RangeError} Neither or both of `command` and `url` are given, `url` is not an `http` or
  *   `https` URL with a host, an option is given for the other kind of server, a timeout is not
  *   positive and finite, or `command` or `label` is empty.
@@ -221,8 +222,8 @@ export function mcpServer(options: McpServerOptions): McpServer {
   } else {
     if (typeof url !== "string") throw new TypeError(`mcpServer url must be a string, got ${jsTypeName(url)}`);
     if (urlHost(url) === "") throw new RangeError("mcpServer url must be an http or https URL with a host");
-    // As Python's `bool(args)`: an empty args array counts as not given.
-    const argsGiven = args !== undefined && !(Array.isArray(args) && args.length === 0);
+    // As Python's `bool(args)`: an empty args array or string counts as not given.
+    const argsGiven = args !== undefined && (args as unknown) !== "" && !(Array.isArray(args) && args.length === 0);
     for (const [name, given] of [
       ["args", argsGiven],
       ["env", env !== undefined],
@@ -312,18 +313,17 @@ function checkSeconds(name: string, value: unknown): void {
 
 /** Return `value` (a frozen copy of an array), `false` when absent, or throw `TypeError`. */
 function checkConcurrencySafe(value: unknown): boolean | readonly string[] {
+  const message = "mcpServer concurrencySafe must be a boolean or an array of tool names";
   if (value === undefined) return false;
   if (typeof value === "boolean") return value;
-  if (Array.isArray(value)) {
-    const names: string[] = [];
-    for (let i = 0; i < value.length; i++) {
-      const name: unknown = value[i];
-      if (typeof name !== "string") break;
-      names.push(name);
-    }
-    if (names.length === value.length) return Object.freeze(names);
+  if (!Array.isArray(value)) throw new TypeError(message);
+  const names: string[] = [];
+  for (let i = 0; i < value.length; i++) {
+    const name: unknown = value[i];
+    if (typeof name !== "string") throw new TypeError(message);
+    names.push(name);
   }
-  throw new TypeError("mcpServer concurrencySafe must be a boolean or an array of tool names");
+  return Object.freeze(names);
 }
 
 /**

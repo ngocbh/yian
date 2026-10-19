@@ -57,6 +57,7 @@ describe("mcpServer arguments", () => {
     [{ command: "x", env: [] }, TypeError, "env"],
     [{ url: "not a url" }, RangeError, "url"],
     [{ url: "http:example.com" }, RangeError, "url"],
+    [{ url: "http://h/mcp", args: "" }, TypeError, "args"],
   ];
 
   for (const [options, error, field] of rows) {

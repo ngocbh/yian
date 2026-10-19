@@ -15,8 +15,10 @@
  * unsupported, 9 names Python yian, a boolean is unsupported, and the schema is checked first),
  * its run-id rows (empty, a lone surrogate) and its unsupported-record row; the `RunStopped`
  * rows (an unknown reason, an empty or repeated node id, a non-text message; no node ids is
- * valid); a failure without a node id and an evidence or capture of another class, refused by
- * the record's constructor.
+ * valid); a failure without a node id, an evidence or capture of another class, a bad worker
+ * count, digest, commit target, handle, spawner id, typed-value wire or envelope seq, refused by
+ * the record's constructor; `RUN_RECORD_TYPES`; carriers held by reference and failures and
+ * values held as frozen copies.
  *
  * Changed:
  * - `test_encode_validates_programmatically_constructed_envelopes`: the record's constructor
@@ -40,17 +42,21 @@
  *   array.
  *
  * Not ported: the two list rows of `test_encode_rejects_invalid_id_tuple_carriers` (a TS id
- * carrier is an array); the `inf` and `-inf` rows (a TS float may be infinite) and the tuple, model and
- * dataclass rows of the non-finite seed test; the pydantic-extras tests; the dataclass row of the
- * unordered-container test; `test_canonical_seed_rejects_keys_before_json_stringification` (JS
- * object keys are always text); `test_typed_object_output_canonicalizes_a_tuple` (TS has no
- * tuples); the recursion-depth tests (the TS codec is iterative);
- * `test_pool_codec_rejects_nonfinite_values` (`inf` is a TS float, and a NaN fails at `pool.set`).
+ * carrier is an array); the `inf` and `-inf` rows (a TS float may be infinite) and the tuple,
+ * model and dataclass rows of the non-finite seed test; the pydantic-extras tests; the dataclass
+ * row of the unordered-container test;
+ * `test_canonical_seed_rejects_keys_before_json_stringification` (JS object keys are always
+ * text); `test_typed_object_output_canonicalizes_a_tuple` (TS has no tuples); the
+ * recursion-depth tests (the TS codec is iterative); `test_pool_codec_rejects_nonfinite_values`
+ * (`inf` is a TS float, and a NaN fails at `pool.set`).
  */
 
 import { expect, test } from "bun:test";
 
 import { Failure } from "../../src/diagnostics.ts";
+import { ValueRoute } from "../../src/expr/lineage.ts";
+import { EvaluationEvidence } from "../../src/memory/contracts.ts";
+import { ForwardCapture } from "../../src/runtime/contracts.ts";
 import {
   canonicalSeed,
   canonicalTyped,
@@ -63,6 +69,7 @@ import {
   NodeStepRecord,
   NodeSucceededRecord,
   RecordEnvelope,
+  RUN_RECORD_TYPES,
   RUN_STOP_REASONS,
   RunResumedRecord,
   RunStoppedRecord,
@@ -238,36 +245,89 @@ test.each<[string, unknown, string]>([
   expect((caught as Error).message).toBe(message);
 });
 
-test("records and envelopes are frozen", () => {
-  const record = new NodeStartedRecord("work");
-  const envelope = new RecordEnvelope(SCHEMA_VERSION, "run", 0, record);
-  const failure = new Failure({ code: "node.execute", message: "boom", nodeId: "work" });
-  const assignments: [string, () => unknown][] = [
-    ["node started", () => ((record as { nodeId: string }).nodeId = "changed")],
-    ["envelope", () => ((envelope as { seq: number }).seq = 1)],
-    ["run resumed", () => (new RunResumedRecord(["a"], 1).retryNodeIds as string[]).push("b")],
-    ["run stopped", () => (new RunStoppedRecord("signal", "stop", ["a"]).nodeIds as string[]).push("b")],
-    ["node step", () => ((new NodeStepRecord("a", { n: { m: 1n } }).step["n"] as { m: unknown }).m = 2n)],
-    [
-      "node succeeded",
-      () => ((new NodeSucceededRecord("a", "a", { kind: "int", value: 1n }).value as { value: unknown }).value = 2n),
-    ],
-    ["node routed", () => ((new NodeRoutedRecord("a", "next") as { handle: string }).handle = "other")],
-    [
-      "node expanded",
-      () => {
-        const record = new NodeExpandedRecord("grow", { items: [1n] }, [], TOPOLOGY_DIGEST);
-        (record.seed as { items: unknown[] }).items.push(2n);
-      },
-    ],
-    [
-      "node failed",
-      () => ((new NodeFailedRecord(failure).failure as { message: string }).message = "changed"),
-    ],
-  ];
+const FAILURE = new Failure({ code: "node.execute", message: "boom", nodeId: "work" });
 
-  expect(envelope.kind).toBe("node_started");
-  for (const [, assign] of assignments) expect(assign).toThrow(TypeError);
+test.each<[string, () => unknown]>([
+  ["run resumed", () => ((new RunResumedRecord(["a"], 1) as { numWorkers: number }).numWorkers = 2)],
+  ["run stopped", () => ((new RunStoppedRecord("signal", "stop", []) as { reason: string }).reason = "callback")],
+  ["node started", () => ((new NodeStartedRecord("work") as { nodeId: string }).nodeId = "changed")],
+  ["node step", () => ((new NodeStepRecord("a", {}) as { nodeId: string }).nodeId = "b")],
+  [
+    "node succeeded",
+    () => {
+      const record = new NodeSucceededRecord("a", "a", { kind: "int", value: 1n });
+      (record as { commitTarget: string }).commitTarget = "b";
+    },
+  ],
+  ["node routed", () => ((new NodeRoutedRecord("a", "next") as { handle: string }).handle = "other")],
+  [
+    "node expanded",
+    () => ((new NodeExpandedRecord("grow", {}, [], TOPOLOGY_DIGEST) as { spawnerId: string }).spawnerId = "other"),
+  ],
+  ["node failed", () => ((new NodeFailedRecord(FAILURE) as { failure: unknown }).failure = null)],
+  [
+    "the envelope",
+    () => ((new RecordEnvelope(SCHEMA_VERSION, "run", 0, new NodeStartedRecord("work")) as { seq: number }).seq = 1),
+  ],
+  ["run resumed retry ids", () => (new RunResumedRecord(["a"], 1).retryNodeIds as string[]).push("b")],
+  ["run stopped node ids", () => (new RunStoppedRecord("signal", "stop", ["a"]).nodeIds as string[]).push("b")],
+  ["a nested step value", () => ((new NodeStepRecord("a", { n: { m: 1n } }).step["n"] as { m: unknown }).m = 2n)],
+  [
+    "a succeeded value",
+    () => ((new NodeSucceededRecord("a", "a", { kind: "int", value: 1n }).value as { value: unknown }).value = 2n),
+  ],
+  [
+    "a nested seed value",
+    () => {
+      const record = new NodeExpandedRecord("grow", { items: [1n] }, [], TOPOLOGY_DIGEST);
+      (record.seed as { items: unknown[] }).items.push(2n);
+    },
+  ],
+  ["prune ids", () => (new NodeExpandedRecord("grow", {}, ["a"], TOPOLOGY_DIGEST).pruneIds as string[]).push("b")],
+  ["a failure", () => ((new NodeFailedRecord(FAILURE).failure as { message: string }).message = "changed")],
+])("records and envelopes are frozen: %s", (_name, assign) => {
+  expect(assign).toThrow(TypeError);
+});
+
+test("the envelope names its record's wire kind", () => {
+  expect(new RecordEnvelope(SCHEMA_VERSION, "run", 0, new NodeStartedRecord("work")).kind).toBe("node_started");
+});
+
+test("RUN_RECORD_TYPES holds every record class", () => {
+  expect(RUN_RECORD_TYPES).toEqual([
+    RunResumedRecord,
+    RunStoppedRecord,
+    NodeStartedRecord,
+    NodeStepRecord,
+    NodeSucceededRecord,
+    NodeRoutedRecord,
+    NodeExpandedRecord,
+    NodeFailedRecord,
+  ]);
+  expect(Object.isFrozen(RUN_RECORD_TYPES)).toBe(true);
+});
+
+test("records hold their carriers by reference and frozen copies of their values", () => {
+  const evidence = new EvaluationEvidence(null, { q: "why" }, null, null);
+  const capture = new ForwardCapture(null, ValueRoute.record([]));
+  const terminal = new Failure({ code: "graph.terminal_unreachable", message: "", nodeId: "a" });
+  const wire = { kind: "object", value: { b: [1n], a: { file: { uri: "s3://x", mime: null, name: null } } } };
+
+  const succeeded = new NodeSucceededRecord("a", "a", wire as never, { evidence, forwardCapture: capture });
+  const routed = new NodeRoutedRecord("a", "next", { terminalFailure: terminal });
+  const failed = new NodeFailedRecord(FAILURE);
+  wire.value.b.push(2n);
+
+  expect(succeeded.evidence).toBe(evidence);
+  expect(succeeded.forwardCapture).toBe(capture);
+  expect(succeeded.value).toEqual({ kind: "object", value: { a: { file: wire.value.a.file }, b: [1n] } });
+  expect(Object.keys(succeeded.value.value as object)).toEqual(["a", "b"]);
+  expect(routed.terminalFailure).toEqual(terminal);
+  expect(routed.terminalFailure).not.toBe(terminal);
+  expect(Object.isFrozen(routed.terminalFailure)).toBe(true);
+  expect(failed.failure).toEqual(FAILURE);
+  expect(failed.failure).not.toBe(FAILURE);
+  expect(Object.isFrozen(failed.failure)).toBe(true);
 });
 
 test("record constructors validate programmatically constructed values", () => {
@@ -303,6 +363,59 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
     TypeError,
     "forward_capture must be a ForwardCapture or null",
   ],
+])("record constructors refuse %s", (_name, fn, cls, message) => {
+  expectError(fn, cls, message);
+});
+
+test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
+  ["negative workers", () => new RunResumedRecord([], -1), RangeError, "num_workers must be non-negative"],
+  ["fractional workers", () => new RunResumedRecord([], 1.5), TypeError, "num_workers must be an integer"],
+  ["bigint workers", () => new RunResumedRecord([], 1n as never), TypeError, "num_workers must be an integer"],
+  ["boolean workers", () => new RunResumedRecord([], true as never), TypeError, "num_workers must be an integer"],
+  [
+    "a non-text digest",
+    () => new NodeExpandedRecord("grow", {}, [], 3 as never),
+    TypeError,
+    "topology_digest must be a string",
+  ],
+  [
+    "a digest that isn't 64 lowercase hex digits",
+    () => new NodeExpandedRecord("grow", {}, [], "B".repeat(64)),
+    RangeError,
+    "topology_digest must be 64 lowercase hex digits",
+  ],
+  [
+    "an empty commit target",
+    () => new NodeSucceededRecord("a", "", { kind: "int", value: 1n }),
+    RangeError,
+    "commit_target must be non-empty",
+  ],
+  ["an empty handle", () => new NodeRoutedRecord("a", ""), RangeError, "handle must be non-empty"],
+  [
+    "an empty spawner id",
+    () => new NodeExpandedRecord("", {}, [], TOPOLOGY_DIGEST),
+    RangeError,
+    "spawner_id must be non-empty",
+  ],
+  [
+    "a bad typed-value wire",
+    () => new NodeSucceededRecord("a", "a", { kind: "int", value: "1" }),
+    RangeError,
+    'invalid int typed value: expected a bigint, got "1"',
+  ],
+  [
+    "a negative envelope seq",
+    () => new RecordEnvelope(SCHEMA_VERSION, "run", -1, new NodeStartedRecord("work")),
+    RangeError,
+    "run-record envelope seq must be a non-negative integer",
+  ],
+  [
+    "a fractional envelope seq",
+    () => new RecordEnvelope(SCHEMA_VERSION, "run", 1.5, new NodeStartedRecord("work")),
+    RangeError,
+    "run-record envelope seq must be a non-negative integer",
+  ],
+  ["a non-text stop reason", () => new RunStoppedRecord(3 as never, "stop", []), TypeError, "reason must be a string"],
 ])("record constructors refuse %s", (_name, fn, cls, message) => {
   expectError(fn, cls, message);
 });

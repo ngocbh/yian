@@ -131,6 +131,14 @@ export const RUN_STOP_REASONS = Object.freeze(["signal", "callback"] as const);
 /** One of `RUN_STOP_REASONS`. */
 export type RunStopReason = (typeof RUN_STOP_REASONS)[number];
 
+/** The optional carriers accepted with a node outcome, both frozen and held by reference. */
+export interface OutcomeCarriers {
+  /** Visible evidence accepted with the outcome; defaults to `null`. */
+  evidence?: EvaluationEvidence | null;
+  /** The binding capture accepted with the outcome; defaults to `null`. */
+  forwardCapture?: ForwardCapture | null;
+}
+
 /** Start a recovery segment with ordered unfinished work and a worker count. Frozen. */
 export class RunResumedRecord {
   /** Unfinished node ids to retry, in order; unique and non-empty. */
@@ -144,7 +152,7 @@ export class RunResumedRecord {
    * @throws TypeError when `numWorkers` isn't a safe integer.
    */
   constructor(retryNodeIds: readonly string[], numWorkers: number) {
-    this.retryNodeIds = validatedIdTuple(retryNodeIds, "retry_node_ids");
+    this.retryNodeIds = validatedIdArray(retryNodeIds, "retry_node_ids");
     this.numWorkers = validatedCount(numWorkers, "num_workers");
     Object.freeze(this);
   }
@@ -172,7 +180,7 @@ export class RunStoppedRecord {
     if (typeof message !== "string") throw new TypeError("message must be a string");
     this.reason = reason;
     this.message = message;
-    this.nodeIds = validatedIdTuple(nodeIds, "node_ids");
+    this.nodeIds = validatedIdArray(nodeIds, "node_ids");
     Object.freeze(this);
   }
 }
@@ -242,7 +250,7 @@ export class NodeSucceededRecord {
     nodeId: string,
     commitTarget: string,
     value: TypedWire,
-    options: { evidence?: EvaluationEvidence | null; forwardCapture?: ForwardCapture | null } = {},
+    options: OutcomeCarriers = {},
   ) {
     const { evidence = null, forwardCapture = null } = options;
     this.nodeId = requireNonemptyString(nodeId, "node_id");
@@ -276,11 +284,7 @@ export class NodeRoutedRecord {
   constructor(
     nodeId: string,
     handle: string,
-    options: {
-      terminalFailure?: Failure | null;
-      evidence?: EvaluationEvidence | null;
-      forwardCapture?: ForwardCapture | null;
-    } = {},
+    options: OutcomeCarriers & { terminalFailure?: Failure | null } = {},
   ) {
     const { terminalFailure = null, evidence = null, forwardCapture = null } = options;
     this.nodeId = requireNonemptyString(nodeId, "node_id");
@@ -318,17 +322,13 @@ export class NodeExpandedRecord {
     seed: unknown,
     pruneIds: readonly string[],
     topologyDigest: string,
-    options: { evidence?: EvaluationEvidence | null; forwardCapture?: ForwardCapture | null } = {},
+    options: OutcomeCarriers = {},
   ) {
     const { evidence = null, forwardCapture = null } = options;
     this.spawnerId = requireNonemptyString(spawnerId, "spawner_id");
-    this.seed = freezeParsed(canonicalSeed(seed)[0]);
-    this.pruneIds = validatedIdTuple(pruneIds, "prune_ids", true);
-    if (typeof topologyDigest !== "string") throw new TypeError("topology_digest must be a string");
-    if (!/^[0-9a-f]{64}$/.test(topologyDigest)) {
-      throw new RangeError("topology_digest must be 64 lowercase hex digits");
-    }
-    this.topologyDigest = topologyDigest;
+    this.seed = freezeParsed(canonicalCopy(jsonPart(seed, [], "mapping")));
+    this.pruneIds = validatedIdArray(pruneIds, "prune_ids", true);
+    this.topologyDigest = requireSha256(topologyDigest, "topology_digest");
     this.evidence = validatedEvidence(evidence);
     this.forwardCapture = validatedCapture(forwardCapture);
     Object.freeze(this);
@@ -350,7 +350,7 @@ export class NodeFailedRecord {
    */
   constructor(
     failure: Failure,
-    options: { evidence?: EvaluationEvidence | null; forwardCapture?: ForwardCapture | null } = {},
+    options: OutcomeCarriers = {},
   ) {
     const { evidence = null, forwardCapture = null } = options;
     this.failure = retainedFailure(failure, "NodeFailedRecord");
@@ -371,11 +371,11 @@ export type RunRecord =
   | NodeExpandedRecord
   | NodeFailedRecord;
 
+/** A run-record class. */
+type RunRecordClass = new (...args: never[]) => RunRecord;
+
 /** Each record class and its snake_case wire kind. */
-const RECORD_KINDS: ReadonlyMap<abstract new (...args: never[]) => RunRecord, string> = new Map<
-  abstract new (...args: never[]) => RunRecord,
-  string
->([
+const RECORD_KINDS: ReadonlyMap<RunRecordClass, string> = new Map<RunRecordClass, string>([
   [RunResumedRecord, "run_resumed"],
   [RunStoppedRecord, "run_stopped"],
   [NodeStartedRecord, "node_started"],
@@ -387,9 +387,7 @@ const RECORD_KINDS: ReadonlyMap<abstract new (...args: never[]) => RunRecord, st
 ]);
 
 /** Every run-record class. */
-export const RUN_RECORD_TYPES: readonly (abstract new (...args: never[]) => RunRecord)[] = Object.freeze([
-  ...RECORD_KINDS.keys(),
-]);
+export const RUN_RECORD_TYPES: readonly RunRecordClass[] = Object.freeze([...RECORD_KINDS.keys()]);
 
 /**
  * Return `value` when it is a non-empty string.
@@ -400,6 +398,18 @@ export const RUN_RECORD_TYPES: readonly (abstract new (...args: never[]) => RunR
 function requireNonemptyString(value: unknown, name: string): string {
   if (typeof value !== "string") throw new TypeError(`${name} must be a string`);
   if (!value) throw new RangeError(`${name} must be non-empty`);
+  return value;
+}
+
+/**
+ * Return `value` when it is a SHA-256 hex digest: 64 lowercase hex digits.
+ *
+ * @throws TypeError when it isn't a string.
+ * @throws RangeError when it isn't such a digest.
+ */
+function requireSha256(value: unknown, name: string): string {
+  if (typeof value !== "string") throw new TypeError(`${name} must be a string`);
+  if (!/^[0-9a-f]{64}$/.test(value)) throw new RangeError(`${name} must be 64 lowercase hex digits`);
   return value;
 }
 
@@ -458,7 +468,7 @@ function retainedFailure(failure: unknown, carrier: string): Failure {
  *
  * @throws RangeError when `value` isn't such an array.
  */
-function validatedIdTuple(value: unknown, label: string, requireSorted = false): readonly string[] {
+function validatedIdArray(value: unknown, label: string, requireSorted = false): readonly string[] {
   if (!isList(value)) throw new RangeError(`${label} must be an array of strings`);
   // Spread, so a hole of a sparse array reads as `undefined` and is refused.
   const ids = [...value];
@@ -524,7 +534,7 @@ export class RecordEnvelope {
       throw new RangeError("run-record envelope run_id must be a non-empty string");
     }
     if (!runId.isWellFormed()) throw new RangeError("Unicode surrogate is not valid canonical JSON");
-    if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 0) {
+    if (!Number.isSafeInteger(seq) || seq < 0) {
       throw new RangeError("run-record envelope seq must be a non-negative integer");
     }
     kindForRecord(record);

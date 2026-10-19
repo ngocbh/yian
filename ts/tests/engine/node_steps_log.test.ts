@@ -6,15 +6,16 @@
  * `test_node_step_record_rejects_invalid_values` (list, text, null, NaN, a class instance, a
  * `Set`, an empty and a non-text node id; each with its exact error).
  *
- * TS-only: a step keeps `±Infinity` (a TS yian value) and writes `-0` as `0`; a `FileRef` in a
- * step is refused.
+ * TS-only: a step writes `-0` as `0`; a `FileRef` in a step is refused.
  *
- * Changed: `test_node_step_too_deep_for_python_is_a_value_error`: a 5000-deep step is accepted
- * (the TS codec is iterative).
+ * Changed:
+ * - the `infinity` row of `test_node_step_record_rejects_invalid_values`: a step keeps
+ *   `±Infinity` (a TS yian value).
+ * - `test_node_step_too_deep_for_python_is_a_value_error`: a 5000-deep step is accepted (the TS
+ *   codec is iterative).
  *
- * Not ported: the `infinity` and `non-text-key` rows (a TS float may be infinite; JS object keys
- * are always text); the wire-payload tests and the reducer tests (they need the codec and the
- * run state).
+ * Not ported: the `non-text-key` row (JS object keys are always text); the wire-payload tests
+ * and the reducer tests (they need the codec and the run state).
  */
 
 import { expect, test } from "bun:test";

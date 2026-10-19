@@ -83,8 +83,9 @@ export class Gemini implements SseProtocol {
    * Every system message's non-empty text parts, wherever the message is, join
    * `systemInstruction.parts` in order. A user message is a `user` content of its non-empty text
    * parts; one with none is not sent, with a warning through `process.emitWarning` (once per
-   * instance). Each run of consecutive tool messages is one `user` content of a
-   * `functionResponse` per result, with the result's call id and name; its `response` is the
+   * instance). Each run of tool messages is one `user` content of a `functionResponse` per
+   * result, with the result's call id and name; only a user or model content that is sent ends
+   * the run, so a system message or a skipped message in between does not. Its `response` is the
    * result's text read as JSON when that is a plain object, else `{output: <the value>}`, or
    * `{output: <the text>}` when the text is not plain JSON. `isError` is not sent. An assistant
    * message is a `model` content in part order: a non-empty text part as `{text}`, a call as
@@ -116,25 +117,31 @@ export class Gemini implements SseProtocol {
     }
     const system: JsonObject[] = [];
     const contents: JsonObject[] = [];
-    // The parts of the content the current run of tool messages goes into, or `null` outside a run.
+    // The parts of the content the current run of tool messages goes into, or `null` outside a
+    // run. Only a pushed user or model content ends a run: Gemini wants every response to one
+    // model turn's calls in the content right after it, so a message that adds no content
+    // (a system message, a skipped user or assistant message) must not split them.
     let results: JsonValue[] | null = null;
     for (const message of messages) {
       if (message.role === "tool") {
         const parts = message.parts.map(functionResponse);
-        if (results !== null) results.push(...parts);
-        else if (parts.length > 0) contents.push({ role: "user", parts: (results = parts) });
-        continue;
-      }
-      results = null;
-      if (message.role === "system") {
+        if (results !== null) {
+          results.push(...parts);
+        } else if (parts.length > 0) {
+          results = parts;
+          contents.push({ role: "user", parts: results });
+        }
+      } else if (message.role === "system") {
         system.push(...textParts(message));
-      } else if (message.role === "user") {
-        const parts = textParts(message);
-        if (parts.length > 0) contents.push({ role: "user", parts });
-        else this.#warnEmptyUser();
       } else {
-        const parts = this.#modelParts(message);
-        if (parts.length > 0) contents.push({ role: "model", parts });
+        const user = message.role === "user";
+        const parts = user ? textParts(message) : this.#modelParts(message);
+        if (parts.length > 0) {
+          contents.push({ role: user ? "user" : "model", parts });
+          results = null;
+        } else if (user) {
+          this.#warnEmptyUser();
+        }
       }
     }
     return [system, contents];

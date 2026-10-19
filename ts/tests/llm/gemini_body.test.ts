@@ -234,6 +234,34 @@ describe("tool results", () => {
     ]);
   });
 
+  test("a message that adds no content does not split a run of tool messages", () => {
+    const both = [
+      {
+        role: "user",
+        parts: [
+          { functionResponse: { id: "call_1", name: "double", response: { output: 1n } } },
+          { functionResponse: { id: "call_2", name: "double", response: { output: 2n } } },
+        ],
+      },
+    ];
+    const body = bodyOf([tool(result("call_1", "1")), system("S."), tool(result("call_2", "2"))]);
+    expect(body["contents"]).toEqual(both);
+    expect(body["systemInstruction"]).toEqual({ parts: [{ text: "S." }] });
+    let sent = null as JsonValue;
+    const emitted = warnings(() => {
+      sent = contents([tool(result("call_1", "1")), user(""), tool(result("call_2", "2"))]);
+    });
+    expect(sent).toEqual(both);
+    expect(emitted).toEqual([[EMPTY_USER]]);
+    const thinking = own(new ReasoningPart("Thinking."));
+    expect(contents([tool(result("call_1", "1")), thinking, tool(result("call_2", "2"))])).toEqual(both);
+    expect(contents([tool(result("call_1", "1")), message("tool"), tool(result("call_2", "2"))])).toEqual(both);
+  });
+
+  test("an empty tool message adds nothing", () => {
+    expect(contents([user("Hi."), message("tool")])).toEqual([{ role: "user", parts: [{ text: "Hi." }] }]);
+  });
+
   test("an orphan tool result is still sent", () => {
     // Gemini would refuse it; yian leaves that answer to the API.
     expect(contents([user("Hi."), own(text("Hello.")), tool(result("call_9", "6"))])).toEqual([

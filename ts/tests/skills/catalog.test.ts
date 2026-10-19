@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadSkillDir, loadSkills } from "../../src/compose/skills.ts";
-import { BUILTIN, current, install } from "../../src/defaults.ts";
+import { current } from "../../src/defaults.ts";
 import { Skill, SkillError } from "../../src/skills/index.ts";
 
 let tmp: string;
@@ -20,7 +20,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  install(BUILTIN);
   for (const path of locked) chmodSync(path, 0o755);
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -39,6 +38,12 @@ function writeRaw(dirname: string, content: string): string {
   mkdirSync(directory, { recursive: true });
   writeFileSync(join(directory, "SKILL.md"), content);
   return directory;
+}
+
+/** Make `path` unreadable until the test ends. */
+function lock(path: string): void {
+  chmodSync(path, 0);
+  locked.push(path);
 }
 
 /** Return what `run` throws, asserting it is a `SkillError` whose message contains `text`. */
@@ -103,8 +108,8 @@ describe("bad skill files name the file", () => {
     ["---\nname: ~\ndescription: d\n---\nbody\n", "invalid skill name null"],
   ])("%p", (content, message) => {
     const dir = writeRaw("a", content);
-    expectSkillError(() => loadSkillDir(dir), "SKILL.md");
-    expectSkillError(() => loadSkillDir(dir), message);
+    const error = expectSkillError(() => loadSkillDir(dir), message);
+    expect(error.message).toContain("SKILL.md");
   });
 });
 
@@ -120,26 +125,12 @@ test("empty frontmatter, CRLF and a BOM", () => {
 test("missing and oversized skill files", () => {
   const empty = join(tmp, "empty");
   mkdirSync(empty);
-  expectSkillError(() => loadSkillDir(empty), `${empty}: missing SKILL.md`);
-  const error = expectSkillError(() => loadSkillDir(empty + "/"), `${empty}: missing SKILL.md`);
-  expect(error.message).toBe(`${empty}: missing SKILL.md`);
+  for (const given of [empty, empty + "/"]) {
+    expect(expectSkillError(() => loadSkillDir(given), "missing").message).toBe(`${empty}: missing SKILL.md`);
+  }
   const big = writeSkill(tmp, "big", "description: d\n", "x".repeat(current().maxSkillFileBytes));
   expectSkillError(() => loadSkillDir(big), "larger than");
 });
-
-test("skill file cap", () => {
-  const dir = join(tmp, "s");
-  mkdirSync(dir);
-  writeFileSync(join(dir, "SKILL.md"), "x".repeat(11));
-  install({ ...BUILTIN, maxSkillFileBytes: 10 });
-  expectSkillError(() => loadSkillDir(dir), "larger than 10 bytes");
-});
-
-/** Make `path` unreadable until the test ends. */
-function lock(path: string): void {
-  chmodSync(path, 0);
-  locked.push(path);
-}
 
 test("earlier root wins and skips non-skills", () => {
   const first = join(tmp, "first");

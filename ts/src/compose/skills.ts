@@ -158,7 +158,7 @@ function splitFrontmatter(text: string, path: string): [ValueRecord, string] {
   if (lines[0]!.trim() !== "---") throw new SkillError(`${path}: must start with \`---\` YAML frontmatter`);
   const index = lines.findIndex((line, at) => at > 0 && line.trim() === "---");
   if (index === -1) throw new SkillError(`${path}: frontmatter has no closing \`---\``);
-  let meta;
+  let meta: unknown;
   try {
     meta = parseYamlLiteral(lines.slice(1, index).join("")) ?? {};
   } catch (error) {

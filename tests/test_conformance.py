@@ -3567,6 +3567,20 @@ def test_raised_reports_a_private_class_as_its_public_base() -> None:
     assert raised == {"class": "TypeCheckError", "message": "no", "path": ["a"]}
 
 
+def test_compose_codefns_references_are_exported() -> None:
+    """Every `_compose_codefns` fixture function a committed case's flow or files names exists."""
+    from tests import conformance_harvest as harvest
+
+    reference = re.compile(r"(?:\./|(?:\.\./)+)fixtures/compose_codefns\.ts:([A-Za-z_]\w*)")
+    texts = ["nodes:\n  p: {kind: code, code: ./fixtures/compose_codefns.ts:make_plan}\n"]
+    for path in sorted((_ROOT / "cases").rglob("*.yaml")):
+        case = _read(path)
+        texts += [case.get("flow", ""), *case.get("files", {}).values()]
+    names = {name for text in texts for name in reference.findall(text)}
+    exported = harvest._exported(harvest._FIXTURE_MODULES["tests.engine._compose_codefns"])
+    assert names - exported == set()
+
+
 _CODE_TESTS = '''
 from yian import load_flow
 from yian.run import run_flow

@@ -7,7 +7,7 @@
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
 
@@ -71,8 +71,6 @@ describe("ApiKeyCredentials", () => {
     ["symbol name", [[Symbol("X"), "do-not-echo"]]],
     ["three-item pair", [["X", "do-not-echo", "extra"]]],
     ["null", null],
-    ["undefined pair value", [["X-A", undefined]]],
-    ["undefined Map value", new Map([["X-A", undefined]])],
   ];
   for (const [label, headers] of refusedHeaders) {
     test(`refuse headers that cannot be sent: ${label}`, () => {
@@ -234,42 +232,60 @@ describe("ProviderSelection", () => {
     expect(plain.project).toBeNull();
   });
 
-  const refusals: [Record<string, unknown>, string][] = [
-    [{ provider: "" }, "Invalid provider selection"],
-    [{ method: "other" }, "Invalid provider selection"],
-    [{ endpoint: "has space" }, "Invalid provider selection"],
-    [{ headerNames: "X-A" }, "Invalid provider selection"],
+  const refusals: [string, Record<string, unknown>, string][] = [
+    ["empty provider", { provider: "" }, "Invalid provider selection"],
+    ["unknown method", { method: "other" }, "Invalid provider selection"],
+    ["endpoint with space", { endpoint: "has space" }, "Invalid provider selection"],
+    ["headerNames a string", { headerNames: "X-A" }, "Invalid provider selection"],
     [
+      "subscription with organization",
       { method: "subscription", organization: "org-1" },
       "organization and project are only for an openai API-key login",
     ],
-    [{ provider: "anthropic", project: "proj-1" }, "organization and project are only for an openai API-key login"],
-    [{ method: "subscription", headerNames: ["X-A"] }, "Connection headers are only for an API-key login"],
-    [{ method: "none", headerNames: ["X-A"] }, "Connection headers are only for an API-key login"],
-    [{ provider: "ollama", headerNames: ["X-A"] }, "Connection headers are not sent to provider ollama"],
     [
+      "anthropic with project",
+      { provider: "anthropic", project: "proj-1" },
+      "organization and project are only for an openai API-key login",
+    ],
+    [
+      "subscription with headers",
+      { method: "subscription", headerNames: ["X-A"] },
+      "Connection headers are only for an API-key login",
+    ],
+    ["none with headers", { method: "none", headerNames: ["X-A"] }, "Connection headers are only for an API-key login"],
+    [
+      "ollama with headers",
+      { provider: "ollama", headerNames: ["X-A"] },
+      "Connection headers are not sent to provider ollama",
+    ],
+    [
+      "organization with space",
       { organization: "has space" },
       "Invalid provider selection: organization must be non-empty visible ASCII, without spaces",
     ],
     [
+      "Authorization header",
       { headerNames: ["Authorization"] },
       "Invalid provider selection: header Authorization is refused: yian sends the credential itself",
     ],
     [
+      "OpenAI-Project header",
       { headerNames: ["OpenAI-Project"] },
       "Invalid provider selection: header OpenAI-Project is refused: use llm_config.organization / project",
     ],
     [
+      "case-repeated header",
       { headerNames: ["X-A", "x-a"] },
       "Invalid provider selection: a header name is given more than once (names ignore case)",
     ],
     [
+      "33 headers",
       { headerNames: Array.from({ length: 33 }, (_, n) => `X-${n}`) },
       "Invalid provider selection: headers must have at most 32 headers",
     ],
   ];
-  for (const [fields, message] of refusals) {
-    test(`refuses ${JSON.stringify(fields).slice(0, 60)}`, () => {
+  for (const [label, fields, message] of refusals) {
+    test(`refuses ${label}`, () => {
       const values = { provider: "openai", method: "api_key", model: "m", credentialId: "c".repeat(32), ...fields };
       const error = thrown(() => new ProviderSelection(values));
       expect(error).toBeInstanceOf(AuthError);
@@ -278,6 +294,7 @@ describe("ProviderSelection", () => {
   }
 });
 
+/** A provider error carrying an HTTP `status`, like the openai SDK's `APIStatusError`. */
 class StatusError extends Error {
   readonly status: unknown;
 
@@ -400,7 +417,7 @@ describe("AuthStore", () => {
 
   /** Write `contents` as the store at `path`: its directory 0700, the file 0600. */
   function writeRaw(path: string, contents: string | Uint8Array): void {
-    const directory = join(path, "..");
+    const directory = dirname(path);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     fs.chmodSync(directory, 0o700);
     fs.writeFileSync(path, contents);

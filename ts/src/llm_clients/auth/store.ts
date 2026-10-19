@@ -81,6 +81,11 @@ function isMissing(error: unknown): boolean {
   return (error as { code?: unknown } | null)?.code === "ENOENT";
 }
 
+/** Close `fd`, turning a failure into the storage access error. */
+function closeFd(fd: number): void {
+  access(() => fs.closeSync(fd));
+}
+
 /**
  * Check that the open descriptor `fd` is a private directory or regular file; return its status.
  *
@@ -290,6 +295,8 @@ export class AuthStore {
   #load(directory: Directory | null): [string | null, Providers] {
     if (directory === null) return [null, new Map()];
     const limit = current().maxAuthStoreBytes;
+    // Allocated before the open, so a failed allocation leaves no descriptor open.
+    const raw = new Uint8Array(limit + 1);
     let fd: number;
     try {
       fd = fs.openSync(this.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -297,7 +304,6 @@ export class AuthStore {
       if (isMissing(error)) return [null, new Map()];
       throw accessError();
     }
-    const raw = new Uint8Array(limit + 1);
     let size = 0;
     try {
       this.#checkSameDirectory(directory);
@@ -602,9 +608,4 @@ export class AuthStore {
       if (directory !== null) closeFd(directory.fd);
     }
   }
-}
-
-/** Close `fd`, turning a failure into the storage access error. */
-function closeFd(fd: number): void {
-  access(() => fs.closeSync(fd));
 }

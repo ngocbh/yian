@@ -15,7 +15,7 @@ export { REDACTED } from "../llm/auth.ts";
 // A masked echo counts only when it shows at least this many key characters on one side.
 const MIN_VISIBLE = 3;
 const WORD = "A-Za-z0-9_\\-";
-const MARK = "\\*{2,}|\\.{3}|…";
+const MARK = /\*{2,}|\.{3}|…/gu;
 
 /**
  * Match masked echoes: visible head, mask marks, visible tail.
@@ -24,23 +24,42 @@ const MARK = "\\*{2,}|\\.{3}|…";
  * lookbehind starts a head only at the start of a run, which keeps matching linear.
  */
 function maskedPattern(extra: string): RegExp {
-  // In `u` mode a class may escape only syntax characters; these are the ones a class needs.
+  // In `u` mode escaping anything but a syntax character (or `-` in a class) is a SyntaxError;
+  // these are the ones a class needs.
   const visible = `[${WORD}${extra.replace(/[\\\]\[^-]/g, "\\$&")}]`;
-  return new RegExp(`(?<!${visible})${visible}*(?:${MARK})${visible}*`, "gu");
+  return new RegExp(`(?<!${visible})${visible}*(?:${MARK.source})${visible}*`, "gu");
 }
 
-/** Return where the longest suffix of `head` that begins `key` starts, if long enough, in code points. */
-function prefixStart(head: string[], key: string): number | null {
-  for (let size = Math.min(head.length, [...key].length); size >= MIN_VISIBLE; size--) {
-    if (key.startsWith(head.slice(-size).join(""))) return head.length - size;
+/** Return the UTF-16 index of each code-point boundary in `text`, from 0 to `text.length`. */
+function boundaries(text: string): number[] {
+  const indexes = [0];
+  for (const char of text) indexes.push(indexes.at(-1)! + char.length);
+  return indexes;
+}
+
+/**
+ * Return where the longest suffix of `head` that begins `key` starts, if it has at least
+ * `MIN_VISIBLE` code points; `keySize` is the key's length in code points.
+ */
+function prefixStart(head: string, key: string, keySize: number): number | null {
+  const bounds = boundaries(head);
+  const count = bounds.length - 1;
+  for (let size = Math.min(count, keySize); size >= MIN_VISIBLE; size--) {
+    const start = bounds[count - size]!;
+    if (key.startsWith(head.slice(start))) return start;
   }
   return null;
 }
 
-/** Return where the longest prefix of `tail` that ends `key` stops, if long enough, in code points. */
-function suffixStop(tail: string[], key: string): number | null {
-  for (let size = Math.min(tail.length, [...key].length); size >= MIN_VISIBLE; size--) {
-    if (key.endsWith(tail.slice(0, size).join(""))) return size;
+/**
+ * Return where the longest prefix of `tail` that ends `key` stops, if it has at least
+ * `MIN_VISIBLE` code points; `keySize` is the key's length in code points.
+ */
+function suffixStop(tail: string, key: string, keySize: number): number | null {
+  const bounds = boundaries(tail);
+  for (let size = Math.min(bounds.length - 1, keySize); size >= MIN_VISIBLE; size--) {
+    const stop = bounds[size]!;
+    if (key.endsWith(tail.slice(0, stop))) return stop;
   }
   return null;
 }
@@ -67,18 +86,20 @@ export function redactKey(text: string, key: string | null | undefined): string 
     if (!/^[A-Za-z0-9_\-*…]$/u.test(char)) others.add(char);
   }
   const extra = [...others].sort(compareCodeUnits).join("");
+  const keySize = [...key].length;
 
   return text.replace(maskedPattern(extra), (token) => {
-    const marks = [...token.matchAll(new RegExp(MARK, "gu"))];
+    // `matchAll` scans a copy of `MARK`, so the shared regex's `lastIndex` stays 0.
+    const marks = [...token.matchAll(MARK)];
     const last = marks.at(-1)!;
-    const head = Array.from(token.slice(0, marks[0]!.index));
-    const tail = Array.from(token.slice(last.index + last[0].length));
-    const start = prefixStart(head, key);
-    const stop = suffixStop(tail, key);
+    const head = token.slice(0, marks[0]!.index);
+    const tail = token.slice(last.index + last[0].length);
+    const start = prefixStart(head, key, keySize);
+    const stop = suffixStop(tail, key, keySize);
     if (start === null && stop === null) return token;
     // Text on a side that does not match the key is kept only when the other side matched.
-    const left = start === null ? "" : head.slice(0, start).join("");
-    const right = stop === null ? tail.join("") : tail.slice(stop).join("");
+    const left = start === null ? "" : head.slice(0, start);
+    const right = stop === null ? tail : tail.slice(stop);
     return left + REDACTED + right;
   });
 }

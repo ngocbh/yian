@@ -28,8 +28,9 @@ function read(link: object, name: string): unknown {
  * when it is an `AuthError`, a link whose `kind` is `"auth"` (such as a `ProviderError` of kind
  * `auth`), or carries an integer `status` or `code` of 401 or 403, or of 400 with
  * `api_key_invalid` in its text: Gemini reports an invalid key as a 400 whose only distinguishing
- * mark is that reason, so the substring match is deliberate. Callers run this inside a `catch`, so it never throws: a link whose property or
- * text can't be read doesn't count, and a `cause` that can't be read ends the walk.
+ * mark is that reason, so the substring match is deliberate. Callers run this inside a `catch`,
+ * so it never throws: a link whose property or text can't be read doesn't count, and a `cause`
+ * that can't be read ends the walk.
  */
 export function isAuthFailure(error: unknown): boolean {
   const seen = new Set<object>();

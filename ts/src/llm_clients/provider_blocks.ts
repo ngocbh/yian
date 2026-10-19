@@ -292,3 +292,382 @@ function checkJson(value: unknown, loc: Loc): Checked {
   if (isRecord(value)) return checkMap(JSON_MAP, value, loc);
   return fail(loc, "json_type", "Input should be a JSON value");
 }
+
+// --------------------------------------------------------------------------------------- //
+// Blocks and the key walk
+// --------------------------------------------------------------------------------------- //
+
+/** A top-level block: an object schema that names itself and refuses reserved and unknown keys. */
+export interface BlockSchema extends ObjectSchema {
+  /** The Python class name, e.g. "OpenAIResponsesBlock", for the error header. */
+  readonly title: string;
+  /** The block name used in messages, e.g. "qwen-cn". */
+  readonly name: string;
+  /** How an unknown key is described, e.g. "is not a supported field of the X request". */
+  readonly api: string;
+  /** Dotted key path -> what yian builds there; setting one is an error. */
+  readonly reserved: Readonly<Record<string, string>>;
+}
+
+/** Check `data` against a block: the key walk, then the value pass (pydantic's validate and dump). */
+export function checkBlock(schema: BlockSchema, data: unknown): { value: JsonObject | null; issues: Issue[] } {
+  if (isRecord(data)) {
+    const problems: string[] = [];
+    keyProblems(schema, schema, data, "", problems);
+    if (problems.length > 0) {
+      const joined = problems.join("; ");
+      return { value: null, issues: [{ loc: [], type: "value_error", msg: `Value error, ${joined}`, error: joined }] };
+    }
+  }
+  return checkObject(schema, data);
+}
+
+/** Return `data` checked against a block, without unset fields; throws `ValidationError` on any issue. */
+export function validateBlock(schema: BlockSchema, data: unknown): JsonObject {
+  const { value, issues } = checkBlock(schema, data);
+  if (issues.length > 0) throw new ValidationError(schema.title, issues);
+  return value!;
+}
+
+/**
+ * Append a message for each reserved or unknown key of `data`, recursing into parts.
+ *
+ * `model` is the schema `data` is checked against; `top` is the block, which supplies the
+ * block name, the reserved paths and the unknown-key wording.
+ */
+function keyProblems(
+  top: BlockSchema,
+  model: ObjectSchema,
+  data: Readonly<Record<string, unknown>>,
+  prefix: string,
+  problems: string[],
+): void {
+  for (const [key, value] of Object.entries(data)) {
+    if (value === undefined) continue;
+    const path = `${prefix}${key}`;
+    const problem = badKey(top, path, key, model.fields);
+    if (problem !== null) problems.push(problem);
+    else valueProblems(top, model.fields[key]!, value, path, problems);
+  }
+}
+
+/**
+ * Return why `key` at `path` is not allowed, or `null` when it is.
+ *
+ * `allowed` holds the keys the enclosing object accepts.
+ */
+function badKey(top: BlockSchema, path: string, key: string, allowed: Readonly<Record<string, Field>>): string | null {
+  if (Object.hasOwn(top.reserved, path)) {
+    return `\`${top.name}.${path}\` is built by yian (${top.reserved[path]!}); remove it`;
+  }
+  if (!Object.hasOwn(allowed, key)) {
+    return `\`${top.name}.${path}\` ${top.api}; allowed: ${Object.keys(allowed).sort(compareCodeUnits).join(", ")}`;
+  }
+  return null;
+}
+
+/**
+ * Check the keys of a nested object, or of each object in a list, at `path`.
+ *
+ * Objects inside a map field are not walked; none exists, and the value pass's
+ * `extra_forbidden` would still refuse an unknown key there.
+ */
+function valueProblems(top: BlockSchema, field: Field, value: unknown, path: string, problems: string[]): void {
+  if (isRecord(value)) {
+    const part = nestedSchema(field, value);
+    if (part !== null) keyProblems(top, part, value, `${path}.`, problems);
+  } else if (isList(value)) {
+    const items = members(field).flatMap((member) => (member.kind === "list" ? [member.item] : []));
+    if (items.length === 0) return;
+    const item = items.length === 1 ? items[0]! : union(...items);
+    value.forEach((entry, index) => valueProblems(top, item, entry, `${path}[${index}]`, problems));
+  }
+}
+
+/** Return the fields a union allows, flattening nested unions. */
+function members(field: Field): Field[] {
+  return field.kind === "union" ? field.members.flatMap(members) : [field];
+}
+
+/**
+ * Return the schema to check the record `value` against, if one can be chosen.
+ *
+ * A tagged field is told apart by `type`; when `value` names no variant there is none,
+ * and the value pass reports the problem instead.
+ */
+function nestedSchema(field: Field, value: Readonly<Record<string, unknown>>): ObjectSchema | null {
+  if (field.kind === "tagged") {
+    const tag = Object.hasOwn(value, "type") ? value["type"] : undefined;
+    return typeof tag === "string" && Object.hasOwn(field.variants, tag) ? field.variants[tag]! : null;
+  }
+  const objects = members(field).flatMap((member) => (member.kind === "object" ? [member.schema] : []));
+  return objects.length === 1 ? objects[0]! : null;
+}
+
+/** Return a frozen block schema. */
+function block(
+  title: string,
+  name: string,
+  api: string,
+  reserved: Record<string, string>,
+  fields: Record<string, Field>,
+): BlockSchema {
+  return Object.freeze({ ...schema(fields), title, name, api, reserved: table(reserved) });
+}
+
+// --------------------------------------------------------------------------------------- //
+// OpenAI Responses API
+// --------------------------------------------------------------------------------------- //
+
+/** The `reasoning` object of an OpenAI Responses API request. */
+const OpenAIReasoning = schema({
+  context: literal("auto", "current_turn", "all_turns"),
+  effort: literal("none", "minimal", "low", "medium", "high", "xhigh", "max"),
+  // The SDK also types `mode` as any string; these are the values it documents.
+  mode: literal("standard", "pro"),
+  summary: literal("auto", "concise", "detailed"),
+});
+
+/** The `text` object of an OpenAI Responses API request (`format` is reserved). */
+const OpenAIText = schema({ verbosity: literal("low", "medium", "high") });
+
+/** The `access_programs` object of an OpenAI Responses API request. */
+const OpenAIAccessPrograms = schema({ cyber: literal("standard", "daybreak_blue", "daybreak_red") });
+
+/** How moderation treats the input or the output: score it, or block it. */
+const OpenAIModerationMode = schema({ mode: literal("score", "block") }, ["mode"]);
+
+/** The `moderation.policy` object of an OpenAI Responses API request. */
+const OpenAIModerationPolicy = schema({ input: object(OpenAIModerationMode), output: object(OpenAIModerationMode) });
+
+/** The `moderation` object of an OpenAI Responses API request. */
+const OpenAIModeration = schema({ model: str(), policy: object(OpenAIModerationPolicy) }, ["model"]);
+
+/**
+ * The `prompt_cache_options` object of an OpenAI Responses API request.
+ *
+ * `comparison_response_id` is left out because it names one earlier response, and
+ * `prewarm` because it suppresses the reply yian reads.
+ */
+const OpenAIPromptCacheOptions = schema({ mode: literal("implicit", "explicit"), ttl: literal("30m") });
+
+const _Metadata = map(str({ maxLength: 64 }), str({ maxLength: 512 }), { maxLength: 16 });
+
+/** Responses API request fields that every OpenAI transport yian uses accepts. */
+const _OpenAIResponsesShared: Record<string, Field> = {
+  access_programs: object(OpenAIAccessPrograms),
+  max_tool_calls: int({ ge: 1n }),
+  metadata: _Metadata,
+  moderation: object(OpenAIModeration),
+  prompt_cache_key: str(),
+  prompt_cache_options: object(OpenAIPromptCacheOptions),
+  prompt_cache_retention: literal("in_memory", "24h"),
+  reasoning: object(OpenAIReasoning),
+  safety_identifier: str({ maxLength: 64 }),
+  service_tier: literal("auto", "default", "flex", "scale", "priority", "fast", "ultrafast"),
+  text: object(OpenAIText),
+  top_logprobs: int({ ge: 0n, le: 20n }),
+  top_p: float({ ge: 0, le: 1 }),
+  truncation: literal("auto", "disabled"),
+  user: str(),
+};
+
+/** The paths of a Responses API request that yian builds, with what it builds there. */
+const _OPENAI_RESERVED: Record<string, string> = {
+  model: "llm_config.model",
+  input: "messages",
+  instructions: "system prompt",
+  prompt: "messages",
+  tools: "tools",
+  tool_choice: "tools",
+  parallel_tool_calls: "tools",
+  "text.format": "structured output",
+  stream: "streaming",
+  stream_options: "streaming",
+  previous_response_id: "conversation state",
+  conversation: "conversation state",
+  store: "conversation state",
+  include: "response items",
+  background: "request lifecycle",
+  context_management: "conversation state",
+};
+
+/**
+ * The `openai` block: the request body of the OpenAI Responses API (`POST /v1/responses`).
+ *
+ * Mirrors Python yian's `OpenAIResponsesBlock`: every body keyword of the request is a
+ * field here or reserved.
+ */
+export const OpenAIResponsesBlock: BlockSchema = block(
+  "OpenAIResponsesBlock",
+  "openai",
+  "is not a supported field of the OpenAI Responses API request",
+  _OPENAI_RESERVED,
+  { ..._OpenAIResponsesShared, max_output_tokens: int({ ge: 1n }), temperature: float({ ge: 0, le: 2 }) },
+);
+
+/**
+ * The `openai` block when the call goes to the ChatGPT subscription endpoint.
+ *
+ * The endpoint accepts a subset of the Responses API request: everything in
+ * `OpenAIResponsesBlock` except `temperature` and `max_output_tokens`, which it refuses.
+ */
+export const OpenAISubscriptionBlock: BlockSchema = block(
+  "OpenAISubscriptionBlock",
+  "openai",
+  "is not accepted by the ChatGPT subscription endpoint (a subset of the Responses API)",
+  _OPENAI_RESERVED,
+  _OpenAIResponsesShared,
+);
+
+// --------------------------------------------------------------------------------------- //
+// Anthropic Messages API
+// --------------------------------------------------------------------------------------- //
+
+/** A `CacheControlEphemeral` object of an Anthropic Messages request. */
+const AnthropicCacheControl = schema({ type: literal("ephemeral"), ttl: literal("5m", "1h") }, ["type"]);
+
+/** The `metadata` object of an Anthropic Messages request. */
+const AnthropicMetadata = schema({ user_id: str({ maxLength: 512 }) });
+
+/** The `output_config` object of an Anthropic Messages request (`format` is reserved). */
+const AnthropicOutputConfig = schema({ effort: literal("low", "medium", "high", "xhigh", "max") });
+
+const _ThinkingDisplay = literal("summarized", "omitted");
+
+/** Manual extended thinking with a token budget of at least 1024. */
+const AnthropicThinkingEnabled = schema(
+  { type: literal("enabled"), budget_tokens: int({ ge: 1024n }), display: _ThinkingDisplay },
+  ["type", "budget_tokens"],
+);
+
+/** Thinking turned off. */
+const AnthropicThinkingDisabled = schema({ type: literal("disabled") }, ["type"]);
+
+/** Thinking only between tool calls. */
+const AnthropicThinkingBetweenTools = schema({ type: literal("between_tools") }, ["type"]);
+
+/** Thinking whose amount the model decides. */
+const AnthropicThinkingAdaptive = schema({ type: literal("adaptive"), display: _ThinkingDisplay }, ["type"]);
+
+/**
+ * The `anthropic` block: the request body of the Anthropic Messages API (`POST /v1/messages`).
+ *
+ * `temperature`, `top_k` and `top_p` are deprecated for newer models but still body
+ * fields; a model that refuses them answers with a provider error. `max_tokens` starts at
+ * 1 because a zero-token call only warms the cache and yian reads the reply.
+ */
+export const AnthropicMessagesBlock: BlockSchema = block(
+  "AnthropicMessagesBlock",
+  "anthropic",
+  "is not a supported field of the Anthropic Messages API request",
+  {
+    model: "llm_config.model",
+    messages: "messages",
+    system: "system prompt",
+    tools: "tools",
+    tool_choice: "tools",
+    stream: "streaming",
+    "output_config.format": "structured output",
+    container: "tools",
+    mcp_servers: "tools",
+    diagnostics: "conversation state",
+  },
+  {
+    cache_control: object(AnthropicCacheControl),
+    inference_geo: str(),
+    max_tokens: int({ ge: 1n }),
+    metadata: object(AnthropicMetadata),
+    output_config: object(AnthropicOutputConfig),
+    service_tier: literal("auto", "standard_only"),
+    stop_sequences: list(str()),
+    temperature: float({ ge: 0, le: 1 }),
+    thinking: tagged({
+      enabled: AnthropicThinkingEnabled,
+      disabled: AnthropicThinkingDisabled,
+      between_tools: AnthropicThinkingBetweenTools,
+      adaptive: AnthropicThinkingAdaptive,
+    }),
+    top_k: int({ ge: 0n }),
+    top_p: float({ ge: 0, le: 1 }),
+  },
+);
+
+// --------------------------------------------------------------------------------------- //
+// Gemini generateContent
+// --------------------------------------------------------------------------------------- //
+
+/** The `generationConfig.thinkingConfig` object of a Gemini request. */
+const GeminiThinkingConfig = schema({
+  includeThoughts: bool(),
+  // -1 asks for a dynamic budget and 0 turns thinking off on models that allow it.
+  thinkingBudget: int(),
+  thinkingLevel: literal("MINIMAL", "LOW", "MEDIUM", "HIGH"),
+});
+
+/** The `generationConfig` object of a Gemini request, without its output-format fields. */
+const GeminiGenerationConfig = schema({
+  enableEnhancedCivicAnswers: bool(),
+  frequencyPenalty: float(),
+  logprobs: int({ ge: 0n, le: 20n }),
+  maxOutputTokens: int({ ge: 1n }),
+  mediaResolution: literal("MEDIA_RESOLUTION_LOW", "MEDIA_RESOLUTION_MEDIUM", "MEDIA_RESOLUTION_HIGH"),
+  presencePenalty: float(),
+  responseLogprobs: bool(),
+  seed: int(),
+  stopSequences: list(str(), { maxLength: 5 }),
+  temperature: float({ ge: 0, le: 2 }),
+  thinkingConfig: object(GeminiThinkingConfig),
+  topK: int(),
+  topP: float({ ge: 0, le: 1 }),
+});
+
+/** One `safetySettings` entry of a Gemini request: a category and its block threshold. */
+const GeminiSafetySetting = schema(
+  {
+    category: literal(
+      "HARM_CATEGORY_HARASSMENT",
+      "HARM_CATEGORY_HATE_SPEECH",
+      "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+      "HARM_CATEGORY_DANGEROUS_CONTENT",
+      "HARM_CATEGORY_CIVIC_INTEGRITY",
+      "HARM_CATEGORY_JAILBREAK",
+    ),
+    threshold: literal("BLOCK_LOW_AND_ABOVE", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_ONLY_HIGH", "BLOCK_NONE", "OFF"),
+  },
+  ["category", "threshold"],
+);
+
+/**
+ * The `google` block: the request body of the Gemini API `generateContent` method.
+ *
+ * Uses the REST (camelCase) names and enum spellings. Output-modality fields (speech,
+ * image, audio, translation) are left out because yian reads a text reply, and `labels`
+ * because the Gemini Developer API refuses it.
+ */
+export const GeminiGenerateContentBlock: BlockSchema = block(
+  "GeminiGenerateContentBlock",
+  "google",
+  "is not a supported field of the Gemini generateContent request",
+  {
+    model: "llm_config.model",
+    contents: "messages",
+    systemInstruction: "system prompt",
+    tools: "tools",
+    toolConfig: "tools",
+    cachedContent: "system prompt and tools",
+    continuationToken: "conversation state",
+    "generationConfig.responseMimeType": "structured output",
+    "generationConfig.responseSchema": "structured output",
+    "generationConfig.responseJsonSchema": "structured output",
+    "generationConfig._responseJsonSchema": "structured output",
+    "generationConfig.responseFormat": "structured output",
+    "generationConfig.candidateCount": "yian reads one reply",
+  },
+  {
+    generationConfig: object(GeminiGenerationConfig),
+    safetySettings: list(object(GeminiSafetySetting)),
+    serviceTier: literal("standard", "flex", "priority"),
+    store: bool(),
+  },
+);

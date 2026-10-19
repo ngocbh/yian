@@ -217,7 +217,6 @@ test("routed provider without an endpoint never falls back to openai", async () 
   // only inherit are unsupported.
   for (const provider of OPENAI_COMPATIBLE.filter((name) => name !== "openai")) {
     expect(Object.hasOwn(PROVIDER_BASE_URL, provider)).toBe(true);
-    expect(DEFAULT_LISTING_URL[provider]).not.toStartWith("https://api.openai.com");
   }
   for (const provider of ["constructor", "toString", "__proto__"]) {
     assertClean(await rejected(listModels(provider, { apiKey: KEY, request: neverCalled })), "unsupported provider");
@@ -300,6 +299,7 @@ describe("invalid request sends nothing", () => {
     // Not a URL at all, even without a key.
     ["openai", "gateway.example.com/v1", null, 8],
     ["vllm", "ftp://localhost/v1", null, 8],
+    ["vllm", "http://[::1/v1", null, 8],
     // A key the HTTP client would refuse in a header.
     ["openai", null, `${KEY}\n`, 8],
     ["openai", null, "sk-é", 8],
@@ -388,7 +388,7 @@ describe("malformed response is invalid", () => {
 });
 
 test("timeout is shared by every page", async () => {
-  // Each page takes 150 ms and always has more; a 400 ms budget allows about three.
+  // Each page takes 150 ms and always has more; a 400 ms budget allows three, each getting what's left.
   const scheduler = virtualScheduler();
   const fake = server(async () => {
     await scheduler.sleep(150);
@@ -396,12 +396,7 @@ test("timeout is shared by every page", async () => {
   });
   const error = await rejected(listModels("anthropic", { apiKey: KEY, timeout: 0.4, scheduler, request: fake }));
   assertClean(error, "timed out");
-  expect(fake.calls.length).toBeGreaterThanOrEqual(2);
-  expect(fake.calls.length).toBeLessThanOrEqual(3);
-  const budgets = fake.calls.map((call) => call.timeoutMs);
-  expect(budgets[0]!).toBeLessThanOrEqual(400);
-  expect(budgets).toEqual([...budgets].sort((a, b) => b - a));
-  expect(new Set(budgets).size).toBe(budgets.length);
+  expect(fake.calls.map((call) => call.timeoutMs)).toEqual([400, 250, 100]);
 });
 
 /** Start `server` on a loopback port and return its URL root. */

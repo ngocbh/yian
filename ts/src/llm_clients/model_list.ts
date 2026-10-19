@@ -42,9 +42,10 @@ export interface ListModelsOptions {
   /** Key sent as the provider's auth header; absent sends none. Ollama never sends one. */
   apiKey?: string | null;
   /**
-   * Host to list instead of the provider default: the API root without the version path for
-   * Anthropic and Google, where `/models` is appended for OpenAI-compatible providers. A trailing
-   * `/v1` on an Ollama URL is dropped. When a key is sent it must pass `validateBaseUrl`.
+   * Host to list instead of the provider default. For Anthropic and Google it is the API root
+   * without the version path. For OpenAI-compatible providers it is the URL `/models` is appended
+   * to. A trailing `/v1` on an Ollama URL is dropped. When a key is sent it must pass
+   * `validateBaseUrl`.
    */
   baseUrl?: string | null;
   /** Seconds for the whole listing, shared by every page; must be positive. Defaults to 8. */
@@ -126,7 +127,9 @@ export async function listModels(
   }
   const settings = connectionHeaders(name, sendsKey, options.headers, organization, project);
   if (settings === null) throw new ModelListError("invalid request");
-  const fixed = { ...protocol, ...(sendsKey ? auth!(apiKey as string) : {}) };
+  // The same test as `sendsKey`, written so TypeScript narrows `auth` and `apiKey`.
+  const keyHeaders = auth && apiKey ? auth(apiKey) : {};
+  const fixed = { ...protocol, ...keyHeaders };
   // The protocol and key headers win a name clash; dropping the other spelling keeps the client
   // from joining both values into one header.
   const taken = new Set(Object.keys(fixed).map((key) => key.toLowerCase()));
@@ -182,7 +185,8 @@ function validRequest(base: unknown, apiKey: unknown, timeout: unknown, checkUrl
       throw error;
     }
   }
-  return /^https?:\/\/[^/?#]/i.test(base);
+  // Stands in for Python's urlsplit check: the URL parses, its scheme is http(s), and it names a host.
+  return URL.canParse(base) && /^https?:\/\/[^/?#]/i.test(base);
 }
 
 /**
@@ -230,7 +234,12 @@ function text(value: unknown): string {
   return value;
 }
 
-/** Return model ids from every page of Anthropic's model listing. */
+/**
+ * Return model ids from every page of Anthropic's model listing.
+ *
+ * `last_id` must be a string, stricter than Python, whose `urlencode` takes any value: the JSON
+ * decoder here turns integers into bigints.
+ */
 async function anthropicIds(getPage: GetPage): Promise<unknown[]> {
   const ids: unknown[] = [];
   let params: Record<string, string> = { limit: PAGE_SIZE };
@@ -242,7 +251,13 @@ async function anthropicIds(getPage: GetPage): Promise<unknown[]> {
   }
 }
 
-/** Return the `generateContent` model ids from every page of Google's listing. */
+/**
+ * Return the `generateContent` model ids from every page of Google's listing.
+ *
+ * `nextPageToken` must be a string and `supportedGenerationMethods` an array, stricter than
+ * Python, which takes any token `urlencode` accepts and any container `in` works on: the JSON
+ * decoder here turns integers into bigints.
+ */
 async function googleIds(getPage: GetPage): Promise<unknown[]> {
   const ids: unknown[] = [];
   let params: Record<string, string> = { pageSize: PAGE_SIZE };

@@ -217,9 +217,8 @@ function outputField(
 
 test("a tag field reads as the merged literal", () => {
   const contract = outputField("a", "${d.output.action}");
-  expect(typeEquals(contract!.type, new Type({ kind: ValueKind.STRING, tags: new Set(["buy", "hold", "sell"]) }))).toBe(
-    true,
-  );
+  const merged = new Type({ kind: ValueKind.STRING, tags: new Set(["buy", "hold", "sell"]) });
+  expect(typeEquals(contract!.type, merged)).toBe(true);
 });
 
 test("a shared field of one type reads as that type", () => {

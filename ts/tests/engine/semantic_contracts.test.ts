@@ -580,55 +580,41 @@ test("sameOutputContract compares value contracts by type and origins", () => {
 
   const nested = (entries: readonly (readonly [ValuePath, OriginRef])[]) =>
     new ValueContract(record(INT), at({ entries }));
-  expect(sameOutputContract(nested([[["a"], origin("x")]]), nested([[["a"], origin("x")]]))).toBe(true);
-  expect(sameOutputContract(nested([[["a"], origin("x")]]), nested([[["b"], origin("x")]]))).toBe(false);
-  expect(sameOutputContract(nested([[["a"], origin("x")]]), nested([[["a"], origin("y")]]))).toBe(false);
-  expect(
-    sameOutputContract(
-      nested([
-        [["a"], origin("x")],
-        [["b"], origin("y")],
-      ]),
-      nested([[["a"], origin("x")]]),
-    ),
-  ).toBe(false);
+  const ax = () => nested([[["a"], origin("x")]]);
+  const axBy = nested([
+    [["a"], origin("x")],
+    [["b"], origin("y")],
+  ]);
+  expect(sameOutputContract(ax(), ax())).toBe(true);
+  expect(sameOutputContract(ax(), nested([[["b"], origin("x")]]))).toBe(false);
+  expect(sameOutputContract(ax(), nested([[["a"], origin("y")]]))).toBe(false);
+  expect(sameOutputContract(axBy, ax())).toBe(false);
   // Entries are canonical, so the same paths with their origins swapped differ.
-  expect(
-    sameOutputContract(
-      nested([
-        [["a"], origin("x")],
-        [["b"], origin("y")],
-      ]),
-      nested([
-        [["a"], origin("y")],
-        [["b"], origin("x")],
-      ]),
-    ),
-  ).toBe(false);
+  const ayBx = nested([
+    [["a"], origin("y")],
+    [["b"], origin("x")],
+  ]);
+  expect(sameOutputContract(axBy, ayBx)).toBe(false);
 });
 
 test("sameOutputContract compares partial records field by field, and null only equals null", () => {
   const int = new ValueContract(INT);
   const partial = (fields: readonly (readonly [string, ValueContract | null])[]) => new PartialRecordContract(fields);
+  const aIntB = partial([
+    ["a", int],
+    ["b", null],
+  ]);
+  /** The record `{a: first, b: untyped}`. */
+  const withA = (first: ValueContract | null) =>
+    partial([
+      ["a", first],
+      ["b", null],
+    ]);
 
+  expect(sameOutputContract(aIntB, withA(new ValueContract(INT)))).toBe(true);
   expect(
     sameOutputContract(
-      partial([
-        ["a", int],
-        ["b", null],
-      ]),
-      partial([
-        ["a", new ValueContract(INT)],
-        ["b", null],
-      ]),
-    ),
-  ).toBe(true);
-  expect(
-    sameOutputContract(
-      partial([
-        ["a", int],
-        ["b", null],
-      ]),
+      aIntB,
       partial([
         ["b", null],
         ["a", int],
@@ -637,40 +623,15 @@ test("sameOutputContract compares partial records field by field, and null only 
   ).toBe(false);
   expect(
     sameOutputContract(
-      partial([
-        ["a", int],
-        ["b", null],
-      ]),
+      aIntB,
       partial([
         ["a", int],
         ["c", null],
       ]),
     ),
   ).toBe(false);
-  expect(
-    sameOutputContract(
-      partial([
-        ["a", int],
-        ["b", null],
-      ]),
-      partial([
-        ["a", null],
-        ["b", null],
-      ]),
-    ),
-  ).toBe(false);
-  expect(
-    sameOutputContract(
-      partial([
-        ["a", int],
-        ["b", null],
-      ]),
-      partial([
-        ["a", new ValueContract(FLOAT)],
-        ["b", null],
-      ]),
-    ),
-  ).toBe(false);
+  expect(sameOutputContract(aIntB, withA(null))).toBe(false);
+  expect(sameOutputContract(aIntB, withA(new ValueContract(FLOAT)))).toBe(false);
   expect(sameOutputContract(partial([["a", null]]), partial([["a", null]]))).toBe(true);
   expect(sameOutputContract(partial([["a", null]]), int)).toBe(false);
 

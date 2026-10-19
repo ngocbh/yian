@@ -78,7 +78,7 @@ test("the child signature of a one-field record is its exact record", () => {
   expect(isExactly(sig.output, ValueContract)).toBe(true);
   const output = sig.output as ValueContract;
   expect(output.type.kind).toBe(ValueKind.OBJECT);
-  expect([...output.type.fields!]).toHaveLength(1);
+  expect(output.type.fields!.size).toBe(1);
   expect(typeEquals(output.type.fields!.get("order")!, STR)).toBe(true);
 });
 
@@ -134,7 +134,7 @@ test("the ChildSignature constructor rejects malformed output evidence", () => {
       new ChildSignature({
         inputs: [],
         output: text,
-        declaredOutputs: "result" as unknown as readonly (readonly [string, OutputContract | null])[],
+        declaredOutputs: "result" as never,
       }),
     TypeError,
     "declared child outputs must be an array",
@@ -144,7 +144,7 @@ test("the ChildSignature constructor rejects malformed output evidence", () => {
       new ChildSignature({
         inputs: [],
         output: text,
-        declaredOutputs: [["result"]] as unknown as readonly (readonly [string, OutputContract | null])[],
+        declaredOutputs: [["result"]] as never,
       }),
     TypeError,
     "declared child outputs must be (name, optional contract) tuples",
@@ -184,4 +184,5 @@ test("a ChildSignature with no declared evidence skips the evidence check", () =
   expect(sig.outputNames).toEqual([]);
   expect(sig.returnsRecord).toBe(false);
   expect(Object.isFrozen(sig)).toBe(true);
+  expect(Object.isFrozen(sig.inputs)).toBe(true);
 });

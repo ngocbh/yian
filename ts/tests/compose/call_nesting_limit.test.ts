@@ -170,7 +170,6 @@ describe("resolveChild", () => {
   test("a null resolver can't resolve the callable", () => {
     const error = thrown(() => resolveChild("c", "child", null));
     expect(error).toBeInstanceOf(LoadError);
-    expect((error as LoadError).message).toStartWith("call node 'c': could not resolve callable 'child': ");
     expect((error as LoadError).message).toBe(
       "call node 'c': could not resolve callable 'child': no child resolver was given",
     );

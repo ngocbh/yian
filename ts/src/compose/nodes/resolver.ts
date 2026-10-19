@@ -11,10 +11,11 @@
  * it enforces, and the signature derivation. Output-binding contract inference lives one layer
  * lower in `helpers/output_contracts.ts`.
  *
- * Like `base.ts` this is a leaf of the nodes package: it imports no other kind module, only
- * `helpers/output_contracts.ts`, the END node class (`nodes/end/node.ts`), `BUILTIN_TYPE_NAMES`
- * (`typesys/types.ts`) and types from the compile layer, so `call`, `loop`, `base.ts` and the
- * loader import it without cycling.
+ * Like `base.ts` this is a leaf of the nodes package: it imports `helpers/output_contracts.ts`,
+ * `helpers/errors.ts`, the node contracts (`nodes/contracts.ts`), the END node class
+ * (`nodes/end/node.ts`), `BUILTIN_TYPE_NAMES` (`typesys/types.ts`), `typesys/values.ts`,
+ * `defaults.ts`, `diagnostics.ts` and types from the compile layer, but no other kind module and
+ * nothing that imports it, so `call`, `loop`, `base.ts` and the loader import it without cycling.
  */
 
 import type { CompiledFlow } from "../../compile/model.ts";
@@ -84,7 +85,7 @@ export class ChildSignature {
     }
     if (!Array.isArray(declaredOutputs)) throw new TypeError("declared child outputs must be an array");
     if (declaredOutputs.length > 0 || returnsRecord) checkEvidence(output, declaredOutputs, returnsRecord);
-    this.inputs = inputs;
+    this.inputs = Object.freeze([...inputs]);
     this.output = output;
     this.declaredOutputs = Object.freeze(
       declaredOutputs.map(([name, contract]) => Object.freeze([name, contract] as const)),
@@ -201,7 +202,7 @@ export function childSignature(loaded: ResolvedChild): ChildSignature {
   if (end.returnsRecord) output = combineOutputContracts(new Map(declaredOutputs));
   else output = declaredOutputs.length > 0 ? declaredOutputs[0]![1] : null;
   return new ChildSignature({
-    inputs: [...loaded.input],
+    inputs: loaded.input,
     output,
     declaredOutputs,
     returnsRecord: end.returnsRecord,

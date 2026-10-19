@@ -446,12 +446,12 @@ def _check_steering(steering: object) -> None:
             _keys(where, action, {"after", "steer", "interrupt"})
             if ("steer" in action) == ("interrupt" in action):
                 raise ValueError(f"`{where}` takes `steer` or `interrupt`")
-            steer = action.get("steer", ["text"])
-            if not isinstance(steer, list) or not steer or any(
-                not isinstance(text, str) for text in steer
+            if "steer" in action and (
+                not isinstance(action["steer"], list) or not action["steer"]
+                or any(not isinstance(text, str) for text in action["steer"])
             ):
                 raise ValueError(f"`{where}.steer` must be a non-empty list of text")
-            if action.get("interrupt", True) is not True:
+            if "interrupt" in action and action["interrupt"] is not True:
                 raise ValueError(f"`{where}.interrupt` must be `true`")
             if "after" not in action:
                 continue
@@ -1065,7 +1065,7 @@ class _Inbox:
         self.steers: dict = {}
         self.interrupts: set = set()
         self.counts: dict = {}
-        self.pending = []
+        self.pending: list[tuple[str, str, dict]] = []
         for node, actions in steering.items():
             for index, action in enumerate(actions):
                 if "after" in action:
@@ -1136,12 +1136,14 @@ def _scripted_model(take, problems: list, inbox: _Inbox) -> object:
                                              messages, tools, schema)
             if difference:
                 problems.append(difference)
-        return entry, (node, inbox.count(node, "model_call") if consumer == "agent" else None)
+        number = inbox.count(node, "model_call") if consumer == "agent" else None
+        return entry, None if number is None else (node, number)
 
-    def replay(entry: dict, at: tuple):
+    def replay(entry: dict, at: tuple | None):
         # A point is reached when the next chunk is asked for, which is when yian polls.
         def reached(point: dict) -> None:
-            inbox.reached(at[0], {"model_call": at[1], **point})
+            if at is not None:
+                inbox.reached(at[0], {"model_call": at[1], **point})
 
         if "reply" in entry:
             reply = _langchain_reply(entry)
@@ -1157,7 +1159,7 @@ def _scripted_model(take, problems: list, inbox: _Inbox) -> object:
                 _raise(entry["raise"])
         reached({})
 
-    def summed(entry: dict, at: tuple) -> AIMessage:
+    def summed(entry: dict, at: tuple | None) -> AIMessage:
         return message_chunk_to_message(reduce(add, replay(entry, at)))
 
     class ScriptedModel:
@@ -1233,7 +1235,8 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
         )
         number = inbox.count(ctx.node, "tool_call")
         entry = take(label, f"a call to `{name}` from node {ctx.node!r}")
-        inbox.reached(ctx.node, {"tool_call": number})
+        if number is not None:
+            inbox.reached(ctx.node, {"tool_call": number})
         return entry
 
     def stub(name: str, by_node: bool):
@@ -3996,24 +3999,27 @@ def _steering_case(steering: dict, agent: list, tools: dict | None = None) -> di
 
 
 def test_steering_steer_reaches_the_next_request(tmp_path: Path) -> None:
-    """A steer queued once tool call 1 returns joins the next `agent` request."""
+    """A steer without `after` joins the first `agent` request, and one queued once tool call 1
+    returns joins the next."""
     call = {"type": "tool_call", "id": "c1", "name": "lookup", "arguments": {"q": "x"}}
     lookup = {"parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
               "results": [{"return": "X1"}]}
+    spec = {"name": "lookup", "description": "", "parameters": lookup["parameters"]}
     case = _steering_case(
-        {"chat": [{"after": {"tool_call": 1}, "steer": ["only 2024"]}]},
-        [{"reply": {"format": "yian.message.v1", "role": "assistant", "parts": [call]}},
+        {"chat": [{"steer": ["use B"]}, {"after": {"tool_call": 1}, "steer": ["only 2024"]}]},
+        [{"reply": {"format": "yian.message.v1", "role": "assistant", "parts": [call]},
+          "request": {"messages": [_message("system", "Help."), _message("user", "Go."),
+                                   _message("user", "use B")], "tools": [spec]}},
          {**_reply("done"), "request": {
              "messages": [
-                 _message("system", "Help."), _message("user", "Go."),
+                 _message("system", "Help."), _message("user", "Go."), _message("user", "use B"),
                  {"format": "yian.message.v1", "role": "assistant", "parts": [call]},
                  {"format": "yian.message.v1", "role": "tool", "parts": [
                      {"type": "tool_result", "call_id": "c1", "name": "lookup", "content": "X1"}
                  ]},
                  _message("user", "only 2024"),
              ],
-             "tools": [{"name": "lookup", "description": "",
-                        "parameters": lookup["parameters"]}],
+             "tools": [spec],
          }}],
         {"lookup": lookup},
     )
@@ -4052,25 +4058,28 @@ def test_steering_unreached_action_fails(tmp_path: Path) -> None:
 
 def test_steering_checks() -> None:
     """`host.steering` actions are checked: their point, and one of `steer` and `interrupt`."""
-    problems = {
-        "`host.steering` maps node ids to lists of actions": {"chat": {"steer": ["x"]}},
-        "`host.steering.chat[0]` takes `steer` or `interrupt`": {
-            "chat": [{"steer": ["x"], "interrupt": True}]},
-        "`host.steering.chat[1]` takes `steer` or `interrupt`": {
-            "chat": [{"steer": ["x"]}, {"after": {"model_call": 1}}]},
-        "`host.steering.chat[0].steer` must be a non-empty list of text": {
-            "chat": [{"steer": "x"}]},
-        "`host.steering.chat[0].interrupt` must be `true`": {"chat": [{"interrupt": False}]},
-        "unknown key `host.steering.chat[0].stop`": {"chat": [{"stop": True}]},
-        "`host.steering.chat[0].after` is `{model_call, chunk}`, `{model_call}` or "
-        "`{tool_call}`": {"chat": [{"after": {"chunk": 1}, "interrupt": True}]},
-        "`host.steering.chat[1].after` is": {
-            "chat": [{"interrupt": True},
-                     {"after": {"model_call": 1, "tool_call": 1}, "interrupt": True}]},
-        "`host.steering.chat[0].after` counts must be ints from 1": {
-            "chat": [{"after": {"tool_call": 0}, "interrupt": True}]},
-    }
-    for message, steering in problems.items():
+    steer_text = "`host.steering.chat[0].steer` must be a non-empty list of text"
+    counts = "`host.steering.chat[0].after` counts must be ints from 1"
+    problems = [
+        ("`host.steering` maps node ids to lists of actions", {"chat": {"steer": ["x"]}}),
+        ("`host.steering.chat[0]` takes `steer` or `interrupt`",
+         {"chat": [{"steer": ["x"], "interrupt": True}]}),
+        ("`host.steering.chat[1]` takes `steer` or `interrupt`",
+         {"chat": [{"steer": ["x"]}, {"after": {"model_call": 1}}]}),
+        (steer_text, {"chat": [{"steer": "x"}]}),
+        (steer_text, {"chat": [{"steer": []}]}),
+        (steer_text, {"chat": [{"steer": ["x", 1]}]}),
+        ("`host.steering.chat[0].interrupt` must be `true`", {"chat": [{"interrupt": False}]}),
+        ("unknown key `host.steering.chat[0].stop`", {"chat": [{"stop": True}]}),
+        ("`host.steering.chat[0].after` is `{model_call, chunk}`, `{model_call}` or "
+         "`{tool_call}`", {"chat": [{"after": {"chunk": 1}, "interrupt": True}]}),
+        ("`host.steering.chat[1].after` is",
+         {"chat": [{"interrupt": True},
+                   {"after": {"model_call": 1, "tool_call": 1}, "interrupt": True}]}),
+        (counts, {"chat": [{"after": {"tool_call": 0}, "interrupt": True}]}),
+        (counts, {"chat": [{"after": {"model_call": True}, "interrupt": True}]}),
+    ]
+    for message, steering in problems:
         with pytest.raises(ValueError, match=re.escape(message)):
             _check(_steering_case(steering, []), candidate=True)
 

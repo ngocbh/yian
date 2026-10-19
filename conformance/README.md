@@ -318,9 +318,9 @@ A case can't hold code, so its host is declared under `host`.
   is queued before the run. The points:
   - `{model_call: n}`: once the node's `n`th `agent` model call has finished (its last chunk
     taken); not when the call raises;
-  - `{model_call: n, chunk: k}`: once chunk `k` of that call has been delivered (a `reply`
-    streams as one chunk);
-  - `{tool_call: i}`: once the node's `i`th tool call has returned, counted as in
+  - `{model_call: n, chunk: k}`: once chunk `k` of that call has been delivered; `k` counts the
+    entry's `chunks` list, text or not (a `reply` streams as one chunk);
+  - `{tool_call: i}`: once the node's `i`th tool call has returned or raised, counted as in
     `expect.tool_calls` (`ask_user` included). Stub tools run one at a time, so this is call order.
 
   Counts start at 1. In a `resume` case they run across the cut run and the resume, as the
@@ -331,7 +331,8 @@ A case can't hold code, so its host is declared under `host`.
   The AGENT reads its inbox only at fixed places: steers and the interrupt at the top of each
   loop iteration (just before a model call), the interrupt before each later chunk of a
   streamed reply and before each tool call. A polled inbox can't act "before" a point, so:
-  - a steer before model call `n` is `after: {model_call: n-1}`;
+  - a steer before model call `n` is `after: {model_call: n-1}`, and one before model call 1
+    has no `after`;
   - an interrupt before tool call `i` is `after: {tool_call: i-1}`, or `after: {model_call: n}`
     for the first call of reply `n`;
   - an interrupt after chunk `k` is `after: {model_call: n, chunk: k}`.

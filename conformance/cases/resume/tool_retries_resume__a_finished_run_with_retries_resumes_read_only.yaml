@@ -1,0 +1,104 @@
+# From tests/engine/test_tool_retries_resume.py::test_a_finished_log_with_retries_replays_to_the_live_steps.
+# Also tests/engine/test_run_lifecycle.py::test_terminal_resume_is_read_only_silent_and_unlocks[succeeded].
+# Resuming a finished run returns its result read-only: nothing is appended (the retried TOOL's steps stay as
+# recorded), no event fires, and the tool is not called again.
+# env: YIAN_TOOL_RETRY_DELAY_SECONDS=0 makes the backoffs zero waits (each still takes a draw).
+kind: resume
+flow: |
+  id: t
+  name: t
+  nodes:
+    call:
+      kind: tool
+      tool_id: x
+      retries: 2
+  output: ${call.output}
+env:
+  YIAN_TOOL_RETRY_DELAY_SECONDS: '0'
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    x:
+      parameters:
+        type: object
+        properties: {}
+      results:
+      - raise:
+          class: TimeoutError
+          message: a
+      - raise:
+          class: TimeoutError
+          message: b
+      - return: ok
+  jitter: [0.0, 0.0]
+  crash_after_record: end
+expect:
+  output:
+    status: succeeded
+    output: ok
+  trace:
+  - - run_started
+    - null
+    - defaults:
+        TOOL_RETRY_DELAY_SECONDS: 0
+      learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, call]
+  - - node_step
+    - call
+    - step:
+        attempt: 1
+        error:
+          message: a
+          type: TimeoutError
+        event: failed
+        retry_in: 0.0
+  - - node_step
+    - call
+    - step:
+        attempt: 2
+        event: started
+  - - node_step
+    - call
+    - step:
+        attempt: 2
+        error:
+          message: b
+          type: TimeoutError
+        event: failed
+        retry_in: 0.0
+  - - node_step
+    - call
+    - step:
+        attempt: 3
+        event: started
+  - - node_succeeded
+    - call
+    - value: ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ok
+  events: []
+  tool_calls:
+    x:
+    - args: {}
+      call_id: r1/call
+      attempt: 1
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 2
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 3
+      node: call
+resume: {}

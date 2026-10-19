@@ -1,0 +1,62 @@
+# From tests/engine/test_run_connection_settings.py::test_resume_reports_extra_header_names_beside_missing_ones.
+# Header names the run didn't record are named beside the missing ones.
+# Record 3 is agent's node_started: its first model call runs, its result is refused.
+kind: resume
+flow: |
+  id: keyed
+  name: keyed
+  nodes:
+    agent: {kind: agent, prompt: hi}
+  output: ${agent.output}
+run:
+  run_id: r1
+  num_workers: 0
+  llm_config:
+    provider: openai
+    model: gpt-5.4
+    api_key: <key:1>
+    headers:
+      X-Gateway: <key:2>
+      X-Trace: <key:3>
+host:
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+  crash_after_record: 3
+expect:
+  raises:
+    class: ValueError
+    message: 'headers must have the header names this run recorded for its host key: missing X-Trace; not recorded X-Other'
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        agent:
+          _header_names: [X-Gateway, X-Trace]
+          _host_key: true
+          model: gpt-5.4
+          provider: openai
+          _connection:
+            method: api_key
+            source: host
+            endpoint: https://api.openai.com/v1
+      learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, agent]
+  events: []
+resume:
+  api_key: <key:1>
+  headers:
+    X-Gateway: <key:2>
+    X-Other: <key:4>

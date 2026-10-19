@@ -1,0 +1,166 @@
+# From tests/engine/test_run_recovery_matrix.py::test_namespaced_human_input_start_replays_without_host_interaction[map].
+# A HUMAN_INPUT inside a grown MAP item is retried under its namespaced id.
+# Record 11 is invoke#0/ask's node_started: the first answer is given, its result is refused.
+kind: resume
+flow: |
+  id: recovery-nested-human-map
+  name: recovery_nested_human_map
+  defs:
+    gate:
+      input:
+        token: !str
+      nodes:
+        ask:
+          kind: human_input
+          prompt: nested map input
+          output: str
+      output: ${ask.output}
+  nodes:
+    invoke:
+      kind: map
+      call: gate
+      over: ${["a", "b"]}
+      input:
+        token: ${item}
+  output: ${invoke.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  human:
+    invoke#0/ask: [lost, A]
+    invoke#1/ask: [B]
+  crash_after_record: 11
+expect:
+  output:
+    status: succeeded
+    output: [A, B]
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, invoke]
+  - - node_expanded
+    - invoke
+    - prune_ids: []
+      seed:
+      - token: a
+      - token: b
+  - [node_started, invoke/__start__]
+  - - node_succeeded
+    - invoke/__start__
+    - value: {}
+  - [node_started, invoke#0/__start__]
+  - - node_succeeded
+    - invoke#0/__start__
+    - value:
+        token: a
+  - [node_started, invoke#1/__start__]
+  - - node_succeeded
+    - invoke#1/__start__
+    - value:
+        token: b
+  - [node_started, invoke#0/ask]
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: [invoke#0/ask]
+  - [node_started, invoke#0/ask]
+  - - node_succeeded
+    - invoke#0/ask
+    - value: A
+  - [node_started, invoke#1/ask]
+  - - node_succeeded
+    - invoke#1/ask
+    - value: B
+  - [node_started, invoke#0/__end__]
+  - - node_succeeded
+    - invoke#0/__end__
+    - value: A
+  - [node_started, invoke#1/__end__]
+  - - node_succeeded
+    - invoke#1/__end__
+    - value: B
+  - [node_started, invoke/__end__]
+  - - node_succeeded
+    - invoke/__end__
+    - commit_target: invoke
+      value: [A, B]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: [A, B]
+  events:
+  - [RunResumed]
+  - - NodeStarted
+    - node_id: invoke#0/ask
+  - - NodeSucceeded
+    - node_id: invoke#0/ask
+      output: A
+  - - NodeStarted
+    - node_id: invoke#1/ask
+  - - NodeSucceeded
+    - node_id: invoke#1/ask
+      output: B
+  - - NodeStarted
+    - node_id: invoke#0/__end__
+  - - NodeSucceeded
+    - node_id: invoke#0/__end__
+      output: A
+  - - NodeStarted
+    - node_id: invoke#1/__end__
+  - - NodeSucceeded
+    - node_id: invoke#1/__end__
+      output: B
+  - - NodeStarted
+    - node_id: invoke/__end__
+  - - NodeSucceeded
+    - node_id: invoke/__end__
+      output: [A, B]
+      commit_as: invoke
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: [A, B]
+  - - RunSucceeded
+    - output: [A, B]
+  tool_calls:
+    ask_user:
+    - args:
+        question: nested map input
+        answer_schema:
+        - name: answer
+          type: str
+          required: true
+        node_id: invoke#0/ask
+      call_id: r1/invoke#0/ask
+      attempt: 1
+      node: invoke#0/ask
+    - args:
+        question: nested map input
+        answer_schema:
+        - name: answer
+          type: str
+          required: true
+        node_id: invoke#0/ask
+      call_id: r1/invoke#0/ask
+      attempt: 1
+      node: invoke#0/ask
+    - args:
+        question: nested map input
+        answer_schema:
+        - name: answer
+          type: str
+          required: true
+        node_id: invoke#1/ask
+      call_id: r1/invoke#1/ask
+      attempt: 1
+      node: invoke#1/ask
+resume: {}

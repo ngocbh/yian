@@ -1,0 +1,95 @@
+# From tests/engine/test_tool_retries_resume.py::test_a_crash_during_the_backoff_wait_rewaits_and_resumes_at_attempt_two.
+# A crash during the first backoff wait resumes at attempt 2 with the same call id; the restart waits the
+# recorded retry_in again without a new draw (jitter holds one draw, for attempt 1's backoff), and the resumed
+# attempt is the node's own start, so it records no `started` step.
+# env: YIAN_TOOL_RETRY_DELAY_SECONDS=1 with draw 0.0 keeps each wait at 0.5 s.
+# Record 4 is the `failed` step: the wait runs, then the `started` step is refused.
+kind: resume
+flow: |
+  id: t
+  name: t
+  nodes:
+    call:
+      kind: tool
+      tool_id: x
+      retries: 3
+  output: ${call.output}
+env:
+  YIAN_TOOL_RETRY_DELAY_SECONDS: '1'
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    x:
+      parameters:
+        type: object
+        properties: {}
+      results:
+      - raise:
+          class: TimeoutError
+          message: a
+      - return: ok
+  jitter: [0.0]
+  crash_after_record: 4
+expect:
+  output:
+    status: succeeded
+    output: ok
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, call]
+  - - node_step
+    - call
+    - step:
+        attempt: 1
+        error:
+          message: a
+          type: TimeoutError
+        event: failed
+        retry_in: 0.5
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: [call]
+  - [node_started, call]
+  - - node_succeeded
+    - call
+    - value: ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ok
+  events:
+  - [RunResumed]
+  - - NodeStarted
+    - node_id: call
+  - - NodeSucceeded
+    - node_id: call
+      output: ok
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: ok
+  - - RunSucceeded
+    - output: ok
+  tool_calls:
+    x:
+    - args: {}
+      call_id: r1/call
+      attempt: 1
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 2
+      node: call
+resume: {}

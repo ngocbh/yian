@@ -1,0 +1,79 @@
+# From tests/engine/test_run_recovery_prefixes.py::test_recorded_public_resume_keeps_completed_code_and_wire[5].
+# A node that settled before the crash is not run again: the resume retries nothing and only END runs.
+# A TOOL stands for the test's CODE node so the single call shows the node didn't rerun.
+# Record 4 is n's node_succeeded: __end__'s node_started is refused.
+kind: resume
+flow: |
+  id: one-tool
+  name: one_tool
+  input:
+    x: !str
+  nodes:
+    n:
+      kind: tool
+      tool_id: lookup
+      input:
+        x: ${input.x}
+  output: ${n.output}
+inputs:
+  x: Ada
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    lookup:
+      parameters:
+        type: object
+        properties:
+          x:
+            type: string
+        required: [x]
+      results:
+      - return: Ada
+  crash_after_record: 4
+expect:
+  output:
+    status: succeeded
+    output: Ada
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs:
+        x: Ada
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        x: Ada
+  - [node_started, n]
+  - - node_succeeded
+    - n
+    - value: Ada
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: []
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: Ada
+  events:
+  - [RunResumed]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: Ada
+  - - RunSucceeded
+    - output: Ada
+  tool_calls:
+    lookup:
+    - args:
+        x: Ada
+      call_id: r1/n
+      attempt: 1
+      node: n
+resume: {}

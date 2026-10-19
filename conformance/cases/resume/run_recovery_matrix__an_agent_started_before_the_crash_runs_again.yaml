@@ -1,0 +1,108 @@
+# From tests/engine/test_run_recovery_matrix.py::test_effect_start_prefix_replays_without_running_effect_work[agent].
+# An AGENT that started before the crash is retried on resume, and its model is called again.
+# Record 3 is effect's node_started: its first model call runs (the first reply), its result is refused.
+kind: resume
+flow: |
+  id: recovery-agent
+  name: recovery_agent
+  nodes:
+    effect:
+      kind: agent
+      prompt: this model must never be invoked
+      llm_config:
+        provider: openai
+        model: offline-test
+  output: ${effect.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  models:
+    effect:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: lost
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: again
+  crash_after_record: 3
+expect:
+  output:
+    status: succeeded
+    output: again
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        effect:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: offline-test
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, effect]
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: [effect]
+  - [node_started, effect]
+  - - node_succeeded
+    - effect
+    - value: again
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: again
+  events:
+  - [RunResumed]
+  - - NodeStarted
+    - node_id: effect
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: offline-test
+      node_id: effect
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: offline-test
+      node_id: effect
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: effect
+      output: again
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: again
+  - - RunSucceeded
+    - output: again
+  stream:
+  - chunk: again
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: effect
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: effect
+resume: {}

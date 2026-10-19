@@ -1,0 +1,64 @@
+# From tests/engine/test_run_connection_settings.py::test_resume_checks_the_given_header_values.
+# A resume header value is checked (a line break is refused) and the message doesn't show it.
+# Record 3 is agent's node_started: its first model call runs, its result is refused.
+kind: resume
+flow: |
+  id: keyed
+  name: keyed
+  nodes:
+    agent: {kind: agent, prompt: hi}
+  output: ${agent.output}
+run:
+  run_id: r1
+  num_workers: 0
+  llm_config:
+    provider: openai
+    model: gpt-5.4
+    api_key: <key:1>
+    headers:
+      X-Gateway: <key:2>
+      X-Trace: <key:3>
+host:
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+  crash_after_record: 3
+expect:
+  raises:
+    class: ValueError
+    message: header X-Trace value must be non-empty visible ASCII, with spaces or tabs only between characters
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        agent:
+          _header_names: [X-Gateway, X-Trace]
+          _host_key: true
+          model: gpt-5.4
+          provider: openai
+          _connection:
+            method: api_key
+            source: host
+            endpoint: https://api.openai.com/v1
+      learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, agent]
+  events: []
+resume:
+  api_key: <key:1>
+  headers:
+    X-Gateway: <key:2>
+    X-Trace: |-
+      bad
+      value-77

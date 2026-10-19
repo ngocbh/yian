@@ -1,0 +1,244 @@
+# From tests/engine/test_loop_run.py::test_loop_without_max_resumes_from_its_log.
+# A while LOOP without `max:` cut in the middle of its run resumes from the recorded drivers to the same output.
+# Record 15 is loop#1/step's node_started (mid-iteration): the step runs, its result is refused.
+kind: resume
+flow: |
+  id: counter
+  name: counter
+  defs:
+    bump:
+      input:
+        n: !int
+        exited: !bool
+      nodes:
+        step:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:loop_bump
+          input:
+            n: ${input.n}
+            exited: ${input.exited}
+          output:
+            n: int
+            exited: bool
+      output: ${step.output}
+  nodes:
+    loop:
+      kind: loop
+      call: bump
+      input:
+        n: 0
+        exited: false
+      while: not exited
+  output: ${loop.output}
+python_flow: |
+  id: counter
+  name: counter
+  defs:
+    bump:
+      input:
+        n: !int
+        exited: !bool
+      nodes:
+        step:
+          kind: code
+          code: tests.engine._compose_codefns:loop_bump
+          input:
+            n: ${input.n}
+            exited: ${input.exited}
+          output:
+            n: int
+            exited: bool
+      output: ${step.output}
+  nodes:
+    loop:
+      kind: loop
+      call: bump
+      input:
+        n: 0
+        exited: false
+      while: not exited
+  output: ${loop.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  crash_after_record: 15
+expect:
+  output:
+    status: succeeded
+    output:
+      exited: true
+      n: 3
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, loop]
+  - - node_expanded
+    - loop
+    - prune_ids: []
+      seed:
+      - exited: false
+        n: 0
+      - 0
+  - [node_started, loop#0/__start__]
+  - - node_succeeded
+    - loop#0/__start__
+    - value:
+        exited: false
+        n: 0
+  - [node_started, loop#0/step]
+  - - node_succeeded
+    - loop#0/step
+    - value:
+        exited: false
+        n: 1
+  - [node_started, loop#0/__end__]
+  - - node_succeeded
+    - loop#0/__end__
+    - value:
+        exited: false
+        n: 1
+  - [node_started, loop~1]
+  - - node_expanded
+    - loop~1
+    - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/step, loop~1]
+      seed:
+      - exited: false
+        n: 1
+      - 1
+  - [node_started, loop#1/__start__]
+  - - node_succeeded
+    - loop#1/__start__
+    - value:
+        exited: false
+        n: 1
+  - [node_started, loop#1/step]
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: [loop#1/step]
+  - [node_started, loop#1/step]
+  - - node_succeeded
+    - loop#1/step
+    - value:
+        exited: false
+        n: 2
+  - [node_started, loop#1/__end__]
+  - - node_succeeded
+    - loop#1/__end__
+    - value:
+        exited: false
+        n: 2
+  - [node_started, loop~2]
+  - - node_expanded
+    - loop~2
+    - prune_ids: [loop#1/__end__, loop#1/__start__, loop#1/step, loop~2]
+      seed:
+      - exited: false
+        n: 2
+      - 2
+  - [node_started, loop#2/__start__]
+  - - node_succeeded
+    - loop#2/__start__
+    - value:
+        exited: false
+        n: 2
+  - [node_started, loop#2/step]
+  - - node_succeeded
+    - loop#2/step
+    - value:
+        exited: true
+        n: 3
+  - [node_started, loop#2/__end__]
+  - - node_succeeded
+    - loop#2/__end__
+    - value:
+        exited: true
+        n: 3
+  - [node_started, loop~3]
+  - - node_succeeded
+    - loop~3
+    - commit_target: loop
+      value:
+        exited: true
+        n: 3
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        exited: true
+        n: 3
+  events:
+  - [RunResumed]
+  - - NodeStarted
+    - node_id: loop#1/step
+  - - NodeSucceeded
+    - node_id: loop#1/step
+      output:
+        exited: false
+        n: 2
+  - - NodeStarted
+    - node_id: loop#1/__end__
+  - - NodeSucceeded
+    - node_id: loop#1/__end__
+      output:
+        exited: false
+        n: 2
+  - - NodeStarted
+    - node_id: loop~2
+  - - NodeExpanded
+    - node_id: loop~2
+      grow:
+        seed:
+        - exited: false
+          n: 2
+        - 2
+        prune: [loop#1/__end__, loop#1/__start__, loop#1/step, loop~2]
+  - - NodeStarted
+    - node_id: loop#2/__start__
+  - - NodeSucceeded
+    - node_id: loop#2/__start__
+      output:
+        exited: false
+        n: 2
+  - - NodeStarted
+    - node_id: loop#2/step
+  - - NodeSucceeded
+    - node_id: loop#2/step
+      output:
+        exited: true
+        n: 3
+  - - NodeStarted
+    - node_id: loop#2/__end__
+  - - NodeSucceeded
+    - node_id: loop#2/__end__
+      output:
+        exited: true
+        n: 3
+  - - NodeStarted
+    - node_id: loop~3
+  - - NodeSucceeded
+    - node_id: loop~3
+      output:
+        exited: true
+        n: 3
+      commit_as: loop
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        exited: true
+        n: 3
+  - - RunSucceeded
+    - output:
+        exited: true
+        n: 3
+resume: {}

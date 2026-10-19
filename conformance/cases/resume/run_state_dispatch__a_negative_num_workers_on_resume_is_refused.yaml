@@ -1,0 +1,39 @@
+# From tests/engine/test_run_state_dispatch.py::test_run_resumed_requires_an_exact_nonnegative_worker_count[-1].
+# A negative resume.num_workers is refused before run_resumed is appended (the trace is the cut log).
+# Record 3 is n's node_started: the tool runs, its result is refused.
+kind: resume
+flow: |
+  id: one-tool
+  name: one_tool
+  input:
+    x: !str
+  nodes:
+    n:
+      kind: tool
+      tool_id: lookup
+      input:
+        x: ${input.x}
+  output: ${n.output}
+inputs:
+  x: Ada
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    lookup:
+      parameters:
+        type: object
+        properties:
+          x:
+            type: string
+        required: [x]
+      results:
+      - return: Ada
+  crash_after_record: 3
+expect:
+  raises:
+    class: ValueError
+    message: num_workers must be a non-negative integer
+resume:
+  num_workers: -1

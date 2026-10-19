@@ -1,6 +1,6 @@
 /**
  * The `NodeResult` closed sum `Output | Route | Grow` of `nodes/base.ts`, a port of
- * `tests/engine/test_node_result.py`. A failing node throws; there is no failure result variant.
+ * `tests/engine/test_node_result.py`. A failing node rejects; there is no failure result variant.
  * `Route` is tested in `route.test.ts`.
  *
  * Changed: Python's `frozenset()` is an empty `Set`, and `hasattr` is the `in` operator.

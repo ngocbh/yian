@@ -1,14 +1,15 @@
 /**
  * The node base contract: a node is a pure function of its bound input record.
  *
- * A node implements `async run(inputs, caps)` and resolves to ONE of the closed sum
- * `Output | Route | Grow` (`NodeResult`). The node never receives the pool: the engine's
+ * The base's async template method `run(inputs, caps)` fills defaults, checks the pre-asserts,
+ * calls the kind's body, checks the post-asserts, and resolves to ONE of the closed sum
+ * `Output | Route | Grow` (`NodeResult`). A kind supplies its body as `forward(inputs, caps)`,
+ * which returns a result or a promise of one. The node never receives the pool: the engine's
  * evaluator binds its inputs (the read boundary) and hands it a record. Narrow effects enter
- * through one capabilities object, `caps`, holding only what the node's traits ask for: MAP
- * receives `bindItem`, a node that records durable steps receives `steps`, and every node may
- * read its own abort `signal`. Failure is not a variant: a failing node rejects, and the
- * evaluator turns an expected rejection into a canonical failure retained by the accepted
- * failure record.
+ * through one capabilities object, `caps`: the node's own abort `signal`, plus what its traits
+ * ask for (`bindItem` for MAP, `steps` for a node that records durable steps). Failure is not a
+ * variant: a failing node rejects, and the evaluator turns an expected rejection into a
+ * canonical failure retained by the accepted failure record.
  *
  * Invariant: a node never writes the pool. It describes its one output value as
  * `new Output(value)`; the engine performs the write under the node's id. This keeps nodes pure.

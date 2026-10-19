@@ -22,6 +22,8 @@
  * - Message batches and declared names are arrays, not tuples. Dataclass `!=` is `not.toEqual`;
  *   each rejected row names its one error class, where Python accepts either `TypeError` or
  *   `ValueError` (`RangeError`).
+ * - Changed (rule `messages`, decision 43): a quoted key in a value path is spelled in the text
+ *   form, `value["a"][0]`, `input_feedback["text"]`, never Python's `value['a'][0]`.
  *
  * Later (T4-1 / T3-9): `test_attributed_backward_result_detaches_messages_and_keeps_reference_coordinates`,
  * `test_backward_attribution_rejects_malformed_root_coordinates`,
@@ -189,6 +191,15 @@ test.each<[unknown]>([[null], [7n], [true], [{}], [["Bad."]]])(
   },
 );
 
+test("result channel errors spell a quoted key in the text form", () => {
+  expect(() => new BackwardResult({ inputFeedback: { "my key": "Bad." as never } })).toThrow(
+    new TypeError('input_feedback["my key"] must be an array'),
+  );
+  expect(() => new BackwardResult({ variableFeedback: { v: [7] as never } })).toThrow(
+    new TypeError('variable_feedback["v"] messages must be strings'),
+  );
+});
+
 test("copyBackwardValue keeps a __proto__ key as data", () => {
   const copy = copyBackwardValue(JSON.parse('{"__proto__": {"x": "y"}}'), "value") as Record<string, unknown>;
   expect(Object.getPrototypeOf(copy)).toBe(Object.prototype);
@@ -219,10 +230,10 @@ class Point {
 }
 
 test.each<[string, unknown, typeof TypeError | typeof RangeError, string]>([
-  ["NaN", { a: [NaN] }, RangeError, "value['a'][0] must not contain NaN"],
+  ["NaN", { a: [NaN] }, RangeError, 'value["a"][0] must not contain NaN'],
   ["a Map", [new Map()], TypeError, "value[0] must contain only JSON values"],
-  ["a class instance", { p: new Point() }, TypeError, "value['p'] must contain only JSON values"],
-  ["undefined", [{ u: undefined }], TypeError, "value[0]['u'] must contain only JSON values"],
+  ["a class instance", { p: new Point() }, TypeError, 'value["p"] must contain only JSON values'],
+  ["undefined", [{ u: undefined }], TypeError, 'value[0]["u"] must contain only JSON values'],
 ])("copyBackwardValue refuses %s with the nested name", (_name, value, cls, message) => {
   expect(() => copyBackwardValue(value, "value")).toThrow(cls);
   expect(() => copyBackwardValue(value, "value")).toThrow(message);
@@ -377,11 +388,20 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError]>([
   expect(factory).toThrow(cls);
 });
 
+test.each<[string, unknown, string]>([
+  ["a trace that isn't an array", "x", "failure trace must be an array"],
+  ["a plain {key} item", [{ key: "writer" }], "failure trace item must be an OriginRef"],
+])("backward context checks the failure's trace before copying it (%s)", (_name, trace, message) => {
+  const failure = new Failure({ code: "node.execute", message: "Forward failed.", nodeId: "writer" });
+  (failure as { trace: unknown }).trace = trace;
+  expect(() => new BackwardContext(null, { failure })).toThrow(new TypeError(message));
+});
+
 test("copyBackwardValue with a reused memo names a failing container by its own path", () => {
   const memo = new Map<object, unknown>();
   const failing = { x: [NaN] };
-  expect(() => copyBackwardValue({ a: failing }, "first", memo)).toThrow("first['a']['x'][0] must not contain NaN");
-  expect(() => copyBackwardValue([failing], "second", memo)).toThrow("second[0]['x'][0] must not contain NaN");
+  expect(() => copyBackwardValue({ a: failing }, "first", memo)).toThrow('first["a"]["x"][0] must not contain NaN');
+  expect(() => copyBackwardValue([failing], "second", memo)).toThrow('second[0]["x"][0] must not contain NaN');
 });
 
 const BAD_PART = "output path components must be strings or non-negative integers";

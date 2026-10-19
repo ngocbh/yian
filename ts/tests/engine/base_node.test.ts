@@ -5,10 +5,11 @@
  * `test_validate_assertions_names_the_given_path`.
  *
  * TS-only: a new node's defaults, a subclass overriding traits, the constructor's origin check, the
- * parse error's `cause`, the node's type table reaching the assertion parse, `checkNamedPrompt`'s
- * prefix and `cause`, `validatePrompts` being a no-op on the base, `validateExecutionSetup`
- * (a missing `forward`, then the assertion parse), the stage markers' `original`, `cause` and
- * message, and `NodeAssertFailed`'s defaults.
+ * parse error's `cause`, the node's type table reaching the assertion parse, `parseNamedCondition`
+ * refusing every constructor when given no table, `checkNamedPrompt`'s prefix and `cause`,
+ * `validatePrompts` being a no-op on the base, `validateExecutionSetup` (a missing `forward`, then
+ * the assertion parse), the stage markers' `original`, `cause` and message (a thrown value with no
+ * text is named by its type), and `NodeAssertFailed`'s defaults.
  *
  * Changed: Python's `vars(node)` is `Object.hasOwn`, and `hasattr` is the `in` operator.
  *
@@ -37,6 +38,7 @@ import {
   NodeBodyError,
   NodeKind,
   Output,
+  parseNamedCondition,
 } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { Assertion, ContractOrigins, type OutputContract, ValueContract } from "../../src/nodes/contracts.ts";
@@ -158,6 +160,14 @@ test("assertions parse against the node's type table", () => {
   expect(node.validateAssertions()).toBeUndefined();
 });
 
+test("a condition parsed without a type table refuses every constructor", () => {
+  expect(() => parseNamedCondition("Size(x) == x", "case 'c'")).toThrow(
+    /^case 'c' is not a valid boolean expression: /,
+  );
+  expect(parseNamedCondition("Size(x) == x", "case 'c'", new Map([["Size", Type.scalar(ValueKind.INTEGER)]])))
+    .toBeUndefined();
+});
+
 test("a prompt check names its subject and keeps the template error as the cause", () => {
   let error: unknown;
   try {
@@ -228,6 +238,12 @@ test.each([
   expect(thrown.cause).toBe("boom");
   expect(thrown.message).toBe("boom");
   expect(new Marker(7n).message).toBe("7");
+
+  // A value with no text still wraps, named by its type.
+  const bare: unknown = Object.create(null);
+  const textless = new Marker(bare);
+  expect(textless.original).toBe(bare);
+  expect(textless.message).toBe("object");
 });
 
 test("NodeAssertFailed defaults its failure code and keeps its assertion and cause", () => {

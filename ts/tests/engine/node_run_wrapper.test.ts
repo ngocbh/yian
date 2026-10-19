@@ -22,7 +22,9 @@
  * TS-only: a failing pre-assert rejects rather than throws; a node without `forward` rejects; a
  * body changing its input record doesn't change what a post-assert sees; a false assert's
  * `failureCode`; a `Route` and a `Grow` pass a failing post-assert; `runForEvaluator`'s stage
- * markers and its input capture; `run` rejects with the original errors.
+ * markers (a thrown value with no text included) and its input capture; `run` rejects with the
+ * original errors; an async `forward` that throws after an `await` rejects (a `NodeBodyError` under
+ * `runForEvaluator`), and its `Output` gets the post-asserts.
  *
  * Later (T3-8 / T4-x): `test_runtime_does_not_drive_backward`,
  * `test_wrapper_delegates_to_real_code_node_forward`, `test_wrapper_delegates_for_grow_kind`,
@@ -112,6 +114,25 @@ class ThrowNode extends Node {
 
   override forward(): NodeResult {
     throw this.error;
+  }
+}
+
+/** A node whose async body awaits once, then throws `error` if given, else returns `value`. */
+class AsyncNode extends Node {
+  readonly kind = NodeKind.CODE;
+  value: unknown;
+  error: unknown;
+
+  constructor(nodeId: string, value: unknown, error?: unknown) {
+    super(nodeId);
+    this.value = value;
+    this.error = error;
+  }
+
+  override async forward(): Promise<NodeResult> {
+    await null;
+    if (this.error !== undefined) throw this.error;
+    return new Output(this.value);
   }
 }
 
@@ -335,6 +356,35 @@ test("runForEvaluator wraps a body error, keeping a non-Error original", async (
   expect(text).toBeInstanceOf(NodeBodyError);
   expect((text as NodeBodyError).original).toBe("boom");
   expect((text as Error).message).toBe("boom");
+
+  // A thrown value with no text still wraps, kept by identity.
+  const bare: unknown = Object.create(null);
+  const textless = await rejection(new ThrowNode("n", bare).runForEvaluator({}));
+  expect(textless).toBeInstanceOf(NodeBodyError);
+  expect((textless as NodeBodyError).original).toBe(bare);
+});
+
+test("an async forward that throws after an await rejects, wrapped by runForEvaluator", async () => {
+  const thrown = new Error("late boom");
+
+  expect(await rejection(new AsyncNode("n", null, thrown).run({}))).toBe(thrown);
+  const error = await rejection(new AsyncNode("n", null, thrown).runForEvaluator({}));
+  expect(error).toBeInstanceOf(NodeBodyError);
+  expect((error as NodeBodyError).original).toBe(thrown);
+});
+
+test("an async forward's Output gets its post-asserts", async () => {
+  const holding = new AsyncNode("n", 42n);
+  holding.postAsserts = [new Assertion("output == 42", "output is 42")];
+  const failing = new AsyncNode("n", 7n);
+  failing.postAsserts = [new Assertion("output > 100", "output is large")];
+
+  expect(await holding.run({})).toEqual(new Output(42n));
+  const error = await rejection(failing.run({}));
+  expect(error).toBeInstanceOf(NodeAssertFailed);
+  expect((error as Error).message).toContain("post-assert failed");
+  const marked = await rejection(failing.runForEvaluator({}));
+  expect(marked).toBeInstanceOf(AssertionStageError);
 });
 
 test("runForEvaluator wraps a default's binding error", async () => {

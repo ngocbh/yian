@@ -5,7 +5,7 @@
  * Changed: `NodeKind` is a const object of strings, so a member is its value and has no
  * `.value`; `hasattr` is the `in` operator.
  *
- * Later (T3-8): the other two.
+ * Later (T3-8): `test_retired_ref_package_is_absent` and `test_call_node_excludes_map_fields`.
  */
 
 import { expect, test } from "bun:test";

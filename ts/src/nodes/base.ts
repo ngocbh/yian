@@ -38,6 +38,7 @@ import {
   type Type,
   type Value,
   type ValueRecord,
+  writeAsJson,
 } from "../typesys/values.ts";
 import { applyDefaults, BindingError, copyValue, type ReservedBinder, validateParameters } from "./binding.ts";
 import {
@@ -202,13 +203,13 @@ export class BackwardResult {
     if (!isRecord(inputs)) throw new TypeError("input_feedback must be a record");
     for (const name of Object.keys(inputs)) {
       const messages = inputs[name];
-      if (!isList(messages)) throw new TypeError(`input_feedback[${reprText(name)}] must be an array`);
+      if (!isList(messages)) throw new TypeError(`input_feedback[${writeAsJson(name)}] must be an array`);
       for (const message of messages) validateFeedback(message, message, [name]);
     }
     validateTextFeedback(selfFeedback, "self_feedback");
     if (!isRecord(variables)) throw new TypeError("variable_feedback must be a record");
     for (const name of Object.keys(variables)) {
-      validateTextFeedback(variables[name], `variable_feedback[${reprText(name)}]`);
+      validateTextFeedback(variables[name], `variable_feedback[${writeAsJson(name)}]`);
     }
     // Only this channel copies with a memo: Python deep-copies it, so its shared subtrees stay shared.
     this.inputFeedback = copyBackwardValue(inputs, "input_feedback", new Map()) as typeof this.inputFeedback;
@@ -228,7 +229,7 @@ export class BackwardResult {
  *
  * @param value The JSON value to check and copy.
  * @param name The value's name in error messages; a nested value is named `name[0]` or
- *   `name['k']`.
+ *   `name["k"]`.
  * @param memo Containers already copied, mapped to their copies. A container met again returns
  *   its earlier copy, so the result shares it. Omitted, every occurrence is copied separately.
  * @returns The copy, with fresh frozen arrays and records.
@@ -255,7 +256,7 @@ export function copyBackwardValue(value: unknown, name: string, memo?: Map<objec
   } else if (isRecord(value)) {
     result = {};
     for (const key of Object.keys(value)) {
-      setField(result, key, copyBackwardValue(value[key], `${name}[${reprText(key)}]`, memo) as Value);
+      setField(result, key, copyBackwardValue(value[key], `${name}[${writeAsJson(key)}]`, memo) as Value);
     }
   } else {
     throw new TypeError(`${name} must contain only JSON values`);
@@ -286,7 +287,8 @@ export function validateDeclaredNames(names: unknown, fieldName: string): void {
  * Parse a condition expression, prefixing its parse error with `subject`. The node kinds with
  * predicates use it.
  *
- * A `T(...)` constructor must name a type in `types`, the node's type table.
+ * A `T(...)` constructor must name a type in `types`, the node's type table; with no table,
+ * every constructor is refused.
  *
  * @throws ExpressionError `<subject> is not a valid boolean expression: <error>`, with the parse
  *   error as its `cause`.
@@ -297,7 +299,8 @@ export function parseNamedCondition(
   types: ReadonlyMap<string, Type> | null = null,
 ): void {
   try {
-    parseCondition(expression, types);
+    // An omitted table is an empty one, so every constructor is refused, as Python's `types or {}`.
+    parseCondition(expression, types ?? new Map());
   } catch (error) {
     if (!(error instanceof ExpressionError)) throw error;
     throw new ExpressionError(`${subject} is not a valid boolean expression: ${error.message}`, { cause: error });
@@ -430,8 +433,11 @@ export class BackwardContext {
     validateDeclaredNames(variableNames, "variable_names");
     if (failure !== null) {
       if (!isExactly(failure, Failure)) throw new TypeError("failure must be a Failure or null");
-      const trace = failure.trace.map((origin) => Object.freeze(new OriginRef(origin.key)));
-      failure = new Failure({ ...failure, trace });
+      // Rebuilt once to check the trace with Failure's own errors, as Python's `__post_init__`,
+      // before its items are copied.
+      const checked = new Failure(failure);
+      const trace = checked.trace.map((origin) => Object.freeze(new OriginRef(origin.key)));
+      failure = new Failure({ ...checked, trace });
       Object.freeze(failure.trace);
       Object.freeze(failure);
     }
@@ -485,8 +491,9 @@ export class BackwardContext {
 export function validateBackwardResult(result: BackwardResult, context: BackwardContext): void {
   if (!isExactly(result, BackwardResult)) throw new TypeError("result must be a BackwardResult");
   if (!isExactly(context, BackwardContext)) throw new TypeError("context must be a BackwardContext");
-  // Python rebuilds the result here; a TS result was validated and frozen when it was built, and
-  // `isExactly` refuses a subclass, so there's nothing to recheck.
+  // Python rebuilds the result here. `isExactly` refuses a subclass, and a result built by the
+  // constructor was validated and frozen then; an object forged with `Object.create` isn't
+  // defended against.
   const inputs = context.inputs;
   const names = Object.keys(result.inputFeedback);
   if (names.length > 0 && inputs === null) throw new RangeError("input_feedback requires usable recorded inputs");
@@ -600,9 +607,19 @@ export class NodeAssertFailed extends Error {
   }
 }
 
-/** Return a stage marker's message: an `Error`'s own message, else the thrown value as text. */
+/**
+ * Return a stage marker's message: an `Error`'s own message, else the thrown value as text, else
+ * its type name when it has no text.
+ */
 function markerMessage(original: unknown): string {
-  return original instanceof Error ? original.message : String(original);
+  if (original instanceof Error) return original.message;
+  // A body may throw a value with no text (a null-prototype object, a throwing `toString`); the
+  // marker must still wrap it.
+  try {
+    return String(original);
+  } catch {
+    return jsTypeName(original);
+  }
 }
 
 /** A stage marker retaining one value thrown by a node's body. Used by the evaluator. */
@@ -1088,7 +1105,8 @@ export abstract class Node {
    * assertion and kind predicate parses), the pre-asserts run against the bound record, `forward`
    * runs, and the post-asserts check an `Output` against the inputs as bound. The promise
    * resolves to exactly one `Output | Route | Grow`. Every failure rejects it, with the original
-   * error; the checks before `forward` still run before the promise is returned.
+   * error; the checks and the synchronous part of `forward` (up to its first `await`) still run
+   * before the promise is returned.
    *
    * @param inputs The bound input record; the template fills defaults into a fresh copy.
    * @param caps The capabilities the node's traits ask for, passed to `forward`.
@@ -1108,7 +1126,9 @@ export abstract class Node {
    * @param inputs The bound input record.
    * @param caps The capabilities the node's traits ask for, passed to `forward`.
    * @param captureInputs Receives the completed input record after defaults and before the
-   *   assertions or the body, before this returns its promise; never passed to `forward`.
+   *   assertions or the body, before this returns its promise; never passed to `forward`. The
+   *   checks and the synchronous part of `forward` (up to its first `await`) also run before the
+   *   promise is returned.
    */
   runForEvaluator(
     inputs: Readonly<Record<string, unknown>>,
@@ -1136,8 +1156,9 @@ export abstract class Node {
     captureInputs: ((inputs: Record<string, unknown>) => void) | null,
     caps: NodeCaps,
   ): Promise<NodeResult> {
-    // Everything before the first `await` runs inside the caller's call, so `captureInputs` has
-    // run by the time `runForEvaluator` returns; `async` still turns a throw here into a rejection.
+    // Everything before the first `await` runs inside the caller's call, the synchronous part of
+    // `forward` included, so `captureInputs` has run by the time `runForEvaluator` returns;
+    // `async` still turns a throw here into a rejection.
     const params = this.params ?? [];
     if (!isList(params)) {
       throw new TypeError(`node ${reprText(this.id)} params must be an exact list, got ${jsTypeName(params)}`);
@@ -1250,9 +1271,9 @@ export abstract class Node {
    * `run` template calls it after defaults and before the assertions or the body; a kind that
    * overrides `run` keeps the evaluator's pre-run boundary.
    *
-   * @returns Finite JSON material, empty by default. The reserved `input_output_paths` record
-   *   addresses declared inputs by paths of string fields or non-negative list indices into the
-   *   output.
+   * @returns JSON material (infinity is a value; NaN is refused), empty by default. The reserved
+   *   `input_output_paths` record addresses declared inputs by paths of string fields or
+   *   non-negative list indices into the output.
    */
   captureBackwardContext(): Record<string, unknown> {
     return {};

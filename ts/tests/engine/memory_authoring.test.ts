@@ -44,6 +44,7 @@ import { CompiledFlow, copyGraph } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
 
 const ROOT = new DeclSite([], ["root"], null);
 
@@ -194,6 +195,15 @@ test("authored identity includes flow id and policy but excludes origin", () => 
       },
       name: "reflective",
       site: { node: null, owner: ["root"], scope: [] },
+      type: "reflective",
+    },
+  ]);
+  const agentManifest = (flowManifest(agentPolicy).nodes as JsonObject).agent as JsonObject;
+  expect(agentManifest.memories).toEqual([
+    {
+      config: { entries: [], type: "mapping" },
+      name: "reflective",
+      site: { node: "agent", owner: ["root"], scope: [] },
       type: "reflective",
     },
   ]);

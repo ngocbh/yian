@@ -269,14 +269,16 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - Every manifest value is a typed wrapper: an int `{"type": "int", "value": "<digits>"}`, a float
   its IEEE-754 big-endian hex (`inf` is `7ff0000000000000`, `-0` is written as `0`), a mapping's
   entries sorted by key, a `FileRef` its `{uri, mime, name}` mapping. NaN is refused (V8 and
-  JavaScriptCore write its bits differently). Counts (TOOL `retries`, LOOP `iteration` and
-  `maxIters`, END `n`, indexes) are raw JSON ints and must be safe integers; LOOP `times` is an int
-  wrapper.
+  JavaScriptCore write its bits differently). Counts (TOOL and AGENT `retries`, LOOP `iteration`
+  and `maxIters`, END `n`, indexes) are raw JSON ints and must be safe integers; AGENT `retries` is
+  written even at 0, TOOL's only when non-zero; LOOP `times` is an int wrapper.
 - A node's or flow's fields are its own enumerable keys; a field the manifest doesn't know throws.
   `kind` is emitted; trait fields are ignored: the kind fixes them.
 - A CODE node contributes `{"inline": body}`, `{"ref": "./x.ts:fn"}` or
-  `{"builtin": "identity", "field": "x"}`; `baseDir`, `mode` and its origins aren't identity. The
-  AGENT manifest is not ported yet: an AGENT node throws.
+  `{"builtin": "identity", "field": "x"}`; `baseDir`, `mode` and its origins aren't identity. An
+  AGENT contributes its authored fields (`own_llm_config`, not `llmConfig`); `llmConfig`,
+  `llmConfigLabel`, `wiresLlmConfig`, `llmValueTypes`, `callTime` and `hostCredentials` aren't
+  identity.
 - In `typesCompatible` and `typeRelation`, an open numeric end is `null`.
 - Compare positions and scopes with `sameExecutionPosition`/`sameExecutionScope`, and arrays with
   `sameItems` (`src/nodes/contracts.ts`).

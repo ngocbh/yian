@@ -661,14 +661,10 @@ describe("tag positions", () => {
 
 // ---------- Harvested cases ----------
 
-/**
- * The call the loader makes on a case's document. `registry` reads the flow's typedefs on
- * first use, so a check that runs before them (`typedefsOnly`) doesn't; `builder` holds the
- * ledger reads.
- */
+/** The call the loader makes on a case's document; `builder` holds the ledger reads. */
 type Call = (
   document: SourceDocument,
-  registry: () => TypeRegistry,
+  registry: TypeRegistry,
   diagnostics: LoadDiagnostics,
   builder: SourceCatalogBuilder,
 ) => void;
@@ -721,7 +717,7 @@ function readSlot(
 const slot =
   (...read: Slot): Call =>
   (document, registry, diagnostics, builder) =>
-    readSlot(read, document, registry(), diagnostics, builder);
+    readSlot(read, document, registry, diagnostics, builder);
 
 const output =
   (path: string[]): Call =>
@@ -737,12 +733,12 @@ const unread =
 function runRow(row: Row): void {
   const { case_, document } = caseDocument(row.id, { file: row.file });
   const root = document.root;
-  let typedefs: TypeRegistry | undefined;
-  const registry = (): TypeRegistry =>
-    (typedefs ??= root.has("typedefs") ? readTypedefs(root.mapping("typedefs")) : new Map());
+  const registry: TypeRegistry = root.has("typedefs")
+    ? readTypedefs(root.mapping("typedefs"))
+    : new Map();
   const diagnostics = LoadDiagnostics.fromDocument(document);
   const builder = new SourceCatalogBuilder();
-  for (const read of row.ledger ?? []) readSlot(read, document, registry(), diagnostics, builder);
+  for (const read of row.ledger ?? []) readSlot(read, document, registry, diagnostics, builder);
   const expected = (case_["expect"] as Case)["load"];
   if (expected === "ok") {
     row.call(document, registry, diagnostics, builder);

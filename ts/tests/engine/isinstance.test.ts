@@ -345,5 +345,4 @@ test("traced isinstance records one route over the first argument", () => {
 test("a node starts with an empty type table", () => {
   const node = new CaseNode("route", [new Case("s", { when: "isinstance(order, Sell)" })]);
   expect(node.types).toEqual(new Map());
-  expect(node.types.size).toBe(0);
 });

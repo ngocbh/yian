@@ -2,16 +2,15 @@
  * A CASE `when` set in code that doesn't parse is a setup error: a port of
  * `tests/engine/test_python_built_conditions.py`.
  *
- * Ported: `test_unparseable_case_when_raises_its_parse_error_from_setup` and the CASE half of
+ * Ported: `test_unparseable_case_when_raises_its_parse_error_from_setup` and
  * `test_validate_conditions_names_the_given_path`.
  *
  * Changed: `run` is async, so the setup error is a rejection.
  *
  * TS-only: a CASE whose `when` parses rejects from `run` as not ported yet.
  *
- * Later (T3-8, LOOP): `test_unparseable_loop_predicate_raises_before_the_first_body`,
- * `test_times_loop_has_no_predicate_to_check` and the LOOP half of
- * `test_validate_conditions_names_the_given_path`.
+ * Later (T3-8, LOOP): `test_unparseable_loop_predicate_raises_before_the_first_body` and
+ * `test_times_loop_has_no_predicate_to_check`.
  *
  * Later (T4-9): `test_case_when_evaluation_error_still_fails_in_forward`.
  *
@@ -46,7 +45,7 @@ test("unparseable case when raises its parse error from setup", async () => {
   expect(message).toContain("write `x > 0`");
 });
 
-test("validate conditions names the given path (case)", () => {
+test("validate conditions names the given path", () => {
   // The pre-run check names a node by its static path.
   const node = new CaseNode("gate", [new Case("pos", { when: "${x} > 0" })]);
 

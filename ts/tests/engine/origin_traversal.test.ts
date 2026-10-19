@@ -24,7 +24,7 @@
  *
  * Later (T3-8, LOOP): the LOOP row of `test_each_composite_exposes_its_signature_and_baked_child`.
  *
- * Later (T3-10): the 25 compile tests, and the composite rows' recursion into the child flow and
+ * Later (T3-10): the 24 compile tests, and the composite rows' recursion into the child flow and
  * alias identity.
  */
 
@@ -258,12 +258,13 @@ test("case predicate origins traverse and rewrite by arm identity", () => {
   });
 
   const rewritten = copy.cases;
-  expect(rewritten[0]).toBe(rewritten[1]!);
+  expect(rewritten[0]).toBe(rewritten[1]);
   expect(rewritten[0]!.origin).toEqual(origin("mapped/case/shared"));
   expect(rewritten[2]!.origin).toEqual(origin("mapped/case/second"));
   expect(calls).toEqual(["case/shared", "case/second"]);
   expect(shared.origin).toEqual(origin("case/shared"));
   expect(node.cases).toBe(cases);
-  expect(node.cases).toEqual([shared, shared, second]);
   expect(node.cases[0]).toBe(shared);
+  expect(node.cases[1]).toBe(shared);
+  expect(node.cases[2]).toBe(second);
 });

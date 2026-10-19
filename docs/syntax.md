@@ -2117,24 +2117,24 @@ A few providers need a note:
   a forced tool call, so without `thinking` they also get a tool the model may call,
   corrected and retried the same way.
 
-    Changed (TS yian): every call streams. A reply that ends without its stop reason
-    fails the model call and is retried; an error in the stream fails it, retried when
-    its kind allows (overloaded, rate limit, server and timeout errors). A `refusal`
-    stop is `provider.refused`, `pause_turn` fails the call, and a full context window
-    is `provider.context_length`; `billing_error` is `provider.quota`. Thinking goes
-    back with its signature only to the provider, model, and account that wrote it.
-    With `thinking: {type: enabled}`, continuing a tool loop whose first reply's signed
-    thinking can't go back (after a model or provider switch) fails before sending,
-    naming the fix.
+    Changed (TS yian): every call streams. A reply that ends without its stop reason fails
+    the model call and is retried; an error in the stream fails it, retried when its kind
+    allows (overloaded, rate limit, server and timeout errors; an unknown type counts as a
+    server error). A `refusal` stop is `provider.refused`, `pause_turn` fails the call,
+    and a full context window is `provider.context_length`; `billing_error` is
+    `provider.quota`. Thinking goes back with its signature only to the provider, model,
+    and account that wrote it. With `thinking: {type: enabled}`, continuing a tool loop
+    whose first reply's signed thinking can't go back (after a model or provider switch)
+    fails before sending, naming the fix.
 
 - `ollama` takes what the Ollama client sends: `think` (`true`, `false`, or a level),
   `options` (`temperature`, `num_ctx`, …), `keep_alive`, `logprobs`, and
   `top_logprobs`. It has no default `think`, so the model's own default applies.
 
 An omitted field is not sent, so the provider's default applies. The one exception is
-Anthropic `max_tokens`, which the Messages API requires; when the block leaves it unset,
-yian, not a client library, fills it in from the model's output limit (64000 or 128000 for
-the Claude models it knows, else 4096).
+Anthropic `max_tokens`, which the Messages API requires; the client library fills it in
+when the block leaves it unset. Changed (TS yian): yian fills it in from the model's output
+limit (64000 or 128000 for the Claude models it knows, else 4096).
 
 Some request fields are built by yian, so a block cannot set them: the model, the
 messages (`messages`, `input`, `contents`), the system prompt (`system`,

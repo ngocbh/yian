@@ -1,0 +1,32 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  input: {proj: !str }
+  defs:
+    child:
+      input: {proj: !str }
+      nodes:
+        ask:
+          kind: human_input
+          input: {proj: '${input.proj}'}
+          adaptive_questions:
+            prompt: "Q ${proj}"
+            llm_config: {provider: azure, model: d}
+      output: ${ask.output}
+  nodes:
+    sub:
+      kind: call
+      call: child
+      input: {proj: '${input.proj}'}
+  output: ${sub.output}
+inputs:
+  proj: x
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: ValueError
+    message: 'node ''ask'' adaptive_questions.llm_config in ''sub'': provider azure needs llm_config.base_url, the Azure OpenAI resource endpoint (https://<resource>.openai.azure.com/); set llm_config.base_url beside provider: azure. AZURE_OPENAI_ENDPOINT is not read'
+  trace: []
+  events: []

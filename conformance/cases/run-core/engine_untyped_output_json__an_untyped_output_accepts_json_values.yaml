@@ -1,0 +1,80 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    mk:
+      kind: code
+      input:
+        s: ${input.s}
+      code: |
+        return [1, "a", {"k": 2.5}]
+  output: ${mk.output}
+inputs:
+  s: x
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+    - 1
+    - a
+    - k: 2.5
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        s: x
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        s: x
+  - [node_started, mk]
+  - - node_succeeded
+    - mk
+    - value:
+      - 1
+      - a
+      - k: 2.5
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+      - 1
+      - a
+      - k: 2.5
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        s: x
+  - - NodeStarted
+    - node_id: mk
+  - - NodeSucceeded
+    - node_id: mk
+      output:
+      - 1
+      - a
+      - k: 2.5
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+      - 1
+      - a
+      - k: 2.5
+  - - RunSucceeded
+    - output:
+      - 1
+      - a
+      - k: 2.5

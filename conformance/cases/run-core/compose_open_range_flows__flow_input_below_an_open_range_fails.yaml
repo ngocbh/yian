@@ -1,0 +1,71 @@
+kind: run
+flow: |2
+
+  id: open_inputs
+  name: open_inputs
+  input:
+    n: !int(0..)
+    m: !int(..100) 50
+    f: !float(0.0..) 0.0
+  nodes:
+    echo:
+      kind: code
+      input:
+        n: ${input.n}
+        m: ${input.m}
+        f: ${input.f}
+      code: |
+        return [inputs["n"], inputs["m"], inputs["f"]]
+      output: list(float)
+  output: ${echo.output}
+inputs:
+  n: -1
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      frames:
+      - label: flow.yaml
+        range: [5, 6, 5, 15]
+      message: 'input ''n'': -1 is below the inclusive int minimum 0'
+      node: __start__
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        n: -1
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_failed
+    - __start__
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [5, 6, 5, 15]
+        message: 'input ''n'': -1 is below the inclusive int minimum 0'
+        node: __start__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [5, 6, 5, 15]
+        message: 'input ''n'': -1 is below the inclusive int minimum 0'
+        node: __start__
+  - - RunFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [5, 6, 5, 15]
+        message: 'input ''n'': -1 is below the inclusive int minimum 0'
+        node: __start__

@@ -1,0 +1,112 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: Literal(buy), conviction: float}
+    Sell: {action: Literal(sell), price: float}
+    Decision: Union(Buy, Sell)
+    Size: Literal(s, m, l)
+  input:
+    order: !object
+  nodes:
+    d:
+      kind: code
+      input:
+        order: ${input.order}
+      output: object
+      code: |
+        return inputs["order"]
+    route:
+      kind: case
+      cases:
+        - when: Buy(d.output).conviction > 0.4
+          then: strong
+      else: weak
+    strong:
+      kind: code
+      code: return "strong"
+    weak:
+      kind: code
+      code: return "weak"
+  output: ${strong.output | weak.output}
+inputs:
+  order:
+    action: buy
+    conviction: 0.5
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: strong
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        order:
+          action: buy
+          conviction: 0.5
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        order:
+          action: buy
+          conviction: 0.5
+  - [node_started, d]
+  - - node_succeeded
+    - d
+    - value:
+        action: buy
+        conviction: 0.5
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: strong
+  - [node_started, strong]
+  - - node_succeeded
+    - strong
+    - value: strong
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: strong
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        order:
+          action: buy
+          conviction: 0.5
+  - - NodeStarted
+    - node_id: d
+  - - NodeSucceeded
+    - node_id: d
+      output:
+        action: buy
+        conviction: 0.5
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: strong
+      node_id: route
+  - - NodeSkipped
+    - node_id: weak
+  - - NodeStarted
+    - node_id: strong
+  - - NodeSucceeded
+    - node_id: strong
+      output: strong
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: strong
+  - - RunSucceeded
+    - output: strong

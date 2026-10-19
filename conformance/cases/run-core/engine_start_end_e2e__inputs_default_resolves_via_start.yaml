@@ -1,0 +1,103 @@
+kind: run
+flow: |2
+
+  id: defaulted
+  name: defaulted
+  input:
+    topic: !str
+    window: !int 30
+  nodes:
+    emit:
+      kind: code
+      input:
+        topic: ${input.topic}
+        window: ${input.window}
+      output:
+        report: str
+        n: int
+      code: ./fixtures/compose_codefns.ts:make_report
+  output:
+    report: ${emit.output.report}
+    n: ${emit.output.n}
+python_flow: |2
+
+  id: defaulted
+  name: defaulted
+  input:
+    topic: !str
+    window: !int 30
+  nodes:
+    emit:
+      kind: code
+      input:
+        topic: ${input.topic}
+        window: ${input.window}
+      output:
+        report: str
+        n: int
+      code: tests.engine._compose_codefns:make_report
+  output:
+    report: ${emit.output.report}
+    n: ${emit.output.n}
+inputs:
+  topic: ACME
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      n: 4
+      report: report for ACME
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        topic: ACME
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        topic: ACME
+        window: 30
+  - [node_started, emit]
+  - - node_succeeded
+    - emit
+    - value:
+        n: 4
+        report: report for ACME
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        n: 4
+        report: report for ACME
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        topic: ACME
+        window: 30
+  - - NodeStarted
+    - node_id: emit
+  - - NodeSucceeded
+    - node_id: emit
+      output:
+        n: 4
+        report: report for ACME
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        n: 4
+        report: report for ACME
+  - - RunSucceeded
+    - output:
+        n: 4
+        report: report for ACME

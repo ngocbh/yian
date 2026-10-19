@@ -1,0 +1,112 @@
+kind: run
+flow: |
+  id: inline-outer-assert
+  name: inline_outer_assert
+  nodes:
+    composite:
+      kind: call
+      asserts:
+        - output == 999
+      nodes:
+        inner:
+          kind: code
+          code: |
+            return 1
+          output: int
+      output: ${inner.output}
+  output: ${composite.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: assertion.failed
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 12]
+      - label: flow.yaml
+        range: [7, 9, 7, 22]
+      message: 'node ''composite/__end__'' post-assert failed: output == 999'
+      node: composite/__end__
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, composite]
+  - - node_expanded
+    - composite
+    - prune_ids: []
+      seed: {}
+  - [node_started, composite/__start__]
+  - - node_succeeded
+    - composite/__start__
+    - value: {}
+  - [node_started, composite/inner]
+  - - node_succeeded
+    - composite/inner
+    - value: 1
+  - [node_started, composite/__end__]
+  - - node_failed
+    - composite/__end__
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 12]
+        - label: flow.yaml
+          range: [7, 9, 7, 22]
+        message: 'node ''composite/__end__'' post-assert failed: output == 999'
+        node: composite/__end__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: composite
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed: {}
+      node_id: composite
+  - - NodeStarted
+    - node_id: composite/__start__
+  - - NodeSucceeded
+    - node_id: composite/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: composite/inner
+  - - NodeSucceeded
+    - node_id: composite/inner
+      output: 1
+  - - NodeStarted
+    - node_id: composite/__end__
+  - - NodeFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 12]
+        - label: flow.yaml
+          range: [7, 9, 7, 22]
+        message: 'node ''composite/__end__'' post-assert failed: output == 999'
+        node: composite/__end__
+  - - RunFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 12]
+        - label: flow.yaml
+          range: [7, 9, 7, 22]
+        message: 'node ''composite/__end__'' post-assert failed: output == 999'
+        node: composite/__end__

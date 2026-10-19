@@ -1,0 +1,93 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    n: !date
+  nodes:
+    route:
+      kind: case
+      on: ${input.n}
+      cases:
+        - when: 2026-01-02
+          then: one
+        - when: "2026-01-03"
+          then: two
+      else: other
+    one:
+      kind: code
+      code: |
+        return "one"
+      output: str
+    two:
+      kind: code
+      code: |
+        return "two"
+      output: str
+    other:
+      kind: code
+      code: |
+        return "other"
+      output: str
+  output: ${one.output | two.output | other.output}
+inputs:
+  n: 2026-01-02
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: one
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        n: 2026-01-02
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        n: 2026-01-02
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: one
+  - [node_started, one]
+  - - node_succeeded
+    - one
+    - value: one
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: one
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        n: 2026-01-02
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: one
+      node_id: route
+  - - NodeSkipped
+    - node_id: two
+  - - NodeSkipped
+    - node_id: other
+  - - NodeStarted
+    - node_id: one
+  - - NodeSucceeded
+    - node_id: one
+      output: one
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: one
+  - - RunSucceeded
+    - output: one

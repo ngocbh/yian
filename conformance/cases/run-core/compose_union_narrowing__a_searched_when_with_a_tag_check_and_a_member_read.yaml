@@ -1,0 +1,175 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Limit: {type: 'Literal(limit)', price: float}
+    Market: {type: 'Literal(market)'}
+    Leg: Union(Limit, Market)
+    Buy: {action: 'Literal(buy)', qty: int, limit: float, leg: Leg}
+    Hold: {action: 'Literal(hold)', note: str}
+    Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}
+    Decision: Union(Buy, Hold, Sell)
+    HoldOrSell: Union(Hold, Sell)
+    Wrap: {decision: Decision}
+    BuyOrSell: Union(Buy, Sell)
+    Text: {text: str}
+    Num: {num: int}
+    Reply: Union(Text, Num)
+    Mode: Literal(a, b)
+    Cancel: {action: 'Literal(cancel)', reason: str}
+    Rest: Union(Hold, Sell, Cancel)
+    Narrow: {action: 'Literal(buy)', qty: int, limit: float, leg: Limit}
+    SellOrNarrow: Union(Sell, Narrow)
+  input:
+    s: !str
+  nodes:
+    d:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Decision
+      code: |
+        if (inputs['s'] === 'buy')
+            return {'action': 'buy', 'qty': 1, 'limit': 6.0, 'leg': {'type': 'market'}}
+        return {'action': 'sell', 'qty': 2, 'price': 1.5, 'note': 'n'}
+    route:
+      kind: case
+      cases:
+        - when: "d.output.action == 'buy' and d.output.limit > 5"
+          then: t
+      else: e
+    t:
+      kind: code
+      output: str
+      code: return 'branch'
+    e:
+      kind: code
+      output: str
+      code: return 'else'
+  output: ${route.output}
+python_flow: |
+  id: p
+  name: p
+  typedefs:
+    Limit: {type: 'Literal(limit)', price: float}
+    Market: {type: 'Literal(market)'}
+    Leg: Union(Limit, Market)
+    Buy: {action: 'Literal(buy)', qty: int, limit: float, leg: Leg}
+    Hold: {action: 'Literal(hold)', note: str}
+    Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}
+    Decision: Union(Buy, Hold, Sell)
+    HoldOrSell: Union(Hold, Sell)
+    Wrap: {decision: Decision}
+    BuyOrSell: Union(Buy, Sell)
+    Text: {text: str}
+    Num: {num: int}
+    Reply: Union(Text, Num)
+    Mode: Literal(a, b)
+    Cancel: {action: 'Literal(cancel)', reason: str}
+    Rest: Union(Hold, Sell, Cancel)
+    Narrow: {action: 'Literal(buy)', qty: int, limit: float, leg: Limit}
+    SellOrNarrow: Union(Sell, Narrow)
+  input:
+    s: !str
+  nodes:
+    d:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Decision
+      code: |
+        if inputs['s'] == 'buy':
+            return {'action': 'buy', 'qty': 1, 'limit': 6.0, 'leg': {'type': 'market'}}
+        return {'action': 'sell', 'qty': 2, 'price': 1.5, 'note': 'n'}
+    route:
+      kind: case
+      cases:
+        - when: "d.output.action == 'buy' and d.output.limit > 5"
+          then: t
+      else: e
+    t:
+      kind: code
+      output: str
+      code: return 'branch'
+    e:
+      kind: code
+      output: str
+      code: return 'else'
+  output: ${route.output}
+inputs:
+  s: sell
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: else
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        s: sell
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        s: sell
+  - [node_started, d]
+  - - node_succeeded
+    - d
+    - value:
+        action: sell
+        note: n
+        price: 1.5
+        qty: 2
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: '#else'
+  - [node_started, e]
+  - - node_succeeded
+    - e
+    - value: else
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: else
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        s: sell
+  - - NodeStarted
+    - node_id: d
+  - - NodeSucceeded
+    - node_id: d
+      output:
+        action: sell
+        note: n
+        price: 1.5
+        qty: 2
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: '#else'
+      node_id: route
+  - - NodeSkipped
+    - node_id: t
+  - - NodeStarted
+    - node_id: e
+  - - NodeSucceeded
+    - node_id: e
+      output: else
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: else
+  - - RunSucceeded
+    - output: else

@@ -1,0 +1,147 @@
+kind: run
+rules: [messages]
+flow: |2
+
+  id: opaque-turn-zero
+  name: opaque_turn_zero
+  input:
+    initial_n: !str
+  defs:
+    body:
+      input:
+        n: !int
+        note: !str
+      nodes: {}
+      output:
+        n: ${input.n}
+        note: ${input.note + "!"}
+  nodes:
+    loop:
+      kind: loop
+      call: body
+      input:
+        n: ${input.initial_n + ""}
+        note: seed
+      while: "false"
+      max: 1
+  output: ${loop.output}
+inputs:
+  initial_n: not-an-int
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      frames:
+      - label: flow.yaml
+        range: [9, 10, 9, 14]
+      message: '"not-an-int" does not match declared type int'
+      node: loop
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        initial_n: not-an-int
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        initial_n: not-an-int
+  - [node_started, loop]
+  - - node_failed
+    - loop
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [9, 10, 9, 14]
+        message: '"not-an-int" does not match declared type int'
+        node: loop
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        initial_n: not-an-int
+  - - NodeStarted
+    - node_id: loop
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [9, 10, 9, 14]
+        message: '"not-an-int" does not match declared type int'
+        node: loop
+  - - RunFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [9, 10, 9, 14]
+        message: '"not-an-int" does not match declared type int'
+        node: loop
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      frames:
+      - label: flow.yaml
+        range: [9, 10, 9, 14]
+      message: '''not-an-int'' does not match declared type int'
+      node: loop
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        initial_n: not-an-int
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        initial_n: not-an-int
+  - [node_started, loop]
+  - - node_failed
+    - loop
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [9, 10, 9, 14]
+        message: '''not-an-int'' does not match declared type int'
+        node: loop
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        initial_n: not-an-int
+  - - NodeStarted
+    - node_id: loop
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [9, 10, 9, 14]
+        message: '''not-an-int'' does not match declared type int'
+        node: loop
+  - - RunFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [9, 10, 9, 14]
+        message: '''not-an-int'' does not match declared type int'
+        node: loop

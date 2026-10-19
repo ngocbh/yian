@@ -1,0 +1,134 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  defs:
+    child:
+      input:
+        x: !str
+      nodes:
+        n:
+          kind: code
+          input:
+            x: ${input.x}
+          output: str
+          code: "return String(inputs['x'])"
+      output: ${n.output}
+  input:
+    s: !str
+  nodes:
+    mk:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Any
+      code: |
+        return 3
+    c:
+      kind: call
+      call: child
+      input:
+        x: !str ${mk.output}
+  output: ${c.output}
+python_flow: |
+  id: p
+  name: p
+  defs:
+    child:
+      input:
+        x: !str
+      nodes:
+        n:
+          kind: code
+          input:
+            x: ${input.x}
+          output: str
+          code: return repr(inputs['x'])
+      output: ${n.output}
+  input:
+    s: !str
+  nodes:
+    mk:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Any
+      code: |
+        return 3
+    c:
+      kind: call
+      call: child
+      input:
+        x: !str ${mk.output}
+  output: ${c.output}
+inputs:
+  s: x
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      frames:
+      - label: flow.yaml
+        range: [29, 10, 29, 27]
+      message: 'binding ''x'': 3 does not match declared type str'
+      node: c
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        s: x
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        s: x
+  - [node_started, mk]
+  - - node_succeeded
+    - mk
+    - value: 3
+  - [node_started, c]
+  - - node_failed
+    - c
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [29, 10, 29, 27]
+        message: 'binding ''x'': 3 does not match declared type str'
+        node: c
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        s: x
+  - - NodeStarted
+    - node_id: mk
+  - - NodeSucceeded
+    - node_id: mk
+      output: 3
+  - - NodeStarted
+    - node_id: c
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [29, 10, 29, 27]
+        message: 'binding ''x'': 3 does not match declared type str'
+        node: c
+  - - RunFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [29, 10, 29, 27]
+        message: 'binding ''x'': 3 does not match declared type str'
+        node: c

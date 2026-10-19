@@ -1,0 +1,93 @@
+kind: run
+flow: |2
+
+  id: fan
+  name: fan
+  input:
+    xs: !list(int)
+  defs:
+    one:
+      input:
+        v: !int
+      nodes:
+        echo:
+          kind: code
+          input:
+            v: ${input.v}
+          code: |
+            return {"v": inputs["v"]}
+      output: ${echo.output}
+  nodes:
+    each:
+      kind: map
+      over: ${input.xs}
+      call: one
+      input:
+        v: ${item}
+  output: ${each.output}
+env:
+  YIAN_MAX_TOTAL_NODES: '3'
+inputs:
+  xs: [1, 2, 3, 4, 5]
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.growth
+      frames:
+      - label: flow.yaml
+        range: [19, 3, 19, 7]
+      message: expansion exceeded node budget (3) at spawner 'each'
+      node: each
+  trace:
+  - - run_started
+    - null
+    - defaults:
+        MAX_TOTAL_NODES: 3
+      inputs:
+        xs: [1, 2, 3, 4, 5]
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        xs: [1, 2, 3, 4, 5]
+  - [node_started, each]
+  - - node_failed
+    - each
+    - failure:
+        code: contract.growth
+        frames:
+        - label: flow.yaml
+          range: [19, 3, 19, 7]
+        message: expansion exceeded node budget (3) at spawner 'each'
+        node: each
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        xs: [1, 2, 3, 4, 5]
+  - - NodeStarted
+    - node_id: each
+  - - NodeFailed
+    - failure:
+        code: contract.growth
+        frames:
+        - label: flow.yaml
+          range: [19, 3, 19, 7]
+        message: expansion exceeded node budget (3) at spawner 'each'
+        node: each
+  - - RunFailed
+    - failure:
+        code: contract.growth
+        frames:
+        - label: flow.yaml
+          range: [19, 3, 19, 7]
+        message: expansion exceeded node budget (3) at spawner 'each'
+        node: each

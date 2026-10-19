@@ -1,0 +1,23 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    blk: !object
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {openai: '${input.blk}'}
+  output: ${chat.output}
+inputs:
+  blk:
+    bogus: 1
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: LayerFieldError
+    message: 'node ''chat'' llm_config.openai: `openai.bogus` is not a supported field of the OpenAI Responses API request; allowed: access_programs, max_output_tokens, max_tool_calls, metadata, moderation, prompt_cache_key, prompt_cache_options, prompt_cache_retention, reasoning, safety_identifier, service_tier, temperature, text, top_logprobs, top_p, truncation, user'
+  trace: []
+  events: []

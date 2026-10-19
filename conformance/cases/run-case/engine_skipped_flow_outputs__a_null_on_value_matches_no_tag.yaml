@@ -1,0 +1,125 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    approve: !bool
+  nodes:
+    cls:
+      kind: code
+      output: Optional(Literal(a, b))
+      code: |
+        return null
+    route:
+      kind: case
+      on: ${cls.output}
+      cases:
+        - when: a
+          then: na
+        - when: b
+          then: nb
+    na:
+      kind: code
+      output: str
+      code: |
+        return "A"
+    nb:
+      kind: code
+      output: str
+      code: |
+        return "B"
+  output:
+    v: ${na.output | nb.output}
+python_flow: |
+  id: f
+  name: f
+  input:
+    approve: !bool
+  nodes:
+    cls:
+      kind: code
+      output: Optional(Literal(a, b))
+      code: |
+        return None
+    route:
+      kind: case
+      on: ${cls.output}
+      cases:
+        - when: a
+          then: na
+        - when: b
+          then: nb
+    na:
+      kind: code
+      output: str
+      code: |
+        return "A"
+    nb:
+      kind: code
+      output: str
+      code: |
+        return "B"
+  output:
+    v: ${na.output | nb.output}
+inputs:
+  approve: true
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      v: null
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        approve: true
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        approve: true
+  - [node_started, cls]
+  - [node_succeeded, cls]
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: '#else'
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        v: null
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        approve: true
+  - - NodeStarted
+    - node_id: cls
+  - - NodeSucceeded
+    - node_id: cls
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: '#else'
+      node_id: route
+  - - NodeSkipped
+    - node_id: na
+  - - NodeSkipped
+    - node_id: nb
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        v: null
+  - - RunSucceeded
+    - output:
+        v: null

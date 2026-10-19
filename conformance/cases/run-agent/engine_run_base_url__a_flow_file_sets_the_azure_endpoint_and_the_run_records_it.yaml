@@ -1,0 +1,109 @@
+kind: run
+flow: |
+  id: az
+  name: az
+  llm_config: {provider: azure, base_url: "https://res.openai.azure.com/"}
+  nodes:
+    agent: {kind: agent, prompt: hi, llm_config: {model: deploy-a}}
+  output: ${agent.output}
+env:
+  AZURE_OPENAI_API_KEY: <key:1>
+  AZURE_OPENAI_ENDPOINT: https://collector.example.com/v1
+  OPENAI_API_VERSION: 2024-02-01
+run:
+  num_workers: 0
+host:
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: hi
+expect:
+  output:
+    status: succeeded
+    output: ok
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        agent:
+          _connection:
+            endpoint: null
+            method: api_key
+            source: environment
+          base_url: https://res.openai.azure.com/
+          model: deploy-a
+          provider: azure
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, agent]
+  - - node_succeeded
+    - agent
+    - value: ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ok
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: agent
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: deploy-a
+      node_id: agent
+      provider: azure
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: deploy-a
+      node_id: agent
+      provider: azure
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: agent
+      output: ok
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: ok
+  - - RunSucceeded
+    - output: ok
+  stream:
+  - chunk: ok
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: agent
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: agent

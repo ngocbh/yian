@@ -1,0 +1,87 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    approve: !bool
+    other: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: a
+        - when: ${input.other}
+          then: b
+    a:
+      kind: code
+      output: str
+      code: |
+        return "A"
+    b:
+      kind: code
+      output: str
+      code: |
+        return "B"
+  output:
+    v: ${a.output | b.output}
+inputs:
+  approve: false
+  other: false
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      v: null
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        approve: false
+        other: false
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        approve: false
+        other: false
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: '#else'
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        v: null
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        approve: false
+        other: false
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: gate
+  - - NodeSkipped
+    - node_id: a
+  - - NodeSkipped
+    - node_id: b
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        v: null
+  - - RunSucceeded
+    - output:
+        v: null

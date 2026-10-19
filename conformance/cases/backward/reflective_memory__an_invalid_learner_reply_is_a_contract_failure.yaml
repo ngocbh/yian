@@ -1,0 +1,245 @@
+# From tests/engine/test_reflective_memory.py::test_parsed_response_validation_failure_is_final_and_sanitized.
+# Pins: a reflective learner reply that doesn't match the reflection schema fails the backward call
+# at the learn stage as a final contract error, without the reply's text, and commits nothing.
+# YIAN_DEFAULT_PROVIDER/MODEL: a reflective learner's model config comes from the defaults, not the flow.
+kind: backward
+flow: |
+  id: memory-run
+  name: memory_run
+  long_term_memory: {lessons: reflective}
+  nodes:
+    work:
+      kind: code
+      code: return 7
+      output: int
+  output: ${work.output}
+env:
+  YIAN_DEFAULT_PROVIDER: openai
+  YIAN_DEFAULT_MODEL: gpt-5.5
+run:
+  run_id: r1
+  num_workers: 0
+  learnable: true
+host:
+  memory: {}
+  models:
+    __memory__:
+      memory:lessons:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"actions":[{"action":"add","lesson_id":"one","text":"text-secret","unexpected":"response-secret"}]}'
+backward:
+- feedback: Prefer eight.
+expect:
+  output:
+    status: succeeded
+    output: 7
+  trace:
+  - - run_started
+    - null
+    - learnable: true
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - forward_capture:
+        bound_inputs: {}
+        node_data:
+          input_output_paths: {}
+        route:
+          kind: record
+        scope:
+          boundary: start
+          flow_path: []
+          occurrence_path: []
+          static_path: [__start__]
+      value: {}
+  - [node_started, work]
+  - - node_succeeded
+    - work
+    - forward_capture:
+        bound_inputs: {}
+        route:
+          kind: record
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [work]
+      value: 7
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - forward_capture:
+        bound_inputs:
+          result: 7
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 3
+              path: []
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: []
+          occurrence_path: []
+          static_path: [__end__]
+      value: 7
+  - - backward_started
+    - null
+    - attempt_id: 1
+      feedback: Prefer eight.
+  - - backward_finished
+    - null
+    - attempt_id: 1
+      attributed_results:
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 1
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 5
+            path: []
+            run_id: r1
+        feedback: [Prefer eight.]
+        invoked: true
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 3
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: null
+          input_name: null
+          message_index: 0
+          parents: []
+          sender: null
+        feedback: [Prefer eight.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [Prefer eight.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 5
+          path: []
+          run_id: r1
+      outcome:
+        failure:
+          cause:
+            code: reflective.contract
+            message: reflector returned invalid structured output
+            retryable: false
+            stage: learn
+          code: reflective.contract
+          memory: lessons
+          message: reflector returned invalid structured output
+          node_id: null
+          node_started_seq: null
+          run_id: null
+          scope: null
+          stage: learn
+        feedback:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        learning:
+          failures:
+          - failure:
+              code: reflective.contract
+              message: reflector returned invalid structured output
+              retryable: false
+              stage: learn
+            memory: lessons
+            operation: learn
+          policies:
+          - commit_id: null
+            failure: null
+            memory: lessons
+            status: unrequested
+          status: failed
+        status: failed
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: work
+  - - NodeSucceeded
+    - node_id: work
+      output: 7
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: 7
+  - - RunSucceeded
+    - output: 7
+  backward:
+  - failure:
+      cause:
+        code: reflective.contract
+        message: reflector returned invalid structured output
+        retryable: false
+        stage: learn
+      code: reflective.contract
+      memory: lessons
+      message: reflector returned invalid structured output
+      node_id: null
+      node_started_seq: null
+      run_id: null
+      scope: null
+      stage: learn
+    feedback:
+      input_feedback: {}
+      self_feedback: []
+      variable_feedback: {}
+    learning:
+      failures:
+      - failure:
+          code: reflective.contract
+          message: reflector returned invalid structured output
+          retryable: false
+          stage: learn
+        memory: lessons
+        operation: learn
+      policies:
+      - commit_id: null
+        failure: null
+        memory: lessons
+        status: unrequested
+      status: failed
+    status: failed
+  memory:
+    lessons: ''

@@ -1,0 +1,117 @@
+# From tests/engine/test_agent_steering.py::test_non_steerable_agent_never_calls_the_inbox.
+# An AGENT not authored `steerable: true` never reads its inbox: a queued steer and a set
+# interrupt change nothing, so the model gets the plain request and its reply is the output.
+kind: run
+flow: |
+  id: steer
+  name: steer
+  llm_config: {provider: openai, model: gpt-5.5}
+  nodes:
+    chat:
+      kind: agent
+      steerable: false
+      system_prompt: Help.
+      prompt: Help the user.
+      output: str
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  steering:
+    chat:
+    - steer: [ignored]
+    - interrupt: true
+  models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: done
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Help.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Help the user.
+expect:
+  output:
+    status: succeeded
+    output: done
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        chat:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, chat]
+  - - node_succeeded
+    - chat
+    - value: done
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: done
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: chat
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: chat
+      output: done
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: done
+  - - RunSucceeded
+    - output: done
+  stream:
+  - chunk: done
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: chat
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: chat

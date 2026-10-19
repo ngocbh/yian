@@ -1,0 +1,128 @@
+# From tests/engine/test_agent_steering.py::test_interrupt_mid_stream_keeps_the_partial_text_and_ends_the_stream.
+# An interrupt set once chunk 2 of the streamed reply is delivered stops the stream there: the
+# output is the text shown so far ("hello big"), the stream ends with a final "" chunk, the one
+# ModelCallFinished has no error, and the reply's tool call never runs.
+kind: run
+flow: |
+  id: steer
+  name: steer
+  llm_config: {provider: openai, model: gpt-5.5}
+  nodes:
+    chat:
+      kind: agent
+      steerable: true
+      tools: [lookup]
+      system_prompt: Help.
+      prompt: Help the user.
+      output: str
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  steering:
+    chat:
+    - after:
+        model_call: 1
+        chunk: 2
+      interrupt: true
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+        required: [topic]
+      results: []
+  models:
+    chat:
+      agent:
+      - chunks:
+        - text: hello
+        - text: ' big'
+        - text: ' world'
+        - tool_call:
+            index: 0
+            id: call-1
+            name: lookup
+            arguments: '{"topic": "a"}'
+        - finish: tool_calls
+expect:
+  output:
+    status: succeeded
+    output: hello big
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        chat:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, chat]
+  - - node_succeeded
+    - chat
+    - value: hello big
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: hello big
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: chat
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: chat
+      output: hello big
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: hello big
+  - - RunSucceeded
+    - output: hello big
+  stream:
+  - chunk: hello
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: chat
+  - chunk: ' big'
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: chat
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: chat

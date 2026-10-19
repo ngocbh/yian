@@ -1,0 +1,15 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  nodes:
+    write: {kind: agent, prompt: hi}
+  output: ${write.output}
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: ValueError
+    message: Agent 'write' has no provider or model; set llm_config.provider/model, pass --provider/--model, or run 'yian auth <provider>'
+  trace: []
+  events: []

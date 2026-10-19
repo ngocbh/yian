@@ -1,0 +1,249 @@
+# From tests/engine/test_agent_session_notes.py::test_learned_notes_do_not_cross_sibling_conversations.
+# Pins: a note learned by one sibling AGENT's session reaches only that sibling's next request; a
+# sibling with null feedback isn't called backward.
+kind: run
+flow: |
+  id: sibling-notes
+  name: sibling_notes
+  llm_config: {provider: openai, model: test-model}
+  input:
+    question: !str
+  nodes:
+    left:
+      kind: agent
+      long_term_memory: {left_chat: session}
+      input: {question: "${input.question}"}
+      prompt: "left: ${question}"
+      output: str
+    right:
+      kind: agent
+      long_term_memory: {right_chat: session}
+      input: {question: "${input.question}"}
+      prompt: "right: ${question}"
+      output: str
+  output:
+    left: ${left.output}
+    right: ${right.output}
+inputs:
+  question: next question
+run:
+  run_id: r2
+  num_workers: 0
+host:
+  memory:
+    before:
+    - inputs:
+        question: first question
+      run:
+        run_id: r1
+        num_workers: 0
+        learnable: true
+      backward:
+      - feedback:
+          left: Check units.
+          right: null
+  models:
+    left:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: answer
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: answer
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: |-
+                You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+
+                Memory context (canonical JSON; sections are ordered from outer workflow to local agent):
+                {"order":"outer-to-local","sections":[{"index":1,"memory":"left_chat","text":"Check the measurement units before answering."}]}
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: 'left: first question'
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: text
+              text: answer
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: 'left: next question'
+      backward:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"input_feedback": {}, "self_feedback": ["Check the measurement units before answering."], "variable_feedback": {}}'
+    right:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: answer
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: answer
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: 'right: first question'
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: text
+              text: answer
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: 'right: next question'
+expect:
+  output:
+    status: succeeded
+    output:
+      left: answer
+      right: answer
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        left:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: test-model
+          provider: openai
+        right:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: test-model
+          provider: openai
+      inputs:
+        question: next question
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        question: next question
+  - [node_started, left]
+  - - node_succeeded
+    - left
+    - value: answer
+  - [node_started, right]
+  - - node_succeeded
+    - right
+    - value: answer
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        left: answer
+        right: answer
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        question: next question
+  - - NodeStarted
+    - node_id: left
+  - - ModelCallStarted
+    - exchange_id: <id:4>
+      model: test-model
+      node_id: left
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:4>
+      model: test-model
+      node_id: left
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: left
+      output: answer
+  - - NodeStarted
+    - node_id: right
+  - - ModelCallStarted
+    - exchange_id: <id:5>
+      model: test-model
+      node_id: right
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:5>
+      model: test-model
+      node_id: right
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: right
+      output: answer
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        left: answer
+        right: answer
+  - - RunSucceeded
+    - output:
+        left: answer
+        right: answer
+  stream:
+  - chunk: answer
+    exchange_id: <id:4>
+    final: false
+    key: text
+    node_id: left
+  - chunk: ''
+    exchange_id: <id:4>
+    final: true
+    key: text
+    node_id: left
+  - chunk: answer
+    exchange_id: <id:5>
+    final: false
+    key: text
+    node_id: right
+  - chunk: ''
+    exchange_id: <id:5>
+    final: true
+    key: text
+    node_id: right

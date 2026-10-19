@@ -1,0 +1,93 @@
+# From tests/engine/test_run_connection_settings.py::test_resume_sends_the_given_headers_to_the_key_agents.
+# Header names compare without case, as in HTTP: the recorded names given in other cases resume the run, and
+# no header value is recorded.
+# Record 3 is agent's node_started: its first model call runs, its result is refused.
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# restarted node (decision 20); the trace still pins the resume.
+kind: resume
+flow: |
+  id: keyed
+  name: keyed
+  nodes:
+    agent: {kind: agent, prompt: hi}
+  output: ${agent.output}
+run:
+  run_id: r1
+  num_workers: 0
+  llm_config:
+    provider: openai
+    model: gpt-5.4
+    api_key: <key:1>
+    headers:
+      X-Gateway: <key:2>
+      X-Trace: <key:3>
+host:
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+  crash_after_record: 3
+expect:
+  output:
+    status: succeeded
+    output: ok
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        agent:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: host
+          _header_names: [X-Gateway, X-Trace]
+          _host_key: true
+          model: gpt-5.4
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, agent]
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: [agent]
+  - [node_started, agent]
+  - - node_succeeded
+    - agent
+    - value: ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ok
+  stream:
+  - chunk: ok
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: agent
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: agent
+resume:
+  api_key: <key:1>
+  headers:
+    x-gateway: <key:2>
+    X-TRACE: <key:3>

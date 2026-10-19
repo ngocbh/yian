@@ -1,0 +1,546 @@
+kind: run
+flow: |
+  id: nested-inline-composites
+  name: nested_inline_composites
+  input:
+    items: !list(int)
+  nodes:
+    outer_call:
+      kind: call
+      input:
+        items: ${input.items}
+      nodes:
+        inner:
+          kind: map
+          over: ${input.items}
+          input:
+            value: ${item}
+          nodes:
+            echo:
+              kind: code
+              code: ./fixtures/compose_codefns.ts:echo_x
+              input:
+                x: ${input.value}
+              output: int
+          output: ${echo.output}
+      output: ${inner.output}
+    outer_loop:
+      kind: loop
+      times: 2
+      input:
+        n: 0
+        exited: false
+      nodes:
+        inner:
+          kind: call
+          input:
+            n: ${input.n}
+            exited: ${input.exited}
+          nodes:
+            bump:
+              kind: code
+              code: ./fixtures/compose_codefns.ts:loop_bump
+              input:
+                n: ${input.n}
+                exited: ${input.exited}
+              output:
+                n: int
+                exited: bool
+          output: ${bump.output}
+      output: ${inner.output}
+  output:
+    mapped: ${outer_call.output}
+    looped: ${outer_loop.output}
+python_flow: |
+  id: nested-inline-composites
+  name: nested_inline_composites
+  input:
+    items: !list(int)
+  nodes:
+    outer_call:
+      kind: call
+      input:
+        items: ${input.items}
+      nodes:
+        inner:
+          kind: map
+          over: ${input.items}
+          input:
+            value: ${item}
+          nodes:
+            echo:
+              kind: code
+              code: tests.engine._compose_codefns:echo_x
+              input:
+                x: ${input.value}
+              output: int
+          output: ${echo.output}
+      output: ${inner.output}
+    outer_loop:
+      kind: loop
+      times: 2
+      input:
+        n: 0
+        exited: false
+      nodes:
+        inner:
+          kind: call
+          input:
+            n: ${input.n}
+            exited: ${input.exited}
+          nodes:
+            bump:
+              kind: code
+              code: tests.engine._compose_codefns:loop_bump
+              input:
+                n: ${input.n}
+                exited: ${input.exited}
+              output:
+                n: int
+                exited: bool
+          output: ${bump.output}
+      output: ${inner.output}
+  output:
+    mapped: ${outer_call.output}
+    looped: ${outer_loop.output}
+inputs:
+  items: [3, 1, 2]
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      looped:
+        exited: false
+        n: 2
+      mapped: [3, 1, 2]
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        items: [3, 1, 2]
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        items: [3, 1, 2]
+  - [node_started, outer_call]
+  - - node_expanded
+    - outer_call
+    - prune_ids: []
+      seed:
+        items: [3, 1, 2]
+  - [node_started, outer_loop]
+  - - node_expanded
+    - outer_loop
+    - prune_ids: []
+      seed:
+      - exited: false
+        n: 0
+      - 0
+  - [node_started, outer_call/__start__]
+  - - node_succeeded
+    - outer_call/__start__
+    - value:
+        items: [3, 1, 2]
+  - [node_started, outer_loop#0/__start__]
+  - - node_succeeded
+    - outer_loop#0/__start__
+    - value:
+        exited: false
+        n: 0
+  - [node_started, outer_call/inner]
+  - - node_expanded
+    - outer_call/inner
+    - prune_ids: []
+      seed:
+      - value: 3
+      - value: 1
+      - value: 2
+  - [node_started, outer_loop#0/inner]
+  - - node_expanded
+    - outer_loop#0/inner
+    - prune_ids: []
+      seed:
+        exited: false
+        n: 0
+  - [node_started, outer_call/inner/__start__]
+  - - node_succeeded
+    - outer_call/inner/__start__
+    - value: {}
+  - [node_started, outer_loop#0/inner/__start__]
+  - - node_succeeded
+    - outer_loop#0/inner/__start__
+    - value:
+        exited: false
+        n: 0
+  - [node_started, outer_call/inner#0/__start__]
+  - - node_succeeded
+    - outer_call/inner#0/__start__
+    - value:
+        value: 3
+  - [node_started, outer_call/inner#1/__start__]
+  - - node_succeeded
+    - outer_call/inner#1/__start__
+    - value:
+        value: 1
+  - [node_started, outer_call/inner#2/__start__]
+  - - node_succeeded
+    - outer_call/inner#2/__start__
+    - value:
+        value: 2
+  - [node_started, outer_loop#0/inner/bump]
+  - - node_succeeded
+    - outer_loop#0/inner/bump
+    - value:
+        exited: false
+        n: 1
+  - [node_started, outer_call/inner#0/echo]
+  - - node_succeeded
+    - outer_call/inner#0/echo
+    - value: 3
+  - [node_started, outer_call/inner#1/echo]
+  - - node_succeeded
+    - outer_call/inner#1/echo
+    - value: 1
+  - [node_started, outer_call/inner#2/echo]
+  - - node_succeeded
+    - outer_call/inner#2/echo
+    - value: 2
+  - [node_started, outer_loop#0/inner/__end__]
+  - - node_succeeded
+    - outer_loop#0/inner/__end__
+    - commit_target: outer_loop#0/inner
+      value:
+        exited: false
+        n: 1
+  - [node_started, outer_call/inner#0/__end__]
+  - - node_succeeded
+    - outer_call/inner#0/__end__
+    - value: 3
+  - [node_started, outer_call/inner#1/__end__]
+  - - node_succeeded
+    - outer_call/inner#1/__end__
+    - value: 1
+  - [node_started, outer_call/inner#2/__end__]
+  - - node_succeeded
+    - outer_call/inner#2/__end__
+    - value: 2
+  - [node_started, outer_loop#0/__end__]
+  - - node_succeeded
+    - outer_loop#0/__end__
+    - value:
+        exited: false
+        n: 1
+  - [node_started, outer_call/inner/__end__]
+  - - node_succeeded
+    - outer_call/inner/__end__
+    - commit_target: outer_call/inner
+      value: [3, 1, 2]
+  - [node_started, outer_loop~1]
+  - - node_expanded
+    - outer_loop~1
+    - prune_ids:
+      - outer_loop#0/__end__
+      - outer_loop#0/__start__
+      - outer_loop#0/inner
+      - outer_loop~1
+      seed:
+      - exited: false
+        n: 1
+      - 1
+  - [node_started, outer_call/__end__]
+  - - node_succeeded
+    - outer_call/__end__
+    - commit_target: outer_call
+      value: [3, 1, 2]
+  - [node_started, outer_loop#1/__start__]
+  - - node_succeeded
+    - outer_loop#1/__start__
+    - value:
+        exited: false
+        n: 1
+  - [node_started, outer_loop#1/inner]
+  - - node_expanded
+    - outer_loop#1/inner
+    - prune_ids: []
+      seed:
+        exited: false
+        n: 1
+  - [node_started, outer_loop#1/inner/__start__]
+  - - node_succeeded
+    - outer_loop#1/inner/__start__
+    - value:
+        exited: false
+        n: 1
+  - [node_started, outer_loop#1/inner/bump]
+  - - node_succeeded
+    - outer_loop#1/inner/bump
+    - value:
+        exited: false
+        n: 2
+  - [node_started, outer_loop#1/inner/__end__]
+  - - node_succeeded
+    - outer_loop#1/inner/__end__
+    - commit_target: outer_loop#1/inner
+      value:
+        exited: false
+        n: 2
+  - [node_started, outer_loop#1/__end__]
+  - - node_succeeded
+    - outer_loop#1/__end__
+    - value:
+        exited: false
+        n: 2
+  - [node_started, outer_loop~2]
+  - - node_succeeded
+    - outer_loop~2
+    - commit_target: outer_loop
+      value:
+        exited: false
+        n: 2
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        looped:
+          exited: false
+          n: 2
+        mapped: [3, 1, 2]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        items: [3, 1, 2]
+  - - NodeStarted
+    - node_id: outer_call
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          items: [3, 1, 2]
+      node_id: outer_call
+  - - NodeStarted
+    - node_id: outer_loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - exited: false
+          n: 0
+        - 0
+      node_id: outer_loop
+  - - NodeStarted
+    - node_id: outer_call/__start__
+  - - NodeSucceeded
+    - node_id: outer_call/__start__
+      output:
+        items: [3, 1, 2]
+  - - NodeStarted
+    - node_id: outer_loop#0/__start__
+  - - NodeSucceeded
+    - node_id: outer_loop#0/__start__
+      output:
+        exited: false
+        n: 0
+  - - NodeStarted
+    - node_id: outer_call/inner
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - value: 3
+        - value: 1
+        - value: 2
+      node_id: outer_call/inner
+  - - NodeStarted
+    - node_id: outer_loop#0/inner
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          exited: false
+          n: 0
+      node_id: outer_loop#0/inner
+  - - NodeStarted
+    - node_id: outer_call/inner/__start__
+  - - NodeSucceeded
+    - node_id: outer_call/inner/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: outer_loop#0/inner/__start__
+  - - NodeSucceeded
+    - node_id: outer_loop#0/inner/__start__
+      output:
+        exited: false
+        n: 0
+  - - NodeStarted
+    - node_id: outer_call/inner#0/__start__
+  - - NodeSucceeded
+    - node_id: outer_call/inner#0/__start__
+      output:
+        value: 3
+  - - NodeStarted
+    - node_id: outer_call/inner#1/__start__
+  - - NodeSucceeded
+    - node_id: outer_call/inner#1/__start__
+      output:
+        value: 1
+  - - NodeStarted
+    - node_id: outer_call/inner#2/__start__
+  - - NodeSucceeded
+    - node_id: outer_call/inner#2/__start__
+      output:
+        value: 2
+  - - NodeStarted
+    - node_id: outer_loop#0/inner/bump
+  - - NodeSucceeded
+    - node_id: outer_loop#0/inner/bump
+      output:
+        exited: false
+        n: 1
+  - - NodeStarted
+    - node_id: outer_call/inner#0/echo
+  - - NodeSucceeded
+    - node_id: outer_call/inner#0/echo
+      output: 3
+  - - NodeStarted
+    - node_id: outer_call/inner#1/echo
+  - - NodeSucceeded
+    - node_id: outer_call/inner#1/echo
+      output: 1
+  - - NodeStarted
+    - node_id: outer_call/inner#2/echo
+  - - NodeSucceeded
+    - node_id: outer_call/inner#2/echo
+      output: 2
+  - - NodeStarted
+    - node_id: outer_loop#0/inner/__end__
+  - - NodeSucceeded
+    - commit_as: outer_loop#0/inner
+      node_id: outer_loop#0/inner/__end__
+      output:
+        exited: false
+        n: 1
+  - - NodeStarted
+    - node_id: outer_call/inner#0/__end__
+  - - NodeSucceeded
+    - node_id: outer_call/inner#0/__end__
+      output: 3
+  - - NodeStarted
+    - node_id: outer_call/inner#1/__end__
+  - - NodeSucceeded
+    - node_id: outer_call/inner#1/__end__
+      output: 1
+  - - NodeStarted
+    - node_id: outer_call/inner#2/__end__
+  - - NodeSucceeded
+    - node_id: outer_call/inner#2/__end__
+      output: 2
+  - - NodeStarted
+    - node_id: outer_loop#0/__end__
+  - - NodeSucceeded
+    - node_id: outer_loop#0/__end__
+      output:
+        exited: false
+        n: 1
+  - - NodeStarted
+    - node_id: outer_call/inner/__end__
+  - - NodeSucceeded
+    - commit_as: outer_call/inner
+      node_id: outer_call/inner/__end__
+      output: [3, 1, 2]
+  - - NodeStarted
+    - node_id: outer_loop~1
+  - - NodeExpanded
+    - grow:
+        prune:
+        - outer_loop#0/__end__
+        - outer_loop#0/__start__
+        - outer_loop#0/inner
+        - outer_loop~1
+        seed:
+        - exited: false
+          n: 1
+        - 1
+      node_id: outer_loop~1
+  - - NodeStarted
+    - node_id: outer_call/__end__
+  - - NodeSucceeded
+    - commit_as: outer_call
+      node_id: outer_call/__end__
+      output: [3, 1, 2]
+  - - NodeStarted
+    - node_id: outer_loop#1/__start__
+  - - NodeSucceeded
+    - node_id: outer_loop#1/__start__
+      output:
+        exited: false
+        n: 1
+  - - NodeStarted
+    - node_id: outer_loop#1/inner
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          exited: false
+          n: 1
+      node_id: outer_loop#1/inner
+  - - NodeStarted
+    - node_id: outer_loop#1/inner/__start__
+  - - NodeSucceeded
+    - node_id: outer_loop#1/inner/__start__
+      output:
+        exited: false
+        n: 1
+  - - NodeStarted
+    - node_id: outer_loop#1/inner/bump
+  - - NodeSucceeded
+    - node_id: outer_loop#1/inner/bump
+      output:
+        exited: false
+        n: 2
+  - - NodeStarted
+    - node_id: outer_loop#1/inner/__end__
+  - - NodeSucceeded
+    - commit_as: outer_loop#1/inner
+      node_id: outer_loop#1/inner/__end__
+      output:
+        exited: false
+        n: 2
+  - - NodeStarted
+    - node_id: outer_loop#1/__end__
+  - - NodeSucceeded
+    - node_id: outer_loop#1/__end__
+      output:
+        exited: false
+        n: 2
+  - - NodeStarted
+    - node_id: outer_loop~2
+  - - NodeSucceeded
+    - commit_as: outer_loop
+      node_id: outer_loop~2
+      output:
+        exited: false
+        n: 2
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        looped:
+          exited: false
+          n: 2
+        mapped: [3, 1, 2]
+  - - RunSucceeded
+    - output:
+        looped:
+          exited: false
+          n: 2
+        mapped: [3, 1, 2]

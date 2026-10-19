@@ -1,0 +1,122 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', price: float}
+    Order: Union(Buy, Sell)
+    Running: Literal(running)
+  input:
+    order: !object
+  nodes:
+    d:
+      kind: code
+      input:
+        order: ${input.order}
+      output: Order
+      code: |
+        return inputs["order"]
+    route:
+      kind: case
+      cases:
+        - when: isinstance(d.output, Buy)
+          then: b
+        - when: isinstance(d.output, Order)
+          then: o
+      else: n
+    b:
+      kind: code
+      code: |
+        return "buy"
+    o:
+      kind: code
+      code: |
+        return "order"
+    n:
+      kind: code
+      code: |
+        return "none"
+  output: ${b.output | o.output | n.output}
+inputs:
+  order:
+    action: sell
+    price: 1.5
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: order
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        order:
+          action: sell
+          price: 1.5
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        order:
+          action: sell
+          price: 1.5
+  - [node_started, d]
+  - - node_succeeded
+    - d
+    - value:
+        action: sell
+        price: 1.5
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: o
+  - [node_started, o]
+  - - node_succeeded
+    - o
+    - value: order
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: order
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        order:
+          action: sell
+          price: 1.5
+  - - NodeStarted
+    - node_id: d
+  - - NodeSucceeded
+    - node_id: d
+      output:
+        action: sell
+        price: 1.5
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: o
+      node_id: route
+  - - NodeSkipped
+    - node_id: b
+  - - NodeSkipped
+    - node_id: n
+  - - NodeStarted
+    - node_id: o
+  - - NodeSucceeded
+    - node_id: o
+      output: order
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: order
+  - - RunSucceeded
+    - output: order

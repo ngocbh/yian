@@ -1,0 +1,17 @@
+kind: run
+flow: |
+  id: keyed
+  name: keyed
+  nodes:
+    agent: {kind: agent, prompt: hi}
+  output: ${agent.output}
+run:
+  num_workers: 0
+  llm_config:
+    api_key: <key:1>
+expect:
+  raises:
+    class: ValueError
+    message: llm_config.api_key needs llm_config.provider, so the key goes only to that provider
+  trace: []
+  events: []

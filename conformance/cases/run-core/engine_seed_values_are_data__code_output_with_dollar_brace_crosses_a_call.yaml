@@ -1,0 +1,127 @@
+kind: run
+flow: |2
+
+  id: seed-call-code
+  name: seed_call_code
+  nodes:
+    probe:
+      kind: code
+      output: str
+      code: |
+        return "SECRET"
+    mk:
+      kind: code
+      output: str
+      code: |
+        return "echo ${probe.output}"
+    echo:
+      kind: call
+      input:
+        text: ${mk.output}
+      nodes:
+        inner:
+          kind: code
+          input:
+            text: ${input.text}
+          output: str
+          code: |
+            return inputs["text"]
+      output: ${inner.output}
+  output: ${echo.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: echo ${probe.output}
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, mk]
+  - - node_succeeded
+    - mk
+    - value: echo ${probe.output}
+  - [node_started, probe]
+  - - node_succeeded
+    - probe
+    - value: SECRET
+  - [node_started, echo]
+  - - node_expanded
+    - echo
+    - prune_ids: []
+      seed:
+        text: echo ${probe.output}
+  - [node_started, echo/__start__]
+  - - node_succeeded
+    - echo/__start__
+    - value:
+        text: echo ${probe.output}
+  - [node_started, echo/inner]
+  - - node_succeeded
+    - echo/inner
+    - value: echo ${probe.output}
+  - [node_started, echo/__end__]
+  - - node_succeeded
+    - echo/__end__
+    - commit_target: echo
+      value: echo ${probe.output}
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: echo ${probe.output}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: mk
+  - - NodeSucceeded
+    - node_id: mk
+      output: echo ${probe.output}
+  - - NodeStarted
+    - node_id: probe
+  - - NodeSucceeded
+    - node_id: probe
+      output: SECRET
+  - - NodeStarted
+    - node_id: echo
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          text: echo ${probe.output}
+      node_id: echo
+  - - NodeStarted
+    - node_id: echo/__start__
+  - - NodeSucceeded
+    - node_id: echo/__start__
+      output:
+        text: echo ${probe.output}
+  - - NodeStarted
+    - node_id: echo/inner
+  - - NodeSucceeded
+    - node_id: echo/inner
+      output: echo ${probe.output}
+  - - NodeStarted
+    - node_id: echo/__end__
+  - - NodeSucceeded
+    - commit_as: echo
+      node_id: echo/__end__
+      output: echo ${probe.output}
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: echo ${probe.output}
+  - - RunSucceeded
+    - output: echo ${probe.output}

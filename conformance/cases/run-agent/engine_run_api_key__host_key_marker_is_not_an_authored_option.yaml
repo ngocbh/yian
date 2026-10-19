@@ -1,0 +1,19 @@
+kind: run
+flow: |
+  id: keyed
+  name: keyed
+  nodes:
+    agent: {kind: agent, prompt: hi}
+  output: ${agent.output}
+run:
+  num_workers: 0
+  llm_config:
+    provider: vllm
+    model: m
+    _host_key: true
+expect:
+  raises:
+    class: ValueError
+    message: llm_config._host_key is internal to recorded runs
+  trace: []
+  events: []

@@ -1,0 +1,91 @@
+kind: run
+flow: |
+  id: nullable-projection
+  name: nullable_projection
+  typedefs:
+    Payload:
+      value: int
+  input:
+    payload: !Optional(Payload)
+  defs:
+    pick:
+      input:
+        payload: !Optional(Payload)
+      nodes: {}
+      output: ${input.payload.value}
+  nodes:
+    invoke:
+      kind: call
+      call: pick
+      input:
+        payload: ${input.payload}
+  output: ${invoke.output}
+inputs:
+  payload: null
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: null
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        payload: null
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        payload: null
+  - [node_started, invoke]
+  - - node_expanded
+    - invoke
+    - prune_ids: []
+      seed:
+        payload: null
+  - [node_started, invoke/__start__]
+  - - node_succeeded
+    - invoke/__start__
+    - value:
+        payload: null
+  - [node_started, invoke/__end__]
+  - - node_succeeded
+    - invoke/__end__
+    - commit_target: invoke
+  - [node_started, __end__]
+  - [node_succeeded, __end__]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        payload: null
+  - - NodeStarted
+    - node_id: invoke
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          payload: null
+      node_id: invoke
+  - - NodeStarted
+    - node_id: invoke/__start__
+  - - NodeSucceeded
+    - node_id: invoke/__start__
+      output:
+        payload: null
+  - - NodeStarted
+    - node_id: invoke/__end__
+  - - NodeSucceeded
+    - commit_as: invoke
+      node_id: invoke/__end__
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+  - [RunSucceeded]

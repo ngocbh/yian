@@ -1,0 +1,135 @@
+# From tests/engine/test_typed_bindings_replay.py::test_typed_consumer_after_resume_rejects_a_mistyped_answer.
+# The consumer binds after the resume, so its declared `!int` checks the answer given on resume.
+# Record 3 is ask's node_started: the first answer is given, its result is refused.
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# restarted node (decision 20); the trace still pins the resume.
+kind: resume
+rules: [messages]
+flow: |
+  id: typed-gate-replay
+  name: typed_gate_replay
+  nodes:
+    ask:
+      kind: human_input
+      prompt: "How many?"
+    use:
+      kind: code
+      input:
+        n: !int ${ask.output}
+      code: |
+        return inputs["n"]
+  output: ${use.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  human:
+    ask: [1, three]
+  crash_after_record: 3
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      message: 'binding ''n'': "three" does not match declared type int'
+      frames:
+      - label: flow.yaml
+        range: [10, 10, 10, 28]
+      node: use
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, ask]
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: [ask]
+  - [node_started, ask]
+  - - node_succeeded
+    - ask
+    - value: three
+  - [node_started, use]
+  - - node_failed
+    - use
+    - failure:
+        code: binding.type
+        message: 'binding ''n'': "three" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [10, 10, 10, 28]
+        node: use
+  tool_calls:
+    ask_user:
+    - args:
+        question: How many?
+        node_id: ask
+      call_id: r1/ask
+      attempt: 1
+      node: ask
+    - args:
+        question: How many?
+        node_id: ask
+      call_id: r1/ask
+      attempt: 1
+      node: ask
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      message: 'binding ''n'': ''three'' does not match declared type int'
+      frames:
+      - label: flow.yaml
+        range: [10, 10, 10, 28]
+      node: use
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, ask]
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: [ask]
+  - [node_started, ask]
+  - - node_succeeded
+    - ask
+    - value: three
+  - [node_started, use]
+  - - node_failed
+    - use
+    - failure:
+        code: binding.type
+        message: 'binding ''n'': ''three'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [10, 10, 10, 28]
+        node: use
+  tool_calls:
+    ask_user:
+    - args:
+        question: How many?
+        node_id: ask
+      call_id: r1/ask
+      attempt: 1
+      node: ask
+    - args:
+        question: How many?
+        node_id: ask
+      call_id: r1/ask
+      attempt: 1
+      node: ask
+resume: {}

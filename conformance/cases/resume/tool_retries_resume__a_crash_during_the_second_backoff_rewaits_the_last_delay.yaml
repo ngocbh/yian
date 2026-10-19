@@ -1,0 +1,102 @@
+# From tests/engine/test_tool_retries_resume.py::test_a_crash_during_the_second_backoff_rewaits_the_last_recorded_delay.
+# A crash during the second backoff wait resumes at attempt 3 with the same call id, keeping the recorded steps;
+# the restart re-waits the last recorded delay (a retry_after: no draw).
+# Record 6 is the second `failed` step: the wait runs, then the `started` step of attempt 3 is refused.
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# restarted node (decision 20); the trace still pins the resume.
+kind: resume
+flow: |
+  id: t
+  name: t
+  nodes:
+    call:
+      kind: tool
+      tool_id: x
+      retries: 3
+  output: ${call.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    x:
+      parameters:
+        type: object
+        properties: {}
+      results:
+      - raise:
+          class: TransientToolError
+          message: a
+          retry_after: 0.25
+      - raise:
+          class: TransientToolError
+          message: b
+          retry_after: 0.1
+      - return: ok
+  jitter: []
+  crash_after_record: 6
+expect:
+  output:
+    status: succeeded
+    output: ok
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, call]
+  - - node_step
+    - call
+    - step:
+        attempt: 1
+        error:
+          message: a
+          type: TransientToolError
+        event: failed
+        retry_in: 0.25
+  - - node_step
+    - call
+    - step:
+        attempt: 2
+        event: started
+  - - node_step
+    - call
+    - step:
+        attempt: 2
+        error:
+          message: b
+          type: TransientToolError
+        event: failed
+        retry_in: 0.1
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: [call]
+  - [node_started, call]
+  - - node_succeeded
+    - call
+    - value: ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ok
+  tool_calls:
+    x:
+    - args: {}
+      call_id: r1/call
+      attempt: 1
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 2
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 3
+      node: call
+resume: {}

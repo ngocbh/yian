@@ -1,0 +1,155 @@
+# From tests/engine/test_agent_session_notes.py::test_admitted_failed_forward_can_learn_without_rewriting_history.
+# Pins: an earlier run whose model call failed still learns a note from backward, which the next run
+# recalls; the failed turn reaches the next request as a session status line.
+kind: run
+flow: |
+  id: learned-session
+  name: learned_session
+  llm_config: {provider: openai, model: test-model}
+  input:
+    question: !str
+  nodes:
+    answer:
+      kind: agent
+      long_term_memory: session
+      input: {question: "${input.question}"}
+      prompt: ${question}
+      output: str
+  output: ${answer.output}
+inputs:
+  question: next question
+run:
+  run_id: r2
+  num_workers: 0
+host:
+  memory:
+    before:
+    - inputs:
+        question: first question
+      run:
+        run_id: r1
+        num_workers: 0
+        learnable: true
+      backward:
+      - feedback: Check the input units.
+  models:
+    answer:
+      agent:
+      - chunks: []
+        raise:
+          class: RuntimeError
+          message: provider could not answer
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: recovered
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: |-
+                You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+
+                Memory context (canonical JSON; sections are ordered from outer workflow to local agent):
+                {"order":"outer-to-local","sections":[{"index":1,"memory":"session","text":"Check the measurement units before answering."}]}
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: first question
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: 'Session history status (context only): [{"invocation":"failed"},{"effect":"model","status":"failed"}]'
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: next question
+      backward:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"input_feedback": {}, "self_feedback": ["Check the measurement units before answering."], "variable_feedback": {}}'
+expect:
+  output:
+    status: succeeded
+    output: recovered
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        answer:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: test-model
+          provider: openai
+      inputs:
+        question: next question
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        question: next question
+  - [node_started, answer]
+  - - node_succeeded
+    - answer
+    - value: recovered
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: recovered
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        question: next question
+  - - NodeStarted
+    - node_id: answer
+  - - ModelCallStarted
+    - exchange_id: <id:3>
+      model: test-model
+      node_id: answer
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:3>
+      model: test-model
+      node_id: answer
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: answer
+      output: recovered
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: recovered
+  - - RunSucceeded
+    - output: recovered
+  stream:
+  - chunk: recovered
+    exchange_id: <id:3>
+    final: false
+    key: text
+    node_id: answer
+  - chunk: ''
+    exchange_id: <id:3>
+    final: true
+    key: text
+    node_id: answer

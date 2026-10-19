@@ -1,0 +1,87 @@
+# From tests/engine/test_tool_retries.py::test_permanent_error_on_the_first_attempt_fails_unchanged.
+# A PermanentToolError is never retried: one call, and its message fails the node unchanged.
+kind: run
+flow: |
+  id: t
+  name: t
+  nodes:
+    call:
+      kind: tool
+      tool_id: flaky
+      retries: 3
+  output: ${call.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    flaky:
+      parameters:
+        type: object
+        properties: {}
+      results:
+      - raise:
+          class: PermanentToolError
+          message: no
+  jitter: []
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: no
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 7]
+      node: call
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, call]
+  - - node_failed
+    - call
+    - failure:
+        code: node.execute
+        message: no
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        node: call
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: call
+  - - NodeFailed
+    - failure:
+        code: node.execute
+        message: no
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        node: call
+  - - RunFailed
+    - failure:
+        code: node.execute
+        message: no
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        node: call
+  tool_calls:
+    flaky:
+    - args: {}
+      call_id: r1/call
+      attempt: 1
+      node: call

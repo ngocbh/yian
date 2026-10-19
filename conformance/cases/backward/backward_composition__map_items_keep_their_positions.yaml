@@ -1,0 +1,1019 @@
+# From tests/engine/test_backward_composition.py::test_public_map_preserves_equal_item_positions_after_reversed_completion,
+# both parametrizations as two backward calls (serial here; the gate CODE that forced the reversed
+# completion is dropped).
+# Pins: MAP items with equal values keep their positions in backward: whole-output feedback calls
+# each item's AGENT and returns one positional message per item; positional feedback [null, ""]
+# calls only item 1 ("" is effective feedback).
+kind: backward
+flow: |
+  id: ordered-map-feedback
+  name: ordered_map_feedback
+  llm_config: {provider: ollama, model: local-test}
+  input:
+    values: !list(str)
+  defs:
+    item_flow:
+      input:
+        value: !str
+      nodes:
+        answer:
+          kind: agent
+          input:
+            value: ${input.value}
+          prompt: ${value}
+      output: ${answer.output}
+  nodes:
+    each:
+      kind: map
+      call: item_flow
+      over: ${input.values}
+      input:
+        value: ${item}
+  output: ${each.output}
+inputs:
+  values: [same, same]
+run:
+  run_id: r1
+  num_workers: 0
+  learnable: true
+host:
+  models:
+    each#0/answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: same
+      backward:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"input_feedback": {"value": ["Review every item."]}, "self_feedback": [], "variable_feedback": {}}'
+    each#1/answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: same
+      backward:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"input_feedback": {"value": ["Review every item."]}, "self_feedback": [], "variable_feedback": {}}'
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"input_feedback": {"value": [""]}, "self_feedback": [], "variable_feedback": {}}'
+backward:
+- feedback: Review every item.
+- feedback: [null, '']
+expect:
+  output:
+    status: succeeded
+    output: [same, same]
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        each/answer:
+          model: local-test
+          provider: ollama
+      inputs:
+        values: [same, same]
+      learnable: true
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - forward_capture:
+        bound_inputs:
+          values: [same, same]
+        evaluated_keys: [values]
+        input_names: [values]
+        node_data:
+          input_output_paths:
+            values: [values]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 0
+              path: [values]
+              run_id: r1
+          kind: record
+          names: [values]
+        scope:
+          boundary: start
+          flow_path: []
+          occurrence_path: []
+          static_path: [__start__]
+      value:
+        values: [same, same]
+  - [node_started, each]
+  - - node_expanded
+    - each
+    - forward_capture:
+        bound_inputs:
+          over: [same, same]
+        evaluated_keys: [over]
+        input_names: [value]
+        items:
+        - capture:
+            bound_inputs:
+              value: same
+            evaluated_keys: [value]
+            route:
+              children:
+              - children:
+                - kind: source
+                  source:
+                    execution_seq: 1
+                    path: [values, 0]
+                    run_id: r1
+                kind: selected
+              kind: record
+              names: [value]
+            scope: null
+          index: 0
+        - capture:
+            bound_inputs:
+              value: same
+            evaluated_keys: [value]
+            route:
+              children:
+              - children:
+                - kind: source
+                  source:
+                    execution_seq: 1
+                    path: [values, 1]
+                    run_id: r1
+                kind: selected
+              kind: record
+              names: [value]
+            scope: null
+          index: 1
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 1
+              path: [values]
+              run_id: r1
+          kind: record
+          names: [over]
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [each]
+      prune_ids: []
+      seed:
+      - value: same
+      - value: same
+  - [node_started, each/__start__]
+  - - node_succeeded
+    - each/__start__
+    - forward_capture:
+        bound_inputs: {}
+        node_data:
+          input_output_paths: {}
+        route:
+          kind: record
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [each]
+      value: {}
+  - [node_started, each#0/__start__]
+  - - node_succeeded
+    - each#0/__start__
+    - forward_capture:
+        bound_inputs:
+          value: same
+        input_names: [value]
+        node_data:
+          input_output_paths:
+            value: [value]
+        route:
+          children:
+          - kind: literal
+            value_json: same
+          kind: record
+          names: [value]
+        scope:
+          boundary: start
+          flow_path: [each]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [each]
+          static_path: [each, __start__]
+      value:
+        value: same
+  - [node_started, each#1/__start__]
+  - - node_succeeded
+    - each#1/__start__
+    - forward_capture:
+        bound_inputs:
+          value: same
+        input_names: [value]
+        node_data:
+          input_output_paths:
+            value: [value]
+        route:
+          children:
+          - kind: literal
+            value_json: same
+          kind: record
+          names: [value]
+        scope:
+          boundary: start
+          flow_path: [each]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [each]
+          static_path: [each, __start__]
+      value:
+        value: same
+  - [node_started, each#0/answer]
+  - - node_succeeded
+    - each#0/answer
+    - forward_capture:
+        bound_inputs:
+          value: same
+        evaluated_keys: [value]
+        input_names: [value]
+        node_data:
+          effective_llm_config:
+            model: local-test
+            provider: ollama
+          prompt_template: ${value}
+          rendered_prompt: same
+          variable_domains: {}
+          variables: {}
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 7
+              path: [value]
+              run_id: r1
+          kind: record
+          names: [value]
+        scope:
+          boundary: null
+          flow_path: [each]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [each]
+          static_path: [each, answer]
+      value: same
+  - [node_started, each#1/answer]
+  - - node_succeeded
+    - each#1/answer
+    - forward_capture:
+        bound_inputs:
+          value: same
+        evaluated_keys: [value]
+        input_names: [value]
+        node_data:
+          effective_llm_config:
+            model: local-test
+            provider: ollama
+          prompt_template: ${value}
+          rendered_prompt: same
+          variable_domains: {}
+          variables: {}
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 9
+              path: [value]
+              run_id: r1
+          kind: record
+          names: [value]
+        scope:
+          boundary: null
+          flow_path: [each]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [each]
+          static_path: [each, answer]
+      value: same
+  - [node_started, each#0/__end__]
+  - - node_succeeded
+    - each#0/__end__
+    - forward_capture:
+        bound_inputs:
+          result: same
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 11
+              path: []
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: [each]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [each]
+          static_path: [each, __end__]
+      value: same
+  - [node_started, each#1/__end__]
+  - - node_succeeded
+    - each#1/__end__
+    - forward_capture:
+        bound_inputs:
+          result: same
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 13
+              path: []
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: [each]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [each]
+          static_path: [each, __end__]
+      value: same
+  - [node_started, each/__end__]
+  - - node_succeeded
+    - each/__end__
+    - commit_target: each
+      forward_capture:
+        bound_inputs:
+          e0: same
+          e1: same
+        evaluated_keys: [e0, e1]
+        input_names: [e0, e1]
+        node_data:
+          input_output_paths:
+            e0: [0]
+            e1: [1]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 15
+              path: []
+              run_id: r1
+          - kind: source
+            source:
+              execution_seq: 17
+              path: []
+              run_id: r1
+          kind: record
+          names: [e0, e1]
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [each]
+      value: [same, same]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - forward_capture:
+        bound_inputs:
+          result: [same, same]
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 19
+              path: []
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: []
+          occurrence_path: []
+          static_path: [__end__]
+      value: [same, same]
+  - - backward_started
+    - null
+    - attempt_id: 1
+      feedback: Review every item.
+  - - backward_ready
+    - null
+    - attempt_id: 1
+      attributed_results:
+      - attribution:
+        - contribution_index: 0
+          input_name: value
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 7
+            path: []
+            run_id: r1
+        - contribution_index: 0
+          input_name: value
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 9
+            path: []
+            run_id: r1
+        feedback:
+        - values: [Review every item., null]
+        - values: [null, Review every item.]
+        invoked: true
+        result:
+          input_feedback:
+            values:
+            - [Review every item., null]
+            - [null, Review every item.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 1
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 3
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 5
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: value
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 11
+            path: []
+            run_id: r1
+        feedback:
+        - value: Review every item.
+        invoked: true
+        result:
+          input_feedback:
+            value: [Review every item.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 7
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: value
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 13
+            path: []
+            run_id: r1
+        feedback:
+        - value: Review every item.
+        invoked: true
+        result:
+          input_feedback:
+            value: [Review every item.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 9
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 15
+            path: []
+            run_id: r1
+        feedback: [Review every item.]
+        invoked: true
+        result:
+          input_feedback:
+            value: [Review every item.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 11
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 17
+            path: []
+            run_id: r1
+        feedback: [Review every item.]
+        invoked: true
+        result:
+          input_feedback:
+            value: [Review every item.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 13
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: e0
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 19
+            path: []
+            run_id: r1
+        feedback: [Review every item.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [Review every item.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 15
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: e1
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 19
+            path: []
+            run_id: r1
+        feedback: [Review every item.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [Review every item.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 17
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 21
+            path: []
+            run_id: r1
+        feedback: [Review every item.]
+        invoked: true
+        result:
+          input_feedback:
+            e0: [Review every item.]
+            e1: [Review every item.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 19
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: null
+          input_name: null
+          message_index: 0
+          parents: []
+          sender: null
+        feedback: [Review every item.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [Review every item.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 21
+          path: []
+          run_id: r1
+      proposals: []
+      root_result:
+        input_feedback:
+          values:
+          - [Review every item., null]
+          - [null, Review every item.]
+        self_feedback: []
+        variable_feedback: {}
+  - - backward_finished
+    - null
+    - attempt_id: 1
+      attributed_results: []
+      outcome:
+        failure: null
+        feedback:
+          input_feedback:
+            values:
+            - [Review every item., null]
+            - [null, Review every item.]
+          self_feedback: []
+          variable_feedback: {}
+        learning: null
+        status: succeeded
+  - - backward_started
+    - null
+    - attempt_id: 2
+      feedback: [null, '']
+  - - backward_ready
+    - null
+    - attempt_id: 2
+      attributed_results:
+      - attribution:
+        - contribution_index: 0
+          input_name: value
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 9
+            path: []
+            run_id: r1
+        feedback:
+        - values: [null, '']
+        invoked: true
+        result:
+          input_feedback:
+            values:
+            - [null, '']
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 1
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 3
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 5
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 7
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: value
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 13
+            path: []
+            run_id: r1
+        feedback:
+        - value: ''
+        invoked: true
+        result:
+          input_feedback:
+            value: ['']
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 9
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 11
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 17
+            path: []
+            run_id: r1
+        feedback: ['']
+        invoked: true
+        result:
+          input_feedback:
+            value: ['']
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 13
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 15
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: e1
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 19
+            path: []
+            run_id: r1
+        feedback: ['']
+        invoked: true
+        result:
+          input_feedback:
+            result: ['']
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 17
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 21
+            path: []
+            run_id: r1
+        feedback:
+        - [null, '']
+        invoked: true
+        result:
+          input_feedback:
+            e1: ['']
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 19
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: null
+          input_name: null
+          message_index: 0
+          parents: []
+          sender: null
+        feedback:
+        - [null, '']
+        invoked: true
+        result:
+          input_feedback:
+            result:
+            - [null, '']
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 21
+          path: []
+          run_id: r1
+      proposals: []
+      root_result:
+        input_feedback:
+          values:
+          - [null, '']
+        self_feedback: []
+        variable_feedback: {}
+  - - backward_finished
+    - null
+    - attempt_id: 2
+      attributed_results: []
+      outcome:
+        failure: null
+        feedback:
+          input_feedback:
+            values:
+            - [null, '']
+          self_feedback: []
+          variable_feedback: {}
+        learning: null
+        status: succeeded
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        values: [same, same]
+  - - NodeStarted
+    - node_id: each
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - value: same
+        - value: same
+      node_id: each
+  - - NodeStarted
+    - node_id: each/__start__
+  - - NodeSucceeded
+    - node_id: each/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: each#0/__start__
+  - - NodeSucceeded
+    - node_id: each#0/__start__
+      output:
+        value: same
+  - - NodeStarted
+    - node_id: each#1/__start__
+  - - NodeSucceeded
+    - node_id: each#1/__start__
+      output:
+        value: same
+  - - NodeStarted
+    - node_id: each#0/answer
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: local-test
+      node_id: each#0/answer
+      provider: ollama
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: local-test
+      node_id: each#0/answer
+      provider: ollama
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: each#0/answer
+      output: same
+  - - NodeStarted
+    - node_id: each#1/answer
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: local-test
+      node_id: each#1/answer
+      provider: ollama
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: local-test
+      node_id: each#1/answer
+      provider: ollama
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: each#1/answer
+      output: same
+  - - NodeStarted
+    - node_id: each#0/__end__
+  - - NodeSucceeded
+    - node_id: each#0/__end__
+      output: same
+  - - NodeStarted
+    - node_id: each#1/__end__
+  - - NodeSucceeded
+    - node_id: each#1/__end__
+      output: same
+  - - NodeStarted
+    - node_id: each/__end__
+  - - NodeSucceeded
+    - commit_as: each
+      node_id: each/__end__
+      output: [same, same]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: [same, same]
+  - - RunSucceeded
+    - output: [same, same]
+  stream:
+  - chunk: same
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: each#0/answer
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: each#0/answer
+  - chunk: same
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: each#1/answer
+  - chunk: ''
+    exchange_id: <id:2>
+    final: true
+    key: text
+    node_id: each#1/answer
+  backward:
+  - failure: null
+    feedback:
+      input_feedback:
+        values:
+        - [Review every item., null]
+        - [null, Review every item.]
+      self_feedback: []
+      variable_feedback: {}
+    learning: null
+    status: succeeded
+  - failure: null
+    feedback:
+      input_feedback:
+        values:
+        - [null, '']
+      self_feedback: []
+      variable_feedback: {}
+    learning: null
+    status: succeeded

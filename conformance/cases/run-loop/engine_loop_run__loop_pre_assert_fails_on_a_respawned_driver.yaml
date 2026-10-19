@@ -1,0 +1,295 @@
+kind: run
+flow: |2
+
+  id: partial-chat
+  name: partial_chat
+  typedefs:
+    Person:
+      name: str
+  input:
+    person: !Person
+    talking_to: !str
+  defs:
+    turn:
+      input:
+        person: !Person
+        talking_to: !str
+        n: !int
+      nodes:
+        step:
+          kind: code
+          code: |
+            if (inputs["person"]["name"] !== "Ada") throw new Error("assert")
+            if (inputs["talking_to"] !== "Bob") throw new Error("assert")
+            const n = inputs["n"] + 1n
+            return {"n": n, "done": n >= 3n}
+          input:
+            person: ${input.person}
+            talking_to: ${input.talking_to}
+            n: ${input.n}
+          output:
+            n: int
+            done: bool
+      output: ${step.output}
+  nodes:
+    loop:
+      kind: loop
+      call: turn
+      input:
+        person: ${input.person}
+        talking_to: ${input.talking_to}
+        n: 0
+        done: false
+      while: not done
+      asserts:
+        - "n < 2"
+  output: ${loop.output}
+python_flow: |2
+
+  id: partial-chat
+  name: partial_chat
+  typedefs:
+    Person:
+      name: str
+  input:
+    person: !Person
+    talking_to: !str
+  defs:
+    turn:
+      input:
+        person: !Person
+        talking_to: !str
+        n: !int
+      nodes:
+        step:
+          kind: code
+          code: |
+            assert inputs["person"]["name"] == "Ada"
+            assert inputs["talking_to"] == "Bob"
+            n = inputs["n"] + 1
+            return {"n": n, "done": n >= 3}
+          input:
+            person: ${input.person}
+            talking_to: ${input.talking_to}
+            n: ${input.n}
+          output:
+            n: int
+            done: bool
+      output: ${step.output}
+  nodes:
+    loop:
+      kind: loop
+      call: turn
+      input:
+        person: ${input.person}
+        talking_to: ${input.talking_to}
+        n: 0
+        done: false
+      while: not done
+      asserts:
+        - "n < 2"
+  output: ${loop.output}
+inputs:
+  person:
+    name: Ada
+  talking_to: Bob
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: assertion.failed
+      frames:
+      - label: flow.yaml
+        range: [43, 9, 43, 16]
+      message: 'node ''loop~2'' pre-assert failed: n < 2'
+      node: loop~2
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        person:
+          name: Ada
+        talking_to: Bob
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        person:
+          name: Ada
+        talking_to: Bob
+  - [node_started, loop]
+  - - node_expanded
+    - loop
+    - prune_ids: []
+      seed:
+      - done: false
+        n: 0
+        person:
+          name: Ada
+        talking_to: Bob
+      - 0
+  - [node_started, loop#0/__start__]
+  - - node_succeeded
+    - loop#0/__start__
+    - value:
+        n: 0
+        person:
+          name: Ada
+        talking_to: Bob
+  - [node_started, loop#0/step]
+  - - node_succeeded
+    - loop#0/step
+    - value:
+        done: false
+        n: 1
+  - [node_started, loop#0/__end__]
+  - - node_succeeded
+    - loop#0/__end__
+    - value:
+        done: false
+        n: 1
+  - [node_started, loop~1]
+  - - node_expanded
+    - loop~1
+    - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/step, loop~1]
+      seed:
+      - done: false
+        n: 1
+        person:
+          name: Ada
+        talking_to: Bob
+      - 1
+  - [node_started, loop#1/__start__]
+  - - node_succeeded
+    - loop#1/__start__
+    - value:
+        n: 1
+        person:
+          name: Ada
+        talking_to: Bob
+  - [node_started, loop#1/step]
+  - - node_succeeded
+    - loop#1/step
+    - value:
+        done: false
+        n: 2
+  - [node_started, loop#1/__end__]
+  - - node_succeeded
+    - loop#1/__end__
+    - value:
+        done: false
+        n: 2
+  - [node_started, loop~2]
+  - - node_failed
+    - loop~2
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [43, 9, 43, 16]
+        message: 'node ''loop~2'' pre-assert failed: n < 2'
+        node: loop~2
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        person:
+          name: Ada
+        talking_to: Bob
+  - - NodeStarted
+    - node_id: loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - done: false
+          n: 0
+          person:
+            name: Ada
+          talking_to: Bob
+        - 0
+      node_id: loop
+  - - NodeStarted
+    - node_id: loop#0/__start__
+  - - NodeSucceeded
+    - node_id: loop#0/__start__
+      output:
+        n: 0
+        person:
+          name: Ada
+        talking_to: Bob
+  - - NodeStarted
+    - node_id: loop#0/step
+  - - NodeSucceeded
+    - node_id: loop#0/step
+      output:
+        done: false
+        n: 1
+  - - NodeStarted
+    - node_id: loop#0/__end__
+  - - NodeSucceeded
+    - node_id: loop#0/__end__
+      output:
+        done: false
+        n: 1
+  - - NodeStarted
+    - node_id: loop~1
+  - - NodeExpanded
+    - grow:
+        prune: [loop#0/__end__, loop#0/__start__, loop#0/step, loop~1]
+        seed:
+        - done: false
+          n: 1
+          person:
+            name: Ada
+          talking_to: Bob
+        - 1
+      node_id: loop~1
+  - - NodeStarted
+    - node_id: loop#1/__start__
+  - - NodeSucceeded
+    - node_id: loop#1/__start__
+      output:
+        n: 1
+        person:
+          name: Ada
+        talking_to: Bob
+  - - NodeStarted
+    - node_id: loop#1/step
+  - - NodeSucceeded
+    - node_id: loop#1/step
+      output:
+        done: false
+        n: 2
+  - - NodeStarted
+    - node_id: loop#1/__end__
+  - - NodeSucceeded
+    - node_id: loop#1/__end__
+      output:
+        done: false
+        n: 2
+  - - NodeStarted
+    - node_id: loop~2
+  - - NodeFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [43, 9, 43, 16]
+        message: 'node ''loop~2'' pre-assert failed: n < 2'
+        node: loop~2
+  - - RunFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [43, 9, 43, 16]
+        message: 'node ''loop~2'' pre-assert failed: n < 2'
+        node: loop~2

@@ -1,0 +1,157 @@
+# From tests/engine/test_typed_tool_node.py::test_a_value_that_does_not_fit_fails_at_the_output_declaration,
+# with `retries: 3` from tests/engine/test_tool_retries.py::test_an_output_contract_failure_is_not_retried.
+# A return that doesn't fit the TOOL node's `output: int` fails contract.output at that line, and is
+# not retried.
+kind: run
+rules: [messages]
+flow: |
+  id: count
+  name: count
+  nodes:
+    place:
+      kind: tool
+      tool_id: place_order
+      retries: 3
+      input:
+        qty: 5
+      output: int
+  output: ${place.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    place_order:
+      parameters:
+        type: object
+        properties:
+          qty:
+            type: integer
+        required: [qty]
+      results:
+      - return: x
+  jitter: []
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      message: '"x" does not match declared type int'
+      frames:
+      - label: flow.yaml
+        range: [10, 13, 10, 16]
+      node: place
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, place]
+  - - node_failed
+    - place
+    - failure:
+        code: contract.output
+        message: '"x" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [10, 13, 10, 16]
+        node: place
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: place
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        message: '"x" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [10, 13, 10, 16]
+        node: place
+  - - RunFailed
+    - failure:
+        code: contract.output
+        message: '"x" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [10, 13, 10, 16]
+        node: place
+  tool_calls:
+    place_order:
+    - args:
+        qty: 5
+      call_id: r1/place
+      attempt: 1
+      node: place
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      message: '''x'' does not match declared type int'
+      frames:
+      - label: flow.yaml
+        range: [10, 13, 10, 16]
+      node: place
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, place]
+  - - node_failed
+    - place
+    - failure:
+        code: contract.output
+        message: '''x'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [10, 13, 10, 16]
+        node: place
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: place
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        message: '''x'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [10, 13, 10, 16]
+        node: place
+  - - RunFailed
+    - failure:
+        code: contract.output
+        message: '''x'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [10, 13, 10, 16]
+        node: place
+  tool_calls:
+    place_order:
+    - args:
+        qty: 5
+      call_id: r1/place
+      attempt: 1
+      node: place

@@ -1,0 +1,36 @@
+# env: YIAN_DEFAULT_PROVIDER/MODEL kept on purpose: the unsupported default provider is the case.
+kind: run
+flow: |2
+
+  id: test
+  name: test
+  input:
+    topic: !str
+  output: ${w.output}
+  nodes:
+    first:
+      kind: code
+      input:
+        topic: ${input.topic}
+      output: str
+      code: |
+        return inputs["topic"]
+    w:
+      kind: agent
+      input:
+        text: ${first.output}
+      output: str
+      prompt: Write about ${text}.
+env:
+  YIAN_DEFAULT_MODEL: claude-model
+  YIAN_DEFAULT_PROVIDER: claude
+inputs:
+  topic: x
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: ValueError
+    message: 'YIAN_DEFAULT_PROVIDER=''claude'' is not a supported provider; set it to one of: openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
+  trace: []
+  events: []

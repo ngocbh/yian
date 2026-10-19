@@ -1,0 +1,161 @@
+kind: run
+flow: |
+  id: tagged_inputs
+  name: tagged_inputs
+  typedefs:
+    Cfg: {kind: Literal(cfg), a: int}
+    Message: {role: str, content: str}
+  input:
+    qty: !int
+    history: !list(Message) []
+    model: !Optional(str)
+    note: !Optional(str) null
+    cfg: !Cfg {kind: cfg, a: 1}
+    s: !str ${x}
+  nodes:
+    worker:
+      kind: code
+      output: object
+      code: "return {...inputs}"
+      input:
+        qty: ${input.qty}
+        history: ${input.history}
+        model: ${input.model}
+        note: ${input.note}
+        cfg: ${input.cfg}
+        s: ${input.s}
+  output: ${worker.output}
+python_flow: |
+  id: tagged_inputs
+  name: tagged_inputs
+  typedefs:
+    Cfg: {kind: Literal(cfg), a: int}
+    Message: {role: str, content: str}
+  input:
+    qty: !int
+    history: !list(Message) []
+    model: !Optional(str)
+    note: !Optional(str) null
+    cfg: !Cfg {kind: cfg, a: 1}
+    s: !str ${x}
+  nodes:
+    worker:
+      kind: code
+      output: object
+      code: return dict(inputs)
+      input:
+        qty: ${input.qty}
+        history: ${input.history}
+        model: ${input.model}
+        note: ${input.note}
+        cfg: ${input.cfg}
+        s: ${input.s}
+  output: ${worker.output}
+inputs:
+  qty: 3
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      cfg:
+        a: 1
+        kind: cfg
+      history: []
+      model: null
+      note: null
+      qty: 3
+      s: ${x}
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        qty: 3
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        cfg:
+          a: 1
+          kind: cfg
+        history: []
+        note: null
+        qty: 3
+        s: ${x}
+  - [node_started, worker]
+  - - node_succeeded
+    - worker
+    - value:
+        cfg:
+          a: 1
+          kind: cfg
+        history: []
+        model: null
+        note: null
+        qty: 3
+        s: ${x}
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        cfg:
+          a: 1
+          kind: cfg
+        history: []
+        model: null
+        note: null
+        qty: 3
+        s: ${x}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        cfg:
+          a: 1
+          kind: cfg
+        history: []
+        note: null
+        qty: 3
+        s: ${x}
+  - - NodeStarted
+    - node_id: worker
+  - - NodeSucceeded
+    - node_id: worker
+      output:
+        cfg:
+          a: 1
+          kind: cfg
+        history: []
+        model: null
+        note: null
+        qty: 3
+        s: ${x}
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        cfg:
+          a: 1
+          kind: cfg
+        history: []
+        model: null
+        note: null
+        qty: 3
+        s: ${x}
+  - - RunSucceeded
+    - output:
+        cfg:
+          a: 1
+          kind: cfg
+        history: []
+        model: null
+        note: null
+        qty: 3
+        s: ${x}

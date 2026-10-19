@@ -1,0 +1,57 @@
+# From tests/engine/test_run_api_key.py::test_backward_without_the_key_fails_clearly.
+# Also ::test_backward_sends_the_key_and_records_none_of_it (its keyless resume). A finished run's resume skips
+# the host-key check: without api_key it returns the recorded result.
+kind: resume
+flow: |
+  id: keyed
+  name: keyed
+  nodes:
+    agent: {kind: agent, prompt: hi}
+  output: ${agent.output}
+run:
+  run_id: r1
+  num_workers: 0
+  llm_config:
+    provider: vllm
+    model: served-model
+    api_key: <key:1>
+host:
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+  crash_after_record: end
+expect:
+  output:
+    status: succeeded
+    output: ok
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        agent:
+          _host_key: true
+          model: served-model
+          provider: vllm
+      learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, agent]
+  - - node_succeeded
+    - agent
+    - value: ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ok
+  events: []
+resume: {}

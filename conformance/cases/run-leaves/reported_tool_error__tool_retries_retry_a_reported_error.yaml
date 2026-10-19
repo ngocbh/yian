@@ -1,0 +1,112 @@
+# From tests/engine/test_reported_tool_error.py::test_tool_retries_retry_a_reported_error.
+# A ReportedToolError is retried like any other error.
+kind: run
+flow: |
+  id: t
+  name: t
+  nodes:
+    call:
+      kind: tool
+      tool_id: flaky
+      retries: 1
+  output: ${call.output}
+env:
+  YIAN_TOOL_RETRY_DELAY_SECONDS: '0'
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    flaky:
+      parameters:
+        type: object
+        properties: {}
+      results:
+      - raise:
+          class: ReportedToolError
+          message: no such file
+      - raise:
+          class: ReportedToolError
+          message: no such file
+  jitter: [0.0]
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: 'tool ''flaky'' failed after 2 attempts: attempt 1: ReportedToolError: no such file; attempt 2: ReportedToolError: no such file'
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 7]
+      node: call
+  trace:
+  - - run_started
+    - null
+    - defaults:
+        TOOL_RETRY_DELAY_SECONDS: 0
+      learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, call]
+  - - node_step
+    - call
+    - step:
+        attempt: 1
+        error:
+          message: no such file
+          type: ReportedToolError
+        event: failed
+        retry_in: 0.0
+  - - node_step
+    - call
+    - step:
+        attempt: 2
+        event: started
+  - - node_failed
+    - call
+    - failure:
+        code: node.execute
+        message: 'tool ''flaky'' failed after 2 attempts: attempt 1: ReportedToolError: no such file; attempt 2: ReportedToolError: no such file'
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        node: call
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: call
+  - - NodeFailed
+    - failure:
+        code: node.execute
+        message: 'tool ''flaky'' failed after 2 attempts: attempt 1: ReportedToolError: no such file; attempt 2: ReportedToolError: no such file'
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        node: call
+  - - RunFailed
+    - failure:
+        code: node.execute
+        message: 'tool ''flaky'' failed after 2 attempts: attempt 1: ReportedToolError: no such file; attempt 2: ReportedToolError: no such file'
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        node: call
+  tool_calls:
+    flaky:
+    - args: {}
+      call_id: r1/call
+      attempt: 1
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 2
+      node: call

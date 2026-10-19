@@ -1,0 +1,403 @@
+kind: run
+flow: |
+  id: inline-map-typed-records
+  name: inline_map_typed_records
+  typedefs:
+    Row:
+      name: str
+      position: int
+  input:
+    rows: !list(Row)
+  nodes:
+    prepare:
+      kind: code
+      code: |
+        return inputs["rows"]
+      input:
+        rows: ${input.rows}
+      output: list(Row)
+    each:
+      kind: map
+      parallel: true
+      over: ${prepare.output}
+      input:
+        row: ${item}
+        name: ${item.name}
+      nodes:
+        render:
+          kind: code
+          code: |
+            return {"row": inputs["row"], "name": inputs["name"]}
+          input:
+            row: ${input.row}
+            name: ${input.name}
+          output:
+            row: Row
+            name: str
+      output: ${render.output}
+  output: ${each.output}
+inputs:
+  rows:
+  - name: third
+    position: 3
+  - name: first
+    position: 1
+  - name: second
+    position: 2
+run:
+  num_workers: 4
+expect:
+  output:
+    status: succeeded
+    output:
+    - name: third
+      row:
+        name: third
+        position: 3
+    - name: first
+      row:
+        name: first
+        position: 1
+    - name: second
+      row:
+        name: second
+        position: 2
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        rows:
+        - name: third
+          position: 3
+        - name: first
+          position: 1
+        - name: second
+          position: 2
+      learnable: false
+      num_workers: 4
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+      - name: third
+        row:
+          name: third
+          position: 3
+      - name: first
+        row:
+          name: first
+          position: 1
+      - name: second
+        row:
+          name: second
+          position: 2
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        rows:
+        - name: third
+          position: 3
+        - name: first
+          position: 1
+        - name: second
+          position: 2
+  - [node_started, each]
+  - - node_expanded
+    - each
+    - prune_ids: []
+      seed:
+      - name: third
+        row:
+          name: third
+          position: 3
+      - name: first
+        row:
+          name: first
+          position: 1
+      - name: second
+        row:
+          name: second
+          position: 2
+  - [node_started, each#0/__end__]
+  - - node_succeeded
+    - each#0/__end__
+    - value:
+        name: third
+        row:
+          name: third
+          position: 3
+  - [node_started, each#0/__start__]
+  - - node_succeeded
+    - each#0/__start__
+    - value:
+        name: third
+        row:
+          name: third
+          position: 3
+  - [node_started, each#0/render]
+  - - node_succeeded
+    - each#0/render
+    - value:
+        name: third
+        row:
+          name: third
+          position: 3
+  - [node_started, each#1/__end__]
+  - - node_succeeded
+    - each#1/__end__
+    - value:
+        name: first
+        row:
+          name: first
+          position: 1
+  - [node_started, each#1/__start__]
+  - - node_succeeded
+    - each#1/__start__
+    - value:
+        name: first
+        row:
+          name: first
+          position: 1
+  - [node_started, each#1/render]
+  - - node_succeeded
+    - each#1/render
+    - value:
+        name: first
+        row:
+          name: first
+          position: 1
+  - [node_started, each#2/__end__]
+  - - node_succeeded
+    - each#2/__end__
+    - value:
+        name: second
+        row:
+          name: second
+          position: 2
+  - [node_started, each#2/__start__]
+  - - node_succeeded
+    - each#2/__start__
+    - value:
+        name: second
+        row:
+          name: second
+          position: 2
+  - [node_started, each#2/render]
+  - - node_succeeded
+    - each#2/render
+    - value:
+        name: second
+        row:
+          name: second
+          position: 2
+  - [node_started, each/__end__]
+  - - node_succeeded
+    - each/__end__
+    - commit_target: each
+      value:
+      - name: third
+        row:
+          name: third
+          position: 3
+      - name: first
+        row:
+          name: first
+          position: 1
+      - name: second
+        row:
+          name: second
+          position: 2
+  - [node_started, each/__start__]
+  - - node_succeeded
+    - each/__start__
+    - value: {}
+  - [node_started, prepare]
+  - - node_succeeded
+    - prepare
+    - value:
+      - name: third
+        position: 3
+      - name: first
+        position: 1
+      - name: second
+        position: 2
+  events:
+  - [RunStarted]
+  - - RunSucceeded
+    - output:
+      - name: third
+        row:
+          name: third
+          position: 3
+      - name: first
+        row:
+          name: first
+          position: 1
+      - name: second
+        row:
+          name: second
+          position: 2
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+      - name: third
+        row:
+          name: third
+          position: 3
+      - name: first
+        row:
+          name: first
+          position: 1
+      - name: second
+        row:
+          name: second
+          position: 2
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        rows:
+        - name: third
+          position: 3
+        - name: first
+          position: 1
+        - name: second
+          position: 2
+  - - NodeStarted
+    - node_id: each
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - name: third
+          row:
+            name: third
+            position: 3
+        - name: first
+          row:
+            name: first
+            position: 1
+        - name: second
+          row:
+            name: second
+            position: 2
+      node_id: each
+  - - NodeStarted
+    - node_id: each#0/__end__
+  - - NodeSucceeded
+    - node_id: each#0/__end__
+      output:
+        name: third
+        row:
+          name: third
+          position: 3
+  - - NodeStarted
+    - node_id: each#0/__start__
+  - - NodeSucceeded
+    - node_id: each#0/__start__
+      output:
+        name: third
+        row:
+          name: third
+          position: 3
+  - - NodeStarted
+    - node_id: each#0/render
+  - - NodeSucceeded
+    - node_id: each#0/render
+      output:
+        name: third
+        row:
+          name: third
+          position: 3
+  - - NodeStarted
+    - node_id: each#1/__end__
+  - - NodeSucceeded
+    - node_id: each#1/__end__
+      output:
+        name: first
+        row:
+          name: first
+          position: 1
+  - - NodeStarted
+    - node_id: each#1/__start__
+  - - NodeSucceeded
+    - node_id: each#1/__start__
+      output:
+        name: first
+        row:
+          name: first
+          position: 1
+  - - NodeStarted
+    - node_id: each#1/render
+  - - NodeSucceeded
+    - node_id: each#1/render
+      output:
+        name: first
+        row:
+          name: first
+          position: 1
+  - - NodeStarted
+    - node_id: each#2/__end__
+  - - NodeSucceeded
+    - node_id: each#2/__end__
+      output:
+        name: second
+        row:
+          name: second
+          position: 2
+  - - NodeStarted
+    - node_id: each#2/__start__
+  - - NodeSucceeded
+    - node_id: each#2/__start__
+      output:
+        name: second
+        row:
+          name: second
+          position: 2
+  - - NodeStarted
+    - node_id: each#2/render
+  - - NodeSucceeded
+    - node_id: each#2/render
+      output:
+        name: second
+        row:
+          name: second
+          position: 2
+  - - NodeStarted
+    - node_id: each/__end__
+  - - NodeSucceeded
+    - commit_as: each
+      node_id: each/__end__
+      output:
+      - name: third
+        row:
+          name: third
+          position: 3
+      - name: first
+        row:
+          name: first
+          position: 1
+      - name: second
+        row:
+          name: second
+          position: 2
+  - - NodeStarted
+    - node_id: each/__start__
+  - - NodeSucceeded
+    - node_id: each/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: prepare
+  - - NodeSucceeded
+    - node_id: prepare
+      output:
+      - name: third
+        position: 3
+      - name: first
+        position: 1
+      - name: second
+        position: 2

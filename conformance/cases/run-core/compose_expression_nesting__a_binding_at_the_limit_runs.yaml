@@ -1,0 +1,63 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    s: !str
+  nodes:
+    use:
+      kind: code
+      input:
+        topic: ${upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(input.s))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))}
+      output: str
+      code: |
+        return inputs['topic']
+  output: ${use.output}
+inputs:
+  s: a
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: A
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        s: a
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        s: a
+  - [node_started, use]
+  - - node_succeeded
+    - use
+    - value: A
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: A
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        s: a
+  - - NodeStarted
+    - node_id: use
+  - - NodeSucceeded
+    - node_id: use
+      output: A
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: A
+  - - RunSucceeded
+    - output: A

@@ -1,0 +1,150 @@
+kind: run
+flow: |2
+
+  id: ic_qi
+  name: ic_qi
+  input:
+    name: !str
+
+  defs:
+    enrich:
+      input:
+        topic: !str
+      nodes:
+        x:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:echo
+          input:
+            topic: ${input.topic}
+          output: str
+      output: ${x.output}
+
+  nodes:
+    use:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: call(enrich, topic="hi ${input.name}")
+      output: str
+  output: ${use.output}
+python_flow: |2
+
+  id: ic_qi
+  name: ic_qi
+  input:
+    name: !str
+
+  defs:
+    enrich:
+      input:
+        topic: !str
+      nodes:
+        x:
+          kind: code
+          code: tests.engine._compose_codefns:echo
+          input:
+            topic: ${input.topic}
+          output: str
+      output: ${x.output}
+
+  nodes:
+    use:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: call(enrich, topic="hi ${input.name}")
+      output: str
+  output: ${use.output}
+inputs:
+  name: ACME
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: hi ACME
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        name: ACME
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        name: ACME
+  - [node_started, __call_0]
+  - - node_expanded
+    - __call_0
+    - prune_ids: []
+      seed:
+        topic: hi ACME
+  - [node_started, __call_0/__start__]
+  - - node_succeeded
+    - __call_0/__start__
+    - value:
+        topic: hi ACME
+  - [node_started, __call_0/x]
+  - - node_succeeded
+    - __call_0/x
+    - value: hi ACME
+  - [node_started, __call_0/__end__]
+  - - node_succeeded
+    - __call_0/__end__
+    - commit_target: __call_0
+      value: hi ACME
+  - [node_started, use]
+  - - node_succeeded
+    - use
+    - value: hi ACME
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: hi ACME
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        name: ACME
+  - - NodeStarted
+    - node_id: __call_0
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          topic: hi ACME
+      node_id: __call_0
+  - - NodeStarted
+    - node_id: __call_0/__start__
+  - - NodeSucceeded
+    - node_id: __call_0/__start__
+      output:
+        topic: hi ACME
+  - - NodeStarted
+    - node_id: __call_0/x
+  - - NodeSucceeded
+    - node_id: __call_0/x
+      output: hi ACME
+  - - NodeStarted
+    - node_id: __call_0/__end__
+  - - NodeSucceeded
+    - commit_as: __call_0
+      node_id: __call_0/__end__
+      output: hi ACME
+  - - NodeStarted
+    - node_id: use
+  - - NodeSucceeded
+    - node_id: use
+      output: hi ACME
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: hi ACME
+  - - RunSucceeded
+    - output: hi ACME

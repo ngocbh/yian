@@ -1,0 +1,159 @@
+# From tests/engine/test_agent_steering.py::test_interrupt_after_a_reply_keeps_it_and_records_skipped_calls.
+# Also ::test_interrupt_during_a_single_chunk_reply_keeps_the_complete_reply (a reply streams as one chunk).
+# An interrupt set once model call 1 has finished keeps that reply's text as the output and runs
+# none of its two tool calls: each is reported as a ToolCallFinished with error `interrupted`.
+# (The tests' session-effect asserts need host.memory; the events show the skipped calls.)
+kind: run
+flow: |
+  id: steer
+  name: steer
+  llm_config: {provider: openai, model: gpt-5.5}
+  nodes:
+    chat:
+      kind: agent
+      steerable: true
+      tools: [lookup]
+      system_prompt: Help.
+      prompt: Help the user.
+      output: str
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  steering:
+    chat:
+    - after:
+        model_call: 1
+      interrupt: true
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+        required: [topic]
+      results: []
+  models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: Checking both.
+          - type: tool_call
+            id: call-1
+            name: lookup
+            arguments:
+              topic: a
+          - type: tool_call
+            id: call-2
+            name: lookup
+            arguments:
+              topic: b
+expect:
+  output:
+    status: succeeded
+    output: Checking both.
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        chat:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, chat]
+  - - node_succeeded
+    - chat
+    - value: Checking both.
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: Checking both.
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: chat
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - ToolCallStarted
+    - arguments:
+        topic: a
+      call_index: 0
+      exchange_id: <id:1>
+      name: lookup
+      node_id: chat
+      tool_call_id: call-1
+  - - ToolCallFinished
+    - call_index: 0
+      error: interrupted
+      exchange_id: <id:1>
+      name: lookup
+      node_id: chat
+      tool_call_id: call-1
+  - - ToolCallStarted
+    - arguments:
+        topic: b
+      call_index: 1
+      exchange_id: <id:1>
+      name: lookup
+      node_id: chat
+      tool_call_id: call-2
+  - - ToolCallFinished
+    - call_index: 1
+      error: interrupted
+      exchange_id: <id:1>
+      name: lookup
+      node_id: chat
+      tool_call_id: call-2
+  - - NodeSucceeded
+    - node_id: chat
+      output: Checking both.
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: Checking both.
+  - - RunSucceeded
+    - output: Checking both.
+  stream:
+  - chunk: Checking both.
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: chat
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: chat

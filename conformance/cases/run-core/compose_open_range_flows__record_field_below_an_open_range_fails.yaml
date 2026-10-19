@@ -1,0 +1,108 @@
+kind: run
+flow: |2
+
+  id: open_typedefs
+  name: open_typedefs
+  typedefs:
+    Count: int(0..)
+    Order:
+      qty: int(1..)
+      price: float(..100.0)
+  input:
+    counts: !list(Count) []
+    maybe: !Optional(Count) null
+  nodes:
+    order:
+      kind: code
+      input:
+        counts: ${input.counts}
+        maybe: ${input.maybe}
+      code: |
+        const extra = inputs["counts"].reduce((a, b) => a + b, 0n) + (inputs["maybe"] ?? 0n)
+        return {"qty": 0, "price": 1.0 + Number(extra)}
+      output: Order
+  output: ${order.output}
+python_flow: |2
+
+  id: open_typedefs
+  name: open_typedefs
+  typedefs:
+    Count: int(0..)
+    Order:
+      qty: int(1..)
+      price: float(..100.0)
+  input:
+    counts: !list(Count) []
+    maybe: !Optional(Count) null
+  nodes:
+    order:
+      kind: code
+      input:
+        counts: ${input.counts}
+        maybe: ${input.maybe}
+      code: |
+        extra = sum(inputs["counts"]) + (inputs["maybe"] or 0)
+        return {"qty": 0, "price": 1.0 + extra}
+      output: Order
+  output: ${order.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      frames:
+      - label: flow.yaml
+        range: [21, 13, 21, 18]
+      message: 0 is below the inclusive int minimum 1
+      node: order
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        counts: []
+        maybe: null
+  - [node_started, order]
+  - - node_failed
+    - order
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [21, 13, 21, 18]
+        message: 0 is below the inclusive int minimum 1
+        node: order
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        counts: []
+        maybe: null
+  - - NodeStarted
+    - node_id: order
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [21, 13, 21, 18]
+        message: 0 is below the inclusive int minimum 1
+        node: order
+  - - RunFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [21, 13, 21, 18]
+        message: 0 is below the inclusive int minimum 1
+        node: order

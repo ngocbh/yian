@@ -1,0 +1,86 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  nodes:
+    pick: {kind: code, output: object, code: "return {'provider': 'azure', 'model': 'dep', 'base_url': 'https://res.openai.azure.com'}"}
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: '${pick.output}'
+  output: ${chat.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      frames:
+      - label: flow.yaml
+        range: [8, 17, 8, 33]
+      message: 'node ''chat'' llm_config.base_url: credentials and where they are sent stay with the host or yian auth'
+      node: chat
+  trace:
+  - - run_started
+    - null
+    - call_time_llm:
+        agents:
+          chat: {}
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, pick]
+  - - node_succeeded
+    - pick
+    - value:
+        base_url: https://res.openai.azure.com
+        model: dep
+        provider: azure
+  - [node_started, chat]
+  - - node_failed
+    - chat
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [8, 17, 8, 33]
+        message: 'node ''chat'' llm_config.base_url: credentials and where they are sent stay with the host or yian auth'
+        node: chat
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: pick
+  - - NodeSucceeded
+    - node_id: pick
+      output:
+        base_url: https://res.openai.azure.com
+        model: dep
+        provider: azure
+  - - NodeStarted
+    - node_id: chat
+  - - NodeFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [8, 17, 8, 33]
+        message: 'node ''chat'' llm_config.base_url: credentials and where they are sent stay with the host or yian auth'
+        node: chat
+  - - RunFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [8, 17, 8, 33]
+        message: 'node ''chat'' llm_config.base_url: credentials and where they are sent stay with the host or yian auth'
+        node: chat

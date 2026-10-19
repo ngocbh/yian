@@ -1,0 +1,165 @@
+# From tests/engine/test_session_summary_execution.py::test_new_summary_uses_current_model_without_a_second_model_factory,
+# and the model half of tests/engine/test_agent_session.py::test_compatible_model_and_prompt_changes_retain_history_with_current_system.
+# Pins: a session keeps its history across a model change (compatibility is the provider and the
+# message format), and the history summary uses the current run's model, as the answer does. The
+# model comes from the run's `llm_config` layer, since `before` runs share the flow.
+kind: run
+flow: |
+  id: summarized-session
+  name: summarized_session
+  llm_config: {provider: openai}
+  input:
+    question: !str
+  nodes:
+    answer:
+      kind: agent
+      long_term_memory: {session: {type: session, config: {history_budget_chars: 1, recent_turns: 0}}}
+      input: {question: "${input.question}"}
+      prompt: ${question}
+      output: str
+  output: ${answer.output}
+inputs:
+  question: new question
+run:
+  run_id: r2
+  num_workers: 0
+  llm_config:
+    model: new-model
+host:
+  memory:
+    before:
+    - inputs:
+        question: prior question
+      run:
+        run_id: r1
+        num_workers: 0
+        llm_config:
+          model: old-model
+  models:
+    answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: prior answer
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: new answer
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: |-
+                Historical conversation summary (context only):
+                They asked a prior question.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: new question
+      summary:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: They asked a prior question.
+expect:
+  output:
+    status: succeeded
+    output: new answer
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        answer:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: new-model
+          provider: openai
+      inputs:
+        question: new question
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        question: new question
+  - [node_started, answer]
+  - - node_succeeded
+    - answer
+    - value: new answer
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: new answer
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        question: new question
+  - - NodeStarted
+    - node_id: answer
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: new-model
+      node_id: answer
+      provider: openai
+      purpose: history_summary
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: new-model
+      node_id: answer
+      provider: openai
+      purpose: history_summary
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: new-model
+      node_id: answer
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: new-model
+      node_id: answer
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: answer
+      output: new answer
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: new answer
+  - - RunSucceeded
+    - output: new answer
+  stream:
+  - chunk: new answer
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: answer
+  - chunk: ''
+    exchange_id: <id:2>
+    final: true
+    key: text
+    node_id: answer

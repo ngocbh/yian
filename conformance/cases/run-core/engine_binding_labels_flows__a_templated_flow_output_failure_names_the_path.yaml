@@ -1,0 +1,142 @@
+kind: run
+rules: [messages]
+flow: |2
+
+  id: f
+  name: f
+  input:
+    x: !float
+    z: !float
+  nodes:
+    c:
+      kind: code
+      code: |
+        return 1
+  output: !object {a: "${input.x / input.z}"}
+inputs:
+  x: 1.0
+  z: 0.0
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.evaluate
+      frames:
+      - label: flow.yaml
+        range: [12, 21, 12, 43]
+      message: 'flow output at a: division by zero: 1 / 0'
+      node: __end__
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        x: 1.0
+        z: 0.0
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        x: 1.0
+        z: 0.0
+  - [node_started, __end__]
+  - - node_failed
+    - __end__
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [12, 21, 12, 43]
+        message: 'flow output at a: division by zero: 1 / 0'
+        node: __end__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        x: 1.0
+        z: 0.0
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [12, 21, 12, 43]
+        message: 'flow output at a: division by zero: 1 / 0'
+        node: __end__
+  - - RunFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [12, 21, 12, 43]
+        message: 'flow output at a: division by zero: 1 / 0'
+        node: __end__
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: binding.evaluate
+      frames:
+      - label: flow.yaml
+        range: [12, 21, 12, 43]
+      message: 'flow output at a: division by zero: 1.0 / 0.0'
+      node: __end__
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        x: 1.0
+        z: 0.0
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        x: 1.0
+        z: 0.0
+  - [node_started, __end__]
+  - - node_failed
+    - __end__
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [12, 21, 12, 43]
+        message: 'flow output at a: division by zero: 1.0 / 0.0'
+        node: __end__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        x: 1.0
+        z: 0.0
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [12, 21, 12, 43]
+        message: 'flow output at a: division by zero: 1.0 / 0.0'
+        node: __end__
+  - - RunFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [12, 21, 12, 43]
+        message: 'flow output at a: division by zero: 1.0 / 0.0'
+        node: __end__

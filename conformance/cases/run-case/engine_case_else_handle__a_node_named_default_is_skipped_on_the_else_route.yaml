@@ -1,0 +1,76 @@
+kind: run
+flow: |2
+
+  id: f
+  name: f
+  input:
+    n: !int
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.n > 5"
+          then: default
+      else: small
+    default: {kind: code, code: "return 'big'", output: str}
+    small: {kind: code, code: "return 'small'", output: str}
+  output: ${default.output | small.output}
+inputs:
+  n: 1
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: small
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        n: 1
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        n: 1
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: '#else'
+  - [node_started, small]
+  - - node_succeeded
+    - small
+    - value: small
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: small
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        n: 1
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: gate
+  - - NodeSkipped
+    - node_id: default
+  - - NodeStarted
+    - node_id: small
+  - - NodeSucceeded
+    - node_id: small
+      output: small
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: small
+  - - RunSucceeded
+    - output: small

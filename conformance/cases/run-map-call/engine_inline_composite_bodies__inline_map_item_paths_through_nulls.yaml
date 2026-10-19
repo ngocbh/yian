@@ -1,0 +1,325 @@
+kind: run
+flow: |
+  id: inline-map-nullable-items
+  name: inline_map_nullable_items
+  typedefs:
+    Detail:
+      name: str
+    Row:
+      detail: Optional(Detail)
+  input:
+    items: !list(Optional(Row))
+  nodes:
+    each:
+      kind: map
+      over: ${input.items}
+      input:
+        row: ${item}
+        name: ${item.detail.name}
+      nodes:
+        collect:
+          kind: code
+          code: |
+            return {"row": inputs["row"], "name": inputs["name"]}
+          input:
+            row: ${input.row}
+            name: ${input.name}
+          output:
+            row: Optional(Row)
+            name: Optional(str)
+      output: ${collect.output}
+  output: ${each.output}
+inputs:
+  items:
+  - null
+  - detail: null
+  - detail:
+      name: ready
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+    - name: null
+      row: null
+    - name: null
+      row:
+        detail: null
+    - name: ready
+      row:
+        detail:
+          name: ready
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        items:
+        - null
+        - detail: null
+        - detail:
+            name: ready
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        items:
+        - null
+        - detail: null
+        - detail:
+            name: ready
+  - [node_started, each]
+  - - node_expanded
+    - each
+    - prune_ids: []
+      seed:
+      - name: null
+        row: null
+      - name: null
+        row:
+          detail: null
+      - name: ready
+        row:
+          detail:
+            name: ready
+  - [node_started, each/__start__]
+  - - node_succeeded
+    - each/__start__
+    - value: {}
+  - [node_started, each#0/__start__]
+  - - node_succeeded
+    - each#0/__start__
+    - value:
+        name: null
+        row: null
+  - [node_started, each#1/__start__]
+  - - node_succeeded
+    - each#1/__start__
+    - value:
+        name: null
+        row:
+          detail: null
+  - [node_started, each#2/__start__]
+  - - node_succeeded
+    - each#2/__start__
+    - value:
+        name: ready
+        row:
+          detail:
+            name: ready
+  - [node_started, each#0/collect]
+  - - node_succeeded
+    - each#0/collect
+    - value:
+        name: null
+        row: null
+  - [node_started, each#1/collect]
+  - - node_succeeded
+    - each#1/collect
+    - value:
+        name: null
+        row:
+          detail: null
+  - [node_started, each#2/collect]
+  - - node_succeeded
+    - each#2/collect
+    - value:
+        name: ready
+        row:
+          detail:
+            name: ready
+  - [node_started, each#0/__end__]
+  - - node_succeeded
+    - each#0/__end__
+    - value:
+        name: null
+        row: null
+  - [node_started, each#1/__end__]
+  - - node_succeeded
+    - each#1/__end__
+    - value:
+        name: null
+        row:
+          detail: null
+  - [node_started, each#2/__end__]
+  - - node_succeeded
+    - each#2/__end__
+    - value:
+        name: ready
+        row:
+          detail:
+            name: ready
+  - [node_started, each/__end__]
+  - - node_succeeded
+    - each/__end__
+    - commit_target: each
+      value:
+      - name: null
+        row: null
+      - name: null
+        row:
+          detail: null
+      - name: ready
+        row:
+          detail:
+            name: ready
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+      - name: null
+        row: null
+      - name: null
+        row:
+          detail: null
+      - name: ready
+        row:
+          detail:
+            name: ready
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        items:
+        - null
+        - detail: null
+        - detail:
+            name: ready
+  - - NodeStarted
+    - node_id: each
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - name: null
+          row: null
+        - name: null
+          row:
+            detail: null
+        - name: ready
+          row:
+            detail:
+              name: ready
+      node_id: each
+  - - NodeStarted
+    - node_id: each/__start__
+  - - NodeSucceeded
+    - node_id: each/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: each#0/__start__
+  - - NodeSucceeded
+    - node_id: each#0/__start__
+      output:
+        name: null
+        row: null
+  - - NodeStarted
+    - node_id: each#1/__start__
+  - - NodeSucceeded
+    - node_id: each#1/__start__
+      output:
+        name: null
+        row:
+          detail: null
+  - - NodeStarted
+    - node_id: each#2/__start__
+  - - NodeSucceeded
+    - node_id: each#2/__start__
+      output:
+        name: ready
+        row:
+          detail:
+            name: ready
+  - - NodeStarted
+    - node_id: each#0/collect
+  - - NodeSucceeded
+    - node_id: each#0/collect
+      output:
+        name: null
+        row: null
+  - - NodeStarted
+    - node_id: each#1/collect
+  - - NodeSucceeded
+    - node_id: each#1/collect
+      output:
+        name: null
+        row:
+          detail: null
+  - - NodeStarted
+    - node_id: each#2/collect
+  - - NodeSucceeded
+    - node_id: each#2/collect
+      output:
+        name: ready
+        row:
+          detail:
+            name: ready
+  - - NodeStarted
+    - node_id: each#0/__end__
+  - - NodeSucceeded
+    - node_id: each#0/__end__
+      output:
+        name: null
+        row: null
+  - - NodeStarted
+    - node_id: each#1/__end__
+  - - NodeSucceeded
+    - node_id: each#1/__end__
+      output:
+        name: null
+        row:
+          detail: null
+  - - NodeStarted
+    - node_id: each#2/__end__
+  - - NodeSucceeded
+    - node_id: each#2/__end__
+      output:
+        name: ready
+        row:
+          detail:
+            name: ready
+  - - NodeStarted
+    - node_id: each/__end__
+  - - NodeSucceeded
+    - commit_as: each
+      node_id: each/__end__
+      output:
+      - name: null
+        row: null
+      - name: null
+        row:
+          detail: null
+      - name: ready
+        row:
+          detail:
+            name: ready
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+      - name: null
+        row: null
+      - name: null
+        row:
+          detail: null
+      - name: ready
+        row:
+          detail:
+            name: ready
+  - - RunSucceeded
+    - output:
+      - name: null
+        row: null
+      - name: null
+        row:
+          detail: null
+      - name: ready
+        row:
+          detail:
+            name: ready

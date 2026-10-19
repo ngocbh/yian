@@ -1,0 +1,175 @@
+# hand TS expect (rules curated by hand): `code` is left out of rules; the frame and message are about flow structure, not the CODE body.
+kind: run
+rules: [messages]
+flow: |2
+
+  id: nested
+  name: nested
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', qty: int, price: float}
+    Decision: Union(Buy, Sell)
+    Text: {text: str}
+    Num: {num: int}
+    Note: Union(Text, Num)
+  input:
+    value: !object
+  nodes:
+    d:
+      kind: code
+      input:
+        value: ${input.value}
+      code: |
+        return inputs["value"]
+      output:
+        decision: Decision
+        notes: list(Note)
+  output: ${d.output}
+inputs:
+  value:
+    decision:
+      action: bid
+      qty: 1
+    notes: []
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      frames:
+      - label: flow.yaml
+        range: [21, 17, 21, 25]
+      message: '"bid" is not a tag of the union (expected one of ["buy","sell"])'
+      node: d
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        value:
+          decision:
+            action: bid
+            qty: 1
+          notes: []
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        value:
+          decision:
+            action: bid
+            qty: 1
+          notes: []
+  - [node_started, d]
+  - - node_failed
+    - d
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [21, 17, 21, 25]
+        message: '"bid" is not a tag of the union (expected one of ["buy","sell"])'
+        node: d
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        value:
+          decision:
+            action: bid
+            qty: 1
+          notes: []
+  - - NodeStarted
+    - node_id: d
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [21, 17, 21, 25]
+        message: '"bid" is not a tag of the union (expected one of ["buy","sell"])'
+        node: d
+  - - RunFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [21, 17, 21, 25]
+        message: '"bid" is not a tag of the union (expected one of ["buy","sell"])'
+        node: d
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      frames:
+      - label: flow.yaml
+        range: [21, 17, 21, 25]
+      message: '''bid'' is not a tag of the union (expected one of [''buy'', ''sell''])'
+      node: d
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        value:
+          decision:
+            action: bid
+            qty: 1
+          notes: []
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        value:
+          decision:
+            action: bid
+            qty: 1
+          notes: []
+  - [node_started, d]
+  - - node_failed
+    - d
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [21, 17, 21, 25]
+        message: '''bid'' is not a tag of the union (expected one of [''buy'', ''sell''])'
+        node: d
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        value:
+          decision:
+            action: bid
+            qty: 1
+          notes: []
+  - - NodeStarted
+    - node_id: d
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [21, 17, 21, 25]
+        message: '''bid'' is not a tag of the union (expected one of [''buy'', ''sell''])'
+        node: d
+  - - RunFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [21, 17, 21, 25]
+        message: '''bid'' is not a tag of the union (expected one of [''buy'', ''sell''])'
+        node: d

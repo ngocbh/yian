@@ -1,0 +1,16 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  llm_config: {provider: anthropic}
+  nodes:
+    write: {kind: agent, prompt: hi}
+  output: ${write.output}
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: ValueError
+    message: Agent 'write' has no model for provider 'anthropic'; set llm_config.provider/model, pass --provider/--model, or run 'yian auth anthropic'
+  trace: []
+  events: []

@@ -1,0 +1,109 @@
+kind: run
+flow: |2
+
+  id: f
+  name: f
+  input:
+    cmd: !str
+  nodes:
+    route:
+      kind: case
+      on: ${input.cmd}
+      cases:
+        - when: go
+          then: maybe
+    maybe:
+      kind: code
+      output: str
+      code: |
+        return 'm'
+    whole: !object
+      a: ${maybe.output}
+    embedded: !str "got ${maybe.output}"
+    lone: !int 7
+  output:
+    whole: ${whole.output}
+    embedded: ${embedded.output}
+    lone: ${lone.output}
+inputs:
+  cmd: stop
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      embedded: 'got '
+      lone: 7
+      whole: null
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        cmd: stop
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        cmd: stop
+  - [node_started, lone]
+  - - node_succeeded
+    - lone
+    - value: 7
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: '#else'
+  - [node_started, embedded]
+  - - node_succeeded
+    - embedded
+    - value: 'got '
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        embedded: 'got '
+        lone: 7
+        whole: null
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        cmd: stop
+  - - NodeStarted
+    - node_id: lone
+  - - NodeSucceeded
+    - node_id: lone
+      output: 7
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: '#else'
+      node_id: route
+  - - NodeSkipped
+    - node_id: maybe
+  - - NodeSkipped
+    - node_id: whole
+  - - NodeStarted
+    - node_id: embedded
+  - - NodeSucceeded
+    - node_id: embedded
+      output: 'got '
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        embedded: 'got '
+        lone: 7
+        whole: null
+  - - RunSucceeded
+    - output:
+        embedded: 'got '
+        lone: 7
+        whole: null

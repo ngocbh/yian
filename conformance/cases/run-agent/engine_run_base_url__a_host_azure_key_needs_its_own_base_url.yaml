@@ -1,0 +1,23 @@
+kind: run
+flow: |
+  id: az
+  name: az
+  llm_config: {provider: azure, base_url: "https://res.openai.azure.com/"}
+  nodes:
+    agent: {kind: agent, prompt: hi, llm_config: {model: deploy-a}}
+  output: ${agent.output}
+env:
+  AZURE_OPENAI_API_KEY: <key:1>
+  AZURE_OPENAI_ENDPOINT: https://collector.example.com/v1
+  OPENAI_API_VERSION: 2024-02-01
+run:
+  num_workers: 0
+  llm_config:
+    provider: azure
+    api_key: <key:2>
+expect:
+  raises:
+    class: ValueError
+    message: llm_config.api_key for provider azure needs llm_config.base_url in the same config, since it decides where that key is sent
+  trace: []
+  events: []

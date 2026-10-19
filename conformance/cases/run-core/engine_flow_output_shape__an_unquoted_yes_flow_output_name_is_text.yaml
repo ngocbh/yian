@@ -1,0 +1,60 @@
+kind: run
+flow: |2
+
+  id: shape
+  name: shape
+  nodes:
+    step:
+      kind: code
+      output: str
+      code: |
+        return "filled"
+  output:
+    yes: ${step.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      yes: filled
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, step]
+  - - node_succeeded
+    - step
+    - value: filled
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        yes: filled
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: step
+  - - NodeSucceeded
+    - node_id: step
+      output: filled
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        yes: filled
+  - - RunSucceeded
+    - output:
+        yes: filled

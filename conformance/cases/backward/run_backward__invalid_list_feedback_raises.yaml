@@ -1,0 +1,98 @@
+kind: backward
+flow: |
+  id: identity
+  name: identity
+  input:
+    text: !str
+  nodes: {}
+  output: ${input.text}
+inputs:
+  text: hello
+run:
+  num_workers: 0
+  learnable: true
+backward:
+- feedback: [null]
+expect:
+  output:
+    status: succeeded
+    output: hello
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        text: hello
+      learnable: true
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - forward_capture:
+        bound_inputs:
+          text: hello
+        evaluated_keys: [text]
+        input_names: [text]
+        node_data:
+          input_output_paths:
+            text: [text]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 0
+              path: [text]
+              run_id: <id:1>
+          kind: record
+          names: [text]
+        scope:
+          boundary: start
+          flow_path: []
+          occurrence_path: []
+          static_path: [__start__]
+      value:
+        text: hello
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - forward_capture:
+        bound_inputs:
+          result: hello
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 1
+              path: [text]
+              run_id: <id:1>
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: []
+          occurrence_path: []
+          static_path: [__end__]
+      value: hello
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        text: hello
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: hello
+  - - RunSucceeded
+    - output: hello
+  backward:
+  - raises:
+      class: ValueError
+      message: feedback requires a recorded list

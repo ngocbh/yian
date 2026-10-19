@@ -1,0 +1,152 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+    o: !Order
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: "return ({a: \"x\"})"
+    c:
+      kind: code
+      input:
+        v: ${input.o}
+      output: str
+      code: return 'x'
+      asserts:
+        - "not isinstance(v, Buy) or v.qty > 0"
+  output: ${c.output}
+python_flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+    o: !Order
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: return dict(a='x')
+    c:
+      kind: code
+      input:
+        v: ${input.o}
+      output: str
+      code: return 'x'
+      asserts:
+        - "not isinstance(v, Buy) or v.qty > 0"
+  output: ${c.output}
+inputs:
+  s: x
+  r:
+    a: x
+  o:
+    action: buy
+    qty: 0
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: assertion.failed
+      frames:
+      - label: flow.yaml
+        range: [27, 9, 27, 46]
+      message: 'node ''c'' pre-assert failed: not isinstance(v, Buy) or v.qty > 0'
+      node: c
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        o:
+          action: buy
+          qty: 0
+        r:
+          a: x
+        s: x
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        o:
+          action: buy
+          qty: 0
+        r:
+          a: x
+        s: x
+  - [node_started, step]
+  - - node_succeeded
+    - step
+    - value:
+        a: x
+  - [node_started, c]
+  - - node_failed
+    - c
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [27, 9, 27, 46]
+        message: 'node ''c'' pre-assert failed: not isinstance(v, Buy) or v.qty > 0'
+        node: c
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        o:
+          action: buy
+          qty: 0
+        r:
+          a: x
+        s: x
+  - - NodeStarted
+    - node_id: step
+  - - NodeSucceeded
+    - node_id: step
+      output:
+        a: x
+  - - NodeStarted
+    - node_id: c
+  - - NodeFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [27, 9, 27, 46]
+        message: 'node ''c'' pre-assert failed: not isinstance(v, Buy) or v.qty > 0'
+        node: c
+  - - RunFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [27, 9, 27, 46]
+        message: 'node ''c'' pre-assert failed: not isinstance(v, Buy) or v.qty > 0'
+        node: c

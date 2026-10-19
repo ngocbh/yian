@@ -1,0 +1,89 @@
+# From tests/engine/test_answer_schema.py::test_record_expands_per_field_with_required.
+# A gate with a record `output:` sends one answer-schema entry per field (an Optional field not
+# required), and a record answer with a null field passes.
+kind: run
+flow: |
+  id: rate
+  name: rate
+  nodes:
+    rate:
+      kind: human_input
+      prompt: "Rate the release"
+      output: {rating: float, note: Optional(str)}
+  output: ${rate.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  human:
+    rate:
+    - rating: 4.5
+      note: null
+expect:
+  output:
+    status: succeeded
+    output:
+      note: null
+      rating: 4.5
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, rate]
+  - - node_succeeded
+    - rate
+    - value:
+        note: null
+        rating: 4.5
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        note: null
+        rating: 4.5
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: rate
+  - - NodeSucceeded
+    - node_id: rate
+      output:
+        note: null
+        rating: 4.5
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        note: null
+        rating: 4.5
+  - - RunSucceeded
+    - output:
+        note: null
+        rating: 4.5
+  tool_calls:
+    ask_user:
+    - args:
+        question: Rate the release
+        answer_schema:
+        - name: rating
+          type: float
+          required: true
+        - name: note
+          type: str
+          required: false
+        node_id: rate
+      call_id: r1/rate
+      attempt: 1
+      node: rate

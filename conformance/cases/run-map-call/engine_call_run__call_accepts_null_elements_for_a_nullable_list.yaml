@@ -1,0 +1,122 @@
+kind: run
+flow: |
+  id: list-none-call
+  name: list_none_call
+  defs:
+    echo:
+      input:
+        values: !list(Optional(str))
+      nodes: {}
+      output: ${input.values}
+  nodes:
+    source:
+      kind: code
+      code: |
+        return [null]
+      output: list(None)
+    invoke:
+      kind: call
+      call: echo
+      input:
+        values: ${source.output}
+  output: ${invoke.output}
+python_flow: |
+  id: list-none-call
+  name: list_none_call
+  defs:
+    echo:
+      input:
+        values: !list(Optional(str))
+      nodes: {}
+      output: ${input.values}
+  nodes:
+    source:
+      kind: code
+      code: |
+        return [None]
+      output: list(None)
+    invoke:
+      kind: call
+      call: echo
+      input:
+        values: ${source.output}
+  output: ${invoke.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: [null]
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, source]
+  - - node_succeeded
+    - source
+    - value: [null]
+  - [node_started, invoke]
+  - - node_expanded
+    - invoke
+    - prune_ids: []
+      seed:
+        values: [null]
+  - [node_started, invoke/__start__]
+  - - node_succeeded
+    - invoke/__start__
+    - value:
+        values: [null]
+  - [node_started, invoke/__end__]
+  - - node_succeeded
+    - invoke/__end__
+    - commit_target: invoke
+      value: [null]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: [null]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: source
+  - - NodeSucceeded
+    - node_id: source
+      output: [null]
+  - - NodeStarted
+    - node_id: invoke
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          values: [null]
+      node_id: invoke
+  - - NodeStarted
+    - node_id: invoke/__start__
+  - - NodeSucceeded
+    - node_id: invoke/__start__
+      output:
+        values: [null]
+  - - NodeStarted
+    - node_id: invoke/__end__
+  - - NodeSucceeded
+    - commit_as: invoke
+      node_id: invoke/__end__
+      output: [null]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: [null]
+  - - RunSucceeded
+    - output: [null]

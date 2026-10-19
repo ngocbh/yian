@@ -1,0 +1,206 @@
+# hand TS expect: the TS body throws `new Error("boom")`, whose failure message is "Error: boom", and its
+# throwing line `throw new Error("boom")` ends at column 34; Python's "boom" and column 37 are in python_expect.
+kind: run
+rules: [code]
+flow: |
+  id: code-origin-inline-failure
+  name: code-origin-inline-failure
+  nodes:
+    invoke:
+      kind: call
+      nodes:
+        worker:
+          kind: code
+          output: int
+          code: |-
+            const marker = 1n
+            throw new Error("boom")
+            return marker
+      output: ${worker.output}
+  output: ${invoke.output}
+python_flow: |
+  id: code-origin-inline-failure
+  name: code-origin-inline-failure
+  nodes:
+    invoke:
+      kind: call
+      nodes:
+        worker:
+          kind: code
+          output: int
+          code: |-
+            marker = 1
+            raise RuntimeError("boom")
+            return marker
+      output: ${worker.output}
+  output: ${invoke.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 9]
+      - label: flow.yaml
+        range: [12, 11, 12, 34]
+      message: "Error: boom"
+      node: invoke/worker
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, invoke]
+  - - node_expanded
+    - invoke
+    - prune_ids: []
+      seed: {}
+  - [node_started, invoke/__start__]
+  - - node_succeeded
+    - invoke/__start__
+    - value: {}
+  - [node_started, invoke/worker]
+  - - node_failed
+    - invoke/worker
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 9]
+        - label: flow.yaml
+          range: [12, 11, 12, 34]
+        message: "Error: boom"
+        node: invoke/worker
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: invoke
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed: {}
+      node_id: invoke
+  - - NodeStarted
+    - node_id: invoke/__start__
+  - - NodeSucceeded
+    - node_id: invoke/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: invoke/worker
+  - - NodeFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 9]
+        - label: flow.yaml
+          range: [12, 11, 12, 34]
+        message: "Error: boom"
+        node: invoke/worker
+  - - RunFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 9]
+        - label: flow.yaml
+          range: [12, 11, 12, 34]
+        message: "Error: boom"
+        node: invoke/worker
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 9]
+      - label: flow.yaml
+        range: [12, 11, 12, 37]
+      message: boom
+      node: invoke/worker
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, invoke]
+  - - node_expanded
+    - invoke
+    - prune_ids: []
+      seed: {}
+  - [node_started, invoke/__start__]
+  - - node_succeeded
+    - invoke/__start__
+    - value: {}
+  - [node_started, invoke/worker]
+  - - node_failed
+    - invoke/worker
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 9]
+        - label: flow.yaml
+          range: [12, 11, 12, 37]
+        message: boom
+        node: invoke/worker
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: invoke
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed: {}
+      node_id: invoke
+  - - NodeStarted
+    - node_id: invoke/__start__
+  - - NodeSucceeded
+    - node_id: invoke/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: invoke/worker
+  - - NodeFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 9]
+        - label: flow.yaml
+          range: [12, 11, 12, 37]
+        message: boom
+        node: invoke/worker
+  - - RunFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 9]
+        - label: flow.yaml
+          range: [12, 11, 12, 37]
+        message: boom
+        node: invoke/worker

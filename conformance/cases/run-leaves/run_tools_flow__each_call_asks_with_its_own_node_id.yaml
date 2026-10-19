@@ -1,0 +1,166 @@
+# From tests/engine/test_run_tools_flow.py::test_each_map_item_and_call_asks_with_its_own_node_id[call].
+# A HUMAN_INPUT in a called child asks with the CALL occurrence's id (c1/ask, c2/ask).
+kind: run
+flow: |
+  id: call_ask
+  name: call_ask
+  defs:
+    one:
+      nodes:
+        ask:
+          kind: human_input
+          prompt: "q"
+          output: str
+      output: ${ask.output}
+  nodes:
+    c1:
+      kind: call
+      call: one
+    c2:
+      kind: call
+      call: one
+      runs_after: [c1]
+  output: ${c2.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  human:
+    c1/ask: [first]
+    c2/ask: [second]
+expect:
+  output:
+    status: succeeded
+    output: second
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, c1]
+  - - node_expanded
+    - c1
+    - prune_ids: []
+      seed: {}
+  - [node_started, c1/__start__]
+  - - node_succeeded
+    - c1/__start__
+    - value: {}
+  - [node_started, c1/ask]
+  - - node_succeeded
+    - c1/ask
+    - value: first
+  - [node_started, c1/__end__]
+  - - node_succeeded
+    - c1/__end__
+    - commit_target: c1
+      value: first
+  - [node_started, c2]
+  - - node_expanded
+    - c2
+    - prune_ids: []
+      seed: {}
+  - [node_started, c2/__start__]
+  - - node_succeeded
+    - c2/__start__
+    - value: {}
+  - [node_started, c2/ask]
+  - - node_succeeded
+    - c2/ask
+    - value: second
+  - [node_started, c2/__end__]
+  - - node_succeeded
+    - c2/__end__
+    - commit_target: c2
+      value: second
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: second
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: c1
+  - - NodeExpanded
+    - node_id: c1
+      grow:
+        seed: {}
+        prune: []
+  - - NodeStarted
+    - node_id: c1/__start__
+  - - NodeSucceeded
+    - node_id: c1/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: c1/ask
+  - - NodeSucceeded
+    - node_id: c1/ask
+      output: first
+  - - NodeStarted
+    - node_id: c1/__end__
+  - - NodeSucceeded
+    - node_id: c1/__end__
+      output: first
+      commit_as: c1
+  - - NodeStarted
+    - node_id: c2
+  - - NodeExpanded
+    - node_id: c2
+      grow:
+        seed: {}
+        prune: []
+  - - NodeStarted
+    - node_id: c2/__start__
+  - - NodeSucceeded
+    - node_id: c2/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: c2/ask
+  - - NodeSucceeded
+    - node_id: c2/ask
+      output: second
+  - - NodeStarted
+    - node_id: c2/__end__
+  - - NodeSucceeded
+    - node_id: c2/__end__
+      output: second
+      commit_as: c2
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: second
+  - - RunSucceeded
+    - output: second
+  tool_calls:
+    ask_user:
+    - args:
+        question: q
+        answer_schema:
+        - name: answer
+          type: str
+          required: true
+        node_id: c1/ask
+      call_id: r1/c1/ask
+      attempt: 1
+      node: c1/ask
+    - args:
+        question: q
+        answer_schema:
+        - name: answer
+          type: str
+          required: true
+        node_id: c2/ask
+      call_id: r1/c2/ask
+      attempt: 1
+      node: c2/ask

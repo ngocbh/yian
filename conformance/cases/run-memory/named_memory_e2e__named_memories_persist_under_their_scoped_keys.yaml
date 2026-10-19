@@ -1,0 +1,288 @@
+# From tests/engine/test_named_memory_e2e.py::test_python_api_named_memories_persist_and_stack.
+# Pins: named memories persist across runs over one root: the earlier run's backward commits episodes
+# to the root flow's `notes` (every occurrence) and to the `uses:` file's own `notes`, the key
+# `lib.notes` (only that file's nodes), read back through fresh memories. The replies are what the
+# test's `_reply` writes for each request; the main run's scripted replies aren't checked against
+# what the model saw, since its requests (recalled episodes, stacked outer to local) aren't carried:
+# they would pin the episodes' entry_id formula (a T6-6 hand-off).
+kind: run
+flow: |
+  id: e2e-memory
+  name: e2e_memory
+  long_term_memory:
+    notes:
+      type: episodic
+      config: {recall_limit: 3}
+  uses:
+    lib: notes-lib
+  input:
+    question: !str
+  nodes:
+    ask:
+      kind: agent
+      llm_config: {provider: openai, model: fake-model}
+      long_term_memory: {chat: session}
+      input: {question: "${input.question}"}
+      prompt: ${question}
+      output: str
+    lib_step:
+      kind: call
+      call: lib
+      input: {topic: "${input.question}"}
+  output:
+    answer: ${ask.output}
+    summary: ${lib_step.output}
+files:
+  notes-lib.yaml: |
+    id: notes-lib
+    name: notes_lib
+    long_term_memory: {notes: episodic}
+    input:
+      topic: !str
+    nodes:
+      summarize:
+        kind: agent
+        llm_config: {provider: openai, model: fake-model}
+        input: {topic: "${input.topic}"}
+        prompt: Summarize ${topic}.
+        output: str
+    output: ${summarize.output}
+inputs:
+  question: q2
+run:
+  run_id: r2
+  num_workers: 0
+host:
+  memory:
+    before:
+    - inputs:
+        question: q1
+      run:
+        run_id: r1
+        num_workers: 0
+        learnable: true
+      backward:
+      - feedback: null
+  models:
+    ask:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: users=1 memories=
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: q1
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: users=2 memories=notes
+    lib_step/summarize:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: users=1 memories=
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Summarize q1.
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: users=1 memories=notes,lib.notes
+expect:
+  output:
+    status: succeeded
+    output:
+      answer: users=2 memories=notes
+      summary: users=1 memories=notes,lib.notes
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        ask:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: fake-model
+          provider: openai
+        lib_step/summarize:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: fake-model
+          provider: openai
+      inputs:
+        question: q2
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        question: q2
+  - [node_started, ask]
+  - - node_succeeded
+    - ask
+    - value: users=2 memories=notes
+  - [node_started, lib_step]
+  - - node_expanded
+    - lib_step
+    - prune_ids: []
+      seed:
+        topic: q2
+  - [node_started, lib_step/__start__]
+  - - node_succeeded
+    - lib_step/__start__
+    - value:
+        topic: q2
+  - [node_started, lib_step/summarize]
+  - - node_succeeded
+    - lib_step/summarize
+    - value: users=1 memories=notes,lib.notes
+  - [node_started, lib_step/__end__]
+  - - node_succeeded
+    - lib_step/__end__
+    - commit_target: lib_step
+      value: users=1 memories=notes,lib.notes
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        answer: users=2 memories=notes
+        summary: users=1 memories=notes,lib.notes
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        question: q2
+  - - NodeStarted
+    - node_id: ask
+  - - ModelCallStarted
+    - exchange_id: <id:14>
+      model: fake-model
+      node_id: ask
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:14>
+      model: fake-model
+      node_id: ask
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: ask
+      output: users=2 memories=notes
+  - - NodeStarted
+    - node_id: lib_step
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          topic: q2
+      node_id: lib_step
+  - - NodeStarted
+    - node_id: lib_step/__start__
+  - - NodeSucceeded
+    - node_id: lib_step/__start__
+      output:
+        topic: q2
+  - - NodeStarted
+    - node_id: lib_step/summarize
+  - - ModelCallStarted
+    - exchange_id: <id:15>
+      model: fake-model
+      node_id: lib_step/summarize
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:15>
+      model: fake-model
+      node_id: lib_step/summarize
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: lib_step/summarize
+      output: users=1 memories=notes,lib.notes
+  - - NodeStarted
+    - node_id: lib_step/__end__
+  - - NodeSucceeded
+    - commit_as: lib_step
+      node_id: lib_step/__end__
+      output: users=1 memories=notes,lib.notes
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        answer: users=2 memories=notes
+        summary: users=1 memories=notes,lib.notes
+  - - RunSucceeded
+    - output:
+        answer: users=2 memories=notes
+        summary: users=1 memories=notes,lib.notes
+  stream:
+  - chunk: users=2 memories=notes
+    exchange_id: <id:14>
+    final: false
+    key: text
+    node_id: ask
+  - chunk: ''
+    exchange_id: <id:14>
+    final: true
+    key: text
+    node_id: ask
+  - chunk: users=1 memories=notes,lib.notes
+    exchange_id: <id:15>
+    final: false
+    key: text
+    node_id: lib_step/summarize
+  - chunk: ''
+    exchange_id: <id:15>
+    final: true
+    key: text
+    node_id: lib_step/summarize
+  memory:
+    lib.notes: |-
+      {"entry_id":"<id:1>","episode":{"base_system_prompt":null,"execution_seq":7,"failure":null,"inputs":{"topic":"q1"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"q1"},"owner_static_path":["lib_step","__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:2>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":9,"failure":null,"inputs":{"topic":"q1"},"interactions":[{"kind":"model_text","text":"users=1 memories="}],"memory_sections":[],"occurrence_path":[],"output":"users=1 memories=","owner_static_path":["lib_step","summarize"],"prompt":"Summarize q1.","run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:3>","episode":{"base_system_prompt":null,"execution_seq":11,"failure":null,"inputs":{"result":"users=1 memories="},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"users=1 memories=","owner_static_path":["lib_step","__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+    notes: |-
+      {"entry_id":"<id:4>","episode":{"base_system_prompt":null,"execution_seq":1,"failure":null,"inputs":{"question":"q1"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"question":"q1"},"owner_static_path":["__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:5>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":3,"failure":null,"inputs":{"question":"q1"},"interactions":[{"kind":"model_text","text":"users=1 memories="}],"memory_sections":[],"occurrence_path":[],"output":"users=1 memories=","owner_static_path":["ask"],"prompt":"q1","run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:6>","episode":{"base_system_prompt":null,"execution_seq":5,"failure":null,"inputs":{"topic":"q1"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"kind":"grow","prune_ids":[],"seed":{"topic":"q1"}},"owner_static_path":["lib_step"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:7>","episode":{"base_system_prompt":null,"execution_seq":7,"failure":null,"inputs":{"topic":"q1"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"q1"},"owner_static_path":["lib_step","__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:8>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":9,"failure":null,"inputs":{"topic":"q1"},"interactions":[{"kind":"model_text","text":"users=1 memories="}],"memory_sections":[],"occurrence_path":[],"output":"users=1 memories=","owner_static_path":["lib_step","summarize"],"prompt":"Summarize q1.","run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:9>","episode":{"base_system_prompt":null,"execution_seq":11,"failure":null,"inputs":{"result":"users=1 memories="},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"users=1 memories=","owner_static_path":["lib_step","__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:10>","episode":{"base_system_prompt":null,"execution_seq":13,"failure":null,"inputs":{"answer":"users=1 memories=","summary":"users=1 memories="},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"answer":"users=1 memories=","summary":"users=1 memories="},"owner_static_path":["__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}

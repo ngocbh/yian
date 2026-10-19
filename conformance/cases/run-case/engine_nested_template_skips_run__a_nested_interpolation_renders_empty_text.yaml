@@ -1,0 +1,104 @@
+kind: run
+flow: |
+  id: nested_skips
+  name: nested_skips
+  input:
+    approve: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: order
+      else: rejected
+    order:
+      kind: code
+      output: str
+      code: |
+        return "filled"
+    rejected:
+      kind: code
+      output: str
+      code: |
+        return "no"
+    c:
+      kind: code
+      input:
+        x: {a: 'got ${order.output}!'}
+      code: |
+        return inputs["x"]
+  output: ${c.output}
+inputs:
+  approve: false
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      a: got !
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        approve: false
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        approve: false
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: '#else'
+  - [node_started, c]
+  - - node_succeeded
+    - c
+    - value:
+        a: got !
+  - [node_started, rejected]
+  - - node_succeeded
+    - rejected
+    - value: no
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        a: got !
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        approve: false
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: gate
+  - - NodeSkipped
+    - node_id: order
+  - - NodeStarted
+    - node_id: c
+  - - NodeSucceeded
+    - node_id: c
+      output:
+        a: got !
+  - - NodeStarted
+    - node_id: rejected
+  - - NodeSucceeded
+    - node_id: rejected
+      output: no
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        a: got !
+  - - RunSucceeded
+    - output:
+        a: got !

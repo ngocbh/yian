@@ -1,0 +1,271 @@
+kind: run
+flow: |
+  id: inline-named-equivalence
+  name: inline_named_equivalence
+  defs:
+    named:
+      input:
+        x: !int
+      nodes:
+        echo:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:echo_x
+          input:
+            x: ${input.x}
+          output: int
+        pack:
+          kind: code
+          code: |
+            return {"value": inputs["value"]}
+          input:
+            value: ${echo.output}
+          output:
+            value: int
+      output: ${pack.output}
+  nodes:
+    named_call:
+      kind: call
+      call: named
+      input:
+        x: 5
+    inline_call:
+      kind: call
+      input:
+        x: 5
+      nodes:
+        echo:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:echo_x
+          input:
+            x: ${input.x}
+          output: int
+        pack:
+          kind: code
+          code: |
+            return {"value": inputs["value"]}
+          input:
+            value: ${echo.output}
+          output:
+            value: int
+      output: ${pack.output}
+  output:
+    named: ${named_call.output}
+    inline: ${inline_call.output}
+python_flow: |
+  id: inline-named-equivalence
+  name: inline_named_equivalence
+  defs:
+    named:
+      input:
+        x: !int
+      nodes:
+        echo:
+          kind: code
+          code: tests.engine._compose_codefns:echo_x
+          input:
+            x: ${input.x}
+          output: int
+        pack:
+          kind: code
+          code: |
+            return {"value": inputs["value"]}
+          input:
+            value: ${echo.output}
+          output:
+            value: int
+      output: ${pack.output}
+  nodes:
+    named_call:
+      kind: call
+      call: named
+      input:
+        x: 5
+    inline_call:
+      kind: call
+      input:
+        x: 5
+      nodes:
+        echo:
+          kind: code
+          code: tests.engine._compose_codefns:echo_x
+          input:
+            x: ${input.x}
+          output: int
+        pack:
+          kind: code
+          code: |
+            return {"value": inputs["value"]}
+          input:
+            value: ${echo.output}
+          output:
+            value: int
+      output: ${pack.output}
+  output:
+    named: ${named_call.output}
+    inline: ${inline_call.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      inline:
+        value: 5
+      named:
+        value: 5
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, inline_call]
+  - - node_expanded
+    - inline_call
+    - prune_ids: []
+      seed:
+        x: 5
+  - [node_started, named_call]
+  - - node_expanded
+    - named_call
+    - prune_ids: []
+      seed:
+        x: 5
+  - [node_started, inline_call/__start__]
+  - - node_succeeded
+    - inline_call/__start__
+    - value:
+        x: 5
+  - [node_started, named_call/__start__]
+  - - node_succeeded
+    - named_call/__start__
+    - value:
+        x: 5
+  - [node_started, inline_call/echo]
+  - - node_succeeded
+    - inline_call/echo
+    - value: 5
+  - [node_started, named_call/echo]
+  - - node_succeeded
+    - named_call/echo
+    - value: 5
+  - [node_started, inline_call/pack]
+  - - node_succeeded
+    - inline_call/pack
+    - value:
+        value: 5
+  - [node_started, named_call/pack]
+  - - node_succeeded
+    - named_call/pack
+    - value:
+        value: 5
+  - [node_started, inline_call/__end__]
+  - - node_succeeded
+    - inline_call/__end__
+    - commit_target: inline_call
+      value:
+        value: 5
+  - [node_started, named_call/__end__]
+  - - node_succeeded
+    - named_call/__end__
+    - commit_target: named_call
+      value:
+        value: 5
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        inline:
+          value: 5
+        named:
+          value: 5
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: inline_call
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          x: 5
+      node_id: inline_call
+  - - NodeStarted
+    - node_id: named_call
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          x: 5
+      node_id: named_call
+  - - NodeStarted
+    - node_id: inline_call/__start__
+  - - NodeSucceeded
+    - node_id: inline_call/__start__
+      output:
+        x: 5
+  - - NodeStarted
+    - node_id: named_call/__start__
+  - - NodeSucceeded
+    - node_id: named_call/__start__
+      output:
+        x: 5
+  - - NodeStarted
+    - node_id: inline_call/echo
+  - - NodeSucceeded
+    - node_id: inline_call/echo
+      output: 5
+  - - NodeStarted
+    - node_id: named_call/echo
+  - - NodeSucceeded
+    - node_id: named_call/echo
+      output: 5
+  - - NodeStarted
+    - node_id: inline_call/pack
+  - - NodeSucceeded
+    - node_id: inline_call/pack
+      output:
+        value: 5
+  - - NodeStarted
+    - node_id: named_call/pack
+  - - NodeSucceeded
+    - node_id: named_call/pack
+      output:
+        value: 5
+  - - NodeStarted
+    - node_id: inline_call/__end__
+  - - NodeSucceeded
+    - commit_as: inline_call
+      node_id: inline_call/__end__
+      output:
+        value: 5
+  - - NodeStarted
+    - node_id: named_call/__end__
+  - - NodeSucceeded
+    - commit_as: named_call
+      node_id: named_call/__end__
+      output:
+        value: 5
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        inline:
+          value: 5
+        named:
+          value: 5
+  - - RunSucceeded
+    - output:
+        inline:
+          value: 5
+        named:
+          value: 5

@@ -1,0 +1,244 @@
+# From tests/engine/test_agent_steering.py::test_steers_are_sent_as_user_messages_at_the_top_of_each_iteration.
+# A steer queued before the run joins the first model request as a user message; the two
+# queued once tool call 1 returns join the next request, after the tool result, in order.
+kind: run
+flow: |
+  id: steer
+  name: steer
+  llm_config: {provider: openai, model: gpt-5.5}
+  nodes:
+    chat:
+      kind: agent
+      steerable: true
+      tools: [lookup]
+      system_prompt: Help.
+      prompt: Help the user.
+      output: str
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  steering:
+    chat:
+    - steer: [use dataset B]
+    - after:
+        tool_call: 1
+      steer: [only the 2024 rows, and cite them]
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+        required: [topic]
+      results:
+      - return: found a
+  models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: tool_call
+            id: call-1
+            name: lookup
+            arguments:
+              topic: a
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Help.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Help the user.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: use dataset B
+          tools:
+          - name: lookup
+            description: Look up a topic.
+            parameters:
+              type: object
+              properties:
+                topic:
+                  type: string
+              required: [topic]
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: done
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Help.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Help the user.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: use dataset B
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: tool_call
+              id: call-1
+              name: lookup
+              arguments:
+                topic: a
+          - format: yian.message.v1
+            role: tool
+            parts:
+            - type: tool_result
+              call_id: call-1
+              name: lookup
+              content: found a
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: only the 2024 rows
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: and cite them
+          tools:
+          - name: lookup
+            description: Look up a topic.
+            parameters:
+              type: object
+              properties:
+                topic:
+                  type: string
+              required: [topic]
+expect:
+  output:
+    status: succeeded
+    output: done
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        chat:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, chat]
+  - - node_succeeded
+    - chat
+    - value: done
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: done
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: chat
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - ToolCallStarted
+    - arguments:
+        topic: a
+      call_index: 0
+      exchange_id: <id:1>
+      name: lookup
+      node_id: chat
+      tool_call_id: call-1
+  - - ToolCallFinished
+    - call_index: 0
+      exchange_id: <id:1>
+      name: lookup
+      node_id: chat
+      result: found a
+      tool_call_id: call-1
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: chat
+      output: done
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: done
+  - - RunSucceeded
+    - output: done
+  stream:
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: chat
+  - chunk: done
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: chat
+  - chunk: ''
+    exchange_id: <id:2>
+    final: true
+    key: text
+    node_id: chat
+  tool_calls:
+    lookup:
+    - args:
+        topic: a
+      attempt: 1
+      call_id: r1/chat/<id:1>/0
+      node: chat

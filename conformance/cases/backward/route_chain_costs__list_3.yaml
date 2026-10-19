@@ -1,0 +1,371 @@
+# From tests/engine/test_route_chain_costs.py::test_backward_results_match_the_recorded_results[list-3]
+# (tests/fixtures/route_chain_results.json, "list-3").
+# Pins: feedback on a CALL whose argument concatenates `input.values` three times reaches the flow
+# input as one message per operand.
+kind: backward
+flow: |
+  id: lc
+  name: lc
+  input:
+    values: !list(str)
+  defs:
+    identity:
+      input:
+        values: !list(str)
+      nodes: {}
+      output: ${input.values}
+  nodes:
+    outer:
+      kind: call
+      call: identity
+      input:
+        values: ${input.values + input.values + input.values}
+  output: ${outer.output}
+inputs:
+  values: [v]
+run:
+  run_id: r1
+  num_workers: 0
+  learnable: true
+backward:
+- feedback: good
+expect:
+  output:
+    status: succeeded
+    output: [v, v, v]
+  trace:
+  - - run_started
+    - null
+    - learnable: true
+      num_workers: 0
+      inputs:
+        values: [v]
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - forward_capture:
+        bound_inputs:
+          values: [v]
+        evaluated_keys: [values]
+        input_names: [values]
+        node_data:
+          input_output_paths:
+            values: [values]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 0
+              path: [values]
+              run_id: r1
+          kind: record
+          names: [values]
+        scope:
+          boundary: start
+          flow_path: []
+          occurrence_path: []
+          static_path: [__start__]
+      value:
+        values: [v]
+  - [node_started, outer]
+  - - node_expanded
+    - outer
+    - forward_capture:
+        bound_inputs:
+          values: [v, v, v]
+        evaluated_keys: [values]
+        input_names: [values]
+        route:
+          children:
+          - children:
+            - kind: source
+              source:
+                execution_seq: 1
+                path: [values]
+                run_id: r1
+            - children:
+              - kind: source
+                source:
+                  execution_seq: 1
+                  path: [values]
+                  run_id: r1
+              - kind: source
+                source:
+                  execution_seq: 1
+                  path: [values]
+                  run_id: r1
+              kind: concat
+              sizes: [1, 1]
+            kind: concat
+            sizes: [1, 2]
+          kind: record
+          names: [values]
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [outer]
+      prune_ids: []
+      seed:
+        values: [v, v, v]
+  - [node_started, outer/__start__]
+  - - node_succeeded
+    - outer/__start__
+    - forward_capture:
+        bound_inputs:
+          values: [v, v, v]
+        input_names: [values]
+        node_data:
+          input_output_paths:
+            values: [values]
+        route:
+          children:
+          - kind: literal
+            value_json: [v, v, v]
+          kind: record
+          names: [values]
+        scope:
+          boundary: start
+          flow_path: [outer]
+          occurrence_path:
+          - index: null
+            kind: call
+            static_path: [outer]
+          static_path: [outer, __start__]
+      value:
+        values: [v, v, v]
+  - [node_started, outer/__end__]
+  - - node_succeeded
+    - outer/__end__
+    - commit_target: outer
+      forward_capture:
+        bound_inputs:
+          result: [v, v, v]
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 5
+              path: [values]
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: [outer]
+          occurrence_path:
+          - index: null
+            kind: call
+            static_path: [outer]
+          static_path: [outer, __end__]
+      value: [v, v, v]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - forward_capture:
+        bound_inputs:
+          result: [v, v, v]
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 7
+              path: []
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: []
+          occurrence_path: []
+          static_path: [__end__]
+      value: [v, v, v]
+  - - backward_started
+    - null
+    - attempt_id: 1
+      feedback: good
+  - - backward_ready
+    - null
+    - attempt_id: 1
+      attributed_results:
+      - attribution:
+        - contribution_index: 0
+          input_name: values
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 5
+            path: []
+            run_id: r1
+        - contribution_index: 1
+          input_name: values
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 5
+            path: []
+            run_id: r1
+        - contribution_index: 2
+          input_name: values
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 5
+            path: []
+            run_id: r1
+        feedback:
+        - values: good
+        - values: good
+        - values: good
+        invoked: true
+        result:
+          input_feedback:
+            values: [good, good, good]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 1
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 3
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 7
+            path: []
+            run_id: r1
+        feedback:
+        - values: good
+        invoked: true
+        result:
+          input_feedback:
+            values: [good]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 5
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 9
+            path: []
+            run_id: r1
+        feedback: [good]
+        invoked: true
+        result:
+          input_feedback:
+            result: [good]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 7
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: null
+          input_name: null
+          message_index: 0
+          parents: []
+          sender: null
+        feedback: [good]
+        invoked: true
+        result:
+          input_feedback:
+            result: [good]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 9
+          path: []
+          run_id: r1
+      proposals: []
+      root_result:
+        input_feedback:
+          values: [good, good, good]
+        self_feedback: []
+        variable_feedback: {}
+  - - backward_finished
+    - null
+    - attempt_id: 1
+      attributed_results: []
+      outcome:
+        failure: null
+        feedback:
+          input_feedback:
+            values: [good, good, good]
+          self_feedback: []
+          variable_feedback: {}
+        learning: null
+        status: succeeded
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        values: [v]
+  - - NodeStarted
+    - node_id: outer
+  - - NodeExpanded
+    - node_id: outer
+      grow:
+        seed:
+          values: [v, v, v]
+        prune: []
+  - - NodeStarted
+    - node_id: outer/__start__
+  - - NodeSucceeded
+    - node_id: outer/__start__
+      output:
+        values: [v, v, v]
+  - - NodeStarted
+    - node_id: outer/__end__
+  - - NodeSucceeded
+    - node_id: outer/__end__
+      output: [v, v, v]
+      commit_as: outer
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: [v, v, v]
+  - - RunSucceeded
+    - output: [v, v, v]
+  backward:
+  - failure: null
+    feedback:
+      input_feedback:
+        values: [good, good, good]
+      self_feedback: []
+      variable_feedback: {}
+    learning: null
+    status: succeeded

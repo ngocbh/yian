@@ -1,0 +1,153 @@
+kind: run
+flow: |2
+
+  id: c2call
+  name: c2_call
+  input:
+    seed: !int
+
+  defs:
+    child:
+      input:
+        seed: !int
+      nodes:
+        emit:
+          kind: code
+          input:
+            seed: ${input.seed}
+          output: {n: int}
+          code: |
+            return {"n": inputs["seed"] + 1n}
+      output: ${emit.output}
+      asserts:
+        - "emit.output.n >= 1"
+
+  nodes:
+    callee:
+      kind: call
+      call: child
+      input:
+        seed: ${input.seed}
+  output: ${callee.output}
+python_flow: |2
+
+  id: c2call
+  name: c2_call
+  input:
+    seed: !int
+
+  defs:
+    child:
+      input:
+        seed: !int
+      nodes:
+        emit:
+          kind: code
+          input:
+            seed: ${input.seed}
+          output: {n: int}
+          code: |
+            return {"n": inputs["seed"] + 1}
+      output: ${emit.output}
+      asserts:
+        - "emit.output.n >= 1"
+
+  nodes:
+    callee:
+      kind: call
+      call: child
+      input:
+        seed: ${input.seed}
+  output: ${callee.output}
+inputs:
+  seed: 5
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      n: 6
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        seed: 5
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        seed: 5
+  - [node_started, callee]
+  - - node_expanded
+    - callee
+    - prune_ids: []
+      seed:
+        seed: 5
+  - [node_started, callee/__start__]
+  - - node_succeeded
+    - callee/__start__
+    - value:
+        seed: 5
+  - [node_started, callee/emit]
+  - - node_succeeded
+    - callee/emit
+    - value:
+        n: 6
+  - [node_started, callee/__end__]
+  - - node_succeeded
+    - callee/__end__
+    - commit_target: callee
+      value:
+        n: 6
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        n: 6
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        seed: 5
+  - - NodeStarted
+    - node_id: callee
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          seed: 5
+      node_id: callee
+  - - NodeStarted
+    - node_id: callee/__start__
+  - - NodeSucceeded
+    - node_id: callee/__start__
+      output:
+        seed: 5
+  - - NodeStarted
+    - node_id: callee/emit
+  - - NodeSucceeded
+    - node_id: callee/emit
+      output:
+        n: 6
+  - - NodeStarted
+    - node_id: callee/__end__
+  - - NodeSucceeded
+    - commit_as: callee
+      node_id: callee/__end__
+      output:
+        n: 6
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        n: 6
+  - - RunSucceeded
+    - output:
+        n: 6

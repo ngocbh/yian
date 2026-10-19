@@ -91,7 +91,7 @@ Every case runs in a new temporary directory, the *case directory*:
 - **Secrets** are written as `<key:N>` (N a number) in `run`, `resume`, `backward`, `env`, `host`
   and `stdin`. The runner replaces each with the text `sk-conformance-N` and fails the case if one
   appears in the trace, events, stream, tool calls, output, the raised error's message, stdout,
-  stderr or the run log file.
+  stderr or a run log file.
 - **Time.** The TS runner uses a virtual scheduler, so waits take no time. The Python runner
   waits for real, so a case keeps its waits short.
 
@@ -105,7 +105,7 @@ it says "or". A `run`, `resume` or `backward` case's `expect` has exactly one of
 | Kind | Keys | Checks |
 |---|---|---|
 | `load` | `flow` (required), `files`, `env` | `expect.load` |
-| `run` | `flow` (required), `files`, `env`, `inputs`, `run`, `host` | `expect.raises`, or `expect.output`; then `trace`, `events`, `stream`, `tool_calls` when present |
+| `run` | `flow` (required), `files`, `env`, `inputs`, `run`, `host` | `expect.raises`, or `expect.output`; then `trace`, `events`, `stream`, `tool_calls`, `memory` when present |
 | `resume` | as `run`, plus `host.crash_after_record` and `resume` | as `run`, for the resumed run |
 | `backward` | as `run`, plus `backward` | as `run`, plus `expect.backward` |
 | `expr` | exactly one of `expr` and `template` (required), `values`, `item`, `mode`, `typedefs`, `env` | `expect.value` or `expect.raises` |
@@ -138,16 +138,24 @@ runner always gives the run a log file in the case directory, and projects it to
 error the run raised instead (the log may not exist). When the run raised before creating its
 log, its trace is `[]`.
 
+With `host.memory` (below), its `before` runs go first; `tool_calls` lists their calls too, and
+every other result is the main run's.
+
 ### `resume`
 
-For serial runs (`num_workers: 0`). `host.crash_after_record: k` (required) cuts the first run
-after record `k` (0-based, so records `0`..`k` are kept): every later append is refused without
-writing, the run is abandoned, and the runner checks that the cut happened. The Python runner's
-cut still runs the run's own cleanup (closing the log; later, memory and MCP close calls), which
-a real crash would not. Then the flow is resumed from the log with the `resume` arguments
-`num_workers` (absent: the recorded value), `api_key`, `headers` and `context` (`context` as in
-`run`). The expectations are for the resumed run: its output, the trace of the whole log, the
-events and stream of the resume call, and `tool_calls` over both runs.
+For serial runs (`num_workers: 0`). `host.crash_after_record` (required) is a record number or
+`end`. A number `k` cuts the first run after record `k` (0-based, so records `0`..`k` are kept): every later
+append is refused without writing, the run is abandoned, and the runner checks that the cut
+happened. The Python runner's cut still runs the run's own cleanup (closing the log; later, memory
+and MCP close calls), which a real crash would not. `end` lets the first run run to its end (a first
+run that raises fails the case), so the resume is a finished run's, read-only. Then the flow is
+resumed from the log with the `resume` arguments `num_workers` (absent: the recorded value),
+`api_key`, `headers` and `context` (`context` as in `run`). The expectations are for the resumed
+run: its output, the trace of the whole log, the events and stream of the resume call, and
+`tool_calls` over both runs. With `host.memory`, the `before` runs come first (their calls are in
+`tool_calls` too), and the cut run and the resume each get the memories built afresh. Memory in a
+`resume` case (memories for the cut run and for the resume) is specified but not yet pinned by a
+case here; later memory cases pin it.
 
 ### `backward`
 
@@ -155,7 +163,9 @@ Runs the flow (`run.learnable: true`), then calls backward once per entry of `ba
 (required), a non-empty list of `{feedback, api_key, headers}` (only `feedback` required).
 `expect.backward` has one entry per call: the `outcome` of the `backward_finished` record the
 call appended, projected like the trace (nested nulls kept, so `failure: null` stays), or
-`{raises: <raises>}` when the call raised. The trace includes the backward records.
+`{raises: <raises>}` when the call raised. The trace includes the backward records. With
+`host.memory`, a `before` run's backward calls aren't in `expect.backward`; the main run's
+memories are closed after its last backward call, and `expect.memory` is read after that.
 
 ### `expr`
 
@@ -255,7 +265,9 @@ A case can't hold code, so its host is declared under `host`.
   takes the next entry of its node and consumer. The consumers are `agent` (an AGENT's calls),
   `structured_retry` (a structured call's attempts after its first, which keeps the outer
   consumer), `compose` (the calls of the synthetic composer AGENT `<gate>__compose`, under that
-  node id) and `backward`; `summary` and `memory:<key>` are reserved. An entry is
+  node id), `backward`, `summary` (the AGENT's history summaries, under the AGENT's node id)
+  and `memory:<key>` (a reflective or profile memory's learner, under the node id
+  `__memory__`; `<key>` is the memory key and may hold `/`). An entry is
   `{reply: <message>}`, a yian.message.v1 assistant message, with an optional `usage`; or
   `{chunks: [<chunk>, ...]}` whose last chunk is `{finish: <reason or null>}`; or
   `{chunks: [...], raise: {class, message, status}}` for a failure after the chunks
@@ -287,6 +299,51 @@ A case can't hold code, so its host is declared under `host`.
   check a pinned saved login that changed or was removed. In `run`, `resume` and `backward`
   cases every model call is scripted, so a call with no script fails the case at once instead of
   reaching a provider; calls that run out and leftovers fail as above.
+- **`memory`**: `{before: [<run>, ...]}` turns memory on (`{}` with no earlier runs). For each
+  run (each `before` run, the main run, and for a `resume` case the cut run and the resume) the
+  runner builds the flow's memories from their declarations, fresh per run, rooted at
+  `<case dir>/memory` (Python: `build_memories(flow, root=...)`), passes them to the run, and
+  closes them after that run's backward calls. An error building them is the case's `raises`
+  (e.g. `MemorySetupError`), except in a `before` run (below); in a `resume` case, the cut run's
+  error skips the resume. A `before` entry is `{inputs, run, backward}`, the case's own shapes
+  (`run.run_id` required; `backward` needs `run.learnable: true`); the `before` runs go in
+  order, before the main run, over the same memory root. Their outcomes aren't compared, but a
+  raise (a run's, a backward call's, or building their memories) fails the case. Scripts are
+  shared by all runs in order; `tool_calls` lists every run's calls; `trace`, `events`,
+  `stream`, `output` and `backward` are the main run's. A profile is seeded by a `files` entry
+  at its storage path, `memory/<flow id>/<scope...>/<name>.md`.
+- **`steering`**: `{<node id>: [<action>, ...]}`, the host inbox a steerable AGENT polls (Python:
+  the `steering` argument of `run_flow` and `resume_flow`). The node id is the occurrence id, as
+  in `tool_calls`' `node` (`loop#0/chat` inside a LOOP or MAP). An action is
+  `{after: <point>, steer: [<text>, ...]}`, which queues steer messages, or
+  `{after: <point>, interrupt: true}`, which sets the node's interrupt. An action without `after`
+  is queued before the run. The points:
+  - `{model_call: n}`: once the node's `n`th `agent` model call has finished (its last chunk
+    taken); not when the call raises;
+  - `{model_call: n, chunk: k}`: once chunk `k` of that call has been delivered; `k` counts the
+    entry's `chunks` list, text or not (a `reply` streams as one chunk);
+  - `{tool_call: i}`: once the node's `i`th tool call has returned or raised, counted as in
+    `expect.tool_calls` (`ask_user` included). Stub tools run one at a time, so this is call order.
+
+  Counts start at 1. In a `resume` case they run across the cut run and the resume, as the
+  scripts do. Steering acts in the main run (and its resume), never in a `host.memory` `before`
+  run, whose calls aren't counted. Steers are drained once; an interrupt stays set. An action
+  whose point is never reached fails the case after the comparisons, like a leftover entry.
+  Steering in a `resume` case is specified but not yet pinned by a case here.
+
+  The AGENT reads its inbox only at fixed places: steers and the interrupt at the top of each
+  loop iteration (just before a model call), the interrupt before each later chunk of a
+  streamed reply and before each tool call. A polled inbox can't act "before" a point, so:
+  - a steer before model call `n` is `after: {model_call: n-1}`, and one before model call 1
+    has no `after`;
+  - an interrupt before tool call `i` is `after: {tool_call: i-1}`, or `after: {model_call: n}`
+    for the first call of reply `n`;
+  - an interrupt after chunk `k` is `after: {model_call: n, chunk: k}`.
+
+  An interrupted AGENT succeeds with its text so far (`""` before any reply): mid-stream it keeps
+  the chunks shown and ends the stream with a final `""` chunk, and on the last chunk it keeps the
+  whole reply. The tool calls it skips finish with error `interrupted`. Only an AGENT authored
+  `steerable: true` (with `str` output) reads the inbox.
 - **`crash_after_record`**: `resume` cases only (above).
 
 `expect.tool_calls` lists, per tool that was called, each call in order as `{args, call_id,
@@ -295,13 +352,18 @@ attempt, node}`.
 (`question`, `questions`, `answer_schema`, `title`, `node_id`, `options`; nulls left out).
 HUMAN_INPUT never sends `options`; a model's `ask_user` call can.
 
+`expect.memory` (it needs `host.memory`) is `{<key>: <text>}`: after the main run and its
+backward calls, the runner builds the memories afresh and reads each listed key's whole recall
+text (Python: `open_run().recall(None)`, a `MemoryContent`'s `text`). Its keys, like `<key>` in
+`memory:<key>`, are memory keys as the `memory_commit_*` records name them. A key the flow
+doesn't declare fails the case, and so does a session key, whose whole recall is empty by
+contract: a session is checked through a later run's `request`.
+
 The format reserves these host keys; a runner that doesn't support one yet fails the case that
 uses it:
 
-- **`steering`** and **`stop`**: a steer, interrupt or stop at a point: before model call `n` of
-  a node, after chunk `k` of model call `n`, or before tool call `i`.
-- **`memory`**: memory backends, their initial contents, and `expect.memory` for the contents
-  after.
+- **`stop`**: a stop at a point: before model call `n` of a node, after chunk `k` of model call
+  `n`, or before tool call `i`.
 - **`skills`**: skill directories, given as `files`.
 
 Not in the format yet (each comes as an addition when a case needs it): file values in
@@ -442,16 +504,21 @@ fields. (This list grows only by fields no committed case holds yet.) The genera
 run's own id. Every occurrence inside a text value is replaced, so a call id `<run id>/fetch`
 becomes `<id:1>/fetch`; mapping keys are left alone. The ids are collected from every
 projection, expected or not, and numbered in order of first appearance (by position, within one
-text), walking the trace, then the events, stream, tool calls (tools in sorted order), output and
-backward outcomes, with lists in order and mapping keys in sorted order; projections added later
-are walked after the backward outcomes. Since replacement is textual, the TS runner's id source
-makes ids that can't occur in other text (UUIDs, for example). A `raises` expectation is compared
-as is; a case whose error names the run id gives `run_id`.
+text), walking the `before` runs' traces first, run by run in order (their ids are numbered,
+but their entries are never compared), then the trace, events, stream, tool calls (tools in
+sorted order), output, backward outcomes and `expect.memory` texts, with lists in order and
+mapping keys in sorted order; projections added later are walked after `expect.memory`. An
+episode's `entry_id` equals a `mutation_id`, so recall text gets the same placeholder. Since
+replacement is textual, the TS runner's id source makes ids that can't occur in other text
+(UUIDs, for example). A `raises` expectation is compared as is; a case whose error names the
+run id gives `run_id`.
 
 **Pooled runs.** When the run's `num_workers` isn't 0, the trace, events, stream and each tool's
 calls are first grouped: run-level entries first, then each node's entries, nodes in sorted
 order, each group keeping its order. Placeholders are numbered and lists compared after that.
-Expectations are written grouped.
+Expectations are written grouped. A `resume` case's results are grouped by the resumed run's
+`num_workers` (`resume.num_workers`, else the recorded one). A `before` run's trace is grouped
+when its own `num_workers` isn't 0.
 An entry's node is its trace `node`; an event's `node_id` (a `NodeFailed`'s failure node; run
 events are run-level); a chunk's `node_id`; a tool call's `node`.
 

@@ -1,0 +1,207 @@
+kind: run
+flow: |
+  id: unions
+  name: unions
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', qty: int, price: float}
+    Hold: {action: 'Literal(hold)', note: str}
+    Decision: Union(Buy, Sell, Hold)
+  input:
+    decision: !object
+  defs:
+    sell_flow:
+      input:
+        order: !Sell
+      nodes:
+        fill:
+          kind: code
+          input:
+            qty: ${input.order.qty}
+            price: ${input.order.price}
+          code: |
+            return Number(inputs["qty"]) * inputs["price"]
+          output: float
+      output: ${fill.output}
+  nodes:
+    d:
+      kind: code
+      input:
+        decision: ${input.decision}
+      code: |
+        return inputs["decision"]
+      output: Decision
+    route:
+      kind: case
+      on: ${d.output.action}
+      cases:
+        - when: buy
+          then: place_buy
+        - when: sell
+          then: call(sell_flow, order=${d.output})
+      else: log_hold
+    place_buy:
+      kind: code
+      input:
+        qty: ${d.output.qty}
+      code: |
+        return "buy " + String(inputs["qty"])
+      output: str
+    log_hold:
+      kind: code
+      input:
+        note: ${d.output.note}
+      code: |
+        return "hold: " + inputs["note"]
+      output: str
+  output:
+    action: ${d.output.action}
+    trade: ${place_buy.output | __call_0.output | log_hold.output}
+python_flow: |
+  id: unions
+  name: unions
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', qty: int, price: float}
+    Hold: {action: 'Literal(hold)', note: str}
+    Decision: Union(Buy, Sell, Hold)
+  input:
+    decision: !object
+  defs:
+    sell_flow:
+      input:
+        order: !Sell
+      nodes:
+        fill:
+          kind: code
+          input:
+            qty: ${input.order.qty}
+            price: ${input.order.price}
+          code: |
+            return inputs["qty"] * inputs["price"]
+          output: float
+      output: ${fill.output}
+  nodes:
+    d:
+      kind: code
+      input:
+        decision: ${input.decision}
+      code: |
+        return inputs["decision"]
+      output: Decision
+    route:
+      kind: case
+      on: ${d.output.action}
+      cases:
+        - when: buy
+          then: place_buy
+        - when: sell
+          then: call(sell_flow, order=${d.output})
+      else: log_hold
+    place_buy:
+      kind: code
+      input:
+        qty: ${d.output.qty}
+      code: |
+        return "buy " + str(inputs["qty"])
+      output: str
+    log_hold:
+      kind: code
+      input:
+        note: ${d.output.note}
+      code: |
+        return "hold: " + inputs["note"]
+      output: str
+  output:
+    action: ${d.output.action}
+    trade: ${place_buy.output | __call_0.output | log_hold.output}
+inputs:
+  decision:
+    action: hold
+    note: wait
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      action: hold
+      trade: 'hold: wait'
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        decision:
+          action: hold
+          note: wait
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        decision:
+          action: hold
+          note: wait
+  - [node_started, d]
+  - - node_succeeded
+    - d
+    - value:
+        action: hold
+        note: wait
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: '#else'
+  - [node_started, log_hold]
+  - - node_succeeded
+    - log_hold
+    - value: 'hold: wait'
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        action: hold
+        trade: 'hold: wait'
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        decision:
+          action: hold
+          note: wait
+  - - NodeStarted
+    - node_id: d
+  - - NodeSucceeded
+    - node_id: d
+      output:
+        action: hold
+        note: wait
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: '#else'
+      node_id: route
+  - - NodeSkipped
+    - node_id: place_buy
+  - - NodeSkipped
+    - node_id: __call_0
+  - - NodeStarted
+    - node_id: log_hold
+  - - NodeSucceeded
+    - node_id: log_hold
+      output: 'hold: wait'
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        action: hold
+        trade: 'hold: wait'
+  - - RunSucceeded
+    - output:
+        action: hold
+        trade: 'hold: wait'

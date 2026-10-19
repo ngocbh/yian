@@ -1,0 +1,114 @@
+# From tests/engine/test_run_lifecycle.py::test_nonterminal_resume_commits_exact_retries_and_selected_workers[pooled-override].
+# resume.num_workers replaces the recorded worker bound in run_resumed, and the resumed run is pooled (results
+# grouped by the resumed run's num_workers). Record 3 is a's node_started: a runs, its result is refused.
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# restarted node (decision 20); the trace still pins the resume.
+kind: resume
+flow: |
+  id: lifecycle-parallel
+  name: lifecycle_parallel
+  input:
+    n: !int
+  nodes:
+    a:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo_x
+      input:
+        x: ${input.n}
+      output: int
+    b:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo_x
+      input:
+        x: ${input.n}
+      output: int
+    c:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo_x
+      input:
+        x: ${input.n}
+      output: int
+  output:
+    a: ${a.output}
+    b: ${b.output}
+    c: ${c.output}
+python_flow: |
+  id: lifecycle-parallel
+  name: lifecycle_parallel
+  input:
+    n: !int
+  nodes:
+    a:
+      kind: code
+      code: tests.engine._compose_codefns:echo_x
+      input:
+        x: ${input.n}
+      output: int
+    b:
+      kind: code
+      code: tests.engine._compose_codefns:echo_x
+      input:
+        x: ${input.n}
+      output: int
+    c:
+      kind: code
+      code: tests.engine._compose_codefns:echo_x
+      input:
+        x: ${input.n}
+      output: int
+  output:
+    a: ${a.output}
+    b: ${b.output}
+    c: ${c.output}
+inputs:
+  n: 7
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  crash_after_record: 3
+expect:
+  output:
+    status: succeeded
+    output:
+      a: 7
+      b: 7
+      c: 7
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs:
+        n: 7
+  - - run_resumed
+    - null
+    - num_workers: 4
+      retry_node_ids: [a]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        a: 7
+        b: 7
+        c: 7
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        n: 7
+  - [node_started, a]
+  - [node_started, a]
+  - - node_succeeded
+    - a
+    - value: 7
+  - [node_started, b]
+  - - node_succeeded
+    - b
+    - value: 7
+  - [node_started, c]
+  - - node_succeeded
+    - c
+    - value: 7
+resume:
+  num_workers: 4

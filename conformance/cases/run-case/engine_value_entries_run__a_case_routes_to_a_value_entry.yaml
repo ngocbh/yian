@@ -1,0 +1,116 @@
+kind: run
+flow: |2
+
+  id: f
+  name: f
+  input:
+    cmd: !str
+  nodes:
+    route:
+      kind: case
+      on: ${input.cmd}
+      cases:
+        - when: /exit
+          then: exit_result
+      else: reply
+    exit_result: !object {exited: true, reply: ""}
+    reply:
+      kind: code
+      input:
+        text: ${input.cmd}
+      code: |
+        return {'exited': false, 'reply': inputs['text']}
+  output: ${route.output}
+python_flow: |2
+
+  id: f
+  name: f
+  input:
+    cmd: !str
+  nodes:
+    route:
+      kind: case
+      on: ${input.cmd}
+      cases:
+        - when: /exit
+          then: exit_result
+      else: reply
+    exit_result: !object {exited: true, reply: ""}
+    reply:
+      kind: code
+      input:
+        text: ${input.cmd}
+      code: |
+        return {'exited': False, 'reply': inputs['text']}
+  output: ${route.output}
+inputs:
+  cmd: /exit
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      exited: true
+      reply: ''
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        cmd: /exit
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        cmd: /exit
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: exit_result
+  - [node_started, exit_result]
+  - - node_succeeded
+    - exit_result
+    - value:
+        exited: true
+        reply: ''
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        exited: true
+        reply: ''
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        cmd: /exit
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: exit_result
+      node_id: route
+  - - NodeSkipped
+    - node_id: reply
+  - - NodeStarted
+    - node_id: exit_result
+  - - NodeSucceeded
+    - node_id: exit_result
+      output:
+        exited: true
+        reply: ''
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        exited: true
+        reply: ''
+  - - RunSucceeded
+    - output:
+        exited: true
+        reply: ''

@@ -1,0 +1,112 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    cmd: !str
+  nodes:
+    route:
+      kind: case
+      on: ${input.cmd}
+      cases:
+        - when: a
+          then: reply
+      else: yes
+    reply:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: replied
+      output: str
+    yes:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: agreed
+      output: str
+  output: ${route.output}
+python_flow: |
+  id: f
+  name: f
+  input:
+    cmd: !str
+  nodes:
+    route:
+      kind: case
+      on: ${input.cmd}
+      cases:
+        - when: a
+          then: reply
+      else: yes
+    reply:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: replied
+      output: str
+    yes:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: agreed
+      output: str
+  output: ${route.output}
+inputs:
+  cmd: b
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: agreed
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        cmd: b
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        cmd: b
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: '#else'
+  - [node_started, yes]
+  - - node_succeeded
+    - yes
+    - value: agreed
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: agreed
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        cmd: b
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: '#else'
+      node_id: route
+  - - NodeSkipped
+    - node_id: reply
+  - - NodeStarted
+    - node_id: yes
+  - - NodeSucceeded
+    - node_id: yes
+      output: agreed
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: agreed
+  - - RunSucceeded
+    - output: agreed

@@ -1,0 +1,36 @@
+kind: run
+flow: |2
+
+  id: map_groups
+  name: map_groups
+  llm_config: {provider: openai, model: test-model}
+  defs:
+    inner:
+      input:
+        item: !str
+      nodes:
+        agent:
+          kind: agent
+          prompt: go
+          tools: [toolbox]
+      output: ${agent.output}
+  input:
+    items: !list(str)
+  nodes:
+    each:
+      kind: map
+      over: ${input.items}
+      call: inner
+      input:
+        item: ${item}
+  output: ${each.output}
+inputs:
+  items: []
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: ValueError
+    message: 'AGENT node ''each/agent'' grants unknown tool or group ''toolbox''; tool groups in this run: []'
+  trace: []
+  events: []

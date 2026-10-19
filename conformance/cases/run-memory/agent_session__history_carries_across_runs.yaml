@@ -1,0 +1,144 @@
+# From tests/engine/test_agent_session.py::test_two_fresh_plain_runs_retain_actual_history_without_learning.
+# Pins: a session AGENT's turn from an earlier run (a `before` run) comes before this run's turn in its
+# request, the reply as an assistant message; a run without backward learns nothing.
+kind: run
+flow: |
+  id: plain-session
+  name: plain_session
+  llm_config: {provider: openai, model: test-model}
+  input:
+    question: !str
+  nodes:
+    agent:
+      kind: agent
+      long_term_memory: session
+      prompt: ${question}
+      input:
+        question: ${input.question}
+      output: str
+  output: ${agent.output}
+inputs:
+  question: second question
+run:
+  run_id: r2
+  num_workers: 0
+host:
+  memory:
+    before:
+    - inputs:
+        question: first question
+      run:
+        run_id: r1
+        num_workers: 0
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: first reply
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: second reply
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: first question
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: text
+              text: first reply
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: second question
+expect:
+  output:
+    status: succeeded
+    output: second reply
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        agent:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: test-model
+          provider: openai
+      inputs:
+        question: second question
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        question: second question
+  - [node_started, agent]
+  - - node_succeeded
+    - agent
+    - value: second reply
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: second reply
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        question: second question
+  - - NodeStarted
+    - node_id: agent
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: test-model
+      node_id: agent
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: test-model
+      node_id: agent
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: agent
+      output: second reply
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: second reply
+  - - RunSucceeded
+    - output: second reply
+  stream:
+  - chunk: second reply
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: agent
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: agent

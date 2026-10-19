@@ -1,0 +1,223 @@
+kind: run
+rules: [messages]
+flow: |2
+
+  id: narrow
+  name: narrow
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', qty: int, price: float}
+    Decision: Union(Buy, Sell)
+  input:
+    decision: !object
+
+  nodes:
+    decide:
+      kind: code
+      input:
+        decision: ${input.decision}
+      code: return inputs['decision']
+      output: Decision
+    place:
+      kind: code
+      input:
+        buy: !Buy ${decide.output}
+      code: "return 'buy ' + String(inputs['buy']['qty'])"
+      output: str
+  output: ${place.output}
+python_flow: |2
+
+  id: narrow
+  name: narrow
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', qty: int, price: float}
+    Decision: Union(Buy, Sell)
+  input:
+    decision: !object
+
+  nodes:
+    decide:
+      kind: code
+      input:
+        decision: ${input.decision}
+      code: return inputs['decision']
+      output: Decision
+    place:
+      kind: code
+      input:
+        buy: !Buy ${decide.output}
+      code: return 'buy ' + str(inputs['buy']['qty'])
+      output: str
+  output: ${place.output}
+inputs:
+  decision:
+    action: sell
+    qty: 2
+    price: 1.5
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      frames:
+      - label: flow.yaml
+        range: [21, 12, 21, 33]
+      message: 'binding ''buy'': record has unknown fields: ["price"]'
+      node: place
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        decision:
+          action: sell
+          price: 1.5
+          qty: 2
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        decision:
+          action: sell
+          price: 1.5
+          qty: 2
+  - [node_started, decide]
+  - - node_succeeded
+    - decide
+    - value:
+        action: sell
+        price: 1.5
+        qty: 2
+  - [node_started, place]
+  - - node_failed
+    - place
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [21, 12, 21, 33]
+        message: 'binding ''buy'': record has unknown fields: ["price"]'
+        node: place
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        decision:
+          action: sell
+          price: 1.5
+          qty: 2
+  - - NodeStarted
+    - node_id: decide
+  - - NodeSucceeded
+    - node_id: decide
+      output:
+        action: sell
+        price: 1.5
+        qty: 2
+  - - NodeStarted
+    - node_id: place
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [21, 12, 21, 33]
+        message: 'binding ''buy'': record has unknown fields: ["price"]'
+        node: place
+  - - RunFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [21, 12, 21, 33]
+        message: 'binding ''buy'': record has unknown fields: ["price"]'
+        node: place
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      frames:
+      - label: flow.yaml
+        range: [21, 12, 21, 33]
+      message: 'binding ''buy'': record has unknown fields: [''price'']'
+      node: place
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        decision:
+          action: sell
+          price: 1.5
+          qty: 2
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        decision:
+          action: sell
+          price: 1.5
+          qty: 2
+  - [node_started, decide]
+  - - node_succeeded
+    - decide
+    - value:
+        action: sell
+        price: 1.5
+        qty: 2
+  - [node_started, place]
+  - - node_failed
+    - place
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [21, 12, 21, 33]
+        message: 'binding ''buy'': record has unknown fields: [''price'']'
+        node: place
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        decision:
+          action: sell
+          price: 1.5
+          qty: 2
+  - - NodeStarted
+    - node_id: decide
+  - - NodeSucceeded
+    - node_id: decide
+      output:
+        action: sell
+        price: 1.5
+        qty: 2
+  - - NodeStarted
+    - node_id: place
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [21, 12, 21, 33]
+        message: 'binding ''buy'': record has unknown fields: [''price'']'
+        node: place
+  - - RunFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [21, 12, 21, 33]
+        message: 'binding ''buy'': record has unknown fields: [''price'']'
+        node: place

@@ -1,0 +1,192 @@
+# hand TS expect (rules curated by hand): `code` is left out of rules; the frame and message are about flow structure, not the CODE body.
+kind: run
+rules: [messages]
+flow: |
+  id: named-call-output-failure
+  name: named-call-output-failure
+  defs:
+    child:
+      nodes:
+        emit:
+          kind: code
+          code: |-
+            return {"profile": {"age": "bad"}}
+          output:
+            profile:
+              age: int
+      output: ${emit.output}
+  nodes:
+    invoke:
+      kind: call
+      call: child
+  output: ${invoke.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      frames:
+      - label: flow.yaml
+        range: [15, 3, 15, 9]
+      - label: flow.yaml
+        range: [12, 18, 12, 21]
+      message: '"bad" does not match declared type int'
+      node: invoke/emit
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, invoke]
+  - - node_expanded
+    - invoke
+    - prune_ids: []
+      seed: {}
+  - [node_started, invoke/__start__]
+  - - node_succeeded
+    - invoke/__start__
+    - value: {}
+  - [node_started, invoke/emit]
+  - - node_failed
+    - invoke/emit
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [15, 3, 15, 9]
+        - label: flow.yaml
+          range: [12, 18, 12, 21]
+        message: '"bad" does not match declared type int'
+        node: invoke/emit
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: invoke
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed: {}
+      node_id: invoke
+  - - NodeStarted
+    - node_id: invoke/__start__
+  - - NodeSucceeded
+    - node_id: invoke/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: invoke/emit
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [15, 3, 15, 9]
+        - label: flow.yaml
+          range: [12, 18, 12, 21]
+        message: '"bad" does not match declared type int'
+        node: invoke/emit
+  - - RunFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [15, 3, 15, 9]
+        - label: flow.yaml
+          range: [12, 18, 12, 21]
+        message: '"bad" does not match declared type int'
+        node: invoke/emit
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      frames:
+      - label: flow.yaml
+        range: [15, 3, 15, 9]
+      - label: flow.yaml
+        range: [12, 18, 12, 21]
+      message: '''bad'' does not match declared type int'
+      node: invoke/emit
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, invoke]
+  - - node_expanded
+    - invoke
+    - prune_ids: []
+      seed: {}
+  - [node_started, invoke/__start__]
+  - - node_succeeded
+    - invoke/__start__
+    - value: {}
+  - [node_started, invoke/emit]
+  - - node_failed
+    - invoke/emit
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [15, 3, 15, 9]
+        - label: flow.yaml
+          range: [12, 18, 12, 21]
+        message: '''bad'' does not match declared type int'
+        node: invoke/emit
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: invoke
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed: {}
+      node_id: invoke
+  - - NodeStarted
+    - node_id: invoke/__start__
+  - - NodeSucceeded
+    - node_id: invoke/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: invoke/emit
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [15, 3, 15, 9]
+        - label: flow.yaml
+          range: [12, 18, 12, 21]
+        message: '''bad'' does not match declared type int'
+        node: invoke/emit
+  - - RunFailed
+    - failure:
+        code: contract.output
+        frames:
+        - label: flow.yaml
+          range: [15, 3, 15, 9]
+        - label: flow.yaml
+          range: [12, 18, 12, 21]
+        message: '''bad'' does not match declared type int'
+        node: invoke/emit

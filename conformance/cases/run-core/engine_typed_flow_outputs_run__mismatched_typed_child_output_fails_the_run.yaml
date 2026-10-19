@@ -1,0 +1,207 @@
+kind: run
+rules: [messages]
+flow: |2
+
+  id: typed_parent
+  name: typed_parent
+  defs:
+    child:
+      nodes:
+        n:
+          kind: code
+          code: |
+            return 'x'
+      output: !int ${n.output}
+  nodes:
+    use:
+      kind: call
+      call: child
+  output: ${use.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      frames:
+      - label: flow.yaml
+        range: [13, 3, 13, 6]
+      - label: flow.yaml
+        range: [11, 13, 11, 29]
+      message: 'flow output: "x" does not match declared type int'
+      node: use/__end__
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, use]
+  - - node_expanded
+    - use
+    - prune_ids: []
+      seed: {}
+  - [node_started, use/__start__]
+  - - node_succeeded
+    - use/__start__
+    - value: {}
+  - [node_started, use/n]
+  - - node_succeeded
+    - use/n
+    - value: x
+  - [node_started, use/__end__]
+  - - node_failed
+    - use/__end__
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [13, 3, 13, 6]
+        - label: flow.yaml
+          range: [11, 13, 11, 29]
+        message: 'flow output: "x" does not match declared type int'
+        node: use/__end__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: use
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed: {}
+      node_id: use
+  - - NodeStarted
+    - node_id: use/__start__
+  - - NodeSucceeded
+    - node_id: use/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: use/n
+  - - NodeSucceeded
+    - node_id: use/n
+      output: x
+  - - NodeStarted
+    - node_id: use/__end__
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [13, 3, 13, 6]
+        - label: flow.yaml
+          range: [11, 13, 11, 29]
+        message: 'flow output: "x" does not match declared type int'
+        node: use/__end__
+  - - RunFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [13, 3, 13, 6]
+        - label: flow.yaml
+          range: [11, 13, 11, 29]
+        message: 'flow output: "x" does not match declared type int'
+        node: use/__end__
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      frames:
+      - label: flow.yaml
+        range: [13, 3, 13, 6]
+      - label: flow.yaml
+        range: [11, 13, 11, 29]
+      message: 'flow output: ''x'' does not match declared type int'
+      node: use/__end__
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, use]
+  - - node_expanded
+    - use
+    - prune_ids: []
+      seed: {}
+  - [node_started, use/__start__]
+  - - node_succeeded
+    - use/__start__
+    - value: {}
+  - [node_started, use/n]
+  - - node_succeeded
+    - use/n
+    - value: x
+  - [node_started, use/__end__]
+  - - node_failed
+    - use/__end__
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [13, 3, 13, 6]
+        - label: flow.yaml
+          range: [11, 13, 11, 29]
+        message: 'flow output: ''x'' does not match declared type int'
+        node: use/__end__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: use
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed: {}
+      node_id: use
+  - - NodeStarted
+    - node_id: use/__start__
+  - - NodeSucceeded
+    - node_id: use/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: use/n
+  - - NodeSucceeded
+    - node_id: use/n
+      output: x
+  - - NodeStarted
+    - node_id: use/__end__
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [13, 3, 13, 6]
+        - label: flow.yaml
+          range: [11, 13, 11, 29]
+        message: 'flow output: ''x'' does not match declared type int'
+        node: use/__end__
+  - - RunFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [13, 3, 13, 6]
+        - label: flow.yaml
+          range: [11, 13, 11, 29]
+        message: 'flow output: ''x'' does not match declared type int'
+        node: use/__end__

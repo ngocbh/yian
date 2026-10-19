@@ -1,0 +1,22 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    p: !str
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {provider: '${input.p}'}
+  output: ${chat.output}
+inputs:
+  p: bogus-provider
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: LayerFieldError
+    message: 'node ''chat'' llm_config.provider: not a known provider; use one of: openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
+  trace: []
+  events: []

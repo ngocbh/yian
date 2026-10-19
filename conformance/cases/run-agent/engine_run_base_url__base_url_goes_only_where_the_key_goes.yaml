@@ -1,0 +1,336 @@
+kind: run
+flow: |
+  id: two
+  name: two
+  defs:
+    body:
+      nodes:
+        nested: {kind: agent, prompt: hi, llm_config: {model: nested-model}}
+      output: ${nested.output}
+  nodes:
+    inherits: {kind: agent, prompt: hi}
+    child: {kind: call, call: body, depends_on: [inherits]}
+    other:
+      kind: agent
+      prompt: hi
+      depends_on: [inherits]
+      llm_config: {provider: anthropic, model: claude-sonnet-4-5}
+    optout:
+      kind: agent
+      prompt: hi
+      depends_on: [other]
+      llm_config: {inherit: false, provider: openai, model: other-deployment}
+  output: ${optout.output}
+run:
+  num_workers: 0
+  llm_config:
+    provider: openai
+    model: gpt-5.4
+    base_url: https://res.openai.azure.com/openai/v1/
+    api_key: <key:1>
+host:
+  models:
+    inherits:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: hi
+    other:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: hi
+    optout:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: hi
+    child/nested:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: hi
+expect:
+  output:
+    status: succeeded
+    output: ok
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        child/nested:
+          _connection:
+            endpoint: https://res.openai.azure.com/openai/v1/
+            method: api_key
+            source: host
+          _host_key: true
+          base_url: https://res.openai.azure.com/openai/v1/
+          model: nested-model
+          provider: openai
+        inherits:
+          _connection:
+            endpoint: https://res.openai.azure.com/openai/v1/
+            method: api_key
+            source: host
+          _host_key: true
+          base_url: https://res.openai.azure.com/openai/v1/
+          model: gpt-5.4
+          provider: openai
+        optout:
+          _connection:
+            endpoint: https://res.openai.azure.com/openai/v1/
+            method: api_key
+            source: host
+          _host_key: true
+          base_url: https://res.openai.azure.com/openai/v1/
+          model: other-deployment
+          provider: openai
+        other:
+          _connection:
+            endpoint: null
+            method: api_key
+            source: environment
+          model: claude-sonnet-4-5
+          provider: anthropic
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, inherits]
+  - - node_succeeded
+    - inherits
+    - value: ok
+  - [node_started, child]
+  - - node_expanded
+    - child
+    - prune_ids: []
+      seed: {}
+  - [node_started, other]
+  - - node_succeeded
+    - other
+    - value: ok
+  - [node_started, child/__start__]
+  - - node_succeeded
+    - child/__start__
+    - value: {}
+  - [node_started, optout]
+  - - node_succeeded
+    - optout
+    - value: ok
+  - [node_started, child/nested]
+  - - node_succeeded
+    - child/nested
+    - value: ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ok
+  - [node_started, child/__end__]
+  - - node_succeeded
+    - child/__end__
+    - commit_target: child
+      value: ok
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: inherits
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.4
+      node_id: inherits
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.4
+      node_id: inherits
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: inherits
+      output: ok
+  - - NodeStarted
+    - node_id: child
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed: {}
+      node_id: child
+  - - NodeStarted
+    - node_id: other
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: claude-sonnet-4-5
+      node_id: other
+      provider: anthropic
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: claude-sonnet-4-5
+      node_id: other
+      provider: anthropic
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: other
+      output: ok
+  - - NodeStarted
+    - node_id: child/__start__
+  - - NodeSucceeded
+    - node_id: child/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: optout
+  - - ModelCallStarted
+    - exchange_id: <id:3>
+      model: other-deployment
+      node_id: optout
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:3>
+      model: other-deployment
+      node_id: optout
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: optout
+      output: ok
+  - - NodeStarted
+    - node_id: child/nested
+  - - ModelCallStarted
+    - exchange_id: <id:4>
+      model: nested-model
+      node_id: child/nested
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:4>
+      model: nested-model
+      node_id: child/nested
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: child/nested
+      output: ok
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: ok
+  - - NodeStarted
+    - node_id: child/__end__
+  - - NodeSucceeded
+    - commit_as: child
+      node_id: child/__end__
+      output: ok
+  - - RunSucceeded
+    - output: ok
+  stream:
+  - chunk: ok
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: inherits
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: inherits
+  - chunk: ok
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: other
+  - chunk: ''
+    exchange_id: <id:2>
+    final: true
+    key: text
+    node_id: other
+  - chunk: ok
+    exchange_id: <id:3>
+    final: false
+    key: text
+    node_id: optout
+  - chunk: ''
+    exchange_id: <id:3>
+    final: true
+    key: text
+    node_id: optout
+  - chunk: ok
+    exchange_id: <id:4>
+    final: false
+    key: text
+    node_id: child/nested
+  - chunk: ''
+    exchange_id: <id:4>
+    final: true
+    key: text
+    node_id: child/nested

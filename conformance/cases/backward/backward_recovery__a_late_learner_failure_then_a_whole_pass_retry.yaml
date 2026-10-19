@@ -1,0 +1,614 @@
+# From tests/engine/test_backward_recovery.py::test_late_learning_failure_keeps_completed_feedback_but_retry_rebuilds_every_proposal,
+# with a reflective learner whose provider call fails (tests/engine/test_reflective_memory.py::
+# test_learn_provider_failure_is_retryable_and_sanitized); also tests/engine/test_run_memory.py::
+# test_learning_failure_does_not_replace_primary_success and ::test_precommit_failure_requires_an_explicit_whole_pass_retry.
+# Pins: a learner's provider failure fails the backward call at the learn stage (retryable, its text
+# sanitized) but keeps the completed feedback and commits nothing; the run's own result is
+# unchanged; the next call is a whole pass (AGENTs and learner again) that commits under attempt 2.
+# YIAN_DEFAULT_PROVIDER/MODEL: a reflective learner's model config comes from the defaults, not the flow.
+kind: backward
+flow: |
+  id: backward-recovery
+  name: backward_recovery
+  long_term_memory: {lessons: reflective}
+  llm_config: {provider: ollama, model: local-test}
+  input:
+    topic: !str
+  nodes:
+    first:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      prompt: 'Draft ${topic}'
+    second:
+      kind: agent
+      input:
+        draft: ${first.output}
+      prompt: 'Review ${draft}'
+  output: ${second.output}
+env:
+  YIAN_DEFAULT_PROVIDER: openai
+  YIAN_DEFAULT_MODEL: gpt-5.5
+inputs:
+  topic: reefs
+run:
+  run_id: r1
+  num_workers: 0
+  learnable: true
+host:
+  memory: {}
+  models:
+    first:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: draft
+      backward:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"input_feedback": {"topic": ["old topic"]}, "self_feedback": [], "variable_feedback": {}}'
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"input_feedback": {"topic": ["fresh topic"]}, "self_feedback": [], "variable_feedback": {}}'
+    second:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: answer
+      backward:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"input_feedback": {"draft": ["old draft"]}, "self_feedback": [], "variable_feedback": {}}'
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"input_feedback": {"draft": ["fresh draft"]}, "self_feedback": [], "variable_feedback": {}}'
+    __memory__:
+      memory:lessons:
+      - chunks: []
+        raise:
+          class: RuntimeError
+          message: provider-secret
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"actions":[{"action":"add","lesson_id":"fresh","text":"Review the topic first."}]}'
+backward:
+- feedback: First review.
+- feedback: Second review.
+expect:
+  output:
+    status: succeeded
+    output: answer
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        first:
+          model: local-test
+          provider: ollama
+        second:
+          model: local-test
+          provider: ollama
+      inputs:
+        topic: reefs
+      learnable: true
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - forward_capture:
+        bound_inputs:
+          topic: reefs
+        evaluated_keys: [topic]
+        input_names: [topic]
+        node_data:
+          input_output_paths:
+            topic: [topic]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 0
+              path: [topic]
+              run_id: r1
+          kind: record
+          names: [topic]
+        scope:
+          boundary: start
+          flow_path: []
+          occurrence_path: []
+          static_path: [__start__]
+      value:
+        topic: reefs
+  - [node_started, first]
+  - - node_succeeded
+    - first
+    - forward_capture:
+        bound_inputs:
+          topic: reefs
+        evaluated_keys: [topic]
+        input_names: [topic]
+        node_data:
+          effective_llm_config:
+            model: local-test
+            provider: ollama
+          prompt_template: Draft ${topic}
+          rendered_prompt: Draft reefs
+          variable_domains: {}
+          variables: {}
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 1
+              path: [topic]
+              run_id: r1
+          kind: record
+          names: [topic]
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [first]
+      value: draft
+  - [node_started, second]
+  - - node_succeeded
+    - second
+    - forward_capture:
+        bound_inputs:
+          draft: draft
+        evaluated_keys: [draft]
+        input_names: [draft]
+        node_data:
+          effective_llm_config:
+            model: local-test
+            provider: ollama
+          prompt_template: Review ${draft}
+          rendered_prompt: Review draft
+          variable_domains: {}
+          variables: {}
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 3
+              path: []
+              run_id: r1
+          kind: record
+          names: [draft]
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [second]
+      value: answer
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - forward_capture:
+        bound_inputs:
+          result: answer
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 5
+              path: []
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: []
+          occurrence_path: []
+          static_path: [__end__]
+      value: answer
+  - - backward_started
+    - null
+    - attempt_id: 1
+      feedback: First review.
+  - - backward_finished
+    - null
+    - attempt_id: 1
+      attributed_results:
+      - attribution:
+        - contribution_index: 0
+          input_name: topic
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 3
+            path: []
+            run_id: r1
+        feedback:
+        - topic: old topic
+        invoked: true
+        result:
+          input_feedback:
+            topic: [old topic]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 1
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: draft
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 5
+            path: []
+            run_id: r1
+        feedback: [old draft]
+        invoked: true
+        result:
+          input_feedback:
+            topic: [old topic]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 3
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 7
+            path: []
+            run_id: r1
+        feedback: [First review.]
+        invoked: true
+        result:
+          input_feedback:
+            draft: [old draft]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 5
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: null
+          input_name: null
+          message_index: 0
+          parents: []
+          sender: null
+        feedback: [First review.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [First review.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 7
+          path: []
+          run_id: r1
+      outcome:
+        failure:
+          cause:
+            code: reflective.provider
+            message: reflector invocation failed
+            retryable: true
+            stage: learn
+          code: reflective.provider
+          memory: lessons
+          message: reflector invocation failed
+          node_id: null
+          node_started_seq: null
+          run_id: null
+          scope: null
+          stage: learn
+        feedback:
+          input_feedback:
+            topic: [old topic]
+          self_feedback: []
+          variable_feedback: {}
+        learning:
+          failures:
+          - failure:
+              code: reflective.provider
+              message: reflector invocation failed
+              retryable: true
+              stage: learn
+            memory: lessons
+            operation: learn
+          policies:
+          - commit_id: null
+            failure: null
+            memory: lessons
+            status: unrequested
+          status: failed
+        status: failed
+  - - backward_started
+    - null
+    - attempt_id: 2
+      feedback: Second review.
+  - - backward_ready
+    - null
+    - attempt_id: 2
+      attributed_results:
+      - attribution:
+        - contribution_index: 0
+          input_name: topic
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 3
+            path: []
+            run_id: r1
+        feedback:
+        - topic: fresh topic
+        invoked: true
+        result:
+          input_feedback:
+            topic: [fresh topic]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 1
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: draft
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 5
+            path: []
+            run_id: r1
+        feedback: [fresh draft]
+        invoked: true
+        result:
+          input_feedback:
+            topic: [fresh topic]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 3
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 7
+            path: []
+            run_id: r1
+        feedback: [Second review.]
+        invoked: true
+        result:
+          input_feedback:
+            draft: [fresh draft]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 5
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: null
+          input_name: null
+          message_index: 0
+          parents: []
+          sender: null
+        feedback: [Second review.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [Second review.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 7
+          path: []
+          run_id: r1
+      proposals:
+      - memory: lessons
+        mutations:
+        - mutation_id: <id:1>
+          payload:
+            action: add
+            lesson_id: fresh
+            source:
+              run_id: r1
+            text: Review the topic first.
+      root_result:
+        input_feedback:
+          topic: [fresh topic]
+        self_feedback: []
+        variable_feedback: {}
+  - - memory_commit_requested
+    - null
+    - attempt_id: 2
+      commit_id: <id:2>
+      memory: lessons
+      mutations:
+      - mutation_id: <id:1>
+        payload:
+          action: add
+          lesson_id: fresh
+          source:
+            run_id: r1
+          text: Review the topic first.
+  - - memory_commit_succeeded
+    - null
+    - attempt_id: 2
+      commit_id: <id:2>
+      memory: lessons
+  - - backward_finished
+    - null
+    - attempt_id: 2
+      attributed_results: []
+      outcome:
+        failure: null
+        feedback:
+          input_feedback:
+            topic: [fresh topic]
+          self_feedback: []
+          variable_feedback: {}
+        learning:
+          failures: []
+          policies:
+          - commit_id: <id:2>
+            failure: null
+            memory: lessons
+            status: succeeded
+          status: succeeded
+        status: succeeded
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        topic: reefs
+  - - NodeStarted
+    - node_id: first
+  - - ModelCallStarted
+    - exchange_id: <id:3>
+      model: local-test
+      node_id: first
+      provider: ollama
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:3>
+      model: local-test
+      node_id: first
+      provider: ollama
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: first
+      output: draft
+  - - NodeStarted
+    - node_id: second
+  - - ModelCallStarted
+    - exchange_id: <id:4>
+      model: local-test
+      node_id: second
+      provider: ollama
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:4>
+      model: local-test
+      node_id: second
+      provider: ollama
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: second
+      output: answer
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: answer
+  - - RunSucceeded
+    - output: answer
+  stream:
+  - chunk: draft
+    exchange_id: <id:3>
+    final: false
+    key: text
+    node_id: first
+  - chunk: ''
+    exchange_id: <id:3>
+    final: true
+    key: text
+    node_id: first
+  - chunk: answer
+    exchange_id: <id:4>
+    final: false
+    key: text
+    node_id: second
+  - chunk: ''
+    exchange_id: <id:4>
+    final: true
+    key: text
+    node_id: second
+  backward:
+  - failure:
+      cause:
+        code: reflective.provider
+        message: reflector invocation failed
+        retryable: true
+        stage: learn
+      code: reflective.provider
+      memory: lessons
+      message: reflector invocation failed
+      node_id: null
+      node_started_seq: null
+      run_id: null
+      scope: null
+      stage: learn
+    feedback:
+      input_feedback:
+        topic: [old topic]
+      self_feedback: []
+      variable_feedback: {}
+    learning:
+      failures:
+      - failure:
+          code: reflective.provider
+          message: reflector invocation failed
+          retryable: true
+          stage: learn
+        memory: lessons
+        operation: learn
+      policies:
+      - commit_id: null
+        failure: null
+        memory: lessons
+        status: unrequested
+      status: failed
+    status: failed
+  - failure: null
+    feedback:
+      input_feedback:
+        topic: [fresh topic]
+      self_feedback: []
+      variable_feedback: {}
+    learning:
+      failures: []
+      policies:
+      - commit_id: <id:2>
+        failure: null
+        memory: lessons
+        status: succeeded
+      status: succeeded
+    status: succeeded
+  memory:
+    lessons: '[fresh] Review the topic first.'

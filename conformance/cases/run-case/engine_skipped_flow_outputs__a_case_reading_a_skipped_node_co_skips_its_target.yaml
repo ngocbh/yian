@@ -1,0 +1,69 @@
+kind: run
+flow: "id: f\nname: f\ninput:\n  approve: !bool\nnodes:\n  gate:\n    kind: case\n    cases:\n      - when: ${input.approve}\n        then: order\n    else: rejected\n  order:\n    kind: code\n    output: \n      qty: int\n    code: |\n      return {\"qty\": 2}\n  rejected:\n    kind: code\n    output: str\n    code: |\n      return \"no\"\n  check:\n    kind: case\n    cases:\n      - when: ${order.output.qty > 1}\n        then: use\n  use:\n    kind: code\n    output: int\n    input:\n      q: ${order.output.qty * 2}\n    code: |\n      return inputs[\"q\"]\noutput:\n  u: ${use.output}\n"
+inputs:
+  approve: false
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      u: null
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        approve: false
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        approve: false
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: '#else'
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        u: null
+  - [node_started, rejected]
+  - - node_succeeded
+    - rejected
+    - value: no
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        approve: false
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: gate
+  - - NodeSkipped
+    - node_id: order
+  - - NodeSkipped
+    - node_id: check
+  - - NodeSkipped
+    - node_id: use
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        u: null
+  - - NodeStarted
+    - node_id: rejected
+  - - NodeSucceeded
+    - node_id: rejected
+      output: no
+  - - RunSucceeded
+    - output:
+        u: null

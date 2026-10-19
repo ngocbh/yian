@@ -1,0 +1,19 @@
+kind: run
+flow: |
+  id: plain
+  name: plain
+  nodes:
+    agent: {kind: agent, prompt: hi}
+  output: ${agent.output}
+run:
+  num_workers: 0
+  llm_config:
+    provider: vllm
+    model: served-model
+    openai_reasoning_effort: sentinel-3f9a1c
+expect:
+  raises:
+    class: ValueError
+    message: '`openai_reasoning_effort` was removed; write `openai: {reasoning: {effort: <level>}}`'
+  trace: []
+  events: []

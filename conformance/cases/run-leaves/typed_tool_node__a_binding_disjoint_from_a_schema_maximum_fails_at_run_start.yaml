@@ -1,0 +1,38 @@
+# From tests/engine/test_typed_tool_node.py::test_a_tagged_binding_disjoint_from_a_json_schema_maximum_fails_at_run_start.
+# A binding typed int(101..) into a parameter whose JSON Schema caps it at 100 fails the run at its
+# start: the two ranges don't overlap.
+kind: run
+flow: |
+  id: placing
+  name: placing
+  input:
+    n: !int(101..)
+  nodes:
+    place:
+      kind: tool
+      tool_id: place_order
+      input:
+        qty: ${input.n}
+  output: ${place.output}
+inputs:
+  n: 200
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    place_order:
+      parameters:
+        type: object
+        properties:
+          qty:
+            type: integer
+            maximum: 100
+        required: [qty]
+      results: []
+expect:
+  raises:
+    class: ValueError
+    message: 'TOOL node ''place'' input ''qty'': tool ''place_order'' takes int(..100), but the binding is int(101..)'
+  trace: []
+  events: []

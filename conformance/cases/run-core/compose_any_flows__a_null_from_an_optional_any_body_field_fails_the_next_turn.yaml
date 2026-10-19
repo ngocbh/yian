@@ -1,0 +1,275 @@
+# hand TS expect: The null value is shown in the text form in TS (rules: messages).
+kind: run
+rules: [messages]
+flow: |
+  id: p
+  name: p
+  nodes:
+    loop:
+      kind: loop
+      times: 2
+      input:
+        acc: !Any 0
+      nodes:
+        step:
+          kind: code
+          input:
+            acc: ${input.acc}
+          output: Optional(Any)
+          code: |
+            return null
+      output:
+        acc: ${step.output}
+  output: ${loop.output}
+python_flow: |
+  id: p
+  name: p
+  nodes:
+    loop:
+      kind: loop
+      times: 2
+      input:
+        acc: !Any 0
+      nodes:
+        step:
+          kind: code
+          input:
+            acc: ${input.acc}
+          output: Optional(Any)
+          code: |
+            return None
+      output:
+        acc: ${step.output}
+  output: ${loop.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 7]
+      message: 'input ''acc'': null does not match declared type Any'
+      node: loop#1/__start__
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, loop]
+  - - node_expanded
+    - loop
+    - prune_ids: []
+      seed:
+      - acc: 0
+      - 0
+  - [node_started, loop#0/__start__]
+  - - node_succeeded
+    - loop#0/__start__
+    - value:
+        acc: 0
+  - [node_started, loop#0/step]
+  - [node_succeeded, loop#0/step]
+  - [node_started, loop#0/__end__]
+  - - node_succeeded
+    - loop#0/__end__
+    - value:
+        acc: null
+  - [node_started, loop~1]
+  - - node_expanded
+    - loop~1
+    - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/step, loop~1]
+      seed:
+      - acc: null
+      - 1
+  - [node_started, loop#1/__start__]
+  - - node_failed
+    - loop#1/__start__
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        message: 'input ''acc'': null does not match declared type Any'
+        node: loop#1/__start__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - acc: 0
+        - 0
+      node_id: loop
+  - - NodeStarted
+    - node_id: loop#0/__start__
+  - - NodeSucceeded
+    - node_id: loop#0/__start__
+      output:
+        acc: 0
+  - - NodeStarted
+    - node_id: loop#0/step
+  - - NodeSucceeded
+    - node_id: loop#0/step
+  - - NodeStarted
+    - node_id: loop#0/__end__
+  - - NodeSucceeded
+    - node_id: loop#0/__end__
+      output:
+        acc: null
+  - - NodeStarted
+    - node_id: loop~1
+  - - NodeExpanded
+    - grow:
+        prune: [loop#0/__end__, loop#0/__start__, loop#0/step, loop~1]
+        seed:
+        - acc: null
+        - 1
+      node_id: loop~1
+  - - NodeStarted
+    - node_id: loop#1/__start__
+  - - NodeFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        message: 'input ''acc'': null does not match declared type Any'
+        node: loop#1/__start__
+  - - RunFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        message: 'input ''acc'': null does not match declared type Any'
+        node: loop#1/__start__
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 7]
+      message: 'input ''acc'': None does not match declared type Any'
+      node: loop#1/__start__
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, loop]
+  - - node_expanded
+    - loop
+    - prune_ids: []
+      seed:
+      - acc: 0
+      - 0
+  - [node_started, loop#0/__start__]
+  - - node_succeeded
+    - loop#0/__start__
+    - value:
+        acc: 0
+  - [node_started, loop#0/step]
+  - [node_succeeded, loop#0/step]
+  - [node_started, loop#0/__end__]
+  - - node_succeeded
+    - loop#0/__end__
+    - value:
+        acc: null
+  - [node_started, loop~1]
+  - - node_expanded
+    - loop~1
+    - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/step, loop~1]
+      seed:
+      - acc: null
+      - 1
+  - [node_started, loop#1/__start__]
+  - - node_failed
+    - loop#1/__start__
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        message: 'input ''acc'': None does not match declared type Any'
+        node: loop#1/__start__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - acc: 0
+        - 0
+      node_id: loop
+  - - NodeStarted
+    - node_id: loop#0/__start__
+  - - NodeSucceeded
+    - node_id: loop#0/__start__
+      output:
+        acc: 0
+  - - NodeStarted
+    - node_id: loop#0/step
+  - - NodeSucceeded
+    - node_id: loop#0/step
+  - - NodeStarted
+    - node_id: loop#0/__end__
+  - - NodeSucceeded
+    - node_id: loop#0/__end__
+      output:
+        acc: null
+  - - NodeStarted
+    - node_id: loop~1
+  - - NodeExpanded
+    - grow:
+        prune: [loop#0/__end__, loop#0/__start__, loop#0/step, loop~1]
+        seed:
+        - acc: null
+        - 1
+      node_id: loop~1
+  - - NodeStarted
+    - node_id: loop#1/__start__
+  - - NodeFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        message: 'input ''acc'': None does not match declared type Any'
+        node: loop#1/__start__
+  - - RunFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        message: 'input ''acc'': None does not match declared type Any'
+        node: loop#1/__start__

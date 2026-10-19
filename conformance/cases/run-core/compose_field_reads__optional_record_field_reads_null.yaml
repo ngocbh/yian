@@ -1,0 +1,88 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Optional(Rec)
+      code: "return null"
+  output:
+    a: ${step.output.a}
+    note: 'a=${step.output.a}'
+python_flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Optional(Rec)
+      code: return None
+  output:
+    a: ${step.output.a}
+    note: 'a=${step.output.a}'
+inputs:
+  s: x
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      a: null
+      note: a=
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        s: x
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        s: x
+  - [node_started, step]
+  - [node_succeeded, step]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        a: null
+        note: a=
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        s: x
+  - - NodeStarted
+    - node_id: step
+  - - NodeSucceeded
+    - node_id: step
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        a: null
+        note: a=
+  - - RunSucceeded
+    - output:
+        a: null
+        note: a=

@@ -1,0 +1,82 @@
+# hand TS expect: 1e308 * 10 is inf in TS (infinity is a float value), so the flow output is inf and the run succeeds;
+# output only (no TS trace or events). python_expect is Python's END failure.
+kind: run
+rules: [infinity]
+flow: |2
+
+  id: nonfinite
+  name: nonfinite
+  input:
+    x: !float
+  nodes:
+    c:
+      kind: code
+      code: |
+        return 1
+  output: ${input.x * 10}
+inputs:
+  x: 1.0e+308
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: {$float: inf}
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: binding.evaluate
+      frames:
+      - label: flow.yaml
+        range: [11, 9, 11, 24]
+      message: 'flow output: non-finite number inf is not a yian value'
+      node: __end__
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        x: 1.0e+308
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        x: 1.0e+308
+  - [node_started, __end__]
+  - - node_failed
+    - __end__
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [11, 9, 11, 24]
+        message: 'flow output: non-finite number inf is not a yian value'
+        node: __end__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        x: 1.0e+308
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [11, 9, 11, 24]
+        message: 'flow output: non-finite number inf is not a yian value'
+        node: __end__
+  - - RunFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [11, 9, 11, 24]
+        message: 'flow output: non-finite number inf is not a yian value'
+        node: __end__

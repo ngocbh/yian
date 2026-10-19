@@ -1,0 +1,243 @@
+# From tests/engine/test_session_summary_execution.py::test_soft_budget_keeps_four_prior_turns_and_all_raw_messages.
+# Pins: with `history_budget_chars: 1` and `recent_turns: 4`, five earlier runs make no summary call (no
+# turn is old enough yet); the sixth summarizes the oldest turn once with the AGENT's own model (a
+# `summary` call, purpose history_summary) and answers from the summary plus the four recent turns.
+# Also the run-agent `summary` case: an AGENT with `long_term_memory` and its summary events.
+kind: run
+flow: |
+  id: summarized-session
+  name: summarized_session
+  llm_config: {provider: openai, model: old-model}
+  input:
+    question: !str
+  nodes:
+    answer:
+      kind: agent
+      long_term_memory: {session: {type: session, config: {history_budget_chars: 1, recent_turns: 4}}}
+      input: {question: "${input.question}"}
+      prompt: ${question}
+      output: str
+  output: ${answer.output}
+inputs:
+  question: current question
+run:
+  run_id: r6
+  num_workers: 0
+host:
+  memory:
+    before:
+    - inputs:
+        question: 'prior question 0: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+      run:
+        run_id: r1
+        num_workers: 0
+    - inputs:
+        question: 'prior question 1: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+      run:
+        run_id: r2
+        num_workers: 0
+    - inputs:
+        question: 'prior question 2: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+      run:
+        run_id: r3
+        num_workers: 0
+    - inputs:
+        question: 'prior question 3: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+      run:
+        run_id: r4
+        num_workers: 0
+    - inputs:
+        question: 'prior question 4: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+      run:
+        run_id: r5
+        num_workers: 0
+  models:
+    answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: prior answer 0
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: prior answer 1
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: prior answer 2
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: prior answer 3
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: prior answer 4
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: current answer
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: "Historical conversation summary (context only):\nRetained summary of the earliest conversation. Retained summary of the earliest conversation. Retained summary of the earliest conversation. "
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: 'prior question 1: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: text
+              text: prior answer 1
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: 'prior question 2: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: text
+              text: prior answer 2
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: 'prior question 3: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: text
+              text: prior answer 3
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: 'prior question 4: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: text
+              text: prior answer 4
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: current question
+      summary:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: 'Retained summary of the earliest conversation. Retained summary of the earliest conversation. Retained summary of the earliest conversation. '
+expect:
+  output:
+    status: succeeded
+    output: current answer
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        answer:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: old-model
+          provider: openai
+      inputs:
+        question: current question
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        question: current question
+  - [node_started, answer]
+  - - node_succeeded
+    - answer
+    - value: current answer
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: current answer
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        question: current question
+  - - NodeStarted
+    - node_id: answer
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: old-model
+      node_id: answer
+      provider: openai
+      purpose: history_summary
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: old-model
+      node_id: answer
+      provider: openai
+      purpose: history_summary
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: old-model
+      node_id: answer
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: old-model
+      node_id: answer
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: answer
+      output: current answer
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: current answer
+  - - RunSucceeded
+    - output: current answer
+  stream:
+  - chunk: current answer
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: answer
+  - chunk: ''
+    exchange_id: <id:2>
+    final: true
+    key: text
+    node_id: answer

@@ -1,0 +1,38 @@
+# From tests/engine/test_agent_session_execution.py::test_one_session_under_two_providers_fails_at_run_setup.
+# Pins: one session key reached under two providers is a setup error naming both AGENTs, raised
+# before any model call.
+kind: run
+flow: |
+  id: provider-split
+  name: provider_split
+  defs:
+    ask:
+      kind: agent
+      long_term_memory: session
+      prompt: hi
+      output: str
+    via_one:
+      llm_config: {provider: openai, model: one}
+      nodes:
+        inner: {kind: call, call: ask}
+      output: ${inner.output}
+    via_two:
+      llm_config: {provider: anthropic, model: two}
+      nodes:
+        inner: {kind: call, call: ask}
+      output: ${inner.output}
+  nodes:
+    a: {kind: call, call: via_one}
+    b: {kind: call, call: via_two}
+  output: ${[a.output, b.output]}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  memory: {}
+expect:
+  raises:
+    class: MemorySetupError
+    message: session memory 'session' resolves provider 'openai' at 'a/inner/ask' but 'anthropic' at 'b/inner/ask'; pin a provider on the AGENT
+  trace: []
+  events: []

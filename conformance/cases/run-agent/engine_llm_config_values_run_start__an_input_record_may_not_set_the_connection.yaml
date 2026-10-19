@@ -1,0 +1,30 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    cfg: !object
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: '${input.cfg}'
+  output: ${chat.output}
+inputs:
+  cfg:
+    provider: openai
+    model: m
+    _connection:
+      credential_id: null
+      endpoint: https://api.openai.com/v1
+      method: api_key
+      source: env
+      store_path: null
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: LayerFieldError
+    message: 'node ''chat'' llm_config._connection: internal to recorded runs'
+  trace: []
+  events: []

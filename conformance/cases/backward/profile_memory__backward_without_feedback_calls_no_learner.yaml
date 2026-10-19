@@ -1,0 +1,292 @@
+# From tests/engine/test_profile_memory.py::test_learn_without_feedback_calls_no_model.
+# Pins: a backward call with no feedback makes no profile learner call (and no AGENT backward call),
+# and the document stays as it was.
+# YIAN_DEFAULT_PROVIDER/MODEL: a profile learner's model config comes from the defaults, not the flow.
+kind: backward
+flow: |
+  id: chat
+  name: chat
+  llm_config: {provider: openai, model: test-model}
+  long_term_memory: profile
+  input:
+    message: !str
+  nodes:
+    reply:
+      kind: agent
+      input:
+        message: ${input.message}
+      prompt: ${message}
+      output: str
+  output: ${reply.output}
+files:
+  memory/chat/profile.md: |
+    # Ada
+    - Works on reefs.
+env:
+  YIAN_DEFAULT_PROVIDER: openai
+  YIAN_DEFAULT_MODEL: gpt-5.5
+inputs:
+  message: hi
+run:
+  run_id: r1
+  num_workers: 0
+  learnable: true
+host:
+  memory: {}
+  models:
+    reply:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: Hello.
+backward:
+- feedback: null
+expect:
+  output:
+    status: succeeded
+    output: Hello.
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        reply:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: test-model
+          provider: openai
+      inputs:
+        message: hi
+      learnable: true
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - forward_capture:
+        bound_inputs:
+          message: hi
+        evaluated_keys: [message]
+        input_names: [message]
+        node_data:
+          input_output_paths:
+            message: [message]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 0
+              path: [message]
+              run_id: r1
+          kind: record
+          names: [message]
+        scope:
+          boundary: start
+          flow_path: []
+          occurrence_path: []
+          static_path: [__start__]
+      value:
+        message: hi
+  - [node_started, reply]
+  - - node_succeeded
+    - reply
+    - forward_capture:
+        bound_inputs:
+          message: hi
+        evaluated_keys: [message]
+        input_names: [message]
+        node_data:
+          effective_llm_config:
+            _connection:
+              endpoint: https://api.openai.com/v1
+              method: api_key
+              source: missing
+            model: test-model
+            provider: openai
+          prompt_template: ${message}
+          rendered_prompt: hi
+          variable_domains: {}
+          variables: {}
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 1
+              path: [message]
+              run_id: r1
+          kind: record
+          names: [message]
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [reply]
+      value: Hello.
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - forward_capture:
+        bound_inputs:
+          result: Hello.
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 3
+              path: []
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: []
+          occurrence_path: []
+          static_path: [__end__]
+      value: Hello.
+  - - backward_started
+    - null
+    - attempt_id: 1
+  - - backward_ready
+    - null
+    - attempt_id: 1
+      attributed_results:
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 1
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 3
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 5
+          path: []
+          run_id: r1
+      proposals:
+      - memory: profile
+        mutations: []
+      root_result:
+        input_feedback: {}
+        self_feedback: []
+        variable_feedback: {}
+  - - memory_commit_requested
+    - null
+    - attempt_id: 1
+      commit_id: <id:1>
+      memory: profile
+      mutations: []
+  - - memory_commit_succeeded
+    - null
+    - attempt_id: 1
+      commit_id: <id:1>
+      memory: profile
+  - - backward_finished
+    - null
+    - attempt_id: 1
+      attributed_results: []
+      outcome:
+        failure: null
+        feedback:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        learning:
+          failures: []
+          policies:
+          - commit_id: <id:1>
+            failure: null
+            memory: profile
+            status: succeeded
+          status: succeeded
+        status: succeeded
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        message: hi
+  - - NodeStarted
+    - node_id: reply
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: test-model
+      node_id: reply
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: test-model
+      node_id: reply
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: reply
+      output: Hello.
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: Hello.
+  - - RunSucceeded
+    - output: Hello.
+  stream:
+  - chunk: Hello.
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: reply
+  - chunk: ''
+    exchange_id: <id:2>
+    final: true
+    key: text
+    node_id: reply
+  backward:
+  - failure: null
+    feedback:
+      input_feedback: {}
+      self_feedback: []
+      variable_feedback: {}
+    learning:
+      failures: []
+      policies:
+      - commit_id: <id:1>
+        failure: null
+        memory: profile
+        status: succeeded
+      status: succeeded
+    status: succeeded
+  memory:
+    profile: |
+      # Ada
+      - Works on reefs.

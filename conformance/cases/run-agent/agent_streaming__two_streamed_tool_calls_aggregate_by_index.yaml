@@ -1,0 +1,196 @@
+# From tests/engine/test_agent_streaming.py::test_two_streamed_tool_calls_aggregate_by_index.
+# Also tests/engine/test_agent_live_events.py::test_two_tool_calls_in_one_reply_get_their_own_indexed_brackets.
+# Two tool calls stream as argument deltas, each split over two chunks sharing its index; they
+# are joined by index and run in order (topic a, then b), each with its own indexed
+# ToolCallStarted/Finished pair under the one exchange. The tool-only reply streams only its
+# final "" chunk; the second reply streams "both", " fine", then its final chunk.
+kind: run
+flow: |
+  id: stream
+  name: stream
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    writer:
+      kind: agent
+      tools: [lookup]
+      system_prompt: Help.
+      prompt: hi
+      output: str
+  output: ${writer.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+        required: [topic]
+      results:
+      - return: found:a
+      - return: found:b
+  models:
+    writer:
+      agent:
+      - chunks:
+        - tool_call:
+            index: 0
+            id: call-a
+            name: lookup
+            arguments: '{"topic": '
+        - tool_call:
+            index: 0
+            arguments: '"a"}'
+        - tool_call:
+            index: 1
+            id: call-b
+            name: lookup
+            arguments: '{"topic": '
+        - tool_call:
+            index: 1
+            arguments: '"b"}'
+        - finish: tool_calls
+      - chunks:
+        - text: both
+        - text: ' fine'
+        - finish: stop
+expect:
+  output:
+    status: succeeded
+    output: both fine
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        writer:
+          _connection:
+            endpoint: null
+            method: api_key
+            source: environment
+          model: claude-test
+          provider: anthropic
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, writer]
+  - - node_succeeded
+    - writer
+    - value: both fine
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: both fine
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: writer
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: claude-test
+      node_id: writer
+      provider: anthropic
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: claude-test
+      node_id: writer
+      provider: anthropic
+      purpose: chat
+  - - ToolCallStarted
+    - arguments:
+        topic: a
+      call_index: 0
+      exchange_id: <id:1>
+      name: lookup
+      node_id: writer
+      tool_call_id: call-a
+  - - ToolCallFinished
+    - call_index: 0
+      exchange_id: <id:1>
+      name: lookup
+      node_id: writer
+      result: found:a
+      tool_call_id: call-a
+  - - ToolCallStarted
+    - arguments:
+        topic: b
+      call_index: 1
+      exchange_id: <id:1>
+      name: lookup
+      node_id: writer
+      tool_call_id: call-b
+  - - ToolCallFinished
+    - call_index: 1
+      exchange_id: <id:1>
+      name: lookup
+      node_id: writer
+      result: found:b
+      tool_call_id: call-b
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: claude-test
+      node_id: writer
+      provider: anthropic
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: claude-test
+      node_id: writer
+      provider: anthropic
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: writer
+      output: both fine
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: both fine
+  - - RunSucceeded
+    - output: both fine
+  stream:
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: writer
+  - chunk: both
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: writer
+  - chunk: ' fine'
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: writer
+  - chunk: ''
+    exchange_id: <id:2>
+    final: true
+    key: text
+    node_id: writer
+  tool_calls:
+    lookup:
+    - args:
+        topic: a
+      attempt: 1
+      call_id: r1/writer/<id:1>/0
+      node: writer
+    - args:
+        topic: b
+      attempt: 1
+      call_id: r1/writer/<id:1>/1
+      node: writer

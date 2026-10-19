@@ -1,0 +1,85 @@
+# From tests/engine/test_blocking_human_input.py::test_prompt_only_returns_host_answer_with_trusted_metadata
+# and tests/engine/test_answer_schema.py::test_literal_enum_carries_values.
+# A HUMAN_INPUT gate typed Literal(...) sends its tags as the answer schema's enum, and its
+# `node_name:` as the title.
+kind: run
+flow: |
+  id: approval
+  name: approval
+  input:
+    plan: !str
+  nodes:
+    approval:
+      kind: human_input
+      node_name: Plan approval
+      input:
+        plan: ${input.plan}
+      prompt: "Approve ${plan}?"
+      output: Literal(approve, revise)
+  output: ${approval.output}
+inputs:
+  plan: release
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  human:
+    approval: [approve]
+expect:
+  output:
+    status: succeeded
+    output: approve
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs:
+        plan: release
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        plan: release
+  - [node_started, approval]
+  - - node_succeeded
+    - approval
+    - value: approve
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: approve
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        plan: release
+  - - NodeStarted
+    - node_id: approval
+  - - NodeSucceeded
+    - node_id: approval
+      output: approve
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: approve
+  - - RunSucceeded
+    - output: approve
+  tool_calls:
+    ask_user:
+    - args:
+        question: Approve release?
+        answer_schema:
+        - name: answer
+          type: str
+          required: true
+          enum: [approve, revise]
+        title: Plan approval
+        node_id: approval
+      call_id: r1/approval
+      attempt: 1
+      node: approval

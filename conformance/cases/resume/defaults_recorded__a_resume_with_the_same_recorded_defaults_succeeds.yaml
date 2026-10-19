@@ -1,0 +1,89 @@
+# From tests/engine/test_defaults_recorded.py::test_resume_with_same_value_succeeds.
+# Also ::test_non_default_value_is_recorded. A run records the defaults that differ from the built-in ones in
+# run_started, and a resume under the same values passes the defaults check. A TOOL stands for the test's CODE.
+# env: YIAN_MAX_TOTAL_NODES is the recorded default under test (the built-in value is 10000).
+# Record 2 is __start__'s node_succeeded (the test's cut): n's node_started is refused.
+kind: resume
+flow: |
+  id: one-tool
+  name: one_tool
+  input:
+    x: !str
+  nodes:
+    n:
+      kind: tool
+      tool_id: lookup
+      input:
+        x: ${input.x}
+  output: ${n.output}
+env:
+  YIAN_MAX_TOTAL_NODES: '5000'
+inputs:
+  x: Ada
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    lookup:
+      parameters:
+        type: object
+        properties:
+          x:
+            type: string
+        required: [x]
+      results:
+      - return: Ada
+  crash_after_record: 2
+expect:
+  output:
+    status: succeeded
+    output: Ada
+  trace:
+  - - run_started
+    - null
+    - defaults:
+        MAX_TOTAL_NODES: 5000
+      learnable: false
+      num_workers: 0
+      inputs:
+        x: Ada
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        x: Ada
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: []
+  - [node_started, n]
+  - - node_succeeded
+    - n
+    - value: Ada
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: Ada
+  events:
+  - [RunResumed]
+  - - NodeStarted
+    - node_id: n
+  - - NodeSucceeded
+    - node_id: n
+      output: Ada
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: Ada
+  - - RunSucceeded
+    - output: Ada
+  tool_calls:
+    lookup:
+    - args:
+        x: Ada
+      call_id: r1/n
+      attempt: 1
+      node: n
+resume: {}

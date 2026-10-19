@@ -1,0 +1,148 @@
+kind: run
+flow: |
+  id: nested-map-binding
+  name: nested_map_binding
+  defs:
+    inner:
+      input:
+        maybe: !Optional(str)
+      nodes:
+        leaf:
+          kind: code
+          input:
+            okay: literal
+            bad: ${input.maybe:?"missing mapped value"}
+          output: str
+          code: ./fixtures/compose_codefns.ts:echo
+      output: ${leaf.output}
+  nodes:
+    invoke:
+      kind: map
+      call: inner
+      over: ${[1]}
+      input:
+        maybe: null
+  output: ${invoke.output}
+python_flow: |
+  id: nested-map-binding
+  name: nested_map_binding
+  defs:
+    inner:
+      input:
+        maybe: !Optional(str)
+      nodes:
+        leaf:
+          kind: code
+          input:
+            okay: literal
+            bad: ${input.maybe:?"missing mapped value"}
+          output: str
+          code: tests.engine._compose_codefns:echo
+      output: ${leaf.output}
+  nodes:
+    invoke:
+      kind: map
+      call: inner
+      over: ${[1]}
+      input:
+        maybe: null
+  output: ${invoke.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.evaluate
+      frames:
+      - label: flow.yaml
+        range: [17, 3, 17, 9]
+      - label: flow.yaml
+        range: [12, 16, 12, 54]
+      message: missing mapped value
+      node: invoke#0/leaf
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, invoke]
+  - - node_expanded
+    - invoke
+    - prune_ids: []
+      seed:
+      - maybe: null
+  - [node_started, invoke/__start__]
+  - - node_succeeded
+    - invoke/__start__
+    - value: {}
+  - [node_started, invoke#0/__start__]
+  - - node_succeeded
+    - invoke#0/__start__
+    - value:
+        maybe: null
+  - [node_started, invoke#0/leaf]
+  - - node_failed
+    - invoke#0/leaf
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [17, 3, 17, 9]
+        - label: flow.yaml
+          range: [12, 16, 12, 54]
+        message: missing mapped value
+        node: invoke#0/leaf
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: invoke
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - maybe: null
+      node_id: invoke
+  - - NodeStarted
+    - node_id: invoke/__start__
+  - - NodeSucceeded
+    - node_id: invoke/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: invoke#0/__start__
+  - - NodeSucceeded
+    - node_id: invoke#0/__start__
+      output:
+        maybe: null
+  - - NodeStarted
+    - node_id: invoke#0/leaf
+  - - NodeFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [17, 3, 17, 9]
+        - label: flow.yaml
+          range: [12, 16, 12, 54]
+        message: missing mapped value
+        node: invoke#0/leaf
+  - - RunFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [17, 3, 17, 9]
+        - label: flow.yaml
+          range: [12, 16, 12, 54]
+        message: missing mapped value
+        node: invoke#0/leaf

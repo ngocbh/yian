@@ -1,0 +1,188 @@
+# env: YIAN_DEFAULT_MODEL/PROVIDER kept: the flow names no model, and without them the run fails before its model call.
+kind: run
+rules: [llm]
+flow: |2
+
+  id: guess
+  name: guess
+  nodes:
+    a:
+      kind: agent
+      prompt: say anything
+      output: Any
+  output: ${a.output}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+run:
+  num_workers: 0
+host:
+  models:
+    a:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"value": {"a": [1, null]}}'
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: say anything
+          schema:
+            properties:
+              value:
+                anyOf:
+                - type: boolean
+                - type: integer
+                - type: number
+                - type: string
+                - additionalProperties: true
+                  type: object
+                - items: {}
+                  type: array
+            required: [value]
+            type: object
+expect:
+  output:
+    status: succeeded
+    output:
+      a: [1, null]
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        a:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, a]
+  - - node_succeeded
+    - a
+    - value:
+        a: [1, null]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        a: [1, null]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: a
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: a
+      provider: openai
+      purpose: structured_native
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: a
+      provider: openai
+      purpose: structured_native
+  - - NodeSucceeded
+    - node_id: a
+      output:
+        a: [1, null]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        a: [1, null]
+  - - RunSucceeded
+    - output:
+        a: [1, null]
+python_expect:
+  output:
+    status: succeeded
+    output:
+      a: [1, null]
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        a:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, a]
+  - - node_succeeded
+    - a
+    - value:
+        a: [1, null]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        a: [1, null]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: a
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: a
+      provider: openai
+      purpose: structured_native
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: a
+      provider: openai
+      purpose: structured_native
+  - - NodeSucceeded
+    - node_id: a
+      output:
+        a: [1, null]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        a: [1, null]
+  - - RunSucceeded
+    - output:
+        a: [1, null]

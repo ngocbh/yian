@@ -1,0 +1,95 @@
+kind: run
+flow: |2
+
+  id: na
+  name: na
+  input:
+    v: !int
+  nodes:
+    x:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:double
+      input:
+        n: ${input.v}
+      output: int
+      asserts:
+        - "n >= 0"
+  output: ${x.output}
+python_flow: |2
+
+  id: na
+  name: na
+  input:
+    v: !int
+  nodes:
+    x:
+      kind: code
+      code: tests.engine._compose_codefns:double
+      input:
+        n: ${input.v}
+      output: int
+      asserts:
+        - "n >= 0"
+  output: ${x.output}
+inputs:
+  v: -1
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: assertion.failed
+      frames:
+      - label: flow.yaml
+        range: [14, 9, 14, 17]
+      message: 'node ''x'' pre-assert failed: n >= 0'
+      node: x
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        v: -1
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        v: -1
+  - [node_started, x]
+  - - node_failed
+    - x
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [14, 9, 14, 17]
+        message: 'node ''x'' pre-assert failed: n >= 0'
+        node: x
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        v: -1
+  - - NodeStarted
+    - node_id: x
+  - - NodeFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [14, 9, 14, 17]
+        message: 'node ''x'' pre-assert failed: n >= 0'
+        node: x
+  - - RunFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [14, 9, 14, 17]
+        message: 'node ''x'' pre-assert failed: n >= 0'
+        node: x

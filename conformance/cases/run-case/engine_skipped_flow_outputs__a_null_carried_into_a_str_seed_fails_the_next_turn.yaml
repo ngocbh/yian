@@ -1,0 +1,392 @@
+kind: run
+rules: [messages]
+flow: |
+  id: f
+  name: f
+  input:
+    flip: !bool
+  nodes:
+    repeat:
+      kind: loop
+      times: 2
+      input:
+        n: 0
+        note: !str "start"
+        flip: ${input.flip}
+      nodes:
+          gate:
+            kind: case
+            cases:
+              - when: ${input.flip}
+                then: mk
+          mk:
+            kind: code
+            output: str
+            code: |
+              return "made"
+          bump:
+            kind: code
+            input:
+              n: ${input.n}
+            output: int
+            code: |
+              return inputs["n"] + 1n
+      output:
+        n: ${bump.output}
+        note: ${mk.output}
+  output: ${repeat.output}
+python_flow: |
+  id: f
+  name: f
+  input:
+    flip: !bool
+  nodes:
+    repeat:
+      kind: loop
+      times: 2
+      input:
+        n: 0
+        note: !str "start"
+        flip: ${input.flip}
+      nodes:
+          gate:
+            kind: case
+            cases:
+              - when: ${input.flip}
+                then: mk
+          mk:
+            kind: code
+            output: str
+            code: |
+              return "made"
+          bump:
+            kind: code
+            input:
+              n: ${input.n}
+            output: int
+            code: |
+              return inputs["n"] + 1
+      output:
+        n: ${bump.output}
+        note: ${mk.output}
+  output: ${repeat.output}
+inputs:
+  flip: false
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 9]
+      message: 'input ''note'': null does not match declared type str'
+      node: repeat#1/__start__
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        flip: false
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        flip: false
+  - [node_started, repeat]
+  - - node_expanded
+    - repeat
+    - prune_ids: []
+      seed:
+      - flip: false
+        n: 0
+        note: start
+      - 0
+  - [node_started, repeat#0/__start__]
+  - - node_succeeded
+    - repeat#0/__start__
+    - value:
+        flip: false
+        n: 0
+        note: start
+  - [node_started, repeat#0/bump]
+  - - node_succeeded
+    - repeat#0/bump
+    - value: 1
+  - [node_started, repeat#0/gate]
+  - - node_routed
+    - repeat#0/gate
+    - handle: '#else'
+  - [node_started, repeat#0/__end__]
+  - - node_succeeded
+    - repeat#0/__end__
+    - value:
+        n: 1
+        note: null
+  - [node_started, repeat~1]
+  - - node_expanded
+    - repeat~1
+    - prune_ids:
+      - repeat#0/__end__
+      - repeat#0/__start__
+      - repeat#0/bump
+      - repeat#0/gate
+      - repeat#0/mk
+      - repeat~1
+      seed:
+      - flip: false
+        n: 1
+        note: null
+      - 1
+  - [node_started, repeat#1/__start__]
+  - - node_failed
+    - repeat#1/__start__
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [6, 3, 6, 9]
+        message: 'input ''note'': null does not match declared type str'
+        node: repeat#1/__start__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        flip: false
+  - - NodeStarted
+    - node_id: repeat
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - flip: false
+          n: 0
+          note: start
+        - 0
+      node_id: repeat
+  - - NodeStarted
+    - node_id: repeat#0/__start__
+  - - NodeSucceeded
+    - node_id: repeat#0/__start__
+      output:
+        flip: false
+        n: 0
+        note: start
+  - - NodeStarted
+    - node_id: repeat#0/bump
+  - - NodeSucceeded
+    - node_id: repeat#0/bump
+      output: 1
+  - - NodeStarted
+    - node_id: repeat#0/gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: repeat#0/gate
+  - - NodeSkipped
+    - node_id: repeat#0/mk
+  - - NodeStarted
+    - node_id: repeat#0/__end__
+  - - NodeSucceeded
+    - node_id: repeat#0/__end__
+      output:
+        n: 1
+        note: null
+  - - NodeStarted
+    - node_id: repeat~1
+  - - NodeExpanded
+    - grow:
+        prune:
+        - repeat#0/__end__
+        - repeat#0/__start__
+        - repeat#0/bump
+        - repeat#0/gate
+        - repeat#0/mk
+        - repeat~1
+        seed:
+        - flip: false
+          n: 1
+          note: null
+        - 1
+      node_id: repeat~1
+  - - NodeStarted
+    - node_id: repeat#1/__start__
+  - - NodeFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [6, 3, 6, 9]
+        message: 'input ''note'': null does not match declared type str'
+        node: repeat#1/__start__
+  - - RunFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [6, 3, 6, 9]
+        message: 'input ''note'': null does not match declared type str'
+        node: repeat#1/__start__
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 9]
+      message: 'input ''note'': None does not match declared type str'
+      node: repeat#1/__start__
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        flip: false
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        flip: false
+  - [node_started, repeat]
+  - - node_expanded
+    - repeat
+    - prune_ids: []
+      seed:
+      - flip: false
+        n: 0
+        note: start
+      - 0
+  - [node_started, repeat#0/__start__]
+  - - node_succeeded
+    - repeat#0/__start__
+    - value:
+        flip: false
+        n: 0
+        note: start
+  - [node_started, repeat#0/bump]
+  - - node_succeeded
+    - repeat#0/bump
+    - value: 1
+  - [node_started, repeat#0/gate]
+  - - node_routed
+    - repeat#0/gate
+    - handle: '#else'
+  - [node_started, repeat#0/__end__]
+  - - node_succeeded
+    - repeat#0/__end__
+    - value:
+        n: 1
+        note: null
+  - [node_started, repeat~1]
+  - - node_expanded
+    - repeat~1
+    - prune_ids:
+      - repeat#0/__end__
+      - repeat#0/__start__
+      - repeat#0/bump
+      - repeat#0/gate
+      - repeat#0/mk
+      - repeat~1
+      seed:
+      - flip: false
+        n: 1
+        note: null
+      - 1
+  - [node_started, repeat#1/__start__]
+  - - node_failed
+    - repeat#1/__start__
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [6, 3, 6, 9]
+        message: 'input ''note'': None does not match declared type str'
+        node: repeat#1/__start__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        flip: false
+  - - NodeStarted
+    - node_id: repeat
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - flip: false
+          n: 0
+          note: start
+        - 0
+      node_id: repeat
+  - - NodeStarted
+    - node_id: repeat#0/__start__
+  - - NodeSucceeded
+    - node_id: repeat#0/__start__
+      output:
+        flip: false
+        n: 0
+        note: start
+  - - NodeStarted
+    - node_id: repeat#0/bump
+  - - NodeSucceeded
+    - node_id: repeat#0/bump
+      output: 1
+  - - NodeStarted
+    - node_id: repeat#0/gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: repeat#0/gate
+  - - NodeSkipped
+    - node_id: repeat#0/mk
+  - - NodeStarted
+    - node_id: repeat#0/__end__
+  - - NodeSucceeded
+    - node_id: repeat#0/__end__
+      output:
+        n: 1
+        note: null
+  - - NodeStarted
+    - node_id: repeat~1
+  - - NodeExpanded
+    - grow:
+        prune:
+        - repeat#0/__end__
+        - repeat#0/__start__
+        - repeat#0/bump
+        - repeat#0/gate
+        - repeat#0/mk
+        - repeat~1
+        seed:
+        - flip: false
+          n: 1
+          note: null
+        - 1
+      node_id: repeat~1
+  - - NodeStarted
+    - node_id: repeat#1/__start__
+  - - NodeFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [6, 3, 6, 9]
+        message: 'input ''note'': None does not match declared type str'
+        node: repeat#1/__start__
+  - - RunFailed
+    - failure:
+        code: contract.input
+        frames:
+        - label: flow.yaml
+          range: [6, 3, 6, 9]
+        message: 'input ''note'': None does not match declared type str'
+        node: repeat#1/__start__

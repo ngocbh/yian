@@ -1,0 +1,201 @@
+kind: run
+flow: |
+  id: nested-assert-parent
+  name: nested_assert_parent
+  defs:
+    deep:
+      input:
+        v: !int
+      nodes:
+        x:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:double
+          input:
+            n: ${input.v}
+          output: int
+      output: ${x.output}
+    middle:
+      input:
+        v: !int
+      nodes:
+        via:
+          kind: call
+          call: deep
+          input:
+            v: ${input.v}
+          asserts:
+            - output < 100
+      output: ${via.output}
+  nodes:
+    outer:
+      kind: call
+      call: middle
+      input:
+        v: 60
+  output: ${outer.output}
+python_flow: |
+  id: nested-assert-parent
+  name: nested_assert_parent
+  defs:
+    deep:
+      input:
+        v: !int
+      nodes:
+        x:
+          kind: code
+          code: tests.engine._compose_codefns:double
+          input:
+            n: ${input.v}
+          output: int
+      output: ${x.output}
+    middle:
+      input:
+        v: !int
+      nodes:
+        via:
+          kind: call
+          call: deep
+          input:
+            v: ${input.v}
+          asserts:
+            - output < 100
+      output: ${via.output}
+  nodes:
+    outer:
+      kind: call
+      call: middle
+      input:
+        v: 60
+  output: ${outer.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: assertion.failed
+      frames:
+      - label: flow.yaml
+        range: [28, 3, 28, 8]
+      - label: flow.yaml
+        range: [19, 7, 19, 10]
+      - label: flow.yaml
+        range: [25, 13, 25, 25]
+      message: 'node ''outer/via/__end__'' post-assert failed: output < 100'
+      node: outer/via/__end__
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, outer]
+  - - node_expanded
+    - outer
+    - prune_ids: []
+      seed:
+        v: 60
+  - [node_started, outer/__start__]
+  - - node_succeeded
+    - outer/__start__
+    - value:
+        v: 60
+  - [node_started, outer/via]
+  - - node_expanded
+    - outer/via
+    - prune_ids: []
+      seed:
+        v: 60
+  - [node_started, outer/via/__start__]
+  - - node_succeeded
+    - outer/via/__start__
+    - value:
+        v: 60
+  - [node_started, outer/via/x]
+  - - node_succeeded
+    - outer/via/x
+    - value: 120
+  - [node_started, outer/via/__end__]
+  - - node_failed
+    - outer/via/__end__
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [28, 3, 28, 8]
+        - label: flow.yaml
+          range: [19, 7, 19, 10]
+        - label: flow.yaml
+          range: [25, 13, 25, 25]
+        message: 'node ''outer/via/__end__'' post-assert failed: output < 100'
+        node: outer/via/__end__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: outer
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          v: 60
+      node_id: outer
+  - - NodeStarted
+    - node_id: outer/__start__
+  - - NodeSucceeded
+    - node_id: outer/__start__
+      output:
+        v: 60
+  - - NodeStarted
+    - node_id: outer/via
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          v: 60
+      node_id: outer/via
+  - - NodeStarted
+    - node_id: outer/via/__start__
+  - - NodeSucceeded
+    - node_id: outer/via/__start__
+      output:
+        v: 60
+  - - NodeStarted
+    - node_id: outer/via/x
+  - - NodeSucceeded
+    - node_id: outer/via/x
+      output: 120
+  - - NodeStarted
+    - node_id: outer/via/__end__
+  - - NodeFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [28, 3, 28, 8]
+        - label: flow.yaml
+          range: [19, 7, 19, 10]
+        - label: flow.yaml
+          range: [25, 13, 25, 25]
+        message: 'node ''outer/via/__end__'' post-assert failed: output < 100'
+        node: outer/via/__end__
+  - - RunFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [28, 3, 28, 8]
+        - label: flow.yaml
+          range: [19, 7, 19, 10]
+        - label: flow.yaml
+          range: [25, 13, 25, 25]
+        message: 'node ''outer/via/__end__'' post-assert failed: output < 100'
+        node: outer/via/__end__

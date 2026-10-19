@@ -1,0 +1,758 @@
+kind: run
+flow: |2
+
+  id: map-over-loop-over-call
+  name: map-over-loop-over-call
+  input:
+    xs: !list(int)
+  nodes:
+    each:
+      kind: map
+      over: ${input.xs}
+      input:
+        x: ${item}
+      nodes:
+        repeat:
+          kind: loop
+          times: 3
+          input:
+            n: ${input.x}
+          nodes:
+            inner:
+              kind: call
+              input:
+                n: ${input.n}
+              nodes:
+                a:
+                  kind: code
+                  input: {n: "${input.n}"}
+                  output: int
+                  code: |
+                    return inputs["n"] + 1n
+              output: ${a.output}
+          output:
+            n: ${inner.output}
+      output: ${repeat.output}
+  output: ${each.output}
+python_flow: |2
+
+  id: map-over-loop-over-call
+  name: map-over-loop-over-call
+  input:
+    xs: !list(int)
+  nodes:
+    each:
+      kind: map
+      over: ${input.xs}
+      input:
+        x: ${item}
+      nodes:
+        repeat:
+          kind: loop
+          times: 3
+          input:
+            n: ${input.x}
+          nodes:
+            inner:
+              kind: call
+              input:
+                n: ${input.n}
+              nodes:
+                a:
+                  kind: code
+                  input: {n: "${input.n}"}
+                  output: int
+                  code: |
+                    return inputs["n"] + 1
+              output: ${a.output}
+          output:
+            n: ${inner.output}
+      output: ${repeat.output}
+  output: ${each.output}
+inputs:
+  xs: [1, 2]
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+    - n: 4
+    - n: 5
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        xs: [1, 2]
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        xs: [1, 2]
+  - [node_started, each]
+  - - node_expanded
+    - each
+    - prune_ids: []
+      seed:
+      - x: 1
+      - x: 2
+  - [node_started, each/__start__]
+  - - node_succeeded
+    - each/__start__
+    - value: {}
+  - [node_started, each#0/__start__]
+  - - node_succeeded
+    - each#0/__start__
+    - value:
+        x: 1
+  - [node_started, each#1/__start__]
+  - - node_succeeded
+    - each#1/__start__
+    - value:
+        x: 2
+  - [node_started, each#0/repeat]
+  - - node_expanded
+    - each#0/repeat
+    - prune_ids: []
+      seed:
+      - n: 1
+      - 0
+  - [node_started, each#1/repeat]
+  - - node_expanded
+    - each#1/repeat
+    - prune_ids: []
+      seed:
+      - n: 2
+      - 0
+  - [node_started, each#0/repeat#0/__start__]
+  - - node_succeeded
+    - each#0/repeat#0/__start__
+    - value:
+        n: 1
+  - [node_started, each#1/repeat#0/__start__]
+  - - node_succeeded
+    - each#1/repeat#0/__start__
+    - value:
+        n: 2
+  - [node_started, each#0/repeat#0/inner]
+  - - node_expanded
+    - each#0/repeat#0/inner
+    - prune_ids: []
+      seed:
+        n: 1
+  - [node_started, each#1/repeat#0/inner]
+  - - node_expanded
+    - each#1/repeat#0/inner
+    - prune_ids: []
+      seed:
+        n: 2
+  - [node_started, each#0/repeat#0/inner/__start__]
+  - - node_succeeded
+    - each#0/repeat#0/inner/__start__
+    - value:
+        n: 1
+  - [node_started, each#1/repeat#0/inner/__start__]
+  - - node_succeeded
+    - each#1/repeat#0/inner/__start__
+    - value:
+        n: 2
+  - [node_started, each#0/repeat#0/inner/a]
+  - - node_succeeded
+    - each#0/repeat#0/inner/a
+    - value: 2
+  - [node_started, each#1/repeat#0/inner/a]
+  - - node_succeeded
+    - each#1/repeat#0/inner/a
+    - value: 3
+  - [node_started, each#0/repeat#0/inner/__end__]
+  - - node_succeeded
+    - each#0/repeat#0/inner/__end__
+    - commit_target: each#0/repeat#0/inner
+      value: 2
+  - [node_started, each#1/repeat#0/inner/__end__]
+  - - node_succeeded
+    - each#1/repeat#0/inner/__end__
+    - commit_target: each#1/repeat#0/inner
+      value: 3
+  - [node_started, each#0/repeat#0/__end__]
+  - - node_succeeded
+    - each#0/repeat#0/__end__
+    - value:
+        n: 2
+  - [node_started, each#1/repeat#0/__end__]
+  - - node_succeeded
+    - each#1/repeat#0/__end__
+    - value:
+        n: 3
+  - [node_started, each#0/repeat~1]
+  - - node_expanded
+    - each#0/repeat~1
+    - prune_ids:
+      - each#0/repeat#0/__end__
+      - each#0/repeat#0/__start__
+      - each#0/repeat#0/inner
+      - each#0/repeat~1
+      seed:
+      - n: 2
+      - 1
+  - [node_started, each#1/repeat~1]
+  - - node_expanded
+    - each#1/repeat~1
+    - prune_ids:
+      - each#1/repeat#0/__end__
+      - each#1/repeat#0/__start__
+      - each#1/repeat#0/inner
+      - each#1/repeat~1
+      seed:
+      - n: 3
+      - 1
+  - [node_started, each#0/repeat#1/__start__]
+  - - node_succeeded
+    - each#0/repeat#1/__start__
+    - value:
+        n: 2
+  - [node_started, each#1/repeat#1/__start__]
+  - - node_succeeded
+    - each#1/repeat#1/__start__
+    - value:
+        n: 3
+  - [node_started, each#0/repeat#1/inner]
+  - - node_expanded
+    - each#0/repeat#1/inner
+    - prune_ids: []
+      seed:
+        n: 2
+  - [node_started, each#1/repeat#1/inner]
+  - - node_expanded
+    - each#1/repeat#1/inner
+    - prune_ids: []
+      seed:
+        n: 3
+  - [node_started, each#0/repeat#1/inner/__start__]
+  - - node_succeeded
+    - each#0/repeat#1/inner/__start__
+    - value:
+        n: 2
+  - [node_started, each#1/repeat#1/inner/__start__]
+  - - node_succeeded
+    - each#1/repeat#1/inner/__start__
+    - value:
+        n: 3
+  - [node_started, each#0/repeat#1/inner/a]
+  - - node_succeeded
+    - each#0/repeat#1/inner/a
+    - value: 3
+  - [node_started, each#1/repeat#1/inner/a]
+  - - node_succeeded
+    - each#1/repeat#1/inner/a
+    - value: 4
+  - [node_started, each#0/repeat#1/inner/__end__]
+  - - node_succeeded
+    - each#0/repeat#1/inner/__end__
+    - commit_target: each#0/repeat#1/inner
+      value: 3
+  - [node_started, each#1/repeat#1/inner/__end__]
+  - - node_succeeded
+    - each#1/repeat#1/inner/__end__
+    - commit_target: each#1/repeat#1/inner
+      value: 4
+  - [node_started, each#0/repeat#1/__end__]
+  - - node_succeeded
+    - each#0/repeat#1/__end__
+    - value:
+        n: 3
+  - [node_started, each#1/repeat#1/__end__]
+  - - node_succeeded
+    - each#1/repeat#1/__end__
+    - value:
+        n: 4
+  - [node_started, each#0/repeat~2]
+  - - node_expanded
+    - each#0/repeat~2
+    - prune_ids:
+      - each#0/repeat#1/__end__
+      - each#0/repeat#1/__start__
+      - each#0/repeat#1/inner
+      - each#0/repeat~2
+      seed:
+      - n: 3
+      - 2
+  - [node_started, each#1/repeat~2]
+  - - node_expanded
+    - each#1/repeat~2
+    - prune_ids:
+      - each#1/repeat#1/__end__
+      - each#1/repeat#1/__start__
+      - each#1/repeat#1/inner
+      - each#1/repeat~2
+      seed:
+      - n: 4
+      - 2
+  - [node_started, each#0/repeat#2/__start__]
+  - - node_succeeded
+    - each#0/repeat#2/__start__
+    - value:
+        n: 3
+  - [node_started, each#1/repeat#2/__start__]
+  - - node_succeeded
+    - each#1/repeat#2/__start__
+    - value:
+        n: 4
+  - [node_started, each#0/repeat#2/inner]
+  - - node_expanded
+    - each#0/repeat#2/inner
+    - prune_ids: []
+      seed:
+        n: 3
+  - [node_started, each#1/repeat#2/inner]
+  - - node_expanded
+    - each#1/repeat#2/inner
+    - prune_ids: []
+      seed:
+        n: 4
+  - [node_started, each#0/repeat#2/inner/__start__]
+  - - node_succeeded
+    - each#0/repeat#2/inner/__start__
+    - value:
+        n: 3
+  - [node_started, each#1/repeat#2/inner/__start__]
+  - - node_succeeded
+    - each#1/repeat#2/inner/__start__
+    - value:
+        n: 4
+  - [node_started, each#0/repeat#2/inner/a]
+  - - node_succeeded
+    - each#0/repeat#2/inner/a
+    - value: 4
+  - [node_started, each#1/repeat#2/inner/a]
+  - - node_succeeded
+    - each#1/repeat#2/inner/a
+    - value: 5
+  - [node_started, each#0/repeat#2/inner/__end__]
+  - - node_succeeded
+    - each#0/repeat#2/inner/__end__
+    - commit_target: each#0/repeat#2/inner
+      value: 4
+  - [node_started, each#1/repeat#2/inner/__end__]
+  - - node_succeeded
+    - each#1/repeat#2/inner/__end__
+    - commit_target: each#1/repeat#2/inner
+      value: 5
+  - [node_started, each#0/repeat#2/__end__]
+  - - node_succeeded
+    - each#0/repeat#2/__end__
+    - value:
+        n: 4
+  - [node_started, each#1/repeat#2/__end__]
+  - - node_succeeded
+    - each#1/repeat#2/__end__
+    - value:
+        n: 5
+  - [node_started, each#0/repeat~3]
+  - - node_succeeded
+    - each#0/repeat~3
+    - commit_target: each#0/repeat
+      value:
+        n: 4
+  - [node_started, each#1/repeat~3]
+  - - node_succeeded
+    - each#1/repeat~3
+    - commit_target: each#1/repeat
+      value:
+        n: 5
+  - [node_started, each#0/__end__]
+  - - node_succeeded
+    - each#0/__end__
+    - value:
+        n: 4
+  - [node_started, each#1/__end__]
+  - - node_succeeded
+    - each#1/__end__
+    - value:
+        n: 5
+  - [node_started, each/__end__]
+  - - node_succeeded
+    - each/__end__
+    - commit_target: each
+      value:
+      - n: 4
+      - n: 5
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+      - n: 4
+      - n: 5
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        xs: [1, 2]
+  - - NodeStarted
+    - node_id: each
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - x: 1
+        - x: 2
+      node_id: each
+  - - NodeStarted
+    - node_id: each/__start__
+  - - NodeSucceeded
+    - node_id: each/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: each#0/__start__
+  - - NodeSucceeded
+    - node_id: each#0/__start__
+      output:
+        x: 1
+  - - NodeStarted
+    - node_id: each#1/__start__
+  - - NodeSucceeded
+    - node_id: each#1/__start__
+      output:
+        x: 2
+  - - NodeStarted
+    - node_id: each#0/repeat
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: 1
+        - 0
+      node_id: each#0/repeat
+  - - NodeStarted
+    - node_id: each#1/repeat
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: 2
+        - 0
+      node_id: each#1/repeat
+  - - NodeStarted
+    - node_id: each#0/repeat#0/__start__
+  - - NodeSucceeded
+    - node_id: each#0/repeat#0/__start__
+      output:
+        n: 1
+  - - NodeStarted
+    - node_id: each#1/repeat#0/__start__
+  - - NodeSucceeded
+    - node_id: each#1/repeat#0/__start__
+      output:
+        n: 2
+  - - NodeStarted
+    - node_id: each#0/repeat#0/inner
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          n: 1
+      node_id: each#0/repeat#0/inner
+  - - NodeStarted
+    - node_id: each#1/repeat#0/inner
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          n: 2
+      node_id: each#1/repeat#0/inner
+  - - NodeStarted
+    - node_id: each#0/repeat#0/inner/__start__
+  - - NodeSucceeded
+    - node_id: each#0/repeat#0/inner/__start__
+      output:
+        n: 1
+  - - NodeStarted
+    - node_id: each#1/repeat#0/inner/__start__
+  - - NodeSucceeded
+    - node_id: each#1/repeat#0/inner/__start__
+      output:
+        n: 2
+  - - NodeStarted
+    - node_id: each#0/repeat#0/inner/a
+  - - NodeSucceeded
+    - node_id: each#0/repeat#0/inner/a
+      output: 2
+  - - NodeStarted
+    - node_id: each#1/repeat#0/inner/a
+  - - NodeSucceeded
+    - node_id: each#1/repeat#0/inner/a
+      output: 3
+  - - NodeStarted
+    - node_id: each#0/repeat#0/inner/__end__
+  - - NodeSucceeded
+    - commit_as: each#0/repeat#0/inner
+      node_id: each#0/repeat#0/inner/__end__
+      output: 2
+  - - NodeStarted
+    - node_id: each#1/repeat#0/inner/__end__
+  - - NodeSucceeded
+    - commit_as: each#1/repeat#0/inner
+      node_id: each#1/repeat#0/inner/__end__
+      output: 3
+  - - NodeStarted
+    - node_id: each#0/repeat#0/__end__
+  - - NodeSucceeded
+    - node_id: each#0/repeat#0/__end__
+      output:
+        n: 2
+  - - NodeStarted
+    - node_id: each#1/repeat#0/__end__
+  - - NodeSucceeded
+    - node_id: each#1/repeat#0/__end__
+      output:
+        n: 3
+  - - NodeStarted
+    - node_id: each#0/repeat~1
+  - - NodeExpanded
+    - grow:
+        prune:
+        - each#0/repeat#0/__end__
+        - each#0/repeat#0/__start__
+        - each#0/repeat#0/inner
+        - each#0/repeat~1
+        seed:
+        - n: 2
+        - 1
+      node_id: each#0/repeat~1
+  - - NodeStarted
+    - node_id: each#1/repeat~1
+  - - NodeExpanded
+    - grow:
+        prune:
+        - each#1/repeat#0/__end__
+        - each#1/repeat#0/__start__
+        - each#1/repeat#0/inner
+        - each#1/repeat~1
+        seed:
+        - n: 3
+        - 1
+      node_id: each#1/repeat~1
+  - - NodeStarted
+    - node_id: each#0/repeat#1/__start__
+  - - NodeSucceeded
+    - node_id: each#0/repeat#1/__start__
+      output:
+        n: 2
+  - - NodeStarted
+    - node_id: each#1/repeat#1/__start__
+  - - NodeSucceeded
+    - node_id: each#1/repeat#1/__start__
+      output:
+        n: 3
+  - - NodeStarted
+    - node_id: each#0/repeat#1/inner
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          n: 2
+      node_id: each#0/repeat#1/inner
+  - - NodeStarted
+    - node_id: each#1/repeat#1/inner
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          n: 3
+      node_id: each#1/repeat#1/inner
+  - - NodeStarted
+    - node_id: each#0/repeat#1/inner/__start__
+  - - NodeSucceeded
+    - node_id: each#0/repeat#1/inner/__start__
+      output:
+        n: 2
+  - - NodeStarted
+    - node_id: each#1/repeat#1/inner/__start__
+  - - NodeSucceeded
+    - node_id: each#1/repeat#1/inner/__start__
+      output:
+        n: 3
+  - - NodeStarted
+    - node_id: each#0/repeat#1/inner/a
+  - - NodeSucceeded
+    - node_id: each#0/repeat#1/inner/a
+      output: 3
+  - - NodeStarted
+    - node_id: each#1/repeat#1/inner/a
+  - - NodeSucceeded
+    - node_id: each#1/repeat#1/inner/a
+      output: 4
+  - - NodeStarted
+    - node_id: each#0/repeat#1/inner/__end__
+  - - NodeSucceeded
+    - commit_as: each#0/repeat#1/inner
+      node_id: each#0/repeat#1/inner/__end__
+      output: 3
+  - - NodeStarted
+    - node_id: each#1/repeat#1/inner/__end__
+  - - NodeSucceeded
+    - commit_as: each#1/repeat#1/inner
+      node_id: each#1/repeat#1/inner/__end__
+      output: 4
+  - - NodeStarted
+    - node_id: each#0/repeat#1/__end__
+  - - NodeSucceeded
+    - node_id: each#0/repeat#1/__end__
+      output:
+        n: 3
+  - - NodeStarted
+    - node_id: each#1/repeat#1/__end__
+  - - NodeSucceeded
+    - node_id: each#1/repeat#1/__end__
+      output:
+        n: 4
+  - - NodeStarted
+    - node_id: each#0/repeat~2
+  - - NodeExpanded
+    - grow:
+        prune:
+        - each#0/repeat#1/__end__
+        - each#0/repeat#1/__start__
+        - each#0/repeat#1/inner
+        - each#0/repeat~2
+        seed:
+        - n: 3
+        - 2
+      node_id: each#0/repeat~2
+  - - NodeStarted
+    - node_id: each#1/repeat~2
+  - - NodeExpanded
+    - grow:
+        prune:
+        - each#1/repeat#1/__end__
+        - each#1/repeat#1/__start__
+        - each#1/repeat#1/inner
+        - each#1/repeat~2
+        seed:
+        - n: 4
+        - 2
+      node_id: each#1/repeat~2
+  - - NodeStarted
+    - node_id: each#0/repeat#2/__start__
+  - - NodeSucceeded
+    - node_id: each#0/repeat#2/__start__
+      output:
+        n: 3
+  - - NodeStarted
+    - node_id: each#1/repeat#2/__start__
+  - - NodeSucceeded
+    - node_id: each#1/repeat#2/__start__
+      output:
+        n: 4
+  - - NodeStarted
+    - node_id: each#0/repeat#2/inner
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          n: 3
+      node_id: each#0/repeat#2/inner
+  - - NodeStarted
+    - node_id: each#1/repeat#2/inner
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          n: 4
+      node_id: each#1/repeat#2/inner
+  - - NodeStarted
+    - node_id: each#0/repeat#2/inner/__start__
+  - - NodeSucceeded
+    - node_id: each#0/repeat#2/inner/__start__
+      output:
+        n: 3
+  - - NodeStarted
+    - node_id: each#1/repeat#2/inner/__start__
+  - - NodeSucceeded
+    - node_id: each#1/repeat#2/inner/__start__
+      output:
+        n: 4
+  - - NodeStarted
+    - node_id: each#0/repeat#2/inner/a
+  - - NodeSucceeded
+    - node_id: each#0/repeat#2/inner/a
+      output: 4
+  - - NodeStarted
+    - node_id: each#1/repeat#2/inner/a
+  - - NodeSucceeded
+    - node_id: each#1/repeat#2/inner/a
+      output: 5
+  - - NodeStarted
+    - node_id: each#0/repeat#2/inner/__end__
+  - - NodeSucceeded
+    - commit_as: each#0/repeat#2/inner
+      node_id: each#0/repeat#2/inner/__end__
+      output: 4
+  - - NodeStarted
+    - node_id: each#1/repeat#2/inner/__end__
+  - - NodeSucceeded
+    - commit_as: each#1/repeat#2/inner
+      node_id: each#1/repeat#2/inner/__end__
+      output: 5
+  - - NodeStarted
+    - node_id: each#0/repeat#2/__end__
+  - - NodeSucceeded
+    - node_id: each#0/repeat#2/__end__
+      output:
+        n: 4
+  - - NodeStarted
+    - node_id: each#1/repeat#2/__end__
+  - - NodeSucceeded
+    - node_id: each#1/repeat#2/__end__
+      output:
+        n: 5
+  - - NodeStarted
+    - node_id: each#0/repeat~3
+  - - NodeSucceeded
+    - commit_as: each#0/repeat
+      node_id: each#0/repeat~3
+      output:
+        n: 4
+  - - NodeStarted
+    - node_id: each#1/repeat~3
+  - - NodeSucceeded
+    - commit_as: each#1/repeat
+      node_id: each#1/repeat~3
+      output:
+        n: 5
+  - - NodeStarted
+    - node_id: each#0/__end__
+  - - NodeSucceeded
+    - node_id: each#0/__end__
+      output:
+        n: 4
+  - - NodeStarted
+    - node_id: each#1/__end__
+  - - NodeSucceeded
+    - node_id: each#1/__end__
+      output:
+        n: 5
+  - - NodeStarted
+    - node_id: each/__end__
+  - - NodeSucceeded
+    - commit_as: each
+      node_id: each/__end__
+      output:
+      - n: 4
+      - n: 5
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+      - n: 4
+      - n: 5
+  - - RunSucceeded
+    - output:
+      - n: 4
+      - n: 5

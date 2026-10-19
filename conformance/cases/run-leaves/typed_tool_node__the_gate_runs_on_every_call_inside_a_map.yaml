@@ -1,0 +1,299 @@
+# From tests/engine/test_typed_tool_node.py::test_the_gate_runs_on_every_call_inside_a_map.
+# The TOOL output check runs on each MAP item's call; the second item's return fails at each#1/place.
+kind: run
+rules: [messages]
+flow: |
+  id: batch
+  name: batch
+  nodes:
+    each:
+      kind: map
+      over: [1, 2]
+      input:
+        x: ${item}
+      nodes:
+        place:
+          kind: tool
+          tool_id: place_order
+          input:
+            x: ${input.x}
+          output: int
+      output: ${place.output}
+  output: ${each.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    place_order:
+      parameters:
+        type: object
+        properties:
+          x:
+            type: integer
+        required: [x]
+      results:
+      - return: 1
+      - return: bad
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      message: '"bad" does not match declared type int'
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 7]
+      - label: flow.yaml
+        range: [15, 17, 15, 20]
+      node: each#1/place
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, each]
+  - - node_expanded
+    - each
+    - prune_ids: []
+      seed:
+      - x: 1
+      - x: 2
+  - [node_started, each/__start__]
+  - - node_succeeded
+    - each/__start__
+    - value: {}
+  - [node_started, each#0/__start__]
+  - - node_succeeded
+    - each#0/__start__
+    - value:
+        x: 1
+  - [node_started, each#1/__start__]
+  - - node_succeeded
+    - each#1/__start__
+    - value:
+        x: 2
+  - [node_started, each#0/place]
+  - - node_succeeded
+    - each#0/place
+    - value: 1
+  - [node_started, each#1/place]
+  - - node_failed
+    - each#1/place
+    - failure:
+        code: contract.output
+        message: '"bad" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        - label: flow.yaml
+          range: [15, 17, 15, 20]
+        node: each#1/place
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: each
+  - - NodeExpanded
+    - node_id: each
+      grow:
+        seed:
+        - x: 1
+        - x: 2
+        prune: []
+  - - NodeStarted
+    - node_id: each/__start__
+  - - NodeSucceeded
+    - node_id: each/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: each#0/__start__
+  - - NodeSucceeded
+    - node_id: each#0/__start__
+      output:
+        x: 1
+  - - NodeStarted
+    - node_id: each#1/__start__
+  - - NodeSucceeded
+    - node_id: each#1/__start__
+      output:
+        x: 2
+  - - NodeStarted
+    - node_id: each#0/place
+  - - NodeSucceeded
+    - node_id: each#0/place
+      output: 1
+  - - NodeStarted
+    - node_id: each#1/place
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        message: '"bad" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        - label: flow.yaml
+          range: [15, 17, 15, 20]
+        node: each#1/place
+  - - RunFailed
+    - failure:
+        code: contract.output
+        message: '"bad" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        - label: flow.yaml
+          range: [15, 17, 15, 20]
+        node: each#1/place
+  tool_calls:
+    place_order:
+    - args:
+        x: 1
+      call_id: r1/each#0/place
+      attempt: 1
+      node: each#0/place
+    - args:
+        x: 2
+      call_id: r1/each#1/place
+      attempt: 1
+      node: each#1/place
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      message: '''bad'' does not match declared type int'
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 7]
+      - label: flow.yaml
+        range: [15, 17, 15, 20]
+      node: each#1/place
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, each]
+  - - node_expanded
+    - each
+    - prune_ids: []
+      seed:
+      - x: 1
+      - x: 2
+  - [node_started, each/__start__]
+  - - node_succeeded
+    - each/__start__
+    - value: {}
+  - [node_started, each#0/__start__]
+  - - node_succeeded
+    - each#0/__start__
+    - value:
+        x: 1
+  - [node_started, each#1/__start__]
+  - - node_succeeded
+    - each#1/__start__
+    - value:
+        x: 2
+  - [node_started, each#0/place]
+  - - node_succeeded
+    - each#0/place
+    - value: 1
+  - [node_started, each#1/place]
+  - - node_failed
+    - each#1/place
+    - failure:
+        code: contract.output
+        message: '''bad'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        - label: flow.yaml
+          range: [15, 17, 15, 20]
+        node: each#1/place
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: each
+  - - NodeExpanded
+    - node_id: each
+      grow:
+        seed:
+        - x: 1
+        - x: 2
+        prune: []
+  - - NodeStarted
+    - node_id: each/__start__
+  - - NodeSucceeded
+    - node_id: each/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: each#0/__start__
+  - - NodeSucceeded
+    - node_id: each#0/__start__
+      output:
+        x: 1
+  - - NodeStarted
+    - node_id: each#1/__start__
+  - - NodeSucceeded
+    - node_id: each#1/__start__
+      output:
+        x: 2
+  - - NodeStarted
+    - node_id: each#0/place
+  - - NodeSucceeded
+    - node_id: each#0/place
+      output: 1
+  - - NodeStarted
+    - node_id: each#1/place
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        message: '''bad'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        - label: flow.yaml
+          range: [15, 17, 15, 20]
+        node: each#1/place
+  - - RunFailed
+    - failure:
+        code: contract.output
+        message: '''bad'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        - label: flow.yaml
+          range: [15, 17, 15, 20]
+        node: each#1/place
+  tool_calls:
+    place_order:
+    - args:
+        x: 1
+      call_id: r1/each#0/place
+      attempt: 1
+      node: each#0/place
+    - args:
+        x: 2
+      call_id: r1/each#1/place
+      attempt: 1
+      node: each#1/place

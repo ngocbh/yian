@@ -1,0 +1,415 @@
+# From tests/engine/test_run_recovery_matrix.py::test_every_nested_growth_prefix_replays_to_the_live_state[serial-named].
+# Also ::test_recorded_nested_growth_resumes_with_exact_memory_and_trace (without its memory).
+# A run cut after a nested MAP's expansion inside a CALL resumes the grown nodes from the recorded growth.
+# Record 8 is outer/mapped's node_expanded: an expansion settles its spawner, so nothing is in flight.
+# The LOOP after the cut stays because the source test asserts its output.
+kind: resume
+flow: |
+  id: recovery-matrix-growth
+  name: recovery_matrix_growth
+  defs:
+    echo_one:
+      input:
+        value: !int
+      nodes:
+        echo:
+          kind: code
+          input:
+            x: ${input.value}
+          output: int
+          code: ./fixtures/compose_codefns.ts:echo_x
+      output: ${echo.output}
+    bump_once:
+      input:
+        n: !int
+        exited: !bool
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+            exited: ${input.exited}
+          output:
+            n: int
+            exited: bool
+          code: ./fixtures/compose_codefns.ts:loop_bump
+      output: ${bump.output}
+    composite:
+      nodes:
+        mapped:
+          kind: map
+          call: echo_one
+          over: ${[1, 2]}
+          input:
+            value: ${item}
+        repeated:
+          kind: loop
+          call: bump_once
+          input:
+            n: 0
+            exited: false
+          times: 2
+      output:
+        mapped: ${mapped.output}
+        repeated: ${repeated.output}
+  nodes:
+    outer:
+      kind: call
+      call: composite
+  output: ${outer.output}
+python_flow: |
+  id: recovery-matrix-growth
+  name: recovery_matrix_growth
+  defs:
+    echo_one:
+      input:
+        value: !int
+      nodes:
+        echo:
+          kind: code
+          input:
+            x: ${input.value}
+          output: int
+          code: tests.engine._compose_codefns:echo_x
+      output: ${echo.output}
+    bump_once:
+      input:
+        n: !int
+        exited: !bool
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+            exited: ${input.exited}
+          output:
+            n: int
+            exited: bool
+          code: tests.engine._compose_codefns:loop_bump
+      output: ${bump.output}
+    composite:
+      nodes:
+        mapped:
+          kind: map
+          call: echo_one
+          over: ${[1, 2]}
+          input:
+            value: ${item}
+        repeated:
+          kind: loop
+          call: bump_once
+          input:
+            n: 0
+            exited: false
+          times: 2
+      output:
+        mapped: ${mapped.output}
+        repeated: ${repeated.output}
+  nodes:
+    outer:
+      kind: call
+      call: composite
+  output: ${outer.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  crash_after_record: 8
+expect:
+  output:
+    status: succeeded
+    output:
+      mapped: [1, 2]
+      repeated:
+        exited: false
+        n: 2
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, outer]
+  - - node_expanded
+    - outer
+    - prune_ids: []
+      seed: {}
+  - [node_started, outer/__start__]
+  - - node_succeeded
+    - outer/__start__
+    - value: {}
+  - [node_started, outer/mapped]
+  - - node_expanded
+    - outer/mapped
+    - prune_ids: []
+      seed:
+      - value: 1
+      - value: 2
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: []
+  - [node_started, outer/repeated]
+  - - node_expanded
+    - outer/repeated
+    - prune_ids: []
+      seed:
+      - exited: false
+        n: 0
+      - 0
+  - [node_started, outer/mapped/__start__]
+  - - node_succeeded
+    - outer/mapped/__start__
+    - value: {}
+  - [node_started, outer/repeated#0/__start__]
+  - - node_succeeded
+    - outer/repeated#0/__start__
+    - value:
+        exited: false
+        n: 0
+  - [node_started, outer/mapped#0/__start__]
+  - - node_succeeded
+    - outer/mapped#0/__start__
+    - value:
+        value: 1
+  - [node_started, outer/mapped#1/__start__]
+  - - node_succeeded
+    - outer/mapped#1/__start__
+    - value:
+        value: 2
+  - [node_started, outer/repeated#0/bump]
+  - - node_succeeded
+    - outer/repeated#0/bump
+    - value:
+        exited: false
+        n: 1
+  - [node_started, outer/mapped#0/echo]
+  - - node_succeeded
+    - outer/mapped#0/echo
+    - value: 1
+  - [node_started, outer/mapped#1/echo]
+  - - node_succeeded
+    - outer/mapped#1/echo
+    - value: 2
+  - [node_started, outer/repeated#0/__end__]
+  - - node_succeeded
+    - outer/repeated#0/__end__
+    - value:
+        exited: false
+        n: 1
+  - [node_started, outer/mapped#0/__end__]
+  - - node_succeeded
+    - outer/mapped#0/__end__
+    - value: 1
+  - [node_started, outer/mapped#1/__end__]
+  - - node_succeeded
+    - outer/mapped#1/__end__
+    - value: 2
+  - [node_started, outer/repeated~1]
+  - - node_expanded
+    - outer/repeated~1
+    - prune_ids:
+      - outer/repeated#0/__end__
+      - outer/repeated#0/__start__
+      - outer/repeated#0/bump
+      - outer/repeated~1
+      seed:
+      - exited: false
+        n: 1
+      - 1
+  - [node_started, outer/mapped/__end__]
+  - - node_succeeded
+    - outer/mapped/__end__
+    - commit_target: outer/mapped
+      value: [1, 2]
+  - [node_started, outer/repeated#1/__start__]
+  - - node_succeeded
+    - outer/repeated#1/__start__
+    - value:
+        exited: false
+        n: 1
+  - [node_started, outer/repeated#1/bump]
+  - - node_succeeded
+    - outer/repeated#1/bump
+    - value:
+        exited: false
+        n: 2
+  - [node_started, outer/repeated#1/__end__]
+  - - node_succeeded
+    - outer/repeated#1/__end__
+    - value:
+        exited: false
+        n: 2
+  - [node_started, outer/repeated~2]
+  - - node_succeeded
+    - outer/repeated~2
+    - commit_target: outer/repeated
+      value:
+        exited: false
+        n: 2
+  - [node_started, outer/__end__]
+  - - node_succeeded
+    - outer/__end__
+    - commit_target: outer
+      value:
+        mapped: [1, 2]
+        repeated:
+          exited: false
+          n: 2
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        mapped: [1, 2]
+        repeated:
+          exited: false
+          n: 2
+  events:
+  - [RunResumed]
+  - - NodeStarted
+    - node_id: outer/repeated
+  - - NodeExpanded
+    - node_id: outer/repeated
+      grow:
+        seed:
+        - exited: false
+          n: 0
+        - 0
+        prune: []
+  - - NodeStarted
+    - node_id: outer/mapped/__start__
+  - - NodeSucceeded
+    - node_id: outer/mapped/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: outer/repeated#0/__start__
+  - - NodeSucceeded
+    - node_id: outer/repeated#0/__start__
+      output:
+        exited: false
+        n: 0
+  - - NodeStarted
+    - node_id: outer/mapped#0/__start__
+  - - NodeSucceeded
+    - node_id: outer/mapped#0/__start__
+      output:
+        value: 1
+  - - NodeStarted
+    - node_id: outer/mapped#1/__start__
+  - - NodeSucceeded
+    - node_id: outer/mapped#1/__start__
+      output:
+        value: 2
+  - - NodeStarted
+    - node_id: outer/repeated#0/bump
+  - - NodeSucceeded
+    - node_id: outer/repeated#0/bump
+      output:
+        exited: false
+        n: 1
+  - - NodeStarted
+    - node_id: outer/mapped#0/echo
+  - - NodeSucceeded
+    - node_id: outer/mapped#0/echo
+      output: 1
+  - - NodeStarted
+    - node_id: outer/mapped#1/echo
+  - - NodeSucceeded
+    - node_id: outer/mapped#1/echo
+      output: 2
+  - - NodeStarted
+    - node_id: outer/repeated#0/__end__
+  - - NodeSucceeded
+    - node_id: outer/repeated#0/__end__
+      output:
+        exited: false
+        n: 1
+  - - NodeStarted
+    - node_id: outer/mapped#0/__end__
+  - - NodeSucceeded
+    - node_id: outer/mapped#0/__end__
+      output: 1
+  - - NodeStarted
+    - node_id: outer/mapped#1/__end__
+  - - NodeSucceeded
+    - node_id: outer/mapped#1/__end__
+      output: 2
+  - - NodeStarted
+    - node_id: outer/repeated~1
+  - - NodeExpanded
+    - node_id: outer/repeated~1
+      grow:
+        seed:
+        - exited: false
+          n: 1
+        - 1
+        prune:
+        - outer/repeated#0/__end__
+        - outer/repeated#0/__start__
+        - outer/repeated#0/bump
+        - outer/repeated~1
+  - - NodeStarted
+    - node_id: outer/mapped/__end__
+  - - NodeSucceeded
+    - node_id: outer/mapped/__end__
+      output: [1, 2]
+      commit_as: outer/mapped
+  - - NodeStarted
+    - node_id: outer/repeated#1/__start__
+  - - NodeSucceeded
+    - node_id: outer/repeated#1/__start__
+      output:
+        exited: false
+        n: 1
+  - - NodeStarted
+    - node_id: outer/repeated#1/bump
+  - - NodeSucceeded
+    - node_id: outer/repeated#1/bump
+      output:
+        exited: false
+        n: 2
+  - - NodeStarted
+    - node_id: outer/repeated#1/__end__
+  - - NodeSucceeded
+    - node_id: outer/repeated#1/__end__
+      output:
+        exited: false
+        n: 2
+  - - NodeStarted
+    - node_id: outer/repeated~2
+  - - NodeSucceeded
+    - node_id: outer/repeated~2
+      output:
+        exited: false
+        n: 2
+      commit_as: outer/repeated
+  - - NodeStarted
+    - node_id: outer/__end__
+  - - NodeSucceeded
+    - node_id: outer/__end__
+      output:
+        mapped: [1, 2]
+        repeated:
+          exited: false
+          n: 2
+      commit_as: outer
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        mapped: [1, 2]
+        repeated:
+          exited: false
+          n: 2
+  - - RunSucceeded
+    - output:
+        mapped: [1, 2]
+        repeated:
+          exited: false
+          n: 2
+resume: {}

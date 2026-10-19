@@ -1,0 +1,70 @@
+# From tests/engine/test_typed_tool_node.py::test_ask_user_with_string_options_runs.
+# A TOOL node may call `ask_user` with `question` and `options`; options text that isn't a JSON list
+# is one label.
+kind: run
+flow: |
+  id: asking
+  name: asking
+  nodes:
+    ask:
+      kind: tool
+      tool_id: ask_user
+      input:
+        question: Proceed?
+        options: "yes, no"
+  output: ${ask.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  human:
+    ask: ['answered Proceed?']
+expect:
+  output:
+    status: succeeded
+    output: answered Proceed?
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, ask]
+  - - node_succeeded
+    - ask
+    - value: answered Proceed?
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: answered Proceed?
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: ask
+  - - NodeSucceeded
+    - node_id: ask
+      output: answered Proceed?
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: answered Proceed?
+  - - RunSucceeded
+    - output: answered Proceed?
+  tool_calls:
+    ask_user:
+    - args:
+        question: Proceed?
+        options: ['yes, no']
+      call_id: r1/ask
+      attempt: 1
+      node: ask

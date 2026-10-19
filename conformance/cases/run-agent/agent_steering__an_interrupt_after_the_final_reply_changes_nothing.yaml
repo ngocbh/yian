@@ -1,0 +1,172 @@
+# From tests/engine/test_agent_steering.py::test_interrupt_for_a_finished_node_is_ignored.
+# The test sets `chat`'s interrupt during the next node's model call; a case's points count the
+# acting node's own calls, so here it is set once `chat`'s final reply (a reply with no tool
+# calls) has been taken, after the AGENT's last poll. It changes nothing: `chat` succeeds with
+# "chat done" and the next AGENT's request renders it ("summarize: chat done").
+kind: run
+flow: |
+  id: steer
+  name: steer
+  llm_config: {provider: openai, model: gpt-5.5}
+  nodes:
+    chat:
+      kind: agent
+      steerable: true
+      system_prompt: Help.
+      prompt: Help the user.
+      output: str
+    after:
+      kind: agent
+      input: {draft: "${chat.output}"}
+      system_prompt: Help.
+      prompt: "summarize: ${draft}"
+      output: str
+  output: ${after.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  steering:
+    chat:
+    - after:
+        model_call: 1
+      interrupt: true
+  models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: chat done
+    after:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: summary
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Help.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: 'summarize: chat done'
+expect:
+  output:
+    status: succeeded
+    output: summary
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        after:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+        chat:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, chat]
+  - - node_succeeded
+    - chat
+    - value: chat done
+  - [node_started, after]
+  - - node_succeeded
+    - after
+    - value: summary
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: summary
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: chat
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: chat
+      output: chat done
+  - - NodeStarted
+    - node_id: after
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: gpt-5.5
+      node_id: after
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: gpt-5.5
+      node_id: after
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: after
+      output: summary
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: summary
+  - - RunSucceeded
+    - output: summary
+  stream:
+  - chunk: chat done
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: chat
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: chat
+  - chunk: summary
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: after
+  - chunk: ''
+    exchange_id: <id:2>
+    final: true
+    key: text
+    node_id: after

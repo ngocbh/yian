@@ -1,0 +1,151 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  defs:
+    ask:
+      input: {m: !str }
+      llm_config: {model: '${input.m}'}
+      nodes:
+        chat: {kind: agent, prompt: Go., llm_config: {provider: openai}}
+      output: ${chat.output}
+  nodes:
+    a: {kind: call, call: ask, input: {m: def-model}}
+  output: ${a.output}
+run:
+  num_workers: 0
+host:
+  models:
+    a/chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Go.
+expect:
+  output:
+    status: succeeded
+    output: ok
+  trace:
+  - - run_started
+    - null
+    - call_time_llm:
+        agents:
+          a/chat: {}
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, a]
+  - - node_expanded
+    - a
+    - prune_ids: []
+      seed:
+        m: def-model
+  - [node_started, a/__start__]
+  - - node_succeeded
+    - a/__start__
+    - value:
+        m: def-model
+  - [node_started, a/chat]
+  - - node_step
+    - a/chat
+    - step:
+        effective_llm_config:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: def-model
+          provider: openai
+  - - node_succeeded
+    - a/chat
+    - value: ok
+  - [node_started, a/__end__]
+  - - node_succeeded
+    - a/__end__
+    - commit_target: a
+      value: ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ok
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: a
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          m: def-model
+      node_id: a
+  - - NodeStarted
+    - node_id: a/__start__
+  - - NodeSucceeded
+    - node_id: a/__start__
+      output:
+        m: def-model
+  - - NodeStarted
+    - node_id: a/chat
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: def-model
+      node_id: a/chat
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: def-model
+      node_id: a/chat
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: a/chat
+      output: ok
+  - - NodeStarted
+    - node_id: a/__end__
+  - - NodeSucceeded
+    - commit_as: a
+      node_id: a/__end__
+      output: ok
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: ok
+  - - RunSucceeded
+    - output: ok
+  stream:
+  - chunk: ok
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: a/chat
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: a/chat

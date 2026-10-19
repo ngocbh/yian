@@ -1,0 +1,152 @@
+kind: run
+flow: |
+  id: eager-def-inline-call
+  name: eager_def_inline_call
+  defs:
+    outer:
+      nodes:
+        wrapper:
+          kind: call
+          nodes:
+            constant:
+              kind: code
+              code: ./fixtures/compose_codefns.ts:echo
+              input:
+                topic: inline-ok
+              output: str
+          output: ${constant.output}
+      output: ${wrapper.output}
+  nodes:
+    invoke:
+      kind: call
+      call: outer
+  output: ${invoke.output}
+python_flow: |
+  id: eager-def-inline-call
+  name: eager_def_inline_call
+  defs:
+    outer:
+      nodes:
+        wrapper:
+          kind: call
+          nodes:
+            constant:
+              kind: code
+              code: tests.engine._compose_codefns:echo
+              input:
+                topic: inline-ok
+              output: str
+          output: ${constant.output}
+      output: ${wrapper.output}
+  nodes:
+    invoke:
+      kind: call
+      call: outer
+  output: ${invoke.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: inline-ok
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, invoke]
+  - - node_expanded
+    - invoke
+    - prune_ids: []
+      seed: {}
+  - [node_started, invoke/__start__]
+  - - node_succeeded
+    - invoke/__start__
+    - value: {}
+  - [node_started, invoke/wrapper]
+  - - node_expanded
+    - invoke/wrapper
+    - prune_ids: []
+      seed: {}
+  - [node_started, invoke/wrapper/__start__]
+  - - node_succeeded
+    - invoke/wrapper/__start__
+    - value: {}
+  - [node_started, invoke/wrapper/constant]
+  - - node_succeeded
+    - invoke/wrapper/constant
+    - value: inline-ok
+  - [node_started, invoke/wrapper/__end__]
+  - - node_succeeded
+    - invoke/wrapper/__end__
+    - commit_target: invoke/wrapper
+      value: inline-ok
+  - [node_started, invoke/__end__]
+  - - node_succeeded
+    - invoke/__end__
+    - commit_target: invoke
+      value: inline-ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: inline-ok
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: invoke
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed: {}
+      node_id: invoke
+  - - NodeStarted
+    - node_id: invoke/__start__
+  - - NodeSucceeded
+    - node_id: invoke/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: invoke/wrapper
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed: {}
+      node_id: invoke/wrapper
+  - - NodeStarted
+    - node_id: invoke/wrapper/__start__
+  - - NodeSucceeded
+    - node_id: invoke/wrapper/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: invoke/wrapper/constant
+  - - NodeSucceeded
+    - node_id: invoke/wrapper/constant
+      output: inline-ok
+  - - NodeStarted
+    - node_id: invoke/wrapper/__end__
+  - - NodeSucceeded
+    - commit_as: invoke/wrapper
+      node_id: invoke/wrapper/__end__
+      output: inline-ok
+  - - NodeStarted
+    - node_id: invoke/__end__
+  - - NodeSucceeded
+    - commit_as: invoke
+      node_id: invoke/__end__
+      output: inline-ok
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: inline-ok
+  - - RunSucceeded
+    - output: inline-ok

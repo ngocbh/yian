@@ -1,0 +1,237 @@
+kind: run
+flow: |2
+
+  id: c2mapv
+  name: c2_map_violate
+  input:
+    seeds: !list(int)
+
+  defs:
+    child:
+      input:
+        seed: !int
+      nodes:
+        emit:
+          kind: code
+          input:
+            seed: ${input.seed}
+          output: {n: int}
+          code: |
+            return {"n": inputs["seed"] + 1n}
+      output: ${emit.output}
+      asserts:
+        - "emit.output.n >= 1"
+
+  nodes:
+    fan:
+      kind: map
+      call: child
+      over: ${input.seeds}
+      input:
+        seed: ${item}
+  output: ${fan.output}
+python_flow: |2
+
+  id: c2mapv
+  name: c2_map_violate
+  input:
+    seeds: !list(int)
+
+  defs:
+    child:
+      input:
+        seed: !int
+      nodes:
+        emit:
+          kind: code
+          input:
+            seed: ${input.seed}
+          output: {n: int}
+          code: |
+            return {"n": inputs["seed"] + 1}
+      output: ${emit.output}
+      asserts:
+        - "emit.output.n >= 1"
+
+  nodes:
+    fan:
+      kind: map
+      call: child
+      over: ${input.seeds}
+      input:
+        seed: ${item}
+  output: ${fan.output}
+inputs:
+  seeds: [5, -5, 7]
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: assertion.failed
+      frames:
+      - label: flow.yaml
+        range: [24, 3, 24, 6]
+      - label: flow.yaml
+        range: [21, 9, 21, 29]
+      message: 'node ''fan#1/__end__'' post-assert failed: emit.output.n >= 1'
+      node: fan#1/__end__
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        seeds: [5, -5, 7]
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        seeds: [5, -5, 7]
+  - [node_started, fan]
+  - - node_expanded
+    - fan
+    - prune_ids: []
+      seed:
+      - seed: 5
+      - seed: -5
+      - seed: 7
+  - [node_started, fan/__start__]
+  - - node_succeeded
+    - fan/__start__
+    - value: {}
+  - [node_started, fan#0/__start__]
+  - - node_succeeded
+    - fan#0/__start__
+    - value:
+        seed: 5
+  - [node_started, fan#1/__start__]
+  - - node_succeeded
+    - fan#1/__start__
+    - value:
+        seed: -5
+  - [node_started, fan#2/__start__]
+  - - node_succeeded
+    - fan#2/__start__
+    - value:
+        seed: 7
+  - [node_started, fan#0/emit]
+  - - node_succeeded
+    - fan#0/emit
+    - value:
+        n: 6
+  - [node_started, fan#1/emit]
+  - - node_succeeded
+    - fan#1/emit
+    - value:
+        n: -4
+  - [node_started, fan#2/emit]
+  - - node_succeeded
+    - fan#2/emit
+    - value:
+        n: 8
+  - [node_started, fan#0/__end__]
+  - - node_succeeded
+    - fan#0/__end__
+    - value:
+        n: 6
+  - [node_started, fan#1/__end__]
+  - - node_failed
+    - fan#1/__end__
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [24, 3, 24, 6]
+        - label: flow.yaml
+          range: [21, 9, 21, 29]
+        message: 'node ''fan#1/__end__'' post-assert failed: emit.output.n >= 1'
+        node: fan#1/__end__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        seeds: [5, -5, 7]
+  - - NodeStarted
+    - node_id: fan
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - seed: 5
+        - seed: -5
+        - seed: 7
+      node_id: fan
+  - - NodeStarted
+    - node_id: fan/__start__
+  - - NodeSucceeded
+    - node_id: fan/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: fan#0/__start__
+  - - NodeSucceeded
+    - node_id: fan#0/__start__
+      output:
+        seed: 5
+  - - NodeStarted
+    - node_id: fan#1/__start__
+  - - NodeSucceeded
+    - node_id: fan#1/__start__
+      output:
+        seed: -5
+  - - NodeStarted
+    - node_id: fan#2/__start__
+  - - NodeSucceeded
+    - node_id: fan#2/__start__
+      output:
+        seed: 7
+  - - NodeStarted
+    - node_id: fan#0/emit
+  - - NodeSucceeded
+    - node_id: fan#0/emit
+      output:
+        n: 6
+  - - NodeStarted
+    - node_id: fan#1/emit
+  - - NodeSucceeded
+    - node_id: fan#1/emit
+      output:
+        n: -4
+  - - NodeStarted
+    - node_id: fan#2/emit
+  - - NodeSucceeded
+    - node_id: fan#2/emit
+      output:
+        n: 8
+  - - NodeStarted
+    - node_id: fan#0/__end__
+  - - NodeSucceeded
+    - node_id: fan#0/__end__
+      output:
+        n: 6
+  - - NodeStarted
+    - node_id: fan#1/__end__
+  - - NodeFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [24, 3, 24, 6]
+        - label: flow.yaml
+          range: [21, 9, 21, 29]
+        message: 'node ''fan#1/__end__'' post-assert failed: emit.output.n >= 1'
+        node: fan#1/__end__
+  - - RunFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [24, 3, 24, 6]
+        - label: flow.yaml
+          range: [21, 9, 21, 29]
+        message: 'node ''fan#1/__end__'' post-assert failed: emit.output.n >= 1'
+        node: fan#1/__end__

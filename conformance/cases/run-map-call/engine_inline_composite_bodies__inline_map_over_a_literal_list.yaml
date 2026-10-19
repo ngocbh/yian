@@ -1,0 +1,148 @@
+kind: run
+flow: |
+  id: inline-map-literal-over
+  name: inline_map_literal_over
+  nodes:
+    each:
+      kind: map
+      over: [1, 2]
+      input:
+        value: ${item}
+      nodes:
+        echo:
+          kind: code
+          code: |
+            return inputs["value"]
+          input:
+            value: ${input.value}
+          output: int
+      output: ${echo.output}
+  output: ${each.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: [1, 2]
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, each]
+  - - node_expanded
+    - each
+    - prune_ids: []
+      seed:
+      - value: 1
+      - value: 2
+  - [node_started, each/__start__]
+  - - node_succeeded
+    - each/__start__
+    - value: {}
+  - [node_started, each#0/__start__]
+  - - node_succeeded
+    - each#0/__start__
+    - value:
+        value: 1
+  - [node_started, each#1/__start__]
+  - - node_succeeded
+    - each#1/__start__
+    - value:
+        value: 2
+  - [node_started, each#0/echo]
+  - - node_succeeded
+    - each#0/echo
+    - value: 1
+  - [node_started, each#1/echo]
+  - - node_succeeded
+    - each#1/echo
+    - value: 2
+  - [node_started, each#0/__end__]
+  - - node_succeeded
+    - each#0/__end__
+    - value: 1
+  - [node_started, each#1/__end__]
+  - - node_succeeded
+    - each#1/__end__
+    - value: 2
+  - [node_started, each/__end__]
+  - - node_succeeded
+    - each/__end__
+    - commit_target: each
+      value: [1, 2]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: [1, 2]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: each
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - value: 1
+        - value: 2
+      node_id: each
+  - - NodeStarted
+    - node_id: each/__start__
+  - - NodeSucceeded
+    - node_id: each/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: each#0/__start__
+  - - NodeSucceeded
+    - node_id: each#0/__start__
+      output:
+        value: 1
+  - - NodeStarted
+    - node_id: each#1/__start__
+  - - NodeSucceeded
+    - node_id: each#1/__start__
+      output:
+        value: 2
+  - - NodeStarted
+    - node_id: each#0/echo
+  - - NodeSucceeded
+    - node_id: each#0/echo
+      output: 1
+  - - NodeStarted
+    - node_id: each#1/echo
+  - - NodeSucceeded
+    - node_id: each#1/echo
+      output: 2
+  - - NodeStarted
+    - node_id: each#0/__end__
+  - - NodeSucceeded
+    - node_id: each#0/__end__
+      output: 1
+  - - NodeStarted
+    - node_id: each#1/__end__
+  - - NodeSucceeded
+    - node_id: each#1/__end__
+      output: 2
+  - - NodeStarted
+    - node_id: each/__end__
+  - - NodeSucceeded
+    - commit_as: each
+      node_id: each/__end__
+      output: [1, 2]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: [1, 2]
+  - - RunSucceeded
+    - output: [1, 2]

@@ -1,0 +1,178 @@
+kind: run
+flow: |2
+
+  id: when_escape
+  name: when_escape
+  input:
+    score: !float
+    topic: !str
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.score >= 0.5"
+          then: pro
+      else: con
+    pro:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:pick_pro
+      input:
+        topic: ${input.topic}
+      output: str
+    con:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:pick_con
+      input:
+        topic: ${input.topic}
+      output: str
+    gate2:
+      kind: case
+      cases:
+        - when: "input.score < 0.5"
+          then: hot
+        - when: '(pro.output :? "m") == "x"'
+          then: cold
+      else: cold
+    hot:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:positive
+      input:
+        topic: ${input.topic}
+      output: str
+    cold:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:cautious
+      input:
+        topic: ${input.topic}
+      output: str
+  output: ${gate2.output}
+python_flow: |2
+
+  id: when_escape
+  name: when_escape
+  input:
+    score: !float
+    topic: !str
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.score >= 0.5"
+          then: pro
+      else: con
+    pro:
+      kind: code
+      code: tests.engine._compose_codefns:pick_pro
+      input:
+        topic: ${input.topic}
+      output: str
+    con:
+      kind: code
+      code: tests.engine._compose_codefns:pick_con
+      input:
+        topic: ${input.topic}
+      output: str
+    gate2:
+      kind: case
+      cases:
+        - when: "input.score < 0.5"
+          then: hot
+        - when: '(pro.output :? "m") == "x"'
+          then: cold
+      else: cold
+    hot:
+      kind: code
+      code: tests.engine._compose_codefns:positive
+      input:
+        topic: ${input.topic}
+      output: str
+    cold:
+      kind: code
+      code: tests.engine._compose_codefns:cautious
+      input:
+        topic: ${input.topic}
+      output: str
+  output: ${gate2.output}
+inputs:
+  score: 0.2
+  topic: ACME
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: pro case for ACME
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        score: 0.2
+        topic: ACME
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        score: 0.2
+        topic: ACME
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: '#else'
+  - [node_started, gate2]
+  - - node_routed
+    - gate2
+    - handle: hot
+  - [node_started, con]
+  - - node_succeeded
+    - con
+    - value: 'con: ACME'
+  - [node_started, hot]
+  - - node_succeeded
+    - hot
+    - value: pro case for ACME
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: pro case for ACME
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        score: 0.2
+        topic: ACME
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: gate
+  - - NodeSkipped
+    - node_id: pro
+  - - NodeStarted
+    - node_id: gate2
+  - - NodeRouted
+    - handle: hot
+      node_id: gate2
+  - - NodeSkipped
+    - node_id: cold
+  - - NodeStarted
+    - node_id: con
+  - - NodeSucceeded
+    - node_id: con
+      output: 'con: ACME'
+  - - NodeStarted
+    - node_id: hot
+  - - NodeSucceeded
+    - node_id: hot
+      output: pro case for ACME
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: pro case for ACME
+  - - RunSucceeded
+    - output: pro case for ACME

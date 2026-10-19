@@ -1,0 +1,159 @@
+# From tests/engine/test_typed_tool_node.py::test_a_one_node_tool_flow_gates_its_output.
+# A compact one-node TOOL flow checks its `output: int`; the failure names the flow's node (`count`)
+# at that line.
+kind: run
+rules: [messages]
+flow: |
+  id: count
+  name: count
+  input:
+    qty: !int
+  kind: tool
+  tool_id: place_order
+  output: int
+inputs:
+  qty: 5
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    place_order:
+      parameters:
+        type: object
+        properties:
+          qty:
+            type: integer
+        required: [qty]
+      results:
+      - return: x
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      message: '"x" does not match declared type int'
+      frames:
+      - label: flow.yaml
+        range: [7, 9, 7, 12]
+      node: count
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs:
+        qty: 5
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        qty: 5
+  - [node_started, count]
+  - - node_failed
+    - count
+    - failure:
+        code: contract.output
+        message: '"x" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [7, 9, 7, 12]
+        node: count
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        qty: 5
+  - - NodeStarted
+    - node_id: count
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        message: '"x" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [7, 9, 7, 12]
+        node: count
+  - - RunFailed
+    - failure:
+        code: contract.output
+        message: '"x" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [7, 9, 7, 12]
+        node: count
+  tool_calls:
+    place_order:
+    - args:
+        qty: 5
+      call_id: r1/count
+      attempt: 1
+      node: count
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      message: '''x'' does not match declared type int'
+      frames:
+      - label: flow.yaml
+        range: [7, 9, 7, 12]
+      node: count
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs:
+        qty: 5
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        qty: 5
+  - [node_started, count]
+  - - node_failed
+    - count
+    - failure:
+        code: contract.output
+        message: '''x'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [7, 9, 7, 12]
+        node: count
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        qty: 5
+  - - NodeStarted
+    - node_id: count
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        message: '''x'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [7, 9, 7, 12]
+        node: count
+  - - RunFailed
+    - failure:
+        code: contract.output
+        message: '''x'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [7, 9, 7, 12]
+        node: count
+  tool_calls:
+    place_order:
+    - args:
+        qty: 5
+      call_id: r1/count
+      attempt: 1
+      node: count

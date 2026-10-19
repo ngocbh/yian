@@ -1,0 +1,29 @@
+kind: run
+rules: [messages]
+flow: |
+  id: f
+  name: f
+  input:
+    t: !float
+  nodes:
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {openai: {temperature: '${input.t}'}}
+  output: ${chat.output}
+inputs:
+  t: warm
+run:
+  num_workers: 0
+expect:
+  raises:
+    class: ValueError
+    message: 'node ''chat'' llm_config.openai.temperature: input ''t'': "warm" does not match declared type float'
+  trace: []
+  events: []
+python_expect:
+  raises:
+    class: ValueError
+    message: 'node ''chat'' llm_config.openai.temperature: input ''t'': ''warm'' does not match declared type float'
+  trace: []
+  events: []

@@ -1,0 +1,377 @@
+# env: YIAN_DEFAULT_MODEL/PROVIDER kept: the flow names no model, and without them the run fails before its model call.
+kind: run
+rules: [llm]
+flow: |2
+
+  id: decide
+  name: decide
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', qty: int, price: float}
+    Hold: {action: 'Literal(hold)', note: str}
+    Decision: Union(Buy, Sell, Hold)
+  nodes:
+    a:
+      kind: agent
+      prompt: decide a trade
+      output: Decision
+    route:
+      kind: case
+      on: ${a.output.action}
+      cases:
+        - when: buy
+          then: place_buy
+        - when: sell
+          then: place_sell
+      else: log_hold
+    place_buy:
+      kind: code
+      input:
+        qty: ${a.output.qty}
+      code: |
+        return "buy " + String(inputs["qty"])
+      output: str
+    place_sell:
+      kind: code
+      input:
+        qty: ${a.output.qty}
+        price: ${a.output.price}
+      code: |
+        return Number(inputs["qty"]) * inputs["price"]
+      output: float
+    log_hold:
+      kind: code
+      input:
+        note: ${a.output.note}
+      code: |
+        return "hold: " + inputs["note"]
+      output: str
+  output:
+    decision: ${a.output}
+    trade: ${place_buy.output | place_sell.output | log_hold.output}
+python_flow: |2
+
+  id: decide
+  name: decide
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', qty: int, price: float}
+    Hold: {action: 'Literal(hold)', note: str}
+    Decision: Union(Buy, Sell, Hold)
+  nodes:
+    a:
+      kind: agent
+      prompt: decide a trade
+      output: Decision
+    route:
+      kind: case
+      on: ${a.output.action}
+      cases:
+        - when: buy
+          then: place_buy
+        - when: sell
+          then: place_sell
+      else: log_hold
+    place_buy:
+      kind: code
+      input:
+        qty: ${a.output.qty}
+      code: |
+        return "buy " + str(inputs["qty"])
+      output: str
+    place_sell:
+      kind: code
+      input:
+        qty: ${a.output.qty}
+        price: ${a.output.price}
+      code: |
+        return inputs["qty"] * inputs["price"]
+      output: float
+    log_hold:
+      kind: code
+      input:
+        note: ${a.output.note}
+      code: |
+        return "hold: " + inputs["note"]
+      output: str
+  output:
+    decision: ${a.output}
+    trade: ${place_buy.output | place_sell.output | log_hold.output}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+run:
+  num_workers: 0
+host:
+  models:
+    a:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"value": {"action": "buy", "qty": 3}}'
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: decide a trade
+          schema:
+            properties:
+              value:
+                anyOf:
+                - additionalProperties: false
+                  properties:
+                    action:
+                      const: buy
+                      title: Action
+                      type: string
+                    qty:
+                      title: Qty
+                      type: integer
+                  required: [action, qty]
+                  title: buy
+                  type: object
+                - additionalProperties: false
+                  properties:
+                    action:
+                      const: hold
+                      title: Action
+                      type: string
+                    note:
+                      title: Note
+                      type: string
+                  required: [action, note]
+                  title: hold
+                  type: object
+                - additionalProperties: false
+                  properties:
+                    action:
+                      const: sell
+                      title: Action
+                      type: string
+                    qty:
+                      title: Qty
+                      type: integer
+                    price:
+                      title: Price
+                      type: number
+                  required: [action, qty, price]
+                  title: sell
+                  type: object
+            required: [value]
+            type: object
+expect:
+  output:
+    status: succeeded
+    output:
+      decision:
+        action: buy
+        qty: 3
+      trade: buy 3
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        a:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, a]
+  - - node_succeeded
+    - a
+    - value:
+        action: buy
+        qty: 3
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: place_buy
+  - [node_started, place_buy]
+  - - node_succeeded
+    - place_buy
+    - value: buy 3
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        decision:
+          action: buy
+          qty: 3
+        trade: buy 3
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: a
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: a
+      provider: openai
+      purpose: structured_native
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: a
+      provider: openai
+      purpose: structured_native
+  - - NodeSucceeded
+    - node_id: a
+      output:
+        action: buy
+        qty: 3
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: place_buy
+      node_id: route
+  - - NodeSkipped
+    - node_id: place_sell
+  - - NodeSkipped
+    - node_id: log_hold
+  - - NodeStarted
+    - node_id: place_buy
+  - - NodeSucceeded
+    - node_id: place_buy
+      output: buy 3
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        decision:
+          action: buy
+          qty: 3
+        trade: buy 3
+  - - RunSucceeded
+    - output:
+        decision:
+          action: buy
+          qty: 3
+        trade: buy 3
+python_expect:
+  output:
+    status: succeeded
+    output:
+      decision:
+        action: buy
+        qty: 3
+      trade: buy 3
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        a:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, a]
+  - - node_succeeded
+    - a
+    - value:
+        action: buy
+        qty: 3
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: place_buy
+  - [node_started, place_buy]
+  - - node_succeeded
+    - place_buy
+    - value: buy 3
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        decision:
+          action: buy
+          qty: 3
+        trade: buy 3
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: a
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: a
+      provider: openai
+      purpose: structured_native
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: gpt-5.5
+      node_id: a
+      provider: openai
+      purpose: structured_native
+  - - NodeSucceeded
+    - node_id: a
+      output:
+        action: buy
+        qty: 3
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: place_buy
+      node_id: route
+  - - NodeSkipped
+    - node_id: place_sell
+  - - NodeSkipped
+    - node_id: log_hold
+  - - NodeStarted
+    - node_id: place_buy
+  - - NodeSucceeded
+    - node_id: place_buy
+      output: buy 3
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        decision:
+          action: buy
+          qty: 3
+        trade: buy 3
+  - - RunSucceeded
+    - output:
+        decision:
+          action: buy
+          qty: 3
+        trade: buy 3

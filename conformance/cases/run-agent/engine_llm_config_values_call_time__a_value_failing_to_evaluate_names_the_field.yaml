@@ -1,0 +1,87 @@
+kind: run
+flow: |
+  id: f
+  name: f
+  nodes:
+    pick: {kind: code, output: Optional(str), code: "return null"}
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {provider: openai, model: !str '${pick.output :? "no model"}'}
+  output: ${chat.output}
+python_flow: |
+  id: f
+  name: f
+  nodes:
+    pick: {kind: code, output: Optional(str), code: "return None"}
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {provider: openai, model: !str '${pick.output :? "no model"}'}
+  output: ${chat.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.evaluate
+      frames:
+      - label: flow.yaml
+        range: [8, 43, 8, 78]
+      message: 'node ''chat'' llm_config.model: no model'
+      node: chat
+  trace:
+  - - run_started
+    - null
+    - call_time_llm:
+        agents:
+          chat: {}
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, pick]
+  - [node_succeeded, pick]
+  - [node_started, chat]
+  - - node_failed
+    - chat
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [8, 43, 8, 78]
+        message: 'node ''chat'' llm_config.model: no model'
+        node: chat
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: pick
+  - - NodeSucceeded
+    - node_id: pick
+  - - NodeStarted
+    - node_id: chat
+  - - NodeFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [8, 43, 8, 78]
+        message: 'node ''chat'' llm_config.model: no model'
+        node: chat
+  - - RunFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [8, 43, 8, 78]
+        message: 'node ''chat'' llm_config.model: no model'
+        node: chat

@@ -1,0 +1,139 @@
+kind: run
+flow: |2
+
+  id: run-case
+  name: case_flow
+  input:
+    topic: !str
+    seed: !float
+  nodes:
+    score:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:score
+      input:
+        seed: ${input.seed}
+      output: float
+    gate:
+      kind: case
+      cases:
+        - when: "score.output >= 0.5"
+          then: positive
+      else: cautious
+    positive:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:positive
+      input:
+        topic: ${input.topic}
+      output: str
+    cautious:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:cautious
+      input:
+        topic: ${input.topic}
+      output: str
+  output: ${positive.output | cautious.output}
+python_flow: |2
+
+  id: run-case
+  name: case_flow
+  input:
+    topic: !str
+    seed: !float
+  nodes:
+    score:
+      kind: code
+      code: tests.engine._compose_codefns:score
+      input:
+        seed: ${input.seed}
+      output: float
+    gate:
+      kind: case
+      cases:
+        - when: "score.output >= 0.5"
+          then: positive
+      else: cautious
+    positive:
+      kind: code
+      code: tests.engine._compose_codefns:positive
+      input:
+        topic: ${input.topic}
+      output: str
+    cautious:
+      kind: code
+      code: tests.engine._compose_codefns:cautious
+      input:
+        topic: ${input.topic}
+      output: str
+  output: ${positive.output | cautious.output}
+inputs:
+  topic: BETA
+  seed: 0.2
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: cautious note for BETA
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        seed: 0.2
+        topic: BETA
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        seed: 0.2
+        topic: BETA
+  - [node_started, score]
+  - - node_succeeded
+    - score
+    - value: 0.2
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: '#else'
+  - [node_started, cautious]
+  - - node_succeeded
+    - cautious
+    - value: cautious note for BETA
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: cautious note for BETA
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        seed: 0.2
+        topic: BETA
+  - - NodeStarted
+    - node_id: score
+  - - NodeSucceeded
+    - node_id: score
+      output: 0.2
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: gate
+  - - NodeSkipped
+    - node_id: positive
+  - - NodeStarted
+    - node_id: cautious
+  - - NodeSucceeded
+    - node_id: cautious
+      output: cautious note for BETA
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: cautious note for BETA
+  - - RunSucceeded
+    - output: cautious note for BETA

@@ -1,0 +1,134 @@
+kind: run
+flow: |
+  defs:
+    f:
+      input:
+        x: !str
+      nodes:
+        up:
+          kind: code
+          input:
+            x: ${input.x}
+          output: str
+          code: |
+            return inputs['x'].toUpperCase()
+      output: ${up.output}
+
+  id: f
+  name: f
+  input:
+    cmd: !str
+    t: !str
+  nodes:
+    route:
+      kind: case
+      on: ${input.cmd}
+      cases:
+        - when: go
+          then: e
+      else: other
+    other:
+      kind: code
+      code: |
+        return 'other'
+    e: !str call(f, x=${input.t})
+  output: ${route.output}
+python_flow: |
+  defs:
+    f:
+      input:
+        x: !str
+      nodes:
+        up:
+          kind: code
+          input:
+            x: ${input.x}
+          output: str
+          code: |
+            return inputs['x'].upper()
+      output: ${up.output}
+
+  id: f
+  name: f
+  input:
+    cmd: !str
+    t: !str
+  nodes:
+    route:
+      kind: case
+      on: ${input.cmd}
+      cases:
+        - when: go
+          then: e
+      else: other
+    other:
+      kind: code
+      code: |
+        return 'other'
+    e: !str call(f, x=${input.t})
+  output: ${route.output}
+inputs:
+  cmd: no
+  t: ada
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: other
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        cmd: no
+        t: ada
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        cmd: no
+        t: ada
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: '#else'
+  - [node_started, other]
+  - - node_succeeded
+    - other
+    - value: other
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: other
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        cmd: no
+        t: ada
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - handle: '#else'
+      node_id: route
+  - - NodeSkipped
+    - node_id: e
+  - - NodeSkipped
+    - node_id: __call_0
+  - - NodeStarted
+    - node_id: other
+  - - NodeSucceeded
+    - node_id: other
+      output: other
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: other
+  - - RunSucceeded
+    - output: other

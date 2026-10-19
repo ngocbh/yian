@@ -1,0 +1,178 @@
+kind: run
+rules: [messages]
+flow: |2
+
+  id: tagged_map
+  name: tagged_map
+  nodes:
+    src:
+      kind: code
+      code: |
+        return [1, "2"]
+    m:
+      kind: map
+      over: ${src.output}
+      input:
+        t: !int ${item}
+      nodes:
+        twice:
+          kind: code
+          input:
+            t: ${input.t}
+          code: |
+            return inputs["t"] * 2n
+      output: ${twice.output}
+  output: ${m.output}
+python_flow: |2
+
+  id: tagged_map
+  name: tagged_map
+  nodes:
+    src:
+      kind: code
+      code: |
+        return [1, "2"]
+    m:
+      kind: map
+      over: ${src.output}
+      input:
+        t: !int ${item}
+      nodes:
+        twice:
+          kind: code
+          input:
+            t: ${input.t}
+          code: |
+            return inputs["t"] * 2
+      output: ${twice.output}
+  output: ${m.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      frames:
+      - label: flow.yaml
+        range: [13, 10, 13, 22]
+      message: 'binding ''t'': "2" does not match declared type int'
+      node: m
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, src]
+  - - node_succeeded
+    - src
+    - value: [1, '2']
+  - [node_started, m]
+  - - node_failed
+    - m
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [13, 10, 13, 22]
+        message: 'binding ''t'': "2" does not match declared type int'
+        node: m
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: src
+  - - NodeSucceeded
+    - node_id: src
+      output: [1, '2']
+  - - NodeStarted
+    - node_id: m
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [13, 10, 13, 22]
+        message: 'binding ''t'': "2" does not match declared type int'
+        node: m
+  - - RunFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [13, 10, 13, 22]
+        message: 'binding ''t'': "2" does not match declared type int'
+        node: m
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      frames:
+      - label: flow.yaml
+        range: [13, 10, 13, 22]
+      message: 'binding ''t'': ''2'' does not match declared type int'
+      node: m
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, src]
+  - - node_succeeded
+    - src
+    - value: [1, '2']
+  - [node_started, m]
+  - - node_failed
+    - m
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [13, 10, 13, 22]
+        message: 'binding ''t'': ''2'' does not match declared type int'
+        node: m
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: src
+  - - NodeSucceeded
+    - node_id: src
+      output: [1, '2']
+  - - NodeStarted
+    - node_id: m
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [13, 10, 13, 22]
+        message: 'binding ''t'': ''2'' does not match declared type int'
+        node: m
+  - - RunFailed
+    - failure:
+        code: binding.type
+        frames:
+        - label: flow.yaml
+          range: [13, 10, 13, 22]
+        message: 'binding ''t'': ''2'' does not match declared type int'
+        node: m

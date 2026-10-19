@@ -1,0 +1,232 @@
+kind: run
+flow: |2
+
+  id: usu
+  name: usu
+  defs:
+    step:
+      input:
+        seen: !Optional(list(str))
+        n: !int
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            seen: Optional(list(str))
+            n: int
+          code: |
+            return {"seen": ["a", "b"].slice(0, Number(inputs["n"] + 1n)), "n": inputs["n"] + 1n}
+      output: ${bump.output}
+  nodes:
+    repeat:
+      kind: loop
+      call: step
+      until: "'b' in seen"
+      max: 5
+      input:
+        seen: ${null}
+        n: 0
+  output: ${repeat.output}
+python_flow: |2
+
+  id: usu
+  name: usu
+  defs:
+    step:
+      input:
+        seen: !Optional(list(str))
+        n: !int
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            seen: Optional(list(str))
+            n: int
+          code: |
+            return {"seen": ["a", "b"][: inputs["n"] + 1], "n": inputs["n"] + 1}
+      output: ${bump.output}
+  nodes:
+    repeat:
+      kind: loop
+      call: step
+      until: "'b' in seen"
+      max: 5
+      input:
+        seen: ${null}
+        n: 0
+  output: ${repeat.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      n: 2
+      seen: [a, b]
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, repeat]
+  - - node_expanded
+    - repeat
+    - prune_ids: []
+      seed:
+      - n: 0
+        seen: null
+      - 0
+  - [node_started, repeat#0/__start__]
+  - - node_succeeded
+    - repeat#0/__start__
+    - value:
+        n: 0
+        seen: null
+  - [node_started, repeat#0/bump]
+  - - node_succeeded
+    - repeat#0/bump
+    - value:
+        n: 1
+        seen: [a]
+  - [node_started, repeat#0/__end__]
+  - - node_succeeded
+    - repeat#0/__end__
+    - value:
+        n: 1
+        seen: [a]
+  - [node_started, repeat~1]
+  - - node_expanded
+    - repeat~1
+    - prune_ids: [repeat#0/__end__, repeat#0/__start__, repeat#0/bump, repeat~1]
+      seed:
+      - n: 1
+        seen: [a]
+      - 1
+  - [node_started, repeat#1/__start__]
+  - - node_succeeded
+    - repeat#1/__start__
+    - value:
+        n: 1
+        seen: [a]
+  - [node_started, repeat#1/bump]
+  - - node_succeeded
+    - repeat#1/bump
+    - value:
+        n: 2
+        seen: [a, b]
+  - [node_started, repeat#1/__end__]
+  - - node_succeeded
+    - repeat#1/__end__
+    - value:
+        n: 2
+        seen: [a, b]
+  - [node_started, repeat~2]
+  - - node_succeeded
+    - repeat~2
+    - commit_target: repeat
+      value:
+        n: 2
+        seen: [a, b]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        n: 2
+        seen: [a, b]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: repeat
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: 0
+          seen: null
+        - 0
+      node_id: repeat
+  - - NodeStarted
+    - node_id: repeat#0/__start__
+  - - NodeSucceeded
+    - node_id: repeat#0/__start__
+      output:
+        n: 0
+        seen: null
+  - - NodeStarted
+    - node_id: repeat#0/bump
+  - - NodeSucceeded
+    - node_id: repeat#0/bump
+      output:
+        n: 1
+        seen: [a]
+  - - NodeStarted
+    - node_id: repeat#0/__end__
+  - - NodeSucceeded
+    - node_id: repeat#0/__end__
+      output:
+        n: 1
+        seen: [a]
+  - - NodeStarted
+    - node_id: repeat~1
+  - - NodeExpanded
+    - grow:
+        prune: [repeat#0/__end__, repeat#0/__start__, repeat#0/bump, repeat~1]
+        seed:
+        - n: 1
+          seen: [a]
+        - 1
+      node_id: repeat~1
+  - - NodeStarted
+    - node_id: repeat#1/__start__
+  - - NodeSucceeded
+    - node_id: repeat#1/__start__
+      output:
+        n: 1
+        seen: [a]
+  - - NodeStarted
+    - node_id: repeat#1/bump
+  - - NodeSucceeded
+    - node_id: repeat#1/bump
+      output:
+        n: 2
+        seen: [a, b]
+  - - NodeStarted
+    - node_id: repeat#1/__end__
+  - - NodeSucceeded
+    - node_id: repeat#1/__end__
+      output:
+        n: 2
+        seen: [a, b]
+  - - NodeStarted
+    - node_id: repeat~2
+  - - NodeSucceeded
+    - commit_as: repeat
+      node_id: repeat~2
+      output:
+        n: 2
+        seen: [a, b]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        n: 2
+        seen: [a, b]
+  - - RunSucceeded
+    - output:
+        n: 2
+        seen: [a, b]

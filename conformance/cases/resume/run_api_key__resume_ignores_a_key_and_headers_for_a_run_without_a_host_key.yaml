@@ -1,0 +1,89 @@
+# From tests/engine/test_run_api_key.py::test_resume_ignores_a_key_for_a_run_started_without_one.
+# Also tests/engine/test_run_connection_settings.py::test_resume_ignores_headers_on_a_run_with_no_key_agents.
+# A run that recorded no host-key agent ignores a resume's api_key and headers (one branch drops both).
+# env: VLLM_API_KEY is the agent's own key, as in the test (the run's llm_config has none).
+# Record 3 is agent's node_started: its first model call runs, its result is refused.
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# restarted node (decision 20); the trace still pins the resume.
+kind: resume
+flow: |
+  id: keyed
+  name: keyed
+  nodes:
+    agent: {kind: agent, prompt: hi}
+  output: ${agent.output}
+env:
+  VLLM_API_KEY: <key:2>
+run:
+  run_id: r1
+  num_workers: 0
+  llm_config:
+    provider: vllm
+    model: served-model
+host:
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+  crash_after_record: 3
+expect:
+  output:
+    status: succeeded
+    output: ok
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        agent:
+          _connection:
+            endpoint: null
+            method: api_key
+            source: environment
+          model: served-model
+          provider: vllm
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, agent]
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: [agent]
+  - [node_started, agent]
+  - - node_succeeded
+    - agent
+    - value: ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ok
+  stream:
+  - chunk: ok
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: agent
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: agent
+resume:
+  api_key: <key:1>
+  headers:
+    X-Anything: <key:3>

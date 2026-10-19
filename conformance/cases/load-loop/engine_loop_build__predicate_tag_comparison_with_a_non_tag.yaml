@@ -1,4 +1,6 @@
+# TS spells the compared and suggested values as JSON text (rules: messages; narrowing_facts.py `!r`); Python's repr in python_expect.
 kind: load
+rules: [messages]
 flow: |2
 
   id: loop-union
@@ -56,6 +58,14 @@ python_flow: |2
       output: ${step.output}
   output: ${ask.output}
 expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''ask'': `until:` `r.kind == "dnoe"` compares r.kind with "dnoe", which is not one of its tags (done, more); did you mean "done"?'
+      frames:
+      - label: flow.yaml
+        range: [9, 3, 9, 6]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

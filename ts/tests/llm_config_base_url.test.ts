@@ -1,12 +1,18 @@
 /**
  * Mirrors `tests/test_llm_config_base_url.py`: the `LLMConfig`, `host_only_field_error`,
- * `pop_host_credentials` and `check_model_config` tests, and the `splitModelConfig` half of the
- * pinned-connection test; the client and redirect tests go with the factory, the
- * `resolve_model_config` tests with `connection.ts`.
+ * `pop_host_credentials` and `check_model_config` tests, and the `resolve_model_config` and
+ * `split_model_config` halves of the pinned-connection tests; the client and redirect tests go
+ * with the factory.
  */
 
-import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { inspect } from "node:util";
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+
+import type { Env } from "../src/defaults.ts";
 
 import {
   azureResourceEndpoint,
@@ -16,13 +22,33 @@ import {
   popApiKey,
   popHostCredentials,
 } from "../src/llm_clients/config.ts";
-import { checkModelConfig, splitModelConfig } from "../src/llm_clients/connection.ts";
+import {
+  checkModelConfig,
+  type Connection,
+  resolveModelConfig,
+  splitModelConfig,
+} from "../src/llm_clients/connection.ts";
 import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
 
 const SENTINEL = "sk-sentinel-7d1f3b20";
 const AZURE_V1 = "https://res.openai.azure.com/openai/v1/";
 const AZURE_RESOURCE = "https://res.openai.azure.com/";
 const GATEWAY = "https://gateway.example.com/";
+
+// Each test's environment: a private store in a fresh directory and no key, endpoint or default,
+// as Python's `clean_env` leaves it.
+let home: string;
+let vars: Map<string, string>;
+const env: Env = (name) => vars.get(name);
+
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), "yian-base-url-"));
+  vars = new Map([["YIAN_AUTH_FILE", join(home, "auth.json")]]);
+});
+
+afterEach(() => {
+  rmSync(home, { recursive: true, force: true });
+});
 
 /** Return each field of `host`, read through its getters. */
 function fields(host: HostConnection): Record<string, unknown> {
@@ -212,18 +238,29 @@ test("azure config without base_url fails the model check", () => {
   expect(validated.baseUrl).toBe(AZURE_RESOURCE);
 });
 
-test("a base_url must match its pinned connection", () => {
-  // What resolving a host OpenAI key with this base_url records.
-  const resolved = {
-    provider: "openai",
-    model: "gpt-5.4",
-    base_url: AZURE_V1,
-    api_key: SENTINEL,
-    _connection: { method: "api_key", source: "host", credential_id: null, endpoint: AZURE_V1, store_path: null },
-  };
+test("an openai base_url pins a host connection to that endpoint", () => {
+  const resolved = resolveModelConfig(
+    { provider: "openai", model: "gpt-5.4", base_url: AZURE_V1, api_key: SENTINEL },
+    { env },
+  );
+  expect(resolved["base_url"]).toBe(AZURE_V1);
+  expect((resolved["_connection"] as Connection).source).toBe("host");
+  expect((resolved["_connection"] as Connection).endpoint).toBe(AZURE_V1);
+  const { api_key: _key, ...rest } = resolved;
+  expect(JSON.stringify(rest)).not.toContain(SENTINEL);
   const [validated, connection] = splitModelConfig(resolved);
   expect([validated.baseUrl, connection!.endpoint]).toEqual([AZURE_V1, AZURE_V1]);
-  const moved = { ...resolved, _connection: { ...resolved._connection, endpoint: "https://api.openai.com/v1" } };
+});
+
+test("a base_url must match its pinned connection", () => {
+  const resolved = resolveModelConfig(
+    { provider: "openai", model: "gpt-5.4", base_url: AZURE_V1, api_key: SENTINEL },
+    { env },
+  );
+  const moved = {
+    ...resolved,
+    _connection: { ...(resolved["_connection"] as Connection), endpoint: "https://api.openai.com/v1" },
+  };
   const stored = {
     ...resolved,
     _connection: {

@@ -3,14 +3,36 @@
  * `llm_clients/factory.ts`, `test_run_records_connections` with `runFlow`.
  */
 
-import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { AuthError } from "../src/llm_clients/auth/common.ts";
-import { azureResourceEndpoint, HostConnection, LLMConfig } from "../src/llm_clients/config.ts";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+
+import { ENTRIES, type Env } from "../src/defaults.ts";
+import { PROVIDER_API_KEY_ENV } from "../src/llm_clients/api_key_env.ts";
 import {
+  ApiKeyCredentials,
+  AuthError,
+  type Credentials,
+  OAuthCredentials,
+  type ProviderSelection,
+} from "../src/llm_clients/auth/common.ts";
+import { AuthStore } from "../src/llm_clients/auth/store.ts";
+import {
+  azureResourceEndpoint,
+  HostConnection,
+  LLMConfig,
+  SUPPORTED_LLM_PROVIDERS,
+} from "../src/llm_clients/config.ts";
+import {
+  type AgentConfig,
   blockProblem,
+  callCredentials,
   checkModelConfig,
   type Connection,
+  connectionCredentials,
+  connectionSnapshot,
   ConnectionSnapshot,
   HOST_KEY_MARKER,
   headerNameDiff,
@@ -18,6 +40,7 @@ import {
   legacyConnectionConfig,
   legacyConnectionMap,
   refusedBlock,
+  resolveModelConfig,
   splitModelConfig,
   validateConnection,
 } from "../src/llm_clients/connection.ts";
@@ -61,6 +84,51 @@ function rangeError(run: () => unknown): RangeError {
   const error = thrown(run);
   expect(error).toBeInstanceOf(RangeError);
   return error as RangeError;
+}
+
+/** Return the error `promise` rejects with, failing the test if it resolves. */
+async function rejected(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error("expected a rejection");
+}
+
+// Each test's environment: conftest's base (a private store in a fresh directory, the default
+// provider and model), changed per test as Python's monkeypatch does.
+let home: string;
+let vars: Map<string, string>;
+const env: Env = (name) => vars.get(name);
+
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), "yian-connections-"));
+  vars = new Map([
+    ["YIAN_AUTH_FILE", join(home, "auth.json")],
+    ["YIAN_DEFAULT_PROVIDER", "openai"],
+    ["YIAN_DEFAULT_MODEL", "gpt-5.5"],
+  ]);
+});
+
+afterEach(() => {
+  rmSync(home, { recursive: true, force: true });
+});
+
+/** Return the test's store. */
+function authStore(): AuthStore {
+  return new AuthStore(null, { env });
+}
+
+/** Return the connection a snapshot records for the saved API-key login `selection`. */
+function storeConnection(selection: ProviderSelection, endpoint: string | null = null): Connection {
+  return {
+    method: "api_key",
+    source: "store",
+    credential_id: selection.credentialId,
+    endpoint,
+    store_path: authStore().path,
+  };
 }
 
 test("connection metadata validation per provider", () => {
@@ -362,7 +430,7 @@ test("split model config refuses header names without the marker", () => {
   expect(error.message).toContain("_header_names");
 });
 
-test("split carries headers beside the key", () => {
+test("split and resolve carry headers beside the key", () => {
   const config = new LLMConfig({
     provider: "anthropic",
     model: "m",
@@ -372,6 +440,22 @@ test("split carries headers beside the key", () => {
   const [validated] = splitModelConfig(config);
   expect(validated.headers).toEqual({ "X-Gateway": HEADER_VALUE });
   expect(validated.apiKey).toBe("k");
+  let resolved = resolveModelConfig(config, { env });
+  expect(resolved["headers"]).toEqual({ "X-Gateway": HEADER_VALUE });
+  expect(resolved["api_key"]).toBe("k");
+  resolved = resolveModelConfig(
+    { ...MARKED, _header_names: ["X-Gateway"], headers: { "X-Gateway": HEADER_VALUE } },
+    { env },
+  );
+  expect(resolved["headers"]).toEqual({ "X-Gateway": HEADER_VALUE });
+  expect(Object.hasOwn(resolved, "_header_names")).toBe(false);
+  // The OpenAI route resolves through the snapshot and still keeps them.
+  resolved = resolveModelConfig(
+    { provider: "openai", model: "m", api_key: "k", organization: "org-abc", headers: { "X-Gateway": HEADER_VALUE } },
+    { env },
+  );
+  expect(resolved["organization"]).toBe("org-abc");
+  expect(resolved["headers"]).toEqual({ "X-Gateway": HEADER_VALUE });
 });
 
 test("layers refuse recorded header names", () => {
@@ -481,5 +565,324 @@ describe("TS additions", () => {
     expect(refusedBlock({ provider: "azure", model: "m" })).toBe("");
     expect(refusedBlock({ model: "m" })).toBe("");
     expect(refusedBlock(subscription)).toBe(".openai");
+  });
+});
+
+test("resolve model config names stray default model", () => {
+  vars.delete("YIAN_DEFAULT_PROVIDER");
+  vars.set("YIAN_DEFAULT_MODEL", "m");
+  expect(rangeError(() => resolveModelConfig({}, { env })).message).toContain(
+    "YIAN_DEFAULT_MODEL is set but names no provider",
+  );
+});
+
+test("snapshot connections per provider", async () => {
+  const saved = await authStore().save("anthropic", new ApiKeyCredentials("saved-secret"), "m");
+
+  const { connections } = connectionSnapshot({ env });
+
+  expect(connections["anthropic"]).toEqual(storeConnection(saved));
+  expect(connections["google"]).toEqual(ENVIRONMENT);
+  expect(Object.hasOwn(connections, "ollama")).toBe(false);
+  expect(connections["openai"]).toEqual({
+    method: "api_key",
+    source: "missing",
+    credential_id: null,
+    endpoint: "https://api.openai.com/v1",
+    store_path: null,
+  });
+});
+
+describe("snapshot rejects impossible saved logins", () => {
+  const key = new ApiKeyCredentials("k");
+  const rows: [string, Credentials | null, string | null][] = [
+    ["openai", null, null],
+    ["openai", key, "https://api.example/v1"],
+    [
+      "anthropic",
+      new OAuthCredentials({ accessToken: "a", refreshToken: "r", expiresAt: Date.now() / 1000 + 3600, accountId: "acct" }),
+      null,
+    ],
+    ["google", key, "https://example.com/"],
+    ["azure", key, null],
+    ["azure", null, "https://r.openai.azure.com/"],
+    ["azure", key, "http://r.openai.azure.com/"],
+    ["ollama", key, null],
+    ["anthropic", null, null],
+  ];
+  test.each(rows)("%s %#", async (provider, credentials, endpoint) => {
+    await authStore().save(provider, credentials, "m", { endpoint, makeDefault: false });
+    expect(rangeError(() => connectionSnapshot({ env })).message).toBe(
+      `The saved ${provider} login is invalid; run 'yian auth ${provider}' again`,
+    );
+  });
+});
+
+test("snapshot accepts keyless logins and skips unsupported ones", async () => {
+  const store = authStore();
+  await store.save("ollama", null, "l", { makeDefault: false });
+  await store.save("vllm", null, "v", { makeDefault: false });
+  await store.save("claude", new ApiKeyCredentials("k"), "c", { makeDefault: false });
+
+  const snapshot = connectionSnapshot({ env });
+
+  expect(snapshot.providerModels["ollama"]).toBe("l");
+  expect(snapshot.connections["vllm"]).toEqual(ENVIRONMENT);
+  expect(Object.hasOwn(snapshot.providerModels, "claude")).toBe(false);
+  expect(Object.hasOwn(snapshot.connections, "claude")).toBe(false);
+
+  vars.delete("YIAN_DEFAULT_PROVIDER");
+  await store.setDefault("claude");
+  expect(rangeError(() => connectionSnapshot({ env })).message).toContain(
+    "saved default provider 'claude' is not supported",
+  );
+});
+
+test("bind records store and environment connections", async () => {
+  const saved = await authStore().save("anthropic", new ApiKeyCredentials("saved-secret"), "m");
+  const snapshot = connectionSnapshot({ env });
+  const effective = {
+    a: { provider: "anthropic", model: "m" },
+    g: { provider: "google", model: "g" },
+    o: { provider: "ollama", model: "l" },
+  };
+
+  const bound = snapshot.bind(effective);
+
+  expect(bound["a"]!["_connection"]).toEqual(storeConnection(saved));
+  expect(bound["g"]!["_connection"]).toEqual(ENVIRONMENT);
+  expect(Object.hasOwn(bound["o"]!, "_connection")).toBe(false);
+  expect(Object.hasOwn(effective.a, "_connection")).toBe(false);
+
+  const hosted = snapshot.bind(effective, { hostKeyProvider: "anthropic" });
+  expect(hosted["a"]![HOST_KEY_MARKER]).toBe(true);
+  expect(Object.hasOwn(hosted["a"]!, "_connection")).toBe(false);
+  expect(hosted["g"]!["_connection"]).toEqual(ENVIRONMENT);
+});
+
+test("bind azure endpoint rules", async () => {
+  const effective = { z: { provider: "azure", model: "dep" } };
+
+  let bound = connectionSnapshot({ env }).bind(effective)["z"]!;
+  expect(Object.hasOwn(bound, "base_url")).toBe(false);
+  expect(bound["_connection"]).toEqual(ENVIRONMENT);
+
+  const saved = await authStore().save("azure", new ApiKeyCredentials("saved-secret"), "dep", {
+    endpoint: "https://r.openai.azure.com/",
+  });
+  const snapshot = connectionSnapshot({ env });
+  const store = storeConnection(saved, "https://r.openai.azure.com/");
+
+  bound = snapshot.bind(effective)["z"]!;
+  expect(bound["base_url"]).toBe("https://r.openai.azure.com/");
+  expect(bound["_connection"]).toEqual(store);
+
+  const same = { provider: "azure", model: "dep", base_url: "https://r.openai.azure.com/openai/v1/" };
+  bound = snapshot.bind({ z: same })["z"]!;
+  expect(bound["base_url"]).toBe("https://r.openai.azure.com/openai/v1/");
+  expect(bound["_connection"]).toEqual(store);
+
+  const other = { provider: "azure", model: "dep", base_url: "https://other.openai.azure.com/" };
+  bound = snapshot.bind({ z: other })["z"]!;
+  expect(bound["base_url"]).toBe("https://other.openai.azure.com/");
+  expect(bound["_connection"]).toEqual(ENVIRONMENT);
+});
+
+test("resolve model config attaches without rereading on replay", async () => {
+  // Any read of the environment, the snapshot's first step, fails the test.
+  const unread: Env = (name) => {
+    throw new Error(`read ${name}`);
+  };
+  expect(resolveModelConfig({ provider: "ollama", model: "l" }, { env: unread })).toEqual({
+    provider: "ollama",
+    model: "l",
+  });
+  const hosted = resolveModelConfig({ provider: "anthropic", model: "m", api_key: "k" }, { env: unread });
+  expect(Object.hasOwn(hosted, "_connection")).toBe(false);
+  const pinned = { provider: "anthropic", model: "m", _connection: STORE };
+  expect(resolveModelConfig(pinned, { env: unread })).toEqual(pinned);
+  const host = new ConnectionSnapshot({ defaults: {}, providerModels: {}, connections: {} }).hostConnection();
+  const recorded = { provider: "openai", model: "m", api_key: "k", _connection: host };
+  expect(resolveModelConfig(recorded, { env: unread })["_connection"]).toEqual(host);
+
+  expect(resolveModelConfig({ provider: "anthropic", model: "m" }, { env })["_connection"]).toEqual(ENVIRONMENT);
+  const saved = await authStore().save("anthropic", new ApiKeyCredentials("saved-secret"), "m");
+  expect(resolveModelConfig({ provider: "anthropic", model: "m" }, { env })["_connection"]).toEqual(
+    storeConnection(saved),
+  );
+  expect(resolveModelConfig({ provider: "openai", model: "m", api_key: "k" }, { env })["_connection"]).toEqual(host);
+  const azure = await authStore().save("azure", new ApiKeyCredentials("saved-secret"), "dep", {
+    endpoint: "https://r.openai.azure.com/",
+  });
+  const resolved = resolveModelConfig({ provider: "azure", model: "dep" }, { env });
+  expect(resolved["base_url"]).toBe("https://r.openai.azure.com/");
+  expect(resolved["_connection"]).toEqual(storeConnection(azure, "https://r.openai.azure.com/"));
+});
+
+test("connection credentials per provider", async () => {
+  const saved = await authStore().save("anthropic", new ApiKeyCredentials("saved-anth-key"), "m", {
+    makeDefault: false,
+  });
+  const pinned = storeConnection(saved);
+
+  const credentials = await connectionCredentials(pinned, "anthropic", { env });
+  expect((credentials as ApiKeyCredentials).apiKey).toBe("saved-anth-key");
+
+  await authStore().save("anthropic", new ApiKeyCredentials("other-key"), "m", { makeDefault: false });
+  let error = await rejected(connectionCredentials(pinned, "anthropic", { env }));
+  expect(error).toBeInstanceOf(AuthError);
+  expect(error.message).toContain("yian auth anthropic");
+  await authStore().remove("anthropic");
+  error = await rejected(connectionCredentials(pinned, "anthropic", { env }));
+  expect(error).toBeInstanceOf(AuthError);
+  expect(error.message).toContain("yian auth anthropic");
+  error = await rejected(connectionCredentials(ENVIRONMENT, "anthropic", { env }));
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toContain("read by its client");
+});
+
+test("snapshot records saved settings without values", async () => {
+  const savedHeader = "saved-gw-7c2e91";
+  const openai = await authStore().save(
+    "openai",
+    new ApiKeyCredentials("sk-saved-4b1f", { "X-Gateway": savedHeader }),
+    "gpt-x",
+    { organization: "org-saved", project: "proj-saved" },
+  );
+  const anthropic = await authStore().save(
+    "anthropic",
+    new ApiKeyCredentials("sk-ant-saved", { "X-Trace": "t", "X-Gateway": "g" }),
+    "m",
+    { makeDefault: false },
+  );
+  const plain = await authStore().save("google", new ApiKeyCredentials("g-saved"), "g", { makeDefault: false });
+
+  const { connections } = connectionSnapshot({ env });
+
+  expect(connections["openai"]).toEqual({
+    ...storeConnection(openai, "https://api.openai.com/v1"),
+    organization: "org-saved",
+    project: "proj-saved",
+    header_names: ["X-Gateway"],
+  });
+  expect(connections["anthropic"]).toEqual({ ...storeConnection(anthropic), header_names: ["X-Gateway", "X-Trace"] });
+  expect(connections["google"]).toEqual(storeConnection(plain));
+  expect(JSON.stringify(connections)).not.toContain(savedHeader);
+});
+
+describe("environment table", () => {
+  const AZURE = "https://r.openai.azure.com/";
+  // Design 7.4's table of the variables yian reads. Later readers (the factory) add their calls
+  // to `drive` below, so this test holds them to the same table.
+  const READ = new Set<string>([
+    ...Object.values(PROVIDER_API_KEY_ENV).filter((name): name is string => name !== null),
+    "GEMINI_API_KEY",
+    "AZURE_OPENAI_AD_TOKEN",
+    "OPENAI_API_VERSION",
+    "OPENAI_BASE_URL",
+    "ANTHROPIC_BASE_URL",
+    "VLLM_BASE_URL",
+    "OLLAMA_BASE_URL",
+    "YIAN_DEFAULT_PROVIDER",
+    "YIAN_DEFAULT_MODEL",
+    "YIAN_AUTH_FILE",
+    "XDG_CONFIG_HOME",
+    "HOME",
+    ...ENTRIES.map((entry) => entry.variable),
+  ]);
+  // Variables a provider SDK or another tool reads; yian sets none of their effects.
+  const NEVER_READ = [
+    "ANTHROPIC_AUTH_TOKEN",
+    "OLLAMA_API_KEY",
+    "OPENAI_CUSTOM_HEADERS",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "OPENAI_ORG_ID",
+    "OPENAI_ORGANIZATION",
+    "OPENAI_PROJECT_ID",
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "AZURE_OPENAI_DEPLOYMENT_NAME",
+    "CODEX_HOME",
+    "SSL_CERT_FILE",
+  ];
+
+  /** Return the logins of each kind `provider` can save. */
+  function logins(provider: string): (Credentials | null)[] {
+    const key = new ApiKeyCredentials("saved-key", { "X-Gateway": "saved-gw" });
+    if (provider === "ollama") return [null];
+    if (provider === "vllm") return [key, null];
+    if (provider === "openai") {
+      const expiresAt = Date.now() / 1000 + 3600;
+      return [key, new OAuthCredentials({ accessToken: "a", refreshToken: "r", expiresAt, accountId: "acct" })];
+    }
+    return [key];
+  }
+
+  test("every variable read is in the table, and the others are never read", async () => {
+    const recorded = new Set<string>();
+    const recording: Env = (name) => {
+      recorded.add(name);
+      return env(name);
+    };
+    for (const name of NEVER_READ) vars.set(name, "never-read");
+
+    /** Snapshot, resolve, list and resolve credentials for `provider`'s configs. */
+    const drive = async (provider: string) => {
+      const base: AgentConfig = provider === "azure" ? { provider, model: "m", base_url: AZURE } : { provider, model: "m" };
+      connectionSnapshot({ env: recording });
+      callCredentials(base, { env: recording });
+      const configs = [
+        resolveModelConfig(base, { env: recording }),
+        resolveModelConfig({ ...base, api_key: "host-key" }, { env: recording }),
+        legacyConnectionConfig(base),
+      ];
+      for (const config of configs) {
+        callCredentials(config, { env: recording });
+        if (config["_connection"] !== undefined) {
+          // Only the reads count; an environment connection outside OpenAI refuses.
+          await connectionCredentials(config["_connection"], provider, { env: recording }).catch(() => null);
+        }
+      }
+    };
+
+    // No saved login and no key.
+    for (const provider of SUPPORTED_LLM_PROVIDERS) await drive(provider);
+    // Every key variable.
+    for (const name of READ) if (name.endsWith("_API_KEY")) vars.set(name, `env-${name}`);
+    vars.set("AZURE_OPENAI_AD_TOKEN", "env-ad-token");
+    vars.set("OPENAI_BASE_URL", "https://api.example/v1");
+    for (const provider of SUPPORTED_LLM_PROVIDERS) await drive(provider);
+    // Each login kind, over the key variables.
+    const store = new AuthStore(null, { env: recording });
+    for (const provider of SUPPORTED_LLM_PROVIDERS) {
+      for (const credentials of logins(provider)) {
+        await store.save(provider, credentials, "m", {
+          endpoint: provider === "azure" ? AZURE : null,
+          makeDefault: false,
+        });
+        await drive(provider);
+      }
+    }
+    // The default store path.
+    vars.delete("YIAN_AUTH_FILE");
+    new AuthStore(null, { env: recording });
+
+    expect([...recorded].filter((name) => !READ.has(name))).toEqual([]);
+    expect(NEVER_READ.filter((name) => recorded.has(name))).toEqual([]);
+    expect([...recorded]).toEqual(
+      expect.arrayContaining([
+        "YIAN_AUTH_FILE",
+        "YIAN_DEFAULT_PROVIDER",
+        "YIAN_DEFAULT_MODEL",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_AD_TOKEN",
+        "XDG_CONFIG_HOME",
+        "HOME",
+      ]),
+    );
   });
 });

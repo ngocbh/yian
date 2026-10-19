@@ -2,20 +2,39 @@
  * Record nonsecret connection identities and the selection they come from.
  *
  * There is no built-in provider or model: defaults come only from the environment and the saved
- * logins, read once into a `ConnectionSnapshot`. Binding records on every keyed agent which
- * connection it uses (the saved login or the provider's key environment variable; OpenAI also a
- * host key, subscription, or missing key), and `recordSelection` records the selection an agent
- * whose config resolves only when it runs binds from. Recorded metadata is internal, never a YAML
+ * logins, read once into a `ConnectionSnapshot`. Auth storage owns credentials and refresh. Binding
+ * records on every keyed agent which connection it uses (the saved login or the provider's key
+ * environment variable; OpenAI also a host key, subscription, or missing key), and
+ * `recordSelection` records the selection an agent whose config resolves only when it runs binds
+ * from. `connectionCredentials` resolves the credentials a model call sends, and `callCredentials`
+ * lists them so its errors can be scrubbed of them. Recorded metadata is internal, never a YAML
  * option, and never contains a token, API key or header value; its keys are snake_case because it
  * goes into run logs as Python yian writes them.
+ *
+ * The environment is read only through the `env` parameter (default `processEnv`), one variable
+ * at a time: `YIAN_DEFAULT_PROVIDER`, `YIAN_DEFAULT_MODEL`, `OPENAI_BASE_URL` and `OPENAI_API_KEY`
+ * for the snapshot and OpenAI's credentials; for `callCredentials`, each provider's key variable
+ * (`PROVIDER_API_KEY_ENV`), `GEMINI_API_KEY` after Google's, and `AZURE_OPENAI_AD_TOKEN` for Azure;
+ * and, through `AuthStore`, `YIAN_AUTH_FILE`, `XDG_CONFIG_HOME` and `HOME` for the store path. An
+ * empty value counts as unset.
  */
 
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 
+import { type Env, processEnv } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import type { Scheduler } from "../platform.ts";
 import { isList, isRecord, valueRepr } from "../typesys/values.ts";
-import { AuthError } from "./auth/common.ts";
+import { getApiKeyEnv } from "./api_key_env.ts";
+import {
+  ApiKeyCredentials,
+  AuthError,
+  type Credentials,
+  type OAuthCredentials,
+  type ProviderSelection,
+} from "./auth/common.ts";
+import { AuthStore } from "./auth/store.ts";
 import {
   AZURE_NEEDS_BASE_URL,
   azureResourceEndpoint,
@@ -37,6 +56,9 @@ const FIELDS: ReadonlySet<string> = new Set(["method", "source", "credential_id"
 const SETTINGS_FIELDS: ReadonlySet<string> = new Set(["organization", "project", "header_names"]);
 // Providers whose agents authenticate with a key and so carry a connection.
 const KEYED: ReadonlySet<string> = new Set(SUPPORTED_LLM_PROVIDERS.filter((name) => name !== "ollama"));
+// Providers whose saved login may hold no credential: Ollama sends none, and vLLM runs keyless
+// unless its server was started with a key.
+const KEYLESS_LOGINS: ReadonlySet<string> = new Set(["ollama", "vllm"]);
 const ENVIRONMENT_CONNECTION: Connection = {
   method: "api_key",
   source: "environment",
@@ -54,6 +76,11 @@ export const HOST_KEY_MARKER = "_host_key";
  * Their values, like the key, are never recorded.
  */
 export const HEADER_NAMES_KEY = "_header_names";
+// Key variables a provider's client reads after the provider's own, and only when it is given no
+// key.
+const KEY_ENV_FALLBACKS: ReadonlyMap<string, readonly string[]> = new Map([["google", ["GEMINI_API_KEY"]]]);
+// Token variables listed whenever set, though only a call given no key sends them.
+const ALWAYS_SENT_ENV: ReadonlyMap<string, readonly string[]> = new Map([["azure", ["AZURE_OPENAI_AD_TOKEN"]]]);
 const SELECTION_FIELDS: ReadonlySet<string> = new Set([
   "defaults",
   "provider_models",
@@ -491,6 +518,145 @@ export function keyIdentity(key: string): string {
   return createHash("sha256").update(key, "utf8").digest("hex");
 }
 
+/** Whether `value` names a supported provider. */
+function isSupported(value: unknown): value is string {
+  return typeof value === "string" && (SUPPORTED_LLM_PROVIDERS as readonly string[]).includes(value);
+}
+
+/**
+ * Read saved choices and the environment once, without resolving credentials, and return the
+ * snapshot.
+ *
+ * The default provider is `YIAN_DEFAULT_PROVIDER`, else the saved default, else none. Each saved
+ * selection supplies its provider's model; `YIAN_DEFAULT_MODEL` overrides the default provider's.
+ * Each keyed provider gets a connection: its saved API-key login (or, for OpenAI, subscription),
+ * else its key environment variable. A saved login for a provider this version does not support
+ * is skipped unless it is the default. `store` defaults to the store `env` names.
+ *
+ * Throws `RangeError` if `YIAN_DEFAULT_PROVIDER` or the saved default names an unsupported
+ * provider, or a supported provider's saved login is of a kind it cannot use (such as a
+ * subscription outside OpenAI, or an Azure login without a valid endpoint). Throws `AuthError` if
+ * the store cannot be read.
+ */
+export function connectionSnapshot(options: { env?: Env; store?: AuthStore } = {}): ConnectionSnapshot {
+  const { env = processEnv } = options;
+  const store = options.store ?? new AuthStore(null, { env });
+  const state = store.read();
+  const envProvider = env("YIAN_DEFAULT_PROVIDER") || null;
+  const apiEndpoint = env("OPENAI_BASE_URL") || OPENAI_API_ENDPOINT;
+  const provider = (envProvider || state.defaultProvider || "").toLowerCase() || null;
+  if (envProvider !== null && !isSupported(provider)) {
+    throw new RangeError(
+      `YIAN_DEFAULT_PROVIDER=${reprText(envProvider)} is not a supported provider; ` +
+        `set it to one of: ${SUPPORTED_LLM_PROVIDERS.join(", ")}`,
+    );
+  }
+  const models: Record<string, string> = {};
+  const connections: Record<string, Connection> = {};
+  for (const selection of state.selections) {
+    if (!isSupported(selection.provider)) {
+      if (envProvider === null && selection.provider === state.defaultProvider) {
+        throw new RangeError(
+          `The saved default provider ${reprText(selection.provider)} is not supported; ` +
+            `run 'yian auth ${selection.provider} --remove'`,
+        );
+      }
+      // A login for a provider this version no longer runs selects nothing.
+      continue;
+    }
+    checkSelection(selection);
+    models[selection.provider] = selection.model;
+    if (selection.provider === "openai") {
+      connections[selection.provider] = {
+        // `checkSelection` refuses an OpenAI login without a credential.
+        method: selection.method as Connection["method"],
+        source: "store",
+        credential_id: selection.credentialId,
+        endpoint: selection.method === "subscription" ? SUBSCRIPTION_ENDPOINT : apiEndpoint,
+        store_path: store.path,
+      };
+    } else if (selection.method === "api_key") {
+      connections[selection.provider] = {
+        method: "api_key",
+        source: "store",
+        credential_id: selection.credentialId,
+        endpoint: selection.endpoint,
+        store_path: store.path,
+      };
+    }
+    if (selection.method === "api_key") Object.assign(connections[selection.provider]!, selectionSettings(selection));
+  }
+  for (const keyed of SUPPORTED_LLM_PROVIDERS) {
+    if (KEYED.has(keyed) && keyed !== "openai" && !Object.hasOwn(connections, keyed)) {
+      connections[keyed] = structuredClone(ENVIRONMENT_CONNECTION);
+    }
+  }
+  let strayModel = false;
+  const envModel = env("YIAN_DEFAULT_MODEL");
+  if (envModel) {
+    if (provider === null) strayModel = true;
+    else models[provider] = envModel;
+  }
+  if (!Object.hasOwn(connections, "openai")) {
+    const key = env("OPENAI_API_KEY");
+    connections["openai"] = {
+      method: "api_key",
+      source: key ? "environment" : "missing",
+      credential_id: key ? keyIdentity(key) : null,
+      endpoint: apiEndpoint,
+      store_path: null,
+    };
+  }
+  const defaults: Defaults = {};
+  if (provider !== null) {
+    defaults.provider = provider;
+    if (Object.hasOwn(models, provider)) defaults.model = models[provider]!;
+  }
+  const validated = Object.fromEntries(
+    Object.entries(connections).map(([name, value]) => [name, validateConnection(value, name)]),
+  );
+  return new ConnectionSnapshot({ defaults, providerModels: models, connections: validated, apiEndpoint, strayModel });
+}
+
+/**
+ * Return the connection fields that record a saved API-key login's settings: `organization` and
+ * `project` when set, and the sorted `header_names` when the login has headers; never a header
+ * value.
+ */
+function selectionSettings(selection: ProviderSelection): Partial<Connection> {
+  const settings: Partial<Connection> = {};
+  if (selection.organization !== null) settings.organization = selection.organization;
+  if (selection.project !== null) settings.project = selection.project;
+  if (selection.headerNames.length > 0) settings.header_names = [...selection.headerNames].sort(compareCodeUnits);
+  return settings;
+}
+
+/**
+ * Check that a supported provider's saved login is a kind it can use.
+ *
+ * Throws `RangeError` if a provider other than Ollama or vLLM has no credential; a provider other
+ * than OpenAI has a subscription; a provider other than Azure has an endpoint; Azure has no valid
+ * endpoint; or Ollama has a key.
+ */
+function checkSelection(selection: ProviderSelection): void {
+  const { provider, method, endpoint } = selection;
+  let invalid =
+    (method === "none" && !KEYLESS_LOGINS.has(provider)) ||
+    (provider !== "openai" && method === "subscription") ||
+    (provider !== "azure" && endpoint !== null) ||
+    (provider === "azure" && endpoint === null) ||
+    (provider === "ollama" && method !== "none");
+  if (!invalid && provider === "azure") {
+    try {
+      validateBaseUrl(endpoint);
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      invalid = true;
+    }
+  }
+  if (invalid) throw new RangeError(`The saved ${provider} login is invalid; run 'yian auth ${provider}' again`);
+}
+
 /**
  * Validate the exact nonsecret metadata schema before use or replay, and return a deep copy of
  * `value`.
@@ -689,6 +855,14 @@ function pythonText(value: unknown): string {
   return value === null || value === undefined ? "None" : String(value);
 }
 
+/** Say that this run's host key for `provider` is not recorded, and how to pass it again. */
+function hostKeyMissing(provider: unknown): string {
+  return (
+    `This run's ${pythonText(provider)} API key came from the host's llm_config.api_key and is not ` +
+    "recorded; pass api_key to resume_flow or RunResult.backward"
+  );
+}
+
 /** Return `names` keyed by their lowercase form; a later name wins a clash. */
 function byLowerCase(names: Iterable<string>): Map<string, string> {
   return new Map(Array.from(names, (name): [string, string] => [name.toLowerCase(), name]));
@@ -717,6 +891,15 @@ export function headerNameDiff(expected: Iterable<string>, given: Iterable<strin
   return details.length > 0 ? details.join("; ") : null;
 }
 
+/** Return `config`'s set fields as a new record, its key and header values included. */
+function setFields(config: LLMConfig): AgentConfig {
+  const raw: AgentConfig = Object.fromEntries(Object.entries(config.dump()).filter(([, value]) => value !== null));
+  // Dumps leave the key and header values out; carry them across explicitly.
+  if (config.apiKey !== null) raw["api_key"] = config.apiKey;
+  if (config.headers !== null) raw["headers"] = { ...config.headers };
+  return raw;
+}
+
 /** Remove `key` from `raw` and return its value; `undefined` when absent. */
 function pop(raw: AgentConfig, key: string): unknown {
   const value = raw[key];
@@ -741,26 +924,13 @@ function pop(raw: AgentConfig, key: string): unknown {
  * its saved login.
  */
 export function splitModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LLMConfig, Connection | null] {
-  let raw: AgentConfig;
-  if (config instanceof LLMConfig) {
-    raw = Object.fromEntries(Object.entries(config.dump()).filter(([, value]) => value !== null));
-    // Dumps leave the key and header values out; carry them across explicitly.
-    if (config.apiKey !== null) raw["api_key"] = config.apiKey;
-    if (config.headers !== null) raw["headers"] = config.headers;
-  } else {
-    raw = Object.fromEntries(Object.entries(config));
-  }
+  const raw = config instanceof LLMConfig ? setFields(config) : Object.fromEntries(Object.entries(config));
   const recordedNames = pop(raw, HEADER_NAMES_KEY) ?? null;
   const headerNames = recordedNames === null ? null : validateHeaderNames(recordedNames, raw["provider"]);
   const marker = pop(raw, HOST_KEY_MARKER);
   if (marker !== undefined) {
     if (marker !== true) throw new RangeError("Invalid internal host key marker");
-    if (raw["api_key"] === undefined || raw["api_key"] === null) {
-      throw new AuthError(
-        `This run's ${pythonText(raw["provider"])} API key came from the host's llm_config.api_key and is not ` +
-          "recorded; pass api_key to resume_flow or RunResult.backward",
-      );
-    }
+    if (raw["api_key"] === undefined || raw["api_key"] === null) throw new AuthError(hostKeyMissing(raw["provider"]));
     checkHostHeaders(raw, headerNames ?? []);
   } else if (headerNames !== null) {
     throw new RangeError(`Internal ${HEADER_NAMES_KEY} needs the host key marker`);
@@ -869,6 +1039,58 @@ function blockErrorText(provider: string, issue: Issue): string {
 }
 
 /**
+ * Resolve a fresh config, preserving any existing pinned connection, and return it as a new record.
+ *
+ * `config` holds yian values (ints as `bigint`); host configs go through `fromHost` at the host
+ * entry points. An unset provider or model comes from the snapshot's defaults and saved models. A
+ * config with a model and a pinned connection, or a non-OpenAI config with a provider and model
+ * that needs no snapshot connection (keyless, or with its own `api_key`), returns without reading
+ * the snapshot. Otherwise an OpenAI config with an `api_key` gets a `host` connection, and any
+ * other keyed config gets its provider's connection as `ConnectionSnapshot.bind` attaches it,
+ * including an Azure login's endpoint as `base_url`. The snapshot is `snapshot`, else one read
+ * from `env` then.
+ *
+ * Throws `RangeError` if no layer sets the provider or its model, or a saved login is invalid
+ * (and as `splitModelConfig` does). Throws `AuthError` if the credential store cannot be read.
+ */
+export function resolveModelConfig(
+  config: Readonly<AgentConfig> | LLMConfig,
+  options: { snapshot?: ConnectionSnapshot; env?: Env } = {},
+): AgentConfig {
+  const [validated, metadata] = splitModelConfig(config);
+  const raw = setFields(validated);
+  if (metadata !== null && validated.model) {
+    raw["_connection"] = metadata;
+    return raw;
+  }
+  if (
+    validated.provider !== "openai" &&
+    validated.provider &&
+    validated.model &&
+    (!KEYED.has(validated.provider) || validated.apiKey !== null)
+  ) {
+    return raw;
+  }
+  const snapshot = options.snapshot ?? connectionSnapshot({ env: options.env });
+  const provider = validated.provider || snapshot.defaults.provider || null;
+  const saved = provider !== null && Object.hasOwn(snapshot.providerModels, provider) ? snapshot.providerModels[provider] : null;
+  const model = validated.model || saved || null;
+  if (provider === null || model === null) {
+    throw new RangeError(missingModelMessage(null, provider, { strayModel: snapshot.strayModel }));
+  }
+  raw["provider"] = provider;
+  raw["model"] = model;
+  if (metadata !== null) {
+    raw["_connection"] = metadata;
+  } else if (provider === "openai" && validated.apiKey !== null) {
+    raw["_connection"] = snapshot.hostConnection(validated.baseUrl);
+  } else if (validated.apiKey === null) {
+    attach(snapshot, raw);
+  }
+  return raw;
+}
+
+/**
  * Pin an old record to its original route without I/O, and return the pinned copy; `config` is
  * not mutated.
  *
@@ -911,4 +1133,144 @@ export function legacyConnectionMap(
   effective: Readonly<Record<string, Readonly<AgentConfig>>>,
 ): Record<string, AgentConfig> {
   return Object.fromEntries(Object.entries(effective).map(([path, config]) => [path, legacyConnectionConfig(config)]));
+}
+
+/**
+ * Resolve fresh credentials while enforcing the recorded connection identity.
+ *
+ * A `store` connection resolves the saved login it was pinned to, so a later login or removal
+ * fails instead of switching accounts; an API key comes with the header values saved beside it.
+ * `refresh` renews an expiring OpenAI subscription; without it one fails with the store's error.
+ * OpenAI also resolves its environment key, checking that it is the recorded one. Another
+ * provider's `environment` connection resolves nothing here: its client reads the key variable
+ * itself. `provider` is the provider of the config that carries `connection`; `signal` and
+ * `scheduler` go to the store.
+ *
+ * Rejects with `AuthError` if the pinned login changed, was removed, or cannot be read, or an
+ * OpenAI key is missing or changed; with `RangeError` if the metadata is invalid for `provider`,
+ * or it is a non-OpenAI `environment` connection.
+ */
+export async function connectionCredentials(
+  connection: unknown,
+  provider = "openai",
+  options: {
+    env?: Env;
+    refresh?: (current: OAuthCredentials) => OAuthCredentials | Promise<OAuthCredentials>;
+    signal?: AbortSignal;
+    scheduler?: Scheduler;
+  } = {},
+): Promise<Credentials> {
+  const { env = processEnv, refresh, signal, scheduler } = options;
+  const checked = validateConnection(connection, provider);
+  if (checked.source === "store") {
+    let credentials: Credentials;
+    try {
+      // `validateConnection` requires a saved login's credential id and absolute store path.
+      const store = new AuthStore(checked.store_path, { env, signal, scheduler });
+      credentials = await store.credentials(provider, checked.credential_id!, {
+        refresh: provider === "openai" ? refresh : undefined,
+      });
+    } catch (error) {
+      if (error instanceof AuthError) {
+        throw new AuthError(`${error.message}. Run 'yian auth ${provider}' and start a new run`, { cause: error });
+      }
+      throw error;
+    }
+    if (credentials.method !== checked.method) {
+      throw new AuthError(`The saved connection method changed; run 'yian auth ${provider}' and start a new run`);
+    }
+    return credentials;
+  }
+  if (provider !== "openai") throw new RangeError(`An environment connection for ${provider} is read by its client`);
+  if (checked.source === "host") throw new AuthError(hostKeyMissing("openai"));
+  if (checked.source === "missing") {
+    throw new AuthError(
+      "No OpenAI connection was selected; run 'yian auth openai' or set OPENAI_API_KEY before starting a new run",
+    );
+  }
+  const key = env("OPENAI_API_KEY");
+  if (!key) {
+    throw new AuthError("This run needs its OpenAI API key in OPENAI_API_KEY; use 'yian auth openai' for a new run");
+  }
+  if (checked.source === "environment" && keyIdentity(key) !== checked.credential_id) {
+    throw new AuthError("The OpenAI environment API key changed since this run started; start a new run");
+  }
+  return new ApiKeyCredentials(key);
+}
+
+/**
+ * Return every credential the model call built from `config` may send: the distinct plain
+ * credentials in first-seen order, possibly none. Never throws.
+ *
+ * `config` is an `LLMConfig` or a record of yian values; `null` and `undefined` resolve like `{}`.
+ * A config `api_key` is sent in place of any saved login or key variable, and the config's
+ * `headers` values are listed whenever given. Otherwise a `store` connection sends its provider's
+ * saved login, read without refresh: its key and saved header values, or its subscription tokens
+ * and account id, expired ones too. Otherwise (an `environment` or `legacy_environment`
+ * connection, or none) the client reads the first set variable of the provider's key variable,
+ * then its fallbacks (`GEMINI_API_KEY` for Google). `AZURE_OPENAI_AD_TOKEN` is listed for `azure`
+ * whenever set. A config without connection metadata is resolved first, as the factory does. Each
+ * step is guarded, so a failing one still leaves the others' credentials. Every header value is
+ * listed however short, so a value such as `prod` is scrubbed wherever it appears.
+ */
+export function callCredentials(config: unknown, options: { env?: Env } = {}): readonly string[] {
+  const { env = processEnv } = options;
+  const found: string[] = [];
+  const value = config ?? {};
+  let provider: unknown = null;
+  let hostKey: string | null = null;
+  let connection: unknown = null;
+  let headers: unknown = null;
+  try {
+    let key: unknown = null;
+    if (value instanceof LLMConfig) {
+      [provider, key, headers] = [value.provider, value.apiKey, value.headers];
+    } else if (isRecord(value)) {
+      [provider, key] = [value["provider"] ?? null, value["api_key"]];
+      [connection, headers] = [value["_connection"] ?? null, value["headers"]];
+    }
+    if (typeof key === "string" && key) {
+      found.push(key);
+      hostKey = key;
+    }
+  } catch {}
+  try {
+    if (isRecord(headers)) {
+      for (const header of Object.values(headers)) if (typeof header === "string" && header) found.push(header);
+    }
+  } catch {}
+  if (connection === null && (hostKey === null || provider === null)) {
+    try {
+      if (value instanceof LLMConfig || isRecord(value)) {
+        const resolved = resolveModelConfig(value, { env });
+        [provider, connection] = [resolved["provider"] ?? null, resolved["_connection"] ?? null];
+      }
+    } catch {}
+  }
+  if (typeof provider !== "string") return [...new Set(found)];
+  const name = provider.toLowerCase();
+  if (hostKey === null) {
+    try {
+      const pinned = connection as Record<string, unknown> | null;
+      const source = pinned === null ? null : pinned["source"];
+      if (source === "store") {
+        found.push(...new AuthStore(pinned!["store_path"] as string | null, { env }).savedSecrets(name));
+      } else if (source === null || source === "environment" || source === "legacy_environment") {
+        for (const variable of [getApiKeyEnv(name), ...(KEY_ENV_FALLBACKS.get(name) ?? [])]) {
+          const key = variable === null ? undefined : env(variable);
+          if (key) {
+            found.push(key);
+            break;
+          }
+        }
+      }
+    } catch {}
+  }
+  try {
+    for (const variable of ALWAYS_SENT_ENV.get(name) ?? []) {
+      const token = env(variable);
+      if (token) found.push(token);
+    }
+  } catch {}
+  return [...new Set(found)];
 }

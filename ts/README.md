@@ -118,7 +118,20 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 
 - `src/llm_clients/` holds `LLMConfig`, the provider block decoders (one field-spec table per
   API, the key walk, the value pass), the connection-setting checks and the key-variable table.
-- It reads no environment variable itself; its limits come from `current()`.
+- Only `connection.ts` and `auth/store.ts` read the environment, through an `Env` parameter
+  (default `processEnv`); the rest reads none. Limits come from `current()`.
+- `connection.ts`: selection (`ConnectionSnapshot`, read once from the defaults variables and the
+  saved logins), the connections recorded on each keyed agent, and the credentials a call may send
+  (`connectionCredentials`, and `callCredentials` for the scrub set).
+- `layers.ts`: resolves one agent's `llm_config` layers into its effective config, and checks
+  layers and complete selections. It reads no environment or saved settings.
+- `redact.ts`: `redactKey`/`redactKeys` remove keys and their masked echoes (`sk-abc****wxyz`)
+  from provider text.
+- `auth/common.ts`: `AuthError`, the credential classes and `ProviderSelection`.
+- `auth/store.ts`: `AuthStore`, the saved-login file in Python's format. Reads are sync. `save`,
+  `remove` and `setDefault` are async and hold `<path>.lock` through `waitForLock`;
+  `credentials` is async and takes the lock only to refresh. Node and Bun have no `dir_fd`, so private-path checks use `lstat`, an
+  `O_NOFOLLOW` open and `fstat`.
 - Values are yian values (ints are `bigint`), so a host `llm_config` goes through `fromHost` first.
 - `LLMConfig` holds the key, the header values and the blocks in `#private` fields. The key and
   headers are never dumped; the blocks are read through `blockFor` and `dump`.

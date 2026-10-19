@@ -202,7 +202,11 @@ run before appending any record.
   and echoes it, in full or masked like `sk-abc****wxyz`, the key and those
   fragments are replaced with `[REDACTED]` before the failure is recorded. The same
   applies to whichever credential the call used instead: the provider's saved login
-  or its key environment variable. The log
+  or its key environment variable. Changed (TS yian): a saved subscription's account
+  id is scrubbed too, and `ANTHROPIC_AUTH_TOKEN` isn't read. The base URLs come from
+  `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `VLLM_BASE_URL` and `OLLAMA_BASE_URL`;
+  `GOOGLE_GEMINI_BASE_URL` isn't read, and an empty variable counts as unset
+  (`YIAN_AUTH_FILE` too). See [Installation](installation.md#ts-environment). The log
   records only a nonsecret marker on those agents, so pass the key again as
   `resume_flow(..., api_key=key)` or `result.backward(..., api_key=key)`; without
   it, agents marked for the key fail when they call their model instead of reading

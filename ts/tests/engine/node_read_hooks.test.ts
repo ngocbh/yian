@@ -10,7 +10,9 @@
  * wiring without `over` throws a plain `Error` (Python's `KeyError`), not a `BindingError`; a
  * `bind` capability gets `over`, its source and the normalizer, whose result comes back as `over`;
  * a resolved list holding NaN is a `binding.evaluate` `BindingError`. WAIT's `until` is labelled
- * `wait until`; a WAIT wiring without `until` throws a plain `Error`.
+ * `wait until`; a WAIT wiring without `until` throws a plain `Error`; a `bind` capability gets
+ * `until`, its source and the normalizer, whose result comes back as `until`, and the normalizer
+ * still refuses a non-date under `bind`.
  */
 
 import { expect, test } from "bun:test";
@@ -50,6 +52,33 @@ test("WAIT labels until as wait until, and a wiring without it is a setup fault"
   expect(caught).toBeInstanceOf(Error);
   expect(caught).not.toBeInstanceOf(BindingError);
   expect((caught as Error).message).toBe("WAIT node 'w' has no `until` wiring");
+});
+
+test("WAIT hands until, its source and its normalizer to a bind capability", () => {
+  const node = new WaitNode("w");
+  const calls: [string, unknown][] = [];
+  const bind: ReservedBinder = (name, source, normalize) => {
+    calls.push([name, source]);
+    return normalize("2026-01-01");
+  };
+
+  expect(node.bindReserved(new Map([["until", "${deadline.output}"]]), new VariablePool(), { bind })).toEqual({
+    until: "2026-01-01",
+  });
+  expect(calls).toEqual([["until", "${deadline.output}"]]);
+});
+
+test("WAIT's normalizer refuses a non-date under a bind capability", () => {
+  const node = new WaitNode("w");
+  const bind: ReservedBinder = (_name, _source, normalize) => normalize(5n);
+  let caught: unknown = null;
+  try {
+    node.bindReserved(new Map([["until", "${deadline.output}"]]), new VariablePool(), { bind });
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(BindingError);
+  expect((caught as BindingError).failureCode).toBe("contract.input");
 });
 
 test("plain node defaults", () => {

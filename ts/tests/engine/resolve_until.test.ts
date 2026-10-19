@@ -38,7 +38,7 @@ function rejection(source: unknown, pool: VariablePool = new VariablePool()): Bi
     expect(error).toBeInstanceOf(BindingError);
     return error as BindingError;
   }
-  throw new Error(`resolveUntil accepted ${String(source)}`);
+  throw new Error(`resolveUntil accepted ${Bun.inspect(source)}`);
 }
 
 test("literal iso passthrough", () => {
@@ -91,7 +91,6 @@ test("deadline that overflows in utc names the value", () => {
   const caught = rejection(literal);
 
   expect(caught.failureCode).toBe("contract.input");
-  expect(caught.message).toContain(literal);
   expect(caught.message).toBe("wait `until` '0001-01-01T00:00+01:00': date value out of range");
 });
 

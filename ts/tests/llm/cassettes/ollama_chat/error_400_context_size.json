@@ -1,0 +1,42 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "error_400_context_size: llama-server's context-size 400 passed through by Ollama: context_length, not retried.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "http://localhost:11434/api/chat",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json"
+        },
+        "json": {
+          "model": "qwen3",
+          "stream": true,
+          "options": {},
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Say hello."
+            }
+          ],
+          "tools": []
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "json": {
+          "error": "request (302 tokens) exceeds the available context size (256 tokens), try increasing it"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "error_500_then_200: HTTP 500 runner failure, then a 200: server, retried once.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "http://localhost:11434/api/chat",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json"
+        },
+        "json": {
+          "model": "qwen3",
+          "stream": true,
+          "options": {},
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Say hello."
+            }
+          ],
+          "tools": []
+        }
+      },
+      "response": {
+        "status": 500,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "json": {
+          "error": "llama runner process has terminated: exit status 2"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "http://localhost:11434/api/chat",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json"
+        },
+        "json": {
+          "model": "qwen3",
+          "stream": true,
+          "options": {},
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Say hello."
+            }
+          ],
+          "tools": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/x-ndjson"
+        },
+        "chunks": [
+          "{\"model\":\"qwen3\",\"created_at\":\"2026-10-16T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"Hello\"},\"done\":false}\n",
+          "{\"model\":\"qwen3\",\"created_at\":\"2026-10-16T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\" there.\"},\"done\":false}\n",
+          "{\"model\":\"qwen3\",\"created_at\":\"2026-10-16T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\",\"total_duration\":1000,\"load_duration\":10,\"prompt_eval_count\":17,\"prompt_eval_duration\":100,\"eval_count\":9,\"eval_duration\":200}\n"
+        ]
+      }
+    }
+  ]
+}

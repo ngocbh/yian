@@ -1,0 +1,84 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "replay_degraded: turn 2 on qwen3 whose prior was parsed for qwen3:32b: its thinking is left out, the call and id stay.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "http://localhost:11434/api/chat",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json"
+        },
+        "json": {
+          "model": "qwen3",
+          "stream": true,
+          "options": {},
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Double 3."
+            },
+            {
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "id": "call_k3x9q2ab",
+                  "function": {
+                    "name": "double",
+                    "arguments": {
+                      "value": 3
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "role": "tool",
+              "content": "6",
+              "tool_name": "double",
+              "tool_call_id": "call_k3x9q2ab"
+            }
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "double",
+                "description": "Double an integer.",
+                "parameters": {
+                  "properties": {
+                    "value": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "type": "object"
+                }
+              }
+            }
+          ],
+          "think": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/x-ndjson"
+        },
+        "chunks": [
+          "{\"model\":\"qwen3\",\"created_at\":\"2026-10-16T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"The answer\"},\"done\":false}\n",
+          "{\"model\":\"qwen3\",\"created_at\":\"2026-10-16T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\" is 6.\"},\"done\":false}\n",
+          "{\"model\":\"qwen3\",\"created_at\":\"2026-10-16T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\",\"total_duration\":1000,\"load_duration\":10,\"prompt_eval_count\":17,\"prompt_eval_duration\":100,\"eval_count\":9,\"eval_duration\":200}\n"
+        ]
+      }
+    }
+  ]
+}

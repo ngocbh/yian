@@ -1,0 +1,40 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "redirect_307: HTTP 307 to another host: redirect, not followed, not retried.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "http://localhost:11434/api/chat",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json"
+        },
+        "json": {
+          "model": "qwen3",
+          "stream": true,
+          "options": {},
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Say hello."
+            }
+          ],
+          "tools": []
+        }
+      },
+      "response": {
+        "status": 307,
+        "headers": {
+          "location": "https://evil.example/steal"
+        },
+        "text": ""
+      }
+    }
+  ]
+}

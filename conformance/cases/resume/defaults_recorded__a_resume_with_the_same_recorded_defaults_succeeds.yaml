@@ -1,7 +1,7 @@
 # From tests/engine/test_defaults_recorded.py::test_resume_with_same_value_succeeds.
 # Also ::test_non_default_value_is_recorded. A run records the defaults that differ from the built-in ones in
 # run_started, and a resume under the same values passes the defaults check. A TOOL stands for the test's CODE.
-# env: YIAN_MAX_TOTAL_NODES is the recorded default under test (the built-in value is 20000).
+# env: YIAN_MAX_TOTAL_NODES is the recorded default under test (the built-in value is 10000).
 # Record 2 is __start__'s node_succeeded (the test's cut): n's node_started is refused.
 kind: resume
 flow: |

@@ -1811,6 +1811,8 @@ non-negative integer (`0` means no retry); anything else fails at load. It cover
 only these corrections, not tool failures. A TOOL node's `retries:` is different:
 it retries a failed tool call (see [TOOL retries](#tool-retries)).
 
+Changed (TS yian): `retries:` is at most 9,007,199,254,740,991 (JavaScript's largest safe integer).
+
 ```yaml
 extract:
   kind: agent

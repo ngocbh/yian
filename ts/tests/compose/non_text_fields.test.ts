@@ -9,6 +9,10 @@
  * text is pydantic's. The null and text `node_name:` rows and the null optional flow field rows
  * check the parsed value, where Python loads the flow.
  *
+ * The `llm_config` rows (`test_non_text_llm_config_field_is_a_load_error`,
+ * `test_nested_llm_config_text_field`, `test_other_llm_config_errors_are_unchanged`) load the node
+ * site with `assembleText`, as the loader assembles the root flow.
+ *
  * The harvested `load-core/compose_non_text_fields__*` cases are pinned at the end of each block,
  * by the call that raises their error; the inline-body ones are Later (T3-17).
  *
@@ -17,14 +21,14 @@
  *
  * Later (T3-15): the `code:` and `tool_id:` rows (`test_non_text_code_is_a_load_error`,
  * `test_non_text_tool_id_is_a_load_error`, `test_null_code_and_tool_id_are_empty`,
- * `test_tagged_non_text_tool_id`, `test_text_code_and_tool_id_still_load`) and the `llm_config`
- * rows. Later (T3-16): the `call:`, `on:` and loop/case rows (`test_non_text_call_is_a_load_error`,
+ * `test_tagged_non_text_tool_id`, `test_text_code_and_tool_id_still_load`). Later (T3-16): the `call:`, `on:` and loop/case rows (`test_non_text_call_is_a_load_error`,
  * `test_null_call_is_empty`, `test_text_call_still_loads`, `test_non_text_case_on_is_a_load_error`,
  * `test_null_case_on_is_absent`, `test_text_case_on_still_loads`, and the while, until,
  * searched-when, on-when, then and else rows of `test_already_located_fields_are_unchanged`).
  * Later (T3-17): the inline-body rows of `test_code_in_def_compact_merge_and_inline_body` and
- * `test_non_text_kind_in_a_def_and_inline_body`. Later (T3-22): their defs, compact and merge rows,
- * and the def `asserts:` rows (`test_non_text_def_assert_is_a_load_error`,
+ * `test_non_text_kind_in_a_def_and_inline_body`, and the `adaptive_questions.llm_config` site of
+ * the `llm_config` rows. Later (T3-22): their defs, compact and merge rows, the flow and def sites
+ * of the `llm_config` rows, and the def `asserts:` rows (`test_non_text_def_assert_is_a_load_error`,
  * `test_non_list_def_asserts_is_a_load_error`, `test_null_def_asserts_loads`).
  */
 
@@ -34,7 +38,7 @@ import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { notTextError } from "../../src/compose/nodes/base.ts";
 import { parseFile } from "../../src/compose/parse/file.ts";
 import { forget } from "../../src/defaults.ts";
-import { fileOf, loadError, nodesOf, runTextCase } from "./declarations.ts";
+import { assembled, assembleText, fileOf, loadError, nodesOf, runCase, runTextCase } from "./declarations.ts";
 import { ALL_KIND_NAMES, StandInCode, standIn } from "./stand_ins.ts";
 
 afterEach(() => forget());
@@ -326,5 +330,49 @@ describe("parseNodes", () => {
     ["load-core/compose_non_text_fields__null_kind", []],
   ] as const)("case %s", (id, kinds) =>
     runTextCase({ id, call: (text, label) => nodesOf(text, kinds, label) }),
+  );
+});
+
+describe("llm_config", () => {
+  /** A flow whose agent node `a` has `llm_config: <v>`. */
+  const llmOnNode = (v: string) => `id: f
+name: f
+nodes:
+  a:
+    kind: agent
+    prompt: hi
+    llm_config: ${v}
+output: \${a.output}
+`;
+  const PREFIX = "node 'a': llm_config: ";
+
+  test("a non-text llm_config field is a load error", () => {
+    const text = llmOnNode("{model: 5}");
+
+    const error = loadError(() => assembleText(text));
+
+    expect(error.message).toContain(
+      PREFIX + "`model:` must be text, but YAML read it as an integer; put it in quotes",
+    );
+    expect(error.message).not.toContain("validation error for LLMConfig");
+    expect(startLine(error)).toBe(lineOf(text, "llm_config: "));
+  });
+
+  test("a nested llm_config text field", () => {
+    const error = loadError(() => assembleText(llmOnNode("{provider: openai, openai: {user: 5}}")));
+
+    expect(error.message).toContain(PREFIX + "`openai.user:` must be text");
+  });
+
+  test.each([
+    ["{provider: 5}", "1 validation error"],
+    ["{provider: azure, azure: {stop: 5}}", "2 validation errors"],
+    ["{provider: azure, azure: {stop: [5]}}", "2 validation errors"],
+  ])("other llm_config errors are unchanged: %s", (value, count) => {
+    expect(loadError(() => assembleText(llmOnNode(value))).message).toContain(PREFIX + count + " for LLMConfig");
+  });
+
+  test.each(["load-core/compose_non_text_fields__non_text_node_llm_config_field"])("case %s", (id) =>
+    runCase({ id, call: assembled }),
   );
 });

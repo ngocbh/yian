@@ -8,9 +8,13 @@
  * `number`; the default follows `YIAN_AGENT_RETRIES`; a variable named `inf` is refused at its key,
  * before a like-named input; a lone surrogate in `prompt:` or `system_prompt:` is refused at the
  * field; the constructor refuses a non-exact `MemoryDecl`; `withSourceOrigins` registers one
- * origin per `long_term_memory:` entry; and `build` on a hand-built descriptor and context (the
- * variable reader's fallback and return check, memory sites stamped with `ctx.owner`, the
- * `llm_config` label and the `__llm_config` range).
+ * origin per `long_term_memory:` entry; `build` on a hand-built descriptor and context (no
+ * declarations build no variables, memory sites stamped with `ctx.owner`, the `llm_config` label
+ * and the `__llm_config` range; the variable reader's fallback and return check are in
+ * `agent_variables.test.ts`); and the literal `llm_config:` check, which reads `LLMConfig`'s
+ * first issue where Python reads pydantic's: a text field read as non-text, at the top level or
+ * in a block, is named as `notTextError` names it, and a field taking more than text (`azure.stop`)
+ * keeps the validation error.
  *
  * Held here until T3-22: the harvested cases at the end, whose error the AGENT parse or build
  * raises, each under a comment naming the Python file it comes from, and the flows that assemble.
@@ -18,7 +22,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { BuildContext, siteKey, type VariableDeclarationReader } from "../../src/compose/nodes/base.ts";
+import { BuildContext, siteKey } from "../../src/compose/nodes/base.ts";
 import { AgentDescriptor, retriesError } from "../../src/compose/nodes/agent.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
@@ -27,7 +31,6 @@ import { BUILTIN, forget, reload } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
-import { Parameter } from "../../src/nodes/contracts.ts";
 import { assembled, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
 
 afterEach(() => forget());
@@ -256,43 +259,17 @@ describe("withSourceOrigins", () => {
 });
 
 describe("build", () => {
-  /** A context over an empty registry, with `reader` as its variable declaration reader. */
-  const reading = (reader: VariableDeclarationReader | null = null, owner?: readonly string[]) =>
-    new BuildContext({ registry: new Map(), variableDeclarationReader: reader, owner });
+  /** A context over an empty registry, with `owner` as the owner path of the node being built. */
+  const reading = (owner?: readonly string[]) => new BuildContext({ registry: new Map(), owner });
 
-  test("a reader returning null falls back to the source-free reader", () => {
-    const calls: unknown[] = [];
-    const reader = (nodeId: string, declarations: unknown) => {
-      calls.push([nodeId, declarations]);
-      return null;
-    };
-
-    expect((new AgentDescriptor({ id: "a" }).build(reading(reader)).node as AgentNode).variables).toEqual([]);
-    expect(loadError(() => new AgentDescriptor({ id: "a", variables: { n: "int" } }).build(reading(reader))).message)
-      .toStartWith("variable 'n': a variable needs a default");
-    expect(calls).toEqual([["a", {}], ["a", { n: "int" }]]);
-  });
-
-  class LooseParameter extends Parameter {}
-
-  test.each<[string, unknown]>([
-    ["a record", {}],
-    ["text", "x"],
-    ["a set", new Set()],
-    ["a list holding a record", [{}]],
-    ["a list holding a Parameter subclass", [new LooseParameter("x")]],
-  ])("a reader returning %s is a defect", (_label, returned) => {
-    const reader = (() => returned) as unknown as VariableDeclarationReader;
-
-    expect(() => new AgentDescriptor({ id: "a" }).build(reading(reader))).toThrow(
-      new TypeError("variable declaration reader must return a list of exact Parameters or null"),
-    );
+  test("a node with no declarations builds no variables", () => {
+    expect((new AgentDescriptor({ id: "a" }).build(reading()).node as AgentNode).variables).toEqual([]);
   });
 
   test("memory sites are stamped with the context's owner", () => {
     const origin = new SourceCatalogBuilder().register(["node", "a"], readerFor("nodes:\n  a: {}\n", "a"));
     const memories = [new MemoryDecl("notes", "episodic", {}, new DeclSite([], ["root"], "a"), origin)];
-    const node = new AgentDescriptor({ id: "a", memories }).build(reading(null, ["root", "node", "outer"]))
+    const node = new AgentDescriptor({ id: "a", memories }).build(reading(["root", "node", "outer"]))
       .node as AgentNode;
 
     expect(node.memories).toEqual([
@@ -324,6 +301,33 @@ describe("build", () => {
   });
 });
 
+describe("literal llm_config fields", () => {
+  /** Return the message of the `LoadError` building node `a` with `llmConfig` raises. */
+  const llmError = (llmConfig: unknown) =>
+    loadError(() => new AgentDescriptor({ id: "a", llmConfig }).build(new BuildContext({ registry: new Map() })))
+      .message;
+
+  test("a text field read as non-text names the field", () => {
+    expect(llmError({ model: 5n })).toBe(
+      "node 'a': llm_config: `model:` must be text, but YAML read it as an integer; put it in quotes",
+    );
+  });
+
+  test("a block's text field read as non-text names its path", () => {
+    expect(llmError({ anthropic: { inference_geo: 5n } })).toBe(
+      "node 'a': llm_config: `anthropic.inference_geo:` must be text, but YAML read it as an integer; " +
+        "put it in quotes",
+    );
+  });
+
+  // `stop` takes text or a list of text, so its value is not a text field read as non-text.
+  test.each([[5n], [[5n]]])("a field taking more than text keeps the validation error: stop %p", (stop) => {
+    expect(llmError({ provider: "azure", azure: { stop } })).toStartWith(
+      "node 'a': llm_config: 2 validation errors for LLMConfig\nazure.stop.str\n",
+    );
+  });
+});
+
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
@@ -350,6 +354,21 @@ test.each<CaseRow>([
 ])("parseNodes: $id", runCase);
 
 test.each<CaseRow>([
+  // tests/compose/test_agent_field_shapes.py
+  { id: "load-agent/compose_agent_field_shapes__inherit_on_is_text", call: assembled },
+  { id: "load-agent/compose_agent_field_shapes__int_inherit", call: assembled },
+  // tests/compose/test_llm_config_blocks_load.py
+  { id: "load-agent/compose_llm_config_blocks_load__node_level_reserved_field_fails_at_load", call: assembled },
+  // tests/engine/test_llm_inherit.py
+  { id: "load-agent/engine_llm_inherit__unknown_node_llm_config_key_fails", call: assembled },
+  // tests/engine/test_run_api_key.py
+  { id: "load-agent/engine_run_api_key__api_key_on_a_node", call: assembled },
+  // tests/engine/test_run_base_url.py
+  { id: "load-agent/engine_run_base_url__base_url_on_a_node", call: assembled },
+  // tests/engine/test_run_connection_settings.py
+  { id: "load-agent/engine_run_connection_settings__organization_on_a_node", call: assembled },
+  // tests/seeds/errors/
+  { id: "load-agent/seed_e39_llm_config_no_range", call: assembled },
   // tests/compose/test_agent_load_checks.py
   { id: "load-agent/compose_agent_load_checks__agent_output_of_file", call: assembled },
   { id: "load-agent/compose_agent_load_checks__node_env_max_tool_iterations_zero", call: assembled },
@@ -365,6 +384,8 @@ test.each<CaseRow>([
 ])("assemble: $id", runCase);
 
 test.each<CaseRow>([
+  // tests/compose/test_agent_field_shapes.py
+  { id: "load-agent/compose_agent_field_shapes__inherit_true_with_a_model_loads", call: assembled },
   // tests/compose/test_agent_load_checks.py
   { id: "load-agent/compose_agent_load_checks__agent_union_output_loads", call: assembled },
   { id: "load-agent/compose_agent_load_checks__max_tool_iterations_minus_one_loads", call: assembled },

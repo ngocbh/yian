@@ -1,12 +1,14 @@
 /**
- * Mirrors `tests/engine/test_retired_llm_keys.py`: the first three tests. The load, cascade, run
- * and resume tests go with their modules.
+ * Mirrors `tests/engine/test_retired_llm_keys.py`: the first three tests, and the harvested case
+ * `engine_retired_llm_keys__temperature_on_a_node` (the root flow assembled as the loader
+ * assembles it). The load, cascade, run and resume tests go with their modules.
  */
 
 import { expect, test } from "bun:test";
 
 import { LLMConfig, retiredKeyError } from "../../src/llm_clients/config.ts";
 import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
+import { assembled, runCase } from "../compose/declarations.ts";
 
 const SENTINEL = "sentinel-3f9a1c";
 const SENTINEL_NUMBER = 0.734519;
@@ -55,3 +57,7 @@ test("temperature message never echoes an unknown provider", () => {
   expect(message).not.toContain(SENTINEL);
   expect(message).toContain("`<provider>: {temperature: <value>}`");
 });
+
+test.each(["load-agent/engine_retired_llm_keys__temperature_on_a_node"])("case %s", (id) =>
+  runCase({ id, call: assembled }),
+);

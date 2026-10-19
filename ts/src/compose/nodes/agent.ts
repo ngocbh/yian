@@ -6,18 +6,22 @@
  * and a variable named `inf`, checks the shapes of its own fields, and builds the runtime
  * `AgentNode`. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
  *
- * Knows about: diagnostics, compose source and helpers, memory contracts, nodes (agent and
- *              contracts), skills, typesys and defaults.
+ * Knows about: diagnostics, compose source and helpers, llm_clients (config and provider
+ *              blocks), memory contracts, nodes (agent, contracts and human_input), skills,
+ *              typesys and defaults.
  * Never imports: compose/parse, the runtime or the CLI.
  */
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { current } from "../../defaults.ts";
+import { hostOnlyFieldError, LLMConfig } from "../../llm_clients/config.ts";
+import { ValidationError } from "../../llm_clients/provider_blocks.ts";
 import { DeclSite, MemoryDecl } from "../../memory/contracts.ts";
 import { LLM_CONFIG_KEY } from "../../nodes/agent/llm_values.ts";
 import { AgentNode, isMaxToolIterations, isTextOutput } from "../../nodes/agent/node.ts";
 import { typeToSchema } from "../../nodes/agent/structured.ts";
-import { type Binding, isExactly, Parameter, ValueContract, type ValueTemplate } from "../../nodes/contracts.ts";
+import { Binding, isExactly, Parameter, ValueContract, ValueTemplate } from "../../nodes/contracts.ts";
+import { siteLabel } from "../../nodes/human_input/node.ts";
 import { SkillError } from "../../skills/index.ts";
 import { isList, isRecord, typeLevels, type Value, valueRepr } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
@@ -32,6 +36,7 @@ import {
   BuildResult,
   NodeDescriptor,
   type NodeDescriptorFields,
+  notTextError,
   rejectInfinityName,
   rejectNonText,
   siteKey,
@@ -67,7 +72,104 @@ function formerBooleanHint(value: unknown): string {
   return fix === null ? "" : `; ${fix[1]}`;
 }
 
-/** Split an authored `llm_config:` layer into the config without `inherit` and `inherit`; `null` is `[{}, true]`. */
+/** Put `prefix` in place of the leading `llm_config` of a host-only field message. */
+function hostOnlyMessage(prefix: string, message: string): string {
+  // A message that does not start with `llm_config` is kept whole after the prefix.
+  return message.startsWith("llm_config") ? prefix + message.slice("llm_config".length) : `${prefix}: ${message}`;
+}
+
+/** Return the field a `hostOnlyFieldError` message names (`llm_config.<field> ...`). */
+function hostOnlyField(message: string): string {
+  const rest = message.startsWith("llm_config.") ? message.slice("llm_config.".length) : message;
+  return rest.split(" ", 1)[0]!;
+}
+
+/**
+ * Return the field and value of an `LLMConfig` error that is a text field read as non-text, or
+ * `null`.
+ *
+ * Only the first issue is read, so the field named agrees with the range the caller locates from
+ * that same first issue. It is `null` when that issue is not a `string_type` failure, or is the
+ * `str` member of a union field, which takes more than text. Issues carry no input, so the value
+ * is read from `cfg` along the issue's path.
+ */
+function notTextDetail(error: ValidationError, cfg: Readonly<Record<string, unknown>>): [string, unknown] | null {
+  const first = error.issues[0];
+  if (first === undefined || first.type !== "string_type") return null;
+  const { loc } = first;
+  if (loc.at(-1) === "str") {
+    // A union reports one issue per member, the `str` member first; any other issue under the same
+    // parent (a list member's item issue extends it) marks a field that takes more than text.
+    const parent = loc.slice(0, -1);
+    if (error.issues.some((issue) => issue !== first && parent.every((step, i) => issue.loc[i] === step))) {
+      return null;
+    }
+  }
+  let value: unknown = cfg;
+  for (const step of loc) {
+    // Union member labels and variant tags are steps of the path but not keys of the value.
+    if (typeof step === "number") {
+      if (isList(value)) value = value[step];
+    } else if (isRecord(value) && Object.hasOwn(value, step)) {
+      value = value[step];
+    }
+  }
+  return [siteLabel(loc), value];
+}
+
+/**
+ * Check literal `llm_config` fields as `LLMConfig` fields.
+ *
+ * @param cfg The literal fields; a field holding a value is `null`.
+ * @param prefix Message prefix naming the layer.
+ * @param sourceRange The layer's location, when retained.
+ * @param fieldRange The location of a top-level field by its key; `null` locates every error at
+ *   the layer.
+ * @throws LoadError when a field violates `LLMConfig`: a text field YAML read as non-text is named
+ *   by `notTextError`, any other violation keeps the `LLMConfig` message.
+ */
+function checkLiteralFields(
+  cfg: Readonly<Record<string, unknown>>,
+  prefix: string,
+  sourceRange: SourceRange | null,
+  diagnostics: LoadDiagnostics,
+  fieldRange: ((key: string) => SourceRange | null) | null = null,
+): void {
+  try {
+    new LLMConfig(cfg);
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      const detail = notTextDetail(error, cfg);
+      const key = error.issues[0]?.loc[0];
+      const range = fieldRange !== null && typeof key === "string" ? fieldRange(key) : sourceRange;
+      throw diagnostics.error(`${prefix}: ` + (detail !== null ? notTextError(...detail) : error.message), {
+        range,
+        cause: error,
+      });
+    }
+    if (!(error instanceof RangeError)) throw error;
+    throw diagnostics.error(`${prefix}: ${error.message}`, { range: sourceRange, cause: error });
+  }
+}
+
+/**
+ * Validate an authored `llm_config:` layer at load and split off `inherit`.
+ *
+ * `inherit` (the whole-node cascade opt-out, default `true`) is not an `LLMConfig` field, so it is
+ * removed before the check that refuses unknown keys (such as `temparature`). A layer holding
+ * `${...}` values (a `ValueTemplate`, or a `Binding` for the whole record) is checked by
+ * `checkLlmConfigValue`; its values are checked when they resolve.
+ *
+ * @param cfg The authored layer, or `null` for defaults.
+ * @param prefix Message prefix naming the layer, such as `node 'a': llm_config`.
+ * @param sourceRange The layer's location, when retained.
+ * @param fieldRanges For a layer holding values, the value range of each key written in it, by
+ *   dotted path.
+ * @returns The layer without `inherit`, then `inherit`.
+ * @throws LoadError when the layer is not a mapping, sets a non-boolean `inherit`, sets a
+ *   host-only field (`api_key`, `organization`, `project`, `headers`, or `base_url` other than
+ *   beside `provider: azure`), or violates `LLMConfig`.
+ */
 function validateLlmConfig(
   cfg: unknown,
   prefix: string,
@@ -75,7 +177,22 @@ function validateLlmConfig(
   diagnostics: LoadDiagnostics,
   fieldRanges: ReadonlyMap<string, SourceRange>,
 ): [Readonly<Record<string, unknown>> | ValueTemplate | Binding, boolean] {
-  return [(cfg ?? {}) as Readonly<Record<string, unknown>>, true];
+  if (cfg === null) return [{}, true];
+  if (cfg instanceof ValueTemplate || cfg instanceof Binding) {
+    throw new Error("check_llm_config_value is not ported yet");
+  }
+  if (!isRecord(cfg)) throw diagnostics.error(`${prefix} must be a mapping`, { range: sourceRange });
+  const { inherit = true, ...rest } = cfg;
+  if (typeof inherit !== "boolean") {
+    throw diagnostics.error(
+      `${prefix} \`inherit:\` must be true or false, got ${valueRepr(inherit)}${formerBooleanHint(inherit)}`,
+      { range: sourceRange },
+    );
+  }
+  const hostOnly = hostOnlyFieldError(rest);
+  if (hostOnly !== null) throw diagnostics.error(hostOnlyMessage(prefix, hostOnly), { range: sourceRange });
+  checkLiteralFields(rest, prefix, sourceRange, diagnostics);
+  return [rest, inherit];
 }
 
 /** The fields `AgentDescriptor`'s constructor takes: the common ones and the AGENT's own. */
@@ -442,10 +559,10 @@ export class AgentDescriptor extends NodeDescriptor {
       if (ctx.variableDeclarationReader !== null) {
         const variables: unknown = ctx.variableDeclarationReader(this.id, this.variables);
         if (variables !== null) {
-          if (!isList(variables) || variables.some((variable) => !isExactly(variable, Parameter))) {
+          if (!isList(variables) || !variables.every((variable) => isExactly(variable, Parameter))) {
             throw new TypeError("variable declaration reader must return a list of exact Parameters or null");
           }
-          return variables as Parameter[];
+          return variables;
         }
       }
       // Only a node with no authored source gets here; a variable needs a default, which only a

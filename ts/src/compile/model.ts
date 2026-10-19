@@ -1,11 +1,13 @@
 /**
- * The compiled flow graph: nodes, edges and adjacency.
+ * The compiled flow graph: nodes, edges, adjacency and growth validation.
  *
  * `CompiledFlow` carries authored topology: the nodes and how they connect. Mutable dispositions
  * live in the run state, and the run boundary copies the graph before a growth reducer splices or
  * prunes dynamic topology, so one authored flow can back many independent runs.
  *
  * Growth fragments also carry source-neutral seed connections and actual child boundary pairs.
+ * Their graph validation lives here so manifests and accepted-state preparation share one check
+ * without depending on the kind-aware growth builders.
  *
  * `START_ID` / `END_ID` are the reserved boundary-node ids. Every flow begins with a synthesized
  * START node (which binds the run inputs) and ends with a synthesized END node (whose value is the
@@ -18,13 +20,16 @@
 
 import { reprText } from "../diagnostics.ts";
 import { MemoryDecl } from "../memory/contracts.ts";
-import type { Node } from "../nodes/base.ts";
+import { Node } from "../nodes/base.ts";
 import {
   asBinding,
   type Binding,
-  type ChildFlowBoundary,
+  ChildFlowBoundary,
+  ExecutionScope,
   isExactly,
-  type SeedConnection,
+  Parameter,
+  sameExecutionPosition,
+  SeedConnection,
   type ValuePath,
   type ValueTemplate,
 } from "../nodes/contracts.ts";
@@ -228,6 +233,104 @@ export class Flow {
   }
 }
 
+/** Whether `a` and `b` have the same length and pairwise `same` items. */
+function sameItems<T>(a: readonly T[], b: readonly T[], same: (x: T, y: T) => boolean = (x, y) => x === y): boolean {
+  return a.length === b.length && a.every((item, i) => same(item, b[i]!));
+}
+
+/**
+ * Validate immutable growth recipes against their declared fragment targets.
+ *
+ * Both fragment acceptance and topology identity use this source-neutral graph check. Execution
+ * scopes may be absent on direct graphs; present scopes must identify the corresponding actual
+ * boundary and containing flow occurrence.
+ *
+ * A seed connection targets either a child START input that is declared and wired, or an input of
+ * another fragment node that is declared with a default and left unwired, so the seed route stands
+ * in for a value bound by default. Each (target, input) pair appears at most once.
+ *
+ * @throws TypeError when a recipe carrier, boundary node, scope, target node or target parameter
+ *   list has the wrong type.
+ * @throws RangeError when a boundary or seed connection doesn't match the fragment.
+ */
+export function validateGrowthMetadata(flow: Flow): void {
+  const recipes: [string, unknown, abstract new (...args: never[]) => object][] = [
+    ["input_connections", flow.inputConnections, SeedConnection],
+    ["child_boundaries", flow.childBoundaries, ChildFlowBoundary],
+  ];
+  for (const [name, values, carrier] of recipes) {
+    if (!Array.isArray(values) || values.some((value) => !isExactly(value, carrier))) {
+      throw new TypeError(`${name} must be an array of exact ${carrier.name} values`);
+    }
+  }
+  const starts = new Set<string>();
+  const endpoints = new Set<string>();
+  for (const boundary of flow.childBoundaries) {
+    new ChildFlowBoundary(boundary.startId, boundary.endId);
+    const scopes: (ExecutionScope | null)[] = [];
+    for (const [nodeId, role] of [
+      [boundary.startId, "start"],
+      [boundary.endId, "end"],
+    ] as const) {
+      if (!flow.nodes.has(nodeId) || endpoints.has(nodeId)) {
+        throw new RangeError("child boundaries must name distinct fragment nodes");
+      }
+      endpoints.add(nodeId);
+      const node: unknown = flow.nodes.get(nodeId);
+      if (!(node instanceof Node)) throw new TypeError("child boundaries must name Node values");
+      const scope: unknown = node.executionScope;
+      if (scope !== null) {
+        if (!isExactly(scope, ExecutionScope)) throw new TypeError("child boundary scope must be an ExecutionScope");
+        new ExecutionScope(scope.staticPath, {
+          flowPath: scope.flowPath,
+          occurrencePath: scope.occurrencePath,
+          boundary: scope.boundary,
+        });
+        if (scope.boundary !== role) throw new RangeError("child boundary role disagrees with its execution scope");
+        if (scope.staticPath.length === 0 || !sameItems(scope.staticPath.slice(0, -1), scope.flowPath)) {
+          throw new RangeError("child boundary location must belong to its containing flow");
+        }
+      }
+      scopes.push(scope);
+    }
+    const [start, end] = scopes as [ExecutionScope | null, ExecutionScope | null];
+    if (
+      start !== null &&
+      end !== null &&
+      (!sameItems(start.flowPath, end.flowPath) ||
+        !sameItems(start.occurrencePath, end.occurrencePath, sameExecutionPosition))
+    ) {
+      throw new RangeError("child boundaries must belong to the same flow occurrence");
+    }
+    starts.add(boundary.startId);
+  }
+  // Keyed by the JSON of the (target, input) pair, which no two distinct pairs share.
+  const targets = new Set<string>();
+  for (const connection of flow.inputConnections) {
+    new SeedConnection(connection.childStartId, connection.inputName, connection.seedPath);
+    const target = JSON.stringify([connection.childStartId, connection.inputName]);
+    if (!flow.nodes.has(connection.childStartId)) throw new RangeError("seed connections must name fragment nodes");
+    if (targets.has(target)) throw new RangeError("seed connections must name unique target inputs");
+    targets.add(target);
+    const node: unknown = flow.nodes.get(connection.childStartId);
+    if (!(node instanceof Node)) throw new TypeError("seed connection targets must be Node values");
+    const params: unknown = node.params ?? [];
+    if (!Array.isArray(params) || !params.every((param) => isExactly(param, Parameter))) {
+      throw new TypeError("seed connection target parameters must be Parameter values");
+    }
+    const declared = new Map(params.map((param) => [param.name, param]));
+    const parameter = declared.get(connection.inputName);
+    if (parameter === undefined) throw new RangeError("seed connection target input must be declared");
+    const wired = flow.wiring.get(connection.childStartId)?.has(connection.inputName) ?? false;
+    if (starts.has(connection.childStartId)) {
+      if (!wired) throw new RangeError("seed connection child START input must be wired");
+    } else {
+      if (!parameter.hasDefault) throw new RangeError("seed connection non-START input must declare a default");
+      if (wired) throw new RangeError("seed connection non-START input must not be wired");
+    }
+  }
+}
+
 /** The options of `CompiledFlow`'s constructor and `fromParts`. */
 type CompiledFlowOptions = {
   outputs?: readonly FlowOutput[] | null;
@@ -396,28 +499,29 @@ export class CompiledFlow extends Flow {
  * Return a private copy of `value` for one run, rewrite or callsite.
  *
  * A flow copy gets fresh `nodes`, `edges` and `wiring` containers (the inner wiring maps are
- * read-only and stay shared) and, for a `CompiledFlow`, a fresh adjacency index. A node copy is
+ * read-only and stay shared) and, for a `CompiledFlow`, an adjacency index rebuilt from its
+ * `edges`. A node copy is
  * shallow, except that each own field holding a `Flow` (the static child of CALL, MAP and LOOP)
  * holds that flow's copy. Each flow and node is copied once per call, so sharing and cycles carry
  * over to the copy. Carriers, payloads, `env`, type tables and labels stay shared: change a copy
  * only by reassigning a field.
  */
 export function copyGraph<T extends Flow | Node>(value: T): T {
-  return copyOnce(value, new Map()) as T;
+  return copyOnce(value, new Map());
 }
 
 /** Return the copy of `value` recorded in `memo`, making and recording it on first reach. */
-function copyOnce(value: Flow | Node, memo: Map<object, object>): Flow | Node {
+function copyOnce<T extends Flow | Node>(value: T, memo: Map<Flow | Node, Flow | Node>): T {
   const known = memo.get(value);
-  if (known !== undefined) return known as Flow | Node;
+  if (known !== undefined) return known as T;
   // Same prototype and own fields, without running the constructor.
-  const copy = Object.assign(Object.create(Object.getPrototypeOf(value)), value) as Flow | Node;
+  const copy = Object.assign(Object.create(Object.getPrototypeOf(value)), value) as T;
   // Recorded before recursing, so a cycle back to `value` reaches this copy.
   memo.set(value, copy);
   if (copy instanceof Flow) {
     copy.edges = [...copy.edges];
     copy.wiring = new Map(copy.wiring);
-    copy.nodes = new Map([...copy.nodes].map(([id, node]) => [id, copyOnce(node, memo) as Node]));
+    copy.nodes = new Map([...copy.nodes].map(([id, node]) => [id, copyOnce(node, memo)]));
     if (copy instanceof CompiledFlow) {
       copy.incomingEdges = new Map();
       copy.outgoingEdges = new Map();

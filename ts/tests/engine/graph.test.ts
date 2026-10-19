@@ -15,8 +15,10 @@
  * copier that stands in for Python's `copy.deepcopy` of a flow or node: a copied flow and its
  * nodes are distinct instances of their classes with fresh containers, and splicing or pruning the
  * copy leaves the original; a node or child flow reached twice is copied once; a cycle copies to a
- * cycle; a node copy takes its child flow along; each call gets a fresh memo; a reassigned field
- * on a copy leaves the original.
+ * cycle; a node copy takes its child flow along, with fresh containers; each call gets a fresh
+ * memo; a copy shares its carriers, and a field reassigned on it leaves the original;
+ * `validateGrowthMetadata` (Python tests it through the expansion builders): a small valid
+ * fragment passes, and one row per refusal message.
  *
  * Later (T3-17/T3-22): `test_compiled_flow_is_flow_and_keeps_boundary_and_terminal` and the
  * compose rows (`test_data_edge_optional_reflects_binding_escape`, the CASE escape rows, the
@@ -26,11 +28,27 @@
 
 import { expect, test } from "bun:test";
 
-import { CompiledFlow, copyGraph, Edge, END_ID, Flow, GrowthRejected, START_ID } from "../../src/compile/model.ts";
+import {
+  CompiledFlow,
+  copyGraph,
+  Edge,
+  END_ID,
+  Flow,
+  GrowthRejected,
+  START_ID,
+  validateGrowthMetadata,
+} from "../../src/compile/model.ts";
 import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
-import { Binding, ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
+import {
+  Binding,
+  ChildFlowBoundary,
+  ExecutionPosition,
+  ExecutionScope,
+  Parameter,
+  SeedConnection,
+} from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
@@ -296,6 +314,8 @@ test("copying a node copies its child flow and leaves the original's child", () 
   expect(copy.child).toBeInstanceOf(Flow);
   expect(copy.child).not.toBe(child);
   expect((copy.child as Flow).nodes.get("leaf")).not.toBe(child.nodes.get("leaf"));
+  expect((copy.child as Flow).edges).not.toBe(child.edges);
+  expect((copy.child as Flow).wiring).not.toBe(child.wiring);
   expect(call.child).toBe(child);
 });
 
@@ -320,10 +340,228 @@ test("a field reassigned on a node copy leaves the original", () => {
   const node = new FuncNode("a");
   node.params = params;
   const copy = copyGraph(node);
+  expect(copy.params).toBe(params);
 
   copy.params = [new Parameter("y")];
   copy.executionScope = new ExecutionScope(["a"]);
 
   expect(node.params).toBe(params);
   expect(node.executionScope).toBeNull();
+});
+
+/** Return a boundary scope for node `id` of child flow `call`, at item `index` of a MAP. */
+function boundaryScope(id: string, boundary: "start" | "end", index = 0): ExecutionScope {
+  return new ExecutionScope(["call", id], {
+    flowPath: ["call"],
+    occurrencePath: [new ExecutionPosition("map_item", ["call"], index)],
+    boundary,
+  });
+}
+
+/**
+ * Return a valid growth fragment: child START `s` (input `x`, wired) and END `e`, each with its own
+ * boundary scope, and node `h` with a defaulted unwired input `p`; both inputs are seeded unless
+ * `recipes` replaces the recipes.
+ */
+function growthFragment(recipes: { inputConnections?: unknown; childBoundaries?: unknown } = {}): Flow {
+  const {
+    inputConnections = [new SeedConnection("s", "x", ["x"]), new SeedConnection("h", "p", ["p"])],
+    childBoundaries = [new ChildFlowBoundary("s", "e")],
+  } = recipes;
+  const nodes = nodesOf("s", "e", "h");
+  nodes.get("s")!.params = [new Parameter("x")];
+  nodes.get("s")!.executionScope = boundaryScope("s", "start");
+  nodes.get("e")!.executionScope = boundaryScope("e", "end");
+  nodes.get("h")!.params = [new Parameter("p", { hasDefault: true, default: 1n })];
+  return new Flow(nodes, [], {
+    wiring: new Map([["s", new Map([["x", "${input.x}"]])]]),
+    inputConnections: inputConnections as readonly SeedConnection[],
+    childBoundaries: childBoundaries as readonly ChildFlowBoundary[],
+  });
+}
+
+/** Return an instance of `cls` holding `fields`, made without running its constructor. */
+function forged<T>(cls: abstract new (...args: never[]) => T, fields: object): T {
+  return Object.assign(Object.create(cls.prototype) as object, fields) as T;
+}
+
+test("growth metadata accepts a seeded child START and a seeded defaulted unwired input", () => {
+  const flow = growthFragment();
+  expect(flow.nodes.get("s")!.executionScope!.occurrencePath[0]).not.toBe(
+    flow.nodes.get("e")!.executionScope!.occurrencePath[0],
+  );
+
+  expect(() => validateGrowthMetadata(flow)).not.toThrow();
+});
+
+test.each([
+  [
+    "a non-array recipe",
+    () => growthFragment({ inputConnections: "s" }),
+    TypeError,
+    "input_connections must be an array of exact SeedConnection values",
+  ],
+  [
+    "a recipe item of another class",
+    () => growthFragment({ childBoundaries: [new SeedConnection("s", "x", ["x"])] }),
+    TypeError,
+    "child_boundaries must be an array of exact ChildFlowBoundary values",
+  ],
+  [
+    "a forged boundary with equal ids",
+    () => growthFragment({ childBoundaries: [forged(ChildFlowBoundary, { startId: "s", endId: "s" })] }),
+    RangeError,
+    "child START and END must be distinct",
+  ],
+  [
+    "a forged seed connection with an empty name",
+    () =>
+      growthFragment({
+        inputConnections: [forged(SeedConnection, { childStartId: "s", inputName: "", seedPath: ["x"] })],
+      }),
+    RangeError,
+    "seed connection identifiers must be non-empty strings",
+  ],
+  [
+    "a boundary naming a missing node",
+    () => growthFragment({ childBoundaries: [new ChildFlowBoundary("s", "absent")] }),
+    RangeError,
+    "child boundaries must name distinct fragment nodes",
+  ],
+  [
+    "a boundary reusing an endpoint",
+    () => growthFragment({ childBoundaries: [new ChildFlowBoundary("s", "e"), new ChildFlowBoundary("h", "e")] }),
+    RangeError,
+    "child boundaries must name distinct fragment nodes",
+  ],
+  [
+    "a boundary endpoint that isn't a Node",
+    () => {
+      const flow = growthFragment();
+      flow.nodes.set("e", { executionScope: null } as unknown as Node);
+      return flow;
+    },
+    TypeError,
+    "child boundaries must name Node values",
+  ],
+  [
+    "a boundary scope of another class",
+    () => {
+      const flow = growthFragment();
+      const node = flow.nodes.get("s")!;
+      node.executionScope = { ...node.executionScope } as ExecutionScope;
+      return flow;
+    },
+    TypeError,
+    "child boundary scope must be an ExecutionScope",
+  ],
+  [
+    "a boundary role that disagrees with its scope",
+    () => {
+      const flow = growthFragment();
+      flow.nodes.get("s")!.executionScope = boundaryScope("s", "end");
+      return flow;
+    },
+    RangeError,
+    "child boundary role disagrees with its execution scope",
+  ],
+  [
+    "a boundary scope whose static path isn't in its flow path",
+    () => {
+      const flow = growthFragment();
+      flow.nodes.get("s")!.executionScope = new ExecutionScope(["other", "s"], {
+        flowPath: ["call"],
+        occurrencePath: [new ExecutionPosition("map_item", ["call"], 0)],
+        boundary: "start",
+      });
+      return flow;
+    },
+    RangeError,
+    "child boundary location must belong to its containing flow",
+  ],
+  [
+    "boundaries whose occurrences differ in one position index",
+    () => {
+      const flow = growthFragment();
+      flow.nodes.get("e")!.executionScope = boundaryScope("e", "end", 1);
+      return flow;
+    },
+    RangeError,
+    "child boundaries must belong to the same flow occurrence",
+  ],
+  [
+    "a seed connection naming a missing node",
+    () => growthFragment({ inputConnections: [new SeedConnection("absent", "x", ["x"])] }),
+    RangeError,
+    "seed connections must name fragment nodes",
+  ],
+  [
+    "a duplicate seed target",
+    () =>
+      growthFragment({
+        inputConnections: [new SeedConnection("s", "x", ["x"]), new SeedConnection("s", "x", [0, "x"])],
+      }),
+    RangeError,
+    "seed connections must name unique target inputs",
+  ],
+  [
+    "a seed target that isn't a Node",
+    () => {
+      const flow = growthFragment();
+      flow.nodes.set("h", { params: [new Parameter("p", { hasDefault: true })] } as unknown as Node);
+      return flow;
+    },
+    TypeError,
+    "seed connection targets must be Node values",
+  ],
+  [
+    "target parameters that aren't Parameters",
+    () => {
+      const flow = growthFragment();
+      flow.nodes.get("s")!.params = [{ name: "x", hasDefault: false } as Parameter];
+      return flow;
+    },
+    TypeError,
+    "seed connection target parameters must be Parameter values",
+  ],
+  [
+    "an undeclared seed input",
+    () => growthFragment({ inputConnections: [new SeedConnection("s", "absent", ["absent"])] }),
+    RangeError,
+    "seed connection target input must be declared",
+  ],
+  [
+    "an unwired child START input",
+    () => {
+      const flow = growthFragment();
+      flow.wiring.delete("s");
+      return flow;
+    },
+    RangeError,
+    "seed connection child START input must be wired",
+  ],
+  [
+    "a non-START target without a default",
+    () => {
+      const flow = growthFragment();
+      flow.nodes.get("h")!.params = [new Parameter("p")];
+      return flow;
+    },
+    RangeError,
+    "seed connection non-START input must declare a default",
+  ],
+  [
+    "a wired non-START target",
+    () => {
+      const flow = growthFragment();
+      flow.wiring.set("h", new Map([["p", new Binding("${input.x}")]]));
+      return flow;
+    },
+    RangeError,
+    "seed connection non-START input must not be wired",
+  ],
+] as const)("growth metadata refuses %s", (_case, build, error, message) => {
+  const flow = build();
+  expect(() => validateGrowthMetadata(flow)).toThrow(error);
+  expect(() => validateGrowthMetadata(flow)).toThrow(message);
 });

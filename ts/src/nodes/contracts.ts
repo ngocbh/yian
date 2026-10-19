@@ -195,6 +195,8 @@ export class ExecutionScope {
       if (!isExactly(position, ExecutionPosition)) {
         throw new TypeError("occurrence_path items must be ExecutionPosition values");
       }
+      // Rebuilding checks a position that may have bypassed the constructor.
+      new ExecutionPosition(position.kind, position.staticPath, position.index);
     }
     if (boundary !== null && boundary !== "start" && boundary !== "end") {
       throw new RangeError("execution boundary must be 'start', 'end', or null");
@@ -205,6 +207,22 @@ export class ExecutionScope {
     this.boundary = boundary;
     Object.freeze(this);
   }
+}
+
+/** Whether two positions have the same kind, index and static path. */
+export function sameExecutionPosition(a: ExecutionPosition, b: ExecutionPosition): boolean {
+  return a.kind === b.kind && a.index === b.index && samePath(a.staticPath, b.staticPath);
+}
+
+/** Whether two scopes have the same static path, flow path, occurrence positions and boundary. */
+export function sameExecutionScope(a: ExecutionScope, b: ExecutionScope): boolean {
+  return (
+    samePath(a.staticPath, b.staticPath) &&
+    samePath(a.flowPath, b.flowPath) &&
+    a.occurrencePath.length === b.occurrencePath.length &&
+    a.occurrencePath.every((position, i) => sameExecutionPosition(position, b.occurrencePath[i]!)) &&
+    a.boundary === b.boundary
+  );
 }
 
 /**

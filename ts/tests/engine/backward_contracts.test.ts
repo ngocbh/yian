@@ -11,7 +11,9 @@
  * container by its own path in each call; `validateInputOutputPaths` checks each path; a `null`
  * channel is an empty one;
  * `projectStructuralFeedback` selects through `input_output_paths`; record membership reads own
- * keys only (`constructor`, `toString`).
+ * keys only (`constructor`, `toString`); an `ExecutionScope` rebuilds each occurrence position, so
+ * a forged one is refused; `sameExecutionPosition` and `sameExecutionScope` compare by value, field
+ * by field.
  *
  * Changed:
  * - Infinity is a backward JSON value (decision 34), so the `output=float("inf")` row is accepted;
@@ -53,7 +55,12 @@ import {
   validateBackwardResult,
   validateInputOutputPaths,
 } from "../../src/nodes/base.ts";
-import { ExecutionPosition, ExecutionScope } from "../../src/nodes/contracts.ts";
+import {
+  ExecutionPosition,
+  ExecutionScope,
+  sameExecutionPosition,
+  sameExecutionScope,
+} from "../../src/nodes/contracts.ts";
 
 test("execution scopes keep root-relative structured positions", () => {
   const root = new ExecutionScope([], { flowPath: [] });
@@ -85,6 +92,54 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError]>([
   ["an index on a call", () => new ExecutionPosition("call", ["child"], 2), RangeError],
 ])("execution scopes reject %s", (_name, factory, cls) => {
   expect(factory).toThrow(cls);
+});
+
+test.each<[unknown, typeof TypeError | typeof RangeError, string]>([
+  [true, TypeError, "execution position index must be an integer"],
+  [-1, RangeError, "execution position index must be non-negative"],
+])("an execution scope rebuilds a forged position with index %p", (index, cls, message) => {
+  const forged = Object.assign(Object.create(ExecutionPosition.prototype) as ExecutionPosition, {
+    kind: "map_item",
+    staticPath: ["each"],
+    index,
+  });
+  const build = () => new ExecutionScope(["each", "END"], { flowPath: ["each"], occurrencePath: [forged] });
+  expect(build).toThrow(cls);
+  expect(build).toThrow(message);
+});
+
+test("execution positions compare by kind, index and static path", () => {
+  const position = new ExecutionPosition("map_item", ["child", "each"], 2);
+  expect(sameExecutionPosition(position, new ExecutionPosition("map_item", ["child", "each"], 2))).toBe(true);
+  expect(sameExecutionPosition(position, new ExecutionPosition("loop_body", ["child", "each"], 2))).toBe(false);
+  expect(sameExecutionPosition(position, new ExecutionPosition("map_item", ["child", "each"], 3))).toBe(false);
+  expect(sameExecutionPosition(position, new ExecutionPosition("map_item", ["child", "other"], 2))).toBe(false);
+  expect(sameExecutionPosition(position, new ExecutionPosition("map_item", ["child"], 2))).toBe(false);
+});
+
+test("execution scopes compare by static path, flow path, positions and boundary", () => {
+  const call = new ExecutionPosition("call", ["child"]);
+  const item = (index: number) => new ExecutionPosition("map_item", ["child", "each"], index);
+  const fields = {
+    staticPath: ["child", "each", "END"],
+    flowPath: ["child", "each"],
+    occurrencePath: [call, item(1)],
+    boundary: "end" as "start" | "end" | null,
+  };
+  const scope = (changed: Partial<typeof fields> = {}) => {
+    const { staticPath, ...options } = { ...fields, ...changed };
+    return new ExecutionScope(staticPath, options);
+  };
+  const base = scope();
+
+  expect(sameExecutionScope(base, scope())).toBe(true);
+  expect(sameExecutionScope(base, scope({ staticPath: ["child", "each", "START"] }))).toBe(false);
+  expect(sameExecutionScope(base, scope({ flowPath: ["child"] }))).toBe(false);
+  expect(sameExecutionScope(base, scope({ occurrencePath: [call, item(2)] }))).toBe(false);
+  expect(sameExecutionScope(base, scope({ occurrencePath: [call] }))).toBe(false);
+  expect(sameExecutionScope(base, scope({ occurrencePath: [call, item(1), item(1)] }))).toBe(false);
+  expect(sameExecutionScope(base, scope({ boundary: "start" }))).toBe(false);
+  expect(sameExecutionScope(base, scope({ boundary: null }))).toBe(false);
 });
 
 test("feedback uses exact nested list lengths", () => {

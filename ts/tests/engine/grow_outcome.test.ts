@@ -1,20 +1,28 @@
 /**
- * The seed-first `Grow` outcome of `nodes/base.ts`, a port of
- * `tests/engine/test_grow_outcome.py`.
+ * The seed-first `Grow` outcome of `nodes/base.ts` and the compile-owned `Flow` value type, a port
+ * of `tests/engine/test_grow_outcome.py`.
  *
- * Changed: Python's `frozenset()` is an empty `Set`, and `hasattr` is the `in` operator.
+ * Changed: Python's `frozenset()` is an empty `Set`, and `hasattr` is the `in` operator; the
+ * flow's node and wiring tables are `Map`s.
  *
  * TS-only: `Grow` copies `prune`, so changing the passed set doesn't change it, and `Output`,
  * `Route` and `Grow` are frozen.
- *
- * Later (T3-10): `test_flow_holds_fragment_and_start_id`.
  *
  * Not ported: `test_grow_is_a_noderesult_member` (the union is a type).
  */
 
 import { expect, test } from "bun:test";
 
+import { Flow } from "../../src/compile/model.ts";
 import { Grow, Output, Route } from "../../src/nodes/base.ts";
+
+test("flow holds fragment and start id", () => {
+  const sg = new Flow(new Map(), [], { wiring: new Map(), startId: "r", endId: "r" });
+  expect(sg.startId).toBe("r");
+  expect(sg.nodes).toEqual(new Map());
+  expect(sg.edges).toEqual([]);
+  expect(sg.wiring).toEqual(new Map());
+});
 
 test("grow defaults to empty prune", () => {
   const g = new Grow(null);

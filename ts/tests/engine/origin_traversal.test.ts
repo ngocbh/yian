@@ -8,8 +8,8 @@
  * `iterLocalOrigins` and `rewriteLocalOrigins`. Python's bare `Node` is a minimal subclass.
  *
  * TS-only: the local traversal order with shared carriers yielded once; `rewriteLocalOrigins` on
- * a shallow node copy leaves the original unchanged and keeps shared carriers shared; and
- * `failureTrace`.
+ * a shallow node copy leaves the original unchanged and keeps shared carriers shared; a shallow
+ * copy validates its assertions and runs; and `failureTrace`.
  *
  * Later (T3-10): the 25 compile tests.
  */
@@ -17,13 +17,17 @@
 import { expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
-import { Node, NodeKind } from "../../src/nodes/base.ts";
+import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { Assertion, ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 
-/** A minimal concrete node; the base hooks are the subject. */
+/** A minimal concrete node; the base hooks are the subject. Its body lets a copy run. */
 class BareNode extends Node {
   readonly kind = NodeKind.CODE;
+
+  override forward(): NodeResult {
+    return new Output("done");
+  }
 }
 
 /** Return one opaque source identity with a readable test key. */
@@ -155,11 +159,12 @@ test("rewriting a shallow copy leaves the original and keeps shared carriers sha
   expect(copy.preAsserts[1]).not.toBe(shared);
 });
 
-test("a shallow copy validates its assertions", () => {
+test("a shallow copy validates its assertions and runs", async () => {
   const { node } = richNode();
   const copy = shallowCopy(node);
 
   expect(copy.validateAssertions()).toBeUndefined();
+  expect(await copy.run({ x: 5n })).toEqual(new Output("done"));
   copy.preAsserts = [new Assertion("x >", "broken")];
   expect(() => copy.validateAssertions()).toThrow(/^node 'n' pre-assert 'broken' \(`x >`\) is not/);
 });

@@ -27,6 +27,7 @@ import {
   promptRefs,
   validateFeedback,
 } from "../expr/index.ts";
+import { evaluateWhenRecord } from "../expr/expressions.ts";
 import type { MemoryScope } from "../memory/contracts.ts";
 import type { VariablePool } from "../typesys/pool.ts";
 import {
@@ -38,7 +39,7 @@ import {
   type Value,
   type ValueRecord,
 } from "../typesys/values.ts";
-import { type BindingError, type ReservedBinder, validateParameters } from "./binding.ts";
+import { applyDefaults, BindingError, copyValue, type ReservedBinder, validateParameters } from "./binding.ts";
 import {
   type Assertion,
   ExecutionScope,
@@ -49,7 +50,7 @@ import {
   type NodeSteps,
   type OriginMapper,
   type OutputContract,
-  type Parameter,
+  Parameter,
   PartialRecordContract,
   rewriteOriginCarrier,
   validateOptionalOrigin,
@@ -1066,10 +1067,125 @@ export abstract class Node {
 
   /** Parse one assertion's expression, naming the node and the assertion when it doesn't parse. */
   private parseAssertion(label: string, assertion: Assertion, where: string | null = null): void {
-    let shown = reprText(assertion.display);
-    if (assertion.expression !== assertion.display) shown += ` (\`${assertion.expression}\`)`;
     // `||`, as Python's `or`: an empty path names the node by its id.
-    parseNamedCondition(assertion.expression, `node ${reprText(where || this.id)} ${label} ${shown}`, this.types);
+    parseNamedCondition(
+      assertion.expression,
+      `node ${reprText(where || this.id)} ${label} ${this.shownAssertion(assertion)}`,
+      this.types,
+    );
+  }
+
+  /** Show an assertion in a message: its display, then its expression when that differs. */
+  private shownAssertion(assertion: Assertion): string {
+    const shown = reprText(assertion.display);
+    return assertion.expression === assertion.display ? shown : `${shown} (\`${assertion.expression}\`)`;
+  }
+
+  /**
+   * Run the node's complete pure-execution template.
+   *
+   * Declared defaults are filled first, then node-owned setup is validated (including that every
+   * assertion and kind predicate parses), the pre-asserts run against the bound record, `forward`
+   * runs, and the post-asserts check an `Output` against the inputs as bound. The promise
+   * resolves to exactly one `Output | Route | Grow`. Every failure rejects it, with the original
+   * error; the checks before `forward` still run before the promise is returned.
+   *
+   * @param inputs The bound input record; the template fills defaults into a fresh copy.
+   * @param caps The capabilities the node's traits ask for, passed to `forward`.
+   */
+  run(inputs: Readonly<Record<string, unknown>>, caps: NodeCaps = {}): Promise<NodeResult> {
+    return this.runTemplate(inputs, false, null, caps);
+  }
+
+  /**
+   * Run the base template with the stage markers and input capture. Used by the evaluator.
+   *
+   * A default's `BindingError` rejects as a `BindingStageError`, an assertion failure as an
+   * `AssertionStageError`, and anything else the body throws as a `NodeBodyError`, except the
+   * evaluator's own markers, which pass through as they are.
+   *
+   * @param inputs The bound input record.
+   * @param caps The capabilities the node's traits ask for, passed to `forward`.
+   * @param captureInputs Receives the completed input record after defaults and before the
+   *   assertions or the body, before this returns its promise; never passed to `forward`.
+   */
+  runForEvaluator(
+    inputs: Readonly<Record<string, unknown>>,
+    caps: NodeCaps = {},
+    captureInputs: ((inputs: Record<string, unknown>) => void) | null = null,
+  ): Promise<NodeResult> {
+    return this.runTemplate(inputs, true, captureInputs, caps);
+  }
+
+  /**
+   * The template: fill declared defaults for omitted inputs, check the pre-asserts, run the
+   * kind's `forward`, then check the post-asserts against `{...inputs, output}`.
+   *
+   * Defaults come first, so a pre-assert may read an input the caller omitted but the node
+   * declares a default for; a present key, `null` included, shadows its default. START uses this
+   * same template, so the parameter seam is its only default authority. The assertions read only
+   * the bound record, never the pool: every assert reaching a node is node-local after reference
+   * lowering, so the evaluator binds what it reads into the record.
+   *
+   * @param classify Whether to wrap the stage failures in the evaluator's markers.
+   */
+  private async runTemplate(
+    inputs: Readonly<Record<string, unknown>>,
+    classify: boolean,
+    captureInputs: ((inputs: Record<string, unknown>) => void) | null,
+    caps: NodeCaps,
+  ): Promise<NodeResult> {
+    // Everything before the first `await` runs inside the caller's call, so `captureInputs` has
+    // run by the time `runForEvaluator` returns; `async` still turns a throw here into a rejection.
+    const params = this.params ?? [];
+    if (!Array.isArray(params) || Object.getPrototypeOf(params) !== Array.prototype) {
+      throw new TypeError(`node ${reprText(this.id)} params must be an exact list, got ${jsTypeName(params)}`);
+    }
+    for (const parameter of params) {
+      if (!isExactly(parameter, Parameter)) {
+        throw new TypeError(
+          `node ${reprText(this.id)} params must contain Parameter values, got ${jsTypeName(parameter)}`,
+        );
+      }
+    }
+    let record: Record<string, unknown>;
+    try {
+      record = applyDefaults(params, inputs);
+    } catch (error) {
+      if (classify && error instanceof BindingError) throw new BindingStageError(error);
+      throw error;
+    }
+    if (captureInputs !== null) captureInputs(record);
+    this.validateExecutionSetup();
+    const preFailure = this.failingAssertion("pre-assert", this.preAsserts, record);
+    if (preFailure !== null) throw classify ? new AssertionStageError(preFailure) : preFailure;
+    // A snapshot for the post-asserts, taken before `forward`: a body may change the record it
+    // receives (a CODE body transforming its input in place), and the post-asserts must see the
+    // inputs as bound. Only paid when the node has post-asserts.
+    const postRecord = this.postAsserts.length > 0 ? (copyValue(record as ValueRecord) as ValueRecord) : null;
+    let result: NodeResult;
+    try {
+      result = await this.forward(record, caps);
+    } catch (error) {
+      if (
+        !classify ||
+        error instanceof BindingStageError ||
+        error instanceof DeferredBindingFault ||
+        error instanceof CapabilityFault ||
+        error instanceof NodeBodyError
+      ) {
+        throw error;
+      }
+      throw new NodeBodyError(error);
+    }
+    // Only an `Output` has post-asserts checked: a spawner's grow path owns its own.
+    if (result instanceof Output && postRecord !== null) {
+      // `setField`, so an input named `__proto__` stays data; the snapshot is this run's own.
+      setField(postRecord, "output", result.value as Value);
+      const postFailure = this.failingAssertion("post-assert", this.postAsserts, postRecord);
+      if (postFailure !== null) throw classify ? new AssertionStageError(postFailure) : postFailure;
+    }
+    return result;
   }
 
   /**
@@ -1219,5 +1335,37 @@ export abstract class Node {
    */
   wiringRefLabel(param: string): string {
     return this.wiringLabels.get(param) ?? `input ${reprText(param)}`;
+  }
+
+  /**
+   * Return the first assertion that doesn't hold on `record`, as the error to throw, or `null`.
+   *
+   * Each assertion is parsed before it is evaluated with this node's type table. A false
+   * condition fails with `assertion.failed`; one that throws an `ExpressionError` while
+   * evaluating fails with `condition.evaluate`, that error as the `cause`.
+   *
+   * @throws ExpressionError when an assertion doesn't parse; the message names the node.
+   */
+  private failingAssertion(
+    label: string,
+    assertions: readonly Assertion[],
+    record: Record<string, unknown>,
+  ): NodeAssertFailed | null {
+    for (const assertion of assertions) {
+      this.parseAssertion(label, assertion);
+      const subject = `node ${reprText(this.id)} ${label}`;
+      let holds: boolean;
+      try {
+        holds = evaluateWhenRecord(assertion.expression, record as ValueRecord, this.types);
+      } catch (error) {
+        if (!(error instanceof ExpressionError)) throw error;
+        return new NodeAssertFailed(
+          `${subject} ${this.shownAssertion(assertion)} could not be evaluated: ${error.message}`,
+          { assertion, failureCode: "condition.evaluate", cause: error },
+        );
+      }
+      if (!holds) return new NodeAssertFailed(`${subject} failed: ${assertion.display}`, { assertion });
+    }
+    return null;
   }
 }

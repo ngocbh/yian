@@ -725,9 +725,10 @@ function checkBindingType(where: string, binding: Binding, contract: ValueContra
 
 /**
  * Return a fresh copy of a delivered value: new arrays and records (own data properties), with
- * `FileRef`s and scalars kept. A container shared inside `value` stays shared in the copy.
+ * `FileRef`s and scalars kept. A container shared inside `value` stays shared in the copy. Used
+ * by node kinds.
  */
-function copyValue(value: Value, copies: Map<object, Value> = new Map()): Value {
+export function copyValue(value: Value, copies: Map<object, Value> = new Map()): Value {
   if (Array.isArray(value) || isRecord(value)) {
     // The memo also bounds the work: a value reusing one child at each of its allowed levels
     // would otherwise take time exponential in its depth to copy.

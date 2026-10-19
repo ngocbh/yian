@@ -1,0 +1,399 @@
+/**
+ * The base `run` template checks the pre- and post-asserts against the bound record only: a
+ * port of `tests/engine/test_node_run_wrapper.py`. The tests drive the template directly, on a
+ * small node that implements `forward`.
+ *
+ * Ported: `test_default_backward_stops_feedback_with_empty_channels`,
+ * `test_run_returns_forward_output_when_asserts_hold`,
+ * `test_pre_assert_failure_raises_before_forward_runs`, `test_post_assert_failure_on_output_raises`,
+ * `test_assertion_evaluates_expression_and_reports_display`,
+ * `test_assertion_display_is_not_evaluated_when_expression_holds`,
+ * `test_duplicate_assertions_retain_first_occurrence_origin`, `test_wrapper_delegates_for_route_kind`
+ * (with a local `BranchNode` fake), `test_unparseable_pre_assert_raises_its_parse_error_before_forward`,
+ * `test_unparseable_post_assert_raises_before_forward_runs` and
+ * `test_assert_evaluation_error_still_fails_the_assert`. `test_validate_assertions_names_the_given_path`
+ * is in `base_node.test.ts`.
+ *
+ * Changed: `run` is async, so every failure is a rejection. Changed (rule `condition.evaluate`,
+ * decision 36): in `test_assert_evaluation_error_still_fails_the_assert` the condition that throws
+ * while evaluating still rejects with `NodeAssertFailed`, now with `failureCode`
+ * `condition.evaluate`, a "could not be evaluated" message and the `ExpressionError` as `cause`.
+ *
+ * TS-only: a failing pre-assert rejects rather than throws; a node without `forward` rejects; a
+ * body changing its input record doesn't change what a post-assert sees; a false assert's
+ * `failureCode`; a `Route` and a `Grow` pass a failing post-assert; `runForEvaluator`'s stage
+ * markers and its input capture; `run` rejects with the original errors.
+ *
+ * Later (T3-8 / T4-x): `test_runtime_does_not_drive_backward`,
+ * `test_wrapper_delegates_to_real_code_node_forward`, `test_wrapper_delegates_for_grow_kind`,
+ * `test_eval_node_no_longer_has_first_failing_assert`,
+ * `test_eval_node_does_not_fire_when_run_bypasses_firing` and
+ * `test_eval_node_fires_via_wrapper_positive_control`.
+ */
+
+import { expect, test } from "bun:test";
+
+import { OriginRef } from "../../src/diagnostics.ts";
+import { ExpressionError } from "../../src/expr/index.ts";
+import {
+  AssertionStageError,
+  BackwardContext,
+  BackwardResult,
+  BindingStageError,
+  CapabilityFault,
+  Grow,
+  Node,
+  NodeAssertFailed,
+  NodeBodyError,
+  NodeKind,
+  type NodeResult,
+  Output,
+  Route,
+} from "../../src/nodes/base.ts";
+import { BindingError } from "../../src/nodes/binding.ts";
+import { Assertion, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
+
+/**
+ * A node that implements `forward` (not `run`), so the base template is under test. `forward`
+ * records that it ran, so a pre-assert failure can be shown to stop it.
+ */
+class ImplNode extends Node {
+  readonly kind = NodeKind.CODE;
+  value: unknown;
+  ran = false;
+
+  constructor(nodeId: string, value: unknown) {
+    super(nodeId);
+    this.value = value;
+  }
+
+  override forward(): NodeResult {
+    this.ran = true;
+    return new Output(this.value);
+  }
+}
+
+/** A CASE-like fake whose body routes to one handle. */
+class BranchNode extends Node {
+  readonly kind = NodeKind.CASE;
+  handle: string;
+
+  constructor(nodeId: string, handle: string) {
+    super(nodeId);
+    this.handle = handle;
+  }
+
+  override forward(): NodeResult {
+    return new Route(this.handle);
+  }
+}
+
+/** A spawner-like fake whose body grows with its inputs as the seed. */
+class GrowNode extends Node {
+  readonly kind = NodeKind.CALL;
+  override readonly isSpawner = true;
+
+  override forward(inputs: Record<string, unknown>): NodeResult {
+    return new Grow(inputs);
+  }
+}
+
+/** A node whose body throws one given value. */
+class ThrowNode extends Node {
+  readonly kind = NodeKind.CODE;
+  error: unknown;
+
+  constructor(nodeId: string, error: unknown) {
+    super(nodeId);
+    this.error = error;
+  }
+
+  override forward(): NodeResult {
+    throw this.error;
+  }
+}
+
+/** A node whose body changes the record it receives before returning it. */
+class MutatingNode extends Node {
+  readonly kind = NodeKind.CODE;
+
+  override forward(inputs: Record<string, unknown>): NodeResult {
+    (inputs.x as Record<string, unknown>).n = 0n;
+    inputs.x = null;
+    return new Output(1n);
+  }
+}
+
+/** A node with no body. */
+class NoForwardNode extends Node {
+  readonly kind = NodeKind.CODE;
+}
+
+/** Return what `promise` rejects with, failing if it resolves. */
+async function rejection(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected a rejection");
+}
+
+/** A parameter whose stored default violates its `int` contract. */
+function badDefault(): Parameter {
+  return new Parameter("x", {
+    contract: new ValueContract(Type.scalar(ValueKind.INTEGER)),
+    hasDefault: true,
+    default: "30",
+  });
+}
+
+test("default backward stops feedback with empty channels", () => {
+  const node = new ImplNode("n", null);
+
+  expect(node.backward(new BackwardContext({}), ["unused"])).toEqual(new BackwardResult());
+});
+
+test("run returns forward output when asserts hold", async () => {
+  const node = new ImplNode("n", { output: 42n });
+  node.preAsserts = [new Assertion("x > 0", "x is positive")];
+  node.postAsserts = [new Assertion("output.output == 42", "output is 42")];
+
+  const result = await node.run({ x: 5n });
+
+  expect(result).toBeInstanceOf(Output);
+  expect((result as Output).value).toEqual({ output: 42n });
+  expect(node.ran).toBe(true);
+});
+
+test("pre-assert failure raises before forward runs", async () => {
+  const node = new ImplNode("n", { output: 1n });
+  const assertion = new Assertion("x > 100", "x is greater than 100", { origin: new OriginRef("assert:n:0") });
+  node.preAsserts = [assertion];
+
+  const error = await rejection(node.run({ x: 5n }));
+
+  expect(error).toBeInstanceOf(NodeAssertFailed);
+  expect(node.ran).toBe(false);
+  expect((error as NodeAssertFailed).assertion).toBe(assertion);
+  expect((error as Error).message).toContain("pre-assert failed");
+  expect((error as Error).message).toContain("'n'");
+});
+
+test("post-assert failure on output raises", async () => {
+  const node = new ImplNode("n", { output: 7n });
+  node.postAsserts = [new Assertion("output.output > 100", "output is greater than 100")];
+
+  const error = await rejection(node.run({}));
+
+  expect(error).toBeInstanceOf(NodeAssertFailed);
+  expect(node.ran).toBe(true);
+  expect((error as Error).message).toContain("post-assert failed");
+  expect((error as Error).message).toContain("'n'");
+});
+
+test("assertion evaluates expression and reports display", async () => {
+  const node = new ImplNode("n", null);
+  const assertion = new Assertion("__assert_calc > 100", "authored text that is not an expression");
+  node.preAsserts = [assertion];
+
+  const error = await rejection(node.run({ __assert_calc: 5n }));
+
+  expect(error).toBeInstanceOf(NodeAssertFailed);
+  expect((error as Error).message).toContain("authored text that is not an expression");
+  expect((error as NodeAssertFailed).assertion).toBe(assertion);
+});
+
+test("assertion display is not evaluated when expression holds", async () => {
+  const node = new ImplNode("n", null);
+  node.preAsserts = [new Assertion("x > 0", "{{ definitely not executable")];
+
+  expect(await node.run({ x: 1n })).toEqual(new Output(null));
+});
+
+test("duplicate assertions retain first occurrence origin", async () => {
+  const node = new ImplNode("n", null);
+  const first = new Assertion("1 == 2", "must hold", { origin: new OriginRef("assert:first") });
+  const second = new Assertion("1 == 2", "must hold", { origin: new OriginRef("assert:second") });
+  node.preAsserts = [first, second];
+
+  const error = await rejection(node.run({}));
+
+  expect((error as NodeAssertFailed).assertion).toBe(first);
+});
+
+test("wrapper delegates for route kind", async () => {
+  const node = new BranchNode("b", "yes");
+
+  expect(BranchNode.prototype.run).toBe(Node.prototype.run);
+  const result = await node.run({});
+
+  expect(result).toBeInstanceOf(Route);
+  expect((result as Route).handle).toBe("yes");
+});
+
+test("unparseable pre-assert raises its parse error before forward", async () => {
+  const node = new ImplNode("n", { output: 1n });
+  node.preAsserts = [new Assertion("${x} > 0", "x positive")];
+
+  const error = await rejection(node.run({ x: 5n }));
+
+  expect(error).toBeInstanceOf(ExpressionError);
+  const message = (error as Error).message;
+  expect(message).toStartWith("node 'n' pre-assert 'x positive' (`${x} > 0`) is not a valid boolean expression: ");
+  expect(message).toContain("write `x > 0`");
+  expect(node.ran).toBe(false);
+});
+
+test("unparseable post-assert raises before forward runs", async () => {
+  const node = new ImplNode("n", { output: 1n });
+  node.preAsserts = [new Assertion("x > 0", "x positive")];
+  node.postAsserts = [new Assertion("output.output >=", "output.output >=")];
+
+  const error = await rejection(node.run({ x: 5n }));
+
+  expect(error).toBeInstanceOf(ExpressionError);
+  expect((error as Error).message).toStartWith(
+    "node 'n' post-assert 'output.output >=' is not a valid boolean expression: ",
+  );
+  expect(node.ran).toBe(false);
+});
+
+test("assert evaluation error still fails the assert", async () => {
+  const node = new ImplNode("n", { output: 1n });
+  const assertion = new Assertion("output > 0", "output is positive");
+  node.postAsserts = [assertion];
+
+  const error = await rejection(node.run({}));
+
+  expect(error).toBeInstanceOf(NodeAssertFailed);
+  const failed = error as NodeAssertFailed;
+  expect(failed.failureCode).toBe("condition.evaluate");
+  expect(failed.assertion).toBe(assertion);
+  expect(failed.cause).toBeInstanceOf(ExpressionError);
+  expect(failed.message).toBe(
+    "node 'n' post-assert 'output is positive' (`output > 0`) could not be evaluated: " +
+      (failed.cause as Error).message,
+  );
+});
+
+test("a failing pre-assert rejects the promise rather than throwing", async () => {
+  const node = new ImplNode("n", null);
+  node.preAsserts = [new Assertion("x > 100", "x is large")];
+
+  const promise = node.run({ x: 5n });
+
+  await expect(promise).rejects.toBeInstanceOf(NodeAssertFailed);
+});
+
+test("a node without forward rejects", async () => {
+  const node = new NoForwardNode("n");
+
+  await expect(node.run({})).rejects.toThrow("node 'n' (NoForwardNode) defines no forward");
+});
+
+test("a body changing its input record doesn't change what a post-assert sees", async () => {
+  const node = new MutatingNode("n");
+  node.postAsserts = [new Assertion("x.n == 5 and output == 1", "x is as bound")];
+  const inputs = { x: { n: 5n } };
+
+  expect(await node.run(inputs)).toEqual(new Output(1n));
+});
+
+test("a false assert has the failure code assertion.failed", async () => {
+  const node = new ImplNode("n", 1n);
+  node.postAsserts = [new Assertion("output > 5", "output is large")];
+
+  const error = await rejection(node.run({}));
+
+  expect((error as NodeAssertFailed).failureCode).toBe("assertion.failed");
+  expect((error as Error).message).toBe("node 'n' post-assert failed: output is large");
+  expect((error as Error).cause).toBeUndefined();
+});
+
+test("a Route and a Grow pass a failing post-assert untouched", async () => {
+  const branch = new BranchNode("b", "yes");
+  branch.postAsserts = [new Assertion("output == 'never'", "output is never")];
+  const grow = new GrowNode("g");
+  grow.postAsserts = [new Assertion("output == 'never'", "output is never")];
+
+  expect(await branch.run({})).toEqual(new Route("yes"));
+  const result = await grow.run({ topic: "ACME" });
+  expect(result).toBeInstanceOf(Grow);
+  expect((result as Grow).seed).toEqual({ topic: "ACME" });
+});
+
+test("runForEvaluator wraps a body error, keeping a non-Error original", async () => {
+  const thrown = new Error("boom");
+  const error = await rejection(new ThrowNode("n", thrown).runForEvaluator({}));
+  expect(error).toBeInstanceOf(NodeBodyError);
+  expect((error as NodeBodyError).original).toBe(thrown);
+
+  const text = await rejection(new ThrowNode("n", "boom").runForEvaluator({}));
+  expect(text).toBeInstanceOf(NodeBodyError);
+  expect((text as NodeBodyError).original).toBe("boom");
+  expect((text as Error).message).toBe("boom");
+});
+
+test("runForEvaluator wraps a default's binding error", async () => {
+  const node = new ImplNode("n", null);
+  node.params = [badDefault()];
+
+  const error = await rejection(node.runForEvaluator({}));
+
+  expect(error).toBeInstanceOf(BindingStageError);
+  expect((error as BindingStageError).original).toBeInstanceOf(BindingError);
+  expect(node.ran).toBe(false);
+});
+
+test("runForEvaluator wraps an assert failure", async () => {
+  const pre = new ImplNode("n", null);
+  pre.preAsserts = [new Assertion("x > 100", "x is large")];
+  const post = new ImplNode("n", 1n);
+  post.postAsserts = [new Assertion("output > 5", "output is large")];
+
+  const preError = await rejection(pre.runForEvaluator({ x: 5n }));
+  const postError = await rejection(post.runForEvaluator({}));
+
+  expect(preError).toBeInstanceOf(AssertionStageError);
+  expect((preError as AssertionStageError).original).toBeInstanceOf(NodeAssertFailed);
+  expect((preError as AssertionStageError).original.assertion).toBe(pre.preAsserts[0]!);
+  expect(postError).toBeInstanceOf(AssertionStageError);
+  expect((postError as AssertionStageError).original.assertion).toBe(post.postAsserts[0]!);
+});
+
+test("runForEvaluator passes a capability fault through and wraps a body's assertion marker", async () => {
+  const fault = new CapabilityFault(new Error("host down"));
+  const marker = new AssertionStageError(new NodeAssertFailed("bad"));
+
+  expect(await rejection(new ThrowNode("n", fault).runForEvaluator({}))).toBe(fault);
+  const wrapped = await rejection(new ThrowNode("n", marker).runForEvaluator({}));
+  expect(wrapped).toBeInstanceOf(NodeBodyError);
+  expect((wrapped as NodeBodyError).original).toBe(marker);
+});
+
+test("runForEvaluator captures the defaulted inputs before it returns, ahead of the pre-asserts", async () => {
+  const node = new ImplNode("n", null);
+  node.params = [new Parameter("x", { hasDefault: true, default: 5n })];
+  node.preAsserts = [new Assertion("x > 100", "x is large")];
+  const captured: Record<string, unknown>[] = [];
+
+  const promise = node.runForEvaluator({}, {}, (inputs) => captured.push(inputs));
+
+  expect(captured).toEqual([{ x: 5n }]);
+  await expect(promise).rejects.toBeInstanceOf(AssertionStageError);
+});
+
+test("run rejects with the original errors", async () => {
+  const thrown = new Error("boom");
+  const bound = new ImplNode("n", null);
+  bound.params = [badDefault()];
+  const asserted = new ImplNode("n", null);
+  asserted.preAsserts = [new Assertion("x > 100", "x is large")];
+
+  expect(await rejection(new ThrowNode("n", thrown).run({}))).toBe(thrown);
+  expect(await rejection(new ThrowNode("n", "boom").run({}))).toBe("boom");
+  expect(await rejection(bound.run({}))).toBeInstanceOf(BindingError);
+  expect(await rejection(asserted.run({ x: 5n }))).toBeInstanceOf(NodeAssertFailed);
+});

@@ -20,7 +20,25 @@
  * `test_assertion_identity_uses_expression_and_display_but_ignores_origin`,
  * `test_assertion_manifest_preserves_order_and_duplicate_count`,
  * `test_assertion_manifest_rejects_unknown_fields_and_raw_bypass` and
- * `test_wrapped_wiring_keeps_its_source_text_and_identity`.
+ * `test_wrapped_wiring_keeps_its_source_text_and_identity`; and the output-contract rows
+ * `test_output_contract_resolution_retains_whole_value_identity`,
+ * `test_output_contract_resolution_infers_whole_span_literals`,
+ * `test_output_contract_resolution_validates_embedded_reference_contracts`,
+ * `test_output_contract_resolution_rebases_nested_origins`,
+ * `test_output_contract_projection_propagates_optional_field_path` and
+ * `test_output_contract_resolution_projects_proven_partial_record_fields`.
+ *
+ * TS-only: the `compose/helpers/output_contracts.ts` rows Python covers only through `load_flow`:
+ * `literalType` (an int, a float, ±Infinity, text, empty text, a bool, null, a record, a value
+ * with no type), `literalValue` (`$$` unescaped, a span, a `ValueTemplate`, malformed text, a
+ * non-string as is), `literalContract` (a nested record, exact literals, a list's join and
+ * widening, a list that doesn't join), `templateContract` (a record with an unproven field is
+ * partial, a nested typed binding, `exactLiterals`), `combineOutputContracts` (all exact, an opaque
+ * or partial field, a non-contract), `recordFieldOrigins` (canonical order), `referenceContract`
+ * (`input.x.f`, `<id>.output.f`, unknown paths, a wrong contract class), `localFieldError` (any
+ * alternative accepting, else the first error), `directReferencePath` and `directReferenceParts`
+ * (a dotted reference, a call, an index, `:-`, embedded text), and `projectOutputContract` on a
+ * non-contract.
  *
  * Changed:
  * - Python's bare `Node` is a minimal subclass; node and wiring tables are `Map`s, and a non-string
@@ -40,8 +58,8 @@
  * Later (T3-14…T3-22): the compose/load rows
  * (`test_loaded_compose_flow_has_only_canonical_binding_storage`,
  * `test_boundary_reads_wrapped_output_but_preserves_it_in_end_wiring` and
- * `test_reference_validation_checks_a_wrapped_flow_output`); the output-contract and
- * child-signature rows (`test_output_contract_*` and `test_child_signature_*`); the CALL/LOOP
+ * `test_reference_validation_checks_a_wrapped_flow_output`); the child-signature rows
+ * (`test_child_signature_*`); the CALL/LOOP
  * type-check and composite-builder rows (`test_call_type_*`, `test_loop_type_check_*` and
  * `test_composite_builders_preserve_or_deliberately_wrap_child_contract`); inline binding type
  * inference (`test_inline_binding_type_inference_reads_one_carrier_layer`); and edge inference
@@ -54,18 +72,39 @@ import { expect, test } from "bun:test";
 
 import { expansionDigest, flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import {
+  combineOutputContracts,
+  directReferenceParts,
+  directReferencePath,
+  literalContract,
+  literalType,
+  literalValue,
+  localFieldError,
+  NOT_LITERAL,
+  projectOutputContract,
+  recordFieldOrigins,
+  referenceContract,
+  resolveOutputBindingContract,
+  templateContract,
+} from "../../src/compose/helpers/output_contracts.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
+import { parseExpr } from "../../src/expr/index.ts";
+import { Token, Tree } from "../../src/expr/grammar.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import {
   Assertion,
   Binding,
   ContractOrigins,
+  isExactly,
+  type OutputContract,
   PartialRecordContract,
   ValueContract,
+  ValueTemplate,
 } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { Type, ValueKind } from "../../src/typesys/index.ts";
+import { typeEquals } from "../../src/typesys/values.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 
 /** A minimal concrete node; the base fields are the subject. */
@@ -530,4 +569,373 @@ test("wrapped wiring keeps its source text and identity", () => {
   expect(rendered).toContain(JSON.stringify(firstSource).slice(1, -1));
   expect(rendered).not.toContain("credential");
   expect(flowFingerprint(changed)).not.toBe(flowFingerprint(wrapped));
+});
+
+// --------------------------------------------------------------------------------------- //
+// Output-binding contracts (compose/helpers/output_contracts.ts)
+// --------------------------------------------------------------------------------------- //
+
+const STR = Type.scalar(ValueKind.STRING);
+const INT = Type.scalar(ValueKind.INTEGER);
+
+/** Return a closed record type whose fields are all required, unless `required` names them. */
+function recordType(fields: Record<string, Type>, required: readonly string[] = Object.keys(fields)): Type {
+  return new Type({ kind: ValueKind.OBJECT, fields: new Map(Object.entries(fields)), required: new Set(required) });
+}
+
+/** Return a `Map` of a record's entries, as producer and flow-input tables are. */
+function table<T>(entries: Record<string, T>): Map<string, T> {
+  return new Map(Object.entries(entries));
+}
+
+/** Resolve `binding` against `producers` and `flowInputs`, given as records. */
+function resolveContract(
+  binding: unknown,
+  producers: Record<string, OutputContract>,
+  flowInputs: Record<string, ValueContract> = {},
+): OutputContract | null {
+  return resolveOutputBindingContract(binding, table(producers), table(flowInputs));
+}
+
+/** Return `contract`, requiring it to be an exact `ValueContract`. */
+function exact(contract: OutputContract | null): ValueContract {
+  if (!isExactly(contract, ValueContract)) throw new Error("expected an exact ValueContract");
+  return contract;
+}
+
+test("output contract resolution retains whole-value identity", () => {
+  // Raw and wrapped references resolve to the producer's exact carrier.
+  const outputType = Type.scalar(ValueKind.STRING);
+  const contract = new ValueContract(outputType, new ContractOrigins({ default: origin("producer-output") }));
+  const source = "${producer.output}";
+  const producers = { producer: contract };
+
+  expect(resolveContract(source, producers)).toBe(contract);
+  expect(resolveContract(new Binding(source, { origin: origin("typed-output") }), producers)).toBe(contract);
+  const doubleWrapped = new Binding(new Binding(source, { origin: origin("inner") }), { origin: origin("outer") });
+  expect(resolveContract(doubleWrapped, producers)).toBe(null);
+  expect(resolveContract("${input.topic}", {}, { topic: contract })).toBe(contract);
+
+  const computed = exact(resolveContract('${producer.output == "/exit"}', { producer: contract }));
+  expect(computed).not.toBe(contract);
+  expect(computed.type).toEqual(Type.scalar(ValueKind.BOOLEAN));
+  expect(computed.origins).toEqual(new ContractOrigins());
+
+  for (const [expression, expressionProducers] of [
+    ["${false}", {}],
+    ["${true and false}", {}],
+    ["${left.output == right.output}", { left: contract, right: contract }],
+  ] as const) {
+    const inferred = exact(resolveContract(expression, expressionProducers));
+    expect(inferred.type).toEqual(Type.scalar(ValueKind.BOOLEAN));
+    expect(inferred.origins).toEqual(new ContractOrigins());
+  }
+
+  expect(resolveContract("${producer.output + 1}", { producer: contract })).toBe(null);
+
+  expectError(
+    () => resolveContract("${input.topic}", {}, { topic: outputType as unknown as ValueContract }),
+    TypeError,
+    "flow input contracts must be exact ValueContract values, got Type for 'topic'",
+  );
+  expectError(
+    () => resolveContract('${producer.output == "/exit"}', { producer: outputType as unknown as ValueContract }),
+    TypeError,
+    "output producer contracts must be ValueContract or PartialRecordContract values, got Type for 'producer'",
+  );
+});
+
+test.each([
+  ["${42}", ValueKind.INTEGER],
+  ["${1.5}", ValueKind.NUMBER],
+  ['${"text"}', ValueKind.STRING],
+  ["${null}", ValueKind.NONE],
+])("output contract resolution infers the whole-span literal %s", (source, kind) => {
+  // Compose turns a proven scalar literal span into a source-free contract.
+  expect(resolveContract(source, {})).toEqual(new ValueContract(Type.scalar(kind)));
+});
+
+test.each([
+  [
+    "prefix ${producer.output}",
+    { producer: STR as unknown as ValueContract },
+    {},
+    "output producer contracts must be ValueContract or PartialRecordContract values, got Type for 'producer'",
+  ],
+  [
+    "prefix ${input.topic}",
+    {},
+    { topic: STR as unknown as ValueContract },
+    "flow input contracts must be exact ValueContract values, got Type for 'topic'",
+  ],
+])("output contract resolution validates embedded reference contracts: %s", (source, producers, inputs, message) => {
+  // Template shape must not bypass exact semantic-carrier validation.
+  expectError(() => resolveContract(source, producers, inputs), TypeError, message);
+});
+
+test("output contract resolution rebases nested origins", () => {
+  // Selecting a record field makes its origin root and strips its path prefix.
+  const nestedType = recordType({ answer: INT, note: STR });
+  const rootType = recordType({ result: nestedType, ignored: Type.scalar(ValueKind.BOOLEAN) });
+  const contract = new ValueContract(
+    rootType,
+    new ContractOrigins({
+      default: origin("root"),
+      entries: [
+        [["ignored"], origin("ignored")],
+        [["result"], origin("result")],
+        [["result", "answer"], origin("answer")],
+        [["result", "note"], origin("note")],
+      ],
+    }),
+  );
+
+  const projected = exact(resolveContract("${producer.output.result}", { producer: contract }));
+  expect(projected.type).toBe(nestedType);
+  expect(projected.origins).toEqual(
+    new ContractOrigins({
+      default: origin("result"),
+      entries: [
+        [["answer"], origin("answer")],
+        [["note"], origin("note")],
+      ],
+    }),
+  );
+
+  const inputProjected = exact(resolveContract("${input.payload.result}", {}, { payload: contract }));
+  expect(inputProjected.type).toBe(nestedType);
+  expect(inputProjected.origins).toEqual(projected.origins);
+
+  const fallbackContract = new ValueContract(
+    rootType,
+    new ContractOrigins({ default: origin("root"), entries: [[["result"], origin("result")]] }),
+  );
+  const leaf = exact(resolveContract("${producer.output.result.answer}", { producer: fallbackContract }));
+  expect(leaf.origins.default).toEqual(origin("result"));
+  expect(leaf.origins.entries).toEqual([]);
+});
+
+test("output contract projection propagates an optional field path", () => {
+  // A missing optional ancestor makes a strict descendant value nullable.
+  const optionalRecord = recordType({ value: INT });
+  const root = recordType({ payload: optionalRecord }, []);
+
+  const projected = exact(resolveContract("${producer.output.payload.value}", { producer: new ValueContract(root) }));
+
+  expect(projected.type.kind).toBe(ValueKind.INTEGER);
+  expect(projected.type.nullable).toBe(true);
+});
+
+test("output contract resolution projects proven partial record fields", () => {
+  // Known fields remain typed when an opaque sibling prevents an exact record.
+  const known = new ValueContract(recordType({ value: INT }), new ContractOrigins({ default: origin("known") }));
+  const partial = new PartialRecordContract([
+    ["known", known],
+    ["opaque", null],
+  ]);
+  const producers = { producer: partial };
+
+  const projected = exact(resolveContract("${producer.output.known.value}", producers));
+  expect(projected.type).toEqual(INT);
+  expect(projected.origins.default).toEqual(origin("known"));
+  expect(resolveContract("${producer.output.opaque}", producers)).toBe(null);
+  expect(resolveContract("${producer.output}", producers)).toBe(partial);
+  expect(exact(resolveContract("${producer.output == null}", producers)).type).toEqual(
+    Type.scalar(ValueKind.BOOLEAN),
+  );
+  expect(exact(resolveContract("record: ${producer.output}", producers)).type).toEqual(STR);
+});
+
+test.each<[string, unknown, Type | null]>([
+  ["an int", 3n, new Type({ kind: ValueKind.INTEGER, bounds: [3n, 3n] })],
+  ["a float", 1.5, new Type({ kind: ValueKind.NUMBER, bounds: [1.5, 1.5] })],
+  ["Infinity", Infinity, null],
+  ["-Infinity", -Infinity, null],
+  ["text", "buy", new Type({ kind: ValueKind.STRING, tags: new Set(["buy"]) })],
+  ["empty text", "", STR],
+  ["a bool", true, Type.scalar(ValueKind.BOOLEAN)],
+  ["null", null, Type.scalar(ValueKind.NONE)],
+  ["a record", { a: 1n }, Type.scalar(ValueKind.OBJECT)],
+  ["a value with no type", new Date(0), null],
+])("literalType of %s", (_name, value, expected) => {
+  const typ = literalType(value);
+  if (expected === null) expect(typ).toBe(null);
+  else expect(typeEquals(typ!, expected)).toBe(true);
+});
+
+test("literalValue unescapes text and marks templates", () => {
+  const value = { a: 1n };
+  expect(literalValue("costs $$5")).toBe("costs $5");
+  expect(literalValue("hi ${a.output}")).toBe(NOT_LITERAL);
+  expect(literalValue(new ValueTemplate({ a: "x" }))).toBe(NOT_LITERAL);
+  expect(literalValue("${")).toBe(NOT_LITERAL);
+  expect(literalValue(value)).toBe(value);
+  expect(literalValue(7n)).toBe(7n);
+});
+
+test("literalContract types a nested record, joins a list, and leaves an unjoinable list unproven", () => {
+  const nested = exact(literalContract({ a: { b: "x" }, n: 1n }));
+  expect(typeEquals(nested.type, recordType({ a: recordType({ b: STR }), n: INT }))).toBe(true);
+  const exactNested = exact(literalContract({ a: { b: "x" } }, { exactLiterals: true }));
+  const tagX = new Type({ kind: ValueKind.STRING, tags: new Set(["x"]) });
+  expect(typeEquals(exactNested.type, recordType({ a: recordType({ b: tagX }) }))).toBe(true);
+
+  // Equal exact items join as they are; differing literals join once widened.
+  const same = exact(literalContract(["x", "x"], { exactLiterals: true }));
+  expect(typeEquals(same.type, new Type({ kind: ValueKind.LIST_STRING, element: tagX }))).toBe(true);
+  const differing = exact(literalContract(["x", "y"], { exactLiterals: true }));
+  expect(typeEquals(differing.type, new Type({ kind: ValueKind.LIST_STRING, element: STR }))).toBe(true);
+  const ints = exact(literalContract([1n, 2n]));
+  expect(typeEquals(ints.type, new Type({ kind: ValueKind.LIST_INTEGER, element: INT }))).toBe(true);
+
+  expect(literalContract([1n, "a"])).toBe(null);
+  expect(literalContract([])).toBe(null);
+  expect(literalContract(Infinity)).toBe(null);
+  // A nested list that doesn't join leaves its field opaque, so the record is partial.
+  expect(literalContract({ items: [1n, "a"], n: 1n })).toEqual(
+    new PartialRecordContract([
+      ["items", null],
+      ["n", new ValueContract(INT)],
+    ]),
+  );
+});
+
+test("templateContract infers a record from its fields", () => {
+  const declared = new ValueContract(INT, new ContractOrigins({ default: origin("declared") }));
+  const template = new ValueTemplate({
+    a: "${p.output}",
+    b: "lit",
+    n: 1n,
+    c: new Binding("${q.output}", { contract: declared }),
+  });
+
+  const seen: string[] = [];
+  const contract = templateContract(template, (text) => {
+    seen.push(text);
+    return null;
+  });
+
+  expect(seen).toEqual(["${p.output}"]);
+  expect(contract).toEqual(
+    new PartialRecordContract([
+      ["a", null],
+      ["b", new ValueContract(STR)],
+      ["n", new ValueContract(INT)],
+      ["c", declared],
+    ]),
+  );
+
+  const exactRecord = exact(templateContract(new ValueTemplate({ b: "lit" }), () => null, { exactLiterals: true }));
+  const tagLit = new Type({ kind: ValueKind.STRING, tags: new Set(["lit"]) });
+  expect(typeEquals(exactRecord.type, recordType({ b: tagLit }))).toBe(true);
+});
+
+test("combineOutputContracts builds an exact record, a partial record, or rejects a non-contract", () => {
+  const a = new ValueContract(STR, new ContractOrigins({ default: origin("a") }));
+  const b = new ValueContract(INT);
+  const combined = exact(combineOutputContracts(table({ a, b })));
+  expect(typeEquals(combined.type, recordType({ a: STR, b: INT }))).toBe(true);
+  expect(combined.origins).toEqual(new ContractOrigins({ entries: [[["a"], origin("a")]] }));
+
+  const nestedPartial = new PartialRecordContract([
+    ["x", b],
+    ["y", null],
+  ]);
+  expect(combineOutputContracts(table<OutputContract | null>({ a, opaque: null, nested: nestedPartial }))).toEqual(
+    new PartialRecordContract([
+      ["a", a],
+      ["opaque", null],
+      ["nested", null],
+    ]),
+  );
+
+  expectError(
+    () => combineOutputContracts(table({ a: STR as unknown as ValueContract })),
+    TypeError,
+    "output fields must contain ValueContract, PartialRecordContract, or null values, got Type for 'a'",
+  );
+});
+
+test("recordFieldOrigins indexes field origins in canonical order", () => {
+  const b = new ValueContract(
+    recordType({ x: STR }),
+    new ContractOrigins({ default: origin("b"), entries: [[["x"], origin("b.x")]] }),
+  );
+  const a = new ValueContract(STR, new ContractOrigins({ default: origin("a") }));
+
+  expect(
+    recordFieldOrigins([
+      ["b", b],
+      ["a", a],
+      ["c", null],
+    ]),
+  ).toEqual(
+    new ContractOrigins({
+      entries: [
+        [["a"], origin("a")],
+        [["b"], origin("b")],
+        [["b", "x"], origin("b.x")],
+      ],
+    }),
+  );
+});
+
+test("referenceContract projects flow inputs and producer outputs", () => {
+  const record = new ValueContract(recordType({ f: INT }));
+  const producers = table<OutputContract>({ p: record });
+  const inputs = table({ x: record });
+
+  expect(exact(referenceContract("input.x.f", producers, inputs)).type).toEqual(INT);
+  expect(exact(referenceContract("p.output.f", producers, inputs)).type).toEqual(INT);
+  expect(referenceContract("input.x", producers, inputs)).toBe(record);
+  expect(referenceContract("q.output", producers, inputs)).toBe(null);
+  expect(referenceContract("input.y", producers, inputs)).toBe(null);
+  expect(referenceContract("p.other", producers, inputs)).toBe(null);
+  expect(referenceContract("p", producers, inputs)).toBe(null);
+
+  expectError(
+    () => referenceContract("input.x", producers, table({ x: STR as unknown as ValueContract })),
+    TypeError,
+    "flow input contracts must be exact ValueContract values, got Type for 'x'",
+  );
+  expectError(
+    () => referenceContract("p.output", table({ p: STR as unknown as ValueContract }), inputs),
+    TypeError,
+    "output producer contracts must be ValueContract or PartialRecordContract values, got Type for 'p'",
+  );
+});
+
+test("localFieldError accepts a read any alternative accepts, else reports the first error", () => {
+  const alternatives = [new ValueContract(recordType({ a: STR })), new ValueContract(recordType({ b: STR }))];
+
+  expect(localFieldError(alternatives, ["b"], "v.b")).toBe(null);
+  expect(localFieldError([alternatives[0]!, new ValueContract(STR)], ["c"], "v.c")).toBe(
+    "reference ${v.c} reads unknown field 'c' on record",
+  );
+});
+
+test("directReferencePath and directReferenceParts read only a lone plain reference", () => {
+  expect(directReferencePath("${a.output.f}")).toBe("a.output.f");
+  expect(directReferencePath(new Binding("${item}"))).toBe("item");
+  expect(directReferencePath("${len(a.output)}")).toBe(null);
+  expect(directReferencePath("${a.output :- null}")).toBe(null);
+  expect(directReferencePath("text ${a.output}")).toBe(null);
+  expect(directReferencePath("${")).toBe(null);
+  expect(directReferencePath(5n)).toBe(null);
+
+  expect(directReferenceParts(parseExpr("d.output.action"))).toEqual(["d", "output", "action"]);
+  expect(directReferenceParts(parseExpr("len(a.output)"))).toBe(null);
+  expect(directReferenceParts(parseExpr("a.output :- null"))).toBe(null);
+  expect(directReferenceParts(parseExpr('"text"'))).toBe(null);
+  // The grammar has no index; a hand-built `a.0` stands in for one.
+  const indexed = new Tree("refcall", [new Token("NAME", "a"), new Tree("trailer", [new Token("NUMBER", "0")])]);
+  expect(directReferenceParts(indexed)).toBe(null);
+});
+
+test("projectOutputContract rejects a non-contract", () => {
+  expectError(
+    () => projectOutputContract(STR as unknown as ValueContract, ["f"]),
+    TypeError,
+    "output contract must be an exact ValueContract or PartialRecordContract, got Type",
+  );
 });

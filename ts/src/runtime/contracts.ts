@@ -10,8 +10,10 @@
  */
 
 import { type RouteKind, SourceRef, ValueRoute } from "../expr/lineage.ts";
-import { isExactly } from "../nodes/contracts.ts";
+import { copyBackwardValue, validateDeclaredNames, validateInputOutputPaths } from "../nodes/base.ts";
+import { ExecutionScope, isExactly } from "../nodes/contracts.ts";
 import { type JsonValue, parseJson } from "../typesys/json.ts";
+import { isList, isRecord } from "../typesys/values.ts";
 
 /** A route field besides `kind` and `expression`. */
 type RouteField =
@@ -176,5 +178,183 @@ export function validateRoute(route: unknown, options: { deep?: boolean } = {}):
       }
       previousEnd = end;
     }
+  }
+}
+
+/**
+ * Require `scope` to be `null` or exactly an `ExecutionScope`; a scope is frozen by its
+ * constructor, so it is held without rebuilding.
+ *
+ * @throws TypeError for any other value.
+ */
+function validateScope(scope: unknown): asserts scope is ExecutionScope | null {
+  if (scope !== null && !isExactly(scope, ExecutionScope)) {
+    throw new TypeError("scope must be an ExecutionScope or null");
+  }
+}
+
+/**
+ * Transient detached inventories, scope, and node material from one invocation. Frozen.
+ *
+ * This worker-owned snapshot becomes durable only through an accepted `ForwardCapture`. It
+ * contains neither bound values nor outcomes. `nodeData` is a deep-frozen copy made by the
+ * constructor; copy it before you modify it.
+ */
+export class BackwardCapture {
+  /** Distinct eligible input names, snapshotted before binding can fail. */
+  readonly inputNames: readonly string[];
+  /** Distinct local variable names in their declaration order. */
+  readonly variableNames: readonly string[];
+  /** This invocation's authored path and dynamic positions, if known. */
+  readonly scope: ExecutionScope | null;
+  /** JSON static material and optional actual render data. */
+  readonly nodeData: Readonly<Record<string, unknown>>;
+
+  /**
+   * Validate the declarations and retain a frozen copy of the node data.
+   *
+   * @param options.inputNames Distinct eligible input names; defaults to empty.
+   * @param options.variableNames Distinct local variable names; defaults to empty.
+   * @param options.scope The invocation's execution scope; defaults to `null`.
+   * @param options.nodeData JSON node material; `null` or omitted is `{}`, including on early
+   *   binding failure.
+   * @throws TypeError for a malformed inventory, scope, or JSON container.
+   * @throws RangeError for a repeated name, an invalid output path, or NaN.
+   */
+  constructor(
+    options: {
+      inputNames?: readonly string[];
+      variableNames?: readonly string[];
+      scope?: ExecutionScope | null;
+      nodeData?: Readonly<Record<string, unknown>> | null;
+    } = {},
+  ) {
+    const { inputNames = [], variableNames = [], scope = null } = options;
+    validateDeclaredNames(inputNames, "input_names");
+    validateDeclaredNames(variableNames, "variable_names");
+    validateScope(scope);
+    const data: unknown = options.nodeData ?? {};
+    if (!isRecord(data)) throw new TypeError("node_data must be a record");
+    validateInputOutputPaths(data, inputNames);
+    this.inputNames = Object.freeze([...inputNames]);
+    this.variableNames = Object.freeze([...variableNames]);
+    this.scope = scope;
+    this.nodeData = copyBackwardValue(data, "node_data") as typeof this.nodeData;
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Detached canonical inputs and routes from one actual binding operation. Frozen.
+ *
+ * A `null` input record marks unfinished binding; safe partial routes remain inspectable. Item
+ * captures retain explicit indices and actual second-template evaluation flags. Outcomes and
+ * visible interactions stay on their accepted record. Scope may be absent for synthetic nodes
+ * awaiting instantiation. JSON values are deep-frozen copies made by the constructor; copy one
+ * before you modify it.
+ */
+export class ForwardCapture {
+  /** The actual completed input record, or `null` for unfinished binding. */
+  readonly boundInputs: Readonly<Record<string, unknown>> | null;
+  /** Record-shaped routes for the captured fields. */
+  readonly route: ValueRoute;
+  /** Captured keys whose template expressions were evaluated here; a private copy, read-only by contract. */
+  readonly evaluatedKeys: ReadonlySet<string>;
+  /** Per-item bindings in increasing explicit index order. */
+  readonly items: readonly (readonly [number, ForwardCapture])[];
+  /** The captured authored location and occurrence, when available. */
+  readonly scope: ExecutionScope | null;
+  /** Node-owned static backward material, if captured. */
+  readonly nodeData: Readonly<Record<string, unknown>> | null;
+  /** Distinct eligible input names retained for this invocation. */
+  readonly inputNames: readonly string[];
+  /** Distinct local variable names retained for this invocation. */
+  readonly variableNames: readonly string[];
+
+  /**
+   * Validate the routes and retain frozen copies of the invocation data.
+   *
+   * @param boundInputs The actual completed input record; `null` marks unfinished binding and
+   *   forbids usable item inputs.
+   * @param route Record-shaped routes for the captured fields.
+   * @param options.evaluatedKeys Captured keys whose template expressions were evaluated here;
+   *   copied, and defaults to empty.
+   * @param options.items Per-item index/capture pairs in increasing index order; defaults to
+   *   empty. Item captures are held by reference, since they are frozen.
+   * @param options.scope The captured execution scope; defaults to `null`.
+   * @param options.nodeData Node-owned static backward material; defaults to `null`.
+   * @param options.inputNames Distinct eligible input names; defaults to empty.
+   * @param options.variableNames Distinct local variable names; defaults to empty.
+   * @throws TypeError when a carrier, container, or JSON value has an invalid type.
+   * @throws RangeError when a route, inventory name, output path, or input/item presence breaks
+   *   the capture contract, or for NaN.
+   * @throws JSONDecodeError when a route's `valueJson` isn't JSON yian reads.
+   */
+  constructor(
+    boundInputs: Readonly<Record<string, unknown>> | null,
+    route: ValueRoute,
+    options: {
+      evaluatedKeys?: ReadonlySet<string>;
+      items?: readonly (readonly [number, ForwardCapture])[];
+      scope?: ExecutionScope | null;
+      nodeData?: Readonly<Record<string, unknown>> | null;
+      inputNames?: readonly string[];
+      variableNames?: readonly string[];
+    } = {},
+  ) {
+    const {
+      evaluatedKeys = new Set<string>(),
+      items = [],
+      scope = null,
+      nodeData = null,
+      inputNames = [],
+      variableNames = [],
+    } = options;
+    validateRoute(route);
+    if (route.kind !== "record") throw new RangeError("input route must be a record");
+    if (!(evaluatedKeys instanceof Set) || [...evaluatedKeys].some((key) => typeof key !== "string")) {
+      throw new TypeError("evaluated_keys must be a set of strings");
+    }
+    for (const key of evaluatedKeys) {
+      if (!route.names.includes(key)) throw new RangeError("evaluated_keys must name captured routes");
+    }
+    if (boundInputs !== null) {
+      if (!isRecord(boundInputs)) throw new TypeError("bound_inputs must be a JSON object or null");
+      // Route names are unique, so equal sizes and inclusion make the key sets equal.
+      const keys = Object.keys(boundInputs);
+      if (keys.length !== route.names.length || keys.some((key) => !route.names.includes(key))) {
+        throw new RangeError("bound_inputs keys must match input routes");
+      }
+    }
+    if (!isList(items)) throw new TypeError("items must be an array");
+    let previousIndex = -1;
+    for (const pair of items as unknown[]) {
+      if (!isList(pair) || pair.length !== 2) throw new TypeError("item captures must be index/capture pairs");
+      const [index, capture] = pair;
+      if (!Number.isSafeInteger(index) || (index as number) <= previousIndex) {
+        throw new RangeError("item indices must be non-negative and increasing");
+      }
+      if (!isExactly(capture, ForwardCapture)) throw new TypeError("item capture must be a ForwardCapture");
+      if (boundInputs === null && capture.boundInputs !== null) {
+        throw new RangeError("unfinished binding cannot retain usable item inputs");
+      }
+      previousIndex = index as number;
+    }
+    validateScope(scope);
+    validateDeclaredNames(inputNames, "input_names");
+    validateDeclaredNames(variableNames, "variable_names");
+    if (nodeData !== null) {
+      if (!isRecord(nodeData)) throw new TypeError("node_data must be a record or null");
+      validateInputOutputPaths(nodeData, inputNames);
+    }
+    this.boundInputs = copyBackwardValue(boundInputs, "bound_inputs") as typeof this.boundInputs;
+    this.route = route;
+    this.evaluatedKeys = new Set(evaluatedKeys);
+    this.items = Object.freeze(items.map(([index, capture]) => Object.freeze([index, capture] as const)));
+    this.scope = scope;
+    this.nodeData = copyBackwardValue(nodeData, "node_data") as typeof this.nodeData;
+    this.inputNames = Object.freeze([...inputNames]);
+    this.variableNames = Object.freeze([...variableNames]);
+    Object.freeze(this);
   }
 }

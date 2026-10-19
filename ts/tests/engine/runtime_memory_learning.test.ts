@@ -4,6 +4,12 @@
  * `test_causal_route_episode_retains_the_accepted_failure` (with the `_scope` and `_evidence`
  * helpers) and `test_route_and_growth_projection_use_closed_source_neutral_envelopes`.
  *
+ * Ported, after rewrite: `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow`
+ * and `test_root_fallback_reaches_only_keys_owned_by_the_root_flow_site`, with the root result
+ * (`BackwardResult(self_feedback=("original text",))`) and the empty results built by hand instead
+ * of computed; the export half of `test_owner_contexts_are_the_only_episode_projection` (the
+ * removed names stay absent from `runtime/learning.ts`).
+ *
  * Changed:
  * - `test_commit_id_requires_a_positive_attempt_and_separates_attempts`: the invalid attempt ids
  *   are `null, 0, -1, true, "2", 2.5, 2n` (`2.0` is the valid `2` in TS), each a `RangeError`
@@ -12,17 +18,15 @@
  * - Payload and seed ints are `bigint`s (`1n`), and the growth seed's tuple is an array.
  * - `_episode_outcome` is the module export `episodeOutcome`; its `is` on the status becomes
  *   `toBe` on the status string.
+ * - The root entry's `message_index` is `0n`; Python's tuples are arrays.
+ * - The export half checks the removed names in camelCase (`projectOutcomeEpisodes`,
+ *   `occurrenceKey`); the half that runs a flow comes with the engine (below).
  *
  * TS-only: the run id, memory and mutation-item messages of `memoryCommitId`; a float payload
  * digests its `logJson` text; `failureJson` equals `toJSON()`, refuses a value that isn't exactly
  * a `Failure` and revalidates the failure's fields; `episodeOutcome` projects a success's canonical
  * value and a failed record's failure JSON, and refuses a record of another class and a forged
  * success without a canonical typed value.
- *
- * Later, in this item: the rewrites of
- * `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow` and
- * `test_root_fallback_reaches_only_keys_owned_by_the_root_flow_site`, and the export half of
- * `test_owner_contexts_are_the_only_episode_projection` (with the owner-context projection).
  *
  * Later (T4-4, T4-5, with the run state): `test_evidence_is_rejected_when_learning_is_not_enabled`,
  * `test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope`,
@@ -35,7 +39,7 @@
  * Later (T4-7, with `computeBackward` and the engine): the owner-context and episode tests
  * (`test_owner_contexts_include_general_occurrences_and_empty_memories` through
  * `test_owner_variable_batches_follow_captured_inventory_across_wire_round_trip`, except
- * `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow`, listed above;
+ * `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow`, ported above;
  * `test_runstarted_retains_defensive_memory_authority_and_projects_episodes`,
  * `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome`,
  * `test_failure_episode_uses_full_canonical_durable_failure_json`,
@@ -47,16 +51,20 @@ import { createHash } from "node:crypto";
 
 import { expect, test } from "bun:test";
 
+import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import {
+  DeclSite,
   EvaluationEvidence,
   MemoryEpisodeStatus,
   MemoryMutation,
   MemoryOccurrenceKind,
   MemoryOccurrenceSegment,
   MemoryScope,
+  MemorySpec,
   ModelTextInteraction,
 } from "../../src/memory/index.ts";
+import { BackwardResult } from "../../src/nodes/base.ts";
 import {
   NodeExpandedRecord,
   NodeFailedRecord,
@@ -64,8 +72,9 @@ import {
   NodeStartedRecord,
   NodeSucceededRecord,
 } from "../../src/runtime/log.ts";
-import { episodeOutcome, failureJson, memoryCommitId } from "../../src/runtime/learning.ts";
-import type { OutcomeRecord } from "../../src/runtime/trace.ts";
+import * as learning from "../../src/runtime/learning.ts";
+import { episodeOutcome, failureJson, memoryCommitId, projectOwnerContexts } from "../../src/runtime/learning.ts";
+import { type OutcomeRecord, RetainedTrace, TraceTerminal } from "../../src/runtime/trace.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
@@ -93,6 +102,24 @@ function evidence(memoryScope: MemoryScope | null): EvaluationEvidence {
     new ModelTextInteraction("answer"),
   ]);
 }
+
+/** The root flow's declaration site. */
+const ROOT = new DeclSite([], ["root"]);
+
+/** A synthetic source-free failed terminal trace, with no occurrences. */
+function syntheticTrace(): RetainedTrace {
+  const trace = new RetainedTrace("synthetic", START_ID, END_ID);
+  trace.terminal = new TraceTerminal(
+    false,
+    null,
+    null,
+    new Failure({ code: "graph.terminal_unreachable", message: "no producer", nodeId: null }),
+  );
+  return trace;
+}
+
+/** The root result a source-free failed terminal keeps for text feedback: the text as self feedback. */
+const ORIGINAL_ROOT = new BackwardResult({ selfFeedback: ["original text"] });
 
 /** One mutation whose payload holds text, null and an int. */
 const MUTATIONS = [new MemoryMutation("m", { z: 1n, a: ["é", null] })];
@@ -217,4 +244,61 @@ test("an episode refuses a success without a canonical typed value", () => {
     value: { kind: "int" },
   });
   expectError(() => episodeOutcome(forged), RangeError, "successful record has no canonical typed value");
+});
+
+test("owner context projects a synthetic source-free failure only to the root flow", () => {
+  const trace = syntheticTrace();
+  const memories = [
+    new MemorySpec("inner", "inner", {}, [new DeclSite([], ["def", "child"])], false),
+    new MemorySpec("outer", "outer", {}, [ROOT], false),
+  ];
+  const [inner, outer] = projectOwnerContexts(trace, memories, [], "original text", ORIGINAL_ROOT, []);
+  expect(outer!.episodes).toEqual([]);
+  expect(inner!.episodes).toEqual([]);
+  expect(inner!.feedback).toEqual([]);
+  expect(outer!.feedback).toEqual([
+    {
+      execution_seq: null,
+      owner_static_path: null,
+      occurrence_path: null,
+      execution_scope: null,
+      root: true,
+      channel: "self",
+      target_name: null,
+      value: "original text",
+      message_index: 0n,
+      contribution_context: {},
+    },
+  ]);
+});
+
+test("root fallback reaches only keys owned by the root flow site", () => {
+  const trace = syntheticTrace();
+  const memories = [
+    new MemorySpec("agent_notes", "agent_notes", {}, [new DeclSite([], ["root"], "agent")], true),
+    new MemorySpec("def_notes", "def_notes", {}, [new DeclSite([], ["def", "child"])], false),
+    // An imported file's root flow is not the run's root flow.
+    new MemorySpec("lib.notes", "lib.notes", {}, [new DeclSite(["lib"], ["root"])], false),
+    new MemorySpec("shared", "shared", {}, [new DeclSite([], ["def", "child"]), ROOT], false),
+  ];
+  const [agentNotes, defNotes, imported, shared] = projectOwnerContexts(
+    trace,
+    memories,
+    [],
+    "original text",
+    ORIGINAL_ROOT,
+    [],
+  );
+  expect(agentNotes!.feedback).toEqual([]);
+  expect(defNotes!.feedback).toEqual([]);
+  expect(imported!.feedback).toEqual([]);
+  expect(shared!.feedback.map((entry) => (entry as { value: unknown }).value)).toEqual(["original text"]);
+  expect(shared!.feedback.every((entry) => (entry as { root: unknown }).root === true)).toBe(true);
+});
+
+test("owner contexts are the only episode projection", () => {
+  for (const name of ["RuntimeLearningState", "projectOutcomeEpisodes", "occurrenceKey"]) {
+    expect(Object.hasOwn(learning, name)).toBe(false);
+  }
+  expect(typeof learning.projectOwnerContexts).toBe("function");
 });

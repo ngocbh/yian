@@ -30,6 +30,16 @@
  * per reducer, Finished and context-owner rule, the last record class refused through a forged
  * record of another class.
  *
+ * TS-only, owner learn contexts over `chainTrace()` (`p` sends `v`, `w`, self and variable
+ * feedback): the producer's episode (inputs without the hidden `w`, output, coordinates) and
+ * `notes` feedback entries (output, input with contributions, self and variable channels) with
+ * `bigint` integers; an empty context for a key with no occurrences; the root fallback for a
+ * root-owned key; one refusal per table, stack and scope check; the two `OwnerContextError`
+ * constructor checks; context failures: a lone surrogate in `p`'s self feedback, which
+ * `freezeFeedback` refuses (the TS message doesn't name `feedback[i]`), names `p`'s backward
+ * context, and a synthetic source-free trace with run id `""` fails the root fallback's context
+ * with `context === null`.
+ *
  * Later (T4-6, with the engine): `test_terminal_trace_keeps_actual_root_writer_until_quiescence`,
  * `test_root_inventory_is_retained_without_running_capture_or_defaults`,
  * `test_terminal_trace_append_rejection_leaves_all_indexes_unchanged` and
@@ -47,11 +57,17 @@ import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import { type FeedbackValue, RouteContext, SourceRef, sourceKey, ValueRoute } from "../../src/expr/lineage.ts";
 import {
+  DeclSite,
+  LearnContext,
   LearningFailure,
   LearningResult,
+  MemoryEpisode,
+  MemoryEpisodeStatus,
   MemoryMutation,
   MemoryOperationFailure,
   MemoryScope,
+  MemorySpec,
+  MemoryStack,
   PolicyCommitOutcome,
 } from "../../src/memory/contracts.ts";
 import { BackwardContext, BackwardResult, Node, NodeKind } from "../../src/nodes/base.ts";
@@ -72,7 +88,9 @@ import {
   contextualTransfers,
   materializeContext,
   memoryCommitId,
+  OwnerContextError,
   prefixLearning,
+  projectOwnerContexts,
   proposalBatches,
   reduceBackwardRecord,
   RuntimeBackwardState,
@@ -137,11 +155,17 @@ test("an explicitly synthetic source-free failure keeps the direct root text", (
 
 const RUN = "run";
 
-/** A CODE node with a settable memory scope, recording its backward calls. */
+/** A CODE node with a settable memory scope and hidden inputs, recording its backward calls. */
 class TraceNode extends Node {
   readonly kind = NodeKind.CODE;
+  /** The inputs `modelHiddenInputs` reports. */
+  hidden: ReadonlySet<string> = new Set();
   /** Each backward call's context and feedback, in call order. */
   readonly calls: [BackwardContext, readonly FeedbackValue[]][] = [];
+
+  override modelHiddenInputs(): ReadonlySet<string> {
+    return this.hidden;
+  }
 
   override backward(context: BackwardContext, feedback: readonly FeedbackValue[]): BackwardResult {
     this.calls.push([context, feedback]);
@@ -196,8 +220,9 @@ interface ChainOptions {
  * A terminal trace of a learnable run, driven through `prepareTrace` and `apply`: RunStarted (START
  * `__start__` writes `{x: 1n}`, root END `end`, root input names `["x"]`); START, whose capture
  * routes `x` to source 0 path `["x"]`; `p`, routing `v` from START's output `x` and `w` straight to
- * source 0 path `["x"]`, with memory scope `["p"]` and key `notes`; END, routing `value` from `p`,
- * with the successful terminal. Returns the trace, the nodes and the envelopes.
+ * source 0 path `["x"]`, with variable `tone`, hidden input `w`, and memory scope `["p"]` with key
+ * `notes`; END, routing `value` from `p`, with the successful terminal. Returns the trace, the
+ * nodes and the envelopes.
  */
 function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null }: ChainOptions = {}) {
   const pool = new VariablePool(START_ID);
@@ -220,13 +245,18 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null }: 
       ["v", sourceRoute(1, ["x"])],
       ["w", sourceRoute(0, ["x"])],
     ]),
-    { inputNames: ["v", "w"], nodeData: pPaths === null ? null : { input_output_paths: pPaths } },
+    {
+      inputNames: ["v", "w"],
+      variableNames: ["tone"],
+      nodeData: pPaths === null ? null : { input_output_paths: pPaths },
+    },
   );
   const endCapture = new ForwardCapture({ value: pOutput }, ValueRoute.record([["value", sourceRoute(3)]]), {
     inputNames: ["value"],
   });
   const nodes = { start: new TraceNode(START_ID), p: new TraceNode("p"), end: new TraceNode(END_ID) };
   nodes.p.memoryScope = new MemoryScope(["p"], { memories: ["notes"] });
+  nodes.p.hidden = new Set(["w"]);
   const envelopes = [
     at(0, run),
     at(1, new NodeStartedRecord(START_ID)),
@@ -1483,4 +1513,314 @@ test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
   ],
 ])("the reducer refuses %s", (_label, call, cls, message) => {
   expectError(() => call(chainTrace().trace), cls, message);
+});
+
+// TS-only: owner learn contexts, over `chainTrace()` with memory key `notes` on `p`.
+
+const EMPTY_SPEC = new MemorySpec("empty", "empty", {}, [new DeclSite([], ["def", "unused"])], false);
+const NOTES_SPEC = new MemorySpec("notes", "notes", {}, [new DeclSite([], ["def", "p"])], false);
+const OUTER_SPEC = new MemorySpec("outer", "outer", {}, [new DeclSite([], ["root"])], false);
+const OWNER_TABLE = [EMPTY_SPEC, NOTES_SPEC, OUTER_SPEC];
+const P_STACK = new MemoryStack(["p"], ["notes"]);
+const OWNER_ROOT = new BackwardResult({ inputFeedback: { x: ["Raise v.", "Check w."] } });
+
+/** The chain's results with `p` sending `v`, `w`, self feedback `self` and variable feedback. */
+function ownerResults(self = "Be careful."): AttributedBackwardResult[] {
+  const [start, , end] = chainResults(true);
+  const result = new BackwardResult({
+    inputFeedback: { v: ["Raise v."], w: ["Check w."] },
+    selfFeedback: [self],
+    variableFeedback: { tone: ["Softer."] },
+  });
+  const attribution = [new BackwardAttribution(E, "value", 0, 0, [0])];
+  return [start!, new AttributedBackwardResult(P, ["Too low."], attribution, result, true), end!];
+}
+
+/** The options of `ownerContexts`. */
+interface OwnerOptions {
+  memories?: readonly MemorySpec[];
+  stacks?: readonly MemoryStack[];
+  root?: BackwardResult;
+  results?: AttributedBackwardResult[];
+}
+
+/** Project the owner contexts of `trace` for root feedback `Too low.`. */
+function ownerContexts(trace: RetainedTrace, options: OwnerOptions = {}): readonly LearnContext[] {
+  const { memories = OWNER_TABLE, stacks = [P_STACK], root = OWNER_ROOT, results = ownerResults() } = options;
+  return projectOwnerContexts(trace, memories, stacks, "Too low.", root, results);
+}
+
+/** Return what `fn` throws. */
+function thrown(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected an error");
+}
+
+/** A source reference's JSON form. */
+function sourceJson(seq: number) {
+  return { run_id: RUN, execution_seq: BigInt(seq), path: [] };
+}
+
+/** The materialized context of END's route reading `p`'s output. */
+const P_OUTPUT_CONTEXT = {
+  expression: "${source_3}",
+  result: 2n,
+  sources: [{ source: sourceJson(3), value: 2n }],
+  role: "source",
+  operand: null,
+  positions: [],
+  span: null,
+  result_type: null,
+  snapshot: null,
+};
+
+/** The materialized projection context of `p`'s route reading field `x` of execution `seq`. */
+function fieldContext(seq: number) {
+  return {
+    expression: `\${source_${seq}}`,
+    result: 1n,
+    sources: [{ source: { ...sourceJson(seq), path: ["x"] }, value: 1n }],
+    role: "projection",
+    operand: ["x"],
+    positions: [],
+    span: null,
+    result_type: null,
+    snapshot: null,
+  };
+}
+
+/** `p`'s execution coordinates: no execution scope. */
+const P_COORDINATES = { execution_seq: 3n, owner_static_path: null, occurrence_path: null, execution_scope: null };
+
+test("owner contexts project the producer's episode and feedback for its memory only", () => {
+  const { trace } = chainTrace();
+  const contexts = ownerContexts(trace);
+  expect(contexts.map((context) => context.memory)).toEqual(["empty", "notes", "outer"]);
+  const [empty, notes, outer] = contexts as LearnContext[];
+  expect(empty).toEqual(new LearnContext(RUN, "empty", []));
+  expect(notes!.runId).toBe(RUN);
+  expect(notes!.episodes).toEqual([
+    new MemoryEpisode(RUN, [], ["p"], MemoryEpisodeStatus.SUCCEEDED, { v: 1n }, { output: 2n, executionSeq: 3 }),
+  ]);
+  expect(notes!.feedback).toEqual([
+    {
+      ...P_COORDINATES,
+      channel: "output",
+      target_name: null,
+      value: "Too low.",
+      contribution_context: {
+        message_index: 0n,
+        sender: sourceJson(5),
+        input_name: "value",
+        sender_message_index: 0n,
+        contribution_index: 0n,
+        parents: [0n],
+        contexts: [P_OUTPUT_CONTEXT],
+      },
+    },
+    {
+      ...P_COORDINATES,
+      channel: "input",
+      target_name: "v",
+      value: "Raise v.",
+      contribution_context: {
+        message_index: 0n,
+        parents: [0n],
+        contexts: [P_OUTPUT_CONTEXT],
+        contributions: [
+          { source: sourceJson(1), value: { x: "Raise v." }, contribution_index: 0n, contexts: [fieldContext(1)] },
+        ],
+      },
+    },
+    {
+      ...P_COORDINATES,
+      channel: "input",
+      target_name: "w",
+      value: "Check w.",
+      contribution_context: {
+        message_index: 0n,
+        parents: [0n],
+        contexts: [P_OUTPUT_CONTEXT],
+        contributions: [
+          { source: sourceJson(0), value: { x: "Check w." }, contribution_index: 0n, contexts: [fieldContext(0)] },
+        ],
+      },
+    },
+    {
+      ...P_COORDINATES,
+      channel: "self",
+      target_name: null,
+      value: "Be careful.",
+      message_index: 0n,
+      contribution_context: {},
+    },
+    {
+      ...P_COORDINATES,
+      channel: "variable",
+      target_name: "tone",
+      value: "Softer.",
+      message_index: 0n,
+      contribution_context: {},
+    },
+  ]);
+  // The root fallback skips START's source-zero message and keeps `p`'s.
+  expect(outer!.episodes).toEqual([]);
+  expect(outer!.feedback).toEqual([
+    {
+      execution_seq: null,
+      owner_static_path: null,
+      occurrence_path: null,
+      execution_scope: null,
+      root: true,
+      channel: "input",
+      target_name: "x",
+      value: "Check w.",
+      contribution_context: { message_index: 0n },
+    },
+  ]);
+  for (const context of contexts) {
+    expect(Object.isFrozen(context)).toBe(true);
+    expect(Object.isFrozen(context.feedback)).toBe(true);
+  }
+});
+
+test.each<[string, OwnerOptions, ErrorClass, string]>([
+  [
+    "a table that isn't an array",
+    { memories: new Set(OWNER_TABLE) as never },
+    TypeError,
+    "owner contexts require the complete recorded memory table",
+  ],
+  [
+    "a table entry of another class",
+    { memories: [{ ...EMPTY_SPEC } as MemorySpec] },
+    TypeError,
+    "owner contexts require the complete recorded memory table",
+  ],
+  [
+    "stacks that aren't an array",
+    { stacks: new Set([P_STACK]) as never },
+    TypeError,
+    "owner contexts require the recorded memory stacks",
+  ],
+  [
+    "a stack of another class",
+    { stacks: [{ ...P_STACK } as MemoryStack] },
+    TypeError,
+    "owner contexts require the recorded memory stacks",
+  ],
+  [
+    "an unsorted table",
+    { memories: [NOTES_SPEC, EMPTY_SPEC] },
+    RangeError,
+    "owner contexts require a memory table sorted by unique key",
+  ],
+  [
+    "a repeated key",
+    { memories: [NOTES_SPEC, NOTES_SPEC] },
+    RangeError,
+    "owner contexts require a memory table sorted by unique key",
+  ],
+  [
+    "repeated stack locators",
+    { stacks: [P_STACK, new MemoryStack(["p"], [])] },
+    RangeError,
+    "recorded memory stacks must have unique locators",
+  ],
+  [
+    "a root result that disagrees with the transfers",
+    { root: CHAIN_ROOT },
+    RangeError,
+    "backward root result must match the accepted START and source-zero projection",
+  ],
+  [
+    "a scope without its recorded stack",
+    { stacks: [] },
+    RangeError,
+    "historical memory scope disagrees with its recorded memory stack",
+  ],
+  [
+    "a scope whose recorded stack differs",
+    { stacks: [new MemoryStack(["p"], ["other"])] },
+    RangeError,
+    "historical memory scope disagrees with its recorded memory stack",
+  ],
+  [
+    "a scope key absent from the table",
+    { memories: [EMPTY_SPEC] },
+    RangeError,
+    "historical memory scope names a key absent from the recorded table",
+  ],
+])("owner contexts refuse %s", (_label, options, cls, message) => {
+  expectError(() => ownerContexts(chainTrace().trace, options), cls, message);
+});
+
+test("OwnerContextError keeps the memory, the original error and the context", () => {
+  const { trace } = chainTrace();
+  const original = new RangeError("Bad.");
+  const context = trace.backwardContext(P);
+  const error = new OwnerContextError("notes", original, context);
+  expect(error).toBeInstanceOf(Error);
+  expect(error.name).toBe("OwnerContextError");
+  expect(error.message).toBe("Bad.");
+  expect(error.cause).toBe(original);
+  expect(error.memory).toBe("notes");
+  expect(error.original).toBe(original);
+  expect(error.context).toBe(context);
+  expect(new OwnerContextError("notes", original).context).toBeNull();
+});
+
+test.each<[string, () => unknown, string]>([
+  [
+    "an empty memory key",
+    () => new OwnerContextError("", new RangeError("Bad.")),
+    "owner context failure requires a memory key string",
+  ],
+  [
+    "a memory key that isn't text",
+    () => new OwnerContextError(1 as unknown as string, new RangeError("Bad.")),
+    "owner context failure requires a memory key string",
+  ],
+  [
+    "a context of another class",
+    () => new OwnerContextError("notes", new RangeError("Bad."), {} as BackwardContext),
+    "owner context failure context must be a BackwardContext or null",
+  ],
+])("OwnerContextError refuses %s", (_label, fn, message) => {
+  expectError(fn, TypeError, message);
+});
+
+test("a feedback value freezeFeedback refuses fails the owner's context, naming its occurrence", () => {
+  const { trace } = chainTrace();
+  const error = thrown(() => ownerContexts(trace, { results: ownerResults("\uD800") })) as OwnerContextError;
+  expect(error.constructor).toBe(OwnerContextError);
+  expect(error.memory).toBe("notes");
+  expect(error.original.constructor).toBe(RangeError);
+  expect(error.original.message).toBe("Unicode surrogate is not valid canonical JSON");
+  expect(error.message).toBe(error.original.message);
+  expect(error.cause).toBe(error.original);
+  expect(error.context).toEqual(trace.backwardContext(P));
+});
+
+test("a root fallback context that can't be built names no occurrence", () => {
+  const trace = new RetainedTrace("", START_ID, END_ID);
+  trace.terminal = new TraceTerminal(
+    false,
+    null,
+    null,
+    new Failure({ code: "graph.terminal_unreachable", message: "no producer", nodeId: null }),
+  );
+  const root = new BackwardResult({ selfFeedback: ["original text"] });
+  const error = thrown(() =>
+    projectOwnerContexts(trace, [OUTER_SPEC], [], "original text", root, []),
+  ) as OwnerContextError;
+  expect(error.constructor).toBe(OwnerContextError);
+  expect(error.memory).toBe("outer");
+  expect(error.context).toBeNull();
+  expect(error.original.constructor).toBe(RangeError);
+  expect(error.original.message).toBe("run_id must be non-empty");
 });

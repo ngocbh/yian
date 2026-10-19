@@ -7,8 +7,8 @@
  * records, and retained traces sit below it; state and callback drivers consume its pure
  * projections. It invokes no callbacks or backend operations.
  *
- * Knows about:   diagnostics, expr/lineage, memory, nodes/base, nodes/contracts, runtime/contracts,
- *                runtime/log, runtime/trace, typesys.
+ * Knows about:   diagnostics, expr/lineage, memory/contracts, nodes/base, nodes/contracts,
+ *                runtime/contracts, runtime/log, runtime/trace, typesys.
  * Never imports: runtime state or backward, engine or run, compile, compose, or the CLI.
  */
 
@@ -29,17 +29,25 @@ import {
   type ValueRoute,
 } from "../expr/lineage.ts";
 import {
+  DeclSite,
+  freezeFeedback,
+  type JsonValue as FrozenJson,
+  LearnContext,
   LearningFailure,
   LearningResult,
+  MemoryEpisode,
   MemoryEpisodeStatus,
   MemoryMutation,
   MemoryOperationFailure,
+  type MemoryScope,
+  MemorySpec,
+  MemoryStack,
   PolicyCommitOutcome,
   sameLearningResult,
   sameMemoryMutation,
 } from "../memory/contracts.ts";
 import {
-  type BackwardContext,
+  BackwardContext,
   BackwardResult,
   copyBackwardValue,
   sameBackwardResult,
@@ -70,9 +78,13 @@ import {
   NodeFailedRecord,
   NodeRoutedRecord,
   NodeSucceededRecord,
+  executionScopePayload,
   routePayload,
 } from "./log.ts";
 import { type OutcomeRecord, RetainedTrace, type TraceOccurrence, TraceTerminal } from "./trace.ts";
+
+/** The root flow's declaration site: the source-free root channel goes to the keys it owns. */
+const ROOT_FLOW_SITE = new DeclSite([], ["root"]);
 
 /** A node-data output path part: a field name, or an index as a decoded `bigint` or a `number`. */
 type PathPart = string | bigint | number;
@@ -1107,6 +1119,315 @@ export function episodeOutcome(record: OutcomeRecord): [MemoryEpisodeStatus, Jso
   }
   if (isExactly(record, NodeFailedRecord)) return [MemoryEpisodeStatus.FAILED, null, failureJson(record.failure)];
   throw new TypeError("unsupported graph outcome for episode projection");
+}
+
+/** A receiving memory's learn context can't be built from validated run material. */
+export class OwnerContextError extends Error {
+  override name = "OwnerContextError";
+  /** The receiving memory key. */
+  readonly memory: string;
+  /** The context-construction error, also the `cause`. */
+  readonly original: Error;
+  /** The occurrence whose material failed, or `null` when only the source-free root feedback failed. */
+  readonly context: BackwardContext | null;
+
+  /**
+   * Keep the receiving memory key, the original error and the owner occurrence; the message is
+   * the original's.
+   *
+   * @throws TypeError when `memory` isn't a non-empty string or `context` isn't `null` or exactly a
+   *   `BackwardContext`.
+   */
+  constructor(memory: string, original: Error, context: BackwardContext | null = null) {
+    if (typeof memory !== "string" || !memory) {
+      throw new TypeError("owner context failure requires a memory key string");
+    }
+    if (context !== null && !isExactly(context, BackwardContext)) {
+      throw new TypeError("owner context failure context must be a BackwardContext or null");
+    }
+    super(original.message, { cause: original });
+    this.memory = memory;
+    this.original = original;
+    this.context = context;
+  }
+}
+
+/**
+ * Project every local channel, including input messages stopped at literals. Integers are
+ * `bigint`s.
+ *
+ * @param trace Accepted terminal forward authority.
+ * @param occurrence The owning occurrence.
+ * @param context The occurrence's backward context.
+ * @param messages The occurrence's ordered incoming messages.
+ * @param result The occurrence's validated backward result.
+ * @param cache This backward pass's cache over `trace`.
+ * @returns One entry per channel message, in channel order.
+ */
+function ownerFeedback(
+  trace: RetainedTrace,
+  occurrence: TraceOccurrence,
+  context: BackwardContext,
+  messages: readonly BackwardMessage[],
+  result: BackwardResult,
+  cache: ContextCache,
+): JsonObject[] {
+  const entries: JsonObject[] = messages.map((message, index) => ({
+    channel: "output",
+    target_name: null,
+    value: message.feedback as JsonValue,
+    contribution_context: materializeContext(message, index, cache),
+  }));
+  const hasOutput = trace.sources.has(sourceKey(occurrence.source));
+  const structural = structuralParents(context, messages, result, hasOutput);
+  const route = occurrence.inputRoute;
+  const routes = new Map(route.names.map((name, index) => [name, route.children[index]!]));
+  for (const name of context.inputNames) {
+    const batch = Object.hasOwn(result.inputFeedback, name) ? result.inputFeedback[name]! : [];
+    batch.forEach((feedback, index) => {
+      const parents = structural !== null ? [structural.get(name)![index]!] : messages.map((_, parent) => parent);
+      const inherited = inheritedContext(occurrence, context, messages, parents, name, hasOutput);
+      // Validation already routed this feedback, so the input has a captured route.
+      const routed = routeFeedback(routes.get(name)!, feedback, (source) => cache.lookup(source), {
+        recordedValue: context.inputs![name],
+      });
+      entries.push({
+        channel: "input",
+        target_name: name,
+        value: feedback as JsonValue,
+        contribution_context: {
+          message_index: BigInt(index),
+          parents: parents.map(BigInt),
+          contexts: routeContextData(inherited, cache),
+          contributions: routed.contributions.map((contribution, contributionIndex) => ({
+            source: sourceData(contribution.source),
+            value: contribution.feedback as JsonValue,
+            contribution_index: BigInt(contributionIndex),
+            contexts: routeContextData(contribution.context, cache),
+          })),
+        },
+      });
+      routed.stopped.forEach((stopped, stopIndex) => {
+        entries.push({
+          channel: "stopped",
+          target_name: name,
+          value: stopped.feedback as JsonValue,
+          contribution_context: {
+            message_index: BigInt(index),
+            stop_index: BigInt(stopIndex),
+            parents: parents.map(BigInt),
+            contexts: routeContextData([...inherited, ...stopped.context], cache),
+          },
+        });
+      });
+    });
+  }
+  result.selfFeedback.forEach((feedback, index) => {
+    entries.push({
+      channel: "self",
+      target_name: null,
+      value: feedback,
+      message_index: BigInt(index),
+      contribution_context: {},
+    });
+  });
+  const variables = result.variableFeedback;
+  for (const name of context.variableNames) {
+    if (!Object.hasOwn(variables, name)) continue;
+    variables[name]!.forEach((feedback, index) => {
+      entries.push({
+        channel: "variable",
+        target_name: name,
+        value: feedback as JsonValue,
+        message_index: BigInt(index),
+        contribution_context: {},
+      });
+    });
+  }
+  return entries;
+}
+
+/** Keep the source-free and root-input fallback channels without duplicating START. */
+function rootOwnerFeedback(result: BackwardResult): JsonObject[] {
+  const entries: JsonObject[] = [];
+  for (const [name, batch] of Object.entries(result.inputFeedback)) {
+    batch.forEach((feedback, index) => {
+      entries.push({
+        channel: "input",
+        target_name: name,
+        value: feedback as JsonValue,
+        contribution_context: { message_index: BigInt(index) },
+      });
+    });
+  }
+  result.selfFeedback.forEach((feedback, index) => {
+    entries.push({
+      channel: "self",
+      target_name: null,
+      value: feedback,
+      message_index: BigInt(index),
+      contribution_context: {},
+    });
+  });
+  for (const [name, batch] of Object.entries(result.variableFeedback)) {
+    batch.forEach((feedback, index) => {
+      entries.push({
+        channel: "variable",
+        target_name: name,
+        value: feedback as JsonValue,
+        message_index: BigInt(index),
+        contribution_context: {},
+      });
+    });
+  }
+  const coordinates = { execution_seq: null, owner_static_path: null, occurrence_path: null, execution_scope: null };
+  return entries.map((entry) => ({ ...coordinates, root: true, ...entry }));
+}
+
+/**
+ * Build every enabled memory's context from a validated complete backward result.
+ *
+ * A memory receives an occurrence when the occurrence's recorded scope names its key. The
+ * source-free root channel goes to every memory owned by the root flow.
+ *
+ * @param trace Accepted terminal executions and historical scopes.
+ * @param memories The complete recorded key table, including keys without executed nodes.
+ * @param stacks The recorded per-target key stacks.
+ * @param submittedFeedback The original ordinary root message.
+ * @param rootResult The completed root projection.
+ * @param attributedResults The complete accepted occurrence inventory and validated local results.
+ * @param options `cache` is the backward pass's route-context cache over `trace`, shared with the
+ *   backward driver; without one a new one starts.
+ * @returns Detached episode and feedback batches in table order. Feedback keeps the accepted
+ *   execution coordinates; the memory scope selects receivers and episode ownership without
+ *   relabeling that feedback.
+ * @throws TypeError or RangeError for an invalid table, stacks, trace or backward authority, or
+ *   missing accepted source authority while materializing.
+ * @throws OwnerContextError when validated material can't satisfy a receiving memory's JSON
+ *   contract. It names the occurrence whose episode or feedback failed, or none when only the root
+ *   feedback failed. No callback or backend is invoked.
+ */
+export function projectOwnerContexts(
+  trace: RetainedTrace,
+  memories: readonly MemorySpec[],
+  stacks: readonly MemoryStack[],
+  submittedFeedback: FeedbackValue,
+  rootResult: BackwardResult,
+  attributedResults: readonly AttributedBackwardResult[],
+  options: { cache?: ContextCache | null } = {},
+): readonly LearnContext[] {
+  if (!isList(memories) || memories.some((spec) => !isExactly(spec, MemorySpec))) {
+    throw new TypeError("owner contexts require the complete recorded memory table");
+  }
+  if (!isList(stacks) || stacks.some((stack) => !isExactly(stack, MemoryStack))) {
+    throw new TypeError("owner contexts require the recorded memory stacks");
+  }
+  const keys = memories.map((spec) => spec.key);
+  if (!sameItems(keys, [...new Set(keys)].sort(compareCodeUnits))) {
+    throw new RangeError("owner contexts require a memory table sorted by unique key");
+  }
+  const known = new Set(keys);
+  const recorded = new Map(stacks.map((stack) => [JSON.stringify(stack.locator), stack.memories]));
+  if (recorded.size !== stacks.length) throw new RangeError("recorded memory stacks must have unique locators");
+  validateAttributedBackward(trace, submittedFeedback, rootResult, attributedResults);
+  const occurrences = trace.occurrences;
+  const scopes = new Map<string, MemoryScope>();
+  for (const occurrence of occurrences) {
+    const scope = occurrence.memoryScope;
+    if (scope === null) continue;
+    const stack = recorded.get(JSON.stringify(scope.staticPath));
+    if (stack === undefined || !sameItems(stack, scope.memories)) {
+      throw new RangeError("historical memory scope disagrees with its recorded memory stack");
+    }
+    if (!scope.memories.every((key) => known.has(key))) {
+      throw new RangeError("historical memory scope names a key absent from the recorded table");
+    }
+    if (scope.memories.length > 0) scopes.set(sourceKey(occurrence.source), scope);
+  }
+
+  const cache = options.cache ?? new ContextCache(trace);
+  const [pending, directRoot] = seedBackward(trace, submittedFeedback);
+  const feedbackBySource = new Map<string, JsonObject[]>();
+  for (let index = occurrences.length - 1; index >= 0; index--) {
+    const occurrence = occurrences[index]!;
+    const item = attributedResults[index]!;
+    const messages = takeMessages(pending, occurrence.source);
+    const context = trace.backwardContext(occurrence.source);
+    const key = sourceKey(occurrence.source);
+    if (scopes.has(key)) {
+      feedbackBySource.set(key, ownerFeedback(trace, occurrence, context, messages, item.result, cache));
+    }
+    for (const [source, transfer] of contextualTransfers(trace, occurrence, context, messages, item.result, cache)) {
+      addMessage(pending, source, transfer);
+    }
+  }
+  const fallback = rootOwnerFeedback(projectRootBackward(trace, pending, {}, directRoot));
+
+  const contexts: LearnContext[] = [];
+  // One memo across every freeze here: occurrences and the root fallback share subtrees.
+  const memo = new Map<object, FrozenJson>();
+  for (const spec of memories) {
+    const episodes: MemoryEpisode[] = [];
+    const frozen: FrozenJson[] = [];
+    for (const occurrence of occurrences) {
+      const scope = scopes.get(sourceKey(occurrence.source));
+      if (scope === undefined || !scope.memories.includes(spec.key)) continue;
+      const record = occurrence.record;
+      // An accepted outcome holds its forward capture while learning.
+      const capture = record.forwardCapture!;
+      const evidence = record.evidence;
+      const [status, output, failure] = episodeOutcome(record);
+      const executionScope = executionScopePayload(capture.scope);
+      const coordinates = {
+        execution_seq: BigInt(occurrence.source.executionSeq),
+        owner_static_path: executionScope === null ? null : executionScope.static_path!,
+        occurrence_path: executionScope === null ? null : executionScope.occurrence_path!,
+        execution_scope: executionScope,
+      };
+      const local = feedbackBySource.get(sourceKey(occurrence.source))!;
+      const entries = local.map((entry) => ({ ...coordinates, ...entry }));
+      let inputs = capture.boundInputs;
+      if (inputs !== null && occurrence.hiddenInputs.size > 0) {
+        // Episodes reach learn prompts and storage; inputs that only configured the call stay in
+        // the bound record for backward and resume.
+        inputs = Object.fromEntries(Object.entries(inputs).filter(([name]) => !occurrence.hiddenInputs.has(name)));
+      }
+      try {
+        episodes.push(
+          new MemoryEpisode(trace.runId, scope.occurrencePath, scope.staticPath, status, inputs, {
+            output,
+            failure,
+            interactions: evidence === null ? [] : evidence.interactions,
+            baseSystemPrompt: evidence === null ? null : evidence.baseSystemPrompt,
+            prompt: evidence === null ? null : evidence.prompt,
+            memorySections: evidence === null ? [] : evidence.memorySections,
+            executionSeq: occurrence.source.executionSeq,
+          }),
+        );
+        // Freezing this occurrence's feedback alone attributes a failure to it, under the local
+        // indices and run/key checks a context of only these entries reports.
+        LearnContext.fromFrozen(trace.runId, spec.key, [], []);
+        frozen.push(...freezeFeedback(entries, memo));
+      } catch (error) {
+        if (error instanceof TypeError || error instanceof RangeError) {
+          throw new OwnerContextError(spec.key, error, trace.backwardContext(occurrence.source));
+        }
+        throw error;
+      }
+    }
+    try {
+      if (spec.owners.some((site) => DeclSite.compare(site, ROOT_FLOW_SITE) === 0)) {
+        // A fresh context checks its run, key and episodes before its feedback.
+        LearnContext.fromFrozen(trace.runId, spec.key, episodes, []);
+        frozen.push(...freezeFeedback(fallback, memo, frozen.length));
+      }
+      contexts.push(LearnContext.fromFrozen(trace.runId, spec.key, episodes, Object.freeze(frozen)));
+    } catch (error) {
+      if (error instanceof TypeError || error instanceof RangeError) throw new OwnerContextError(spec.key, error);
+      throw error;
+    }
+  }
+  return Object.freeze(contexts);
 }
 
 /**

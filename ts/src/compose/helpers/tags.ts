@@ -73,8 +73,11 @@ const FLOW_INDICATORS = /[[\]{}]/;
 // that starts an escape: text made only of these reads back as one tag.
 const TAG_CHARACTERS = /^[A-Za-z0-9\-;/?:@&=+$_.~*'()]+$/;
 const TYPEDEF_EXAMPLE = "(e.g. `Decision: Union(Buy, Sell)`) and tag with its name (`!Decision`)";
-/** YAML scalar styles that make a value text, never a `call(...)` directive. */
-export const QUOTED_STYLES: ReadonlySet<ScalarStyle> = new Set([
+/**
+ * YAML scalar styles that make a value text, never a `call(...)` directive. Typed to take a
+ * cursor's `scalarStyle` as is: `null` (not a scalar) is not in it.
+ */
+export const QUOTED_STYLES: ReadonlySet<ScalarStyle | null> = new Set<ScalarStyle | null>([
   "single",
   "double",
   "literal",

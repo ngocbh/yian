@@ -1090,14 +1090,17 @@ test("a write failure whose rollback truncate also fails is an AggregateError an
 test("a poisoned log that is closed refuses appends as closed", () => {
   const file = path.join(dir, "run.jsonl");
   const log = baselineLog(file);
+  const failure = new Error("fsync failed");
   const spy = spyOnLog("fsyncSync", file, () => {
-    throw new Error("fsync failed");
+    throw failure;
   });
   try {
-    expect(() => log.append(new NodeStartedRecord("second"))).toThrow();
+    // The rollback's fsync fails too, so the append throws an AggregateError.
+    expect(() => log.append(new NodeStartedRecord("second"))).toThrow(AggregateError);
   } finally {
     spy.mockRestore();
   }
+  expectPoisoned(log, file, failure);
   log.close();
   expectError(() => log.append(new NodeStartedRecord("late")), Error, "run log is closed");
   expectUnlocked(file);
@@ -1290,8 +1293,11 @@ describe.skipIf(!NODE)("the built jsonl log on Node", () => {
             assert.equal(error.errors[0], writeFailure);
             assert.equal(error.errors[1], truncateFailure);
             // The truncate failed, so the half line stays until a resume repairs it.
-            assert.ok(readFileSync(file).length > prefix.length);
+            const data = readFileSync(file);
+            assert.ok(data.length > prefix.length);
+            assert.deepEqual(data.subarray(0, prefix.length), prefix);
             assert.equal(log.nextSequence, 1);
+            assert.equal(log.records().length, 1);
             expectPoisoned(log, file, writeFailure);
             expectClean(log, file, ["first"]);
             assert.deepEqual(readFileSync(file), prefix);

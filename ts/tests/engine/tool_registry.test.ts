@@ -1,7 +1,8 @@
 /**
  * The tool registry and `ToolSet`, a port of `tests/engine/test_tool_registry.py` with rows for
- * each construction and group error, `expand`, `forRun`, `toolIds`, `groups`, `validate`,
- * `isConcurrencySafe` and the `ask_user` options cleaning, plus `test_injected_arguments_are_not_inputs`
+ * each construction and group error, `expand`, `forRun`, `toolIds`, `groups`, `validate` and the
+ * `CheckedCall` it returns, `invoke` of a call, `isConcurrencySafe` and the `ask_user` options
+ * cleaning, plus `test_injected_arguments_are_not_inputs`
  * and `test_function_tool_types` from `test_tool_types.py`. Not ported:
  * `test_invocation_supports_pydantic_v1_schema` and `test_invocation_rejects_unvalidated_json_schema_tools`
  * (TS has only `FunctionTool`s), `test_install_ask_user_is_removed` (it never existed in TS),
@@ -25,7 +26,7 @@ import {
   type ToolEntry,
 } from "../../src/tools/registry.ts";
 import { toolTypes } from "../../src/tools/types.ts";
-import { canonicalTypeLabel } from "../../src/typesys/values.ts";
+import { canonicalTypeLabel, TypeCheckError } from "../../src/typesys/values.ts";
 
 let saved: [string, FunctionTool][] = [];
 
@@ -567,7 +568,9 @@ describe("validate", () => {
     });
     const tools = new ToolSet({ echo: counted });
 
-    expect(await tools.validate("echo", { text: "hi" })).toBeUndefined();
+    const call = await tools.validate("echo", { text: "hi" });
+    expect(call.toolId).toBe("echo");
+    expect(Object.isFrozen(call)).toBe(true);
     expect(await rejected(tools.validate("echo", { town: "Paris" }), RangeError)).toBe(
       'tool \'echo\' received unsupported argument(s) ["town"]; allowed: ["text"]',
     );
@@ -586,6 +589,56 @@ describe("validate", () => {
   });
 });
 
+describe("invoke of a CheckedCall", () => {
+  /** Build a tool set whose `echo` tool records the arguments and context of each call. */
+  function recording(seen: [Record<string, unknown>, ToolContext][]): ToolSet {
+    return new ToolSet({
+      echo: new FunctionTool({
+        name: "echo",
+        description: "Echo.",
+        parametersJsonSchema: { type: "object", properties: { list: { type: "array" } } },
+        execute: (args, ctx) => {
+          seen.push([args, ctx]);
+          return "done";
+        },
+      }),
+    });
+  }
+
+  test("each invoke gives execute a fresh copy of the checked arguments", async () => {
+    const seen: [Record<string, unknown>, ToolContext][] = [];
+    const inputs = { list: [1] };
+    const tools = recording(seen);
+    const call = await tools.validate("echo", inputs);
+
+    expect(await tools.invoke(call)).toBe("done");
+    expect(await tools.invoke(call, { attempt: 2 })).toBe("done");
+
+    expect(seen.map(([args]) => args)).toEqual([{ list: [1] }, { list: [1] }]);
+    expect(seen[0]![0]).not.toBe(seen[1]![0]);
+    expect(seen[0]![0].list).not.toBe(inputs.list);
+    expect(seen.map(([, ctx]) => ctx.attempt)).toEqual([1, 2]);
+  });
+
+  test("a call validated on one set runs with the context of the set that invokes it", async () => {
+    const seen: [Record<string, unknown>, ToolContext][] = [];
+    const tools = recording(seen);
+    const call = await tools.validate("echo", {});
+
+    await tools.forRun("r").invoke(call, { node: "n" });
+
+    expect(seen[0]![1].runId).toBe("r");
+    expect(seen[0]![1].callId).toBe("r/n");
+  });
+
+  test("anything but a tool id or a CheckedCall is a TypeError", async () => {
+    const tools = new ToolSet({ echo: tool("echo") });
+    expect(await rejected(tools.invoke({} as never), TypeError)).toBe(
+      "invoke takes a tool id or a CheckedCall from validate",
+    );
+  });
+});
+
 describe("isConcurrencySafe", () => {
   /** Build a tool whose `isConcurrencySafe` is `check`. */
   function guarded(check: ((args: Record<string, unknown>) => boolean) | null): ToolSet {
@@ -593,7 +646,10 @@ describe("isConcurrencySafe", () => {
       echo: new FunctionTool({
         name: "echo",
         description: "Echo.",
-        parametersJsonSchema: { type: "object", properties: { n: { type: "integer" } } },
+        parametersJsonSchema: {
+          type: "object",
+          properties: { n: { type: "integer" }, big: { type: "integer" }, list: { type: "array" } },
+        },
         execute: () => null,
         isConcurrencySafe: check,
       }),
@@ -614,19 +670,22 @@ describe("isConcurrencySafe", () => {
     ],
   ];
   for (const [label, check, expected] of ROWS) {
-    test(`${label} gives ${expected}`, () => {
-      expect(guarded(check).isConcurrencySafe("echo", { n: 1 })).toBe(expected);
+    test(`${label} gives ${expected}`, async () => {
+      const tools = guarded(check);
+      expect(tools.isConcurrencySafe(await tools.validate("echo", { n: 1 }))).toBe(expected);
     });
   }
 
-  test("an unknown tool, non-record arguments or arguments holding undefined give false", () => {
+  test("validate refuses an unknown tool, non-record arguments or undefined; a non-call gives false", async () => {
     const tools = guarded(() => true);
-    expect(tools.isConcurrencySafe("nope", {})).toBe(false);
-    expect(tools.isConcurrencySafe("echo", [] as never)).toBe(false);
-    expect(tools.isConcurrencySafe("echo", { n: undefined })).toBe(false);
+    expect(await rejected(tools.validate("nope", {}), RangeError)).toContain("unknown tool id 'nope'");
+    await rejected(tools.validate("echo", [] as never), TypeError);
+    await expect(tools.validate("echo", { n: undefined })).rejects.toBeInstanceOf(TypeCheckError);
+    expect(tools.isConcurrencySafe({} as never)).toBe(false);
+    expect(tools.isConcurrencySafe("echo" as never)).toBe(false);
   });
 
-  test("receives the host form of the arguments", () => {
+  test("receives the host form of the arguments", async () => {
     const seen: Record<string, unknown>[] = [];
     const args = { n: 2n, big: 2n ** 60n, list: [1] };
     const tools = guarded((received) => {
@@ -634,7 +693,7 @@ describe("isConcurrencySafe", () => {
       return true;
     });
 
-    expect(tools.isConcurrencySafe("echo", args)).toBe(true);
+    expect(tools.isConcurrencySafe(await tools.validate("echo", args))).toBe(true);
     expect(seen).toEqual([{ n: 2, big: 2n ** 60n, list: [1] }]);
     expect(seen[0]).not.toBe(args);
     expect(seen[0]!.list).not.toBe(args.list);
@@ -644,13 +703,15 @@ describe("isConcurrencySafe", () => {
     const check = (async () => {
       throw new Error("x");
     }) as unknown as (args: Record<string, unknown>) => boolean;
-    expect(guarded(check).isConcurrencySafe("echo", { n: 1 })).toBe(false);
+    const tools = guarded(check);
+    expect(tools.isConcurrencySafe(await tools.validate("echo", { n: 1 }))).toBe(false);
     // Let the rejection settle, so an unhandled one would fail the run here.
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
-  test("the ask_user tool is unsafe", () => {
-    expect(new ToolSet({ ask_user: () => "yes" }).isConcurrencySafe("ask_user", { question: "Q?" })).toBe(false);
+  test("the ask_user tool is unsafe", async () => {
+    const tools = new ToolSet({ ask_user: () => "yes" });
+    expect(tools.isConcurrencySafe(await tools.validate("ask_user", { question: "Q?" }))).toBe(false);
   });
 });
 

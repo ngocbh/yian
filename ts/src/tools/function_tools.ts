@@ -41,7 +41,8 @@ export interface StandardIssue {
   readonly path?: ReadonlyArray<PropertyKey | { readonly key: PropertyKey }> | undefined;
 }
 
-// any: the inferred input and output types are the validator's own; only their use here is typed.
+// any (in both types below): the validator's other type parameter is its own; only the inferred one
+// is used here.
 /** The arguments `execute` gets: the validator's output type, else a plain record. */
 type ArgsOf<P> = P extends StandardSchemaV1<any, infer O> ? O : Record<string, unknown>;
 /** What `execute` returns: the output validator's input type, since it parses the result, else `unknown`. */
@@ -82,13 +83,16 @@ export class FunctionTool {
   readonly parametersJsonSchema: JsonObject;
   // `any`, not `unknown`: a tool typed for its own context (`ToolContext<Broker>`) must be accepted.
   /**
-   * Receives a deep copy of the checked arguments and the call's `ToolContext`, and returns the
-   * result or a Promise of it. Changing that copy doesn't change the caller's values.
+   * Receives the call's argument and its `ToolContext`, and returns the result or a Promise of it.
+   * The argument is a deep copy of the checked arguments, so changing it doesn't change the
+   * caller's values; for a tool with a `parametersValidator` it is the validator's output, the
+   * same object for every attempt of one checked call.
    */
   readonly execute: (args: Record<string, unknown>, ctx: ToolContext<any>) => unknown;
   /**
-   * Says whether a call with these arguments may run beside other calls; `null` when none was
-   * given. It must be synchronous: a Promise result counts as unsafe.
+   * Says whether a call may run beside other calls; `null` when none was given. It receives what
+   * `execute` gets: a deep copy of the checked arguments, or the validator's output, the same
+   * object every attempt gets. It must be synchronous: a Promise result counts as unsafe.
    */
   readonly isConcurrencySafe: ((args: Record<string, unknown>) => boolean) | null;
   /** The Standard Schema v1 validator of the arguments, or `null` when none was given. */

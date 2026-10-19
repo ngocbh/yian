@@ -3,7 +3,10 @@
  * and a `FunctionTool` in a `ToolSet` and the registry, a port of
  * `tests/engine/test_function_tool.py` and of the JSON Schema and output rows of
  * `test_tool_types.py` that read a tool. The `function_tool` rows are ported as `tool()` rows, with
- * a Standard Schema validator or a JSON Schema in place of the function's signature. Not ported:
+ * a Standard Schema validator or a JSON Schema in place of the function's signature; the two
+ * invocation rows, `test_function_tool_result_validates_like_a_function_and_passes_the_context`
+ * and `test_function_tool_without_context_gets_its_validated_arguments`, are in the checking-order
+ * rows, where the validator plays pydantic's role. Not ported:
  * the decorator form and the docstring defaults (TS has no runtime signatures), the async refusal
  * (TS awaits an async `execute`), the unresolvable annotation row (TS has no runtime annotations),
  * Python's lax `"2"` to 2 coercion (yian's argument check refuses `"2"` for an integer first),
@@ -25,7 +28,14 @@ import * as v from "valibot";
 import { z } from "zod";
 
 import { ToolContext } from "../../src/tools/context.ts";
-import { FunctionTool, isFunctionTool, type StandardSchemaV1, tool } from "../../src/tools/function_tools.ts";
+import { isToolCheckError, ToolCheckError } from "../../src/tools/errors.ts";
+import {
+  FunctionTool,
+  isFunctionTool,
+  type StandardResult,
+  type StandardSchemaV1,
+  tool,
+} from "../../src/tools/function_tools.ts";
 import { registeredTools, registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
 import { toolTypes } from "../../src/tools/types.ts";
 import { type JsonObject, parseJson } from "../../src/typesys/json.ts";
@@ -56,6 +66,69 @@ function inputLabels(tool: FunctionTool): Record<string, string | null> | null {
   return Object.fromEntries(
     [...inputs].map(([name, typ]) => [name, typ === null ? null : canonicalTypeLabel(typ)]),
   );
+}
+
+/** Return the error `promise` rejects with, after checking its class. */
+async function rejection(promise: Promise<unknown>, kind: abstract new (...args: never[]) => Error): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    expect((error as Error).constructor).toBe(kind);
+    return error as Error;
+  }
+  throw new Error("expected a rejection");
+}
+
+/** Parameters yian's check accepts where the validator refines, fills a default or transforms. */
+const CHECKED_PARAMETERS = z.object({
+  sym: z.string().refine((s) => s === s.toUpperCase(), "must be upper case"),
+  qty: z.number().int().min(1).default(1),
+  note: z
+    .string()
+    .transform((s) => s.trim())
+    .optional(),
+});
+
+/** What `CHECKED_PARAMETERS` gives `execute`. */
+type Checked = z.output<typeof CHECKED_PARAMETERS>;
+
+/** A call `checkedPlace`'s `execute` saw: its arguments and context. */
+type SeenCall = [Checked, ToolContext<any>];
+
+/**
+ * Build the `place` tool on `CHECKED_PARAMETERS` behind a hand-built async validator that counts
+ * its calls in `count` and runs `during` while it validates. `execute` records each call in `seen`.
+ */
+function checkedPlace(
+  options: { during?: () => void; isConcurrencySafe?: (args: Checked) => boolean } = {},
+): { placed: FunctionTool; seen: SeenCall[]; count: { calls: number } } {
+  const seen: SeenCall[] = [];
+  const count = { calls: 0 };
+  const zod = CHECKED_PARAMETERS["~standard"];
+  const validator: StandardSchemaV1<unknown, Checked> = {
+    "~standard": {
+      version: 1,
+      vendor: "hand",
+      validate: async (value) => {
+        count.calls++;
+        options.during?.();
+        await Promise.resolve();
+        return (await zod.validate(value)) as StandardResult<Checked>;
+      },
+    },
+  };
+  const placed = tool({
+    name: "place",
+    description: "Place an order.",
+    parameters: validator,
+    parametersJsonSchema: zod.jsonSchema.input({ target: "draft-2020-12" }) as JsonObject,
+    execute: (args, ctx) => {
+      seen.push([args, ctx]);
+      return `${args.sym}:${args.qty}`;
+    },
+    isConcurrencySafe: options.isConcurrencySafe,
+  });
+  return { placed, seen, count };
 }
 
 describe("FunctionTool construction", () => {
@@ -427,17 +500,6 @@ describe("FunctionTool invocation", () => {
     return [tool, seen];
   }
 
-  /** Return the error `promise` rejects with, after checking its class. */
-  async function rejection(promise: Promise<unknown>, kind: abstract new (...args: never[]) => Error): Promise<Error> {
-    try {
-      await promise;
-    } catch (error) {
-      expect((error as Error).constructor).toBe(kind);
-      return error as Error;
-    }
-    throw new Error("expected a rejection");
-  }
-
   test("test_function_tool_is_invoked_with_a_context_and_its_arguments", async () => {
     const [ft, seen] = echo();
     const inputs = { text: "hi" };
@@ -752,7 +814,7 @@ describe("tool()", () => {
     expectPlaceTypes(new ToolSet({ g: [placed] }).resolve(["place"])[0]!);
   });
 
-  test("test_register_tool_description_override_on_a_function_tool_from_a_function", () => {
+  test("test_register_tool_description_override_on_a_function_tool_from_a_function", async () => {
     const placed = place();
     registerTool("place", placed, { descriptionOverride: "Buy." });
 
@@ -763,6 +825,15 @@ describe("tool()", () => {
     expect(stored.outputValidator).toBe(FILLED);
     expect(stored.outputJsonSchema).toEqual(placed.outputJsonSchema!);
     expectPlaceTypes(stored);
+
+    // The copy carries the validator, so a call through the registry runs it.
+    TOOL_REGISTRY.delete("place");
+    const { placed: checked, seen } = checkedPlace();
+    registerTool("place", checked, { descriptionOverride: "Buy." });
+    const error = await rejection(new ToolSet().invoke("place", { sym: "abc" }), ToolCheckError);
+    expect(error.message).toBe("tool 'place' arguments failed its validator: sym: must be upper case");
+    expect(await new ToolSet().invoke("place", { sym: "X" })).toBe("X:1");
+    expect(seen.map(([args]) => args)).toEqual([{ sym: "X", qty: 1 }]);
   });
 
   test("test_registered_tools_copy_keeps_the_output_type", () => {
@@ -958,6 +1029,177 @@ describe("tool()", () => {
     expect(counted.isConcurrencySafe!({ n: 1 })).toBe(true);
     // @ts-expect-error a string is not the output type.
     tool({ name: "bad", description: "", parameters: ECHO_SCHEMA, output: z.number(), execute: () => "no" });
+  });
+});
+
+describe("tool() checking order", () => {
+  /** Build a tool `x` on the echo schema whose validator is `validate`. */
+  function handTool(validate: StandardSchemaV1["~standard"]["validate"]): FunctionTool {
+    return tool({
+      name: "x",
+      description: "",
+      parameters: { "~standard": { version: 1, vendor: "hand", validate } },
+      parametersJsonSchema: ECHO_SCHEMA,
+      execute: (args) => args,
+    });
+  }
+
+  test("yian's check runs first and the validator is never called", async () => {
+    const { placed, seen, count } = checkedPlace();
+    const tools = new ToolSet({ place: placed });
+
+    const unknown = await rejection(tools.validate("place", { sym: "X", ctx: "forged" }), RangeError);
+    expect(unknown.message).toBe(
+      'tool \'place\' received unsupported argument(s) ["ctx"]; allowed: ["note","qty","sym"]',
+    );
+    await rejection(tools.invoke("place", { sym: "X", qty: "2" }), TypeCheckError);
+    expect(count.calls).toBe(0);
+    expect(seen).toEqual([]);
+  });
+
+  test("the validator's issues fail the call as a ToolCheckError", async () => {
+    const { placed, seen } = checkedPlace();
+
+    const error = await rejection(new ToolSet({ place: placed }).invoke("place", { sym: "abc" }), ToolCheckError);
+    expect(isToolCheckError(error)).toBe(true);
+    expect(error.message).toBe("tool 'place' arguments failed its validator: sym: must be upper case");
+    expect(seen).toEqual([]);
+  });
+
+  test("each issue is shown with its path, when it has one", async () => {
+    const issues = [
+      { message: "no path" },
+      { message: "empty path", path: [] },
+      { message: "keyed", path: ["a", { key: 0 }, { key: "b" }] },
+      { message: "symbol", path: [Symbol("s")] },
+    ];
+    const tools = new ToolSet({ x: handTool(() => ({ issues })) });
+
+    const error = await rejection(tools.validate("x", { text: "hi" }), ToolCheckError);
+    expect(error.message).toBe(
+      'tool \'x\' arguments failed its validator: no path; empty path; a[0].b: keyed; ["Symbol(s)"]: symbol',
+    );
+    const empty = new ToolSet({ x: handTool(() => ({ issues: [] })) });
+    const none = await rejection(empty.validate("x", { text: "hi" }), ToolCheckError);
+    expect(none.message).toBe("tool 'x' arguments failed its validator");
+  });
+
+  test("the validator runs once in validate and every attempt gets its output", async () => {
+    const { placed, seen, count } = checkedPlace();
+    const tools = new ToolSet({ place: placed });
+
+    const call = await tools.validate("place", { sym: "X", note: " hi " });
+    expect(count.calls).toBe(1);
+    for (const attempt of [1, 2, 3]) expect(await tools.invoke(call, { attempt })).toBe("X:1");
+
+    expect(count.calls).toBe(1);
+    expect(seen.map(([, ctx]) => ctx.attempt)).toEqual([1, 2, 3]);
+    expect(seen[0]![0]).toEqual({ sym: "X", qty: 1, note: "hi" });
+    expect(seen[1]![0]).toBe(seen[0]![0]);
+    expect(seen[2]![0]).toBe(seen[0]![0]);
+  });
+
+  test("a one-shot invoke runs the validator once per call", async () => {
+    const { placed, count } = checkedPlace();
+    const tools = new ToolSet({ place: placed });
+
+    await tools.invoke("place", { sym: "X" });
+    await tools.invoke("place", { sym: "Y", qty: 2 });
+
+    expect(count.calls).toBe(2);
+  });
+
+  test("an async validator is awaited, and a throwing one propagates unchanged", async () => {
+    const delayed = handTool(async (value) => {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      return { value: { ...(value as object), late: true } };
+    });
+    expect(await new ToolSet({ x: delayed }).invoke("x", { text: "hi" })).toEqual({ text: "hi", late: true });
+
+    const boom = new Error("boom");
+    const throwing = handTool(() => {
+      throw boom;
+    });
+    expect(await rejection(new ToolSet({ x: throwing }).validate("x", { text: "hi" }), Error)).toBe(boom);
+  });
+
+  test("an already-aborted signal stops validate before the validator runs", async () => {
+    const { placed, count } = checkedPlace();
+    const controller = new AbortController();
+    const reason = new Error("stopped");
+    controller.abort(reason);
+
+    const tools = new ToolSet({ place: placed });
+    await expect(tools.validate("place", { sym: "X" }, { signal: controller.signal })).rejects.toBe(reason);
+    expect(count.calls).toBe(0);
+    // With no signal passed, the one `forRun` bound is used.
+    await expect(tools.forRun("r", { signal: controller.signal }).validate("place", { sym: "X" })).rejects.toBe(reason);
+    await expect(tools.forRun("r", { signal: controller.signal }).invoke("place", { sym: "X" })).rejects.toBe(reason);
+    expect(count.calls).toBe(0);
+  });
+
+  test("a stop while the validator runs rejects after it returns", async () => {
+    const controller = new AbortController();
+    const reason = new Error("stopped");
+    const { placed, seen, count } = checkedPlace({ during: () => controller.abort(reason) });
+
+    const tools = new ToolSet({ place: placed });
+    await expect(tools.invoke("place", { sym: "X" }, { signal: controller.signal })).rejects.toBe(reason);
+    expect(count.calls).toBe(1);
+    expect(seen).toEqual([]);
+  });
+
+  test("isConcurrencySafe receives the object execute gets", async () => {
+    const safe: Checked[] = [];
+    const { placed, seen } = checkedPlace({
+      isConcurrencySafe: (args) => {
+        safe.push(args);
+        return true;
+      },
+    });
+    const tools = new ToolSet({ place: placed });
+    const call = await tools.validate("place", { sym: "X" });
+
+    expect(tools.isConcurrencySafe(call)).toBe(true);
+    await tools.invoke(call);
+
+    expect(safe[0]).toEqual({ sym: "X", qty: 1 });
+    expect(seen[0]![0]).toBe(safe[0]!);
+  });
+
+  test("invokeTrusted runs the validator too", async () => {
+    const { placed, count } = checkedPlace();
+    const tools = new ToolSet({ place: placed });
+
+    await rejection(tools.invokeTrusted("place", { sym: "abc" }), ToolCheckError);
+    expect(await tools.invokeTrusted("place", { sym: "X" })).toBe("X:1");
+    expect(count.calls).toBe(2);
+  });
+
+  test("test_function_tool_result_validates_like_a_function_and_passes_the_context", async () => {
+    const app = { name: "broker" };
+    const { placed, seen } = checkedPlace();
+    const tools = new ToolSet({ place: placed }, { context: app }).forRun("r");
+
+    expect(await tools.invoke("place", { sym: "X", qty: 2 }, { node: "n" })).toBe("X:2");
+
+    const [args, ctx] = seen[0]!;
+    expect(args).toEqual({ sym: "X", qty: 2 });
+    expect(ctx.callId).toBe("r/n");
+    expect(ctx.context).toBe(app);
+    await rejection(tools.invoke("place", { sym: "X", ctx: "forged" }), RangeError);
+    await rejection(tools.invoke("place", { sym: "X", qty: "many" }), TypeCheckError);
+  });
+
+  test("test_function_tool_without_context_gets_its_validated_arguments", async () => {
+    const add = tool({
+      name: "add",
+      description: "Add two integers.",
+      parameters: z.object({ a: z.number().int(), b: z.number().int().default(4) }),
+      execute: (args) => args.a + args.b,
+    });
+
+    expect(await new ToolSet({ add }).invoke("add", { a: 3 })).toBe(7);
   });
 });
 

@@ -61,6 +61,7 @@ export {
 export {
   type AskUserHandler,
   type AskUserRequest,
+  type CheckedCall,
   type InvokeOptions,
   invokeTool,
   invokeToolTrusted,

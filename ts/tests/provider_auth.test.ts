@@ -29,7 +29,7 @@ import {
 import { request } from "../src/llm_clients/auth/http.ts";
 import { type AuthRequest, OpenAIAuth } from "../src/llm_clients/auth/openai.ts";
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
-import { lockFile, realScheduler, type Scheduler, virtualScheduler } from "../src/platform.ts";
+import { lockFile, realScheduler, type Scheduler, USER_AGENT, virtualScheduler } from "../src/platform.ts";
 import { parseJson } from "../src/typesys/json.ts";
 import { SCENARIOS } from "./auth_both_runtimes.ts";
 
@@ -1810,9 +1810,9 @@ describe("OpenAIAuth", () => {
       ["POST", "https://auth.openai.com/api/accounts/deviceauth/token"],
       ["POST", "https://auth.openai.com/oauth/token"],
     ]);
-    expect(http.calls[0]![2].headers).toEqual({ "User-Agent": "yian", "Content-Type": "application/json" });
+    expect(http.calls[0]![2].headers).toEqual({ "User-Agent": USER_AGENT, "Content-Type": "application/json" });
     expect(http.calls.at(-1)![2].headers).toEqual({
-      "User-Agent": "yian",
+      "User-Agent": USER_AGENT,
       "Content-Type": "application/x-www-form-urlencoded",
     });
     expect(http.calls[0]![2].timeoutMs).toBe(30_000);
@@ -2049,7 +2049,7 @@ describe("OpenAIAuth", () => {
     const auth = new OpenAIAuth({ request: http.request });
     expect(await auth.apiModels(credentials, { organization: ORG, project: PROJECT })).toEqual(["m"]);
     expect(http.calls[0]![2].headers).toEqual({
-      "User-Agent": "yian",
+      "User-Agent": USER_AGENT,
       "X-Gateway": GATEWAY,
       "OpenAI-Organization": ORG,
       "OpenAI-Project": PROJECT,
@@ -2138,7 +2138,7 @@ describe("OpenAIAuth", () => {
       "https://chatgpt.com/backend-api/codex/models?client_version=0.155.1",
     ]);
     expect(http.calls[0]![2].headers).toEqual({
-      "User-Agent": "yian",
+      "User-Agent": USER_AGENT,
       Authorization: "Bearer access",
       "ChatGPT-Account-Id": "acct",
       originator: "yian",

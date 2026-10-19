@@ -5,7 +5,7 @@ import net from "node:net";
 
 import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
-import { realScheduler, type Scheduler } from "../../platform.ts";
+import { realScheduler, type Scheduler, USER_AGENT } from "../../platform.ts";
 import { isRecord } from "../../typesys/index.ts";
 import { openaiIdHeaders, validateHeaders } from "../connection_settings.ts";
 import { type ApiKeyCredentials, AuthError, HttpResponse, isVisibleText, OAuthCredentials } from "./common.ts";
@@ -239,7 +239,8 @@ export class OpenAIAuth {
   ): Promise<HttpResponse> {
     const { signal, jsonBody, form } = options;
     signal.throwIfAborted();
-    const headers: Record<string, string> = { "User-Agent": "yian", ...options.headers };
+    // Python sent `yian`; design 7.4 gives every request, auth included, `yian/<version>`.
+    const headers: Record<string, string> = { "User-Agent": USER_AGENT, ...options.headers };
     const sent: AuthRequestOptions = { headers, timeoutMs: this.#requestTimeoutMs, signal };
     if (jsonBody !== undefined) {
       headers["Content-Type"] = "application/json";

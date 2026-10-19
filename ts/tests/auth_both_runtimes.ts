@@ -21,7 +21,7 @@ import { AuthError, HttpResponse, OAuthCredentials } from "../src/llm_clients/au
 import { request } from "../src/llm_clients/auth/http.ts";
 import { type AuthRequest, OpenAIAuth } from "../src/llm_clients/auth/openai.ts";
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
-import { realScheduler } from "../src/platform.ts";
+import { realScheduler, USER_AGENT } from "../src/platform.ts";
 
 /** A spawned child, with everything it printed so far and its exit. */
 interface Child {
@@ -352,7 +352,7 @@ async function deviceFlowEndToEndOverHttp(): Promise<void> {
         ["POST", "/oauth/token"],
       ],
     );
-    for (const each of sent) assert.equal(each.headers["user-agent"], "yian");
+    for (const each of sent) assert.equal(each.headers["user-agent"], USER_AGENT);
     assert.equal(sent[0]!.headers["content-type"], "application/json");
     assert.deepEqual(JSON.parse(sent[0]!.body), { client_id: "app_EMoamEEZ73f0CkXaXp7hrann" });
     assert.deepEqual(JSON.parse(sent[1]!.body), { device_auth_id: "device-id", user_code: "ABC-DEF" });

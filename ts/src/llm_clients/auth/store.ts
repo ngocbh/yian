@@ -673,7 +673,9 @@ export class AuthStore {
         if ("error" in outcome) throw outcome.error;
         if (existing === undefined) throw this.#signal!.reason;
         // Only the leader's own stop ended the flight, so the token is still due: start over, and
-        // the first joiner back leads the next flight.
+        // the first joiner back leads the next flight. A stop during the leader's refresh request
+        // can't tell whether the server already rotated the token; the next flight sends the saved
+        // one, as Python's next thread does.
       }
     } finally {
       if (directory !== null) closeFd(directory.fd);

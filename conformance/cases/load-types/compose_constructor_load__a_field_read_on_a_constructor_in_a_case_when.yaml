@@ -1,0 +1,40 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: Literal(buy), conviction: float}
+    Sell: {action: Literal(sell), price: float}
+    Decision: Union(Buy, Sell)
+    Size: Literal(s, m, l)
+  input:
+    order: !object
+  nodes:
+    d:
+      kind: code
+      input:
+        order: ${input.order}
+      output: object
+      code: |
+        return inputs["order"]
+    route:
+      kind: case
+      cases:
+        - when: Buy(d.output).size > 0.4
+          then: strong
+      else: weak
+    strong:
+      kind: code
+      code: return "strong"
+    weak:
+      kind: code
+      code: return "weak"
+  output: ${strong.output | weak.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'' cases[0].when: reference ${Buy(...).size} reads unknown field ''size'' on record'
+      frames:
+      - label: flow.yaml
+        range: [21, 15, 21, 39]

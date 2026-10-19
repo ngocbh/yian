@@ -1,0 +1,75 @@
+# TS spells the carried field list as JSON text (rules: messages); Python's repr in python_expect.
+kind: load
+rules: [messages]
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int, note: str}
+    Hold: {action: 'Literal(hold)', note: str}
+    Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}
+    Decision: Union(Buy, Hold, Sell)
+    Text: {text: str}
+    Num: {num: int}
+    Reply: Union(Text, Num)
+  input:
+    s: !str
+  nodes:
+    drive:
+      kind: loop
+      times: 2
+      input:
+        action: buy
+      nodes:
+        step:
+          kind: code
+          input:
+            action: ${input.action}
+          output: Decision
+          code: "return null"
+      output: ${step.output}
+  output: ${drive.output}
+python_flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int, note: str}
+    Hold: {action: 'Literal(hold)', note: str}
+    Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}
+    Decision: Union(Buy, Hold, Sell)
+    Text: {text: str}
+    Num: {num: int}
+    Reply: Union(Text, Num)
+  input:
+    s: !str
+  nodes:
+    drive:
+      kind: loop
+      times: 2
+      input:
+        action: buy
+      nodes:
+        step:
+          kind: code
+          input:
+            action: ${input.action}
+          output: Decision
+          code: return None
+      output: ${step.output}
+  output: ${drive.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''drive'': body inline body of node ''drive'' must return a record with at least one carried field (a subset of the carried record ["action"]); write `output: {field: ...}` or a whole reference to a node with a record output'
+      frames:
+      - label: flow.yaml
+        range: [14, 3, 14, 8]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''drive'': body inline body of node ''drive'' must return a record with at least one carried field (a subset of the carried record [''action'']); write `output: {field: ...}` or a whole reference to a node with a record output'
+      frames:
+      - label: flow.yaml
+        range: [14, 3, 14, 8]

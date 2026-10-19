@@ -1,0 +1,41 @@
+kind: load
+flow: |
+  typedefs:
+    Rec:
+      a: str
+      n: int
+    Buy:
+      conviction: float
+    Obj:
+      n: int
+    Trade:
+      action: Literal(buy)
+      conviction: float
+    Row:
+      name: int
+  id: nested_map
+  name: nested_map
+  input:
+    rows: !list(Row)
+  defs:
+    child:
+      input:
+        v: !object
+      nodes: {}
+      output: ${input.v}
+  nodes:
+    m:
+      kind: map
+      call: child
+      over: ${input.rows}
+      input:
+        v: !Rec {a: '${item.name}', n: 1}
+  output: ${m.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''m'' input ''v'': declared Rec, but the value is {"a":int,"n":1}'
+      frames:
+      - label: flow.yaml
+        range: [30, 10, 30, 40]

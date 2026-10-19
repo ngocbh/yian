@@ -1,0 +1,37 @@
+# `input.x is None`: None is yian's type name for null (type text), shared.
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    A:
+      kind: Literal(a)
+      n: int
+    B:
+      kind: Literal(b)
+      s: str
+    AB: Union(A, B)
+  input:
+    x: !Optional(AB)
+  nodes:
+    route:
+      kind: case
+      cases:
+        - when: "isinstance(input.x, A) or isinstance(input.x, B) or input.x != null"
+          then: t
+      else: e
+    t:
+      kind: code
+      code: return 1
+    e:
+      kind: code
+      code: return 1
+  output: ${input.x}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'': `cases[0].when`: `input.x != null` can never be true here: input.x is None, by the checks before it'
+      frames:
+      - label: flow.yaml
+        range: [17, 15, 17, 84]

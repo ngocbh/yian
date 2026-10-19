@@ -1,0 +1,71 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int, limit: float}
+    Hold: {action: 'Literal(hold)', note: str}
+    Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}
+    Decision: Union(Buy, Hold, Sell)
+  input:
+    s: !str
+  nodes:
+    d:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Decision
+      code: "return null"
+    route:
+      kind: case
+      cases:
+        - when: "isinstance(d.output, Buy) and d.output.limt > 5"
+          then: b
+      else: e
+    b:
+      kind: code
+      code: return 1
+    e:
+      kind: code
+      code: return 1
+  output: ${d.output.action}
+python_flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int, limit: float}
+    Hold: {action: 'Literal(hold)', note: str}
+    Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}
+    Decision: Union(Buy, Hold, Sell)
+  input:
+    s: !str
+  nodes:
+    d:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Decision
+      code: return None
+    route:
+      kind: case
+      cases:
+        - when: "isinstance(d.output, Buy) and d.output.limt > 5"
+          then: b
+      else: e
+    b:
+      kind: code
+      code: return 1
+    e:
+      kind: code
+      code: return 1
+  output: ${d.output.action}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'route' cases[0].when from: reference ${d.output.limt} reads field 'limt', which Buy doesn't have; d.output is Buy here, by the checks before this read; did you mean 'limit'?
+      frames:
+      - label: flow.yaml
+        range: [20, 15, 20, 64]

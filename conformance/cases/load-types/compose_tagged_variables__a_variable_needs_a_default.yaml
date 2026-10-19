@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: tagged_variables
+  name: tagged_variables
+  typedefs:
+    Tone: Literal(concise, detailed)
+  kind: agent
+  variables:
+    num_sentences: !int(1..12) 4
+    tone: !Tone concise
+    instruction: !str "Summarize clearly"
+    x: !int
+  prompt: "${instruction} in ${num_sentences} sentences, ${tone}."
+  output: str
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'variable ''x'': a variable needs a default: `x: !int <default>`'
+      frames:
+      - label: flow.yaml
+        range: [10, 6, 10, 10]

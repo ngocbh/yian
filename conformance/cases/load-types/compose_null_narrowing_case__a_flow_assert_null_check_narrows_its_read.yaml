@@ -1,0 +1,69 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Item:
+      qty: int
+  input:
+    s: !str
+  nodes:
+    route:
+      kind: case
+      cases:
+        - when: "input.s == 'go'"
+          then: d
+      else: e
+    d:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: ${input.s}
+      output: Item
+    e:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: ${input.s}
+      output: str
+  output: ${input.s}
+  asserts:
+    - "d.output != null and d.output.nosuch > 0"
+python_flow: |
+  id: p
+  name: p
+  typedefs:
+    Item:
+      qty: int
+  input:
+    s: !str
+  nodes:
+    route:
+      kind: case
+      cases:
+        - when: "input.s == 'go'"
+          then: d
+      else: e
+    d:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: ${input.s}
+      output: Item
+    e:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: ${input.s}
+      output: str
+  output: ${input.s}
+  asserts:
+    - "d.output != null and d.output.nosuch > 0"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'assert ''d.output != null and d.output.nosuch > 0'': reference ${d.output.nosuch} reads field ''nosuch'', which Item doesn''t have; d.output is Item here, by the checks before this read'
+      frames:
+      - label: flow.yaml
+        range: [29, 5, 29, 47]

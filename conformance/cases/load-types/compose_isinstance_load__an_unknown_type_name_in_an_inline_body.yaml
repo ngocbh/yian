@@ -1,0 +1,58 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', price: float}
+    Order: Union(Buy, Sell)
+    Running: Literal(running)
+  input:
+    order: !object
+  defs:
+    classify:
+      input:
+        order: !object
+      nodes:
+        inner:
+          kind: code
+          input:
+            is_sell: ${isinstance(input.order, Sell)}
+          code: |
+            return inputs["is_sell"]
+      output: ${inner.output}
+  nodes:
+    named:
+      kind: call
+      call: classify
+      input:
+        order: ${input.order}
+    inline:
+      kind: call
+      input:
+        order: ${input.order}
+      nodes:
+        outer:
+          kind: call
+          input:
+            order: ${input.order}
+          nodes:
+            inner:
+              kind: code
+              input:
+                is_buy: ${isinstance(input.order, By)}
+              code: |
+                return inputs["is_buy"]
+          output: ${inner.output}
+      output: ${outer.output}
+  output:
+    sell: ${named.output}
+    buy: ${inline.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''inner'' input ''is_buy'': unknown type ''By''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object'
+      frames:
+      - label: flow.yaml
+        range: [41, 23, 41, 53]

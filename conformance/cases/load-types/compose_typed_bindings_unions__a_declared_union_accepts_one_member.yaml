@@ -1,0 +1,34 @@
+kind: load
+flow: |
+  id: unions
+  name: unions
+
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', qty: int, price: float}
+    Hold: {action: 'Literal(hold)', note: str}
+    Decision: Union(Buy, Sell, Hold)
+    BuyOrSell: Union(Buy, Sell)
+  input:
+    decision: !object
+  nodes:
+    decide:
+      kind: code
+      input:
+        decision: ${input.decision}
+      code: return inputs['decision']
+      output: Decision
+    b:
+      kind: code
+      input:
+        buy: !Buy ${decide.output}
+      code: return 1
+    use:
+      kind: code
+      output: Buy
+      input:
+        d: !Decision ${b.output}
+      code: return 1
+  output: ${decide.output.action}
+expect:
+  load: ok

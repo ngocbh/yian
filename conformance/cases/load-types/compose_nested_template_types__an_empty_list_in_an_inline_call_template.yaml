@@ -1,0 +1,38 @@
+# TS spells the key in the path as JSON text (rules: messages); Python's repr in python_expect.
+kind: load
+rules: [messages]
+flow: |
+  id: inline_call
+  name: inline_call
+  input:
+    text: !str
+  nodes:
+    c:
+      kind: call
+      input:
+        payload: {text: '${input.text}', items: []}
+      nodes:
+        echo:
+          kind: code
+          input:
+            x: ${input.payload}
+          code: |
+            return inputs["x"]
+      output: ${echo.output}
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'cannot infer type for inline binding ''c.input.payload'': empty literal list at c.input.payload["items"] has no provable element type; declare its type with a tag (`payload: !<type> ...`) or use an explicitly typed named `defs:` body'
+      frames:
+      - label: flow.yaml
+        range: [9, 16, 9, 50]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'cannot infer type for inline binding ''c.input.payload'': empty literal list at c.input.payload[''items''] has no provable element type; declare its type with a tag (`payload: !<type> ...`) or use an explicitly typed named `defs:` body'
+      frames:
+      - label: flow.yaml
+        range: [9, 16, 9, 50]

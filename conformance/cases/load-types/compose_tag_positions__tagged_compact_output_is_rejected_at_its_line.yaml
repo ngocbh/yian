@@ -1,0 +1,25 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  kind: code
+  code: ./fixtures/compose_codefns.ts:echo
+  input:
+    qty: !int
+  output: !int
+python_flow: |
+  id: f
+  name: f
+  kind: code
+  code: tests.engine._compose_codefns:echo
+  input:
+    qty: !int
+  output: !int
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '`output:` declares a type; write `output: int`, without a tag'
+      frames:
+      - label: flow.yaml
+        range: [7, 9, 7, 13]

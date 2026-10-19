@@ -1,0 +1,36 @@
+kind: load
+flow: |
+  typedefs:
+    Rec:
+      a: str
+      n: int
+    Buy:
+      conviction: float
+    Obj:
+      n: int
+    Trade:
+      action: Literal(buy)
+      conviction: float
+  id: nested_types
+  name: nested_types
+  nodes:
+    p:
+      kind: code
+      output: str
+      code: |
+        return "hi"
+    c:
+      kind: code
+      input:
+        x: !Rec {a: '${p.output}', n: x}
+      code: |
+        return inputs["x"]
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''c'' input ''x'': declared Rec, but the value is {"a":str,"n":"x"}'
+      frames:
+      - label: flow.yaml
+        range: [23, 10, 23, 39]

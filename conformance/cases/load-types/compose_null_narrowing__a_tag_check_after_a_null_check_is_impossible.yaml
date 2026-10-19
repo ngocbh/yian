@@ -1,0 +1,36 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    A:
+      kind: Literal(a)
+      n: int
+    B:
+      kind: Literal(b)
+      s: str
+    AB: Union(A, B)
+  input:
+    x: !Optional(AB)
+  nodes:
+    route:
+      kind: case
+      cases:
+        - when: "input.x != null and input.x.kind != 'a' and input.x.kind != 'b'"
+          then: t
+      else: e
+    t:
+      kind: code
+      code: return 1
+    e:
+      kind: code
+      code: return 1
+  output: ${input.x}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'': `cases[0].when`: `input.x.kind != "b"` can never be true here: input.x is B, by the checks before it, so `input.x.kind == "b"` is always true'
+      frames:
+      - label: flow.yaml
+        range: [17, 15, 17, 80]

@@ -1,0 +1,33 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    A:
+      kind: Literal(a)
+      n: int
+    B:
+      kind: Literal(b)
+      s: str
+    AB: Union(A, B)
+  input:
+    x: !Optional(AB)
+  nodes:
+    c:
+      kind: code
+      code: return 1
+      input:
+        x: ${input.x}
+      asserts:
+        - "x != null and not isinstance(x, A) and not isinstance(x, B)"
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'c' assert: `not isinstance(x, B)` can never be true here: x is B, by the checks before it, so `isinstance(x, B)` is always true
+      frames:
+      - label: flow.yaml
+        range: [20, 9, 20, 70]

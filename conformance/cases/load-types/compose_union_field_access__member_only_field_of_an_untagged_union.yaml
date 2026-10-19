@@ -1,0 +1,55 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int, note: str}
+    Hold: {action: 'Literal(hold)', note: str}
+    Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}
+    Decision: Union(Buy, Hold, Sell)
+    Text: {text: str}
+    Num: {num: int}
+    Reply: Union(Text, Num)
+  input:
+    s: !str
+  nodes:
+    d:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Reply
+      code: "return null"
+  output:
+    t: ${d.output.text}
+python_flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int, note: str}
+    Hold: {action: 'Literal(hold)', note: str}
+    Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}
+    Decision: Union(Buy, Hold, Sell)
+    Text: {text: str}
+    Num: {num: int}
+    Reply: Union(Text, Num)
+  input:
+    s: !str
+  nodes:
+    d:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Reply
+      code: return None
+  output:
+    t: ${d.output.text}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          flow output from: reference ${d.output.text} reads field 'text', which only 1 of 2 union members have; check the member with isinstance(d.output, <Type>) in a case first
+      frames:
+      - label: flow.yaml
+        range: [21, 3, 22, 1]

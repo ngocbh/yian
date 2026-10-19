@@ -1,0 +1,31 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', price: float}
+    Order: Union(Buy, Sell)
+    Running: Literal(running)
+  input:
+    order: !object
+  nodes:
+    d:
+      kind: code
+      input:
+        order: ${input.order}
+      output: Order
+      code: |
+        return inputs["order"]
+  output: ${d.output}
+  asserts:
+    - isinstance(input.order, Order)
+    - isinstance(d.output, Byu)
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'flow assert ''isinstance(d.output, Byu)'': unknown type ''Byu''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object'
+      frames:
+      - label: flow.yaml
+        range: [21, 5, 21, 30]

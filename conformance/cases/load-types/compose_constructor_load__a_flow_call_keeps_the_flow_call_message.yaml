@@ -1,0 +1,34 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Buy: {action: Literal(buy), conviction: float}
+    Sell: {action: Literal(sell), price: float}
+    Decision: Union(Buy, Sell)
+    Size: Literal(s, m, l)
+  input:
+    order: !object
+  nodes:
+    d:
+      kind: code
+      input:
+        order: ${input.order}
+      output: object
+      code: |
+        return inputs["order"]
+    c:
+      kind: code
+      input:
+        x: ${review(d.output, d.output)}
+      code: |
+        return inputs["x"]
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'c: a flow call ''review'' inside ${...} is not supported — write it as the whole value with the call(...) directive: call(review, ...)'
+      frames:
+      - label: flow.yaml
+        range: [21, 10, 21, 39]

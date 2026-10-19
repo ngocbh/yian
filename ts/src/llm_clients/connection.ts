@@ -11,7 +11,8 @@
  * option, and never contains a token, API key or header value; its keys are snake_case because it
  * goes into run logs as Python yian writes them.
  *
- * The environment is read only through the `env` parameter (default `processEnv`), one variable
+ * The `YIAN_*` limits, such as `YIAN_MAX_BASE_URL_CHARS`, come through `defaults.ts`'s `current()`;
+ * everything else is read only through the `env` parameter (default `processEnv`), one variable
  * at a time: `YIAN_DEFAULT_PROVIDER`, `YIAN_DEFAULT_MODEL`, `OPENAI_BASE_URL` and `OPENAI_API_KEY`
  * for the snapshot and OpenAI's credentials; for `callCredentials`, each provider's key variable
  * (`PROVIDER_API_KEY_ENV`), `GEMINI_API_KEY` after Google's, and `AZURE_OPENAI_AD_TOKEN` for Azure;
@@ -505,9 +506,14 @@ function nonempty(value: unknown, where: string): string {
   return value;
 }
 
+/** Whether `value` names a supported provider. */
+function isSupported(value: unknown): value is string {
+  return typeof value === "string" && (SUPPORTED_LLM_PROVIDERS as readonly string[]).includes(value);
+}
+
 /** Return `value` if it names a supported provider; otherwise throw `RangeError` naming `where`. */
 function supported(value: unknown, where: string): string {
-  if (typeof value !== "string" || !(SUPPORTED_LLM_PROVIDERS as readonly string[]).includes(value)) {
+  if (!isSupported(value)) {
     throw new RangeError(`${where} names an unsupported provider`);
   }
   return value;
@@ -516,11 +522,6 @@ function supported(value: unknown, where: string): string {
 /** Return the nonsecret SHA-256 identity recorded for an environment API key. */
 export function keyIdentity(key: string): string {
   return createHash("sha256").update(key, "utf8").digest("hex");
-}
-
-/** Whether `value` names a supported provider. */
-function isSupported(value: unknown): value is string {
-  return typeof value === "string" && (SUPPORTED_LLM_PROVIDERS as readonly string[]).includes(value);
 }
 
 /**
@@ -674,10 +675,7 @@ function checkSelection(selection: ProviderSelection): void {
  */
 export function validateConnection(value: unknown, provider: unknown = "openai"): Connection {
   if (typeof provider !== "string" || !KEYED.has(provider)) {
-    const name =
-      typeof provider === "string" && (SUPPORTED_LLM_PROVIDERS as readonly string[]).includes(provider)
-        ? `provider ${provider}`
-        : "an unsupported provider";
+    const name = isSupported(provider) ? `provider ${provider}` : "an unsupported provider";
     throw new RangeError(`Internal connection metadata is not used for ${name}`);
   }
   if (
@@ -1251,10 +1249,12 @@ export function callCredentials(config: unknown, options: { env?: Env } = {}): r
   const name = provider.toLowerCase();
   if (hostKey === null) {
     try {
-      const pinned = connection as Record<string, unknown> | null;
-      const source = pinned === null ? null : pinned["source"];
-      if (source === "store") {
-        found.push(...new AuthStore(pinned!["store_path"] as string | null, { env }).savedSecrets(name));
+      const source = isRecord(connection) ? connection["source"] : connection === null ? null : undefined;
+      if (source === "store" && isRecord(connection)) {
+        // Python's `connection["store_path"]` raises inside this guard when the key is missing,
+        // and `AuthStore` rejects a path that is neither text nor `None`.
+        const path = Object.hasOwn(connection, "store_path") ? connection["store_path"] : undefined;
+        if (typeof path === "string" || path === null) found.push(...new AuthStore(path, { env }).savedSecrets(name));
       } else if (source === null || source === "environment" || source === "legacy_environment") {
         for (const variable of [getApiKeyEnv(name), ...(KEY_ENV_FALLBACKS.get(name) ?? [])]) {
           const key = variable === null ? undefined : env(variable);

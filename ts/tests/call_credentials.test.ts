@@ -119,6 +119,9 @@ describe("saved subscription tokens", () => {
 test("sdk fallback variables", () => {
   vars.set("GEMINI_API_KEY", "sk-env-gemini");
   expect(listed(resolved("google", "gemini-x"))).toEqual(["sk-env-gemini"]);
+  // An empty value counts as unset.
+  vars.set("GOOGLE_API_KEY", "");
+  expect(listed(resolved("google", "gemini-x"))).toEqual(["sk-env-gemini"]);
   vars.set("GOOGLE_API_KEY", "sk-env-google");
   expect(listed(resolved("google", "gemini-x"))).toEqual(["sk-env-google"]);
 
@@ -171,7 +174,18 @@ test("a malformed store gives no store secrets", () => {
   expect(listed(config)).toEqual([]);
 
   vars.set("YIAN_AUTH_FILE", path);
-  listed({ provider: "anthropic", model: "c" });
+  expect(listed({ provider: "anthropic", model: "c" })).toEqual(["sk-env-anthropic"]);
+});
+
+test("a store connection without a usable store path gives no store secrets", async () => {
+  await authStore().save("anthropic", new ApiKeyCredentials("sk-saved-anthropic"), "c");
+  const pinned = { method: "api_key", source: "store", credential_id: "abc", endpoint: null };
+  for (const connection of [pinned, { ...pinned, store_path: 5 }]) {
+    expect(listed({ provider: "anthropic", model: "c", _connection: connection })).toEqual([]);
+  }
+  expect(listed({ provider: "anthropic", model: "c", _connection: { ...pinned, store_path: null } })).toEqual([
+    "sk-saved-anthropic",
+  ]);
 });
 
 test("an invalid provider still gives the host key", () => {

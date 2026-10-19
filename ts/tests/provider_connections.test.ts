@@ -636,6 +636,11 @@ test("snapshot accepts keyless logins and skips unsupported ones", async () => {
   expect(rangeError(() => connectionSnapshot({ env })).message).toContain(
     "saved default provider 'claude' is not supported",
   );
+  // An empty value counts as unset.
+  vars.set("YIAN_DEFAULT_PROVIDER", "");
+  expect(rangeError(() => connectionSnapshot({ env })).message).toContain(
+    "saved default provider 'claude' is not supported",
+  );
 });
 
 test("bind records store and environment connections", async () => {

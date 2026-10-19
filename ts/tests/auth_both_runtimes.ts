@@ -38,6 +38,9 @@ function spawnChild(path: string, credentialId: string, counterFile: string): Ch
   child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
     stderr += chunk;
   });
+  // A child that dies after `ready` makes the `go` write fail with EPIPE; its exit code and
+  // stderr already report why.
+  child.stdin.on("error", () => {});
   const exited = new Promise<number | null>((resolve, reject) => {
     child.on("error", reject);
     child.on("close", (code) => resolve(code));
@@ -62,13 +65,14 @@ function ready(child: Child): Promise<void> {
 
 /** Three processes refresh one expiring login at once: exactly one refresh runs. */
 async function refreshIsSerializedAcrossProcesses(): Promise<void> {
-  const tmp = fs.mkdtempSync(join(tmpdir(), "yian-auth-"));
-  const path = join(tmp, "auth", "auth.json");
-  const counterFile = join(tmp, "refreshes");
-  fs.writeFileSync(counterFile, "");
   const children: Child[] = [];
+  let tmp: string | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    tmp = fs.mkdtempSync(join(tmpdir(), "yian-auth-"));
+    const path = join(tmp, "auth", "auth.json");
+    const counterFile = join(tmp, "refreshes");
+    fs.writeFileSync(counterFile, "");
     const expiring = new OAuthCredentials({ accessToken: "old", refreshToken: "refresh", expiresAt: 900, accountId: "acct" });
     const selection = await new AuthStore(path).save("openai", expiring, "model");
     for (let i = 0; i < 3; i++) children.push(spawnChild(path, selection.credentialId, counterFile));
@@ -87,7 +91,9 @@ async function refreshIsSerializedAcrossProcesses(): Promise<void> {
   } finally {
     clearTimeout(timer);
     for (const child of children) child.process.kill("SIGKILL");
-    fs.rmSync(tmp, { recursive: true, force: true });
+    // Reaped first, so no child still writes into the directory being removed.
+    await Promise.allSettled(children.map((child) => child.exited));
+    if (tmp !== undefined) fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 

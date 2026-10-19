@@ -666,13 +666,14 @@ export class AuthStore {
       const key = [this.path, provider, expectedCredentialId].join("\0");
       for (;;) {
         const existing = flights.get(key);
-        const flight = existing ?? this.#lead(key, locked);
-        const outcome = existing === undefined ? await flight : await joined(flight, this.#signal);
+        const outcome = await (existing === undefined ? this.#lead(key, locked) : joined(existing, this.#signal));
         if ("credentials" in outcome) return outcome.credentials;
         // Never refresh again after a failure: a refresh that timed out may have rotated the
         // token, and reusing the old one can revoke the login.
         if ("error" in outcome) throw outcome.error;
         if (existing === undefined) throw this.#signal!.reason;
+        // Only the leader's own stop ended the flight, so the token is still due: start over, and
+        // the first joiner back leads the next flight.
       }
     } finally {
       if (directory !== null) closeFd(directory.fd);

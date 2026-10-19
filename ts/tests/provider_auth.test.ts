@@ -939,7 +939,6 @@ describe("AuthStore", () => {
     let calls = 0;
     const refresh = async () => {
       calls++;
-      await realScheduler.sleep(50);
       if (calls === 1) throw failure;
       return oauth("new", "new-refresh", 5000);
     };
@@ -958,23 +957,22 @@ describe("AuthStore", () => {
     const other = join(tmp, "other", "auth.json");
     const first = new AuthStore(file, { scheduler: clock });
     const second = new AuthStore(other, { scheduler: clock });
-    const [firstSelection, secondSelection] = await Promise.all([
-      first.save("openai", oauth("old", "old-refresh", 900), "model"),
-      second.save("openai", oauth("old", "old-refresh", 900), "model"),
-    ]);
+    // A copied store pins the same credential id on both paths, so only the path tells them apart.
+    const copied = await first.save("openai", oauth("old", "old-refresh", 900), "model");
+    writeRaw(other, fs.readFileSync(file));
     // Each refresh waits until both have started, so they finish only if they run in parallel.
     const [firstStarted, startFirst] = gate();
     const [secondStarted, startSecond] = gate();
     const both = Promise.all([firstStarted, secondStarted]);
     const parallel = await Promise.all([
-      first.credentials("openai", firstSelection.credentialId, {
+      first.credentials("openai", copied.credentialId, {
         refresh: async () => {
           startFirst();
           await both;
           return oauth("first", "r", 5000);
         },
       }),
-      second.credentials("openai", secondSelection.credentialId, {
+      second.credentials("openai", copied.credentialId, {
         refresh: async () => {
           startSecond();
           await both;
@@ -984,13 +982,18 @@ describe("AuthStore", () => {
     ]);
     expect(accessTokens(parallel)).toEqual(["first", "second"]);
 
-    // Two providers on one path: each gets its own refresh, one after the other under the lock.
-    const store = new AuthStore(join(tmp, "providers", "auth.json"), { scheduler: clock });
+    // Two providers on one path with the same credential id: each gets its own refresh, one after
+    // the other under the lock.
+    const path = join(tmp, "providers", "auth.json");
+    const store = new AuthStore(path, { scheduler: clock });
     const a = await store.save("a", oauth("old", "r", 900), "model");
-    const b = await store.save("b", oauth("old", "r", 900), "model");
+    await store.save("b", oauth("old", "r", 900), "model");
+    const data = JSON.parse(fs.readFileSync(path, "utf8"));
+    data.providers.b.credential_id = a.credentialId;
+    writeRaw(path, JSON.stringify(data));
     const providers = await Promise.all([
       store.credentials("a", a.credentialId, { refresh: async () => oauth("new-a", "r", 5000) }),
-      store.credentials("b", b.credentialId, { refresh: async () => oauth("new-b", "r", 5000) }),
+      store.credentials("b", a.credentialId, { refresh: async () => oauth("new-b", "r", 5000) }),
     ]);
     expect(accessTokens(providers)).toEqual(["new-a", "new-b"]);
 
@@ -1006,7 +1009,8 @@ describe("AuthStore", () => {
       },
     });
     await entered;
-    // Written beside the held lock, so the next caller pins the replacement's credential id.
+    // Replace the file while the first refresh holds the lock, so the next caller pins a different
+    // credential id of the same provider (a shared flight would hand it `pinned`).
     const replacement = await second.save("openai", oauth("old", "old-refresh", 900), "model");
     writeRaw(file, fs.readFileSync(other));
     let replacementCalls = 0;
@@ -2739,7 +2743,8 @@ const NODE = ((): string | undefined => {
 })();
 
 describe("the cross-process scenarios", () => {
-  for (const [name, run] of Object.entries(SCENARIOS)) test(name, run, 20_000);
+  // More than the scenario's own 20 s limit, so that limit reports first.
+  for (const [name, run] of Object.entries(SCENARIOS)) test(name, run, 30_000);
 
   test.skipIf(!NODE)(
     "all pass on Node, built",

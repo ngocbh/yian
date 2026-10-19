@@ -1,0 +1,43 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "header_key_echo: a secret gateway header on the route's auth is sent; HTTP 401 echoing it: auth, scrubbed, not retried.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "http://localhost:11434/api/chat",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-gateway-token": "<redacted>"
+        },
+        "json": {
+          "model": "qwen3",
+          "stream": true,
+          "options": {},
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Say hello."
+            }
+          ],
+          "tools": []
+        }
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "json": {
+          "error": "token test-key-2 rejected"
+        }
+      }
+    }
+  ]
+}

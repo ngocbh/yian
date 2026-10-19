@@ -1,0 +1,43 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "error_401_key_echo: HTTP 401 echoing the configured key: auth, the key scrubbed from the message, not retried.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "http://localhost:11434/api/chat",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "authorization": "<redacted>"
+        },
+        "json": {
+          "model": "qwen3",
+          "stream": true,
+          "options": {},
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Say hello."
+            }
+          ],
+          "tools": []
+        }
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "json": {
+          "error": "invalid key test-key-1"
+        }
+      }
+    }
+  ]
+}

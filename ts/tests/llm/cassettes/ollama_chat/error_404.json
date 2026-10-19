@@ -1,0 +1,42 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "error_404: HTTP 404 model not found: not_found, Ollama's text as the detail, not retried.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "http://localhost:11434/api/chat",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json"
+        },
+        "json": {
+          "model": "qwen3",
+          "stream": true,
+          "options": {},
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Say hello."
+            }
+          ],
+          "tools": []
+        }
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "json": {
+          "error": "model 'qwen3' not found"
+        }
+      }
+    }
+  ]
+}

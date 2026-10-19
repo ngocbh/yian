@@ -25,7 +25,6 @@ import {
   fromHost,
   isRecord,
   jsTypeName,
-  setField,
   toHost,
   TypeCheckError,
   type ValueRecord,
@@ -619,13 +618,10 @@ export class ToolSet {
     const where = `tool ${reprText(toolId)} arguments`;
     const payload = fromHost(inputs, where);
     if (!isRecord(payload)) throw new TypeError(`${where} must be a record, got ${jsTypeName(inputs)}`);
-    if (toolId !== ASK_USER) {
-      checkArguments(toolId, tool.parametersJsonSchema, payload, null);
-    } else {
-      if (Object.hasOwn(payload, "options")) payload.options = normalizeOptions(payload.options);
-      const schema = trusted ? ASK_USER_TRUSTED_PARAMETERS : tool.parametersJsonSchema;
-      checkArguments(toolId, schema, payload, trusted ? "trusted" : "public");
-    }
+    const askUser = toolId === ASK_USER;
+    if (askUser && Object.hasOwn(payload, "options")) payload.options = normalizeOptions(payload.options);
+    const schema = askUser && trusted ? ASK_USER_TRUSTED_PARAMETERS : tool.parametersJsonSchema;
+    checkArguments(toolId, schema, payload, askUser ? (trusted ? "trusted" : "public") : null);
     return [tool, payload];
   }
 
@@ -672,10 +668,9 @@ function checkArguments(
 ): void {
   const name = reprText(toolId);
   // Own keys only: a schema is a plain object, so `toString` must not read as a property.
-  const own = (record: ValueRecord, key: string): unknown => (Object.hasOwn(record, key) ? record[key] : undefined);
-  const found = own(schema, "properties");
+  const found = Object.hasOwn(schema, "properties") ? schema.properties : undefined;
   const properties: ValueRecord = isRecord(found) ? found : {};
-  const extra = own(schema, "additionalProperties");
+  const extra = Object.hasOwn(schema, "additionalProperties") ? schema.additionalProperties : undefined;
   const extraSchema = isRecord(extra) ? extra : undefined;
   const unsupported = Object.keys(payload)
     .filter((key) => !Object.hasOwn(properties, key))
@@ -688,7 +683,7 @@ function checkArguments(
         `allowed: ${writeAsText(allowed)}`,
     );
   }
-  const required = own(schema, "required");
+  const required = Object.hasOwn(schema, "required") ? schema.required : undefined;
   const missing = (Array.isArray(required) ? required : []).filter(
     (key): key is string => typeof key === "string" && !Object.hasOwn(payload, key),
   );

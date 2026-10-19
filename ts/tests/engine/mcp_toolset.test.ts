@@ -1,8 +1,8 @@
 /**
  * `ToolSet` takes an open MCP server as a tool group, a port of `tests/engine/test_mcp_toolset.py`
  * (construction, `expand` and invoke rows) with a fake open server. The `McpServerClosed` row and
- * the import-without-the-SDK row land with the MCP client; the exports row lands with the
- * package entry point.
+ * the import-without-the-SDK row land with the MCP client; the exports row is the
+ * `tools/index.ts` exports row in `tool_errors.test.ts`.
  */
 
 import { describe, expect, test } from "bun:test";

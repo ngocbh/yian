@@ -321,7 +321,7 @@ describe("FunctionTool invocation", () => {
     try {
       await promise;
     } catch (error) {
-      expect(error).toBeInstanceOf(kind);
+      expect((error as Error).constructor).toBe(kind);
       return error as Error;
     }
     throw new Error("expected a rejection");

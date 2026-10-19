@@ -355,7 +355,8 @@ run before appending any record.
   ChatGPT subscription model refuse it, since they send no API key.
 
   Changed (TS yian): a saved subscription's account id is scrubbed from errors too,
-  and `ANTHROPIC_AUTH_TOKEN` isn't read. [Installation](installation.md#ts-environment)
+  and `ANTHROPIC_AUTH_TOKEN` isn't read. Scrubbing rewrites an error's `message`, its
+  `stack` and every `cause`, and the members of an `AggregateError`. [Installation](installation.md#ts-environment)
   lists the variables TS yian reads, its base URL variables included; an empty
   variable counts as unset.
 - `memory` — one backend per declared memory key, normally the

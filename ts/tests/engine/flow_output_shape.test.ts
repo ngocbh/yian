@@ -6,7 +6,7 @@
  * `test_child_signature_of_a_value_output_is_the_value_contract`,
  * `test_child_signature_of_an_empty_record_is_the_empty_record_contract`,
  * `test_direct_child_signature_must_say_it_returns_a_record`, the contract half of
- * `test_map_over_a_one_field_record_def_returns_a_list_of_records` and
+ * `test_map_over_a_one_field_record_def_returns_a_list_of_records`,
  * `test_map_over_a_def_without_fields_is_rejected` (absent, empty record),
  * `test_loop_body_with_an_empty_record_output_is_rejected` and
  * `test_loop_value_body_re_exporting_an_empty_record_is_rejected`.

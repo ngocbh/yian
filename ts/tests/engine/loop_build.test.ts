@@ -31,8 +31,8 @@
  * `max:` or `times:` past `Number.MAX_SAFE_INTEGER` is refused with the at-most message (the
  * largest safe integer builds), and a float `max: 2.0` is refused as `(got 2)`; `times:` is
  * refused below 1 and as a float, a bool or text, as `max:` is; `times:` beside `while:` is a
- * second driver; a body input that isn't a carried field is refused; and a count error and a
- * field-name error are joined at the node; a hand-constructed descriptor's `number` count is
+ * second driver; a body input that isn't a carried field is refused; a count error and a
+ * field-name error are joined at the node; and a hand-constructed descriptor's `number` count is
  * refused.
  *
  * Pinned at the end (`assembledWith`, each def built by hand): the
@@ -292,6 +292,12 @@ test.each([
   expect(error.message).toBe(`loop node 'chat_loop': \`max:\` must be an integer ${got}`);
 });
 
+test("a max at the largest safe integer builds", () => {
+  const node = loopOf(swap(GOOD, "    max: 5\n", "    max: 9007199254740991\n"), goodBody());
+
+  expect(node.maxIters).toBe(Number.MAX_SAFE_INTEGER);
+});
+
 test("a max past the largest safe integer is rejected", () => {
   const error = loadError(() => build(swap(GOOD, "    max: 5\n", "    max: 9007199254740992\n"), goodBody()));
 
@@ -305,12 +311,6 @@ test("a constructed descriptor's number count is refused, as a YAML float is", (
   const error = loadError(() => desc.build(new BuildContext({ registry: new Map(), resolver: () => goodBody() })));
 
   expect(error.message).toBe("loop node 'lp': `times:` must be an integer (got 1)");
-});
-
-test("a max at the largest safe integer builds", () => {
-  const node = loopOf(swap(GOOD, "    max: 5\n", "    max: 9007199254740991\n"), goodBody());
-
-  expect(node.maxIters).toBe(Number.MAX_SAFE_INTEGER);
 });
 
 // ---------- the carried record's field names ----------
@@ -507,15 +507,18 @@ test("the merged contract types an omitted field from its seed", () => {
     ["chat.input.talking_to", STR],
   ]);
   const read: string[] = [];
-  const reader: BindingContractReader = (label, binding) => {
-    read.push(`${label} = ${String(binding)}`);
+  const reader: BindingContractReader = (label, binding, range) => {
+    read.push(`${label} = ${String(binding)} at line ${range?.startLine}`);
     return seeds.get(label) ?? null;
   };
 
   const node = loopOf(CHAT, body, { nodeId: "chat", bindingContractReader: reader });
 
   // Only the omitted fields' seeds are read.
-  expect(read).toEqual(["chat.input.person = ${input.person}", "chat.input.talking_to = ${input.talking_to}"]);
+  expect(read).toEqual([
+    "chat.input.person = ${input.person} at line 8",
+    "chat.input.talking_to = ${input.talking_to} at line 9",
+  ]);
   expect(node.returnedFields).toEqual(["exited", "reply"]);
   expect(isExactly(node.outputContract, ValueContract)).toBe(true);
   expect(fieldNames(node.outputContract)).toEqual(["person", "talking_to", "exited", "reply"]);

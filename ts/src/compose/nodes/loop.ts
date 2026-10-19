@@ -292,7 +292,7 @@ export class LoopDescriptor extends NodeDescriptor {
  * @param subject The message prefix naming the loop node.
  * @returns The count as a number; `null` when it was refused.
  */
-function checkedCount(subject: string, key: string, value: unknown, errors: string[]): number | null {
+function checkedCount(subject: string, key: "times" | "max", value: unknown, errors: string[]): number | null {
   const field = `${subject}: \`${key}:\``;
   if (typeof value !== "bigint") {
     // A bool, a float, text or anything else: a count is a plain integer.

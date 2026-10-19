@@ -32,8 +32,7 @@
  * `test_child_signature_keeps_nested_partial_output_opaque_at_record_field` and
  * `test_child_signature_rejects_contradictory_declared_output_evidence`;
  * `test_composite_builders_preserve_or_deliberately_wrap_child_contract` (the LOOP count is `1n`,
- * as YAML reads it); and the CASE edge row
- * `test_case_edge_inference_reads_wrapped_lowered_wiring`.
+ * as YAML reads it); and the CASE edge row `test_case_edge_inference_reads_wrapped_lowered_wiring`.
  *
  * TS-only: the `compose/helpers/output_contracts.ts` rows Python covers only through `load_flow`:
  * `literalType` (an int, a float, ±Infinity, text, empty text, a bool, null, a record, a value
@@ -72,8 +71,8 @@
  * `test_boundary_reads_wrapped_output_but_preserves_it_in_end_wiring` and
  * `test_reference_validation_checks_a_wrapped_flow_output`); the CALL/LOOP type-check rows
  * (`test_call_type_*` and `test_loop_type_check_*`); inline binding type inference
- * (`test_inline_binding_type_inference_reads_one_carrier_layer`);
- * and edge inference (`test_data_edge_inference_is_identical_for_raw_and_wrapped_sources` and
+ * (`test_inline_binding_type_inference_reads_one_carrier_layer`); and edge inference
+ * (`test_data_edge_inference_is_identical_for_raw_and_wrapped_sources` and
  * `test_producer_scan_unwraps_exactly_one_carrier_layer`).
  */
 
@@ -1075,8 +1074,12 @@ test("composite builders preserve or deliberately wrap the child contract", () =
   const ctx = new BuildContext({ registry: new Map(), resolver: () => child });
 
   const call = new CallDescriptor({ id: "call", call: "child" }).build(ctx).node;
-  const loop = new LoopDescriptor({ id: "loop", call: "child", inputs: { state: "${input.state}" }, times: 1n })
-    .build(ctx).node;
+  const loop = new LoopDescriptor({
+    id: "loop",
+    call: "child",
+    inputs: { state: "${input.state}" },
+    times: 1n,
+  }).build(ctx).node;
   const mapped = new MapDescriptor({ id: "mapped", call: "child", over: "${input.items}" }).build(ctx).node;
 
   expect(call.outputContract).toBe(contract);

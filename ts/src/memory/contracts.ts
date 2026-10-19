@@ -98,11 +98,11 @@ function requirePath(value: unknown, name: string, allowEmpty = false): readonly
 }
 
 /**
- * Validate and copy one JSON value into frozen containers; see `freezeJsonObject`. Numbers must be
- * finite, and `-0` is copied as `0`. With `valueNumbers`, numbers follow the yian value rule
- * instead: NaN refused, `±Infinity` kept, `-0` copied as `0`. With `memo`, a container already
- * frozen through the same memo returns its copy, so a repeated subtree is shared; a memo is for
- * unlimited nesting, since a cached copy isn't measured against `limit` again.
+ * Validate and copy one JSON value into frozen containers; see `freezeJsonObject`. With
+ * `valueNumbers`, numbers follow the yian value rule: NaN refused, `±Infinity` kept, `-0` copied
+ * as `0`. With `memo`, a container already frozen through the same memo returns its copy, so a
+ * repeated subtree is shared; a memo is for unlimited nesting, since a cached copy isn't measured
+ * against `limit` again.
  */
 function freezeJson(
   value: unknown,
@@ -118,8 +118,7 @@ function freezeJson(
   if (typeof value === "number") {
     if (!valueNumbers) {
       if (!Number.isFinite(value)) throw new RangeError(`${name} JSON number must be finite`);
-      // yian has no negative zero, and canonical JSON refuses one.
-      return Object.is(value, -0) ? 0 : value;
+      return value;
     }
     if (Number.isNaN(value)) throw new RangeError(`${name} JSON number must not be NaN`);
     return Object.is(value, -0) ? 0 : value;
@@ -170,11 +169,11 @@ function freezeJson(
 
 /**
  * Validate and snapshot one exact JSON object: `null`, booleans, `bigint` ints, finite `number`
- * floats (`-0` copied as `0`), well-formed strings, plain arrays and plain objects with string
- * keys, copied into frozen arrays and frozen objects whose keys are inserted in code-unit order.
- * With `limitNesting` (the default, for configs) it nests at most `current().maxValueNesting`
- * container levels. With `valueNumbers` (for evidence values) numbers follow the yian value rule
- * instead: NaN refused, `±Infinity` kept, `-0` copied as `0`.
+ * floats, well-formed strings, plain arrays and plain objects with string keys, copied into frozen
+ * arrays and frozen objects whose keys are inserted in code-unit order. With `limitNesting` (the
+ * default, for configs) it nests at most `current().maxValueNesting` container levels. With
+ * `valueNumbers` (for evidence values) numbers follow the yian value rule instead: NaN refused,
+ * `±Infinity` kept, `-0` copied as `0`.
  *
  * @throws TypeError when `value` isn't a plain object, holds a non-JSON value, or has a symbol key.
  * @throws RangeError for a refused number, a lone surrogate, a cycle, or nesting past the limit.
@@ -1417,7 +1416,7 @@ export function sameMemoryOperationFailure(a: MemoryOperationFailure, b: MemoryO
 /** One JSON mutation a memory proposed. Frozen. */
 export class MemoryMutation {
   readonly mutationId: string;
-  /** The deep-frozen payload snapshot; any depth, with `-0` copied as `0`. */
+  /** The deep-frozen payload snapshot; any depth. */
   readonly payload: JsonValue;
 
   /**

@@ -35,8 +35,8 @@
  * values (a `"__proto__"` key, a null-prototype object, a repeated subtree, an array hole), the
  * value nesting limit, the occurrence nesting order, the operation failure's field checks
  * (Python pins those through the learning outcome and backward records), `validateMutations`, a
- * mutation's id and payload checks (a payload deeper than the value nesting limit is kept, and a
- * `-0` reads back as `0`), and each learning carrier's field checks in Python's order.
+ * mutation's id and payload checks (a payload deeper than the value nesting limit is kept), and
+ * each learning carrier's field checks in Python's order.
  *
  * TS-only (episodes and learn contexts): one row per `MemoryEpisode` and `LearnContext`
  * constructor message with its class, in Python's check order; the episode JSON and the learn
@@ -582,8 +582,6 @@ test("a mutation checks its id and payload", () => {
   for (let i = 0; i < 150; i++) deep = { d: deep };
   expect(new MemoryMutation("deep", deep).payload).toEqual(deep as JsonObject);
   expect(new MemoryMutation("scalar", "text").payload).toBe("text");
-  expect(Object.is(new MemoryMutation("zero", -0).payload, 0)).toBe(true);
-  expect(Object.is((new MemoryMutation("zero", { x: [-0] }).payload as { x: number[] }).x[0], 0)).toBe(true);
   expectError(
     () => new MemoryMutation("m", { x: Number.POSITIVE_INFINITY }),
     RangeError,

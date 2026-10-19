@@ -23,8 +23,9 @@
  *   `occurrenceKey`); the half that runs a flow comes with the engine (below).
  *
  * TS-only: the run id, memory and mutation-item messages of `memoryCommitId`; a float payload
- * digests its `logJson` text, and a `-0` payload digests as `0`; `failureJson` equals `toJSON()`,
- * refuses a value that isn't exactly a `Failure` and revalidates the failure's fields;
+ * digests its `logJson` text, and a `-0` payload digests as a float `0` payload (the run log
+ * writes both as `0.0`); `failureJson` equals `toJSON()`, refuses a value that isn't exactly a
+ * `Failure` and revalidates the failure's fields;
  * `episodeOutcome` projects a success's canonical value and a failed record's failure JSON, and
  * refuses a record of another class and a forged success without a canonical typed value.
  *

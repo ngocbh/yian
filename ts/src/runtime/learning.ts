@@ -1435,8 +1435,9 @@ export function projectOwnerContexts(
  * Return the sole deterministic ID for one memory's mutation batch in one attempt.
  *
  * The SHA-256 input is the UTF-8 run-log text (`logJson`: keys in code-unit order, ints of any
- * size, floats marked by `.0`) of `[runId, attemptId, memory, [[mutationId, payload], ...]]`, the
- * attempt id written as an int. Batch order is semantic. The result is
+ * size, floats marked by `.0`, `-0` written as `0.0`) of
+ * `[runId, attemptId, memory, [[mutationId, payload], ...]]`, the attempt id written as an int.
+ * Batch order is semantic. The result is
  * `ac-memory-v3:<hex digest>`.
  *
  * @throws RangeError when `attemptId` isn't a positive safe integer, or `runId` or `memory` isn't
@@ -1460,6 +1461,7 @@ export function memoryCommitId(
     return [mutation.mutationId, mutation.payload];
   });
   // A plain number would be written as a float (`1.0`), so the attempt id is a bigint.
-  const text = logJson([runId, BigInt(attemptId), memory, batch]);
+  // The run log's canonical form writes a carrier's -0 as `0.0`; logJson alone refuses -0.
+  const text = logJson(canonicalSeed([runId, BigInt(attemptId), memory, batch])[0]);
   return `ac-memory-v3:${createHash("sha256").update(text, "utf8").digest("hex")}`;
 }

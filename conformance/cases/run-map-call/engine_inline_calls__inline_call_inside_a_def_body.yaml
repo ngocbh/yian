@@ -1,0 +1,202 @@
+kind: run
+flow: |2
+
+  id: ic_defbody
+  name: ic_defbody
+  input:
+    topic: !str
+  defs:
+    helper:
+      input:
+        topic: !str
+      nodes:
+        x:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:echo
+          input:
+            topic: ${input.topic}
+          output: str
+      output: ${x.output}
+    enrich:
+      input:
+        topic: !str
+      nodes:
+        y:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:echo
+          input:
+            topic: call(helper, topic=${input.topic})
+          output: str
+      output: ${y.output}
+  nodes:
+    go:
+      kind: call
+      call: enrich
+      input:
+        topic: ${input.topic}
+  output: ${go.output}
+python_flow: |2
+
+  id: ic_defbody
+  name: ic_defbody
+  input:
+    topic: !str
+  defs:
+    helper:
+      input:
+        topic: !str
+      nodes:
+        x:
+          kind: code
+          code: tests.engine._compose_codefns:echo
+          input:
+            topic: ${input.topic}
+          output: str
+      output: ${x.output}
+    enrich:
+      input:
+        topic: !str
+      nodes:
+        y:
+          kind: code
+          code: tests.engine._compose_codefns:echo
+          input:
+            topic: call(helper, topic=${input.topic})
+          output: str
+      output: ${y.output}
+  nodes:
+    go:
+      kind: call
+      call: enrich
+      input:
+        topic: ${input.topic}
+  output: ${go.output}
+inputs:
+  topic: ACME
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: ACME
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        topic: ACME
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        topic: ACME
+  - [node_started, go]
+  - - node_expanded
+    - go
+    - prune_ids: []
+      seed:
+        topic: ACME
+  - [node_started, go/__start__]
+  - - node_succeeded
+    - go/__start__
+    - value:
+        topic: ACME
+  - [node_started, go/__call_0]
+  - - node_expanded
+    - go/__call_0
+    - prune_ids: []
+      seed:
+        topic: ACME
+  - [node_started, go/__call_0/__start__]
+  - - node_succeeded
+    - go/__call_0/__start__
+    - value:
+        topic: ACME
+  - [node_started, go/__call_0/x]
+  - - node_succeeded
+    - go/__call_0/x
+    - value: ACME
+  - [node_started, go/__call_0/__end__]
+  - - node_succeeded
+    - go/__call_0/__end__
+    - commit_target: go/__call_0
+      value: ACME
+  - [node_started, go/y]
+  - - node_succeeded
+    - go/y
+    - value: ACME
+  - [node_started, go/__end__]
+  - - node_succeeded
+    - go/__end__
+    - commit_target: go
+      value: ACME
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ACME
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        topic: ACME
+  - - NodeStarted
+    - node_id: go
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          topic: ACME
+      node_id: go
+  - - NodeStarted
+    - node_id: go/__start__
+  - - NodeSucceeded
+    - node_id: go/__start__
+      output:
+        topic: ACME
+  - - NodeStarted
+    - node_id: go/__call_0
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          topic: ACME
+      node_id: go/__call_0
+  - - NodeStarted
+    - node_id: go/__call_0/__start__
+  - - NodeSucceeded
+    - node_id: go/__call_0/__start__
+      output:
+        topic: ACME
+  - - NodeStarted
+    - node_id: go/__call_0/x
+  - - NodeSucceeded
+    - node_id: go/__call_0/x
+      output: ACME
+  - - NodeStarted
+    - node_id: go/__call_0/__end__
+  - - NodeSucceeded
+    - commit_as: go/__call_0
+      node_id: go/__call_0/__end__
+      output: ACME
+  - - NodeStarted
+    - node_id: go/y
+  - - NodeSucceeded
+    - node_id: go/y
+      output: ACME
+  - - NodeStarted
+    - node_id: go/__end__
+  - - NodeSucceeded
+    - commit_as: go
+      node_id: go/__end__
+      output: ACME
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: ACME
+  - - RunSucceeded
+    - output: ACME

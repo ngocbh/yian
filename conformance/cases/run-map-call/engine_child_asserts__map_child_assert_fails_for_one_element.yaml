@@ -1,0 +1,171 @@
+kind: run
+flow: |2
+
+  id: dm
+  name: dm
+  input:
+    vs: !list(int)
+
+  defs:
+    checked:
+      input:
+        n: !int
+      nodes:
+        x:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:double
+          input:
+            n: ${input.n}
+          output: int
+      output: ${x.output}
+      asserts:
+        - "input.n >= 0"
+        - "x.output < 100"
+
+  nodes:
+    map_it:
+      kind: map
+      call: checked
+      over: ${input.vs}
+      input:
+        n: ${item}
+  output: ${map_it.output}
+python_flow: |2
+
+  id: dm
+  name: dm
+  input:
+    vs: !list(int)
+
+  defs:
+    checked:
+      input:
+        n: !int
+      nodes:
+        x:
+          kind: code
+          code: tests.engine._compose_codefns:double
+          input:
+            n: ${input.n}
+          output: int
+      output: ${x.output}
+      asserts:
+        - "input.n >= 0"
+        - "x.output < 100"
+
+  nodes:
+    map_it:
+      kind: map
+      call: checked
+      over: ${input.vs}
+      input:
+        n: ${item}
+  output: ${map_it.output}
+inputs:
+  vs: [1, -1, 3]
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: assertion.failed
+      frames:
+      - label: flow.yaml
+        range: [24, 3, 24, 9]
+      - label: flow.yaml
+        range: [20, 9, 20, 23]
+      message: 'node ''map_it#1/__start__'' post-assert failed: input.n >= 0'
+      node: map_it#1/__start__
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        vs: [1, -1, 3]
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        vs: [1, -1, 3]
+  - [node_started, map_it]
+  - - node_expanded
+    - map_it
+    - prune_ids: []
+      seed:
+      - n: 1
+      - n: -1
+      - n: 3
+  - [node_started, map_it/__start__]
+  - - node_succeeded
+    - map_it/__start__
+    - value: {}
+  - [node_started, map_it#0/__start__]
+  - - node_succeeded
+    - map_it#0/__start__
+    - value:
+        n: 1
+  - [node_started, map_it#1/__start__]
+  - - node_failed
+    - map_it#1/__start__
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [24, 3, 24, 9]
+        - label: flow.yaml
+          range: [20, 9, 20, 23]
+        message: 'node ''map_it#1/__start__'' post-assert failed: input.n >= 0'
+        node: map_it#1/__start__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        vs: [1, -1, 3]
+  - - NodeStarted
+    - node_id: map_it
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: 1
+        - n: -1
+        - n: 3
+      node_id: map_it
+  - - NodeStarted
+    - node_id: map_it/__start__
+  - - NodeSucceeded
+    - node_id: map_it/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: map_it#0/__start__
+  - - NodeSucceeded
+    - node_id: map_it#0/__start__
+      output:
+        n: 1
+  - - NodeStarted
+    - node_id: map_it#1/__start__
+  - - NodeFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [24, 3, 24, 9]
+        - label: flow.yaml
+          range: [20, 9, 20, 23]
+        message: 'node ''map_it#1/__start__'' post-assert failed: input.n >= 0'
+        node: map_it#1/__start__
+  - - RunFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [24, 3, 24, 9]
+        - label: flow.yaml
+          range: [20, 9, 20, 23]
+        message: 'node ''map_it#1/__start__'' post-assert failed: input.n >= 0'
+        node: map_it#1/__start__

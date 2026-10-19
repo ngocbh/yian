@@ -1,0 +1,116 @@
+kind: run
+flow: |2
+
+  id: shadow
+  name: shadow
+  input:
+    x: !Optional(str)
+  defs:
+    child:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: !Optional(str) "fallback"
+      output: Optional(str)
+  nodes:
+    go:
+      kind: call
+      call: child
+      input:
+        topic: ${input.x}
+  output: ${go.output}
+python_flow: |2
+
+  id: shadow
+  name: shadow
+  input:
+    x: !Optional(str)
+  defs:
+    child:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: !Optional(str) "fallback"
+      output: Optional(str)
+  nodes:
+    go:
+      kind: call
+      call: child
+      input:
+        topic: ${input.x}
+  output: ${go.output}
+inputs:
+  x: null
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: null
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        x: null
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        x: null
+  - [node_started, go]
+  - - node_expanded
+    - go
+    - prune_ids: []
+      seed:
+        topic: null
+  - [node_started, go/__start__]
+  - - node_succeeded
+    - go/__start__
+    - value:
+        topic: null
+  - [node_started, go/child]
+  - [node_succeeded, go/child]
+  - [node_started, go/__end__]
+  - - node_succeeded
+    - go/__end__
+    - commit_target: go
+  - [node_started, __end__]
+  - [node_succeeded, __end__]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        x: null
+  - - NodeStarted
+    - node_id: go
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          topic: null
+      node_id: go
+  - - NodeStarted
+    - node_id: go/__start__
+  - - NodeSucceeded
+    - node_id: go/__start__
+      output:
+        topic: null
+  - - NodeStarted
+    - node_id: go/child
+  - - NodeSucceeded
+    - node_id: go/child
+  - - NodeStarted
+    - node_id: go/__end__
+  - - NodeSucceeded
+    - commit_as: go
+      node_id: go/__end__
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+  - [RunSucceeded]

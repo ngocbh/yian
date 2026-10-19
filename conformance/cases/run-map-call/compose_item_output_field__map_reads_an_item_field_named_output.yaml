@@ -1,0 +1,196 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Row: {output: str}
+  input:
+    rows: !list(Row)
+  defs:
+    leaf:
+      input:
+        x: !str
+      nodes:
+        up:
+          kind: code
+          input:
+            x: ${input.x}
+          output: str
+          code: "return inputs['x'].toUpperCase()"
+      output: ${up.output}
+  nodes:
+    m:
+      kind: map
+      over: ${input.rows}
+      call: leaf
+      input:
+        x: ${item.output}
+  output: ${m.output}
+python_flow: |
+  id: p
+  name: p
+  typedefs:
+    Row: {output: str}
+  input:
+    rows: !list(Row)
+  defs:
+    leaf:
+      input:
+        x: !str
+      nodes:
+        up:
+          kind: code
+          input:
+            x: ${input.x}
+          output: str
+          code: return inputs['x'].upper()
+      output: ${up.output}
+  nodes:
+    m:
+      kind: map
+      over: ${input.rows}
+      call: leaf
+      input:
+        x: ${item.output}
+  output: ${m.output}
+inputs:
+  rows:
+  - output: a
+  - output: b
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: [A, B]
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        rows:
+        - output: a
+        - output: b
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        rows:
+        - output: a
+        - output: b
+  - [node_started, m]
+  - - node_expanded
+    - m
+    - prune_ids: []
+      seed:
+      - x: a
+      - x: b
+  - [node_started, m/__start__]
+  - - node_succeeded
+    - m/__start__
+    - value: {}
+  - [node_started, m#0/__start__]
+  - - node_succeeded
+    - m#0/__start__
+    - value:
+        x: a
+  - [node_started, m#1/__start__]
+  - - node_succeeded
+    - m#1/__start__
+    - value:
+        x: b
+  - [node_started, m#0/up]
+  - - node_succeeded
+    - m#0/up
+    - value: A
+  - [node_started, m#1/up]
+  - - node_succeeded
+    - m#1/up
+    - value: B
+  - [node_started, m#0/__end__]
+  - - node_succeeded
+    - m#0/__end__
+    - value: A
+  - [node_started, m#1/__end__]
+  - - node_succeeded
+    - m#1/__end__
+    - value: B
+  - [node_started, m/__end__]
+  - - node_succeeded
+    - m/__end__
+    - commit_target: m
+      value: [A, B]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: [A, B]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        rows:
+        - output: a
+        - output: b
+  - - NodeStarted
+    - node_id: m
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - x: a
+        - x: b
+      node_id: m
+  - - NodeStarted
+    - node_id: m/__start__
+  - - NodeSucceeded
+    - node_id: m/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: m#0/__start__
+  - - NodeSucceeded
+    - node_id: m#0/__start__
+      output:
+        x: a
+  - - NodeStarted
+    - node_id: m#1/__start__
+  - - NodeSucceeded
+    - node_id: m#1/__start__
+      output:
+        x: b
+  - - NodeStarted
+    - node_id: m#0/up
+  - - NodeSucceeded
+    - node_id: m#0/up
+      output: A
+  - - NodeStarted
+    - node_id: m#1/up
+  - - NodeSucceeded
+    - node_id: m#1/up
+      output: B
+  - - NodeStarted
+    - node_id: m#0/__end__
+  - - NodeSucceeded
+    - node_id: m#0/__end__
+      output: A
+  - - NodeStarted
+    - node_id: m#1/__end__
+  - - NodeSucceeded
+    - node_id: m#1/__end__
+      output: B
+  - - NodeStarted
+    - node_id: m/__end__
+  - - NodeSucceeded
+    - commit_as: m
+      node_id: m/__end__
+      output: [A, B]
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: [A, B]
+  - - RunSucceeded
+    - output: [A, B]

@@ -2020,7 +2020,7 @@ interface JsonFrame {
  *   contains itself` at the entry holding it; anything else (a `Date`, a `Map`, a class
  *   instance, a `FileRef` under `"refuse"`) is `<valueRepr> is not a JSON value`.
  */
-function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
+export function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
   const stack: JsonFrame[] = [];
   const active = new Set<object>();
   const done = new Map<object, Value>();

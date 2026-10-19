@@ -10,8 +10,14 @@
  * `isinstance` is a special form: the first argument is an expression, the second a bare type
  * name looked up in the type table (`types`, a `Map`), never a reference.
  *
- * Left for later: the node, case and loop tests (from `test_a_node_starts_with_an_empty_type_table`
- * on) land with compose and `run.ts`.
+ * Ported: the CASE half of `test_a_node_starts_with_an_empty_type_table`.
+ *
+ * Later (T3-8, LOOP): `test_loop_respawn_copies_the_type_table`.
+ *
+ * Later (T4-9): `test_case_forward_routes_with_its_type_table`.
+ *
+ * Left for later: the rest of the node, case and loop tests (the loaded-flow half of
+ * `test_a_node_starts_with_an_empty_type_table` and the run tests) land with compose and `run.ts`.
  */
 
 import { expect, test } from "bun:test";
@@ -42,6 +48,7 @@ import {
   rewriteTemplateRefs,
   scanTemplate,
 } from "../../src/expr/template.ts";
+import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { fieldOf } from "../../src/typesys/values.ts";
 
@@ -331,4 +338,12 @@ test("traced isinstance records one route over the first argument", () => {
   const child = route.children[0]!;
   expect(child.kind).toBe("source");
   expect(child.source).toEqual(new SourceRef("run", 0, ["output"]));
+});
+
+// --- nodes --- //
+
+test("a node starts with an empty type table", () => {
+  const node = new CaseNode("route", [new Case("s", { when: "isinstance(order, Sell)" })]);
+  expect(node.types).toEqual(new Map());
+  expect(node.types.size).toBe(0);
 });

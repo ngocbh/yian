@@ -2,12 +2,17 @@
  * The node-level halves of `tests/engine/test_eval_node.py` rows that need node kinds, called on
  * the node directly.
  *
+ * Ported: `test_case_rejects_a_non_origin_predicate_carrier`.
+ *
  * Ported (adapted): `test_map_over_accepts_a_binding_carrier`,
- * `test_unbaked_composite_is_a_setup_fault` (the CALL and MAP rows) and
+ * `test_unbaked_composite_is_a_setup_fault` (the CALL and MAP rows),
+ * `test_case_without_predicate_is_a_setup_fault`,
+ * `test_case_with_non_string_predicate_is_a_setup_fault` and
  * `test_map_over_not_a_list_message_is_byte_identical`.
  *
  * Changed: Python drives each node through `eval_node`; here MAP's reserved source goes through
- * `bindReserved` and the setup fault through `run`, which reject or throw the node's own error.
+ * `bindReserved` and the setup faults through `run`, which reject or throw the node's own error.
+ * The non-string `when` is a cast. `RangeError` stands for Python's `ValueError`.
  * `test_map_over_accepts_a_binding_carrier` checks the resolved `over` list, not the `Grow` the
  * MAP body builds from it. The not-a-list message is pinned as the golden format's text.
  *
@@ -15,6 +20,9 @@
  * (the carrier's, else `null`).
  *
  * Later (T3-8, LOOP): the LOOP row of `test_unbaked_composite_is_a_setup_fault`.
+ *
+ * Later (T4-9): `test_case_predicate_failure_selects_the_active_ordered_origin` and
+ * `test_source_free_case_predicate_failure_falls_back_to_the_node_origin`.
  *
  * Later (T4-6): the evaluator and the other rows.
  */
@@ -25,6 +33,7 @@ import { OriginRef } from "../../src/diagnostics.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
+import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { Assertion, Binding } from "../../src/nodes/contracts.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
@@ -68,4 +77,29 @@ test("map over not a list message is byte identical", () => {
     expect((caught as BindingError).message).toBe("MAP node 'm': `over` (${input.bad}) did not resolve to a list");
     expect((caught as BindingError).origin).toBe(source instanceof Binding ? origin : null);
   }
+});
+
+test("case without predicate is a setup fault", async () => {
+  // A compiled CASE branch must have its validated predicate.
+  const node = new CaseNode("case", [new Case("branch")]);
+
+  await expect(node.run({})).rejects.toThrow(RangeError);
+  await expect(node.run({})).rejects.toThrow("node 'case' case 'branch' has no `when` expression");
+});
+
+test("case with non string predicate is a setup fault", async () => {
+  // Malformed code-built CASE state must not look like node execution.
+  const malformed = new Case("branch", { when: 42 as unknown as string });
+  const node = new CaseNode("case", [malformed]);
+
+  await expect(node.run({})).rejects.toThrow(TypeError);
+  await expect(node.run({})).rejects.toThrow("node 'case' case 'branch' `when` must be a string");
+});
+
+test("case rejects a non origin predicate carrier", () => {
+  // Code-built CASE provenance must stay source-neutral.
+  const make = () => new Case("branch", { when: "true", origin: "flow.yaml:12" as unknown as OriginRef });
+
+  expect(make).toThrow(TypeError);
+  expect(make).toThrow("CASE predicate origin");
 });

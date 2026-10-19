@@ -1,7 +1,7 @@
 /**
  * Default and structural backward on nodes: a port of `tests/engine/test_backward_structural.py`.
  * Ported: `test_behavioral_backward_stops_with_empty_channels_and_static_capture` (Python's bare
- * `Node` is a minimal subclass),
+ * `Node` is a minimal subclass), `test_case_backward_inventory_excludes_generated_control_inputs`,
  * `test_list_end_keeps_whole_list_text_unchanged_and_records_each_output_position`,
  * `test_failed_boundaries_forward_text_only_when_inputs_and_layout_were_captured`,
  * `test_successful_null_output_is_a_bare_contributor_but_zero_output_has_none`.
@@ -15,7 +15,7 @@
  * `test_end_projects_its_zero_one_and_many_output_layouts` appends an END's extra assertion param
  * by replacing `params`, which TS types as read-only.
  *
- * Later (T3-8): `test_case_backward_inventory_excludes_generated_control_inputs`,
+ * Later (T3-8, LOOP):
  * `test_stopping_loop_projects_all_carried_fields_without_reevaluating_predicate`,
  * `test_stopped_loop_failure_does_not_route_an_unaccepted_carried_output`.
  * Later (T3-9, T4-x): `test_agent_capture_keeps_variable_inventory_separate_from_delivered_inputs`.
@@ -41,6 +41,7 @@ import {
   validateBackwardResult,
 } from "../../src/nodes/base.ts";
 import { applyDefaults } from "../../src/nodes/binding.ts";
+import { CaseNode } from "../../src/nodes/case/node.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
@@ -77,6 +78,13 @@ test("behavioral backward stops with empty channels and static capture", () => {
   expect(node.captureBackwardContext()).toEqual({});
   expect(node.backwardInputNames()).toEqual(["topic"]);
   expect(new BareNode("empty").backwardInputNames()).toEqual([]);
+});
+
+test("case backward inventory excludes generated control inputs", () => {
+  const node = new CaseNode("choose", []);
+  node.params = ["topic", "__r0", "__on", "__r12", "__remarks"].map((name) => new Parameter(name));
+
+  expect(node.backwardInputNames()).toEqual(["topic", "__remarks"]);
 });
 
 test.each([

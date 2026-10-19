@@ -823,10 +823,13 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       if (skills === "all") {
         manifest.skills = "all";
       } else {
-        if (!isList(skills) || !skills.every((skill) => typeof skill === "string")) {
-          throw new TypeError(`${path}.skills: expected "all" or an array of strings`);
-        }
-        if (skills.length > 0) manifest.skills = [...skills].sort(compareCodeUnits);
+        if (!isList(skills)) throw new TypeError(`${path}.skills: expected "all" or an array, got ${typeName(skills)}`);
+        skills.forEach((skill, index) => {
+          if (typeof skill !== "string") {
+            throw new TypeError(`${path}.skills[${index}]: expected a string, got ${typeName(skill)}`);
+          }
+        });
+        if (skills.length > 0) manifest.skills = [...(skills as string[])].sort(compareCodeUnits);
       }
       // Left out when false so flows that never opt in keep their identity.
       if (agent.steerable) manifest.steerable = true;

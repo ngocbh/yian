@@ -138,7 +138,8 @@
  * execution-scope projection; and for AGENT: unset optional keys left out, `retries` present at
  * zero and a forged count refused, the run-resolved and derived fields (`llmConfig`,
  * `llmConfigLabel`, `wiresLlmConfig`, `llmValueTypes`, `callTime`, `hostCredentials`) outside
- * identity, and an unknown field and `skills` or `tools` that aren't arrays refused.
+ * identity, and an unknown field, `skills` or `tools` that aren't arrays and a skill that isn't a
+ * string refused.
  *
  * Later (T3-22): the loader rows `test_loaded_flow_stores_only_exact_parameter_carriers`,
  * `test_flow_fingerprint_ignores_comments_and_python_object_identity`,
@@ -171,7 +172,7 @@ import { createHash } from "node:crypto";
 
 import { expansionDigest, flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
-import { OriginRef } from "../../src/diagnostics.ts";
+import { compareCodeUnits, OriginRef } from "../../src/diagnostics.ts";
 import {
   DeclSite,
   MemoryDecl,
@@ -732,7 +733,7 @@ function plainMapping(canonical: JsonValue): unknown {
   if (value.type !== "mapping") return value.value;
   const entries = value.entries as JsonObject[];
   const keys = entries.map((entry) => (entry.key as JsonObject).value as string);
-  expect(keys).toEqual([...keys].sort());
+  expect(keys).toEqual([...keys].sort(compareCodeUnits));
   return Object.fromEntries(entries.map((entry, index) => [keys[index], plainMapping(entry.value!)]));
 }
 
@@ -894,9 +895,11 @@ test("an AGENT leaves out unset variables, skills, steerable, system prompt, mem
   expect(manifest.retries).toBe(2);
 });
 
-test("compose/test_agent_skills_yaml.py::test_skills_are_identity_but_empty_and_order_are_not", () => {
+test("test_skills_are_identity_but_empty_and_order_are_not", () => {
   const skills = (granted: readonly string[] | "all") =>
     flowFingerprint(singleNodeFlow(new AgentNode("node", { prompt: "p", skills: granted })));
+  const granted = (names: readonly string[] | "all") =>
+    nodeManifest(singleNodeFlow(new AgentNode("node", { skills: names })), "node").skills;
   const base = flowFingerprint(singleNodeFlow(new AgentNode("node", { prompt: "p" })));
   const ab = skills(["a", "b"]);
 
@@ -904,8 +907,6 @@ test("compose/test_agent_skills_yaml.py::test_skills_are_identity_but_empty_and_
   expect(ab).not.toBe(base);
   expect(skills(["b", "a"])).toBe(ab);
   expect([base, ab]).not.toContain(skills("all"));
-  const granted = (names: readonly string[] | "all") =>
-    nodeManifest(singleNodeFlow(new AgentNode("node", { skills: names })), "node").skills;
   expect(granted(["b", "a"])).toEqual(["a", "b"]);
   expect(granted("all")).toBe("all");
 });
@@ -949,7 +950,13 @@ test.each([
     "skills that aren't an array",
     (node: AgentNode) => Object.assign(node, { skills: 5 }),
     TypeError,
-    'flow.nodes.node.skills: expected "all" or an array of strings',
+    'flow.nodes.node.skills: expected "all" or an array, got number',
+  ],
+  [
+    "a skill that isn't a string",
+    (node: AgentNode) => Object.assign(node, { skills: ["a", 1] }),
+    TypeError,
+    "flow.nodes.node.skills[1]: expected a string, got number",
   ],
   [
     "tools that aren't an array",

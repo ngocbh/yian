@@ -20,13 +20,25 @@ import { expect, test } from "bun:test";
 import { MemoryMutation } from "../../src/memory/contracts.ts";
 import { MemoryProposal } from "../../src/runtime/contracts.ts";
 
+/** Assert that `fn` throws exactly `cls` with exactly `message`. */
+function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
+  let caught: unknown;
+  try {
+    fn();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(cls);
+  expect((caught as Error).message).toBe(message);
+}
+
 test("memory proposal owns detached mutations in supplied order", () => {
   const payload = { values: [1n] };
   const mutations = [new MemoryMutation("second", payload), new MemoryMutation("first", {})];
   const proposal = new MemoryProposal("agent", mutations);
   payload.values.push(2n);
   expect(() => {
-    ((proposal.mutations[0]!.payload as { values: bigint[] }).values as bigint[]).length = 0;
+    (proposal.mutations[0]!.payload as { values: bigint[] }).values.length = 0;
   }).toThrow(TypeError);
   expect(proposal.mutations.map((mutation) => mutation.mutationId)).toEqual(["second", "first"]);
   expect(proposal.mutations[0]!.payload).toEqual({ values: [1n] });
@@ -38,8 +50,8 @@ test("memory proposal owns detached mutations in supplied order", () => {
     (proposal as { mutations: readonly MemoryMutation[] }).mutations = [];
   }).toThrow(TypeError);
   expect(() => new MemoryProposal("agent", new Set(mutations) as never)).toThrow(TypeError);
-  expect(() => new MemoryProposal("agent", [mutations[0]!, mutations[0]!])).toThrow(RangeError);
-  expect(() => new MemoryProposal("agent", [mutations[0]!, mutations[0]!])).toThrow(/unique/);
+  const repeated = [mutations[0]!, mutations[0]!];
+  expectError(() => new MemoryProposal("agent", repeated), RangeError, "mutation IDs must be unique");
   expect(new MemoryProposal("agent", []).mutations).toEqual([]);
 });
 

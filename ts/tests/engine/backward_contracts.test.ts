@@ -22,7 +22,9 @@
  * by field. One row per check, with its class and message, for the transfer half of
  * `BackwardAttribution`, `AttributedBackwardResult`, `MemoryProposal`'s memory key,
  * `BackwardFailure` (stage before code) and `BackwardOutcome`; a `MemoryOperationFailure` cause is
- * kept by identity.
+ * kept by identity; a transfer attribution keeps a frozen copy of its parents and a root seed is
+ * valid; an unreached occurrence with no material is valid; a backward failure keeps each field it
+ * was given.
  *
  * Changed:
  * - Infinity is a backward JSON value (decision 34), so the `output=float("inf")` row is accepted;
@@ -30,10 +32,9 @@
  * - `BackwardResult`, `BackwardContext` and `AttributedBackwardResult` hold frozen copies, with no
  *   copy on read: a reader's edit throws a `TypeError` where Python changes a private copy.
  *   `FrozenInstanceError` is the `TypeError` an assignment to a frozen object throws in a module.
- * - `BackwardOutcome` and `BackwardFailure` keep the frozen carriers they were given (feedback,
- *   failure, learning, scope, a `MemoryOperationFailure` cause), where Python copies them: where
- *   Python asserts `is not`, the test asserts the same frozen value. With no `replace`, the
- *   outcome copy is a second outcome built from the first's fields.
+ * - `BackwardOutcome` keeps the frozen feedback, failure and learning result it was given, where
+ *   Python copies them: where Python asserts `is not`, the test asserts the same frozen value.
+ *   With no `replace`, the outcome copy is a second outcome built from the first's fields.
  * - Message batches, declared names and parents are arrays, not tuples. Dataclass `!=` is
  *   `not.toEqual`; each rejected row names its one error class, where Python accepts either
  *   `TypeError` or `ValueError` (`RangeError`).
@@ -488,36 +489,60 @@ test.each([
   expect(failure.trace[0]).toBe(origin);
 });
 
-test.each<[string, () => unknown, typeof TypeError | typeof RangeError]>([
-  ["array inputs", () => new BackwardContext([] as never), TypeError],
-  ["a class instance in the inputs", () => new BackwardContext({ text: new Point() }), TypeError],
-  ["a NaN output", () => new BackwardContext({}, { output: NaN }), RangeError],
-  ["a duplicate input name", () => new BackwardContext({}, { inputNames: ["text", "text"] }), RangeError],
-  ["a non-text variable name", () => new BackwardContext({}, { variableNames: [7] as never }), TypeError],
-  ["a boolean start sequence", () => new BackwardContext({}, { nodeStartedSeq: true as never }), TypeError],
-  ["a zero start sequence", () => new BackwardContext({}, { nodeStartedSeq: 0 }), RangeError],
-  ["array node data", () => new BackwardContext({}, { nodeData: [] as never }), TypeError],
-  ["an unknown backward status", () => new BackwardOutcome("incomplete" as never), RangeError],
-  ["a failed outcome without a failure", () => new BackwardOutcome("failed"), RangeError],
-  ["record feedback", () => new BackwardOutcome("succeeded", { feedback: {} as never }), TypeError],
+test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string | null]>([
+  ["array inputs", () => new BackwardContext([] as never), TypeError, null],
+  ["a class instance in the inputs", () => new BackwardContext({ text: new Point() }), TypeError, null],
+  ["a NaN output", () => new BackwardContext({}, { output: NaN }), RangeError, null],
+  ["a duplicate input name", () => new BackwardContext({}, { inputNames: ["text", "text"] }), RangeError, null],
+  ["a non-text variable name", () => new BackwardContext({}, { variableNames: [7] as never }), TypeError, null],
+  ["a boolean start sequence", () => new BackwardContext({}, { nodeStartedSeq: true as never }), TypeError, null],
+  ["a zero start sequence", () => new BackwardContext({}, { nodeStartedSeq: 0 }), RangeError, null],
+  ["array node data", () => new BackwardContext({}, { nodeData: [] as never }), TypeError, null],
+  [
+    "an unknown backward status",
+    () => new BackwardOutcome("incomplete" as never),
+    RangeError,
+    "backward status must be 'succeeded' or 'failed'",
+  ],
+  [
+    "a failed outcome without a failure",
+    () => new BackwardOutcome("failed"),
+    RangeError,
+    "failed backward requires a failure",
+  ],
+  [
+    "record feedback",
+    () => new BackwardOutcome("succeeded", { feedback: {} as never }),
+    TypeError,
+    "feedback must be a BackwardResult or null",
+  ],
   [
     "a succeeded outcome with a failure",
     () => new BackwardOutcome("succeeded", { failure: new BackwardFailure("learn", "x", "x") }),
     RangeError,
+    "succeeded backward cannot carry a failure",
   ],
-  ["an empty failure code", () => new BackwardFailure("learn", "", "detail"), RangeError],
+  [
+    "an empty failure code",
+    () => new BackwardFailure("learn", "", "detail"),
+    RangeError,
+    "backward failure code must be non-empty",
+  ],
   [
     "a boolean failure start sequence",
     () => new BackwardFailure("learn", "x", "detail", { nodeStartedSeq: true as never }),
     TypeError,
+    "node_started_seq must be an integer or null",
   ],
   [
     "an error as a failure cause",
     () => new BackwardFailure("learn", "x", "detail", { cause: new RangeError("bad") as never }),
     TypeError,
+    "cause must be a Failure, MemoryOperationFailure, or null",
   ],
-])("backward contracts reject invalid snapshots and outcomes (%s)", (_name, factory, cls) => {
-  expect(factory).toThrow(cls);
+])("backward contracts reject invalid snapshots and outcomes (%s)", (_name, factory, cls, message) => {
+  if (message === null) expect(factory).toThrow(cls);
+  else expectError(factory, cls, message);
 });
 
 test.each<[string, unknown, string]>([
@@ -923,7 +948,6 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>
     TypeError,
     "backward failure code must be a string",
   ],
-  ["an empty code", () => new BackwardFailure("learn", "", "y"), RangeError, "backward failure code must be non-empty"],
   [
     "an empty stage and a number code",
     () => new BackwardFailure("", 1 as never, "y"),
@@ -1031,34 +1055,10 @@ test("a backward failure keeps its attribution", () => {
 
 test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>([
   [
-    "an unknown status",
-    () => new BackwardOutcome("incomplete" as never),
-    RangeError,
-    "backward status must be 'succeeded' or 'failed'",
-  ],
-  [
-    "record feedback",
-    () => new BackwardOutcome("succeeded", { feedback: {} as never }),
-    TypeError,
-    "feedback must be a BackwardResult or null",
-  ],
-  [
     "a plain failure",
     () => new BackwardOutcome("failed", { failure: {} as never }),
     TypeError,
     "failure must be a BackwardFailure or null",
-  ],
-  [
-    "a succeeded outcome with a failure",
-    () => new BackwardOutcome("succeeded", { failure: new BackwardFailure("learn", "x", "y") }),
-    RangeError,
-    "succeeded backward cannot carry a failure",
-  ],
-  [
-    "a failed outcome without a failure",
-    () => new BackwardOutcome("failed"),
-    RangeError,
-    "failed backward requires a failure",
   ],
   [
     "a plain learning result",

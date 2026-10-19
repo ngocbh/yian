@@ -565,8 +565,11 @@ test("mutations, proposals and failures name the memory key", () => {
   const proposal = new MemoryProposal("notes", [mutation]);
   expect(proposal.memory).toBe("notes");
   expect(proposal.mutations).toEqual([mutation]);
-  expect(() => new MemoryProposal("notes", [mutation, new MemoryMutation("m1", {})])).toThrow(RangeError);
-  expect(() => new MemoryProposal("notes", [mutation, new MemoryMutation("m1", {})])).toThrow(/unique/);
+  expectError(
+    () => new MemoryProposal("notes", [mutation, new MemoryMutation("m1", {})]),
+    RangeError,
+    "mutation IDs must be unique",
+  );
   const cause = new MemoryOperationFailure("learn", "notes.failed", "boom", false);
   expect(new LearningFailure("notes", "learn", cause).memory).toBe("notes");
   expect("frameRef" in new LearningFailure("notes", "commit", cause)).toBe(false);

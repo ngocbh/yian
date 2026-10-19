@@ -523,15 +523,6 @@ export class MemoryProposal {
   }
 }
 
-/** The optional `BackwardFailure` fields checked as strings, with their names in messages. */
-const FAILURE_TEXT_FIELDS = [
-  ["runId", "run_id"],
-  ["nodeId", "node_id"],
-  ["memory", "memory"],
-  ["causeType", "cause_type"],
-  ["traceback", "traceback"],
-] as const;
-
 /**
  * An attributed failure from one backward or memory operation. Frozen.
  *
@@ -603,9 +594,14 @@ export class BackwardFailure {
       if (!value) throw new RangeError(`backward failure ${name} must be non-empty`);
     }
     if (typeof message !== "string") throw new TypeError("backward failure message must be a string");
-    const text = { runId, nodeId, memory, causeType, traceback };
-    for (const [field, name] of FAILURE_TEXT_FIELDS) {
-      if (text[field] !== null && typeof text[field] !== "string") {
+    for (const [name, value] of [
+      ["run_id", runId],
+      ["node_id", nodeId],
+      ["memory", memory],
+      ["cause_type", causeType],
+      ["traceback", traceback],
+    ] as const) {
+      if (value !== null && typeof value !== "string") {
         throw new TypeError(`backward failure ${name} must be a string or null`);
       }
     }
@@ -616,10 +612,7 @@ export class BackwardFailure {
     if (scope !== null && !isExactly(scope, ExecutionScope)) {
       throw new TypeError("scope must be an ExecutionScope or null");
     }
-    let retained: Failure | MemoryOperationFailure | null = cause;
-    if (isExactly(cause, Failure)) {
-      retained = retainFailure(cause);
-    } else if (cause !== null && !isExactly(cause, MemoryOperationFailure)) {
+    if (cause !== null && !isExactly(cause, Failure) && !isExactly(cause, MemoryOperationFailure)) {
       throw new TypeError("cause must be a Failure, MemoryOperationFailure, or null");
     }
     this.stage = stage;
@@ -630,7 +623,7 @@ export class BackwardFailure {
     this.nodeId = nodeId;
     this.nodeStartedSeq = nodeStartedSeq;
     this.memory = memory;
-    this.cause = retained;
+    this.cause = isExactly(cause, Failure) ? retainFailure(cause) : cause;
     this.causeType = causeType;
     this.traceback = traceback;
     Object.freeze(this);
@@ -648,7 +641,7 @@ export type BackwardStatus = "succeeded" | "failed";
 export class BackwardOutcome {
   /** Whether the backward attempt succeeded. */
   readonly status: BackwardStatus;
-  /** The completed flow-level feedback, when available, also when a later learning operation fails. */
+  /** The completed flow-level feedback when available, even if a later learning operation failed. */
   readonly feedback: BackwardResult | null;
   /** The failed attempt's diagnostic; `null` on success. */
   readonly failure: BackwardFailure | null;

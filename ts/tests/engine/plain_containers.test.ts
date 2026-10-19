@@ -62,6 +62,20 @@ function intakeError(value: unknown, where = "output"): TypeCheckError {
   throw new Error("fromHost did not throw");
 }
 
+/** Return Proxy traps that all throw, so a test fails if intake runs one. */
+function throwingTraps(): ProxyHandler<object> {
+  const boom = (): never => {
+    throw new RangeError("boom");
+  };
+  return {
+    get: boom,
+    ownKeys: boom,
+    getPrototypeOf: boom,
+    getOwnPropertyDescriptor: boom,
+    has: boom,
+  };
+}
+
 describe("fromHost", () => {
   test("a plain value becomes an equal fresh value", () => {
     // Host intake returns a fresh value; Python returns a plain value itself.
@@ -182,7 +196,7 @@ describe("fromHost", () => {
     expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
   });
 
-  // Design 8.1: intake reads only own data properties, so no host code runs during the check.
+  // Intake reads only own data properties, so no host code runs during the check.
   test("a getter is refused without being run", () => {
     let reads = 0;
     const value = {
@@ -300,19 +314,25 @@ describe("fromHost", () => {
   });
 
   test("a Proxy is refused without running a trap", () => {
-    const boom = (): never => {
-      throw new RangeError("boom");
-    };
-    const traps = {
-      get: boom,
-      ownKeys: boom,
-      getPrototypeOf: boom,
-      getOwnPropertyDescriptor: boom,
-      has: boom,
-    };
-    const error = intakeError({ s: new Proxy({}, traps) });
+    const error = intakeError({ s: new Proxy({}, throwingTraps()) });
     expect(error.message).toBe("output at s: Proxy is not a yian value");
     expect(error.path).toEqual(["s"]);
+  });
+
+  test("an object whose prototype is a Proxy is named object, running no trap", () => {
+    const value = { a: Object.create(new Proxy({}, throwingTraps())) as unknown };
+    const error = intakeError(value);
+    expect(error.message).toBe("output at a: object is not a yian value");
+    expect(error.path).toEqual(["a"]);
+  });
+
+  test("an instance whose constructor is a Proxy is named object, running no trap", () => {
+    function F(): void {}
+    F.prototype.constructor = new Proxy(() => 1, throwingTraps());
+    const value = { a: new (F as unknown as new () => object)() };
+    const error = intakeError(value);
+    expect(error.message).toBe("output at a: object is not a yian value");
+    expect(error.path).toEqual(["a"]);
   });
 
   test.each<[string, unknown, string, (string | number)[]]>([

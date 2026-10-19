@@ -585,14 +585,14 @@ binds it. Tool errors, `FunctionTool` and `McpServer` are recognized by brand, n
 `instanceof`, so ones built against another copy of yian (an npm install beside a
 workspace one) are accepted and classified.
 
-Arguments enter through host value intake, so a non-yian value (`undefined`,
-`NaN`, a `Date`, a getter or a `Proxy`) anywhere in them is refused, and reach the tool as fresh host values:
-an int within ±(2^53−1) arrives as a `number`, a larger one as a `bigint`, and an
-infinite float as a real `Infinity`, which a tool may also return. `isConcurrencySafe(args)`
-is opt-in, so a tool without it is unsafe. It receives the host form of the arguments,
-and a call counts as safe only when it returns exactly `true`; a throw or any other
-result counts as unsafe. Once the AGENT loop is ported, consecutive safe calls in one
-turn may run together.
+Arguments enter through host value intake, so a non-yian value (`undefined`, `NaN`, a
+`Date`, an accessor property (getter or setter) or a `Proxy`) anywhere in them is refused,
+and reach the tool as fresh host values: an int within ±(2^53−1) arrives as a `number`, a
+larger one as a `bigint`, and an infinite float as a real `Infinity`, which a tool may also
+return. `isConcurrencySafe(args)` is opt-in, so a tool without it is unsafe. It receives
+the host form of the arguments, and a call counts as safe only when it returns exactly
+`true`; a throw or any other result counts as unsafe. Once the AGENT loop is ported,
+consecutive safe calls in one turn may run together.
 
 ### TOOL retries
 

@@ -365,8 +365,9 @@ fresh yian value or throws `TypeCheckError` with `path` and the message
 
 Like `JSON.stringify`, intake skips symbol keys, non-enumerable keys and extra array
 properties. A `TypedValue` handed in is refused. Intake reads only own data properties, so no
-host code runs while it reads a value. `fromHost` refuses a top-level `undefined` too: the tool caller reads it as `null`
-first, and a CODE body returning it fails. Depth is checked separately, by `rejectDeepNesting`.
+host code runs while it reads a value. `fromHost` refuses a top-level `undefined` too: the tool
+caller reads it as `null` first, and a CODE body returning it fails. Depth is checked
+separately, by `rejectDeepNesting`.
 
 ## `Type` — structure beyond the bare tag
 

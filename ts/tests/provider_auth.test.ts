@@ -1528,12 +1528,9 @@ function never(): Promise<never> {
   return new Promise(() => {});
 }
 
-/** An `awaitCallback` answering with `query` and, unless `query` names one, the sent state. */
+/** An `awaitCallback` answering with the state sent in `urls[0]`, then `&` and `query`. */
 function callbackWith(urls: string[], query: string): (redirectUri: string) => string {
-  return (redirectUri) => {
-    const state = new URL(urls[0]!).searchParams.get("state")!;
-    return redirectUri + "?" + query + (query.includes("state") ? "" : "&state=" + state);
-  };
+  return (redirectUri) => redirectUri + "?state=" + new URL(urls[0]!).searchParams.get("state") + "&" + query;
 }
 
 const GATEWAY = "gw-SENTINEL-token-9876";
@@ -1657,46 +1654,50 @@ describe("OpenAIAuth", () => {
     expect(http.calls).toEqual([]);
   });
 
-  const invalidCallbacks: [string, (urls: string[]) => (uri: string) => unknown, string][] = [
-    ["state=bad", (urls) => callbackWith(urls, "state=bad"), "OpenAI login state did not match"],
+  const REDIRECT = "http://localhost:1455/auth/callback";
+  // Each row turns the valid callback URL (the redirect URI with the sent state) into the result.
+  const invalidCallbacks: [string, (valid: string) => unknown, string][] = [
+    ["state=bad", () => REDIRECT + "?state=bad&code=c", "OpenAI login state did not match"],
     [
       "state=bad&state=also-bad",
-      (urls) => callbackWith(urls, "state=bad&state=also-bad"),
+      () => REDIRECT + "?state=bad&state=also-bad&code=c",
       "OpenAI login state did not match",
     ],
-    ["error=denied", (urls) => callbackWith(urls, "error=denied"), "OpenAI browser authorization was denied"],
+    ["a doubled ?", (valid) => valid.replace("?", "??") + "&code=c", "OpenAI login state did not match"],
+    ["error=denied", (valid) => valid + "&error=denied", "OpenAI browser authorization was denied"],
     [
       "code=one&code=two",
-      (urls) => callbackWith(urls, "code=one&code=two"),
+      (valid) => valid + "&code=one&code=two",
       "OpenAI callback did not include an authorization code",
     ],
-    ["empty code", (urls) => callbackWith(urls, "code="), "OpenAI callback did not include an authorization code"],
-    ["no code", (urls) => callbackWith(urls, "other=1"), "OpenAI callback did not include an authorization code"],
+    ["empty code", (valid) => valid + "&code=", "OpenAI callback did not include an authorization code"],
+    ["no code", (valid) => valid + "&other=1", "OpenAI callback did not include an authorization code"],
     [
       "another host",
-      (urls) => (uri) => callbackWith(urls, "code=c")(uri).replace("localhost", "127.0.0.1"),
+      (valid) => valid.replace("localhost", "127.0.0.1") + "&code=c",
       "OpenAI returned an invalid callback location",
     ],
     [
       "another scheme",
-      (urls) => (uri) => callbackWith(urls, "code=c")(uri).replace("http:", "https:"),
+      (valid) => valid.replace("http:", "https:") + "&code=c",
       "OpenAI returned an invalid callback location",
     ],
     [
       "another path",
-      (urls) => (uri) => callbackWith(urls, "code=c")(uri).replace("/auth/callback", "/auth/callbackx"),
+      (valid) => valid.replace("/auth/callback", "/auth/callbackx") + "&code=c",
       "OpenAI returned an invalid callback location",
     ],
-    ["null", () => () => null, "OpenAI returned an invalid browser callback"],
-    ["0", () => () => 0, "OpenAI returned an invalid browser callback"],
+    ["null", () => null, "OpenAI returned an invalid browser callback"],
+    ["0", () => 0, "OpenAI returned an invalid browser callback"],
   ];
-  for (const [label, makeCallback, message] of invalidCallbacks) {
+  for (const [label, result, message] of invalidCallbacks) {
     test(`browser callback rejects invalid or denied responses: ${label}`, async () => {
       const http = new FakeHttp();
       const urls: string[] = [];
+      const awaitCallback = (uri: string) => result(uri + "?state=" + new URL(urls[0]!).searchParams.get("state"));
       const error = await rejected(
         new OpenAIAuth({ request: http.request }).browserLogin((url) => void urls.push(url), {
-          awaitCallback: makeCallback(urls) as (uri: string) => string,
+          awaitCallback: awaitCallback as (uri: string) => string,
         }),
       );
       expect(error).toBeInstanceOf(AuthError);
@@ -1753,58 +1754,54 @@ describe("OpenAIAuth", () => {
   }
 
   describe("account metadata", () => {
-    /** Refresh `OLD()` with `data` and return the result or the error. */
-    async function refreshWith(data: Record<string, unknown>): Promise<OAuthCredentials | Error> {
-      const auth = new OpenAIAuth({ request: new FakeHttp(new HttpResponse(200, data)).request });
-      try {
-        return await auth.refresh(OLD());
-      } catch (error) {
-        return error as Error;
-      }
+    /** Refresh `OLD()` with `data`. */
+    function refreshWith(data: Record<string, unknown>): Promise<OAuthCredentials> {
+      return new OpenAIAuth({ request: new FakeHttp(new HttpResponse(200, data)).request }).refresh(OLD());
     }
 
     test("an id token and access token naming different accounts are refused", async () => {
-      const error = await refreshWith(tokens("acct", { id_token: jwt("other") }));
+      const error = await rejected(refreshWith(tokens("acct", { id_token: jwt("other") })));
       expect(error).toBeInstanceOf(AuthError);
-      expect((error as Error).message).toBe("OpenAI refresh changed account identity");
+      expect(error.message).toBe("OpenAI refresh changed account identity");
     });
 
     test("a non-text account is refused", async () => {
       for (const token of [jwt(""), jwt("acct", { chatgpt_account_id: 5 })]) {
-        const error = await refreshWith({ access_token: token, expires_in: 3600n });
+        const error = await rejected(refreshWith({ access_token: token, expires_in: 3600n }));
         expect(error).toBeInstanceOf(AuthError);
-        expect((error as Error).message).toBe("OpenAI returned invalid account metadata");
+        expect(error.message).toBe("OpenAI returned invalid account metadata");
       }
     });
 
     test("a top-level account wins over the auth claim", async () => {
       const result = await refreshWith({ access_token: jwt("other", { chatgpt_account_id: "acct" }) });
-      expect((result as OAuthCredentials).accountId).toBe("acct");
+      expect(result.accountId).toBe("acct");
     });
 
     test("organizations[0].id is used only when both chatgpt ids are absent", async () => {
       const fallback = await refreshWith({ access_token: jwt(null, { organizations: [{ id: "acct" }] }) });
-      expect((fallback as OAuthCredentials).accountId).toBe("acct");
+      expect(fallback.accountId).toBe("acct");
       const ignored = await refreshWith({ access_token: jwt("acct", { organizations: [{ id: "org-other" }] }) });
-      expect((ignored as OAuthCredentials).accountId).toBe("acct");
-      const switched = await refreshWith({ access_token: jwt(null, { organizations: [{ id: "org-other" }] }) });
-      expect((switched as Error).message).toBe("OpenAI refresh changed account identity");
+      expect(ignored.accountId).toBe("acct");
+      const other = jwt(null, { organizations: [{ id: "org-other" }] });
+      const switched = await rejected(refreshWith({ access_token: other }));
+      expect(switched.message).toBe("OpenAI refresh changed account identity");
     });
 
     test("residency is read from either claim and no_constraint clears it", async () => {
       const cleared = await refreshWith({ access_token: jwt("acct", { chatgpt_compute_residency: "no_constraint" }) });
-      expect((cleared as OAuthCredentials).residency).toBeNull();
+      expect(cleared.residency).toBeNull();
       const auth = { chatgpt_account_id: "acct", chatgpt_compute_residency: "us" };
       const fromAuth = await refreshWith({ access_token: jwt(null, { "https://api.openai.com/auth": auth }) });
-      expect((fromAuth as OAuthCredentials).residency).toBe("us");
+      expect(fromAuth.residency).toBe("us");
       const kept = await refreshWith({ access_token: jwt("acct") });
-      expect((kept as OAuthCredentials).residency).toBe("eu");
+      expect(kept.residency).toBe("eu");
     });
 
     test("tokens that aren't JWTs keep the previous account on refresh and fail a login", async () => {
       const kept = await refreshWith({ access_token: "opaque.token", refresh_token: "r2" });
-      expect((kept as OAuthCredentials).accountId).toBe("acct");
-      expect((kept as OAuthCredentials).refreshToken).toBe("r2");
+      expect(kept.accountId).toBe("acct");
+      expect(kept.refreshToken).toBe("r2");
       const urls: string[] = [];
       const http = new FakeHttp(new HttpResponse(200, { access_token: "opaque", refresh_token: "r" }));
       const error = await rejected(
@@ -1977,19 +1974,16 @@ describe("OpenAIAuth", () => {
     });
   }
 
-  for (const method of ["api", "subscription", "refresh", "device"] as const) {
+  const methods: Record<string, (auth: OpenAIAuth) => Promise<unknown>> = {
+    api: (auth) => auth.apiModels(new ApiKeyCredentials("key")),
+    subscription: (auth) => auth.subscriptionModels(SUBSCRIPTION()),
+    refresh: (auth) => auth.refresh(SUBSCRIPTION()),
+    device: (auth) => auth.deviceLogin(() => {}),
+  };
+  for (const [method, call] of Object.entries(methods)) {
     test(`HTTP failures do not echo secrets or fall back: ${method}`, async () => {
       const http = new FakeHttp(new HttpResponse(401, { error: "secret-do-not-print" }));
-      const auth = new OpenAIAuth({ request: http.request });
-      const error = await rejected(
-        method === "api"
-          ? auth.apiModels(new ApiKeyCredentials("key"))
-          : method === "subscription"
-            ? auth.subscriptionModels(SUBSCRIPTION())
-            : method === "refresh"
-              ? auth.refresh(SUBSCRIPTION())
-              : auth.deviceLogin(() => {}),
-      );
+      const error = await rejected(call(new OpenAIAuth({ request: http.request })));
       expect(error).toBeInstanceOf(AuthError);
       expect(error.message).toMatch(/HTTP 401/);
       expect(error.message).not.toContain("secret");
@@ -2151,10 +2145,10 @@ describe("OpenAIAuth", () => {
     const auth = new OpenAIAuth({ request: http.request, requestTimeoutMs: 1 });
     for (const timeoutMs of [0, NaN, Infinity]) {
       for (const login of [
-        auth.deviceLogin(() => {}, { timeoutMs }),
-        auth.browserLogin(() => {}, { awaitCallback: (uri) => uri, timeoutMs }),
+        () => auth.deviceLogin(() => {}, { timeoutMs }),
+        () => auth.browserLogin(() => {}, { awaitCallback: (uri) => uri, timeoutMs }),
       ]) {
-        const error = await rejected(login);
+        const error = await rejected(login());
         expect(error).toBeInstanceOf(RangeError);
         expect(error.message).toBe("Invalid authentication timeout");
       }
@@ -2209,10 +2203,10 @@ describe("OpenAIAuth", () => {
     const http = new FakeHttp(new HttpResponse(200, { device_auth_id: "id", user_code: "code" }));
     const auth = new OpenAIAuth({ request: http.request, scheduler });
     for (const login of [
-      auth.browserLogin(() => {}, { awaitCallback: never, timeoutMs: 1000 }),
-      auth.browserLogin(never, { awaitCallback: (uri) => uri, timeoutMs: 1000 }),
+      () => auth.browserLogin(() => {}, { awaitCallback: never, timeoutMs: 1000 }),
+      () => auth.browserLogin(never, { awaitCallback: (uri) => uri, timeoutMs: 1000 }),
     ]) {
-      const error = await rejected(login);
+      const error = await rejected(login());
       expect(error).toBeInstanceOf(AuthError);
       expect(error.message).toBe("OpenAI browser login timed out");
     }
@@ -2223,19 +2217,14 @@ describe("OpenAIAuth", () => {
   });
 
   test("a stop while openUrl hangs rejects with the reason", async () => {
+    const scheduler = virtualScheduler(1_000_000);
     const controller = new AbortController();
     const reason = new Error("stopped by host");
-    const auth = new OpenAIAuth({ request: new FakeHttp().request, signal: controller.signal });
-    const error = await rejected(
-      auth.browserLogin(
-        () => {
-          setTimeout(() => controller.abort(reason), 0);
-          return never();
-        },
-        { awaitCallback: (uri) => uri },
-      ),
-    );
+    void scheduler.sleep(100).then(() => controller.abort(reason));
+    const auth = new OpenAIAuth({ request: new FakeHttp().request, scheduler, signal: controller.signal });
+    const error = await rejected(auth.browserLogin(never, { awaitCallback: (uri) => uri }));
     expect(error).toBe(reason);
+    expect(scheduler.now()).toBe(1_000_100);
   });
 
   for (const phase of ["headers", "body", "idle_headers", "idle_body"] as const) {
@@ -2248,7 +2237,10 @@ describe("OpenAIAuth", () => {
         const closed = new Promise<void>((resolve) => (peerClosed = resolve));
         const serverErrors: unknown[] = [];
         const timers: ReturnType<typeof setInterval>[] = [];
+        const sockets: net.Socket[] = [];
+        const wait = new AbortController();
         const server = net.createServer((socket) => {
+          sockets.push(socket);
           socket.on("error", () => {});
           socket.on("close", () => peerClosed());
           let received = "";
@@ -2290,10 +2282,19 @@ describe("OpenAIAuth", () => {
             expect(error.message).toBe("OpenAI authentication request failed");
           }
           expect(performance.now() - start).toBeLessThan(700);
-          const peer = await Promise.race([closed.then(() => true), Bun.sleep(1000).then(() => false)]);
+          const peer = await Promise.race([
+            closed.then(() => true),
+            realScheduler.sleep(1000, wait.signal).then(
+              () => false,
+              () => false,
+            ),
+          ]);
           expect(peer).toBe(true);
         } finally {
+          wait.abort();
           for (const timer of timers) clearInterval(timer);
+          // A socket still open would hold server.close until the runner's timeout.
+          for (const socket of sockets) socket.destroy();
           await new Promise((resolve) => server.close(resolve));
         }
         expect(serverErrors).toEqual([]);

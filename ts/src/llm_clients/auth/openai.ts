@@ -50,7 +50,7 @@ function untilStopped<T>(work: T | PromiseLike<T>, signal: AbortSignal): Promise
   return new Promise<T>((resolve, reject) => {
     const stop = () => reject(signal.reason);
     if (signal.aborted) return stop();
-    signal.addEventListener("abort", stop);
+    signal.addEventListener("abort", stop, { once: true });
     settled.then(resolve, reject).finally(() => signal.removeEventListener("abort", stop));
   });
 }
@@ -72,6 +72,30 @@ function sameText(a: string, b: string): boolean {
   const left = Buffer.from(a);
   const right = Buffer.from(b);
   return left.length === right.length && timingSafeEqual(left, right);
+}
+
+/** Return a 2xx response's body record, or throw `AuthError`. */
+function responseData(response: HttpResponse): Record<string, unknown> {
+  if (!(response.status >= 200 && response.status < 300)) {
+    throw new AuthError(`OpenAI authentication request failed (HTTP ${response.status})`);
+  }
+  const { data } = response;
+  if (!isRecord(data)) throw new AuthError("OpenAI authentication returned malformed data");
+  return data;
+}
+
+/** Read routing metadata only from a token just received from OpenAI. */
+function claimsOf(token: unknown): Record<string, unknown> {
+  if (typeof token !== "string") return {};
+  const parts = token.split(".");
+  if (parts.length !== 3) return {};
+  try {
+    const raw = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(parts[1]!, "base64url"));
+    const value: unknown = JSON.parse(raw);
+    return isRecord(value) ? value : {};
+  } catch {
+    return {};
+  }
 }
 
 /** Return the device polling interval in seconds, at least 1, from the server's value. */
@@ -177,34 +201,11 @@ export class OpenAIAuth {
     return response as HttpResponse;
   }
 
-  #data(response: HttpResponse): Record<string, unknown> {
-    if (!(response.status >= 200 && response.status < 300)) {
-      throw new AuthError(`OpenAI authentication request failed (HTTP ${response.status})`);
-    }
-    const { data } = response;
-    if (!isRecord(data)) throw new AuthError("OpenAI authentication returned malformed data");
-    return data;
-  }
-
-  /** Read routing metadata only from a token just received from OpenAI. */
-  #claims(token: unknown): Record<string, unknown> {
-    if (typeof token !== "string") return {};
-    const parts = token.split(".");
-    if (parts.length !== 3) return {};
-    try {
-      const raw = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(parts[1]!, "base64url"));
-      const value: unknown = JSON.parse(raw);
-      return isRecord(value) ? value : {};
-    } catch {
-      return {};
-    }
-  }
-
   #tokens(data: Record<string, unknown>, previous?: OAuthCredentials): OAuthCredentials {
     const accountIds = new Set<string>();
     let residency: unknown = previous ? previous.residency : null;
     for (const token of [get(data, "id_token"), get(data, "access_token")]) {
-      const claims = this.#claims(token);
+      const claims = claimsOf(token);
       const authClaim = get(claims, "https://api.openai.com/auth", {});
       const auth = isRecord(authClaim) ? authClaim : {};
       const topLevel = get(claims, "chatgpt_account_id");
@@ -265,7 +266,7 @@ export class OpenAIAuth {
         redirect_uri: redirectUri,
       },
     });
-    return this.#tokens(this.#data(response));
+    return this.#tokens(responseData(response));
   }
 
   /**
@@ -305,18 +306,21 @@ export class OpenAIAuth {
       try {
         signal.throwIfAborted();
         await untilStopped(openUrl(url), signal);
+        signal.throwIfAborted();
         const result: unknown = await untilStopped(
           awaitCallback === undefined ? listener!.callbackUrl : awaitCallback(REDIRECT_URI, signal),
           signal,
         );
         signal.throwIfAborted();
         if (typeof result !== "string") throw new AuthError("OpenAI returned an invalid browser callback");
-        const location = result.slice(0, REDIRECT_URI.length + 1);
-        if (!(result === REDIRECT_URI || location === REDIRECT_URI + "?" || location === REDIRECT_URI + "#")) {
+        if (
+          !(result === REDIRECT_URI || result.startsWith(REDIRECT_URI + "?") || result.startsWith(REDIRECT_URI + "#"))
+        ) {
           throw new AuthError("OpenAI returned an invalid callback location");
         }
         const rest = result.slice(REDIRECT_URI.length).split("#", 1)[0]!;
-        const params = new URLSearchParams(rest.slice(1));
+        // URLSearchParams drops one leading "?", which parse_qs keeps as part of the first key.
+        const params = new URLSearchParams("&" + rest.slice(1));
         const states = params.getAll("state");
         if (states.length !== 1 || !sameText(states[0]!, state)) {
           throw new AuthError("OpenAI login state did not match");
@@ -345,7 +349,7 @@ export class OpenAIAuth {
   ): Promise<OAuthCredentials> {
     const { timeoutMs = 900_000 } = options;
     return this.#withDeadline(timeoutMs, "OpenAI login timed out", async (signal) => {
-      const data = this.#data(
+      const data = responseData(
         await this.#send("POST", ISSUER + "/api/accounts/deviceauth/usercode", {
           signal,
           jsonBody: { client_id: CLIENT_ID },
@@ -364,7 +368,7 @@ export class OpenAIAuth {
           jsonBody: { device_auth_id: deviceId, user_code: userCode },
         });
         if (response.status !== 403 && response.status !== 404) {
-          const result = this.#data(response);
+          const result = responseData(response);
           return await this.#exchange(
             get(result, "authorization_code"),
             get(result, "code_verifier"),
@@ -385,7 +389,7 @@ export class OpenAIAuth {
       signal: this.#signal,
       form: { grant_type: "refresh_token", refresh_token: credentials.refreshToken, client_id: CLIENT_ID },
     });
-    return this.#tokens(this.#data(response), credentials);
+    return this.#tokens(responseData(response), credentials);
   }
 
   /**
@@ -412,7 +416,7 @@ export class OpenAIAuth {
     }
     headers.Authorization = "Bearer " + credentials.apiKey;
     const response = await this.#send("GET", "https://api.openai.com/v1/models", { signal: this.#signal, headers });
-    const data = get(this.#data(response), "data");
+    const data = get(responseData(response), "data");
     if (
       !Array.isArray(data) ||
       data.length === 0 ||
@@ -442,7 +446,7 @@ export class OpenAIAuth {
       signal: this.#signal,
       headers,
     });
-    const models = get(this.#data(response), "models");
+    const models = get(responseData(response), "models");
     if (
       !Array.isArray(models) ||
       models.some(

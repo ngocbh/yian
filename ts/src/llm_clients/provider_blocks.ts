@@ -6,7 +6,10 @@
  * the value pass checks a value against them the way Python yian's pydantic models do in
  * strict mode: no coercion (`"5"` is not an integer), no non-finite numbers, unknown keys
  * refused, unset (`null`) fields left out of the result at every level, and errors that
- * never echo values. Issues carry pydantic's `loc`, `type` and `msg`.
+ * never echo values. Issues carry pydantic's `loc`, `type` and `msg`. Before the value pass,
+ * the key walk refuses the paths yian builds itself (`reserved`) and unknown keys, naming each.
+ * `locatedBlockProblems` checks a block whose leaves may be values resolved later, and
+ * `blockFieldAnnotation` gives the simple type a value for one field must have.
  */
 
 import { compareCodeUnits } from "../diagnostics.ts";

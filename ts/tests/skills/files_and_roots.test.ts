@@ -1,14 +1,17 @@
 /**
  * Bundled-file confinement and default Claude/Codex skill roots, a port of
- * `tests/skills/test_files_and_roots.py`.
+ * `tests/skills/test_files_and_roots.py`; with `YIAN_TEST_NODE` set to a Node binary, the built
+ * skills code on Node.
  *
  * Later: the compose facade test (with the compose loaders).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { defaultSkillRoots } from "../../src/compose/skills.ts";
 import { current } from "../../src/defaults.ts";
@@ -160,3 +163,96 @@ test("resolved path resolves a symlink above a missing path", () => {
   symlinkSync(join(tmp, "real"), join(tmp, "link"));
   expect(resolvedPath(join(tmp, "link", "missing", "x"))).toBe(join(realpathSync(join(tmp, "real")), "missing", "x"));
 });
+
+/** The `ts/` directory. */
+const ROOT = resolve(import.meta.dir, "../..");
+const BUILT = join(ROOT, "dist/src/compose/skills.js");
+
+/**
+ * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
+ * value that can't run, a Node older than the `engines` floor, or a missing build
+ * fails the whole file, so a typo can't pass as a run with the Node case skipped.
+ * A copy of `tests/engine/platform.test.ts`'s: importing a test file would run its tests.
+ */
+const NODE = ((): string | undefined => {
+  const node = process.env.YIAN_TEST_NODE;
+  if (!node) return undefined;
+  let version: string;
+  try {
+    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
+  } catch (error) {
+    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
+  }
+  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18)) {
+    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
+  }
+  if (!existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
+  return node;
+})();
+
+test.skipIf(!NODE)(
+  "the built skills code runs on Node",
+  () => {
+    const url = (file: string) => JSON.stringify(pathToFileURL(join(ROOT, file)).href);
+    const script = String.raw`
+      import assert from "node:assert/strict";
+      import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+      import { tmpdir } from "node:os";
+      import { dirname, join } from "node:path";
+
+      const { defaultSkillRoots, loadSkillDir, loadSkills } = await import(${url("dist/src/compose/skills.js")});
+      const { readSkillFile } = await import(${url("dist/src/skills/catalog.js")});
+      const { invokeLoadSkill } = await import(${url("dist/src/skills/tool.js")});
+
+      const tmp = realpathSync(mkdtempSync(join(tmpdir(), "yian-skills-")));
+      const write = (path, data) => {
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, data);
+      };
+      const skillMd = (name, description) => "---\nname: " + name + "\ndescription: " + description + "\n---\nUse " + name + ".\n";
+      try {
+        const api = join(tmp, "a", "api");
+        write(join(api, "SKILL.md"), "---\r\nname: api\r\ndescription: Call the API.\r\n---\r\nRead references/api.md.\r\n");
+        const loaded = loadSkillDir(api);
+        assert.equal(loaded.name, "api");
+        assert.equal(loaded.description, "Call the API.");
+        assert.equal(loaded.instructions, "Read references/api.md.\n");
+
+        write(join(tmp, "elsewhere", "linked", "SKILL.md"), skillMd("linked", "Linked."));
+        symlinkSync(join(tmp, "elsewhere", "linked"), join(tmp, "a", "linked"));
+        write(join(tmp, "a", ".hidden", "SKILL.md"), skillMd("hidden", "Hidden."));
+        write(join(tmp, "b", "api", "SKILL.md"), skillMd("api", "Shadowed."));
+        write(join(tmp, "b", "zeta", "SKILL.md"), skillMd("zeta", "Zeta."));
+        const skills = loadSkills([join(tmp, "a"), join(tmp, "b")]);
+        assert.ok(skills instanceof Map);
+        assert.deepEqual([...skills.keys()], ["api", "linked", "zeta"]);
+        assert.equal(skills.get("api").description, "Call the API.");
+
+        write(join(api, "references", "api.md"), "GET /items\n");
+        write(join(tmp, "secret.txt"), "top secret\n");
+        symlinkSync(join(tmp, "secret.txt"), join(api, "leak.txt"));
+        write(join(api, "blob.bin"), new Uint8Array([0xff, 0xfe, 0x00]));
+        assert.equal(readSkillFile(loaded, "references/api.md"), "GET /items\n");
+        assert.throws(() => readSkillFile(loaded, "leak.txt"), /outside/);
+        assert.throws(() => readSkillFile(loaded, "blob.bin"), /not UTF-8/);
+        assert.equal(invokeLoadSkill(skills, { name: "api" }), "Read references/api.md.\n");
+
+        const repo = join(tmp, "outer", "repo");
+        mkdirSync(join(repo, ".git"), { recursive: true });
+        mkdirSync(join(repo, "sub"));
+        const base = (dir) => [join(dir, ".claude", "skills"), join(dir, ".agents", "skills")];
+        assert.deepEqual(defaultSkillRoots({ cwd: join(repo, "sub"), home: join(tmp, "home") }), [
+          ...base(join(tmp, "home")),
+          ...base(join(repo, "sub")),
+          ...base(repo),
+        ]);
+        console.log("ok");
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    `;
+    expect(execFileSync(NODE!, ["--input-type=module", "-e", script], { encoding: "utf8" })).toBe("ok\n");
+  },
+  30_000,
+);

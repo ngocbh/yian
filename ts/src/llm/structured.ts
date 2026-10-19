@@ -1,10 +1,14 @@
 /**
- * Choose how a structured call is sent per route, model and schema.
+ * Structured output: choose how a call is sent per route, model and schema, and read the JSON
+ * object from the reply.
  *
  * `planStructured` picks a strategy (a forced or unforced tool, the route's JSON-schema output
  * format, or a prompt for a model with no native structured output) from the first matching row
- * of a fixed table, and the request fields it needs; `StructuredPlan.parse` reads the reply's JSON
- * object. The caller validates replies against the schema it passed. Ported from Python yian's
+ * of a fixed table, and the request fields it needs. The resulting `StructuredPlan` `apply`s
+ * those fields to a request, gives the prompt strategy's `instruction` and the retry
+ * `correction` texts, and `parse`s the reply's JSON object; `parse` throws
+ * `StructuredOutputError`, or its subclass `MissingToolCallError` for a tool strategy. The caller
+ * validates replies against the schema it passed. Ported from Python yian's
  * `with_structured_output` overrides in `llm_clients/*_client.py`, the native-structured gate and
  * code-fence strip in `nodes/agent/structured.py`, and `missing_tool_call` in
  * `llm_clients/base_client.py`.
@@ -38,7 +42,10 @@ import {
 import { AnthropicMessages } from "./protocols/anthropic_messages.ts";
 import { OpenAIResponses } from "./protocols/openai_responses.ts";
 
-/** A structured reply that holds no valid answer: no JSON object, or a refusal. */
+/**
+ * A structured reply that holds no valid answer: no JSON object, a refusal, or
+ * (`MissingToolCallError`) no call of the schema's tool.
+ */
 export class StructuredOutputError extends Error {
   override name = "StructuredOutputError";
 }
@@ -207,7 +214,7 @@ export class StructuredPlan {
       throw new MissingToolCallError(`the reply did not call the ${this.name} tool; call it with the answer`);
     }
     const text = response.message.text();
-    const value = parseObject(strip(text)) ?? (text.includes(FENCE) ? parseObject(fenced(text)) : null);
+    const value = parseObject(strip(text)) ?? parseObject(fenced(text));
     if (value !== null) return value;
     const refusals = parts.filter((part) => part instanceof RefusalPart);
     if (refusals.length > 0) {
@@ -233,16 +240,21 @@ function strip(text: string): string {
 
 /**
  * Return the text inside the first code fence of `text`, without its info string (e.g. `json`),
- * up to the last fence after it or the end, stripped like `strip`. Taking the last fence
- * keeps fences inside the JSON's strings.
+ * up to the last fence after it or the end, stripped like `strip`; `""` when `text` has no
+ * fence. Taking the last fence keeps fences inside the JSON's strings.
  */
 function fenced(text: string): string {
-  const body = text.slice(text.indexOf(FENCE) + FENCE.length).replace(/^[A-Za-z0-9_+.-]*/, "");
+  const start = text.indexOf(FENCE);
+  if (start === -1) return "";
+  const body = text.slice(start + FENCE.length).replace(/^[A-Za-z0-9_+.-]*/, "");
   const end = body.lastIndexOf(FENCE);
   return strip(end === -1 ? body : body.slice(0, end));
 }
 
-/** Return the JSON object `text` holds, or `null`; an empty text holds none. */
+/**
+ * Return the JSON object `text` holds, or `null`; an empty text holds none (checked here because
+ * `parseArguments` reads `""` as `{}`).
+ */
 function parseObject(text: string): JsonObject | null {
   return text === "" ? null : parseArguments(text)[0];
 }

@@ -1,9 +1,10 @@
 /**
- * Tests for the structured-output strategy choice in `src/llm/structured.ts`: `structuredTarget`,
- * `planStructured` (one test per row of the selection table, first match wins), `forcesTool` and
- * `sendsJsonSchemaAsTool`, a plan's `apply`, `instruction`, `correction` and `parse`, and the
- * structured-output errors, ported from Python yian's Anthropic, Azure, open-schema and
- * structured-node tests.
+ * Tests for `src/llm/structured.ts`, choosing how a structured call is sent and reading the JSON
+ * object from the reply: `structuredTarget`, `planStructured` (one test per row of the selection
+ * table, first match wins), `forcesTool` and `sendsJsonSchemaAsTool`; a plan's `apply` to a
+ * request, its `instruction` and `correction` texts, and `parse` of tool and text replies; and
+ * `StructuredOutputError` and `MissingToolCallError`. Ported from Python yian's Anthropic, Azure,
+ * open-schema and structured-node tests.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -46,6 +47,7 @@ import {
   MissingToolCallError,
   planStructured,
   sendsJsonSchemaAsTool,
+  type Strategy,
   StructuredOutputError,
   type StructuredPlan,
   type StructuredTarget,
@@ -200,7 +202,7 @@ function fields(plan: StructuredPlan): unknown {
 
 /** Return the expected `fields` of a plan; omitted fields are empty. */
 function want(options: {
-  strategy: string;
+  strategy: Strategy;
   name?: string;
   tools?: { schema: JsonObject; strict: boolean | null }[];
   named?: string;
@@ -227,6 +229,26 @@ function expectSame(got: unknown, wanted: unknown): void {
   expect(got).toEqual(wanted);
   expect(encodeBody(got)).toBe(encodeBody(wanted));
 }
+
+/** One plan per strategy, labelled with it; the apply and parse tests filter it. */
+const PLANS: [Strategy, StructuredPlan][] = [
+  ["forced_tool", planStructured(target({ provider: "xai", model: "grok-4", protocol: "openai_chat" }), REC)],
+  [
+    "unforced_tool",
+    planStructured(target({ provider: "deepseek", model: "deepseek-reasoner", protocol: "openai_chat" }), REC),
+  ],
+  ["json_schema", planStructured(target({ provider: "azure", model: "gpt-4o" }), BOUNDED)],
+  [
+    "prompt",
+    planStructured(target({ provider: "xai", model: "no-structured-sentinel", protocol: "openai_chat" }), REC),
+  ],
+];
+
+describe("the test plans", () => {
+  test.each(PLANS)("the %s plan uses its strategy", (strategy, plan) => {
+    expect(plan.strategy).toBe(strategy);
+  });
+});
 
 describe("planStructured: row 1, no native structured output", () => {
   test.each([
@@ -592,24 +614,14 @@ describe("StructuredPlan: apply, instruction and correction", () => {
     new Message({ role: "system", parts: [new TextPart("be brief")] }),
     new Message({ role: "user", parts: [new TextPart("rate it")] }),
   ];
-  const chat = (provider: string, model: string) => target({ provider, model, protocol: "openai_chat" });
-  const prompted = () => planStructured(chat("xai", "no-structured-sentinel"), REC);
-  /** One plan per strategy. */
-  const plans: [string, () => StructuredPlan][] = [
-    ["forced_tool", () => planStructured(chat("xai", "grok-4"), REC)],
-    ["unforced_tool", () => planStructured(chat("deepseek", "deepseek-reasoner"), REC)],
-    ["json_schema", () => planStructured(target({ provider: "azure", model: "gpt-4o" }), BOUNDED)],
-    ["prompt", prompted],
-  ];
-  const native = plans.filter(([strategy]) => strategy !== "prompt");
+  const native = PLANS.filter(([strategy]) => strategy !== "prompt");
+  const [, prompted] = PLANS.find(([strategy]) => strategy === "prompt")!;
 
-  test.each(native)("apply sets the %s plan's fields and keeps the messages", (strategy, make) => {
-    const plan = make();
-    expect(plan.strategy).toBe(strategy as StructuredPlan["strategy"]);
+  test.each(native)("apply sets the %s plan's fields and keeps the messages", (_strategy, plan) => {
     const request = new Request({ messages, toolChoice: "auto", parallelToolCalls: true });
     const applied = plan.apply(request);
     expect(applied).not.toBe(request);
-    expect(applied.messages).toEqual(messages);
+    expect(applied.messages).toHaveLength(messages.length);
     applied.messages.forEach((message, i) => expect(message).toBe(messages[i]!));
     expect([...applied.tools]).toEqual([...plan.tools]);
     expect(applied.toolChoice).toBe(plan.toolChoice);
@@ -621,11 +633,10 @@ describe("StructuredPlan: apply, instruction and correction", () => {
 
   test("apply returns the prompt request unchanged", () => {
     const request = new Request({ messages, toolChoice: "auto" });
-    expect(prompted().apply(request)).toBe(request);
+    expect(prompted.apply(request)).toBe(request);
   });
 
-  test.each(plans)("apply refuses a request with tools or an output format (%s)", (_strategy, make) => {
-    const plan = make();
+  test.each(PLANS)("apply refuses a request with tools or an output format (%s)", (_strategy, plan) => {
     const tooled = new Request({ messages, tools: [functionTool(OPEN, null)] });
     const formatted = new Request({ messages, outputFormat: new OutputFormat({ name: "Other", schema: OPEN }) });
     for (const request of [tooled, formatted]) {
@@ -636,28 +647,28 @@ describe("StructuredPlan: apply, instruction and correction", () => {
   });
 
   test("the prompt instruction writes the schema as compact JSON", () => {
-    expect(prompted().instruction()).toBe(
+    expect(prompted.instruction()).toBe(
       "Respond with ONLY a JSON object matching this JSON schema (no prose, no code fences):\n" +
         '{"properties":{"answer":{"title":"Answer","type":"string"},"score":{"title":"Score","type":"integer"}},' +
         '"required":["answer","score"],"title":"Record","type":"object"}',
     );
   });
 
-  test.each(native)("the %s plan has no instruction", (_strategy, make) => {
-    const error = thrown(() => make().instruction());
+  test.each(native)("the %s plan has no instruction", (_strategy, plan) => {
+    const error = thrown(() => plan.instruction());
     expect(error.constructor).toBe(Error);
     expect(error.message).toBe("only the prompt strategy has an instruction");
   });
 
   test("the prompt correction asks for a JSON object", () => {
-    expect(prompted().correction("not json")).toBe(
+    expect(prompted.correction("not json")).toBe(
       "Your previous output was invalid: not json. Respond with ONLY a JSON object matching the schema.",
     );
   });
 
-  test.each(native)("the %s correction asks for valid data", (_strategy, make) => {
+  test.each(native)("the %s correction asks for valid data", (_strategy, plan) => {
     // The retry text Python sends after a reply that did not call the tool.
-    expect(make().correction("the reply did not call the Record tool; call it with the answer")).toBe(
+    expect(plan.correction("the reply did not call the Record tool; call it with the answer")).toBe(
       "Your previous output was invalid: the reply did not call the Record tool; call it with the answer. " +
         "Respond with valid data matching the schema.",
     );
@@ -665,22 +676,9 @@ describe("StructuredPlan: apply, instruction and correction", () => {
 });
 
 describe("StructuredPlan: parse a tool reply", () => {
-  const forced = planStructured(target({ provider: "xai", model: "grok-4", protocol: "openai_chat" }), REC);
-  const unforced = planStructured(
-    target({ provider: "deepseek", model: "deepseek-reasoner", protocol: "openai_chat" }),
-    REC,
-  );
-  const toolPlans: [string, StructuredPlan][] = [
-    ["forced_tool", forced],
-    ["unforced_tool", unforced],
-  ];
+  const toolPlans = PLANS.filter(([strategy]) => strategy === "forced_tool" || strategy === "unforced_tool");
   const call = (name: string, args: JsonObject | null, id = "c1") =>
     new ToolCallPart({ id, name, arguments: args, rawArguments: args === null ? "{bad" : null });
-
-  test("the plans use the tool strategies", () => {
-    expect(forced.strategy).toBe("forced_tool");
-    expect(unforced.strategy).toBe("unforced_tool");
-  });
 
   test.each(toolPlans)("%s: one call gives its arguments", (_strategy, plan) => {
     expect(plan.parse(reply([call("Record", { answer: "x", score: 1n })]))).toEqual({ answer: "x", score: 1n });
@@ -725,18 +723,8 @@ describe("StructuredPlan: parse a tool reply", () => {
 describe("StructuredPlan: parse a text reply", () => {
   afterEach(() => install(BUILTIN));
 
-  const textPlans: [string, StructuredPlan][] = [
-    ["json_schema", planStructured(target({ provider: "azure", model: "gpt-4o" }), BOUNDED)],
-    [
-      "prompt",
-      planStructured(target({ provider: "xai", model: "no-structured-sentinel", protocol: "openai_chat" }), REC),
-    ],
-  ];
+  const textPlans = PLANS.filter(([strategy]) => strategy === "json_schema" || strategy === "prompt");
   const fence = "```";
-
-  test("the plans use the text strategies", () => {
-    expect(textPlans.map(([, plan]) => plan.strategy)).toEqual(["json_schema", "prompt"]);
-  });
 
   const valid: [string, string, JsonObject][] = [
     ["plain JSON", '{"answer": "x", "score": 1}', { answer: "x", score: 1n }],
@@ -750,6 +738,8 @@ describe("StructuredPlan: parse a text reply", () => {
       `Here it is:\n${fence}json\n{"answer": "x"}\n${fence}\nHope that helps.`,
       { answer: "x" },
     ],
+    // Prose first, so the whole text fails and the fenced text must run to the very end.
+    ["an unclosed fence after prose", `Here it is:\n${fence}json\n{"answer": "x"}`, { answer: "x" }],
     [
       "a fenced JSON whose string holds a fence",
       `${fence}json\n{"code": "${fence}py\\nx\\n${fence}"}\n${fence}`,

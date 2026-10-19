@@ -1,0 +1,28 @@
+# tests/engine/test_flow_identity.py::test_flow_fingerprint_covers_each_parameter_field
+kind: fingerprint
+flow: |
+  id: params
+  name: params
+  input:
+    x: !int
+  nodes:
+    body:
+      kind: tool
+      tool_id: body
+      input:
+        x: ${input.x}
+  output: ${body.output}
+other: |
+  id: params
+  name: params
+  input:
+    x: !int
+  nodes:
+    body:
+      kind: tool
+      tool_id: body
+      input:
+        renamed: ${input.x}
+  output: ${body.output}
+expect:
+  fingerprint: different

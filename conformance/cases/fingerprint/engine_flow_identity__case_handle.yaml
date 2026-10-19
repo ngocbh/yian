@@ -1,0 +1,60 @@
+# tests/engine/test_flow_identity.py::test_flow_fingerprint_covers_each_included_kind_field
+kind: fingerprint
+flow: |
+  id: case
+  name: case
+  input:
+    x: !bool
+    y: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.x}
+          then: first
+        - when: ${input.y}
+          then: second
+      else: other
+    first:
+      kind: tool
+      tool_id: first
+      output: str
+    second:
+      kind: tool
+      tool_id: second
+      output: str
+    other:
+      kind: tool
+      tool_id: other
+      output: str
+  output: ${first.output | second.output | other.output}
+other: |
+  id: case
+  name: case
+  input:
+    x: !bool
+    y: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.x}
+          then: second
+        - when: ${input.y}
+          then: first
+      else: other
+    first:
+      kind: tool
+      tool_id: first
+      output: str
+    second:
+      kind: tool
+      tool_id: second
+      output: str
+    other:
+      kind: tool
+      tool_id: other
+      output: str
+  output: ${first.output | second.output | other.output}
+expect:
+  fingerprint: different

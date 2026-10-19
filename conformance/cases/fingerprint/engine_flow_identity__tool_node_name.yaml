@@ -1,0 +1,22 @@
+# tests/engine/test_flow_identity.py::test_flow_fingerprint_changes_with_wiring_types_asserts_and_env
+kind: fingerprint
+flow: |
+  id: tool
+  name: tool
+  nodes:
+    node:
+      kind: tool
+      tool_id: t
+      node_name: First title
+  output: ${node.output}
+other: |
+  id: tool
+  name: tool
+  nodes:
+    node:
+      kind: tool
+      tool_id: t
+      node_name: A different title
+  output: ${node.output}
+expect:
+  fingerprint: same

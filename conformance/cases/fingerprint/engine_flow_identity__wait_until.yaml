@@ -1,0 +1,20 @@
+# tests/engine/test_flow_identity.py::test_wait_fingerprint_and_expansion_digest_cover_absolute_until_wiring
+kind: fingerprint
+flow: |
+  id: wait
+  name: wait
+  nodes:
+    node:
+      kind: wait
+      until: "2026-01-01T00:00:00+00:00"
+  output: ${node.output}
+other: |
+  id: wait
+  name: wait
+  nodes:
+    node:
+      kind: wait
+      until: "2026-01-02T00:00:00+00:00"
+  output: ${node.output}
+expect:
+  fingerprint: different

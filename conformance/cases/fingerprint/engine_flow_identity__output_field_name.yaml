@@ -1,0 +1,32 @@
+# tests/engine/test_flow_identity.py::test_flow_fingerprint_covers_each_end_field
+kind: fingerprint
+flow: |
+  id: out
+  name: out
+  nodes:
+    a:
+      kind: tool
+      tool_id: a
+      output: int
+    b:
+      kind: tool
+      tool_id: b
+      output: int
+  output:
+    first: ${a.output}
+other: |
+  id: out
+  name: out
+  nodes:
+    a:
+      kind: tool
+      tool_id: a
+      output: int
+    b:
+      kind: tool
+      tool_id: b
+      output: int
+  output:
+    second: ${a.output}
+expect:
+  fingerprint: different

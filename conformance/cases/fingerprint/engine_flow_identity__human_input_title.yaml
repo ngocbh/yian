@@ -1,0 +1,24 @@
+# tests/engine/test_flow_identity.py::test_flow_manifest_includes_human_input_title_but_ignores_inert_map_parallel
+kind: fingerprint
+flow: |
+  id: human
+  name: human
+  nodes:
+    node:
+      kind: human_input
+      node_name: First title
+      prompt: answer
+      output: str
+  output: ${node.output}
+other: |
+  id: human
+  name: human
+  nodes:
+    node:
+      kind: human_input
+      node_name: Second title
+      prompt: answer
+      output: str
+  output: ${node.output}
+expect:
+  fingerprint: different

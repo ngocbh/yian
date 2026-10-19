@@ -1,0 +1,22 @@
+# tests/engine/test_flow_identity.py::test_flow_fingerprint_covers_each_structural_type_field
+kind: fingerprint
+flow: |
+  id: typed
+  name: typed
+  nodes:
+    body:
+      kind: tool
+      tool_id: body
+      output: str
+  output: ${body.output}
+other: |
+  id: typed
+  name: typed
+  nodes:
+    body:
+      kind: tool
+      tool_id: body
+      output: Optional(str)
+  output: ${body.output}
+expect:
+  fingerprint: different

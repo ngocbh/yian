@@ -41,7 +41,7 @@ import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
 const SONNET = "claude-sonnet-4-5";
 const KEY: ReplayKey = { protocol: PROTOCOL, provider: "anthropic", model: SONNET };
 
-// The s3 probe's reply shapes.
+// Realistic Messages reply shapes.
 const A_USAGE: JsonObject = {
   input_tokens: 12n,
   output_tokens: 40n,
@@ -470,6 +470,27 @@ describe("deltas and parts", () => {
     expect(out).toEqual([new TextDelta(0, "Hi"), new PartDone(0, new TextPart("Hi")), ...END]);
   });
 
+  test("a delta after its block's stop is ignored", async () => {
+    const out = await parse(
+      reply([
+        blockStart(0n, { type: "text", text: "a" }),
+        blockStop(0n),
+        blockDelta(0n, { type: "text_delta", text: "b" }),
+        blockStart(1n, { type: "thinking", thinking: "t", signature: "SIG-1" }),
+        blockStop(1n),
+        blockDelta(1n, { type: "thinking_delta", thinking: "u" }),
+        blockDelta(1n, { type: "signature_delta", signature: "SIG-2" }),
+      ]),
+    );
+    expect(out).toEqual([
+      new TextDelta(0, "a"),
+      new PartDone(0, new TextPart("a")),
+      new ReasoningDelta(1, "t"),
+      new PartDone(1, thought("t", "SIG-1")),
+      ...END,
+    ]);
+  });
+
   test("ping, unknown events, empty data and non-object data are ignored", async () => {
     const out = await parse([
       { type: "ping" },
@@ -683,6 +704,22 @@ describe("finish", () => {
     for await (const event of route().parse(source())) out.push(event);
     expect(out.at(-1)).toEqual(finish("stop"));
     expect(pulled).toBe(false);
+  });
+
+  test("a consumer that stops early closes the frame source", async () => {
+    let closed = false;
+    async function* source(): AsyncGenerator<SSEEvent> {
+      try {
+        yield* sse(events(messageObj([TEXT])));
+      } finally {
+        closed = true;
+      }
+    }
+    for await (const event of route().parse(source())) {
+      expect(event).toEqual(new TextDelta(0, "Hello"));
+      break;
+    }
+    expect(closed).toBe(true);
   });
 
   test("a message_delta without message_stop completes at the end of input", async () => {
@@ -1111,7 +1148,7 @@ describe("round trips", () => {
     "anthropic needs its signed thinking to continue a tool call with thinking on; finish the tool turn on the " +
     "original model or turn thinking off in the anthropic block";
 
-  /** Return the reply parsed from the s3 probe's stream of `content`. */
+  /** Return the reply parsed from the Messages SSE events streamed for `content`. */
   async function replyOf(content: JsonObject[]): Promise<Message> {
     return (await collected(events(messageObj(content, { stopReason: "tool_use" })))).message;
   }

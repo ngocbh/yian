@@ -175,6 +175,8 @@ export class AnthropicMessages implements SseProtocol {
   readonly #block: JsonObject | null;
   readonly #key: ReplayKey;
   readonly #onReplayDegraded: ((reason: ReplayDegradedReason) => void) | null;
+  // Python's `warnings.warn` shows the hoist warning once per call site, so warn once here.
+  #hoistWarned = false;
 
   constructor(options: AnthropicMessagesOptions) {
     this.model = options.model;
@@ -198,9 +200,9 @@ export class AnthropicMessages implements SseProtocol {
    * blocks are dropped. Leading system messages are lifted to `system`. A later one stays in
    * place when the model accepts that, it follows a user turn and an assistant turn or the end
    * comes next; otherwise it is hoisted to `system`, with LangChain's warning through
-   * `process.emitWarning`. An assistant message is sent as its blocks in part order: thinking,
-   * redacted thinking, text and `tool_use` (an invalid call with empty `input`), one lone text
-   * as a string; refusals are not sent. Its reasoning goes back from its replay records, only
+   * `process.emitWarning` (once per instance). An assistant message is sent as its blocks in
+   * part order: thinking, redacted thinking, text and `tool_use` (an invalid call with empty
+   * `input`), one lone text as a string; refusals are not sent. Its reasoning goes back from its replay records, only
    * with a text or call, and is all left out when any reasoning part has no record or one that
    * can't be used, `onReplayDegraded` being called once for the latter (a throw from the callback
    * propagates). The final assistant message is stripped at the end, and an empty assistant
@@ -339,6 +341,8 @@ export class AnthropicMessages implements SseProtocol {
           const piece = delta[field];
           if (typeof piece !== "string") throw invalid();
           const block = blocks.get(wireIndex);
+          // A delta after its block's stop is dropped: the part is done.
+          if (block?.index != null && !open.has(block.index)) continue;
           if (deltaType === "text_delta" && block?.kind === "text") {
             if (!piece) continue;
             block.text += piece;
@@ -500,9 +504,11 @@ export class AnthropicMessages implements SseProtocol {
     return reason !== null || unsigned ? [message.parts.map(() => null), unusable] : [blocks, null];
   }
 
-  /** Return `content` as the new `system` field, warning that it was moved there. */
+  /** Return `content` as the new `system` field, warning the first time that it was moved there. */
   #hoist(system: JsonValue | null, content: JsonValue): JsonValue {
     if (system !== null) throw new TypeError("Received multiple non-consecutive system messages.");
+    if (this.#hoistWarned) return content;
+    this.#hoistWarned = true;
     // LangChain's text, with the model in Python repr quotes (model ids hold no quote or escape).
     process.emitWarning(
       "A non-leading `SystemMessage` was moved to the top-level `system` field and now applies to the " +
@@ -658,6 +664,8 @@ function degradedTurnStart(rendered: JsonObject[], degraded: Map<JsonObject, str
   const isUser = (turn: JsonObject) => turn["role"] === "user";
   const last = rendered.findLast(isUser);
   if (last === undefined || !hasBlock(last, "tool_result")) return null;
+  // A user turn holding tool results and text still continues the loop for this search, while a
+  // later step that sends its own thinking shows the API started a new turn there.
   const start = rendered.findLastIndex((turn) => isUser(turn) && !hasBlock(turn, "tool_result"));
   const [first, ...later] = rendered.slice(start + 1).filter((turn) => turn["role"] === "assistant");
   const thinks = (turn: JsonObject) => hasBlock(turn, "thinking", "redacted_thinking");

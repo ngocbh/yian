@@ -274,6 +274,19 @@ describe("system messages", () => {
     expect(warnings).toEqual([[hoistWarning(SONNET)]]);
   });
 
+  test("the hoist warning is shown once per protocol", () => {
+    const protocol = new AnthropicMessages({ model: SONNET, provider: "anthropic" });
+    const request = new Request({ messages: [user("Hi."), system("Late."), assistant(text("Ok."))] });
+    const emit = spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      expect(protocol.buildBody(request)["system"]).toBe("Late.");
+      expect(protocol.buildBody(request)["system"]).toBe("Late.");
+      expect(emit.mock.calls).toEqual([[hoistWarning(SONNET)]]);
+    } finally {
+      emit.mockRestore();
+    }
+  });
+
   const inPlaceModels = [
     "claude-fable-5-1",
     "claude-mythos-5",

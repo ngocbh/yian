@@ -32,10 +32,12 @@
  * refused, and `-0` is read as `0`; Python's ints are `bigint`s. The non-string-key row (`{1: "v"}`)
  * becomes a symbol-key row; the tuple and `object()` rows become a `Set` and a class instance.
  * Tuples are arrays, so the list-for-tuple rows pass a `Set`. JavaScript has no `1.0` distinct from
- * `1`, so the float counter rows pass `1.5` and a `bigint`; the `["run",1,0.0]` operation id fails
- * the canonical round trip instead of the ordinal's type check. The identifier row built with
- * `replace(_stamp(), namespace=...)` constructs the stamp directly (Python's `replace` reruns the
- * same checks). Dataclass `==` becomes `toEqual` or `sameConversationInvocation`.
+ * `1`, so the float counter rows pass `1.5` and a `bigint`. An operation id whose number is written as
+ * a float (`0.0`, `1e3`) fails the canonical round trip instead of the counter's type check; one past
+ * 2^53 is refused as a counter (Python accepts it); `NaN` isn't JSON, so it fails the encoding check
+ * (Python raises `TypeError`). The identifier row built with `replace(_stamp(), namespace=...)`
+ * constructs the stamp directly (Python's `replace` reruns the same checks). Dataclass `==` becomes
+ * `toEqual` or `sameConversationInvocation`.
  *
  * Not ported: the `object.__setattr__` rows of
  * `test_nested_view_carriers_are_revalidated_and_detached` and all of
@@ -367,6 +369,9 @@ test.each<[string, ErrorClass, string]>([
   ['["run",0,0]', RangeError, "start_sequence must be positive"],
   ['["run",1,-1]', RangeError, "ordinal must be non-negative"],
   ['["run",1,0.0]', RangeError, "operation_id must be canonical JSON"],
+  ['["run",1e3,0]', RangeError, "operation_id must be canonical JSON"],
+  ['["run",9007199254740993,0]', TypeError, "start_sequence must be an integer"],
+  ['["run",NaN,0]', RangeError, "operation_id must encode [run_id, start_sequence, ordinal]"],
   ['["run", 1, 0]', RangeError, "operation_id must be canonical JSON"],
   ['["",1,0]', RangeError, "run_id must be non-empty"],
   ["{}", RangeError, "operation_id must encode [run_id, start_sequence, ordinal]"],

@@ -1680,11 +1680,6 @@ function requireCounter(value: unknown, name: string, positive = false): number 
   return value;
 }
 
-/** Copy one conversation JSON object at any depth under the yian value number rule. */
-function freezeConversationJson(value: unknown, name: string): JsonObject {
-  return freezeJsonObject(value, name, { limitNesting: false, valueNumbers: true });
-}
-
 /** One run's accepted node start, independent of its conversation owner. Frozen. */
 export class ConversationInvocation {
   readonly runId: string;
@@ -1733,7 +1728,7 @@ export class ConversationRequest {
   constructor(consumerStaticPath: readonly string[], invocation: ConversationInvocation, compatibility: unknown) {
     this.consumerStaticPath = requirePath(consumerStaticPath, "consumer_static_path");
     this.invocation = requireInvocation(invocation);
-    this.compatibility = freezeConversationJson(compatibility, "compatibility");
+    this.compatibility = freezeValueObject(compatibility, "compatibility");
     Object.freeze(this);
   }
 }
@@ -1756,7 +1751,7 @@ export class ConversationItem {
   constructor(itemId: string, format: string, payload: unknown) {
     this.itemId = requireString(itemId, "item_id");
     this.format = requireString(format, "format");
-    this.payload = freezeConversationJson(payload, "payload");
+    this.payload = freezeValueObject(payload, "payload");
     Object.freeze(this);
   }
 }
@@ -1785,9 +1780,8 @@ export class ConversationStamp {
     expectedRevision: number,
     ordinal: number,
   ) {
-    const checkedNamespace = requireString(namespace, "namespace");
+    this.namespace = requireString(namespace, "namespace");
     this.invocation = requireInvocation(invocation);
-    this.namespace = checkedNamespace;
     this.generation = requireCounter(generation, "generation");
     this.expectedRevision = requireCounter(expectedRevision, "expected_revision");
     this.ordinal = requireCounter(ordinal, "ordinal");
@@ -1807,29 +1801,26 @@ export type ConversationEffectStatus = (typeof CONVERSATION_EFFECT_STATUSES)[num
 export type ConversationTurnStatus = (typeof CONVERSATION_TURN_STATUSES)[number];
 
 /** Return one member of the closed effect vocabulary. */
-function requireEffectKind(value: unknown): ConversationEffectKind {
+function requireEffectKind(value: ConversationEffectKind): ConversationEffectKind {
   requireString(value, "kind");
-  if (!CONVERSATION_EFFECT_KINDS.includes(value as ConversationEffectKind)) {
-    throw new RangeError("unsupported conversation effect kind");
-  }
-  return value as ConversationEffectKind;
+  if (!CONVERSATION_EFFECT_KINDS.includes(value)) throw new RangeError("unsupported conversation effect kind");
+  return value;
 }
 
 /** Return a terminal disposition without interpreting its cause. */
-function requireTurnStatus(value: unknown): ConversationTurnStatus {
+function requireTurnStatus(value: ConversationTurnStatus): ConversationTurnStatus {
   requireString(value, "status");
-  if (!CONVERSATION_TURN_STATUSES.includes(value as ConversationTurnStatus)) {
-    throw new RangeError("invalid conversation turn status");
-  }
-  return value as ConversationTurnStatus;
+  if (!CONVERSATION_TURN_STATUSES.includes(value)) throw new RangeError("invalid conversation turn status");
+  return value;
 }
 
 /** Validate an effect disposition and return its optional known failure. */
-function requireEffectFailure(status: unknown, failure: unknown): MemoryOperationFailure | null {
+function requireEffectFailure(
+  status: ConversationEffectStatus,
+  failure: MemoryOperationFailure | null,
+): MemoryOperationFailure | null {
   requireString(status, "status");
-  if (!CONVERSATION_EFFECT_STATUSES.includes(status as ConversationEffectStatus)) {
-    throw new RangeError("invalid conversation effect status");
-  }
+  if (!CONVERSATION_EFFECT_STATUSES.includes(status)) throw new RangeError("invalid conversation effect status");
   if (failure !== null && !isExactly(failure, MemoryOperationFailure)) {
     throw new TypeError("failure must be a MemoryOperationFailure or null");
   }
@@ -1878,8 +1869,8 @@ export class ConversationEffectState {
     this.invocation = requireInvocation(invocation);
     this.effectOrdinal = requireCounter(effectOrdinal, "effect_ordinal", true);
     this.kind = requireEffectKind(kind);
-    this.request = freezeConversationJson(request, "request");
-    const checkedFailure = requireEffectFailure(status, failure);
+    this.request = freezeValueObject(request, "request");
+    this.failure = requireEffectFailure(status, failure);
     if (!isPlainArray(observationOrdinals)) throw new TypeError("observation_ordinals must be an array");
     let previous = effectOrdinal;
     for (const ordinal of observationOrdinals) {
@@ -1892,7 +1883,6 @@ export class ConversationEffectState {
     }
     this.status = status;
     this.observationOrdinals = Object.freeze([...observationOrdinals]);
-    this.failure = checkedFailure;
     Object.freeze(this);
   }
 }
@@ -1943,6 +1933,7 @@ export class ConversationApplied {
     try {
       parts = JSON.parse(operationId);
     } catch (error) {
+      // Python's `json.loads` raises `JSONDecodeError`, a `ValueError`.
       if (error instanceof SyntaxError) throw new RangeError(shape);
       throw error;
     }
@@ -2034,7 +2025,7 @@ export class ConversationView {
     this.namespace = requireString(namespace, "namespace");
     this.generation = requireCounter(generation, "generation");
     this.revision = requireCounter(revision, "revision");
-    this.compatibility = freezeConversationJson(compatibility, "compatibility");
+    this.compatibility = freezeValueObject(compatibility, "compatibility");
     this.items = requireConversationItems(items);
 
     if (!isPlainArray(effects)) throw new TypeError("effects must be an array");
@@ -2043,6 +2034,7 @@ export class ConversationView {
       if (!isExactly(effect, ConversationEffectState)) {
         throw new TypeError("effects must contain ConversationEffectState values");
       }
+      // JSON text, so equal identities built apart collide, as Python's dataclass hash does.
       const { runId, startSequence } = effect.invocation;
       const identity = JSON.stringify([runId, startSequence, effect.effectOrdinal]);
       if (effectIds.has(identity)) throw new RangeError("conversation effect identities must be unique");
@@ -2056,7 +2048,9 @@ export class ConversationView {
       if (!isExactly(completion, ConversationCompletion)) {
         throw new TypeError("closed_invocations must contain ConversationCompletion values");
       }
-      const identity = JSON.stringify([completion.invocation.runId, completion.invocation.startSequence]);
+      // JSON text, so equal identities built apart collide, as Python's dataclass hash does.
+      const { runId, startSequence } = completion.invocation;
+      const identity = JSON.stringify([runId, startSequence]);
       if (closedIds.has(identity)) throw new RangeError("closed invocation identities must be unique");
       closedIds.add(identity);
     }
@@ -2104,17 +2098,16 @@ export class ConversationAdmitted {
    *   other than the baseline's.
    */
   constructor(stamp: ConversationStamp, baseline: ConversationView) {
-    const checkedStamp = requireStamp(stamp, true);
+    this.stamp = requireStamp(stamp, true);
     if (!isExactly(baseline, ConversationView)) throw new TypeError("baseline must be a ConversationView");
+    this.baseline = baseline;
     if (
-      checkedStamp.namespace !== baseline.namespace ||
-      checkedStamp.generation !== baseline.generation ||
-      checkedStamp.expectedRevision !== baseline.revision
+      this.stamp.namespace !== baseline.namespace ||
+      this.stamp.generation !== baseline.generation ||
+      this.stamp.expectedRevision !== baseline.revision
     ) {
       throw new RangeError("admission stamp must match its baseline");
     }
-    this.stamp = checkedStamp;
-    this.baseline = baseline;
     Object.freeze(this);
   }
 }
@@ -2145,7 +2138,7 @@ export class ConversationEffectRequested {
   ) {
     this.stamp = requireStamp(stamp);
     this.kind = requireEffectKind(kind);
-    this.payload = freezeConversationJson(payload, "payload");
+    this.payload = freezeValueObject(payload, "payload");
     this.items = requireConversationItems(items);
     Object.freeze(this);
   }
@@ -2181,11 +2174,9 @@ export class ConversationEffectObserved {
     if (effectOrdinal >= this.stamp.ordinal) {
       throw new RangeError("observed effect ordinal must precede the observation");
     }
-    const checkedItems = requireConversationItems(items);
-    const checkedFailure = requireEffectFailure(status, failure);
+    this.items = requireConversationItems(items);
+    this.failure = requireEffectFailure(status, failure);
     this.status = status;
-    this.items = checkedItems;
-    this.failure = checkedFailure;
     Object.freeze(this);
   }
 }

@@ -21,6 +21,7 @@ import {
   splitModelConfig,
   validateConnection,
 } from "../src/llm_clients/connection.ts";
+import { requireConcreteSelection, validateLayer } from "../src/llm_clients/layers.ts";
 
 const STORE: Connection = {
   method: "api_key",
@@ -229,6 +230,9 @@ test("split and layer accept non-OpenAI metadata", () => {
   expect(splitModelConfig({ provider: "anthropic", model: "m", _connection: STORE })[1]).toEqual(STORE);
   rangeError(() => splitModelConfig({ provider: "ollama", model: "m", _connection: STORE }));
 
+  validateLayer({ provider: "anthropic", model: "m", _connection: STORE });
+  rangeError(() => validateLayer({ provider: "ollama", model: "m", _connection: STORE }));
+
   expect(
     rangeError(() =>
       splitModelConfig({
@@ -370,6 +374,48 @@ test("split carries headers beside the key", () => {
   expect(validated.apiKey).toBe("k");
 });
 
+test("layers refuse recorded header names", () => {
+  expect(rangeError(() => validateLayer({ provider: "anthropic", _header_names: ["X-Gateway"] })).message).toContain(
+    "_header_names is internal to recorded runs",
+  );
+});
+
+test("a recorded map takes settings only beside the marker", () => {
+  const marked: Record<string, unknown> = {
+    provider: "openai",
+    model: "m",
+    [HOST_KEY_MARKER]: true,
+    organization: "org-abc",
+    project: "proj-abc",
+    _header_names: ["X-Gateway"],
+  };
+  requireConcreteSelection(marked, { path: "agent" });
+  for (const key of ["organization", "project", "_header_names"]) {
+    const unmarked = { provider: "openai", model: "m", [key]: marked[key] };
+    expect(rangeError(() => requireConcreteSelection(unmarked, { path: "agent" })).message).toContain(
+      `'agent' has ${key} without a host key`,
+    );
+  }
+  for (const names of [[], ["X-B", "X-A"], ["Authorization"], "X-A"]) {
+    expect(
+      rangeError(() => requireConcreteSelection({ ...marked, _header_names: names }, { path: "agent" })).message,
+    ).toMatch(/'agent'.*_header_names/);
+  }
+  expect(
+    rangeError(() => requireConcreteSelection({ ...marked, organization: "has space" }, { path: "agent" })).message,
+  ).toMatch(/'agent'.*organization/);
+  for (const key of ["organization", "project"]) {
+    const anthropic = { ...marked, provider: "anthropic", [key]: marked[key] };
+    delete anthropic[key === "project" ? "organization" : "project"];
+    expect(rangeError(() => requireConcreteSelection(anthropic, { path: "agent" })).message).toContain(
+      `'agent': ${key} applies only to provider openai`,
+    );
+  }
+  expect(
+    rangeError(() => requireConcreteSelection({ ...marked, headers: { "X-Gateway": "v" } }, { path: "agent" })).message,
+  ).toContain("headers");
+});
+
 test("a legacy connection map pins each agent and leaves its input alone", () => {
   const effective = { o: { provider: "openai", model: "m" }, a: { provider: "anthropic", model: "m" } };
   const pinned = legacyConnectionMap(effective);
@@ -407,6 +453,27 @@ describe("TS additions", () => {
     expect(rangeError(() => checkModelConfig(subscription)).message).toContain("`openai.temperature`");
     // A host key sends the same agent to the Responses API, which accepts the block.
     checkModelConfig({ ...subscription, api_key: "host-key" });
+  });
+
+  test("validateLayer ignores undefined values", () => {
+    validateLayer({
+      provider: "anthropic",
+      model: "m",
+      [HOST_KEY_MARKER]: undefined,
+      _header_names: undefined,
+      api_key: undefined,
+      base_url: undefined,
+      sandbox: undefined,
+      temperature: undefined,
+      modle: undefined,
+      _connection: undefined,
+    });
+  });
+
+  test("constructor as a layer key is unknown", () => {
+    expect(rangeError(() => validateLayer({ constructor: "x" })).message).toContain(
+      'llm_config has unknown field(s) ["constructor"] (allowed: ',
+    );
   });
 
   test("refusedBlock names the block only when the block alone was refused", () => {

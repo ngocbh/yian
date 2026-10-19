@@ -99,10 +99,9 @@ export type ErrorLabel = string | ((path: ValuePath) => string);
  */
 export class BindingCapture {
   readonly #boundInputs: ValueRecord | null;
+  readonly #evaluatedKeys: ReadonlySet<string>;
   /** The record route of every recorded input, by name. */
   readonly route: ValueRoute;
-  /** The inputs whose source evaluated a `${...}` span. */
-  readonly evaluatedKeys: ReadonlySet<string>;
   /** Each item record's capture under the index its node gave it, in recording order. */
   readonly items: readonly (readonly [number, BindingCapture])[];
 
@@ -115,7 +114,7 @@ export class BindingCapture {
   ) {
     this.#boundInputs = boundInputs;
     this.route = route;
-    this.evaluatedKeys = new Set(evaluatedKeys);
+    this.#evaluatedKeys = new Set(evaluatedKeys);
     this.items = Object.freeze(items.map(([index, capture]) => Object.freeze([index, capture] as const)));
     Object.freeze(this);
   }
@@ -123,6 +122,11 @@ export class BindingCapture {
   /** Return a fresh copy of the complete pre-execution input record, or `null` when incomplete. */
   get boundInputs(): ValueRecord | null {
     return this.#boundInputs === null ? null : (copyValue(this.#boundInputs) as ValueRecord);
+  }
+
+  /** Return a fresh set of the inputs whose source evaluated a `${...}` span. */
+  get evaluatedKeys(): ReadonlySet<string> {
+    return new Set(this.#evaluatedKeys);
   }
 }
 
@@ -775,8 +779,9 @@ function copyValue(value: Value, copies: Map<object, Value> = new Map()): Value 
  * @throws TypeError when `params` isn't canonical.
  * @throws BindingError on an expression, default or required failure, a resolved value or filled
  *   default that nests deeper than `YIAN_MAX_VALUE_NESTING` levels or is refused by host intake
- *   (NaN, for one), a typed binding's rejection, or a supplied input's contract rejection;
- *   `failureCode` names the stage.
+ *   (NaN, or a non-plain object such as a nested `Binding` carrier in a literal source, which
+ *   Python passed through as a literal; both fail with `binding.evaluate`), a typed binding's
+ *   rejection, or a supplied input's contract rejection; `failureCode` names the stage.
  */
 export function bindParams(
   params: readonly Parameter[],

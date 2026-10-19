@@ -18,7 +18,8 @@
  * identity, and keeps an own `__proto__` key as data; and `BindingCollector` refuses a negative,
  * non-integer or repeated item index, keeps partial routes without usable inputs after
  * `invalidate` (its items invalidated too), refuses a second `freeze`, and its capture's
- * `boundInputs` gives a fresh copy on each read.
+ * `boundInputs` and `evaluatedKeys` give a fresh copy on each read; a capture built directly
+ * freezes its item pairs and copies its evaluated keys.
  *
  * Later: the 5 node and evaluator capture tests
  * (`test_binding_failure_keeps_partial_context_without_usable_inputs`,
@@ -37,8 +38,14 @@ import { expect, test } from "bun:test";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { TEMPLATE_FNS, registerTemplateFn } from "../../src/expr/builtins.ts";
 import { RequiredError } from "../../src/expr/index.ts";
-import { ResolvedValue, routeFeedback, SourceRef } from "../../src/expr/lineage.ts";
-import { applyDefaults, BindingCollector, BindingError, bindParams } from "../../src/nodes/binding.ts";
+import { ResolvedValue, routeFeedback, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
+import {
+  applyDefaults,
+  BindingCapture,
+  BindingCollector,
+  BindingError,
+  bindParams,
+} from "../../src/nodes/binding.ts";
 import { Binding, ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { FileRef, Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 
@@ -773,4 +780,22 @@ test("boundInputs gives a fresh copy on each read", () => {
   ((first["x"] as ValueRecord)["items"] as Value[]).push(2n);
   expect(captured.boundInputs).toEqual({ x: { items: [1n] } });
   expect(Object.isFrozen(captured)).toBe(true);
+});
+
+test("evaluatedKeys gives a fresh copy on each read", () => {
+  const collector = new BindingCollector();
+  bindParams([new Parameter("a")], new Map([["a", "${system.x}"]]), poolOf({ x: 1n }), { collector });
+  const captured = collector.freeze();
+  (captured.evaluatedKeys as Set<string>).add("zzz");
+  expect(captured.evaluatedKeys).toEqual(new Set(["a"]));
+});
+
+test("a capture built directly freezes its item pairs and copies its evaluated keys", () => {
+  const inner = new BindingCapture({ i: 1n }, ValueRoute.record([]), new Set());
+  const keys = new Set(["a"]);
+  const capture = new BindingCapture(null, ValueRoute.record([]), keys, [[0, inner]]);
+  expect(Object.isFrozen(capture.items)).toBe(true);
+  expect(Object.isFrozen(capture.items[0])).toBe(true);
+  keys.add("b");
+  expect(capture.evaluatedKeys).toEqual(new Set(["a"]));
 });

@@ -678,6 +678,12 @@ instead (`'g': numbers must be finite (got .nan)`; see [above](#yaml-values)); i
 input, a default, or a tagged output it still fails at run time with `binding.evaluate`.
 See [Expressions → Non-finite results](expressions.md#non-finite-results).
 
+Changed (TS yian): infinity is a float value (`inf`, `-inf`), so a binding may hold it, and
+there are no complex numbers. Only NaN, and anything else that isn't a yian value, fails a
+binding with `binding.evaluate`, in intake's message: `input 'y' at a[1]: NaN is not a yian
+value`; a default reads `default for 'x': ...`. A binding's int has no digit limit, so an int
+longer than 4300 digits binds too.
+
 A value nests at most 100 levels (`YIAN_MAX_VALUE_NESTING` can lower it; see [Defaults
 and limits](defaults.md)); each record and list is a level, and a record or list built
 around a value is one level deeper. A binding (an expression result, or a written-out

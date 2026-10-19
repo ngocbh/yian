@@ -1,5 +1,7 @@
 /** Tests for the auth objects, their headers and credentials, and the scrub in `src/llm/auth.ts`. */
 
+import { inspect } from "node:util";
+
 import { describe, expect, test } from "bun:test";
 
 import {
@@ -402,4 +404,25 @@ describe("ExtraHeadersAuth", () => {
     expect(await auth.headers()).toEqual({ "x-extra": "before" });
     expect(auth.credentials()).toEqual(["before"]);
   });
+});
+
+describe("inspect", () => {
+  const cases: [string, () => Auth][] = [
+    ["BearerAuth", () => new BearerAuth("sk-bearer-secret")],
+    ["BearerAuth with a callable key", () => new BearerAuth(() => "sk-callable-secret")],
+    ["HeaderKeyAuth", () => new HeaderKeyAuth("x-api-key", "k-header-secret")],
+    ["SubscriptionAuth", () => new SubscriptionAuth(() => access("tok-secret", "acct-secret", "us"))],
+    ["BasicAuth", () => new BasicAuth("user", "pw-secret")],
+    ["ExtraHeadersAuth", () => new ExtraHeadersAuth(new BearerAuth("sk-inner-secret"), { "x-gateway": "gw-secret" })],
+  ];
+  for (const [name, make] of cases) {
+    test(`${name} shows no secret, even after sending them`, async () => {
+      const auth = make();
+      await auth.headers();
+      const secrets = auth.credentials();
+      expect(secrets.length).toBeGreaterThan(0);
+      const shown = [Bun.inspect(auth), inspect(auth, { depth: Infinity })];
+      for (const text of shown) for (const secret of secrets) expect(text).not.toContain(secret);
+    });
+  }
 });

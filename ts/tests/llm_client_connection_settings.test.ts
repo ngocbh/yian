@@ -199,12 +199,10 @@ test.each(["anthropic", "google"])(
   assertHeaderValueStaysOut,
 );
 
-// Known gap: the auth objects keep the header values (and keys) in TS `private` fields, which
-// `Bun.inspect`, `console.log` and a deep `util.inspect` print; `#private` fields would hide
-// them, as `ApiKeyCredentials` does. Remove `.failing` once they do.
-test.failing("header values stay out of a full inspect of the model", async () => {
+test("header values stay out of a full inspect of the model", async () => {
   const model = await build({ ...HEADER_CONFIGS["deepseek"], headers: { "X-Gateway": GATEWAY } });
   expect(Bun.inspect(model)).not.toContain(GATEWAY);
+  expect(inspect(model, { depth: Infinity })).not.toContain(GATEWAY);
 });
 
 test.each(["LLMConfig", "dict"])("model from config sends the settings (%s)", async (carrier) => {

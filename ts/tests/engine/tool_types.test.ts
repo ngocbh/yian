@@ -312,29 +312,9 @@ test("an invalid shape has no type", () => {
   expect(typeFromJsonSchema(schema, { closed: true })).toBeNull();
 });
 
-// The schema pydantic generates for a field `v: Union[_Inner, str]`, `_Inner` holding `x: int`.
-const UNION_OF_A_MODEL_AND_A_SCALAR: Schema = {
-  $defs: {
-    _Inner: {
-      properties: { x: { title: "X", type: "integer" } },
-      required: ["x"],
-      title: "_Inner",
-      type: "object",
-    },
-  },
-  anyOf: [{ $ref: "#/$defs/_Inner" }, { type: "string" }],
-  title: "V",
-};
-
-describe("pydantic union of a model and a scalar has no type", () => {
-  test.each([false, true])("closed=%p", (closed) => {
-    expect(typeFromJsonSchema(UNION_OF_A_MODEL_AND_A_SCALAR, { closed })).toBeNull();
-  });
-});
-
 const INT = Type.scalar(ValueKind.INTEGER);
 
-/** A closed record of `fields`, every one required. */
+/** A record of `fields`, every one required. */
 function record(fields: Record<string, Type>): Type {
   return new Type({
     kind: ValueKind.OBJECT,
@@ -395,6 +375,26 @@ describe("translation never reports an accepted value as disjoint", () => {
     const declared = typeFromJsonSchema(schema, { closed });
     expect(declared).not.toBeNull();
     expect(typeRelation(inferred, declared!)).not.toBe("disjoint");
+  });
+});
+
+// The schema pydantic generates for a field `v: Union[_Inner, str]`, `_Inner` holding `x: int`.
+const UNION_OF_A_MODEL_AND_A_SCALAR: Schema = {
+  $defs: {
+    _Inner: {
+      properties: { x: { title: "X", type: "integer" } },
+      required: ["x"],
+      title: "_Inner",
+      type: "object",
+    },
+  },
+  anyOf: [{ $ref: "#/$defs/_Inner" }, { type: "string" }],
+  title: "V",
+};
+
+describe("pydantic union of a model and a scalar has no type", () => {
+  test.each([false, true])("closed=%p", (closed) => {
+    expect(typeFromJsonSchema(UNION_OF_A_MODEL_AND_A_SCALAR, { closed })).toBeNull();
   });
 });
 

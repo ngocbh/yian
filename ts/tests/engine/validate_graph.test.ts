@@ -11,7 +11,8 @@
  *
  * TS-only: `rejectCycles` on bare edges (the cycle message and `errors` for a two-node cycle,
  * as conformance `load-core/seed_e02_cycle`; the stuck nodes sorted; edges touching START and
- * END ignored; an acyclic graph passes), `FlowValidationError`'s `errors`, and `classifyPath`'s
+ * END ignored; an acyclic graph passes; an edge naming an unknown node throws, as Python's
+ * `KeyError`), `FlowValidationError`'s `errors`, and `classifyPath`'s
  * messages and its `null` for good paths.
  *
  * Later (T3-18): the cycle and CASE handle tests, which build seeds through compose.
@@ -29,9 +30,10 @@ import {
 import { typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 
+/** Resolve a type expression with no typedefs. */
 const t = (text: string): Type => typeFor(text, new Map());
 
-/** A closed record whose fields are all required. */
+/** A record whose fields are all required. */
 function rec(fields: Record<string, Type>): Type {
   return new Type({
     kind: ValueKind.OBJECT,
@@ -218,6 +220,15 @@ describe("TS-only: rejectCycles", () => {
       ),
     ).not.toThrow();
   });
+
+  test.each<[string, string]>([
+    ["x", "a"],
+    ["a", "x"],
+  ])("edge %s->%s naming an unknown node throws", (from, to) => {
+    expect(() => rejectCycles(edges([from, to]), new Set(["a"]))).toThrow(
+      "edge names unknown node 'x'",
+    );
+  });
 });
 
 describe("TS-only: FlowValidationError", () => {
@@ -232,7 +243,7 @@ describe("TS-only: classifyPath", () => {
   const targets = new Set(["a"]);
   const inputs = new Set(["q"]);
 
-  test.each([
+  test.each<[string, string[], string]>([
     ["input", [], "reference ${input} must be input.<name>"],
     ["input.zz", [], "reference ${input.zz} points to unknown flow input 'zz'"],
     [
@@ -272,11 +283,11 @@ describe("TS-only: classifyPath", () => {
     ],
     ["zz.output", [], "reference ${zz.output} uses unknown namespace 'zz'"],
     ["toString.output", [], "reference ${toString.output} uses unknown namespace 'toString'"],
-  ] as [string, string[], string][])("%s is refused", (path, extraHeads, message) => {
+  ])("%s is refused", (path, extraHeads, message) => {
     expect(classifyPath(path, targets, inputs, extraHeads)).toBe(message);
   });
 
-  test.each([
+  test.each<[string, string[]]>([
     ["input.q", []],
     ["input.q.deep", []],
     ["item", ["item"]],
@@ -286,7 +297,7 @@ describe("TS-only: classifyPath", () => {
     ["system.run_id", []],
     ["a.output", []],
     ["a.output.x.y", []],
-  ] as [string, string[]][])("%s is accepted", (path, extraHeads) => {
+  ])("%s is accepted", (path, extraHeads) => {
     expect(classifyPath(path, targets, inputs, extraHeads)).toBeNull();
   });
 

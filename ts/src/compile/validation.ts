@@ -87,6 +87,10 @@ export function rejectCycles(
   for (const edge of edges) {
     if (edge.from === START_ID || edge.from === END_ID) continue;
     if (edge.to === START_ID || edge.to === END_ID) continue;
+    // An edge naming a node outside `nodeIds` is a caller defect, as Python's KeyError is.
+    for (const end of [edge.from, edge.to]) {
+      if (!nodeIds.has(end)) throw new Error(`edge names unknown node ${reprText(end)}`);
+    }
     adjacency.get(edge.from)!.push(edge.to);
     inDegree.set(edge.to, inDegree.get(edge.to)! + 1);
   }
@@ -178,9 +182,8 @@ export function typesCompatible(source: Type, sink: Type): boolean {
     } else {
       return false;
     }
-    return members.every((member) =>
-      sink.variants!.some((option) => typesCompatible(member, option)),
-    );
+    const options = sink.variants;
+    return members.every((member) => options.some((option) => typesCompatible(member, option)));
   }
   if (sink.fields !== undefined) {
     // A union may hold a member other than this record, and load can't tell which.
@@ -262,6 +265,11 @@ function weakest(...relations: TypeRelation[]): TypeRelation {
   return relations.reduce((a, b) => (RELATION_RANK[b] < RELATION_RANK[a] ? b : a));
 }
 
+/** Return the most permissive of `relations`. */
+function strongest(...relations: TypeRelation[]): TypeRelation {
+  return relations.reduce((a, b) => (RELATION_RANK[b] > RELATION_RANK[a] ? b : a));
+}
+
 /** Return whether every item of `a` is in `b`. */
 function isSubset(a: Iterable<string>, b: { has(item: string): boolean }): boolean {
   for (const item of a) if (!b.has(item)) return false;
@@ -322,9 +330,7 @@ function relateUnion(inferred: Type, declared: Type): TypeRelation {
   const declaredMembers = declared.variants ?? [declared];
   const relations = new Set(
     inferredMembers.map((member) =>
-      declaredMembers
-        .map((option) => relateNonNull(member, option))
-        .reduce((a, b) => (RELATION_RANK[b] > RELATION_RANK[a] ? b : a)),
+      strongest(...declaredMembers.map((option) => relateNonNull(member, option))),
     ),
   );
   if (relations.size === 1) return [...relations][0]!;
@@ -350,6 +356,7 @@ function relateBounds(inferred: Type, declared: Type): TypeRelation {
   if (intervalWithin(inferred, declared)) return "fits";
   const [low, high] = inferred.bounds ?? [null, null];
   const [declaredLow, declaredHigh] = declared.bounds;
+  // The shared range runs from the larger low end to the smaller high end.
   let sharedLow = lowAtMost(low, declaredLow) ? declaredLow : low;
   let sharedHigh = highAtMost(high, declaredHigh) ? high : declaredHigh;
   if (inferred.kind === ValueKind.INTEGER) {
@@ -376,7 +383,8 @@ function relateTags(inferred: Type, declared: Type): TypeRelation {
   if (STRING_STORED.has(inferred.kind)) return tagsMeetKind(declared.tags, inferred.kind);
   if (inferred.tags === undefined) return "narrower";
   if (isSubset(inferred.tags, declared.tags)) return "fits";
-  return [...inferred.tags].some((tag) => declared.tags!.has(tag)) ? "narrower" : "disjoint";
+  const declaredTags = declared.tags;
+  return [...inferred.tags].some((tag) => declaredTags.has(tag)) ? "narrower" : "disjoint";
 }
 
 /** Return narrower when some tag is a valid `kind` string, else disjoint. */

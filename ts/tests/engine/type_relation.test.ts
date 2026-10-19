@@ -159,7 +159,7 @@ test("a record field both sides may hold None is narrower", () => {
   expect(typeRelation(inferred, t("AOpt"))).toBe("narrower");
 });
 
-test.each([
+test.each<[string, string, TypeRelation]>([
   // A union member over the union is explicit narrowing.
   ["Decision", "Buy", "narrower"],
   ["Buy", "Decision", "fits"],
@@ -178,7 +178,7 @@ test.each([
   ["Union(Buy, Sell)", "Union(Sell, Hold)", "narrower"],
   ["list(Buy)", "list(Decision)", "fits"],
   ["list(Decision)", "list(Buy)", "narrower"],
-] as [string, string, TypeRelation][])(
+])(
   "union: %s into %s is %s",
   (inferred, declared, expected) => {
     expect(typeRelation(t(inferred), t(declared))).toBe(expected);

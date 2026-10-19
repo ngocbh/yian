@@ -25,6 +25,7 @@ const REGISTRY = readTypedefs({
   WideOrder: { trade: "Union(Buy, Sell, Hold)" },
 });
 
+/** Resolve a type expression against the test typedefs. */
 const t = (text: string): Type => typeFor(text, REGISTRY);
 
 test("a union fits a wider union", () => {

@@ -14,7 +14,7 @@
  * the message `'(' was never closed` is CPython's).
  *
  * Held here until T3-22: the harvested cases at the end, whose error the CODE parse raises, each
- * under a comment naming the Python file it comes from.
+ * under a comment naming the Python file it comes from, and the flows that assemble.
  */
 
 import { expect, test } from "bun:test";
@@ -24,7 +24,7 @@ import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { type CaseRow, parsedNodes, runCase } from "./declarations.ts";
+import { assembled, type CaseRow, parsedNodes, runCase } from "./declarations.ts";
 
 const FLOW = `nodes:
   verdict:
@@ -118,13 +118,22 @@ test("build passes the base directory, the code origins and the title, and compi
 });
 
 // ---------- harvested conformance cases ----------
-// Later (T4-9): `load-leaves/seed_e30_inline_syntax_error`, `load-leaves/seed_e31_inline_no_return`,
-// `load-leaves/seed_e32_malformed_code_ref` and
-// `load-leaves/compose_kind_code_parse__quoted_body_syntax_error_frames_the_whole_scalar`, whose
-// errors come from compiling the CODE body.
+// Later (T4-9): `load-leaves/seed_e30_inline_syntax_error`, `load-leaves/seed_e32_malformed_code_ref`
+// and `load-leaves/compose_kind_code_parse__quoted_body_syntax_error_frames_the_whole_scalar`,
+// whose errors come from compiling the CODE body.
 
 test.each<CaseRow>([
   // tests/seeds/errors/
   { id: "load-leaves/seed_e11_field_not_allowed", call: parsedNodes },
   { id: "load-leaves/seed_e12_missing_required_field", call: parsedNodes },
 ])("parseNodes: $id", runCase);
+
+test.each<CaseRow>([
+  // tests/seeds/
+  { id: "load-agent/seed_01_structured_agent", call: assembled },
+  { id: "load-agent/seed_03_research_one", call: assembled },
+  { id: "load-leaves/seed_29_inline_code", call: assembled },
+  { id: "load-leaves/seed_30_reference_code", call: assembled },
+  // tests/seeds/errors/
+  { id: "load-leaves/seed_e31_inline_no_return", call: assembled },
+])("assembles: $id", runCase);

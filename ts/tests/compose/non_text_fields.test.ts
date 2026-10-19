@@ -2,8 +2,8 @@
  * A text or expression field YAML reads as non-text is a load error at that value: a port of
  * `tests/compose/test_non_text_fields.py`. Values are as TS YAML gives them: ints are `bigint`.
  * The flow rows read through `parseFile`, the node rows through `parseFile`, `flowNodesCursor`
- * and `parseNodes` with the registered kinds (the nine `ALL_KIND_NAMES` stand-ins for the kind
- * list).
+ * and `parseNodes` with the registered kinds (plus stand-ins for the kinds not registered yet, for
+ * the kind list).
  *
  * Changed: a flow with no `nodes:` says "missing required top-level key 'nodes'", where Python's
  * text is pydantic's. The null and text `node_name:` rows and the null optional flow field rows
@@ -48,7 +48,7 @@ import {
   runCase,
   runTextCase,
 } from "./declarations.ts";
-import { ALL_KIND_NAMES, standIn } from "./stand_ins.ts";
+import { standIn, UNREGISTERED_KIND_NAMES } from "./stand_ins.ts";
 
 afterEach(() => forget());
 
@@ -310,7 +310,7 @@ describe("parseFile", () => {
 });
 
 describe("parseNodes", () => {
-  const ALL_KINDS = ALL_KIND_NAMES.map((kind) => standIn(kind));
+  const UNREGISTERED_KINDS = UNREGISTERED_KIND_NAMES.map((kind) => standIn(kind));
 
   test.each(NON_TEXT)("non-text node name is a load error: %s", (value, phrase) => {
     const text = nodeNameFlow(value);
@@ -334,7 +334,7 @@ describe("parseNodes", () => {
   test.each(NON_TEXT)("non-text kind is a load error: %s", (value, phrase) => {
     const text = kindFlow(value);
 
-    const error = loadError(() => nodesOf(text, ALL_KINDS));
+    const error = loadError(() => nodesOf(text, UNREGISTERED_KINDS));
 
     expect(error.message).toContain(
       `node 'a': \`kind:\` must be text, but YAML read it as ${phrase}; ` +
@@ -348,7 +348,7 @@ describe("parseNodes", () => {
     ["llm", "unknown kind"],
     ["''", "unknown kind"],
   ])("null and text kinds are unchanged: %s", (value, fragment) => {
-    expect(loadError(() => nodesOf(kindFlow(value), ALL_KINDS)).message).toContain(fragment);
+    expect(loadError(() => nodesOf(kindFlow(value), UNREGISTERED_KINDS)).message).toContain(fragment);
   });
 
   test("a node's asserts must be a list of strings, located", () => {
@@ -406,7 +406,7 @@ describe("parseNodes", () => {
   });
 
   test.each([
-    ["load-core/compose_non_text_fields__non_text_kind", ALL_KINDS],
+    ["load-core/compose_non_text_fields__non_text_kind", UNREGISTERED_KINDS],
     ["load-core/compose_non_text_fields__null_kind", []],
   ] as const)("case %s", (id, kinds) =>
     runTextCase({ id, call: (text, label) => nodesOf(text, kinds, label) }),

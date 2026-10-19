@@ -1,12 +1,12 @@
 /**
  * The `when:` hint on a node body's unknown-key error: a port of
  * `tests/compose/test_node_when_hint.py`, through `parseFile`, `flowNodesCursor` and `parseNodes`
- * with stand-in kinds.
+ * with the registered kinds.
  *
- * Changed: `test_when_on_non_case_node_suggests_a_case_node` runs on the `code` stand-in, and
- * its per-kind sweep over the registered kinds but `case`, through `parseNodes` where Python
- * loads the flow; `test_when_on_case_node_points_at_cases_entries` runs on a `case` stand-in
- * carrying the case kind's `whenHint`. The harvested `compose_node_when_hint__when_on_*` cases of
+ * Changed: `test_when_on_non_case_node_suggests_a_case_node` sweeps the registered kinds but
+ * `case`, through `parseNodes` where Python loads the flow;
+ * `test_when_on_case_node_points_at_cases_entries` runs on a `case` stand-in carrying the case
+ * kind's `whenHint`. The harvested `compose_node_when_hint__when_on_*` cases of
  * the registered kinds are pinned.
  *
  * Later (T3-16): the sweep's rows and pinned cases for the kinds not registered yet, and the real
@@ -21,7 +21,7 @@ import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { compareCodeUnits } from "../../src/diagnostics.ts";
 import { type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "./declarations.ts";
-import { StandInCase, StandInCode, withKinds } from "./stand_ins.ts";
+import { StandInCase } from "./stand_ins.ts";
 
 afterEach(() => forget());
 
@@ -34,27 +34,13 @@ class HintedCase extends StandInCase {
     "; `when:` goes in each entry of `cases:` (`cases: [{when: ..., then: <node>}]`)";
 }
 
-/** Return the message of the `LoadError` parsing flow `text`'s nodes with `kinds` throws. */
-function nodesMessage(text: string, kinds: readonly DescriptorClass[]): string {
+/**
+ * Return the message of the `LoadError` parsing flow `text`'s nodes throws, with `kinds` (default
+ * none) registered.
+ */
+function nodesMessage(text: string, kinds: readonly DescriptorClass[] = []): string {
   return loadError(() => nodesOf(text, kinds)).message;
 }
-
-test("when on a non-case node suggests a case node", () => {
-  const text = `id: f
-name: f
-nodes:
-  x:
-    kind: code
-    when: \${x.output}
-output: \${x.output}
-`;
-
-  const message = nodesMessage(text, [StandInCode]);
-
-  expect(message).toContain("field 'when' is not allowed");
-  expect(message).toContain("(allowed: ");
-  expect(message).toContain(NON_CASE_HINT);
-});
 
 // call, loop and map check their `call:`-or-`nodes:` choice before body keys, so they need one.
 const EXTRA_BODY: ReadonlyMap<string, string> = new Map([
@@ -76,7 +62,7 @@ nodes:
 output: \${x.output}
 `;
 
-    const message = nodesMessage(text, []);
+    const message = nodesMessage(text);
 
     expect(message).toContain("field 'when' is not allowed");
     expect(message).toContain("(allowed: ");
@@ -114,7 +100,7 @@ nodes:
 output: \${b.output}
 `;
 
-  const message = nodesMessage(text, [HintedCase, StandInCode]);
+  const message = nodesMessage(text, [HintedCase]);
 
   expect(message).toContain("field 'when' is not allowed");
   expect(message).toContain(CASE_HINT);
@@ -131,7 +117,7 @@ test("when error points at the when key", () => {
   const nodes = SourceDocument.parse(source).root.child("nodes");
   const node = nodes.child("x");
 
-  const error = loadError(() => withKinds([StandInCode], () => parseNodes(nodes)));
+  const error = loadError(() => parseNodes(nodes));
 
   expect(error.message).toContain("field 'when' is not allowed");
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(node.rangeOf("when")!);
@@ -148,7 +134,7 @@ nodes:
 output: \${x.output}
 `;
 
-  const message = nodesMessage(text, [StandInCode]);
+  const message = nodesMessage(text);
 
   expect(message).toContain("field 'bogus' is not allowed");
   expect(message.endsWith(")")).toBe(true);
@@ -164,7 +150,7 @@ code: "def run(): return 1"
 when: \${input.flag}
 `;
 
-  const message = nodesMessage(text, [StandInCode]);
+  const message = nodesMessage(text);
 
   expect(message).toContain("field 'when' is not allowed");
   expect(message).toContain(NON_CASE_HINT);

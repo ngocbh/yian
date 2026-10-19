@@ -1,6 +1,6 @@
 /**
  * Compose keeps a node's YAML ranges and field labels on the transient build result, never on
- * the built node: a port of `tests/compose/test_field_ranges_guard.py` through `StandInCode`.
+ * the built node: a port of `tests/compose/test_field_ranges_guard.py`.
  *
  * Adapted: row 3 drops its equality half (TS has no dataclass `==`).
  *
@@ -12,7 +12,6 @@ import { expect, test } from "bun:test";
 import { BuildContext, BuildResult, type NodeDescriptor, siteKey } from "../../src/compose/nodes/base.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/document.ts";
-import { StandInCode, withKinds } from "./stand_ins.ts";
 
 const FLOW = `
 id: ranges
@@ -29,10 +28,10 @@ nodes:
 output: \${n.output}
 `;
 
-/** Parse `FLOW`'s node `n` with `StandInCode`. */
+/** Parse `FLOW`'s node `n`. */
 function parseN(): NodeDescriptor {
   const document = SourceDocument.parse(FLOW);
-  return withKinds([StandInCode], () => parseNodes(document.root.child("nodes")).get("n")!);
+  return parseNodes(document.root.child("nodes")).get("n")!;
 }
 
 const CTX = new BuildContext({ registry: new Map() });

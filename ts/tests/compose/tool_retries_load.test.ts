@@ -11,7 +11,8 @@
  * Python loads it; the bad value is spelled by `valueRepr` (`true`, `"2"`, `null` where Python
  * shows `True`, `'2'`, `None`).
  *
- * The harvested `load-leaves/compose_tool_retries_load__negative_retries` is pinned at the end.
+ * The harvested `load-leaves/compose_tool_retries_load__negative_retries` and
+ * `load-leaves/compose_tool_retries_load__retries_loads` are pinned at the end.
  *
  * Later (T3-22): `test_zero_retries_keeps_the_flow_fingerprint` pins a loaded flow's fingerprint.
  */
@@ -26,7 +27,7 @@ import { Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
-import { assembleText, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
 
 afterEach(() => forget());
 
@@ -114,5 +115,10 @@ test("nonzero retries changes the flow fingerprint", () => {
 
 test.each<CaseRow>([{ id: "load-leaves/compose_tool_retries_load__negative_retries", call: parsedNodes }])(
   "parseNodes: $id",
+  runCase,
+);
+
+test.each<CaseRow>([{ id: "load-leaves/compose_tool_retries_load__retries_loads", call: assembled }])(
+  "assembles: $id",
   runCase,
 );

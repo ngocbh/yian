@@ -7,6 +7,9 @@
  *
  * TS-only: a `retries:` past `Number.MAX_SAFE_INTEGER` is refused; `build` passes the title and
  * the retries to the node.
+ *
+ * Held here until T3-22: the harvested flows at the end that assemble, each under a comment naming
+ * where it comes from.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -18,7 +21,7 @@ import { SourceRange } from "../../src/diagnostics.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembleText, loadError } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
 
 const FLOW = `nodes:
   fetch:
@@ -135,3 +138,10 @@ test("build passes the title and the retries to the node", () => {
   expect(node.retries).toBe(2);
   expect(node.outputContract).toBeNull();
 });
+
+// ---------- harvested conformance cases ----------
+
+test.each<CaseRow>([
+  // tests/seeds/
+  { id: "load-leaves/seed_08_tool_news", call: assembled },
+])("assembles: $id", runCase);

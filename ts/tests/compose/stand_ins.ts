@@ -1,8 +1,8 @@
 /**
  * Stand-in node kinds for the Compose tests, for kinds not ported yet or rows that need a minimal
- * kind: `StandInAgent`, `StandInCode` and `StandInCase` shaped like the real kinds, `standIn` for
- * one-off classes, and `withKinds`, which registers classes in `KINDS` and `BINDING_FIELDS` for
- * one call.
+ * kind: `StandInCode` and `StandInCase` shaped like the real kinds, `standIn` for one-off classes,
+ * `UNREGISTERED_KIND_NAMES`, and `withKinds`, which registers classes in `KINDS` and
+ * `BINDING_FIELDS` for one call.
  */
 
 import {
@@ -27,17 +27,8 @@ export const ALL_KIND_NAMES: readonly string[] = [
   "wait",
 ];
 
-/** An `agent` stand-in taking `prompt`, `input` and `output`. */
-export class StandInAgent extends NodeDescriptor {
-  static override readonly kind = "agent";
-  static override readonly allowed = this.allow("prompt", "inputs", "outputs");
-  readonly prompt: unknown;
-
-  constructor(fields: NodeDescriptorFields & { prompt?: unknown }) {
-    super(fields);
-    this.prompt = fields.prompt ?? null;
-  }
-}
+/** The author-written kinds no real descriptor is registered for yet, for rows that need all nine. */
+export const UNREGISTERED_KIND_NAMES: readonly string[] = ALL_KIND_NAMES.filter((kind) => !KINDS.has(kind));
 
 /** A `code` stand-in requiring `code` and taking `input`, `output` and `asserts`; it builds. */
 export class StandInCode extends NodeDescriptor {

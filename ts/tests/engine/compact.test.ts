@@ -4,8 +4,7 @@
  * A compact flow carries a node `kind:` at the top level and no `nodes:` map. The parser
  * desugars it into the canonical one-node flow: the flow `id:` names the node, the flow `input:`
  * is the node signature auto-wired by name, the flow `output:` is the node's output type
- * re-exported as the flow output, and every other top-level key is the node body. The
- * projection row uses `StandInCode` for the code kind.
+ * re-exported as the flow output, and every other top-level key is the node body.
  *
  * Python reaches `test_compact_digit_id_rejected_without_parser_dump` and the full-form half of
  * `test_full_form_flow_id_may_keep_hyphens` through `load_flow`; TS calls `parseFile`.
@@ -26,7 +25,6 @@ import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { fileOf, loadError, runTextCase } from "../compose/declarations.ts";
-import { StandInCode, withKinds } from "../compose/stand_ins.ts";
 
 afterEach(() => forget());
 
@@ -56,7 +54,7 @@ test("the compact projection keeps logic ranges without changing the root", () =
   const parsed = parseFile(document);
 
   const cursor = flowNodesCursor(document, parsed.nodes);
-  const descriptor = withKinds([StandInCode], () => parseNodes(cursor)).get("echo_one")!;
+  const descriptor = parseNodes(cursor).get("echo_one")!;
 
   expect(cursor.document).toBe(document);
   expect(descriptor.range).toEqual(new SourceRange(2, 1, 2, 3));

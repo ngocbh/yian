@@ -24,7 +24,7 @@ import { parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts"
 import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { loadError, nodesOf, runTextCase } from "./declarations.ts";
-import { StandInCode, standIn } from "./stand_ins.ts";
+import { standIn } from "./stand_ins.ts";
 
 afterEach(() => forget());
 
@@ -159,7 +159,7 @@ test("a quoted key follows the usual name rules", () => {
   parseFile(parseSourceDocument(flowWith("x_block", "'2026-10-13'"), "k.yaml"));
 
   const call = standIn("call", { allow: ["nodes", "outputs"] });
-  const error = loadError(() => nodesOf(flowWith("root_node", "'1'"), [StandInCode, call]));
+  const error = loadError(() => nodesOf(flowWith("root_node", "'1'"), [call]));
 
   expect(error.diagnostic.message).not.toContain("names in a flow must be text");
   expect(error.diagnostic.message).toContain("_1");

@@ -11,7 +11,7 @@
  * question's text is refused at the text.
  *
  * Held here until T3-22: the harvested cases at the end, whose error the HUMAN_INPUT parse raises,
- * each under a comment naming the Python file it comes from.
+ * each under a comment naming the Python file it comes from, and the flows that assemble.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -540,3 +540,10 @@ test.each<CaseRow>([
   { id: "load-leaves/compose_kind_human_input_parse__questions_not_a_list_or_ref", call: assembled },
   { id: "load-leaves/compose_kind_human_input_parse__questions_text_around_a_ref", call: assembled },
 ])("assemble: $id", runCase);
+
+test.each<CaseRow>([
+  // tests/compose/test_kind_human_input_parse.py
+  { id: "load-leaves/compose_kind_human_input_parse__a_spaced_whole_questions_ref_loads", call: assembled },
+  // tests/engine/test_human_input_text_load.py
+  { id: "load-leaves/engine_human_input_text_load__a_clean_gate_loads", call: assembled },
+])("assembles: $id", runCase);

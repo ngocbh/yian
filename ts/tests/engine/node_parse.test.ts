@@ -1,8 +1,7 @@
 /**
  * The keyed-map flat-body node descriptors `parseNodes` reads: a port of
- * `tests/engine/test_node_parse.py`. Agent, code and tool rows read through `parseNodes` parse
- * with the registered kinds; the rows that check a common field or rule on a `code` node keep the
- * `StandInCode` stand-in of `tests/compose/stand_ins.ts`.
+ * `tests/engine/test_node_parse.py`. The rows read through `parseNodes` parse with the registered
+ * kinds.
  *
  * TS-only: `inf` is an expression keyword, so it is a rejected node id too.
  *
@@ -23,8 +22,8 @@
  *
  * The harvested cases whose error `parseNodes` raises are pinned at the end, with
  * `load-core/engine_author_id_ban__author_id_with_hash_is_loud` (from
- * `tests/engine/test_author_id_ban.py`) and the e10 and e42 seeds; the e10 row registers the
- * nine `ALL_KIND_NAMES` stand-ins, since its message lists them.
+ * `tests/engine/test_author_id_ban.py`) and the e10 and e42 seeds; the e10 row registers
+ * stand-ins for the kinds not registered yet, since its message lists all nine.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -38,12 +37,7 @@ import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { reprText } from "../../src/diagnostics.ts";
 import { caseText, loadError, nodesOf, runTextCase } from "../compose/declarations.ts";
-import {
-  ALL_KIND_NAMES,
-  StandInCode,
-  standIn,
-  withKinds,
-} from "../compose/stand_ins.ts";
+import { standIn, UNREGISTERED_KIND_NAMES, withKinds } from "../compose/stand_ins.ts";
 
 afterEach(() => forget());
 
@@ -145,7 +139,7 @@ nodes:
     code: "return 1"
 output: \${fetch-data.output}
 `;
-    const error = loadError(() => nodesOf(flow, [StandInCode]));
+    const error = loadError(() => nodesOf(flow));
 
     expect(error.message).toMatch(/node id 'fetch-data' must be an identifier.*try 'fetch_data'/);
     expect(error.message).not.toContain("unknown namespace");
@@ -244,14 +238,14 @@ x:
   asserts:
     - "output >= 0"
 `;
-    const node = nodes(text, [StandInCode]).get("x") as StandInCode;
+    const node = nodes(text).get("x") as CodeDescriptor;
 
     expect(node.asserts).toEqual(["output >= 0"]);
   });
 
   test("node asserts must be list of str", () => {
     const text = "\nx:\n  kind: code\n  code: m:f\n  output: int\n  asserts: not-a-list\n";
-    const error = loadError(() => nodes(text, [StandInCode]));
+    const error = loadError(() => nodes(text));
 
     expect(error.message).toBe("node 'x' (kind=code): `asserts:` must be a list of strings");
   });
@@ -294,10 +288,9 @@ fetch:
     values: list(float)
   code: tests.seeds.fns:fetch_facts
 `,
-      [StandInCode],
     ).get("fetch")!;
 
-    expect(node).toBeInstanceOf(StandInCode);
+    expect(node).toBeInstanceOf(CodeDescriptor);
     expect(node.nodeName).toBe("Fetch values");
     expect(node.dependsOn).toEqual(["warm_cache"]);
     expect(node.runsAfter).toEqual(["log_start"]);
@@ -316,7 +309,7 @@ fetch:
   test("field illegal for kind is loud", () => {
     // `prompt` is an agent field, illegal on a code node.
     const text = "\nn:\n  kind: code\n  code: tests.seeds.fns:f\n  prompt: not allowed here\n";
-    const error = loadError(() => nodes(text, [StandInCode]));
+    const error = loadError(() => nodes(text));
 
     expect(error.message).toContain("prompt");
     expect(error.diagnostic.frames.at(-1)!.range).not.toBeNull();
@@ -353,7 +346,7 @@ fetch:
         // A non-list, or a list of non-strings, is a located load error at parse time, not a
         // silent iteration over a string's characters or a mapping's keys.
         const text = `use:\n  kind: code\n  ${key}: ${value}\n  output: str\n  code: m:f\n`;
-        const error = loadError(() => nodes(text, [StandInCode]));
+        const error = loadError(() => nodes(text));
 
         expect(error.message).toContain(`\`${key}:\` must be a list of node ids`);
         expect(error.diagnostic.frames[0]!.range).not.toBeNull();
@@ -364,7 +357,7 @@ fetch:
       // `depends_on: fetch` is the natural slip; the error names the list spelling to write.
       const text = `use:\n  kind: code\n  ${key}: fetch\n  output: str\n  code: m:f\n`;
 
-      expect(loadError(() => nodes(text, [StandInCode])).message).toContain(
+      expect(loadError(() => nodes(text)).message).toContain(
         `write \`${key}: [fetch]\``,
       );
     });
@@ -375,7 +368,7 @@ test.each([
   // tests/engine/test_author_id_ban.py
   ["load-core/engine_author_id_ban__author_id_with_hash_is_loud", []],
   ["load-core/engine_node_parse__hyphenated_node_id", []],
-  ["load-core/seed_e10_unknown_node_kind", ALL_KIND_NAMES.map((kind) => standIn(kind))],
+  ["load-core/seed_e10_unknown_node_kind", UNREGISTERED_KIND_NAMES.map((kind) => standIn(kind))],
   ["load-core/seed_e42_removed_model_kind", []],
 ] as const)("parseNodes: %s", (id, kinds) =>
   runTextCase({ id, call: (text, label) => nodesOf(text, kinds, label) }),

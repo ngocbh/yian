@@ -128,6 +128,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   leaves its inputs unchanged; pass it one `seen` map for a whole graph.
 - An int in a config is a `bigint`; a `number` is a float, so a built-in key refuses `5` and takes
   `5n`.
+- A host memory is any object with `openRun({ snapshot })` and `reset()` (`isMemory` checks it, as
+  Python's `isinstance(value, Memory)`); both are synchronous, and a session has no `with` form:
+  the caller calls `close()` in `finally`.
 - The recall, learning evidence, learning and session conversation contracts, the session's
   recall, learn and commit methods, and the built-in backends are not ported yet.
 

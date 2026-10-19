@@ -57,7 +57,7 @@ export function hasOpenSchema(schema: JsonValue): boolean {
  * LangChain, title removal walks objects only, so a title inside an `anyOf`, `oneOf`, `allOf` or
  * `prefixItems` member is kept. Ported from langchain-core's `utils/function_calling.py`
  * (`_convert_json_schema_to_openai_function`, `_rm_titles`) and `utils/json_schema.py`
- * (`dereference_refs`).
+ * (`dereference_refs`) (see NOTICE).
  *
  * @param schema The JSON schema; it is not changed.
  * @param strict The tool's `strict` flag, passed through.
@@ -214,7 +214,8 @@ function childSchemas(node: JsonObject): JsonValue[] {
  * entry's keys winning; a `$ref` with sibling keys is replaced by its definition with the
  * siblings kept over it. A bare `{$ref}` and the `$defs` stay. It visits the `$defs` and
  * `definitions` values, the `properties` values, an `items` object and the `anyOf` and `allOf`
- * members. Ported from the openai SDK's `lib/_pydantic.py` (`_ensure_strict_json_schema`).
+ * members. Ported from the openai SDK's `lib/_pydantic.py` (`_ensure_strict_json_schema`) (see
+ * NOTICE).
  *
  * @param schema The JSON schema; it is not changed.
  * @returns The strict copy.
@@ -304,7 +305,7 @@ function keywordNote(keywords: JsonObject): string {
 }
 
 /** The keywords Azure OpenAI's strict structured output rejects, in the order their note lists them. */
-export const AZURE_STRICT_UNSUPPORTED: readonly string[] = [
+export const AZURE_STRICT_UNSUPPORTED: readonly string[] = Object.freeze([
   "minLength",
   "maxLength",
   "pattern",
@@ -324,7 +325,7 @@ export const AZURE_STRICT_UNSUPPORTED: readonly string[] = [
   "minItems",
   "maxItems",
   "uniqueItems",
-];
+]);
 
 /**
  * Return a copy of a JSON schema with the keywords Azure's strict mode rejects moved into
@@ -389,7 +390,7 @@ const ANTHROPIC_STRING_FORMATS = new Set([
  * its rebuilt `items` and a `minItems` of 0 or 1. Every other keyword is stated in the description
  * as a `{key: <JSON value>, …}` note, in the schema's key order, after the description and a blank
  * line when there is a string one.
- * Ported from the anthropic SDK's `lib/_parse/_transform.py` (`transform_schema`).
+ * Ported from the anthropic SDK's `lib/_parse/_transform.py` (`transform_schema`) (see NOTICE).
  *
  * @param schema The JSON schema; it is not changed.
  * @returns The rebuilt schema.

@@ -1,9 +1,9 @@
 /**
- * Host intake, `fromHost`, a port of `tests/engine/test_plain_containers.py`. TS yian reads a
- * host value (a tool or CODE result, an input) through `fromHost` where Python reads a node
- * output into plain containers: it returns a fresh value made of plain arrays and records, and
- * refuses what isn't a yian value. Each row that differs from Python carries a comment naming
- * its rule.
+ * Host intake, `fromHost`, a port of `tests/engine/test_plain_containers.py`, and its reverse,
+ * `toHost`. TS yian reads a host value (a tool or CODE result, an input) through `fromHost`
+ * where Python reads a node output into plain containers: it returns a fresh value made of
+ * plain arrays and records, and refuses what isn't a yian value. Each row that differs from
+ * Python carries a comment naming its rule.
  *
  * Ported: plain values and leaves (a `FileRef` kept; a class instance refused), shared values
  * copied once near the root and deep, the deep chain copied without recursion, an error from
@@ -16,6 +16,11 @@
  *
  * Also here: the cycle row of
  * `test_untyped_output_json.py::test_reject_non_json_locates_the_bad_part`.
+ *
+ * The `toHost` rows (TS-only; Python hands a host a deep copy of its own values): an int within
+ * ±(2^53−1) handed over as a `number` and beyond as a `bigint`, floats kept, fresh arrays and
+ * records, `__proto__` kept as an own data key, a `FileRef` kept, sharing kept, a 100 000-deep
+ * list without recursion, and the `fromHost` round trip.
  *
  * Not ported: the list, tuple and dict subclass rows read through their own iteration
  * (`HiddenList`, `HiddenDict`, `YieldsOneNan`, the namedtuple, the tuple rows), which are
@@ -31,6 +36,7 @@ import {
   buildValue,
   FileRef,
   fromHost,
+  toHost,
   TypeCheckError,
   type Value,
   type ValueRecord,
@@ -283,5 +289,73 @@ describe("fromHost", () => {
       thrown = error;
     }
     expect(thrown).toBe(boom);
+  });
+});
+
+describe("toHost", () => {
+  test.each<[string, Value, unknown]>([
+    ["a small int", 1n, 1],
+    ["the largest safe int", 2n ** 53n - 1n, 2 ** 53 - 1],
+    ["the smallest safe int", -(2n ** 53n - 1n), -(2 ** 53 - 1)],
+    ["an int just beyond 2^53-1", 2n ** 53n, 2n ** 53n],
+    ["an int just beyond -(2^53-1)", -(2n ** 53n), -(2n ** 53n)],
+    ["a float", 2.5, 2.5],
+    ["Infinity", Infinity, Infinity],
+    ["-Infinity", -Infinity, -Infinity],
+    ["text", "x", "x"],
+    ["true", true, true],
+    ["null", null, null],
+  ])("a scalar is handed over: %s", (_id, value, expected) => {
+    expect(toHost(value)).toBe(expected);
+  });
+
+  test("arrays and records are converted into fresh copies", () => {
+    const value: ValueRecord = { a: [1n, [2.5, "x"]], b: { c: 2n ** 60n } };
+    const out = toHost(value) as { a: unknown[]; b: Record<string, unknown> };
+    expect(out).toStrictEqual({ a: [1, [2.5, "x"]], b: { c: 2n ** 60n } });
+    expect(out).not.toBe(value);
+    out.a.push(3);
+    (out.a[1] as unknown[]).push(4);
+    out.b["d"] = 5;
+    expect(value).toStrictEqual({ a: [1n, [2.5, "x"]], b: { c: 2n ** 60n } });
+  });
+
+  test("a __proto__ key stays an own data key and no prototype changes", () => {
+    const value = fromHost(JSON.parse('{"__proto__": {"polluted": 1}, "a": 2}'), "x");
+    const out = toHost(value) as object;
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
+    expect(Object.keys(out)).toEqual(["__proto__", "a"]);
+    expect(Object.getOwnPropertyDescriptor(out, "__proto__")?.value).toStrictEqual({ polluted: 1 });
+    expect((out as { polluted?: unknown }).polluted).toBeUndefined();
+  });
+
+  test("a FileRef is the same object", () => {
+    const file = new FileRef({ uri: "file:///x" });
+    expect(toHost(file)).toBe(file);
+    expect((toHost([file]) as unknown[])[0]).toBe(file);
+  });
+
+  test("a shared value is copied once", () => {
+    const shared: Value[] = [1n];
+    const out = toHost({ l: shared, r: [shared] }) as { l: unknown; r: unknown[] };
+    expect(out.l).toBe(out.r[0]);
+    expect(out.l).toStrictEqual([1]);
+  });
+
+  test("a 100 000-deep list converts without recursion", () => {
+    let deep: Value = [];
+    for (let i = 0; i < 100_000; i++) deep = [deep];
+    let node = toHost(deep) as unknown[];
+    let depth = 0;
+    while (node.length > 0) {
+      node = node[0] as unknown[];
+      depth += 1;
+    }
+    expect(depth).toBe(100_000);
+  });
+
+  test("fromHost reads toHost's result back as the same value", () => {
+    const value: ValueRecord = { a: [1n, 2.5, -(2n ** 70n)], b: { c: 0n, d: "x", e: null } };
+    expect(fromHost(toHost(value), "x")).toEqual(value);
   });
 });

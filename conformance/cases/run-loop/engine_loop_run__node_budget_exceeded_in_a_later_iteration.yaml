@@ -1,3 +1,6 @@
+# From tests/engine/test_loop_run.py::test_loop_budget_exceeded_in_step_fails_run.
+# The test's budget of 6 now trips the first growth (at `loop`); 7 lets iteration 0 grow and trips the next
+# driver's growth (at `loop~1`), the later-iteration failure the test describes.
 kind: run
 flow: |2
 
@@ -60,7 +63,7 @@ python_flow: |2
       max: 10
   output: ${loop.output}
 env:
-  YIAN_MAX_TOTAL_NODES: '6'
+  YIAN_MAX_TOTAL_NODES: '7'
 run:
   num_workers: 0
 expect:
@@ -71,13 +74,13 @@ expect:
       frames:
       - label: flow.yaml
         range: [21, 3, 21, 7]
-      message: expansion exceeded node budget (6) at spawner 'loop'
-      node: loop
+      message: expansion exceeded node budget (7) at spawner 'loop~1'
+      node: loop~1
   trace:
   - - run_started
     - null
     - defaults:
-        MAX_TOTAL_NODES: 6
+        MAX_TOTAL_NODES: 7
       inputs: {}
       learnable: false
       num_workers: 0
@@ -86,15 +89,41 @@ expect:
     - __start__
     - value: {}
   - [node_started, loop]
-  - - node_failed
+  - - node_expanded
     - loop
+    - prune_ids: []
+      seed:
+      - exited: false
+        n: 0
+      - 0
+  - [node_started, loop#0/__start__]
+  - - node_succeeded
+    - loop#0/__start__
+    - value:
+        exited: false
+        n: 0
+  - [node_started, loop#0/step]
+  - - node_succeeded
+    - loop#0/step
+    - value:
+        exited: false
+        n: 1
+  - [node_started, loop#0/__end__]
+  - - node_succeeded
+    - loop#0/__end__
+    - value:
+        exited: false
+        n: 1
+  - [node_started, loop~1]
+  - - node_failed
+    - loop~1
     - failure:
         code: contract.growth
         frames:
         - label: flow.yaml
           range: [21, 3, 21, 7]
-        message: expansion exceeded node budget (6) at spawner 'loop'
-        node: loop
+        message: expansion exceeded node budget (7) at spawner 'loop~1'
+        node: loop~1
   events:
   - [RunStarted]
   - - NodeStarted
@@ -104,19 +133,50 @@ expect:
       output: {}
   - - NodeStarted
     - node_id: loop
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - exited: false
+          n: 0
+        - 0
+      node_id: loop
+  - - NodeStarted
+    - node_id: loop#0/__start__
+  - - NodeSucceeded
+    - node_id: loop#0/__start__
+      output:
+        exited: false
+        n: 0
+  - - NodeStarted
+    - node_id: loop#0/step
+  - - NodeSucceeded
+    - node_id: loop#0/step
+      output:
+        exited: false
+        n: 1
+  - - NodeStarted
+    - node_id: loop#0/__end__
+  - - NodeSucceeded
+    - node_id: loop#0/__end__
+      output:
+        exited: false
+        n: 1
+  - - NodeStarted
+    - node_id: loop~1
   - - NodeFailed
     - failure:
         code: contract.growth
         frames:
         - label: flow.yaml
           range: [21, 3, 21, 7]
-        message: expansion exceeded node budget (6) at spawner 'loop'
-        node: loop
+        message: expansion exceeded node budget (7) at spawner 'loop~1'
+        node: loop~1
   - - RunFailed
     - failure:
         code: contract.growth
         frames:
         - label: flow.yaml
           range: [21, 3, 21, 7]
-        message: expansion exceeded node budget (6) at spawner 'loop'
-        node: loop
+        message: expansion exceeded node budget (7) at spawner 'loop~1'
+        node: loop~1

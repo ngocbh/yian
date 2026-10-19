@@ -20,19 +20,6 @@ flow: |2
             n: int
             note: Optional(str)
       output: ${step.output}
-    bump_only:
-      input:
-        n: !int
-      nodes:
-        step:
-          kind: code
-          code: |
-            return {"n": inputs["n"] + 1n}
-          input:
-            n: ${input.n}
-          output:
-            n: int
-      output: ${step.output}
   nodes:
     loop:
       kind: loop
@@ -62,19 +49,6 @@ python_flow: |2
           output:
             n: int
             note: Optional(str)
-      output: ${step.output}
-    bump_only:
-      input:
-        n: !int
-      nodes:
-        step:
-          kind: code
-          code: |
-            return {"n": inputs["n"] + 1}
-          input:
-            n: ${input.n}
-          output:
-            n: int
       output: ${step.output}
   nodes:
     loop:

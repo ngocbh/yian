@@ -22,9 +22,6 @@ flow: |2
             return {"n": inputs["n"] + 1n, "r": {"answer": "ok"}}
       output: ${step.output}
   nodes:
-    prev:
-      kind: code
-      code: "return {hint: \"x\"}"
     ask:
       kind: loop
       call: body
@@ -57,9 +54,6 @@ python_flow: |2
             return {"n": inputs["n"] + 1, "r": {"answer": "ok"}}
       output: ${step.output}
   nodes:
-    prev:
-      kind: code
-      code: return dict(hint="x")
     ask:
       kind: loop
       call: body
@@ -96,11 +90,6 @@ expect:
       - n: 0
         r: null
       - 0
-  - [node_started, prev]
-  - - node_succeeded
-    - prev
-    - value:
-        hint: x
   - [node_started, ask#0/__start__]
   - - node_succeeded
     - ask#0/__start__
@@ -152,12 +141,6 @@ expect:
           r: null
         - 0
       node_id: ask
-  - - NodeStarted
-    - node_id: prev
-  - - NodeSucceeded
-    - node_id: prev
-      output:
-        hint: x
   - - NodeStarted
     - node_id: ask#0/__start__
   - - NodeSucceeded

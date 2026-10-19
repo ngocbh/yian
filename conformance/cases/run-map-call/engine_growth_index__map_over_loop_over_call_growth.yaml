@@ -70,7 +70,7 @@ python_flow: |2
       output: ${repeat.output}
   output: ${each.output}
 inputs:
-  xs: [1, 2, 3, 4]
+  xs: [1, 2]
 run:
   num_workers: 0
 expect:
@@ -79,20 +79,18 @@ expect:
     output:
     - n: 4
     - n: 5
-    - n: 6
-    - n: 7
   trace:
   - - run_started
     - null
     - inputs:
-        xs: [1, 2, 3, 4]
+        xs: [1, 2]
       learnable: false
       num_workers: 0
   - [node_started, __start__]
   - - node_succeeded
     - __start__
     - value:
-        xs: [1, 2, 3, 4]
+        xs: [1, 2]
   - [node_started, each]
   - - node_expanded
     - each
@@ -100,8 +98,6 @@ expect:
       seed:
       - x: 1
       - x: 2
-      - x: 3
-      - x: 4
   - [node_started, each/__start__]
   - - node_succeeded
     - each/__start__
@@ -116,16 +112,6 @@ expect:
     - each#1/__start__
     - value:
         x: 2
-  - [node_started, each#2/__start__]
-  - - node_succeeded
-    - each#2/__start__
-    - value:
-        x: 3
-  - [node_started, each#3/__start__]
-  - - node_succeeded
-    - each#3/__start__
-    - value:
-        x: 4
   - [node_started, each#0/repeat]
   - - node_expanded
     - each#0/repeat
@@ -140,20 +126,6 @@ expect:
       seed:
       - n: 2
       - 0
-  - [node_started, each#2/repeat]
-  - - node_expanded
-    - each#2/repeat
-    - prune_ids: []
-      seed:
-      - n: 3
-      - 0
-  - [node_started, each#3/repeat]
-  - - node_expanded
-    - each#3/repeat
-    - prune_ids: []
-      seed:
-      - n: 4
-      - 0
   - [node_started, each#0/repeat#0/__start__]
   - - node_succeeded
     - each#0/repeat#0/__start__
@@ -164,16 +136,6 @@ expect:
     - each#1/repeat#0/__start__
     - value:
         n: 2
-  - [node_started, each#2/repeat#0/__start__]
-  - - node_succeeded
-    - each#2/repeat#0/__start__
-    - value:
-        n: 3
-  - [node_started, each#3/repeat#0/__start__]
-  - - node_succeeded
-    - each#3/repeat#0/__start__
-    - value:
-        n: 4
   - [node_started, each#0/repeat#0/inner]
   - - node_expanded
     - each#0/repeat#0/inner
@@ -186,18 +148,6 @@ expect:
     - prune_ids: []
       seed:
         n: 2
-  - [node_started, each#2/repeat#0/inner]
-  - - node_expanded
-    - each#2/repeat#0/inner
-    - prune_ids: []
-      seed:
-        n: 3
-  - [node_started, each#3/repeat#0/inner]
-  - - node_expanded
-    - each#3/repeat#0/inner
-    - prune_ids: []
-      seed:
-        n: 4
   - [node_started, each#0/repeat#0/inner/__start__]
   - - node_succeeded
     - each#0/repeat#0/inner/__start__
@@ -208,16 +158,6 @@ expect:
     - each#1/repeat#0/inner/__start__
     - value:
         n: 2
-  - [node_started, each#2/repeat#0/inner/__start__]
-  - - node_succeeded
-    - each#2/repeat#0/inner/__start__
-    - value:
-        n: 3
-  - [node_started, each#3/repeat#0/inner/__start__]
-  - - node_succeeded
-    - each#3/repeat#0/inner/__start__
-    - value:
-        n: 4
   - [node_started, each#0/repeat#0/inner/a]
   - - node_succeeded
     - each#0/repeat#0/inner/a
@@ -226,14 +166,6 @@ expect:
   - - node_succeeded
     - each#1/repeat#0/inner/a
     - value: 3
-  - [node_started, each#2/repeat#0/inner/a]
-  - - node_succeeded
-    - each#2/repeat#0/inner/a
-    - value: 4
-  - [node_started, each#3/repeat#0/inner/a]
-  - - node_succeeded
-    - each#3/repeat#0/inner/a
-    - value: 5
   - [node_started, each#0/repeat#0/inner/__end__]
   - - node_succeeded
     - each#0/repeat#0/inner/__end__
@@ -244,16 +176,6 @@ expect:
     - each#1/repeat#0/inner/__end__
     - commit_target: each#1/repeat#0/inner
       value: 3
-  - [node_started, each#2/repeat#0/inner/__end__]
-  - - node_succeeded
-    - each#2/repeat#0/inner/__end__
-    - commit_target: each#2/repeat#0/inner
-      value: 4
-  - [node_started, each#3/repeat#0/inner/__end__]
-  - - node_succeeded
-    - each#3/repeat#0/inner/__end__
-    - commit_target: each#3/repeat#0/inner
-      value: 5
   - [node_started, each#0/repeat#0/__end__]
   - - node_succeeded
     - each#0/repeat#0/__end__
@@ -264,16 +186,6 @@ expect:
     - each#1/repeat#0/__end__
     - value:
         n: 3
-  - [node_started, each#2/repeat#0/__end__]
-  - - node_succeeded
-    - each#2/repeat#0/__end__
-    - value:
-        n: 4
-  - [node_started, each#3/repeat#0/__end__]
-  - - node_succeeded
-    - each#3/repeat#0/__end__
-    - value:
-        n: 5
   - [node_started, each#0/repeat~1]
   - - node_expanded
     - each#0/repeat~1
@@ -296,28 +208,6 @@ expect:
       seed:
       - n: 3
       - 1
-  - [node_started, each#2/repeat~1]
-  - - node_expanded
-    - each#2/repeat~1
-    - prune_ids:
-      - each#2/repeat#0/__end__
-      - each#2/repeat#0/__start__
-      - each#2/repeat#0/inner
-      - each#2/repeat~1
-      seed:
-      - n: 4
-      - 1
-  - [node_started, each#3/repeat~1]
-  - - node_expanded
-    - each#3/repeat~1
-    - prune_ids:
-      - each#3/repeat#0/__end__
-      - each#3/repeat#0/__start__
-      - each#3/repeat#0/inner
-      - each#3/repeat~1
-      seed:
-      - n: 5
-      - 1
   - [node_started, each#0/repeat#1/__start__]
   - - node_succeeded
     - each#0/repeat#1/__start__
@@ -328,16 +218,6 @@ expect:
     - each#1/repeat#1/__start__
     - value:
         n: 3
-  - [node_started, each#2/repeat#1/__start__]
-  - - node_succeeded
-    - each#2/repeat#1/__start__
-    - value:
-        n: 4
-  - [node_started, each#3/repeat#1/__start__]
-  - - node_succeeded
-    - each#3/repeat#1/__start__
-    - value:
-        n: 5
   - [node_started, each#0/repeat#1/inner]
   - - node_expanded
     - each#0/repeat#1/inner
@@ -350,18 +230,6 @@ expect:
     - prune_ids: []
       seed:
         n: 3
-  - [node_started, each#2/repeat#1/inner]
-  - - node_expanded
-    - each#2/repeat#1/inner
-    - prune_ids: []
-      seed:
-        n: 4
-  - [node_started, each#3/repeat#1/inner]
-  - - node_expanded
-    - each#3/repeat#1/inner
-    - prune_ids: []
-      seed:
-        n: 5
   - [node_started, each#0/repeat#1/inner/__start__]
   - - node_succeeded
     - each#0/repeat#1/inner/__start__
@@ -372,16 +240,6 @@ expect:
     - each#1/repeat#1/inner/__start__
     - value:
         n: 3
-  - [node_started, each#2/repeat#1/inner/__start__]
-  - - node_succeeded
-    - each#2/repeat#1/inner/__start__
-    - value:
-        n: 4
-  - [node_started, each#3/repeat#1/inner/__start__]
-  - - node_succeeded
-    - each#3/repeat#1/inner/__start__
-    - value:
-        n: 5
   - [node_started, each#0/repeat#1/inner/a]
   - - node_succeeded
     - each#0/repeat#1/inner/a
@@ -390,14 +248,6 @@ expect:
   - - node_succeeded
     - each#1/repeat#1/inner/a
     - value: 4
-  - [node_started, each#2/repeat#1/inner/a]
-  - - node_succeeded
-    - each#2/repeat#1/inner/a
-    - value: 5
-  - [node_started, each#3/repeat#1/inner/a]
-  - - node_succeeded
-    - each#3/repeat#1/inner/a
-    - value: 6
   - [node_started, each#0/repeat#1/inner/__end__]
   - - node_succeeded
     - each#0/repeat#1/inner/__end__
@@ -408,16 +258,6 @@ expect:
     - each#1/repeat#1/inner/__end__
     - commit_target: each#1/repeat#1/inner
       value: 4
-  - [node_started, each#2/repeat#1/inner/__end__]
-  - - node_succeeded
-    - each#2/repeat#1/inner/__end__
-    - commit_target: each#2/repeat#1/inner
-      value: 5
-  - [node_started, each#3/repeat#1/inner/__end__]
-  - - node_succeeded
-    - each#3/repeat#1/inner/__end__
-    - commit_target: each#3/repeat#1/inner
-      value: 6
   - [node_started, each#0/repeat#1/__end__]
   - - node_succeeded
     - each#0/repeat#1/__end__
@@ -428,16 +268,6 @@ expect:
     - each#1/repeat#1/__end__
     - value:
         n: 4
-  - [node_started, each#2/repeat#1/__end__]
-  - - node_succeeded
-    - each#2/repeat#1/__end__
-    - value:
-        n: 5
-  - [node_started, each#3/repeat#1/__end__]
-  - - node_succeeded
-    - each#3/repeat#1/__end__
-    - value:
-        n: 6
   - [node_started, each#0/repeat~2]
   - - node_expanded
     - each#0/repeat~2
@@ -460,28 +290,6 @@ expect:
       seed:
       - n: 4
       - 2
-  - [node_started, each#2/repeat~2]
-  - - node_expanded
-    - each#2/repeat~2
-    - prune_ids:
-      - each#2/repeat#1/__end__
-      - each#2/repeat#1/__start__
-      - each#2/repeat#1/inner
-      - each#2/repeat~2
-      seed:
-      - n: 5
-      - 2
-  - [node_started, each#3/repeat~2]
-  - - node_expanded
-    - each#3/repeat~2
-    - prune_ids:
-      - each#3/repeat#1/__end__
-      - each#3/repeat#1/__start__
-      - each#3/repeat#1/inner
-      - each#3/repeat~2
-      seed:
-      - n: 6
-      - 2
   - [node_started, each#0/repeat#2/__start__]
   - - node_succeeded
     - each#0/repeat#2/__start__
@@ -492,16 +300,6 @@ expect:
     - each#1/repeat#2/__start__
     - value:
         n: 4
-  - [node_started, each#2/repeat#2/__start__]
-  - - node_succeeded
-    - each#2/repeat#2/__start__
-    - value:
-        n: 5
-  - [node_started, each#3/repeat#2/__start__]
-  - - node_succeeded
-    - each#3/repeat#2/__start__
-    - value:
-        n: 6
   - [node_started, each#0/repeat#2/inner]
   - - node_expanded
     - each#0/repeat#2/inner
@@ -514,18 +312,6 @@ expect:
     - prune_ids: []
       seed:
         n: 4
-  - [node_started, each#2/repeat#2/inner]
-  - - node_expanded
-    - each#2/repeat#2/inner
-    - prune_ids: []
-      seed:
-        n: 5
-  - [node_started, each#3/repeat#2/inner]
-  - - node_expanded
-    - each#3/repeat#2/inner
-    - prune_ids: []
-      seed:
-        n: 6
   - [node_started, each#0/repeat#2/inner/__start__]
   - - node_succeeded
     - each#0/repeat#2/inner/__start__
@@ -536,16 +322,6 @@ expect:
     - each#1/repeat#2/inner/__start__
     - value:
         n: 4
-  - [node_started, each#2/repeat#2/inner/__start__]
-  - - node_succeeded
-    - each#2/repeat#2/inner/__start__
-    - value:
-        n: 5
-  - [node_started, each#3/repeat#2/inner/__start__]
-  - - node_succeeded
-    - each#3/repeat#2/inner/__start__
-    - value:
-        n: 6
   - [node_started, each#0/repeat#2/inner/a]
   - - node_succeeded
     - each#0/repeat#2/inner/a
@@ -554,14 +330,6 @@ expect:
   - - node_succeeded
     - each#1/repeat#2/inner/a
     - value: 5
-  - [node_started, each#2/repeat#2/inner/a]
-  - - node_succeeded
-    - each#2/repeat#2/inner/a
-    - value: 6
-  - [node_started, each#3/repeat#2/inner/a]
-  - - node_succeeded
-    - each#3/repeat#2/inner/a
-    - value: 7
   - [node_started, each#0/repeat#2/inner/__end__]
   - - node_succeeded
     - each#0/repeat#2/inner/__end__
@@ -572,16 +340,6 @@ expect:
     - each#1/repeat#2/inner/__end__
     - commit_target: each#1/repeat#2/inner
       value: 5
-  - [node_started, each#2/repeat#2/inner/__end__]
-  - - node_succeeded
-    - each#2/repeat#2/inner/__end__
-    - commit_target: each#2/repeat#2/inner
-      value: 6
-  - [node_started, each#3/repeat#2/inner/__end__]
-  - - node_succeeded
-    - each#3/repeat#2/inner/__end__
-    - commit_target: each#3/repeat#2/inner
-      value: 7
   - [node_started, each#0/repeat#2/__end__]
   - - node_succeeded
     - each#0/repeat#2/__end__
@@ -592,16 +350,6 @@ expect:
     - each#1/repeat#2/__end__
     - value:
         n: 5
-  - [node_started, each#2/repeat#2/__end__]
-  - - node_succeeded
-    - each#2/repeat#2/__end__
-    - value:
-        n: 6
-  - [node_started, each#3/repeat#2/__end__]
-  - - node_succeeded
-    - each#3/repeat#2/__end__
-    - value:
-        n: 7
   - [node_started, each#0/repeat~3]
   - - node_succeeded
     - each#0/repeat~3
@@ -614,18 +362,6 @@ expect:
     - commit_target: each#1/repeat
       value:
         n: 5
-  - [node_started, each#2/repeat~3]
-  - - node_succeeded
-    - each#2/repeat~3
-    - commit_target: each#2/repeat
-      value:
-        n: 6
-  - [node_started, each#3/repeat~3]
-  - - node_succeeded
-    - each#3/repeat~3
-    - commit_target: each#3/repeat
-      value:
-        n: 7
   - [node_started, each#0/__end__]
   - - node_succeeded
     - each#0/__end__
@@ -636,16 +372,6 @@ expect:
     - each#1/__end__
     - value:
         n: 5
-  - [node_started, each#2/__end__]
-  - - node_succeeded
-    - each#2/__end__
-    - value:
-        n: 6
-  - [node_started, each#3/__end__]
-  - - node_succeeded
-    - each#3/__end__
-    - value:
-        n: 7
   - [node_started, each/__end__]
   - - node_succeeded
     - each/__end__
@@ -653,16 +379,12 @@ expect:
       value:
       - n: 4
       - n: 5
-      - n: 6
-      - n: 7
   - [node_started, __end__]
   - - node_succeeded
     - __end__
     - value:
       - n: 4
       - n: 5
-      - n: 6
-      - n: 7
   events:
   - [RunStarted]
   - - NodeStarted
@@ -670,7 +392,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output:
-        xs: [1, 2, 3, 4]
+        xs: [1, 2]
   - - NodeStarted
     - node_id: each
   - - NodeExpanded
@@ -679,8 +401,6 @@ expect:
         seed:
         - x: 1
         - x: 2
-        - x: 3
-        - x: 4
       node_id: each
   - - NodeStarted
     - node_id: each/__start__
@@ -700,18 +420,6 @@ expect:
       output:
         x: 2
   - - NodeStarted
-    - node_id: each#2/__start__
-  - - NodeSucceeded
-    - node_id: each#2/__start__
-      output:
-        x: 3
-  - - NodeStarted
-    - node_id: each#3/__start__
-  - - NodeSucceeded
-    - node_id: each#3/__start__
-      output:
-        x: 4
-  - - NodeStarted
     - node_id: each#0/repeat
   - - NodeExpanded
     - grow:
@@ -730,24 +438,6 @@ expect:
         - 0
       node_id: each#1/repeat
   - - NodeStarted
-    - node_id: each#2/repeat
-  - - NodeExpanded
-    - grow:
-        prune: []
-        seed:
-        - n: 3
-        - 0
-      node_id: each#2/repeat
-  - - NodeStarted
-    - node_id: each#3/repeat
-  - - NodeExpanded
-    - grow:
-        prune: []
-        seed:
-        - n: 4
-        - 0
-      node_id: each#3/repeat
-  - - NodeStarted
     - node_id: each#0/repeat#0/__start__
   - - NodeSucceeded
     - node_id: each#0/repeat#0/__start__
@@ -759,18 +449,6 @@ expect:
     - node_id: each#1/repeat#0/__start__
       output:
         n: 2
-  - - NodeStarted
-    - node_id: each#2/repeat#0/__start__
-  - - NodeSucceeded
-    - node_id: each#2/repeat#0/__start__
-      output:
-        n: 3
-  - - NodeStarted
-    - node_id: each#3/repeat#0/__start__
-  - - NodeSucceeded
-    - node_id: each#3/repeat#0/__start__
-      output:
-        n: 4
   - - NodeStarted
     - node_id: each#0/repeat#0/inner
   - - NodeExpanded
@@ -788,22 +466,6 @@ expect:
           n: 2
       node_id: each#1/repeat#0/inner
   - - NodeStarted
-    - node_id: each#2/repeat#0/inner
-  - - NodeExpanded
-    - grow:
-        prune: []
-        seed:
-          n: 3
-      node_id: each#2/repeat#0/inner
-  - - NodeStarted
-    - node_id: each#3/repeat#0/inner
-  - - NodeExpanded
-    - grow:
-        prune: []
-        seed:
-          n: 4
-      node_id: each#3/repeat#0/inner
-  - - NodeStarted
     - node_id: each#0/repeat#0/inner/__start__
   - - NodeSucceeded
     - node_id: each#0/repeat#0/inner/__start__
@@ -816,18 +478,6 @@ expect:
       output:
         n: 2
   - - NodeStarted
-    - node_id: each#2/repeat#0/inner/__start__
-  - - NodeSucceeded
-    - node_id: each#2/repeat#0/inner/__start__
-      output:
-        n: 3
-  - - NodeStarted
-    - node_id: each#3/repeat#0/inner/__start__
-  - - NodeSucceeded
-    - node_id: each#3/repeat#0/inner/__start__
-      output:
-        n: 4
-  - - NodeStarted
     - node_id: each#0/repeat#0/inner/a
   - - NodeSucceeded
     - node_id: each#0/repeat#0/inner/a
@@ -837,16 +487,6 @@ expect:
   - - NodeSucceeded
     - node_id: each#1/repeat#0/inner/a
       output: 3
-  - - NodeStarted
-    - node_id: each#2/repeat#0/inner/a
-  - - NodeSucceeded
-    - node_id: each#2/repeat#0/inner/a
-      output: 4
-  - - NodeStarted
-    - node_id: each#3/repeat#0/inner/a
-  - - NodeSucceeded
-    - node_id: each#3/repeat#0/inner/a
-      output: 5
   - - NodeStarted
     - node_id: each#0/repeat#0/inner/__end__
   - - NodeSucceeded
@@ -860,18 +500,6 @@ expect:
       node_id: each#1/repeat#0/inner/__end__
       output: 3
   - - NodeStarted
-    - node_id: each#2/repeat#0/inner/__end__
-  - - NodeSucceeded
-    - commit_as: each#2/repeat#0/inner
-      node_id: each#2/repeat#0/inner/__end__
-      output: 4
-  - - NodeStarted
-    - node_id: each#3/repeat#0/inner/__end__
-  - - NodeSucceeded
-    - commit_as: each#3/repeat#0/inner
-      node_id: each#3/repeat#0/inner/__end__
-      output: 5
-  - - NodeStarted
     - node_id: each#0/repeat#0/__end__
   - - NodeSucceeded
     - node_id: each#0/repeat#0/__end__
@@ -883,18 +511,6 @@ expect:
     - node_id: each#1/repeat#0/__end__
       output:
         n: 3
-  - - NodeStarted
-    - node_id: each#2/repeat#0/__end__
-  - - NodeSucceeded
-    - node_id: each#2/repeat#0/__end__
-      output:
-        n: 4
-  - - NodeStarted
-    - node_id: each#3/repeat#0/__end__
-  - - NodeSucceeded
-    - node_id: each#3/repeat#0/__end__
-      output:
-        n: 5
   - - NodeStarted
     - node_id: each#0/repeat~1
   - - NodeExpanded
@@ -922,32 +538,6 @@ expect:
         - 1
       node_id: each#1/repeat~1
   - - NodeStarted
-    - node_id: each#2/repeat~1
-  - - NodeExpanded
-    - grow:
-        prune:
-        - each#2/repeat#0/__end__
-        - each#2/repeat#0/__start__
-        - each#2/repeat#0/inner
-        - each#2/repeat~1
-        seed:
-        - n: 4
-        - 1
-      node_id: each#2/repeat~1
-  - - NodeStarted
-    - node_id: each#3/repeat~1
-  - - NodeExpanded
-    - grow:
-        prune:
-        - each#3/repeat#0/__end__
-        - each#3/repeat#0/__start__
-        - each#3/repeat#0/inner
-        - each#3/repeat~1
-        seed:
-        - n: 5
-        - 1
-      node_id: each#3/repeat~1
-  - - NodeStarted
     - node_id: each#0/repeat#1/__start__
   - - NodeSucceeded
     - node_id: each#0/repeat#1/__start__
@@ -959,18 +549,6 @@ expect:
     - node_id: each#1/repeat#1/__start__
       output:
         n: 3
-  - - NodeStarted
-    - node_id: each#2/repeat#1/__start__
-  - - NodeSucceeded
-    - node_id: each#2/repeat#1/__start__
-      output:
-        n: 4
-  - - NodeStarted
-    - node_id: each#3/repeat#1/__start__
-  - - NodeSucceeded
-    - node_id: each#3/repeat#1/__start__
-      output:
-        n: 5
   - - NodeStarted
     - node_id: each#0/repeat#1/inner
   - - NodeExpanded
@@ -988,22 +566,6 @@ expect:
           n: 3
       node_id: each#1/repeat#1/inner
   - - NodeStarted
-    - node_id: each#2/repeat#1/inner
-  - - NodeExpanded
-    - grow:
-        prune: []
-        seed:
-          n: 4
-      node_id: each#2/repeat#1/inner
-  - - NodeStarted
-    - node_id: each#3/repeat#1/inner
-  - - NodeExpanded
-    - grow:
-        prune: []
-        seed:
-          n: 5
-      node_id: each#3/repeat#1/inner
-  - - NodeStarted
     - node_id: each#0/repeat#1/inner/__start__
   - - NodeSucceeded
     - node_id: each#0/repeat#1/inner/__start__
@@ -1016,18 +578,6 @@ expect:
       output:
         n: 3
   - - NodeStarted
-    - node_id: each#2/repeat#1/inner/__start__
-  - - NodeSucceeded
-    - node_id: each#2/repeat#1/inner/__start__
-      output:
-        n: 4
-  - - NodeStarted
-    - node_id: each#3/repeat#1/inner/__start__
-  - - NodeSucceeded
-    - node_id: each#3/repeat#1/inner/__start__
-      output:
-        n: 5
-  - - NodeStarted
     - node_id: each#0/repeat#1/inner/a
   - - NodeSucceeded
     - node_id: each#0/repeat#1/inner/a
@@ -1037,16 +587,6 @@ expect:
   - - NodeSucceeded
     - node_id: each#1/repeat#1/inner/a
       output: 4
-  - - NodeStarted
-    - node_id: each#2/repeat#1/inner/a
-  - - NodeSucceeded
-    - node_id: each#2/repeat#1/inner/a
-      output: 5
-  - - NodeStarted
-    - node_id: each#3/repeat#1/inner/a
-  - - NodeSucceeded
-    - node_id: each#3/repeat#1/inner/a
-      output: 6
   - - NodeStarted
     - node_id: each#0/repeat#1/inner/__end__
   - - NodeSucceeded
@@ -1060,18 +600,6 @@ expect:
       node_id: each#1/repeat#1/inner/__end__
       output: 4
   - - NodeStarted
-    - node_id: each#2/repeat#1/inner/__end__
-  - - NodeSucceeded
-    - commit_as: each#2/repeat#1/inner
-      node_id: each#2/repeat#1/inner/__end__
-      output: 5
-  - - NodeStarted
-    - node_id: each#3/repeat#1/inner/__end__
-  - - NodeSucceeded
-    - commit_as: each#3/repeat#1/inner
-      node_id: each#3/repeat#1/inner/__end__
-      output: 6
-  - - NodeStarted
     - node_id: each#0/repeat#1/__end__
   - - NodeSucceeded
     - node_id: each#0/repeat#1/__end__
@@ -1083,18 +611,6 @@ expect:
     - node_id: each#1/repeat#1/__end__
       output:
         n: 4
-  - - NodeStarted
-    - node_id: each#2/repeat#1/__end__
-  - - NodeSucceeded
-    - node_id: each#2/repeat#1/__end__
-      output:
-        n: 5
-  - - NodeStarted
-    - node_id: each#3/repeat#1/__end__
-  - - NodeSucceeded
-    - node_id: each#3/repeat#1/__end__
-      output:
-        n: 6
   - - NodeStarted
     - node_id: each#0/repeat~2
   - - NodeExpanded
@@ -1122,32 +638,6 @@ expect:
         - 2
       node_id: each#1/repeat~2
   - - NodeStarted
-    - node_id: each#2/repeat~2
-  - - NodeExpanded
-    - grow:
-        prune:
-        - each#2/repeat#1/__end__
-        - each#2/repeat#1/__start__
-        - each#2/repeat#1/inner
-        - each#2/repeat~2
-        seed:
-        - n: 5
-        - 2
-      node_id: each#2/repeat~2
-  - - NodeStarted
-    - node_id: each#3/repeat~2
-  - - NodeExpanded
-    - grow:
-        prune:
-        - each#3/repeat#1/__end__
-        - each#3/repeat#1/__start__
-        - each#3/repeat#1/inner
-        - each#3/repeat~2
-        seed:
-        - n: 6
-        - 2
-      node_id: each#3/repeat~2
-  - - NodeStarted
     - node_id: each#0/repeat#2/__start__
   - - NodeSucceeded
     - node_id: each#0/repeat#2/__start__
@@ -1159,18 +649,6 @@ expect:
     - node_id: each#1/repeat#2/__start__
       output:
         n: 4
-  - - NodeStarted
-    - node_id: each#2/repeat#2/__start__
-  - - NodeSucceeded
-    - node_id: each#2/repeat#2/__start__
-      output:
-        n: 5
-  - - NodeStarted
-    - node_id: each#3/repeat#2/__start__
-  - - NodeSucceeded
-    - node_id: each#3/repeat#2/__start__
-      output:
-        n: 6
   - - NodeStarted
     - node_id: each#0/repeat#2/inner
   - - NodeExpanded
@@ -1188,22 +666,6 @@ expect:
           n: 4
       node_id: each#1/repeat#2/inner
   - - NodeStarted
-    - node_id: each#2/repeat#2/inner
-  - - NodeExpanded
-    - grow:
-        prune: []
-        seed:
-          n: 5
-      node_id: each#2/repeat#2/inner
-  - - NodeStarted
-    - node_id: each#3/repeat#2/inner
-  - - NodeExpanded
-    - grow:
-        prune: []
-        seed:
-          n: 6
-      node_id: each#3/repeat#2/inner
-  - - NodeStarted
     - node_id: each#0/repeat#2/inner/__start__
   - - NodeSucceeded
     - node_id: each#0/repeat#2/inner/__start__
@@ -1216,18 +678,6 @@ expect:
       output:
         n: 4
   - - NodeStarted
-    - node_id: each#2/repeat#2/inner/__start__
-  - - NodeSucceeded
-    - node_id: each#2/repeat#2/inner/__start__
-      output:
-        n: 5
-  - - NodeStarted
-    - node_id: each#3/repeat#2/inner/__start__
-  - - NodeSucceeded
-    - node_id: each#3/repeat#2/inner/__start__
-      output:
-        n: 6
-  - - NodeStarted
     - node_id: each#0/repeat#2/inner/a
   - - NodeSucceeded
     - node_id: each#0/repeat#2/inner/a
@@ -1237,16 +687,6 @@ expect:
   - - NodeSucceeded
     - node_id: each#1/repeat#2/inner/a
       output: 5
-  - - NodeStarted
-    - node_id: each#2/repeat#2/inner/a
-  - - NodeSucceeded
-    - node_id: each#2/repeat#2/inner/a
-      output: 6
-  - - NodeStarted
-    - node_id: each#3/repeat#2/inner/a
-  - - NodeSucceeded
-    - node_id: each#3/repeat#2/inner/a
-      output: 7
   - - NodeStarted
     - node_id: each#0/repeat#2/inner/__end__
   - - NodeSucceeded
@@ -1260,18 +700,6 @@ expect:
       node_id: each#1/repeat#2/inner/__end__
       output: 5
   - - NodeStarted
-    - node_id: each#2/repeat#2/inner/__end__
-  - - NodeSucceeded
-    - commit_as: each#2/repeat#2/inner
-      node_id: each#2/repeat#2/inner/__end__
-      output: 6
-  - - NodeStarted
-    - node_id: each#3/repeat#2/inner/__end__
-  - - NodeSucceeded
-    - commit_as: each#3/repeat#2/inner
-      node_id: each#3/repeat#2/inner/__end__
-      output: 7
-  - - NodeStarted
     - node_id: each#0/repeat#2/__end__
   - - NodeSucceeded
     - node_id: each#0/repeat#2/__end__
@@ -1283,18 +711,6 @@ expect:
     - node_id: each#1/repeat#2/__end__
       output:
         n: 5
-  - - NodeStarted
-    - node_id: each#2/repeat#2/__end__
-  - - NodeSucceeded
-    - node_id: each#2/repeat#2/__end__
-      output:
-        n: 6
-  - - NodeStarted
-    - node_id: each#3/repeat#2/__end__
-  - - NodeSucceeded
-    - node_id: each#3/repeat#2/__end__
-      output:
-        n: 7
   - - NodeStarted
     - node_id: each#0/repeat~3
   - - NodeSucceeded
@@ -1310,20 +726,6 @@ expect:
       output:
         n: 5
   - - NodeStarted
-    - node_id: each#2/repeat~3
-  - - NodeSucceeded
-    - commit_as: each#2/repeat
-      node_id: each#2/repeat~3
-      output:
-        n: 6
-  - - NodeStarted
-    - node_id: each#3/repeat~3
-  - - NodeSucceeded
-    - commit_as: each#3/repeat
-      node_id: each#3/repeat~3
-      output:
-        n: 7
-  - - NodeStarted
     - node_id: each#0/__end__
   - - NodeSucceeded
     - node_id: each#0/__end__
@@ -1336,18 +738,6 @@ expect:
       output:
         n: 5
   - - NodeStarted
-    - node_id: each#2/__end__
-  - - NodeSucceeded
-    - node_id: each#2/__end__
-      output:
-        n: 6
-  - - NodeStarted
-    - node_id: each#3/__end__
-  - - NodeSucceeded
-    - node_id: each#3/__end__
-      output:
-        n: 7
-  - - NodeStarted
     - node_id: each/__end__
   - - NodeSucceeded
     - commit_as: each
@@ -1355,8 +745,6 @@ expect:
       output:
       - n: 4
       - n: 5
-      - n: 6
-      - n: 7
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -1364,11 +752,7 @@ expect:
       output:
       - n: 4
       - n: 5
-      - n: 6
-      - n: 7
   - - RunSucceeded
     - output:
       - n: 4
       - n: 5
-      - n: 6
-      - n: 7

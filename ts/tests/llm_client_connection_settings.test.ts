@@ -188,7 +188,9 @@ const HEADER_CONFIGS: Record<string, Record<string, unknown>> = {
 async function assertHeaderValueStaysOut(provider: string): Promise<void> {
   const model = await build({ ...HEADER_CONFIGS[provider], headers: { "X-Gateway": GATEWAY } });
   expect(JSON.stringify(model.route.headers)).not.toContain(GATEWAY);
-  expect(inspect(model)).not.toContain(GATEWAY);
+  // A full inspect: the default depth would stop before the auth object's fields.
+  expect(Bun.inspect(model)).not.toContain(GATEWAY);
+  expect(inspect(model, { depth: Infinity })).not.toContain(GATEWAY);
   expect(model.route.auth.credentials()).toContain(GATEWAY);
 }
 
@@ -198,12 +200,6 @@ test.each(["anthropic", "google"])(
   "anthropic and google header values stay out of the model fields (%s)",
   assertHeaderValueStaysOut,
 );
-
-test("header values stay out of a full inspect of the model", async () => {
-  const model = await build({ ...HEADER_CONFIGS["deepseek"], headers: { "X-Gateway": GATEWAY } });
-  expect(Bun.inspect(model)).not.toContain(GATEWAY);
-  expect(inspect(model, { depth: Infinity })).not.toContain(GATEWAY);
-});
 
 test.each(["LLMConfig", "dict"])("model from config sends the settings (%s)", async (carrier) => {
   const fields = {
@@ -290,7 +286,7 @@ test("subscription model refuses connection headers", async () => {
     new OAuthCredentials({
       accessToken: "synthetic-access",
       refreshToken: "synthetic-refresh",
-      expiresAt: Date.now() / 1000 + 3600,
+      expiresAt: 4_102_444_800,
       accountId: "synthetic-account",
     }),
     "gpt-5.5",

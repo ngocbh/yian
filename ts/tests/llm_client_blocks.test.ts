@@ -11,7 +11,7 @@
  * builds and calls a model for every case, since TS keeps the other providers' cases in their
  * protocol body tests.
  *
- * Elsewhere: the text-beside-the-structured-output-format test is `llm/structured.test.ts`'s; the
+ * Elsewhere: the text-beside-the-structured-output-format test is `llm/openai_responses_body.test.ts`'s; the
  * Azure no-renaming, DeepSeek, MiniMax `reasoning_split` and no-block body tests are the
  * `openai_chat` and `openai_responses` body tests'. Dropped: the `extra_body` merge test (TS has
  * no `extra_body`).

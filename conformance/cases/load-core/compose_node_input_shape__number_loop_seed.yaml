@@ -1,0 +1,77 @@
+kind: load
+flow: |
+  id: input-shape
+  name: input_shape
+  input:
+    z: !int
+  defs:
+    step:
+      input:
+        n: !int
+      nodes:
+        b:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": inputs["n"] + 1n}
+      output: ${b.output}
+  nodes:
+    seed:
+      kind: code
+      input:
+        z: ${input.z}
+      output:
+        n: int
+      code: |
+        return {"n": inputs["z"]}
+    repeat:
+      kind: loop
+      times: 2
+      call: step
+      input: 5
+  output: ${repeat.output}
+python_flow: |
+  id: input-shape
+  name: input_shape
+  input:
+    z: !int
+  defs:
+    step:
+      input:
+        n: !int
+      nodes:
+        b:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": inputs["n"] + 1}
+      output: ${b.output}
+  nodes:
+    seed:
+      kind: code
+      input:
+        z: ${input.z}
+      output:
+        n: int
+      code: |
+        return {"n": inputs["z"]}
+    repeat:
+      kind: loop
+      times: 2
+      call: step
+      input: 5
+  output: ${repeat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''repeat'' (kind=loop): `input:` must be a mapping of carried fields (got 5); list each carried field, such as `<field>: ...`'
+      frames:
+      - label: flow.yaml
+        range: [32, 12, 32, 13]

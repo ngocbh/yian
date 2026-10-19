@@ -1,0 +1,24 @@
+# The harvest tagged this `code`, but the frame is flow structure, the same in both languages.
+# `('#' and '/' ...)` quotes the reserved characters in yian's wording, shared.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    bad#id:
+      kind: code
+      input:
+        x: ${input.x}
+      output: str
+      code: return 1
+  output: ${bad#id.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: node id 'bad#id' uses a reserved separator ('#' and '/' are reserved for runtime graph expansion; '.' is reserved for reference paths)
+      frames:
+      - label: flow.yaml
+        range: [7, 5, 12, 1]

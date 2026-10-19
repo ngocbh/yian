@@ -1,0 +1,29 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    a: {kind: code, code: ./fixtures/seeds.ts:one_line_summary, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+  system:
+    paths: 5
+python_flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    a: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+  system:
+    paths: 5
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'system: paths must be a list of strings'
+      frames:
+      - label: flow.yaml
+        range: [9, 10, 9, 11]

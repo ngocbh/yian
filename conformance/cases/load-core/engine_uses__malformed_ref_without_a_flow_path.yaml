@@ -1,0 +1,48 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    a: {kind: code, code: ./fixtures/seeds.ts:one_line_summary, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+  uses:
+    m: '@v1'
+python_flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    a: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+  uses:
+    m: '@v1'
+files:
+  child.yaml: |
+    id: child
+    name: child
+    input:
+      x: !str
+    nodes:
+      c: {kind: code, code: ./fixtures/seeds.ts:one_line_summary, input: {x: "${input.x}"}}
+    output: {y: "${c.output}"}
+python_files:
+  child.yaml: |
+    id: child
+    name: child
+    input:
+      x: !str
+    nodes:
+      c: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
+    output: {y: "${c.output}"}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'uses: ref ''@v1'' has no flow path'
+      frames:
+      - label: flow.yaml
+        range: [9, 6, 9, 11]
+        note: uses alias 'm'

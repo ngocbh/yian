@@ -1,0 +1,31 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    proj: !str
+  nodes:
+    a:
+      kind: case
+      on: ${input.proj}
+      cases:
+        - when: x
+          then: 5
+      else: c
+    b:
+      kind: code
+      output: str
+      code: "return 'b'"
+    c:
+      kind: code
+      output: str
+      code: "return 'c'"
+  output: ${b.output | c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''a'' then: a branch names a node or calls a flow; put the value in its own entry in `nodes:` and name it: `a_then_0: !int 5` and `then: a_then_0`'
+      frames:
+      - label: flow.yaml
+        range: [11, 15, 11, 16]

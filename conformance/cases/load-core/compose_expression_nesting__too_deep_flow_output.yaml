@@ -1,0 +1,39 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    x: !int
+    s: !str
+  nodes:
+    use:
+      kind: code
+      input:
+        topic: ${input.s}
+      output: str
+      code: |
+        return String(inputs['topic'])
+  output: "${-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(1)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))}"
+python_flow: |
+  id: f
+  name: f
+  input:
+    x: !int
+    s: !str
+  nodes:
+    use:
+      kind: code
+      input:
+        topic: ${input.s}
+      output: str
+      code: |
+        return str(inputs['topic'])
+  output: "${-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(1)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))}"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'flow outputs: expression nests deeper than 100 levels, the limit for a yian expression (each call, list, unary operator, comparison, and chain of operators is a level); split it into smaller bindings or steps'
+      frames:
+      - label: flow.yaml
+        range: [14, 9, 14, 318]

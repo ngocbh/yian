@@ -1,0 +1,30 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    xs: !list(int)
+  defs:
+    body:
+      input:
+        v: !int
+      nodes:
+        one:
+          kind: code
+          output: {v: int}
+          code: "return {'v': 1}"
+      output: ${one.output}
+  nodes:
+    a:
+      kind: call
+      call: true
+      input: {v: 1}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'' (kind=call): `call:` must be text, but YAML read it as a boolean; put it in quotes'
+      frames:
+      - label: flow.yaml
+        range: [18, 11, 18, 15]

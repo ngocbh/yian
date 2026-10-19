@@ -1,0 +1,67 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  defs:
+    step:
+      input:
+        n: !int
+        exited: !bool
+      nodes:
+        s:
+          kind: code
+          code: "return {n: inputs['n'] + 1n, exited: inputs['n'] >= 2n}"
+          input:
+            n: ${input.n}
+          output:
+            n: int
+            exited: bool
+      output: ${s.output}
+  nodes:
+    repeat:
+      kind: loop
+      call: step
+      input:
+        n: 0
+        exited: false
+      while: "not ${exited}"
+      max: 5
+  output: ${repeat.output}
+python_flow: |2
+
+  id: f
+  name: f
+  defs:
+    step:
+      input:
+        n: !int
+        exited: !bool
+      nodes:
+        s:
+          kind: code
+          code: "return {'n': inputs['n'] + 1, 'exited': inputs['n'] >= 2}"
+          input:
+            n: ${input.n}
+          output:
+            n: int
+            exited: bool
+      output: ${s.output}
+  nodes:
+    repeat:
+      kind: loop
+      call: step
+      input:
+        n: 0
+        exited: false
+      while: "not ${exited}"
+      max: 5
+  output: ${repeat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''repeat'': `while:` is not a valid boolean expression: `${...}` can''t appear inside an expression; write `not exited`'
+      frames:
+      - label: flow.yaml
+        range: [26, 12, 26, 27]

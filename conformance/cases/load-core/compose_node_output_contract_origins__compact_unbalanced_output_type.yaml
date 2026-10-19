@@ -1,0 +1,16 @@
+# `'list('` is yian's quote of the type text, shared by both languages.
+kind: load
+flow: |
+  id: invalid_compact_output
+  name: invalid_compact_output
+  kind: code
+  code: return 7
+  output: list(
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad type expression ''list('': malformed type expression ''list('': unbalanced parentheses — if this type sits inside a `{...}` mapping, its comma split it; quote it or use block style'
+      frames:
+      - label: flow.yaml
+        range: [5, 9, 5, 14]

@@ -1,0 +1,38 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    s:
+      kind: code
+      output: int
+      code: "return {'output': 1}"
+    gate:
+      kind: case
+      cases:
+        - when: "s.output >= 1"
+          then: call(helper, x=${nope.output})
+      else: s
+  output: ${gate.output}
+  defs:
+    helper:
+      input:
+        x: !int
+      nodes:
+        h:
+          kind: code
+          code: "return {'output': 1}"
+          input:
+            x: ${input.x}
+          output: int
+      output: ${h.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'gate' cases[0].then call(helper) argument 'x' from: reference ${nope.output} uses unknown namespace 'nope'
+      frames:
+      - label: flow.yaml
+        range: [12, 15, 12, 45]

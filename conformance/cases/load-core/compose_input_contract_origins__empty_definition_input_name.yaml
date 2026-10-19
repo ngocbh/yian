@@ -1,0 +1,21 @@
+kind: load
+flow: |
+  id: invalid-definition-input
+  name: invalid-definition-input
+  defs:
+    child:
+      input:
+        '': !int
+      nodes: {}
+  nodes: {}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''child'': flow input names must be non-empty strings'
+      frames:
+      - label: flow.yaml
+        range: [5, 5, 8, 1]
+        note: definition 'child'
+      - label: flow.yaml
+        range: [6, 7, 6, 9]

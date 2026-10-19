@@ -1,0 +1,21 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input:
+    s: !str
+  nodes:
+    c:
+      kind: code
+      code: |
+        return 1
+  output: ${isinstance(input.s, Nope)}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'flow output: unknown type ''Nope''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object'
+      frames:
+      - label: flow.yaml
+        range: [11, 9, 11, 37]

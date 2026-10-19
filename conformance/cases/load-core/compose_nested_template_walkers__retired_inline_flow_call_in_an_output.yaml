@@ -1,0 +1,30 @@
+kind: load
+flow: |2
+
+  id: nested
+  name: nested
+  defs:
+    sub:
+      nodes: {}
+  nodes:
+    p:
+      kind: code
+      code: |
+        return "hi"
+    c:
+      kind: code
+      input:
+        x: ${p.output}
+      code: |
+        return inputs["x"]
+  output:
+    r:
+      a: ${ sub(x=c.output) }
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'flow outputs: a flow call ''sub'' inside ${...} is not supported — write it as the whole value with the call(...) directive: call(sub, ...)'
+      frames:
+      - label: flow.yaml
+        range: [19, 3, 21, 1]

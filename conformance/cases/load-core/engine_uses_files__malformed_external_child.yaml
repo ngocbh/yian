@@ -1,0 +1,51 @@
+# No TS `message`: it is PyYAML's text (rules: yaml); python_expect keeps it.
+kind: load
+rules: [yaml]
+flow: |
+  id: p
+  name: p
+  input:
+    x: !str
+  nodes:
+    a: {kind: call, call: ch, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+  uses:
+    ch: child
+files:
+  child.yaml: 'id: ['
+  p.yaml: |
+    id: p
+    name: p
+    input:
+      x: !str
+    nodes:
+      a: {kind: call, call: ch, input: {x: "${input.x}"}}
+    output: {y: "${a.output}"}
+    uses:
+      ch: child
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      frames:
+      - label: flow.yaml
+        range: [9, 7, 9, 12]
+        note: uses alias 'ch'
+      - label: child.yaml
+        range: [1, 6, 1, 7]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        invalid YAML: while parsing a flow node
+        expected the node content, but found '<stream end>'
+          in "<unicode string>", line 1, column 6:
+            id: [
+                 ^
+      frames:
+      - label: flow.yaml
+        range: [9, 7, 9, 12]
+        note: uses alias 'ch'
+      - label: child.yaml
+        range: [1, 6, 1, 7]

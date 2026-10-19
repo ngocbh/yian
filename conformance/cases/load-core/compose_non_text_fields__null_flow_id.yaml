@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: null
+  name: f
+  description: d
+  version: '1'
+  nodes:
+    a:
+      kind: code
+      output: str
+      code: "return 'x'"
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '`id:` must be text, but it is empty; write the text'
+      frames:
+      - label: flow.yaml
+        range: [1, 5, 1, 9]

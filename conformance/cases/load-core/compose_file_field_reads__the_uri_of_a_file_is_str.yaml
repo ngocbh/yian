@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    f: !file
+  nodes:
+    b:
+      kind: code
+      input:
+        x: !int ${input.f.uri}
+      output: int
+      code: return 1
+  output: ${b.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''b'' input ''x'': declared int, but the value is str'
+      frames:
+      - label: flow.yaml
+        range: [9, 10, 9, 29]

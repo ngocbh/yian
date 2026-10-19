@@ -1,0 +1,25 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    proj: !str
+  nodes:
+    ask:
+      kind: human_input
+      input:
+        proj: ${input.proj}
+      questions:
+        - question: "Which framework for ${upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(proj)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))}?"
+          header: Framework
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'ask' questions[0].question: expression nests deeper than 100 levels, the limit for a yian expression (each call, list, unary operator, comparison, and chain of operators is a level); split it into smaller bindings or steps
+      frames:
+      - label: flow.yaml
+        range: [11, 19, 11, 756]

@@ -1,0 +1,73 @@
+# The harvest tagged this `code`, but the frame is flow structure, the same in both languages.
+kind: load
+flow: |
+  id: input-shape-defs
+  name: input_shape_defs
+  input:
+    z: !int
+  defs:
+    step:
+      input:
+        n: !int
+      nodes:
+        b:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": inputs["n"] + 1n}
+        c:
+          kind: code
+          input: ${b.output}
+          code: return 1
+      output: ${b.output}
+  nodes:
+    run:
+      kind: call
+      call: step
+      input:
+        n: ${input.z}
+  output: ${run.output}
+python_flow: |
+  id: input-shape-defs
+  name: input_shape_defs
+  input:
+    z: !int
+  defs:
+    step:
+      input:
+        n: !int
+      nodes:
+        b:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": inputs["n"] + 1}
+        c:
+          kind: code
+          input: ${b.output}
+          code: return 1
+      output: ${b.output}
+  nodes:
+    run:
+      kind: call
+      call: step
+      input:
+        n: ${input.z}
+  output: ${run.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''step'': node ''c'' (kind=code): `input:` must be a mapping of parameter names to bindings (got the reference ''${b.output}''); bind each parameter, such as `<field>: ${b.output.<field>}`'
+      frames:
+      - label: flow.yaml
+        range: [7, 5, 23, 1]
+        note: definition 'step'
+      - label: flow.yaml
+        range: [20, 16, 20, 27]

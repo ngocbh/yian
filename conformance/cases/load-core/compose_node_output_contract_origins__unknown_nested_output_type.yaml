@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: invalid-nested-output-type
+  name: invalid-nested-output-type
+  nodes:
+    emit:
+      kind: code
+      code: 'return {"profile": {"age": 7}}'
+      output:
+        profile:
+          age: DefinitelyNotAType
+  output: ${emit.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad type expression ''DefinitelyNotAType'': unknown type ''DefinitelyNotAType'''
+      frames:
+      - label: flow.yaml
+        range: [9, 14, 9, 32]

@@ -1,0 +1,38 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+  input:
+    xs: !list(Rec)
+  defs:
+    each:
+      input:
+        v: !str
+      nodes:
+        inner:
+          kind: code
+          input:
+            v: ${input.v}
+          output: str
+          code: return 'x'
+      output: ${inner.output}
+  nodes:
+    m:
+      kind: map
+      call: each
+      over: ${input.xs}
+      input:
+        v: ${item.b}
+  output: ${m.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'm' map input 'v' from: reference ${item.b} reads unknown field 'b' on record
+      frames:
+      - label: flow.yaml
+        range: [25, 10, 25, 19]

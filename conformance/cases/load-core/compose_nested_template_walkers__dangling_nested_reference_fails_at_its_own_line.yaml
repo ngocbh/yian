@@ -1,0 +1,12 @@
+kind: load
+flow: "\nid: nested\nname: nested\nnodes:\n  p:\n    kind: code\n    code: |\n      return \"hi\"\n  c:\n    kind: code\n    input:\n      x: \n        a: ${p.output}\n        b: ${nope.output}\n    code: |\n      return inputs[\"x\"]\noutput: ${c.output}\n"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'c' input 'x' from: reference ${nope.output} uses unknown namespace 'nope'
+      frames:
+      - label: flow.yaml
+        range: [14, 12, 14, 26]

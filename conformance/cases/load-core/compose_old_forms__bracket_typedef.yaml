@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Buy:
+      action: Literal[buy]
+  input:
+    b: !Buy
+  kind: code
+  code: return inputs['b']
+  output: Buy
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad typedefs: typedef ''Buy'' field ''action'': types use parentheses: `Literal(buy)`'
+      frames:
+      - label: flow.yaml
+        range: [5, 13, 5, 25]

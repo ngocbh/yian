@@ -1,0 +1,73 @@
+kind: load
+flow: |
+  id: input-shape
+  name: input_shape
+  input:
+    z: !int
+  defs:
+    step:
+      input:
+        n: !int
+      nodes:
+        b:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": inputs["n"] + 1n}
+      output: ${b.output}
+  nodes:
+    seed:
+      kind: code
+      input:
+        z: ${input.z}
+      output:
+        n: int
+      code: |
+        return {"n": inputs["z"]}
+    under_test:
+      kind: code
+      code: return 1
+      input: ${seed.output}
+python_flow: |
+  id: input-shape
+  name: input_shape
+  input:
+    z: !int
+  defs:
+    step:
+      input:
+        n: !int
+      nodes:
+        b:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": inputs["n"] + 1}
+      output: ${b.output}
+  nodes:
+    seed:
+      kind: code
+      input:
+        z: ${input.z}
+      output:
+        n: int
+      code: |
+        return {"n": inputs["z"]}
+    under_test:
+      kind: code
+      code: return 1
+      input: ${seed.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''under_test'' (kind=code): `input:` must be a mapping of parameter names to bindings (got the reference ''${seed.output}''); bind each parameter, such as `<field>: ${seed.output.<field>}`'
+      frames:
+      - label: flow.yaml
+        range: [31, 12, 31, 26]

@@ -1,0 +1,33 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    x: !int
+    s: !str
+  nodes:
+    route:
+      kind: case
+      cases:
+        - when: "not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not true"
+          then: yes
+      else: no
+    yes:
+      kind: code
+      output: str
+      code: |
+        return 'yes'
+    no:
+      kind: code
+      output: str
+      code: |
+        return 'no'
+  output: ${yes.output | no.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'': `when:` ''not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not true'' is not a valid boolean expression: expression nests deeper than 100 levels, the limit for a yian expression (each call, list, unary operator, comparison, and chain of operators is a level); split it into smaller bindings or steps'
+      frames:
+      - label: flow.yaml
+        range: [10, 15, 10, 425]

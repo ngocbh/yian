@@ -1,0 +1,19 @@
+# The harvest tagged this `code`, but the frame is flow structure, the same in both languages.
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    a:
+      kind: code
+      output: str
+      code: [a]
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'' (kind=code): `code:` must be text, but YAML read it as a list; put it in quotes'
+      frames:
+      - label: flow.yaml
+        range: [7, 11, 7, 14]

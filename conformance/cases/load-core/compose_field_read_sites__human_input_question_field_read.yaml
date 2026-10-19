@@ -1,0 +1,73 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: "return ({a: \"x\"})"
+    h:
+      kind: human_input
+      input:
+        v: ${step.output}
+      prompt: "Pick for ${v.a}"
+      questions:
+        - question: "${v.b}"
+          header: Pick
+          options:
+            - label: one
+              description: the first
+  output: ${h.output}
+python_flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: return dict(a='x')
+    h:
+      kind: human_input
+      input:
+        v: ${step.output}
+      prompt: "Pick for ${v.a}"
+      questions:
+        - question: "${v.b}"
+          header: Pick
+          options:
+            - label: one
+              description: the first
+  output: ${h.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'h' questions[0].question: reference ${v.b} reads unknown field 'b' on record
+      frames:
+      - label: flow.yaml
+        range: [25, 19, 25, 27]

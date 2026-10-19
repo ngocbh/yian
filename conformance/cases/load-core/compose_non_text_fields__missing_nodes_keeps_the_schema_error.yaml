@@ -1,0 +1,13 @@
+# No `message`: it is pydantic's text (a validation library's message), not yian's.
+kind: load
+flow: |
+  id: f
+  name: f
+  output: x
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      frames:
+      - label: flow.yaml
+        range: [1, 1, 4, 1]

@@ -1,0 +1,26 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    a:
+      kind: case
+      cases:
+        - when: "ghost.output >= 1"
+          then: b
+      else: b
+    b:
+      kind: code
+      output: int
+      code: "return {'output': 1}"
+  output: ${b.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'a' cases[0].when from: reference ${ghost.output} uses unknown namespace 'ghost'
+      frames:
+      - label: flow.yaml
+        range: [7, 15, 7, 34]

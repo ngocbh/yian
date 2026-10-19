@@ -1,0 +1,43 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: str
+      code: "return null"
+    settle:
+      kind: wait
+      until: ${step.output.at}
+  output: ${step.output}
+python_flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: str
+      code: return None
+    settle:
+      kind: wait
+      until: ${step.output.at}
+  output: ${step.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'settle' wait until: reference ${step.output.at} reads field 'at' on type str, which has no fields
+      frames:
+      - label: flow.yaml
+        range: [14, 12, 14, 29]

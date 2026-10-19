@@ -1,0 +1,73 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  defs:
+    each:
+      input:
+        v: !str
+      nodes:
+        inner:
+          kind: code
+          input:
+            v: ${input.v}
+          output: str
+          code: return 'x'
+      output: ${inner.output}
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: str
+      code: "return null"
+    m:
+      kind: map
+      call: each
+      over: ${step.output.items}
+      input:
+        v: ${item}
+  output: ${m.output}
+python_flow: |
+  id: p
+  name: p
+  defs:
+    each:
+      input:
+        v: !str
+      nodes:
+        inner:
+          kind: code
+          input:
+            v: ${input.v}
+          output: str
+          code: return 'x'
+      output: ${inner.output}
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: str
+      code: return None
+    m:
+      kind: map
+      call: each
+      over: ${step.output.items}
+      input:
+        v: ${item}
+  output: ${m.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'm' map over: reference ${step.output.items} reads field 'items' on type str, which has no fields
+      frames:
+      - label: flow.yaml
+        range: [27, 11, 27, 31]

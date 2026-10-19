@@ -1,0 +1,71 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+    Short: {action: 'Literal(short)', qty: int}
+    Hold: {action: 'Literal(hold)'}
+    Trade: Union(Buy, Short, Hold)
+    Sized: Union(Buy, Short)
+    A: {x: int}
+    B: {y: str}
+    AB: Union(A, B)
+  input:
+    s: !str
+    r: !Rec
+    o: !Order
+    ab: !AB
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: "return ({a: \"x\"})"
+  output: ${step.output}
+  asserts:
+    - "input.o.qty > 0 and isinstance(input.o, Buy)"
+python_flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+    Short: {action: 'Literal(short)', qty: int}
+    Hold: {action: 'Literal(hold)'}
+    Trade: Union(Buy, Short, Hold)
+    Sized: Union(Buy, Short)
+    A: {x: int}
+    B: {y: str}
+    AB: Union(A, B)
+  input:
+    s: !str
+    r: !Rec
+    o: !Order
+    ab: !AB
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: return dict(a='x')
+  output: ${step.output}
+  asserts:
+    - "input.o.qty > 0 and isinstance(input.o, Buy)"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'assert ''input.o.qty > 0 and isinstance(input.o, Buy)'': reference ${input.o.qty} reads field ''qty'', which only union members with action buy have; check the member first with `isinstance(input.o, <Type>) and ...`'
+      frames:
+      - label: flow.yaml
+        range: [30, 5, 30, 51]

@@ -1,0 +1,35 @@
+kind: load
+flow: |
+  id: system_fields
+  name: system_fields
+  nodes:
+    read:
+      kind: code
+      input:
+        t: ${system.run_id.x.y}
+      output: str
+      code: |
+        return String(inputs["t"])
+  output: ${read.output}
+python_flow: |
+  id: system_fields
+  name: system_fields
+  nodes:
+    read:
+      kind: code
+      input:
+        t: ${system.run_id.x.y}
+      output: str
+      code: |
+        return str(inputs["t"])
+  output: ${read.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'read' input 't' from: reference ${system.run_id.x.y} reads field 'x' on type str, which has no fields
+      frames:
+      - label: flow.yaml
+        range: [7, 10, 7, 30]

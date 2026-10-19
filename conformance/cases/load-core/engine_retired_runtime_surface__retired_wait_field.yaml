@@ -1,0 +1,20 @@
+kind: load
+flow: |2
+
+  id: retired-wait-poll
+  name: retired_wait_poll
+  input: {}
+  nodes:
+    wait:
+      kind: wait
+      until: 2000-01-01
+      poll: retired
+  output: ${wait.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''wait'' (kind=wait): field ''poll'' is not allowed (allowed: depends_on, env, kind, node_name, runs_after, until)'
+      frames:
+      - label: flow.yaml
+        range: [9, 11, 9, 18]

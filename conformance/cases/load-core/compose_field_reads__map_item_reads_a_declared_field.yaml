@@ -1,0 +1,30 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+  input:
+    xs: !list(Rec)
+  defs:
+    each:
+      input:
+        v: !str
+      nodes:
+        inner:
+          kind: code
+          input:
+            v: ${input.v}
+          output: str
+          code: return 'x'
+      output: ${inner.output}
+  nodes:
+    m:
+      kind: map
+      call: each
+      over: ${input.xs}
+      input:
+        v: ${item.a}
+  output: ${m.output}
+expect:
+  load: ok

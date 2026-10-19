@@ -1,0 +1,28 @@
+kind: load
+flow: |
+  id: parent
+  name: parent
+  defs:
+    child:
+      nodes:
+        step:
+          kind: code
+          output: str
+          code: |
+            return "filled"
+      output: {}
+  nodes:
+    c:
+      kind: call
+      call: child
+  output: ${c.output.missing}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          flow output from: reference ${c.output.missing} reads unknown field 'missing' on record
+      frames:
+      - label: flow.yaml
+        range: [16, 9, 16, 28]

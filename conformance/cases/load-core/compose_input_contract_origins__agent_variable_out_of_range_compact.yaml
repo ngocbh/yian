@@ -1,0 +1,17 @@
+kind: load
+flow: |
+  id: projected_variables
+  name: projected_variables
+  kind: agent
+  variables:
+    count: !int(1..12) 13
+  prompt: ${count}
+  output: str
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''count'': `13` is not a valid int(1..12)'
+      frames:
+      - label: flow.yaml
+        range: [5, 10, 5, 24]

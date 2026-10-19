@@ -1,0 +1,12 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    a:
+      kind: tool
+      tool_id: '5'
+      input: {symbol: x}
+  output: ${a.output}
+expect:
+  load: ok

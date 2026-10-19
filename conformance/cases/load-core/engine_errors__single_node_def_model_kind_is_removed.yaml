@@ -1,0 +1,32 @@
+kind: load
+flow: |2
+
+  id: def-model
+  name: def_model
+  input:
+    topic: !str
+  defs:
+    score:
+      kind: model
+      model_id: x
+      input:
+        topic: !str
+      output: float
+  nodes:
+    rank:
+      kind: call
+      call: score
+      input:
+        topic: ${input.topic}
+  output: ${rank.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''score'': node ''score'': kind ''model'' was removed; serve the model behind a host tool and call it with kind: tool (set tool_id: and input:)'
+      frames:
+      - label: flow.yaml
+        range: [8, 5, 13, 1]
+        note: definition 'score'
+      - label: flow.yaml
+        range: [8, 11, 8, 16]

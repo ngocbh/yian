@@ -1,0 +1,27 @@
+kind: load
+flow: |
+  id: projected_variables
+  name: projected_variables
+  defs:
+    child:
+      kind: agent
+      variables:
+        count: !int(1..12) 13
+      prompt: ${count}
+      output: str
+  nodes:
+    invoke:
+      kind: call
+      call: child
+  output: ${invoke.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''child'': ''count'': `13` is not a valid int(1..12)'
+      frames:
+      - label: flow.yaml
+        range: [5, 5, 10, 1]
+        note: definition 'child'
+      - label: flow.yaml
+        range: [7, 14, 7, 28]

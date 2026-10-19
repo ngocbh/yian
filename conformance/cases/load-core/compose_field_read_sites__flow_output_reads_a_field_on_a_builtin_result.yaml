@@ -1,0 +1,13 @@
+kind: load
+flow: "id: p\nname: p\ntypedefs:\n  Rec: {a: str}\n  Rec3: {a: str, b: Optional(str)}\n  Buy: {action: 'Literal(buy)', qty: int}\n  Sell: {action: 'Literal(sell)'}\n  Order: Union(Buy, Sell)\ninput:\n  s: !str\n  r: !Rec\nnodes:\n  step:\n    kind: code\n    input:\n      x: ${input.s}\n    output: Rec\n    code: \"return ({a: \\\"x\\\"})\"\noutput: \n  o: ${lower(input.s).f}\n"
+python_flow: "id: p\nname: p\ntypedefs:\n  Rec: {a: str}\n  Rec3: {a: str, b: Optional(str)}\n  Buy: {action: 'Literal(buy)', qty: int}\n  Sell: {action: 'Literal(sell)'}\n  Order: Union(Buy, Sell)\ninput:\n  s: !str\n  r: !Rec\nnodes:\n  step:\n    kind: code\n    input:\n      x: ${input.s}\n    output: Rec\n    code: return dict(a='x')\noutput: \n  o: ${lower(input.s).f}\n"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          flow output from: reference ${lower(...).f} reads field 'f' on type str, which has no fields
+      frames:
+      - label: flow.yaml
+        range: [20, 3, 21, 1]

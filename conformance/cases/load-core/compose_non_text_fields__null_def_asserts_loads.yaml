@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    b:
+      nodes:
+        c:
+          kind: code
+          output: int
+          code: return 1
+      output: ${c.output}
+      asserts: null
+  nodes:
+    a:
+      kind: call
+      call: b
+  output: ${a.output}
+expect:
+  load: ok

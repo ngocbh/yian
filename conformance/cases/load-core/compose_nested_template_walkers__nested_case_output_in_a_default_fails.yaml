@@ -1,0 +1,40 @@
+# The harvest tagged this `code`, but the frame is flow structure, the same in both languages.
+kind: load
+flow: |2
+
+  id: nested_case
+  name: nested_case
+  input:
+    go: !bool
+  nodes:
+    route:
+      kind: case
+      cases:
+        - when: ${input.go}
+          then: yes_branch
+      else: no_branch
+    yes_branch:
+      kind: code
+      code: return "yes"
+    no_branch:
+      kind: code
+      code: return "no"
+    c:
+      kind: code
+      input:
+        x:
+          picked: ${route.output}
+          note: ${yes_branch.output :- route.output}
+      code: return inputs["x"]
+  output:
+    c: ${c.output}
+    direct:
+      - ${route.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''c'': ${route.output} — a case value can''t be read in a coalesce operand, a default, an expression, a condition, or an assert; read it as a whole binding or inside text'
+      frames:
+      - label: flow.yaml
+        range: [23, 9, 25, 5]

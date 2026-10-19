@@ -1,0 +1,16 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      code: "return {'a': 1}"
+  output:
+    o: ${step.output.anything.deeper}
+expect:
+  load: ok

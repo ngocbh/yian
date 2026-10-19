@@ -1,0 +1,67 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: "return ({a: \"x\"})"
+    c:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Order
+      code: "return ({action: \"sell\"})"
+      asserts:
+        - "not isinstance(output, Order)"
+  output: ${c.output}
+python_flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: return dict(a='x')
+    c:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Order
+      code: return dict(action='sell')
+      asserts:
+        - "not isinstance(output, Order)"
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'c' assert: `not isinstance(output, Order)` can never be true: output is declared Order, so `isinstance(output, Order)` is always true
+      frames:
+      - label: flow.yaml
+        range: [26, 9, 26, 40]

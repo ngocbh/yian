@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: invalid-output-list-item
+  name: invalid-output-list-item
+  nodes:
+    emit:
+      kind: code
+      code: 'return {"profile": 7}'
+      output:
+        - profile: int
+        - malformed
+  output: ${emit.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: a list of fields must hold single-key maps, got 'malformed'
+      frames:
+      - label: flow.yaml
+        range: [9, 9, 9, 18]

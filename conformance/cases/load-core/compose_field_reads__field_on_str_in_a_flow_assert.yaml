@@ -1,0 +1,39 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: str
+      code: "return null"
+  asserts:
+    - ${step.output.order == 'x'}
+  output: ${step.output}
+python_flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: str
+      code: return None
+  asserts:
+    - ${step.output.order == 'x'}
+  output: ${step.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'assert "${step.output.order == ''x''}": reference ${step.output.order} reads field ''order'' on type str, which has no fields'
+      frames:
+      - label: flow.yaml
+        range: [13, 5, 13, 32]

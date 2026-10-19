@@ -1,0 +1,10 @@
+kind: load
+flow: "\nid: m\nname: m\ndefs:\n  echo:\n    input:\n      v: !int\n    nodes: {}\n    output: ${input.v}\nnodes:\n  a:\n    kind: code\n    code: return 1\n  m:\n    kind: map\n    call: echo\n    over: \n      x: ${a.output}\n    input:\n      v: ${item}\noutput: ${m.output}\n"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'map node ''m'' over: a value holding ${...} can''t be a list or mapping; write the list as an expression, e.g. `${[a.output, b.output]}`'
+      frames:
+      - label: flow.yaml
+        range: [18, 7, 19, 5]

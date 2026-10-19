@@ -1,0 +1,60 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    x: !str
+  nodes:
+    a: {kind: call, call: ch, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+  uses:
+    ch: child@v1
+files:
+  child.yaml: |
+    id: child
+    name: child
+    version: "v2"
+    input:
+      x: !str
+    nodes:
+      a: {kind: code, code: ./fixtures/seeds.ts:one_line_summary, input: {x: "${input.x}"}}
+    output: {y: "${a.output}"}
+  p.yaml: |
+    id: p
+    name: p
+    input:
+      x: !str
+    nodes:
+      a: {kind: call, call: ch, input: {x: "${input.x}"}}
+    output: {y: "${a.output}"}
+    uses:
+      ch: child@v1
+python_files:
+  child.yaml: |
+    id: child
+    name: child
+    version: "v2"
+    input:
+      x: !str
+    nodes:
+      a: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
+    output: {y: "${a.output}"}
+  p.yaml: |
+    id: p
+    name: p
+    input:
+      x: !str
+    nodes:
+      a: {kind: call, call: ch, input: {x: "${input.x}"}}
+    output: {y: "${a.output}"}
+    uses:
+      ch: child@v1
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'uses: ref pinned child@v1 but the resolved file declares version: ''v2'' (file-per-version: name a file that declares ''v1'')'
+      frames:
+      - label: flow.yaml
+        range: [9, 7, 9, 15]
+        note: uses alias 'ch'

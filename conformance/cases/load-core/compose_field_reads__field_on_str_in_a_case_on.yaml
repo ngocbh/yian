@@ -1,0 +1,63 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: str
+      code: "return null"
+    a:
+      kind: code
+      input:
+        v: ${input.s}
+      output: str
+      code: return 'x'
+    route:
+      kind: case
+      on: ${step.output.kind}
+      cases:
+        - when: x
+          then: a
+      else: a
+  output: ${a.output}
+python_flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: str
+      code: return None
+    a:
+      kind: code
+      input:
+        v: ${input.s}
+      output: str
+      code: return 'x'
+    route:
+      kind: case
+      on: ${step.output.kind}
+      cases:
+        - when: x
+          then: a
+      else: a
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'route' on: from: reference ${step.output.kind} reads field 'kind' on type str, which has no fields
+      frames:
+      - label: flow.yaml
+        range: [20, 9, 20, 28]

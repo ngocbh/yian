@@ -1,0 +1,28 @@
+kind: load
+flow: |
+  input:
+    items: !list(str)
+  id: parent
+  name: parent
+  defs:
+    child:
+      nodes:
+        step:
+          kind: code
+          output: str
+          code: |
+            return "filled"
+  nodes:
+    each:
+      kind: map
+      call: child
+      over: ${input.items}
+  output: ${each.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'map node ''each'': callable ''child'' must declare a non-empty `output:`; a mapped call (over:) returns a list of the child''s results'
+      frames:
+      - label: flow.yaml
+        range: [14, 3, 14, 7]

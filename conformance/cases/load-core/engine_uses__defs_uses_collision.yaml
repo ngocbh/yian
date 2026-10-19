@@ -1,0 +1,72 @@
+# TS spells the name list as JSON text (rules: messages); Python's repr in python_expect.
+# The harvest tagged it `code`, but the frame is flow structure, the same in both languages.
+kind: load
+rules: [messages]
+flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    a: {kind: call, call: dup, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+  uses:
+    dup: child
+  defs:
+    dup:
+      input:
+        x: !str
+      nodes:
+        c: {kind: code, code: ./fixtures/seeds.ts:one_line_summary, input: {x: "${x}"}}
+      output: {y: "${c.output}"}
+python_flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    a: {kind: call, call: dup, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+  uses:
+    dup: child
+  defs:
+    dup:
+      input:
+        x: !str
+      nodes:
+        c: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${x}"}}
+      output: {y: "${c.output}"}
+files:
+  child.yaml: |
+    id: child
+    name: child
+    input:
+      x: !str
+    nodes:
+      c: {kind: code, code: ./fixtures/seeds.ts:one_line_summary, input: {x: "${input.x}"}}
+    output: {y: "${c.output}"}
+python_files:
+  child.yaml: |
+    id: child
+    name: child
+    input:
+      x: !str
+    nodes:
+      c: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
+    output: {y: "${c.output}"}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'name(s) ["dup"] declared in both defs: and uses: (a callable has one namespace)'
+      frames:
+      - label: flow.yaml
+        range: [12, 5, 17, 1]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'name(s) [''dup''] declared in both defs: and uses: (a callable has one namespace)'
+      frames:
+      - label: flow.yaml
+        range: [12, 5, 17, 1]

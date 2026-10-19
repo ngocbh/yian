@@ -1,0 +1,41 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: {a: str}
+      code: "return null"
+      asserts:
+        - output.a.b == 1
+  output: ${step.output.a}
+python_flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: {a: str}
+      code: return None
+      asserts:
+        - output.a.b == 1
+  output: ${step.output.a}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'step' assert: reference ${output.a.b} reads field 'b' on type str, which has no fields
+      frames:
+      - label: flow.yaml
+        range: [13, 9, 13, 24]

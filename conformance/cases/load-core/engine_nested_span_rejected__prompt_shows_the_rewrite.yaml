@@ -1,0 +1,24 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input:
+    name: !str
+  nodes:
+    brief:
+      kind: agent
+      input: {name: '${input.name}'}
+      output: str
+      prompt: "Hello ${upper(${name})}"
+  output: ${brief.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'brief' prompt: `${...}` can't appear inside an expression; write `${upper(name)}`
+      frames:
+      - label: flow.yaml
+        range: [11, 13, 11, 38]

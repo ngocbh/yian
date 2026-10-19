@@ -1,0 +1,39 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: {a: str}
+      code: "return null"
+  output:
+    o: ${step.output.b}
+python_flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: {a: str}
+      code: return None
+  output:
+    o: ${step.output.b}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          flow output from: reference ${step.output.b} reads unknown field 'b' on record
+      frames:
+      - label: flow.yaml
+        range: [13, 3, 14, 1]

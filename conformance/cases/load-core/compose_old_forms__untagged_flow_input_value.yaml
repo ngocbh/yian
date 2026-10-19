@@ -1,0 +1,19 @@
+kind: load
+flow: |
+  id: old_inputs
+  name: old_inputs
+  typedefs:
+    Message: {role: str, content: str}
+  input:
+    x: 5
+  kind: code
+  code: return 1
+  output: int
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'flow input ''x'': an input is a tag with an optional default, e.g. `x: !int` or `x: !int 5`'
+      frames:
+      - label: flow.yaml
+        range: [6, 6, 6, 7]

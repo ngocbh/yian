@@ -1,0 +1,49 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: str
+      code: "return null"
+    sink:
+      kind: code
+      input:
+        v: ${step.output.order}
+      output: str
+      code: return 'x'
+  output: ${sink.output}
+python_flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: str
+      code: return None
+    sink:
+      kind: code
+      input:
+        v: ${step.output.order}
+      output: str
+      code: return 'x'
+  output: ${sink.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'sink' input 'v' from: reference ${step.output.order} reads field 'order' on type str, which has no fields
+      frames:
+      - label: flow.yaml
+        range: [15, 10, 15, 30]

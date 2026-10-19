@@ -1,0 +1,18 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    x:
+      kind: loop
+      call: sub
+      when: ${x.output}
+  output: ${x.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''x'' (kind=loop): field ''when'' is not allowed (allowed: asserts, call, depends_on, env, input, kind, max, node_name, runs_after, times, until, while); to run a node only when a condition holds, route to it from a `case` node (`cases: [{when: ..., then: <node>}]`)'
+      frames:
+      - label: flow.yaml
+        range: [7, 11, 7, 22]

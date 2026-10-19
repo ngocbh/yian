@@ -240,6 +240,29 @@ test("a keyless provider sends nothing", () => {
   expect(listed({ provider: "ollama", model: "m" })).toEqual([]);
 });
 
+describe("ollama base url credentials", () => {
+  test("userinfo lists the password and the basic token", () => {
+    vars.set("OLLAMA_BASE_URL", "http://u:test-pass-1@gpu-box:11434");
+    expect(listed({ provider: "ollama", model: "m" })).toEqual(["test-pass-1", "dTp0ZXN0LXBhc3MtMQ=="]);
+  });
+
+  test("an empty user sends no auth, so nothing is listed", () => {
+    vars.set("OLLAMA_BASE_URL", "http://:pw@h");
+    expect(listed({ provider: "ollama", model: "m" })).toEqual([]);
+  });
+
+  test("a malformed value lists nothing and doesn't throw", () => {
+    vars.set("OLLAMA_BASE_URL", "http://u:test-pass-1@h:0");
+    expect(listed({ provider: "ollama", model: "m" })).toEqual([]);
+  });
+
+  test("unset or empty lists nothing", () => {
+    expect(listed({ provider: "ollama", model: "m" })).toEqual([]);
+    vars.set("OLLAMA_BASE_URL", "");
+    expect(listed({ provider: "ollama", model: "m" })).toEqual([]);
+  });
+});
+
 test("a missing openai connection sends nothing", () => {
   const config = resolved("openai", "gpt-x");
   expect(connectionOf(config).source).toBe("missing");

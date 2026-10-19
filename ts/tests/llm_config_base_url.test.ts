@@ -1,8 +1,8 @@
 /**
  * Mirrors `tests/test_llm_config_base_url.py`: the `LLMConfig`, `host_only_field_error`,
  * `pop_host_credentials` and `check_model_config` tests, and the `resolve_model_config` and
- * `split_model_config` halves of the pinned-connection tests; the client and redirect tests go
- * with the factory.
+ * `split_model_config` halves of the pinned-connection tests, and the `split_ollama_base_url`
+ * tests; the client and redirect tests go with the factory.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -21,6 +21,7 @@ import {
   LLMConfig,
   popApiKey,
   popHostCredentials,
+  splitOllamaBaseUrl,
 } from "../src/llm_clients/config.ts";
 import {
   checkModelConfig,
@@ -276,6 +277,84 @@ test("a base_url must match its pinned connection", () => {
     expect(error).toBeInstanceOf(RangeError);
     expect(error.message).toContain("host connection endpoint");
   }
+});
+
+const OLLAMA_SHAPE =
+  "OLLAMA_BASE_URL must be an http:// or https:// URL of a host, an optional port, and a path, " +
+  "without a query or fragment";
+const OLLAMA_PORT = "OLLAMA_BASE_URL port must be a number from 1 to 65535";
+
+test.each<[string, string, [string, string] | null]>([
+  ["http://gpu-box:11434", "http://gpu-box:11434", null],
+  ["https://gpu-box", "https://gpu-box", null],
+  ["gpu-box:11434", "http://gpu-box:11434", null],
+  ["localhost:11434", "http://localhost:11434", null],
+  ["[::1]:11434", "http://[::1]:11434", null],
+  ["gpu-box:11434/v1", "http://gpu-box:11434", null],
+  ["u:p@gpu-box:11434", "http://gpu-box:11434", ["u", "p"]],
+  ["http://ollama_1:11434", "http://ollama_1:11434", null],
+  ["http://[FE80::1]:11434", "http://[fe80::1]:11434", null],
+  ["http://GPU-Box:11434", "http://gpu-box:11434", null],
+  ["HTTP://gpu-box", "http://gpu-box:11434", null],
+  ["HTTPS://gpu-box", "https://gpu-box:11434", null],
+  ["Http://gpu-box:8080", "http://gpu-box:8080", null],
+  ["HTTP://:pw@gpu-box", "http://gpu-box:11434", null],
+  ["HTTP://u:p@gpu-box", "http://gpu-box", ["u", "p"]],
+  ["http://h/v1", "http://h", null],
+  ["http://h/v1/", "http://h", null],
+  ["http://h/v1//", "http://h", null],
+  ["http://h/a//", "http://h/a", null],
+  ["http://h//a/b/", "http://h/a/b", null],
+  ["http://h:", "http://h", null],
+  ["http://h:011434", "http://h:11434", null],
+  ["http://u%40x:p%3Ab@h", "http://h", ["u@x", "p:b"]],
+  ["http://u:p@x@h:1", "http://h:1", ["u", "p@x"]],
+  ["http://u@h", "http://h", ["u", ""]],
+  ["http://@h", "http://h", null],
+  ["http://:pw@h", "http://h", null],
+])("ollama base url %p is accepted", (value, url, credentials) => {
+  expect(splitOllamaBaseUrl(value)).toEqual([url, credentials]);
+});
+
+test("ollama userinfo decodes like unquote", () => {
+  const user = (userinfo: string) => splitOllamaBaseUrl(`http://${userinfo}@h`)[1];
+  expect(user("u%zz:p")).toEqual(["u%zz", "p"]);
+  expect(user("%C3%A9:%e2%82%ac")).toEqual(["\u00e9", "\u20ac"]);
+  // Invalid UTF-8 becomes U+FFFD per maximal subpart; a BOM stays; a bad escape stays as written.
+  expect(user("%FF:%F0%80%80a")).toEqual(["\ufffd", "\ufffd\ufffd\ufffda"]);
+  expect(user("%EF%BB%BFx:%E2%82")).toEqual(["\ufeffx", "\ufffd"]);
+  expect(user("%zz%41%:%4")).toEqual(["%zzA%", "%4"]);
+  expect(user("\u00fc%41:p")).toEqual(["\u00fcA", "p"]);
+});
+
+test.each<[unknown, string]>([
+  ["gpu-box", OLLAMA_SHAPE],
+  ["ftp://h", OLLAMA_SHAPE],
+  ["//gpu-box:11434", OLLAMA_SHAPE],
+  ["http://:11434", OLLAMA_SHAPE],
+  [":11434", OLLAMA_SHAPE],
+  ["http:///p", OLLAMA_SHAPE],
+  ["http://h:1/p?q=1", OLLAMA_SHAPE],
+  ["http://h:1/p#f", OLLAMA_SHAPE],
+  [" http://h:1", OLLAMA_SHAPE],
+  ["http://h:1\n", OLLAMA_SHAPE],
+  ["http://gpu box:1", OLLAMA_SHAPE],
+  ["http://h:1/a b", OLLAMA_SHAPE],
+  ["http://gp\u00fc-box:1", OLLAMA_SHAPE],
+  ["http://h%41:1", OLLAMA_SHAPE],
+  ["http://h:abc", OLLAMA_SHAPE],
+  ["http://u:secret-pw-9@h:1/?q", OLLAMA_SHAPE],
+  [11434, OLLAMA_SHAPE],
+  [null, OLLAMA_SHAPE],
+  ["http://h:0", OLLAMA_PORT],
+  ["http://h:70000", OLLAMA_PORT],
+  ["http://u:secret-pw-9@h:0", OLLAMA_PORT],
+])("ollama base url %p is refused", (value, message) => {
+  const error = caught(() => splitOllamaBaseUrl(value));
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe(message);
+  if (typeof value === "string") expect(error.message).not.toContain(value);
+  expect(error.message).not.toContain("secret-pw-9");
 });
 
 describe("TS additions", () => {

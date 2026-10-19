@@ -3,9 +3,8 @@
  * `tests/engine/test_constructor_expr.py` (call shape, the positional and keyword forms, larger
  * expressions, names that are not constructors, a constructor in an embedded template span),
  * its walker tests (`expr_refs`, `rewrite_expr_refs`, `constructor_names`), the co-skip,
- * flow-callee and prompt tests, and its static inference tests.
- *
- * Left for later: the binder tests land with `nodes/binding.ts`.
+ * flow-callee and prompt tests, its binder tests (`bindParams` reports a failed constructor as
+ * `binding.type` and delivers a constructed record), and its static inference tests.
  */
 
 import { expect, test } from "bun:test";
@@ -24,7 +23,9 @@ import {
 import { parseExpr } from "../../src/expr/grammar.ts";
 import { ResolvedValue, routeFeedback, SourceRef } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, evalBinding, flowCallCalleesInSpans, promptRefs } from "../../src/expr/template.ts";
-import { Type, typeFor, type Value, type ValueRecord, ValueKind } from "../../src/typesys/index.ts";
+import { BindingError, bindParams } from "../../src/nodes/binding.ts";
+import { Parameter, ValueTemplate } from "../../src/nodes/contracts.ts";
+import { Type, typeFor, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 import { fieldOf } from "../../src/typesys/values.ts";
 
@@ -336,6 +337,50 @@ test("a field read on a constructor projects its route", () => {
   expect(traced.value).toBe(0.5);
   expect(traced.route.kind).toBe("project");
   expect(traced.route.path).toEqual(["conviction"]);
+});
+
+// --- the binder --- //
+
+/** Return a pool holding each entry of `outputs` as that node's output. */
+function poolOf(outputs: Record<string, unknown>): VariablePool {
+  const pool = new VariablePool();
+  for (const [nodeId, value] of Object.entries(outputs)) pool.set(nodeId, value);
+  return pool;
+}
+
+test("the binder reports a failed constructor as binding.type", () => {
+  const error = errorOf(() =>
+    bindParams([new Parameter("x")], new Map([["x", "${Buy(d.output)}"]]), poolOf({ d: { conviction: 0.5 } }), {
+      types: TYPES,
+    }),
+  );
+  expect(error).toBeInstanceOf(BindingError);
+  expect((error as BindingError).failureCode).toBe("binding.type");
+  expect(error.message).toContain("record missing required fields: ['action']");
+});
+
+test("the binder reports a failed nested constructor as binding.type", () => {
+  const error = errorOf(() =>
+    bindParams(
+      [new Parameter("x")],
+      new Map([["x", new ValueTemplate({ d: "${Buy(d.output)}" })]]),
+      poolOf({ d: { conviction: 0.5 } }),
+      { types: TYPES },
+    ),
+  );
+  expect(error).toBeInstanceOf(BindingError);
+  expect((error as BindingError).failureCode).toBe("binding.type");
+  expect(error.message).toContain("binding 'x.d'");
+});
+
+test("the binder delivers a constructed record", () => {
+  const record = bindParams(
+    [new Parameter("x")],
+    new Map([["x", '${Buy(action="buy", conviction=d.output)}']]),
+    poolOf({ d: 0.25 }),
+    { types: TYPES },
+  );
+  expect(record).toEqual({ x: { action: "buy", conviction: 0.25 } });
 });
 
 // --- static inference --- //

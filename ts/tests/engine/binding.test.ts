@@ -1,0 +1,598 @@
+/**
+ * The bind grammar, resolving each declared param's source into a typed record: a port of
+ * `tests/engine/test_binding.py`. The local `InputBinding`/`bindInputs` adapter phrases each case
+ * as a `Parameter` plus a wiring entry, so the grammar (coalesce, `:-` default, `:?` required,
+ * escapes, type checks, deep copies, the `${item}` scope) is tested through `bindParams`, the
+ * engine's read boundary.
+ *
+ * Changed (rule `int-in-float`): in `test_bind_ref_and_literal` the literal `90` bound into a
+ * `float` parameter stays the int `90n` (Python widens it to `90.0`). Changed (values in
+ * messages use the text form): `test_bind_never_converts_a_supplied_string` reads `"30" does not
+ * match declared type int`.
+ *
+ * TS-only: a `Set` as `params` is refused as not an exact list.
+ *
+ * Later: `test_binding_capture_matches_the_value_actually_delivered` and
+ * `test_omitted_default_has_no_upstream_source` land with binding capture (`BindingCollector`);
+ * the 5 node and evaluator capture tests
+ * (`test_binding_failure_keeps_partial_context_without_usable_inputs`,
+ * `test_evaluator_capture_preserves_typed_values_before_node_mutation`,
+ * `test_capture_includes_materialized_reserved_values_from_node_hooks`,
+ * `test_per_item_wrapper_capture_includes_defaults_before_body_and_asserts`,
+ * `test_map_wrapper_capture_includes_valid_defaults_and_item_routes`) land with `nodes/base.ts`
+ * and the runtime.
+ *
+ * Not ported: `test_bind_params_rejects_noncanonical_containers` has no counterpart: both of
+ * its rows are tuples, and TS has only arrays.
+ */
+
+import { expect, test } from "bun:test";
+
+import { OriginRef } from "../../src/diagnostics.ts";
+import { RequiredError } from "../../src/expr/index.ts";
+import { applyDefaults, BindingError, bindParams } from "../../src/nodes/binding.ts";
+import { Binding, ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
+
+const START_ID = "__start__";
+
+/** One test-local parameter plus its flow-owned source; no `source` is an omitted input. */
+interface InputBinding {
+  name: string;
+  contract?: ValueContract | null;
+  source?: unknown;
+  required?: boolean;
+  hasDefault?: boolean;
+  default?: unknown;
+  coerceStrings?: boolean;
+}
+
+const STRING = new ValueContract(Type.scalar(ValueKind.STRING));
+const INTEGER = new ValueContract(Type.scalar(ValueKind.INTEGER));
+const NUMBER = new ValueContract(Type.scalar(ValueKind.NUMBER));
+const BOOLEAN = new ValueContract(Type.scalar(ValueKind.BOOLEAN));
+const OBJECT = new ValueContract(Type.scalar(ValueKind.OBJECT));
+const NONE = new ValueContract(Type.scalar(ValueKind.NONE));
+const NULLABLE_STRING = new ValueContract(new Type({ kind: ValueKind.STRING, nullable: true }));
+const NULLABLE_INTEGER = new ValueContract(new Type({ kind: ValueKind.INTEGER, nullable: true }));
+
+/** Near-canonical fixture proving the read seam requires the exact carrier. */
+class ParameterSubclass extends Parameter {}
+
+/**
+ * Drive the live `bindParams` from test-local parameter/source pairs.
+ *
+ * A binding without a `source` models an omitted input (no wiring entry), so the parameter's
+ * presence-based `default`/`required` applies. An entry that merely resolves to null (e.g.
+ * `${system.w}` with the pool empty) is bound-null, which shadows a parameter default.
+ */
+function bindInputs(bindings: InputBinding[], pool: VariablePool, { item = null }: { item?: Value } = {}): ValueRecord {
+  const params = bindings.map(
+    (b) =>
+      new Parameter(b.name, {
+        contract: b.contract ?? null,
+        required: b.required ?? false,
+        hasDefault: b.hasDefault ?? false,
+        default: b.default ?? null,
+        coerceStrings: b.coerceStrings ?? false,
+      }),
+  );
+  const wiring = new Map(
+    bindings.filter((b) => b.source !== undefined && b.source !== null).map((b) => [b.name, b.source]),
+  );
+  return bindParams(params, wiring, pool, { item });
+}
+
+/** Return a pool holding each entry of `system` as a `${system.<key>}` ambient. */
+function poolOf(system: Record<string, unknown> = {}): VariablePool {
+  const pool = new VariablePool();
+  for (const [key, value] of Object.entries(system)) pool.addSystem(key, value);
+  return pool;
+}
+
+/** Return the `BindingError` `call` throws. */
+function bindingError(call: () => unknown): BindingError {
+  try {
+    call();
+  } catch (error) {
+    expect(error).toBeInstanceOf(BindingError);
+    return error as BindingError;
+  }
+  throw new Error("call did not throw");
+}
+
+/** Return the error `call` throws. */
+function errorOf(call: () => unknown): Error {
+  try {
+    call();
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error("call did not throw");
+}
+
+test("bind a reference and a literal", () => {
+  const pool = poolOf({ topics: "ACME" });
+  pool.set("up", { pe: 21 });
+  const rec = bindInputs(
+    [
+      { name: "topic", contract: STRING, source: "${system.topics}" },
+      { name: "pe", contract: NUMBER, source: "${up.output.pe}" },
+      { name: "k", contract: NUMBER, source: 90n }, // literal
+    ],
+    pool,
+  );
+  expect(rec).toEqual({ topic: "ACME", pe: 21, k: 90n });
+});
+
+test("the default is applied when the input is omitted", () => {
+  // The param `default` is the omit-default (presence-based): it fills only when the input has
+  // no wiring entry at all. (Resolve-fallback for a present-but-null source is the `:-` grammar.)
+  const rec = bindInputs([{ name: "w", contract: INTEGER, hasDefault: true, default: 30n }], poolOf());
+  expect(rec).toEqual({ w: 30n });
+});
+
+test("a compatible default is validated without replacement", () => {
+  // A typed default keeps its authored payload after validation.
+  const rec = bindInputs([{ name: "w", contract: NUMBER, hasDefault: true, default: 30n }], poolOf());
+  expect(typeof rec["w"]).toBe("bigint");
+});
+
+test("a present null shadows the default but fails a non-nullable contract", () => {
+  // An entry that is present but resolves to null is bound-null: it shadows the param default
+  // rather than filling 30, but the non-nullable type still rejects the explicit null.
+  bindingError(() =>
+    bindInputs(
+      [{ name: "w", contract: INTEGER, source: "${system.w}", hasDefault: true, default: 30n }],
+      poolOf(),
+    ),
+  );
+});
+
+test("a present null shadows the default when the contract is nullable", () => {
+  const rec = bindInputs(
+    [{ name: "w", contract: NULLABLE_INTEGER, source: "${system.w}", hasDefault: true, default: 30n }],
+    poolOf(),
+  );
+  expect(rec).toEqual({ w: null });
+});
+
+test("a present null is valid for a none contract", () => {
+  expect(bindInputs([{ name: "w", contract: NONE, source: "${system.w}" }], poolOf())).toEqual({ w: null });
+});
+
+test("an explicit null default fills when omitted", () => {
+  // `hasDefault` owns presence, so an authored nullable `default: null` is a real default and
+  // stays distinct from a parameter with no default.
+  const rec = bindInputs([{ name: "w", contract: NULLABLE_INTEGER, hasDefault: true, default: null }], poolOf());
+  expect(rec).toEqual({ w: null });
+});
+
+test("an omitted input with no default is absent", () => {
+  // A truly omitted optional input with no default leaves its key absent from the record (not
+  // present as null) so the wrapper's default can fill it.
+  expect(bindInputs([{ name: "x", contract: INTEGER }], poolOf())).toEqual({});
+});
+
+test("an omitted required input raises", () => {
+  // Param `required` is presence-based too: an omitted required input (no entry) fails loud.
+  bindingError(() => bindInputs([{ name: "t", contract: STRING, required: true }], poolOf()));
+});
+
+test("binding errors carry the stage code and the operation origin", () => {
+  // Expression/required/default work and supplied contracts stay distinct.
+  const bindingOrigin = new OriginRef("binding:x");
+  const parameterOrigin = new OriginRef("parameter:x");
+  const defaultOrigin = new OriginRef("default:x");
+  const contractOrigin = new OriginRef("contract:x");
+
+  const expression = bindingError(() =>
+    bindParams(
+      [new Parameter("x", { origin: parameterOrigin })],
+      new Map([["x", new Binding("${missing.value:?x is required}", { origin: bindingOrigin })]]),
+      poolOf(),
+    ),
+  );
+  expect([expression.failureCode, expression.origin]).toEqual(["binding.evaluate", bindingOrigin]);
+
+  const required = bindingError(() =>
+    bindParams([new Parameter("x", { required: true, origin: parameterOrigin })], new Map(), poolOf()),
+  );
+  expect([required.failureCode, required.origin]).toEqual(["binding.evaluate", parameterOrigin]);
+  expect(required.message).toBe("required input 'x' is unbound (from=null)");
+
+  const integerContract = new ValueContract(
+    Type.scalar(ValueKind.INTEGER),
+    new ContractOrigins({ default: contractOrigin }),
+  );
+  const invalidDefault = bindingError(() =>
+    bindParams(
+      [
+        new Parameter("x", {
+          contract: integerContract,
+          hasDefault: true,
+          default: "bad",
+          origin: parameterOrigin,
+          defaultOrigin,
+        }),
+      ],
+      new Map(),
+      poolOf(),
+    ),
+  );
+  expect([invalidDefault.failureCode, invalidDefault.origin]).toEqual(["binding.evaluate", defaultOrigin]);
+
+  const contract = bindingError(() =>
+    bindParams(
+      [new Parameter("x", { contract: integerContract, origin: parameterOrigin })],
+      new Map([["x", new Binding("bad", { origin: bindingOrigin })]]),
+      poolOf(),
+    ),
+  );
+  expect([contract.failureCode, contract.origin]).toEqual(["contract.input", contractOrigin]);
+});
+
+test("a nested input contract failure selects the exact, then the ancestor origin", () => {
+  // Supplied values resolve their structural error path through the contract.
+  const exactOrigin = new OriginRef("contract:value/items/0/score");
+  const itemsOrigin = new OriginRef("contract:value/items");
+  const rootOrigin = new OriginRef("contract:value");
+  const score = Type.scalar(ValueKind.INTEGER);
+  const item = new Type({ kind: ValueKind.OBJECT, fields: new Map([["score", score]]), required: new Set(["score"]) });
+  const valueType = new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map([["items", new Type({ kind: ValueKind.LIST_OBJECT, element: item })]]),
+    required: new Set(["items"]),
+  });
+  const contract = new ValueContract(
+    valueType,
+    new ContractOrigins({
+      default: rootOrigin,
+      entries: [
+        [["items"], itemsOrigin],
+        [["items", 0, "score"], exactOrigin],
+      ],
+    }),
+  );
+  const parameter = new Parameter("value", { contract });
+
+  const exact = bindingError(() =>
+    bindParams([parameter], new Map([["value", new Binding({ items: [{ score: "bad" }] })]]), poolOf()),
+  );
+  expect(exact.origin).toEqual(exactOrigin);
+
+  const ancestor = bindingError(() =>
+    bindParams(
+      [parameter],
+      new Map([["value", new Binding({ items: [{ score: 1n }, { score: "bad" }] })]]),
+      poolOf(),
+    ),
+  );
+  expect(ancestor.origin).toEqual(itemsOrigin);
+});
+
+test("a nested input contract fallback keeps the default's precedence", () => {
+  // Missing contract sites fall back, while authored defaults keep ownership.
+  const parameterOrigin = new OriginRef("parameter:value");
+  const defaultOrigin = new OriginRef("default:value");
+  const item = new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map([["score", Type.scalar(ValueKind.INTEGER)]]),
+    required: new Set(["score"]),
+  });
+  const sourceFree = new ValueContract(new Type({ kind: ValueKind.LIST_OBJECT, element: item }));
+
+  const supplied = bindingError(() =>
+    bindParams(
+      [new Parameter("value", { contract: sourceFree, origin: parameterOrigin })],
+      new Map([["value", new Binding([{ score: "bad" }])]]),
+      poolOf(),
+    ),
+  );
+  expect(supplied.failureCode).toBe("contract.input");
+  expect(supplied.origin).toEqual(parameterOrigin);
+
+  const defaulted = bindingError(() =>
+    bindParams(
+      [
+        new Parameter("value", {
+          contract: sourceFree,
+          hasDefault: true,
+          default: [{ score: "bad" }],
+          origin: parameterOrigin,
+          defaultOrigin,
+        }),
+      ],
+      new Map(),
+      poolOf(),
+    ),
+  );
+  expect(defaulted.failureCode).toBe("binding.evaluate");
+  expect(defaulted.origin).toEqual(defaultOrigin);
+});
+
+test("applyDefaults marks an invalid authored default as binding evaluation", () => {
+  // The wrapper's default backstop keeps default-site semantics.
+  const defaultOrigin = new OriginRef("default:x");
+  const parameter = new Parameter("x", { contract: INTEGER, hasDefault: true, default: "bad", defaultOrigin });
+
+  const error = bindingError(() => applyDefaults([parameter], {}));
+
+  expect(error.failureCode).toBe("binding.evaluate");
+  expect(error.origin).toEqual(defaultOrigin);
+});
+
+test("bindParams rejects a raw declaration bypass", () => {
+  // The engine read seam enforces the canonical node params shape.
+  const error = errorOf(() => bindParams(["x"] as never, new Map(), poolOf()));
+  expect(error).toBeInstanceOf(TypeError);
+  expect(error.message).toContain("Parameter values");
+});
+
+test("bindParams rejects Parameter subclasses", () => {
+  const error = errorOf(() => bindParams([new ParameterSubclass("x")], new Map(), poolOf()));
+  expect(error).toBeInstanceOf(TypeError);
+  expect(error.message).toContain("Parameter values");
+});
+
+test("a nullable reference that is missing binds null", () => {
+  expect(bindInputs([{ name: "t", contract: NULLABLE_STRING, source: "${system.t}" }], poolOf())).toEqual({
+    t: null,
+  });
+});
+
+test("a type mismatch raises", () => {
+  bindingError(() =>
+    bindInputs([{ name: "n", contract: NUMBER, source: "${system.n}" }], poolOf({ n: "not-a-number" })),
+  );
+});
+
+test("binding never converts a supplied string", () => {
+  // Only the run boundary (`coerceInputs`) converts text; a child START bound across a
+  // CALL/MAP/LOOP edge validates the value as is, whatever its policy says.
+  const pool = poolOf({ n: "30" });
+  for (const coerceStrings of [false, true]) {
+    const error = bindingError(() =>
+      bindInputs([{ name: "n", contract: INTEGER, source: "${system.n}", coerceStrings }], pool),
+    );
+    expect(error.message).toContain('"30" does not match declared type int');
+  }
+});
+
+test("an incompatible stored default is not coerced", () => {
+  // String coercion is caller-input policy. It must not silently rewrite the already-stored
+  // default, even when that policy is enabled.
+  bindingError(() =>
+    bindInputs([{ name: "n", contract: INTEGER, hasDefault: true, default: "30", coerceStrings: true }], poolOf()),
+  );
+});
+
+test("an untyped value is lenient", () => {
+  // No contract means the read boundary accepts any value.
+  expect(bindInputs([{ name: "p", source: "${system.p}" }], poolOf({ p: { k: 1n } }))).toEqual({ p: { k: 1n } });
+});
+
+test("a falsy default is applied", () => {
+  // A falsy param default (0 / false) still fills when the input is omitted (no entry).
+  const rec = bindInputs(
+    [
+      { name: "n", contract: INTEGER, hasDefault: true, default: 0n },
+      { name: "f", contract: BOOLEAN, hasDefault: true, default: false },
+    ],
+    poolOf(),
+  );
+  expect(rec).toEqual({ n: 0n, f: false });
+});
+
+test("binding isolates an object from the pool", () => {
+  // The leaf must see only its own record: mutating it must not write the pool.
+  const pool = poolOf();
+  pool.set("up", { k: 1n, nested: { a: 2n } });
+  const rec = bindInputs([{ name: "x", contract: OBJECT, source: "${up.output}" }], pool);
+  const x = rec["x"] as ValueRecord;
+  x["k"] = 999n;
+  (x["nested"] as ValueRecord)["a"] = 999n; // nested mutation must not leak either
+  expect(pool.resolve("up", ["output"])).toEqual({ k: 1n, nested: { a: 2n } });
+});
+
+test("binding isolates an untyped value from the pool", () => {
+  // The untyped path must also isolate the value.
+  const pool = poolOf({ p: { k: 1n } });
+  const rec = bindInputs([{ name: "p", source: "${system.p}" }], pool);
+  (rec["p"] as ValueRecord)["k"] = 999n;
+  expect(pool.system.get("p")!.toObject()).toEqual({ k: 1n });
+});
+
+test("an untyped binding resolves and isolates", () => {
+  // No contract: resolve and deep-copy, with no type check.
+  const pool = poolOf({ topic: "ACME" });
+  pool.set("up", { k: 1n });
+  const rec = bindInputs(
+    [
+      { name: "topic", source: "${system.topic}" },
+      { name: "cfg", source: "${up.output}" },
+      { name: "lit", source: 5n },
+    ],
+    pool,
+  );
+  expect(rec).toEqual({ topic: "ACME", cfg: { k: 1n }, lit: 5n });
+  (rec["cfg"] as ValueRecord)["k"] = 999n; // mutation must not leak (deep-copied)
+  expect(pool.resolve("up", ["output"])).toEqual({ k: 1n });
+});
+
+// --- coalesce, `:-` default and `:?` required --- //
+
+test("coalesce takes the first non-null", () => {
+  // `${a | b}` branch-join: the first non-null among peers (refs).
+  const pool = new VariablePool();
+  pool.set("pro", "pro-text");
+  // a present: a wins
+  expect(bindInputs([{ name: "t", source: "${pro.output | con.output}" }], pool)).toEqual({ t: "pro-text" });
+  // a absent: falls through to b
+  const pool2 = new VariablePool();
+  pool2.set("con", "con-text");
+  expect(bindInputs([{ name: "t", source: "${pro.output | con.output}" }], pool2)).toEqual({ t: "con-text" });
+});
+
+test("an n-ary coalesce and a literal last segment", () => {
+  const pool = new VariablePool();
+  pool.set("c", "c-text");
+  // 3-way, first two absent: the third ref wins
+  expect(bindInputs([{ name: "t", source: "${a.output | b.output | c.output}" }], pool)).toEqual({ t: "c-text" });
+  // all refs absent, a quoted or number literal last segment survives
+  const empty = new VariablePool();
+  expect(bindInputs([{ name: "t", source: '${a.output | "fallback"}' }], empty)).toEqual({ t: "fallback" });
+  expect(bindInputs([{ name: "n", source: "${a.output | 0.0}" }], empty)).toEqual({ n: 0 });
+});
+
+test("the default operator's quoted right side is a literal", () => {
+  // The `:-` right side is a full expression: a quoted string is a literal, a number or null is
+  // its literal, and a bare word is a reference, so quote a literal default.
+  const empty = new VariablePool();
+  expect(bindInputs([{ name: "d", source: '${input.as_of:-"today"}' }], empty)).toEqual({ d: "today" });
+  expect(bindInputs([{ name: "n", source: "${input.n:-30}" }], empty)).toEqual({ n: 30n });
+  expect(bindInputs([{ name: "z", source: "${input.z:-null}" }], empty)).toEqual({ z: null });
+  // a bare word right side is a ref: unbound gives null (a miss), no literal string fallback.
+  expect(bindInputs([{ name: "d", source: "${input.as_of:-today}" }], empty)).toEqual({ d: null });
+  // a present value wins over the default
+  const pool = new VariablePool();
+  pool.set(START_ID, { as_of: "2026-06-12" });
+  expect(bindInputs([{ name: "d", source: '${input.as_of:-"today"}' }], pool)).toEqual({ d: "2026-06-12" });
+});
+
+test("the required operator fails loud when unbound", () => {
+  const empty = new VariablePool();
+  const error = bindingError(() => bindInputs([{ name: "t", source: '${input.topic:?"a topic is required"}' }], empty));
+  expect((error.cause as Error).constructor).toBe(RequiredError);
+  expect((error.cause as Error).message).toBe("a topic is required");
+  // present: returns the value, no raise
+  const pool = new VariablePool();
+  pool.set(START_ID, { topic: "ACME" });
+  expect(bindInputs([{ name: "t", source: "${input.topic:?required}" }], pool)).toEqual({ t: "ACME" });
+});
+
+test("a plain ref and a literal are unchanged by the coalesce parser", () => {
+  // A plain single ref and a non-`${}` literal resolve as before.
+  const pool = new VariablePool();
+  pool.set("up", { pe: 21 });
+  expect(bindInputs([{ name: "pe", source: "${up.output.pe}" }], pool)).toEqual({ pe: 21 });
+  expect(bindInputs([{ name: "k", source: 90n }], pool)).toEqual({ k: 90n });
+});
+
+test("a falsy but present value wins a coalesce", () => {
+  // Only null is "no value". A present 0 / false / "" / [] must win a coalesce, not fall through.
+  for (const falsy of [0n, false, "", []]) {
+    const pool = new VariablePool();
+    pool.set("a", falsy);
+    pool.set("b", "b-text");
+    const rec = bindInputs([{ name: "t", source: "${a.output | b.output}" }], pool);
+    expect(rec["t"]).toEqual(falsy);
+    expect(rec["t"]).not.toBe("b-text");
+  }
+});
+
+test("required does not raise on a present falsy value", () => {
+  // `:?` fires only on null: a present false / 0 / "" is a value, returned, no raise.
+  for (const falsy of [false, 0n, ""]) {
+    const pool = new VariablePool();
+    pool.set(START_ID, { flag: falsy });
+    expect(bindInputs([{ name: "f", source: "${input.flag:?req}" }], pool)).toEqual({ f: falsy });
+  }
+});
+
+test("the default is suppressed by a present falsy value", () => {
+  // `:-` present-value-wins must hold for a falsy present value (0 must not become 99).
+  const pool = new VariablePool();
+  pool.set(START_ID, { n: 0n });
+  expect(bindInputs([{ name: "n", source: "${input.n:-99}" }], pool)).toEqual({ n: 0n });
+});
+
+test("a quote-aware literal keeps its pipe", () => {
+  // A quoted literal operand holding `|` is not split mid-token.
+  const empty = new VariablePool();
+  expect(bindInputs([{ name: "t", source: '${a.output | "x|y"}' }], empty)).toEqual({ t: "x|y" });
+  // and a default value holding `:` inside quotes survives (the first operator is the `:-`)
+  expect(bindInputs([{ name: "d", source: '${input.x:-"a:b"}' }], empty)).toEqual({ d: "a:b" });
+});
+
+test("a default ref resolves and a nested span raises", () => {
+  // `${input.as_of :- system.today}` falls back to the system date; a `${...}` written inside
+  // the expression is a loud error.
+  const pool = new VariablePool();
+  pool.addSystem("today", "2026-06-12");
+  // as_of unbound: falls through to system.today
+  expect(bindInputs([{ name: "d", source: "${input.as_of :- system.today}" }], pool)).toEqual({ d: "2026-06-12" });
+  // as_of present: wins; the default is not consulted
+  pool.set(START_ID, { as_of: "2026-01-01" });
+  expect(bindInputs([{ name: "d", source: "${input.as_of :- system.today}" }], pool)).toEqual({ d: "2026-01-01" });
+  const error = bindingError(() => bindInputs([{ name: "d", source: "${input.as_of:-${system.today}}" }], pool));
+  expect(error.message).toContain("write `${input.as_of:-system.today}`");
+});
+
+test("the item scope combines with coalesce and default", () => {
+  // `${item.x | b.output}`: an item miss falls to the ref peer; a present item wins.
+  const pool = new VariablePool();
+  pool.set("b", "b-text");
+  expect(bindInputs([{ name: "v", source: "${item.x | b.output}" }], pool, { item: { y: 1n } })).toEqual({
+    v: "b-text",
+  });
+  expect(bindInputs([{ name: "v", source: "${item.x | b.output}" }], pool, { item: { x: 7n } })).toEqual({ v: 7n });
+});
+
+test("a whole ref is typed, an embedded one stringified, and $$ escapes", () => {
+  // A value that is exactly one `${...}` gives the typed value; a `${...}` embedded in text is
+  // stringified; `$$` is a literal `$`.
+  const pool = new VariablePool();
+  pool.set("a", 0.7);
+  pool.set("b", ["ACME", "BETA"]);
+  // a whole `${...}` gives the float, not the string "0.7"
+  const rec = bindInputs([{ name: "x", source: "${a.output}" }], pool);
+  expect(rec).toEqual({ x: 0.7 });
+  expect(typeof rec["x"]).toBe("number");
+  // a whole `${...}` of a list gives the list
+  expect(bindInputs([{ name: "x", source: "${b.output}" }], pool)).toEqual({ x: ["ACME", "BETA"] });
+  // an embedded `${...}` in text gives a string with the value interpolated
+  expect(bindInputs([{ name: "x", source: "pe=${a.output}" }], pool)).toEqual({ x: "pe=0.7" });
+  // `$$` gives a literal `$` (no interpolation)
+  expect(bindInputs([{ name: "x", source: "cost is $$5" }], pool)).toEqual({ x: "cost is $5" });
+});
+
+test("bindInputs gives a typed record from the declared inputs", () => {
+  // The read boundary the engine seam (evalNode) uses to turn a node's declared inputs into a
+  // typed record.
+  expect(bindInputs([{ name: "t", contract: STRING, source: "${system.t}" }], poolOf({ t: "X" }))).toEqual({
+    t: "X",
+  });
+});
+
+test("bindInputs resolves item from the local scope", () => {
+  const rec = bindInputs([{ name: "topic", contract: STRING, source: "${item}" }], new VariablePool(), {
+    item: "ACME",
+  });
+  expect(rec).toEqual({ topic: "ACME" });
+});
+
+test("bindInputs walks a dotted item path", () => {
+  const rec = bindInputs([{ name: "v", source: "${item.value}" }], new VariablePool(), { item: { value: 7n } });
+  expect(rec).toEqual({ v: 7n });
+});
+
+test("bindInputs reads an unset item outside a MAP as null", () => {
+  // `${item}` with no item resolves to null (the compile-time scan forbids `${item}` outside a
+  // MAP body, so this only guards a defensive path).
+  expect(bindInputs([{ name: "x", source: "${item}" }], new VariablePool())).toEqual({ x: null });
+});
+
+test("bindInputs still reads a non-item ref from the pool with an item present", () => {
+  const pool = new VariablePool();
+  pool.set(START_ID, { as_of: "2026-01-01" });
+  expect(bindInputs([{ name: "d", source: "${input.as_of}" }], pool, { item: "X" })).toEqual({ d: "2026-01-01" });
+});
+
+// --- TS-only rows --- //
+
+test("bindParams refuses a Set as params", () => {
+  const error = errorOf(() => bindParams(new Set() as never, new Map(), poolOf()));
+  expect(error).toBeInstanceOf(TypeError);
+  expect(error.message).toBe("node params must be an exact list, got Set");
+});

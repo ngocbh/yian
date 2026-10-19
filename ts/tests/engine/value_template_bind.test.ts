@@ -1,10 +1,12 @@
 /**
- * Value templates, an authored container whose nested strings are templates: the carrier half of
+ * Value templates, an authored container whose nested strings are templates: a port of
  * `tests/engine/test_value_template_bind.py`. `ValueTemplate`'s checks, `iterSourceStrings`,
  * `mapSourceStrings` and `bindingInputGroups` walk and rebuild template trees (including nested
  * typed bindings), and the origin walkers (`iterOrigins`, `mapOrigins`, `rewriteOriginCarrier`)
  * reach the template's origins and every nested binding, while a plain record or list binding
- * source stays opaque to iteration.
+ * source stays opaque to iteration. The binder (`bindParams`) evaluates each nested string of a
+ * template and checks each nested typed binding, while a plain record or list source stays a
+ * literal.
  *
  * Changed: Python's rewrite mutates a `copy.deepcopy` in place; `rewriteOriginCarrier` returns the
  * rebuilt carrier instead, so the "private copy" is its return value. Dataclass `==` is
@@ -16,8 +18,8 @@
  * rebuilt template yields is mapped; a record holding a binding and shared by two bindings' sources
  * comes back as one shared record, as Python's `copy.deepcopy` keeps it.
  *
- * Left for later: the binder tests (`test_template_strings_evaluate_with_types_and_unescape`
- * onward) land with `nodes/binding.ts` (`resolveSource`/`bindParams`, then binding capture).
+ * Later: `test_template_routes_record_each_part_and_route_feedback` lands with binding capture
+ * (`BindingCollector`).
  *
  * Not ported: the rows that differ from a good one only by a tuple where Python wants a list or
  * the reverse (a tuple template, a list of origins, a list path): TS has only arrays; and
@@ -28,6 +30,7 @@
 import { expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
+import { BindingError, bindParams } from "../../src/nodes/binding.ts";
 import {
   Binding,
   bindingInputGroups,
@@ -41,7 +44,8 @@ import {
   ValueTemplate,
   type ValuePath,
 } from "../../src/nodes/contracts.ts";
-import { Type, ValueKind } from "../../src/typesys/index.ts";
+import { Type, typeFor, ValueKind, VariablePool } from "../../src/typesys/index.ts";
+import { readTypedefs } from "../../src/typesys/types.ts";
 
 const INTEGER = Type.scalar(ValueKind.INTEGER);
 
@@ -264,6 +268,162 @@ test("a plain binding with a record source keeps its contents opaque", () => {
   );
 
   expect([...binding.iterOrigins()]).toEqual([new OriginRef("o")]);
+});
+
+// --- binder --- //
+
+const BUY = typeFor("Buy", readTypedefs({ Buy: { action: "Literal(buy)", conviction: "float" } }));
+
+/** Return a pool holding each entry of `outputs` as that node's output. */
+function poolOf(outputs: Record<string, unknown> = {}): VariablePool {
+  const pool = new VariablePool();
+  for (const [nodeId, value] of Object.entries(outputs)) pool.set(nodeId, value);
+  return pool;
+}
+
+/** Return the `BindingError` `call` throws. */
+function bindingError(call: () => unknown): BindingError {
+  try {
+    call();
+  } catch (error) {
+    expect(error).toBeInstanceOf(BindingError);
+    return error as BindingError;
+  }
+  throw new Error("call did not throw");
+}
+
+test("template strings evaluate with types and unescape", () => {
+  const template = new ValueTemplate({ a: "${n.output}", b: [1n, "${m.output}"], c: "$$x" });
+
+  const record = bindParams(
+    [new Parameter("d")],
+    new Map([["d", new Binding(template)]]),
+    poolOf({ n: 3.5, m: ["x", 2n] }),
+  );
+
+  expect(record).toEqual({ d: { a: 3.5, b: [1n, ["x", 2n]], c: "$x" } });
+});
+
+test("embedded template strings are stringified", () => {
+  const record = bindParams(
+    [new Parameter("d")],
+    new Map([["d", new ValueTemplate(["n=${n.output}", "plain"])]]),
+    poolOf({ n: 4n }),
+  );
+
+  expect(record).toEqual({ d: ["n=4", "plain"] });
+});
+
+test("a plain record source stays a literal", () => {
+  const source = { a: "${n.output}", b: ["${m.output}"], c: "$$x" };
+
+  const record = bindParams([new Parameter("d")], new Map([["d", new Binding(source)]]), poolOf({ n: 1n, m: 2n }));
+
+  expect(record).toEqual({ d: { a: "${n.output}", b: ["${m.output}"], c: "$$x" } });
+  expect(bindParams([new Parameter("d")], new Map([["d", ["${n.output}"]]]), poolOf({ n: 1n }))).toEqual({
+    d: ["${n.output}"],
+  });
+});
+
+test("a nested typed binding passes a valid value unchanged", () => {
+  const template = new ValueTemplate({
+    order: new Binding("${d.output}", { contract: new ValueContract(BUY) }),
+    n: 1n,
+  });
+  const value = { action: "buy", conviction: 1n };
+
+  const record = bindParams([new Parameter("p")], new Map([["p", template]]), poolOf({ d: value }));
+
+  expect(record).toEqual({ p: { order: { action: "buy", conviction: 1n }, n: 1n } });
+  expect(typeof ((record["p"] as Record<string, Record<string, unknown>>)["order"]!["conviction"])).toBe("bigint");
+});
+
+test("a nested typed binding rejects a missing field at its origin", () => {
+  const nestedOrigin = new OriginRef("site/type/path/order");
+  const template = new ValueTemplate({
+    order: new Binding("${d.output}", { origin: nestedOrigin, contract: new ValueContract(BUY) }),
+  });
+
+  const error = bindingError(() =>
+    bindParams(
+      [new Parameter("p")],
+      new Map([["p", new Binding(template, { origin: new OriginRef("site") })]]),
+      poolOf({ d: { conviction: 0.5 } }),
+    ),
+  );
+
+  expect(error.message).toContain("'action'");
+  expect(error.failureCode).toBe("binding.type");
+  expect(error.origin).toEqual(nestedOrigin);
+  expect(error.message.startsWith("binding 'p.order':")).toBe(true);
+});
+
+test("a nested typed binding prefers the nearest contract origin", () => {
+  const fieldOrigin = new OriginRef("site/type/path/b/0/conviction");
+  const contract = new ValueContract(BUY, new ContractOrigins({ entries: [[["conviction"], fieldOrigin]] }));
+  const template = new ValueTemplate({ b: [new Binding("${d.output}", { origin: new OriginRef("n"), contract })] });
+
+  const error = bindingError(() =>
+    bindParams([new Parameter("p")], new Map([["p", template]]), poolOf({ d: { action: "buy", conviction: "high" } })),
+  );
+
+  expect(error.failureCode).toBe("binding.type");
+  expect(error.origin).toEqual(fieldOrigin);
+  expect(error.message.startsWith("binding 'p.b[0]':")).toBe(true);
+});
+
+test("a nested typed binding over a subtree checks the evaluated record", () => {
+  const template = new ValueTemplate({
+    order: new Binding({ action: "buy", conviction: "${c.output}" }, { contract: new ValueContract(BUY) }),
+  });
+
+  expect(bindParams([new Parameter("p")], new Map([["p", template]]), poolOf({ c: 0.7 }))).toEqual({
+    p: { order: { action: "buy", conviction: 0.7 } },
+  });
+  const error = bindingError(() => bindParams([new Parameter("p")], new Map([["p", template]]), poolOf({ c: "high" })));
+  expect(error.failureCode).toBe("binding.type");
+});
+
+test("template evaluation errors point at the leaf origin", () => {
+  const leafOrigin = new OriginRef("site/path/a");
+  const template = new ValueTemplate({ a: "${n.output:?}" }, [[["a"], leafOrigin]]);
+
+  const error = bindingError(() =>
+    bindParams(
+      [new Parameter("p")],
+      new Map([["p", new Binding(template, { origin: new OriginRef("site") })]]),
+      poolOf(),
+    ),
+  );
+
+  expect(error.failureCode).toBe("binding.evaluate");
+  expect(error.origin).toEqual(leafOrigin);
+  expect(error.message.startsWith("binding 'p.a':")).toBe(true);
+});
+
+test("a nested binding origin locates errors inside it", () => {
+  const nestedOrigin = new OriginRef("site/type/path/b/1");
+  const template = new ValueTemplate({ b: [1n, new Binding({ c: "${n.output:?}" }, { origin: nestedOrigin })] });
+
+  const error = bindingError(() =>
+    bindParams(
+      [new Parameter("p")],
+      new Map([["p", new Binding(template, { origin: new OriginRef("site") })]]),
+      poolOf(),
+    ),
+  );
+
+  expect(error.failureCode).toBe("binding.evaluate");
+  expect(error.origin).toEqual(nestedOrigin);
+  expect(error.message.startsWith("binding 'p.b[1].c':")).toBe(true);
+});
+
+test("the MAP item scope reaches template strings", () => {
+  const template = new ValueTemplate({ i: "${item}", n: 1n });
+
+  expect(bindParams([new Parameter("p")], new Map([["p", template]]), poolOf(), { item: 5n })).toEqual({
+    p: { i: 5n, n: 1n },
+  });
 });
 
 // --- TS-only rows --- //

@@ -30,10 +30,38 @@
  */
 
 import { compareCodeUnits, type OriginRef, reprText } from "../diagnostics.ts";
-import type { ResolvedValue } from "../expr/lineage.ts";
-import { buildValueAs, isRecord, TypeCheckError, type Value, ValueKind, type ValueRecord } from "../typesys/index.ts";
-import { fromHost, jsTypeName, rejectDeepNesting, setField, shownText } from "../typesys/values.ts";
-import { Binding, isExactly, Parameter, type ValuePath, validateOptionalOrigin } from "./contracts.ts";
+import { ConstructorTypeError, ExpressionError, evalBinding, resolveReference } from "../expr/index.ts";
+import { ResolvedValue, type ValueRoute } from "../expr/lineage.ts";
+import {
+  buildValueAs,
+  isRecord,
+  normalizeFiles,
+  type Type,
+  TypeCheckError,
+  type Value,
+  ValueKind,
+  type ValueRecord,
+  type VariablePool,
+} from "../typesys/index.ts";
+import {
+  fromHost,
+  jsTypeName,
+  rejectDeepNesting,
+  renderValuePath,
+  setField,
+  shownText,
+  valueRepr,
+} from "../typesys/values.ts";
+import {
+  Binding,
+  bindingSource,
+  isExactly,
+  Parameter,
+  type ValueContract,
+  type ValuePath,
+  ValueTemplate,
+  validateOptionalOrigin,
+} from "./contracts.ts";
 
 const BINDING_FAILURE_CODES = ["binding.evaluate", "binding.type", "contract.input"] as const;
 
@@ -283,4 +311,338 @@ export function applyDefaults(
     setField(output, parameter.name, parameter.default as Value);
   }
   return output;
+}
+
+/** Spell a parameter name and a path inside its value, as in `p.b[0]`. */
+function pathLabel(name: string, path: ValuePath): string {
+  return name + path.map((part) => (typeof part === "string" ? `.${part}` : `[${part}]`)).join("");
+}
+
+/**
+ * Name a binding error's location: a parameter (or its label) and a path inside it.
+ *
+ * Without a label this is `binding 'p.b[0]'`. With a text label it is the label, followed by
+ * ` at <path>` when `path` is not empty, the path rendered as host intake renders it (`a[1].b`).
+ * A function label names `path` itself.
+ */
+function bindingWhere(name: string, path: ValuePath, label: ErrorLabel | null): string {
+  if (label === null) return `binding ${reprText(pathLabel(name, path))}`;
+  if (typeof label === "function") return label(path);
+  return path.length > 0 ? `${label} at ${renderValuePath(path)}` : label;
+}
+
+/** A source part's value, its route, and whether it evaluated a `${...}` span. */
+type SourceRead = [value: unknown, route: ValueRoute | null, evaluated: boolean];
+
+/** Evaluate template strings for one parameter. */
+class SourceReader {
+  readonly pool: VariablePool;
+  readonly item: Value | ResolvedValue;
+  readonly types: ReadonlyMap<string, Type> | null;
+
+  constructor(pool: VariablePool, item: Value | ResolvedValue, types: ReadonlyMap<string, Type> | null) {
+    this.pool = pool;
+    this.item = item;
+    this.types = types;
+  }
+
+  /**
+   * Return a template string's value, with no route and no spans flag (those come from a
+   * traced read).
+   *
+   * @throws ExpressionError (a `RequiredError` among them) when the template does not parse or
+   *   evaluate.
+   */
+  string(text: string): SourceRead {
+    // Only a traced bind gets a `ResolvedValue` item; this read needs just its value.
+    const item = this.item instanceof ResolvedValue ? this.item.value : this.item;
+    const value = evalBinding(text, (path) => resolveReference(path, this.pool), { item, types: this.types });
+    return [value, null, false];
+  }
+
+  /**
+   * Evaluate one node of a template tree at `path`.
+   *
+   * Each leaf string is a template; a nested typed `Binding` evaluates its source in place, then
+   * checks the result against its contract, converting only its file and object representation.
+   * Other leaves are literals. `label`, when set, names the parameter in an error message in
+   * place of `binding '<name>'`.
+   *
+   * @throws BindingError when a leaf fails to evaluate (located at its registered origin, else
+   *   the nearest enclosing binding's origin, else `origin`), a nested typed binding's value is
+   *   not a yian value (too deep, or refused by host intake), or it violates its contract.
+   */
+  tree(
+    node: unknown,
+    path: ValuePath,
+    name: string,
+    template: ValueTemplate,
+    origin: OriginRef | null,
+    label: ErrorLabel | null,
+  ): SourceRead {
+    if (node instanceof Binding) {
+      let [value, route, evaluated] = this.tree(node.source, path, name, template, node.origin ?? origin, label);
+      if (node.contract !== null) {
+        const where = bindingWhere(name, path, label);
+        try {
+          // A value that is not a yian value fails as such, not as a type mismatch.
+          rejectInvalidBinding(value, where, node.origin);
+          value = checkBindingType(where, node, node.contract, value);
+        } catch (error) {
+          if (error instanceof BindingError && error.origin === null) {
+            error.origin = template.originAt(path) ?? origin;
+          }
+          throw error;
+        }
+      }
+      return [value, route, evaluated];
+    }
+    if (typeof node === "string") {
+      try {
+        return this.string(node);
+      } catch (error) {
+        if (error instanceof ExpressionError) {
+          throw new BindingError(`${bindingWhere(name, path, label)}: ${error.message}`, {
+            failureCode: failureCode(error),
+            origin: template.originAt(path) ?? origin,
+            cause: error,
+          });
+        }
+        throw error;
+      }
+    }
+    if (isRecord(node)) {
+      const values: ValueRecord = {};
+      let anyEvaluated = false;
+      for (const key of Object.keys(node)) {
+        const [value, , evaluated] = this.tree(node[key], [...path, key], name, template, origin, label);
+        // The tree's values are checked at the binding boundary; the cast only satisfies `setField`.
+        setField(values, key, value as Value);
+        anyEvaluated ||= evaluated;
+      }
+      return [values, null, anyEvaluated];
+    }
+    if (Array.isArray(node)) {
+      const items: unknown[] = [];
+      let anyEvaluated = false;
+      for (const [index, child] of node.entries()) {
+        const [value, , evaluated] = this.tree(child, [...path, index], name, template, origin, label);
+        items.push(value);
+        anyEvaluated ||= evaluated;
+      }
+      return [items, null, anyEvaluated];
+    }
+    return [node, null, false];
+  }
+}
+
+/**
+ * Resolve one raw or carrier-wrapped source via the template language. Used by node kinds.
+ *
+ * Exactly one `Binding` layer is removed at this read boundary; a `Binding` directly inside it
+ * stays an ordinary literal payload. A string that is exactly one `${...}` gives the typed value
+ * of that expression; a `${...}` embedded in surrounding text is written into it as text; a
+ * string with no `${...}` is a plain literal (after `$$` becomes `$`). `${item}` /
+ * `${item.path}` resolve from the MAP-body-local `item` scope. A `ValueTemplate` evaluates each
+ * leaf string the same way at its position and checks each nested typed `Binding`. Any other
+ * source, a plain record or list included, is a literal.
+ *
+ * `types` (default `null`, no types) is the table an `isinstance(x, T)` or a `T(...)`
+ * constructor looks `T` up in. `label`, when set, names the parameter in a template error
+ * message in place of `binding '<name>'`; a function label names the path inside the template
+ * the error is at. `name` defaults to `""` and `item` to `null`.
+ *
+ * @throws BindingError when a source does not parse or evaluate (`binding.evaluate`), a
+ *   `${T(...)}` check fails (`binding.type`), or a nested typed binding rejects its value:
+ *   `expr`'s errors never cross the `nodes <- expr` boundary.
+ */
+export function resolveSource(
+  source: unknown,
+  pool: VariablePool,
+  options: {
+    item?: Value | ResolvedValue;
+    name?: string;
+    label?: ErrorLabel | null;
+    types?: ReadonlyMap<string, Type> | null;
+  } = {},
+): unknown {
+  const { item = null, name = "", label = null, types = null } = options;
+  const origin = sourceOrigin(source);
+  const sourceValue = bindingSource(source);
+  if (typeof sourceValue !== "string" && !(sourceValue instanceof ValueTemplate)) return sourceValue;
+  const reader = new SourceReader(pool, item, types);
+  if (sourceValue instanceof ValueTemplate) {
+    return reader.tree(sourceValue.value, [], name, sourceValue, origin, label)[0];
+  }
+  try {
+    return reader.string(sourceValue)[0];
+  } catch (error) {
+    if (error instanceof ExpressionError) {
+      throw new BindingError(error.message, { failureCode: failureCode(error), origin, cause: error });
+    }
+    throw error;
+  }
+}
+
+/** Classify a source evaluation error: a failed `${T(...)}` check is a type error. */
+function failureCode(error: ExpressionError): BindingFailureCode {
+  return error instanceof ConstructorTypeError ? "binding.type" : "binding.evaluate";
+}
+
+/**
+ * Validate a resolved value against its typed binding's declared contract.
+ *
+ * The check runs before the parameter contract. It delivers the payload with only its file and
+ * object representation read as the declared type reads it (`normalizeFiles`): a file's JSON
+ * form at a `file` position becomes a `FileRef`, and a nested `FileRef` at an `object` position
+ * becomes its record. Nothing else converts (an int declared `float` stays an int), and a string
+ * never satisfies a non-string declared type.
+ *
+ * @param where Names the binding in the failure message, e.g. `binding 'p'`.
+ * @param binding The typed binding, whose origin is the fallback location.
+ * @param contract The binding's declared contract.
+ * @param value The value the binding's source resolved to, already checked to be a yian value.
+ * @returns the value to deliver; `value` itself when nothing converts.
+ * @throws BindingError with `failureCode` `binding.type` when the value violates the declared
+ *   type, located at the nearest contract origin for the rejected path, else the binding's origin.
+ */
+function checkBindingType(where: string, binding: Binding, contract: ValueContract, value: unknown): Value {
+  try {
+    buildValueAs(contract.type, value);
+  } catch (error) {
+    if (error instanceof TypeCheckError) {
+      throw new BindingError(`${where}: ${error.message}`, {
+        failureCode: "binding.type",
+        origin: contract.origins.at(error.path) ?? binding.origin,
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  return normalizeFiles(contract.type, value as Value);
+}
+
+/**
+ * Return a fresh copy of a delivered value: new arrays and records (own data properties), with
+ * `FileRef`s and scalars kept. A container shared inside `value` stays shared in the copy.
+ */
+function copyValue(value: Value, copies: Map<object, Value> = new Map()): Value {
+  if (Array.isArray(value) || isRecord(value)) {
+    const shared = copies.get(value);
+    if (shared !== undefined) return shared;
+    if (Array.isArray(value)) {
+      const items: Value[] = [];
+      copies.set(value, items);
+      for (const item of value) items.push(copyValue(item, copies));
+      return items;
+    }
+    const record: ValueRecord = {};
+    copies.set(value, record);
+    for (const key of Object.keys(value)) setField(record, key, copyValue(value[key]!, copies));
+    return record;
+  }
+  // yian has no negative zero: a float that becomes a binding's value is written as 0.
+  return Object.is(value, -0) ? 0 : value;
+}
+
+/**
+ * Resolve each declared `Parameter` into a typed record: the engine's read boundary.
+ *
+ * Joins each param to its source in the flow-owned `wiring` (`name -> source`): coalesce,
+ * default, required, type check, deep copy and the `item` scope. A present typed `Binding` first
+ * checks its resolved value against the binding's declared contract, converting only its file
+ * and object representation; the parameter's own contract then runs as usual. An omitted input
+ * (no wiring entry) fills its declared default or fails when required; a present source that
+ * resolves to `null` shadows the default (`f(x=None)` semantics).
+ *
+ * @param params The node-side declared signature to bind.
+ * @param wiring The flow-owned `name -> source` map for this node.
+ * @param pool The pool each `${...}` source resolves against.
+ * @param options.item The current element for a MAP body's `${item}` scope; `null` (the
+ *   default) is the non-MAP path.
+ * @param options.types The type table an `isinstance(x, T)` or a `T(...)` in a source looks `T`
+ *   up in, keyed by type name (the node's `types`); `null` (the default) means no types.
+ * @param options.labels Param name -> author-facing phrase an error message uses in place of
+ *   `input '<param>'` / `binding '<param>'` (the node's binding labels); a param without one
+ *   keeps the default text. Defaults to `null`.
+ * @returns the bound `{name: value}` record handed to the node instead of the pool, built with
+ *   own data properties.
+ * @throws TypeError when `params` isn't canonical.
+ * @throws BindingError on an expression, default or required failure, a resolved value or filled
+ *   default that nests deeper than `YIAN_MAX_VALUE_NESTING` levels or is refused by host intake
+ *   (NaN, for one), a typed binding's rejection, or a supplied input's contract rejection;
+ *   `failureCode` names the stage.
+ */
+export function bindParams(
+  params: readonly Parameter[],
+  wiring: ReadonlyMap<string, unknown>,
+  pool: VariablePool,
+  options: {
+    item?: Value | ResolvedValue;
+    types?: ReadonlyMap<string, Type> | null;
+    labels?: ReadonlyMap<string, string> | null;
+  } = {},
+): ValueRecord {
+  const { item = null, types = null, labels = null } = options;
+  validateParameters(params);
+  const record: ValueRecord = {};
+  for (const p of params) {
+    try {
+      // An absent entry (the caller omitted the input) vs a present one, bound-null included.
+      const present = wiring.has(p.name);
+      let usedDefault = false;
+      const source = present ? wiring.get(p.name) : null;
+      const label = labels?.get(p.name) ?? null;
+      const inputWhere = label ?? `input ${reprText(p.name)}`;
+      let value = resolveSource(source, pool, { item, name: p.name, label, types });
+      rejectInvalidBinding(value, inputWhere, sourceOrigin(source));
+      if (present && source instanceof Binding && source.contract !== null) {
+        value = checkBindingType(bindingWhere(p.name, [], label), source, source.contract, value);
+      }
+      if (value === null) {
+        // Only an omitted input fills its declared default or fails when required: a present
+        // source that resolves to null shadows the default (`f(x=None)` semantics, as
+        // `applyDefaults`). Loader-built body parameters carry no default; START parameters do,
+        // so the spliced child START owns omitted-input defaulting.
+        if (!present && p.hasDefault) {
+          value = p.default;
+          usedDefault = true;
+          rejectInvalidBinding(value, `default for ${reprText(p.name)}`, p.defaultOrigin ?? p.origin);
+        } else if (!present && p.required) {
+          throw new BindingError(`required input ${reprText(p.name)} is unbound (from=${valueRepr(source)})`, {
+            failureCode: "binding.evaluate",
+            origin: p.origin,
+          });
+        } else if (!present) {
+          // Omitted, no default, not required: leave the key absent so the wrapper's default
+          // can fill it (or the render throws on an unbound name).
+          continue;
+        }
+        // Otherwise present but null: an explicit bound-null that still passes through the
+        // optional contract (nullable or untyped accepts it; a non-nullable contract refuses).
+      }
+      if (p.contract !== null) {
+        // No string conversion here: a CALL/MAP/LOOP edge is not a flow boundary. The run
+        // converts the top-level flow's supplied inputs (`coerceInputs`) before START binds them.
+        let checked;
+        try {
+          checked = buildValueAs(p.contract.type, value);
+        } catch (error) {
+          if (!(error instanceof TypeCheckError)) throw error;
+          throw new BindingError(`${inputWhere}: ${error.message}`, {
+            failureCode: usedDefault ? "binding.evaluate" : "contract.input",
+            origin: usedDefault ? (p.defaultOrigin ?? p.origin) : (p.contract.origins.at(error.path) ?? p.origin),
+            cause: error,
+          });
+        }
+        if (!usedDefault) value = checked.toObject();
+      }
+      // `value` passed `rejectInvalidBinding`, so it is a yian value.
+      setField(record, p.name, copyValue(value as Value));
+    } catch (error) {
+      if (error instanceof BindingError && error.origin === null) error.origin = p.origin;
+      throw error;
+    }
+  }
+  return record;
 }

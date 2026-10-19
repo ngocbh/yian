@@ -1,7 +1,8 @@
 /**
  * Files inside typed containers, a port of the value checks (`buildValueAs`), file
- * normalization (`normalizeFiles`), the overlap tests, the `field_of` table and the two traced
- * item reads of `tests/engine/test_files_in_containers.py`, with `FileRef` constructor refusals
+ * normalization (`normalizeFiles`), the overlap tests, the two typed `bindParams` reads, the
+ * `field_of` table and the two traced item reads of `tests/engine/test_files_in_containers.py`,
+ * with `FileRef` constructor refusals
  * (`RangeError`, as pydantic's `ValidationError` is a `ValueError`). Where Python checks that
  * a value is kept with `is`, these tests use `toBe`.
  *
@@ -23,6 +24,9 @@ import { describe, expect, test } from "bun:test";
 import { evalExpr } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 import { ResolvedValue, SourceRef } from "../../src/expr/lineage.ts";
+import { bindParams } from "../../src/nodes/binding.ts";
+import { Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { VariablePool } from "../../src/typesys/pool.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import {
   buildValueAs,
@@ -305,6 +309,28 @@ describe("untagged unions whose members can share a file", () => {
     expect(typesOverlap(a, b)).toBe(expected);
     expect(typesOverlap(b, a)).toBe(expected);
   });
+});
+
+// --- typed bindings deliver the slot's file representation --- //
+
+/** Bind one parameter to `!declared ${a.output}` over a pool holding `output`. */
+function bind(declared: Type, output: Value): unknown {
+  const pool = new VariablePool();
+  pool.set("a", output);
+  const record = bindParams(
+    [new Parameter("x")],
+    new Map([["x", new Binding("${a.output}", { contract: new ValueContract(declared) })]]),
+    pool,
+  );
+  return record["x"];
+}
+
+test("an object binding reads a nested file as its mapping", () => {
+  expect(bind(OBJECT, { f: REF })).toEqual({ f: form() });
+});
+
+test("a file binding reads the JSON form as a file", () => {
+  expect(bind(t("Rec"), { f: form(), n: 1n })).toEqual({ f: REF, n: 1n });
 });
 
 /** A record holding an own `__proto__` key, as yian builds one. */

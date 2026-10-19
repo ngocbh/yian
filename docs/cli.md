@@ -99,7 +99,7 @@ the whole store (`Credential storage is malformed`). Before downgrading, run
 
 `--default` makes an already-saved provider the default without signing in again.
 `--remove` deletes that provider's saved login; removing the default leaves no
-default. Neither takes other options. `yian auth --remove --auth-file F` deletes the
+default. Neither takes a setup option. `yian auth --remove --auth-file F` deletes the
 whole file `F`; see [Removing a sign-in](#removing-a-sign-in).
 
 `--json` applies to `--remove` and to openai device sign-in; see
@@ -633,14 +633,15 @@ document, `{"format", "error": <diagnostic>}`. `error.code` is one of:
   check before the log exists; and a missing MCP SDK.
 - `run.cancelled`: input the run waited for was closed, such as stdin ending at a
   prompt.
-- `auth.failed`: `yian auth` failed: the options don't go together, the store is
-  unusable, the login to remove isn't saved, or sign-in or the model choice failed.
+- `auth.failed`: `yian auth` failed because the options don't go together, the store
+  is unusable, the login to remove isn't saved, sign-in or the model choice failed, or
+  it was cancelled.
   Device sign-in writes it in an `error` line.
 - `models.failed`: `yian models` couldn't list the models.
 - `models.timeout`: the listing took longer than `--timeout`.
 
 A `models.*` error always has `status`: the HTTP status when the host answered with a
-non-2xx status, else `null`. It is `null` for `models.timeout`.
+non-2xx status, else `null`.
 
 ```json
 {"format": "yian.cli.v1", "error": {"code": "defaults.invalid", "message": "..."}}
@@ -754,12 +755,13 @@ host given, with the key given. `azure` has no model listing, so `models` is `nu
 
 Give exactly one of `--auth-file` and `--provider`; `--base-url` goes only with
 `--provider`. `--timeout S` is the seconds for the whole listing (default 8), a
-finite number above 0. Another combination, an unsupported provider, or a bad timeout
-is a usage error.
+finite number above 0. Another combination, an unsupported provider, a bad timeout,
+or stdin that isn't text is a usage error.
 
 A failure is an error document with `models.failed` or `models.timeout`, and exits 1:
-no openai subscription login in `F`, a failed refresh, a host that can't be reached
-or answers with an error status, or a response that isn't a model list.
+an invalid `--base-url`, an unusable `F`, no openai subscription login in `F`, a failed
+refresh, a host that can't be reached or answers with an error status, or a response
+that isn't a model list.
 
 ```console
 $ printf '%s' "$OPENROUTER_API_KEY" | yian models --provider openrouter --json
@@ -793,8 +795,7 @@ With `--json`, OpenAI device sign-in writes JSON lines on stdout. Each line is a
 - `error`: `{"format", "event": "error", "error": {"code": "auth.failed", "message"}}`.
   An error before the code, such as an unusable store, is the only line.
 
-The stream ends with a `done` line or a line with an `error` key; a `defaults.invalid`
-error document has `error` and no `event`.
+A `defaults.invalid` error document has `error` and no `event`.
 
 ```json
 {"format": "yian.cli.v1", "event": "code", "user_code": "ABCD-1234", "verification_uri": "https://auth.openai.com/codex/device"}
@@ -802,9 +803,9 @@ error document has `error` and no `event`.
 {"format": "yian.cli.v1", "event": "done", "models": ["gpt-5.5", ...], "model": "gpt-5.5"}
 ```
 
-The login saves `--model`, which must be one of the subscription's models (otherwise
-the sign-in fails with `auth.failed` and saves nothing), or else the subscription's
-first model. It becomes the default when the file has no default.
+The login saves `--model`, or else the subscription's first model. A `--model` the
+subscription doesn't offer fails with `auth.failed` and saves nothing. The login
+becomes the default when the file has no default.
 
 SIGTERM or SIGINT stops the sign-in: nothing is saved, no further line is written,
 and the command exits 130. A signal that comes after the login is saved doesn't undo
@@ -821,7 +822,7 @@ yian auth --remove --auth-file F [--json]
 `yian auth PROVIDER --remove` deletes one saved login; a login that isn't saved fails
 with `auth.failed`. `yian auth --remove --auth-file F` deletes the whole file `F`
 under the store's lock, keeping its `.lock` file. It succeeds when `F` doesn't exist,
-and takes no other option: `--default` or a setup option fails with `auth.failed`.
+and takes no `--default` or setup option; either fails with `auth.failed`.
 
 With `--json`, a removal writes `{"format": "yian.cli.v1", "ok": true}` and exits 0; a
 failure writes an error document with `auth.failed` and exits 1. Ctrl-C exits 130
@@ -864,7 +865,7 @@ else: prompts, key checks, and exit codes are the same as without it.
 | Run cancelled at the input prompt, or input closed at a resume key prompt | `1` |
 | Resume key check failed (a missing, changed, or unavailable provider key) | `1` (error printed to stderr) |
 | Invalid CLI input (including a forbidden resume combination, a bad `--memory-root` or `--memory-storage` flag, an `--inputs` file that is not UTF-8 text, not valid JSON, or not a JSON object, an input the flow does not declare, or required inputs missing without a TTY) | `2` |
-| Run interrupted with Ctrl-C during execution or at a resume key prompt; `yian auth --json` stopped with Ctrl-C; device sign-in stopped by SIGTERM | `130` |
+| Run interrupted with Ctrl-C during execution or at a resume key prompt | `130` |
 
 `yian check`, `yian skills check`, and `yian config check` exit `1` when they find a
 problem, and `yian config check` exits `2` when stdin is not a JSON object. With
@@ -872,8 +873,9 @@ problem, and `yian config check` exits `2` when stdin is not a JSON object. With
 reported problem; see [Machine-readable output](#machine-readable-output).
 
 `yian auth` exits `1` when it fails or is cancelled, and `2` for a usage error, such as
-`--json` on a form that doesn't take it. `yian models` exits `1` when the listing
-fails, and `2` for a usage error.
+`--json` on a form that doesn't take it. Under `--json`, Ctrl-C makes it exit `130`, as
+does SIGTERM during device sign-in. `yian models` exits `1` when the listing fails,
+and `2` for a usage error.
 
 ## Compile errors
 

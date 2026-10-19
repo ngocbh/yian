@@ -3,7 +3,8 @@
  *
  * Ported: `test_case_parse_matches_descriptor_and_records_ranges`,
  * `test_case_parse_requires_cases`, `test_case_with_both_on_spellings_is_a_located_error`,
- * `test_case_rejects_boolean_key_at_its_location`, `test_case_build_lowers_to_case_node_with_edges`,
+ * `test_case_rejects_boolean_key_at_its_location`,
+ * `test_case_build_lowers_to_case_node_with_edges`,
  * `test_case_descriptor_rejects_misaligned_or_nonopaque_origins`,
  * `test_on_case_preserves_predicate_and_generated_binding_origins`,
  * `test_case_parse_keeps_then_styles_aligned_with_cases`, `test_case_parse_keeps_else_style`,

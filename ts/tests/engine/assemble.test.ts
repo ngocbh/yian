@@ -12,19 +12,18 @@
  *
  * The conductor: the input representation guards
  * (`test_resolved_parameters_reject_both_input_representations`,
- * `test_resolved_parameters_reject_missing_input_representation`). TS-only conductor rows: a
- * cursor with resolved parameters, the memory declaration check, the errors `parseNodes`, the
- * `uses:` alias check and the value-entry reader raise through `assemble`, and one happy path over
- * stand-in nodes (no boundary until T3-17). Later (T3-17): the value-entry
- * rows of `stampNodeWiringOrigins` (a value entry's input owns its parameter and binding at the
- * entry itself) and `splitTypedInputs` (a value entry is returned unchanged), once `isValueEntry`
- * is real; the resolved parameter boundary
- * (`test_resolved_parameters_preserve_structural_contract_identity`,
+ * `test_resolved_parameters_reject_missing_input_representation`). TS-only conductor rows: a cursor
+ * with resolved parameters, the memory declaration check, the errors `parseNodes`, the `uses:`
+ * alias check and the value-entry reader raise through `assemble`, and one happy path over stand-in
+ * nodes (no boundary until T3-17). Later (T3-17): the value-entry rows of `stampNodeWiringOrigins`
+ * (a value entry's input owns its parameter and binding at the entry itself) and `splitTypedInputs`
+ * (a value entry is returned unchanged), once `isValueEntry` is real; the resolved parameter
+ * boundary (`test_resolved_parameters_preserve_structural_contract_identity`,
  * `test_resolved_parameters_accept_zero_args_and_wire_empty_start`), the seed edge and boundary
  * rows (`test_seed01_*`, `test_seed02_case_targets_not_bare_roots`,
- * `test_seed02_coalesce_both_producers_terminal`, `test_seed05_*`,
- * `test_seed06_*`, `test_seed18_*`, `test_terminal_edge_ids_unique`,
- * `test_assembled_edges_have_start_and_end`, `test_boundary_end_record_flag_picks_the_mode`).
+ * `test_seed02_coalesce_both_producers_terminal`, `test_seed05_*`, `test_seed06_*`,
+ * `test_seed18_*`, `test_terminal_edge_ids_unique`, `test_assembled_edges_have_start_and_end`,
+ * `test_boundary_end_record_flag_picks_the_mode`).
  * Later (T3-18): the wiring parity rows (`test_wiring_parity_*`).
  *
  * `test_seed02_branch_target_has_control_edge` reads the edges of seed 02's built `gate`

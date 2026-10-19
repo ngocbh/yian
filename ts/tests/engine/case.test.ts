@@ -8,9 +8,9 @@
  * `test_searched_when_coalesce_adds_a_required_join_input`,
  * `test_searched_when_join_reuses_a_plain_read`,
  * `test_searched_when_input_read_inside_an_escape_stays_plain`,
- * `test_searched_when_same_escape_in_two_cases_shares_locals`, `test_searched_when_malformed_is_loud`,
- * `test_on_desugar_builds_case`, `test_on_control_edges`, `test_on_data_edge_reconciled`,
- * `test_desugared_searched_routes_via_evaluate_when_record`,
+ * `test_searched_when_same_escape_in_two_cases_shares_locals`,
+ * `test_searched_when_malformed_is_loud`, `test_on_desugar_builds_case`, `test_on_control_edges`,
+ * `test_on_data_edge_reconciled`, `test_desugared_searched_routes_via_evaluate_when_record`,
  * `test_desugared_on_routes_via_evaluate_when_record`, `test_handles_align_with_control_edges`,
  * `test_on_value_with_double_quote_uses_single_quote_and_routes`,
  * `test_on_value_with_both_quotes_is_loud_load_error`, the build halves of
@@ -19,20 +19,21 @@
  * `test_on_non_enum_producer_skips_exhaustiveness`, the build half of
  * `tests/engine/test_validate_refs.py`'s `test_case_node_local_ref_does_not_error`, and the
  * allocation order of `tests/compose/test_null_narrowing_case.py`'s
- * `test_a_case_param_read_after_a_null_check_sees_the_value_as_not_null` (`__r0`, `__r1`, `__r2`
- * in read order).
+ * `test_a_case_param_read_after_a_null_check_sees_the_value_as_not_null` (`__r0`, `__r1`, `__r2` in
+ * read order).
  *
  * Changed: the seed rows parse seeds 02, 06 and 10 through the conformance cases
- * `load-case/seed_02_case`, `load-case/seed_06_case_on` and `load-leaves/seed_10_asserts_arithmetic`
- * (`parseFile`, `flowNodesCursor`, `parseNodes`), where Python reads the seed files. The quote rows
- * build an `on:` case whose `when:` holds the quotes, where Python calls `_quote`, which stays
- * module-private. The exhaustiveness build halves build without the producers, which a build
- * doesn't read. The malformed-`when:` row checks the message's start, where Python matches a
- * fragment.
+ * `load-case/seed_02_case`, `load-case/seed_06_case_on` and
+ * `load-leaves/seed_10_asserts_arithmetic` (`parseFile`, `flowNodesCursor`, `parseNodes`), where
+ * Python reads the seed files. The quote rows build an `on:` case whose `when:` holds the quotes,
+ * where Python calls `_quote`, which stays module-private. The exhaustiveness build halves build
+ * without the producers, which a build doesn't read. The malformed-`when:` row pins the whole
+ * message, where Python matches a fragment. The multiref row pins the whole data-edge list, where
+ * Python checks for the `score` edge and against a `weight` one.
  *
  * TS-only: the seed `e38` row (`load-case/seed_e38_case_when_ref_locates_node_header`): the build
- * locates `__r1` at its `cases[1].when` (line 36) and labels it so; the conformance case's full
- * error comes from the reference check (T3-18).
+ * locates each `__rN` at the whole value of its `cases[N].when` (`__r1` on line 36) and labels it
+ * so; the conformance case's full error comes from the reference check (T3-18).
  *
  * Later (T3-17): the `infer_data_edges` half of
  * `test_build_emits_reconciled_edges_no_provisional_group`.
@@ -55,6 +56,7 @@ import { expect, test } from "bun:test";
 import type { Edge } from "../../src/compile/model.ts";
 import { BuildContext, type BuildResult, siteKey } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
+import type { SourceRange } from "../../src/diagnostics.ts";
 import { evaluateWhenRecord } from "../../src/expr/expressions.ts";
 import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import { CaseNode } from "../../src/nodes/case/node.ts";
@@ -88,10 +90,17 @@ function split(result: BuildResult): { data: Edge[]; control: Edge[] } {
   };
 }
 
+/** Return a range as `[startLine, startCol, endLine, endCol]`, or `null`. */
+const span = (range: SourceRange | undefined) =>
+  range === undefined ? null : [range.startLine, range.startCol, range.endLine, range.endCol];
+
 /** Return the built `CaseNode` of a built CASE. */
 const caseNode = (result: BuildResult) => result.node as CaseNode;
 
-/** Build a searched case `gate` with one case per `when:` (case `i` routes to `t<i>`), else `cautious`. */
+/**
+ * Build a searched case `gate` with one case per `when:` (case `i` routes to `t<i>`), else
+ * `cautious`.
+ */
 function searched(...whens: string[]): BuildResult {
   return new CaseDescriptor({
     id: "gate",
@@ -161,8 +170,9 @@ test("searched multiref allocates __r0 and __r1", () => {
   );
   expect(caseNode(result).cases[0]!.when).toBe("__r0 > 0 and __r1 * 100 <= 5");
   // Only the node output is a data edge; `input.weight` isn't.
-  expect(data.map((edge) => [edge.from, edge.to, edge.inputGroup])).toContainEqual(["score", "size", "__r0"]);
-  expect(data.some((edge) => edge.from === "weight")).toBe(false);
+  expect(data.map((edge) => [edge.id, edge.from, edge.to, edge.inputGroup, edge.optional])).toEqual([
+    ["score->size#0", "score", "size", "__r0", false],
+  ]);
 });
 
 // The reads and the rewrite come from the same parse, so both spellings allocate, wire and route
@@ -257,7 +267,10 @@ test("searched when: malformed is loud", () => {
 
   const error = loadError(() => new CaseDescriptor({ id: "gate", cases, else_: "cautious" }).build(CTX));
 
-  expect(error.message).toStartWith("case node 'gate': `when:` 'score >= >= 5' is not a valid boolean expression: ");
+  expect(error.message).toBe(
+    "case node 'gate': `when:` 'score >= >= 5' is not a valid boolean expression: " +
+      "could not parse expression 'score >= >= 5': unexpected '>=' at line 1, column 10",
+  );
 });
 
 test("searched reads are allocated in read order", () => {
@@ -285,8 +298,9 @@ test("a case node's local reads: the build half", () => {
 test("seed e38: each generated input locates at its when and is labelled so", () => {
   const result = caseDesc("load-case/seed_e38_case_when_ref_locates_node_header", "gate").build(CTX);
 
-  expect(result.fieldRanges.get(siteKey("input", "__r0"))!.startLine).toBe(34);
-  expect(result.fieldRanges.get(siteKey("input", "__r1"))!.startLine).toBe(36);
+  // Each at its `when:` value: `"score.output >= 0.5"` on line 34, `"nope.output >= 0.9"` on 36.
+  expect(span(result.fieldRanges.get(siteKey("input", "__r0")))).toEqual([34, 15, 34, 36]);
+  expect(span(result.fieldRanges.get(siteKey("input", "__r1")))).toEqual([36, 15, 36, 35]);
   expect(result.node.wiringLabels).toEqual(
     new Map([
       ["__r0", "cases[0].when"],

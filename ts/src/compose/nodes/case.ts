@@ -12,11 +12,9 @@
  * data edges followed by its control edges. Two surface forms:
  *
  * - searched (`cases: [{when: "<bool>", then: <t>}]`, `else: <e>`): each distinct read of the
- *   `when:`s becomes one `CaseNode` input `__rN`: a reference (`${path}`), a node-output reference
- *   inside a `:-` / `:?` / `|` (`${path :- null}`, an optional edge), plus a join input over a
- *   co-skipping escape's producers (so the gate skips as a binding of that escape would). Each
- *   reference in a `when:` is rewritten to its bare local `__rN`; the `when:` itself stays lazily
- *   evaluated. `searchedParamGuards` gives the guard each read is checked under.
+ *   `when:`s (defined at `searchedParams`) becomes one `CaseNode` input `__rN`. Each reference in
+ *   a `when:` is rewritten to its bare local `__rN`; the `when:` itself stays lazily evaluated.
+ *   `searchedParamGuards` gives the guard each read is checked under.
  * - `on:` (`on: ${ref}`, `cases: [{when: <value>, then: <t>}]`): one input `__on = ${ref}`; each
  *   `when: <value>` is a literal compared exactly: text becomes `__on == "<value>"`, a number
  *   `__on == <n> and not isinstance(__on, bool)`, a bool `__on == true and isinstance(__on, bool)`.
@@ -161,6 +159,7 @@ export class CaseDescriptor extends NodeDescriptor {
    */
   constructor(fields: CaseDescriptorFields) {
     super(fields);
+    // Not `?? []`: a YAML `cases: null` must stay null so `_checkCasesShape` can reject it.
     this.cases = fields.cases === undefined ? [] : fields.cases;
     this.else_ = fields.else_ ?? null;
     // A directly constructed `else_` implies the key was written.
@@ -631,10 +630,11 @@ function joinSources(reads: readonly ConditionRead[]): string[] {
  * Allocate one `__rN` local per distinct read across all searched `when:`s.
  *
  * A read is a reference (`${path}`), a node-output reference inside a `:-` / `:?` / `|`
- * (`${path :- null}`), or, once per co-skipping escape that reads a node output, a join input
- * over its producers; its source is also its dedupe key. Per `when:`, its reference reads are
- * allocated before its join inputs. Locals and guards come from the same parse, so every guarded
- * occurrence has a local.
+ * (`${path :- null}`, an optional edge), or, once per co-skipping escape that reads a node output,
+ * a join input over its producers, which the `when:` doesn't read but whose required edges skip the
+ * gate as that escape's binding would skip; its source is also its dedupe key. Per `when:`, its
+ * reference reads are allocated before its join inputs. Locals and guards come from the same parse,
+ * so every guarded occurrence has a local.
  *
  * @param guardsOf Gives each occurrence's guard; by default what the checks before it prove
  *   through `and`, `or` and `not` (`guardedRefs`).
@@ -694,7 +694,7 @@ function searchedParams(
     if (occurrenceGuards.length !== locals.length) {
       throw new RangeError(`guardsOf gave ${occurrenceGuards.length} guards for ${locals.length} reads`);
     }
-    locals.forEach((local, i) => guards.get(local)!.push([caseIndex, occurrenceGuards[i]!]));
+    occurrenceGuards.forEach((guard, i) => guards.get(locals[i]!)!.push([caseIndex, guard]));
     caseLocals.push(locals);
   });
   return { sourceToLocal, localCaseIndex, caseLocals, guards };
@@ -710,12 +710,13 @@ function searchedParams(
  *
  * @param desc A searched case that has already built. An `on:` case has no guards.
  * @param guardsOf The guard each occurrence of a parsed `when:` is checked under, in
- *   `guardedRefs` order, with `null` for an occurrence that is not checked; `null` (the default)
- *   uses `guardedRefs`'s guards.
+ *   `guardedRefs` order, with `null` for an occurrence that is not checked; by default
+ *   `guardedRefs`'s guards.
  * @returns For each local, one `[case index, guard]` pair per occurrence, across all `when:`s in
  *   source order (empty for a join input).
  * @throws LoadError when `desc` has a `when:` its build would reject. The loader only calls this
  *   after the build succeeded, so the error is unlocated.
+ * @throws RangeError when `guardsOf` gives a different number of guards than a `when:` has reads.
  *
  * @example
  * For a first case `not isinstance(d.output, Buy) or d.output.qty > 5`, the local of
@@ -723,19 +724,17 @@ function searchedParams(
  */
 export function searchedParamGuards(
   desc: CaseDescriptor,
-  guardsOf: GuardsOf | null = null,
+  guardsOf: GuardsOf = plainGuards,
 ): Map<string, GuardedRead[]> {
   if (desc.on !== null) return new Map();
-  return searchedParams(desc, new LoadDiagnostics(), guardsOf ?? plainGuards).guards;
+  return searchedParams(desc, new LoadDiagnostics(), guardsOf).guards;
 }
 
 /**
  * Lower the searched form: one `__rN` input per distinct read, each `when:` rewritten over them.
  *
- * A read is a reference (`${path}`), a node-output reference inside a `:-` / `:?` / `|`
- * (`${path :- null}`), or a join input over a co-skipping escape's producers, which the `when:`
- * doesn't read but whose required edges skip the gate as that escape's binding would skip. Each
- * `__rN` is located at the `cases[N].when` it was first seen in and labelled `cases[N].when`.
+ * Reads are as `searchedParams` defines them. Each `__rN` is located at the `cases[N].when` it
+ * was first seen in and labelled `cases[N].when`.
  *
  * @throws LoadError when a `when:` isn't text or doesn't parse (at that `when:`), or a case lacks
  *   its `then:` (at the `then:`, else at `cases:`).

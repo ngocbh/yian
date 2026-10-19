@@ -63,7 +63,9 @@ nodes:
 
   const result = descriptor.build(CTX);
 
-  expect(result.fieldRanges.get(siteKey("input", "__r0"))!.startLine).toBe(6);
+  // The whole `when:` value `missing.output > 0`.
+  const range = result.fieldRanges.get(siteKey("input", "__r0"))!;
+  expect([range.startLine, range.startCol, range.endLine, range.endCol]).toEqual([6, 15, 6, 33]);
   expect("fieldRanges" in result.node).toBe(false);
 });
 

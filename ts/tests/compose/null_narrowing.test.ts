@@ -347,7 +347,6 @@ test("a null check the routing proves null is reported", () => {
 
 // ---------- harvested conformance cases ----------
 
-// The flow's searched `route` builds before the `on:` case `inner`.
 test("assembled: load-types/compose_null_narrowing__a_null_when_is_no_on_value_even_on_a_narrowed_field", () => {
   // YAML `null` is no `when:` value at all; the build rejects it before any typing.
   runCase({

@@ -204,6 +204,9 @@ output: \${b.output | c.output}
 `;
 }
 
+/** `caseOn`'s flow without `on:`: a searched CASE whose case reads `when: x`. */
+const SEARCHED_CASE = caseOn("null").replace("    on: null\n", "");
+
 const FLOW = `id: f
 name: f
 nodes:
@@ -475,7 +478,7 @@ describe("parseNodes", () => {
 
 describe("the CASE build", () => {
   test("a searched-when error is located as before", () => {
-    const text = caseOn("null").replace("    on: null\n", "").replace("when: x", "when: 5");
+    const text = SEARCHED_CASE.replace("when: x", "when: 5");
 
     const error = loadError(() => assembleText(text));
 

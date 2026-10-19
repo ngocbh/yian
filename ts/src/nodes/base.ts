@@ -176,6 +176,7 @@ export class BackwardResult {
     for (const name of Object.keys(variables)) {
       validateTextFeedback(variables[name], `variable_feedback[${reprText(name)}]`);
     }
+    // Only this channel copies with a memo: Python deep-copies it, so its shared subtrees stay shared.
     this.inputFeedback = copyBackwardValue(inputs, "input_feedback", new Map()) as typeof this.inputFeedback;
     this.selfFeedback = copyBackwardValue(selfFeedback, "self_feedback") as readonly string[];
     this.variableFeedback = copyBackwardValue(variables, "variable_feedback") as typeof this.variableFeedback;
@@ -184,7 +185,8 @@ export class BackwardResult {
 }
 
 /**
- * Check one retained JSON value and return a deep-frozen copy of it.
+ * Check one retained JSON value and return a deep-frozen copy of it. The runtime log, learning,
+ * the backward hooks and the runtime contracts use it.
  *
  * JSON here is `null`, strings, booleans, `bigint`s, numbers other than NaN (infinity is a
  * value), plain arrays and plain records. `-0` is copied as `0`, since yian has no negative
@@ -207,18 +209,16 @@ export function copyBackwardValue(value: unknown, name: string, memo?: Map<objec
     if (Number.isNaN(value)) throw new RangeError(`${name} must not contain NaN`);
     return Object.is(value, -0) ? 0 : value;
   }
+  const shared = memo?.get(value as object);
+  if (shared !== undefined) return shared;
   let result: unknown[] | ValueRecord;
   if (isList(value)) {
-    const shared = memo?.get(value);
-    if (shared !== undefined) return shared;
     result = [];
     // An index loop, not `map`: `map` skips the holes of a sparse array, which must fail here.
     for (let index = 0; index < value.length; index++) {
       result.push(copyBackwardValue(value[index], `${name}[${index}]`, memo));
     }
   } else if (isRecord(value)) {
-    const shared = memo?.get(value);
-    if (shared !== undefined) return shared;
     result = {};
     for (const key of Object.keys(value)) {
       setField(result, key, copyBackwardValue(value[key], `${name}[${reprText(key)}]`, memo) as Value);
@@ -227,15 +227,15 @@ export function copyBackwardValue(value: unknown, name: string, memo?: Map<objec
     throw new TypeError(`${name} must contain only JSON values`);
   }
   Object.freeze(result);
-  // Only finished copies are stored, so a failing container fails again, with the same name,
+  // Only finished copies are stored, so a failing container fails again, named by its own path,
   // wherever it reappears.
-  memo?.set(value, result);
+  memo?.set(value as object, result);
   return result;
 }
 
 /**
- * Require one inventory of distinct authored names. `BackwardContext` and the kinds that capture
- * backward inputs use it.
+ * Require one inventory of distinct authored names. `BackwardContext`, the runtime trace and the
+ * runtime contracts use it.
  *
  * @throws TypeError when `names` isn't an array of strings.
  * @throws RangeError for a repeated name.
@@ -250,7 +250,8 @@ export function validateDeclaredNames(names: unknown, fieldName: string): void {
 
 /**
  * Validate the optional source-neutral paths from declared inputs into the output, held in
- * `data.input_output_paths`. `BackwardContext` and the structural backward hooks use it.
+ * `data.input_output_paths`. `BackwardContext`, the runtime contracts and the structural
+ * backward hooks use it.
  *
  * A path part is a string, a non-negative `bigint`, or a non-negative safe-integer `number`.
  *
@@ -358,7 +359,8 @@ export class BackwardContext {
     validateDeclaredNames(variableNames, "variable_names");
     if (failure !== null) {
       if (!isExactly(failure, Failure)) throw new TypeError("failure must be a Failure or null");
-      failure = new Failure({ ...failure, trace: failure.trace.map((origin) => new OriginRef(origin.key)) });
+      const trace = failure.trace.map((origin) => Object.freeze(new OriginRef(origin.key)));
+      failure = new Failure({ ...failure, trace });
       Object.freeze(failure.trace);
       Object.freeze(failure);
     }
@@ -405,13 +407,15 @@ export class BackwardContext {
  * @param result The owner's proposed feedback channels.
  * @param context The recorded bound values and the owner's declared input and local variable
  *   inventories.
- * @throws TypeError for a result or context of another class, or an invalid message type.
+ * @throws TypeError for a result or context of another class.
  * @throws RangeError for an undeclared target, an unavailable input value, or a nested feedback
  *   shape mismatch.
  */
 export function validateBackwardResult(result: BackwardResult, context: BackwardContext): void {
   if (!isExactly(result, BackwardResult)) throw new TypeError("result must be a BackwardResult");
   if (!isExactly(context, BackwardContext)) throw new TypeError("context must be a BackwardContext");
+  // Python rebuilds the result here; a TS result was validated and frozen when it was built, and
+  // `isExactly` refuses a subclass, so there's nothing to recheck.
   const inputs = context.inputs;
   const names = Object.keys(result.inputFeedback);
   if (names.length > 0 && inputs === null) throw new RangeError("input_feedback requires usable recorded inputs");

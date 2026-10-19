@@ -7,7 +7,9 @@
  * `test_backward_contracts_reject_invalid_snapshots_and_outcomes`.
  *
  * TS-only: `copyBackwardValue` keeps a `__proto__` key as data, writes `-0` as `0`, keeps a
- * shared subtree shared, and names the nested value it refuses; a `null` channel is an empty one;
+ * shared subtree shared, names the nested value it refuses, and with a reused memo names a failing
+ * container by its own path in each call; `validateInputOutputPaths` checks each path; a `null`
+ * channel is an empty one;
  * `projectStructuralFeedback` selects through `input_output_paths`; record membership reads own
  * keys only (`constructor`, `toString`).
  *
@@ -47,6 +49,7 @@ import {
   copyBackwardValue,
   projectStructuralFeedback,
   validateBackwardResult,
+  validateInputOutputPaths,
 } from "../../src/nodes/base.ts";
 import { ExecutionPosition, ExecutionScope } from "../../src/nodes/contracts.ts";
 
@@ -356,6 +359,7 @@ test.each(["argument", "public view"])(
       }),
     );
     expect(retained.trace.every((item) => Object.getPrototypeOf(item) === OriginRef.prototype)).toBe(true);
+    expect(retained.trace.every((item) => Object.isFrozen(item))).toBe(true);
     expect(failure.trace[0]).toBe(origin);
   },
 );
@@ -371,6 +375,33 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError]>([
   ["array node data", () => new BackwardContext({}, { nodeData: [] as never }), TypeError],
 ])("backward contracts reject invalid snapshots (%s)", (_name, factory, cls) => {
   expect(factory).toThrow(cls);
+});
+
+test("copyBackwardValue with a reused memo names a failing container by its own path", () => {
+  const memo = new Map<object, unknown>();
+  const failing = { x: [NaN] };
+  expect(() => copyBackwardValue({ a: failing }, "first", memo)).toThrow("first['a']['x'][0] must not contain NaN");
+  expect(() => copyBackwardValue([failing], "second", memo)).toThrow("second[0]['x'][0] must not contain NaN");
+});
+
+const BAD_PART = "output path components must be strings or non-negative integers";
+
+test.each<[string, unknown, typeof TypeError | typeof RangeError, string]>([
+  ["paths that aren't a record", [], TypeError, "input_output_paths must be a record"],
+  ["an undeclared input", { other: [] }, RangeError, "input_output_paths must name declared inputs"],
+  ["a path that isn't an array", { topic: "summary" }, TypeError, "input_output_paths values must be arrays"],
+  ["a negative bigint", { topic: [-1n] }, RangeError, BAD_PART],
+  ["a negative number", { topic: [-1] }, RangeError, BAD_PART],
+  ["a fractional number", { topic: [1.5] }, RangeError, BAD_PART],
+  ["a boolean", { topic: [true] }, RangeError, BAD_PART],
+])("validateInputOutputPaths refuses %s", (_name, paths, cls, message) => {
+  expect(() => validateInputOutputPaths({ input_output_paths: paths }, ["topic"])).toThrow(cls);
+  expect(() => validateInputOutputPaths({ input_output_paths: paths }, ["topic"])).toThrow(message);
+});
+
+test("validateInputOutputPaths accepts strings and non-negative integers", () => {
+  validateInputOutputPaths({ input_output_paths: { topic: ["items", 0n, 2, Number.MAX_SAFE_INTEGER] } }, ["topic"]);
+  validateInputOutputPaths({}, ["topic"]);
 });
 
 test("backward context accepts an infinite output", () => {

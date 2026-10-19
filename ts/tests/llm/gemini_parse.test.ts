@@ -1,14 +1,15 @@
 /**
  * Tests for Gemini reply parsing in `src/llm/protocols/gemini.ts`: SSE chunks into deltas, text
  * and reasoning pieces joined into parts, thought signatures on the part they land in, tool calls
- * and their ids, usage merged across chunks, the finish point and finish reasons, replay records
- * and cancellation.
+ * and their ids, usage merged across chunks, the finish point and finish reasons, replay records,
+ * cancellation, stream errors, failed finish reasons, prompt blocks, truncation, invalid JSON, shape
+ * and usage errors, and a reply sent back through `buildBody`.
  */
 
 import { describe, expect, test } from "bun:test";
 
 import { encodeBody } from "../../src/llm/body.ts";
-import { ProviderError } from "../../src/llm/errors.ts";
+import { type ErrorKind, ProviderError } from "../../src/llm/errors.ts";
 import {
   collect,
   type Event,
@@ -25,11 +26,14 @@ import {
   type Part,
   ReasoningPart,
   readReplayRecord,
+  type ReplayDegradedReason,
   type ReplayKey,
   replayRecord,
+  Request,
   Response,
   TextPart,
   ToolCallPart,
+  ToolResultPart,
   Usage,
 } from "../../src/llm/messages.ts";
 import { Gemini, PROTOCOL } from "../../src/llm/protocols/gemini.ts";
@@ -131,15 +135,25 @@ async function parse(items: (JsonObject | SSEEvent)[], protocol = gemini()): Pro
   return out;
 }
 
-/** Return the `ProviderError` parsing `items` throws; fail the test if none is thrown. */
-async function failure(items: (JsonObject | SSEEvent)[], protocol = gemini()): Promise<ProviderError> {
+/**
+ * Return the events parsing `items` emitted and the `ProviderError` it threw, whose provider must
+ * be unset; fail the test if none is thrown.
+ */
+async function failing(items: (JsonObject | SSEEvent)[], protocol = gemini()): Promise<[Event[], ProviderError]> {
+  const out: Event[] = [];
   try {
-    await parse(items, protocol);
+    for await (const event of protocol.parse(frames(items))) out.push(event);
   } catch (error) {
     expect(error).toBeInstanceOf(ProviderError);
-    return error as ProviderError;
+    expect((error as ProviderError).provider).toBeNull();
+    return [out, error as ProviderError];
   }
   throw new Error("expected a ProviderError");
+}
+
+/** Return the `ProviderError` parsing `items` throws; fail the test if none is thrown. */
+async function failure(items: (JsonObject | SSEEvent)[], protocol = gemini()): Promise<ProviderError> {
+  return (await failing(items, protocol))[1];
 }
 
 async function collected(items: (JsonObject | SSEEvent)[], protocol = gemini()): Promise<Response> {
@@ -621,5 +635,377 @@ describe("cancellation", () => {
     }
     expect(closed).toBe(true);
     expect(pulled).toBe(1);
+  });
+});
+
+/** The deltas the probe's text reply streams before its last chunk. */
+const TEXT_DELTAS = [new TextDelta(0, "Hello"), new TextDelta(0, " there.")];
+
+describe("failed finish reasons", () => {
+  const REFUSED = [
+    "SAFETY",
+    "RECITATION",
+    "LANGUAGE",
+    "BLOCKLIST",
+    "PROHIBITED_CONTENT",
+    "SPII",
+    "IMAGE_SAFETY",
+    "IMAGE_PROHIBITED_CONTENT",
+    "IMAGE_RECITATION",
+    "MODEL_ARMOR",
+    "PUP_LIMITED_DISABLED",
+  ];
+  const INCOMPLETE = ["OTHER", "MALFORMED_FUNCTION_CALL", "FINISH_REASON_UNSPECIFIED", "IMAGE_OTHER", "SOMETHING_NEW"];
+  const FAILED: [string, ErrorKind, boolean][] = [
+    ...REFUSED.map((reason): [string, ErrorKind, boolean] => [reason, "refused", false]),
+    ["MALFORMED_RESPONSE", "incomplete", true],
+    ...INCOMPLETE.map((reason): [string, ErrorKind, boolean] => [reason, "incomplete", false]),
+  ];
+
+  /** Return the probe's text reply ending with `reason`, and `finishMessage` when given. */
+  function ending(reason: string, finishMessage?: JsonValue): JsonObject[] {
+    const last = { content: { role: "model", parts: [] }, finishReason: reason, index: 0n } as JsonObject;
+    if (finishMessage !== undefined) last["finishMessage"] = finishMessage;
+    return [...sseChunks([TEXT], { finish: null }), { candidates: [last], usageMetadata: USAGE }];
+  }
+
+  test.each(FAILED)("%s raises %s (retryable %p) after its deltas", async (reason, kind, retryable) => {
+    const message = `google response did not complete (${reason})`;
+    for (const [finishMessage, text] of [
+      [undefined, message],
+      ["The reply was stopped.", `${message}: The reply was stopped.`],
+      ["", message],
+      [null, message],
+    ] as [JsonValue | undefined, string][]) {
+      const [out, error] = await failing(ending(reason, finishMessage));
+      expect(error.kind).toBe(kind);
+      expect(error.retryable).toBe(retryable);
+      expect(error.message).toBe(text);
+      expect(out).toEqual(TEXT_DELTAS);
+    }
+  });
+
+  test("CONTINUATION is a protocol error that names the request yian does not send", async () => {
+    const chunks = ending("CONTINUATION", "Continue.");
+    (chunks.at(-1)!["candidates"] as JsonObject[])[0]!["continuationToken"] = "dG9rZW4=";
+    const [out, error] = await failing(chunks);
+    expect(error.kind).toBe("protocol");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toBe("google asked to continue the reply in another request, which yian does not send");
+    expect(out).toEqual(TEXT_DELTAS);
+  });
+});
+
+describe("prompt blocks", () => {
+  test.each(["SAFETY", "OTHER"])("a %s block with no candidates is refused", async (reason) => {
+    for (const [blockReasonMessage, text] of [
+      [undefined, `google blocked the prompt (${reason})`],
+      ["The prompt was blocked.", `google blocked the prompt (${reason}): The prompt was blocked.`],
+      ["", `google blocked the prompt (${reason})`],
+    ] as [string | undefined, string][]) {
+      const feedback: JsonObject = { blockReason: reason };
+      if (blockReasonMessage !== undefined) feedback["blockReasonMessage"] = blockReasonMessage;
+      const [out, error] = await failing([{ promptFeedback: feedback, usageMetadata: { promptTokenCount: 7n } }]);
+      expect(error.kind).toBe("refused");
+      expect(error.retryable).toBe(false);
+      expect(error.message).toBe(text);
+      expect(out).toEqual([]);
+    }
+  });
+});
+
+describe("stream errors", () => {
+  const UNAVAILABLE = "The service is currently unavailable.";
+  const API_KEY_INVALID: JsonObject = {
+    code: 400n,
+    message: "API key not valid. Please pass a valid API key.",
+    status: "INVALID_ARGUMENT",
+    details: [
+      { "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "API_KEY_INVALID", domain: "googleapis.com" },
+    ],
+  };
+  const TOO_LONG = "The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).";
+  const ERRORS: [string, JsonObject, ErrorKind, boolean, string][] = [
+    ["503 unavailable", { code: 503n, message: UNAVAILABLE, status: "UNAVAILABLE" }, "server", true, UNAVAILABLE],
+    [
+      "503 overloaded",
+      { code: 503n, message: "The model is overloaded. Please try again later.", status: "UNAVAILABLE" },
+      "overloaded",
+      true,
+      "The model is overloaded. Please try again later.",
+    ],
+    [
+      "429",
+      { code: 429n, message: "Quota exceeded.", status: "RESOURCE_EXHAUSTED" },
+      "rate_limit",
+      true,
+      "Quota exceeded.",
+    ],
+    ["400 API_KEY_INVALID", API_KEY_INVALID, "auth", false, "API key not valid. Please pass a valid API key."],
+    ["400 context", { code: 400n, message: TOO_LONG, status: "INVALID_ARGUMENT" }, "context_length", false, TOO_LONG],
+    ["no code", { message: "It broke." }, "server", true, "It broke."],
+    ["a string code", { code: "503", message: "It broke." }, "server", true, "It broke."],
+    ["code 0", { code: 0n, message: "It broke." }, "server", true, "It broke."],
+    ["code 200", { code: 200n, message: "It broke." }, "server", true, "It broke."],
+    ["code 302", { code: 302n, message: "It broke." }, "server", true, "It broke."],
+    ["code 600", { code: 600n, message: "It broke." }, "server", true, "It broke."],
+  ];
+
+  test.each(ERRORS)("an error chunk (%s) after text raises its kind", async (_, body, kind, retryable, text) => {
+    const [out, error] = await failing([chunk([TEXT]), { error: body }, finishChunk()]);
+    expect(error.kind).toBe(kind);
+    expect(error.retryable).toBe(retryable);
+    expect(error.message).toBe(`google stream failed (${kind}): ${text}`);
+    expect(out).toEqual([new TextDelta(0, "Hello there.")]);
+  });
+
+  test("the message falls back to the status, then to no message", async () => {
+    const cases: [JsonObject, string][] = [
+      [{ code: 503n, status: "UNAVAILABLE" }, "UNAVAILABLE"],
+      [{ code: 503n, message: "", status: "UNAVAILABLE" }, "UNAVAILABLE"],
+      [{ code: 503n, message: 5n, status: "UNAVAILABLE" }, "UNAVAILABLE"],
+      [{ code: 503n }, "no message"],
+      [{ code: 503n, message: null, status: "" }, "no message"],
+      [{}, "no message"],
+    ];
+    for (const [body, text] of cases) {
+      expect((await failure([{ error: body }])).message).toBe(`google stream failed (server): ${text}`);
+    }
+  });
+
+  test("an error chunk as the first chunk raises the same way", async () => {
+    for (const [, body, kind, retryable, text] of ERRORS) {
+      const [out, error] = await failing([{ error: body }, ...sseChunks([TEXT])]);
+      const message = `google stream failed (${kind}): ${text}`;
+      expect([error.kind, error.retryable, error.message]).toEqual([kind, retryable, message]);
+      expect(out).toEqual([]);
+    }
+  });
+
+  test("an error chunk after the finishReason chunk raises, with no PartDone, UsageReport or Finish", async () => {
+    const [out, error] = await failing([...sseChunks([TEXT]), { error: { code: 503n, message: UNAVAILABLE } }]);
+    expect(error.kind).toBe("server");
+    expect(error.message).toBe(`google stream failed (server): ${UNAVAILABLE}`);
+    expect(out).toEqual(TEXT_DELTAS);
+  });
+
+  test("the message is the provider's text uncapped", async () => {
+    const message = "x".repeat(2500);
+    const error = await failure([{ error: { code: 500n, message } }]);
+    expect(error.message).toBe(`google stream failed (server): ${message}`);
+  });
+
+  test("an error that isn't an object is not a stream error", async () => {
+    expect(await parse([{ error: "It broke." }, ...sseChunks([TEXT])])).toEqual(await parse(sseChunks([TEXT])));
+  });
+});
+
+describe("truncation", () => {
+  const TRUNCATED = "google stream ended before a complete response";
+
+  test("text chunks with no finishReason are incomplete and retryable", async () => {
+    const [out, error] = await failing(sseChunks([TEXT], { finish: null }));
+    expect([error.kind, error.retryable, error.message]).toEqual(["incomplete", true, TRUNCATED]);
+    expect(out).toEqual(TEXT_DELTAS);
+  });
+
+  test("usage-only chunks with no finishReason are incomplete", async () => {
+    const [out, error] = await failing([{ usageMetadata: USAGE }, { usageMetadata: USAGE, responseId: "resp-1" }]);
+    expect([error.kind, error.retryable, error.message]).toEqual(["incomplete", true, TRUNCATED]);
+    expect(out).toEqual([]);
+  });
+
+  test("an empty stream is incomplete", async () => {
+    const [out, error] = await failing([]);
+    expect([error.kind, error.retryable, error.message]).toEqual(["incomplete", true, TRUNCATED]);
+    expect(out).toEqual([]);
+  });
+});
+
+describe("invalid event JSON", () => {
+  const INVALID: [string, string][] = [
+    ["not JSON", "{not json test-key-1"],
+    ["a lone surrogate escape", '{"candidates": [{"content": {"parts": [{"text": "\\ud800 test-key-1"}]}}]}'],
+    ["a duplicate key", '{"responseId": "resp-1", "responseId": "test-key-1"}'],
+  ];
+
+  test.each(INVALID)("%s is a protocol error that doesn't echo the event", async (_, data) => {
+    const [out, error] = await failing([chunk([TEXT]), new SSEEvent({ data }), finishChunk()]);
+    expect(error.kind).toBe("protocol");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toBe("invalid JSON in google stream event");
+    expect(error.cause).toBeUndefined();
+    expect(error.causeName).toBeNull();
+    expect(String(error.stack)).not.toContain("test-key-1");
+    expect(out).toEqual([new TextDelta(0, "Hello there.")]);
+  });
+});
+
+describe("shape errors", () => {
+  /** Assert the chunk `data` (after a text chunk) raises a protocol error naming `field`. */
+  async function invalid(field: string, data: JsonObject): Promise<void> {
+    const [out, error] = await failing([chunk([TEXT]), data, finishChunk()]);
+    expect(error.kind).toBe("protocol");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toBe(`invalid ${field} in google stream event`);
+    expect(out).toEqual([new TextDelta(0, "Hello there.")]);
+  }
+
+  test("candidates that aren't a list", async () => {
+    for (const candidates of [{}, "x", 1n, true] as JsonValue[]) await invalid("candidates", { candidates });
+  });
+
+  test("a candidate that isn't an object", async () => {
+    for (const candidate of ["x", 1n, [], true] as JsonValue[]) await invalid("candidate", { candidates: [candidate] });
+  });
+
+  test("content that isn't an object, and parts that aren't a list", async () => {
+    for (const content of ["x", 1n, [], true] as JsonValue[]) {
+      await invalid("content", { candidates: [{ content, index: 0n }] });
+    }
+    for (const parts of [{}, "x", 1n, true] as JsonValue[]) {
+      await invalid("parts", { candidates: [{ content: { role: "model", parts }, index: 0n }] });
+    }
+  });
+
+  test("a part that isn't an object, or whose text or thoughtSignature isn't a string", async () => {
+    for (const part of ["x", 1n, [], true] as JsonValue[]) await invalid("part", chunk([part]));
+    for (const value of [5n, true, ["x"], {}] as JsonValue[]) {
+      await invalid("part", chunk([{ text: value }]));
+      await invalid("part", chunk([{ text: "x", thoughtSignature: value }]));
+      await invalid("part", chunk([{ ...UNSIGNED_CALL, thoughtSignature: value }]));
+    }
+  });
+
+  test("promptFeedback that isn't an object", async () => {
+    for (const promptFeedback of ["SAFETY", 1n, [], true] as JsonValue[]) {
+      await invalid("promptFeedback", { promptFeedback });
+    }
+  });
+
+  test("a functionCall that isn't an object, or whose id or name can't be read", async () => {
+    for (const call of ["double", 1n, [], true] as JsonValue[]) {
+      await invalid("functionCall", chunk([{ functionCall: call }]));
+    }
+    const calls: JsonObject[] = [
+      { id: 5n, name: "double", args: {} },
+      { id: ["call-1"], name: "double" },
+      { args: {} },
+      { name: "", args: {} },
+      { name: null, args: {} },
+      { name: 5n, args: {} },
+    ];
+    for (const call of calls) await invalid("functionCall", chunk([{ functionCall: call }]));
+  });
+});
+
+describe("usage errors", () => {
+  const NOT_INT = "google response usage has a count that is not an int";
+
+  test("usageMetadata that isn't an object", async () => {
+    for (const usage of ["x", [1n], 3n, true] as JsonValue[]) {
+      const [out, error] = await failing([chunk([TEXT]), { usageMetadata: usage }, finishChunk()]);
+      expect(error.kind).toBe("protocol");
+      expect(error.retryable).toBe(false);
+      expect(error.message).toBe("google response usage is not an object");
+      expect(out).toEqual([new TextDelta(0, "Hello there.")]);
+    }
+  });
+
+  const FIELDS = [
+    "promptTokenCount",
+    "toolUsePromptTokenCount",
+    "candidatesTokenCount",
+    "thoughtsTokenCount",
+    "cachedContentTokenCount",
+    "totalTokenCount",
+  ];
+  test.each(FIELDS)("a %s that isn't a safe int", async (field) => {
+    // Raw JSON, so a float count that is an integer (`1.0`, `1e3`) reaches the parser.
+    for (const token of ["1.0", "1e3", "1.5", "9007199254740992", "18446744073709551616", '"3"', "true", "-1.5"]) {
+      const data = encodeBody({ usageMetadata: { [field]: "COUNT" } }).replace('"COUNT"', token);
+      const [out, error] = await failing([chunk([TEXT]), new SSEEvent({ data }), finishChunk()]);
+      expect(error.kind).toBe("protocol");
+      expect(error.retryable).toBe(false);
+      expect(error.message).toBe(NOT_INT);
+      expect(out).toEqual([new TextDelta(0, "Hello there.")]);
+    }
+  });
+
+  test("a bad count fails on its own chunk, even when a later chunk replaces it", async () => {
+    const data = encodeBody({ usageMetadata: { promptTokenCount: "COUNT" } }).replace('"COUNT"', "1.0");
+    const error = await failure([new SSEEvent({ data }), replyObj([TEXT])]);
+    expect([error.kind, error.message]).toEqual(["protocol", NOT_INT]);
+  });
+
+  test("a sum past 2^53 - 1 is a protocol error before any part is done", async () => {
+    const usage = { promptTokenCount: 2n ** 53n - 1n, candidatesTokenCount: 1n };
+    const [out, error] = await failing([chunk([TEXT]), finishChunk("STOP", { usageMetadata: usage })]);
+    expect([error.kind, error.message]).toEqual(["protocol", NOT_INT]);
+    expect(out).toEqual([new TextDelta(0, "Hello there.")]);
+  });
+});
+
+describe("round trips", () => {
+  const ASK = new Message({ role: "user", parts: [new TextPart("Double 3.")] });
+  const RESULT = new Message({
+    role: "tool",
+    parts: [new ToolResultPart({ callId: "yian_call_0", name: "double", content: "6", isError: false })],
+  });
+  const SENT_ASK: JsonObject = { role: "user", parts: [{ text: "Double 3." }] };
+  const SENT_RESULT: JsonObject = {
+    role: "user",
+    parts: [{ functionResponse: { id: "yian_call_0", name: "double", response: { output: 6n } } }],
+  };
+  const SENT_CALL: JsonObject = { id: "yian_call_0", name: "double", args: { value: 3n } };
+
+  /** Return a protocol for `model`, pushing each degraded reason to `reasons`. */
+  function protocolFor(model: string, reasons: ReplayDegradedReason[] = []): Gemini {
+    return new Gemini({ model, provider: "google", onReplayDegraded: (reason) => reasons.push(reason) });
+  }
+
+  /** Return the contents `protocol` sends for `messages`. */
+  function sentBy(protocol: Gemini, messages: Message[]): JsonValue {
+    return protocol.buildBody(new Request({ messages }))["contents"]!;
+  }
+
+  test("a [THOUGHT_SIGNED, TEXT, CALL] reply goes back with its call signature and the result's id", async () => {
+    const protocol = protocolFor(FLASH);
+    const reply = (await collected(sseChunks([THOUGHT_SIGNED, TEXT, CALL]), protocol)).message;
+    const reasons: ReplayDegradedReason[] = [];
+    expect(sentBy(protocolFor(FLASH, reasons), [ASK, reply, RESULT])).toEqual([
+      SENT_ASK,
+      { role: "model", parts: [{ text: "Hello there." }, { functionCall: SENT_CALL, thoughtSignature: SIG }] },
+      SENT_RESULT,
+    ]);
+    expect(reasons).toEqual([]);
+  });
+
+  test("a gemini-3-pro-preview reply sent to gemini-2.5-flash drops its signature for the placeholder", async () => {
+    const reply = (await collected(sseChunks([THOUGHT_SIGNED, TEXT, CALL]), protocolFor("gemini-3-pro-preview")))
+      .message;
+    const reasons: ReplayDegradedReason[] = [];
+    expect(sentBy(protocolFor(FLASH, reasons), [ASK, reply, RESULT])).toEqual([
+      SENT_ASK,
+      {
+        role: "model",
+        parts: [
+          { text: "Hello there." },
+          { functionCall: SENT_CALL, thoughtSignature: "skip_thought_signature_validator" },
+        ],
+      },
+      SENT_RESULT,
+    ]);
+    expect(reasons).toEqual(["other_model"]);
+  });
+
+  test("a reply with no response id or model and an unsigned call goes back with no placeholder", async () => {
+    const protocol = protocolFor(FLASH);
+    const reply = (await collected([chunk([TEXT, UNSIGNED_CALL]), finishChunk()], protocol)).message;
+    expect(sentBy(protocol, [ASK, reply, RESULT])).toEqual([
+      SENT_ASK,
+      { role: "model", parts: [{ text: "Hello there." }, { functionCall: SENT_CALL }] },
+      SENT_RESULT,
+    ]);
   });
 });

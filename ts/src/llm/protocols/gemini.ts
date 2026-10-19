@@ -200,21 +200,21 @@ export class Gemini implements SseProtocol {
    * are read, in order. A `functionCall` part is a call; else a part with `text` is a text piece,
    * or a reasoning piece when `thought` is true; else a part with a `thoughtSignature` but no
    * `text` (of any other kind too, whose content is dropped) is an empty piece with that
-   * signature; other unsigned part kinds are skipped. A piece joins the reply's last part when that is a text or
-   * reasoning part of its kind and not both are signed, else it opens a new part (an empty,
-   * unsigned piece opens nothing); its signature goes to the part it joins. Non-empty pieces
-   * stream as deltas. A call's id is its own unless missing or already in the reply, else
-   * `yian_call_<n>`, `n` its position among the calls, with `_<k>` appended while taken; its
-   * `args` are as sent, `{}` when missing, and anything but an object makes an invalid call with
-   * the raw args. Each of the six usage counts merges across chunks, a missing one replacing
-   * nothing; `totalTokenCount` is checked but not used, the total being input + output.
+   * signature; other unsigned part kinds are skipped. A piece joins the reply's last part when
+   * that is a text or reasoning part of its kind and not both are signed, else it opens a new
+   * part (an empty, unsigned piece opens nothing); its signature goes to the part it joins.
+   * Non-empty pieces stream as deltas. A call's id is its own unless missing or already in the
+   * reply, else `yian_call_<n>`, `n` its position among the calls, with `_<k>` appended while
+   * taken; its `args` are as sent, `{}` when missing, and anything but an object makes an invalid
+   * call with the raw args. Each of the six usage counts merges across chunks, a missing one
+   * replacing nothing; `totalTokenCount` is checked but not used, the total being input + output.
    *
    * @param frames The reply's server-sent events, in order.
    * @returns The deltas (one `ToolCallDelta` per call, with its id, name and encoded args), then
    *   at the end of the stream a `PartDone` for each part in index order (a part with a
-   *   signature carries a record of it), `UsageReport` when a count other than the total is above zero, and
-   *   `Finish`: `length` for `MAX_TOKENS`, else `tool_calls` when a call came, else `stop`, with
-   *   a record of the response id and model.
+   *   signature carries a record of it), `UsageReport` when a count other than the total is
+   *   above zero, and `Finish`: `length` for `MAX_TOKENS`, else `tool_calls` when a call came,
+   *   else `stop`, with a record of the response id and model.
    * @throws {ProviderError} For an `error` object in a chunk (kind from its `code`), a blocked
    *   prompt or a safety-type finish reason (`refused`), `CONTINUATION` (`protocol`), any other
    *   finish reason but `STOP` and `MAX_TOKENS` (`incomplete`, retryable for
@@ -266,8 +266,8 @@ export class Gemini implements SseProtocol {
         const signature = rawSignature || null;
         const call = part["functionCall"] ?? null;
         if (call !== null) {
-          const { name, args, rawArguments, ...wire } = readCall(call, invalid);
-          const id = callId(wire.id, calls++, taken);
+          const { id: wireId, name, args, rawArguments } = readCall(call, invalid);
+          const id = callId(wireId, calls++, taken);
           const index = parts.push({ kind: "call", id, name, args, rawArguments, signature }) - 1;
           yield new ToolCallDelta({ index, id, name, arguments: rawArguments ?? encodeBody(args) });
           continue;

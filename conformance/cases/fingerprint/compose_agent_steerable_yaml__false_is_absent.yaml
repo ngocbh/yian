@@ -1,4 +1,5 @@
-# tests/compose/test_agent_steerable_yaml.py::test_steerable_is_identity_but_false_is_not
+# From tests/compose/test_agent_steerable_yaml.py::test_steerable_is_identity_but_false_is_not.
+# `steerable: false` fingerprints the same as no steerable key.
 kind: fingerprint
 flow: |
   id: steer

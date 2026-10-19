@@ -1,4 +1,5 @@
-# tests/compose/test_agent_skills_yaml.py::test_skills_are_identity_but_empty_and_order_are_not
+# From tests/compose/test_agent_skills_yaml.py::test_skills_are_identity_but_empty_and_order_are_not.
+# Granting skills changes the fingerprint of an AGENT with none.
 kind: fingerprint
 flow: |
   id: skills

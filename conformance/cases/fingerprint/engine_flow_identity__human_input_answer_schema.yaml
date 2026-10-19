@@ -1,4 +1,5 @@
-# tests/engine/test_flow_identity.py::test_flow_fingerprint_covers_each_included_kind_field
+# From tests/engine/test_flow_identity.py::test_flow_fingerprint_covers_each_included_kind_field.
+# A HUMAN_INPUT's answer schema (its output type) is identity.
 kind: fingerprint
 flow: |
   id: human

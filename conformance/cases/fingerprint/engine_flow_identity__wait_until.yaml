@@ -1,4 +1,5 @@
-# tests/engine/test_flow_identity.py::test_wait_fingerprint_and_expansion_digest_cover_absolute_until_wiring
+# From tests/engine/test_flow_identity.py::test_wait_fingerprint_and_expansion_digest_cover_absolute_until_wiring.
+# A WAIT's `until:` deadline is identity.
 kind: fingerprint
 flow: |
   id: wait

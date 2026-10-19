@@ -1,7 +1,8 @@
-# tests/engine/test_flow_identity.py::test_memory_expansion_projection_omits_root_id_and_config_but_hashes_keys
+# From tests/engine/test_flow_identity.py::test_memory_expansion_projection_omits_root_id_and_config_but_hashes_keys.
+# A memory declaration's config alone changes the fingerprint.
 kind: fingerprint
 flow: |
-  id: first
+  id: memory
   name: memory
   long_term_memory:
     outer:
@@ -11,11 +12,10 @@ flow: |
     body:
       kind: tool
       tool_id: body
-      input: {topic: hello}
       output: str
   output: ${body.output}
 other: |
-  id: first
+  id: memory
   name: memory
   long_term_memory:
     outer:
@@ -25,7 +25,6 @@ other: |
     body:
       kind: tool
       tool_id: body
-      input: {topic: hello}
       output: str
   output: ${body.output}
 expect:

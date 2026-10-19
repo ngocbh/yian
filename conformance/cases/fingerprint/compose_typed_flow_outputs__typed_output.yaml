@@ -1,4 +1,5 @@
-# tests/compose/test_typed_flow_outputs.py::test_typed_output_changes_the_flow_fingerprint
+# From tests/compose/test_typed_flow_outputs.py::test_typed_output_changes_the_flow_fingerprint.
+# A type tag on the flow output changes the fingerprint.
 kind: fingerprint
 flow: |
   id: sized

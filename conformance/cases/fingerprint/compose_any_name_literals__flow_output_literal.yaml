@@ -1,4 +1,5 @@
-# tests/compose/test_any_name_literals.py::test_a_flow_output_under_a_credential_name_is_identity
+# From tests/compose/test_any_name_literals.py::test_a_flow_output_under_a_credential_name_is_identity.
+# A literal flow output is identity, even under a credential-like name.
 kind: fingerprint
 flow: |
   id: f

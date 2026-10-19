@@ -1,4 +1,5 @@
-# tests/engine/test_flow_identity.py::test_agent_variable_identity_tracks_names_domains_defaults_and_order_only
+# From tests/engine/test_flow_identity.py::test_agent_variable_identity_tracks_names_domains_defaults_and_order_only.
+# An AGENT variable's domain is identity.
 kind: fingerprint
 flow: |
   id: agent

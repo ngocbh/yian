@@ -1,10 +1,11 @@
-# tests/engine/test_flow_identity.py::test_flow_fingerprint_changes_with_wiring_types_asserts_and_env
+# From tests/engine/test_flow_identity.py::test_flow_fingerprint_changes_with_wiring_types_asserts_and_env.
+# A node's output type is identity.
 kind: fingerprint
 flow: |
   id: stable
-  name: Stable
+  name: stable
   input:
-    x: !int 1
+    x: !int
   nodes:
     step:
       kind: tool
@@ -15,9 +16,9 @@ flow: |
   output: ${step.output}
 other: |
   id: stable
-  name: Stable
+  name: stable
   input:
-    x: !int 1
+    x: !int
   nodes:
     step:
       kind: tool

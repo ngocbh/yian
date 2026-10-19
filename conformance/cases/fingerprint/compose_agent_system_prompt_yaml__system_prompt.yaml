@@ -1,4 +1,5 @@
-# tests/compose/test_agent_system_prompt_yaml.py::test_system_prompt_is_identity
+# From tests/compose/test_agent_system_prompt_yaml.py::test_system_prompt_is_identity.
+# Adding a system prompt changes the fingerprint.
 kind: fingerprint
 flow: |
   id: chat

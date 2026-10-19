@@ -1,4 +1,5 @@
-# tests/engine/test_flow_identity.py::test_flow_fingerprint_covers_each_end_field
+# From tests/engine/test_flow_identity.py::test_flow_fingerprint_covers_each_end_field.
+# A flow output field's name is identity.
 kind: fingerprint
 flow: |
   id: out
@@ -7,10 +8,6 @@ flow: |
     a:
       kind: tool
       tool_id: a
-      output: int
-    b:
-      kind: tool
-      tool_id: b
       output: int
   output:
     first: ${a.output}
@@ -21,10 +18,6 @@ other: |
     a:
       kind: tool
       tool_id: a
-      output: int
-    b:
-      kind: tool
-      tool_id: b
       output: int
   output:
     second: ${a.output}

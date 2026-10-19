@@ -1,4 +1,5 @@
-# tests/engine/test_flow_identity.py::test_flow_fingerprint_covers_each_structural_type_field
+# From tests/engine/test_flow_identity.py::test_flow_fingerprint_covers_each_structural_type_field.
+# Adding a member to a union type changes the fingerprint.
 kind: fingerprint
 flow: |
   id: typed

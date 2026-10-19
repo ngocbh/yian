@@ -1,8 +1,9 @@
-# tests/engine/test_flow_identity.py::test_flow_fingerprint_tracks_block_fields_but_not_key_order
+# From tests/engine/test_flow_identity.py::test_flow_fingerprint_tracks_block_fields_but_not_key_order.
+# A field in an llm_config provider block is identity.
 kind: fingerprint
 flow: |
   id: blocks
-  name: Blocks
+  name: blocks
   llm_config:
     provider: anthropic
     anthropic:
@@ -17,7 +18,7 @@ flow: |
   output: ${ask.output}
 other: |
   id: blocks
-  name: Blocks
+  name: blocks
   llm_config:
     provider: anthropic
     anthropic:

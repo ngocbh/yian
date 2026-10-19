@@ -1,4 +1,5 @@
-# tests/engine/test_flow_identity.py::test_loop_without_max_has_null_max_in_manifest_and_its_own_fingerprint
+# From tests/engine/test_flow_identity.py::test_loop_without_max_has_null_max_in_manifest_and_its_own_fingerprint.
+# A LOOP with `max:` fingerprints differently from one without.
 kind: fingerprint
 flow: |
   id: count

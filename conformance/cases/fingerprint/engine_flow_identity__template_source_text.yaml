@@ -1,4 +1,5 @@
-# tests/engine/test_flow_identity.py::test_templates_under_any_name_keep_their_source_text
+# From tests/engine/test_flow_identity.py::test_templates_under_any_name_keep_their_source_text.
+# A template's literal text is identity.
 kind: fingerprint
 flow: |
   id: template-input

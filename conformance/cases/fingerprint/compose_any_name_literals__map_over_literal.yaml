@@ -1,4 +1,5 @@
-# tests/compose/test_any_name_literals.py::test_a_map_over_literal_under_a_credential_name_loads
+# From tests/compose/test_any_name_literals.py::test_a_map_over_literal_under_a_credential_name_loads.
+# A literal in a MAP's `over:` list is identity.
 kind: fingerprint
 flow: |
   id: p

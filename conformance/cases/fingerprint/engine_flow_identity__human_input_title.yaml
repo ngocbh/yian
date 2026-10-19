@@ -1,4 +1,5 @@
-# tests/engine/test_flow_identity.py::test_flow_manifest_includes_human_input_title_but_ignores_inert_map_parallel
+# From tests/engine/test_flow_identity.py::test_flow_manifest_includes_human_input_title_but_ignores_inert_map_parallel.
+# A HUMAN_INPUT's title (`node_name:`) is identity.
 kind: fingerprint
 flow: |
   id: human

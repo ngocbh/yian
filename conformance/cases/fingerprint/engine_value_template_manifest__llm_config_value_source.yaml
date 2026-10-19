@@ -1,4 +1,5 @@
-# tests/engine/test_value_template_manifest.py::test_llm_config_values_are_fingerprinted_as_written
+# From tests/engine/test_value_template_manifest.py::test_llm_config_values_are_fingerprinted_as_written.
+# A value in an AGENT's llm_config is identity as written.
 kind: fingerprint
 flow: |
   id: f

@@ -1,4 +1,5 @@
-# tests/engine/test_flow_identity.py::test_union_manifest_orders_members_canonically
+# From tests/engine/test_flow_identity.py::test_union_manifest_orders_members_canonically.
+# The order of union members is not identity.
 kind: fingerprint
 flow: |
   id: typed
@@ -10,8 +11,6 @@ flow: |
     Sell:
       action: Literal(sell)
       price: float
-    Hold:
-      action: Literal(hold)
   nodes:
     body:
       kind: tool
@@ -28,8 +27,6 @@ other: |
     Sell:
       action: Literal(sell)
       price: float
-    Hold:
-      action: Literal(hold)
   nodes:
     body:
       kind: tool

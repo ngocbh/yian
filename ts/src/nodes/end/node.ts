@@ -19,7 +19,7 @@
  * loaded flow never co-skips END through an output. Hidden from authors: a reserved
  * `__`-prefixed id, never parseable.
  *
- * Knows about:   nodes/base, nodes/contracts and expr (types).
+ * Knows about:   nodes/base, nodes/contracts, diagnostics and expr (types).
  * Never imports: anything above nodes; the loader synthesizes it and the engine reads it as the
  *   terminal.
  */
@@ -33,7 +33,18 @@ import {
   Output,
   projectStructuralFeedback,
 } from "../base.ts";
+import { reprText } from "../../diagnostics.ts";
 import { Parameter } from "../contracts.ts";
+
+/**
+ * Return the input `name` from `inputs`, reading only an own property.
+ *
+ * @throws RangeError when `inputs` has no own property `name` (Python's `KeyError`).
+ */
+function inputOf(inputs: Record<string, unknown>, name: string): unknown {
+  if (Object.hasOwn(inputs, name)) return inputs[name];
+  throw new RangeError(`END input ${reprText(name)} is missing`);
+}
 
 /**
  * The flow's return boundary: internal-only, loader-synthesized.
@@ -124,15 +135,21 @@ export class EndNode extends Node {
     return this.mode === "record";
   }
 
-  /** Return the flow's value, record of named outputs, or list of element outputs. */
+  /**
+   * Return the flow's value, record of named outputs, or list of element outputs.
+   *
+   * @throws RangeError when a declared input is missing.
+   */
   override forward(inputs: Record<string, unknown>): Output {
     if (this.mode === "value") {
       const [name] = this.names;
-      return new Output(name === undefined ? null : inputs[name]);
+      return new Output(name === undefined ? null : inputOf(inputs, name));
     }
-    if (this.mode === "record") return new Output(Object.fromEntries(this.names.map((name) => [name, inputs[name]])));
+    if (this.mode === "record") {
+      return new Output(Object.fromEntries(this.names.map((name) => [name, inputOf(inputs, name)])));
+    }
     // List mode (the MAP fan-in): join in over order (index); n = 0 gives [].
-    return new Output(this.backwardInputNames().map((name) => inputs[name]));
+    return new Output(this.backwardInputNames().map((name) => inputOf(inputs, name)));
   }
 
   /**

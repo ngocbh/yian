@@ -22,6 +22,8 @@
  * Later (T4-9): `test_case_predicate_failure_selects_the_active_ordered_origin` and
  * `test_source_free_case_predicate_failure_falls_back_to_the_node_origin`.
  *
+ * Later (T3-8, WAIT): `test_wait_until_accepts_a_binding_carrier`.
+ *
  * Later (T4-6): the evaluator and the other rows.
  */
 

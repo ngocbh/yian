@@ -8,7 +8,8 @@
  *
  * Changed: `run` is async, so the setup error is a rejection. The LOOP's child is a stub object.
  *
- * TS-only: a CASE whose `when` parses rejects from `run` as not ported yet.
+ * TS-only: a CASE whose `when` parses rejects from `run` as not ported yet; LOOP's
+ * `validateConditions` names the given path.
  *
  * Later (T4-9): `test_case_when_evaluation_error_still_fails_in_forward`.
  *
@@ -84,6 +85,19 @@ test("validate conditions names the given path", () => {
 
   expect(() => node.validateConditions({ path: "loop/gate" })).toThrow(ExpressionError);
   expect(() => node.validateConditions({ path: "loop/gate" })).toThrow(/^node 'loop\/gate' case 'pos' `when:`/);
+});
+
+test("loop validate conditions names the given path", () => {
+  const node = new LoopNode("loop", {
+    flowId: "f",
+    child: {},
+    predicateKind: "while",
+    predicate: "not ${exited}",
+    maxIters: 10,
+  });
+
+  expect(() => node.validateConditions({ path: "outer/loop" })).toThrow(ExpressionError);
+  expect(() => node.validateConditions({ path: "outer/loop" })).toThrow(/^node 'outer\/loop' `while:`/);
 });
 
 test("a case whose when parses rejects from run as not ported yet", async () => {

@@ -14,7 +14,8 @@
  * Python's `list_` is `EndNode.list`.
  *
  * TS-only: the constructor's "exactly one of outputNames or n" `RangeError`, with neither and with
- * both.
+ * both; a record missing a declared input rejects with a `RangeError` (Python's `KeyError`); an
+ * output named `constructor` reads its own value, not `Object.prototype`'s.
  *
  * Later (T4-6): `test_end_post_asserts_fire_record_scoped_through_eval_node`,
  * `test_end_post_asserts_resolve_namespaced_cross_node_ref_via_synth_param`.
@@ -90,6 +91,16 @@ test("end takes exactly one of outputNames or n", () => {
   const message = "EndNode takes exactly one of outputNames (value/record) or n (list)";
   expect(() => new EndNode("__end__")).toThrow(new RangeError(message));
   expect(() => new EndNode("__end__", { outputNames: ["a"], n: 1 })).toThrow(new RangeError(message));
+});
+
+test("end record missing an input rejects", async () => {
+  const node = EndNode.record("__end__", { outputNames: ["report", "n"] });
+  await expect(node.run({ report: "r" })).rejects.toThrow(new RangeError("END input 'n' is missing"));
+});
+
+test("end output named constructor reads its own value", async () => {
+  const node = EndNode.record("__end__", { outputNames: ["constructor"] });
+  expect(((await node.run({ constructor: 7n })) as Output).value).toEqual({ constructor: 7n });
 });
 
 // LIST mode (the MAP fan-in): joins in over order (index).

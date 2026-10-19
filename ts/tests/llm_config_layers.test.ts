@@ -3,10 +3,10 @@
  * `compile/llm_cascade.ts`.
  */
 
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import { HOST_KEY_MARKER, missingModelMessage } from "../src/llm_clients/connection.ts";
-import { resolveAgentConfig } from "../src/llm_clients/layers.ts";
+import { requireConcreteSelection, resolveAgentConfig, validateLayer } from "../src/llm_clients/layers.ts";
 
 const DEFAULTS = { provider: "anthropic", model: "default-model" };
 
@@ -113,4 +113,48 @@ test("the result never aliases its inputs", () => {
   expect(config).toEqual({ provider: "openai", model: "gpt-saved", openai: { temperature: 0.3, max_output_tokens: 5n } });
   (config["openai"] as Record<string, unknown>)["temperature"] = 9;
   expect(authored.openai.temperature).toBe(0.3);
+});
+
+describe("TS additions", () => {
+  test("a non-string default provider takes the default model, then is not concrete", () => {
+    expect(rangeError(() => resolve({}, { defaults: { provider: 1n, model: "m" } }))).toBe(
+      'effective LLM config for \'review/chat\' lacks concrete fields: ["provider"]',
+    );
+  });
+
+  test("a list provider never matches a model", () => {
+    const provider = ["openai"];
+    expect(rangeError(() => resolve({}, { defaults: { provider, model: "m" } }))).toBe(
+      missingModelMessage("review/chat", provider),
+    );
+  });
+
+  test("the exact messages", () => {
+    expect(rangeError(() => requireConcreteSelection({ provider: "openai" }, { path: "agent" }))).toBe(
+      'effective LLM config for \'agent\' lacks concrete fields: ["model"]',
+    );
+    expect(rangeError(() => validateLayer({ _header_names: [] }))).toBe(
+      "llm_config._header_names is internal to recorded runs",
+    );
+  });
+
+  test("undefined values are absent", () => {
+    requireConcreteSelection(
+      {
+        provider: "openai",
+        model: "m",
+        [HOST_KEY_MARKER]: undefined,
+        base_url: undefined,
+        organization: undefined,
+        project: undefined,
+        _header_names: undefined,
+      },
+      { path: "agent" },
+    );
+    const config = resolve(
+      { provider: "openai", model: undefined, [HOST_KEY_MARKER]: undefined, _header_names: undefined },
+      { providerModels: { openai: "gpt-saved" } },
+    );
+    expect(config).toEqual({ provider: "openai", model: "gpt-saved" });
+  });
 });

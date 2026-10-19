@@ -30,7 +30,7 @@ import {
 } from "./connection.ts";
 import { validateOrganization } from "./connection_settings.ts";
 
-const REQUIRED_SELECTION_FIELDS = ["provider", "model"];
+const REQUIRED_SELECTION_FIELDS: readonly string[] = ["provider", "model"];
 // Recorded only on agents marked for a host key: the nonsecret settings sent with it.
 const HOST_SETTING_KEYS = ["organization", "project", HEADER_NAMES_KEY];
 // Left out of the layer check of a recorded map: only a resolved map carries them.
@@ -43,7 +43,7 @@ const RECORDED_ONLY_KEYS: ReadonlySet<string> = new Set([HOST_KEY_MARKER, "base_
  * over nothing under `inherit: false`); it is not mutated. `defaults` other than `model` (the
  * lowest-precedence host defaults, possibly empty) fill the gaps under it. An unset model comes
  * from `providerModels` (saved models by provider) for the resolved provider, or from `defaults`
- * when that provider is the default one; a provider that isn't a string has no saved model. The
+ * when that provider is the default one; a list or record provider has no model. The
  * result is then checked as a concrete selection. `strayModel` says `YIAN_DEFAULT_MODEL` was set
  * without a default provider. Every message names `path`, the agent's static path, unless `label`,
  * the authored site of a synthesized agent's `llm_config`, is given.
@@ -73,13 +73,15 @@ export function resolveAgentConfig(
     throw new RangeError(missingModelMessage(path, null, { strayModel, label }));
   }
   if (!truthy(own(written, "model"))) {
-    const models = new Map<string, unknown>(Object.entries(providerModels));
+    // Keyed by value as Python's dict is: a primitive default provider matches its clone, a list or
+    // record one never does.
+    const models = new Map<unknown, unknown>(Object.entries(providerModels));
     const defaultProvider = own(defaults, "provider");
     const defaultModel = own(defaults, "model");
-    if (typeof defaultProvider === "string" && truthy(defaultProvider) && truthy(defaultModel)) {
-      if (!models.has(defaultProvider)) models.set(defaultProvider, defaultModel);
+    if (truthy(defaultProvider) && truthy(defaultModel) && !models.has(defaultProvider)) {
+      models.set(defaultProvider, defaultModel);
     }
-    const model = typeof provider === "string" ? models.get(provider) : undefined;
+    const model = models.get(provider);
     if (!truthy(model)) {
       throw new RangeError(missingModelMessage(path, provider, { strayModel, label }));
     }
@@ -191,7 +193,8 @@ export function validateLayer(config: Readonly<AgentConfig>): void {
         `(allowed: ${[...LLM_CONFIG_KEYS].sort(compareCodeUnits).join(", ")})`,
     );
   }
-  if (has(config, "_connection")) validateConnection(config["_connection"], own(config, "provider") ?? null);
+  // `null`, not `undefined`, so a layer without a provider isn't checked as an openai one.
+  if (has(config, "_connection")) validateConnection(config["_connection"], provider ?? null);
 }
 
 /** Reject the fields only a resolved, recorded config may hold. */

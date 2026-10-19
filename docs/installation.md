@@ -147,6 +147,12 @@ too. `GOOGLE_GEMINI_BASE_URL` is not read. `ANTHROPIC_AUTH_TOKEN`, `OLLAMA_API_K
 project variables, and `GOOGLE_GENAI_USE_VERTEXAI` and `GOOGLE_GENAI_USE_ENTERPRISE`
 are not read and draw no warning. Azure doesn't fall back to `OPENAI_API_KEY`. Errors
 are scrubbed of a saved subscription's account id too.
+
+Changed (TS yian): reasoning that a provider binds to an account goes back to it only from
+the same account. Each replay record carries a short hash of the API key sent (OpenAI,
+Anthropic, a Responses-routed deployment), of the ChatGPT account id, or of the Azure
+resource on an AD token. So after a key is rotated, earlier reasoning from the old key is
+left out of the next request: the run continues, and a `replay_degraded` event says why.
 {: #ts-environment }
 
 When you `yian run` a flow whose AGENT nodes need a provider key that isn't set, the CLI
@@ -402,7 +408,12 @@ is a breaking change: earlier versions sent the variable as a Bearer token. A us
 name and password written in `OLLAMA_BASE_URL` are still sent as Basic auth.
 
 Changed (TS yian): there is no SDK, so yian doesn't read `OLLAMA_API_KEY` and doesn't
-warn about it; see [the environment note](#ts-environment).
+warn about it; see [the environment note](#ts-environment). `OLLAMA_BASE_URL` is checked
+when a model is built: an `http://` or `https://` URL of a host, an optional port and a
+path (a scheme-less `host:port` gets `http://`, and a trailing `/v1` is dropped), without a
+query or fragment. A value that doesn't fit fails the model instead of falling back to
+another endpoint. A user name and password in it are sent as Basic auth and scrubbed from
+errors. A config `api_key` for `ollama` is accepted and never sent.
 
 `hello.yaml` is any flow file, for example this one-node flow:
 
@@ -429,9 +440,11 @@ listing and MCP over HTTP.
 - Add a CA file with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`, on Node and Bun.
   `SSL_CERT_FILE` and `SSL_CERT_DIR` are not portable: official Node builds ignore
   them.
-- `NODE_TLS_REJECT_UNAUTHORIZED=0` turns certificate checks off on both runtimes.
+- `NODE_TLS_REJECT_UNAUTHORIZED=0` turns certificate checks off on both runtimes. yian
+  reads it only to warn once per process that every request is unverified.
 - No request follows a redirect, and a URL holding a user name or password is
-  refused without being echoed, so credentials can't travel in a base URL.
+  refused without being echoed, so credentials can't travel in a base URL
+  (`OLLAMA_BASE_URL` is the exception: its user name and password become Basic auth).
 
 ## Development install
 

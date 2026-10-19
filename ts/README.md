@@ -123,7 +123,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `ProviderError`, whose `kind` is a stable error kind (failure codes are assigned above
   `llm/`) and whose `retryable` is set when it is built. Any other error is a defect and is
   never retried.
-- Every request goes through `safeFetch` in `src/platform.ts` (no redirects, `User-Agent`); code
+- Every request goes through `safeFetch` in `src/platform.ts` (no redirects, `User-Agent`, one
+  warning per process when `NODE_TLS_REJECT_UNAUTHORIZED=0`, read through `processEnv`); code
   that needs a fake or a cassette injects a `Send`, never a global `fetch`.
 - An adapter is a `WireProtocol` (`src/llm/executor.ts`), one file per wire format in
   `src/llm/protocols/`: it builds the body from a `Request` and turns SSE or NDJSON frames into
@@ -150,12 +151,23 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 
 - `src/llm_clients/` holds `LLMConfig`, the provider block decoders (one field-spec table per
   API, the key walk, the value pass), the connection-setting checks and the key-variable table.
-- Only `connection.ts` and `auth/store.ts` read the environment, through an `Env` parameter
+- Only `connection.ts`, `factory.ts` and `auth/store.ts` read the environment, through an `Env` parameter
   (default `processEnv`); the rest reads none. Limits come from `current()`.
 - `connection.ts`: selection (`ConnectionSnapshot`, read once from `YIAN_DEFAULT_PROVIDER`,
   `YIAN_DEFAULT_MODEL`, `OPENAI_BASE_URL`, `OPENAI_API_KEY` and the saved logins), the connections
   recorded on each keyed agent, and the credentials a call may send (`connectionCredentials`, and
   `callCredentials` for the scrub set).
+- `factory.ts`: `chatModelFromConfig` resolves an `LLMConfig` (a host record goes through
+  `fromHost` first) to a `RouteModel` on its provider's route: Python's key, base URL and header
+  precedence, then one route builder per family (OpenAI Responses and the ChatGPT subscription, the
+  Chat Completions vendors, Azure, Anthropic, Gemini, Ollama). Secret connection-header values ride
+  on `ExtraHeadersAuth`, so `RouteModel` scrubs them; OpenAI's organization and project ids go in
+  `Route.headers`. Replay records carry `account`, the first 16 hex digits of SHA-256 of the key
+  sent (OpenAI, Anthropic, name-routed Responses deployments), of the ChatGPT account id, or of the
+  Azure resource on an AD token. The unknown-model warning goes through `onWarning`.
+- `model_list.ts`: `listModels` lists a provider's model ids over `auth/http.ts`'s `request`, with
+  Python's per-provider paging and reasons (`ModelListError`); it reads no environment.
+- `index.ts`: the package's exports, as Python's `__init__.py`.
 - `layers.ts`: resolves one agent's `llm_config` layers into its effective config, and checks
   layers and complete selections. It reads no environment or saved settings.
 - `redact.ts`: `redactKey`/`redactKeys` remove keys and their masked echoes (`sk-abc****wxyz`)

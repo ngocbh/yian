@@ -11,8 +11,28 @@
  */
 
 import { compareCodeUnits, OriginRef, reprText } from "../diagnostics.ts";
-import { isRecord, Type, type Value, type ValueRecord } from "../typesys/index.ts";
-import { jsTypeName, setField, valueRepr } from "../typesys/values.ts";
+import {
+  buildValueAs,
+  canonicalTypeLabel,
+  isRecord,
+  Type,
+  TypeCheckError,
+  TypedValue,
+  type Value,
+  ValueKind,
+  type ValueRecord,
+  unionField,
+  unionTagFields,
+} from "../typesys/index.ts";
+import {
+  fileFieldType,
+  hasFile,
+  jsTypeName,
+  pythonList,
+  setField,
+  shownText,
+  valueRepr,
+} from "../typesys/values.ts";
 
 /** A source-neutral path through record fields and list indices. */
 export type ValuePath = readonly (string | number)[];
@@ -707,6 +727,322 @@ export class PartialRecordContract {
 
 /** The closed compiled output-contract sum: exact value or partial record. */
 export type OutputContract = ValueContract | PartialRecordContract;
+
+/**
+ * Return an exact whole-value type, validating either contract arm's shapes.
+ *
+ * @returns The type of a `ValueContract`, else `null`.
+ * @throws TypeError when `contract` isn't an exact `ValueContract`, `PartialRecordContract` or
+ *   `null`, or a contract's type isn't a `Type`.
+ * @throws RangeError when a contract's type metadata or a partial record's fields are malformed.
+ */
+export function outputContractType(contract: OutputContract | null): Type | null {
+  if (contract === null) return null;
+  if (isExactly(contract, ValueContract)) {
+    if (!(contract.type instanceof Type)) throw new TypeError("value contract type must be a Type");
+    contract.type.validateShape();
+    return contract.type;
+  }
+  if (isExactly(contract, PartialRecordContract)) {
+    contract.validateShape();
+    for (const [, fieldContract] of contract.fields) {
+      if (fieldContract !== null) {
+        if (!(fieldContract.type instanceof Type)) throw new TypeError("value contract type must be a Type");
+        fieldContract.type.validateShape();
+      }
+    }
+    return null;
+  }
+  throw new TypeError(
+    "output contract must be an exact ValueContract, " +
+      "PartialRecordContract, or null, " +
+      `got ${jsTypeName(contract)}`,
+  );
+}
+
+/**
+ * Return a record of only the `fields` whose type may hold a file, none required.
+ *
+ * Read through `normalizeFiles`, the record turns each such field's file JSON forms into
+ * `FileRef`s and leaves every other field of a value as given.
+ *
+ * Example: `fileFieldsType([["f", file], ["n", int]])` returns the record `{f: file}` with no
+ * required field.
+ *
+ * @returns The record type, or `null` when no field may hold a file.
+ */
+export function fileFieldsType(fields: Iterable<readonly [string, Type]>): Type | null {
+  const typed = new Map<string, Type>();
+  for (const [name, typ] of fields) {
+    if (hasFile(typ)) typed.set(name, typ);
+  }
+  if (typed.size === 0) return null;
+  return new Type({ kind: ValueKind.OBJECT, fields: typed, required: new Set() });
+}
+
+/**
+ * Return the type a value written under `contract` is read through to restore its files.
+ *
+ * A stored or JSON-decoded value holds each nested file as its JSON form; reading it through this
+ * type with `normalizeFiles` gives a `FileRef` at each position the contract types as `file`. A
+ * whole-value contract gives its type; a partial record gives `fileFieldsType` of its typed
+ * fields, so its opaque fields are read as given. `null` has no file position.
+ *
+ * Example: for `new ValueContract(list(file))` it returns `list(file)`; for
+ * `new ValueContract(int)` it returns `null`.
+ *
+ * @returns The reading type, or `null` when no position may hold a file.
+ */
+export function outputContractFileType(contract: OutputContract | null): Type | null {
+  if (isExactly(contract, ValueContract)) return hasFile(contract.type) ? contract.type : null;
+  if (isExactly(contract, PartialRecordContract)) {
+    return fileFieldsType(
+      contract.fields.flatMap(([name, field]) => (field === null ? [] : [[name, field.type] as const])),
+    );
+  }
+  return null;
+}
+
+// Kinds a field read is not checked on: `object` is opaque unless it declares fields, and an
+// `Any` value may be an object.
+const UNCHECKED_FIELD_KINDS: ReadonlySet<ValueKind> = new Set([ValueKind.OBJECT, ValueKind.ANY]);
+
+/**
+ * Return the error for reading a field only some members of `union` have.
+ *
+ * `path` is the whole reference path, `unionPath` the path of the union value, and
+ * `readUnionPath` its path within `path`. `isinstanceHint` points the fix at an `isinstance`
+ * conjunct instead of a case; `tagHint` points it at a tag comparison conjunct instead, when the
+ * union is tagged.
+ */
+function memberOnlyFieldError(
+  union: Type,
+  having: readonly Type[],
+  fieldName: string,
+  path: string,
+  unionPath: string,
+  isinstanceHint: boolean,
+  tagHint = false,
+  readUnionPath = "",
+): string {
+  const tagFields = unionTagFields(union);
+  let which: string;
+  let fix: string;
+  if (tagFields.length > 0) {
+    const tag = tagFields[0]!;
+    const tags = having.map((member) => member.fields!.get(tag)!.tags!.values().next().value!).join(", ");
+    which = `only union members with ${tag} ${tags} have`;
+    fix = `read it inside a case on \${${unionPath}.${tag}}`;
+  } else {
+    which = `only ${having.length} of ${union.variants!.length} union members have`;
+    fix = `check the member with isinstance(${unionPath}, <Type>) in a case first`;
+  }
+  if (tagHint && tagFields.length > 0) {
+    const tag = tagFields[0]!;
+    const value = [...having[0]!.fields!.get(tag)!.tags!].sort(compareCodeUnits)[0]!;
+    fix = `check the member first with \`${readUnionPath}.${tag} == "${value}" and ...\``;
+  } else if (isinstanceHint && !tagHint) {
+    fix = `check the member first with \`isinstance(${unionPath}, <Type>) and ...\``;
+  }
+  return `reference \${${path}} reads field ${reprText(fieldName)}, which ${which}; ${fix}`;
+}
+
+/**
+ * Return the error for reading field `fieldName`, which no `file` has.
+ *
+ * `path` is the whole reference path without `${}`.
+ */
+export function fileFieldError(path: string, fieldName: string): string {
+  return `reference \${${path}} reads field ${reprText(fieldName)} on a file, which has only uri, mime, and name`;
+}
+
+/**
+ * Return why a reference reads a field its contract can't have, else `null`.
+ *
+ * An exact record is closed at every proven nested record, and a partial record is closed at its
+ * root; reading below an opaque partial field is not checked. A `file` has only `uri`, `mime` and
+ * `name`, typed by `fileFieldType`. Every other type but `object` and `Any` (scalars,
+ * `Literal(...)`, lists, and their `Optional(...)` forms) has no fields, so reading one is an
+ * error. On a union, a field every member has can be read, and the walk continues with its shared
+ * type (or stops when the members' types differ); a field no member has is an unknown field, and a
+ * field only some members have is an error unless `partialUnionFields` allows it.
+ *
+ * @param contract The exact or partial contract of the referenced value.
+ * @param fields The field names the reference reads below that value. May be empty.
+ * @param path The reference path without `${}`, used in the message. Its last `fields.length`
+ *   segments are `fields`.
+ * @param options.partialUnionFields Whether a field only some union members have can be read
+ *   (default `false`). The read is then not checked further.
+ * @param options.isinstanceHint Whether a member-only field error tells the author to check the
+ *   member with an `isinstance(..., T) and ...` conjunct before the read rather than in a case,
+ *   for a condition no case can route (a LOOP predicate or an assert). Default `false`.
+ * @param options.tagHint Whether a member-only field error of a tagged union tells the author to
+ *   compare the tag (`v.<tag> == "<value>" and ...`) before the read, for a condition where
+ *   `isinstance` is not allowed (a CALL or LOOP node's asserts). An untagged union keeps the case
+ *   hint. Wins over `isinstanceHint`. Default `false`.
+ * @param options.unionRoot The pool path the referenced value is bound from, when `path` reads a
+ *   node-local name. A member-only field error's fix then names the union from this path, which a
+ *   case can route on, instead of from the local name. Default `null`.
+ * @returns The error message, or `null` when the path can be read.
+ * @throws TypeError when a field name is not a non-empty string, or `contract` is not an
+ *   `OutputContract`.
+ * @throws RangeError when a contract's type metadata is malformed.
+ */
+export function outputContractFieldError(
+  contract: OutputContract,
+  fields: readonly string[],
+  path: string,
+  options: {
+    partialUnionFields?: boolean;
+    isinstanceHint?: boolean;
+    tagHint?: boolean;
+    unionRoot?: string | null;
+  } = {},
+): string | null {
+  const { partialUnionFields = false, isinstanceHint = false, tagHint = false, unionRoot = null } = options;
+  if (!Array.isArray(fields) || (fields as unknown[]).some((field) => typeof field !== "string" || !field)) {
+    throw new TypeError("output contract fields must be non-empty strings");
+  }
+  if (isExactly(contract, PartialRecordContract)) {
+    contract.validateShape();
+    if (fields.length === 0) return null;
+    const [fieldName, ...remaining] = fields as [string, ...string[]];
+    const entry = contract.fields.find(([name]) => name === fieldName);
+    if (entry === undefined) return `reference \${${path}} reads unknown field ${reprText(fieldName)} on record`;
+    const fieldContract = entry[1];
+    if (fieldContract === null) return null;
+    return outputContractFieldError(fieldContract, remaining, path, {
+      partialUnionFields,
+      isinstanceHint,
+      tagHint,
+      unionRoot: unionRoot === null ? null : `${unionRoot}.${fieldName}`,
+    });
+  }
+  if (!isExactly(contract, ValueContract)) {
+    outputContractType(contract);
+    return null; // unreachable: the validator above always throws
+  }
+
+  let typ = outputContractType(contract)!;
+  // The path segments walked so far, starting with the ones before `fields`. A negative end
+  // drops from the back, as Python's slice does.
+  const segments = path.split(".");
+  const readWalked = segments.slice(0, segments.length - fields.length);
+  const walked = unionRoot === null ? [...readWalked] : [unionRoot];
+  const start = walked.length;
+  for (const fieldName of fields) {
+    if (typ.variants !== undefined) {
+      const read = unionField(typ, fieldName);
+      if (read.kind === "absent") {
+        return `reference \${${path}} reads unknown field ${reprText(fieldName)} on record`;
+      }
+      if (read.kind === "partial") {
+        if (partialUnionFields) return null;
+        const readUnionPath = [...readWalked, ...walked.slice(start)].join(".");
+        return memberOnlyFieldError(
+          typ,
+          read.members,
+          fieldName,
+          path,
+          walked.join("."),
+          isinstanceHint,
+          tagHint,
+          readUnionPath,
+        );
+      }
+      if (read.type === null) return null;
+      typ = read.type;
+      walked.push(fieldName);
+      continue;
+    }
+    if (typ.fields === undefined) {
+      if (UNCHECKED_FIELD_KINDS.has(typ.kind)) return null;
+      if (typ.kind === ValueKind.FILE) {
+        const readType = fileFieldType(fieldName);
+        if (readType === null) return fileFieldError(path, fieldName);
+        typ = readType;
+        walked.push(fieldName);
+        continue;
+      }
+      return (
+        `reference \${${path}} reads field ${reprText(fieldName)} on type ` +
+        `${canonicalTypeLabel(typ)}, which has no fields`
+      );
+    }
+    const fieldType = typ.fields.get(fieldName);
+    if (fieldType === undefined) {
+      return `reference \${${path}} reads unknown field ${reprText(fieldName)} on record`;
+    }
+    typ = fieldType;
+    walked.push(fieldName);
+  }
+  return null;
+}
+
+/**
+ * Select the most precise authored origin for one output-validation path.
+ *
+ * @throws TypeError for a malformed path or a non-contract `contract`.
+ */
+export function outputContractOrigin(contract: OutputContract | null, path: ValuePath): OriginRef | null {
+  validatePath(path, "output contract lookup");
+  if (contract === null) return null;
+  if (isExactly(contract, ValueContract)) return contract.origins.at(path);
+  if (!isExactly(contract, PartialRecordContract)) {
+    outputContractType(contract);
+    return null; // unreachable: the validator above always throws
+  }
+  const head = path[0];
+  if (typeof head !== "string") return null;
+  const fieldContract = contract.fields.find(([name]) => name === head)?.[1] ?? null;
+  if (fieldContract === null) return null;
+  return fieldContract.origins.at(path.slice(1));
+}
+
+/**
+ * Validate a plain or typed value against either output-contract arm.
+ *
+ * @param contract The contract to enforce; `null` checks nothing.
+ * @param value The plain or typed value to check.
+ * @returns The plain value with each typed part normalized; an untyped part or an unchecked value
+ *   is returned as given. A partial record is rebuilt with own data properties.
+ * @throws TypeCheckError when the value violates the contract.
+ */
+export function validateOutputContract(contract: OutputContract | null, value: unknown): unknown {
+  const exactType = outputContractType(contract);
+  if (exactType !== null) return buildValueAs(exactType, value).toObject();
+  if (value instanceof TypedValue) value = value.toObject();
+  if (contract === null) return value;
+  const partial = contract as PartialRecordContract;
+  if (!isRecord(value)) {
+    throw new TypeCheckError(`${valueRepr(value)} is not an object for a partial record contract`);
+  }
+
+  const expected = new Set(partial.names);
+  const missing = partial.names.filter((name) => !Object.hasOwn(value, name));
+  if (missing.length > 0) {
+    throw new TypeCheckError(`record missing required fields: ${pythonList(missing)}`, { path: [missing[0]!] });
+  }
+  const unknown = Object.keys(value)
+    .filter((name) => !expected.has(name))
+    .sort(compareCodeUnits);
+  if (unknown.length > 0) {
+    const shown = shownText(unknown.map(reprText).join(", "));
+    throw new TypeCheckError(`record has unknown fields: [${shown}]`, { path: [unknown[0]!] });
+  }
+  const checked: ValueRecord = {};
+  for (const name of Object.keys(value)) setField(checked, name, value[name] as Value);
+  for (const [name, fieldContract] of partial.fields) {
+    if (fieldContract === null) continue;
+    try {
+      setField(checked, name, buildValueAs(fieldContract.type, value[name]).toObject());
+    } catch (error) {
+      if (!(error instanceof TypeCheckError)) throw error;
+      throw new TypeCheckError(error.message, { path: [name, ...error.path], cause: error });
+    }
+  }
+  return checked;
+}
 
 /** One direct tool call a node makes, as the run boundary checks it. Frozen. */
 export class HostToolCall {

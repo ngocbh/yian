@@ -9,13 +9,19 @@
  * dataclass is a frozen object, and `FrozenInstanceError` is the `TypeError` an assignment to a
  * frozen object throws in a module; dataclass `==` is `toEqual`; `ValueError` is `RangeError`.
  *
+ * It also ports the output contract rows: a partial record's closed shape and known fields, and
+ * field reads on fieldless types. A `FileRef` stands in for Python's `object()` in an opaque
+ * field.
+ *
  * TS-only: `SeedConnection` (a name, an index and name, a negative index, an empty name, a
  * three-part path), `ChildFlowBoundary` (equal or empty ids) and a frozen `HostToolCall`, which
- * no Python unit test covers.
+ * no Python unit test covers; `outputContractType` (each arm and a non-contract),
+ * `outputContractFileType` and `fileFieldsType`, `fileFieldError`'s text, `outputContractOrigin`
+ * (a partial record field, a non-string head), and `validateOutputContract` keeping an int in a
+ * `float` field, a `__proto__` field as data, its missing and unknown field messages, and a
+ * `TypedValue`'s plain value under a null contract.
  *
- * Left for later: `test_partial_record_contract_enforces_closed_shape_and_known_fields` and
- * `test_output_contract_field_error_rejects_fields_on_fieldless_types` land with the output
- * contract functions; `test_nodes_package_exports_the_canonical_contract_vocabulary` waits for
+ * Later: `test_nodes_package_exports_the_canonical_contract_vocabulary` waits for
  * `nodes/index.ts`.
  *
  * Not ported: the rows that differ from a good one only by a list where Python wants a tuple
@@ -33,18 +39,36 @@ import {
   bindingSource,
   ChildFlowBoundary,
   ContractOrigins,
+  fileFieldError,
+  fileFieldsType,
   HostToolCall,
+  type OutputContract,
+  outputContractFieldError,
+  outputContractFileType,
+  outputContractOrigin,
+  outputContractType,
   Parameter,
   PartialRecordContract,
   SeedConnection,
+  validateOutputContract,
   ValueContract,
   type ValuePath,
 } from "../../src/nodes/contracts.ts";
-import { Type, ValueKind } from "../../src/typesys/index.ts";
+import { FileRef, Type, TypeCheckError, TypedValue, ValueKind } from "../../src/typesys/index.ts";
 
 /** Build a short valid origin for carrier tests. */
 function origin(key: string): OriginRef {
   return new OriginRef(key);
+}
+
+/** Return the error `run` throws, failing when it returns. */
+function thrown(run: () => unknown): Error {
+  try {
+    run();
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error("expected an error");
 }
 
 /** Assign `value` to `field` of a frozen carrier, as a caller ignoring `readonly` would. */
@@ -221,6 +245,51 @@ test("value contract uses a fresh empty origin index", () => {
   expect(first.origins).not.toBe(second.origins);
 });
 
+test("partial record contract enforces closed shape and known fields", () => {
+  const known = origin("known");
+  const contract = new PartialRecordContract([
+    ["count", new ValueContract(Type.scalar(ValueKind.INTEGER), new ContractOrigins({ default: known }))],
+    ["note", null],
+  ]);
+
+  validateOutputContract(contract, { count: 1n, note: new FileRef({ uri: "file:///a" }) });
+  expect(contract.names).toEqual(["count", "note"]);
+  expect(outputContractFieldError(contract, ["count"], "p.output.count")).toBe(null);
+  expect(outputContractFieldError(contract, ["note", "anything"], "p")).toBe(null);
+  expect(outputContractFieldError(contract, ["absent"], "p.output.absent")).toBe(
+    "reference ${p.output.absent} reads unknown field 'absent' on record",
+  );
+  expect(outputContractFieldError(contract, ["count", "x"], "p.output.count.x")).toBe(
+    "reference ${p.output.count.x} reads field 'x' on type int, which has no fields",
+  );
+  expect(outputContractOrigin(contract, ["count"])).toBe(known);
+  expect(outputContractOrigin(contract, ["note"])).toBe(null);
+
+  expect(() => validateOutputContract(contract, { count: "one", note: "x" })).toThrow(TypeCheckError);
+  expect(() => validateOutputContract(contract, { count: "one", note: "x" })).toThrow(
+    /does not match declared type int/,
+  );
+  expect(() => validateOutputContract(contract, { count: 1n })).toThrow(TypeCheckError);
+  expect(() => validateOutputContract(contract, { count: 1n })).toThrow(/missing required/);
+  expect(() => validateOutputContract(contract, { count: 1n, note: "x", extra: true })).toThrow(TypeCheckError);
+  expect(() => validateOutputContract(contract, { count: 1n, note: "x", extra: true })).toThrow(/unknown fields/);
+});
+
+test("output contract field error rejects fields on fieldless types", () => {
+  const err = (typ: Type, ...fields: string[]): string | null =>
+    outputContractFieldError(new ValueContract(typ), fields, "x");
+
+  expect(err(Type.scalar(ValueKind.STRING), "a")).toBe(
+    "reference ${x} reads field 'a' on type str, which has no fields",
+  );
+  expect(err(Type.scalar(ValueKind.LIST_STRING), "a")).toContain("on type list(str)");
+  expect(err(new Type({ kind: ValueKind.INTEGER, nullable: true }), "a")).toContain("on type Optional(int)");
+  expect(err(Type.scalar(ValueKind.NONE), "a")).toContain("on type None");
+  expect(err(Type.scalar(ValueKind.OBJECT), "a", "b")).toBe(null);
+  expect(err(Type.scalar(ValueKind.FILE), "uri")).toBe(null);
+  expect(err(Type.scalar(ValueKind.STRING))).toBe(null); // no field read at all
+});
+
 test("partial record contract rejects ambiguous representations", () => {
   const integer = new ValueContract(Type.scalar(ValueKind.INTEGER));
   expect(
@@ -370,4 +439,106 @@ test("a host tool call is frozen", () => {
   expect(Object.isFrozen(call)).toBe(true);
   expect(Object.isFrozen(call.inputs)).toBe(true);
   expect(() => assign(call, "toolId", "other")).toThrow(TypeError);
+});
+
+const INT = Type.scalar(ValueKind.INTEGER);
+const FLOAT = Type.scalar(ValueKind.NUMBER);
+const FILE = Type.scalar(ValueKind.FILE);
+const LIST_FILE = new Type({ kind: ValueKind.LIST_ANY, element: FILE });
+
+test("outputContractType gives a value contract's type and null otherwise", () => {
+  const value = new ValueContract(INT);
+  expect(outputContractType(null)).toBe(null);
+  expect(outputContractType(value)).toBe(INT);
+  expect(outputContractType(new PartialRecordContract([["x", value], ["y", null]]))).toBe(null);
+  const forged = "x" as unknown as OutputContract;
+  expect(() => outputContractType(forged)).toThrow(TypeError);
+  expect(() => outputContractType(forged)).toThrow(
+    "output contract must be an exact ValueContract, PartialRecordContract, or null, got string",
+  );
+});
+
+test("outputContractFileType and fileFieldsType give the type that restores files", () => {
+  const record = new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map([
+      ["f", FILE],
+      ["n", INT],
+    ]),
+    required: new Set(["f", "n"]),
+  });
+  const fileOnly = new Type({ kind: ValueKind.OBJECT, fields: new Map([["f", FILE]]), required: new Set() });
+
+  expect(outputContractFileType(new ValueContract(LIST_FILE))).toBe(LIST_FILE);
+  expect(outputContractFileType(new ValueContract(record))).toBe(record);
+  expect(outputContractFileType(new ValueContract(INT))).toBe(null);
+  expect(outputContractFileType(null)).toBe(null);
+  const partial = new PartialRecordContract([
+    ["f", new ValueContract(FILE)],
+    ["n", new ValueContract(INT)],
+    ["o", null],
+  ]);
+  expect(outputContractFileType(partial)).toEqual(fileOnly);
+  expect(
+    fileFieldsType([
+      ["f", FILE],
+      ["n", INT],
+    ]),
+  ).toEqual(fileOnly);
+  expect(fileFieldsType([["n", INT]])).toBe(null);
+});
+
+test("fileFieldError names the fields a file has", () => {
+  const message = "reference ${a.f.size} reads field 'size' on a file, which has only uri, mime, and name";
+  expect(fileFieldError("a.f.size", "size")).toBe(message);
+  expect(outputContractFieldError(new ValueContract(FILE), ["size"], "a.f.size")).toBe(message);
+});
+
+test("outputContractOrigin reads a partial record field's origins", () => {
+  const nested = origin("nested");
+  const contract = new PartialRecordContract([
+    ["xs", new ValueContract(LIST_FILE, new ContractOrigins({ entries: [[[0], nested]] }))],
+    ["o", null],
+  ]);
+  expect(outputContractOrigin(contract, ["xs", 0, "uri"])).toBe(nested);
+  expect(outputContractOrigin(contract, ["xs"])).toBe(null);
+  expect(outputContractOrigin(contract, [0])).toBe(null);
+  expect(outputContractOrigin(contract, [])).toBe(null);
+  expect(outputContractOrigin(null, ["xs"])).toBe(null);
+});
+
+test("validateOutputContract keeps an int in a float field and rebuilds the record as data", () => {
+  const contract = new PartialRecordContract([
+    ["x", new ValueContract(FLOAT)],
+    ["__proto__", null],
+  ]);
+  const value = JSON.parse('{"__proto__": "p"}') as Record<string, unknown>;
+  value["x"] = 1n;
+
+  const checked = validateOutputContract(contract, value) as Record<string, unknown>;
+  expect(checked["x"]).toBe(1n);
+  expect(Object.keys(checked)).toEqual(["__proto__", "x"]);
+  expect(Object.getOwnPropertyDescriptor(checked, "__proto__")?.value).toBe("p");
+  expect(Object.getPrototypeOf(checked)).toBe(Object.prototype);
+});
+
+test("validateOutputContract names missing and unknown fields", () => {
+  const contract = new PartialRecordContract([
+    ["b", null],
+    ["a", null],
+  ]);
+  const missing = thrown(() => validateOutputContract(contract, {}));
+  expect(missing).toBeInstanceOf(TypeCheckError);
+  expect(missing.message).toBe("record missing required fields: ['b', 'a']");
+  expect((missing as TypeCheckError).path).toEqual(["b"]);
+  const unknown = thrown(() => validateOutputContract(contract, { a: 1n, b: 2n, z: 3n, y: 4n }));
+  expect(unknown.message).toBe("record has unknown fields: ['y', 'z']");
+  expect((unknown as TypeCheckError).path).toEqual(["y"]);
+  expect(() => validateOutputContract(contract, [])).toThrow("[] is not an object for a partial record contract");
+});
+
+test("validateOutputContract gives a TypedValue's plain value under a null contract", () => {
+  expect(validateOutputContract(null, new TypedValue(ValueKind.INTEGER, 3n))).toBe(3n);
+  const plain = { a: 1n };
+  expect(validateOutputContract(null, plain)).toBe(plain);
 });

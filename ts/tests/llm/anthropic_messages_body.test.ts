@@ -1,12 +1,14 @@
 /**
  * Tests for Anthropic Messages body building in `src/llm/protocols/anthropic_messages.ts`: the
  * top-level keys, turn merging, the system field, user, tool and assistant turns, tool ids, the
- * default `max_tokens`, tools, the tool choice, the block and determinism.
+ * default `max_tokens`, tools, the tool choice, the block, determinism, reasoning replay records
+ * and the required-signature error.
  */
 
 import { describe, expect, spyOn, test } from "bun:test";
 
 import { encodeBody } from "../../src/llm/body.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
 import {
   MediaPart,
   Message,
@@ -14,7 +16,10 @@ import {
   type Part,
   ReasoningPart,
   RefusalPart,
+  type ReplayDegradedReason,
+  type ReplayKey,
   Request,
+  replayRecord,
   type Role,
   TextPart,
   type ToolChoice,
@@ -75,11 +80,19 @@ interface BodyOptions {
   tools?: ToolSpec[];
   toolChoice?: ToolChoice;
   parallelToolCalls?: boolean | null;
+  account?: string | null;
+  onReplayDegraded?: (reason: ReplayDegradedReason) => void;
 }
 
 function bodyOf(messages: Message[], options: BodyOptions = {}): JsonObject {
   const model = options.model ?? SONNET;
-  const protocol = new AnthropicMessages({ model, provider: "anthropic", block: options.block });
+  const protocol = new AnthropicMessages({
+    model,
+    provider: "anthropic",
+    account: options.account,
+    block: options.block,
+    onReplayDegraded: options.onReplayDegraded,
+  });
   return protocol.buildBody(
     new Request({
       messages,
@@ -768,5 +781,314 @@ describe("determinism", () => {
       earlier.map((each) => encodeBody(each)),
     );
     expect(after["system"]).toBe(before["system"]);
+  });
+});
+
+const KEY: ReplayKey = { protocol: PROTOCOL, provider: "anthropic", model: SONNET };
+const OPUS: ReplayKey = { ...KEY, model: "claude-opus-4-5" };
+
+/** Return a replay record for `fields`, keyed to the default protocol object unless `key` is given. */
+function record(fields: JsonObject, key: ReplayKey = KEY): JsonObject {
+  return replayRecord(key, fields);
+}
+
+function thinking(value: string, signature = "sig-1", key: ReplayKey = KEY): ReasoningPart {
+  return new ReasoningPart(value, record({ signature }, key));
+}
+
+function redacted(data = "opaque", key: ReplayKey = KEY): ReasoningPart {
+  return new ReasoningPart("", record({ redacted: data }, key));
+}
+
+/** An assistant message carrying a message record for `key`, as every adapter writes one. */
+function recorded(key: ReplayKey, ...parts: Part[]): Message {
+  return new Message({ role: "assistant", parts, providerPayload: record({ response_id: "msg_1" }, key) });
+}
+
+/** Render `messages` and return the rendered turns and the reasons passed to `onReplayDegraded`. */
+function degraded(messages: Message[], options: BodyOptions = {}): [JsonObject[], ReplayDegradedReason[]] {
+  const reasons: ReplayDegradedReason[] = [];
+  const body = bodyOf(messages, { ...options, onReplayDegraded: (reason) => reasons.push(reason) });
+  return [body["messages"] as JsonObject[], reasons];
+}
+
+const CALLING = { type: "text", text: "Calling." };
+const TOOL_USE = { type: "tool_use", id: "call_1", name: "double", input: { value: 3n } };
+const call1 = () => call("call_1", { value: 3n });
+
+describe("assistant messages: reasoning replay records", () => {
+  /** Render `parts` as a non-final assistant turn; return its content and the degrade reasons. */
+  function nonFinal(parts: Part[], options: BodyOptions = {}): [JsonValue, ReplayDegradedReason[]] {
+    const [turns, reasons] = degraded([user("Hi."), assistant(...parts), user("Next.")], options);
+    return [turns[1]!["content"]!, reasons];
+  }
+
+  test("thinking and redacted thinking are replayed in part order with their signatures", () => {
+    const parts = [thinking("Let me think.", "sig-1"), redacted("opaque"), text("Calling."), call1()];
+    expect(nonFinal(parts)).toEqual([
+      [
+        { type: "thinking", thinking: "Let me think.", signature: "sig-1" },
+        { type: "redacted_thinking", data: "opaque" },
+        CALLING,
+        TOOL_USE,
+      ],
+      [],
+    ]);
+  });
+
+  test("thinking with empty text and a signature is replayed as empty thinking", () => {
+    expect(nonFinal([thinking("", "sig-1"), text("Hello.")])[0]).toEqual([
+      { type: "thinking", thinking: "", signature: "sig-1" },
+      { type: "text", text: "Hello." },
+    ]);
+  });
+
+  test("a reasoning-only message renders nothing for its reasoning", () => {
+    const [turns, reasons] = degraded([user("Hi."), assistant(thinking("Hm.")), user("Next.")]);
+    expect(turns).toEqual([
+      { role: "user", content: "Hi." },
+      { role: "user", content: "Next." },
+    ]);
+    expect(reasons).toEqual([]);
+    expect(sent([user("Hi."), assistant(thinking("Hm."), redacted())])).toEqual([
+      { role: "user", content: "Hi." },
+      { role: "assistant", content: "" },
+    ]);
+  });
+
+  test("a reasoning part without a payload leaves out all the message's reasoning, signalling nothing", () => {
+    const parts = [thinking("Signed."), new ReasoningPart("Unsigned."), text("Calling."), call1()];
+    expect(nonFinal(parts)).toEqual([[CALLING, TOOL_USE], []]);
+  });
+
+  const signed = record({ signature: "sig-1" });
+  const signedFor = (change: Partial<ReplayKey>) => record({ signature: "sig-1" }, { ...KEY, ...change });
+  const unusable: [string, JsonObject, ReplayDegradedReason, string | null][] = [
+    ["another protocol", signedFor({ protocol: "openai_responses" }), "other_protocol", null],
+    ["another provider", signedFor({ provider: "azure" }), "other_provider", null],
+    ["another model", signedFor({ model: "claude-opus-4-5" }), "other_model", null],
+    ["a record with an account, a key without", signedFor({ account: "acct" }), "other_account", null],
+    ["a record without an account, a key with one", signed, "other_account", "acct"],
+    ["an unknown version", { ...signed, v: 2n }, "unknown_version", null],
+    ["a malformed envelope", { ...signed, provider: 1n }, "malformed", null],
+    ["an unknown field", record({ signature: "sig-1", extra: "x" }), "unknown_field", null],
+    ["both signature and redacted", record({ signature: "sig-1", redacted: "opaque" }), "malformed", null],
+    ["neither signature nor redacted", record({}), "malformed", null],
+    ["an empty signature", record({ signature: "" }), "malformed", null],
+    ["an empty redacted value", record({ redacted: "" }), "malformed", null],
+    ["a non-string signature", record({ signature: 1n }), "malformed", null],
+    ["a non-string redacted value", record({ redacted: ["x"] }), "malformed", null],
+  ];
+  for (const [name, payload, reason, account] of unusable) {
+    test(`${name}: all the message's reasoning is left out, text and calls kept, signalled once`, () => {
+      const parts = [thinking("Fine."), new ReasoningPart("Bad.", payload), text("Calling."), call1()];
+      expect(nonFinal(parts, { account })).toEqual([[CALLING, TOOL_USE], [reason]]);
+    });
+  }
+
+  test("a usable thinking record with unusable ones sends none, signalling the first bad part's reason", () => {
+    const azure = { ...KEY, provider: "azure" };
+    const parts = [thinking("Fine."), redacted("opaque", OPUS), thinking("Bad.", "sig-2", azure), text("Calling.")];
+    expect(nonFinal(parts)).toEqual(["Calling.", ["other_model"]]);
+  });
+
+  test("without a callback the reasoning is still left out", () => {
+    expect(sent([user("Hi."), assistant(thinking("Bad.", "sig-1", OPUS), text("Hello.")), user("Next.")])).toEqual([
+      { role: "user", content: "Hi." },
+      { role: "assistant", content: "Hello." },
+      { role: "user", content: "Next." },
+    ]);
+  });
+
+  test("a throwing callback propagates", () => {
+    const onReplayDegraded = () => {
+      throw new Error("stop");
+    };
+    const messages = [user("Hi."), assistant(thinking("Bad.", "sig-1", OPUS), text("Hello."))];
+    expect(() => bodyOf(messages, { onReplayDegraded })).toThrow("stop");
+  });
+
+  test("a matching record with an account replays", () => {
+    const key = { ...KEY, account: "acct" };
+    expect(nonFinal([thinking("Hm.", "sig-1", key), text("Hello.")], { account: "acct" })).toEqual([
+      [
+        { type: "thinking", thinking: "Hm.", signature: "sig-1" },
+        { type: "text", text: "Hello." },
+      ],
+      [],
+    ]);
+  });
+
+  test("a bigint and a number version are both accepted", () => {
+    const parts = [
+      new ReasoningPart("A.", { ...signed, v: 1n }),
+      new ReasoningPart("B.", { ...record({ redacted: "opaque" }), v: 1 }),
+      text("Hello."),
+    ];
+    expect(nonFinal(parts)).toEqual([
+      [
+        { type: "thinking", thinking: "A.", signature: "sig-1" },
+        { type: "redacted_thinking", data: "opaque" },
+        { type: "text", text: "Hello." },
+      ],
+      [],
+    ]);
+  });
+
+  test("reasoning from an openai_chat record is left out as another protocol's", () => {
+    const chat = { protocol: "openai_chat", provider: "deepseek", model: "deepseek-chat" };
+    const part = new ReasoningPart("Thinking.", record({ field: "reasoning_content" }, chat));
+    expect(nonFinal([part, text("Hello.")])).toEqual(["Hello.", ["other_protocol"]]);
+  });
+});
+
+describe("the required-signature error", () => {
+  const ENABLED: JsonObject = { thinking: { type: "enabled", budget_tokens: 2048n } };
+  const REQUIRED =
+    "anthropic needs its signed thinking to continue a tool call with thinking on; finish the tool turn on the " +
+    "original model or turn thinking off in the anthropic block";
+
+  /** Return the error building `messages` throws, with thinking enabled unless `block` is given. */
+  function refused(messages: Message[], options: BodyOptions = {}): ProviderError {
+    const error = thrown(() => bodyOf(messages, { block: ENABLED, ...options }));
+    expect(error).toBeInstanceOf(ProviderError);
+    return error as ProviderError;
+  }
+
+  /** Assert building `messages` throws the required-signature error naming `source`. */
+  function requires(messages: Message[], source: string, options: BodyOptions = {}): void {
+    const error = refused(messages, options);
+    expect(error.message).toBe(`the last assistant turn came from ${source}; ${REQUIRED}`);
+  }
+
+  /** A tool loop whose first assistant message is `first`, ending in its tool result. */
+  function loop(first: Message): Message[] {
+    return [user("Double 3."), first, tool(result("call_1", "6"))];
+  }
+
+  const foreign = () => recorded(OPUS, thinking("Hm.", "sig-1", OPUS), call1());
+
+  test("a turn start with another model's records throws a non-retryable bad_request naming it", () => {
+    const error = refused(loop(foreign()));
+    expect(error.kind).toBe("bad_request");
+    expect(error.retryable).toBe(false);
+    expect(error.provider).toBe("anthropic");
+    expect(error.status).toBeNull();
+    expect(error.message).toBe(`the last assistant turn came from anthropic/claude-opus-4-5; ${REQUIRED}`);
+  });
+
+  test("a turn start with another provider's or account's records throws", () => {
+    const azure = { ...KEY, provider: "azure" };
+    requires(loop(recorded(azure, thinking("Hm.", "sig-1", azure), call1())), "azure/claude-sonnet-4-5");
+    const account = { ...KEY, account: "other" };
+    requires(loop(recorded(account, thinking("Hm.", "sig-1", account), call1())), "anthropic/claude-sonnet-4-5", {
+      account: "acct",
+    });
+  });
+
+  test("a turn start with a malformed record throws", () => {
+    const malformed = new ReasoningPart("Hm.", record({ signature: "" }));
+    requires(loop(recorded(KEY, malformed, call1())), "anthropic/claude-sonnet-4-5");
+  });
+
+  test("without a usable message record the source is the first unusable reasoning record's", () => {
+    const azure = { ...KEY, provider: "azure" };
+    const unrecorded = assistant(thinking("Hm.", "sig-1", OPUS), thinking("Hm.", "sig-2", azure), call1());
+    requires(loop(unrecorded), "anthropic/claude-opus-4-5");
+    const parts = [thinking("Hm.", "sig-1", OPUS), call1()];
+    const odd = new Message({ role: "assistant", parts, providerPayload: { model: "x" } });
+    requires(loop(odd), "anthropic/claude-opus-4-5");
+  });
+
+  test("with no source anywhere the source is an unknown model", () => {
+    const broken = new ReasoningPart("Hm.", { ...record({ signature: "sig-1" }), provider: 1n });
+    requires(loop(assistant(broken, call1())), "an unknown model");
+  });
+
+  test("the degrade signal fires before the throw", () => {
+    const reasons: ReplayDegradedReason[] = [];
+    refused(loop(foreign()), { onReplayDegraded: (reason) => reasons.push(reason) });
+    expect(reasons).toEqual(["other_model"]);
+  });
+
+  test("a turn start with both a payload-less part and an unusable record throws", () => {
+    const both = recorded(OPUS, new ReasoningPart("Unsigned."), thinking("Hm.", "sig-1", OPUS), call1());
+    requires(loop(both), "anthropic/claude-opus-4-5");
+  });
+
+  test("the turn's first assistant message is found across a multi-step loop", () => {
+    const steps = [
+      ...loop(foreign()),
+      recorded(KEY, text("Again."), call("call_2", { value: 6n })),
+      tool(result("call_2", "12")),
+    ];
+    requires(steps, "anthropic/claude-opus-4-5");
+  });
+
+  test("a loop started with matching thinking sends it, a later step needing none", () => {
+    const steps = [
+      ...loop(recorded(KEY, thinking("Hm.", "sig-1"), call1())),
+      recorded(KEY, call("call_2", { value: 6n })),
+      tool(result("call_2", "12")),
+    ];
+    const turns = bodyOf(steps, { block: ENABLED })["messages"] as JsonObject[];
+    expect(turns[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "Hm.", signature: "sig-1" }, TOOL_USE],
+    });
+  });
+
+  test("a tool result merged with a user text still continues the loop", () => {
+    requires([...loop(foreign()), user("Also, hurry.")], "anthropic/claude-opus-4-5");
+  });
+
+  test("a skipped empty assistant message is not the turn's first", () => {
+    const skipped = recorded(OPUS, thinking("Hm.", "sig-1", OPUS));
+    expect(() =>
+      bodyOf([user("Double 3."), skipped, recorded(KEY, thinking("Hm."), call1()), tool(result("call_1", "6"))], {
+        block: ENABLED,
+      }),
+    ).not.toThrow();
+    requires([user("Double 3."), assistant(), foreign(), tool(result("call_1", "6"))], "anthropic/claude-opus-4-5");
+  });
+
+  const otherModes: [string, JsonObject | null][] = [
+    ["adaptive", { thinking: { type: "adaptive" } }],
+    ["between_tools", { thinking: { type: "between_tools" } }],
+    ["disabled", { thinking: { type: "disabled" } }],
+    ["no thinking", null],
+  ];
+  for (const [name, block] of otherModes) {
+    test(`no error under ${name}, even with a degraded turn start`, () => {
+      const [, reasons] = degraded(loop(foreign()), { block });
+      expect(reasons).toEqual(["other_model"]);
+    });
+  }
+
+  test("no error when the turn start's reasoning part has no payload", () => {
+    expect(() => bodyOf(loop(assistant(new ReasoningPart("Unsigned."), call1())), { block: ENABLED })).not.toThrow();
+  });
+
+  test("no error when the turn start has no reasoning", () => {
+    const chat = { protocol: "openai_chat", provider: "deepseek", model: "deepseek-chat" };
+    const fromChat = new Message({
+      role: "assistant",
+      parts: [text("Calling."), call1()],
+      protocol: "openai_chat",
+      providerPayload: record({ response_id: "chatcmpl-1" }, chat),
+    });
+    expect(() => bodyOf(loop(fromChat), { block: ENABLED })).not.toThrow();
+    expect(() => bodyOf(loop(recorded(KEY, call1())), { block: ENABLED })).not.toThrow();
+  });
+
+  test("no error when the request doesn't end in tool results, even after a degraded tool turn", () => {
+    const messages = [...loop(foreign()), assistant(text("It is 6.")), user("Thanks.")];
+    expect(() => bodyOf(messages, { block: ENABLED })).not.toThrow();
+  });
+
+  test("no error when the turn start's thinking is sent", () => {
+    const turns = bodyOf(loop(recorded(KEY, thinking("Hm."), call1())), { block: ENABLED })["messages"] as JsonObject[];
+    const [first] = turns[1]!["content"] as JsonObject[];
+    expect(first).toEqual({ type: "thinking", thinking: "Hm.", signature: "sig-1" });
   });
 });

@@ -5,7 +5,8 @@
  * same: runs of user and tool messages merge into one `user` turn, leading system messages are
  * lifted to `system`, and a later system message stays in place only where the model accepts
  * it, else it is hoisted to `system` with a warning. An assistant message is sent as its blocks
- * in part order, so a replayed turn goes back as the API sent it. Tool ids the API refuses are
+ * in part order, so a replayed turn goes back as the API sent it; its thinking goes back with its
+ * signature only to the provider, model and account that wrote it. Tool ids the API refuses are
  * hashed to ones it accepts, the same on the call and its result. Tools are sent with their
  * schema as `input_schema`, and a tool choice only with tools. Every call streams.
  */
@@ -14,15 +15,19 @@ import { createHash } from "node:crypto";
 
 import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { mergeRequestBody } from "../body.ts";
+import { ProviderError } from "../errors.ts";
 import type { Event } from "../events.ts";
 import type { SseProtocol } from "../executor.ts";
 import type { SSEEvent } from "../framing.ts";
 import {
   copyJson,
+  isPlainObject,
   MediaPart,
   type Message,
   NamedTool,
   type Part,
+  ReasoningPart,
+  readReplayRecord,
   type ReplayDegradedReason,
   type ReplayKey,
   type Request,
@@ -73,6 +78,11 @@ const IN_PLACE_SYSTEM_PREFIXES = [
 const CHOICE_TYPES = { auto: "auto", required: "any", none: "none" } as const;
 // The tool ids the API accepts on `tool_use` and `tool_result`.
 const TOOL_ID = /^[a-zA-Z0-9_-]+$/;
+// The fields of a reasoning part's replay record; it holds exactly one.
+const REASONING_FIELDS = ["signature", "redacted"];
+const REQUIRED_SIGNATURE =
+  "anthropic needs its signed thinking to continue a tool call with thinking on; finish the tool turn on the " +
+  "original model or turn thinking off in the anthropic block";
 
 /** A turn after merging: consecutive system texts, a user turn's blocks, or an assistant message. */
 type Turn =
@@ -131,17 +141,23 @@ export class AnthropicMessages implements SseProtocol {
    * blocks are dropped. Leading system messages are lifted to `system`. A later one stays in
    * place when the model accepts that, it follows a user turn and an assistant turn or the end
    * comes next; otherwise it is hoisted to `system`, with LangChain's warning through
-   * `process.emitWarning`. An assistant message is sent as its text and `tool_use` blocks in
-   * part order (an invalid call with empty `input`), one lone text as a string; refusals and
-   * reasoning are not sent. The final assistant message is stripped at the end, and an empty
-   * assistant message is skipped unless it is the final one.
+   * `process.emitWarning`. An assistant message is sent as its blocks in part order: thinking,
+   * redacted thinking, text and `tool_use` (an invalid call with empty `input`), one lone text
+   * as a string; refusals are not sent. Its reasoning goes back from its replay records, only
+   * with a text or call, and is all left out when any reasoning part has no record or one that
+   * can't be used, `onReplayDegraded` being called once for the latter (a throw from the callback
+   * propagates). The final assistant message is stripped at the end, and an empty assistant
+   * message is skipped unless it is the final one.
    *
+   * @throws {ProviderError} A `bad_request` when thinking is `enabled`, the request continues a
+   *   tool loop, and the loop's first assistant message had its reasoning left out for an
+   *   unusable record: the API requires that turn's signed thinking.
    * @throws {TypeError} If a message holds a media part or a part its role cannot carry, a
    *   system message must be hoisted when `system` is already set, or a tool's parameters have
    *   a top-level `oneOf` or `anyOf`.
    */
   buildBody(request: Request): JsonObject {
-    const [system, messages] = this.#messages(request.messages);
+    const [system, messages, degraded] = this.#messages(request.messages);
     const body: JsonObject = {
       model: this.model,
       max_tokens: MAX_TOKENS.get(this.model) ?? DEFAULT_MAX_TOKENS,
@@ -155,6 +171,16 @@ export class AnthropicMessages implements SseProtocol {
     }
     body["stream"] = true;
     if (this.#block) mergeRequestBody(body, this.#block);
+    // Under adaptive thinking a turn may start without thinking, so only `enabled` needs it.
+    const thinking = body["thinking"];
+    if (isPlainObject(thinking) && thinking["type"] === "enabled") {
+      const source = degradedTurnStart(messages, degraded);
+      if (source !== null) {
+        throw new ProviderError("bad_request", `the last assistant turn came from ${source}; ${REQUIRED_SIGNATURE}`, {
+          provider: this.provider,
+        });
+      }
+    }
     return body;
   }
 
@@ -167,8 +193,12 @@ export class AnthropicMessages implements SseProtocol {
     throw new Error("not implemented");
   }
 
-  /** Return the `system` field (or `null`) and the rendered turns, as LangChain formats them. */
-  #messages(messages: readonly Message[]): [JsonValue | null, JsonObject[]] {
+  /**
+   * Return the `system` field (or `null`) and the rendered turns, as LangChain formats them, and
+   * for each rendered assistant turn whose reasoning was left out for an unusable record, where
+   * that turn came from.
+   */
+  #messages(messages: readonly Message[]): [JsonValue | null, JsonObject[], Map<JsonObject, string>] {
     if (messages.some((message) => message.parts.some((part) => part instanceof MediaPart))) {
       throw new TypeError(NO_MEDIA);
     }
@@ -177,6 +207,7 @@ export class AnthropicMessages implements SseProtocol {
     const inPlace = IN_PLACE_SYSTEM_PREFIXES.some((prefix) => this.model.startsWith(prefix));
     let system: JsonValue | null = null;
     const rendered: JsonObject[] = [];
+    const degraded = new Map<JsonObject, string>();
     // Later system messages held until the next rendered turn shows whether they stay in place.
     let pending: JsonValue[] = [];
     for (const [i, turn] of turns.entries()) {
@@ -188,20 +219,65 @@ export class AnthropicMessages implements SseProtocol {
         continue;
       }
       let content: JsonValue;
+      let source: string | null = null;
       if (turn.role === "assistant") {
-        content = assistantContent(turn.message, i === lastNonSystem);
+        const [reasoning, unusable] = this.#reasoning(turn.message);
+        content = assistantContent(turn.message, i === lastNonSystem, reasoning);
         // The API refuses empty content on every message but the final assistant one.
         if (content === "" && i !== lastNonSystem) continue;
         for (const each of pending) rendered.push({ role: "system", content: each });
+        if (unusable !== null) source = sourceOf(turn.message, unusable);
       } else {
         content = userContent(turn.blocks);
         for (const each of pending) system = this.#hoist(system, each);
       }
       pending = [];
-      rendered.push({ role: turn.role, content });
+      const rendering: JsonObject = { role: turn.role, content };
+      if (source !== null) degraded.set(rendering, source);
+      rendered.push(rendering);
     }
     for (const each of pending) rendered.push({ role: "system", content: each });
-    return [system, rendered];
+    return [system, rendered, degraded];
+  }
+
+  /**
+   * Read an assistant message's reasoning records, calling `onReplayDegraded` once with the first
+   * reason when one can't be used.
+   *
+   * All of the message's reasoning is left out when any reasoning part has no record or an
+   * unusable one: with preserved thinking a signature binds every block before it, so sending
+   * part of a turn's reasoning risks a refusal.
+   *
+   * @returns The `thinking` or `redacted_thinking` block of each reasoning part by part index
+   *   (empty when the reasoning is left out), and the first unusable record, or `null`.
+   */
+  #reasoning(message: Message): [JsonObject[], JsonObject | null] {
+    const blocks: JsonObject[] = [];
+    let reason: ReplayDegradedReason | null = null;
+    let unusable: JsonObject | null = null;
+    let unsigned = false;
+    for (const [index, part] of message.parts.entries()) {
+      if (!(part instanceof ReasoningPart)) continue;
+      if (part.providerPayload === null) {
+        unsigned = true;
+        continue;
+      }
+      const read = readReplayRecord(part.providerPayload, this.#key, REASONING_FIELDS);
+      const fields = read.ok ? read.fields : {};
+      const values = REASONING_FIELDS.filter((name) => Object.hasOwn(fields, name)).map((name) => fields[name]);
+      const [value] = values;
+      if (!read.ok || values.length !== 1 || typeof value !== "string" || value === "") {
+        reason ??= read.ok ? "malformed" : read.reason;
+        unusable ??= part.providerPayload;
+        continue;
+      }
+      blocks[index] = Object.hasOwn(fields, "signature")
+        ? { type: "thinking", thinking: part.text, signature: value }
+        : { type: "redacted_thinking", data: value };
+    }
+    if (reason !== null) this.#onReplayDegraded?.(reason);
+    // A part without a record is no record mismatch, so nothing is signalled for it.
+    return reason !== null || unsigned ? [[], unusable] : [blocks, null];
   }
 
   /** Return `content` as the new `system` field, warning that it was moved there. */
@@ -275,16 +351,18 @@ function userContent(blocks: JsonObject[]): JsonValue {
 
 /**
  * Return an assistant message's content: one lone text block as a string, else its blocks in
- * part order without whitespace-only texts; `""` when it has none.
+ * part order without whitespace-only texts; `""` when it has no text or call.
  *
  * Each text part is its own block and an empty one gives none; a call is a `tool_use` block, an
- * invalid one with empty `input`. Reasoning and refusals are not sent.
+ * invalid one with empty `input`; a reasoning part is its block in `reasoning`, if any.
+ * Refusals are not sent.
  *
  * @param final Whether this is the last non-system message, whose content is stripped at the end.
+ * @param reasoning The reasoning blocks by part index.
  */
-function assistantContent(message: Message, final: boolean): JsonValue {
+function assistantContent(message: Message, final: boolean, reasoning: readonly JsonObject[]): JsonValue {
   const blocks: JsonObject[] = [];
-  for (const part of message.parts) {
+  for (const [index, part] of message.parts.entries()) {
     if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, message.role));
     if (part instanceof TextPart) {
       if (part.text !== "") blocks.push(textBlock(part.text));
@@ -292,15 +370,54 @@ function assistantContent(message: Message, final: boolean): JsonValue {
       // Copied so changing a body cannot change the message it came from.
       const input = part.arguments === null ? {} : copyJson(part.arguments);
       blocks.push({ type: "tool_use", id: toolId(part.id), name: part.name, input });
+    } else if (reasoning[index] !== undefined) {
+      blocks.push(reasoning[index]);
     }
   }
   const lone = loneText(blocks);
   if (lone !== null) return final ? lone.trimEnd() : lone;
   // Claude often streams a whitespace-only text block before a `tool_use`, which the API refuses back.
   const content = blocks.filter(isSendable);
+  // Reasoning goes back only with the text or call it led to.
+  if (!content.some((block) => block["type"] === "text" || block["type"] === "tool_use")) return "";
   const last = content.at(-1);
   if (final && last?.["type"] === "text") last["text"] = (last["text"] as string).trimEnd();
-  return content.length === 0 ? "" : content;
+  return content;
+}
+
+/**
+ * Return where an assistant message came from, `<provider>/<model>`: from its message record,
+ * else from `record` (its first unusable reasoning record); `an unknown model` when neither
+ * names both.
+ */
+function sourceOf(message: Message, record: JsonObject): string {
+  for (const payload of [message.providerPayload, record]) {
+    const provider = payload?.["provider"];
+    const model = payload?.["model"];
+    if (typeof provider === "string" && typeof model === "string") return `${provider}/${model}`;
+  }
+  return "an unknown model";
+}
+
+/**
+ * Return where the current tool loop's first assistant turn came from when its reasoning was
+ * left out for an unusable record, else `null`; `null` too when the request doesn't continue a
+ * tool loop (its last user turn holds no `tool_result`).
+ *
+ * The API checks the signed thinking at the start of the assistant turn, which spans every step
+ * of a tool loop: without interleaved thinking the later steps rightly have none.
+ *
+ * @param degraded Where each such rendered assistant turn came from.
+ */
+function degradedTurnStart(rendered: JsonObject[], degraded: Map<JsonObject, string>): string | null {
+  const isUser = (turn: JsonObject) => turn["role"] === "user";
+  const hasResult = (turn: JsonObject) =>
+    Array.isArray(turn["content"]) && turn["content"].some((block) => (block as JsonObject)["type"] === "tool_result");
+  const last = rendered.findLast(isUser);
+  if (last === undefined || !hasResult(last)) return null;
+  const start = rendered.findLastIndex((turn) => isUser(turn) && !hasResult(turn));
+  const first = rendered.slice(start + 1).find((turn) => turn["role"] === "assistant");
+  return first === undefined ? null : (degraded.get(first) ?? null);
 }
 
 /** Return the text of `blocks` when they are one text block, else `null`. */

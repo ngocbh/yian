@@ -6,7 +6,14 @@
  * `test_node_step_record_rejects_invalid_values` (list, text, null, NaN, a class instance, a
  * `Set`, an empty and a non-text node id; each with its exact error).
  *
- * TS-only: a step writes `-0` as `0`; a `FileRef` in a step is refused.
+ * Ported, the wire tests: `test_node_step_round_trips_under_its_wire_kind` (schema 10),
+ * `test_node_step_wire_payload_rejects_invalid_shapes` (list, text, empty node id, missing step,
+ * extra field; each with its exact class and message),
+ * `test_node_step_wire_payload_rejects_non_finite_numbers` (`invalid run-record JSON`, caused by
+ * the reader's `NaN is not JSON`).
+ *
+ * TS-only: a step writes `-0` as `0`; a `FileRef` in a step is refused; a wire step keeps
+ * yian's infinity tag as `Infinity`.
  *
  * Changed:
  * - the `infinity` row of `test_node_step_record_rejects_invalid_values`: a step keeps
@@ -14,14 +21,15 @@
  * - `test_node_step_too_deep_for_python_is_a_value_error`: a 5000-deep step is accepted (the TS
  *   codec is iterative).
  *
- * Not ported: the `non-text-key` row (JS object keys are always text); the wire-payload tests
- * and the reducer tests (they need the codec and the run state).
+ * Not ported: the `non-text-key` row (JS object keys are always text); the reducer tests (they
+ * need the run state).
  */
 
 import { expect, test } from "bun:test";
 
-import { NodeStepRecord } from "../../src/runtime/log.ts";
+import { decodeRecord, encodeRecord, NodeStepRecord, RecordEnvelope, SCHEMA_VERSION } from "../../src/runtime/log.ts";
 import { FileRef, TypeCheckError } from "../../src/typesys/index.ts";
+import { JSONDecodeError, parseJson } from "../../src/typesys/json.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): unknown {
@@ -44,6 +52,60 @@ function nested(levels: number): Record<string, unknown> {
 }
 
 class Thing {}
+
+const FAILED = {
+  event: "failed",
+  attempt: 1n,
+  error: { type: "TimeoutError", message: "slow" },
+  retry_in: 1.5,
+};
+
+test("a node step round trips under its wire kind", () => {
+  const envelope = new RecordEnvelope(SCHEMA_VERSION, "run-1", 3, new NodeStepRecord("a", FAILED));
+
+  const encoded = encodeRecord(envelope);
+  const decoded = decodeRecord(encoded);
+
+  expect(decoded).toEqual(envelope);
+  expect(encodeRecord(decoded)).toBe(encoded);
+  const wire = parseJson(encoded, "codec") as Record<string, unknown>;
+  expect(wire["kind"]).toBe("node_step");
+  expect(wire["schema"]).toBe(10n);
+  expect(wire["payload"]).toEqual({ node_id: "a", step: FAILED });
+});
+
+test("a wire step keeps yian's infinity tag", () => {
+  const text =
+    '{"kind":"node_step","payload":{"node_id":"a","step":{"high":{"$float":"inf"}}},' +
+    '"run_id":"run-1","schema":10,"seq":0}';
+  const record = decodeRecord(text).record as NodeStepRecord;
+  expect(record.step).toEqual({ high: Infinity });
+  expect(encodeRecord(decodeRecord(text))).toBe(text);
+});
+
+test.each<[string, unknown, new (...args: never[]) => Error, string]>([
+  ["list", { node_id: "a", step: [1] }, TypeError, "node_step payload step must be an object"],
+  ["text", { node_id: "a", step: "text" }, TypeError, "node_step payload step must be an object"],
+  ["empty-node-id", { node_id: "", step: {} }, RangeError, "node_step payload node_id must be a non-empty string"],
+  ["missing-step", { node_id: "a" }, RangeError, 'invalid node_step payload fields; missing=["step"], extra=[]'],
+  [
+    "extra-field",
+    { node_id: "a", step: {}, extra: true },
+    RangeError,
+    'invalid node_step payload fields; missing=[], extra=["extra"]',
+  ],
+])("a node step wire payload rejects an invalid shape: %s", (_name, payload, cls, message) => {
+  const text = JSON.stringify({ schema: SCHEMA_VERSION, run_id: "run-1", seq: 0, kind: "node_step", payload });
+  expectError(() => decodeRecord(text), cls, message);
+});
+
+test("a node step wire payload rejects non-finite numbers", () => {
+  const text =
+    '{"schema":10,"run_id":"run-1","seq":0,"kind":"node_step","payload":{"node_id":"a","step":{"retry_in":NaN}}}';
+  const caught = expectError(() => decodeRecord(text), RangeError, "invalid run-record JSON") as Error;
+  expect((caught.cause as Error).constructor).toBe(JSONDecodeError);
+  expect((caught.cause as Error).message).toStartWith("NaN is not JSON");
+});
 
 test("a node step record detaches the caller's step", () => {
   const step = { event: "started", attempt: 2n, tags: ["x", "y"] };

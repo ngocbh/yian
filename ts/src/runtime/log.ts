@@ -11,7 +11,7 @@
  * Never imports: state, trace, engine, run, compile, compose, or the CLI.
  */
 
-import { compareCodeUnits, Failure, reprText } from "../diagnostics.ts";
+import { compareCodeUnits, Failure, OriginRef, reprText } from "../diagnostics.ts";
 import { type FeedbackValue, validateFeedback } from "../expr/lineage.ts";
 import {
   EvaluationEvidence,
@@ -24,7 +24,7 @@ import {
 } from "../memory/contracts.ts";
 import { BackwardResult, copyBackwardValue, retainFailure } from "../nodes/base.ts";
 import { comparePaths, isExactly, sameItems } from "../nodes/contracts.ts";
-import { type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
+import { JSONDecodeError, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import {
   buildValue,
   buildValueAs,
@@ -34,7 +34,7 @@ import {
   type ValueKind,
   VariablePool,
 } from "../typesys/index.ts";
-import { isList, isRecord, jsonPart, valueRepr, writeAsText } from "../typesys/values.ts";
+import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
 import { AttributedBackwardResult, BackwardOutcome, ForwardCapture, MemoryProposal } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
@@ -765,6 +765,9 @@ const RECORD_KINDS: ReadonlyMap<RunRecordClass, string> = new Map<RunRecordClass
 /** Every run-record class. */
 export const RUN_RECORD_TYPES: readonly RunRecordClass[] = Object.freeze([...RECORD_KINDS.keys()]);
 
+/** The closed set of wire kinds this schema reads. */
+const WIRE_KINDS: ReadonlySet<string> = new Set(RECORD_KINDS.values());
+
 /**
  * Return `value` when it is a non-empty string.
  *
@@ -943,6 +946,17 @@ function requireSchema(schema: unknown): void {
 }
 
 /**
+ * Check a decoded envelope's `schema` member.
+ *
+ * @throws RangeError when it isn't the int token `SCHEMA_VERSION`, naming Python yian for 9.
+ */
+function requireWireSchema(schema: unknown): void {
+  // Only an int token (a `bigint`) names a schema: a float token such as `10.0` reads as a number.
+  if (schema === 9n || schema === BigInt(SCHEMA_VERSION)) requireSchema(Number(schema));
+  else throw new RangeError(`unsupported run-record schema: ${valueRepr(schema)}`);
+}
+
+/**
  * Return a record's wire kind.
  *
  * @throws TypeError when `record` isn't exactly one of `RUN_RECORD_TYPES`.
@@ -997,4 +1011,249 @@ export class RecordEnvelope {
   get kind(): string {
     return kindForRecord(this.record);
   }
+
+  /** The record's deep-frozen canonical JSON payload, counters as `bigint`s. */
+  get payload(): Readonly<JsonObject> {
+    return freezeParsed(canonicalCopy(payloadForRecord(this.record)) as JsonObject);
+  }
+}
+
+/**
+ * Encode one envelope as its canonical run-log line: compact JSON, keys in code-unit order, no
+ * trailing newline (a JSONL log adds it). The frozen record is trusted as constructed.
+ *
+ * @throws TypeError when `envelope` isn't exactly a `RecordEnvelope`.
+ */
+export function encodeRecord(envelope: RecordEnvelope): string {
+  if (!isExactly(envelope, RecordEnvelope)) throw new TypeError("encodeRecord expects a RecordEnvelope");
+  return logJson({
+    schema: BigInt(envelope.schema),
+    run_id: envelope.runId,
+    seq: BigInt(envelope.seq),
+    kind: envelope.kind,
+    payload: payloadForRecord(envelope.record),
+  });
+}
+
+const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+/**
+ * Decode one run-log line into a validated envelope.
+ *
+ * `data` is one complete JSON object, as text or UTF-8 bytes, without a trailing newline. The
+ * envelope's `schema` is checked before anything else, so a Python log is named whatever else
+ * the line holds; the record is built through its constructor, so its checks apply.
+ *
+ * @throws RangeError when the line isn't JSON yian reads (`invalid run-record JSON`, with the
+ *   reader's error as `cause`), the schema isn't `SCHEMA_VERSION`, the kind is unknown, an object
+ *   has missing or extra fields, a string is empty, or a counter isn't a safe integer.
+ * @throws TypeError when `data` is neither text nor bytes, or a field has the wrong JSON type.
+ */
+export function decodeRecord(data: string | Uint8Array): RecordEnvelope {
+  let text: string;
+  if (typeof data === "string") {
+    text = data;
+  } else if (data instanceof Uint8Array) {
+    try {
+      // The BOM is kept, so the reader refuses it.
+      text = UTF8.decode(data);
+    } catch (error) {
+      throw new RangeError("invalid run-record JSON", { cause: error });
+    }
+  } else {
+    throw new TypeError("decodeRecord expects a string or a Uint8Array");
+  }
+  let raw: JsonValue;
+  try {
+    raw = parseJson(text, "codec");
+  } catch (error) {
+    if (error instanceof JSONDecodeError) throw new RangeError("invalid run-record JSON", { cause: error });
+    throw error;
+  }
+  if (!isRecord(raw)) throw new TypeError("run-record envelope must be an object");
+  if (Object.hasOwn(raw, "schema")) requireWireSchema(raw["schema"]);
+  const envelope = wireObject(raw, "run-record envelope", ["schema", "run_id", "seq", "kind", "payload"]);
+  const runId = wireName(envelope["run_id"], "run-record envelope run_id");
+  const seq = wireInt(envelope["seq"], "run-record envelope seq");
+  const kind = wireText(envelope["kind"], "run-record envelope kind");
+  if (!WIRE_KINDS.has(kind)) {
+    throw new RangeError(`run-record kind ${reprText(kind)} is unsupported in schema ${SCHEMA_VERSION}`);
+  }
+  const payload = wireObject(envelope["payload"], "run-record envelope payload");
+  return new RecordEnvelope(SCHEMA_VERSION, runId, seq, recordFromPayload(kind, payload));
+}
+
+/** Return a failure's wire object, shared by the failure-bearing records. */
+function failurePayload(failure: Failure): JsonObject {
+  return failure.toJSON();
+}
+
+/**
+ * Rebuild a `Failure` from its wire object; `label` names it in errors. Its node id must be a
+ * non-empty string.
+ *
+ * @throws RangeError for missing or extra fields, an empty node id or origin key, or an unknown
+ *   code.
+ * @throws TypeError when a field has the wrong JSON type.
+ */
+function failureFromPayload(value: unknown, label: string): Failure {
+  const wire = wireObject(value, label, ["code", "message", "node_id", "trace", "cause_type", "traceback"]);
+  const code = wireText(wire["code"], `${label} code`);
+  const message = wireText(wire["message"], `${label} message`);
+  const nodeId = wireName(wire["node_id"], `${label} node_id`);
+  const trace = wireArray(wire["trace"], `${label} trace`).map((item) => {
+    const origin = wireObject(item, `${label} trace item`, ["key"]);
+    return new OriginRef(wireName(origin["key"], `${label} trace item key`));
+  });
+  return new Failure({
+    code: code as Failure["code"],
+    message,
+    nodeId,
+    trace,
+    causeType: wireNullableText(wire["cause_type"], `${label} cause_type`),
+    traceback: wireNullableText(wire["traceback"], `${label} traceback`),
+  });
+}
+
+/** Build the canonical JSON payload of one record; counters are written as `bigint`s. */
+function payloadForRecord(record: RunRecord): JsonObject {
+  const kind = kindForRecord(record);
+  if (record instanceof RunResumedRecord) {
+    return { retry_node_ids: [...record.retryNodeIds], num_workers: BigInt(record.numWorkers) };
+  }
+  if (record instanceof RunStoppedRecord) {
+    return { reason: record.reason, message: record.message, node_ids: [...record.nodeIds] };
+  }
+  if (record instanceof NodeStartedRecord) return { node_id: record.nodeId };
+  if (record instanceof NodeStepRecord) return { node_id: record.nodeId, step: record.step as JsonObject };
+  if (record instanceof NodeFailedRecord) {
+    if (record.evidence !== null || record.forwardCapture !== null) {
+      throw new Error("node_failed evidence and forward captures are not encoded yet");
+    }
+    return { failure: failurePayload(record.failure), evidence: null, forward_capture: null };
+  }
+  throw new Error(`${kind} records are not encoded yet`);
+}
+
+/**
+ * Build the record of wire kind `kind` from its payload object, through the record's
+ * constructor.
+ *
+ * @throws RangeError for missing or extra fields, an empty id or a counter that isn't a safe
+ *   integer, besides the constructor's own errors.
+ * @throws TypeError when a field has the wrong JSON type.
+ */
+function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
+  const label = `${kind} payload`;
+  switch (kind) {
+    case "run_resumed":
+      requireFields(payload, ["retry_node_ids", "num_workers"], label);
+      return new RunResumedRecord(
+        wireTextArray(payload["retry_node_ids"], `${label} retry_node_ids`),
+        wireInt(payload["num_workers"], `${label} num_workers`),
+      );
+    case "run_stopped":
+      requireFields(payload, ["reason", "message", "node_ids"], label);
+      return new RunStoppedRecord(
+        wireText(payload["reason"], `${label} reason`) as RunStopReason,
+        wireText(payload["message"], `${label} message`),
+        wireTextArray(payload["node_ids"], `${label} node_ids`),
+      );
+    case "node_started":
+      requireFields(payload, ["node_id"], label);
+      return new NodeStartedRecord(wireName(payload["node_id"], `${label} node_id`));
+    case "node_step":
+      requireFields(payload, ["node_id", "step"], label);
+      return new NodeStepRecord(
+        wireName(payload["node_id"], `${label} node_id`),
+        wireObject(payload["step"], `${label} step`),
+      );
+    case "node_failed":
+      requireFields(payload, ["failure", "evidence", "forward_capture"], label);
+      if (payload["evidence"] !== null || payload["forward_capture"] !== null) {
+        throw new Error("node_failed evidence and forward captures are not encoded yet");
+      }
+      return new NodeFailedRecord(failureFromPayload(payload["failure"], `${label} failure`));
+    default:
+      throw new Error(`${kind} records are not encoded yet`);
+  }
+}
+
+/**
+ * Return `value` when it is a JSON object, with exactly `fields` when they are given.
+ *
+ * @throws TypeError when it isn't an object.
+ * @throws RangeError when it has missing or extra fields.
+ */
+function wireObject(value: unknown, label: string, fields?: readonly string[]): JsonObject {
+  if (!isRecord(value)) throw new TypeError(`${label} must be an object`);
+  if (fields !== undefined) requireFields(value, fields, label);
+  return value as JsonObject;
+}
+
+/**
+ * Return `value` when it is a JSON array.
+ *
+ * @throws TypeError otherwise.
+ */
+function wireArray(value: unknown, label: string): JsonValue[] {
+  if (!isList(value)) throw new TypeError(`${label} must be an array`);
+  return value as JsonValue[];
+}
+
+/**
+ * Return `value` when it is an array of strings; emptiness, uniqueness and order are the record's checks.
+ *
+ * @throws TypeError otherwise.
+ */
+function wireTextArray(value: unknown, label: string): string[] {
+  if (!isList(value) || !value.every((item) => typeof item === "string")) {
+    throw new TypeError(`${label} must be an array of strings`);
+  }
+  return value as string[];
+}
+
+/**
+ * Return `value` when it is a string.
+ *
+ * @throws TypeError otherwise.
+ */
+function wireText(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new TypeError(`${label} must be a string`);
+  return value;
+}
+
+/**
+ * Return `value` when it is a string or `null`.
+ *
+ * @throws TypeError otherwise.
+ */
+function wireNullableText(value: unknown, label: string): string | null {
+  if (value !== null && typeof value !== "string") throw new TypeError(`${label} must be a string or null`);
+  return value;
+}
+
+/**
+ * Return `value` when it is a non-empty string.
+ *
+ * @throws TypeError when it isn't a string.
+ * @throws RangeError when it is empty.
+ */
+function wireName(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new TypeError(`${label} must be a non-empty string`);
+  if (!value) throw new RangeError(`${label} must be a non-empty string`);
+  return value;
+}
+
+/**
+ * Return an int token (a `bigint`) as a `number`.
+ *
+ * @throws TypeError when `value` isn't an int token (a float token, a boolean, ...).
+ * @throws RangeError when it is beyond ±(2^53 - 1).
+ */
+function wireInt(value: unknown, label: string): number {
+  if (typeof value !== "bigint") throw new TypeError(`${label} must be an integer`);
+  const number = Number(value);
+  if (!Number.isSafeInteger(number)) throw new RangeError(`${label} must be a safe integer`);
+  return number;
 }

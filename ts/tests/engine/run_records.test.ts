@@ -11,6 +11,23 @@
  * values and held arrays too; assignment is a `TypeError`). Python's `ValueError` is a
  * `RangeError` here.
  *
+ * Ported, the wire codec tests (each row with its exact class and message; a field of the wrong
+ * JSON type is a `TypeError`): `test_record_encoding_is_canonical_newline_free_and_byte_stable`
+ * (`"schema":10`), `test_node_failure_encoding_nests_one_canonical_failure`,
+ * `test_removed_frame_learning_wire_kinds_are_rejected`,
+ * `test_removed_conversation_wire_kinds_are_rejected` (the module has no such export),
+ * `test_decode_rejects_invalid_envelopes` (literal JSON text, so `10.0` stays a float token),
+ * `test_decode_rejects_unknown_missing_and_wrong_payload_fields` (all rows but `node_succeeded`),
+ * `test_decode_rejects_malformed_nested_failures` (20 rows),
+ * `test_node_failure_rejects_legacy_location_fields`,
+ * `test_decode_rejects_old_schemas_even_with_a_nested_failure` (1-8, and 9 naming Python yian),
+ * `test_decode_rejects_flattened_failure_aliases`,
+ * `test_decode_rejects_duplicate_keys_at_any_object_depth` (`invalid run-record JSON`, caused by
+ * the reader's `JSONDecodeError` `duplicate JSON object key: "node_id"`, double-quoted),
+ * `test_invalid_record_json_keeps_its_message`, and the round-trip rows of
+ * `test_every_record_round_trips_through_a_validated_envelope` for `run_resumed`,
+ * `run_stopped`, `node_started`, `node_step` and `node_failed` (each also decoded from bytes).
+ *
  * TS-only: a seed keeps `±Infinity` as a float (a TS yian value, unlike Python's); a seed's
  * record keys come out in code-unit order; the envelope's schema rows (7, 8 and 11 are
  * unsupported, 9 names Python yian, a boolean is unsupported, and the schema is checked first),
@@ -23,11 +40,23 @@
  * configuration that isn't a JSON object, a bad commit identity, mutation batch or failure, and
  * a backward carrier of another class, refused by the run-start, memory-commit and backward
  * records; `RUN_RECORD_TYPES`; carriers held by reference and failures and values held as
- * frozen copies.
+ * frozen copies. On the wire: a line starting with a UTF-8 BOM (bytes or text) and a line that
+ * isn't UTF-8 are `invalid run-record JSON`; data that is neither text nor bytes; the `run_stopped`
+ * round trip and its unknown-reason, extra-field, non-text and repeated-id rows; the
+ * `run_resumed` float-counter, negative-counter and text-ids rows; envelope rows for a float or
+ * too-large `seq`, a non-text run id or kind, a non-object payload or envelope, a missing schema,
+ * and schema 9 named before anything else is checked; an empty `node_started` node id, a
+ * non-text failure code, a failure or origin that isn't an object.
  *
  * Changed:
  * - `test_encode_validates_programmatically_constructed_envelopes`: the record's constructor
- *   refuses the bad node id and the non-`Failure` (Python refused them at encode).
+ *   refuses the bad node id and the non-`Failure` (Python refused them at encode); `encodeRecord`
+ *   refuses an object that isn't a `RecordEnvelope`.
+ * - `test_canonical_json_rejects_lone_unicode_surrogates_as_value_errors`: the seed rows are the
+ *   value layer's `TypeCheckError`, the run-id row the envelope's `RangeError`, and the decode
+ *   row reads `invalid run-record JSON` (the reader refuses the surrogate).
+ * - Python's retired schemas 7 and 8 read `unsupported run-record schema: N` like every schema
+ *   below 10.
  * - `test_encode_rejects_invalid_id_tuple_carriers`: the 9 rows are constructor rejections
  *   (Python refused them at encode); "tuple" reads "array".
  * - `test_typed_object_output_rejects_a_non_json_member`: Python's date and datetime rows are one
@@ -58,7 +87,7 @@
 
 import { expect, test } from "bun:test";
 
-import { Failure } from "../../src/diagnostics.ts";
+import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { ValueRoute } from "../../src/expr/lineage.ts";
 import { EvaluationEvidence, MemoryOperationFailure } from "../../src/memory/contracts.ts";
 import { BackwardResult } from "../../src/nodes/base.ts";
@@ -70,7 +99,9 @@ import {
   canonicalSeed,
   canonicalTyped,
   decodePool,
+  decodeRecord,
   encodePool,
+  encodeRecord,
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
@@ -83,12 +114,14 @@ import {
   RecordEnvelope,
   RUN_RECORD_TYPES,
   RUN_STOP_REASONS,
+  type RunRecord,
   RunResumedRecord,
   type RunStartedFields,
   RunStartedRecord,
   RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
+import * as runLog from "../../src/runtime/log.ts";
 import {
   FileRef,
   type PoolWire,
@@ -98,6 +131,7 @@ import {
   ValueKind,
   VariablePool,
 } from "../../src/typesys/index.ts";
+import { JSONDecodeError, parseJson } from "../../src/typesys/json.ts";
 
 /** Assert `fn` throws a `TypeCheckError` with exactly `message` at `path`. */
 function expectTypeCheck(fn: () => unknown, message: string, path: readonly (string | number)[]): void {
@@ -724,4 +758,625 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
   ["a non-text message", () => new RunStoppedRecord("signal", 3 as never, []), TypeError, "message must be a string"],
 ])("a run-stopped record refuses %s", (_name, fn, cls, message) => {
   expectError(fn, cls, message);
+});
+
+/** Return `wire` as one JSON line; a JS number is written as an int token when it is integral. */
+function line(wire: unknown): string {
+  return JSON.stringify(wire);
+}
+
+/** Assert that decoding `data` throws RangeError `invalid run-record JSON` caused by `cause`. */
+function expectInvalidJson(data: string | Uint8Array, cause: new (...args: never[]) => Error, reason: string): void {
+  let caught: unknown;
+  try {
+    decodeRecord(data);
+  } catch (error) {
+    caught = error;
+  }
+  expect((caught as Error | undefined)?.constructor).toBe(RangeError);
+  expect((caught as Error).message).toBe("invalid run-record JSON");
+  const why = (caught as Error).cause as Error;
+  expect(why.constructor).toBe(cause);
+  expect(why.message).toStartWith(reason);
+}
+
+const ROUND_TRIP_RECORDS: [string, RunRecord][] = [
+  ["RunResumedRecord", new RunResumedRecord(["slow", "later"], 4)],
+  ["RunStoppedRecord", new RunStoppedRecord("callback", "the host callback threw", ["b", "a"])],
+  ["NodeStartedRecord", new NodeStartedRecord("agent")],
+  ["NodeStepRecord", new NodeStepRecord("agent", { event: "started", attempt: 2n })],
+  [
+    "NodeFailedRecord",
+    new NodeFailedRecord(
+      new Failure({
+        code: "node.execute",
+        message: "boom",
+        nodeId: "broken",
+        trace: [new OriginRef("root/nodes/broken/code")],
+        causeType: "ValueError",
+        traceback: "Traceback (most recent call last): ...",
+      }),
+    ),
+  ],
+];
+
+test.each(ROUND_TRIP_RECORDS)("every record round trips through a validated envelope: %s", (_name, record) => {
+  const envelope = new RecordEnvelope(SCHEMA_VERSION, "run-123", 0, record);
+
+  const encoded = encodeRecord(envelope);
+  const decoded = decodeRecord(encoded);
+
+  expect(decoded).toEqual(envelope);
+  expect(decoded.record.constructor).toBe(record.constructor);
+  expect(encodeRecord(decoded)).toBe(encoded);
+  expect(decoded.kind).toBe(envelope.kind);
+  expect(decoded.payload).toEqual((parseJson(encoded, "codec") as { payload: unknown }).payload as never);
+  expect(Object.isFrozen(decoded.payload)).toBe(true);
+  expect(decodeRecord(new TextEncoder().encode(encoded))).toEqual(envelope);
+});
+
+test.each([
+  ["memory_frame_learning_started", { occurrences: [] }],
+  ["memory_frame_learned", { mutations: [] }],
+  [
+    "memory_frame_learning_failed",
+    { failure: { stage: "learn", code: "declined", message: "Declined.", retryable: true } },
+  ],
+])("removed frame-learning wire kinds are rejected: %s", (kind, extra) => {
+  const wire = {
+    schema: SCHEMA_VERSION,
+    run_id: "run",
+    seq: 0,
+    kind,
+    payload: {
+      policy_name: "history",
+      frame_ref: { root_flow_id: "root", static_path: ["root"], owner: "flow" },
+      ...extra,
+    },
+  };
+  expectError(() => decodeRecord(line(wire)), RangeError, `run-record kind '${kind}' is unsupported in schema 10`);
+});
+
+const CONVERSATION_KINDS = [
+  "conversation_admitted",
+  "conversation_effect_requested",
+  "conversation_effect_observed",
+  "conversation_closed",
+];
+
+test.each(CONVERSATION_KINDS)(
+  "removed conversation wire kinds are rejected: %s",
+  (kind) => {
+    const wire = { schema: SCHEMA_VERSION, run_id: "run", seq: 0, kind, payload: { checkpoint: {} } };
+    expectError(() => decodeRecord(line(wire)), RangeError, `run-record kind '${kind}' is unsupported in schema 10`);
+    const recordName = `${kind
+      .split("_")
+      .map((part) => part[0]!.toUpperCase() + part.slice(1))
+      .join("")}Record`;
+    expect(Object.hasOwn(runLog, recordName)).toBe(false);
+  },
+);
+
+test("record encoding is canonical, newline-free and byte-stable", () => {
+  const envelope = new RecordEnvelope(SCHEMA_VERSION, "run-canonical", 0, new NodeStartedRecord("work"));
+
+  const encoded = encodeRecord(envelope);
+
+  expect(encoded).toBe(
+    '{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run-canonical","schema":10,"seq":0}',
+  );
+  expect(encoded.endsWith("\n")).toBe(false);
+  expect(encodeRecord(decodeRecord(encoded))).toBe(encoded);
+});
+
+test("a node failure encoding nests one canonical failure", () => {
+  const envelope = new RecordEnvelope(
+    SCHEMA_VERSION,
+    "run-failure",
+    7,
+    new NodeFailedRecord(
+      new Failure({
+        code: "contract.input",
+        message: "bad input",
+        nodeId: "__start__",
+        trace: [new OriginRef("root/input/window"), new OriginRef("root/type/window")],
+        causeType: "TypeCheckError",
+        traceback: null,
+      }),
+    ),
+  );
+
+  const encoded = encodeRecord(envelope);
+
+  expect(JSON.parse(encoded)).toEqual({
+    schema: 10,
+    run_id: "run-failure",
+    seq: 7,
+    kind: "node_failed",
+    payload: {
+      evidence: null,
+      forward_capture: null,
+      failure: {
+        code: "contract.input",
+        message: "bad input",
+        node_id: "__start__",
+        trace: [{ key: "root/input/window" }, { key: "root/type/window" }],
+        cause_type: "TypeCheckError",
+        traceback: null,
+      },
+    },
+  });
+  expect(decodeRecord(encoded)).toEqual(envelope);
+});
+
+const NODE_STARTED = '"kind":"node_started","payload":{"node_id":"work"}';
+
+test.each<[string, string, new (...args: never[]) => Error, string]>([
+  ["schema 1", `{"schema":1,"run_id":"run","seq":0,${NODE_STARTED}}`, RangeError, "unsupported run-record schema: 1"],
+  [
+    "schema true",
+    `{"schema":true,"run_id":"run","seq":0,${NODE_STARTED}}`,
+    RangeError,
+    "unsupported run-record schema: true",
+  ],
+  // A float token reads as a number, never as a schema.
+  [
+    "schema 10.0",
+    `{"schema":10.0,"run_id":"run","seq":0,${NODE_STARTED}}`,
+    RangeError,
+    "unsupported run-record schema: 10",
+  ],
+  [
+    "an empty run id",
+    `{"schema":10,"run_id":"","seq":0,${NODE_STARTED}}`,
+    RangeError,
+    "run-record envelope run_id must be a non-empty string",
+  ],
+  [
+    "seq -1",
+    `{"schema":10,"run_id":"run","seq":-1,${NODE_STARTED}}`,
+    RangeError,
+    "run-record envelope seq must be a non-negative integer",
+  ],
+  [
+    "seq true",
+    `{"schema":10,"run_id":"run","seq":true,${NODE_STARTED}}`,
+    TypeError,
+    "run-record envelope seq must be an integer",
+  ],
+  [
+    "an unknown kind",
+    '{"schema":10,"run_id":"run","seq":0,"kind":"not_a_record","payload":{}}',
+    RangeError,
+    "run-record kind 'not_a_record' is unsupported in schema 10",
+  ],
+  [
+    "an extra key",
+    `{"schema":10,"run_id":"run","seq":0,${NODE_STARTED},"unexpected":true}`,
+    RangeError,
+    'invalid run-record envelope fields; missing=[], extra=["unexpected"]',
+  ],
+  [
+    "a missing payload",
+    '{"schema":10,"run_id":"run","seq":0,"kind":"node_started"}',
+    RangeError,
+    'invalid run-record envelope fields; missing=["payload"], extra=[]',
+  ],
+  // TS-only rows.
+  [
+    "seq 0.0",
+    `{"schema":10,"run_id":"run","seq":0.0,${NODE_STARTED}}`,
+    TypeError,
+    "run-record envelope seq must be an integer",
+  ],
+  [
+    "seq past 2^53 - 1",
+    `{"schema":10,"run_id":"run","seq":9007199254740992,${NODE_STARTED}}`,
+    RangeError,
+    "run-record envelope seq must be a safe integer",
+  ],
+  [
+    "a non-text run id",
+    `{"schema":10,"run_id":7,"seq":0,${NODE_STARTED}}`,
+    TypeError,
+    "run-record envelope run_id must be a non-empty string",
+  ],
+  [
+    "a non-text kind",
+    '{"schema":10,"run_id":"run","seq":0,"kind":7,"payload":{}}',
+    TypeError,
+    "run-record envelope kind must be a string",
+  ],
+  [
+    "a payload that isn't an object",
+    '{"schema":10,"run_id":"run","seq":0,"kind":"node_started","payload":[]}',
+    TypeError,
+    "run-record envelope payload must be an object",
+  ],
+  ["an envelope that isn't an object", "[10]", TypeError, "run-record envelope must be an object"],
+  [
+    "a missing schema",
+    `{"run_id":"run","seq":0,${NODE_STARTED}}`,
+    RangeError,
+    'invalid run-record envelope fields; missing=["schema"], extra=[]',
+  ],
+  [
+    "a Python schema whatever else the line holds",
+    '{"schema":9,"seq":"x","kind":"node_frobbed","extra":1}',
+    RangeError,
+    "run log schema 9 was written by Python yian; resume it with Python yian",
+  ],
+])("decode rejects an invalid envelope: %s", (_name, text, cls, message) => {
+  expectError(() => decodeRecord(text), cls, message);
+});
+
+test.each<[string, unknown, new (...args: never[]) => Error, string]>([
+  [
+    "an unknown node_started field",
+    { node_id: "work", unexpected: true },
+    RangeError,
+    'invalid node_started payload fields; missing=[], extra=["unexpected"]',
+  ],
+  [
+    "a missing node_started field",
+    {},
+    RangeError,
+    'invalid node_started payload fields; missing=["node_id"], extra=[]',
+  ],
+  ["a non-text node id", { node_id: 7 }, TypeError, "node_started payload node_id must be a non-empty string"],
+  // TS-only.
+  ["an empty node id", { node_id: "" }, RangeError, "node_started payload node_id must be a non-empty string"],
+])("decode rejects unknown, missing and wrong payload fields: %s", (_name, payload, cls, message) => {
+  const wire = { schema: 10, run_id: "run", seq: 0, kind: "node_started", payload };
+  expectError(() => decodeRecord(line(wire)), cls, message);
+});
+
+test("decode rejects a node failure with a legacy locator and no carriers", () => {
+  const wire = {
+    schema: 10,
+    run_id: "run",
+    seq: 0,
+    kind: "node_failed",
+    payload: {
+      failure: {
+        code: "node.execute",
+        message: "boom",
+        node_id: "work",
+        trace: [],
+        cause_type: "ValueError",
+        traceback: null,
+      },
+      locator: null,
+    },
+  };
+  expectError(
+    () => decodeRecord(line(wire)),
+    RangeError,
+    'invalid node_failed payload fields; missing=["evidence","forward_capture"], extra=["locator"]',
+  );
+});
+
+type FailureWire = {
+  schema: number;
+  run_id: string;
+  seq: number;
+  kind: string;
+  payload: Record<string, unknown> & { failure: Record<string, unknown> };
+};
+
+/** Return one independently mutable valid node-failure wire object. */
+function nodeFailureWire(): FailureWire {
+  return {
+    schema: 10,
+    run_id: "run",
+    seq: 0,
+    kind: "node_failed",
+    payload: {
+      evidence: null,
+      forward_capture: null,
+      failure: {
+        code: "node.execute",
+        message: "boom",
+        node_id: "work",
+        trace: [{ key: "root/nodes/work/code" }],
+        cause_type: "ValueError",
+        traceback: "trace",
+      },
+    },
+  };
+}
+
+test("a valid node-failure wire decodes", () => {
+  const decoded = decodeRecord(line(nodeFailureWire()));
+  expect((decoded.record as NodeFailedRecord).failure.trace[0]!.key).toBe("root/nodes/work/code");
+});
+
+const FAILURE_LABEL = "node_failed payload failure";
+
+test.each<[string, (payload: FailureWire["payload"]) => void, new (...args: never[]) => Error, string]>([
+  [
+    "missing-failure",
+    (p) => delete (p as Record<string, unknown>)["failure"],
+    RangeError,
+    'invalid node_failed payload fields; missing=["failure"], extra=[]',
+  ],
+  [
+    "extra-payload",
+    (p) => (p["extra"] = true),
+    RangeError,
+    'invalid node_failed payload fields; missing=[], extra=["extra"]',
+  ],
+  [
+    "missing-code",
+    (p) => delete p.failure["code"],
+    RangeError,
+    `invalid ${FAILURE_LABEL} fields; missing=["code"], extra=[]`,
+  ],
+  [
+    "missing-message",
+    (p) => delete p.failure["message"],
+    RangeError,
+    `invalid ${FAILURE_LABEL} fields; missing=["message"], extra=[]`,
+  ],
+  [
+    "missing-node-id",
+    (p) => delete p.failure["node_id"],
+    RangeError,
+    `invalid ${FAILURE_LABEL} fields; missing=["node_id"], extra=[]`,
+  ],
+  [
+    "missing-trace",
+    (p) => delete p.failure["trace"],
+    RangeError,
+    `invalid ${FAILURE_LABEL} fields; missing=["trace"], extra=[]`,
+  ],
+  [
+    "missing-cause-type",
+    (p) => delete p.failure["cause_type"],
+    RangeError,
+    `invalid ${FAILURE_LABEL} fields; missing=["cause_type"], extra=[]`,
+  ],
+  [
+    "missing-traceback",
+    (p) => delete p.failure["traceback"],
+    RangeError,
+    `invalid ${FAILURE_LABEL} fields; missing=["traceback"], extra=[]`,
+  ],
+  ["unknown-code", (p) => (p.failure["code"] = "node.unknown"), RangeError, "unknown failure code 'node.unknown'"],
+  ["wrong-message", (p) => (p.failure["message"] = 7), TypeError, `${FAILURE_LABEL} message must be a string`],
+  [
+    "null-node-id",
+    (p) => (p.failure["node_id"] = null),
+    TypeError,
+    `${FAILURE_LABEL} node_id must be a non-empty string`,
+  ],
+  [
+    "empty-node-id",
+    (p) => (p.failure["node_id"] = ""),
+    RangeError,
+    `${FAILURE_LABEL} node_id must be a non-empty string`,
+  ],
+  [
+    "wrong-trace-container",
+    (p) => (p.failure["trace"] = "origin"),
+    TypeError,
+    `${FAILURE_LABEL} trace must be an array`,
+  ],
+  [
+    "missing-origin-key",
+    (p) => (p.failure["trace"] = [{}]),
+    RangeError,
+    `invalid ${FAILURE_LABEL} trace item fields; missing=["key"], extra=[]`,
+  ],
+  [
+    "empty-origin-key",
+    (p) => (p.failure["trace"] = [{ key: "" }]),
+    RangeError,
+    `${FAILURE_LABEL} trace item key must be a non-empty string`,
+  ],
+  [
+    "wrong-origin-key",
+    (p) => (p.failure["trace"] = [{ key: 7 }]),
+    TypeError,
+    `${FAILURE_LABEL} trace item key must be a non-empty string`,
+  ],
+  [
+    "extra-origin-field",
+    (p) => (p.failure["trace"] = [{ key: "origin", site: "legacy" }]),
+    RangeError,
+    `invalid ${FAILURE_LABEL} trace item fields; missing=[], extra=["site"]`,
+  ],
+  [
+    "extra-failure-field",
+    (p) => (p.failure["error"] = "legacy"),
+    RangeError,
+    `invalid ${FAILURE_LABEL} fields; missing=[], extra=["error"]`,
+  ],
+  [
+    "wrong-cause-type",
+    (p) => (p.failure["cause_type"] = 7),
+    TypeError,
+    `${FAILURE_LABEL} cause_type must be a string or null`,
+  ],
+  [
+    "wrong-traceback",
+    (p) => (p.failure["traceback"] = []),
+    TypeError,
+    `${FAILURE_LABEL} traceback must be a string or null`,
+  ],
+  // TS-only.
+  ["wrong-code", (p) => (p.failure["code"] = 7), TypeError, `${FAILURE_LABEL} code must be a string`],
+  ["failure-not-object", (p) => (p.failure = [] as never), TypeError, `${FAILURE_LABEL} must be an object`],
+  [
+    "origin-not-object",
+    (p) => (p.failure["trace"] = ["origin"]),
+    TypeError,
+    `${FAILURE_LABEL} trace item must be an object`,
+  ],
+])("decode rejects a malformed nested failure: %s", (_name, mutate, cls, message) => {
+  const wire = nodeFailureWire();
+  mutate(wire.payload);
+  expectError(() => decodeRecord(line(wire)), cls, message);
+});
+
+test.each(["locator", "range"])("a node failure rejects the legacy location field %s", (field) => {
+  const wire = nodeFailureWire();
+  wire.payload[field] = null;
+  expectError(
+    () => decodeRecord(line(wire)),
+    RangeError,
+    `invalid node_failed payload fields; missing=[], extra=[${JSON.stringify(field)}]`,
+  );
+});
+
+test.each([1, 2, 3, 4, 5, 6, 7, 8, 9])("decode rejects old schema %d even with a nested failure", (schema) => {
+  const wire = nodeFailureWire();
+  wire.schema = schema;
+  const message =
+    schema === 9
+      ? "run log schema 9 was written by Python yian; resume it with Python yian"
+      : `unsupported run-record schema: ${schema}`;
+  expectError(() => decodeRecord(line(wire)), RangeError, message);
+});
+
+test("decode rejects flattened failure aliases", () => {
+  const wire = nodeFailureWire();
+  wire.payload = {
+    node_id: "work",
+    error: "boom",
+    error_type: "ValueError",
+    locator: null,
+    range: null,
+    traceback: "trace",
+  } as never;
+  expectError(
+    () => decodeRecord(line(wire)),
+    RangeError,
+    'invalid node_failed payload fields; missing=["evidence","failure","forward_capture"], ' +
+      'extra=["error","error_type","locator","node_id","range","traceback"]',
+  );
+});
+
+test("decode rejects duplicate keys at any object depth", () => {
+  expectInvalidJson(
+    '{"schema":10,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"first","node_id":"second"}}',
+    JSONDecodeError,
+    'duplicate JSON object key: "node_id"',
+  );
+  expectInvalidJson(
+    '{"schema":10,"run_id":"run","seq":0,"kind":"node_failed",' +
+      '"payload":{"failure":{"code":"node.execute","message":"boom",' +
+      '"node_id":"work","trace":[{"key":"one","key":"two"}],' +
+      '"cause_type":null,"traceback":null}}}',
+    JSONDecodeError,
+    'duplicate JSON object key: "key"',
+  );
+});
+
+test("encode validates programmatically constructed envelopes", () => {
+  const forged = { schema: SCHEMA_VERSION, runId: "run", seq: 0, record: new NodeStartedRecord("work") };
+  expectError(() => encodeRecord(forged as never), TypeError, "encodeRecord expects a RecordEnvelope");
+});
+
+test("canonical JSON rejects lone Unicode surrogates", () => {
+  const surrogate = "\ud800";
+
+  expectTypeCheck(() => canonicalSeed({ nested: [surrogate] }), "text holding a lone surrogate is not a yian value", [
+    "nested",
+    0,
+  ]);
+  expectTypeCheck(
+    () => canonicalSeed({ [surrogate]: "nested key" }),
+    "text holding a lone surrogate is not a yian value",
+    [],
+  );
+  expectError(
+    () => new RecordEnvelope(SCHEMA_VERSION, surrogate, 0, new NodeStartedRecord("work")),
+    RangeError,
+    "Unicode surrogate is not valid canonical JSON",
+  );
+  expectInvalidJson(
+    '{"schema":10,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"\\ud800"}}',
+    JSONDecodeError,
+    "string has an unpaired surrogate",
+  );
+});
+
+test("invalid record JSON keeps its message", () => {
+  expectInvalidJson(new TextEncoder().encode('{"schema": 9, '), JSONDecodeError, "Expecting property name");
+});
+
+test("a line with a UTF-8 BOM is invalid record JSON", () => {
+  const envelope = new RecordEnvelope(SCHEMA_VERSION, "run", 0, new NodeStartedRecord("work"));
+  const encoded = new TextEncoder().encode(encodeRecord(envelope));
+  const withBom = new Uint8Array([0xef, 0xbb, 0xbf, ...encoded]);
+  expectInvalidJson(withBom, JSONDecodeError, "Unexpected UTF-8 BOM");
+  expectInvalidJson(`\ufeff${new TextDecoder().decode(encoded)}`, JSONDecodeError, "Unexpected UTF-8 BOM");
+});
+
+test("a line that isn't UTF-8 is invalid record JSON", () => {
+  const bytes = new TextEncoder().encode(
+    '{"schema":10,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"x"}}',
+  );
+  bytes[bytes.indexOf(0x78)] = 0xff;
+  expectInvalidJson(bytes, TypeError, "");
+});
+
+test("decode refuses data that is neither text nor bytes", () => {
+  expectError(() => decodeRecord(7 as never), TypeError, "decodeRecord expects a string or a Uint8Array");
+});
+
+test.each<[string, unknown, new (...args: never[]) => Error, string]>([
+  [
+    "an unknown reason",
+    { reason: "timeout", message: "stop", node_ids: [] },
+    RangeError,
+    `reason must be one of ["signal","callback"], got 'timeout'`,
+  ],
+  [
+    "an extra field",
+    { reason: "signal", message: "stop", node_ids: [], extra: true },
+    RangeError,
+    'invalid run_stopped payload fields; missing=[], extra=["extra"]',
+  ],
+  [
+    "a non-text reason",
+    { reason: 7, message: "stop", node_ids: [] },
+    TypeError,
+    "run_stopped payload reason must be a string",
+  ],
+  [
+    "a non-text node id",
+    { reason: "signal", message: "stop", node_ids: [7] },
+    TypeError,
+    "run_stopped payload node_ids must be an array of strings",
+  ],
+  [
+    "a repeated node id",
+    { reason: "signal", message: "stop", node_ids: ["a", "a"] },
+    RangeError,
+    "node_ids must contain unique IDs",
+  ],
+])("decode rejects a run_stopped payload with %s", (_name, payload, cls, message) => {
+  const wire = { schema: 10, run_id: "run", seq: 0, kind: "run_stopped", payload };
+  expectError(() => decodeRecord(line(wire)), cls, message);
+});
+
+test.each<[string, string, new (...args: never[]) => Error, string]>([
+  [
+    "float workers",
+    '{"retry_node_ids":[],"num_workers":1.0}',
+    TypeError,
+    "run_resumed payload num_workers must be an integer",
+  ],
+  ["negative workers", '{"retry_node_ids":[],"num_workers":-1}', RangeError, "num_workers must be non-negative"],
+  [
+    "text retry ids",
+    '{"retry_node_ids":"ab","num_workers":1}',
+    TypeError,
+    "run_resumed payload retry_node_ids must be an array of strings",
+  ],
+])("decode rejects a run_resumed payload with %s (TS-only)", (_name, payload, cls, message) => {
+  const text = `{"schema":10,"run_id":"run","seq":0,"kind":"run_resumed","payload":${payload}}`;
+  expectError(() => decodeRecord(text), cls, message);
 });

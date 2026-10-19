@@ -1,0 +1,51 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "continuation: finishReason CONTINUATION with a continuationToken: protocol, not retried, no second request.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-goog-api-key": "<redacted>"
+        },
+        "json": {
+          "contents": [
+            {
+              "role": "user",
+              "parts": [
+                {
+                  "text": "Say hello."
+                }
+              ]
+            }
+          ],
+          "systemInstruction": {
+            "parts": [
+              {
+                "text": "You are terse."
+              }
+            ]
+          },
+          "safetySettings": [],
+          "generationConfig": {
+            "candidateCount": 1
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"candidates\": [{\"content\": {\"role\": \"model\", \"parts\": [{\"text\": \"Hello\"}]}, \"index\": 0}], \"usageMetadata\": {\"promptTokenCount\": 12, \"candidatesTokenCount\": 40, \"thoughtsTokenCount\": 25, \"cachedContentTokenCount\": 8, \"totalTokenCount\": 77}, \"modelVersion\": \"gemini-2.5-flash\", \"responseId\": \"resp-1\"}\r\n\r\n",
+          "data: {\"candidates\": [{\"content\": {\"role\": \"model\", \"parts\": [{\"text\": \" there.\"}]}, \"index\": 0, \"finishReason\": \"CONTINUATION\", \"continuationToken\": \"tok-1\"}], \"usageMetadata\": {\"promptTokenCount\": 12, \"candidatesTokenCount\": 40, \"thoughtsTokenCount\": 25, \"cachedContentTokenCount\": 8, \"totalTokenCount\": 77}, \"modelVersion\": \"gemini-2.5-flash\", \"responseId\": \"resp-1\"}\r\n\r\n"
+        ]
+      }
+    }
+  ]
+}

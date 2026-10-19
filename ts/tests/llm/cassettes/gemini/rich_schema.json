@@ -1,0 +1,91 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "rich_schema: a schema with const, minimum, default, title, anyOf and additionalProperties goes as written in parametersJsonSchema.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-goog-api-key": "<redacted>"
+        },
+        "json": {
+          "contents": [
+            {
+              "role": "user",
+              "parts": [
+                {
+                  "text": "Pick."
+                }
+              ]
+            }
+          ],
+          "systemInstruction": {
+            "parts": [
+              {
+                "text": "You are terse."
+              }
+            ]
+          },
+          "tools": [
+            {
+              "functionDeclarations": [
+                {
+                  "name": "pick",
+                  "description": "Pick one.",
+                  "parametersJsonSchema": {
+                    "title": "Pick",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "z",
+                        "title": "Kind"
+                      },
+                      "count": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "default": 1
+                      },
+                      "note": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  }
+                }
+              ]
+            }
+          ],
+          "safetySettings": [],
+          "generationConfig": {
+            "candidateCount": 1
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"candidates\": [{\"content\": {\"role\": \"model\", \"parts\": [{\"text\": \"Hello\"}]}, \"index\": 0}], \"usageMetadata\": {\"promptTokenCount\": 12, \"candidatesTokenCount\": 40, \"thoughtsTokenCount\": 25, \"cachedContentTokenCount\": 8, \"totalTokenCount\": 77}, \"modelVersion\": \"gemini-2.5-flash\", \"responseId\": \"resp-1\"}\r\n\r\n",
+          "data: {\"candidates\": [{\"content\": {\"role\": \"model\", \"parts\": [{\"text\": \" there.\"}]}, \"index\": 0, \"finishReason\": \"STOP\"}], \"usageMetadata\": {\"promptTokenCount\": 12, \"candidatesTokenCount\": 40, \"thoughtsTokenCount\": 25, \"cachedContentTokenCount\": 8, \"totalTokenCount\": 77}, \"modelVersion\": \"gemini-2.5-flash\", \"responseId\": \"resp-1\"}\r\n\r\n"
+        ]
+      }
+    }
+  ]
+}

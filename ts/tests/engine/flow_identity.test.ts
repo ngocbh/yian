@@ -110,8 +110,11 @@
  * the flow `llm_config:` layer (literal values are identity and key order isn't; the
  * `ValueTemplate` and `Binding` arms), the LLM value types and adjacency index outside identity,
  * the flow id and flow memories (identity when present, never expansion topology, forged values
- * refused in both modes), and an unknown flow field, a `Flow` subclass, a non-Flow, a wiring
- * value that isn't a `Binding` and a node wiring that isn't a `Map` refused; the HUMAN_INPUT
+ * refused in both modes), the root outputs and LLM layer outside the expansion digest, and an
+ * unknown flow field, a `Flow` subclass, a non-Flow, a wiring value that isn't a `Binding`, a node
+ * wiring that isn't a `Map`, node and wiring tables that aren't `Map`s, a non-string node, wiring
+ * or parameter key, an edge that isn't an `Edge`, a forged `Edge`, a `flowLlmConfig` that isn't a
+ * record, memories that aren't an array and an output that isn't a `FlowOutput` refused; the HUMAN_INPUT
  * fields as typed values, a CALL child that isn't a `Flow` refused, a literal in MAP wiring and a
  * CALL argument literal as identity, LOOP `times` as a typed int (`null` for a `while` loop), forged
  * LOOP counts and a CASE branch that isn't a `Case` refused, forged memory scopes and segments and a
@@ -1527,6 +1530,15 @@ test("the flow id is identity but not expansion topology", () => {
   expect(expansionDigest(named)).toBe(expansionDigest(unnamed));
 });
 
+test("a CompiledFlow's root outputs and LLM layer aren't expansion topology", () => {
+  const changed = compiled();
+  changed.outputs = [new FlowOutput("other", 1n)];
+  changed.flowLlmConfig = { model: "a" };
+
+  expect(flowFingerprint(changed)).not.toBe(flowFingerprint(compiled()));
+  expect(expansionDigest(changed)).toBe(expansionDigest(compiled()));
+});
+
 test.each([
   ["a number", 5],
   ["an empty string", ""],
@@ -1596,16 +1608,85 @@ test("a Flow subclass and a non-Flow are refused", () => {
 
 test("a wiring value that isn't a Binding is refused", () => {
   const flow = fragment();
-  flow.wiring.set("body", new Map([["x", 1n]]) as unknown as ReadonlyMap<string, Binding>);
+  (flow.wiring as Map<string, unknown>).set("body", new Map([["x", 1n]]));
 
   expectError(() => flowManifest(flow), TypeError, "flow.wiring.body.values[0]: expected Binding, got bigint");
 });
 
 test("a node wiring that isn't a Map is refused", () => {
   const flow = fragment();
-  flow.wiring.set("body", { x: new Binding(1n) } as unknown as ReadonlyMap<string, Binding>);
+  (flow.wiring as Map<string, unknown>).set("body", { x: new Binding(1n) });
 
   expectError(() => flowManifest(flow), TypeError, "flow.wiring.body: expected Map, got Object");
+});
+
+test.each([
+  [
+    "nodes that aren't a Map",
+    (flow: CompiledFlow) => Object.assign(flow, { nodes: {} }),
+    TypeError,
+    "flow.nodes: expected Map, got Object",
+  ],
+  [
+    "a non-string node key",
+    (flow: CompiledFlow) => (flow.nodes as Map<unknown, unknown>).set(1, flow.nodes.get("step")),
+    TypeError,
+    "flow.nodes: keys must be strings, got number",
+  ],
+  [
+    "wiring that isn't a Map",
+    (flow: CompiledFlow) => Object.assign(flow, { wiring: {} }),
+    TypeError,
+    "flow.wiring: expected Map, got Object",
+  ],
+  [
+    "a non-string wiring key",
+    (flow: CompiledFlow) => (flow.wiring as Map<unknown, unknown>).set(1, new Map()),
+    TypeError,
+    "flow.wiring: keys must be strings, got number",
+  ],
+  [
+    "a non-string parameter key",
+    (flow: CompiledFlow) => (flow.wiring as Map<string, unknown>).set("step", new Map([[1, new Binding(1n)]])),
+    TypeError,
+    "flow.wiring.step: mapping keys must be strings, got number",
+  ],
+  [
+    "an edge that isn't an Edge",
+    (flow: CompiledFlow) => flow.edges.push({} as Edge),
+    TypeError,
+    "flow.edges[2]: expected Edge, got Object",
+  ],
+  [
+    "a forged Edge",
+    (flow: CompiledFlow) =>
+      (flow.edges[0] = Object.assign(Object.create(Edge.prototype), flow.edges[0], { futureField: 1 })),
+    RangeError,
+    'flow.edges[0]: unknown noncanonical field(s): ["futureField"]',
+  ],
+  [
+    "a flowLlmConfig that isn't a record",
+    (flow: CompiledFlow) => Object.assign(flow, { flowLlmConfig: 5 }),
+    TypeError,
+    "flow.flowLlmConfig: expected a record, got number",
+  ],
+  [
+    "memories that aren't an array",
+    (flow: CompiledFlow) => Object.assign(flow, { memories: "x" }),
+    TypeError,
+    "flow.memories: expected an array of MemoryDecl values",
+  ],
+  [
+    "an output that isn't a FlowOutput",
+    (flow: CompiledFlow) => Object.assign(flow, { outputs: [{}] }),
+    TypeError,
+    "flow.outputs[0]: expected FlowOutput, got Object",
+  ],
+] as const)("a flow carrier with %s is refused", (_, mutate, cls, message) => {
+  const flow = compiled();
+  mutate(flow);
+
+  expectError(() => flowManifest(flow), cls, message);
 });
 
 // ---- CASE, HUMAN_INPUT, WAIT, CALL, MAP and LOOP ---------------------------------------------

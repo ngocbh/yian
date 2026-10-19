@@ -215,10 +215,11 @@ export class OpenAIChat implements SseProtocol {
     // The reply's parts by index: dense, in the order each is first seen.
     const parts: Assembly[] = [];
     // A reply has one choice, so at most one reasoning, text and refusal part.
-    const slot = (kind: Assembly["kind"], field: string | null = null): number => {
-      let index = parts.findIndex((part) => part.kind === kind);
-      if (index === -1) index = parts.push({ kind, text: "", field }) - 1;
-      return index;
+    const append = (kind: Assembly["kind"], text: string, field: string | null = null): number => {
+      const part = parts.find((each) => each.kind === kind);
+      if (part === undefined) return parts.push({ kind, text, field }) - 1;
+      part.text += text;
+      return parts.indexOf(part);
     };
     let finishReason: string | null = null;
     let usage: Usage | null = null;
@@ -242,32 +243,22 @@ export class OpenAIChat implements SseProtocol {
       const model = data["model"];
       if (responseModel === null && typeof model === "string" && model) responseModel = model;
       usage = usageOf(data["usage"], provider) ?? usage;
-      const choices = data["choices"];
-      if (choices === undefined || choices === null) continue;
-      if (!Array.isArray(choices)) throw invalidChoice(provider);
-      if (choices.length === 0) continue;
-      const choice = choices[0];
-      if (!isPlainObject(choice)) throw invalidChoice(provider);
+      const choice = choiceOf(data["choices"], provider);
+      if (choice === null) continue;
       const reason = choice["finish_reason"];
       if (typeof reason === "string") finishReason = reason;
-      else if (reason !== undefined && reason !== null) throw invalidChoice(provider);
       const delta = isPlainObject(choice["delta"]) ? choice["delta"] : {};
       checkDelta(delta, provider);
       const reasoning = reasoningPiece(delta, this.options.echoReasoningContent);
       if (reasoning !== null) {
         const [text, field] = reasoning;
-        const index = slot("reasoning", field);
-        parts[index]!.text += text;
+        const index = append("reasoning", text, field);
         if (text) yield new ReasoningDelta(index, text);
       }
       const text = contentPiece(delta["content"]);
-      if (text) {
-        const index = slot("text");
-        parts[index]!.text += text;
-        yield new TextDelta(index, text);
-      }
+      if (text) yield new TextDelta(append("text", text), text);
       const refusal = delta["refusal"];
-      if (typeof refusal === "string" && refusal) parts[slot("refusal")]!.text += refusal;
+      if (typeof refusal === "string" && refusal) append("refusal", refusal);
     }
     if (finishReason === null) {
       throw new ProviderError("incomplete", `${provider} stream ended before a complete response`, { retryable: true });
@@ -394,14 +385,26 @@ function eventData(data: string, provider: string): JsonValue {
   try {
     return parseJson(data, "plain");
   } catch (error) {
-    if (error instanceof JSONDecodeError)
-      throw new ProviderError("protocol", `invalid JSON in ${provider} stream event`);
+    if (error instanceof JSONDecodeError) throw new ProviderError("protocol", `invalid JSON in ${provider} stream event`);
     throw error;
   }
 }
 
-function invalidChoice(provider: string): ProviderError {
-  return new ProviderError("protocol", `invalid choice in ${provider} stream event`);
+/**
+ * Return a chunk's choice, or `null` when `choices` is absent, `null` or empty.
+ *
+ * @throws {ProviderError} `choices` is not a list, its first item is not an object, or that
+ *   item's `finish_reason` is neither a string nor `null` (kind `protocol`).
+ */
+function choiceOf(choices: JsonValue | undefined, provider: string): JsonObject | null {
+  if (choices === undefined || choices === null) return null;
+  if (Array.isArray(choices) && choices.length === 0) return null;
+  const choice = Array.isArray(choices) ? choices[0] : null;
+  if (isPlainObject(choice)) {
+    const reason = choice["finish_reason"];
+    if (reason === undefined || reason === null || typeof reason === "string") return choice;
+  }
+  throw new ProviderError("protocol", `invalid choice in ${provider} stream event`);
 }
 
 /**

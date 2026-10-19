@@ -137,9 +137,14 @@ async function* frames(events: SSEEvent[]): AsyncGenerator<SSEEvent> {
   yield* events;
 }
 
+/** Parse `chunks` with `protocol`, pushing each event to `out` as it comes. */
+async function drain(chunks: (JsonValue | SSEEvent)[], protocol: OpenAIChat, done: boolean, out: Event[]): Promise<void> {
+  for await (const event of protocol.parse(frames(sse(chunks, { done })))) out.push(event);
+}
+
 async function parse(chunks: (JsonValue | SSEEvent)[], protocol = xai(), done = true): Promise<Event[]> {
   const out: Event[] = [];
-  for await (const event of protocol.parse(frames(sse(chunks, { done })))) out.push(event);
+  await drain(chunks, protocol, done, out);
   return out;
 }
 
@@ -151,7 +156,7 @@ async function failing(
 ): Promise<[Event[], ProviderError]> {
   const out: Event[] = [];
   try {
-    for await (const event of protocol.parse(frames(sse(chunks, { done })))) out.push(event);
+    await drain(chunks, protocol, done, out);
   } catch (error) {
     expect(error).toBeInstanceOf(ProviderError);
     expect((error as ProviderError).provider).toBeNull();

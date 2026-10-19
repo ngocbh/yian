@@ -1,4 +1,5 @@
 kind: load
+# The assert text is quoted as written, the Python-repr way (TS reprText): shared.
 flow: |2
 
   id: f

@@ -15,7 +15,7 @@ flow: |
       output: str
       cases:
         - when: a
-          then: !str reply
+          then: !int 3
       else: reply
     reply:
       kind: code
@@ -40,7 +40,7 @@ python_flow: |
       output: str
       cases:
         - when: a
-          then: !str reply
+          then: !int 3
       else: reply
     reply:
       kind: code
@@ -53,7 +53,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'case node ''route'' then: a branch names a node or calls a flow; put the value in its own entry in `nodes:` and name it: `route_then_0: !str reply` and `then: route_then_0`'
+      message: 'case node ''route'' then: a branch names a node or calls a flow; put the value in its own entry in `nodes:` and name it: `route_then_0: !int 3` and `then: route_then_0`'
       frames:
       - label: flow.yaml
-        range: [16, 15, 16, 25]
+        range: [16, 15, 16, 21]

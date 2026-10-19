@@ -17,9 +17,9 @@ flow: |
       input:
         kind: ${input.kind}
       code: |
-        if (inputs["kind"] === "buy") return {action: "buy", qty: 3}
+        if (inputs["kind"] === "buy")
+          return {action: "buy", qty: 3n}
         return {action: "sell", price: 1.5}
-
       output: Union(Buy, Sell)
     route:
       kind: case

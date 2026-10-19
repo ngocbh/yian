@@ -1,5 +1,5 @@
 kind: load
-# `.inf` is a float value in TS (design 3.2, #554): a float `when:` on a float `on:` loads; Python refuses it.
+# `.inf` is a float value in TS (rules: infinity): a float `when:` on a float `on:` loads; Python refuses it.
 rules: [infinity]
 flow: |
   id: f

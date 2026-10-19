@@ -1,4 +1,5 @@
 kind: load
+# TS spells the text value JSON-quoted (rules: messages); Python's repr in python_expect.
 rules: [messages]
 flow: |
   id: f

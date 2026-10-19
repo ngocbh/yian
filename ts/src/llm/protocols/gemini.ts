@@ -16,13 +16,14 @@
  * are always sent, and the provider block is merged last.
  *
  * Each streamed chunk is a whole `GenerateContentResponse`, of which the first candidate is read.
- * Text and thought pieces stream as deltas and join into one text or reasoning part until a call
- * or a second signature starts another, with dense part indexes; a part whose wire parts carried
- * a thought signature gets a replay record holding it. A call arrives whole, as one delta, with
- * `yian_call_<n>` as its id when Gemini sends none or repeats one. Usage counts merge field by
- * field across chunks, and the finish comes at the end of the stream. A reply that failed, was
- * refused, blocked or ended early raises `ProviderError`; an error message holds the provider's
- * text uncapped, which `RouteModel` scrubs of the route's credentials and then caps.
+ * Text and thought pieces stream as deltas and join into one text or reasoning part until a call,
+ * a switch between thought and text, or a second signature starts another, with dense part
+ * indexes; a part whose wire parts carried a thought signature gets a replay record holding it.
+ * A call arrives whole, as one delta, with `yian_call_<n>` as its id when Gemini sends none or
+ * repeats one. Usage counts merge field by field across chunks, and the finish comes at the end of
+ * the stream. A reply that failed, was refused, blocked or ended early raises `ProviderError`; an
+ * error message holds the provider's text uncapped, which `RouteModel` scrubs of the route's
+ * credentials and then caps.
  */
 
 import { encodeBody, mergeRequestBody } from "../body.ts";

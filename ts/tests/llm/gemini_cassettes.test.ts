@@ -77,7 +77,8 @@ const PICK = new ToolSpec({
   },
 });
 // Every chunk repeats the probe's cumulative `usageMetadata`: prompt 12, candidates 40,
-// thoughts 25, cached 8, total 77.
+// thoughts 25, cached 8, total 77. Output 65 is candidates 40 + thoughts 25, which is why
+// usage_partial, whose chunks carry no thoughts count, expects 40.
 const USAGE = new Usage({
   inputTokens: 12,
   outputTokens: 65,

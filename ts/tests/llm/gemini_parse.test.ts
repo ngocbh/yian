@@ -362,6 +362,19 @@ describe("deltas and parts", () => {
     ]);
   });
 
+  test("a call closes the open text, so a thought after it is a new reasoning part", async () => {
+    const out = await parse(sseChunks([TEXT, UNSIGNED_CALL, THOUGHT]));
+    expect(partsDone(out)).toEqual([
+      new PartDone(0, TEXT_PART),
+      new PartDone(1, callPart("yian_call_0")),
+      new PartDone(2, new ReasoningPart("Let me think.")),
+    ]);
+    expect(out.filter((event) => event instanceof ReasoningDelta)).toEqual([
+      new ReasoningDelta(2, "Let m"),
+      new ReasoningDelta(2, "e think."),
+    ]);
+  });
+
   test("an empty unsigned piece opens nothing and emits nothing", async () => {
     expect(await parse([chunk([{ text: "" }]), ...sseChunks([TEXT])])).toEqual(await parse(sseChunks([TEXT])));
     const out = await parse([chunk([{ text: "" }, { text: "", thought: true }]), finishChunk()]);
@@ -662,10 +675,9 @@ describe("failed finish reasons", () => {
     ...INCOMPLETE.map((reason): [string, ErrorKind, boolean] => [reason, "incomplete", false]),
   ];
 
-  /** Return the probe's text reply ending with `reason`, and `finishMessage` when given. */
-  function ending(reason: string, finishMessage?: JsonValue): JsonObject[] {
-    const last = { content: { role: "model", parts: [] }, finishReason: reason, index: 0n } as JsonObject;
-    if (finishMessage !== undefined) last["finishMessage"] = finishMessage;
+  /** Return the probe's text reply ending with `reason`, its last candidate also holding `fields`. */
+  function ending(reason: string, fields: JsonObject = {}): JsonObject[] {
+    const last: JsonObject = { content: { role: "model", parts: [] }, finishReason: reason, index: 0n, ...fields };
     return [...sseChunks([TEXT], { finish: null }), { candidates: [last], usageMetadata: USAGE }];
   }
 
@@ -677,7 +689,7 @@ describe("failed finish reasons", () => {
       ["", message],
       [null, message],
     ] as [JsonValue | undefined, string][]) {
-      const [out, error] = await failing(ending(reason, finishMessage));
+      const [out, error] = await failing(ending(reason, finishMessage === undefined ? {} : { finishMessage }));
       expect(error.kind).toBe(kind);
       expect(error.retryable).toBe(retryable);
       expect(error.message).toBe(text);
@@ -686,9 +698,9 @@ describe("failed finish reasons", () => {
   });
 
   test("CONTINUATION is a protocol error that names the request yian does not send", async () => {
-    const chunks = ending("CONTINUATION", "Continue.");
-    (chunks.at(-1)!["candidates"] as JsonObject[])[0]!["continuationToken"] = "dG9rZW4=";
-    const [out, error] = await failing(chunks);
+    const [out, error] = await failing(
+      ending("CONTINUATION", { finishMessage: "Continue.", continuationToken: "dG9rZW4=" }),
+    );
     expect(error.kind).toBe("protocol");
     expect(error.retryable).toBe(false);
     expect(error.message).toBe("google asked to continue the reply in another request, which yian does not send");
@@ -749,6 +761,7 @@ describe("stream errors", () => {
     ["code 200", { code: 200n, message: "It broke." }, "server", true, "It broke."],
     ["code 302", { code: 302n, message: "It broke." }, "server", true, "It broke."],
     ["code 600", { code: 600n, message: "It broke." }, "server", true, "It broke."],
+    ["a float code", { code: 503.5, message: "It broke." }, "server", true, "It broke."],
   ];
 
   test.each(ERRORS)("an error chunk (%s) after text raises its kind", async (_, body, kind, retryable, text) => {

@@ -2127,9 +2127,9 @@ A few providers need a note:
     An invalid key is `provider.auth`, a full context window `provider.context_length`.
     Every system message goes into `systemInstruction`, and tool schemas go as written
     (`parametersJsonSchema`). Thought signatures go back only to the provider, model, and
-    account that wrote them. When a turn's first function call goes out without one (a
-    turn from another provider, model, or account, a hand-built turn, or one whose
-    signature records can't be used), it gets Google's placeholder signature
+    account that wrote them. When an assistant turn's first function call goes out
+    without one (a turn from another provider, model, or account, a hand-built turn, or
+    one whose signature records can't be used), it gets Google's placeholder signature
     (`skip_thought_signature_validator`). A model that would continue a long reply in
     another request (`CONTINUATION`, when the block's `maxOutputTokens` is above the
     model's per-request cap) fails the call: yian sends one request per attempt.

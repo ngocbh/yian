@@ -1,0 +1,45 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "error_401: HTTP 401: auth, not retried.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-api-key": "<redacted>",
+          "anthropic-version": "2023-06-01"
+        },
+        "json": {
+          "model": "claude-sonnet-4-5",
+          "max_tokens": 64000,
+          "messages": [
+            {
+              "role": "user",
+              "content": "Say hello."
+            }
+          ],
+          "system": "You are terse.",
+          "stream": true
+        }
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "json": {
+          "type": "error",
+          "error": {
+            "type": "authentication_error",
+            "message": "invalid x-api-key"
+          },
+          "request_id": "req_1"
+        }
+      }
+    }
+  ]
+}

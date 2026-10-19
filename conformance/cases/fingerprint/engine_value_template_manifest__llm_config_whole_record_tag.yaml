@@ -1,0 +1,26 @@
+# tests/engine/test_value_template_manifest.py::test_whole_record_llm_config_values_are_fingerprinted
+kind: fingerprint
+flow: |
+  id: f
+  name: f
+  input: {cfg: !object }
+  llm_config: {provider: anthropic, anthropic: {max_tokens: 900}}
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config: ${input.cfg}
+  output: ${a.output}
+other: |
+  id: f
+  name: f
+  input: {cfg: !object }
+  llm_config: {provider: anthropic, anthropic: {max_tokens: 900}}
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config: !object ${input.cfg}
+  output: ${a.output}
+expect:
+  fingerprint: different

@@ -1,0 +1,57 @@
+# tests/engine/test_flow_identity.py::test_flow_fingerprint_recursively_includes_static_child_flows
+kind: fingerprint
+rules: [code]
+flow: |
+  id: recursive
+  name: Recursive
+  input:
+    x: !int
+  defs:
+    child:
+      input:
+        x: !int
+      nodes:
+        inner:
+          kind: code
+          input:
+            x: ${input.x}
+          output: str
+          code: |
+            return "ok"
+      output: ${inner.output}
+  nodes:
+    invoke:
+      kind: call
+      call: child
+      input:
+        x: ${input.x}
+  output: ${invoke.output}
+other: |
+  id: recursive
+  name: Recursive
+  input:
+    x: !int
+  defs:
+    child:
+      input:
+        x: !int
+      nodes:
+        inner:
+          kind: code
+          input:
+            x: ${input.x}
+          output: str
+          code: |
+            return "no"
+      output: ${inner.output}
+  nodes:
+    invoke:
+      kind: call
+      call: child
+      input:
+        x: ${input.x}
+  output: ${invoke.output}
+expect:
+  fingerprint: different
+python_expect:
+  fingerprint: different

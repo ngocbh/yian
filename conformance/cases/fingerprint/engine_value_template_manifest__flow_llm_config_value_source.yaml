@@ -1,0 +1,26 @@
+# tests/engine/test_value_template_manifest.py::test_a_flow_llm_config_value_is_fingerprinted_as_written
+kind: fingerprint
+flow: |
+  id: f
+  name: f
+  input: {m: !str , n: !str }
+  llm_config: {provider: '${input.m}'}
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config: {model: m}
+  output: ${a.output}
+other: |
+  id: f
+  name: f
+  input: {m: !str , n: !str }
+  llm_config: {provider: '${input.n}'}
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config: {model: m}
+  output: ${a.output}
+expect:
+  fingerprint: different

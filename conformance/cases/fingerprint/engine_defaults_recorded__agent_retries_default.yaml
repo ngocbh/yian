@@ -1,0 +1,21 @@
+# tests/engine/test_defaults_recorded.py::test_mismatch_is_reported_before_the_fingerprint
+kind: fingerprint
+flow: |
+  id: talk
+  name: talk
+  nodes:
+    ask:
+      kind: agent
+      prompt: say hi
+  output: ${ask.output}
+other: |
+  id: talk
+  name: talk
+  nodes:
+    ask:
+      kind: agent
+      prompt: say hi
+      retries: 0
+  output: ${ask.output}
+expect:
+  fingerprint: different

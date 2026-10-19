@@ -1,0 +1,24 @@
+# tests/engine/test_value_template_manifest.py::test_a_literal_llm_config_with_a_doubled_dollar_reads_unescaped
+kind: fingerprint
+flow: |
+  id: f
+  name: f
+  llm_config: {provider: anthropic, anthropic: {max_tokens: 900}}
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config: {model: "a$$b"}
+  output: ${a.output}
+other: |
+  id: f
+  name: f
+  llm_config: {provider: anthropic, anthropic: {max_tokens: 900}}
+  nodes:
+    a:
+      kind: agent
+      prompt: Go.
+      llm_config: {model: "a$b"}
+  output: ${a.output}
+expect:
+  fingerprint: same

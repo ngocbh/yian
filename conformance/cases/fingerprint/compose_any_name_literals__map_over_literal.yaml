@@ -1,0 +1,50 @@
+# tests/compose/test_any_name_literals.py::test_a_map_over_literal_under_a_credential_name_loads
+kind: fingerprint
+flow: |
+  id: p
+  name: p
+  defs:
+    leaf:
+      input:
+        x: !object
+      nodes:
+        up:
+          kind: tool
+          tool_id: up
+          input:
+            x: ${input.x}
+          output: str
+      output: ${up.output}
+  nodes:
+    m:
+      kind: map
+      over: [{password: hunter2}, {password: b}]
+      call: leaf
+      input:
+        x: ${item}
+  output: ${m.output}
+other: |
+  id: p
+  name: p
+  defs:
+    leaf:
+      input:
+        x: !object
+      nodes:
+        up:
+          kind: tool
+          tool_id: up
+          input:
+            x: ${input.x}
+          output: str
+      output: ${up.output}
+  nodes:
+    m:
+      kind: map
+      over: [{password: hunter3}, {password: b}]
+      call: leaf
+      input:
+        x: ${item}
+  output: ${m.output}
+expect:
+  fingerprint: different

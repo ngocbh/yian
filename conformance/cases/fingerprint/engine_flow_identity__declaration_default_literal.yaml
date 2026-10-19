@@ -1,0 +1,24 @@
+# tests/engine/test_flow_identity.py::test_declaration_default_literals_are_identity
+kind: fingerprint
+flow: |
+  id: literal-default
+  name: literal_default
+  input:
+    signature: !str 'q -> a'
+  nodes:
+    step:
+      kind: tool
+      tool_id: step
+  output: ${step.output}
+other: |
+  id: literal-default
+  name: literal_default
+  input:
+    signature: !str 'q -> s'
+  nodes:
+    step:
+      kind: tool
+      tool_id: step
+  output: ${step.output}
+expect:
+  fingerprint: different

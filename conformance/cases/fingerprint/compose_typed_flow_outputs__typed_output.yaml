@@ -1,0 +1,26 @@
+# tests/compose/test_typed_flow_outputs.py::test_typed_output_changes_the_flow_fingerprint
+kind: fingerprint
+flow: |
+  id: sized
+  name: sized
+  typedefs:
+    Size:
+      qty: int
+  nodes:
+    size:
+      kind: tool
+      tool_id: size
+  output: ${size.output}
+other: |
+  id: sized
+  name: sized
+  typedefs:
+    Size:
+      qty: int
+  nodes:
+    size:
+      kind: tool
+      tool_id: size
+  output: !Size ${size.output}
+expect:
+  fingerprint: different

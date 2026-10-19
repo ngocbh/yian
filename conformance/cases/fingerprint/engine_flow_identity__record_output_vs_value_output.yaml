@@ -1,0 +1,23 @@
+# tests/engine/test_flow_identity.py::test_loaded_zero_and_one_field_records_differ_from_their_value_forms
+kind: fingerprint
+flow: |
+  id: pin
+  name: pin
+  nodes:
+    step:
+      kind: tool
+      tool_id: step
+      output: str
+  output:
+    result: ${step.output}
+other: |
+  id: pin
+  name: pin
+  nodes:
+    step:
+      kind: tool
+      tool_id: step
+      output: str
+  output: ${step.output}
+expect:
+  fingerprint: different

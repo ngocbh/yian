@@ -1,0 +1,27 @@
+# tests/engine/test_flow_identity.py::test_flow_fingerprint_changes_with_node_kind_and_execution_source
+kind: fingerprint
+rules: [code]
+flow: |
+  id: kind
+  name: Kind
+  nodes:
+    leaf:
+      kind: code
+      output: str
+      code: |
+        return "ok"
+  output: ${leaf.output}
+other: |
+  id: kind
+  name: Kind
+  nodes:
+    leaf:
+      kind: code
+      output: str
+      code: |
+        return "no"
+  output: ${leaf.output}
+expect:
+  fingerprint: different
+python_expect:
+  fingerprint: different

@@ -1,0 +1,12 @@
+# tests/engine/test_memory_authoring.py::test_compose_loaded_flow_id_changes_the_previous_memoryless_identity
+kind: fingerprint
+flow: |
+  id: first
+  name: same
+  nodes: {}
+other: |
+  id: second
+  name: same
+  nodes: {}
+expect:
+  fingerprint: different

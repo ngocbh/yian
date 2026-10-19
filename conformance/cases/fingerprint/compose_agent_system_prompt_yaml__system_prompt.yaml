@@ -1,0 +1,31 @@
+# tests/compose/test_agent_system_prompt_yaml.py::test_system_prompt_is_identity
+kind: fingerprint
+flow: |
+  id: chat
+  name: chat
+  input:
+    name: !str
+    message: !str
+  nodes:
+    reply:
+      kind: agent
+      input: {name: "${input.name}", message: "${input.message}"}
+      prompt: ${message}
+      output: str
+  output: ${reply.output}
+other: |
+  id: chat
+  name: chat
+  input:
+    name: !str
+    message: !str
+  nodes:
+    reply:
+      kind: agent
+      input: {name: "${input.name}", message: "${input.message}"}
+      system_prompt: "You are ${name}."
+      prompt: ${message}
+      output: str
+  output: ${reply.output}
+expect:
+  fingerprint: different

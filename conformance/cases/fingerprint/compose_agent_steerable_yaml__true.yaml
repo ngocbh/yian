@@ -1,0 +1,23 @@
+# tests/compose/test_agent_steerable_yaml.py::test_steerable_is_identity_but_false_is_not
+kind: fingerprint
+flow: |
+  id: steer
+  name: steer
+  nodes:
+    chat:
+      kind: agent
+      prompt: Help the user.
+      output: str
+  output: ${chat.output}
+other: |
+  id: steer
+  name: steer
+  nodes:
+    chat:
+      kind: agent
+      prompt: Help the user.
+      steerable: true
+      output: str
+  output: ${chat.output}
+expect:
+  fingerprint: different

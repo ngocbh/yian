@@ -1,0 +1,43 @@
+# tests/engine/test_flow_identity.py::test_loop_without_max_has_null_max_in_manifest_and_its_own_fingerprint
+kind: fingerprint
+flow: |
+  id: count
+  name: count
+  nodes:
+    loop:
+      kind: loop
+      input:
+        n: 0
+      while: n < 3
+      max: 5
+      nodes:
+        bump:
+          kind: tool
+          tool_id: bump
+          input:
+            n: ${input.n}
+          output:
+            n: int
+      output: ${bump.output}
+  output: ${loop.output.n}
+other: |
+  id: count
+  name: count
+  nodes:
+    loop:
+      kind: loop
+      input:
+        n: 0
+      while: n < 3
+      nodes:
+        bump:
+          kind: tool
+          tool_id: bump
+          input:
+            n: ${input.n}
+          output:
+            n: int
+      output: ${bump.output}
+  output: ${loop.output.n}
+expect:
+  fingerprint: different

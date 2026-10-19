@@ -1,0 +1,24 @@
+# tests/compose/test_agent_skills_yaml.py::test_skills_are_identity_but_empty_and_order_are_not
+kind: fingerprint
+flow: |
+  id: skills
+  name: skills
+  nodes:
+    review:
+      kind: agent
+      prompt: Review the change.
+      skills: [a, b]
+      output: str
+  output: ${review.output}
+other: |
+  id: skills
+  name: skills
+  nodes:
+    review:
+      kind: agent
+      prompt: Review the change.
+      skills: all
+      output: str
+  output: ${review.output}
+expect:
+  fingerprint: different

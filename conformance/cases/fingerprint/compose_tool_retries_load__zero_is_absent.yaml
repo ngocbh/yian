@@ -1,0 +1,23 @@
+# tests/compose/test_tool_retries_load.py::test_zero_retries_keeps_the_flow_fingerprint
+kind: fingerprint
+flow: |
+  id: old_tool_crash
+  name: old_tool_crash
+  nodes:
+    place:
+      kind: tool
+      tool_id: place
+      input: {symbol: "ACME"}
+  output: ${place.output}
+other: |
+  id: old_tool_crash
+  name: old_tool_crash
+  nodes:
+    place:
+      kind: tool
+      tool_id: place
+      retries: 0
+      input: {symbol: "ACME"}
+  output: ${place.output}
+expect:
+  fingerprint: same

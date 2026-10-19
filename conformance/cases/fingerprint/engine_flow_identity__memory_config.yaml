@@ -1,0 +1,32 @@
+# tests/engine/test_flow_identity.py::test_memory_expansion_projection_omits_root_id_and_config_but_hashes_keys
+kind: fingerprint
+flow: |
+  id: first
+  name: memory
+  long_term_memory:
+    outer:
+      type: outer
+      config: {limit: 3}
+  nodes:
+    body:
+      kind: tool
+      tool_id: body
+      input: {topic: hello}
+      output: str
+  output: ${body.output}
+other: |
+  id: first
+  name: memory
+  long_term_memory:
+    outer:
+      type: outer
+      config: {limit: 99}
+  nodes:
+    body:
+      kind: tool
+      tool_id: body
+      input: {topic: hello}
+      output: str
+  output: ${body.output}
+expect:
+  fingerprint: different

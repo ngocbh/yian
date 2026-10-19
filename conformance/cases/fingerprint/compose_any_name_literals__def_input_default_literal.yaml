@@ -1,0 +1,40 @@
+# tests/compose/test_any_name_literals.py::test_a_def_input_default_under_a_credential_name_loads
+kind: fingerprint
+flow: |
+  id: f
+  name: f
+  defs:
+    g:
+      input:
+        password: !str hunter2
+      nodes:
+        run:
+          kind: tool
+          tool_id: run
+          output: str
+      output: ${run.output}
+  nodes:
+    b:
+      kind: call
+      call: g
+  output: ${b.output}
+other: |
+  id: f
+  name: f
+  defs:
+    g:
+      input:
+        password: !str hunter3
+      nodes:
+        run:
+          kind: tool
+          tool_id: run
+          output: str
+      output: ${run.output}
+  nodes:
+    b:
+      kind: call
+      call: g
+  output: ${b.output}
+expect:
+  fingerprint: different

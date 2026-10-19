@@ -1,0 +1,26 @@
+# tests/compose/test_any_name_literals.py::test_an_agent_variable_under_a_credential_name_loads
+kind: fingerprint
+flow: |
+  id: f
+  name: f
+  nodes:
+    writer:
+      kind: agent
+      variables:
+        password: !str hunter2
+      prompt: hi
+      output: str
+  output: ${writer.output}
+other: |
+  id: f
+  name: f
+  nodes:
+    writer:
+      kind: agent
+      variables:
+        password: !str hunter3
+      prompt: hi
+      output: str
+  output: ${writer.output}
+expect:
+  fingerprint: different

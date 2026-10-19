@@ -1,22 +1,30 @@
 /**
- * `mcpServer`'s argument checks, an unopened `McpServer` and the MCP error classes, a port of
- * the parts of `tests/engine/test_mcp_server.py` that need no running server:
- * `test_bad_arguments_raise_naming_the_field_and_start_nothing`, the label half of
- * `test_label_option_names_the_thread_and_url_label_is_the_host` and the closed half of
- * `test_open_twice_and_tools_when_closed_raise_and_close_is_idempotent`; and yian's stdio
- * transport driven by a bare SDK client, as `tests/engine/test_mcp_fake_server.py` drives the fake
- * server. Opening a server, and the rest of `test_mcp_server.py` and `test_mcp_errors.py`, land
- * with the MCP client.
+ * `McpServer` opens a server, lists its tools once, and closes, a port of
+ * `tests/engine/test_mcp_server.py`: `test_bad_arguments_raise_naming_the_field_and_start_nothing`,
+ * `test_label_option_names_the_thread_and_url_label_is_the_host`,
+ * `test_with_block_opens_lists_tools_and_closes`, `test_open_for_run_records_the_run_token`,
+ * `test_paging_lists_every_page`, `test_more_than_100_pages_fails_to_open`,
+ * `test_tool_list_is_a_snapshot`, `test_a_tool_listed_twice_fails_to_open_naming_it`,
+ * `test_a_tool_whose_schema_is_not_an_object_is_rejected`,
+ * `test_missing_command_fails_to_open_with_the_os_error`, `test_server_stderr_is_in_the_connect_error`,
+ * `test_hung_server_times_out_and_is_killed`,
+ * `test_open_twice_and_tools_when_closed_raise_and_close_is_idempotent`,
+ * `test_keyboard_interrupt_during_open_closes_the_server` (as an aborted `signal`),
+ * `test_close_from_another_thread_during_open_fails_the_open` and
+ * `test_a_close_leaves_alone_a_connection_opened_while_it_waited`; the MCP error classes; and
+ * yian's stdio transport driven by a bare SDK client, as `tests/engine/test_mcp_fake_server.py`
+ * drives the fake server. The HTTP rows, tool calls and the rest of `test_mcp_errors.py` land
+ * with the HTTP transport and the calls.
  */
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Client } from "@modelcontextprotocol/client";
-import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
+import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 
 import { BUILTIN, current, install } from "../../src/defaults.ts";
@@ -29,7 +37,9 @@ import {
   toolErrorKinds,
   type ToolErrorKind,
 } from "../../src/tools/errors.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
 import {
+  AlreadyOpenError,
   isMcpError,
   isMcpServer,
   McpCallCancelled,
@@ -44,8 +54,10 @@ import {
   McpTimeoutError,
   McpToolError,
   McpTransportError,
+  listAll,
   StdioTransport,
 } from "../../src/tools/mcp.ts";
+import { ToolSet } from "../../src/tools/registry.ts";
 import { childAlive, killMarkers, pids, stdioOptions, strayProcesses, trackServers, waitFor } from "./mcp_helpers.ts";
 
 /** Call `mcpServer` with `options`, which may be ill-typed on purpose. */
@@ -191,10 +203,6 @@ describe("McpServer", () => {
     await server.close();
     await server.close();
     expect(() => server.tools).toThrow("is not open");
-  });
-
-  test("open is not ported yet", async () => {
-    await expect(mcpServer({ command: "x" }).open()).rejects.toThrow("not ported yet (T6-2)");
   });
 
   test("isMcpServer reads the brand", () => {
@@ -503,13 +511,16 @@ describe("StdioTransport", () => {
       const drains = stdin.listenerCount("drain");
       const closes = stdin.listenerCount("close");
       const message = { jsonrpc: "2.0", method: "notifications/x", params: { text: "x".repeat(100_000) } };
-      // The first few writes fit in the pipe and resolve; the rest wait, and fail once close ends
-      // the server.
+      // How many writes the runtime accepts at once varies (on Bun the first few resolve); every
+      // send after those waits for a drain that never comes, and fails once close ends the server.
       const sends = Promise.allSettled(Array.from({ length: 20 }, () => t.send(message)));
       expect(stdin.listenerCount("drain")).toBe(drains + 1);
       expect(stdin.listenerCount("close")).toBe(closes + 1);
       await t.close();
-      expect((await sends).map((result) => result.status)).toContain("rejected");
+      const statuses = (await sends).map((result) => result.status);
+      expect(statuses).toContain("rejected");
+      // No send resolves after one waited: "fulfilled" sorts before "rejected".
+      expect(statuses).toEqual([...statuses].sort());
     },
     SLOW,
   );
@@ -524,5 +535,440 @@ describe("StdioTransport", () => {
       }),
     );
     await expect(t.start()).rejects.toThrow(/ENOENT/);
+  });
+});
+
+describe("McpServer open and close", () => {
+  // Process tests get 15 s; the `< N s` assertions are the real check.
+  const SLOW = 15_000;
+  const dir = mkdtempSync(join(tmpdir(), "yian-mcp-open-"));
+  const markers: string[] = [];
+  const tracker = trackServers();
+  let markerCount = 0;
+
+  /** A fresh marker path in the test directory, remembered so `afterAll` kills the pids it lists. */
+  const marker = (): string => {
+    const file = join(dir, `marker-${(markerCount += 1)}`);
+    markers.push(file);
+    return file;
+  };
+
+  /** An unopened server running the fake server with `flags`, closed in `afterEach`. */
+  const server = (flags: string[] = [], options: Omit<McpServerOptions, "command" | "args"> = {}): McpServer =>
+    tracker.track(mcpServer({ ...stdioOptions(...flags), ...options }));
+
+  /** The tools a bare SDK client lists from the fake server started with `flags`. */
+  const bareListing = async (...flags: string[]) => {
+    const client = tracker.track(new Client({ name: "test", version: "0" }));
+    await client.connect(new StdioClientTransport(stdioOptions(...flags)));
+    return (await client.listTools()).tools;
+  };
+
+  /** The error `promise` rejects with; fails the test when it resolves. */
+  const rejection = async (promise: Promise<unknown>): Promise<Error> => {
+    try {
+      await promise;
+    } catch (error) {
+      return error as Error;
+    }
+    throw new Error("expected a rejection");
+  };
+
+  /** A stand-in lister serving `tools` as one listing, as Python's stand-in client does. */
+  const standIn = (tools: unknown[], capabilities: Record<string, unknown> = { tools: {} }) => {
+    const calls: unknown[] = [];
+    return {
+      calls,
+      listTools: async (params: unknown) => {
+        calls.push(params);
+        return { tools };
+      },
+      getServerCapabilities: () => capabilities,
+    };
+  };
+
+  /** `listAll`'s options for a server labelled `label`. */
+  const listing = (label: string, concurrencySafe: boolean | readonly string[] = false) => ({
+    label,
+    concurrencySafe,
+    call: () => Promise.reject(new Error("no calls here")),
+  });
+
+  afterEach(async () => {
+    await tracker.closeAll();
+    install(BUILTIN);
+  });
+
+  afterAll(() => {
+    killMarkers(markers);
+    rmSync(dir, { recursive: true, force: true });
+    expect(strayProcesses()).toEqual([]);
+  });
+
+  test(
+    "test_with_block_opens_lists_tools_and_closes",
+    async () => {
+      const listed = await bareListing();
+      const file = marker();
+      let opened: McpServer;
+      let pid: number;
+      {
+        await using s = await mcpServer(stdioOptions("--marker", file)).open();
+        opened = s;
+        expect(s.isOpen).toBe(true);
+        expect(s.isClosed).toBe(false);
+        expect(s.openedByRun).toBe(false);
+        expect(s.label).toBe(basename(process.execPath));
+        expect(s.tools.map((tool) => tool.name)).toEqual(listed.map((tool) => tool.name));
+        expect(Object.isFrozen(s.tools)).toBe(true);
+        s.tools.forEach((tool, i) => {
+          expect(tool).toBeInstanceOf(FunctionTool);
+          expect(tool.parametersJsonSchema as unknown).toEqual(listed[i]!.inputSchema);
+          expect(tool.description).toBe(listed[i]!.description!);
+          expect(tool.outputJsonSchema).toBeNull();
+          expect(tool.isConcurrencySafe).toBeNull();
+        });
+        [pid] = pids(file) as [number];
+        expect(childAlive(pid)).toBe(true);
+      }
+      expect(opened.isOpen).toBe(false);
+      expect(opened.openedByRun).toBe(false);
+      expect(() => opened.tools).toThrow("is not open");
+      expect(childAlive(pid)).toBe(false);
+    },
+    SLOW,
+  );
+
+  test(
+    "test_label_option_names_the_thread_and_url_label_is_the_host",
+    async () => {
+      const s = server(["--only", "echo"], { label: "tools" });
+      await s.open();
+      expect(s.label).toBe("tools");
+      expect(s.tools.map((tool) => tool.name)).toEqual(["echo"]);
+    },
+    SLOW,
+  );
+
+  test(
+    "test_open_for_run_records_the_run_token",
+    async () => {
+      const s = server(["--only", "echo"]);
+      try {
+        expect(await s.openForRun("run-token")).toBe(s);
+        expect(s.openedByRun).toBe(true);
+        expect(s.tools.map((tool) => tool.name)).toEqual(["echo"]);
+      } finally {
+        await s.close();
+      }
+      expect(s.openedByRun).toBe(false);
+    },
+    SLOW,
+  );
+
+  test(
+    "test_paging_lists_every_page",
+    async () => {
+      const two = await server(["--pages", "2"]).open();
+      expect(two.tools.map((tool) => tool.name)).toEqual(["page1", "page2"]);
+      const three = await server(["--pages", "3"]).open();
+      expect(three.tools.map((tool) => tool.name)).toEqual(["page1", "page2", "page3"]);
+    },
+    SLOW,
+  );
+
+  test(
+    "test_more_than_100_pages_fails_to_open",
+    async () => {
+      const s = server(["--pages", "101"], { label: "paged" });
+      const error = await rejection(s.open());
+      expect(error).toBeInstanceOf(McpConnectError);
+      expect(error.message).toBe("MCP server 'paged' lists more than 100 pages of tools");
+      expect(s.isOpen).toBe(false);
+      const hundred = await server(["--pages", "100"]).open();
+      expect(hundred.tools).toHaveLength(100);
+    },
+    SLOW,
+  );
+
+  test(
+    "test_tool_list_is_a_snapshot",
+    async () => {
+      const s = await server().open();
+      const names = s.tools.map((tool) => tool.name);
+      // Tool calls through the server land with the calls; the server's own client calls it here.
+      const client = (s as unknown as { generation: { client: Client } }).generation.client;
+      const added = await client.callTool({ name: "add_tool", arguments: {} });
+      expect((added.content as { text: string }[])[0]!.text).toBe("added");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(s.tools.map((tool) => tool.name)).toEqual(names);
+      expect(names).not.toContain("late");
+    },
+    SLOW,
+  );
+
+  test(
+    "test_a_tool_listed_twice_fails_to_open_naming_it",
+    async () => {
+      const s = server(["--twins"], { label: "listing" });
+      const error = await rejection(s.open());
+      expect(error).toBeInstanceOf(McpConnectError);
+      expect(error.message).toBe("MCP server 'listing' lists the tool 'twin' twice");
+      expect(s.isOpen).toBe(false);
+    },
+    SLOW,
+  );
+
+  test("test_a_tool_whose_schema_is_not_an_object_is_rejected", async () => {
+    // The SDK refuses such a listing on both ends, so a stand-in lister serves it.
+    const lister = standIn([{ name: "loose", inputSchema: { properties: {} } }]);
+    const error = await rejection(listAll(lister, listing("listing")));
+    expect(error).toBeInstanceOf(McpConnectError);
+    expect(error.message).toBe("MCP server 'listing' tool 'loose' has an input schema whose type is not 'object'");
+  });
+
+  test("a schema FunctionTool refuses makes the tool unusable", async () => {
+    let deep: Record<string, unknown> = { type: "string" };
+    for (let i = 0; i < 120; i++) deep = { type: "object", properties: { a: deep } };
+    const error = await rejection(listAll(standIn([{ name: "deep", inputSchema: deep }]), listing("listing")));
+    expect(error).toBeInstanceOf(McpConnectError);
+    expect(error.message).toStartWith("MCP server 'listing' tool 'deep' is unusable: ");
+    expect(error.message).toContain("deeper than");
+    expect(error.cause).toBeInstanceOf(TypeError);
+  });
+
+  test("a stand-in listing becomes FunctionTools, marked and with their descriptions", async () => {
+    const schema = { type: "object", properties: {} };
+    const lister = standIn([
+      { name: "a", description: "The a tool.", title: "A", inputSchema: schema },
+      { name: "b", title: "B", inputSchema: schema, outputSchema: schema },
+      { name: "c", inputSchema: schema },
+    ]);
+    const { tools } = await listAll(lister, listing("listing", ["b"]));
+    expect(tools.map((tool) => tool.description)).toEqual(["The a tool.", "B", "c"]);
+    expect(tools.map((tool) => tool.isConcurrencySafe?.({}) ?? null)).toEqual([null, true, null]);
+    expect(tools.map((tool) => tool.outputJsonSchema)).toEqual([null, null, null]);
+    expect(lister.calls).toEqual([undefined]);
+  });
+
+  test("a server without the tools capability lists nothing and sends no tools/list", async () => {
+    const lister = standIn([{ name: "a", inputSchema: { type: "object" } }], {});
+    expect((await listAll(lister, listing("listing"))).tools).toEqual([]);
+    expect(lister.calls).toEqual([]);
+  });
+
+  test(
+    "--pages 0 opens with no tools and sends no tools/list",
+    async () => {
+      const debug = console.debug;
+      const lines: unknown[] = [];
+      console.debug = (...args: unknown[]) => lines.push(args);
+      try {
+        const s = await server(["--pages", "0"]).open();
+        expect(s.tools).toEqual([]);
+        expect(s.isOpen).toBe(true);
+      } finally {
+        console.debug = debug;
+      }
+      // The SDK prints a debug line when `listTools` runs against a server without `tools`.
+      expect(lines).toEqual([]);
+    },
+    SLOW,
+  );
+
+  test(
+    "test_missing_command_fails_to_open_with_the_os_error",
+    async () => {
+      const s = tracker.track(mcpServer({ command: "/nonexistent/yian-no-such-server" }));
+      const error = await rejection(s.open());
+      expect(error).toBeInstanceOf(McpConnectError);
+      expect(isMcpError(error)).toBe(true);
+      expect(error.message).toStartWith("MCP server 'yian-no-such-server' didn't start: ");
+      expect(error.message).toContain("yian-no-such-server");
+      expect((error.cause as NodeJS.ErrnoException).code).toBe("ENOENT");
+      expect(s.isOpen).toBe(false);
+    },
+    SLOW,
+  );
+
+  test(
+    "test_server_stderr_is_in_the_connect_error",
+    async () => {
+      const writes: string[] = [];
+      const write = process.stderr.write.bind(process.stderr);
+      process.stderr.write = ((chunk: string | Uint8Array, ...rest: never[]) => {
+        writes.push(String(chunk));
+        return write(chunk, ...rest);
+      }) as typeof process.stderr.write;
+      let error: Error;
+      try {
+        error = await rejection(server(["--stderr", "boom"], { label: "noisy" }).open());
+      } finally {
+        process.stderr.write = write;
+      }
+      expect(error).toBeInstanceOf(McpConnectError);
+      expect(error.message).toStartWith("MCP server 'noisy' didn't start: ");
+      expect(error.message).toEndWith("\nserver stderr:\nboom");
+      expect(error.cause).toBeInstanceOf(Error);
+      expect(writes.join("")).not.toContain("boom");
+    },
+    SLOW,
+  );
+
+  test(
+    "test_hung_server_times_out_and_is_killed",
+    async () => {
+      const file = marker();
+      const s = server(["--hang", "--marker", file], { connectTimeout: 1, label: "hung" });
+      const start = performance.now();
+      const error = await rejection(s.open());
+      expect(performance.now() - start).toBeLessThan(5000);
+      expect(error).toBeInstanceOf(McpConnectError);
+      expect(error.message).toBe("MCP server 'hung' didn't start within 1 s");
+      expect(s.isOpen).toBe(false);
+      expect(childAlive(pids(file)[0]!)).toBe(false);
+    },
+    SLOW,
+  );
+
+  test(
+    "a server that exits on a request before initialize still opens",
+    async () => {
+      const s = await server(["--exit-before-init", "--only", "echo"]).open();
+      expect(s.tools.map((tool) => tool.name)).toEqual(["echo"]);
+    },
+    SLOW,
+  );
+
+  test(
+    "test_open_twice_and_tools_when_closed_raise_and_close_is_idempotent",
+    async () => {
+      const s = server(["--only", "echo"], { label: "twice" });
+      await s.close();
+      expect(() => s.tools).toThrow("MCP server 'twice' is not open");
+      await s.open();
+      try {
+        const error = await rejection(s.open());
+        expect(error).toBeInstanceOf(AlreadyOpenError);
+        expect(error.message).toBe("MCP server 'twice' is already open");
+        expect(s.isOpen).toBe(true);
+      } finally {
+        await s.close();
+      }
+      await s.close();
+      expect(() => s.tools).toThrow("not open");
+      // Two opens that race: the second is refused at once, the first opens.
+      const results = await Promise.allSettled([s.open(), s.openForRun("run")]);
+      expect(results[0]!.status).toBe("fulfilled");
+      expect((results[1] as PromiseRejectedResult).reason).toBeInstanceOf(AlreadyOpenError);
+      expect(s.openedByRun).toBe(false);
+    },
+    SLOW,
+  );
+
+  test(
+    "test_close_from_another_thread_during_open_fails_the_open",
+    async () => {
+      const file = marker();
+      const s = server(["--hang", "--marker", file], { connectTimeout: 20, label: "starting" });
+      const opening = rejection(s.open());
+      expect(await waitFor(() => pids(file).length === 1, 5000)).toBe(true);
+      const start = performance.now();
+      await s.close();
+      const error = await opening;
+      expect(performance.now() - start).toBeLessThan(3000);
+      expect(error).toBeInstanceOf(McpConnectError);
+      expect(error.message).toBe("MCP server 'starting' was closed while starting");
+      expect(s.isOpen).toBe(false);
+      expect(childAlive(pids(file)[0]!)).toBe(false);
+    },
+    SLOW,
+  );
+
+  test(
+    "a close during the SDK import, before the transport exists, still fails the open",
+    async () => {
+      const file = marker();
+      const s = server(["--marker", file], { label: "early" });
+      const opening = rejection(s.open());
+      await s.close();
+      const error = await opening;
+      expect(error).toBeInstanceOf(McpConnectError);
+      expect(error.message).toBe("MCP server 'early' was closed while starting");
+      expect(s.isOpen).toBe(false);
+      expect(pids(file)).toEqual([]);
+    },
+    SLOW,
+  );
+
+  test(
+    "test_keyboard_interrupt_during_open_closes_the_server",
+    async () => {
+      const file = marker();
+      const s = server(["--hang", "--marker", file], { connectTimeout: 20 });
+      const controller = new AbortController();
+      const opening = rejection(s.open({ signal: controller.signal }));
+      expect(await waitFor(() => pids(file).length === 1, 5000)).toBe(true);
+      const reason = new Error("stopped by the host");
+      controller.abort(reason);
+      expect(await opening).toBe(reason);
+      expect(s.isOpen).toBe(false);
+      expect(childAlive(pids(file)[0]!)).toBe(false);
+    },
+    SLOW,
+  );
+
+  test(
+    "test_a_close_leaves_alone_a_connection_opened_while_it_waited",
+    async () => {
+      const file = marker();
+      const s = server(["--only", "echo", "--marker", file]);
+      await s.open();
+      const late = s.close();
+      await s.open();
+      await late;
+      const [older, newer] = pids(file) as [number, number];
+      expect(s.isOpen).toBe(true);
+      expect(s.isClosed).toBe(false);
+      expect(childAlive(older)).toBe(false);
+      expect(childAlive(newer)).toBe(true);
+      expect(s.tools.map((tool) => tool.name)).toEqual(["echo"]);
+    },
+    SLOW,
+  );
+
+  test(
+    "concurrencySafe marks every tool, or those named",
+    async () => {
+      const safe = async (s: McpServer, name: string, args: Record<string, unknown>) => {
+        const tools = new ToolSet({ fake: s });
+        return tools.isConcurrencySafe(await tools.validate(name, args));
+      };
+      const all = await server(["--only", "echo,add"], { concurrencySafe: true }).open();
+      expect(await safe(all, "echo", { text: "x" })).toBe(true);
+      expect(await safe(all, "add", { a: 1, b: 2 })).toBe(true);
+      const some = await server(["--only", "echo,add"], { concurrencySafe: ["echo"] }).open();
+      expect(await safe(some, "echo", { text: "x" })).toBe(true);
+      expect(await safe(some, "add", { a: 1, b: 2 })).toBe(false);
+      expect(some.tools.find((tool) => tool.name === "add")!.isConcurrencySafe).toBeNull();
+    },
+    SLOW,
+  );
+
+  test(
+    "concurrencySafe naming a tool the server doesn't list fails the open",
+    async () => {
+      const s = server(["--only", "echo"], { concurrencySafe: ["echo", "nope", "gone"], label: "marks" });
+      const error = await rejection(s.open());
+      expect(error).toBeInstanceOf(McpConnectError);
+      expect(error.message).toBe(`MCP server 'marks' marks tools it doesn't list as concurrency-safe: ["nope","gone"]`);
+      expect(s.isOpen).toBe(false);
+    },
+    SLOW,
+  );
+
+  test("a url server can't open yet", async () => {
+    const error = await rejection(tracker.track(mcpServer({ url: "http://localhost:1/mcp" })).open());
+    expect(error.message).toBe("MCP server 'localhost': HTTP servers are not ported yet");
   });
 });

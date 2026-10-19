@@ -7,19 +7,25 @@
  * the subprocess. A failed call throws an `McpError` whose tool error kinds tell an AGENT's tool
  * loop whether its model reads the error and a TOOL node whether `retries:` apply.
  *
- * Knows about: `tools/errors`, `tools/function_tools`, `llm/body` (exact JSON writes), typesys and
- * diagnostics.
+ * Knows about: the MCP SDK client (`@modelcontextprotocol/client`, imported when a server opens),
+ * `defaults`, `platform` (the version), `tools/context`, `tools/errors`, `tools/function_tools`,
+ * `llm/body` (exact JSON writes), typesys and diagnostics.
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
 import type { Writable } from "node:stream";
 
+import type { Client } from "@modelcontextprotocol/client";
+
+import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
 import { encodeBody } from "../llm/body.ts";
-import { parseJson } from "../typesys/json.ts";
-import { isRecord, jsTypeName } from "../typesys/values.ts";
+import { VERSION } from "../platform.ts";
+import { type JsonObject, parseJson } from "../typesys/json.ts";
+import { isRecord, jsTypeName, writeAsText } from "../typesys/values.ts";
+import type { ToolContext } from "./context.ts";
 import { TOOL_ERROR, type ToolErrorKind } from "./errors.ts";
-import type { FunctionTool } from "./function_tools.ts";
+import { FunctionTool } from "./function_tools.ts";
 
 /**
  * The brands of `McpError` and `McpServer`. yian checks them rather than `instanceof`, so an error
@@ -132,6 +138,11 @@ export class McpServerClosed extends McpError {
 export class McpCallCancelled extends McpError {
   override name = "McpCallCancelled";
   readonly [TOOL_ERROR]: readonly ToolErrorKind[] = PERMANENT;
+}
+
+/** Thrown by `open()` and `openForRun()` when the server is already open or still opening. */
+export class AlreadyOpenError extends Error {
+  override name = "AlreadyOpenError";
 }
 
 /** Return whether `value` carries `brand`; never throws, so a hostile object has no brand. */
@@ -344,18 +355,53 @@ function checkConcurrencySafe(value: unknown): boolean | readonly string[] {
   return Object.freeze(names);
 }
 
+/** A server that keeps returning cursors would otherwise keep `open()` listing forever. */
+const MAX_PAGES = 100;
+
+/** The owner of a server the host opened. */
+const HOST = "host";
+
+/** One connection of a server: what one `open()` started, and what `close()` ends. */
+interface Generation {
+  /** Aborted when the open fails, times out or is closed; ends a pending connect or listing. */
+  readonly stop: AbortController;
+  client: Client | undefined;
+  transport: StdioTransport | undefined;
+  /** `"host"`, or the token of the run that opened the server, once its tools are listed. */
+  owner: string | undefined;
+  tools: readonly FunctionTool[] | undefined;
+  /** Each listed tool's `outputSchema`, by name, for the check of its results. */
+  outputSchemas: ReadonlyMap<string, JsonObject>;
+  /** The longest wait for one call in seconds, read when the server opened. */
+  callTimeout: number;
+  /** Whether `close()` ran on this connection. */
+  closed: boolean;
+  /** Whether the server is known gone: its transport closed. */
+  gone: boolean;
+  /** The calls in flight, which `close()` aborts. */
+  readonly calls: Set<AbortController>;
+  /** The shutdown, once started. */
+  closing: Promise<void> | undefined;
+}
+
 /**
  * An MCP server whose tools a flow calls as host tools.
  *
  * Build one with `mcpServer`. While open, `tools` holds the tools the server listed when it
- * opened; a later change to the server's tool list is ignored. A server the host opened belongs to
- * the host, which closes it.
+ * opened; a later change to the server's tool list is ignored. A server opened with `open()`
+ * belongs to the host, which closes it; `await using` does both.
+ *
+ * @example
+ * await using files = await mcpServer({ command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "."] }).open();
+ * const names = files.tools.map((tool) => tool.name);
  */
 export class McpServer {
   /** The name used in errors: the `label` option, else the command's basename, else the URL's host. */
   readonly label: string;
   /** The checked options, read when the server opens. */
   private readonly spec: McpServerSpec;
+  /** The connection from `open()` until `close()`; a later open replaces it. */
+  private generation: Generation | undefined;
 
   /** Keep a spec `mcpServer` checked; build a server with `mcpServer`, not this constructor. */
   constructor(spec: McpServerSpec) {
@@ -368,12 +414,19 @@ export class McpServer {
 
   /** Whether the server is open and its tools are listed. */
   get isOpen(): boolean {
-    return false;
+    return this.generation?.owner !== undefined;
   }
 
   /** Whether an open server has gone away, so its calls fail at once until it is reopened. */
   get isClosed(): boolean {
-    return false;
+    const generation = this.generation;
+    return generation?.owner !== undefined && generation.gone;
+  }
+
+  /** Whether a run, not the host, opened the server and has not closed it. */
+  get openedByRun(): boolean {
+    const owner = this.generation?.owner;
+    return owner !== undefined && owner !== HOST;
   }
 
   /**
@@ -382,22 +435,191 @@ export class McpServer {
    * @throws {Error} The server is not open.
    */
   get tools(): readonly FunctionTool[] {
-    throw new Error(`MCP server '${this.label}' is not open`);
+    const generation = this.generation;
+    if (generation?.owner === undefined || generation.tools === undefined) {
+      throw new Error(`MCP server '${this.label}' is not open`);
+    }
+    return generation.tools;
   }
 
   /**
    * Start the server, wait until it lists its tools, and keep it running; the host must then
-   * `close()` it. Not implemented yet: it lands with the MCP SDK client and its transports.
+   * `close()` it.
    *
+   * @param options.signal Aborting it while the server starts closes the server and rejects with
+   *   the signal's reason.
    * @returns This server.
+   * @throws {AlreadyOpenError} The server is already open, or still opening.
+   * @throws {Error} The MCP SDK (`@modelcontextprotocol/client`) is not installed.
+   * @throws {McpConnectError} The server doesn't start, doesn't list its tools within the connect
+   *   timeout, lists a tool twice or a tool yian can't use, or `concurrencySafe` names a tool it
+   *   doesn't list; or `close()` ran while it started.
    */
-  open(): Promise<this> {
-    return Promise.reject(new Error("opening an MCP server is not ported yet (T6-2)"));
+  open(options: { signal?: AbortSignal } = {}): Promise<this> {
+    return this.start(HOST, options.signal);
   }
 
-  /** Stop the server and its client. Closing a server that is not open does nothing. */
+  /**
+   * Open the server on behalf of the run `token`, which closes it when it ends.
+   *
+   * @param token The opening run's ownership token.
+   * @param options.signal As `open()`'s.
+   * @returns This server.
+   * @throws As `open()` throws.
+   */
+  openForRun(token: string, options: { signal?: AbortSignal } = {}): Promise<this> {
+    return this.start(token, options.signal);
+  }
+
+  /**
+   * Stop the server and its client: end the calls in flight, then the client and the server's
+   * process group. Never rejects; closing twice, or before `open()`, does nothing more. A close
+   * that is still running when the server is opened again leaves the new connection alone.
+   */
   close(): Promise<void> {
-    return Promise.resolve();
+    const generation = this.generation;
+    if (generation === undefined) return Promise.resolve();
+    generation.closed = true;
+    // Detached at once, so an `open()` right after starts a connection this close leaves alone.
+    this.generation = undefined;
+    return this.shutdown(generation);
+  }
+
+  /** Close the server, for `await using`. */
+  [Symbol.asyncDispose](): Promise<void> {
+    return this.close();
+  }
+
+  /** Open a new connection and record `owner` once its tools are listed. */
+  private async start(owner: string, signal: AbortSignal | undefined): Promise<this> {
+    // Checked and set before the first `await`, so two racing opens can't both start.
+    if (this.generation !== undefined) throw new AlreadyOpenError(`MCP server '${this.label}' is already open`);
+    const generation: Generation = {
+      stop: new AbortController(),
+      client: undefined,
+      transport: undefined,
+      owner: undefined,
+      tools: undefined,
+      outputSchemas: new Map(),
+      callTimeout: 0,
+      closed: false,
+      gone: false,
+      calls: new Set(),
+      closing: undefined,
+    };
+    this.generation = generation;
+    try {
+      await this.connect(generation, owner, signal);
+    } catch (error) {
+      await this.shutdown(generation);
+      if (this.generation === generation) this.generation = undefined;
+      throw error;
+    }
+    return this;
+  }
+
+  /**
+   * Load the SDK, start the server, connect and list its tools within one connect deadline, and
+   * record `owner`; throw the error `open()` reports.
+   */
+  private async connect(generation: Generation, owner: string, signal: AbortSignal | undefined): Promise<void> {
+    const label = this.label;
+    const settings = current();
+    const connectTimeout = this.spec.connectTimeout ?? settings.mcpConnectTimeoutSeconds;
+    generation.callTimeout = this.spec.timeout ?? settings.mcpCallTimeoutSeconds;
+    const deadline = performance.now() + connectTimeout * 1000;
+    const stop = generation.stop;
+    let timedOut = false;
+    let started = false;
+    // The transport is closed directly, since `client.close()` can't reach one the SDK hasn't
+    // attached yet.
+    const halt = () => {
+      stop.abort();
+      void generation.transport?.close();
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      halt();
+    }, connectTimeout * 1000);
+    signal?.addEventListener("abort", halt, { once: true });
+    // Run after every `await`: a timeout, `close()` or abort that landed while nothing could be
+    // closed still wins.
+    const check = () => {
+      if (stop.signal.aborted || generation.closed || signal?.aborted) throw new Error("stopped while starting");
+    };
+    const request = () => ({ signal: stop.signal, timeout: Math.max(1, deadline - performance.now()) });
+    try {
+      check();
+      const sdk = await loadSdk(this.spec.command !== undefined);
+      check();
+      const transport = (generation.transport = this.createTransport(sdk.defaultEnv, settings.maxMcpMessageBytes));
+      const client = new sdk.Client({ name: "yian", version: VERSION }, { capabilities: {}, listMaxPages: MAX_PAGES });
+      generation.client = client;
+      client.onclose = () => {
+        generation.gone = true;
+      };
+      started = true;
+      await client.connect(transport, request());
+      check();
+      const listed = await listAll(
+        {
+          listTools: (params, options) => client.listTools(params, options),
+          getServerCapabilities: () => client.getServerCapabilities(),
+        },
+        {
+          label,
+          concurrencySafe: this.spec.concurrencySafe,
+          call: (name, args, ctx) => this.callTool(name, args, ctx),
+          ...request(),
+        },
+      );
+      check();
+      generation.tools = listed.tools;
+      generation.outputSchemas = listed.outputSchemas;
+      generation.owner = owner;
+    } catch (error) {
+      const tail = generation.transport?.stderrTail() ?? "";
+      const late = `MCP server '${label}' didn't start within ${connectTimeout} s` + tail;
+      if (timedOut) throw new McpConnectError(late);
+      if (generation.closed) throw new McpConnectError(`MCP server '${label}' was closed while starting`);
+      if (signal?.aborted) throw signal.reason;
+      // The SDK's timeout for a request is what was left of the deadline, so it may fire just
+      // before yian's timer.
+      if ((error as { code?: unknown } | null)?.code === "REQUEST_TIMEOUT") throw new McpConnectError(late);
+      if (!started || error instanceof McpConnectError) throw error;
+      throw new McpConnectError(`MCP server '${label}' didn't start: ${describeError(error)}` + tail, { cause: error });
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", halt);
+    }
+  }
+
+  /** Return the transport for this server. */
+  private createTransport(defaultEnv: Readonly<Record<string, string>>, maxMessageBytes: number): StdioTransport {
+    const { command, args, env, cwd } = this.spec;
+    if (command === undefined) throw new Error(`MCP server '${this.label}': HTTP servers are not ported yet`);
+    return new StdioTransport({ command, args, env, cwd, maxMessageBytes, defaultEnv });
+  }
+
+  /** End `generation`: its calls, its client and its transport. Never rejects; runs once. */
+  private shutdown(generation: Generation): Promise<void> {
+    return (generation.closing ??= (async () => {
+      generation.stop.abort();
+      for (const call of generation.calls) call.abort();
+      generation.calls.clear();
+      const transportClosed = generation.transport?.close();
+      try {
+        await generation.client?.close();
+      } catch {
+        // The transport's own close below still ends the server.
+      }
+      await transportClosed;
+    })());
+  }
+
+  /** Call the server's tool `name`. */
+  private callTool(_name: string, _args: Record<string, unknown>, _ctx: ToolContext<unknown>): Promise<unknown> {
+    return Promise.reject(new Error("MCP calls are not ported yet"));
   }
 }
 
@@ -406,6 +628,119 @@ Object.defineProperty(McpServer.prototype, MCP_SERVER, { value: true });
 /** Return whether `value` is an `McpServer` from any copy of yian. */
 export function isMcpServer(value: unknown): value is McpServer {
   return hasBrand(value, MCP_SERVER);
+}
+
+/**
+ * Import the MCP SDK client: its `Client`, and for a stdio server its default environment.
+ *
+ * @throws {Error} The SDK is not installed; the import error is the `cause`.
+ */
+async function loadSdk(stdio: boolean): Promise<{ Client: typeof Client; defaultEnv: Record<string, string> }> {
+  try {
+    const sdk = await import("@modelcontextprotocol/client");
+    const defaultEnv = stdio ? (await import("@modelcontextprotocol/client/stdio")).getDefaultEnvironment() : {};
+    return { Client: sdk.Client, defaultEnv };
+  } catch (cause) {
+    throw new Error("MCP servers need the MCP SDK; install @modelcontextprotocol/client 2.3.1", { cause });
+  }
+}
+
+/** `<Name>: <message>` for an error, as Python's `type(error).__name__: error`. */
+function describeError(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}` : `${jsTypeName(error)}: ${String(error)}`;
+}
+
+/** What `listAll` reads from a connected MCP client. */
+export interface ToolLister {
+  /** List every page of the server's tools. */
+  listTools(
+    params: undefined,
+    options: { signal?: AbortSignal; timeout?: number },
+  ): Promise<{ readonly tools: readonly unknown[] }>;
+  /** The capabilities the server declared, or `undefined`. */
+  getServerCapabilities(): { readonly tools?: unknown } | undefined;
+}
+
+/** The options of `listAll`. */
+export interface ListOptions {
+  /** The server's label, for errors. */
+  label: string;
+  /** The server's `concurrencySafe` option. */
+  concurrencySafe: boolean | readonly string[];
+  /** Runs one call of the server's tool `name`; each tool's `execute` delegates to it. */
+  call: (name: string, args: Record<string, unknown>, ctx: ToolContext<unknown>) => Promise<unknown>;
+  /** Aborts the listing. */
+  signal?: AbortSignal;
+  /** The listing's timeout in milliseconds. */
+  timeout?: number;
+}
+
+/**
+ * List the server's tools and wrap each in a `FunctionTool`. A server that declares no `tools`
+ * capability lists none, and gets no `tools/list` request.
+ *
+ * @returns The tools, frozen and in listing order, and each listed `outputSchema` by tool name.
+ * @throws {McpConnectError} The server lists more than 100 pages, a tool twice, a tool whose input
+ *   schema's type is not `"object"` or a tool `FunctionTool` refuses; or `concurrencySafe` names
+ *   a tool it doesn't list.
+ */
+export async function listAll(
+  lister: ToolLister,
+  options: ListOptions,
+): Promise<{ tools: readonly FunctionTool[]; outputSchemas: Map<string, JsonObject> }> {
+  const { label, concurrencySafe, call, signal, timeout } = options;
+  const tools: FunctionTool[] = [];
+  const outputSchemas = new Map<string, JsonObject>();
+  const seen = new Set<string>();
+  // As OpenCode does: the SDK would answer for such a server itself, with a `console.debug` line.
+  if (lister.getServerCapabilities()?.tools) {
+    let listed: readonly unknown[];
+    try {
+      ({ tools: listed } = await lister.listTools(undefined, { signal, timeout }));
+    } catch (error) {
+      if ((error as { code?: unknown } | null)?.code === "LIST_PAGINATION_EXCEEDED") {
+        throw new McpConnectError(`MCP server '${label}' lists more than ${MAX_PAGES} pages of tools`);
+      }
+      throw error;
+    }
+    for (const tool of listed) {
+      const { name, title, description, inputSchema, outputSchema } = tool as Record<string, unknown>;
+      const shown = reprText(String(name));
+      if (seen.has(name as string)) throw new McpConnectError(`MCP server '${label}' lists the tool ${shown} twice`);
+      if (!isRecord(inputSchema) || inputSchema.type !== "object") {
+        throw new McpConnectError(
+          `MCP server '${label}' tool ${shown} has an input schema whose type is not 'object'`,
+        );
+      }
+      const marked = concurrencySafe === true || (concurrencySafe !== false && concurrencySafe.includes(name as string));
+      try {
+        tools.push(
+          new FunctionTool({
+            name: name as string,
+            description: (description || title || name) as string,
+            parametersJsonSchema: inputSchema as JsonObject,
+            isConcurrencySafe: marked ? () => true : null,
+            execute: (args, ctx) => call(name as string, args, ctx),
+          }),
+        );
+      } catch (error) {
+        throw new McpConnectError(`MCP server '${label}' tool ${shown} is unusable: ${(error as Error).message}`, {
+          cause: error,
+        });
+      }
+      seen.add(name as string);
+      if (isRecord(outputSchema)) outputSchemas.set(name as string, outputSchema as JsonObject);
+    }
+  }
+  if (typeof concurrencySafe !== "boolean") {
+    const unknown = concurrencySafe.filter((name) => !seen.has(name));
+    if (unknown.length > 0) {
+      throw new McpConnectError(
+        `MCP server '${label}' marks tools it doesn't list as concurrency-safe: ${writeAsText(unknown)}`,
+      );
+    }
+  }
+  return { tools: Object.freeze(tools), outputSchemas };
 }
 
 /** How much of a stdio server's stderr yian keeps, and how many of its last lines an error shows. */

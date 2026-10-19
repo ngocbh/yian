@@ -369,7 +369,11 @@ async function main(): Promise<void> {
     // An ignored signal stays ignored across `exec`, so `sleep` ignores SIGTERM too.
     const child = spawn("sh", ["-c", "trap '' TERM; exec sleep 300"], { stdio: "ignore" });
     // The pid is written once `sh` has exec'd `sleep`, so a reader knows SIGTERM is ignored.
-    while (!commandOf(child.pid!).startsWith("sleep")) await sleep(0.01);
+    for (let command = commandOf(child.pid!); !command.startsWith("sleep"); command = commandOf(child.pid!)) {
+      // `sh` died before it started `sleep`: exit rather than loop forever, detached and unlisted.
+      if (command === "") process.exit(1);
+      await sleep(0.01);
+    }
     appendLine(values["grandchild-ignores-term"], String(child.pid));
     process.exit(0);
   }

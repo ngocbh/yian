@@ -37,7 +37,8 @@
  * `isRunLogLocked`; the reader `readRunLog` (a complete prefix read without the lock, an
  * incomplete tail ignored and left in place, an empty file, a corrupt line named by path, line and
  * seq, a line that isn't UTF-8); a failed resume whose descriptor close also fails throws the
- * original error; a write that fails and whose rollback truncate also fails.
+ * original error; a write that fails and whose rollback truncate also fails; closing a poisoned
+ * log, after which an append throws `run log is closed`.
  *
  * Changed:
  * - `test_schema_version_is_nine`: `SCHEMA_VERSION` is 10.
@@ -937,10 +938,12 @@ test("an append rollback preserves the log", () => {
     throw failure;
   });
   try {
-    const error = expectAppendFailure(log, file, () => log.append(new NodeStartedRecord("third")));
-    expect(error).toBeInstanceOf(AggregateError);
-    expect((error as AggregateError).message).toBe(`run log ${file} append failed and its rollback also failed`);
-    expect((error as AggregateError).errors).toEqual([failure, failure]);
+    const error = expectAppendFailure(log, file, () => log.append(new NodeStartedRecord("third"))) as AggregateError;
+    expect(error.constructor).toBe(AggregateError);
+    expect(error.message).toBe(`run log ${file} append failed and its rollback also failed`);
+    expect(error.errors).toHaveLength(2);
+    expect(error.errors[0]).toBe(failure);
+    expect(error.errors[1]).toBe(failure);
     expectPoisoned(log, file, failure);
   } finally {
     spy.mockRestore();
@@ -1053,13 +1056,18 @@ test("a write failure whose rollback truncate also fails is an AggregateError an
   const truncateSpy = spyOnLog("ftruncateSync", file, () => {
     throw truncateFailure;
   });
+  let fsyncs = 0;
+  const fsyncSpy = spyOnLog("fsyncSync", file, (real, args) => {
+    fsyncs++;
+    return real(...args);
+  });
   try {
     const error = expectError(
       () => log.append(new NodeStartedRecord("second")),
       AggregateError,
       `run log ${file} append failed and its rollback also failed`,
     ) as AggregateError;
-    expect(error.errors).toEqual([writeFailure, truncateFailure]);
+    expect(error.errors).toHaveLength(2);
     expect(error.errors[0]).toBe(writeFailure);
     expect(error.errors[1]).toBe(truncateFailure);
     expect(log.records()).toEqual(records);
@@ -1068,8 +1076,27 @@ test("a write failure whose rollback truncate also fails is an AggregateError an
   } finally {
     writeSpy.mockRestore();
     truncateSpy.mockRestore();
+    fsyncSpy.mockRestore();
+  }
+  // The rollback still syncs after its truncate failed.
+  expect(fsyncs).toBe(1);
+  log.close();
+  expectUnlocked(file);
+});
+
+test("a poisoned log that is closed refuses appends as closed", () => {
+  const file = path.join(dir, "run.jsonl");
+  const log = baselineLog(file);
+  const spy = spyOnLog("fsyncSync", file, () => {
+    throw new Error("fsync failed");
+  });
+  try {
+    expect(() => log.append(new NodeStartedRecord("second"))).toThrow();
+  } finally {
+    spy.mockRestore();
   }
   log.close();
+  expectError(() => log.append(new NodeStartedRecord("late")), Error, "run log is closed");
   expectUnlocked(file);
 });
 

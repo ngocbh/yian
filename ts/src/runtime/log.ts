@@ -1262,7 +1262,10 @@ export class JsonlRunLog implements RunLog {
   readonly #records: RecordEnvelope[];
   #prefixSize: number;
   #closed = false;
-  /** The error of the failed append that poisoned the log, or `null`. */
+  /**
+   * The error of the failed append that poisoned the log, or `null`. The error is wrapped as
+   * `{ error }` so even a thrown `undefined` poisons the log.
+   */
   #failure: { error: unknown } | null = null;
 
   /** Adopt a locked descriptor and its validated complete prefix of `prefixSize` bytes. */

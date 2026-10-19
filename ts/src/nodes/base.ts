@@ -20,7 +20,13 @@
  */
 
 import { Failure, type FailureCode, OriginRef, reprText } from "../diagnostics.ts";
-import type { IN_LOOP_EVENTS, StreamChunk } from "../events.ts";
+import type {
+  ModelCallFinished,
+  ModelCallStarted,
+  StreamChunk,
+  ToolCallFinished,
+  ToolCallStarted,
+} from "../events.ts";
 import {
   ExpressionError,
   type FeedbackValue,
@@ -686,7 +692,8 @@ export class CapabilityFault extends Error {
  *
  * The id is the node's expanded id: an expanded LOOP or MAP node has its own id per occurrence.
  * Steering is push-based: the host aborts the node's interrupt signal to stop its loop and
- * return now, and the node drains queued steer messages between its effects, awaiting a promise.
+ * return now. `drain` may return the queued steer messages or a promise of them; the node awaits
+ * it between its effects.
  * The interrupt signal is separate from the node's own `caps.signal`, so an interrupt never
  * aborts a running tool.
  */
@@ -728,7 +735,7 @@ export interface NodeCaps {
   /** The transient stream-chunk sink; supplied to a node that declares `needsLiveEvents`. */
   readonly emitStream?: (chunk: StreamChunk) => void;
   /** The transient model and tool call observer sink; supplied with `needsLiveEvents`. */
-  readonly emitEvent?: (event: InstanceType<(typeof IN_LOOP_EVENTS)[number]>) => void;
+  readonly emitEvent?: (event: ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished) => void;
   /** Receives the node's render capture once; supplied to a node that declares `needsRenderCapture`. */
   readonly captureRender?: (captured: Readonly<Record<string, unknown>>) => void;
   /** The host inbox; supplied to a node that declares `needsSteering`. */

@@ -5,14 +5,35 @@
  * (only the text, joined with `"\n"`), and of a message without text; `ReplyInterrupted`'s message,
  * `reply`, `usage` (default `null`) and that it is an `Error`.
  *
- * The AgentNode construction rows (124, 129, 144, 152) and the `YIAN_MAX_TOOL_ITERATIONS` rows
- * (531, 538) come with the node.
+ * The AgentNode construction tests come with the node: `test_direct_agent_rejects_*`,
+ * `test_direct_agent_requires_an_exact_variable_contract`,
+ * `test_env_max_tool_iterations_minus_one_accepted` and
+ * `test_env_max_tool_iterations_rejects_bad_value`.
  *
- * Later (T5-11b): the tool loop rows (167, 180, 221, 243, 267, 395, the cap rows 442–522, 638).
- * Later (T5-11a): 162, the structured-origin rows (299, 351, 371, 426) and the `provider.auth`
- * rows (599–695).
+ * Later (T5-11b), the tool loop: `test_tool_loop_round_trip`,
+ * `test_tool_loop_executes_model_calls_in_returned_order`,
+ * `test_agent_rejects_globally_registered_but_ungranted_tool`,
+ * `test_tool_loop_rejects_model_injected_arguments`,
+ * `test_tool_loop_propagates_tool_exception_as_node_failure`,
+ * `test_tool_validation_error_does_not_claim_scalar_output_origin`, the cap tests
+ * (`test_tool_loop_cap_trips_when_bounded`, `test_default_no_cap_runs_unbounded`,
+ * `test_env_max_tool_iterations_overrides_cap`, `test_tool_loop_cap_does_not_run_the_last_replys_tools`,
+ * `test_ungranted_tool_stays_node_execute`, `test_tool_loop_cap_of_one_still_answers_without_tools`)
+ * and `test_tool_auth_failure_stays_node_execute`.
  *
- * Not ported: 549 (`test_agent_run_has_no_scratch_kwarg`, signature introspection).
+ * Later (T5-11a): `test_no_tools_returns_plain_text`; the structured-origin tests
+ * (`test_structured_failure_selects_exact_or_ancestor_output_origin`,
+ * `test_structured_scalar_failure_selects_contract_root`,
+ * `test_non_validation_structured_failure_keeps_node_origin`,
+ * `test_source_free_structured_failure_keeps_empty_trace`); the `provider.auth` tests
+ * (`test_model_auth_failure_is_provider_auth`, `test_permission_denied_is_provider_auth`,
+ * `test_rate_limit_stays_node_execute`, `test_credential_resolution_auth_error_is_provider_auth`,
+ * `test_structured_call_auth_failure_is_provider_auth`,
+ * `test_fallback_structured_auth_failure_is_not_retried`,
+ * `test_a_stop_during_a_refused_structured_call_stops_the_node`,
+ * `test_provider_auth_failure_message_is_scrubbed`).
+ *
+ * Not ported: `test_agent_run_has_no_scratch_kwarg` (signature introspection).
  */
 
 import { expect, test } from "bun:test";

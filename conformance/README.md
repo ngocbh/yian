@@ -138,8 +138,8 @@ runner always gives the run a log file in the case directory, and projects it to
 error the run raised instead (the log may not exist). When the run raised before creating its
 log, its trace is `[]`.
 
-With `host.memory` (The host, as data), its `before` runs run first; `tool_calls` lists their
-calls too, and every other result is the main run's.
+With `host.memory` (below), its `before` runs go first; `tool_calls` lists their calls too, and
+every other result is the main run's.
 
 ### `resume`
 
@@ -152,7 +152,8 @@ a real crash would not. Then the flow is resumed from the log with the `resume` 
 `run`). The expectations are for the resumed run: its output, the trace of the whole log, the
 events and stream of the resume call, and `tool_calls` over both runs. With `host.memory`, the
 `before` runs come first (their calls are in `tool_calls` too), and the cut run and the resume
-each get the memories built afresh.
+each get the memories built afresh. Memory in a `resume` case (memories for the cut run and for
+the resume) is specified but not yet pinned by a case here; later memory cases pin it.
 
 ### `backward`
 
@@ -300,14 +301,15 @@ A case can't hold code, so its host is declared under `host`.
   run (each `before` run, the main run, and for a `resume` case the cut run and the resume) the
   runner builds the flow's memories from their declarations, fresh per run, rooted at
   `<case dir>/memory` (Python: `build_memories(flow, root=...)`), passes them to the run, and
-  closes them after that run's backward calls. An error building the main run's memories is the
-  case's `raises` (e.g. `MemorySetupError`). A `before` entry is `{inputs, run, backward}`, the
-  case's own shapes (`run.run_id` required; `backward` needs `run.learnable: true`); the
-  `before` runs run in order, before the main run, over the same memory root. Their outcomes
-  aren't compared, but a raise (a run's, a backward call's, or building their memories) fails
-  the case. Scripts are shared by all runs in order; `tool_calls` lists every run's calls;
-  `trace`, `events`, `stream`, `output` and `backward` are the main run's. A profile is seeded
-  by a `files` entry at its storage path, `memory/<flow id>/<scope...>/<name>.md`.
+  closes them after that run's backward calls. An error building them is the case's `raises`
+  (e.g. `MemorySetupError`), except in a `before` run (below); in a `resume` case, the cut run's
+  error skips the resume. A `before` entry is `{inputs, run, backward}`, the case's own shapes
+  (`run.run_id` required; `backward` needs `run.learnable: true`); the `before` runs go in
+  order, before the main run, over the same memory root. Their outcomes aren't compared, but a
+  raise (a run's, a backward call's, or building their memories) fails the case. Scripts are
+  shared by all runs in order; `tool_calls` lists every run's calls; `trace`, `events`,
+  `stream`, `output` and `backward` are the main run's. A profile is seeded by a `files` entry
+  at its storage path, `memory/<flow id>/<scope...>/<name>.md`.
 - **`crash_after_record`**: `resume` cases only (above).
 
 `expect.tool_calls` lists, per tool that was called, each call in order as `{args, call_id,

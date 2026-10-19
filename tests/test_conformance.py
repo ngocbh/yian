@@ -196,10 +196,10 @@ _RESUME_KEYS = {"num_workers", "api_key", "headers", "context"}
 # Host keys the format reserves and this runner doesn't support yet.
 _RESERVED_HOST_KEYS = ("steering", "stop", "skills")
 _HOST_KEYS = {"tools", "human", "jitter", "models", "memory", *_RESERVED_HOST_KEYS}
-# `host.models` consumers, besides `memory:<key>` under `_LEARNERS`.
+# `host.models` consumers, besides `memory:<key>` under `_LEARNER_NODE`.
 _CONSUMERS = ("agent", "structured_retry", "compose", "backward", "summary")
 # The node id memory learners' model calls are scripted under.
-_LEARNERS = "__memory__"
+_LEARNER_NODE = "__memory__"
 _USAGE_COUNTS = ("input_tokens", "output_tokens", "total_tokens")
 # Each optional usage count, by where LangChain's `usage_metadata` holds it.
 _USAGE_DETAILS = {
@@ -384,10 +384,10 @@ def _check_models(models: object) -> None:
     for node, consumers in _mapping("host.models", models).items():
         for consumer, script in _mapping(f"host.models.{node}", consumers).items():
             label = f"host.models.{node}.{consumer}"
-            if consumer.startswith("memory:") != (node == _LEARNERS):
-                raise ValueError(f"`{label}`: `memory:<key>` consumers go under `{_LEARNERS}`, "
-                                 "and only they")
-            if node != _LEARNERS and consumer not in _CONSUMERS:
+            if consumer.startswith("memory:") != (node == _LEARNER_NODE):
+                raise ValueError(f"`{label}`: `memory:<key>` consumers go under "
+                                 f"`{_LEARNER_NODE}`, and `{_LEARNER_NODE}` holds only them")
+            if node != _LEARNER_NODE and consumer not in _CONSUMERS:
                 raise ValueError(f"`{label}`: the consumer must be one of {', '.join(_CONSUMERS)}")
             if not isinstance(script, list):
                 raise ValueError(f"`{label}` must be a list")
@@ -827,7 +827,7 @@ def _seated(patch: pytest.MonkeyPatch) -> None:
     `backward_agent` its node's `backward` calls and `prepare_history` `summary` calls;
     `generate_structured` keeps its caller's seat and starts counting the calls made under it.
     A reflective or profile session's `learn` seats its `memory:<key>` calls under
-    `_LEARNERS`. A call whose context can't be read gets no seat.
+    `_LEARNER_NODE`. A call whose context can't be read gets no seat.
     """
     def wrap(module: object, name: str, make_seat, first: str | None = None,
              at: int = 0) -> None:
@@ -860,7 +860,7 @@ def _seated(patch: pytest.MonkeyPatch) -> None:
     for session in (reflective_memory._ReflectiveSession, profile_memory._ProfileSession):
         # A method: its context follows `self`.
         wrap(session, "learn", lambda outer, context: {
-            "node": _LEARNERS, "consumer": f"memory:{context.memory}",
+            "node": _LEARNER_NODE, "consumer": f"memory:{context.memory}",
         }, "context", at=1)
 
 
@@ -1514,8 +1514,9 @@ def _actual_run(case: dict, case_dir: Path) -> dict:
                       + "".join(traceback.format_exception(exc)))
             if raised:
                 _fail(f"`host.memory.before[{index}]` backward raised {raised[0]}")
-            logs[f"the log of `host.memory.before[{index}]`"] = path.read_text(encoding="utf-8")
-            trace = _trace(path.read_text(encoding="utf-8").splitlines(), flow)
+            text = path.read_text(encoding="utf-8")
+            logs[f"the log of `host.memory.before[{index}]`"] = text
+            trace = _trace(text.splitlines(), flow)
             pooled = arguments.get("num_workers", 8) != 0
             earlier.append(_grouped(trace, lambda record: record[1]) if pooled else trace)
         run, resume = dict(case.get("run", {})), dict(case.get("resume", {}))
@@ -1528,6 +1529,7 @@ def _actual_run(case: dict, case_dir: Path) -> dict:
         def start(memory: object) -> RunResult:
             return run_flow(flow, case.get("inputs", {}), **hooks, **run, memory=memory)
 
+        result, caught, outcomes = None, {}, []
         if case["kind"] == "resume":
             last = case["host"]["crash_after_record"]
             append = JsonlRunLog.append
@@ -1537,34 +1539,38 @@ def _actual_run(case: dict, case_dir: Path) -> dict:
                     raise _Cut
                 return append(self, record)
 
-            with pytest.MonkeyPatch.context() as cut, memories() as memory:
-                cut.setattr(JsonlRunLog, "append", refuse)
-                try:
-                    start(memory)
-                except _Cut:
-                    pass
-                else:
-                    _fail(f"the run ended before record {last + 1}")
+            try:
+                cut_memory = memories()
+            except Exception as exc:
+                # The cut run's memories failing to build is the case's `raises`; nothing resumes.
+                caught = {"raises": _raised(exc), "error": exc}
+            else:
+                with pytest.MonkeyPatch.context() as cut, cut_memory as memory:
+                    cut.setattr(JsonlRunLog, "append", refuse)
+                    try:
+                        start(memory)
+                    except _Cut:
+                        pass
+                    else:
+                        _fail(f"the run ended before record {last + 1}")
             events.clear()
             chunks.clear()
 
             def start(memory: object) -> RunResult:
                 return resume_flow(flow, **hooks, **resume, memory=memory)
 
-        result, caught, outcomes = None, {}, []
         with contextlib.ExitStack() as stack:
-            try:
-                result = start(stack.enter_context(memories()))
-            except Exception as exc:
-                caught = {"raises": _raised(exc), "error": exc}
+            if not caught:
+                try:
+                    result = start(stack.enter_context(memories()))
+                except Exception as exc:
+                    caught = {"raises": _raised(exc), "error": exc}
             if result is not None:
                 outcomes = call_backward(result, log, case.get("backward", []))
-        listed = case.get("expect", {}).get("memory", {})
-        recalled = {}
-        if listed:
+        listed = case.get("expect", {}).get("memory")
+        if listed is not None:
             with memories() as memory:
-                for key in listed:
-                    recalled[key] = _recall(memory, key)
+                recalled = {key: _recall(memory, key) for key in listed}
         # A call past a script's end is the case's own error, whatever it made differ.
         left = check()
         text = log.read_text(encoding="utf-8") if log.exists() else ""
@@ -1579,7 +1585,7 @@ def _actual_run(case: dict, case_dir: Path) -> dict:
             "tool_calls": calls,
             **({"output": _output(result, flow)} if result is not None else {}),
             **({"backward": outcomes} if case["kind"] == "backward" else {}),
-            **({"memory": recalled} if listed else {}),
+            **({"memory": recalled} if listed is not None else {}),
         }
         _check_secrets(case, {**{name: repr(value) for name, value in actual.items()},
                               "the run log": text, **logs,
@@ -3746,9 +3752,12 @@ def test_memory_before_runs_share_a_session(tmp_path: Path) -> None:
                              _message("assistant", "a1"), _message("user", "second")],
             }}]}},
         },
+        # An empty `expect.memory` reads nothing and is compared like any other.
+        "expect": {"output": {"status": "succeeded", "output": "a2"}, "memory": {}},
     }
     actual = results(case, tmp_path, candidate=True)
-    assert actual["output"] == {"status": "succeeded", "output": "a2"}
+    _check_results(case, actual)
+    assert actual["memory"] == {}
     assert actual["tool_calls"] == {}
     assert [entry[2]["inputs"] for entry in actual["trace"] if entry[0] == "run_started"] == [
         {"q": "second"}
@@ -3841,14 +3850,16 @@ def test_memory_checks() -> None:
     base = {"kind": "run", "flow": _memory_flow(flow_memory="{notes: episodic}"),
             "expect": {"output": {"status": "succeeded", "output": "a"}}}
     problems = {
-        "host.memory.before[0].run.run_id": {"host": {"memory": {"before": [{"run": {}}]}}},
-        "host.memory.after": {"host": {"memory": {"after": []}}},
-        "host.models.answer.memory:notes": {
+        "`host.memory.before[0].run.run_id` is required": {
+            "host": {"memory": {"before": [{"run": {}}]}}},
+        "unknown key `host.memory.after`": {"host": {"memory": {"after": []}}},
+        "`host.models.answer.memory:notes`: `memory:<key>` consumers go under `__memory__`": {
             "host": {"memory": {}, "models": {"answer": {"memory:notes": []}}}},
-        "expect.memory": {"expect": {**base["expect"], "memory": {"notes": ""}}},
+        "`expect.memory` needs `host.memory`": {
+            "expect": {**base["expect"], "memory": {"notes": ""}}},
     }
-    for key, change in problems.items():
-        with pytest.raises(ValueError, match=re.escape(key)):
+    for message, change in problems.items():
+        with pytest.raises(ValueError, match=re.escape(message)):
             _check({**base, **change})
 
 

@@ -148,13 +148,9 @@ export class LoadDiagnostics {
     const inner = error.diagnostic;
     const outer = this.frame(range, { note });
     const diagnostic = new Diagnostic({
-      code: inner.code,
+      ...inner,
       message: message ?? inner.message,
       frames: outer !== null ? [outer, ...inner.frames] : inner.frames,
-      notes: inner.notes,
-      nodeId: inner.nodeId,
-      causeType: inner.causeType,
-      traceback: inner.traceback,
     });
     return new LoadError(diagnostic, { cause });
   }

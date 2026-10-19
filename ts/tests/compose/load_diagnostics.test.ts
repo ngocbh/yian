@@ -6,7 +6,8 @@
  * Not ported: the `args`, copy/pickle and legacy-keyword tests (no counterpart), and the
  * absent `line` attribute (Bun puts `line` on every Error).
  *
- * Changed: payload writes throw `TypeError` (a frozen object) rather than `AttributeError`.
+ * Changed: payload writes throw `TypeError` (a frozen object) rather than `AttributeError`;
+ * `oneLineText` returns `null` for a line past the text, where Python raises `IndexError`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -34,6 +35,11 @@ describe("LoadError", () => {
     expect(error.name).toBe("LoadError");
     expect(error).toBeInstanceOf(RangeError);
     for (const name of ["lines", "range", "notes"]) expect(name in error).toBe(false);
+    // Freezing the error must leave its stack and throwing intact.
+    expect(error.stack).toContain("LoadError: broken");
+    expect(() => {
+      throw error;
+    }).toThrow(LoadError);
   });
 
   test.each([

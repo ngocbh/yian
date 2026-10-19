@@ -37,8 +37,8 @@ export function oneLineText(
   // Lines break as ranges count them (`rule: columns`); no empty line after a final break.
   const lines = document.text.split(/\r\n|\r|\n/);
   if (lines[lines.length - 1] === "") lines.pop();
-  const line = lines[range.startLine - 1];
-  return line === undefined ? null : line.slice(range.startCol - 1, range.endCol - 1);
+  if (!(1 <= range.startLine && range.startLine <= lines.length)) return null;
+  return lines[range.startLine - 1]!.slice(range.startCol - 1, range.endCol - 1);
 }
 
 /**

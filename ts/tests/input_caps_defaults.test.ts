@@ -1,18 +1,22 @@
 /**
  * Input-size caps come from `defaults`; mirrors `tests/test_input_caps_defaults.py`.
  *
- * Holds the base URL, skill, question option and auth store rows; the other rows come with their
+ * Holds the base URL, skill, question option, auth store and auth response rows; the other rows come with their
  * modules.
  */
 
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadSkillDir } from "../src/compose/skills.ts";
 import { BUILTIN, install } from "../src/defaults.ts";
+import { ProviderError } from "../src/llm/errors.ts";
 import { ApiKeyCredentials, AuthError } from "../src/llm_clients/auth/common.ts";
+import { request } from "../src/llm_clients/auth/http.ts";
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import { validateBaseUrl } from "../src/llm_clients/config.ts";
 import { checkSkillName } from "../src/skills/catalog.ts";
@@ -108,3 +112,28 @@ test("auth store cap applies to writes", async () => {
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+for (const limit of [10, null]) {
+  test(`auth response cap: ${limit ?? "default"}`, async () => {
+    const body = '{"a": "xx"}';
+    expect(body.length).toBe(11);
+    if (limit !== null) install({ ...BUILTIN, maxAuthResponseBytes: limit });
+    const server = http.createServer((_req, res) => res.end(body));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+    try {
+      const sent = request("GET", url, { headers: {}, timeoutMs: 2000 });
+      if (limit === null) {
+        expect((await sent).data).toEqual({ a: "xx" });
+      } else {
+        const error = await sent.catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(ProviderError);
+        expect((error as ProviderError).kind).toBe("protocol");
+        expect((error as ProviderError).message).toContain("larger than 10 bytes");
+      }
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+}

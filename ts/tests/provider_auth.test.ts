@@ -1,11 +1,13 @@
 /**
- * Mirrors `tests/test_provider_auth.py`: the credential values, the store and `isAuthFailure`.
- * The OAuth flow, refresh HTTP and model-catalog tests go with `auth/openai.ts` and
- * `auth/http.ts`, as does `test_refresh_is_serialized_across_processes`.
+ * Mirrors `tests/test_provider_auth.py`: the credential values, the store, `isAuthFailure` and
+ * `request`. The OAuth flow, refresh HTTP and model-catalog tests go with `auth/openai.ts`, as
+ * does `test_refresh_is_serialized_across_processes`.
  */
 
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -17,10 +19,12 @@ import { ProviderError } from "../src/llm/errors.ts";
 import {
   ApiKeyCredentials,
   AuthError,
+  HttpResponse,
   isAuthFailure,
   OAuthCredentials,
   ProviderSelection,
 } from "../src/llm_clients/auth/common.ts";
+import { request } from "../src/llm_clients/auth/http.ts";
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import { lockFile, realScheduler, type Scheduler, virtualScheduler } from "../src/platform.ts";
 import { parseJson } from "../src/typesys/json.ts";
@@ -1302,4 +1306,175 @@ describe("AuthStore", () => {
     },
     20_000,
   );
+});
+
+/** A request a local server received. */
+interface Received {
+  method: string;
+  headers: http.IncomingHttpHeaders;
+  body: string;
+}
+
+/** A local HTTP server on 127.0.0.1. */
+interface LocalServer {
+  url: string;
+  received: Received[];
+  close(): Promise<void>;
+}
+
+/** Start a server on 127.0.0.1 that records each request, then lets `handle` answer it. */
+async function localServer(handle: (res: http.ServerResponse, received: Received) => void): Promise<LocalServer> {
+  const received: Received[] = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk: string) => (body += chunk));
+    req.on("end", () => {
+      const each = { method: req.method!, headers: req.headers, body };
+      received.push(each);
+      handle(res, each);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}/`,
+    received,
+    async close() {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+describe("request", () => {
+  for (const status of [200, 401, 302]) {
+    test(`builtin http decodes responses and never follows redirects: ${status}`, async () => {
+      const body = '{"data":[{"id":"gpt-test"}]}';
+      const server = await localServer((res) => {
+        res.writeHead(status, { location: `${server.url}redirected`, "content-length": body.length });
+        res.end(body);
+      });
+      try {
+        const response = await request("GET", server.url, { headers: {}, timeoutMs: 1000 });
+        expect(response).toBeInstanceOf(HttpResponse);
+        expect(response.status).toBe(status);
+        // A 3xx body is cancelled unread, and no caller reads a non-2xx body.
+        expect(response.data).toEqual(status === 302 ? null : { data: [{ id: "gpt-test" }] });
+        expect(server.received).toHaveLength(1);
+        expect(server.received[0]!.method).toBe("GET");
+      } finally {
+        await server.close();
+      }
+    });
+  }
+
+  test("a non-JSON body gives null data and keeps the status", async () => {
+    const server = await localServer((res) => {
+      res.writeHead(500);
+      res.end("<html>oops</html>");
+    });
+    try {
+      const response = await request("GET", server.url, { headers: {}, timeoutMs: 1000 });
+      expect(response.status).toBe(500);
+      expect(response.data).toBeNull();
+    } finally {
+      await server.close();
+    }
+  });
+
+  for (const [bodyLimit, fits] of [
+    [1024, false],
+    [4096, true],
+  ] as const) {
+    test(`builtin http body limit raises a protocol error: ${bodyLimit}`, async () => {
+      const body = JSON.stringify({ pad: "x".repeat(2048) });
+      const server = await localServer((res) => res.end(body));
+      try {
+        const sent = request("GET", server.url, { headers: {}, timeoutMs: 2000, bodyLimit });
+        if (fits) {
+          expect((await sent).data).toEqual({ pad: "x".repeat(2048) });
+        } else {
+          const error = await rejected(sent);
+          expect(error).toBeInstanceOf(ProviderError);
+          expect((error as ProviderError).kind).toBe("protocol");
+          expect(error.message).toBe("HTTP response is larger than 1024 bytes");
+        }
+      } finally {
+        await server.close();
+      }
+    });
+  }
+
+  test("jsonBody is sent as JSON and form as urlencoded text", async () => {
+    const server = await localServer((res, received) => {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ method: received.method, type: received.headers["content-type"], body: received.body }));
+    });
+    try {
+      const json = await request("POST", server.url, {
+        headers: { "Content-Type": "application/json" },
+        timeoutMs: 1000,
+        jsonBody: { client_id: "app", scope: "a b" },
+      });
+      expect(json.data).toEqual({
+        method: "POST",
+        type: "application/json",
+        body: '{"client_id":"app","scope":"a b"}',
+      });
+      const form = await request("POST", server.url, {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        timeoutMs: 1000,
+        form: { grant_type: "refresh_token", scope: "a b&c" },
+      });
+      expect(form.data).toEqual({
+        method: "POST",
+        type: "application/x-www-form-urlencoded",
+        body: "grant_type=refresh_token&scope=a+b%26c",
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("builtin http deadline raises a timeout error", async () => {
+    const server = await localServer(() => {});
+    try {
+      const start = Date.now();
+      const error = await rejected(
+        request("GET", server.url, { headers: {}, timeoutMs: 100, scheduler: realScheduler }),
+      );
+      expect(error).toBeInstanceOf(ProviderError);
+      expect((error as ProviderError).kind).toBe("timeout");
+      expect(Date.now() - start).toBeLessThan(1000);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a caller abort mid-request rejects with the abort reason", async () => {
+    const controller = new AbortController();
+    const reason = new Error("stopped by host");
+    const server = await localServer(() => controller.abort(reason));
+    try {
+      const error = await rejected(
+        request("GET", server.url, { headers: {}, timeoutMs: 5000, signal: controller.signal }),
+      );
+      expect(error).toBe(reason);
+      expect(server.received).toHaveLength(1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("HttpResponse keeps its data out of inspection", () => {
+    const response = new HttpResponse(200, { access_token: "secret-token" });
+    expect(response.status).toBe(200);
+    expect(response.data).toEqual({ access_token: "secret-token" });
+    expect(Object.isFrozen(response)).toBe(true);
+    for (const text of [JSON.stringify(response), String(response), inspect(response)]) {
+      expect(text).not.toContain("secret-token");
+    }
+    expect(JSON.stringify(response)).toBe('{"status":200}');
+  });
 });

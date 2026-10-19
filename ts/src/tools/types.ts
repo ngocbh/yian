@@ -5,7 +5,7 @@
  * run-start check against the result from reporting a binding as disjoint when the tool would
  * accept it. A schema with no yian equivalent translates to `null`, which means "do not check".
  *
- * Knows about: typesys. Never imports: nodes, compile, compose, runtime, the run boundary, or
+ * Knows about: typesys and `tools/context`. Never imports: nodes, compile, compose, runtime, the run boundary, or
  * CLI.
  */
 
@@ -18,6 +18,8 @@ import {
   type ValueRecord,
 } from "../typesys/index.ts";
 import { type Bound, type Bounds, typeEquals } from "../typesys/values.ts";
+import { ASK_USER } from "./context.ts";
+import type { FunctionTool } from "./function_tools.ts";
 
 const SCALAR_KINDS: ReadonlyMap<string, ValueKind> = new Map([
   ["string", ValueKind.STRING],
@@ -57,6 +59,7 @@ export function typeFromJsonSchema(
   try {
     typ.validateShape();
   } catch (error) {
+    // A RangeError here stands for Python's ValueError: the shape is invalid, so "do not check".
     if (error instanceof TypeError || error instanceof RangeError) return null;
     throw error;
   }
@@ -71,9 +74,9 @@ export function inputTypeFromJsonSchema(schema: unknown, root?: unknown): Type |
   try {
     return typeFromJsonSchema(schema, { closed: false, root });
   } catch (error) {
-    // A host or MCP schema can nest deeper than the translator recurses (the runtime's
-    // stack overflow is a RangeError); such an input is left unchecked rather than
-    // failing the run.
+    // A host or MCP schema can nest deeper than the translator recurses; the runtime's stack
+    // overflow is a RangeError, standing for Python's RecursionError. Such an input is left
+    // unchecked rather than failing the run.
     if (error instanceof RangeError) return null;
     throw error;
   }
@@ -153,11 +156,12 @@ function resolveRef(ref: unknown, root: unknown): unknown {
 
 /** Return the tags of a string `const` or `enum`, else `null`. */
 function stringTags(schema: ValueRecord): ReadonlySet<string> | null {
+  const enumValues = get(schema, "enum");
   let values: unknown[];
   if (Object.hasOwn(schema, "const")) {
     values = [schema.const];
-  } else if (Array.isArray(get(schema, "enum"))) {
-    values = schema.enum as unknown[];
+  } else if (Array.isArray(enumValues)) {
+    values = enumValues;
   } else {
     return null;
   }
@@ -302,8 +306,8 @@ function union(members: readonly (Type | null)[]): Type | null {
       nullable = true;
       continue;
     }
-    for (let part of member.variants ?? [member]) {
-      part = part.replace({ nullable: false });
+    for (const variant of member.variants ?? [member]) {
+      const part = variant.replace({ nullable: false });
       if (!others.some((other) => typeEquals(other, part))) others.push(part);
     }
   }
@@ -332,4 +336,42 @@ function hull(ranges: readonly Type[]): Type {
     kind: ranges[0]!.kind,
     bounds: low === null && high === null ? undefined : [low, high],
   });
+}
+
+/** The types a tool declares for its inputs and its return value. */
+export interface ToolTypes {
+  /**
+   * The model-visible inputs by name. `null` when the argument schema cannot be read, so no input
+   * is checked. A `null` value means that input is not checked.
+   */
+  inputs: ReadonlyMap<string, Type | null> | null;
+  /** The names of the inputs a call must pass. */
+  required: ReadonlySet<string>;
+  /** The return type, or `null` when it is not checked. */
+  output: Type | null;
+}
+
+/**
+ * Read the declared input and return types of `tool` from its `parametersJsonSchema`.
+ *
+ * Each part is `null` where it cannot be read without risking a narrower type than the tool
+ * accepts or returns.
+ */
+export function toolTypes(tool: FunctionTool): ToolTypes {
+  const schema = tool.parametersJsonSchema;
+  const properties = get(schema, "properties");
+  if (!isRecord(properties)) return { inputs: null, required: new Set(), output: null };
+  const inputs = new Map<string, Type | null>();
+  for (const [name, prop] of Object.entries(properties)) {
+    // The run cleans `ask_user`'s `options` before checking it, so any shape is accepted.
+    const unchecked = tool.name === ASK_USER && name === "options";
+    inputs.set(name, unchecked ? null : inputTypeFromJsonSchema(prop, schema));
+  }
+  const required = get(schema, "required");
+  const names = Array.isArray(required) ? required : [];
+  return {
+    inputs,
+    required: new Set(names.filter((name): name is string => typeof name === "string")),
+    output: null,
+  };
 }

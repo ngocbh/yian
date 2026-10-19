@@ -7,10 +7,12 @@
  * the provider block merged over them; `think`, `keep_alive`, `logprobs`, `top_logprobs` and
  * `options.*` come only from the block. Every message is sent in place, neither merged nor lifted,
  * with empty fields left out: a system or user message as its text parts joined with `"\n"`, an
- * assistant message as its joined text and its calls (with their ids) in part order, its reasoning
- * and refusals left out, and each tool result as its own `tool` message carrying the tool's name
- * and the call id. Tools go with their parameters as written; the tool choice, parallel tool calls
- * and `strict` are not sent, Ollama having none of them.
+ * assistant message as its joined text, its thinking and its calls (with their ids) in part order,
+ * its refusals left out, and each tool result as its own `tool` message carrying the tool's name
+ * and the call id. Thinking goes back only from reasoning this route parsed for the same provider,
+ * model and account; one record that doesn't match leaves all of that message's thinking out.
+ * Tools go with their parameters as written; the tool choice, parallel tool calls and `strict` are
+ * not sent, Ollama having none of them.
  *
  * Each line of the reply is one JSON object holding a piece of the message; the line with
  * `done: true` ends it with the finish reason and the token counts. A reply that failed or ended
@@ -27,6 +29,8 @@ import {
   MediaPart,
   type Message,
   type Part,
+  readReplayRecord,
+  ReasoningPart,
   type ReplayDegradedReason,
   type ReplayKey,
   type Request,
@@ -83,11 +87,15 @@ export class OllamaChat implements NdjsonProtocol {
    * `tools` (`[]` with none), then the block merged over them.
    *
    * Every message is sent in place. A system or user message is `{role, content}`, its text parts
-   * joined with `"\n"`. An assistant message is `{role, content, tool_calls}`: its text parts
-   * joined with `"\n"`, and each call in part order as `{id, function: {name, arguments}}`, the
-   * arguments copied (`{}` for an invalid call); reasoning and refusal parts are not sent. A tool
-   * message is one `{role: "tool", content, tool_name, tool_call_id}` per result; `isError` is not
-   * sent. An empty `content` and an empty call list are left out, so an empty assistant message is
+   * joined with `"\n"`. An assistant message is `{role, content, thinking, tool_calls}`: its text
+   * parts joined with `"\n"`, its reasoning texts joined with `""`, and each call in part order as
+   * `{id, function: {name, arguments}}`, the arguments copied (`{}` for an invalid call); refusal
+   * parts are not sent. Reasoning goes back only when every reasoning record on the message reads
+   * back for this protocol, provider, model and account; otherwise none of it is sent and
+   * `onReplayDegraded` is called once for the message with the first reason in part order. A
+   * reasoning part without a payload is never sent and signals nothing. A tool message is one
+   * `{role: "tool", content, tool_name, tool_call_id}` per result; `isError` is not sent. An empty
+   * `content`, `thinking` and call list are left out, so an empty assistant message is
    * `{role: "assistant"}`.
    *
    * Each tool is `{type: "function", function: {name, description, parameters}}`, the parameters
@@ -105,7 +113,7 @@ export class OllamaChat implements NdjsonProtocol {
     const messages: JsonObject[] = [];
     for (const message of request.messages) {
       if (message.role === "tool") messages.push(...message.parts.map(toolMessage));
-      else if (message.role === "assistant") messages.push(assistantMessage(message));
+      else if (message.role === "assistant") messages.push(this.#assistant(message));
       else messages.push(withContent({ role: message.role }, joinedText(message)));
     }
     const body: JsonObject = {
@@ -117,6 +125,54 @@ export class OllamaChat implements NdjsonProtocol {
     };
     if (this.#block) mergeRequestBody(body, this.#block);
     return body;
+  }
+
+  /**
+   * Render an assistant message: its text parts joined with `"\n"`, its thinking, and its calls in
+   * part order; refusals are not sent.
+   *
+   * @throws {TypeError} If the message holds a tool result.
+   */
+  #assistant(message: Message): JsonObject {
+    const texts: string[] = [];
+    const calls: JsonObject[] = [];
+    for (const part of message.parts) {
+      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, "assistant"));
+      if (part instanceof TextPart) {
+        texts.push(part.text);
+      } else if (part instanceof ToolCallPart) {
+        // Copied so changing a body cannot change the message it came from.
+        const args = part.arguments === null ? {} : copyJson(part.arguments);
+        calls.push({ id: part.id, function: { name: part.name, arguments: args } });
+      }
+    }
+    // Read after the loop above, so a message it refuses never fires onReplayDegraded first.
+    const thinking = this.#thinking(message);
+    const rendered = withContent({ role: "assistant" }, texts.join("\n"));
+    if (thinking !== "") rendered["thinking"] = thinking;
+    if (calls.length > 0) rendered["tool_calls"] = calls;
+    return rendered;
+  }
+
+  /**
+   * Return an assistant message's reasoning texts joined with `""`, or `""` when any reasoning
+   * record can't be used, calling `onReplayDegraded` once with the first reason.
+   *
+   * A reply's thinking comes from one model, so a mismatch on one part means all of them. A
+   * reasoning part without a payload is skipped and signals nothing.
+   */
+  #thinking(message: Message): string {
+    const texts: string[] = [];
+    let reason: ReplayDegradedReason | null = null;
+    for (const part of message.parts) {
+      if (!(part instanceof ReasoningPart) || part.providerPayload === null) continue;
+      const read = readReplayRecord(part.providerPayload, this.#key, []);
+      if (!read.ok) reason ??= read.reason;
+      else texts.push(part.text);
+    }
+    if (reason === null) return texts.join("");
+    this.#onReplayDegraded?.(reason);
+    return "";
   }
 
   /** Turn the reply's NDJSON lines into stream events; not built yet. */
@@ -137,30 +193,6 @@ function joinedText(message: Message): string {
       return part.text;
     })
     .join("\n");
-}
-
-/**
- * Render an assistant message: its text parts joined with `"\n"` and its calls in part order;
- * reasoning and refusals are not sent.
- *
- * @throws {TypeError} If the message holds a tool result.
- */
-function assistantMessage(message: Message): JsonObject {
-  const texts: string[] = [];
-  const calls: JsonObject[] = [];
-  for (const part of message.parts) {
-    if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, "assistant"));
-    if (part instanceof TextPart) {
-      texts.push(part.text);
-    } else if (part instanceof ToolCallPart) {
-      // Copied so changing a body cannot change the message it came from.
-      const args = part.arguments === null ? {} : copyJson(part.arguments);
-      calls.push({ id: part.id, function: { name: part.name, arguments: args } });
-    }
-  }
-  const rendered = withContent({ role: "assistant" }, texts.join("\n"));
-  if (calls.length > 0) rendered["tool_calls"] = calls;
-  return rendered;
 }
 
 /**

@@ -1,8 +1,9 @@
 /**
  * Tests for Ollama body building in `src/llm/protocols/ollama_chat.ts`: the protocol object, the
  * fixed fields and their order, system, user, assistant and tool messages sent in place, call ids
- * and tool results, tools with their schemas as written, the tool choice left out, the block, the
- * copies, and the media and wrong-part refusals.
+ * and tool results, thinking sent back from matching replay records and left out when one can't be
+ * used, tools with their schemas as written, the tool choice left out, the block, the copies, and
+ * the media and wrong-part refusals.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -15,6 +16,9 @@ import {
   type Part,
   ReasoningPart,
   RefusalPart,
+  type ReplayDegradedReason,
+  type ReplayKey,
+  replayRecord,
   Request,
   type Role,
   TextPart,
@@ -72,14 +76,23 @@ function ollama(block: JsonObject | null = null): OllamaChat {
 }
 
 interface BodyOptions {
+  account?: string | null;
   block?: JsonObject | null;
+  onReplayDegraded?: (reason: ReplayDegradedReason) => void;
   tools?: ToolSpec[];
   toolChoice?: ToolChoice;
   parallelToolCalls?: boolean | null;
 }
 
 function bodyOf(messages: Message[], options: BodyOptions = {}): JsonObject {
-  return ollama(options.block ?? null).buildBody(
+  const protocol = new OllamaChat({
+    model: QWEN,
+    provider: "ollama",
+    account: options.account,
+    block: options.block,
+    onReplayDegraded: options.onReplayDegraded,
+  });
+  return protocol.buildBody(
     new Request({
       messages,
       tools: options.tools,
@@ -195,7 +208,7 @@ describe("assistant", () => {
     ]);
   });
 
-  test("refusal and reasoning parts are left out", () => {
+  test("refusal parts and reasoning without a payload are left out", () => {
     expect(sent([assistant(new ReasoningPart("Thinking."), text("A."), new RefusalPart("No."))])).toEqual([
       { role: "assistant", content: "A." },
     ]);
@@ -208,6 +221,142 @@ describe("assistant", () => {
       { role: "assistant" },
       { role: "assistant" },
     ]);
+  });
+});
+
+const KEY: ReplayKey = { protocol: PROTOCOL, provider: "ollama", model: QWEN };
+
+/** Return a reasoning part carrying an envelope-only replay record for `key`. */
+function thought(value: string, key: ReplayKey = KEY): ReasoningPart {
+  return new ReasoningPart(value, replayRecord(key, {}));
+}
+
+/** Build a body from `messages`; return its messages and the reasons passed to `onReplayDegraded`. */
+function sendWithReasons(messages: Message[], options: BodyOptions = {}): [JsonValue, ReplayDegradedReason[]] {
+  const reasons: ReplayDegradedReason[] = [];
+  const body = bodyOf(messages, { ...options, onReplayDegraded: (reason) => reasons.push(reason) });
+  return [body["messages"]!, reasons];
+}
+
+describe("thinking sent back", () => {
+  test("an own reasoning record sends its text as thinking, before the calls", () => {
+    const [messages, reasons] = sendWithReasons([assistant(thought("Hmm."), text("A."), call("call_1", {}))]);
+    expect(messages).toEqual([
+      {
+        role: "assistant",
+        content: "A.",
+        thinking: "Hmm.",
+        tool_calls: [{ id: "call_1", function: { name: "double", arguments: {} } }],
+      },
+    ]);
+    expect(Object.keys((messages as JsonObject[])[0]!)).toEqual(["role", "content", "thinking", "tool_calls"]);
+    expect(reasons).toEqual([]);
+  });
+
+  test("two own reasoning parts join with no separator", () => {
+    expect(sendWithReasons([assistant(thought("A"), text("T."), thought("B"))])).toEqual([
+      [{ role: "assistant", content: "T.", thinking: "AB" }],
+      [],
+    ]);
+  });
+
+  test("empty thinking is left out", () => {
+    expect(sendWithReasons([assistant(thought(""), text("T."))])).toEqual([[{ role: "assistant", content: "T." }], []]);
+  });
+
+  const own = replayRecord(KEY, {});
+  const unusable: [string, JsonObject, ReplayDegradedReason][] = [
+    ["another model", replayRecord({ ...KEY, model: "llama3" }, {}), "other_model"],
+    ["another provider", replayRecord({ ...KEY, provider: "ollama-cloud" }, {}), "other_provider"],
+    ["another account", replayRecord({ ...KEY, account: "acct-2" }, {}), "other_account"],
+    ["another protocol", replayRecord({ ...KEY, protocol: "openai_chat" }, {}), "other_protocol"],
+    ["an unknown version", { ...own, v: 2n }, "unknown_version"],
+    ["an unknown field", replayRecord(KEY, { extra: "x" }), "unknown_field"],
+    ["a malformed record", { ...own, model: 1n }, "malformed"],
+  ];
+  for (const [name, payload, reason] of unusable) {
+    test(`${name}: no thinking, text and calls kept, signalled once`, () => {
+      const parts = [new ReasoningPart("Hmm.", payload), text("A."), call("call_1", {})];
+      expect(sendWithReasons([assistant(...parts)])).toEqual([
+        [
+          {
+            role: "assistant",
+            content: "A.",
+            tool_calls: [{ id: "call_1", function: { name: "double", arguments: {} } }],
+          },
+        ],
+        [reason],
+      ]);
+    });
+  }
+
+  test("two unusable parts signal once, with the first reason in part order", () => {
+    const parts = [thought("A", { ...KEY, model: "llama3" }), thought("B", { ...KEY, provider: "other" })];
+    expect(sendWithReasons([assistant(...parts)])).toEqual([[{ role: "assistant" }], ["other_model"]]);
+  });
+
+  test("a usable record beside an unusable one: no thinking is sent", () => {
+    const parts = [thought("A"), text("T."), thought("B", { ...KEY, model: "llama3" })];
+    expect(sendWithReasons([assistant(...parts)])).toEqual([[{ role: "assistant", content: "T." }], ["other_model"]]);
+  });
+
+  test("reasoning without a payload is not sent and signals nothing", () => {
+    expect(sendWithReasons([assistant(new ReasoningPart("Hmm."), text("T."))])).toEqual([
+      [{ role: "assistant", content: "T." }],
+      [],
+    ]);
+    // Skipped, so it neither blocks nor joins an own record's thinking.
+    expect(sendWithReasons([assistant(new ReasoningPart("X"), thought("A"))])).toEqual([
+      [{ role: "assistant", thinking: "A" }],
+      [],
+    ]);
+  });
+
+  test("an account key matches only records with that account", () => {
+    const account = "acct-1";
+    expect(sendWithReasons([assistant(thought("A", { ...KEY, account }))], { account })).toEqual([
+      [{ role: "assistant", thinking: "A" }],
+      [],
+    ]);
+    expect(sendWithReasons([assistant(thought("A"))], { account })).toEqual([
+      [{ role: "assistant" }],
+      ["other_account"],
+    ]);
+  });
+
+  test("without a callback thinking is still left out, and nothing throws", () => {
+    expect(sent([assistant(thought("A", { ...KEY, model: "llama3" }), text("T."))])).toEqual([
+      { role: "assistant", content: "T." },
+    ]);
+  });
+
+  test("a throwing callback propagates", () => {
+    const onReplayDegraded = () => {
+      throw new Error("stop");
+    };
+    const messages = [assistant(thought("A", { ...KEY, model: "llama3" }))];
+    expect(() => bodyOf(messages, { onReplayDegraded })).toThrow("stop");
+  });
+
+  test("a tool result is refused before an unusable record is signalled", () => {
+    const reasons: ReplayDegradedReason[] = [];
+    refuses(
+      () =>
+        bodyOf([assistant(thought("A", { ...KEY, model: "llama3" }), result("call_1", "6"))], {
+          onReplayDegraded: (reason) => reasons.push(reason),
+        }),
+      "the ollama_chat route cannot send a ToolResultPart in an assistant message",
+    );
+    expect(reasons).toEqual([]);
+  });
+
+  test("each message with an unusable record signals once per body", () => {
+    const messages = [
+      assistant(thought("A", { ...KEY, model: "llama3" })),
+      user("Go on."),
+      assistant(thought("B", { ...KEY, provider: "other" })),
+    ];
+    expect(sendWithReasons(messages)[1]).toEqual(["other_model", "other_provider"]);
   });
 });
 

@@ -52,6 +52,14 @@
  * payload that round-trips and digests as `0`, a counter past 2^53 refused, and the exact-class
  * checks of the codecs and the fold.
  *
+ * Then `summary.ts`, which Python tests only through `SessionMemory`
+ * (`tests/engine/test_session_summaries.py`); these focused tests are TypeScript's own: admissions
+ * include effect-free turns, the prefix digest equals one computed with Python yian and changes with
+ * any earlier ledger entry, a prefix needs a next admission, a `Summary` is frozen and refuses
+ * non-string or blank text (Python's `strip()` whitespace, so `\x1c` is blank and `\ufeff` isn't),
+ * and `matches` is false for another namespace, generation or version, empty `covered`, a
+ * non-prefix `prior` or a stale digest.
+ *
  * Changed: nested carriers are kept by reference, so where Python asserts a detached copy `is not`
  * the carrier passed in, the test checks that it is the same frozen value. The JSON fields are
  * deep-frozen snapshots, so editing them throws `TypeError` (Python returns a fresh copy). A frozen
@@ -161,6 +169,7 @@ import {
   conversationViewFromJson,
   conversationViewToJson,
 } from "../../src/memory/conversation.ts";
+import { admissions, prefixDigest, Summary } from "../../src/memory/summary.ts";
 import { logJson } from "../../src/typesys/json.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError;
@@ -1677,4 +1686,133 @@ test.each([0, 1, 2])("the checkpoint codec refuses retired native state without 
     "Native session history is unsupported; use fresh SessionMemory.",
   );
   expect(wire).toEqual(original);
+});
+
+// The summary.ts whole-turn selection and summary prefix proofs.
+
+function summaryStamp(runId: string, revision: number, ordinal: number): ConversationStamp {
+  return new ConversationStamp(new ConversationInvocation(runId, 1), "namespace", 0, revision, ordinal);
+}
+
+/** One effectful closed turn, an effect-free unclosed turn, then the current admission. */
+function summaryView(): ConversationView {
+  const baseline = view();
+  const events: ((before: ConversationView) => ConversationCheckpoint)[] = [
+    (before) => new ConversationAdmitted(summaryStamp("run", 0, 0), before),
+    () =>
+      new ConversationEffectRequested(summaryStamp("run", 1, 1), "model", {}, [
+        new ConversationItem("user", "message", { text: "héllo" }),
+      ]),
+    () =>
+      new ConversationEffectObserved(
+        summaryStamp("run", 2, 2),
+        1,
+        "completed",
+        [new ConversationItem("assistant", "message", { text: "hi" })],
+        null,
+      ),
+    () => new ConversationClosed(summaryStamp("run", 3, 3), "completed"),
+    (before) => new ConversationAdmitted(summaryStamp("next", 4, 0), before),
+    (before) => new ConversationAdmitted(summaryStamp("third", 5, 0), before),
+  ];
+  return events.reduce((before, event) => advanceConversation(before, event(before)), baseline);
+}
+
+function summaryInvocations(...runIds: string[]): ConversationInvocation[] {
+  return runIds.map((runId) => new ConversationInvocation(runId, 1));
+}
+
+test("admissions read turn order, including effect-free turns", () => {
+  const turns = admissions(summaryView());
+  expect(turns).toEqual(summaryInvocations("run", "next", "third"));
+  expect(admissions(view())).toEqual([]);
+});
+
+test("the prefix digest equals Python yian's and proves every earlier ledger entry", () => {
+  const value = summaryView();
+  // Computed with Python yian's `prefix_digest` over the same history.
+  expect(prefixDigest(value, 2)).toBe("b76c35cd21ab71ef39c7f3eb541c6904f9498fd9195b16d9425a4e265c33b67c");
+  expect(prefixDigest(value, 0)).toBe("4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945");
+  const original = prefixDigest(value, 2);
+  for (const index of value.applied.keys()) {
+    for (const field of ["event", "after"] as const) {
+      const entries = value.applied.with(index, withDigest(value.applied[index]!, { [field]: "d".repeat(64) }));
+      const changed = prefixDigest(changedView(value, { applied: entries }), 2);
+      // The first five entries precede the third admission; the last is that admission.
+      if (index < 5) expect(changed).not.toBe(original);
+      else expect(changed).toBe(original);
+    }
+  }
+});
+
+test("the prefix digest requires a next admission", () => {
+  const value = summaryView();
+  expectError(() => prefixDigest(value, 3), RangeError, "a summary prefix must precede the current admission");
+  expectError(() => prefixDigest(view(), 0), RangeError, "a summary prefix must precede the current admission");
+});
+
+test("a summary is frozen and copies its covered invocations", () => {
+  const covered = summaryInvocations("run");
+  const summary = new Summary("namespace", 0, "v1", covered, "a".repeat(64), "text");
+  covered.push(new ConversationInvocation("next", 1));
+  expect(summary.covered).toEqual(summaryInvocations("run"));
+  expect(Object.isFrozen(summary)).toBe(true);
+  expect(Object.isFrozen(summary.covered)).toBe(true);
+  expect([summary.namespace, summary.generation, summary.projectionVersion, summary.digest, summary.text]).toEqual([
+    "namespace",
+    0,
+    "v1",
+    "a".repeat(64),
+    "text",
+  ]);
+});
+
+test.each([
+  ["", "empty"],
+  [" \t\n", "whitespace"],
+  ["\x1c", "a file separator"],
+  ["\u3000\x85", "Python-only whitespace"],
+])("a summary of %p is blank (%s)", (text) => {
+  expectError(
+    () => new Summary("namespace", 0, "v1", [], "a".repeat(64), text),
+    RangeError,
+    "summary must contain nonempty text",
+  );
+});
+
+test("a summary needs string text; a byte order mark isn't blank", () => {
+  for (const text of [1, null, new String("text")]) {
+    expectError(
+      () => new Summary("namespace", 0, "v1", [], "a".repeat(64), text as never),
+      TypeError,
+      "summary must be a string",
+    );
+  }
+  expect(new Summary("namespace", 0, "v1", [], "a".repeat(64), "\ufeff").text).toBe("\ufeff");
+});
+
+test("a summary matches only its own namespace, generation, version and complete prefix", () => {
+  const value = summaryView();
+  const prior = admissions(value);
+  const covered = summaryInvocations("run", "next");
+  const make = (changes: { namespace?: string; generation?: number; covered?: ConversationInvocation[]; digest?: string }) =>
+    new Summary(
+      changes.namespace ?? "namespace",
+      changes.generation ?? 0,
+      "v1",
+      changes.covered ?? covered,
+      changes.digest ?? prefixDigest(value, changes.covered?.length ?? 2),
+      "text",
+    );
+  expect(make({}).matches(value, prior, "v1")).toBe(true);
+  expect(make({ covered: summaryInvocations("run") }).matches(value, prior, "v1")).toBe(true);
+  expect(make({}).matches(value, prior.slice(0, 2), "v1")).toBe(true);
+  expect(make({ namespace: "other" }).matches(value, prior, "v1")).toBe(false);
+  expect(make({ generation: 1 }).matches(value, prior, "v1")).toBe(false);
+  expect(make({}).matches(value, prior, "v2")).toBe(false);
+  expect(make({ covered: [] }).matches(value, prior, "v1")).toBe(false);
+  expect(make({}).matches(value, summaryInvocations("next", "run", "third"), "v1")).toBe(false);
+  expect(make({}).matches(value, prior.slice(0, 1), "v1")).toBe(false);
+  expect(make({ digest: prefixDigest(value, 1) }).matches(value, prior, "v1")).toBe(false);
+  expect(make({ digest: "a".repeat(64) }).matches(value, prior, "v1")).toBe(false);
 });

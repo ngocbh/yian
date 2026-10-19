@@ -24,7 +24,7 @@ import { SourceDocument } from "../../src/compose/source/document.ts";
 import { loadError } from "./declarations.ts";
 import { StandInCode, standIn } from "./stand_ins.ts";
 
-const KINDS: ReadonlyMap<string, DescriptorClass> = new Map([
+const CLASSES: ReadonlyMap<string, DescriptorClass> = new Map([
   ["loop", standIn("loop", { allow: ["times", "call", "inputs"] })],
   ["call", standIn("call", { allow: ["call", "inputs"] })],
   ["map", standIn("map", { allow: ["over", "call", "inputs"] })],
@@ -37,7 +37,7 @@ const KINDS: ReadonlyMap<string, DescriptorClass> = new Map([
 /** Parse node `nodeId` of `text`'s `nodes:` with the class its `kind:` names. */
 function parseNode(text: string, nodeId: string): NodeDescriptor {
   const cursor = SourceDocument.parse(text).root.child("nodes").child(nodeId);
-  const cls = KINDS.get(cursor.get("kind") as string)!;
+  const cls = CLASSES.get(cursor.get("kind") as string)!;
   return cls.parse(nodeId, cursor.renamed(new Map([["input", "inputs"]])));
 }
 

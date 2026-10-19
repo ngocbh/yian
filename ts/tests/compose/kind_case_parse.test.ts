@@ -9,10 +9,11 @@
  * `test_case_parse_keeps_then_styles_aligned_with_cases`, `test_case_parse_keeps_else_style`,
  * `test_case_parse_tells_else_null_from_no_else`, `test_case_descriptor_constructed_with_else_has_else`,
  * `test_case_parse_keeps_then_null_key`, `test_case_parse_on_form_keeps_styles`,
- * `test_case_rejects_malformed_cases_at_their_location`, the origin half of
+ * `test_case_rejects_malformed_cases_at_their_location`,
+ * `test_source_free_case_build_keeps_predicates_and_wiring_origin_free`, the origin half of
  * `test_searched_case_origins_are_positional_and_select_the_failing_entry` (on the parsed
- * descriptor), and the `thenRanges[0]` assertion of `tests/compose/test_desugar.py`'s
- * `test_desugar_case_call_targets_locate_at_their_target_line`.
+ * descriptor and on the built node), and the `thenRanges[0]` assertion of
+ * `tests/compose/test_desugar.py`'s `test_desugar_case_call_targets_locate_at_their_target_line`.
  *
  * Changed: Python compares the descriptor to a `CaseDescriptor` with the parse metadata excluded;
  * TS compares its class and fields. The duplicate-key and boolean-key rows parse the flow with
@@ -20,9 +21,9 @@
  * parse the flow's nodes, where Python loads it, and spell values in the text form (`(got "done")`,
  * `(got null)`). The origin rows call `withSourceOrigins` on the parsed descriptor and resolve its
  * origins through `builder.resolveRegistered`, where Python loads the flow and reads the built
- * `CaseNode`; the `on:` row also assembles the flow (`assembleText`) and reads the built node and
- * its `__on` wiring. The misaligned origins are a `RangeError` where Python's are a `ValueError`,
- * and the message says "or null" where Python's says "or None".
+ * `CaseNode`; the searched and `on:` rows also assemble the flow (`assembleText`) and read the
+ * built node and its `__r0` or `__on` wiring. The misaligned origins are a `RangeError` where
+ * Python's are a `ValueError`, and the message says "or null" where Python's says "or None".
  *
  * TS-only: the lowering row also checks the `__on` input's range and label; an `on:` case entry
  * with a null `when:` is refused at that `when:`; a lone surrogate in `on:` or in a searched
@@ -31,10 +32,7 @@
  *
  * Dropped: `test_case_keeps_no_key_normalization` (Python class-dict introspection).
  *
- * Later (T3-16, the searched lowering):
- * `test_source_free_case_build_keeps_predicates_and_wiring_origin_free` and the built-node half
- * of `test_searched_case_origins_are_positional_and_select_the_failing_entry` (the predicate
- * origins on the `CaseNode`, the `__r0` binding origin). Later (T4): the run half of
+ * Later (T4): the run half of
  * `test_searched_case_origins_are_positional_and_select_the_failing_entry`. Later (T3-20, T3-17):
  * `test_source_attachment_does_not_preempt_malformed_case_validation` (`case_branches`,
  * `expand_case_outputs`). Later (T3-22, T4):
@@ -46,7 +44,9 @@
  * the harvested `load-case/compose_kind_case_parse__a_case_with_no_branch_has_no_value` and
  * `__a_flow_style_case_names_no_node`.
  *
- * The harvested cases whose error the CASE parse raises are pinned at the end.
+ * The harvested cases whose error the CASE parse or build raises are pinned at the end, with
+ * `load-core/compose_expression_nesting__thousands_of_nested_spans` and `__too_deep_searched_when`
+ * from `tests/compose/test_expression_nesting.py`, which has no TS mirror yet.
  */
 
 import { expect, test } from "bun:test";
@@ -62,7 +62,7 @@ import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import { CaseNode } from "../../src/nodes/case/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
-import { assembleText, type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "./declarations.ts";
 
 const FLOW = `nodes:
   route:
@@ -77,6 +77,10 @@ const FLOW = `nodes:
 const SEARCHED_ORIGIN_FLOW = `id: searched-case-origins
 name: searched-case-origins
 nodes:
+  zero:
+    kind: code
+    code: "return 0"
+    output: int
   gate:
     kind: case
     cases:
@@ -87,6 +91,23 @@ nodes:
       - when: "zero.output > 0"
         then: duplicate
     else: negative
+  positive:
+    kind: code
+    code: 'return "positive"'
+    output: str
+  broken:
+    kind: code
+    code: 'return "broken"'
+    output: str
+  duplicate:
+    kind: code
+    code: 'return "duplicate"'
+    output: str
+  negative:
+    kind: code
+    code: 'return "negative"'
+    output: str
+output: \${positive.output | broken.output | duplicate.output | negative.output}
 `;
 
 const ON_ORIGIN_FLOW = `id: on-case-origins
@@ -410,6 +431,34 @@ test("searched case origins are positional", () => {
   expect(stamped.onOrigin).toBeNull();
 });
 
+test("searched case build keeps positional predicate origins", () => {
+  // Duplicate predicate text stays distinct, and the generated `__r0` binding carries case 0's.
+  const label = "searched-case.yaml";
+  const cursor = SourceDocument.parse(SEARCHED_ORIGIN_FLOW, label).root.child("nodes").child("gate");
+  const { flow, builder } = assembleText(SEARCHED_ORIGIN_FLOW, label);
+  const node = flow.compiled.nodes.get("gate") as CaseNode;
+
+  const origins = node.cases.map((branch) => branch.origin);
+  expect(origins.every((origin) => origin instanceof OriginRef)).toBe(true);
+  expect(new Set(origins.map((origin) => origin!.key)).size).toBe(3);
+  expect(origins.map((origin) => builder.resolveRegistered(origin!)!.range)).toEqual(
+    [0, 1, 2].map((index) => cursor.child("cases").child(index).child("when").range!),
+  );
+  const binding = flow.compiled.wiring.get("gate")!.get("__r0")!;
+  expect(binding).toBeInstanceOf(Binding);
+  expect(binding.origin).toBe(origins[0]!);
+});
+
+test("source-free case build keeps predicates and wiring origin-free", () => {
+  // A directly constructed descriptor builds raw wiring text, no `Binding`.
+  const desc = new CaseDescriptor({ id: "gate", cases: [{ when: "score.output > 0", then: "positive" }] });
+
+  const result = desc.build(CTX);
+
+  expect((result.node as CaseNode).cases[0]!.origin).toBeNull();
+  expect(result.wiring).toEqual(new Map([["__r0", "${score.output}"]]));
+});
+
 test("on case predicate and on origins are distinct", () => {
   // The generated `__on` binding belongs to `on:`, not to a case predicate.
   const document = SourceDocument.parse(ON_ORIGIN_FLOW, "on-case.yaml");
@@ -481,3 +530,9 @@ test.each<CaseRow>([
   { id: "load-case/compose_kind_case_parse__cases_that_is_not_a_list_is_located", call: parsedNodes },
   { id: "load-case/compose_kind_case_parse__a_case_item_that_is_not_a_mapping_is_located", call: parsedNodes },
 ])("parseNodes: $id", runCase);
+
+test.each<CaseRow>([
+  // tests/compose/test_expression_nesting.py
+  { id: "load-core/compose_expression_nesting__thousands_of_nested_spans", call: assembled },
+  { id: "load-core/compose_expression_nesting__too_deep_searched_when", call: assembled },
+])("assembled: $id", runCase);

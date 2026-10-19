@@ -28,9 +28,6 @@
  * CASE build raises: it is pinned at the end (`assemble`), for
  * `test_a_null_when_is_no_on_value_even_on_a_narrowed_field`.
  *
- * Later (T3-16, the searched lowering): that pin runs; it is a todo until then, since the flow's
- * searched case builds first.
- *
  * Later (T3-20): `test_a_non_null_field_is_present_in_every_record_around_it`,
  * `test_a_nullable_field_leaves_the_records_around_it_alone` and
  * `test_a_field_narrowed_to_null_leaves_the_records_around_it_alone`.
@@ -350,9 +347,8 @@ test("a null check the routing proves null is reported", () => {
 
 // ---------- harvested conformance cases ----------
 
-// The flow's searched `route` builds before the `on:` case `inner`, so this row waits for the
-// searched lowering.
-test.todo("assembled: load-types/compose_null_narrowing__a_null_when_is_no_on_value_even_on_a_narrowed_field", () => {
+// The flow's searched `route` builds before the `on:` case `inner`.
+test("assembled: load-types/compose_null_narrowing__a_null_when_is_no_on_value_even_on_a_narrowed_field", () => {
   // YAML `null` is no `when:` value at all; the build rejects it before any typing.
   runCase({
     id: "load-types/compose_null_narrowing__a_null_when_is_no_on_value_even_on_a_narrowed_field",

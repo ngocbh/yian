@@ -21,10 +21,14 @@
  * is real; the resolved parameter boundary
  * (`test_resolved_parameters_preserve_structural_contract_identity`,
  * `test_resolved_parameters_accept_zero_args_and_wire_empty_start`), the seed edge and boundary
- * rows (`test_seed01_*`, `test_seed02_*`, `test_seed05_*`, `test_seed06_*`, `test_seed18_*`,
- * `test_terminal_edge_ids_unique`, `test_assembled_edges_have_start_and_end`,
- * `test_boundary_end_record_flag_picks_the_mode`). Later (T3-18): the wiring parity rows
- * (`test_wiring_parity_*`).
+ * rows (`test_seed01_*`, `test_seed02_case_targets_not_bare_roots`, `test_seed05_*`,
+ * `test_seed06_*`, `test_seed18_*`, `test_terminal_edge_ids_unique`,
+ * `test_assembled_edges_have_start_and_end`, `test_boundary_end_record_flag_picks_the_mode`).
+ * Later (T3-18): the wiring parity rows (`test_wiring_parity_*`).
+ *
+ * `test_seed02_branch_target_has_control_edge` reads the edges of seed 02's built `gate`
+ * (`load-case/seed_02_case`), where Python's `_all_edges` also infers the data edges, which hold no
+ * control edge.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -64,7 +68,7 @@ import { Binding, Parameter, ValueContract, ValueTemplate } from "../../src/node
 import { StartNode } from "../../src/nodes/start/node.ts";
 import type { TypeRegistry } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { caseRegistry, cursorAt, loadError, runTextCase } from "../compose/declarations.ts";
+import { caseRegistry, caseText, cursorAt, loadError, nodesOf, runTextCase } from "../compose/declarations.ts";
 import { StandInCode, withKinds } from "../compose/stand_ins.ts";
 
 afterEach(() => forget());
@@ -863,4 +867,14 @@ output:
       cursorAt(document, ["output", "first"]).range!,
     ]);
   });
+});
+
+test("seed 02's branch target has a control edge", () => {
+  const { text, label } = caseText("load-case/seed_02_case");
+  const edges = nodesOf(text, [], label).get("gate")!.build(new BuildContext({ registry: EMPTY })).edges;
+
+  const control = edges.filter((edge) => edge.to === "positive" && edge.sourceHandle !== null);
+  expect(control).toHaveLength(1);
+  expect(control[0]!.from).toBe("gate");
+  expect(control[0]!.sourceHandle).toBe("positive");
 });

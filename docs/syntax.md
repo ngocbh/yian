@@ -2736,7 +2736,8 @@ an expression whose type isn't proven, e.g. `${input.n + 1}`), the runtime compa
 exact too: `when: 1` no longer matches the text `"1"`, so type the producer or quote the
 value. A `when:` that can't be a value of the `on:` type (a typo'd tag, a wrong scalar
 type) is a load error even with an `else:`. An unquoted datetime `when:` is a load error;
-quote it. Flows with a number or bool `when:` get new fingerprints.
+quote it (Changed (TS yian): it is text and matches as written; see "Matching" below). Flows
+with a number or bool `when:` get new fingerprints.
 
 Changed: a routing-only `case` over a `Literal` flow input (also a LOOP body's carried
 field or a child flow's input) that omits a tag with no `else:` used to load and run no
@@ -2776,6 +2777,9 @@ Matching:
 
 - Each `when:` is a value of the `on:` type: text, a number, or a bool. An unquoted date
   is its ISO text; quote a datetime.
+- Changed (TS yian): an unquoted date or timestamp `when:` is text and matches that text as
+  written (no 'quote a datetime' error), and `when: .inf` / `when: -.inf` match infinity (a
+  float value).
 - Ints and floats compare numerically (`when: 2` matches `2.0`), a bool never equals a
   number, and quoted values are text (`when: "1"` matches only the text `1`).
 - A `when: yes` (or `no`, `on`, `off`, `y`, `n`) on a `bool` `on:` is text, so it is a

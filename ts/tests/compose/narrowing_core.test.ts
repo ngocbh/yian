@@ -38,7 +38,8 @@
  * `::test_each_impossible_check_is_reported_once_and_only_first`,
  * `::test_code_after_an_always_true_check_is_not_reported`,
  * `::test_a_check_the_routing_rules_out_is_impossible`,
- * `::test_routing_and_the_checks_together_use_the_checks_wording`, and the `check_text`,
+ * `::test_routing_and_the_checks_together_use_the_checks_wording`,
+ * `::test_searched_param_guards_lists_the_checks_before_each_read`, and the `check_text`,
  * `check_fact`, `unresolved_type`, `declared_impossible` and `never_value` sites of
  * `::test_an_unknown_check_kind_fails_loudly`.
  *
@@ -55,9 +56,8 @@
  * classes; `Members` takes an array. `types` takes dotted base paths as keys (Python spells the
  * dots `__`). A compared tag and its close match are spelled `"biy"` / `did you mean "buy"?`
  * (Python `'biy'` / `did you mean 'buy'?`). `declaredImpossible` and `neverValue` are exported
- * for these tests (Python's `_declared_impossible` and `_never_value`).
- *
- * Later (T3-16): `test_searched_param_guards_lists_the_checks_before_each_read`.
+ * for these tests (Python's `_declared_impossible` and `_never_value`). `searchedParamGuards`
+ * gives a `Map` of `[case index, guard]` arrays where Python gives a dict of tuples.
  *
  * Later (T3-20): `test_the_fact_algebra_lives_in_helpers_and_narrowing_re_exports_it`, the
  * `narrows` site of `test_an_unknown_check_kind_fails_loudly`,
@@ -149,6 +149,7 @@ import {
 } from "../../src/compose/helpers/narrowing_facts.ts";
 import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
 import { readType } from "../../src/compose/helpers/types.ts";
+import { CaseDescriptor, searchedParamGuards } from "../../src/compose/nodes/case.ts";
 import { forget } from "../../src/defaults.ts";
 import { parseCondition } from "../../src/expr/index.ts";
 import { isExactly, ValueContract } from "../../src/nodes/contracts.ts";
@@ -826,6 +827,45 @@ test("narrowedReadError names the narrowed type only for a field it lacks", () =
   );
   expect(narrowedReadError("v.leg.prise", [BUY, ["leg", "prise"], "v"], "plain", REGISTRY)).toBe("plain");
   expect(narrowedReadError("v.x", [BOOL, ["x"], "v"], "plain", REGISTRY)).toBe("plain");
+});
+
+// --------------------------------------------------------------------------- //
+// isinstance checks in a searched CASE
+// --------------------------------------------------------------------------- //
+
+/** A CASE `c` over `on` with one case per `[when, then]` pair. */
+function caseOf(on: string | null, cases: readonly (readonly [string, string])[]): CaseDescriptor {
+  return new CaseDescriptor({ id: "c", on, cases: cases.map(([when, then]) => ({ when, then })) });
+}
+
+test("searchedParamGuards lists the checks before each read", () => {
+  const buy = new Holds(new IsinstanceCheck("d.output", "Buy"), true);
+  const desc = caseOf(null, [
+    ["isinstance(d.output, Buy) and d.output.qty > 5", "b"],
+    ["d.output.qty > 1 and isinstance(d.output, Sell)", "s"],
+  ]);
+
+  expect(searchedParamGuards(desc)).toStrictEqual(
+    new Map([
+      [
+        "__r0",
+        [
+          [0, NOTHING],
+          [1, NOTHING],
+        ],
+      ],
+      [
+        "__r1",
+        [
+          [0, buy],
+          [1, NOTHING],
+        ],
+      ],
+    ]),
+  );
+  const negated = caseOf(null, [["not isinstance(d.output, Buy) or d.output.qty > 5", "b"]]);
+  expect(searchedParamGuards(negated).get("__r1")).toStrictEqual([[0, buy]]);
+  expect(searchedParamGuards(caseOf("${d.output.action}", [["buy", "b"]]))).toStrictEqual(new Map());
 });
 
 // --------------------------------------------------------------------------- //

@@ -4,6 +4,10 @@
  * that a whole-span condition reads as its bare spelling, and the error a `${...}` nested inside
  * an expression raises and the rewrite it shows, plus the template-span tests (`scanTemplate`).
  *
+ * The harvested `load-core/engine_nested_span_rejected__case_condition_shows_the_rewrite`, from
+ * `test_case_condition_with_a_nested_span_fails_to_load_with_the_rewrite`, is pinned at the end
+ * (`assemble`, whose CASE build raises it).
+ *
  * Left for later: the binding, case, assert, loop and prompt load tests and the run tests land
  * with compose and `run.ts`.
  */
@@ -18,6 +22,7 @@ import {
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, rejectNestedSpans, Token } from "../../src/expr/grammar.ts";
 import { scanTemplate } from "../../src/expr/template.ts";
+import { assembled, runCase } from "../compose/declarations.ts";
 
 const NESTED = "`${...}` can't appear inside an expression";
 
@@ -137,4 +142,10 @@ test("the rewrite only needs to parse, not pass the later checks", () => {
   expect(caught(() => rejectNestedSpans("${isinstance(x)}")).message).toBe(
     `${NESTED}; write \`(isinstance(x))\``,
   );
+});
+
+// ---------- harvested conformance cases ----------
+
+test("assembled: load-core/engine_nested_span_rejected__case_condition_shows_the_rewrite", () => {
+  runCase({ id: "load-core/engine_nested_span_rejected__case_condition_shows_the_rewrite", call: assembled });
 });

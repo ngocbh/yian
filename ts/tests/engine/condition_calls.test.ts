@@ -6,6 +6,9 @@
  * Left for later: the `load_flow`/`run_flow` half (from `_load_error` on) lands with compose and
  * `run.ts`. `test_a_builtin_without_a_readable_signature_is_not_arity_checked` has no
  * counterpart: every registered function declares its `params`.
+ *
+ * The harvested `load-case/engine_condition_calls__wrong_builtin_arguments_in_a_case_when` is
+ * pinned at the end (`assemble`, whose CASE build raises it).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -20,6 +23,7 @@ import {
 import { ExpressionError, parseCondition } from "../../src/expr/expressions.ts";
 import { typeFor } from "../../src/typesys/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
+import { assembled, runCase } from "../compose/declarations.ts";
 
 // Each registration's previous entry (or its absence), put back after the test, as Python's
 // `monkeypatch.setitem` does.
@@ -180,4 +184,10 @@ describe("registerTemplateFn", () => {
       "expression function 'shout', default of 'times': NaN is not a yian value",
     );
   });
+});
+
+// ---------- harvested conformance cases ----------
+
+test("assembled: load-case/engine_condition_calls__wrong_builtin_arguments_in_a_case_when", () => {
+  runCase({ id: "load-case/engine_condition_calls__wrong_builtin_arguments_in_a_case_when", call: assembled });
 });

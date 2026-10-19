@@ -12,7 +12,11 @@
  * data edges followed by its control edges. Two surface forms:
  *
  * - searched (`cases: [{when: "<bool>", then: <t>}]`, `else: <e>`): each distinct read of the
- *   `when:`s becomes one `CaseNode` input `__rN`, and each `when:` is rewritten over those locals.
+ *   `when:`s becomes one `CaseNode` input `__rN`: a reference (`${path}`), a node-output reference
+ *   inside a `:-` / `:?` / `|` (`${path :- null}`, an optional edge), plus a join input over a
+ *   co-skipping escape's producers (so the gate skips as a binding of that escape would). Each
+ *   reference in a `when:` is rewritten to its bare local `__rN`; the `when:` itself stays lazily
+ *   evaluated. `searchedParamGuards` gives the guard each read is checked under.
  * - `on:` (`on: ${ref}`, `cases: [{when: <value>, then: <t>}]`): one input `__on = ${ref}`; each
  *   `when: <value>` is a literal compared exactly: text becomes `__on == "<value>"`, a number
  *   `__on == <n> and not isinstance(__on, bool)`, a bool `__on == true and isinstance(__on, bool)`.
@@ -31,7 +35,16 @@
 
 import { Edge } from "../../compile/model.ts";
 import { OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
-import { bindingCoSkips, ExpressionError, exprRefsOf } from "../../expr/index.ts";
+import type { ExprNode } from "../../expr/grammar.ts";
+import {
+  bindingCoSkips,
+  type ConditionRead,
+  conditionReads,
+  ExpressionError,
+  exprRefsOf,
+  parseCondition,
+  rewriteConditionReads,
+} from "../../expr/index.ts";
 import { ELSE_HANDLE } from "../../nodes/base.ts";
 import { Case, CaseNode } from "../../nodes/case/node.ts";
 import {
@@ -43,6 +56,7 @@ import {
 } from "../../nodes/contracts.ts";
 import { pythonTypeName } from "../../typesys/types.ts";
 import { isRecord, valueRepr } from "../../typesys/values.ts";
+import { type Guard, guardedRefs } from "../helpers/condition_guards.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import type { SourceCatalogBuilder } from "../source/catalog.ts";
@@ -325,8 +339,8 @@ export class CaseDescriptor extends NodeDescriptor {
    * node's `wiringLabels`, so a reference error names the authored site, not the generated name.
    *
    * @throws RangeError when `whenOrigins` no longer aligns with `cases`.
-   * @throws LoadError when a case lacks its `when:` or `then:`, or an `on:` case's `when:` value
-   *   can't be compared (at that `when:`).
+   * @throws LoadError when a case lacks its `when:` or `then:`, an `on:` case's `when:` value
+   *   can't be compared, or a searched `when:` isn't text or doesn't parse (at that `when:`).
    */
   override build(ctx: BuildContext): BuildResult {
     this._validateOriginAlignment();
@@ -546,7 +560,250 @@ function desugarOn(desc: CaseDescriptor, on: string, diagnostics: LoadDiagnostic
   };
 }
 
-/** Lower the searched form: one `__rN` input per distinct read, each `when:` rewritten. */
-function desugarSearched(_desc: CaseDescriptor, _diagnostics: LoadDiagnostics): Lowering {
-  throw new Error("searched case lowering lands in the next commit");
+/**
+ * One read of a searched case's generated input: its case index and the guard it is checked
+ * under, `null` when it is not checked.
+ */
+export type GuardedRead = readonly [number, Guard | null];
+
+/**
+ * The guard each reference occurrence of a parsed `when:` is checked under, in `guardedRefs`
+ * order.
+ */
+export type GuardsOf = (tree: ExprNode) => (Guard | null)[];
+
+/** Return the guard that holds whenever each reference occurrence of `tree` is read. */
+function plainGuards(tree: ExprNode): (Guard | null)[] {
+  return guardedRefs(tree).map(([, guard]) => guard);
+}
+
+/** The `__rN` inputs of a searched case, from one parse of its `when:`s. */
+interface SearchedParams {
+  /** Each distinct binding source and its local, in first-seen order. */
+  sourceToLocal: Map<string, string>;
+  /** The case index each local was first seen in (its caret and label site). */
+  localCaseIndex: Map<string, number>;
+  /** Per case, the local of each reference occurrence, in `conditionReads` order. */
+  caseLocals: string[][];
+  /**
+   * For each local, the case index of each occurrence and the guard it is checked under. A join
+   * input has no occurrences.
+   */
+  guards: Map<string, GuardedRead[]>;
+}
+
+/**
+ * Return the binding source of one `when:` reference occurrence, also the key its local is
+ * deduped by.
+ *
+ * A node-output read inside an escape is `${path :- null}`: it reads the same value (a miss is
+ * already null) but takes an optional edge, so the escape decides as it does in a binding. Any
+ * other read (outside an escape, or of an input or `system.*`, which has no producer edge) stays
+ * the plain `${path}`.
+ */
+function readSource(read: ConditionRead): string {
+  if (read.escape === null || outputsProducer(read.path) === null) return `\${${read.path}}`;
+  return `\${${read.path} :- null}`;
+}
+
+/**
+ * Return one join source per co-skipping escape that reads a node output, in source order.
+ *
+ * A binding of such an escape skips only when all its producers skip; the join
+ * `${<p1>.output | <p2>.output ...}` gives the gate that same required input group.
+ *
+ * @param reads One `when:`'s reference occurrences, in `conditionReads` order.
+ * @returns One join source per such escape, each producer listed once in first-read order.
+ */
+function joinSources(reads: readonly ConditionRead[]): string[] {
+  const producers = new Map<number, string[]>();
+  for (const read of reads) {
+    const producer = outputsProducer(read.path);
+    if (read.escape === null || !read.coSkips || producer === null) continue;
+    const seen = producers.get(read.escape) ?? [];
+    producers.set(read.escape, seen);
+    if (!seen.includes(producer)) seen.push(producer);
+  }
+  return [...producers.values()].map((group) => `\${${group.map((producer) => `${producer}.output`).join(" | ")}}`);
+}
+
+/**
+ * Allocate one `__rN` local per distinct read across all searched `when:`s.
+ *
+ * A read is a reference (`${path}`), a node-output reference inside a `:-` / `:?` / `|`
+ * (`${path :- null}`), or, once per co-skipping escape that reads a node output, a join input
+ * over its producers; its source is also its dedupe key. Per `when:`, its reference reads are
+ * allocated before its join inputs. Locals and guards come from the same parse, so every guarded
+ * occurrence has a local.
+ *
+ * @param guardsOf Gives each occurrence's guard; by default what the checks before it prove
+ *   through `and`, `or` and `not` (`guardedRefs`).
+ * @throws LoadError at a `when:` that isn't text or doesn't parse.
+ * @throws RangeError when `guardsOf` gives a different number of guards than there are reads.
+ */
+function searchedParams(
+  desc: CaseDescriptor,
+  diagnostics: LoadDiagnostics,
+  guardsOf: GuardsOf = plainGuards,
+): SearchedParams {
+  const sourceToLocal = new Map<string, string>();
+  const localCaseIndex = new Map<string, number>();
+  const caseLocals: string[][] = [];
+  const guards = new Map<string, GuardedRead[]>();
+
+  const allocate = (source: string, caseIndex: number): string => {
+    let local = sourceToLocal.get(source);
+    if (local === undefined) {
+      local = `__r${sourceToLocal.size}`;
+      sourceToLocal.set(source, local);
+      localCaseIndex.set(local, caseIndex);
+      guards.set(local, []);
+    }
+    return local;
+  };
+
+  desc.cases.forEach((spec, caseIndex) => {
+    const when = spec["when"];
+    const whenRange =
+      caseIndex < desc.whenRanges.length
+        ? (desc.whenRanges[caseIndex] ?? null)
+        : (desc.fieldRanges.get(siteKey("field", "cases")) ?? desc.range);
+    if (typeof when !== "string") {
+      throw diagnostics.error(
+        `case node ${reprText(desc.id)}: each searched case needs a string \`when:\` expression`,
+        { range: whenRange },
+      );
+    }
+    let tree: ExprNode;
+    try {
+      tree = parseCondition(when);
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+      throw diagnostics.error(
+        `case node ${reprText(desc.id)}: \`when:\` ${reprText(when)} is not a valid boolean expression: ` +
+          error.message,
+        { range: whenRange, cause: error },
+      );
+    }
+    // Parsing the whole value once covers both spellings, as `rewriteWhen` does.
+    const reads = conditionReads(tree);
+    const locals = reads.map((read) => allocate(readSource(read), caseIndex));
+    for (const source of joinSources(reads)) allocate(source, caseIndex);
+    // `guardedRefs` walks the same occurrences in the same order as `conditionReads`.
+    const occurrenceGuards = guardsOf(tree);
+    if (occurrenceGuards.length !== locals.length) {
+      throw new RangeError(`guardsOf gave ${occurrenceGuards.length} guards for ${locals.length} reads`);
+    }
+    locals.forEach((local, i) => guards.get(local)!.push([caseIndex, occurrenceGuards[i]!]));
+    caseLocals.push(locals);
+  });
+  return { sourceToLocal, localCaseIndex, caseLocals, guards };
+}
+
+/**
+ * Return, per searched-case `__rN` input, each occurrence's case and guard.
+ *
+ * `and`, `or` and `not` short-circuit, so an occurrence of an input's reference is read only once
+ * the checks before it decide (`guardedRefs`): its guard is what they prove. A check after it
+ * never guards it. The inputs are allocated exactly as the build allocates them; a join input
+ * over a co-skipping escape's producers has no occurrences.
+ *
+ * @param desc A searched case that has already built. An `on:` case has no guards.
+ * @param guardsOf The guard each occurrence of a parsed `when:` is checked under, in
+ *   `guardedRefs` order, with `null` for an occurrence that is not checked; `null` (the default)
+ *   uses `guardedRefs`'s guards.
+ * @returns For each local, one `[case index, guard]` pair per occurrence, across all `when:`s in
+ *   source order (empty for a join input).
+ * @throws LoadError when `desc` has a `when:` its build would reject. The loader only calls this
+ *   after the build succeeded, so the error is unlocated.
+ *
+ * @example
+ * For a first case `not isinstance(d.output, Buy) or d.output.qty > 5`, the local of
+ * `d.output.qty` maps to `[[0, new Holds(new IsinstanceCheck("d.output", "Buy"), true)]]`.
+ */
+export function searchedParamGuards(
+  desc: CaseDescriptor,
+  guardsOf: GuardsOf | null = null,
+): Map<string, GuardedRead[]> {
+  if (desc.on !== null) return new Map();
+  return searchedParams(desc, new LoadDiagnostics(), guardsOf ?? plainGuards).guards;
+}
+
+/**
+ * Lower the searched form: one `__rN` input per distinct read, each `when:` rewritten over them.
+ *
+ * A read is a reference (`${path}`), a node-output reference inside a `:-` / `:?` / `|`
+ * (`${path :- null}`), or a join input over a co-skipping escape's producers, which the `when:`
+ * doesn't read but whose required edges skip the gate as that escape's binding would skip. Each
+ * `__rN` is located at the `cases[N].when` it was first seen in and labelled `cases[N].when`.
+ *
+ * @throws LoadError when a `when:` isn't text or doesn't parse (at that `when:`), or a case lacks
+ *   its `then:` (at the `then:`, else at `cases:`).
+ */
+function desugarSearched(desc: CaseDescriptor, diagnostics: LoadDiagnostics): Lowering {
+  const params = searchedParams(desc, diagnostics);
+  const wiring = new Map<string, unknown>();
+  for (const [source, local] of params.sourceToLocal) {
+    const origin = desc.whenOrigins[params.localCaseIndex.get(local)!] ?? null;
+    wiring.set(local, origin === null ? source : new Binding(source, { origin }));
+  }
+
+  const cases: Case[] = [];
+  const handleTargets: [string, string][] = [];
+  desc.cases.forEach((spec, index) => {
+    const then = spec["then"] ?? null;
+    if (then === null) {
+      throw diagnostics.error(`case node ${reprText(desc.id)}: each searched case needs a \`then:\``, {
+        range:
+          index < desc.thenRanges.length
+            ? (desc.thenRanges[index] ?? null)
+            : (desc.fieldRanges.get(siteKey("field", "cases")) ?? desc.range),
+      });
+    }
+    // As in `desugarOn`: the branch check has made each `then:` and the `else:` a node name, and
+    // `searchedParams` has made each `when:` text.
+    const handle = then as string;
+    cases.push(
+      new Case(handle, {
+        when: rewriteWhen(spec["when"] as string, params.caseLocals[index]!),
+        origin: desc.whenOrigins[index] ?? null,
+      }),
+    );
+    handleTargets.push([handle, handle]);
+  });
+  if (desc.else_ !== null) handleTargets.push([ELSE_HANDLE, desc.else_ as string]);
+
+  const node = new CaseNode(desc.id, cases, { title: desc.nodeName });
+  node.params = [...params.sourceToLocal.values()].map((local) => new Parameter(local));
+  const paramRanges = new Map<string, SourceRange>();
+  const paramLabels = new Map<string, string>();
+  for (const [local, caseIndex] of params.localCaseIndex) {
+    const range = desc.whenRanges[caseIndex] ?? null;
+    if (range !== null) paramRanges.set(siteKey("input", local), range);
+    paramLabels.set(local, `cases[${caseIndex}].when`);
+  }
+  return {
+    node,
+    wiring,
+    dataEdges: dataEdges(desc.id, wiring),
+    controlEdges: controlEdges(desc.id, handleTargets),
+    paramRanges,
+    paramLabels,
+  };
+}
+
+/**
+ * Rewrite each reference occurrence in `when` to its bare local `__rN`.
+ *
+ * Works in either condition spelling (bare, or one whole `${...}`) and keeps the surrounding
+ * expression, so the `when:` still evaluates lazily case by case. `rewriteConditionReads` walks
+ * the same occurrences as `conditionReads` in `searchedParams`, so `locals[i]` is occurrence
+ * `i`'s local.
+ *
+ * @param when The authored `when:`.
+ * @param locals The local of each reference occurrence, in `conditionReads` order.
+ * @returns The `when:` over the case's locals.
+ */
+function rewriteWhen(when: string, locals: readonly string[]): string {
+  return rewriteConditionReads(when, (i) => locals[i]!);
 }

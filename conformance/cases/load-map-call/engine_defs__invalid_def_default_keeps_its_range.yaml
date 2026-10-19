@@ -1,4 +1,4 @@
-# The frame sits on def/inline-body structure, not CODE text: shared.
+# The frames sit on def lines (flow structure), not CODE text: shared.
 kind: load
 flow: |
   id: invalid-def-default

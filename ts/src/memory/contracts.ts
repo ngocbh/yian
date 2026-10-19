@@ -662,14 +662,14 @@ export class MemoryOccurrenceSegment {
    * Validate the occurrence kind, authored path and index; `staticPath` is copied.
    *
    * @throws TypeError for an unknown kind, a path that isn't an array of strings, or an index
-   *   that isn't an integer `number`.
+   *   that isn't a safe integer `number`.
    * @throws RangeError for an empty path or component, a lone surrogate, or a negative index.
    */
   constructor(kind: MemoryOccurrenceKind, staticPath: readonly string[], index: number) {
     if (!OCCURRENCE_KINDS.includes(kind)) throw new TypeError("kind must be a MemoryOccurrenceKind");
     this.kind = kind;
     this.staticPath = requirePath(staticPath, "static_path");
-    if (!Number.isInteger(index)) throw new TypeError("index must be an integer");
+    if (!Number.isSafeInteger(index)) throw new TypeError("index must be an integer");
     if (index < 0) throw new RangeError("index must be non-negative");
     this.index = index;
     Object.freeze(this);

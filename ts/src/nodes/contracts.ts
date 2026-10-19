@@ -141,7 +141,7 @@ export class ExecutionPosition {
    *
    * @throws RangeError for an unknown kind, an empty path component, an index on a call, or a
    *   negative index.
-   * @throws TypeError when the path isn't an array, or a non-call index isn't an integer.
+   * @throws TypeError when the path isn't an array, or a non-call index isn't a safe integer.
    */
   constructor(kind: PositionKind, staticPath: readonly string[], index: number | null = null) {
     if (typeof kind !== "string" || !POSITION_KINDS.includes(kind)) {
@@ -150,7 +150,7 @@ export class ExecutionPosition {
     validateAuthoredPath(staticPath, "static_path");
     if (kind === "call") {
       if (index !== null) throw new RangeError("a call position cannot have an index");
-    } else if (typeof index !== "number" || !Number.isInteger(index)) {
+    } else if (typeof index !== "number" || !Number.isSafeInteger(index)) {
       throw new TypeError("execution position index must be an integer");
     } else if (index < 0) {
       throw new RangeError("execution position index must be non-negative");

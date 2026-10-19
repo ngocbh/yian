@@ -982,7 +982,10 @@ function requireSchema(schema: unknown): void {
   if (schema === 9) {
     throw new RangeError("run log schema 9 was written by Python yian; resume it with Python yian");
   }
-  if (schema !== SCHEMA_VERSION) throw new RangeError(`unsupported run-record schema: ${valueRepr(schema)}`);
+  if (schema === SCHEMA_VERSION) return;
+  // `valueRepr` prints a bigint like a number, so `10n` would read as the supported schema.
+  const shown = typeof schema === "bigint" ? `${schema}n` : valueRepr(schema);
+  throw new RangeError(`unsupported run-record schema: ${shown}`);
 }
 
 /**
@@ -1091,6 +1094,8 @@ const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
  *   reader's error as `cause`), the schema isn't `SCHEMA_VERSION`, the kind is unknown, an object
  *   has missing or extra fields, a string is empty, or a counter isn't a safe integer.
  * @throws TypeError when `data` is neither text nor bytes, or a field has the wrong JSON type.
+ * @throws JSONDecodeError, the reader's error unchanged, when a route's embedded `value_json`
+ *   isn't JSON yian reads.
  */
 export function decodeRecord(data: string | Uint8Array): RecordEnvelope {
   let text: string;

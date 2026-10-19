@@ -273,6 +273,12 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>
     "index must be an integer",
   ],
   [
+    "an index beyond 2^53",
+    () => new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["root"], 2 ** 53),
+    TypeError,
+    "index must be an integer",
+  ],
+  [
     "a negative index",
     () => new MemoryOccurrenceSegment(MemoryOccurrenceKind.LOOP_ITERATION, ["root"], -1),
     RangeError,

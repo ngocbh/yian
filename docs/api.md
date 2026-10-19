@@ -1986,6 +1986,7 @@ refused. Counters (`seq`, `schema`, `num_workers`, `attempt_id`, indexes) are
 safe-integer `number`s in the API and JSON ints in the line. A damaged or foreign line
 fails with a `RangeError`, or a `TypeError` for a field of the wrong JSON type; text
 that isn't JSON, including a BOM or invalid UTF-8, fails with "invalid run-record JSON".
+A malformed `value_json` inside a route keeps the reader's `JSONDecodeError`.
 
 Backward attempts use `BackwardStartedRecord`, then one `BackwardReadyRecord`
 after the complete backward fold and every memory proposal, then ordered

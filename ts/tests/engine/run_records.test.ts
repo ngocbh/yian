@@ -729,6 +729,7 @@ test.each<[string, unknown, string]>([
   ["9", 9, "run log schema 9 was written by Python yian; resume it with Python yian"],
   ["11", 11, "unsupported run-record schema: 11"],
   ["true", true, "unsupported run-record schema: true"],
+  ["10n", 10n, "unsupported run-record schema: 10n"],
 ])("the envelope refuses schema %s", (_name, schema, message) => {
   expectError(() => new RecordEnvelope(schema as never, "run", 0, new NodeStartedRecord("work")), RangeError, message);
 });

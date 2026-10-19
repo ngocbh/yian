@@ -136,6 +136,7 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError]>([
   ["a boolean path component", () => new ExecutionScope([true] as never), RangeError],
   ["an unknown boundary", () => new ExecutionScope(["node"], { boundary: "other" as never }), RangeError],
   ["a boolean index", () => new ExecutionPosition("map_item", ["each"], true as never), TypeError],
+  ["an index beyond 2^53", () => new ExecutionPosition("map_item", ["each"], 2 ** 53), TypeError],
   ["a negative index", () => new ExecutionPosition("loop_driver", ["loop"], -1), RangeError],
   ["a missing index", () => new ExecutionPosition("loop_body", ["loop"]), TypeError],
   ["an index on a call", () => new ExecutionPosition("call", ["child"], 2), RangeError],
@@ -145,6 +146,7 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError]>([
 
 test.each<[unknown, typeof TypeError | typeof RangeError, string]>([
   [true, TypeError, "execution position index must be an integer"],
+  [2 ** 53, TypeError, "execution position index must be an integer"],
   [-1, RangeError, "execution position index must be non-negative"],
 ])("an execution scope rebuilds a forged position with index %p", (index, cls, message) => {
   const forged = Object.assign(Object.create(ExecutionPosition.prototype) as ExecutionPosition, {

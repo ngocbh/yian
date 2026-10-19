@@ -10,7 +10,8 @@
  * Changed: the message says `or null` where Python's says `or None`. The identity rows build the
  * `reply` node by hand where Python loads `_flow`.
  *
- * TS-only: the harvested case of the `123` row, as `parseNodes` reads it.
+ * TS-only: the harvested cases of the `123` row, as `parseNodes` reads it, and of the compact
+ * flow, which assembles.
  *
  * Later (T3-18): `test_unknown_ref_points_at_the_system_prompt_line` and
  * `test_unknown_ref_in_a_compact_flow_is_located`. Later (T3-22): the pinned fingerprints of
@@ -24,7 +25,7 @@ import { Flow } from "../../src/compile/model.ts";
 import { forget } from "../../src/defaults.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { assembleText, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
 
 afterEach(() => forget());
 
@@ -128,3 +129,7 @@ test("system prompt is identity", () => {
 test.each<CaseRow>([
   { id: "load-agent/compose_agent_system_prompt_yaml__int_system_prompt", call: parsedNodes },
 ])("parseNodes: $id", runCase);
+
+test.each<CaseRow>([
+  { id: "load-agent/compose_agent_system_prompt_yaml__compact_flow_accepts_system_prompt", call: assembled },
+])("assembles: $id", runCase);

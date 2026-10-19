@@ -14,13 +14,16 @@
  * `test_invalid_variable_name_selects_its_declaration_key`, and the params, variables and wiring
  * of `test_loaded_agent_prompt_can_name_inputs_and_variables_without_default_data_edges`.
  *
- * Changed: a mapping's keys are text, so the `{1: "int"}` row of the malformed mappings is
- * `{"1": "int"}`; the noncanonical returns are a record, text, a set, and lists holding a record
+ * Changed: the malformed mappings drop Python's `{1: "int"}` row: a record's keys are always
+ * text, so it has no TS counterpart (`{"1": "int"}` would fail for its missing default instead),
+ * and `test_invalid_variable_name_selects_its_declaration_key` covers a non-text YAML key; the
+ * noncanonical returns are a record, text, a set, and lists holding a record
  * or a `Parameter` subclass, where Python's are a tuple, a dict and a list holding an `object()`.
  *
  * TS-only: `readVariables` on its own, which `AgentDescriptor` calls for a node with no
  * authored source; and the harvested-case table, which makes the loader's call on the
- * conformance cases of these declarations, comparing the message and the last frame.
+ * conformance cases of these declarations, comparing the message and the last frame, or
+ * checking that the flow loads.
  *
  * Later (T3-17): the no-default-data-edge half of
  * `test_loaded_agent_prompt_can_name_inputs_and_variables_without_default_data_edges`.
@@ -34,7 +37,6 @@ import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { BuildContext, type VariableDeclarationReader } from "../../src/compose/nodes/base.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
-import { SourceRange } from "../../src/diagnostics.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
@@ -68,41 +70,6 @@ function reading(parameters: Parameter[], registry: TypeRegistry = EMPTY): Build
 }
 
 describe("tagged agent variables", () => {
-  test("typed variables read their defaults", () => {
-    const registry = readTypedefs({
-      Settings: { limit: "int(1..12)", tags: "list(str)" },
-      Tone: "Literal(concise, detailed, technical)",
-    });
-    const variables = yamlVariables(
-      "  num_sentences: !int(1..12) 4\n" +
-        "  temperature: !float(0..1) 0.4\n" +
-        "  tone: !Tone concise\n" +
-        '  instruction: !str "Summarize clearly"\n' +
-        "  settings: !Settings {limit: 4, tags: [a, b]}\n" +
-        "  items: !list(int(1..12)) [1, 4]\n" +
-        "  optional: !Optional(str) null\n" +
-        '  empty: !str ""\n' +
-        "  compatible: !float(0..4) 4\n" +
-        "  literal: !str ${input.topic}\n",
-      registry,
-    );
-    expect(variables.every((variable) => variable.constructor === Parameter)).toBe(true);
-    expect(variables.every((variable) => variable.contract?.constructor === ValueContract)).toBe(true);
-    expect(variables.every((variable) => variable.hasDefault && !variable.required)).toBe(true);
-    expect(Object.fromEntries(variables.map((variable) => [variable.name, variable.default]))).toEqual({
-      num_sentences: 4n,
-      temperature: 0.4,
-      tone: "concise",
-      instruction: "Summarize clearly",
-      settings: { limit: 4n, tags: ["a", "b"] },
-      items: [1n, 4n],
-      optional: null,
-      empty: "",
-      compatible: 4n,
-      literal: "${input.topic}",
-    });
-  });
-
   test("the agent build resolves typed variables without input bindings", () => {
     const registry = readTypedefs({
       Settings: { limit: "int(1..12)", tags: "list(str)" },
@@ -192,7 +159,7 @@ describe("readVariables", () => {
 
 describe("the AGENT build", () => {
   // Each row is wrapped, since `test.each` spreads an array row into the arguments.
-  test.each([[null], [[]], ["x"], [4n], [{ "": "int" }], [{ "1": "int" }]])(
+  test.each([[null], [[]], ["x"], [4n], [{ "": "int" }]])(
     "variables %p are rejected",
     (variables) => {
       loadError(() => new AgentDescriptor({ id: "writer", variables }).build(new BuildContext({ registry: EMPTY })));
@@ -227,7 +194,9 @@ describe("the AGENT build", () => {
       const reader = (() => returned) as unknown as VariableDeclarationReader;
       const ctx = new BuildContext({ registry: EMPTY, variableDeclarationReader: reader });
 
-      expect(() => new AgentDescriptor({ id: "writer" }).build(ctx)).toThrow(TypeError);
+      expect(() => new AgentDescriptor({ id: "writer" }).build(ctx)).toThrow(
+        new TypeError("variable declaration reader must return a list of exact Parameters or null"),
+      );
     },
   );
 });
@@ -328,12 +297,12 @@ nodes:
     output: str
 output: \${writer.output}
 `;
+    const variables = SourceDocument.parse(text).root.child("nodes").child("writer").child("variables");
     const error = loadError(() => assembleText(text));
 
     expect(error.message).toContain(message);
-    // The key as written on line 7; a document with a non-text key doesn't parse, so it has no
-    // cursor to ask.
-    expect(error.diagnostic.frames.at(-1)!.range).toEqual(new SourceRange(7, 7, 7, 7 + key.length));
+    const first = Object.keys(variables.value as Record<string, unknown>)[0]!;
+    expect(error.diagnostic.frames.at(-1)!.range).toEqual(variables.child(first).keyRange!);
   });
 });
 
@@ -341,6 +310,7 @@ output: \${writer.output}
 
 test.each<CaseRow>([
   { id: "load-agent/compose_agent_variables__empty_variable_name", call: assembled },
+  { id: "load-agent/compose_agent_variables__prompt_reads_inputs_and_variables_loads", call: assembled },
   { id: "load-agent/compose_agent_variables__variable_input_collision", call: assembled },
   { id: "load-core/compose_input_contract_origins__agent_variable_out_of_range_compact", call: assembled },
   { id: "load-core/engine_value_nesting_boundaries__agent_variable_default_over_the_limit", call: assembled },

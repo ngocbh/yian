@@ -10,9 +10,9 @@
  * TS-only: an untagged float default's example, spelled as Python's `repr` spells a finite
  * float and as `.inf` for infinity, which YAML reads back as a float (Python writes `inf`,
  * which reads back as text); a type with a default that doesn't parse (`n: int = [`), kept as
- * written where Python reads an unbound name; and the harvested-case table, which makes the
- * loader's call on the declarations of the conformance cases these readers decide, comparing
- * the message and the last frame.
+ * written where Python reads an unbound name; and the harvested-case table, comparing the
+ * message and the last frame: its flow-input rows read the declarations, and its agent-variable
+ * rows assemble the flow as the loader calls `assemble`.
  *
  * Later (T3-22): the `load_flow` tests: the bracket typedef and node output, the typed binding
  * text, the typed flow output text, text without a type that stays plain text, and the

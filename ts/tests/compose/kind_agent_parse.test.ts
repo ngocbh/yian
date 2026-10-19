@@ -372,10 +372,6 @@ test.each<CaseRow>([
   { id: "load-agent/compose_agent_mode_removed__steerable_agent_without_tools_loads", call: assembled },
   // tests/compose/test_agent_output_nesting.py
   { id: "load-agent/compose_agent_output_nesting__a_written_out_record_at_the_limit_loads", call: assembled },
-  // tests/compose/test_agent_system_prompt_yaml.py
-  { id: "load-agent/compose_agent_system_prompt_yaml__compact_flow_accepts_system_prompt", call: assembled },
-  // tests/compose/test_agent_variables.py
-  { id: "load-agent/compose_agent_variables__prompt_reads_inputs_and_variables_loads", call: assembled },
   // examples/
   { id: "load-agent/example_ask_user", call: assembled },
   { id: "load-agent/example_classify", call: assembled },

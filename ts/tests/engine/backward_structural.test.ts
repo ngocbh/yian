@@ -20,7 +20,7 @@
  * predicate doesn't parse, so backward would throw if it evaluated it (Python's monkeypatch). The
  * params are emptied by assigning `[]`.
  *
- * Later (T3-9, T4-x): `test_agent_capture_keeps_variable_inventory_separate_from_delivered_inputs`.
+ * Later (T4-x, T5-11a): `test_agent_capture_keeps_variable_inventory_separate_from_delivered_inputs`.
  * Later (T4-x): `test_input_inventory_capture_preserves_canonical_parameter_setup_faults`,
  * `test_static_backward_capture_and_names_are_detached_for_the_actual_invocation`,
  * `test_early_binding_failure_keeps_inventories_without_usable_inputs_or_fabricated_layout`,

@@ -198,6 +198,13 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   run. The other kinds hold their data, checks and load-time hooks (origins, setup and condition
   checks, MAP's `over` and WAIT's `until` bindings, HUMAN_INPUT's prompt sites, backward layouts,
   LOOP `respawn`); their `forward` throws "not ported yet".
+- AGENT lives in `src/nodes/agent/node.ts`, and its `llm_config` values in
+  `src/nodes/agent/llm_values.ts`. The node holds its data, checks and load-time hooks; `forward`
+  and `backward` are not ported yet. Setting `callTime` also sets `needsSteps`: `callTime` is an
+  accessor, so a shallow copy keeps the two in step. `llmValueTypes` is an array of
+  `[path, type]` entries, not a map keyed by path. AGENT is the node the remaining `NodeCaps`
+  fields serve (`skills`, `emitStream`, `emitEvent`, `captureRender`, and `steering`, a `Steering`
+  inbox given only to an agent authored `steerable: true`).
 - A CODE `code:` value is a reference (`./file.ts:fn`, also `.js` or `.mjs` and `../` paths,
   resolved against the node's `baseDir`) or an inline TS/JS body. The constructor classifies it
   by shape into `mode` and compiles or imports nothing.

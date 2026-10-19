@@ -1,7 +1,9 @@
 /**
  * Backward contracts: a port of `tests/engine/test_backward_contracts.py`. Ported: the feedback
  * value checks, `BackwardResult`, `validateBackwardResult`, the `ExecutionScope` and
- * `ExecutionPosition` tests, and the `BackwardContext` halves of
+ * `ExecutionPosition` tests,
+ * `test_declared_variables_supply_local_backward_targets_without_activating_hooks` (2 rows), and
+ * the `BackwardContext` halves of
  * `test_backward_context_and_outcome_do_not_expose_mutable_authority`,
  * `test_retained_failure_origins_drop_mutable_subclass_state` (the two `context` cases) and
  * `test_backward_contracts_reject_invalid_snapshots_and_outcomes`.
@@ -26,15 +28,15 @@
  *   `ValueError` (`RangeError`).
  * - Changed (rule `messages`, decision 43): a quoted key in a value path is spelled in the text
  *   form, `value["a"][0]`, `input_feedback["text"]`, never Python's `value['a'][0]`.
+ * - The declared-variables row builds the AGENT's `tone` variable by hand where Python reads it
+ *   from YAML.
  *
- * Later (T4-1 / T3-9): `test_attributed_backward_result_detaches_messages_and_keeps_reference_coordinates`,
+ * Later (T4-1): `test_attributed_backward_result_detaches_messages_and_keeps_reference_coordinates`,
  * `test_backward_attribution_rejects_malformed_root_coordinates`,
  * `test_backward_outcome_does_not_normalize_its_caller_owned_failure`,
  * `test_backward_outcome_can_succeed_without_memory` and
- * `test_backward_outcome_copy_preserves_ordered_policy_dispositions` need the runtime contracts
- * (T4-1), as do the outcome and failure halves of the three partly ported tests;
- * `test_declared_variables_supply_local_backward_targets_without_activating_hooks` needs the AGENT
- * node (T3-9).
+ * `test_backward_outcome_copy_preserves_ordered_policy_dispositions` need the runtime contracts,
+ * as do the outcome and failure halves of the three partly ported tests.
  *
  * Not ported: the rows that pass a list where Python wants a tuple (`static_path=["node"]`,
  * `occurrence_path=[]`, `input_names=["text"]`, a list batch, `{"path": (1,)}`) and the tuple
@@ -47,6 +49,7 @@ import { expect, test } from "bun:test";
 
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { type FeedbackValue, hasFeedback, validateFeedback } from "../../src/expr/index.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
 import {
   BackwardContext,
   BackwardResult,
@@ -58,9 +61,34 @@ import {
 import {
   ExecutionPosition,
   ExecutionScope,
+  Parameter,
   sameExecutionPosition,
   sameExecutionScope,
+  ValueContract,
 } from "../../src/nodes/contracts.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
+
+test.each([
+  ["inputs", { topic: "reefs" }],
+  ["no inputs", null],
+] as const)("declared variables supply local backward targets without activating hooks (%s)", (_label, inputs) => {
+  const tone = new Parameter("tone", {
+    contract: new ValueContract(Type.scalar(ValueKind.STRING)),
+    hasDefault: true,
+    default: "concise",
+  });
+  const node = new AgentNode("writer", { variables: [tone] });
+  const context = new BackwardContext(inputs, {
+    inputNames: ["topic"],
+    variableNames: node.declaredVariables().map((parameter) => parameter.name),
+  });
+  validateBackwardResult(new BackwardResult({ variableFeedback: { tone: ["Use a technical tone."] } }), context);
+  for (const name of ["topic", "other_instruction", "other.tone"]) {
+    const result = new BackwardResult({ variableFeedback: { [name]: ["Be clearer."] } });
+    expect(() => validateBackwardResult(result, context)).toThrow(RangeError);
+    expect(() => validateBackwardResult(result, context)).toThrow(name);
+  }
+});
 
 test("execution scopes keep root-relative structured positions", () => {
   const root = new ExecutionScope([], { flowPath: [] });

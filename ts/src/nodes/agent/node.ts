@@ -8,33 +8,50 @@
  * host interruption unwinds the node; no conversation or continuation state is stored in the
  * graph or variable pool.
  *
- * Here: the node's construction and its checks, the granted tools and skills, the tool-loop bound
- * and the local variable declarations. Not ported yet: `forward`, which brings `exceptionOrigin`
+ * Here: the node's construction and its checks, its load-time hooks (reserved `__llm_config`
+ * wiring, prompt and setup checks, origins), the granted tools and skills, the tool-loop bound and
+ * the local variable declarations. Not ported yet: `forward`, which brings `exceptionOrigin`
  * and `exceptionCode`, and `backward`.
  *
- * Knows about:   nodes/base, nodes/contracts, nodes/agent/llm_values, memory contracts,
+ * Knows about:   nodes/base, nodes/binding, nodes/contracts, nodes/agent/llm_values, memory contracts,
  *                llm_clients config, skills, defaults, diagnostics and typesys.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
 import { current } from "../../defaults.ts";
-import { compareCodeUnits, reprText } from "../../diagnostics.ts";
+import { compareCodeUnits, type OriginRef, reprText } from "../../diagnostics.ts";
 import type { HostConnection } from "../../llm_clients/config.ts";
-import { MemoryDecl } from "../../memory/contracts.ts";
+import { iterMemoryDeclOrigins, MemoryDecl, rewriteMemoryDeclOrigins } from "../../memory/contracts.ts";
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
-import { buildValueAs, isList, isRecord, type Type, ValueKind, valueRepr, writeAsText } from "../../typesys/values.ts";
-import { Node, NodeKind } from "../base.ts";
+import type { VariablePool } from "../../typesys/pool.ts";
+import {
+  buildValueAs,
+  isList,
+  isRecord,
+  type Type,
+  ValueKind,
+  valueRepr,
+  writeAsText,
+} from "../../typesys/values.ts";
+import { checkNamedPrompt, Node, NodeKind } from "../base.ts";
+import { copyValue, type ReservedBinder } from "../binding.ts";
 import {
   Binding,
   isExactly,
+  iterOriginCarrier,
+  type OriginMapper,
   type OutputContract,
   Parameter,
+  rewriteOriginCarrier,
   ValueContract,
   type ValuePath,
   ValueTemplate,
 } from "../contracts.ts";
-import type { CallTimeLLM } from "./llm_values.ts";
+import { type CallTimeLLM, callTimeConfig, LLM_CONFIG_KEY, type Nullable, typesNullable } from "./llm_values.ts";
+
+/** The step key under which a call-time agent records the config it resolved. */
+const CONFIG_STEP = "effective_llm_config";
 
 /** Whether an AGENT output contract is plain text: none, or an untagged `str`. */
 export function isTextOutput(contract: OutputContract | null): boolean {
@@ -221,6 +238,62 @@ export class AgentNode extends Node {
     this.hostCredentials = null;
   }
 
+  /** Declare `__llm_config` when values in the layers can reach this agent's config. */
+  override reservedWiringKeys(): ReadonlySet<string> {
+    return new Set(this.wiresLlmConfig ? [LLM_CONFIG_KEY] : []);
+  }
+
+  /** Hide `__llm_config` from recall and evidence, when this agent has it: it configures the call. */
+  override modelHiddenInputs(): ReadonlySet<string> {
+    return new Set(this.wiresLlmConfig ? [LLM_CONFIG_KEY] : []);
+  }
+
+  /**
+   * Resolve and check a call-time agent's `llm_config` before its model call.
+   *
+   * The node and own-flow layers resolve against `pool`, merge over the base run start recorded,
+   * and are checked as run start checks a static agent's config (`callTimeConfig`). Nothing is
+   * rendered, recalled or sent to a model first. `options.bind` is unused: the bound value is the
+   * resolved config, not the values it was read from.
+   *
+   * @returns `{__llm_config: <config>}`, the resolved config with no key or header value, the
+   *   shape of a `RunStarted` map entry; `{}` for an agent run start resolved.
+   * @throws Error when a call-time agent's wiring has no `__llm_config` source.
+   * @throws BindingError when a value breaks its tag (`binding.type`) or fails to resolve, or the
+   *   resolved config is refused (`contract.input`); the message names the field.
+   * @throws AuthError when the config is marked for the host key the run does not hold; the
+   *   host's to fix, not a failure of this node.
+   */
+  override bindReserved(
+    nodeWiring: ReadonlyMap<string, unknown>,
+    pool: VariablePool,
+    options: { bind?: ReservedBinder | null } = {},
+  ): Record<string, unknown> {
+    if (this.callTime === null) return {};
+    if (!nodeWiring.has(LLM_CONFIG_KEY)) {
+      throw new Error(`AGENT node ${reprText(this.id)} has no \`${LLM_CONFIG_KEY}\` wiring`);
+    }
+    return {
+      [LLM_CONFIG_KEY]: callTimeConfig(nodeWiring.get(LLM_CONFIG_KEY) as Binding, pool, this.callTime, {
+        label: this.llmConfigLabel,
+        credentials: this.hostCredentials,
+      }),
+    };
+  }
+
+  /** Name the reserved `__llm_config` key as the authored `llm_config` field. */
+  override reservedKeyLabel(key: string): string {
+    return key === LLM_CONFIG_KEY ? "llm_config" : super.reservedKeyLabel(key);
+  }
+
+  /**
+   * Return whether a value in `ownLlmConfig`, or a part of it, may be null. Answers from
+   * `llmValueTypes`; a value with no proven type may be null.
+   */
+  llmNullable(): Nullable {
+    return typesNullable(this.ownLlmConfig, this.llmValueTypes);
+  }
+
   /**
    * Set per run on the run's private flow, never on the authored one: what run start fixed when
    * this agent's config resolves only when it runs; `null` when run start resolved it into
@@ -234,6 +307,78 @@ export class AgentNode extends Node {
   set callTime(value: CallTimeLLM | null) {
     this.callTimeValue = value;
     this.needsSteps = value !== null;
+  }
+
+  /**
+   * Return the config an earlier start of this agent recorded in its steps, if any.
+   *
+   * @param steps The node's recorded steps, in order.
+   * @returns A copy of the last recorded `effective_llm_config`, with no key or header value;
+   *   `null` when no step records one.
+   */
+  recordedLlmConfig(steps: readonly unknown[]): Record<string, unknown> | null {
+    for (let index = steps.length - 1; index >= 0; index -= 1) {
+      const step = steps[index];
+      if (isRecord(step) && Object.hasOwn(step, CONFIG_STEP) && isRecord(step[CONFIG_STEP])) {
+        return copyValue(step[CONFIG_STEP]) as Record<string, unknown>;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Return the declared inputs eligible for feedback, never `__llm_config`. The model config is
+   * not material the model reasons about, so the node that produced a value in it never receives
+   * this agent's input feedback.
+   */
+  override backwardInputNames(): readonly string[] {
+    return super.backwardInputNames().filter((name) => name !== LLM_CONFIG_KEY);
+  }
+
+  /**
+   * Return the config a call-time agent bound as `__llm_config`, if any.
+   *
+   * @param inputs The invocation's bound inputs.
+   * @returns The resolved config, with no key or header value; `null` for an agent run start
+   *   resolved, which binds none.
+   */
+  override boundLlmConfig(inputs: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
+    const config = Object.hasOwn(inputs, LLM_CONFIG_KEY) ? inputs[LLM_CONFIG_KEY] : null;
+    return isRecord(config) ? config : null;
+  }
+
+  /**
+   * Reject a steerable agent whose output contract is not plain text. The contract is assigned
+   * after construction, so this is checked here as well as at YAML load.
+   *
+   * @throws RangeError when the agent is steerable and its output isn't an untagged `str`.
+   */
+  override validateExecutionSetup(): void {
+    super.validateExecutionSetup();
+    if (this.steerable && !isTextOutput(this.outputContract)) {
+      // An interrupted node returns its text so far; a structured value can't be partial.
+      throw new RangeError(`AGENT node ${reprText(this.id)}: steerable needs \`str\` output`);
+    }
+  }
+
+  /**
+   * Check the prompt and system prompt templates.
+   *
+   * @param options.path The static node path to name in the error instead of the node's id, used
+   *   by a pre-run check over a whole flow.
+   * @throws ExpressionError when a template's `${...}` span doesn't parse, calls `isinstance` or a
+   *   function that isn't a builtin, or calls a builtin with arguments it doesn't take; the
+   *   message names the node and the field.
+   */
+  override validatePrompts(options: { path?: string | null } = {}): void {
+    const { path = null } = options;
+    for (const [field, text] of [
+      ["prompt", this.prompt],
+      ["system_prompt", this.systemPrompt],
+    ] as const) {
+      // `||`, as Python's `or`: an empty path names the node by its id.
+      if (typeof text === "string") checkNamedPrompt(text, `node ${reprText(path || this.id)} ${field}`);
+    }
   }
 
   /** Require `"all"` or unique valid names, and no `load_skill` tool grant. */
@@ -301,6 +446,32 @@ export class AgentNode extends Node {
       }
       variable.contract.type.validateShape();
       buildValueAs(variable.contract.type, variable.default);
+    }
+  }
+
+  /**
+   * Yield the common origins, then the variables', the memory declarations' and those of the
+   * values in `ownLlmConfig`.
+   */
+  override *iterLocalOrigins(seen: Set<object> = new Set()): Generator<OriginRef> {
+    yield* super.iterLocalOrigins(seen);
+    for (const variable of this.variables) yield* iterOriginCarrier(variable, seen);
+    yield* iterMemoryDeclOrigins(this.memories, seen);
+    if (this.ownLlmConfig instanceof ValueTemplate || this.ownLlmConfig instanceof Binding) {
+      yield* iterOriginCarrier(this.ownLlmConfig, seen);
+    }
+  }
+
+  /**
+   * Rewrite the common, variable, memory declaration and `llmConfig` value origins on a copied
+   * AGENT, reassigning each field with rebuilt carriers. Carrier aliases are kept.
+   */
+  override rewriteLocalOrigins(mapper: OriginMapper, seen: Map<object, object> = new Map()): void {
+    super.rewriteLocalOrigins(mapper, seen);
+    this.variables = this.variables.map((variable) => rewriteOriginCarrier(variable, mapper, seen));
+    this.memories = rewriteMemoryDeclOrigins(this.memories, mapper, seen);
+    if (this.ownLlmConfig instanceof ValueTemplate || this.ownLlmConfig instanceof Binding) {
+      this.ownLlmConfig = rewriteOriginCarrier(this.ownLlmConfig, mapper, seen);
     }
   }
 

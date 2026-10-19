@@ -2,8 +2,6 @@
  * Operator chains are flat nodes that evaluate and trace like the old binary trees, at any
  * length: a port of `tests/engine/test_expr_chains.py`.
  *
- * Later (T4-2): the route payload round trips wait for `runtime/log.ts`.
- *
  * Not ported: the repeat tests and the repeats mixed into the traced concat chains, since
  * repetition is a type error in TS. `test_the_grammar_has_no_lalr_conflict` has no counterpart,
  * since the TS parser has no grammar table. The generated chains come from a small seeded PRNG
@@ -25,7 +23,9 @@ import {
   ValueRoute,
 } from "../../src/expr/lineage.ts";
 import { validateRoute } from "../../src/runtime/contracts.ts";
+import { routeFromPayload, routePayload } from "../../src/runtime/log.ts";
 import type { Value, ValueRecord } from "../../src/typesys/index.ts";
+import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { fieldOf, isRecord } from "../../src/typesys/values.ts";
 
 /** A position-blind form of `node`, as Lark's `Tree`/`Token` equality ignores positions. */
@@ -462,6 +462,11 @@ test("traced chains match the old binary steps", () => {
   expect(shapes.has("concat") && shapes.has("scalar")).toBe(true);
 });
 
+/** Decode `route`'s payload after a trip through its run-log JSON. */
+function roundTrip(route: ValueRoute): ValueRoute {
+  return routeFromPayload(parseJson(logJson(routePayload(route)), "codec"));
+}
+
 /** The height of a route tree: 0 for a leaf. */
 function depth(route: ValueRoute): number {
   return 1 + Math.max(-1, ...route.children.map(depth));
@@ -496,6 +501,7 @@ test("a long traced list chain stays shallow", () => {
   expect(depth(route)).toBeLessThanOrEqual(13);
   expect(routeValue(route, sources.lookup)).toEqual(result.value);
   validateRoute(route);
+  expect(roundTrip(route)).toEqual(route);
   const feedback = Array.from({ length: 3000 }, (_, i) => `m${i}`);
   expect(messages(sources.feedback(result, feedback))).toEqual(feedback.map((m) => [sources.identities.x!, m]));
 });
@@ -522,6 +528,7 @@ test("an old nested concat route still validates and routes feedback", () => {
   });
   const old = new ValueRoute("concat", { children: [inner, source("c")], expression: "((a + b) + c)", sizes: [3, 1] });
   validateRoute(old);
+  expect(roundTrip(old)).toEqual(old);
   expect(routeValue(old, sources.lookup)).toEqual(["a", "b", "c", "d"]);
   const got = sources.evaluate("a + b + c");
   expect(got.route).not.toEqual(old);

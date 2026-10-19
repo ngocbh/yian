@@ -46,18 +46,28 @@
  * `test_codec_replays_outer_record_invariants_after_forging` (they forge frozen carriers with
  * `object.__setattr__`, which a frozen TS carrier refuses).
  *
- * Later: the wire tests of the module (the round trips of the run-start tests above, the commit
- * and outcome records, schema and payload rejections), with the record codec.
+ * Ported, the outcome wire: `test_all_outcome_records_round_trip_closed_evidence`,
+ * `test_existing_outcome_records_round_trip_with_no_evidence`,
+ * `test_memory_scope_wire_has_no_boundary_field`, the evidence rows of
+ * `test_schema_four_rejects_old_schema_and_nested_extra_or_unknown_fields` (an extra
+ * `evidence.scope` field, the unknown interaction kind `provider_trace`, an extra `provider`) and
+ * the evidence half of `test_memory_payloads_name_keys_on_the_wire`, each rejection with its
+ * class and message.
+ *
+ * Later: the other wire tests of the module (the round trips of the run-start tests above, the
+ * commit and backward records, their schema and payload rejections), with the record codec.
  */
 
 import { expect, test } from "bun:test";
 
 import { current } from "../../src/defaults.ts";
+import { Failure } from "../../src/diagnostics.ts";
 import {
   DeclSite,
   EvaluationEvidence,
   type JsonObject,
   MemoryMutation,
+  MemoryOccurrenceSegment,
   MemoryScope,
   MemorySection,
   MemorySnapshotEnvelope,
@@ -69,13 +79,22 @@ import {
   ToolResultInteraction,
 } from "../../src/memory/contracts.ts";
 import {
+  decodeRecord,
   encodePool,
+  encodeRecord,
   MemoryCommitRequestedRecord,
+  NodeExpandedRecord,
+  NodeFailedRecord,
+  NodeRoutedRecord,
   NodeSucceededRecord,
+  RecordEnvelope,
+  type RunRecord,
   type RunStartedFields,
   RunStartedRecord,
+  SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import { VariablePool } from "../../src/typesys/index.ts";
+import { logJson, parseJson } from "../../src/typesys/json.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError;
 
@@ -563,4 +582,127 @@ test("records reject forged nested carrier subclasses", () => {
     TypeError,
     "mutations items must be MemoryMutation values",
   );
+});
+
+// --------------------------------------------------------------------------------------- //
+// Outcome evidence on the run log
+// --------------------------------------------------------------------------------------- //
+
+const DIGEST = "b".repeat(64);
+
+/** Closed evidence with a scope, prompts, two sections and one interaction of each kind. */
+function evidence(): EvaluationEvidence {
+  return new EvaluationEvidence(
+    new MemoryScope(["flow", "agent"], {
+      memories: ["notes", "reflective"],
+      occurrencePath: [new MemoryOccurrenceSegment("map_item", ["flow"], 0)],
+    }),
+    { question: ["hello"] },
+    "base",
+    "answer the question",
+    [new MemorySection("notes", "flow memory"), new MemorySection("reflective", "agent memory")],
+    [
+      new ModelTextInteraction("draft"),
+      new ModelValueInteraction({ answer: "done" }),
+      new ToolCallInteraction("lookup", { key: "value" }),
+      new ToolResultInteraction("lookup", "result"),
+    ],
+  );
+}
+
+/** Encode `record` at seq 0 and decode it; the line must be stable. Return the decoded record. */
+function roundTrip(record: RunRecord): RunRecord {
+  const envelope = new RecordEnvelope(SCHEMA_VERSION, "run", 0, record);
+  const encoded = encodeRecord(envelope);
+  const decoded = decodeRecord(encoded);
+  expect(encodeRecord(decoded)).toBe(encoded);
+  expect(decoded).toEqual(envelope);
+  return decoded.record;
+}
+
+/** The decoded JSON of `record`'s line at seq 0, ints as `bigint`s, as a mutable object. */
+function wireOf(record: RunRecord): Record<string, any> {
+  return parseJson(encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "run", 0, record)), "codec") as Record<string, any>;
+}
+
+const FAILED = new Failure({ code: "node.execute", message: "failed", nodeId: "agent" });
+const DONE = { kind: "str", value: "done" } as const;
+
+test.each<[string, () => RunRecord]>([
+  ["NodeSucceededRecord", () => new NodeSucceededRecord("agent", "agent", DONE, { evidence: evidence() })],
+  ["NodeRoutedRecord", () => new NodeRoutedRecord("agent", "yes", { evidence: evidence() })],
+  ["NodeExpandedRecord", () => new NodeExpandedRecord("agent", {}, [], DIGEST, { evidence: evidence() })],
+  ["NodeFailedRecord", () => new NodeFailedRecord(FAILED, { evidence: evidence() })],
+])("all outcome records round trip closed evidence: %s", (_name, build) => {
+  const record = build();
+  expect(roundTrip(record)).toEqual(record);
+});
+
+test("existing outcome records round trip with no evidence", () => {
+  for (const record of [
+    new NodeSucceededRecord("agent", "agent", DONE),
+    new NodeRoutedRecord("agent", "yes"),
+    new NodeExpandedRecord("agent", {}, [], DIGEST),
+    new NodeFailedRecord(FAILED),
+  ]) {
+    expect((roundTrip(record) as NodeSucceededRecord).evidence).toBeNull();
+  }
+});
+
+const EVIDENCE_LABEL = "node_succeeded payload evidence";
+
+test.each<[string, (evidence: Record<string, any>) => void, string]>([
+  [
+    "an extra scope field",
+    (wire) => {
+      wire.scope.extra = true;
+    },
+    `invalid ${EVIDENCE_LABEL} scope fields; missing=[], extra=["extra"]`,
+  ],
+  [
+    "an unknown interaction kind",
+    (wire) => {
+      wire.interactions[0].kind = "provider_trace";
+    },
+    `${EVIDENCE_LABEL} interactions item kind must be one of ` +
+      `["model_text","model_value","tool_call","tool_result"], got 'provider_trace'`,
+  ],
+  [
+    "an extra interaction field",
+    (wire) => {
+      wire.interactions[0].provider = "x";
+    },
+    `invalid ${EVIDENCE_LABEL} interactions item fields; missing=[], extra=["provider"]`,
+  ],
+])("the evidence wire rejects %s", (_name, mutate, message) => {
+  const wire = wireOf(new NodeSucceededRecord("agent", "agent", DONE, { evidence: evidence() }));
+  mutate(wire.payload.evidence);
+  expectError(() => decodeRecord(logJson(wire)), RangeError, message);
+});
+
+test("the memory scope wire has no boundary field", () => {
+  const wire = wireOf(new NodeSucceededRecord("agent", "agent", DONE, { evidence: evidence() }));
+  const scope = wire.payload.evidence.scope;
+  expect(Object.keys(scope).sort()).toEqual(["memories", "occurrence_path", "static_path"]);
+  scope.boundary = null;
+  expectError(
+    () => decodeRecord(logJson(wire)),
+    RangeError,
+    `invalid ${EVIDENCE_LABEL} scope fields; missing=[], extra=["boundary"]`,
+  );
+});
+
+test("memory payloads name keys on the wire", () => {
+  const record = new NodeSucceededRecord("agent", "agent", DONE, { evidence: evidence() });
+  const wire = JSON.parse(encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "run", 0, record))).payload.evidence;
+  expect(wire.scope).toEqual({
+    static_path: ["flow", "agent"],
+    memories: ["notes", "reflective"],
+    occurrence_path: [{ kind: "map_item", static_path: ["flow"], index: 0 }],
+  });
+  expect(wire.memory_sections).toEqual([
+    { memory: "notes", text: "flow memory" },
+    { memory: "reflective", text: "agent memory" },
+  ]);
+  expect(roundTrip(record)).toEqual(record);
 });

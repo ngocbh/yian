@@ -17,7 +17,10 @@
  * `test_removed_frame_learning_wire_kinds_are_rejected`,
  * `test_removed_conversation_wire_kinds_are_rejected` (the module has no such export),
  * `test_decode_rejects_invalid_envelopes` (literal JSON text, so `10.0` stays a float token),
- * `test_decode_rejects_unknown_missing_and_wrong_payload_fields` (all rows but `node_succeeded`),
+ * `test_decode_rejects_unknown_missing_and_wrong_payload_fields`,
+ * `test_route_encoding_persists_only_its_optional_terminal_failure`,
+ * `test_decode_requires_explicit_route_terminal_failure_field`,
+ * `test_decode_rejects_extra_nested_route_terminal_failure_field`,
  * `test_decode_rejects_malformed_nested_failures` (20 rows),
  * `test_node_failure_rejects_legacy_location_fields`,
  * `test_decode_rejects_old_schemas_even_with_a_nested_failure` (1-8, and 9 naming Python yian),
@@ -26,7 +29,8 @@
  * the reader's `JSONDecodeError` `duplicate JSON object key: "node_id"`, double-quoted),
  * `test_invalid_record_json_keeps_its_message`, and the round-trip rows of
  * `test_every_record_round_trips_through_a_validated_envelope` for `run_resumed`,
- * `run_stopped`, `node_started`, `node_step` and `node_failed` (each also decoded from bytes).
+ * `run_stopped`, `node_started`, `node_step`, `node_succeeded`, `node_routed`, `node_expanded`
+ * and `node_failed` (each also decoded from bytes).
  *
  * TS-only: a seed keeps `±Infinity` as a float (a TS yian value, unlike Python's); a seed's
  * record keys come out in code-unit order; the envelope's schema rows (7, 8 and 11 are
@@ -46,7 +50,9 @@
  * `run_resumed` float-counter, negative-counter and text-ids rows; envelope rows for a float or
  * too-large `seq`, a non-text run id or kind, a non-object payload or envelope, a missing schema,
  * and schema 9 named before anything else is checked; an empty `node_started` node id, a
- * non-text failure code, a failure or origin that isn't an object.
+ * non-text failure code, a failure or origin that isn't an object; a byte-pinned `node_succeeded`
+ * line whose capture holds route sizes, spans and path indexes, an item index and an occurrence
+ * index, all written as ints.
  *
  * Changed:
  * - `test_encode_validates_programmatically_constructed_envelopes`: the record's constructor
@@ -88,9 +94,10 @@
 import { expect, test } from "bun:test";
 
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
-import { ValueRoute } from "../../src/expr/lineage.ts";
+import { SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
 import { EvaluationEvidence, MemoryOperationFailure } from "../../src/memory/contracts.ts";
 import { BackwardResult } from "../../src/nodes/base.ts";
+import { ExecutionPosition, ExecutionScope } from "../../src/nodes/contracts.ts";
 import { BackwardOutcome, ForwardCapture } from "../../src/runtime/contracts.ts";
 import {
   BackwardFinishedRecord,
@@ -766,6 +773,12 @@ const ROUND_TRIP_RECORDS: [string, RunRecord][] = [
   ["RunStoppedRecord", new RunStoppedRecord("callback", "the host callback threw", ["b", "a"])],
   ["NodeStartedRecord", new NodeStartedRecord("agent")],
   ["NodeStepRecord", new NodeStepRecord("agent", { event: "started", attempt: 2n })],
+  ["NodeSucceededRecord", new NodeSucceededRecord("agent", "agent", { kind: "str", value: "done" })],
+  ["NodeRoutedRecord", new NodeRoutedRecord("choice", "approved")],
+  [
+    "NodeExpandedRecord",
+    new NodeExpandedRecord("each", [{ item: 1n }, { item: 2n }], ["each#old/end", "each#old/start"], TOPOLOGY_DIGEST),
+  ],
   [
     "NodeFailedRecord",
     new NodeFailedRecord(
@@ -883,7 +896,168 @@ test("a node failure encoding nests one canonical failure", () => {
   expect(decodeRecord(encoded)).toEqual(envelope);
 });
 
-const NODE_STARTED = '"kind":"node_started","payload":{"node_id":"work"}';
+test("a route encoding persists only its optional terminal failure", () => {
+  const failure = new Failure({
+    code: "graph.terminal_unreachable",
+    message: "terminal output 'result' skipped",
+    nodeId: "choice",
+    trace: [new OriginRef("root/nodes/choice")],
+  });
+  const causal = new RecordEnvelope(
+    SCHEMA_VERSION,
+    "run-route",
+    3,
+    new NodeRoutedRecord("choice", "default", { terminalFailure: failure }),
+  );
+  const noncausal = new RecordEnvelope(SCHEMA_VERSION, "run-route", 4, new NodeRoutedRecord("other", "yes"));
+
+  expect(JSON.parse(encodeRecord(causal)).payload).toEqual({
+    evidence: null,
+    forward_capture: null,
+    node_id: "choice",
+    handle: "default",
+    terminal_failure: {
+      code: "graph.terminal_unreachable",
+      message: "terminal output 'result' skipped",
+      node_id: "choice",
+      trace: [{ key: "root/nodes/choice" }],
+      cause_type: null,
+      traceback: null,
+    },
+  });
+  expect(JSON.parse(encodeRecord(noncausal)).payload).toEqual({
+    evidence: null,
+    forward_capture: null,
+    node_id: "other",
+    handle: "yes",
+    terminal_failure: null,
+  });
+  expect(decodeRecord(encodeRecord(causal))).toEqual(causal);
+  expect(decodeRecord(encodeRecord(noncausal))).toEqual(noncausal);
+});
+
+// Counters nested in a capture (route sizes, spans and path indexes, an item index, an occurrence
+// index, the envelope's seq) are written as ints, never as floats such as `1.0`.
+test("a node success with a capture encodes its counters as ints", () => {
+  const head = new ValueRoute("source", { source: new SourceRef("run", 1, ["items", 0]), expression: "a.items[0]" });
+  const tail = new ValueRoute("source", { source: new SourceRef("run", 2), expression: "b" });
+  const joined = new ValueRoute("concat", { children: [head, tail], sizes: [1, 2], expression: "(a.items[0] + b)" });
+  const text = new ValueRoute("interpolation", {
+    children: [tail],
+    valueJson: '"n=3"',
+    spans: [[2, 3]],
+    expression: "n=${b}",
+  });
+  const picked = new ValueRoute("project", { children: [joined], path: [1], expression: "(a.items[0] + b)[1]" });
+  const route = ValueRoute.record([
+    ["joined", joined],
+    ["text", text],
+    ["picked", picked],
+  ]);
+  const item = new ForwardCapture({ x: 1n }, ValueRoute.record([["x", ValueRoute.literal(1n)]]), {
+    evaluatedKeys: new Set(["x"]),
+  });
+  const capture = new ForwardCapture({ joined: [1n, 2n, 3n], text: "n=3", picked: 2n }, route, {
+    evaluatedKeys: new Set(["text", "joined"]),
+    items: [[2, item]],
+    scope: new ExecutionScope(["each", "work"], {
+      flowPath: ["each"],
+      occurrencePath: [new ExecutionPosition("map_item", ["each"], 3)],
+    }),
+  });
+  const envelope = new RecordEnvelope(
+    SCHEMA_VERSION,
+    "run",
+    5,
+    new NodeSucceededRecord("work", "work", { kind: "int", value: 7n }, { forwardCapture: capture }),
+  );
+
+  const encoded = encodeRecord(envelope);
+
+  const literal =
+    '{"children":[],"expression":"1","kind":"literal","names":[],"path":[],"result_type":null,' +
+    '"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":"1"}';
+  const source = (seq: string, path: string, expression: string) =>
+    `{"children":[],"expression":"${expression}","kind":"source","names":[],"path":[],"result_type":null,` +
+    `"sizes":[],"snapshot":null,"source":{"execution_seq":${seq},"path":${path},"run_id":"run"},` +
+    '"spans":[],"value_json":null}';
+  const tailWire = source("2", "[]", "b");
+  const joinedWire =
+    `{"children":[${source("1", '["items",0]', "a.items[0]")},${tailWire}],"expression":"(a.items[0] + b)",` +
+    '"kind":"concat","names":[],"path":[],"result_type":null,"sizes":[1,2],"snapshot":null,"source":null,' +
+    '"spans":[],"value_json":null}';
+  const textWire =
+    `{"children":[${tailWire}],"expression":"n=\${b}","kind":"interpolation","names":[],"path":[],` +
+    '"result_type":null,"sizes":[],"snapshot":null,"source":null,"spans":[[2,3]],"value_json":"\\"n=3\\""}';
+  const pickedWire =
+    `{"children":[${joinedWire}],"expression":"(a.items[0] + b)[1]","kind":"project","names":[],"path":[1],` +
+    '"result_type":null,"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":null}';
+  const itemWire =
+    '{"bound_inputs":{"x":1},"evaluated_keys":["x"],"input_names":[],"items":[],"node_data":null,' +
+    `"route":{"children":[${literal}],"expression":"{x: 1}","kind":"record","names":["x"],"path":[],` +
+    '"result_type":null,"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":null},' +
+    '"scope":null,"variable_names":[]}';
+  expect(encoded).toBe(
+    '{"kind":"node_succeeded","payload":{"commit_target":"work","evidence":null,"forward_capture":{' +
+      '"bound_inputs":{"joined":[1,2,3],"picked":2,"text":"n=3"},"evaluated_keys":["joined","text"],' +
+      '"input_names":[],' +
+      `"items":[{"capture":${itemWire},"index":2}],"node_data":null,` +
+      `"route":{"children":[${joinedWire},${textWire},${pickedWire}],` +
+      '"expression":"{joined: (a.items[0] + b), text: n=${b}, picked: (a.items[0] + b)[1]}",' +
+      '"kind":"record","names":["joined","text","picked"],"path":[],"result_type":null,"sizes":[],"snapshot":null,' +
+      '"source":null,"spans":[],"value_json":null},"scope":{"boundary":null,"flow_path":["each"],' +
+      '"occurrence_path":[{"index":3,"kind":"map_item","static_path":["each"]}],"static_path":["each","work"]},' +
+      '"variable_names":[]},"node_id":"work","value":{"kind":"int","value":7}},"run_id":"run","schema":10,"seq":5}',
+  );
+  expect(decodeRecord(encoded)).toEqual(envelope);
+  expect(encodeRecord(decodeRecord(encoded))).toBe(encoded);
+});
+
+test("decode requires an explicit route terminal failure field", () => {
+  const wire = {
+    schema: 10,
+    run_id: "run",
+    seq: 0,
+    kind: "node_routed",
+    payload: { node_id: "choice", handle: "default", evidence: null },
+  };
+  expectError(
+    () => decodeRecord(JSON.stringify(wire)),
+    RangeError,
+    'invalid node_routed payload fields; missing=["forward_capture","terminal_failure"], extra=[]',
+  );
+});
+
+test("decode rejects an extra nested route terminal failure field", () => {
+  const wire = {
+    schema: 10,
+    run_id: "run",
+    seq: 0,
+    kind: "node_routed",
+    payload: {
+      evidence: null,
+      forward_capture: null,
+      node_id: "choice",
+      handle: "default",
+      terminal_failure: {
+        code: "graph.terminal_unreachable",
+        message: "terminal output 'result' skipped",
+        node_id: "choice",
+        trace: [],
+        cause_type: null,
+        traceback: null,
+        extra: true,
+      },
+    },
+  };
+  expectError(
+    () => decodeRecord(JSON.stringify(wire)),
+    RangeError,
+    'invalid node_routed payload terminal_failure fields; missing=[], extra=["extra"]',
+  );
+});
+
+const NODE_STARTED ='"kind":"node_started","payload":{"node_id":"work"}';
 
 test.each<[string, string, new (...args: never[]) => Error, string]>([
   ["schema 1", `{"schema":1,"run_id":"run","seq":0,${NODE_STARTED}}`, RangeError, "unsupported run-record schema: 1"],
@@ -1005,6 +1179,13 @@ test.each<[string, string, unknown, new (...args: never[]) => Error, string]>([
     { node_id: 7 },
     TypeError,
     "node_started payload node_id must be a non-empty string",
+  ],
+  [
+    "a node_succeeded payload without its carrier fields",
+    "node_succeeded",
+    { node_id: "work", commit_target: "work", value: { kind: "int", value: "7" } },
+    RangeError,
+    'invalid node_succeeded payload fields; missing=["evidence","forward_capture"], extra=[]',
   ],
   [
     "a legacy node_failed locator without carriers",

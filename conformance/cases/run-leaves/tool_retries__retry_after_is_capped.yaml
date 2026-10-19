@@ -1,0 +1,97 @@
+# From tests/engine/test_tool_retries.py::test_retry_after_replaces_the_backoff_up_to_the_cap[100-30].
+# A retry_after above the cap waits the cap (1 s here), with no draw.
+kind: run
+flow: |
+  id: t
+  name: t
+  nodes:
+    call:
+      kind: tool
+      tool_id: flaky
+      retries: 1
+  output: ${call.output}
+env:
+  YIAN_TOOL_RETRY_MAX_DELAY_SECONDS: '1'
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    flaky:
+      parameters:
+        type: object
+        properties: {}
+      results:
+      - raise:
+          class: TransientToolError
+          message: busy
+          retry_after: 100
+      - return: ok
+  jitter: []
+expect:
+  output:
+    status: succeeded
+    output: ok
+  trace:
+  - - run_started
+    - null
+    - defaults:
+        TOOL_RETRY_MAX_DELAY_SECONDS: 1
+      learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, call]
+  - - node_step
+    - call
+    - step:
+        attempt: 1
+        error:
+          message: busy
+          type: TransientToolError
+        event: failed
+        retry_in: 1.0
+  - - node_step
+    - call
+    - step:
+        attempt: 2
+        event: started
+  - - node_succeeded
+    - call
+    - value: ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ok
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: call
+  - - NodeSucceeded
+    - node_id: call
+      output: ok
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: ok
+  - - RunSucceeded
+    - output: ok
+  tool_calls:
+    flaky:
+    - args: {}
+      call_id: r1/call
+      attempt: 1
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 2
+      node: call

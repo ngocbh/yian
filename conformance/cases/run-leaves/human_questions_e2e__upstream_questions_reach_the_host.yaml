@@ -1,0 +1,110 @@
+# From tests/engine/test_human_questions_e2e.py::test_manual_ref_questions_block_and_return_answer and
+# tests/engine/test_blocking_human_input.py::test_questions_input_is_validated_before_trusted_invocation.
+# A gate reading its questions from an input (`questions: "${qs}"`) sends them validated (defaults
+# filled) and returns the answer record; a flow input stands in for the test's CODE source.
+kind: run
+flow: |
+  id: manual_ref
+  name: manual_ref
+  input:
+    qs: !list(object)
+  nodes:
+    ask:
+      kind: human_input
+      input: {qs: "${input.qs}"}
+      questions: "${qs}"
+  output: ${ask.output}
+inputs:
+  qs:
+  - question: Which option?
+    header: H
+    options:
+    - label: A
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  human:
+    ask:
+    - H: A
+expect:
+  output:
+    status: succeeded
+    output:
+      H: A
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs:
+        qs:
+        - header: H
+          options:
+          - label: A
+          question: Which option?
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        qs:
+        - header: H
+          options:
+          - label: A
+          question: Which option?
+  - [node_started, ask]
+  - - node_succeeded
+    - ask
+    - value:
+        H: A
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        H: A
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        qs:
+        - header: H
+          options:
+          - label: A
+          question: Which option?
+  - - NodeStarted
+    - node_id: ask
+  - - NodeSucceeded
+    - node_id: ask
+      output:
+        H: A
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        H: A
+  - - RunSucceeded
+    - output:
+        H: A
+  tool_calls:
+    ask_user:
+    - args:
+        question: ''
+        questions:
+        - question: Which option?
+          header: H
+          options:
+          - label: A
+            description: ''
+          multi_select: false
+        answer_schema:
+        - name: answer
+          type: object
+          required: true
+        node_id: ask
+      call_id: r1/ask
+      attempt: 1
+      node: ask

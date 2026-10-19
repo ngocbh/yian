@@ -1,0 +1,147 @@
+kind: run
+flow: |2
+
+  id: c1
+  name: c1
+  input:
+    v: !int
+
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.v >= 100"
+          then: hi
+      else: lo
+    hi:
+      kind: code
+      input:
+        n: ${input.v}
+      output: int
+      code: |
+        return inputs["n"] * 2n
+    lo:
+      kind: code
+      input:
+        n: ${input.v}
+      output: int
+      code: |
+        return inputs["n"] * 2n
+  output: ${hi.output | lo.output}
+
+  asserts:
+    - "hi.output >= 0"
+python_flow: |2
+
+  id: c1
+  name: c1
+  input:
+    v: !int
+
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.v >= 100"
+          then: hi
+      else: lo
+    hi:
+      kind: code
+      input:
+        n: ${input.v}
+      output: int
+      code: |
+        return inputs["n"] * 2
+    lo:
+      kind: code
+      input:
+        n: ${input.v}
+      output: int
+      code: |
+        return inputs["n"] * 2
+  output: ${hi.output | lo.output}
+
+  asserts:
+    - "hi.output >= 0"
+inputs:
+  v: 5
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: assertion.failed
+      frames:
+      - label: flow.yaml
+        range: [31, 5, 31, 21]
+      message: 'node ''__end__'' post-assert failed: hi.output >= 0'
+      node: __end__
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        v: 5
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        v: 5
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: '#else'
+  - [node_started, lo]
+  - - node_succeeded
+    - lo
+    - value: 10
+  - [node_started, __end__]
+  - - node_failed
+    - __end__
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [31, 5, 31, 21]
+        message: 'node ''__end__'' post-assert failed: hi.output >= 0'
+        node: __end__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        v: 5
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: gate
+  - - NodeSkipped
+    - node_id: hi
+  - - NodeStarted
+    - node_id: lo
+  - - NodeSucceeded
+    - node_id: lo
+      output: 10
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [31, 5, 31, 21]
+        message: 'node ''__end__'' post-assert failed: hi.output >= 0'
+        node: __end__
+  - - RunFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [31, 5, 31, 21]
+        message: 'node ''__end__'' post-assert failed: hi.output >= 0'
+        node: __end__

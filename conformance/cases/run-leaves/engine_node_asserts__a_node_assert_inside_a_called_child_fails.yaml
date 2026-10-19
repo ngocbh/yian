@@ -1,0 +1,154 @@
+kind: run
+flow: |2
+
+  id: dr
+  name: dr
+  input:
+    v: !int
+
+  defs:
+    checked:
+      input:
+        n: !int
+      nodes:
+        y:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:double
+          input:
+            n: ${input.n}
+          output: int
+          asserts:
+            - "output >= 0"
+      output: ${y.output}
+
+  nodes:
+    call_it:
+      kind: call
+      call: checked
+      input:
+        n: ${input.v}
+  output: ${call_it.output}
+python_flow: |2
+
+  id: dr
+  name: dr
+  input:
+    v: !int
+
+  defs:
+    checked:
+      input:
+        n: !int
+      nodes:
+        y:
+          kind: code
+          code: tests.engine._compose_codefns:double
+          input:
+            n: ${input.n}
+          output: int
+          asserts:
+            - "output >= 0"
+      output: ${y.output}
+
+  nodes:
+    call_it:
+      kind: call
+      call: checked
+      input:
+        n: ${input.v}
+  output: ${call_it.output}
+inputs:
+  v: -1
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: assertion.failed
+      frames:
+      - label: flow.yaml
+        range: [23, 3, 23, 10]
+      - label: flow.yaml
+        range: [19, 13, 19, 26]
+      message: 'node ''call_it/y'' post-assert failed: output >= 0'
+      node: call_it/y
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        v: -1
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        v: -1
+  - [node_started, call_it]
+  - - node_expanded
+    - call_it
+    - prune_ids: []
+      seed:
+        n: -1
+  - [node_started, call_it/__start__]
+  - - node_succeeded
+    - call_it/__start__
+    - value:
+        n: -1
+  - [node_started, call_it/y]
+  - - node_failed
+    - call_it/y
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [23, 3, 23, 10]
+        - label: flow.yaml
+          range: [19, 13, 19, 26]
+        message: 'node ''call_it/y'' post-assert failed: output >= 0'
+        node: call_it/y
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        v: -1
+  - - NodeStarted
+    - node_id: call_it
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+          n: -1
+      node_id: call_it
+  - - NodeStarted
+    - node_id: call_it/__start__
+  - - NodeSucceeded
+    - node_id: call_it/__start__
+      output:
+        n: -1
+  - - NodeStarted
+    - node_id: call_it/y
+  - - NodeFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [23, 3, 23, 10]
+        - label: flow.yaml
+          range: [19, 13, 19, 26]
+        message: 'node ''call_it/y'' post-assert failed: output >= 0'
+        node: call_it/y
+  - - RunFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [23, 3, 23, 10]
+        - label: flow.yaml
+          range: [19, 13, 19, 26]
+        message: 'node ''call_it/y'' post-assert failed: output >= 0'
+        node: call_it/y

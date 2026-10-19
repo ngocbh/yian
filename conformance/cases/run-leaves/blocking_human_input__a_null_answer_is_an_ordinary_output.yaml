@@ -1,0 +1,59 @@
+# From tests/engine/test_blocking_human_input.py::test_none_answer_is_an_ordinary_output.
+# A null answer is the gate's output, not a cancellation.
+kind: run
+flow: |
+  id: optional
+  name: optional
+  nodes:
+    optional:
+      kind: human_input
+      prompt: "Anything to add?"
+  output: ${optional.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  human:
+    optional: [null]
+expect:
+  output:
+    status: succeeded
+    output: null
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, optional]
+  - [node_succeeded, optional]
+  - [node_started, __end__]
+  - [node_succeeded, __end__]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: optional
+  - - NodeSucceeded
+    - node_id: optional
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+  - [RunSucceeded]
+  tool_calls:
+    ask_user:
+    - args:
+        question: Anything to add?
+        node_id: optional
+      call_id: r1/optional
+      attempt: 1
+      node: optional

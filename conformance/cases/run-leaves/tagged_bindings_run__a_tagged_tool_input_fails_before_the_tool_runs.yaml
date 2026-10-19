@@ -1,0 +1,148 @@
+# From tests/engine/test_tagged_bindings_run.py::test_tagged_tool_input_fails_before_the_tool_runs.
+# A tagged TOOL input (`!int`) over an untyped value "5" fails binding.type before the tool runs;
+# an `!Any` flow input stands in for the test's untyped CODE source.
+kind: run
+rules: [messages]
+flow: |
+  id: tagged_tool
+  name: tagged_tool
+  input:
+    n: !Any
+  nodes:
+    place:
+      kind: tool
+      tool_id: place_order
+      input:
+        qty: !int ${input.n}
+  output: ${place.output}
+inputs:
+  n: '5'
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    place_order:
+      parameters:
+        type: object
+        properties:
+          qty:
+            type: integer
+        required: [qty]
+      results: []
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      message: 'binding ''qty'': "5" does not match declared type int'
+      frames:
+      - label: flow.yaml
+        range: [10, 12, 10, 27]
+      node: place
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs:
+        n: '5'
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        n: '5'
+  - [node_started, place]
+  - - node_failed
+    - place
+    - failure:
+        code: binding.type
+        message: 'binding ''qty'': "5" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [10, 12, 10, 27]
+        node: place
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        n: '5'
+  - - NodeStarted
+    - node_id: place
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        message: 'binding ''qty'': "5" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [10, 12, 10, 27]
+        node: place
+  - - RunFailed
+    - failure:
+        code: binding.type
+        message: 'binding ''qty'': "5" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [10, 12, 10, 27]
+        node: place
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      message: 'binding ''qty'': ''5'' does not match declared type int'
+      frames:
+      - label: flow.yaml
+        range: [10, 12, 10, 27]
+      node: place
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs:
+        n: '5'
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        n: '5'
+  - [node_started, place]
+  - - node_failed
+    - place
+    - failure:
+        code: binding.type
+        message: 'binding ''qty'': ''5'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [10, 12, 10, 27]
+        node: place
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        n: '5'
+  - - NodeStarted
+    - node_id: place
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        message: 'binding ''qty'': ''5'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [10, 12, 10, 27]
+        node: place
+  - - RunFailed
+    - failure:
+        code: binding.type
+        message: 'binding ''qty'': ''5'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [10, 12, 10, 27]
+        node: place

@@ -1,0 +1,168 @@
+# From tests/engine/test_typed_tool_node.py::test_an_unknown_variant_fails_at_the_gate.
+# A TOOL return whose tag isn't one of the declared union's fails contract.output at the TOOL node.
+kind: run
+rules: [messages]
+flow: |
+  id: orders
+  name: orders
+  typedefs:
+    Filled: {type: 'Literal(filled)', qty: int}
+    Interrupted: {type: 'Literal(interrupted)', by: str, partial: 'Optional(int)'}
+    OrderResult: Union(Filled, Interrupted)
+  nodes:
+    place:
+      kind: tool
+      tool_id: place_order
+      input:
+        qty: 5
+      output: OrderResult
+    route:
+      kind: case
+      on: ${place.output.type}
+      cases:
+        - when: filled
+          then: on_filled
+        - when: interrupted
+          then: on_interrupted
+    on_filled: !str "filled ${place.output.qty}"
+    on_interrupted: !str "stopped by ${place.output.by}"
+  output: ${on_filled.output | on_interrupted.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    place_order:
+      parameters:
+        type: object
+        properties:
+          qty:
+            type: integer
+        required: [qty]
+      results:
+      - return:
+          type: rejected
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      message: '"rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
+      frames:
+      - label: flow.yaml
+        range: [13, 13, 13, 24]
+      node: place
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, place]
+  - - node_failed
+    - place
+    - failure:
+        code: contract.output
+        message: '"rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
+        frames:
+        - label: flow.yaml
+          range: [13, 13, 13, 24]
+        node: place
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: place
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        message: '"rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
+        frames:
+        - label: flow.yaml
+          range: [13, 13, 13, 24]
+        node: place
+  - - RunFailed
+    - failure:
+        code: contract.output
+        message: '"rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
+        frames:
+        - label: flow.yaml
+          range: [13, 13, 13, 24]
+        node: place
+  tool_calls:
+    place_order:
+    - args:
+        qty: 5
+      call_id: r1/place
+      attempt: 1
+      node: place
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      message: '''rejected'' is not a tag of the union (expected one of [''filled'', ''interrupted''])'
+      frames:
+      - label: flow.yaml
+        range: [13, 13, 13, 24]
+      node: place
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, place]
+  - - node_failed
+    - place
+    - failure:
+        code: contract.output
+        message: '''rejected'' is not a tag of the union (expected one of [''filled'', ''interrupted''])'
+        frames:
+        - label: flow.yaml
+          range: [13, 13, 13, 24]
+        node: place
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: place
+  - - NodeFailed
+    - failure:
+        code: contract.output
+        message: '''rejected'' is not a tag of the union (expected one of [''filled'', ''interrupted''])'
+        frames:
+        - label: flow.yaml
+          range: [13, 13, 13, 24]
+        node: place
+  - - RunFailed
+    - failure:
+        code: contract.output
+        message: '''rejected'' is not a tag of the union (expected one of [''filled'', ''interrupted''])'
+        frames:
+        - label: flow.yaml
+          range: [13, 13, 13, 24]
+        node: place
+  tool_calls:
+    place_order:
+    - args:
+        qty: 5
+      call_id: r1/place
+      attempt: 1
+      node: place

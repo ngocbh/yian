@@ -1,0 +1,141 @@
+# From tests/engine/test_tagged_bindings_run.py::test_tagged_human_input_context_fails_before_asking.
+# A tagged gate input (`!int`) over an untyped value "three" fails binding.type before the gate asks;
+# an `!Any` flow input stands in for the test's untyped CODE source.
+kind: run
+rules: [messages]
+flow: |
+  id: tagged_gate
+  name: tagged_gate
+  input:
+    n: !Any
+  nodes:
+    ask:
+      kind: human_input
+      input:
+        count: !int ${input.n}
+      prompt: "Proceed with ${count} items?"
+  output: ${ask.output}
+inputs:
+  n: three
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  human:
+    ask: []
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      message: 'binding ''count'': "three" does not match declared type int'
+      frames:
+      - label: flow.yaml
+        range: [9, 14, 9, 29]
+      node: ask
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs:
+        n: three
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        n: three
+  - [node_started, ask]
+  - - node_failed
+    - ask
+    - failure:
+        code: binding.type
+        message: 'binding ''count'': "three" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [9, 14, 9, 29]
+        node: ask
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        n: three
+  - - NodeStarted
+    - node_id: ask
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        message: 'binding ''count'': "three" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [9, 14, 9, 29]
+        node: ask
+  - - RunFailed
+    - failure:
+        code: binding.type
+        message: 'binding ''count'': "three" does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [9, 14, 9, 29]
+        node: ask
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      message: 'binding ''count'': ''three'' does not match declared type int'
+      frames:
+      - label: flow.yaml
+        range: [9, 14, 9, 29]
+      node: ask
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs:
+        n: three
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        n: three
+  - [node_started, ask]
+  - - node_failed
+    - ask
+    - failure:
+        code: binding.type
+        message: 'binding ''count'': ''three'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [9, 14, 9, 29]
+        node: ask
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        n: three
+  - - NodeStarted
+    - node_id: ask
+  - - NodeFailed
+    - failure:
+        code: binding.type
+        message: 'binding ''count'': ''three'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [9, 14, 9, 29]
+        node: ask
+  - - RunFailed
+    - failure:
+        code: binding.type
+        message: 'binding ''count'': ''three'' does not match declared type int'
+        frames:
+        - label: flow.yaml
+          range: [9, 14, 9, 29]
+        node: ask

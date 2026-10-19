@@ -1,0 +1,79 @@
+# From tests/engine/test_resolve_until.py::test_non_date_error_is_origin_neutral_for_raw_and_wrapped_sources.
+# A WAIT `until:` that resolves to a non-text value fails contract.input, naming the source text. The
+# input is `!Any`: an int-typed reference is refused at load.
+# shared: ('${input.n}') is the `until:` source text as written, which stays Python-quoted in both
+# languages (names and source text are shared); the value 5 is spelled the same in both.
+kind: run
+flow: |
+  id: wait_int
+  name: wait_int
+  input:
+    n: !Any
+  nodes:
+    settle:
+      kind: wait
+      until: ${input.n}
+  output: ${settle.output}
+inputs:
+  n: 5
+run:
+  run_id: r1
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      message: 'wait `until` (''${input.n}'') did not resolve to a date/datetime: 5'
+      frames:
+      - label: flow.yaml
+        range: [8, 12, 8, 22]
+      node: settle
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs:
+        n: 5
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        n: 5
+  - [node_started, settle]
+  - - node_failed
+    - settle
+    - failure:
+        code: contract.input
+        message: 'wait `until` (''${input.n}'') did not resolve to a date/datetime: 5'
+        frames:
+        - label: flow.yaml
+          range: [8, 12, 8, 22]
+        node: settle
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        n: 5
+  - - NodeStarted
+    - node_id: settle
+  - - NodeFailed
+    - failure:
+        code: contract.input
+        message: 'wait `until` (''${input.n}'') did not resolve to a date/datetime: 5'
+        frames:
+        - label: flow.yaml
+          range: [8, 12, 8, 22]
+        node: settle
+  - - RunFailed
+    - failure:
+        code: contract.input
+        message: 'wait `until` (''${input.n}'') did not resolve to a date/datetime: 5'
+        frames:
+        - label: flow.yaml
+          range: [8, 12, 8, 22]
+        node: settle

@@ -1,0 +1,71 @@
+kind: run
+flow: |2
+
+  id: c3
+  name: c3
+  input:
+    age: !int
+
+  nodes:
+    echo:
+      kind: code
+      input:
+        age: ${input.age}
+      output: int
+      code: |
+        return inputs["age"]
+  output: ${echo.output}
+
+  asserts:
+    - "age >= 18"
+inputs:
+  age: 10
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: assertion.failed
+      frames:
+      - label: flow.yaml
+        range: [18, 5, 18, 16]
+      message: 'node ''__start__'' post-assert failed: age >= 18'
+      node: __start__
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        age: 10
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_failed
+    - __start__
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [18, 5, 18, 16]
+        message: 'node ''__start__'' post-assert failed: age >= 18'
+        node: __start__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [18, 5, 18, 16]
+        message: 'node ''__start__'' post-assert failed: age >= 18'
+        node: __start__
+  - - RunFailed
+    - failure:
+        code: assertion.failed
+        frames:
+        - label: flow.yaml
+          range: [18, 5, 18, 16]
+        message: 'node ''__start__'' post-assert failed: age >= 18'
+        node: __start__

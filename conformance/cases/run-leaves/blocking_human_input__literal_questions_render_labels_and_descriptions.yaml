@@ -1,0 +1,106 @@
+# From tests/engine/test_blocking_human_input.py::test_literal_questions_are_rendered_validated_and_injected.
+# A gate's literal questions render `${...}` in the question, and in each option's label and
+# description; the request carries the validated list.
+kind: run
+flow: |
+  id: choose
+  name: choose
+  input:
+    project: !str
+    candidate: !str
+  nodes:
+    choose:
+      kind: human_input
+      input:
+        project: ${input.project}
+        candidate: ${input.candidate}
+      prompt: "Choose for ${project}"
+      questions:
+        - question: "Which framework for ${project}?"
+          header: Framework
+          options:
+            - label: "${candidate}"
+              description: "Use ${candidate}"
+  output: ${choose.output}
+inputs:
+  project: Atlas
+  candidate: Vue
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  human:
+    choose:
+    - Framework: Vue
+expect:
+  output:
+    status: succeeded
+    output:
+      Framework: Vue
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs:
+        candidate: Vue
+        project: Atlas
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        candidate: Vue
+        project: Atlas
+  - [node_started, choose]
+  - - node_succeeded
+    - choose
+    - value:
+        Framework: Vue
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        Framework: Vue
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        candidate: Vue
+        project: Atlas
+  - - NodeStarted
+    - node_id: choose
+  - - NodeSucceeded
+    - node_id: choose
+      output:
+        Framework: Vue
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        Framework: Vue
+  - - RunSucceeded
+    - output:
+        Framework: Vue
+  tool_calls:
+    ask_user:
+    - args:
+        question: Choose for Atlas
+        questions:
+        - question: Which framework for Atlas?
+          header: Framework
+          options:
+          - label: Vue
+            description: Use Vue
+          multi_select: false
+        answer_schema:
+        - name: answer
+          type: object
+          required: true
+        node_id: choose
+      call_id: r1/choose
+      attempt: 1
+      node: choose

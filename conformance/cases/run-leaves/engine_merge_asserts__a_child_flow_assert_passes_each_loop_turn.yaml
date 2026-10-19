@@ -1,0 +1,262 @@
+kind: run
+flow: |2
+
+  id: c2loop
+  name: c2_loop
+  input:
+    start: !int
+  defs:
+    body:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output: {n: int}
+          code: |
+            return {"n": inputs["n"] + 1n}
+      output: ${step.output}
+      asserts:
+        - "step.output.n >= 1"
+  nodes:
+    spin:
+      kind: loop
+      call: body
+      input:
+        n: ${input.start}
+      times: 3
+  output: ${spin.output}
+python_flow: |2
+
+  id: c2loop
+  name: c2_loop
+  input:
+    start: !int
+  defs:
+    body:
+      input:
+        n: !int
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output: {n: int}
+          code: |
+            return {"n": inputs["n"] + 1}
+      output: ${step.output}
+      asserts:
+        - "step.output.n >= 1"
+  nodes:
+    spin:
+      kind: loop
+      call: body
+      input:
+        n: ${input.start}
+      times: 3
+  output: ${spin.output}
+inputs:
+  start: 5
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output:
+      n: 8
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        start: 5
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        start: 5
+  - [node_started, spin]
+  - - node_expanded
+    - spin
+    - prune_ids: []
+      seed:
+      - n: 5
+      - 0
+  - [node_started, spin#0/__start__]
+  - - node_succeeded
+    - spin#0/__start__
+    - value:
+        n: 5
+  - [node_started, spin#0/step]
+  - - node_succeeded
+    - spin#0/step
+    - value:
+        n: 6
+  - [node_started, spin#0/__end__]
+  - - node_succeeded
+    - spin#0/__end__
+    - value:
+        n: 6
+  - [node_started, spin~1]
+  - - node_expanded
+    - spin~1
+    - prune_ids: [spin#0/__end__, spin#0/__start__, spin#0/step, spin~1]
+      seed:
+      - n: 6
+      - 1
+  - [node_started, spin#1/__start__]
+  - - node_succeeded
+    - spin#1/__start__
+    - value:
+        n: 6
+  - [node_started, spin#1/step]
+  - - node_succeeded
+    - spin#1/step
+    - value:
+        n: 7
+  - [node_started, spin#1/__end__]
+  - - node_succeeded
+    - spin#1/__end__
+    - value:
+        n: 7
+  - [node_started, spin~2]
+  - - node_expanded
+    - spin~2
+    - prune_ids: [spin#1/__end__, spin#1/__start__, spin#1/step, spin~2]
+      seed:
+      - n: 7
+      - 2
+  - [node_started, spin#2/__start__]
+  - - node_succeeded
+    - spin#2/__start__
+    - value:
+        n: 7
+  - [node_started, spin#2/step]
+  - - node_succeeded
+    - spin#2/step
+    - value:
+        n: 8
+  - [node_started, spin#2/__end__]
+  - - node_succeeded
+    - spin#2/__end__
+    - value:
+        n: 8
+  - [node_started, spin~3]
+  - - node_succeeded
+    - spin~3
+    - commit_target: spin
+      value:
+        n: 8
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        n: 8
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        start: 5
+  - - NodeStarted
+    - node_id: spin
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - n: 5
+        - 0
+      node_id: spin
+  - - NodeStarted
+    - node_id: spin#0/__start__
+  - - NodeSucceeded
+    - node_id: spin#0/__start__
+      output:
+        n: 5
+  - - NodeStarted
+    - node_id: spin#0/step
+  - - NodeSucceeded
+    - node_id: spin#0/step
+      output:
+        n: 6
+  - - NodeStarted
+    - node_id: spin#0/__end__
+  - - NodeSucceeded
+    - node_id: spin#0/__end__
+      output:
+        n: 6
+  - - NodeStarted
+    - node_id: spin~1
+  - - NodeExpanded
+    - grow:
+        prune: [spin#0/__end__, spin#0/__start__, spin#0/step, spin~1]
+        seed:
+        - n: 6
+        - 1
+      node_id: spin~1
+  - - NodeStarted
+    - node_id: spin#1/__start__
+  - - NodeSucceeded
+    - node_id: spin#1/__start__
+      output:
+        n: 6
+  - - NodeStarted
+    - node_id: spin#1/step
+  - - NodeSucceeded
+    - node_id: spin#1/step
+      output:
+        n: 7
+  - - NodeStarted
+    - node_id: spin#1/__end__
+  - - NodeSucceeded
+    - node_id: spin#1/__end__
+      output:
+        n: 7
+  - - NodeStarted
+    - node_id: spin~2
+  - - NodeExpanded
+    - grow:
+        prune: [spin#1/__end__, spin#1/__start__, spin#1/step, spin~2]
+        seed:
+        - n: 7
+        - 2
+      node_id: spin~2
+  - - NodeStarted
+    - node_id: spin#2/__start__
+  - - NodeSucceeded
+    - node_id: spin#2/__start__
+      output:
+        n: 7
+  - - NodeStarted
+    - node_id: spin#2/step
+  - - NodeSucceeded
+    - node_id: spin#2/step
+      output:
+        n: 8
+  - - NodeStarted
+    - node_id: spin#2/__end__
+  - - NodeSucceeded
+    - node_id: spin#2/__end__
+      output:
+        n: 8
+  - - NodeStarted
+    - node_id: spin~3
+  - - NodeSucceeded
+    - commit_as: spin
+      node_id: spin~3
+      output:
+        n: 8
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        n: 8
+  - - RunSucceeded
+    - output:
+        n: 8

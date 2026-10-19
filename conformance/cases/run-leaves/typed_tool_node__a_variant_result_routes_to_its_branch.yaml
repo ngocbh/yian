@@ -1,0 +1,120 @@
+# From tests/engine/test_typed_tool_node.py::test_a_variant_result_routes_to_its_branch[interrupted].
+# A TOOL return checked against a declared union routes a CASE on its tag; the test's CODE branches
+# are value entries here.
+kind: run
+flow: |
+  id: orders
+  name: orders
+  typedefs:
+    Filled: {type: 'Literal(filled)', qty: int}
+    Interrupted: {type: 'Literal(interrupted)', by: str, partial: 'Optional(int)'}
+    OrderResult: Union(Filled, Interrupted)
+  nodes:
+    place:
+      kind: tool
+      tool_id: place_order
+      input:
+        qty: 5
+      output: OrderResult
+    route:
+      kind: case
+      on: ${place.output.type}
+      cases:
+        - when: filled
+          then: on_filled
+        - when: interrupted
+          then: on_interrupted
+    on_filled: !str "filled ${place.output.qty}"
+    on_interrupted: !str "stopped by ${place.output.by}"
+  output: ${on_filled.output | on_interrupted.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    place_order:
+      parameters:
+        type: object
+        properties:
+          qty:
+            type: integer
+        required: [qty]
+      results:
+      - return:
+          type: interrupted
+          by: owner
+          partial: 2
+expect:
+  output:
+    status: succeeded
+    output: stopped by owner
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, place]
+  - - node_succeeded
+    - place
+    - value:
+        by: owner
+        partial: 2
+        type: interrupted
+  - [node_started, route]
+  - - node_routed
+    - route
+    - handle: on_interrupted
+  - [node_started, on_interrupted]
+  - - node_succeeded
+    - on_interrupted
+    - value: stopped by owner
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: stopped by owner
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: place
+  - - NodeSucceeded
+    - node_id: place
+      output:
+        by: owner
+        partial: 2
+        type: interrupted
+  - - NodeStarted
+    - node_id: route
+  - - NodeRouted
+    - node_id: route
+      handle: on_interrupted
+  - - NodeSkipped
+    - node_id: on_filled
+  - - NodeStarted
+    - node_id: on_interrupted
+  - - NodeSucceeded
+    - node_id: on_interrupted
+      output: stopped by owner
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: stopped by owner
+  - - RunSucceeded
+    - output: stopped by owner
+  tool_calls:
+    place_order:
+    - args:
+        qty: 5
+      call_id: r1/place
+      attempt: 1
+      node: place

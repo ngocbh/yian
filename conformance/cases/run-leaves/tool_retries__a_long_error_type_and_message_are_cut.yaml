@@ -1,0 +1,100 @@
+# From tests/engine/test_tool_retries.py::test_odd_error_text_is_recorded_safely[x*10000] and
+# ::test_a_long_error_type_name_is_capped.
+# A failed step's error type and message are each cut to the cap less one character plus "…".
+# YIAN_MAX_SHOWN_VALUE_CHARS is 8 so the case stays short (the tests use the 200 default).
+kind: run
+flow: |
+  id: t
+  name: t
+  nodes:
+    call:
+      kind: tool
+      tool_id: flaky
+      retries: 1
+  output: ${call.output}
+env:
+  YIAN_TOOL_RETRY_DELAY_SECONDS: '0'
+  YIAN_MAX_SHOWN_VALUE_CHARS: '8'
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    flaky:
+      parameters:
+        type: object
+        properties: {}
+      results:
+      - raise:
+          class: EEEEEEEEEE
+          message: xxxxxxxxxx
+      - return: ok
+  jitter: [0.0]
+expect:
+  output:
+    status: succeeded
+    output: ok
+  trace:
+  - - run_started
+    - null
+    - defaults:
+        MAX_SHOWN_VALUE_CHARS: 8
+        TOOL_RETRY_DELAY_SECONDS: 0
+      learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, call]
+  - - node_step
+    - call
+    - step:
+        attempt: 1
+        error:
+          message: xxxxxxx…
+          type: EEEEEEE…
+        event: failed
+        retry_in: 0.0
+  - - node_step
+    - call
+    - step:
+        attempt: 2
+        event: started
+  - - node_succeeded
+    - call
+    - value: ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: ok
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: call
+  - - NodeSucceeded
+    - node_id: call
+      output: ok
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: ok
+  - - RunSucceeded
+    - output: ok
+  tool_calls:
+    flaky:
+    - args: {}
+      call_id: r1/call
+      attempt: 1
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 2
+      node: call

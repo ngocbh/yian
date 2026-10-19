@@ -1,0 +1,112 @@
+# From tests/engine/test_tool_retries.py::test_permanent_error_on_the_second_attempt_stops_the_retries.
+# A PermanentToolError after a retry stops the retries; the failure lists both attempts.
+kind: run
+flow: |
+  id: t
+  name: t
+  nodes:
+    call:
+      kind: tool
+      tool_id: flaky
+      retries: 3
+  output: ${call.output}
+env:
+  YIAN_TOOL_RETRY_DELAY_SECONDS: '0'
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    flaky:
+      parameters:
+        type: object
+        properties: {}
+      results:
+      - raise:
+          class: TimeoutError
+          message: a
+      - raise:
+          class: PermanentToolError
+          message: no
+  jitter: [0.0]
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: 'tool ''flaky'' failed after 2 attempts: attempt 1: TimeoutError: a; attempt 2: PermanentToolError: no'
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 7]
+      node: call
+  trace:
+  - - run_started
+    - null
+    - defaults:
+        TOOL_RETRY_DELAY_SECONDS: 0
+      learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, call]
+  - - node_step
+    - call
+    - step:
+        attempt: 1
+        error:
+          message: a
+          type: TimeoutError
+        event: failed
+        retry_in: 0.0
+  - - node_step
+    - call
+    - step:
+        attempt: 2
+        event: started
+  - - node_failed
+    - call
+    - failure:
+        code: node.execute
+        message: 'tool ''flaky'' failed after 2 attempts: attempt 1: TimeoutError: a; attempt 2: PermanentToolError: no'
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        node: call
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: call
+  - - NodeFailed
+    - failure:
+        code: node.execute
+        message: 'tool ''flaky'' failed after 2 attempts: attempt 1: TimeoutError: a; attempt 2: PermanentToolError: no'
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        node: call
+  - - RunFailed
+    - failure:
+        code: node.execute
+        message: 'tool ''flaky'' failed after 2 attempts: attempt 1: TimeoutError: a; attempt 2: PermanentToolError: no'
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        node: call
+  tool_calls:
+    flaky:
+    - args: {}
+      call_id: r1/call
+      attempt: 1
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 2
+      node: call

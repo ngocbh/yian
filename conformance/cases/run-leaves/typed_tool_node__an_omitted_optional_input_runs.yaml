@@ -1,0 +1,77 @@
+# From tests/engine/test_typed_tool_node.py::test_an_omitted_optional_input_runs.
+# A TOOL node may leave out an optional tool parameter: the call's args hold only the bound input.
+kind: run
+flow: |
+  id: placing
+  name: placing
+  nodes:
+    place:
+      kind: tool
+      tool_id: place_order
+      input:
+        qty: 5
+  output: ${place.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    place_order:
+      parameters:
+        type: object
+        properties:
+          qty:
+            type: integer
+          sym:
+            type: string
+        required: [qty]
+      results:
+      - return: 5 AAPL
+expect:
+  output:
+    status: succeeded
+    output: 5 AAPL
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, place]
+  - - node_succeeded
+    - place
+    - value: 5 AAPL
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: 5 AAPL
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: place
+  - - NodeSucceeded
+    - node_id: place
+      output: 5 AAPL
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: 5 AAPL
+  - - RunSucceeded
+    - output: 5 AAPL
+  tool_calls:
+    place_order:
+    - args:
+        qty: 5
+      call_id: r1/place
+      attempt: 1
+      node: place

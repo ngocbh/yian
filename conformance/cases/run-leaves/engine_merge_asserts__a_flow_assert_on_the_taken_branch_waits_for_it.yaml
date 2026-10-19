@@ -1,0 +1,124 @@
+kind: run
+flow: |2
+
+  id: c1
+  name: c1
+  input:
+    v: !int
+
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.v >= 100"
+          then: hi
+      else: lo
+    hi:
+      kind: code
+      input:
+        n: ${input.v}
+      output: int
+      code: |
+        return inputs["n"] * 2n
+    lo:
+      kind: code
+      input:
+        n: ${input.v}
+      output: int
+      code: |
+        return inputs["n"] * 2n
+  output: ${hi.output | lo.output}
+
+  asserts:
+    - "lo.output >= 0"
+python_flow: |2
+
+  id: c1
+  name: c1
+  input:
+    v: !int
+
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.v >= 100"
+          then: hi
+      else: lo
+    hi:
+      kind: code
+      input:
+        n: ${input.v}
+      output: int
+      code: |
+        return inputs["n"] * 2
+    lo:
+      kind: code
+      input:
+        n: ${input.v}
+      output: int
+      code: |
+        return inputs["n"] * 2
+  output: ${hi.output | lo.output}
+
+  asserts:
+    - "lo.output >= 0"
+inputs:
+  v: 5
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: 10
+  trace:
+  - - run_started
+    - null
+    - inputs:
+        v: 5
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        v: 5
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - handle: '#else'
+  - [node_started, lo]
+  - - node_succeeded
+    - lo
+    - value: 10
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: 10
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        v: 5
+  - - NodeStarted
+    - node_id: gate
+  - - NodeRouted
+    - handle: '#else'
+      node_id: gate
+  - - NodeSkipped
+    - node_id: hi
+  - - NodeStarted
+    - node_id: lo
+  - - NodeSucceeded
+    - node_id: lo
+      output: 10
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: 10
+  - - RunSucceeded
+    - output: 10

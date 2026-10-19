@@ -1,0 +1,280 @@
+# From tests/engine/test_tool_retries.py::test_ten_attempts_are_all_listed.
+# Ten failed attempts are all listed in the failure, none elided.
+kind: run
+flow: |
+  id: t
+  name: t
+  nodes:
+    call:
+      kind: tool
+      tool_id: flaky
+      retries: 9
+  output: ${call.output}
+env:
+  YIAN_TOOL_RETRY_DELAY_SECONDS: '0'
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    flaky:
+      parameters:
+        type: object
+        properties: {}
+      results:
+      - raise:
+          class: TimeoutError
+          message: e1
+      - raise:
+          class: TimeoutError
+          message: e2
+      - raise:
+          class: TimeoutError
+          message: e3
+      - raise:
+          class: TimeoutError
+          message: e4
+      - raise:
+          class: TimeoutError
+          message: e5
+      - raise:
+          class: TimeoutError
+          message: e6
+      - raise:
+          class: TimeoutError
+          message: e7
+      - raise:
+          class: TimeoutError
+          message: e8
+      - raise:
+          class: TimeoutError
+          message: e9
+      - raise:
+          class: TimeoutError
+          message: e10
+  jitter: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: 'tool ''flaky'' failed after 10 attempts: attempt 1: TimeoutError: e1; attempt 2: TimeoutError: e2; attempt 3: TimeoutError: e3; attempt 4: TimeoutError: e4; attempt 5: TimeoutError: e5; attempt 6: TimeoutError: e6; attempt 7: TimeoutError: e7; attempt 8: TimeoutError: e8; attempt 9: TimeoutError: e9; attempt 10: TimeoutError: e10'
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 7]
+      node: call
+  trace:
+  - - run_started
+    - null
+    - defaults:
+        TOOL_RETRY_DELAY_SECONDS: 0
+      learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, call]
+  - - node_step
+    - call
+    - step:
+        attempt: 1
+        error:
+          message: e1
+          type: TimeoutError
+        event: failed
+        retry_in: 0.0
+  - - node_step
+    - call
+    - step:
+        attempt: 2
+        event: started
+  - - node_step
+    - call
+    - step:
+        attempt: 2
+        error:
+          message: e2
+          type: TimeoutError
+        event: failed
+        retry_in: 0.0
+  - - node_step
+    - call
+    - step:
+        attempt: 3
+        event: started
+  - - node_step
+    - call
+    - step:
+        attempt: 3
+        error:
+          message: e3
+          type: TimeoutError
+        event: failed
+        retry_in: 0.0
+  - - node_step
+    - call
+    - step:
+        attempt: 4
+        event: started
+  - - node_step
+    - call
+    - step:
+        attempt: 4
+        error:
+          message: e4
+          type: TimeoutError
+        event: failed
+        retry_in: 0.0
+  - - node_step
+    - call
+    - step:
+        attempt: 5
+        event: started
+  - - node_step
+    - call
+    - step:
+        attempt: 5
+        error:
+          message: e5
+          type: TimeoutError
+        event: failed
+        retry_in: 0.0
+  - - node_step
+    - call
+    - step:
+        attempt: 6
+        event: started
+  - - node_step
+    - call
+    - step:
+        attempt: 6
+        error:
+          message: e6
+          type: TimeoutError
+        event: failed
+        retry_in: 0.0
+  - - node_step
+    - call
+    - step:
+        attempt: 7
+        event: started
+  - - node_step
+    - call
+    - step:
+        attempt: 7
+        error:
+          message: e7
+          type: TimeoutError
+        event: failed
+        retry_in: 0.0
+  - - node_step
+    - call
+    - step:
+        attempt: 8
+        event: started
+  - - node_step
+    - call
+    - step:
+        attempt: 8
+        error:
+          message: e8
+          type: TimeoutError
+        event: failed
+        retry_in: 0.0
+  - - node_step
+    - call
+    - step:
+        attempt: 9
+        event: started
+  - - node_step
+    - call
+    - step:
+        attempt: 9
+        error:
+          message: e9
+          type: TimeoutError
+        event: failed
+        retry_in: 0.0
+  - - node_step
+    - call
+    - step:
+        attempt: 10
+        event: started
+  - - node_failed
+    - call
+    - failure:
+        code: node.execute
+        message: 'tool ''flaky'' failed after 10 attempts: attempt 1: TimeoutError: e1; attempt 2: TimeoutError: e2; attempt 3: TimeoutError: e3; attempt 4: TimeoutError: e4; attempt 5: TimeoutError: e5; attempt 6: TimeoutError: e6; attempt 7: TimeoutError: e7; attempt 8: TimeoutError: e8; attempt 9: TimeoutError: e9; attempt 10: TimeoutError: e10'
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        node: call
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: call
+  - - NodeFailed
+    - failure:
+        code: node.execute
+        message: 'tool ''flaky'' failed after 10 attempts: attempt 1: TimeoutError: e1; attempt 2: TimeoutError: e2; attempt 3: TimeoutError: e3; attempt 4: TimeoutError: e4; attempt 5: TimeoutError: e5; attempt 6: TimeoutError: e6; attempt 7: TimeoutError: e7; attempt 8: TimeoutError: e8; attempt 9: TimeoutError: e9; attempt 10: TimeoutError: e10'
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        node: call
+  - - RunFailed
+    - failure:
+        code: node.execute
+        message: 'tool ''flaky'' failed after 10 attempts: attempt 1: TimeoutError: e1; attempt 2: TimeoutError: e2; attempt 3: TimeoutError: e3; attempt 4: TimeoutError: e4; attempt 5: TimeoutError: e5; attempt 6: TimeoutError: e6; attempt 7: TimeoutError: e7; attempt 8: TimeoutError: e8; attempt 9: TimeoutError: e9; attempt 10: TimeoutError: e10'
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 7]
+        node: call
+  tool_calls:
+    flaky:
+    - args: {}
+      call_id: r1/call
+      attempt: 1
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 2
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 3
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 4
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 5
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 6
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 7
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 8
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 9
+      node: call
+    - args: {}
+      call_id: r1/call
+      attempt: 10
+      node: call

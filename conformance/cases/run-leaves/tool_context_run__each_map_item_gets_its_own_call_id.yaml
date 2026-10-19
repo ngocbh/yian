@@ -1,0 +1,214 @@
+# From tests/engine/test_tool_context_run.py::test_each_map_item_gets_its_own_call_id.
+# A TOOL node in a MAP body gets one call id per item: <run id>/m#<i>/place.
+kind: run
+flow: |
+  id: map_ctx
+  name: map_ctx
+  defs:
+    one:
+      input:
+        item: !str
+      nodes:
+        place:
+          kind: tool
+          tool_id: place
+      output: ${place.output}
+  input:
+    items: !list(str)
+  nodes:
+    m:
+      kind: map
+      over: ${input.items}
+      call: one
+      input:
+        item: ${item}
+  output: ${m.output}
+inputs:
+  items: [a, b, c]
+run:
+  run_id: run-7f3a
+  num_workers: 0
+host:
+  tools:
+    place:
+      parameters:
+        type: object
+        properties: {}
+      results:
+      - return: p0
+      - return: p1
+      - return: p2
+expect:
+  output:
+    status: succeeded
+    output: [p0, p1, p2]
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs:
+        items: [a, b, c]
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        items: [a, b, c]
+  - [node_started, m]
+  - - node_expanded
+    - m
+    - prune_ids: []
+      seed:
+      - item: a
+      - item: b
+      - item: c
+  - [node_started, m/__start__]
+  - - node_succeeded
+    - m/__start__
+    - value: {}
+  - [node_started, m#0/__start__]
+  - - node_succeeded
+    - m#0/__start__
+    - value:
+        item: a
+  - [node_started, m#1/__start__]
+  - - node_succeeded
+    - m#1/__start__
+    - value:
+        item: b
+  - [node_started, m#2/__start__]
+  - - node_succeeded
+    - m#2/__start__
+    - value:
+        item: c
+  - [node_started, m#0/place]
+  - - node_succeeded
+    - m#0/place
+    - value: p0
+  - [node_started, m#1/place]
+  - - node_succeeded
+    - m#1/place
+    - value: p1
+  - [node_started, m#2/place]
+  - - node_succeeded
+    - m#2/place
+    - value: p2
+  - [node_started, m#0/__end__]
+  - - node_succeeded
+    - m#0/__end__
+    - value: p0
+  - [node_started, m#1/__end__]
+  - - node_succeeded
+    - m#1/__end__
+    - value: p1
+  - [node_started, m#2/__end__]
+  - - node_succeeded
+    - m#2/__end__
+    - value: p2
+  - [node_started, m/__end__]
+  - - node_succeeded
+    - m/__end__
+    - commit_target: m
+      value: [p0, p1, p2]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: [p0, p1, p2]
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        items: [a, b, c]
+  - - NodeStarted
+    - node_id: m
+  - - NodeExpanded
+    - node_id: m
+      grow:
+        seed:
+        - item: a
+        - item: b
+        - item: c
+        prune: []
+  - - NodeStarted
+    - node_id: m/__start__
+  - - NodeSucceeded
+    - node_id: m/__start__
+      output: {}
+  - - NodeStarted
+    - node_id: m#0/__start__
+  - - NodeSucceeded
+    - node_id: m#0/__start__
+      output:
+        item: a
+  - - NodeStarted
+    - node_id: m#1/__start__
+  - - NodeSucceeded
+    - node_id: m#1/__start__
+      output:
+        item: b
+  - - NodeStarted
+    - node_id: m#2/__start__
+  - - NodeSucceeded
+    - node_id: m#2/__start__
+      output:
+        item: c
+  - - NodeStarted
+    - node_id: m#0/place
+  - - NodeSucceeded
+    - node_id: m#0/place
+      output: p0
+  - - NodeStarted
+    - node_id: m#1/place
+  - - NodeSucceeded
+    - node_id: m#1/place
+      output: p1
+  - - NodeStarted
+    - node_id: m#2/place
+  - - NodeSucceeded
+    - node_id: m#2/place
+      output: p2
+  - - NodeStarted
+    - node_id: m#0/__end__
+  - - NodeSucceeded
+    - node_id: m#0/__end__
+      output: p0
+  - - NodeStarted
+    - node_id: m#1/__end__
+  - - NodeSucceeded
+    - node_id: m#1/__end__
+      output: p1
+  - - NodeStarted
+    - node_id: m#2/__end__
+  - - NodeSucceeded
+    - node_id: m#2/__end__
+      output: p2
+  - - NodeStarted
+    - node_id: m/__end__
+  - - NodeSucceeded
+    - node_id: m/__end__
+      output: [p0, p1, p2]
+      commit_as: m
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: [p0, p1, p2]
+  - - RunSucceeded
+    - output: [p0, p1, p2]
+  tool_calls:
+    place:
+    - args: {}
+      call_id: run-7f3a/m#0/place
+      attempt: 1
+      node: m#0/place
+    - args: {}
+      call_id: run-7f3a/m#1/place
+      attempt: 1
+      node: m#1/place
+    - args: {}
+      call_id: run-7f3a/m#2/place
+      attempt: 1
+      node: m#2/place

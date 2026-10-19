@@ -1,0 +1,71 @@
+# From tests/engine/test_run_tools.py::test_model_options_reach_the_handler_normalized and
+# ::test_ask_user_options_are_normalized_leniently.
+# `ask_user` options reach the handler cleaned: labels stripped, case-insensitive duplicates
+# dropped, at most six kept.
+kind: run
+flow: |
+  id: asking
+  name: asking
+  nodes:
+    ask:
+      kind: tool
+      tool_id: ask_user
+      input:
+        question: Which?
+        options: [" A ", "a", "B", "C", "D", "E", "F", "G"]
+  output: ${ask.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  human:
+    ask: [B]
+expect:
+  output:
+    status: succeeded
+    output: B
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, ask]
+  - - node_succeeded
+    - ask
+    - value: B
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: B
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: ask
+  - - NodeSucceeded
+    - node_id: ask
+      output: B
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: B
+  - - RunSucceeded
+    - output: B
+  tool_calls:
+    ask_user:
+    - args:
+        question: Which?
+        options: [A, B, C, D, E, F]
+      call_id: r1/ask
+      attempt: 1
+      node: ask

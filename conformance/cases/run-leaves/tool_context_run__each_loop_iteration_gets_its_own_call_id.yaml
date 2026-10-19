@@ -1,0 +1,242 @@
+# From tests/engine/test_tool_context_run.py::test_each_loop_iteration_gets_its_own_call_id.
+# A TOOL node in a LOOP body gets one call id per iteration: <run id>/loop#<i>/place.
+kind: run
+flow: |
+  id: loop_ctx
+  name: loop_ctx
+  defs:
+    turn:
+      input:
+        count: !int
+      nodes:
+        place:
+          kind: tool
+          tool_id: place
+      output:
+        count: ${input.count + 1}
+  nodes:
+    loop:
+      kind: loop
+      call: turn
+      input:
+        count: 0
+      while: count < 3
+      max: 5
+  output: ${loop.output}
+run:
+  run_id: run-7f3a
+  num_workers: 0
+host:
+  tools:
+    place:
+      parameters:
+        type: object
+        properties: {}
+      results:
+      - return: p0
+      - return: p1
+      - return: p2
+expect:
+  output:
+    status: succeeded
+    output:
+      count: 3
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, loop]
+  - - node_expanded
+    - loop
+    - prune_ids: []
+      seed:
+      - count: 0
+      - 0
+  - [node_started, loop#0/__start__]
+  - - node_succeeded
+    - loop#0/__start__
+    - value:
+        count: 0
+  - [node_started, loop#0/__end__]
+  - - node_succeeded
+    - loop#0/__end__
+    - value:
+        count: 1
+  - [node_started, loop#0/place]
+  - - node_succeeded
+    - loop#0/place
+    - value: p0
+  - [node_started, loop~1]
+  - - node_expanded
+    - loop~1
+    - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/place, loop~1]
+      seed:
+      - count: 1
+      - 1
+  - [node_started, loop#1/__start__]
+  - - node_succeeded
+    - loop#1/__start__
+    - value:
+        count: 1
+  - [node_started, loop#1/__end__]
+  - - node_succeeded
+    - loop#1/__end__
+    - value:
+        count: 2
+  - [node_started, loop#1/place]
+  - - node_succeeded
+    - loop#1/place
+    - value: p1
+  - [node_started, loop~2]
+  - - node_expanded
+    - loop~2
+    - prune_ids: [loop#1/__end__, loop#1/__start__, loop#1/place, loop~2]
+      seed:
+      - count: 2
+      - 2
+  - [node_started, loop#2/__start__]
+  - - node_succeeded
+    - loop#2/__start__
+    - value:
+        count: 2
+  - [node_started, loop#2/__end__]
+  - - node_succeeded
+    - loop#2/__end__
+    - value:
+        count: 3
+  - [node_started, loop#2/place]
+  - - node_succeeded
+    - loop#2/place
+    - value: p2
+  - [node_started, loop~3]
+  - - node_succeeded
+    - loop~3
+    - commit_target: loop
+      value:
+        count: 3
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        count: 3
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: loop
+  - - NodeExpanded
+    - node_id: loop
+      grow:
+        seed:
+        - count: 0
+        - 0
+        prune: []
+  - - NodeStarted
+    - node_id: loop#0/__start__
+  - - NodeSucceeded
+    - node_id: loop#0/__start__
+      output:
+        count: 0
+  - - NodeStarted
+    - node_id: loop#0/__end__
+  - - NodeSucceeded
+    - node_id: loop#0/__end__
+      output:
+        count: 1
+  - - NodeStarted
+    - node_id: loop#0/place
+  - - NodeSucceeded
+    - node_id: loop#0/place
+      output: p0
+  - - NodeStarted
+    - node_id: loop~1
+  - - NodeExpanded
+    - node_id: loop~1
+      grow:
+        seed:
+        - count: 1
+        - 1
+        prune: [loop#0/__end__, loop#0/__start__, loop#0/place, loop~1]
+  - - NodeStarted
+    - node_id: loop#1/__start__
+  - - NodeSucceeded
+    - node_id: loop#1/__start__
+      output:
+        count: 1
+  - - NodeStarted
+    - node_id: loop#1/__end__
+  - - NodeSucceeded
+    - node_id: loop#1/__end__
+      output:
+        count: 2
+  - - NodeStarted
+    - node_id: loop#1/place
+  - - NodeSucceeded
+    - node_id: loop#1/place
+      output: p1
+  - - NodeStarted
+    - node_id: loop~2
+  - - NodeExpanded
+    - node_id: loop~2
+      grow:
+        seed:
+        - count: 2
+        - 2
+        prune: [loop#1/__end__, loop#1/__start__, loop#1/place, loop~2]
+  - - NodeStarted
+    - node_id: loop#2/__start__
+  - - NodeSucceeded
+    - node_id: loop#2/__start__
+      output:
+        count: 2
+  - - NodeStarted
+    - node_id: loop#2/__end__
+  - - NodeSucceeded
+    - node_id: loop#2/__end__
+      output:
+        count: 3
+  - - NodeStarted
+    - node_id: loop#2/place
+  - - NodeSucceeded
+    - node_id: loop#2/place
+      output: p2
+  - - NodeStarted
+    - node_id: loop~3
+  - - NodeSucceeded
+    - node_id: loop~3
+      output:
+        count: 3
+      commit_as: loop
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        count: 3
+  - - RunSucceeded
+    - output:
+        count: 3
+  tool_calls:
+    place:
+    - args: {}
+      call_id: run-7f3a/loop#0/place
+      attempt: 1
+      node: loop#0/place
+    - args: {}
+      call_id: run-7f3a/loop#1/place
+      attempt: 1
+      node: loop#1/place
+    - args: {}
+      call_id: run-7f3a/loop#2/place
+      attempt: 1
+      node: loop#2/place

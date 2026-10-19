@@ -1,0 +1,220 @@
+# From tests/engine/test_run_tools_flow.py::test_each_loop_occurrence_asks_with_its_own_node_id.
+# A HUMAN_INPUT in a LOOP body asks once per iteration, each request naming its occurrence
+# (loop#0/ask, loop#1/ask).
+kind: run
+flow: |
+  id: loop_ask
+  name: loop_ask
+  defs:
+    turn:
+      input:
+        count: !int
+        last: !str
+      nodes:
+        ask:
+          kind: human_input
+          prompt: "next turn"
+          output: str
+      output:
+        count: ${input.count + 1}
+        last: ${ask.output}
+  nodes:
+    loop:
+      kind: loop
+      call: turn
+      input:
+        count: 0
+        last: ""
+      while: count < 2
+      max: 5
+  output: ${loop.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  human:
+    loop#0/ask: [ok]
+    loop#1/ask: [ok]
+expect:
+  output:
+    status: succeeded
+    output:
+      count: 2
+      last: ok
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, loop]
+  - - node_expanded
+    - loop
+    - prune_ids: []
+      seed:
+      - count: 0
+        last: ''
+      - 0
+  - [node_started, loop#0/__start__]
+  - - node_succeeded
+    - loop#0/__start__
+    - value:
+        count: 0
+        last: ''
+  - [node_started, loop#0/ask]
+  - - node_succeeded
+    - loop#0/ask
+    - value: ok
+  - [node_started, loop#0/__end__]
+  - - node_succeeded
+    - loop#0/__end__
+    - value:
+        count: 1
+        last: ok
+  - [node_started, loop~1]
+  - - node_expanded
+    - loop~1
+    - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/ask, loop~1]
+      seed:
+      - count: 1
+        last: ok
+      - 1
+  - [node_started, loop#1/__start__]
+  - - node_succeeded
+    - loop#1/__start__
+    - value:
+        count: 1
+        last: ok
+  - [node_started, loop#1/ask]
+  - - node_succeeded
+    - loop#1/ask
+    - value: ok
+  - [node_started, loop#1/__end__]
+  - - node_succeeded
+    - loop#1/__end__
+    - value:
+        count: 2
+        last: ok
+  - [node_started, loop~2]
+  - - node_succeeded
+    - loop~2
+    - commit_target: loop
+      value:
+        count: 2
+        last: ok
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value:
+        count: 2
+        last: ok
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: loop
+  - - NodeExpanded
+    - node_id: loop
+      grow:
+        seed:
+        - count: 0
+          last: ''
+        - 0
+        prune: []
+  - - NodeStarted
+    - node_id: loop#0/__start__
+  - - NodeSucceeded
+    - node_id: loop#0/__start__
+      output:
+        count: 0
+        last: ''
+  - - NodeStarted
+    - node_id: loop#0/ask
+  - - NodeSucceeded
+    - node_id: loop#0/ask
+      output: ok
+  - - NodeStarted
+    - node_id: loop#0/__end__
+  - - NodeSucceeded
+    - node_id: loop#0/__end__
+      output:
+        count: 1
+        last: ok
+  - - NodeStarted
+    - node_id: loop~1
+  - - NodeExpanded
+    - node_id: loop~1
+      grow:
+        seed:
+        - count: 1
+          last: ok
+        - 1
+        prune: [loop#0/__end__, loop#0/__start__, loop#0/ask, loop~1]
+  - - NodeStarted
+    - node_id: loop#1/__start__
+  - - NodeSucceeded
+    - node_id: loop#1/__start__
+      output:
+        count: 1
+        last: ok
+  - - NodeStarted
+    - node_id: loop#1/ask
+  - - NodeSucceeded
+    - node_id: loop#1/ask
+      output: ok
+  - - NodeStarted
+    - node_id: loop#1/__end__
+  - - NodeSucceeded
+    - node_id: loop#1/__end__
+      output:
+        count: 2
+        last: ok
+  - - NodeStarted
+    - node_id: loop~2
+  - - NodeSucceeded
+    - node_id: loop~2
+      output:
+        count: 2
+        last: ok
+      commit_as: loop
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        count: 2
+        last: ok
+  - - RunSucceeded
+    - output:
+        count: 2
+        last: ok
+  tool_calls:
+    ask_user:
+    - args:
+        question: next turn
+        answer_schema:
+        - name: answer
+          type: str
+          required: true
+        node_id: loop#0/ask
+      call_id: r1/loop#0/ask
+      attempt: 1
+      node: loop#0/ask
+    - args:
+        question: next turn
+        answer_schema:
+        - name: answer
+          type: str
+          required: true
+        node_id: loop#1/ask
+      call_id: r1/loop#1/ask
+      attempt: 1
+      node: loop#1/ask

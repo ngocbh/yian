@@ -99,7 +99,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   LOOP edge is not a flow boundary.
 - Text for a `float` input that spells an int reads as that int (`"2"` is `2n`); `"2.0"` reads as
   a float, and `inf` and `-inf` as infinity.
-- `checkInputNames`, `coerceInputs` and `applyDefaults` take and return plain records.
+- `checkInputNames` checks, and `coerceInputs` and `applyDefaults` take and return, plain records.
 - `bindParams(params, wiring, pool, {item, types, labels})` takes the wiring as a `ReadonlyMap`
   (`name -> source`) and returns a fresh plain record of own data properties, copying each value.
 

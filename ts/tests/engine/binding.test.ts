@@ -10,7 +10,9 @@
  * messages use the text form): `test_bind_never_converts_a_supplied_string` reads `"30" does not
  * match declared type int`.
  *
- * TS-only: a `Set` as `params` is refused as not an exact list.
+ * TS-only: a `Set` as `params` is refused as not an exact list; and the copy a bind delivers
+ * writes `-0` as `0`, keeps a container shared inside the value shared, keeps a `FileRef` by
+ * identity, and keeps an own `__proto__` key as data.
  *
  * Later: `test_binding_capture_matches_the_value_actually_delivered` and
  * `test_omitted_default_has_no_upstream_source` land with binding capture (`BindingCollector`);
@@ -32,11 +34,11 @@ import { OriginRef } from "../../src/diagnostics.ts";
 import { RequiredError } from "../../src/expr/index.ts";
 import { applyDefaults, BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { Binding, ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import { Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
+import { FileRef, Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 
 const START_ID = "__start__";
 
-/** One test-local parameter plus its flow-owned source; no `source` is an omitted input. */
+/** One test-local parameter plus its flow-owned source; a missing or null `source` is an omitted input. */
 interface InputBinding {
   name: string;
   contract?: ValueContract | null;
@@ -141,12 +143,13 @@ test("a compatible default is validated without replacement", () => {
 test("a present null shadows the default but fails a non-nullable contract", () => {
   // An entry that is present but resolves to null is bound-null: it shadows the param default
   // rather than filling 30, but the non-nullable type still rejects the explicit null.
-  bindingError(() =>
+  const error = bindingError(() =>
     bindInputs(
       [{ name: "w", contract: INTEGER, source: "${system.w}", hasDefault: true, default: 30n }],
       poolOf(),
     ),
   );
+  expect(error.failureCode).toBe("contract.input");
 });
 
 test("a present null shadows the default when the contract is nullable", () => {
@@ -176,7 +179,8 @@ test("an omitted input with no default is absent", () => {
 
 test("an omitted required input raises", () => {
   // Param `required` is presence-based too: an omitted required input (no entry) fails loud.
-  bindingError(() => bindInputs([{ name: "t", contract: STRING, required: true }], poolOf()));
+  const error = bindingError(() => bindInputs([{ name: "t", contract: STRING, required: true }], poolOf()));
+  expect(error.failureCode).toBe("binding.evaluate");
 });
 
 test("binding errors carry the stage code and the operation origin", () => {
@@ -342,9 +346,10 @@ test("a nullable reference that is missing binds null", () => {
 });
 
 test("a type mismatch raises", () => {
-  bindingError(() =>
+  const error = bindingError(() =>
     bindInputs([{ name: "n", contract: NUMBER, source: "${system.n}" }], poolOf({ n: "not-a-number" })),
   );
+  expect(error.failureCode).toBe("contract.input");
 });
 
 test("binding never converts a supplied string", () => {
@@ -362,9 +367,10 @@ test("binding never converts a supplied string", () => {
 test("an incompatible stored default is not coerced", () => {
   // String coercion is caller-input policy. It must not silently rewrite the already-stored
   // default, even when that policy is enabled.
-  bindingError(() =>
+  const error = bindingError(() =>
     bindInputs([{ name: "n", contract: INTEGER, hasDefault: true, default: "30", coerceStrings: true }], poolOf()),
   );
+  expect(error.failureCode).toBe("binding.evaluate");
 });
 
 test("an untyped value is lenient", () => {
@@ -595,4 +601,42 @@ test("bindParams refuses a Set as params", () => {
   const error = errorOf(() => bindParams(new Set() as never, new Map(), poolOf()));
   expect(error).toBeInstanceOf(TypeError);
   expect(error.message).toBe("node params must be an exact list, got Set");
+});
+
+test("a bound -0 is written as 0", () => {
+  const rec = bindInputs(
+    [
+      { name: "literal", source: -0 },
+      { name: "evaluated", source: "${-0.0}" },
+    ],
+    poolOf(),
+  );
+  expect(Object.is(rec["literal"], 0)).toBe(true);
+  expect(Object.is(rec["evaluated"], 0)).toBe(true);
+});
+
+test("a container shared inside a bound value stays shared in the copy", () => {
+  const shared = [1n];
+  const rec = bindInputs([{ name: "x", source: [shared, shared] }], poolOf());
+  const [first, second] = rec["x"] as Value[];
+  expect(first).toBe(second!);
+  expect(first).not.toBe(shared);
+  expect(first).toEqual(shared);
+});
+
+test("a FileRef inside a bound record is kept by identity", () => {
+  const ref = new FileRef({ uri: "f" });
+  const rec = bindInputs([{ name: "x", source: { f: ref } }], poolOf());
+  expect((rec["x"] as ValueRecord)["f"]).toBe(ref);
+});
+
+test("an own __proto__ key in a bound record stays data", () => {
+  const record = {};
+  Object.defineProperty(record, "__proto__", { value: 1n, writable: true, enumerable: true, configurable: true });
+  const rec = bindInputs([{ name: "x", source: record }], poolOf());
+  const x = rec["x"] as ValueRecord;
+  expect(x).not.toBe(record);
+  expect(Object.hasOwn(x, "__proto__")).toBe(true);
+  expect(Object.getPrototypeOf(x)).toBe(Object.prototype);
+  expect(Object.getOwnPropertyDescriptor(x, "__proto__")?.value).toBe(1n);
 });

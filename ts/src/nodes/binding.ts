@@ -38,6 +38,7 @@ import {
   normalizeFiles,
   type Type,
   TypeCheckError,
+  type TypedValue,
   type Value,
   ValueKind,
   type ValueRecord,
@@ -403,7 +404,7 @@ class SourceReader {
       } catch (error) {
         if (error instanceof ExpressionError) {
           throw new BindingError(`${bindingWhere(name, path, label)}: ${error.message}`, {
-            failureCode: failureCode(error),
+            failureCode: failureCodeOf(error),
             origin: template.originAt(path) ?? origin,
             cause: error,
           });
@@ -478,14 +479,14 @@ export function resolveSource(
     return reader.string(sourceValue)[0];
   } catch (error) {
     if (error instanceof ExpressionError) {
-      throw new BindingError(error.message, { failureCode: failureCode(error), origin, cause: error });
+      throw new BindingError(error.message, { failureCode: failureCodeOf(error), origin, cause: error });
     }
     throw error;
   }
 }
 
 /** Classify a source evaluation error: a failed `${T(...)}` check is a type error. */
-function failureCode(error: ExpressionError): BindingFailureCode {
+function failureCodeOf(error: ExpressionError): BindingFailureCode {
   return error instanceof ConstructorTypeError ? "binding.type" : "binding.evaluate";
 }
 
@@ -528,6 +529,8 @@ function checkBindingType(where: string, binding: Binding, contract: ValueContra
  */
 function copyValue(value: Value, copies: Map<object, Value> = new Map()): Value {
   if (Array.isArray(value) || isRecord(value)) {
+    // The memo also bounds the work: a value reusing one child at each of its allowed levels
+    // would otherwise take time exponential in its depth to copy.
     const shared = copies.get(value);
     if (shared !== undefined) return shared;
     if (Array.isArray(value)) {
@@ -538,7 +541,7 @@ function copyValue(value: Value, copies: Map<object, Value> = new Map()): Value 
     }
     const record: ValueRecord = {};
     copies.set(value, record);
-    for (const key of Object.keys(value)) setField(record, key, copyValue(value[key]!, copies));
+    for (const key of Object.keys(value)) setField(record, key, copyValue(value[key] as Value, copies));
     return record;
   }
   // yian has no negative zero: a float that becomes a binding's value is written as 0.
@@ -624,7 +627,7 @@ export function bindParams(
       if (p.contract !== null) {
         // No string conversion here: a CALL/MAP/LOOP edge is not a flow boundary. The run
         // converts the top-level flow's supplied inputs (`coerceInputs`) before START binds them.
-        let checked;
+        let checked: TypedValue;
         try {
           checked = buildValueAs(p.contract.type, value);
         } catch (error) {

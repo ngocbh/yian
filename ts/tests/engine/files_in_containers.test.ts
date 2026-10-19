@@ -2,9 +2,8 @@
  * Files inside typed containers, a port of the value checks (`buildValueAs`), file
  * normalization (`normalizeFiles`), the overlap tests, the two typed `bindParams` reads, the
  * `field_of` table and the two traced item reads of `tests/engine/test_files_in_containers.py`,
- * with `FileRef` constructor refusals
- * (`RangeError`, as pydantic's `ValidationError` is a `ValueError`). Where Python checks that
- * a value is kept with `is`, these tests use `toBe`.
+ * with `FileRef` constructor refusals (`RangeError`, as pydantic's `ValidationError` is a
+ * `ValueError`). Where Python checks that a value is kept with `is`, these tests use `toBe`.
  *
  * TS-only: the `normalizeTypedFiles` tests, and the `normalizeFiles` rows keeping an `object`
  * value that holds NaN, turning a `-0` at an `object` position into `0`, and keeping a file

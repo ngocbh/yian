@@ -11,7 +11,8 @@
  * (values in messages use the text form): `"x" does not match declared type int` and
  * `division by zero: 1 / 0`.
  *
- * TS-only: `${input.x * 10}` with `1e308` delivers `Infinity`.
+ * TS-only: `${input.x * 10}` with `1e308` delivers `Infinity`, and a function label passed to
+ * `resolveSource` names a failing template leaf by its path.
  *
  * Later: `test_fresh_node_has_no_binding_labels` and `test_eval_node_uses_the_node_binding_labels`
  * land with the node kinds and the runtime's `evalNode`.
@@ -19,7 +20,7 @@
 
 import { expect, test } from "bun:test";
 
-import { BindingError, bindParams } from "../../src/nodes/binding.ts";
+import { BindingError, bindParams, resolveSource } from "../../src/nodes/binding.ts";
 import { Binding, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 
@@ -144,4 +145,18 @@ test("an infinite result binds", () => {
   );
 
   expect(record).toEqual({ p: Infinity });
+});
+
+test("a function label names a failing template leaf by its path", () => {
+  const source = new ValueTemplate({ a: { b: "${input.x / input.z}" } });
+  let error: unknown;
+  try {
+    resolveSource(source, poolOf({ x: 1.0, z: 0.0 }), { name: "p", label: (path) => `field ${path.join(".")}` });
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(error).toBeInstanceOf(BindingError);
+  const failure = error as BindingError;
+  expect([failure.message, failure.failureCode]).toEqual(["field a.b: division by zero: 1 / 0", "binding.evaluate"]);
 });

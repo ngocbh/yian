@@ -1,0 +1,23 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    n: !int
+  nodes:
+    r: !object {"": 1, a: 2}
+    use:
+      kind: code
+      input:
+        c: ${r.output.b}
+      code: |
+        return inputs['c']
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''r'': a record key can''t be empty; a written-out `!object` keeps its keys as record fields'
+      frames:
+      - label: flow.yaml
+        range: [6, 6, 6, 27]

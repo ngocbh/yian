@@ -1,0 +1,23 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    n: !bool
+  nodes:
+    route:
+      kind: case
+      on: ${input.n}
+      cases:
+        - when: true
+          then: v0
+    v0: !str "yes"
+  output: ${route.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'' produces a value, so it must be exhaustive: add an `else:` (bool value(s) [false] not covered)'
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 8]

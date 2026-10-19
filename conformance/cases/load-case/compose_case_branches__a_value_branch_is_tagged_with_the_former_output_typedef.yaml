@@ -1,0 +1,11 @@
+kind: load
+flow: "id: f\nname: f\ntypedefs:\n  Reply:\n    reply: str\n    exited: bool\ninput:\n  cmd: !str\nnodes:\n  route:\n    kind: case\n    on: ${input.cmd}\n    output: Reply\n    cases:\n      - when: a\n        then: \n          reply: ok\n          exited: true\n    else: reply\n  reply:\n    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n    input:\n      topic: replied\n    output: str\noutput: ${route.output}\n"
+python_flow: "id: f\nname: f\ntypedefs:\n  Reply:\n    reply: str\n    exited: bool\ninput:\n  cmd: !str\nnodes:\n  route:\n    kind: case\n    on: ${input.cmd}\n    output: Reply\n    cases:\n      - when: a\n        then: \n          reply: ok\n          exited: true\n    else: reply\n  reply:\n    kind: code\n    code: tests.engine._compose_codefns:echo\n    input:\n      topic: replied\n    output: str\noutput: ${route.output}\n"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'' then: a branch names a node or calls a flow; put the value in its own entry in `nodes:` and name it: `route_then_0: !Reply {reply: ok, exited: true}` and `then: route_then_0`'
+      frames:
+      - label: flow.yaml
+        range: [17, 11, 19, 5]

@@ -1,0 +1,49 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    cmd: !str
+  nodes:
+    route:
+      kind: case
+      on: ${input.cmd}
+      cases:
+        - when: a
+          then: reply
+      else: yes
+    reply:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: replied
+      output: str
+  output: ${route.output}
+python_flow: |
+  id: f
+  name: f
+  input:
+    cmd: !str
+  nodes:
+    route:
+      kind: case
+      on: ${input.cmd}
+      cases:
+        - when: a
+          then: reply
+      else: yes
+    reply:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: replied
+      output: str
+  output: ${route.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'' else: `yes` names no node. For the text, add a value entry and name it: `yes_text: !str yes`'
+      frames:
+      - label: flow.yaml
+        range: [12, 11, 12, 14]

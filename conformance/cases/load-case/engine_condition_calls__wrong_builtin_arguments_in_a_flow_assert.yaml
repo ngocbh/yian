@@ -1,0 +1,41 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input:
+    v: !int
+  asserts:
+    - "upper(input.v, 1) == 'A'"
+  nodes:
+    x:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:double
+      input:
+        n: ${input.v}
+      output: int
+  output: ${x.output}
+python_flow: |2
+
+  id: f
+  name: f
+  input:
+    v: !int
+  asserts:
+    - "upper(input.v, 1) == 'A'"
+  nodes:
+    x:
+      kind: code
+      code: tests.engine._compose_codefns:double
+      input:
+        n: ${input.v}
+      output: int
+  output: ${x.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'assert "upper(input.v, 1) == ''A''" is not a valid boolean expression: expression function ''upper'' takes (s): too many positional arguments'
+      frames:
+      - label: flow.yaml
+        range: [7, 5, 7, 31]

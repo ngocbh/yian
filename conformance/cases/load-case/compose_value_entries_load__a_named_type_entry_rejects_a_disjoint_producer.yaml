@@ -1,0 +1,28 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Buy:
+      action: Literal(buy)
+      conviction: float
+  input:
+    t: !str
+  nodes:
+    s:
+      kind: code
+      output: str
+      code: |
+        return 0.5
+    x: !Buy
+      action: buy
+      conviction: ${s.output}
+  output: ${x.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'value entry ''x'': declared Buy, but the value is {"action":"buy","conviction":str}'
+      frames:
+      - label: flow.yaml
+        range: [15, 6, 18, 1]

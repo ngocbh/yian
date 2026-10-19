@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    x: !int
+  nodes:
+    n:
+      kind: code
+      inputs:
+        x: ${input.x}
+      output: int
+      code: return inputs["x"]
+  output: ${n.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''n'': unknown key ''inputs'' — nodes use `input:` (rename the key)'
+      frames:
+      - label: flow.yaml
+        range: [8, 5, 8, 11]

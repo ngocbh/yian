@@ -1,0 +1,10 @@
+kind: load
+flow: "\nid: nested_skips\nname: nested_skips\ninput:\n  approve: !bool\nnodes:\n  gate:\n    kind: case\n    cases:\n      - when: ${input.approve}\n        then: order\n    else: rejected\n  order:\n    kind: code\n    output: str\n    code: |\n      return \"filled\"\n  rejected:\n    kind: code\n    output: str\n    code: |\n      return \"no\"\n  c:\n    kind: code\n    input:\n      x: ${order.output}\n    code: |\n      return inputs[\"x\"]\noutput: \n  r: {a: '${order.output + 1}'}\n"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'output ''r'': ${order.output + 1} does arithmetic on order.output, which is null when node ''order'' is skipped; give it a default with :-, e.g. (order.output :- <default>)'
+      frames:
+      - label: flow.yaml
+        range: [30, 10, 30, 31]

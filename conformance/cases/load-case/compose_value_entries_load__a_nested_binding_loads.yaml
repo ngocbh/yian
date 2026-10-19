@@ -1,0 +1,17 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    t: !str
+  nodes:
+    s:
+      kind: code
+      output: float
+      code: |
+        return 0.5
+    cfg: !object
+      access_token: ${input.t}
+  output: ${cfg.output}
+expect:
+  load: ok

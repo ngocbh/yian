@@ -1,0 +1,42 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    N: Literal(a, b)
+  input:
+    n: !N
+  nodes:
+    route:
+      kind: case
+      on: ${input.n}
+      cases:
+        - when: a
+          then: one
+        - when: c
+          then: two
+      else: other
+    one:
+      kind: code
+      code: |
+        return "one"
+      output: str
+    two:
+      kind: code
+      code: |
+        return "two"
+      output: str
+    other:
+      kind: code
+      code: |
+        return "other"
+      output: str
+  output: ${one.output | two.output | other.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'': `when: c` is not a tag of `on: ${input.n}` (`Literal(a, b)`); use one of: a, b'
+      frames:
+      - label: flow.yaml
+        range: [14, 15, 14, 16]

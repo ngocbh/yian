@@ -1,0 +1,37 @@
+kind: load
+# `.inf` is a float value in TS (design 3.2, #554): a float `when:` on a float `on:` loads; Python refuses it.
+rules: [infinity]
+flow: |
+  id: f
+  name: f
+  input:
+    n: !float
+  nodes:
+    route:
+      kind: case
+      on: ${input.n}
+      cases:
+        - when: .inf
+          then: one
+      else: other
+    one:
+      kind: code
+      code: |
+        return "one"
+      output: str
+    other:
+      kind: code
+      code: |
+        return "other"
+      output: str
+  output: ${one.output | other.output}
+expect:
+  load: ok
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'' cases[0].when: non-finite number inf is not a yian value'
+      frames:
+      - label: flow.yaml
+        range: [10, 15, 10, 19]

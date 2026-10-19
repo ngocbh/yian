@@ -1,0 +1,10 @@
+kind: load
+flow: "id: malformed-case\nname: malformed-case\nnodes:\n  gate:\n    kind: case\n    cases: [{then: done}]\noutput: ${gate.output}\n    "
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''gate'' then: `done` names no node. For the text, add a value entry and name it: `done_text: !str done`'
+      frames:
+      - label: flow.yaml
+        range: [6, 20, 6, 24]

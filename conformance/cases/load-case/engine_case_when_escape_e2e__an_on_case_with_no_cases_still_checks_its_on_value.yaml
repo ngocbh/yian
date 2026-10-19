@@ -1,0 +1,32 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  nodes:
+    a:
+      kind: code
+      output: int
+      code: |
+        return 1
+    gate:
+      kind: case
+      on: ${a.outptu}
+      cases: []
+      else: cold
+    cold:
+      kind: code
+      output: str
+      code: |
+        return "cold"
+  output: ${cold.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'gate' on: from: reference ${a.outptu} on node 'a' must be a.output[.field] (`.output` is the node-value selector)
+      frames:
+      - label: flow.yaml
+        range: [12, 9, 12, 20]

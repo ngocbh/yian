@@ -1,0 +1,25 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input:
+    v: !int
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "nosuchfn(input.v) > 0"
+          then: hot
+      else: cold
+    hot: {kind: code, code: "return 'hot'", output: str}
+    cold: {kind: code, code: "return 'cold'", output: str}
+  output: ${hot.output | cold.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''gate'' cases[0].when: unknown expression function ''nosuchfn'''
+      frames:
+      - label: flow.yaml
+        range: [10, 15, 10, 38]

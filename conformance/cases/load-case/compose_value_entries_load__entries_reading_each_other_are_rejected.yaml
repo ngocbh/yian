@@ -1,0 +1,25 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    t: !str
+  nodes:
+    s:
+      kind: code
+      output: float
+      code: |
+        return 0.5
+    x: !object
+      a: ${y.output}
+    y: !object
+      b: ${x.output}
+  output: ${x.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node build dependency cycle: x -> y -> x'
+      frames:
+      - label: flow.yaml
+        range: [13, 6, 15, 1]

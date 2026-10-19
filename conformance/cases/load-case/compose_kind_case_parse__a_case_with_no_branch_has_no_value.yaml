@@ -1,0 +1,10 @@
+kind: load
+flow: "id: malformed-case\nname: malformed-case\nnodes:\n  gate:\n    kind: case\n    cases: [{when: 1}]\noutput: ${gate.output}\n    "
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'flow outputs: ${gate.output} — case ''gate'' has no resolvable branch value (a case needs a `then:` or `else:`, and its targets must not form a cycle)'
+      frames:
+      - label: flow.yaml
+        range: [7, 9, 7, 23]

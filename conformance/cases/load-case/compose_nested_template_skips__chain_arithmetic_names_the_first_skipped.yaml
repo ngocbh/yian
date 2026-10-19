@@ -1,0 +1,49 @@
+kind: load
+flow: |2
+
+  id: chain_skips
+  name: chain_skips
+  input:
+    approve: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: a
+      else: c
+    a:
+      kind: code
+      output: int
+      code: |
+        return 1
+    b:
+      kind: code
+      output: int
+      code: |
+        return 1
+    c:
+      kind: code
+      output: int
+      code: |
+        return 1
+    e:
+      kind: code
+      output: int
+      code: |
+        return 1
+    d:
+      kind: code
+      input:
+        x: ${a.output + b.output + c.output}
+      code: |
+        return inputs["x"]
+  output: ${d.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''d'' input ''x'': ${a.output + b.output + c.output} does arithmetic on a.output, which is null when node ''a'' is skipped; give it a default with :-, e.g. (a.output :- <default>)'
+      frames:
+      - label: flow.yaml
+        range: [36, 10, 36, 43]

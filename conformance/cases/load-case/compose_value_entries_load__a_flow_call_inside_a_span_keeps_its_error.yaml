@@ -1,0 +1,61 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    f:
+      input:
+        x: !str
+      nodes:
+        up:
+          kind: code
+          input:
+            x: ${input.x}
+          output: str
+          code: |
+            return inputs['x'].toUpperCase()
+      output: ${up.output}
+  input:
+    t: !str
+  nodes:
+    s:
+      kind: code
+      output: float
+      code: |
+        return 0.5
+    x: !str ${ f(input.t) }
+  output: ${x.output}
+python_flow: |
+  id: f
+  name: f
+  defs:
+    f:
+      input:
+        x: !str
+      nodes:
+        up:
+          kind: code
+          input:
+            x: ${input.x}
+          output: str
+          code: |
+            return inputs['x'].upper()
+      output: ${up.output}
+  input:
+    t: !str
+  nodes:
+    s:
+      kind: code
+      output: float
+      code: |
+        return 0.5
+    x: !str ${ f(input.t) }
+  output: ${x.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'x: a flow call ''f'' inside ${...} is not supported — write it as the whole value with the call(...) directive: call(f, ...)'
+      frames:
+      - label: flow.yaml
+        range: [24, 6, 24, 26]

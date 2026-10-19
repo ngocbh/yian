@@ -1,0 +1,10 @@
+kind: load
+flow: "id: f\nname: f\ninput:\n  approve: !bool\nnodes:\n  gate:\n    kind: case\n    cases:\n      - when: ${input.approve}\n        then: a\n    else: rejected\n  a:\n    kind: code\n    output: \n      n: int\n    code: |\n      return {\"n\": 2}\n  rejected:\n    kind: code\n    output: str\n    code: |\n      return \"no\"\n  gate2:\n    kind: case\n    cases:\n      - when: \"((a.output.n + 1) :- 0) > 1\"\n        then: hot\n    else: cold\n  hot:\n    kind: code\n    output: str\n    code: |\n      return \"hot\"\n  cold:\n    kind: code\n    output: str\n    code: |\n      return \"cold\"\noutput:\n  v: ${hot.output | cold.output}\n"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''gate2'' cases[0].when: ((a.output.n + 1) :- 0) > 1 does arithmetic on a.output.n, which is null when node ''a'' is skipped; give it a default with :-, e.g. (a.output.n :- <default>)'
+      frames:
+      - label: flow.yaml
+        range: [26, 15, 26, 44]

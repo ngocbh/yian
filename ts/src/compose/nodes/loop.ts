@@ -7,9 +7,13 @@
  * read into the `while_` and `until_` fields, as Python names them. Its `build` bakes the
  * runtime `LoopNode`: the driver and its counts, the `'a -> 'a` field-name contract (a body
  * returns a subset of the carried record and each omitted field carries over, so the loop's
- * output contract merges the returned body fields with the seeds of the omitted ones), and the
- * predicate's names and whether the loop can end. Registered in `KINDS` and `BINDING_FIELDS` by
- * `compose/nodes/index.ts`.
+ * output contract merges the returned body fields with the seeds of the omitted ones), the
+ * predicate's names, checks and field reads against the carried record, and whether the loop can
+ * end. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`. It also holds the
+ * loop-entry helpers the load checks use: `whileNonNullPaths` finds the carried paths a `while:`
+ * null check proves, `nullableAt` relaxes a type along such a path, `loopEntryInputs` gives the
+ * body's inputs read that way, and `carriedFieldTypes` gives the carried record's proven field
+ * types.
  *
  * Knows about: diagnostics, the LOOP runtime node, node contracts, typesys, compose helpers,
  * `base.ts` and `resolver.ts`.
@@ -19,10 +23,30 @@
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import type { ExprNode } from "../../expr/grammar.ts";
 import { ExpressionError, exprRefs, parseCondition } from "../../expr/index.ts";
-import { isExactly, type OutputContract, PartialRecordContract } from "../../nodes/contracts.ts";
+import {
+  comparePaths,
+  isExactly,
+  type OutputContract,
+  outputContractFieldError,
+  Parameter,
+  PartialRecordContract,
+  ValueContract,
+} from "../../nodes/contracts.ts";
 import { LoopNode } from "../../nodes/loop/node.ts";
-import { valueRepr, writeAsText } from "../../typesys/values.ts";
+import type { TypeRegistry } from "../../typesys/types.ts";
+import { Type, ValueKind, valueRepr, writeAsText } from "../../typesys/values.ts";
+import { AllOf, type Guard, Holds, NotNullCheck, proves, sameGuard } from "../helpers/condition_guards.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
+import {
+  type BaseTypeOf,
+  checkedRefs,
+  guardedReadTypes,
+  impossibleCheckMessage,
+  impossibleChecks,
+  narrowedReadError,
+  unresolvedType,
+  widerType,
+} from "../helpers/narrowing_facts.ts";
 import { combineOutputContracts, projectOutputContract } from "../helpers/output_contracts.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import {
@@ -175,13 +199,19 @@ export class LoopDescriptor extends NodeDescriptor {
    * returned fields' types are checked against the seeds' later, over the assembled flow.
    *
    * A `while:` or `until:` predicate must parse, and every name it reads must be a carried field.
-   * Without `max:`, a predicate loop whose body returns a known subset of the carried record must
-   * return at least one field the predicate reads, or the loop can never end. Every problem found
-   * is reported together, at the node; a predicate that doesn't parse, found alone, is reported at
-   * its field.
+   * With the names valid, its checks and field reads are checked against the carried record's
+   * contract: a check that can never be true is refused, as is a field read the carried record (or
+   * the type the checks before the read narrow it to) can't have. A `while:` is first evaluated on
+   * the seeds, so its checks take a path's type from the seed too: the wider of the seed's and the
+   * carried type, else none. `ctx.registry` resolves the type names of the predicate's `isinstance`
+   * checks. Without `max:`, a predicate loop whose body returns a known subset of the carried
+   * record must return at least one field the predicate reads, or the loop can never end. Every
+   * problem found is reported together, at the node; a predicate that doesn't parse, found alone,
+   * is reported at its field.
    *
    * @throws LoadError when the body can't be resolved or nests too deep, the driver, a count, the
-   *   field-name contract or the predicate is illegal, or the loop can never end.
+   *   field-name contract, the predicate or one of its checks or field reads is illegal, or the
+   *   loop can never end.
    */
   override build(ctx: BuildContext): BuildResult {
     const child = resolveChild(this.id, this.call, ctx.resolver, this.childLabel, {
@@ -301,6 +331,24 @@ export class LoopDescriptor extends NodeDescriptor {
             `the carried record ${carriedText}`,
         );
       }
+      if (tree !== null && errors.length === 0 && node.outputContract !== null) {
+        // With the field names valid, the output contract is the carried record's: the body's for
+        // a total loop, merged with the omitted fields' seeds otherwise.
+        const contract = node.outputContract;
+        let baseTypeOf = carriedBaseType(contract);
+        if (key === "while") {
+          // `while:` is first evaluated on the seeds, which the type contract doesn't always force
+          // to fit the body (a literal, an untyped producer), so its checks must hold on a seed's
+          // type too.
+          const seeds = new Map(
+            [...heads].toSorted(compareCodeUnits).map((head) => [head, this.seedContract(ctx, head)] as const),
+          );
+          baseTypeOf = seededBaseType(baseTypeOf, seeds);
+        }
+        for (const message of predicateErrors(contract, tree, baseTypeOf, ctx.registry)) {
+          errors.push(`${subject}: \`${key}:\` ${message}`);
+        }
+      }
       // A body that returns none of the fields the predicate reads can never change it, so without
       // `max:` the loop never ends. `returnedFields` is set only when the body returns a known
       // strict subset of the carried record. A driver, parse or unknown-name error already
@@ -378,4 +426,218 @@ function contractFieldNames(contract: OutputContract | null): Set<string> | null
   if (isExactly(contract, PartialRecordContract)) return new Set(contract.names);
   if (contract === null || contract.type.fields === undefined) return null;
   return new Set(contract.type.fields.keys());
+}
+
+/** Return the declared type of a carried-record path, or `null` when it is unproven. */
+function carriedBaseType(contract: OutputContract): BaseTypeOf {
+  return (base) => {
+    const projected = projectOutputContract(contract, base.split("."));
+    return isExactly(projected, ValueContract) ? projected.type : null;
+  };
+}
+
+/**
+ * Return the type a carried-record path has on every evaluation of a `while:`, the seed's
+ * included: the carried type when the seed's type fits it, the seed's when the carried type fits
+ * the seed's, and otherwise, or when either is unproven, `null`.
+ *
+ * @param carried The carried record's declared types, from `carriedBaseType`.
+ * @param seeds Each carried field the predicate reads, to its seed's contract (`null` unproven).
+ */
+function seededBaseType(carried: BaseTypeOf, seeds: ReadonlyMap<string, OutputContract | null>): BaseTypeOf {
+  return (base) => {
+    const carriedType = carried(base);
+    const [head, ...rest] = base.split(".");
+    const seed = seeds.get(head!) ?? null;
+    if (!(carriedType instanceof Type) || seed === null) return null;
+    const projected = projectOutputContract(seed, rest);
+    if (!isExactly(projected, ValueContract)) return null;
+    return widerType(carriedType, projected.type);
+  };
+}
+
+/**
+ * Return the predicate's impossible checks and field-read errors, each message once.
+ *
+ * Checks and narrowed reads take each path's type from `baseTypeOf`; a read nothing narrows is
+ * walked on `contract`, the carried record. A read is checked under each distinct guard it is
+ * read with, since the same path can be read both narrowed and not.
+ */
+function predicateErrors(
+  contract: OutputContract,
+  tree: ExprNode,
+  baseTypeOf: BaseTypeOf,
+  registry: TypeRegistry,
+): string[] {
+  const messages = impossibleChecks(tree, baseTypeOf, registry).map(impossibleCheckMessage);
+  const checked: [string, Guard][] = [];
+  for (const [ref, guard] of checkedRefs(tree, baseTypeOf, registry)) {
+    // A read after a reported check is reached by no value.
+    if (guard === null) continue;
+    if (checked.some(([seen, seenGuard]) => seen === ref && sameGuard(seenGuard, guard))) continue;
+    checked.push([ref, guard]);
+    const message = predicateFieldError(contract, ref, guard, baseTypeOf, registry);
+    if (message !== null) messages.push(message);
+  }
+  return [...new Set(messages)];
+}
+
+/**
+ * Return why predicate reference `ref` reads a field the carried record can't have, else `null`.
+ *
+ * `and`, `or` and `not` short-circuit, so the checks before a read (`isinstance` and union tag
+ * comparisons) narrow the values it can see (`guardedReadTypes`): the read is fine when any
+ * narrowed type allows it, and otherwise the first one's error is reported, naming the narrowed
+ * type when it lacks the field. With nothing narrowed the read is walked on the carried record. A
+ * read guarded by a check whose type name doesn't resolve is not checked, so the type-table check
+ * reports the unknown name.
+ *
+ * @param guard The read's guard, from `checkedRefs`.
+ */
+function predicateFieldError(
+  contract: OutputContract,
+  ref: string,
+  guard: Guard,
+  baseTypeOf: BaseTypeOf,
+  registry: TypeRegistry,
+): string | null {
+  // The type-table pass reports the unknown name; an error here would fail the build first and
+  // hide it behind a hint to add the check the author wrote.
+  if (unresolvedType(guard, registry)) return null;
+  const candidates = guardedReadTypes(ref, guard, baseTypeOf, registry);
+  if (candidates.length === 0) {
+    return outputContractFieldError(contract, ref.split("."), ref, { isinstanceHint: true });
+  }
+  let first: string | null = null;
+  for (const candidate of candidates) {
+    const [typ, fields] = candidate;
+    const error = outputContractFieldError(new ValueContract(typ), fields, ref, { isinstanceHint: true });
+    if (error === null) return null;
+    first ??= narrowedReadError(ref, candidate, error, registry);
+  }
+  return first;
+}
+
+/**
+ * Return the carried paths a loop's condition proves not null whenever the body starts.
+ *
+ * Only `while:` is checked before each iteration, the first included; `until:` is checked after
+ * the body and `times:` has no condition, so they prove nothing. A path comes from a
+ * `<path> != null` check the condition proves when true: each part of an `and` adds its paths,
+ * and an `or` keeps only the paths every part proves.
+ *
+ * @param kind The loop's driver: `"while"`, `"until"` or `"times"`.
+ * @param predicate The condition text, bare or whole-span; `null` for `times`.
+ * @returns Each proven path once, as field names from the carried record, sorted with
+ *   `comparePaths`; `[]` for a condition that doesn't parse (the build reports it).
+ *
+ * @example
+ * `whileNonNullPaths("while", "n < 3 and page.next != null")` is `[["page", "next"]]`.
+ */
+export function whileNonNullPaths(kind: string | null, predicate: string | null): readonly (readonly string[])[] {
+  if (kind !== "while" || predicate === null) return [];
+  let tree: ExprNode;
+  try {
+    tree = parseCondition(predicate);
+  } catch (error) {
+    if (!(error instanceof ExpressionError)) throw error;
+    return []; // the build already reported the condition
+  }
+  return [...nonNullBases(proves(tree, true))].map((base) => base.split(".")).toSorted(comparePaths);
+}
+
+/** Return the dotted paths `guard` proves not null (see `whileNonNullPaths`). */
+function nonNullBases(guard: Guard): Set<string> {
+  if (guard instanceof Holds) {
+    return guard.check instanceof NotNullCheck && guard.value ? new Set([guard.check.base]) : new Set();
+  }
+  const parts = guard.parts.map(nonNullBases);
+  if (guard instanceof AllOf) return new Set(parts.flatMap((part) => [...part]));
+  if (parts.length === 0) return new Set();
+  return new Set([...parts[0]!].filter((base) => parts.every((part) => part.has(base))));
+}
+
+/**
+ * Return `typ` with the value at `path`, and each record above it, made nullable.
+ *
+ * The path is followed through record fields. Where it names an absent field, or stops at a union
+ * or a non-record before its end, the rest of it is left as is, but the value it stopped at is
+ * still made nullable. Each field on the path stops being required in its record, since a field
+ * read through a null or absent record is null. The null type is returned as it is.
+ *
+ * @param typ The type to change; it is not changed itself.
+ * @param path Field names from `typ` to the value; `[]` is `typ` itself.
+ * @returns The changed copy.
+ *
+ * @example
+ * `nullableAt({next: str}, ["next"])` with `next` required is `Optional({next: Optional(str)})`
+ * with `next` not required.
+ */
+export function nullableAt(typ: Type, path: readonly string[]): Type {
+  const [head, ...rest] = path;
+  let changed = typ;
+  if (head !== undefined && typ.variants === undefined && typ.fields?.has(head)) {
+    const fields = new Map(typ.fields);
+    fields.set(head, nullableAt(typ.fields.get(head)!, rest));
+    const required = new Set(typ.required);
+    required.delete(head);
+    changed = typ.replace({ fields, required });
+  }
+  if (changed.kind === ValueKind.NONE) return changed; // the null type is already nullable
+  return changed.replace({ nullable: true });
+}
+
+/**
+ * Return a loop body's inputs as the values that enter the body may fill them.
+ *
+ * A path the loop's `while:` proves not null is never null when the body starts, so each input
+ * type is read as nullable at such a path and at each record above it. The seed check and the
+ * returned-field check compare against these, while the node's `childInputs` stay as declared.
+ *
+ * @param node The built loop node.
+ * @returns The body's inputs in order: each relaxed one a copy keeping its origins, each other one
+ *   the node's own parameter.
+ */
+export function loopEntryInputs(node: LoopNode): Parameter[] {
+  const paths = whileNonNullPaths(node.predicateKind, node.predicate);
+  return node.childInputs.map((parameter) => {
+    const contract = parameter.contract;
+    if (contract === null) return parameter;
+    let typ = contract.type;
+    for (const path of paths) {
+      if (path[0] === parameter.name) typ = nullableAt(typ, path.slice(1));
+    }
+    if (typ === contract.type) return parameter;
+    return new Parameter(parameter.name, {
+      contract: new ValueContract(typ, contract.origins),
+      required: parameter.required,
+      hasDefault: parameter.hasDefault,
+      default: parameter.default,
+      coerceStrings: parameter.coerceStrings,
+      origin: parameter.origin,
+      defaultOrigin: parameter.defaultOrigin,
+    });
+  });
+}
+
+/**
+ * Return the proven field types of a loop's carried-record contract: an exact record's fields'
+ * types, a partly typed record's proven field contracts' types; anything else proves no field.
+ *
+ * @param contract The loop node's `outputContract`: the body's own contract for a total loop, or
+ *   the merged returned-plus-seeded contract for a partial one.
+ * @returns Each proven carried field's type, keyed by field name, in field order.
+ */
+export function carriedFieldTypes(contract: OutputContract | null): Map<string, Type> {
+  if (isExactly(contract, ValueContract) && contract.type.fields !== undefined) {
+    return new Map(contract.type.fields);
+  }
+  if (isExactly(contract, PartialRecordContract)) {
+    const types = new Map<string, Type>();
+    for (const [name, fieldContract] of contract.fields) {
+      if (fieldContract !== null) types.set(name, fieldContract.type);
+    }
+    return types;
+  }
+  return new Map();
 }

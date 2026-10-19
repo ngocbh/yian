@@ -305,7 +305,7 @@ function serverTools(key: string, server: McpServer): readonly FunctionTool[] {
     );
   }
   if (server.isClosed) throw new RangeError(`tools[${reprText(key)}]: MCP server '${server.label}' is closed`);
-  return server.tools;
+  return groupTools(key, server.tools);
 }
 
 /**
@@ -594,7 +594,7 @@ export class ToolSet {
    *
    * `true` only when the tool's `isConcurrencySafe` returns exactly `true` for the host form of
    * the arguments. It never throws: no such function, an unknown tool, arguments that aren't a
-   * yian record, a throw or any other result give `false`. It doesn't check the arguments against
+   * yian record, a throw, a Promise or any other result give `false`. It doesn't check the arguments against
    * the schema; callers check each call first.
    */
   isConcurrencySafe(toolId: string, inputs: Record<string, unknown>): boolean {
@@ -602,7 +602,14 @@ export class ToolSet {
       const check = this.lookup(toolId).isConcurrencySafe;
       if (check === null) return false;
       const payload = fromHost(inputs, `tool ${reprText(toolId)} arguments`);
-      return isRecord(payload) && check(toHost(payload) as Record<string, unknown>) === true;
+      if (!isRecord(payload)) return false;
+      const safe: unknown = check(toHost(payload) as Record<string, unknown>);
+      if (typeof (safe as { then?: unknown } | null)?.then === "function") {
+        // A Promise isn't `true`; handle its rejection so it can't crash the process.
+        Promise.resolve(safe).catch(() => {});
+        return false;
+      }
+      return safe === true;
     } catch {
       // A call whose safety can't be read runs alone.
       return false;

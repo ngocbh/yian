@@ -640,6 +640,15 @@ describe("isConcurrencySafe", () => {
     expect(seen[0]!.list).not.toBe(args.list);
   });
 
+  test("an async check that rejects gives false and leaves no unhandled rejection", async () => {
+    const check = (async () => {
+      throw new Error("x");
+    }) as unknown as (args: Record<string, unknown>) => boolean;
+    expect(guarded(check).isConcurrencySafe("echo", { n: 1 })).toBe(false);
+    // Let the rejection settle, so an unhandled one would fail the run here.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
   test("the ask_user tool is unsafe", () => {
     expect(new ToolSet({ ask_user: () => "yes" }).isConcurrencySafe("ask_user", { question: "Q?" })).toBe(false);
   });

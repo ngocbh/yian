@@ -46,7 +46,7 @@ export class FunctionTool {
   readonly name: string;
   /** The description the model sees. */
   readonly description: string;
-  /** The arguments' JSON Schema, a deep copy of the one given; its `type` is `"object"`. */
+  /** The arguments' JSON Schema, a deep-frozen copy of the one given; its `type` is `"object"`. */
   readonly parametersJsonSchema: JsonObject;
   // `any`, not `unknown`: a tool typed for its own context (`ToolContext<Broker>`) must be accepted.
   /**
@@ -54,7 +54,10 @@ export class FunctionTool {
    * result or a Promise of it. Changing that copy doesn't change the caller's values.
    */
   readonly execute: (args: Record<string, unknown>, ctx: ToolContext<any>) => unknown;
-  /** Says whether a call with these arguments may run beside other calls; `null` when none was given. */
+  /**
+   * Says whether a call with these arguments may run beside other calls; `null` when none was
+   * given. It must be synchronous: a Promise result counts as unsafe.
+   */
   readonly isConcurrencySafe: ((args: Record<string, unknown>) => boolean) | null;
 
   /** Check the fields and build a frozen tool. */
@@ -100,7 +103,7 @@ export class FunctionTool {
     }
     this.name = name;
     this.description = description;
-    this.parametersJsonSchema = schema;
+    this.parametersJsonSchema = deepFreeze(schema);
     this.execute = execute;
     this.isConcurrencySafe = isConcurrencySafe ?? null;
     Object.freeze(this);
@@ -109,11 +112,34 @@ export class FunctionTool {
 
 Object.defineProperty(FunctionTool.prototype, FUNCTION_TOOL, { value: true });
 
-/** Return whether `value` is a `FunctionTool` from any copy of yian. */
+/**
+ * Return whether `value` is a `FunctionTool` from any copy of yian: it carries the brand and a
+ * tool's shape. Never throws, so a hostile object is not a tool.
+ */
 export function isFunctionTool(value: unknown): value is FunctionTool {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { [FUNCTION_TOOL]?: unknown })[FUNCTION_TOOL] === true
-  );
+  if (typeof value !== "object" || value === null) return false;
+  try {
+    const tool = value as Partial<Record<keyof FunctionTool, unknown>>;
+    return (
+      (value as { [FUNCTION_TOOL]?: unknown })[FUNCTION_TOOL] === true &&
+      typeof tool.name === "string" &&
+      typeof tool.execute === "function" &&
+      isRecord(tool.parametersJsonSchema)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Freeze `value` and every object and array in it, and return it; `value` is plain JSON. */
+function deepFreeze<T>(value: T): T {
+  // An explicit stack, as `checkJsonValue` walks, so any nesting it accepted is frozen.
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const item = stack.pop();
+    if (typeof item !== "object" || item === null) continue;
+    Object.freeze(item);
+    for (const child of Object.values(item)) stack.push(child);
+  }
+  return value;
 }

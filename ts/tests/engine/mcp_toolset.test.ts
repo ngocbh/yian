@@ -126,6 +126,11 @@ describe("an MCP server in a ToolSet", () => {
     expect(await tools.invoke("other", { text: "hi" })).toBe("hi");
   });
 
+  test("a server listing a non-FunctionTool is rejected", () => {
+    const odd = new FakeServer("odd", [serverTool("echo"), { name: "add" } as unknown as FunctionTool]);
+    expect(thrown(() => new ToolSet({ odd }), TypeError)).toBe("tools['odd'][1] must be a FunctionTool, got Object");
+  });
+
   test("test_a_dead_server_is_rejected", () => {
     const quitter = new FakeServer("quitter", [serverTool("exit_now")], { dead: true });
     expect(thrown(() => new ToolSet({ fake: quitter }), RangeError)).toBe(

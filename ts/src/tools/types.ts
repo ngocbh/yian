@@ -74,9 +74,9 @@ export function inputTypeFromJsonSchema(schema: unknown, root?: unknown): Type |
   try {
     return typeFromJsonSchema(schema, { closed: false, root });
   } catch (error) {
-    // A host or MCP schema can nest deeper than the translator recurses; the runtime's stack
-    // overflow is a RangeError, standing for Python's RecursionError. Such an input is left
-    // unchecked rather than failing the run.
+    // A host or MCP schema can nest deeper than the translator recurses. A RangeError (the
+    // runtime's stack overflow, standing for Python's RecursionError, or a shape the IR refuses)
+    // leaves the input unchecked rather than failing the run.
     if (error instanceof RangeError) return null;
     throw error;
   }

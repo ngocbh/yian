@@ -162,6 +162,18 @@ describe("FunctionTool construction", () => {
     expect(tool.parametersJsonSchema).toEqual({ type: "object", properties: { text: { type: "string" } } });
   });
 
+  test("freezes its schema copy", () => {
+    const tool = build({ parametersJsonSchema: { type: "object", properties: { text: { type: "string" } } } });
+    const properties = tool.parametersJsonSchema.properties as Record<string, JsonObject>;
+    expect(() => {
+      properties.text!.type = "integer";
+    }).toThrow(TypeError);
+    expect(() => {
+      properties.extra = { type: "string" };
+    }).toThrow(TypeError);
+    expect(tool.parametersJsonSchema).toEqual({ type: "object", properties: { text: { type: "string" } } });
+  });
+
   test("a second module copy's FunctionTool passes isFunctionTool", async () => {
     // A computed specifier, so `tsc` doesn't resolve it. Bun shares one instance for a `file:` URL
     // whatever its query, but loads a second instance for a relative specifier with a query.
@@ -256,6 +268,42 @@ describe("FunctionTool in a ToolSet and the registry", () => {
     expect(() => new ToolSet({ ask_user: build({ name: "ask_user" }) as never })).toThrow(
       new TypeError("tools['ask_user'] must be a plain function handler; the engine supplies its schema"),
     );
+  });
+
+  test("a hostile object or a branded object of the wrong shape gets the registry's own TypeError", () => {
+    const hostile = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("trap");
+        },
+      },
+    );
+    expect(isFunctionTool(hostile)).toBe(false);
+    expect(() => new ToolSet({ x: hostile as never })).toThrow(
+      new TypeError("tools['x'] must be a FunctionTool, an MCP server, or an array of FunctionTools, got Object"),
+    );
+    expect(() => registerTool("x", hostile as never)).toThrow(
+      new TypeError(
+        "registerTool('x') got a Object; it accepts a FunctionTool. " +
+          "Pass anything else in the run's tools mapping instead",
+      ),
+    );
+    const brand = Symbol.for("yian.function_tool");
+    const good = { name: "x", description: "X.", parametersJsonSchema: { type: "object" }, execute: () => null };
+    expect(isFunctionTool({ ...good, [brand]: true })).toBe(true);
+    for (const forged of [
+      { ...good, name: 3 },
+      { ...good, execute: "run" },
+      { ...good, parametersJsonSchema: null },
+      { [brand]: true },
+    ]) {
+      const branded = { ...forged, [brand]: true };
+      expect(isFunctionTool(branded)).toBe(false);
+      expect(() => new ToolSet({ box: [branded as never] })).toThrow(
+        new TypeError("tools['box'][0] must be a FunctionTool, got Object"),
+      );
+    }
   });
 
   test("registerTool registers it and returns it unchanged", () => {

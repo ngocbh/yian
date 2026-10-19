@@ -240,6 +240,68 @@ def test_remove_provider_and_default(tmp_path):
     assert [item.provider for item in state.selections] == ["openai"]
 
 
+def test_delete_removes_saved_store_and_keeps_lock(tmp_path):
+    path = tmp_path / "auth" / "auth.json"
+    store = AuthStore(path)
+    store.save("openai", ApiKeyCredentials("k-open"), "gpt")
+    store.delete()
+    assert not path.exists()
+    assert path.with_suffix(".json.lock").exists()
+    assert store.read().selections == ()
+    store.delete()
+    assert os.listdir(path.parent) == ["auth.json.lock"]
+
+
+def test_delete_without_store_or_lock_creates_nothing(tmp_path):
+    missing = AuthStore(tmp_path / "missing" / "auth.json")
+    missing.delete()
+    assert not missing.path.parent.exists()
+
+    empty = tmp_path / "empty"
+    empty.mkdir(mode=0o700)
+    AuthStore(empty / "auth.json").delete()
+    assert os.listdir(empty) == []
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_delete_lock_wait_is_bounded_and_cancellable(tmp_path, cancel):
+    clock = FakeClock()
+    path = tmp_path / "auth" / "auth.json"
+    AuthStore(path).save("openai", ApiKeyCredentials("key"), "model")
+
+    def check():
+        if cancel and clock.now >= 1000.2:
+            raise Cancelled
+
+    with path.with_suffix(".json.lock").open("rb") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        store = AuthStore(
+            path,
+            monotonic=clock,
+            sleep=clock.sleep,
+            check_stopped=check,
+            lock_timeout=0.5,
+        )
+        with pytest.raises(
+            Cancelled if cancel else AuthError, match=None if cancel else "Timed out"
+        ):
+            store.delete()
+    assert AuthStore(path).selection().model == "model"
+
+
+@pytest.mark.parametrize("saved", [False, True])
+def test_delete_refuses_a_directory_others_can_read(tmp_path, saved):
+    path = tmp_path / "auth" / "auth.json"
+    if saved:
+        AuthStore(path).save("openai", ApiKeyCredentials("key"), "model")
+    else:
+        path.parent.mkdir(mode=0o700)
+    path.parent.chmod(0o755)
+    with pytest.raises(AuthError, match="private"):
+        AuthStore(path).delete()
+    assert path.exists() == saved
+
+
 def test_set_default_requires_saved_provider(tmp_path):
     store = AuthStore(tmp_path / "auth" / "auth.json")
     first = store.save("openai", ApiKeyCredentials("k-open"), "gpt")

@@ -61,7 +61,8 @@ class AuthStore:
     request headers and, for ``openai``, an organization and project id. Reading
     a missing store never creates a directory or lock file. Selection and
     credentials are committed together by ``save`` after host validation;
-    ``remove`` and ``set_default`` change a saved store and never create one.
+    ``remove``, ``set_default`` and ``delete`` change a saved store and never
+    create one.
     Refresh reloads under the same lock and cannot replace a newer connection.
     """
 
@@ -426,6 +427,37 @@ class AuthStore:
             AuthError: If the provider has no saved login or storage fails.
         """
         self._update(provider, remove=False)
+
+    def delete(self) -> None:
+        """Delete the whole saved store under its lock, keeping the lock file.
+
+        Creates nothing when neither the store nor its lock file exists. A
+        symbolic link at the store's path is removed, never followed.
+
+        Raises:
+            AuthError: If the directory is not private, the lock wait times out,
+                or storage fails.
+        """
+        self._check_stopped()
+        with self._directory() as directory:
+            if directory is None:
+                return
+            for name in (self.path.name, self.path.name + ".lock"):
+                try:
+                    os.stat(name, dir_fd=directory, follow_symlinks=False)
+                    break
+                except FileNotFoundError:
+                    pass
+            else:
+                return
+            # Unlinking the lock file would let a waiter and a newcomer lock
+            # different files, so only the store goes.
+            with self._locked(directory):
+                try:
+                    os.unlink(self.path.name, dir_fd=directory)
+                except FileNotFoundError:
+                    pass
+                os.fsync(directory)
 
     def credentials(
         self,

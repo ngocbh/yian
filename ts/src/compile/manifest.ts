@@ -412,6 +412,8 @@ function templateTreeManifest(value: unknown, ctx: ManifestContext, path: string
  *
  * @throws TypeError for anything else (a float, infinity, a bigint).
  */
+function count(value: unknown, path: string, nullable: false): number;
+function count(value: unknown, path: string, nullable: boolean): number | null;
 function count(value: unknown, path: string, nullable: boolean): number | null {
   if (nullable && value === null) return null;
   if (typeof value !== "number" || !Number.isSafeInteger(value)) {
@@ -672,8 +674,8 @@ function memoryScopeTopology(value: unknown, path: string): JsonObject {
 /**
  * Project a node's execution location for growth identity.
  *
- * @throws TypeError when `value` isn't exactly an `ExecutionScope`.
- * @throws TypeError or RangeError when it fails its constructor's checks.
+ * @throws TypeError when `value` isn't exactly an `ExecutionScope`; TypeError or RangeError when
+ *   it fails its constructor's checks.
  */
 function executionScopeTopology(value: unknown, path: string): JsonObject {
   if (!isExactly(value, ExecutionScope)) throw new TypeError(`${path} must be an ExecutionScope`);
@@ -823,7 +825,7 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
         manifest.predicate_kind = spawner.predicateKind;
         // `times` is a typed value, as in Python's manifest; it passes `count` first, so a forged
         // float is refused rather than written as a float.
-        const times = spawner.times === null ? null : BigInt(count(spawner.times, `${path}.times`, false)!);
+        const times = spawner.times === null ? null : BigInt(count(spawner.times, `${path}.times`, false));
         manifest.times = canonicalValue(times, ctx, `${path}.times`);
         // Left out for a total loop so the feature doesn't change the identity of flows that don't
         // use it (the shape follows Python's manifest).

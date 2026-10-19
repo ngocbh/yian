@@ -157,7 +157,9 @@ x:
 
   test("node asserts must be list of str", () => {
     const text = "\nx:\n  kind: code\n  code: m:f\n  output: int\n  asserts: not-a-list\n";
-    loadError(() => nodes(text, [StandInCode]));
+    const error = loadError(() => nodes(text, [StandInCode]));
+
+    expect(error.message).toBe("node 'x' (kind=code): `asserts:` must be a list of strings");
   });
 
   test("legacy ref kind is unknown", () => {
@@ -232,7 +234,10 @@ fetch:
     const text = "\nn:\n  input:\n    topic: ${input.topic}\n  output: str\n";
     const error = loadError(() => nodes(text));
 
-    expect(error.message).toContain("kind");
+    expect(error.message).toBe(
+      "node 'n': an entry in `nodes:` is a node or a value; add `kind:` for a node, or a tag " +
+        "(`!object`, `!Buy`, ...) for a value",
+    );
   });
 
   describe.each(["depends_on", "runs_after"])("%s", (key) => {

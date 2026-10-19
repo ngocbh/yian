@@ -17,7 +17,8 @@
  * `assertRanges`. This metadata stays inside Compose; `_finish` copies node and field locations
  * to the `BuildResult` for validation.
  *
- * Knows about: diagnostics, compose source, helpers and node kinds, compile model and expr.
+ * Knows about: diagnostics, compose source, helpers and node kinds, compile model, expr and
+ * typesys.
  * Never imports: the runtime, the run boundary, the CLI or provider SDKs.
  */
 
@@ -156,7 +157,7 @@ function parseNode(
   if (cursor.tag !== null) {
     if (readValue === undefined) {
       throw new TypeError(
-        `node ${reprText(nodeId)} is a tagged value entry; parse_nodes needs read_value to read it`,
+        `node ${reprText(nodeId)} is a tagged value entry; parseNodes needs readValue to read it`,
       );
     }
     return readValue(nodeId, cursor);
@@ -170,10 +171,9 @@ function parseNode(
       range: normalized.range ?? normalized.keyRange,
     });
   }
-  const allowed = [...KINDS.keys()].sort(compareCodeUnits).join(", ");
   if (typeof kind !== "string") {
     throw diagnostics.error(
-      `node ${reprText(nodeId)}: ${notTextError("kind", kind, `write one of ${allowed}`)}`,
+      `node ${reprText(nodeId)}: ${notTextError("kind", kind, `write one of ${kindNames()}`)}`,
       { range: normalized.rangeOf("kind") },
     );
   }
@@ -187,7 +187,7 @@ function parseNode(
   const cls = KINDS.get(kind);
   if (cls === undefined) {
     throw diagnostics.error(
-      `node ${reprText(nodeId)}: unknown kind ${reprText(kind)} (allowed: ${allowed})`,
+      `node ${reprText(nodeId)}: unknown kind ${reprText(kind)} (allowed: ${kindNames()})`,
       { range: normalized.rangeOf("kind") },
     );
   }
@@ -201,6 +201,11 @@ function parseNode(
   }
   desc.assertRanges.push(...normalized.itemRangeList("asserts"));
   return desc;
+}
+
+/** The registered kind names, sorted and comma-joined, for a bad-kind message. */
+function kindNames(): string {
+  return [...KINDS.keys()].sort(compareCodeUnits).join(", ");
 }
 
 /**
@@ -268,7 +273,7 @@ function rejectReservedNodeId(nodeId: string, cursor: SourceCursor): void {
  * A literal gets an example of the entry with its tag. A `${...}` or `call(...)` value is not a
  * literal, and no tag holds a value that contains itself, so neither gets an example.
  *
- * @throws LoadError always; one nested deeper than a yian value may reports the nesting limit
+ * @throws LoadError always; one nested deeper than a yian value may report the nesting limit
  *   instead.
  */
 function rejectUntaggedValue(

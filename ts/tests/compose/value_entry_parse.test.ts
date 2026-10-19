@@ -226,7 +226,7 @@ test("a tagged mapping with kind is still a value", () => {
 });
 
 test("a tagged entry without a reader is a type error", () => {
-  const message = "node 'x' is a tagged value entry; parse_nodes needs read_value to read it";
+  const message = "node 'x' is a tagged value entry; parseNodes needs readValue to read it";
 
   expect(() => parseNodes(nodesCursor("nodes:\n  x: !int 5\n"))).toThrow(
     new TypeError(message),

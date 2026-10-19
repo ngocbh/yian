@@ -419,11 +419,15 @@ export class NodeDescriptor {
   readonly origin: OriginRef | null;
   /** The node body's range. */
   readonly range: SourceRange | null;
-  /** Each authored site's range, keyed by `siteKey`; `_finish` copies it to the build result. */
+  /**
+   * Each authored site's range, keyed by `siteKey`; `_finish` copies it to the build result.
+   * Mutable because `parseNodes` adds each `input:` binding's range after the kind's `parse`.
+   */
   readonly fieldRanges: Map<string, SourceRange>;
   /**
    * One range per authored assert, in order (`null` where none exists). Kept out of
-   * `fieldRanges` because two identical asserts still need distinct carets.
+   * `fieldRanges` because two identical asserts still need distinct carets. Mutable because
+   * `parseNodes` appends the ranges after the kind's `parse`.
    */
   readonly assertRanges: (SourceRange | null)[];
 

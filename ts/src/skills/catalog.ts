@@ -123,9 +123,10 @@ export function readSkillText(path: string, where: string | null = null): string
   const label = where || path;
   const limit = current().maxSkillFileBytes;
   if (statSync(path).size > limit) throw new SkillError(`${label} is larger than ${limit} bytes`);
+  const bytes = readFileSync(path);
   let text: string;
   try {
-    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readFileSync(path));
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch (error) {
     if (error instanceof TypeError) throw new SkillError(`${label} is not UTF-8 text`);
     throw error;
@@ -144,7 +145,7 @@ export function resolvedPath(path: string): string {
   for (;;) {
     try {
       const real = realpathSync(candidate);
-      return candidate === abs ? real : join(real, relative(candidate, abs));
+      return join(real, relative(candidate, abs));
     } catch (error) {
       if (!isSystemError(error)) throw error;
       const parent = dirname(candidate);
@@ -154,18 +155,18 @@ export function resolvedPath(path: string): string {
   }
 }
 
-/** @internal `statSync`, or `null` where Python's `Path.is_file()` answers false (ENOENT, ENOTDIR, ELOOP, EBADF). */
+/** @internal `statSync`, or `null` for the errors Python's `Path.is_file()` treats as false. */
 export function statOrNull(path: string): Stats | null {
   try {
     return statSync(path);
   } catch (error) {
-    if (isSystemError(error) && IGNORED_CODES.has(error.code!)) return null;
+    if (isSystemError(error) && IGNORED_CODES.has(error.code)) return null;
     throw error;
   }
 }
 
 /** @internal Whether `error` is a Node SystemError (an OS error). */
-export function isSystemError(error: unknown): error is NodeJS.ErrnoException {
+export function isSystemError(error: unknown): error is NodeJS.ErrnoException & { code: string } {
   if (!(error instanceof Error)) return false;
   const { code, syscall, errno } = error as NodeJS.ErrnoException;
   return typeof code === "string" && (typeof syscall === "string" || typeof errno === "number");

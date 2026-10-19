@@ -15,30 +15,28 @@ import { readSkillFile, readSkillText, resolvedPath } from "../../src/skills/cat
 import { Skill, SkillError } from "../../src/skills/index.ts";
 
 let tmp: string;
+let root: string;
 let skill: Skill;
+
+const HIDDEN = [".env", ".git/config", "references/.secret"];
 
 beforeEach(() => {
   tmp = realpathSync(mkdtempSync(join(tmpdir(), "yian-skills-")));
-  const directory = join(tmp, "skills", "api");
-  mkdirSync(join(directory, "references"), { recursive: true });
-  writeFileSync(join(directory, "references", "api.md"), "GET /items\n");
+  root = join(tmp, "skills", "api");
+  mkdirSync(join(root, "references"), { recursive: true });
+  writeFileSync(join(root, "references", "api.md"), "GET /items\n");
   writeFileSync(join(tmp, "secret.txt"), "top secret\n");
   skill = new Skill({
     name: "api",
     description: "Call the API.",
     instructions: "Read references/api.md.",
-    directory: realpathSync(directory),
+    directory: root,
   });
 });
 
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
-
-/** The skill's directory, which the fixture always sets. */
-function dir(): string {
-  return skill.directory!;
-}
 
 /** Assert that `run` throws a `SkillError` whose message contains `text`. */
 function expectSkillError(run: () => unknown, text: string): void {
@@ -82,23 +80,23 @@ describe("read skill file rejects paths outside the skill", () => {
 });
 
 test("read skill file rejects symlink escape", () => {
-  symlinkSync(join(tmp, "secret.txt"), join(dir(), "leak.txt"));
+  symlinkSync(join(tmp, "secret.txt"), join(root, "leak.txt"));
   expectSkillError(() => readSkillFile(skill, "leak.txt"), "outside the skill directory");
 });
 
 describe("read skill file rejects hidden files", () => {
-  test.each([".env", ".git/config", "references/.secret"])("%p", (path) => {
-    mkdirSync(join(dir(), ".git"));
-    for (const hidden of [".env", ".git/config", "references/.secret"]) {
-      writeFileSync(join(dir(), hidden), "TOKEN=1\n");
+  test.each(HIDDEN)("%p", (path) => {
+    mkdirSync(join(root, ".git"));
+    for (const hidden of HIDDEN) {
+      writeFileSync(join(root, hidden), "TOKEN=1\n");
     }
     expectSkillError(() => readSkillFile(skill, path), "hidden files and folders are not readable");
   });
 });
 
 test("read skill file rejects missing, directories, binary and large", () => {
-  writeFileSync(join(dir(), "blob.bin"), new Uint8Array([0xff, 0xfe, 0x00]));
-  writeFileSync(join(dir(), "big.txt"), "x".repeat(current().maxSkillFileBytes + 1));
+  writeFileSync(join(root, "blob.bin"), new Uint8Array([0xff, 0xfe, 0x00]));
+  writeFileSync(join(root, "big.txt"), "x".repeat(current().maxSkillFileBytes + 1));
   expectSkillError(() => readSkillFile(skill, "references"), "does not exist");
   expectSkillError(() => readSkillFile(skill, "nope.md"), "does not exist");
   expectSkillError(() => readSkillFile(skill, "blob.bin"), "not UTF-8");
@@ -111,21 +109,21 @@ test("read skill file rejects missing, directories, binary and large", () => {
 // TS-only: the rows below pin behavior Python gets from pathlib.
 
 test("dangling links and link loops do not exist", () => {
-  symlinkSync(join(tmp, "nowhere"), join(dir(), "gone.md"));
-  symlinkSync("loop.md", join(dir(), "loop.md"));
+  symlinkSync(join(tmp, "nowhere"), join(root, "gone.md"));
+  symlinkSync("loop.md", join(root, "loop.md"));
   expectSkillError(() => readSkillFile(skill, "gone.md"), "does not exist");
   expectSkillError(() => readSkillFile(skill, "loop.md"), "does not exist");
 });
 
 test("line endings read as LF and a BOM is kept", () => {
-  writeFileSync(join(dir(), "crlf.md"), "a\r\nb\rc");
-  writeFileSync(join(dir(), "bom.md"), "\uFEFFhi");
+  writeFileSync(join(root, "crlf.md"), "a\r\nb\rc");
+  writeFileSync(join(root, "bom.md"), "\uFEFFhi");
   expect(readSkillFile(skill, "crlf.md")).toBe("a\nb\nc");
   expect(readSkillFile(skill, "bom.md")).toBe("\uFEFFhi");
 });
 
 test("read skill text labels errors with the path by default", () => {
-  const path = join(dir(), "blob.bin");
+  const path = join(root, "blob.bin");
   writeFileSync(path, new Uint8Array([0xff]));
   expectSkillError(() => readSkillText(path), `${path} is not UTF-8 text`);
   expectSkillError(() => readSkillText(path, ""), `${path} is not UTF-8 text`);

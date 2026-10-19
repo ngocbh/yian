@@ -60,8 +60,8 @@ type Outcome<T> = { value: T } | { stop: StopReason } | { error: unknown };
 interface Widget<T> {
   /** The frame's lines, styled, without newlines. */
   lines(): string[];
-  /** The cursor's line and display column in the frame, or null to hide it. */
-  cursor(): { row: number; col: number } | null;
+  /** The cursor's line in the frame and that line's text before it, or null to hide the cursor. */
+  cursor(): { row: number; before: string } | null;
   /** Apply one key; an outcome ends the widget. */
   key(key: Key): { value: T } | { stop: "eof" } | undefined;
   /** The one line the frame collapses to once the widget has ended. */
@@ -95,21 +95,34 @@ function isWide(code: number): boolean {
     (code >= 0xff00 && code <= 0xff60) ||
     (code >= 0xffe0 && code <= 0xffe6) ||
     (code >= 0x1f300 && code <= 0x1f64f) ||
+    (code >= 0x1f680 && code <= 0x1f6ff) ||
     (code >= 0x1f900 && code <= 0x1f9ff) ||
+    (code >= 0x1fa70 && code <= 0x1faff) ||
     (code >= 0x20000 && code <= 0x3fffd)
   );
 }
 
-/** The columns `text` takes on a terminal, ignoring its ANSI sequences. */
-function displayWidth(text: string): number {
-  let width = 0;
-  for (const char of text.replace(ANSI, "")) width += isWide(char.codePointAt(0)!) ? 2 : 1;
-  return width;
-}
-
-/** The rows a line of `width` columns takes on a `columns`-wide terminal. */
-function rowsOf(width: number, columns: number): number {
-  return Math.max(1, Math.ceil(width / columns));
+/**
+ * Lay `line` out on a `columns`-wide terminal as the terminal wraps it: a character that doesn't
+ * fit in the rest of a row (a wide one in the last column) starts the next row. Returns the rows
+ * it takes and where the character at code-point offset `at` (ANSI sequences not counted) sits.
+ */
+function layout(line: string, columns: number, at: number): { rows: number; cursor: { row: number; col: number } } {
+  let row = 0;
+  let col = 0;
+  let cursor: { row: number; col: number } | undefined;
+  for (const [i, char] of Array.from(line.replace(ANSI, "")).entries()) {
+    const width = isWide(char.codePointAt(0)!) ? 2 : 1;
+    if (col + width > columns) {
+      row++;
+      col = 0;
+    }
+    if (i === at) cursor = { row, col };
+    col += width;
+  }
+  // At the end of a line that fills its last row, the terminal holds the cursor in the last
+  // column until the next character wraps it; the cursor stays there rather than adding a row.
+  return { rows: row + 1, cursor: cursor ?? { row, col: Math.min(col, columns - 1) } };
 }
 
 /** The collapsed line `? <label> <answer>`, with nothing after the label when `answer` is empty. */
@@ -149,7 +162,7 @@ function textWidget(options: {
   };
   return {
     lines: () => (error === undefined ? [head() + shown(chars)] : [head() + shown(chars), style("31", error)]),
-    cursor: () => ({ row: 0, col: displayWidth(head()) + displayWidth(shown(chars.slice(0, pos))) }),
+    cursor: () => ({ row: 0, before: head() + shown(chars.slice(0, pos)) }),
     key(key) {
       const newline = key.name === "return" || key.name === "enter";
       error = undefined;
@@ -190,7 +203,7 @@ function textWidget(options: {
 export class Terminal {
   readonly #input: Input;
   readonly #output: Output;
-  readonly #onStop: ((reason: "interrupt" | "eof") => void) | undefined;
+  readonly #onStop: TerminalOptions["onStop"];
   #attached = false;
   #closed = false;
   #stopNotified = false;
@@ -286,10 +299,7 @@ export class Terminal {
     const input = this.#input;
     const output = this.#output;
     let outcome: Outcome<T> | undefined;
-    let settle!: () => void;
-    const settled = new Promise<void>((resolve) => {
-      settle = resolve;
-    });
+    const { promise: settled, resolve: settle } = Promise.withResolvers<void>();
     // The first outcome wins: a later abort, key or error can't replace it.
     const finish = (ended: Outcome<T>): void => {
       if (outcome !== undefined) return;
@@ -304,16 +314,17 @@ export class Terminal {
     const draw = (): void => {
       const columns = output.columns || 80;
       const lines = widget.lines();
-      const rows = lines.map((line) => rowsOf(displayWidth(line), columns));
-      const total = rows.reduce((sum, n) => sum + n, 0);
+      const cursor = widget.cursor();
+      const at = cursor === null ? -1 : Array.from(cursor.before.replace(ANSI, "")).length;
+      const laid = lines.map((line, i) => layout(line, columns, i === cursor?.row ? at : -1));
+      const total = laid.reduce((sum, line) => sum + line.rows, 0);
       let text = erase() + lines.join("\r\n");
       cursorRow = total - 1;
-      const cursor = widget.cursor();
       if (cursor !== null) {
-        const wrapped = Math.min(Math.floor(cursor.col / columns), (rows[cursor.row] ?? 1) - 1);
-        const target = rows.slice(0, cursor.row).reduce((sum, n) => sum + n, 0) + wrapped;
+        const place = laid[cursor.row]!.cursor;
+        const target = laid.slice(0, cursor.row).reduce((sum, line) => sum + line.rows, 0) + place.row;
         if (cursorRow > target) text += `${ESC}${cursorRow - target}A`;
-        text += `\r${ESC}${cursor.col - wrapped * columns + 1}G`;
+        text += `\r${ESC}${place.col + 1}G`;
         cursorRow = target;
       }
       output.write(text);
@@ -330,7 +341,7 @@ export class Terminal {
     };
     const onAbort = (): void => finish({ error: signal!.reason });
     const wasRaw = input.isRaw === true;
-    const raw = input.isTTY === true && typeof input.setRawMode === "function";
+    const setsRaw = input.isTTY === true && typeof input.setRawMode === "function";
     // A `process.exit()` elsewhere skips the `finally` below.
     const onExit = (): void => {
       try {
@@ -342,7 +353,7 @@ export class Terminal {
     };
     try {
       this.#attach();
-      if (raw) {
+      if (setsRaw) {
         process.once("exit", onExit);
         input.setRawMode!(true);
       }
@@ -367,7 +378,7 @@ export class Terminal {
           action();
         } catch {}
       };
-      if (raw) step(() => input.setRawMode!(wasRaw));
+      if (setsRaw) step(() => input.setRawMode!(wasRaw));
       step(() => output.write(SHOW_CURSOR + PASTE_OFF));
       step(() => process.removeListener("exit", onExit));
       step(() => input.pause());

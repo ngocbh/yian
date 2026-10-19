@@ -65,7 +65,7 @@ export class FakeOutput extends Writable {
   }
 
   // Collected here rather than in `_write`, so the text is complete as soon as `write` returns.
-  override write(chunk: any, encoding?: any, callback?: any): boolean {
+  override write(chunk: unknown, encoding?: unknown, callback?: unknown): boolean {
     this.writes++;
     if (this.writes === this.throwOn) throw this.failure;
     this.text += String(chunk);
@@ -125,7 +125,7 @@ export function screen(text: string, columns = 80): Screen {
     const n = args === "" ? 1 : Number(args);
     if (priv === "?") modes.push(`?${args}${command}`);
     else if (command === "A") row = Math.max(0, row - n);
-    else if (command === "G") col = Math.min(n, columns) - 1;
+    else if (command === "G") col = Math.max(1, Math.min(n, columns)) - 1;
     else if (command === "K") line().length = Math.min(line().length, col);
     else if (command === "J") {
       line().length = Math.min(line().length, col);
@@ -137,30 +137,35 @@ export function screen(text: string, columns = 80): Screen {
   return { rows: shown, cursor: { row, col }, modes };
 }
 
-/** Let the streams deliver what was written. */
+/** Let the streams deliver what was written: they do it in next-tick callbacks and microtasks. */
 export function tick(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 10));
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 /** A fresh fake terminal: its input, output and the `Terminal` over them. */
 function setup(
   options: { tty?: boolean; columns?: number; throwOn?: number } & Pick<TerminalOptions, "onStop"> = {},
-): { input: FakeInput; output: FakeOutput; terminal: Terminal; view: () => Screen } {
+): { input: FakeInput; output: FakeOutput; terminal: Terminal; view: () => Screen; exitHooks: number } {
   const input = new FakeInput({ tty: options.tty });
   const output = new FakeOutput({ columns: options.columns, throwOn: options.throwOn });
   const terminal = new Terminal({ input, output, onStop: options.onStop });
-  return { input, output, terminal, view: () => screen(output.text, output.columns) };
+  const exitHooks = process.listenerCount("exit");
+  return { input, output, terminal, view: () => screen(output.text, output.columns), exitHooks };
 }
 
-/** Raw mode was set once and restored, and the cursor and bracketed paste were the last modes written. */
-function assertRestored(input: FakeInput, output: FakeOutput): void {
+/**
+ * Raw mode was set once and restored, the exit hook is gone (`exitHooks` is the count before the
+ * prompt), and, unless `modes` is false, the cursor and bracketed paste were the last modes written.
+ */
+function assertRestored(input: FakeInput, output: FakeOutput, exitHooks: number, modes = true): void {
   if (input.isTTY) assert.deepEqual(input.rawCalls, [true, false]);
   assert.equal(input.isRaw, false);
-  assert.deepEqual(screen(output.text).modes.slice(-2).sort(), ["?2004l", "?25h"]);
+  assert.equal(process.listenerCount("exit"), exitHooks);
+  if (modes) assert.deepEqual(screen(output.text).modes.slice(-2).sort(), ["?2004l", "?25h"]);
 }
 
 async function typingALineReturnsIt(): Promise<void> {
-  const { input, output, terminal, view } = setup();
+  const { input, output, terminal, view, exitHooks } = setup();
   const answer = terminal.askText("Name:");
   input.write("hello");
   await tick();
@@ -170,11 +175,11 @@ async function typingALineReturnsIt(): Promise<void> {
   assert.equal(await answer, "hello");
   assert.deepEqual(view().rows, ["? Name: hello"]);
   assert.deepEqual(view().cursor, { row: 1, col: 0 });
-  assertRestored(input, output);
+  assertRestored(input, output, exitHooks);
 }
 
 async function anInitialValueCanBeEdited(): Promise<void> {
-  const { input, output, terminal, view } = setup();
+  const { input, output, terminal, view, exitHooks } = setup();
   const answer = terminal.askText("Name:", { initial: "world" });
   await tick();
   assert.deepEqual(view().rows, ["? Name: world"]);
@@ -194,7 +199,7 @@ async function anInitialValueCanBeEdited(): Promise<void> {
   assert.deepEqual(view().cursor, { row: 0, col: 8 });
   input.write(ENTER);
   assert.equal(await answer, "Xrl>!");
-  assertRestored(input, output);
+  assertRestored(input, output, exitHooks);
 }
 
 async function aBlankAnswerReturnsAnEmptyString(): Promise<void> {
@@ -206,7 +211,7 @@ async function aBlankAnswerReturnsAnEmptyString(): Promise<void> {
 }
 
 async function aSecretIsMaskedAndNeverEchoed(): Promise<void> {
-  const { input, output, terminal, view } = setup();
+  const { input, output, terminal, view, exitHooks } = setup();
   const answer = terminal.askText("Key:", { secret: true });
   input.write("s3cret");
   await tick();
@@ -215,13 +220,13 @@ async function aSecretIsMaskedAndNeverEchoed(): Promise<void> {
   assert.equal(await answer, "s3cret");
   assert.deepEqual(view().rows, ["? Key:"]);
   for (const piece of ["s3", "3c", "cr", "re", "et"]) assert.ok(!output.text.includes(piece), piece);
-  assertRestored(input, output);
+  assertRestored(input, output, exitHooks);
 }
 
 async function ctrlCReturnsNullAndCallsOnStopOnce(): Promise<void> {
   const stops: string[] = [];
   const rawWhenStopped: boolean[] = [];
-  const { input, output, terminal, view } = setup({
+  const { input, output, terminal, view, exitHooks } = setup({
     onStop: (reason) => {
       stops.push(reason);
       rawWhenStopped.push(input.isRaw);
@@ -233,29 +238,31 @@ async function ctrlCReturnsNullAndCallsOnStopOnce(): Promise<void> {
   assert.deepEqual(stops, ["interrupt"]);
   assert.deepEqual(rawWhenStopped, [false]);
   assert.deepEqual(view().rows, ["? Name:"]);
-  assertRestored(input, output);
+  assertRestored(input, output, exitHooks);
+  const drawn = output.text;
   assert.equal(await terminal.askText("Again:"), null);
+  assert.equal(output.text, drawn);
   assert.deepEqual(stops, ["interrupt"]);
 }
 
 async function ctrlDOnAnEmptyLineIsTheEndOfInput(): Promise<void> {
   const stops: string[] = [];
-  const { input, output, terminal } = setup({ onStop: (reason) => stops.push(reason) });
+  const { input, output, terminal, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
   const answer = terminal.askText("Name:");
   input.write(CTRL_D);
   assert.equal(await answer, null);
   assert.deepEqual(stops, ["eof"]);
-  assertRestored(input, output);
+  assertRestored(input, output, exitHooks);
 }
 
 async function theEndOfInputReturnsNull(): Promise<void> {
   const stops: string[] = [];
-  const { input, output, terminal } = setup({ onStop: (reason) => stops.push(reason) });
+  const { input, output, terminal, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
   const answer = terminal.askText("Name:");
   input.end();
   assert.equal(await answer, null);
   assert.deepEqual(stops, ["eof"]);
-  assertRestored(input, output);
+  assertRestored(input, output, exitHooks);
 }
 
 async function ctrlDOnANonEmptyLineIsIgnored(): Promise<void> {
@@ -267,26 +274,73 @@ async function ctrlDOnANonEmptyLineIsIgnored(): Promise<void> {
   assert.deepEqual(stops, []);
 }
 
-async function aThrowingWriteRestoresTheTerminalAndRejects(): Promise<void> {
-  // Write 1 sets the modes, write 2 draws the first frame, write 3 is the redraw after a key.
-  const { input, output, terminal } = setup({ throwOn: 3 });
+async function aThrowingWriteAtAnySiteRestoresTheTerminal(): Promise<void> {
+  // A clean run counts the writes: the modes, the first frame, the redraw after "a", the
+  // collapsed line and the restored modes.
+  const clean = setup();
+  const answered = clean.terminal.askText("Name:");
+  clean.input.write("a" + ENTER);
+  assert.equal(await answered, "a");
+  const sites = clean.output.writes;
+  assert.equal(sites, 5);
+  for (let throwOn = 1; throwOn <= sites; throwOn++) {
+    const { input, output, terminal, exitHooks } = setup({ throwOn });
+    const answer = terminal.askText("Name:");
+    input.write("a" + ENTER);
+    // Up to the redraw the failure is the outcome; after it the answer is recorded and outranks it.
+    if (throwOn <= 3) await assert.rejects(answer, (error) => error === output.failure, `write ${throwOn}`);
+    else assert.equal(await answer, "a", `write ${throwOn}`);
+    assertRestored(input, output, exitHooks, throwOn !== sites);
+  }
+}
+
+async function theExitHookRestoresTheTerminalEvenWhenWritingFails(): Promise<void> {
+  // Write 1 sets the modes and write 2 draws the first frame, so the hook's write is the one that throws.
+  const { input, output, terminal, exitHooks } = setup({ throwOn: 3 });
+  const before = process.listeners("exit");
   const answer = terminal.askText("Name:");
-  input.write("a");
-  await assert.rejects(answer, (error) => error === output.failure);
-  assertRestored(input, output);
+  await tick();
+  const added = process.listeners("exit").filter((listener) => !before.includes(listener));
+  assert.equal(added.length, 1);
+  assert.doesNotThrow(() => added[0]!(0));
+  assert.deepEqual(input.rawCalls, [true, false]);
+  assert.equal(output.writes, 3);
+  input.write(ENTER);
+  assert.equal(await answer, "");
+  assert.equal(process.listenerCount("exit"), exitHooks);
+}
+
+async function wideCharactersAtAWrapBoundaryStartTheNextRow(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 10 });
+  output.write("above\r\n");
+  const answer = terminal.askText("Name:");
+  input.write("a日日日日日b");
+  await tick();
+  assert.deepEqual(view().rows, ["above", "? Name: a", "日日日日日", "b"]);
+  assert.deepEqual(view().cursor, { row: 3, col: 1 });
+  input.write(BACKSPACE);
+  await tick();
+  assert.deepEqual(view().rows, ["above", "? Name: a", "日日日日日"]);
+  assert.deepEqual(view().cursor, { row: 2, col: 9 });
+  input.write(LEFT.repeat(5));
+  await tick();
+  assert.deepEqual(view().cursor, { row: 2, col: 0 });
+  input.write(ENTER);
+  assert.equal(await answer, "a日日日日日");
+  assert.deepEqual(view().rows, ["above", "? Name: a", "日日日日日"]);
 }
 
 async function aNonTtyInputStillReadsALine(): Promise<void> {
-  const { input, output, terminal } = setup({ tty: false });
+  const { input, output, terminal, exitHooks } = setup({ tty: false });
   const answer = terminal.askText("Name:");
   input.write("answer\n");
   assert.equal(await answer, "answer");
   assert.deepEqual(input.rawCalls, []);
-  assertRestored(input, output);
+  assertRestored(input, output, exitHooks);
 }
 
 async function aThrowingOnStopStillRestoresTheTerminal(): Promise<void> {
-  const { input, output, terminal } = setup({
+  const { input, output, terminal, exitHooks } = setup({
     onStop: () => {
       throw new Error("the handler broke");
     },
@@ -294,7 +348,7 @@ async function aThrowingOnStopStillRestoresTheTerminal(): Promise<void> {
   const answer = terminal.askText("Name:");
   input.write(CTRL_C);
   assert.equal(await answer, null);
-  assertRestored(input, output);
+  assertRestored(input, output, exitHooks);
 }
 
 async function aBracketedPasteKeepsItsNewlines(): Promise<void> {
@@ -354,11 +408,13 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "Ctrl-D on an empty line is the end of input": ctrlDOnAnEmptyLineIsTheEndOfInput,
   "the end of input returns null": theEndOfInputReturnsNull,
   "Ctrl-D on a non-empty line is ignored": ctrlDOnANonEmptyLineIsIgnored,
-  "a throwing write restores the terminal and rejects": aThrowingWriteRestoresTheTerminalAndRejects,
+  "a throwing write at any site restores the terminal": aThrowingWriteAtAnySiteRestoresTheTerminal,
+  "the exit hook restores the terminal even when writing fails": theExitHookRestoresTheTerminalEvenWhenWritingFails,
   "a non-TTY input still reads a line": aNonTtyInputStillReadsALine,
   "a throwing onStop still restores the terminal": aThrowingOnStopStillRestoresTheTerminal,
   "a bracketed paste keeps its newlines": aBracketedPasteKeepsItsNewlines,
   "wide characters redraw without stale rows": wideCharactersRedrawWithoutStaleRows,
+  "wide characters at a wrap boundary start the next row": wideCharactersAtAWrapBoundaryStartTheNextRow,
   "a long line redraws without stale rows": aLongLineRedrawsWithoutStaleRows,
 };
 

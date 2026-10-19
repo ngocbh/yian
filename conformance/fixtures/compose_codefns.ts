@@ -96,13 +96,13 @@ export function loop_bump(inputs: Record<string, any>): Record<string, unknown> 
  * Decrement the carried n. Drives a loop whose `while:` predicate divides by n
  * (`10 / n > 0`), so the predicate RAISES (division by zero) once n reaches 0 on
  * a later iteration — the engine must convert that predicate error into a failed run,
- * not let it escape run() uncaught.
+ * not let it escape the run uncaught.
  */
 export function loop_countdown(inputs: Record<string, any>): Record<string, unknown> {
   return { n: inputs.n - 1n };
 }
 
-// Tags `record` saw, in call order; a test clears it before running a flow.
+// Tags `record` saw, in call order; never cleared (a case observes only the return value).
 export const RECORDED: unknown[] = [];
 
 /** A side-effect probe: note that its node ran, then echo its tag. */

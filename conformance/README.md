@@ -329,6 +329,7 @@ A case can't hold code, so its host is declared under `host`.
   scripts do. Steering acts in the main run (and its resume), never in a `host.memory` `before`
   run, whose calls aren't counted. Steers are drained once; an interrupt stays set. An action
   whose point is never reached fails the case after the comparisons, like a leftover entry.
+  Steering in a `resume` case is specified but not yet pinned by a case here.
 
   The AGENT reads its inbox only at fixed places: steers and the interrupt at the top of each
   loop iteration (just before a model call), the interrupt before each later chunk of a

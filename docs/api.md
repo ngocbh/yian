@@ -579,7 +579,7 @@ takes a `FunctionTool`. `execute(args, ctx)` gets the arguments first and the co
 second, and may be sync or async. `ToolSet`'s `invoke`, `invokeTrusted` and `validate`,
 and the functions `invokeTool` and `invokeToolTrusted`, return Promises.
 `validate(toolId, args)` checks a call and returns a `CheckedCall`, which `invoke(call)`
-runs without checking again and `isConcurrencySafe(call)` reads; `invoke(toolId, args)`
+runs without checking the arguments again and `isConcurrencySafe(call)` reads; `invoke(toolId, args)`
 validates first. `ctx`'s fields are camelCase (`callId`, `toolName`, `runId`), `context`
 is `undefined` when none is given, and `signal` is an `AbortSignal` aborted when the call
 must end early (the run stops, or a sibling call fails the node); `forRun(runId, { signal })`
@@ -608,7 +608,8 @@ const placeOrder = tool({
   name: "place_order",
   description: "Place a market order.",
   parameters: z.object({ symbol: z.string(), qty: z.number().int().default(1) }),
-  execute: async ({ symbol, qty }, ctx) => ctx.context.submit(symbol, qty, { clientOrderId: ctx.callId }),
+  execute: async ({ symbol, qty }, ctx) =>
+    ctx.context.submit(symbol, qty, { clientOrderId: ctx.callId }),
 });
 ```
 
@@ -620,8 +621,8 @@ retries. The validator's issues raise `ToolCheckError`
 
 For a tool that declares an output, `invoke` checks the result: host value intake, yian's
 check against `outputJsonSchema`, which looks inside an object only when its schema sets
-`additionalProperties: false`, then the output validator, which checks the rest, then intake
-again. It returns the checked value in host form, and a failure raises `ToolCheckError`
+`additionalProperties: false`, then, when there is an output validator, the validator, which
+checks the rest, and intake of its output. It returns the checked value in host form, and a failure raises `ToolCheckError`
 (`tool 'x' result at <path>: ...`, `tool 'x' result failed its output validator: ...`). A tool
 without an output returns its raw result. `execute`'s return type is the output validator's
 input form, so declare a transforming output as a raw JSON Schema of what is recorded, or
@@ -1058,11 +1059,12 @@ yet.
 Changed (TS yian): inputs are read from a `FunctionTool`'s `parametersJsonSchema`, and
 its return type from its `outputJsonSchema` (from `tool({ output })`), translated closed:
 an object with `properties` is a record unless it allows extra keys. A schema number
-reads as an int when it is a `bigint` or a safe integer (`1.0` and `1` are one JS number) and as a float otherwise.
-The model sees the schema, so one that isn't JSON (holding `Infinity` or a `Date`) or
-nests deeper than `YIAN_MAX_VALUE_NESTING` throws `TypeError` when the tool is built;
-Python left a too-deep input unchecked. An integral float within ±(2^53−1) passes for
-an `integer` as in Python, but one beyond it (`1e20`) reads as a float and is refused.
+reads as an int when it is a `bigint` or a safe integer (`1.0` and `1` are one JS
+number) and as a float otherwise. The model sees the schema, so one that isn't JSON
+(holding `Infinity` or a `Date`) or nests deeper than `YIAN_MAX_VALUE_NESTING` throws
+`TypeError` when the tool is built; Python left a too-deep input unchecked. An integral
+float within ±(2^53−1) passes for an `integer` as in Python, but one beyond it (`1e20`)
+reads as a float and is refused.
 
 Changed: a limit on only one end (pydantic `Field(ge=0)`, JSON Schema `minimum`
 alone) and an exclusive `number` limit used to be dropped. They are now kept, so a

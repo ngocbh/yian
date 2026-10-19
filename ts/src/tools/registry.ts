@@ -622,7 +622,8 @@ export class ToolSet {
    * @param toolId The id of the tool to call.
    * @param inputs Public arguments keyed by parameter name.
    * @param options The calling node, call id, attempt and abort signal the tool's context carries.
-   * @returns The tool's result, awaited; `undefined` becomes `null`.
+   * @returns The tool's result, awaited, `undefined` read as `null`; for a tool that declares an
+   *   output, the checked value in host form.
    * @throws {TypeError} The first argument is neither a tool id nor a `CheckedCall`; and as
    *   `validate` throws.
    * @throws {ToolCheckError} A declared result is not a yian value, doesn't fit the output
@@ -655,7 +656,8 @@ export class ToolSet {
    * @param toolId The id of the tool to call.
    * @param inputs Public and injected arguments keyed by parameter name.
    * @param options The calling node, call id, attempt and abort signal the tool's context carries.
-   * @returns The tool's result, awaited; `undefined` becomes `null`.
+   * @returns The tool's result, awaited, `undefined` read as `null`; for a tool that declares an
+   *   output, the checked value in host form.
    * @throws {RangeError} The id is not visible to this run, an argument is not in the full schema,
    *   or a required argument is missing.
    * @throws {TypeError} `inputs` is not a record.

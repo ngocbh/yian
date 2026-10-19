@@ -8,7 +8,9 @@
  * counterpart: every registered function declares its `params`.
  *
  * The harvested `load-case/engine_condition_calls__wrong_builtin_arguments_in_a_case_when` is
- * pinned at the end (`assemble`, whose CASE build raises it).
+ * pinned at the end (`assemble`, whose CASE build raises it), and so is
+ * `load-case/engine_condition_calls__wrong_builtin_arguments_in_a_loop_while` (`assembledWith`, the
+ * `step` def built by hand; the LOOP build raises it).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -20,10 +22,11 @@ import {
   type TemplateFn,
   type TemplateParam,
 } from "../../src/expr/builtins.ts";
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { ExpressionError, parseCondition } from "../../src/expr/expressions.ts";
 import { typeFor } from "../../src/typesys/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
-import { assembled, runCase } from "../compose/declarations.ts";
+import { assembled, assembledWith, handChild, parametersFromYaml, runCase } from "../compose/declarations.ts";
 
 // Each registration's previous entry (or its absence), put back after the test, as Python's
 // `monkeypatch.setitem` does.
@@ -190,4 +193,19 @@ describe("registerTemplateFn", () => {
 
 test("assembled: load-case/engine_condition_calls__wrong_builtin_arguments_in_a_case_when", () => {
   runCase({ id: "load-case/engine_condition_calls__wrong_builtin_arguments_in_a_case_when", call: assembled });
+});
+
+/** The `step` def of the LOOP case: it reads `{n, exited}` and returns them. */
+function stepBody(): ComposedFlow {
+  return handChild({
+    inputs: parametersFromYaml("input:\n  n: !int\n  exited: !bool\n", new Map()),
+    output: { n: "${input.n}", exited: "${input.exited}" },
+  });
+}
+
+test("assembled: load-case/engine_condition_calls__wrong_builtin_arguments_in_a_loop_while", () => {
+  runCase({
+    id: "load-case/engine_condition_calls__wrong_builtin_arguments_in_a_loop_while",
+    call: assembledWith({ step: stepBody() }),
+  });
 });

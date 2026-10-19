@@ -3,35 +3,51 @@
  *
  * Ported: `test_loop_parse_matches_descriptor_and_records_ranges` (`max` is `10n`),
  * `test_loop_parse_requires_call`, `test_loop_parse_maps_until_keyword`,
- * `test_loop_rejects_a_non_string_predicate_at_its_field`.
+ * `test_loop_rejects_a_non_string_predicate_at_its_field`,
+ * `test_loop_rejects_an_empty_predicate_at_load` and
+ * `test_loop_reports_a_malformed_predicate_at_its_field`.
  *
  * Changed: Python compares the descriptor to a `LoopDescriptor` with the parse metadata and the
  * compiler-owned `child_label` excluded; TS compares its class and fields. The requires-call row
  * pins the whole message and its range (the node body), where Python matches a fragment. The
  * non-string predicate rows parse the flow's nodes, where Python loads it, and spell the value in
- * the text form (`(got true)`, `(got ["x"])`).
+ * the text form (`(got true)`, `(got ["x"])`). The empty and malformed predicate rows build the
+ * loop node over a body built by hand (`handChild`), where Python loads the flow (the malformed
+ * one seed 28, read from the `load-loop/seed_28_refine_loop` case), and pin the whole message.
  *
  * TS-only: a lone surrogate in `while:` is refused at the value.
  *
- * Later (T3-16, the LOOP build): `test_loop_rejects_an_empty_predicate_at_load`,
- * `test_loop_reports_a_malformed_predicate_at_its_field`.
- *
  * Pinned at the end (`parsedNodes`): the harvested
  * `load-loop/compose_kind_loop_parse__a_list_until_predicate_is_rejected` and
- * `__a_true_while_predicate_is_rejected`, both from this file's Python source. The other harvested
- * cases whose error the LOOP parse raises are pinned in the TS mirrors of the Python files they
- * come from: `non_text_fields.test.ts` (`call:`, `while:`, `until:`), `node_input_shape.test.ts`
- * (`input:`), `node_when_hint.test.ts` (`when:`) and `engine/inline_composite_bodies.test.ts`
- * (the key check).
+ * `__a_true_while_predicate_is_rejected`, both from this file's Python source; and (`assembledWith`,
+ * over a body built by hand) `load-core/compose_expression_nesting__too_deep_loop_until`, whose
+ * LOOP build refuses the predicate. The other harvested cases whose error the LOOP parse raises are
+ * pinned in the TS mirrors of the Python files they come from: `non_text_fields.test.ts` (`call:`,
+ * `while:`, `until:`), `node_input_shape.test.ts` (`input:`), `node_when_hint.test.ts` (`when:`)
+ * and `engine/inline_composite_bodies.test.ts` (the key check).
  */
 
 import { expect, test } from "bun:test";
 
-import { siteKey } from "../../src/compose/nodes/base.ts";
+import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
+import { BuildContext, siteKey } from "../../src/compose/nodes/base.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
-import { type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "./declarations.ts";
+import { ValueContract } from "../../src/nodes/contracts.ts";
+import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
+import {
+  assembledWith,
+  type CaseRow,
+  caseText,
+  handChild,
+  loadError,
+  nodesOf,
+  parametersFromYaml,
+  parsedNodes,
+  runCase,
+} from "./declarations.ts";
 
 const FLOW = `nodes:
   drive:
@@ -159,9 +175,68 @@ test("a lone surrogate in while is refused at the value", () => {
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(readerFor(text, "lp").rangeOf("while")!);
 });
 
+/** Parse loop `nodeId` of `text` and build it over a resolver returning `child`. */
+function buildLoop(text: string, nodeId: string, child: ReturnType<typeof handChild>) {
+  const desc = nodesOf(text).get(nodeId)!;
+  return desc.build(
+    new BuildContext({ registry: new Map(), resolver: () => child, diagnostics: new LoadDiagnostics("<flow>", text) }),
+  );
+}
+
+test("an empty predicate is refused at load", () => {
+  // `while: ''` is falsy but present: it fails to parse at load, not at run time. The `body` def
+  // reads `x` and returns `{x}`, so no field-name error joins the parse error and it is at the field.
+  const body = handChild({
+    inputs: parametersFromYaml("input:\n  x: !int\n", new Map()),
+    producers: { inc: new ValueContract(Type.scalar(ValueKind.INTEGER)) },
+    output: { x: "${inc.output}" },
+  });
+
+  const error = loadError(() => buildLoop(PREDICATE_FLOW.replace("PREDICATE", "while: ''"), "lp", body));
+
+  expect(error.message).toBe(
+    "loop node 'lp': `while:` is not a valid boolean expression: could not parse expression '': " +
+      "unexpected end of expression at line 1, column 1",
+  );
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(24);
+});
+
+test("a malformed predicate is reported at its field", () => {
+  const seed = caseText("load-loop/seed_28_refine_loop").text;
+  expect(seed).toContain("    until: score >= 0.8");
+  const text = seed.replace("    until: score >= 0.8", "    until: score >= >= 1");
+  // The `refine_turn` def reads `{draft, score}` and its `critic` returns them, as the seed's does.
+  const critic = new ValueContract(typeFor("Rec", readTypedefs({ Rec: { draft: "str", score: "float" } })));
+  const body = handChild({
+    inputs: parametersFromYaml("input:\n  draft: !str\n  score: !float\n", new Map()),
+    producers: { critic },
+    output: "${critic.output}",
+  });
+
+  const error = loadError(() => buildLoop(text, "polish", body));
+
+  expect(error.message).toBe(
+    "loop node 'polish': `until:` is not a valid boolean expression: could not parse expression " +
+      "'score >= >= 1': unexpected '>=' at line 1, column 10",
+  );
+  const line = text.split("\n").findIndex((row) => row.startsWith("    until:")) + 1;
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(line);
+});
+
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
   { id: "load-loop/compose_kind_loop_parse__a_list_until_predicate_is_rejected", call: parsedNodes },
   { id: "load-loop/compose_kind_loop_parse__a_true_while_predicate_is_rejected", call: parsedNodes },
 ])("parseNodes: $id", runCase);
+
+test("assembled: load-core/compose_expression_nesting__too_deep_loop_until", () => {
+  // The `body` def reads `n` and its `step` returns `{n}`.
+  const step = new ValueContract(typeFor("Rec", readTypedefs({ Rec: { n: "int" } })));
+  const body = handChild({
+    inputs: parametersFromYaml("input:\n  n: !int\n", new Map()),
+    producers: { step },
+    output: "${step.output}",
+  });
+  runCase({ id: "load-core/compose_expression_nesting__too_deep_loop_until", call: assembledWith({ body }) });
+});

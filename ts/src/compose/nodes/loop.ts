@@ -5,10 +5,11 @@
  * `NodeDescriptor` (which records each field's `SourceRange`) and rejects a `call:` YAML read as
  * non-text and a `while:` or `until:` that isn't an expression string. `while` and `until` are
  * read into the `while_` and `until_` fields, as Python names them. Its `build` bakes the
- * runtime `LoopNode`: the driver and its counts, and the `'a -> 'a` field-name contract (a body
+ * runtime `LoopNode`: the driver and its counts, the `'a -> 'a` field-name contract (a body
  * returns a subset of the carried record and each omitted field carries over, so the loop's
- * output contract merges the returned body fields with the seeds of the omitted ones). Registered
- * in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
+ * output contract merges the returned body fields with the seeds of the omitted ones), and the
+ * predicate's names and whether the loop can end. Registered in `KINDS` and `BINDING_FIELDS` by
+ * `compose/nodes/index.ts`.
  *
  * Knows about: diagnostics, the LOOP runtime node, node contracts, typesys, compose helpers,
  * `base.ts` and `resolver.ts`.
@@ -16,6 +17,8 @@
  */
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
+import type { ExprNode } from "../../expr/grammar.ts";
+import { ExpressionError, exprRefs, parseCondition } from "../../expr/index.ts";
 import { isExactly, type OutputContract, PartialRecordContract } from "../../nodes/contracts.ts";
 import { LoopNode } from "../../nodes/loop/node.ts";
 import { valueRepr, writeAsText } from "../../typesys/values.ts";
@@ -169,11 +172,16 @@ export class LoopDescriptor extends NodeDescriptor {
    * `returnedFields` (carried order) and a merged contract: each returned field projected from
    * the body's codomain, each omitted field typed from its seed (the seed's tag when it has one,
    * else through `ctx.bindingContractReader`, opaque without a reader or an unproven seed). The
-   * returned fields' types are checked against the seeds' later, over the assembled flow. Every
-   * problem found is reported together, at the node.
+   * returned fields' types are checked against the seeds' later, over the assembled flow.
    *
-   * @throws LoadError when the body can't be resolved or nests too deep, or the driver, a count
-   *   or the field-name contract is illegal.
+   * A `while:` or `until:` predicate must parse, and every name it reads must be a carried field.
+   * Without `max:`, a predicate loop whose body returns a known subset of the carried record must
+   * return at least one field the predicate reads, or the loop can never end. Every problem found
+   * is reported together, at the node; a predicate that doesn't parse, found alone, is reported at
+   * its field.
+   *
+   * @throws LoadError when the body can't be resolved or nests too deep, the driver, a count, the
+   *   field-name contract or the predicate is illegal, or the loop can never end.
    */
   override build(ctx: BuildContext): BuildResult {
     const child = resolveChild(this.id, this.call, ctx.resolver, this.childLabel, {
@@ -262,6 +270,58 @@ export class LoopDescriptor extends NodeDescriptor {
         `${subject}: body input(s) ${namesText(extra)} are not carried record fields ${carriedText} ` +
           "(the body reads a subset of the carried record)",
       );
+    }
+    // The predicate is evaluated against the carried record, whose names are the only ones it can
+    // resolve: an unknown name reads as null, so `while:` would run zero times and `until:`
+    // without `max:` would spin forever. A `times:` loop has no predicate.
+    const predicate = this.while_ ?? this.until_;
+    if (predicate !== null) {
+      const key = this.while_ !== null ? "while" : "until";
+      // Parsing the whole value covers both spellings (bare `score >= 0.8`, whole `${score >= 0.8}`).
+      let tree: ExprNode | null = null;
+      try {
+        tree = parseCondition(predicate);
+      } catch (error) {
+        if (!(error instanceof ExpressionError)) throw error;
+        const message = `${subject}: \`${key}:\` is not a valid boolean expression: ${error.message}`;
+        if (errors.length === 0) {
+          // Alone, the error belongs to the field; beside other errors it joins them at the node.
+          throw ctx.diagnostics.error(message, {
+            range: this.fieldRanges.get(siteKey("field", key)) ?? this.range,
+            cause: error,
+          });
+        }
+        errors.push(message);
+      }
+      const heads = new Set((tree === null ? [] : exprRefs(tree)).map((ref) => ref.split(".", 1)[0]!));
+      const unknown = [...heads].filter((head) => !carried.has(head));
+      if (unknown.length > 0) {
+        errors.push(
+          `${subject}: \`${key}:\` references unknown name(s) ${namesText(unknown)} — the predicate reads ` +
+            `the carried record ${carriedText}`,
+        );
+      }
+      // A body that returns none of the fields the predicate reads can never change it, so without
+      // `max:` the loop never ends. `returnedFields` is set only when the body returns a known
+      // strict subset of the carried record. A driver, parse or unknown-name error already
+      // explains the loop, so this one doesn't join it.
+      const returned = node.returnedFields;
+      if (
+        present.length === 1 &&
+        this.max === null &&
+        heads.size > 0 &&
+        unknown.length === 0 &&
+        returned !== null &&
+        [...heads].every((head) => !returned.includes(head))
+      ) {
+        const stuck = [...heads].toSorted(compareCodeUnits);
+        const reads = stuck.map((name) => `\`${name}\``).join(", ");
+        const fix = stuck.map((name) => `\`${name}\``).join(" or ");
+        errors.push(
+          `${subject}: this loop can never end: \`${key}: ${predicate}\` reads ${reads}, which the body ` +
+            `never updates; return ${fix} from the body, or add \`max:\``,
+        );
+      }
     }
     if (errors.length > 0) throw ctx.diagnostics.error(errors.join("\n  "), { range: this.range });
     return this._finish(node, wiring);

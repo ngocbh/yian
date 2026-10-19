@@ -16,7 +16,17 @@
  * `test_multi_segment_template_output_types_as_str`, `test_until_loop_builds`,
  * `test_times_loop_builds`, `test_exactly_one_predicate_required` (2),
  * `test_times_with_max_is_rejected`, `test_times_count_must_be_positive_int`,
- * `test_max_below_one_is_rejected` and `test_non_int_max_is_rejected` (3).
+ * `test_max_below_one_is_rejected`, `test_non_int_max_is_rejected` (3),
+ * `test_while_predicate_unknown_name_is_rejected`, `test_while_predicate_all_spellings_build` (2),
+ * `test_while_predicate_unknown_name_rejected_in_all_spellings` (2),
+ * `test_loop_whose_condition_reads_only_unreturned_fields_is_a_load_error`,
+ * `test_while_loop_whose_condition_reads_only_unreturned_fields_is_a_load_error`,
+ * `test_never_ending_error_names_every_unreturned_field_read`,
+ * `test_never_ending_check_reads_every_condition_spelling` (4),
+ * `test_null_max_still_gets_the_never_ending_error`, `test_dotted_condition_ref_names_the_carried_field`,
+ * `test_never_ending_error_does_not_stack_on_other_loop_errors` (5),
+ * `test_never_changing_condition_with_max_loads`, `test_condition_reading_one_returned_field_loads`
+ * and `test_unknown_returned_fields_get_only_the_record_error`.
  *
  * Changed: each row parses the loop node (`nodesOf`) and builds it over a `BuildContext` whose
  * resolver returns the body built by hand (`handChild`: the def's parameters read from its
@@ -36,19 +46,8 @@
  * refused.
  *
  * Pinned at the end (`assembledWith`, each def built by hand): the
- * `load-loop/engine_loop_build__*` cases whose error is a driver, count or field-name error.
- *
- * Later (T3-16, the predicate names and never-ending check):
- * `test_while_predicate_unknown_name_is_rejected`, `test_while_predicate_all_spellings_build`,
- * `test_while_predicate_unknown_name_rejected_in_all_spellings`,
- * `test_loop_whose_condition_reads_only_unreturned_fields_is_a_load_error`,
- * `test_while_loop_whose_condition_reads_only_unreturned_fields_is_a_load_error`,
- * `test_never_ending_error_names_every_unreturned_field_read`,
- * `test_never_ending_check_reads_every_condition_spelling`,
- * `test_null_max_still_gets_the_never_ending_error`, `test_dotted_condition_ref_names_the_carried_field`,
- * `test_never_ending_error_does_not_stack_on_other_loop_errors`,
- * `test_never_changing_condition_with_max_loads`, `test_condition_reading_one_returned_field_loads`
- * and `test_unknown_returned_fields_get_only_the_record_error`.
+ * `load-loop/engine_loop_build__*` cases whose error is a driver, count, field-name, predicate-name
+ * or never-ending error.
  *
  * Later (T3-16, the predicate types): `test_predicate_unknown_nested_field_is_rejected`,
  * `test_predicate_field_read_on_scalar_is_rejected`,
@@ -623,7 +622,37 @@ nodes:
   expect(fieldType(node.outputContract, "transcript").kind).toBe(ValueKind.STRING);
 });
 
-// ---------- harvested conformance cases ----------
+// ---------- the predicate's names and the never-ending check ----------
+
+test("a while predicate's unknown name is rejected", () => {
+  const error = loadError(() => build(swap(GOOD, "    while: not exited\n", "    while: not exted\n"), goodBody()));
+
+  expect(error.message).toBe(
+    'loop node \'chat_loop\': `while:` references unknown name(s) ["exted"] — the predicate reads the carried ' +
+      'record ["exited","n"]',
+  );
+  // Located at the node.
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(4);
+});
+
+test.each([
+  ["bare", GOOD],
+  ["whole", swap(GOOD, "    while: not exited\n", "    while: ${not exited}\n")],
+])("a while predicate builds in every spelling: %s", (_name, text) => {
+  expect(loopOf(text, goodBody()).predicateKind).toBe("while");
+});
+
+test.each([
+  ["bare", "    while: not exted\n"],
+  ["whole", "    while: ${not exted}\n"],
+])("a while predicate's unknown name is rejected in every spelling: %s", (_name, predicate) => {
+  const error = loadError(() => build(swap(GOOD, "    while: not exited\n", predicate), goodBody()));
+
+  expect(error.message).toBe(
+    'loop node \'chat_loop\': `while:` references unknown name(s) ["exted"] — the predicate reads the carried ' +
+      'record ["exited","n"]',
+  );
+});
 
 /** The `body` def of the never-ending cases: it reads `{done, attempts}` and returns `attempts`. */
 function neverEndsBody(): ComposedFlow {
@@ -632,6 +661,157 @@ function neverEndsBody(): ComposedFlow {
     output: { attempts: "${input.attempts + 1}" },
   });
 }
+
+// `until: done` reads only `done`, which the body never returns, and there is no `max:`, so the
+// loop can never end.
+const NEVER_ENDS = `id: loop-never-ends
+name: loop_never_ends
+nodes:
+  wait:
+    kind: loop
+    call: body
+    input:
+      done: false
+      attempts: 0
+    until: done
+`;
+
+/** The body of the two-field never-ending loop: it reads `{a, b, n}` and returns `n`. */
+function twoReadBody(): ComposedFlow {
+  return handChild({ inputs: params("  a: !bool\n  b: !bool\n  n: !int\n"), output: { n: "${input.n + 1}" } });
+}
+
+/** Build loop `wait` of `text` over the never-ending body, as `build` does. */
+function buildWait(text: string, child: ComposedFlow = neverEndsBody()): BuildResult {
+  return build(text, child, { nodeId: "wait" });
+}
+
+/** The never-ending error of loop `id` whose `condition` reads `names`, none returned. */
+function neverEnds(id: string, condition: string, names: string[]): string {
+  const quoted = names.map((name) => `\`${name}\``);
+  return (
+    `loop node '${id}': this loop can never end: \`${condition}\` reads ${quoted.join(", ")}, which the body ` +
+    `never updates; return ${quoted.join(" or ")} from the body, or add \`max:\``
+  );
+}
+
+test("a loop whose condition reads only unreturned fields is a load error", () => {
+  const error = loadError(() => buildWait(NEVER_ENDS));
+
+  expect(error.message).toBe(neverEnds("wait", "until: done", ["done"]));
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(4);
+});
+
+test("a while loop whose condition reads only unreturned fields is a load error", () => {
+  // The body returns only `n`; `while: not exited` reads only `exited`.
+  const error = loadError(() => build(NO_MAX, goodBody({ n: "int" })));
+
+  expect(error.message).toBe(neverEnds("chat_loop", "while: not exited", ["exited"]));
+});
+
+test("the never-ending error names every unreturned field read", () => {
+  const seeded = swap(
+    NEVER_ENDS,
+    "      done: false\n      attempts: 0\n",
+    "      a: false\n      b: false\n      n: 0\n",
+  );
+  const text = swap(seeded, "    until: done\n", "    until: a or b\n");
+
+  const error = loadError(() => buildWait(text, twoReadBody()));
+
+  expect(error.message).toBe(neverEnds("wait", "until: a or b", ["a", "b"]));
+});
+
+test.each(["done", "${done}", "${not done}", "not done"])(
+  "the never-ending check reads every condition spelling: %s",
+  (condition) => {
+    const error = loadError(() => buildWait(swap(NEVER_ENDS, "    until: done\n", `    until: "${condition}"\n`)));
+
+    expect(error.message).toBe(neverEnds("wait", `until: ${condition}`, ["done"]));
+  },
+);
+
+test("a null max still gets the never-ending error", () => {
+  const error = loadError(() => buildWait(swap(NEVER_ENDS, "    until: done\n", "    until: done\n    max: null\n")));
+
+  expect(error.message).toBe(neverEnds("wait", "until: done", ["done"]));
+});
+
+test("a dotted condition reference names the carried field", () => {
+  const seeded = swap(NEVER_ENDS, "      done: false\n", "      st: {ok: false}\n");
+  const text = swap(seeded, "    until: done\n", "    until: st.ok\n");
+  const body = handChild({
+    inputs: params("  st: !Any\n  attempts: !int\n"),
+    output: { attempts: "${input.attempts + 1}" },
+  });
+
+  const error = loadError(() => buildWait(text, body));
+
+  expect(error.message).toBe(neverEnds("wait", "until: st.ok", ["st"]));
+});
+
+test.each([
+  [
+    "two drivers",
+    "    until: done\n    while: not done\n",
+    'loop node \'wait\': exactly one of while:/until:/times: is required (got ["until","while"])',
+  ],
+  [
+    "times and while",
+    "    times: 2\n    while: not done\n",
+    'loop node \'wait\': exactly one of while:/until:/times: is required (got ["times","while"])',
+  ],
+  [
+    "unknown name",
+    "    until: done or nope\n",
+    'loop node \'wait\': `until:` references unknown name(s) ["nope"] — the predicate reads the carried record ' +
+      '["attempts","done"]',
+  ],
+  ["bad max", "    until: done\n    max: 0\n", "loop node 'wait': `max:` must be >= 1 (got 0)"],
+  [
+    "parse error",
+    '    until: "done and"\n',
+    "loop node 'wait': `until:` is not a valid boolean expression: could not parse expression 'done and': " +
+      "unexpected end of expression at line 1, column 9",
+  ],
+])("the never-ending error does not stack on other loop errors: %s", (_name, driver, message) => {
+  const error = loadError(() => buildWait(swap(NEVER_ENDS, "    until: done\n", driver)));
+
+  expect(error.message).toBe(message);
+});
+
+test("a never-changing condition with max loads", () => {
+  const node = buildWait(swap(NEVER_ENDS, "    until: done\n", "    until: done\n    max: 3\n")).node as LoopNode;
+
+  expect(node.maxIters).toBe(3);
+  expect(node.returnedFields).toEqual(["attempts"]);
+});
+
+test("a condition reading one returned field loads", () => {
+  // `done` is never returned, but `attempts` is, so the condition can change.
+  const node = buildWait(swap(NEVER_ENDS, "    until: done\n", "    until: done or attempts >= 3\n")).node as LoopNode;
+
+  expect(node.maxIters).toBeNull();
+});
+
+test("unknown returned fields get only the record error", () => {
+  // A value body over an untyped producer: its returned field set is unknown at load.
+  const body = handChild({
+    inputs: params("  done: !bool\n  attempts: !int\n"),
+    producers: { step: null },
+    output: "${step.output}",
+  });
+
+  const error = loadError(() => buildWait(NEVER_ENDS, body));
+
+  expect(error.message).toBe(
+    "loop node 'wait': body callable 'body' must return a record with at least one carried field " +
+      '(a subset of the carried record ["attempts","done"]); write `output: {field: ...}` or a whole reference ' +
+      "to a node with a record output",
+  );
+});
+
+// ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
   { id: "load-loop/engine_loop_build__a_loop_without_a_driver_is_rejected", call: assembledWith({ bump: goodBody() }) },
@@ -645,8 +825,20 @@ test.each<CaseRow>([
       bump: handChild({ inputs: params("  n: !int\n"), producers: { step: INT }, output: "${step.output}" }),
     }),
   },
+  {
+    id: "load-loop/engine_loop_build__condition_reading_only_unreturned_fields_is_rejected",
+    call: assembledWith({ body: neverEndsBody() }),
+  },
   { id: "load-loop/engine_loop_build__float_max_is_rejected", call: assembledWith({ bump: goodBody() }) },
   { id: "load-loop/engine_loop_build__max_of_zero_is_rejected", call: assembledWith({ body: neverEndsBody() }) },
+  {
+    id: "load-loop/engine_loop_build__never_ending_error_names_every_unreturned_field_read",
+    call: assembledWith({ body: twoReadBody() }),
+  },
+  {
+    id: "load-loop/engine_loop_build__predicate_unknown_name_is_rejected",
+    call: assembledWith({ body: neverEndsBody() }),
+  },
   { id: "load-loop/engine_loop_build__text_max_is_rejected", call: assembledWith({ bump: goodBody() }) },
   { id: "load-loop/engine_loop_build__times_with_max_is_rejected", call: assembledWith({ bump: goodBody() }) },
   { id: "load-loop/engine_loop_build__two_drivers_are_rejected", call: assembledWith({ body: neverEndsBody() }) },

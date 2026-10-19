@@ -1334,12 +1334,12 @@ describe("Standard Schema libraries", () => {
     expect(inputLabels(placed)).toEqual({ symbol: "str", qty: qtyLabel });
     expect(toolTypes(placed).required).toEqual(new Set(["symbol"]));
     const tools = new ToolSet({ place: placed });
-    expect(await tools.invoke(await tools.validate("place", { symbol: "abc" }))).toEqual(good);
+    expect(await tools.invoke(await tools.validate("place", { symbol: "abc" }))).toStrictEqual(good);
     // yian's message, not the validator's: its check refused the value before the validator ran.
     const wrong = await rejection(tools.invoke("place", { symbol: 1 }), TypeCheckError);
     expect(wrong.message).toBe("tool 'place' argument 'symbol': 1 does not match declared type str");
     if (refused === null) {
-      expect(await tools.invoke("place", { symbol: "ab" })).toEqual({ symbol: "ab" });
+      expect(await tools.invoke("place", { symbol: "ab" })).toStrictEqual({ symbol: "ab" });
       return;
     }
     const error = await rejection(tools.invoke("place", { symbol: "ab" }), ToolCheckError);

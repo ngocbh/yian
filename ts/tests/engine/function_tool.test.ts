@@ -1,15 +1,16 @@
 /**
- * `FunctionTool` construction and the types `toolTypes` reads from its JSON Schema, a port of
- * `tests/engine/test_function_tool.py` (construction and types rows) and of the JSON Schema rows
- * of `test_tool_types.py` that read a tool. The invocation, `ToolSet` and `registerTool` rows land
- * with the tool set and registry. Not ported: the `function_tool` and decorator rows (a later
+ * `FunctionTool` construction, the types `toolTypes` reads from its JSON Schema, and a
+ * `FunctionTool` in a `ToolSet` and the registry, a port of `tests/engine/test_function_tool.py`
+ * (construction, types, `ToolSet` and `registerTool` rows) and of the JSON Schema rows of
+ * `test_tool_types.py` that read a tool. The invocation rows land with `ToolSet.invoke`. Not ported: the `function_tool` and decorator rows (a later
  * `tool()` builds a tool from a function), the async-refusal rows (TS accepts an async
  * `execute`), and the LangChain binding rows.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { FunctionTool, isFunctionTool } from "../../src/tools/function_tools.ts";
+import { registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
 import { toolTypes } from "../../src/tools/types.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { canonicalTypeLabel, Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
@@ -213,5 +214,64 @@ describe("toolTypes", () => {
     });
     expect(inputLabels(tool)).toEqual({ question: "str", options: null });
     expect(toolTypes(tool).required).toEqual(new Set(["question"]));
+  });
+});
+
+describe("FunctionTool in a ToolSet and the registry", () => {
+  let saved: [string, FunctionTool][] = [];
+
+  // Keep process-global registrations isolated between tests.
+  beforeEach(() => {
+    saved = [...TOOL_REGISTRY];
+  });
+  afterEach(() => {
+    TOOL_REGISTRY.clear();
+    for (const [id, tool] of saved) TOOL_REGISTRY.set(id, tool);
+  });
+
+  test("its key must match its name", () => {
+    expect(() => new ToolSet({ other: build({}) })).toThrow(
+      new RangeError("tool 'other' is a FunctionTool named 'echo'; its name must match its key"),
+    );
+  });
+
+  test("a group item is named by its name", () => {
+    const tool = build({});
+    const tools = new ToolSet({ box: [tool] });
+    expect(tools.expand(["box"])).toEqual(["echo"]);
+    expect(tools.resolve(["echo"])).toEqual([tool]);
+  });
+
+  test("it can't be the ask_user handler", () => {
+    expect(() => new ToolSet({ ask_user: build({ name: "ask_user" }) as never })).toThrow(
+      new TypeError("tools['ask_user'] must be a plain function handler; the engine supplies its schema"),
+    );
+  });
+
+  test("registerTool registers it and returns it unchanged", () => {
+    const tool = build({});
+    expect(registerTool("echo", tool)).toBe(tool);
+    expect(TOOL_REGISTRY.get("echo")).toBe(tool);
+    expect(new ToolSet().resolve(["echo"])).toEqual([tool]);
+  });
+
+  test("registerTool rejects it under another name", () => {
+    expect(() => registerTool("other", build({}))).toThrow(
+      new RangeError("tool id 'other' names a FunctionTool named 'echo'; its name must match its id"),
+    );
+    expect(TOOL_REGISTRY.has("other")).toBe(false);
+  });
+
+  test("registerTool stores the description override on a copy", () => {
+    const tool = build({});
+    expect(registerTool("echo", tool, { descriptionOverride: "New." })).toBe(tool);
+    const stored = TOOL_REGISTRY.get("echo")!;
+    expect(stored).not.toBe(tool);
+    expect(isFunctionTool(stored)).toBe(true);
+    expect(stored.description).toBe("New.");
+    expect(stored.name).toBe("echo");
+    expect(stored.execute).toBe(tool.execute);
+    expect(stored.parametersJsonSchema).toEqual(tool.parametersJsonSchema);
+    expect(tool.description).toBe("Echo.");
   });
 });

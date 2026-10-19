@@ -1,0 +1,9 @@
+kind: cli
+files:
+  auth.json: |
+    {"version": 1, "providers": {}}
+args: [auth, openai, --method, subscription, --login, device, --auth-file, auth.json, --json]
+expect:
+  exit: 1
+  json_lines:
+    - {format: yian.cli.v1, event: error, error: {code: auth.failed}}

@@ -1,0 +1,10 @@
+kind: cli
+stdin: "<key:1>\n"
+args: [models, --provider, openrouter, --base-url, "https://gateway.example/api/v1", --json]
+http:
+  - request: {method: GET, url: "https://gateway.example/api/v1/models",
+              headers: {authorization: "Bearer <key:1>"}}
+    response: {status: 403, json: {error: {message: "bad key <key:1>"}}}
+expect:
+  exit: 1
+  json: {format: yian.cli.v1, error: {code: models.failed, status: 403}}

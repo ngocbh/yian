@@ -11,12 +11,15 @@ yian check [--root DIR] FLOW.yaml... [--json]
 yian skills check DIR... [--json]
 yian config check [--json] < llm_config.json
 yian providers [--json]
+yian models (--auth-file F | --provider P [--base-url URL]) [--timeout S] [--json]
 ```
 
 `yian check` loads flows without running them, `yian skills check` checks skill
-directories, `yian config check` checks an `llm_config` layer, and `yian providers`
-lists the providers. With `--json`, these commands and `yian run` write one JSON
-document on stdout; see [Machine-readable output](#machine-readable-output).
+directories, `yian config check` checks an `llm_config` layer, `yian providers`
+lists the providers, and `yian models` lists the models a login or a key offers.
+With `--json`, these commands, `yian auth --remove`, and `yian run` write one JSON
+document on stdout, and device sign-in writes JSON lines; see
+[Machine-readable output](#machine-readable-output).
 
 Commands below that use `examples/...` assume a repository clone and run from
 its root; those files are not installed with the Python package.
@@ -30,11 +33,16 @@ come from the flow's `llm_config`, then `--provider`/`--model`, then
 ## Authentication
 
 ```console
-yian auth
-yian auth PROVIDER [--model MODEL] [--api-key-env NAME] [--endpoint URL] [--method subscription|api-key] [--login browser|device] [--organization ID] [--project ID] [--header NAME[=VARIABLE]]...
-yian auth PROVIDER --default
-yian auth PROVIDER --remove
+yian auth [--auth-file F]
+yian auth PROVIDER [--model MODEL] [--api-key-env NAME] [--endpoint URL] [--method subscription|api-key] [--login browser|device] [--organization ID] [--project ID] [--header NAME[=VARIABLE]]... [--auth-file F]
+yian auth openai --method subscription --login device [--model MODEL] [--auth-file F] --json
+yian auth PROVIDER --default [--auth-file F]
+yian auth PROVIDER --remove [--auth-file F] [--json]
+yian auth --remove --auth-file F [--json]
 ```
+
+`--auth-file F` makes every form use the file `F`, relative to the working directory,
+instead of `$YIAN_AUTH_FILE` or the default store.
 
 `yian auth` with no provider lists the saved logins: each provider, its kind
 (`api-key`, `subscription`, or `none`), its model, an Azure endpoint, its
@@ -91,7 +99,12 @@ the whole store (`Credential storage is malformed`). Before downgrading, run
 
 `--default` makes an already-saved provider the default without signing in again.
 `--remove` deletes that provider's saved login; removing the default leaves no
-default. Neither takes other options.
+default. Neither takes a setup option. `yian auth --remove --auth-file F` deletes the
+whole file `F`; see [Removing a sign-in](#removing-a-sign-in).
+
+`--json` applies to `--remove` and to openai device sign-in; see
+[Signing in from a program](#signing-in-from-a-program). Any other form with `--json`
+is a usage error.
 
 A host `api_key` beats a saved login, and a saved login beats the provider's key
 variable, so a saved OpenAI subscription wins over an ambient `OPENAI_API_KEY`.
@@ -553,9 +566,9 @@ log before publishing the progress event that the CLI renders.
 
 ## Machine-readable output
 
-With `--json`, five commands write one JSON document for a program to read. The
-documents are defined by the JSON Schema `conformance/schema/cli.schema.json` in the
-repository.
+With `--json`, these commands write one JSON document for a program to read, except
+device sign-in, which writes JSON lines. The documents are defined by the JSON
+Schema `conformance/schema/cli.schema.json` in the repository.
 
 | Command | Document | Exits 1 when |
 |---------|----------|--------------|
@@ -563,6 +576,10 @@ repository.
 | `yian skills check DIR... --json` | `{"format", "skills"}` | a skill directory isn't valid |
 | `yian config check --json` (layer on stdin) | `{"format", "ok", "errors"}` | the layer has errors |
 | `yian providers --json` | `{"format", "providers"}` | only for a `defaults.invalid` error |
+| `yian models ... --json` | `{"format", "models"}` | the listing failed |
+| `yian auth PROVIDER --remove --json` | `{"format", "ok"}` | the removal failed |
+| `yian auth --remove --auth-file F --json` | `{"format", "ok"}` | the removal failed |
+| `yian auth openai --method subscription --login device --json` | JSON lines: `{"format", "event", ...}` | sign-in failed |
 | `yian run FLOW ... --json` (fresh or `--resume`) | `{"format", "status", ...}` | the run failed |
 
 Every document follows these rules:
@@ -570,6 +587,8 @@ Every document follows these rules:
 - The command writes exactly one JSON object and a newline on stdout, and nothing
   else there. stderr is free-form: the banner, progress, warnings, and the
   `Run log:` line still go there.
+- JSON lines: device sign-in instead writes one document per line, and nothing else
+  on stdout. The stream ends with a `done` line or a line with an `error` key.
 - Every document has `"format": "yian.cli.v1"`. Keys are snake_case. Every key
   listed below is always present, as `null` where stated.
 - Consumers ignore keys they don't know; keys are only added within v1.
@@ -586,7 +605,8 @@ Exit codes:
 - `0`: success.
 - `1`: a reported problem, with its document on stdout.
 - `2`: a usage error. The text is on stderr, and there is no document.
-- `130`: stopped by Ctrl-C (SIGINT). There is no document.
+- `130`: stopped by Ctrl-C (SIGINT), or SIGTERM for device sign-in. There is no
+  document, or no further line.
 
 Any other exit, a crash included, has no document. Treat stdout that doesn't parse as
 an internal error.
@@ -613,6 +633,15 @@ document, `{"format", "error": <diagnostic>}`. `error.code` is one of:
   check before the log exists; and a missing MCP SDK.
 - `run.cancelled`: input the run waited for was closed, such as stdin ending at a
   prompt.
+- `auth.failed`: `yian auth` failed because the options don't go together, the store
+  is unusable, the login to remove isn't saved, sign-in or the model choice failed, or
+  it was cancelled.
+  Device sign-in writes it in an `error` line.
+- `models.failed`: `yian models` couldn't list the models.
+- `models.timeout`: the listing took longer than `--timeout`.
+
+A `models.*` error always has `status`: the HTTP status when the host answered with a
+non-2xx status, else `null`.
 
 ```json
 {"format": "yian.cli.v1", "error": {"code": "defaults.invalid", "message": "..."}}
@@ -706,6 +735,104 @@ provider's key variable, or `null`. Without `--json`, each line is
   {"name": "ollama", "methods": ["none"], "api_key_env": null}, ...]}
 ```
 
+### Listing models
+
+```console
+yian models --auth-file F [--timeout S] [--json]
+yian models --provider P [--base-url URL] [--timeout S] [--json] < key
+```
+
+`yian models --auth-file F` lists the models the openai subscription login saved in
+`F` offers, in the subscription's order. An expiring token is refreshed first, and the
+new token is saved in `F`.
+
+`yian models --provider P` lists the model ids `P`'s host gives a key, sorted. The key
+is read from stdin, never from the command line, with surrounding whitespace removed;
+an empty stdin or a terminal sends no key. Stdin is read to its end before the listing
+starts, so close it, or pass an empty stdin, when there is no key. `--base-url URL`
+lists another host instead of the provider's own (`vllm`'s is
+`http://localhost:8000/v1`, `ollama`'s `http://localhost:11434`). No environment
+variable is read: the listing goes to the host given, with the key given. `azure` has
+no model listing, so `models` is `null`.
+
+Give exactly one of `--auth-file` and `--provider`; `--base-url` goes only with
+`--provider`. `--timeout S` is the seconds for the whole listing (default 8), a
+finite number above 0. Another combination, an unsupported provider, a bad timeout,
+or stdin that isn't text is a usage error.
+
+A failure is an error document with `models.failed` or `models.timeout`, and exits 1:
+an invalid `--base-url`, an unusable `F`, no openai subscription login in `F`, a failed
+refresh, a host that can't be reached or answers with an error status, or a response
+that isn't a model list.
+
+```console
+$ printf '%s' "$OPENROUTER_API_KEY" | yian models --provider openrouter --json
+{"format": "yian.cli.v1", "models": ["anthropic/claude-sonnet-4.5", "openai/gpt-5", ...]}
+```
+
+```json
+{"format": "yian.cli.v1", "error": {"code": "models.failed", "message": "Couldn't list the openrouter models: HTTP 401", "status": 401}}
+```
+
+Without `--json`, it prints one model per line on stdout. For `azure` it prints
+`azure has no model listing` on stderr and exits 0; a failure's message goes to
+stderr.
+
+### Signing in from a program
+
+```console
+yian auth openai --method subscription --login device [--model MODEL] [--auth-file F] --json
+```
+
+With `--json`, OpenAI device sign-in writes JSON lines on stdout. Each line is a
+`yian.cli.v1` document with an `event`:
+
+- `code`: `{"format", "event": "code", "user_code", "verification_uri"}`. Show the
+  user the code to enter at that page. The device id the sign-in polls with is never
+  written.
+- `waiting`: `{"format", "event": "waiting"}`, written right after `code`, before the
+  first poll.
+- `done`: `{"format", "event": "done", "models", "model"}`, once the login is saved.
+  `models` lists the subscription's models in its order; `model` is the one saved.
+- `error`: `{"format", "event": "error", "error": {"code": "auth.failed", "message"}}`.
+  An error before the code, such as an unusable store, is the only line.
+
+A `defaults.invalid` error document has `error` and no `event`.
+
+```json
+{"format": "yian.cli.v1", "event": "code", "user_code": "ABCD-1234", "verification_uri": "https://auth.openai.com/codex/device"}
+{"format": "yian.cli.v1", "event": "waiting"}
+{"format": "yian.cli.v1", "event": "done", "models": ["gpt-5.5", ...], "model": "gpt-5.5"}
+```
+
+The login saves `--model`, or else the subscription's first model. A `--model` the
+subscription doesn't offer fails with `auth.failed` and saves nothing. The login
+becomes the default when the file has no default.
+
+SIGTERM or SIGINT stops the sign-in: nothing is saved, no further line is written,
+and the command exits 130. A signal that comes before the `code` line, while the
+command starts, may end the process by the signal instead; nothing is saved either way.
+A signal that comes after the login is saved doesn't undo it; `done` is still written.
+A second signal kills the process. The command exits 0 after `done`, 1 after an error,
+and 2 for a usage error.
+
+### Removing a sign-in
+
+```console
+yian auth PROVIDER --remove [--auth-file F] [--json]
+yian auth --remove --auth-file F [--json]
+```
+
+`yian auth PROVIDER --remove` deletes one saved login; a login that isn't saved fails
+with `auth.failed`. `yian auth --remove --auth-file F` deletes the whole file `F`
+under the store's lock, keeping its `.lock` file. It succeeds when `F` doesn't exist,
+and takes no `--default` or setup option; either fails with `auth.failed`.
+
+With `--json`, a removal writes `{"format": "yian.cli.v1", "ok": true}` and exits 0; a
+failure writes an error document with `auth.failed` and exits 1. Ctrl-C exits 130
+with no document. Without `--json`, removing the whole file prints
+`Removed the saved logins in F`.
+
 ### Running a flow
 
 `yian run FLOW ... --json`, fresh or with `--resume`, writes
@@ -748,6 +875,11 @@ else: prompts, key checks, and exit codes are the same as without it.
 problem, and `yian config check` exits `2` when stdin is not a JSON object. With
 `--json`, a failed check exits `1` with its document on stdout, as does every other
 reported problem; see [Machine-readable output](#machine-readable-output).
+
+`yian auth` exits `1` when it fails or is cancelled, and `2` for a usage error, such as
+`--json` on a form that doesn't take it. Under `--json`, Ctrl-C makes it exit `130`, as
+does SIGTERM during device sign-in. `yian models` exits `1` when the listing fails,
+and `2` for a usage error.
 
 ## Compile errors
 

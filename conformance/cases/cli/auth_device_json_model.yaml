@@ -1,0 +1,45 @@
+kind: cli
+args: [auth, openai, --method, subscription, --login, device, --auth-file, auth.json, --json, --model, gpt-b]
+http:
+  - request: {method: POST, url: "https://auth.openai.com/api/accounts/deviceauth/usercode",
+              json: {client_id: app_EMoamEEZ73f0CkXaXp7hrann}}
+    response: {status: 200, json: {device_auth_id: "<key:1>", user_code: ABCD-1234, interval: 1}}
+  - request: {method: POST, url: "https://auth.openai.com/api/accounts/deviceauth/token",
+              json: {device_auth_id: "<key:1>", user_code: ABCD-1234}}
+    response: {status: 200, json: {authorization_code: code-1, code_verifier: verifier-1}}
+  - request:
+      method: POST
+      url: "https://auth.openai.com/oauth/token"
+      form:
+        grant_type: authorization_code
+        code: code-1
+        code_verifier: verifier-1
+        client_id: app_EMoamEEZ73f0CkXaXp7hrann
+        redirect_uri: "https://auth.openai.com/deviceauth/callback"
+    response:
+      status: 200
+      json:
+        access_token: "<key:2>"
+        refresh_token: "<key:3>"
+        id_token: e30.eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LTEifQ.sig
+  - request:
+      method: GET
+      url: "https://chatgpt.com/backend-api/codex/models?client_version=0.155.1"
+      headers: {authorization: "Bearer <key:2>", chatgpt-account-id: acct-1}
+    response:
+      status: 200
+      json:
+        models:
+          - {slug: gpt-b, visibility: list, priority: 2}
+          - {slug: gpt-hidden, visibility: hide, priority: 0}
+          - {slug: gpt-a, visibility: list, priority: 1}
+expect:
+  exit: 0
+  json_lines:
+    - format: yian.cli.v1
+      event: code
+      user_code: ABCD-1234
+      verification_uri: "https://auth.openai.com/codex/device"
+    - {format: yian.cli.v1, event: waiting}
+    - {format: yian.cli.v1, event: done, models: [gpt-a, gpt-b], model: gpt-b}
+  exists: {auth.json: true}

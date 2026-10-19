@@ -166,6 +166,7 @@ yian auth                       # list saved logins and the default
 yian auth PROVIDER [options]    # set up PROVIDER: credential and model
 yian auth PROVIDER --default    # make a saved provider the default
 yian auth PROVIDER --remove     # delete PROVIDER's saved login
+yian auth --remove --auth-file F  # delete the whole file F
 ```
 
 The list shows each provider, its kind (`api-key`, `subscription`, or `none`), its
@@ -210,10 +211,13 @@ cannot silently switch accounts or billing methods. Ollama agents record no
 connection.
 
 The store is `$XDG_CONFIG_HOME/yian/auth.json`, falling back to
-`~/.config/yian/auth.json`. Set `YIAN_AUTH_FILE` to choose
-another private file. The store uses private filesystem permissions (mode `0600`)
-and atomic writes on POSIX hosts; it is not encrypted. Token refresh preserves the
-selected connection. Failed authentication never falls back to another credential.
+`~/.config/yian/auth.json`. Set `YIAN_AUTH_FILE` to choose another private file, or
+give any `yian auth` form `--auth-file F` to use the file `F` (relative to the working
+directory). `yian auth --remove --auth-file F` deletes the whole file, keeping its
+lock file, and succeeds when `F` doesn't exist. The store uses private filesystem
+permissions (mode `0600`) and atomic writes on POSIX hosts; it is not encrypted.
+Token refresh preserves the selected connection. Failed authentication never falls
+back to another credential.
 
 Changed (TS yian): the file keeps the same format, so TS yian uses logins saved by
 Python yian. An `expires_at` that is a whole number of seconds is written without

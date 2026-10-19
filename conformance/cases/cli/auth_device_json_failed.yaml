@@ -1,0 +1,11 @@
+kind: cli
+args: [auth, openai, --method, subscription, --login, device, --auth-file, auth.json, --json]
+http:
+  - request: {method: POST, url: "https://auth.openai.com/api/accounts/deviceauth/usercode",
+              json: {client_id: app_EMoamEEZ73f0CkXaXp7hrann}}
+    response: {status: 500}
+expect:
+  exit: 1
+  json_lines:
+    - {format: yian.cli.v1, event: error, error: {code: auth.failed}}
+  exists: {auth.json: false}

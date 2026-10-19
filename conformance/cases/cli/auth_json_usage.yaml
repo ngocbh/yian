@@ -1,0 +1,5 @@
+kind: cli
+args: [auth, --json]
+expect:
+  exit: 2
+  stdout: ""

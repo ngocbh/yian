@@ -1,16 +1,24 @@
-"""Provider setup over staged authentication and an atomic store, `llm_config` checks, and
-the provider list.
+"""Provider setup over staged authentication and an atomic store, `llm_config` checks, the
+provider list, and model listings.
 
-`config_check` checks a host `llm_config` layer read from stdin, and `providers` lists
-the providers and the login kinds `auth` can save for each.
+`auth` works on the store at `--auth-file`, `$YIAN_AUTH_FILE` or the default path; with
+`--json`, its removal prints one `yian.cli.v1` document and its OpenAI device sign-in
+prints JSON lines. `config_check` checks a host `llm_config` layer read from stdin,
+`providers` lists the providers and the login kinds `auth` can save for each, and
+`models` (`yian models`) lists the models an OpenAI subscription login or a provider's
+key offers.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 import json
+import math
 import os
+import re
+import signal
 import sys
+import time
 from typing import Optional
 import warnings
 import webbrowser
@@ -244,9 +252,9 @@ def _text_models(models: tuple[str, ...]) -> list[str]:
     ]
 
 
-def _list() -> None:
-    """Print each saved login and the default without reading any credential."""
-    state = AuthStore().read()
+def _list(store: AuthStore) -> None:
+    """Print each saved login in `store` and the default without reading any credential."""
+    state = store.read()
     overrides = [
         name
         for name in ("YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL")
@@ -460,6 +468,61 @@ def _setup_openai(
     typer.echo(f"Saved OpenAI {method} authentication with model {model}")
 
 
+class _Stopped(Exception):
+    """Raised inside a JSON device sign-in once SIGTERM or SIGINT has asked it to stop."""
+
+
+def _sign_in_lines(auth_file: Optional[str], model: Optional[str]) -> None:
+    """Sign in to an OpenAI subscription by device code, writing JSON lines, and save the login.
+
+    Writes a `code` line, a `waiting` line, and a `done` line once the login is saved with
+    `model`, or the subscription's first model; it becomes the default when the store has
+    none. The first SIGTERM or SIGINT stops the sign-in before the store's rename: nothing is
+    saved and no further line is written. A second one kills the process.
+
+    Raises:
+        AuthError: The store is unusable, or sign-in, the listing or the model choice fails.
+        typer.Exit: 130 once stopped.
+    """
+    stopped = False
+
+    def stop(number, frame):
+        nonlocal stopped
+        stopped = True
+        # The default actions make a second signal kill a sign-in that doesn't stop.
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+    def check_stopped():
+        if stopped:
+            raise _Stopped
+
+    def show(url, code):
+        print_json({"event": "code", "user_code": code, "verification_uri": url})
+        print_json({"event": "waiting"})
+
+    saved = {}
+    try:
+        for number in (signal.SIGTERM, signal.SIGINT):
+            saved[number] = signal.signal(number, stop)
+        store = AuthStore(auth_file, check_stopped=check_stopped)
+        # Reading first also diagnoses an unusable store before any request.
+        make_default = store.read().default_provider is None
+        service = OpenAIAuth(check_stopped=check_stopped)
+        credentials = service.device_login(show)
+        models = service.subscription_models(credentials)
+        model = models[0] if model is None else model
+        if model not in models:
+            raise AuthError("The selected model is not available for this connection")
+        store.save("openai", credentials, model, make_default=make_default)
+        print_json({"event": "done", "models": list(models), "model": model})
+    except _Stopped:
+        raise typer.Exit(130) from None
+    finally:
+        for number, handler in saved.items():
+            signal.signal(number, handler)
+
+
 def _model_answers(
     provider: str,
     model: str,
@@ -647,7 +710,21 @@ def auth(
         False, "--default", help="Make an already-saved provider the default."
     ),
     remove: bool = typer.Option(
-        False, "--remove", help="Delete the provider's saved login."
+        False,
+        "--remove",
+        help="Delete the provider's saved login; without a provider, delete the whole "
+        "--auth-file.",
+    ),
+    auth_file: Optional[str] = typer.Option(
+        None,
+        "--auth-file",
+        help="Auth file to use instead of $YIAN_AUTH_FILE or ~/.config/yian/auth.json.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print yian.cli.v1 JSON on stdout; applies to --remove and to openai "
+        "--method subscription --login device.",
     ),
 ) -> None:
     """List, set up, choose the default among, or remove saved provider logins.
@@ -673,6 +750,14 @@ def auth(
 
     `yian auth PROVIDER --default` makes a saved login the default.
     `yian auth PROVIDER --remove` deletes one saved login.
+    `yian auth --remove --auth-file F` deletes the whole file F.
+
+    --auth-file F makes every form use the file F instead of $YIAN_AUTH_FILE or
+    ~/.config/yian/auth.json. --json prints one yian.cli.v1 document on stdout
+    for --remove: success, or the error that failed it. For openai --method
+    subscription --login device it prints JSON lines: the code to enter, a
+    waiting line, then the saved models or the error; SIGTERM or SIGINT stops
+    the sign-in, saving nothing, with exit 130.
 
     A failed or cancelled setup leaves the saved logins unchanged.
 
@@ -693,21 +778,52 @@ def auth(
             ``NAME``; refused for ollama and an openai subscription.
         default (`bool`): Make the saved provider the default without signing in.
         remove (`bool`): Delete the provider's saved login; accepts any saved name,
-            and a lowercase saved name in any case.
+            and a lowercase saved name in any case. Without a provider, delete the
+            whole `auth_file`, which must be given.
+        auth_file (`str | None`): Auth file used instead of `$YIAN_AUTH_FILE` or the
+            default path; relative to the working directory.
+        json_output (`bool`): Print `yian.cli.v1` JSON instead of text; only for
+            `--remove` and openai subscription device sign-in.
 
     Raises:
+        typer.BadParameter: `--json` is given to another form.
         typer.Exit: The command fails or is cancelled; saved logins stay unchanged.
     """
+    # A removal refuses setup options, so its error is the plain document even when they
+    # describe a device sign-in.
+    device = (
+        (provider or "").lower() == "openai"
+        and method == "subscription"
+        and login == "device"
+        and not remove
+    )
+    if json_output and not (remove or device):
+        raise typer.BadParameter(
+            "--json applies to --remove and to openai --method subscription --login device"
+        )
     try:
         if provider is None:
-            if default or remove or any(
+            setup = any(
                 value is not None
                 for value in (
                     method, login, model, api_key_env, endpoint, organization, project
                 )
-            ) or header:
+            ) or bool(header)
+            if remove and auth_file is not None:
+                if default or setup:
+                    raise AuthError(
+                        "--remove without a provider deletes the whole --auth-file; it "
+                        "takes no --default or setup option"
+                    )
+                AuthStore(auth_file).delete()
+                if json_output:
+                    print_json({"ok": True})
+                else:
+                    typer.echo(f"Removed the saved logins in {auth_file}")
+                return
+            if default or remove or setup:
                 raise AuthError("Name a provider: yian auth <provider> [options]")
-            _list()
+            _list(AuthStore(auth_file))
             return
         provider, header_sources = _check_options(
             provider,
@@ -722,7 +838,10 @@ def auth(
             project=project,
             header=header,
         )
-        store = AuthStore()
+        if json_output and device:
+            _sign_in_lines(auth_file, model)
+            return
+        store = AuthStore(auth_file)
         if remove:
             state = store.read()
             saved = {selection.provider for selection in state.selections}
@@ -730,6 +849,9 @@ def auth(
                 provider = provider.lower()
             was_default = state.default_provider == provider
             store.remove(provider)
+            if json_output:
+                print_json({"ok": True})
+                return
             typer.echo(f"Removed the saved {provider} login")
             if was_default:
                 typer.echo(_NO_DEFAULT)
@@ -764,10 +886,21 @@ def auth(
                 f"(switch with 'yian auth {provider} --default')"
             )
     except AuthError as error:
-        typer.echo(str(error), err=True)
+        if json_output:
+            failure = {"code": "auth.failed", "message": str(error)}
+            # Device sign-in writes JSON lines, so its error is an event line too.
+            print_json({"event": "error", "error": failure} if device else {"error": failure})
+        else:
+            typer.echo(str(error), err=True)
         raise typer.Exit(1) from None
-    except (KeyboardInterrupt, EOFError):
-        typer.echo(_CANCELLED, err=True)
+    except (KeyboardInterrupt, EOFError) as error:
+        if not json_output:
+            typer.echo(_CANCELLED, err=True)
+        elif isinstance(error, KeyboardInterrupt):
+            # A stopped --json command exits 130 and writes no document.
+            raise typer.Exit(130) from None
+        else:
+            print_json({"error": {"code": "auth.failed", "message": _CANCELLED}})
         raise typer.Exit(1) from None
 
 
@@ -884,3 +1017,143 @@ def providers(
         variable = provider["api_key_env"]
         suffix = f" ({variable})" if variable else ""
         typer.echo(f"{provider['name']}: {', '.join(provider['methods'])}{suffix}")
+
+
+def _subscription_models(auth_file: str, timeout: float) -> list[str]:
+    """Return the models the openai subscription login in `auth_file` offers, in its order.
+
+    An expiring token is refreshed first. The store's lock wait and each request get what
+    is left of `timeout` seconds.
+
+    Raises:
+        AuthError: There is no openai subscription login, or the store, the refresh or the
+            listing failed.
+        TimeoutError: `timeout` passed first.
+    """
+    end = time.monotonic() + timeout
+
+    def service() -> OpenAIAuth:
+        remaining = end - time.monotonic()
+        # OpenAIAuth refuses a request timeout that isn't positive.
+        if remaining <= 0:
+            raise AuthError("No time is left for the request")
+        return OpenAIAuth(request_timeout=remaining)
+
+    try:
+        store = AuthStore(auth_file, lock_timeout=timeout)
+        selection = store.selection("openai")
+        if selection is None or selection.method != "subscription":
+            raise AuthError(f"There is no saved openai subscription login in {auth_file}")
+        credentials = store.credentials(
+            "openai", selection.credential_id, refresh=lambda old: service().refresh(old)
+        )
+        return list(service().subscription_models(credentials))
+    except AuthError:
+        # A request cut short by the deadline fails with a plain AuthError.
+        if time.monotonic() >= end:
+            raise TimeoutError from None
+        raise
+
+
+def models(
+    auth_file: Optional[str] = typer.Option(
+        None, "--auth-file", help="Auth file whose openai subscription login is listed."
+    ),
+    provider: Optional[str] = typer.Option(
+        None, "--provider", help="Provider whose host is listed, with the key on stdin."
+    ),
+    base_url: Optional[str] = typer.Option(
+        None,
+        "--base-url",
+        help="Host to list instead of the provider's own; --provider only.",
+    ),
+    timeout: float = typer.Option(8.0, "--timeout", help="Seconds for the whole listing."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print one yian.cli.v1 JSON document on stdout."
+    ),
+) -> None:
+    """List the models an openai subscription login or a provider's key offers.
+
+    `yian models --auth-file F` lists the models the openai subscription login
+    saved in F offers, in its order, refreshing an expiring token first.
+
+    `yian models --provider P` lists the model ids P's host gives the key read
+    from stdin (none when stdin is empty), sorted; --base-url lists another
+    host. azure has no model listing.
+
+    \f
+    Args:
+        auth_file (`str | None`): Auth file holding the openai subscription login.
+        provider (`str | None`): Provider to list; case-insensitive.
+        base_url (`str | None`): Host to list instead of the provider's default.
+        timeout (`float`): Seconds for the whole listing; finite and above 0.
+        json_output (`bool`): Print a `yian.cli.v1` document instead of text.
+
+    Raises:
+        typer.BadParameter: Not exactly one of `auth_file` and `provider` is given,
+            `base_url` comes without `provider`, the provider isn't supported,
+            `timeout` isn't a finite number above 0, or stdin isn't text.
+        typer.Exit: With code 1 when the listing fails.
+    """
+    if (auth_file is None) == (provider is None):
+        raise typer.BadParameter("Give exactly one of --auth-file and --provider")
+    if base_url is not None and provider is None:
+        raise typer.BadParameter("--base-url applies only to --provider")
+    if provider is not None:
+        provider = provider.lower()
+        if provider not in SUPPORTED_LLM_PROVIDERS:
+            raise typer.BadParameter(
+                f"Unsupported provider; choose one of: {', '.join(SUPPORTED_LLM_PROVIDERS)}"
+            )
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise typer.BadParameter("--timeout must be a finite number of seconds above 0")
+    error = None
+    listed = None
+    if provider is not None:
+        key = None
+        if not sys.stdin.isatty():
+            # Decoded strictly here: without a locale, Python's UTF-8 mode reads stdin text
+            # with surrogateescape, so bytes that aren't UTF-8 would pass as a key.
+            try:
+                key = sys.stdin.buffer.read().decode("utf-8").strip() or None
+            except UnicodeDecodeError:
+                raise typer.BadParameter("stdin must be the API key as text") from None
+        try:
+            listed = list_models(provider, key, base_url, timeout=timeout)
+        except ModelListError as failure:
+            reason = str(failure)
+            status = re.fullmatch(r"HTTP (\d{3})", reason)
+            error = {
+                "code": "models.timeout" if reason == "timed out" else "models.failed",
+                "message": f"Couldn't list the {provider} models: {reason}",
+                "status": int(status[1]) if status else None,
+            }
+    else:
+        try:
+            listed = _subscription_models(auth_file, timeout)
+        except TimeoutError:
+            error = {
+                "code": "models.timeout",
+                "message": "Couldn't list the openai subscription models: timed out",
+                "status": None,
+            }
+        except AuthError as failure:
+            status = re.search(r"\(HTTP (\d{3})\)$", str(failure))
+            error = {
+                "code": "models.failed",
+                "message": f"Couldn't list the openai subscription models: {failure}",
+                "status": int(status[1]) if status else None,
+            }
+    if error is not None:
+        if json_output:
+            print_json({"error": error})
+        else:
+            typer.echo(error["message"], err=True)
+        raise typer.Exit(1)
+    if json_output:
+        print_json({"models": None if listed is None else list(listed)})
+    elif listed is None:
+        typer.echo(f"{provider} has no model listing", err=True)
+    else:
+        for model in listed:
+            typer.echo(model)

@@ -1,0 +1,15 @@
+kind: cli
+files:
+  auth.json: |
+    {"version": 1, "default_provider": "openai", "providers": {
+      "openai": {"method": "subscription", "model": "gpt-5.5", "credential_id": "id-1",
+                 "credentials": {"access_token": "fake-access", "refresh_token": "fake-refresh",
+                                 "expires_at": 4102444800, "account_id": "account-1",
+                                 "residency": null}},
+      "vllm": {"method": "none", "model": "llama", "credential_id": "id-2",
+               "credentials": null}}}
+args: [auth, --remove, --auth-file, auth.json, --default, --json]
+expect:
+  exit: 1
+  json: {format: yian.cli.v1, error: {code: auth.failed}}
+  exists: {auth.json: true}

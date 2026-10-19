@@ -1,14 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "yian.cli.v1",
-  "description": "The documents yian's --json commands write. A command writes exactly one JSON object and a newline on stdout, and nothing else there. Every document has \"format\": \"yian.cli.v1\". Keys are snake_case. Every key a document lists is always present (null where it allows null). Consumers ignore unknown keys; keys are only added within v1. Codes and enum values are only added within v1; a consumer treats an unknown error code as a generic error and ignores an unknown login method. Message and note text is not part of the contract, nor are the number and order of `config check` errors; codes and fields are. Conformance cases still pin the number and order, so the implementations agree. Numbers use yian's lossless JSON form: a float always has a fraction or an exponent (2.0), an int never does. Exit codes: 0 success; 1 a reported problem, with its document on stdout; 2 a usage error (text on stderr, no document); 130 stopped by SIGINT (no document). Any other exit, a crash included (exit 1 with a traceback), has no document; a consumer treats stdout that doesn't parse as an internal error. stderr is free-form.",
+  "description": "The documents yian's --json commands write. A command writes exactly one JSON object and a newline on stdout, and nothing else there, except device sign-in (`auth_event`), which writes JSON lines: one document per line, ending with a `done` line or a line with an `error` key. Every document has \"format\": \"yian.cli.v1\". Keys are snake_case. Every key a document lists is always present (null where it allows null). Consumers ignore unknown keys; keys are only added within v1. Codes and enum values are only added within v1; a consumer treats an unknown error code as a generic error and ignores an unknown login method. Message and note text is not part of the contract, nor are the number and order of `config check` errors; codes and fields are. Conformance cases still pin the number and order, so the implementations agree. Numbers use yian's lossless JSON form: a float always has a fraction or an exponent (2.0), an int never does. Exit codes: 0 success; 1 a reported problem, with its document on stdout; 2 a usage error (text on stderr, no document); 130 stopped by SIGINT, or by SIGTERM for device sign-in (no document, or no further line). Any other exit, a crash included (exit 1 with a traceback), has no document; a consumer treats stdout that doesn't parse as an internal error. stderr is free-form.",
   "anyOf": [
     {"$ref": "#/$defs/error_document"},
     {"$ref": "#/$defs/check_document"},
     {"$ref": "#/$defs/run_document"},
     {"$ref": "#/$defs/config_document"},
     {"$ref": "#/$defs/providers_document"},
-    {"$ref": "#/$defs/skills_document"}
+    {"$ref": "#/$defs/skills_document"},
+    {"$ref": "#/$defs/remove_document"},
+    {"$ref": "#/$defs/auth_event"},
+    {"$ref": "#/$defs/models_document"}
   ],
   "$defs": {
     "format": {
@@ -90,9 +93,20 @@
             {
               "properties": {
                 "code": {
-                  "enum": ["compose.load", "defaults.invalid", "run.setup", "run.cancelled"]
-                }
+                  "enum": [
+                    "compose.load", "defaults.invalid", "run.setup", "run.cancelled", "auth.failed",
+                    "models.failed", "models.timeout"
+                  ]
+                },
+                "status": {"type": ["integer", "null"]}
               }
+            },
+            {
+              "if": {
+                "required": ["code"],
+                "properties": {"code": {"enum": ["models.failed", "models.timeout"]}}
+              },
+              "then": {"required": ["status"]}
             }
           ]
         }
@@ -237,6 +251,75 @@
       "properties": {
         "format": {"$ref": "#/$defs/format"},
         "skills": {"type": "array", "items": {"$ref": "#/$defs/skill_result"}}
+      }
+    },
+    "remove_document": {
+      "description": "`yian auth --remove --auth-file F --json` and `yian auth PROVIDER --remove --json`: the whole auth file, or the provider's saved login, is removed. Removing an auth file that doesn't exist succeeds; removing a provider login that isn't saved is an auth.failed error.",
+      "type": "object",
+      "required": ["format", "ok"],
+      "properties": {
+        "format": {"$ref": "#/$defs/format"},
+        "ok": {"const": true}
+      }
+    },
+    "auth_event": {
+      "description": "One line of `yian auth openai --method subscription --login device --json`: `code` (enter user_code at verification_uri), then `waiting` at once, before the first poll, then `done` once the login is saved, or `error`. done.models lists the subscription's models in its order; done.model is the one saved: --model when given, else the first. An error before the code is the only line. Exit 0 after done, 1 after error, 130 when SIGTERM or SIGINT stops the sign-in, after which no line follows and nothing is saved.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["format", "event", "user_code", "verification_uri"],
+          "properties": {
+            "format": {"$ref": "#/$defs/format"},
+            "event": {"const": "code"},
+            "user_code": {"type": "string"},
+            "verification_uri": {"type": "string"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["format", "event"],
+          "properties": {
+            "format": {"$ref": "#/$defs/format"},
+            "event": {"const": "waiting"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["format", "event", "models", "model"],
+          "properties": {
+            "format": {"$ref": "#/$defs/format"},
+            "event": {"const": "done"},
+            "models": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "string", "minLength": 1}
+            },
+            "model": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["format", "event", "error"],
+          "properties": {
+            "format": {"$ref": "#/$defs/format"},
+            "event": {"const": "error"},
+            "error": {
+              "allOf": [
+                {"$ref": "#/$defs/diagnostic"},
+                {"properties": {"code": {"const": "auth.failed"}}}
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "models_document": {
+      "description": "`yian models --json`: the models the openai subscription login in --auth-file offers, in its order, or the model ids the --provider's host lists, sorted; null when the provider has no model listing (azure).",
+      "type": "object",
+      "required": ["format", "models"],
+      "properties": {
+        "format": {"$ref": "#/$defs/format"},
+        "models": {"type": ["array", "null"], "items": {"type": "string"}}
       }
     }
   }

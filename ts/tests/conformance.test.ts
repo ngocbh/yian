@@ -116,6 +116,16 @@ const BARE_BACKWARD = "kind: backward\nflow: x\nexpect: {output: 1}\n";
 const BACKWARD = `${BARE_BACKWARD}run: {learnable: true}\nbackward: [{feedback: f}]\n`;
 const EXPR = "kind: expr\nexpect: {value: 1}\n";
 const CLI = "kind: cli\nexpect: {exit: 0}\n";
+const EXCHANGE = "request: {method: POST, url: u}, response: {status: 200}";
+/** A `cli` case whose `http` lists `exchanges`, each the keys of one exchange. */
+const HTTP = (...exchanges: string[]) =>
+  `${CLI}http: [${exchanges.map((exchange) => `{${exchange}}`).join(", ")}]\n`;
+const RESPONSE = (response: string) =>
+  HTTP(`request: {method: POST, url: u}, response: ${response}`);
+const STATUS = "`http[0].response.status` must be an int from 100 to 599";
+const DELAY = "`http[0].response.delay` must be a finite non-negative number";
+const EXISTS = (path: string) =>
+  `\`expect.exists\`: \`${path}\` must be a relative path without \`..\``;
 const TOOL = (results: string) =>
   `${RUN}host: {tools: {t: {parameters: {}, results: ${results}}}}\n`;
 const STRICT = "a strict `template` takes no `item` or `typedefs`";
@@ -160,6 +170,32 @@ describe("checkCase", () => {
     [`${LOAD}python_flow: [a]`, "`python_flow` must be text"],
     ["kind: fingerprint\nflow: x\nother: 1\nexpect: {fingerprint: same}", "`other` must be text"],
     [`${CLI}stdin: 1`, "`stdin` must be text"],
+    [`${CLI}signal: {name: SIGHUP, after: x}`, "`signal.name` must be SIGINT or SIGTERM"],
+    [`${CLI}http: {}`, "`http` must be a list"],
+    [
+      HTTP(`${EXCHANGE}, repeat: true`, EXCHANGE),
+      "`http[0].repeat`: only the last exchange repeats",
+    ],
+    [HTTP(`${EXCHANGE}, repeat: 1`), "`http[0].repeat` must be true or false"],
+    [HTTP("request: {method: GET}, response: {status: 200}"), "`http[0].request.url` is required"],
+    [
+      HTTP("request: {method: POST, url: u, json: {}, form: {}}, response: {status: 200}"),
+      "`http[0].request` takes at most one of `json` and `form`",
+    ],
+    [
+      HTTP("request: {method: POST, url: u, form: {a: 1}}, response: {status: 200}"),
+      "`http[0].request.form` values must be text",
+    ],
+    [RESPONSE("{status: 700}"), STATUS],
+    [RESPONSE("{status: 200.0}"), STATUS],
+    [RESPONSE("{status: 200, delay: -1}"), DELAY],
+    [RESPONSE("{status: 200, delay: .inf}"), DELAY],
+    [
+      "kind: cli\nexpect: {exit: 0, exists: {a: yes}}",
+      "`expect.exists` values must be true or false",
+    ],
+    ["kind: cli\nexpect: {exit: 0, exists: {a/../b: true}}", EXISTS("a/../b")],
+    ["kind: cli\nexpect: {exit: 0, exists: {/a: true}}", EXISTS("/a")],
     [
       "kind: fingerprint\nflow: x\nother: y\npython_flow: z\nexpect: {fingerprint: same}",
       "`python_flow` is not a key of a `fingerprint` case",
@@ -294,6 +330,14 @@ describe("checkCase", () => {
     "kind: value\ntype: int\nvalue: 1\nexpect: {value: 1, kind: int}",
     "kind: defaults\nexpect: {defaults: {}}",
     "kind: cli\nargs: [run]\nstdin: x\nexpect: {exit: 0, stdout: x}",
+    [
+      "kind: cli",
+      "signal: {name: SIGTERM, after: x}",
+      "expect: {exit: 130, exists: {home/a.json: true, b: false}}",
+      `http: [{${EXCHANGE}}, {request: {method: GET, url: v, json: {a: 1},`,
+      '  headers: {authorization: "Bearer <key:1>"}},',
+      "  response: {status: 200, json: {data: [{id: a}]}, delay: 0.5}, repeat: true}]",
+    ].join("\n"),
     `${JSON_CASE}read: "1"\nmode: codec`,
     `${JSON_CASE}read: "1"\nmode: plain`,
     'kind: json\nwrite: 1\nform: canonical\nexpect: {text: "1"}',

@@ -240,6 +240,63 @@ def test_remove_provider_and_default(tmp_path):
     assert [item.provider for item in state.selections] == ["openai"]
 
 
+def test_delete_removes_saved_store_and_keeps_lock(tmp_path):
+    path = tmp_path / "auth" / "auth.json"
+    store = AuthStore(path)
+    store.save("openai", ApiKeyCredentials("k-open"), "gpt")
+    store.delete()
+    assert not path.exists()
+    assert path.with_suffix(".json.lock").exists()
+    assert store.read().selections == ()
+    store.delete()
+    assert os.listdir(path.parent) == ["auth.json.lock"]
+
+
+def test_delete_without_store_or_lock_creates_nothing(tmp_path):
+    missing = AuthStore(tmp_path / "missing" / "auth.json")
+    missing.delete()
+    assert not missing.path.parent.exists()
+
+    empty = tmp_path / "empty"
+    empty.mkdir(mode=0o700)
+    AuthStore(empty / "auth.json").delete()
+    assert os.listdir(empty) == []
+
+
+def test_delete_store_without_its_lock_file(tmp_path):
+    path = tmp_path / "auth" / "auth.json"
+    AuthStore(path).save("openai", ApiKeyCredentials("key"), "model")
+    lock = path.with_suffix(".json.lock")
+    lock.unlink()
+    AuthStore(path).delete()
+    assert not path.exists()
+    assert lock.exists()
+
+
+def test_delete_removes_a_symlink_without_following_it(tmp_path):
+    path = tmp_path / "auth" / "auth.json"
+    AuthStore(path).save("openai", ApiKeyCredentials("key"), "model")
+    other = path.with_name("other.json")
+    path.rename(other)
+    path.symlink_to(other)
+    AuthStore(path).delete()
+    assert not path.is_symlink()
+    assert other.exists()
+
+
+@pytest.mark.parametrize("saved", [False, True])
+def test_delete_refuses_a_directory_others_can_read(tmp_path, saved):
+    path = tmp_path / "auth" / "auth.json"
+    if saved:
+        AuthStore(path).save("openai", ApiKeyCredentials("key"), "model")
+    else:
+        path.parent.mkdir(mode=0o700)
+    path.parent.chmod(0o755)
+    with pytest.raises(AuthError, match="private"):
+        AuthStore(path).delete()
+    assert path.exists() == saved
+
+
 def test_set_default_requires_saved_provider(tmp_path):
     store = AuthStore(tmp_path / "auth" / "auth.json")
     first = store.save("openai", ApiKeyCredentials("k-open"), "gpt")
@@ -931,8 +988,13 @@ def test_browser_listener_is_closed_when_user_cancels():
         check.bind(("127.0.0.1", 1455))
 
 
+@pytest.mark.parametrize(
+    "operation",
+    [lambda store: store.save("openai", ApiKeyCredentials("new"), "new"), AuthStore.delete],
+    ids=["save", "delete"],
+)
 @pytest.mark.parametrize("cancel", [False, True])
-def test_lock_wait_is_bounded_and_cancellable(tmp_path, cancel):
+def test_lock_wait_is_bounded_and_cancellable(tmp_path, cancel, operation):
     clock = FakeClock()
     path = tmp_path / "auth" / "auth.json"
     AuthStore(path).save("openai", ApiKeyCredentials("key"), "model")
@@ -953,7 +1015,7 @@ def test_lock_wait_is_bounded_and_cancellable(tmp_path, cancel):
         with pytest.raises(
             Cancelled if cancel else AuthError, match=None if cancel else "Timed out"
         ):
-            store.save("openai", ApiKeyCredentials("new"), "model")
+            operation(store)
     assert AuthStore(path).selection().model == "model"
 
 

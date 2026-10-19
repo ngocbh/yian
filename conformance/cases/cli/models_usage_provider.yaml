@@ -1,0 +1,5 @@
+kind: cli
+args: [models, --provider, nope, --json]
+expect:
+  exit: 2
+  stdout: ""

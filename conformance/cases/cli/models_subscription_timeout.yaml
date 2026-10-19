@@ -1,0 +1,26 @@
+kind: cli
+files:
+  auth.json: |
+    {"version": 1, "default_provider": "openai", "providers": {
+      "openai": {"method": "subscription", "model": "gpt-a", "credential_id": "id-1",
+                 "credentials": {"access_token": "fake-access", "refresh_token": "fake-refresh",
+                                 "expires_at": 4102444800, "account_id": "account-1",
+                                 "residency": null}}}}
+args: [models, --auth-file, auth.json, --timeout, "0.5", --json]
+http:
+  - request:
+      method: GET
+      url: "https://chatgpt.com/backend-api/codex/models?client_version=0.155.1"
+      headers: {authorization: "Bearer fake-access", chatgpt-account-id: account-1}
+    response:
+      status: 200
+      delay: 3
+      json:
+        models:
+          - {slug: gpt-b, visibility: list, priority: 2}
+          - {slug: gpt-hidden, visibility: hide, priority: 0}
+          - {slug: gpt-none, visibility: none, priority: 0}
+          - {slug: gpt-a, visibility: list, priority: 1}
+expect:
+  exit: 1
+  json: {format: yian.cli.v1, error: {code: models.timeout, status: null}}

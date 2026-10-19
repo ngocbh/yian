@@ -1,0 +1,20 @@
+kind: cli
+args: [auth, openai, --method, subscription, --login, device, --auth-file, auth.json, --json]
+http:
+  - request: {method: POST, url: "https://auth.openai.com/api/accounts/deviceauth/usercode",
+              json: {client_id: app_EMoamEEZ73f0CkXaXp7hrann}}
+    response: {status: 200, json: {device_auth_id: "<key:1>", user_code: ABCD-1234, interval: 1}}
+  - request: {method: POST, url: "https://auth.openai.com/api/accounts/deviceauth/token",
+              json: {device_auth_id: "<key:1>", user_code: ABCD-1234}}
+    response: {status: 403}
+    repeat: true
+signal: {name: SIGTERM, after: waiting}
+expect:
+  exit: 130
+  json_lines:
+    - format: yian.cli.v1
+      event: code
+      user_code: ABCD-1234
+      verification_uri: "https://auth.openai.com/codex/device"
+    - {format: yian.cli.v1, event: waiting}
+  exists: {auth.json: false}

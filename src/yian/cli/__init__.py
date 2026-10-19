@@ -6,9 +6,10 @@ checks the model, and saves the credential and model together; `--default` and
 `--remove` choose the default provider or delete a login. It owns prompts; provider
 services own the protocol and credential storage.
 
-`yian config check` checks a host `llm_config` layer read from stdin, and `yian
-providers` lists the providers and their login kinds; each prints text or, with
-`--json`, one `yian.cli.v1` document.
+`yian config check` checks a host `llm_config` layer read from stdin, `yian
+providers` lists the providers and their login kinds, and `yian models` lists the
+models an OpenAI subscription login or a provider's key on stdin offers; each prints
+text or, with `--json`, one `yian.cli.v1` document.
 
 `yian check FLOW...` loads flows without running them and reports each as text or, with
 `--json`, as one `yian.cli.v1` document. `yian skills check DIR...` does the same for
@@ -52,6 +53,7 @@ import typer
 from yian.cli.chat.command import chat as _chat
 from yian.cli.auth import auth as _auth
 from yian.cli.auth import config_check as _config_check
+from yian.cli.auth import models as _models
 from yian.cli.auth import providers as _providers
 from yian.cli.run import check as _check
 from yian.cli.run import err_console
@@ -100,6 +102,7 @@ app.command("chat")(_chat)
 app.command("auth")(_auth)
 app.command("check")(_check)
 app.command("providers")(_providers)
+app.command("models")(_models)
 
 config_app = typer.Typer(name="config", no_args_is_help=True, help="Check an llm_config layer.")
 config_app.command("check")(_config_check)

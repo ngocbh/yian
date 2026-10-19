@@ -1,7 +1,7 @@
 /**
  * Input-size caps come from `defaults`; mirrors `tests/test_input_caps_defaults.py`.
  *
- * Holds the skill rows; the other rows come with their modules.
+ * Holds the skill and question option rows; the other rows come with their modules.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -14,6 +14,7 @@ import { BUILTIN, install } from "../src/defaults.ts";
 import { checkSkillName } from "../src/skills/catalog.ts";
 import { Skill, SkillError } from "../src/skills/index.ts";
 import { systemPromptWithSkills } from "../src/skills/tool.ts";
+import { normalizeOptions } from "../src/tools/registry.ts";
 
 afterEach(() => install(BUILTIN));
 
@@ -52,4 +53,9 @@ test("skill description cap", () => {
   install({ ...BUILTIN, maxSkillDescriptionChars: 5 });
   const prompt = systemPromptWithSkills("base", [new Skill({ name: "a", description: "abcdefgh", instructions: "" })]);
   expect(prompt).toEndWith("- a: abcd…");
+});
+
+test("question option caps", () => {
+  install({ ...BUILTIN, maxQuestionOptions: 2, maxQuestionOptionChars: 5 });
+  expect(normalizeOptions(["abcdefg", "b", "c"])).toEqual(["abcd…", "b"]);
 });

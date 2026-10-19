@@ -1,19 +1,22 @@
 /**
  * `FunctionTool` construction, the types `toolTypes` reads from its JSON Schema, and a
  * `FunctionTool` in a `ToolSet` and the registry, a port of `tests/engine/test_function_tool.py`
- * (construction, types, `ToolSet` and `registerTool` rows) and of the JSON Schema rows of
- * `test_tool_types.py` that read a tool. The invocation rows land with `ToolSet.invoke`. Not ported: the `function_tool` and decorator rows (a later
- * `tool()` builds a tool from a function), the async-refusal rows (TS accepts an async
- * `execute`), and the LangChain binding rows.
+ * and of the JSON Schema rows of `test_tool_types.py` that read a tool. Not ported: the
+ * `function_tool` and decorator rows and `test_replace_drops_the_function_schema` (a later
+ * `tool()` builds a tool from a function),
+ * `test_run_entry_points_and_tool_set_annotate_function_tool_entries` (needs the run entry
+ * points), `test_function_tool_without_a_signature_cannot_be_called_directly`, the async-refusal
+ * rows (TS accepts and awaits an async `execute`), and the LangChain binding rows.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
+import { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool, isFunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
 import { toolTypes } from "../../src/tools/types.ts";
-import type { JsonObject } from "../../src/typesys/json.ts";
-import { canonicalTypeLabel, Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
+import { type JsonObject, parseJson } from "../../src/typesys/json.ts";
+import { canonicalTypeLabel, Type, TypeCheckError, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 
 const ECHO_SCHEMA: JsonObject = {
   type: "object",
@@ -273,5 +276,268 @@ describe("FunctionTool in a ToolSet and the registry", () => {
     expect(stored.execute).toBe(tool.execute);
     expect(stored.parametersJsonSchema).toEqual(tool.parametersJsonSchema);
     expect(tool.description).toBe("Echo.");
+  });
+});
+
+describe("FunctionTool invocation", () => {
+  let saved: [string, FunctionTool][] = [];
+
+  // Keep process-global registrations isolated between tests.
+  beforeEach(() => {
+    saved = [...TOOL_REGISTRY];
+  });
+  afterEach(() => {
+    TOOL_REGISTRY.clear();
+    for (const [id, tool] of saved) TOOL_REGISTRY.set(id, tool);
+  });
+
+  /** Build an echo tool with `schema` that records each call, and the list it records into. */
+  function echo(
+    schema: JsonObject = ECHO_SCHEMA,
+    name = "echo",
+  ): [FunctionTool, [ToolContext<any>, Record<string, unknown>][]] {
+    const seen: [ToolContext<any>, Record<string, unknown>][] = [];
+    const tool = new FunctionTool({
+      name,
+      description: "Echo.",
+      parametersJsonSchema: schema,
+      execute: (args, ctx) => {
+        seen.push([ctx, args]);
+        return "done";
+      },
+    });
+    return [tool, seen];
+  }
+
+  /** Return the error `promise` rejects with, after checking its class. */
+  async function rejection(promise: Promise<unknown>, kind: abstract new (...args: never[]) => Error): Promise<Error> {
+    try {
+      await promise;
+    } catch (error) {
+      expect(error).toBeInstanceOf(kind);
+      return error as Error;
+    }
+    throw new Error("expected a rejection");
+  }
+
+  test("test_function_tool_is_invoked_with_a_context_and_its_arguments", async () => {
+    const [ft, seen] = echo();
+    const inputs = { text: "hi" };
+
+    expect(await new ToolSet({ echo: ft }).forRun("r").invoke("echo", inputs, { node: "n" })).toBe("done");
+
+    expect(seen).toHaveLength(1);
+    const [ctx, args] = seen[0]!;
+    expect(ctx).toBeInstanceOf(ToolContext);
+    expect(ctx.toolName).toBe("echo");
+    expect(ctx.node).toBe("n");
+    expect(ctx.callId).toBe("r/n");
+    expect(args).toEqual({ text: "hi" });
+    expect(Object.getPrototypeOf(args)).toBe(Object.prototype);
+    expect(args).not.toBe(inputs);
+  });
+
+  test("test_function_tool_rejects_an_unknown_argument_before_on_invoke", async () => {
+    const [ft, seen] = echo();
+
+    const error = await rejection(new ToolSet({ echo: ft }).invoke("echo", { text: "hi", extra: 1 }), RangeError);
+    expect(error.message).toBe('tool \'echo\' received unsupported argument(s) ["extra"]; allowed: ["text"]');
+    expect(seen).toEqual([]);
+  });
+
+  test("an inherited property name is an unknown argument", async () => {
+    const [ft, seen] = echo();
+
+    const error = await rejection(new ToolSet({ echo: ft }).invoke("echo", { text: "hi", toString: 1 }), RangeError);
+    expect(error.message).toBe('tool \'echo\' received unsupported argument(s) ["toString"]; allowed: ["text"]');
+    expect(seen).toEqual([]);
+  });
+
+  for (const extra of [true, { type: "integer" }]) {
+    const label = JSON.stringify(extra);
+    test(`test_function_tool_accepts_unknown_arguments_when_the_schema_allows_them[${label}]`, async () => {
+      const [ft, seen] = echo({ ...ECHO_SCHEMA, additionalProperties: extra });
+
+      await new ToolSet({ echo: ft }).invoke("echo", { text: "hi", extra: 1 });
+
+      expect(seen[0]![1]).toEqual({ text: "hi", extra: 1 });
+    });
+  }
+
+  test("test_function_tool_checks_extra_arguments_against_an_additional_properties_schema", async () => {
+    const [ft, seen] = echo({ ...ECHO_SCHEMA, additionalProperties: { type: "integer" } });
+
+    const error = await rejection(new ToolSet({ echo: ft }).invoke("echo", { text: "hi", extra: "x" }), TypeCheckError);
+    expect(error.message).toStartWith("tool 'echo' argument 'extra': ");
+    expect((error as TypeCheckError).path).toEqual(["extra"]);
+    expect(seen).toEqual([]);
+  });
+
+  test("test_function_tool_rejects_a_missing_required_argument", async () => {
+    const [ft, seen] = echo();
+
+    const error = await rejection(new ToolSet({ echo: ft }).invoke("echo", {}), RangeError);
+    expect(error.message).toBe('tool \'echo\' is missing required argument(s) ["text"]');
+    expect(seen).toEqual([]);
+  });
+
+  test("missing required arguments keep the schema's order", async () => {
+    const [ft] = echo({
+      type: "object",
+      properties: { a: { type: "string" }, b: { type: "string" }, c: { type: "string" } },
+      required: ["c", "a", "b"],
+    });
+
+    const error = await rejection(new ToolSet({ echo: ft }).invoke("echo", { a: "x" }), RangeError);
+    expect(error.message).toBe('tool \'echo\' is missing required argument(s) ["c","b"]');
+  });
+
+  test("test_function_tool_rejects_a_value_of_the_wrong_type", async () => {
+    const [ft, seen] = echo();
+
+    const error = await rejection(new ToolSet({ echo: ft }).invoke("echo", { text: 3 }), TypeCheckError);
+    expect(error.message).toStartWith("tool 'echo' argument 'text': ");
+    expect((error as TypeCheckError).path).toEqual(["text"]);
+    expect(error.cause).toBeInstanceOf(TypeCheckError);
+    expect(seen).toEqual([]);
+  });
+
+  test("test_function_tool_passes_an_untranslatable_property_through_unchecked", async () => {
+    const [ft, seen] = echo({
+      type: "object",
+      properties: { v: { anyOf: [{ type: "string" }, { type: "integer" }] } },
+    });
+
+    await new ToolSet({ echo: ft }).invoke("echo", { v: [1, 2] });
+
+    expect(seen[0]![1]).toEqual({ v: [1, 2] });
+  });
+
+  test("test_function_tool_accepts_an_integral_float_for_an_integer_as_given", async () => {
+    const [ft, seen] = echo({ type: "object", properties: { n: { type: "integer", minimum: 1 } } });
+    const tools = new ToolSet({ echo: ft });
+
+    await tools.invoke("echo", parseJson('{"n": 3.0}', "plain") as Record<string, unknown>);
+
+    expect(seen[0]![1]).toEqual({ n: 3 });
+    await rejection(tools.invoke("echo", { n: 3.5 }), TypeCheckError);
+    await rejection(tools.invoke("echo", { n: 0 }), TypeCheckError);
+  });
+
+  test("test_function_tool_trusted_invocation_validates_the_same_way", async () => {
+    const [ft] = echo();
+    const tools = new ToolSet({ echo: ft });
+
+    expect(await tools.invokeTrusted("echo", { text: "hi" })).toBe("done");
+    const error = await rejection(tools.invokeTrusted("echo", { text: "hi", extra: 1 }), RangeError);
+    expect(error.message).toBe('tool \'echo\' received unsupported argument(s) ["extra"]; allowed: ["text"]');
+  });
+
+  test("a schema with a $ref checks the referenced type and is kept as given", async () => {
+    const schema: JsonObject = {
+      type: "object",
+      title: "Order",
+      $defs: { Side: { type: "string", enum: ["buy", "sell"], title: "Side" } },
+      properties: { side: { $ref: "#/$defs/Side" }, qty: { type: "integer" } },
+      required: ["side"],
+    };
+    const [ft] = echo(schema, "order");
+    const tools = new ToolSet({ order: ft });
+
+    expect(tools.resolve(["order"])[0]!.parametersJsonSchema).toEqual(schema);
+    await tools.invoke("order", { side: "buy" });
+    await rejection(tools.invoke("order", { side: "hold" }), TypeCheckError);
+  });
+
+  test("test_on_invoke_gets_a_deep_copy_of_the_arguments", async () => {
+    const ft = new FunctionTool({
+      name: "grow",
+      description: "",
+      parametersJsonSchema: { type: "object", properties: { items: { type: "array" } } },
+      execute: (args) => {
+        (args.items as unknown[]).push("added");
+        args.new = 1;
+        return (args.items as unknown[]).length;
+      },
+    });
+    const items = ["a"];
+    const inputs = { items };
+
+    expect(await new ToolSet({ grow: ft }).invoke("grow", inputs)).toBe(2);
+    expect(items).toEqual(["a"]);
+    expect(inputs).toEqual({ items: ["a"] });
+  });
+
+  test("test_function_tool_accepts_integral_floats_in_an_integer_array_as_given", async () => {
+    const [ft, seen] = echo({ type: "object", properties: { ns: { type: "array", items: { type: "integer" } } } });
+    const tools = new ToolSet({ echo: ft });
+
+    await tools.invoke("echo", parseJson('{"ns": [1.0, 2]}', "plain") as Record<string, unknown>);
+
+    expect(seen[0]![1]).toEqual({ ns: [1, 2] });
+    await rejection(tools.invoke("echo", { ns: [1.5] }), TypeCheckError);
+  });
+
+  test("test_function_tool_accepts_integral_floats_in_a_closed_record", async () => {
+    const [ft, seen] = echo({
+      type: "object",
+      properties: {
+        pos: {
+          type: "object",
+          properties: { x: { type: "integer" } },
+          required: ["x"],
+          additionalProperties: false,
+        },
+      },
+    });
+    const tools = new ToolSet({ echo: ft });
+
+    await tools.invoke("echo", parseJson('{"pos": {"x": 4.0}}', "plain") as Record<string, unknown>);
+
+    expect(seen[0]![1]).toEqual({ pos: { x: 4 } });
+    const error = await rejection(tools.invoke("echo", { pos: { x: 4.5 } }), TypeCheckError);
+    expect((error as TypeCheckError).path).toEqual(["pos", "x"]);
+  });
+
+  test("the tool receives the host form of its arguments", async () => {
+    const [ft, seen] = echo({ type: "object", properties: {}, additionalProperties: true });
+
+    await new ToolSet({ echo: ft }).invoke("echo", { small: 2n, big: 2n ** 60n, inf: Infinity });
+
+    expect(seen[0]![1]).toEqual({ small: 2, big: 2n ** 60n, inf: Infinity });
+  });
+
+  test("a non-yian value in the arguments is refused", async () => {
+    const [ft, seen] = echo();
+
+    const error = await rejection(new ToolSet({ echo: ft }).invoke("echo", { text: undefined }), TypeCheckError);
+    expect(error.message).toBe("tool 'echo' arguments at text: undefined is not a yian value; use null");
+    expect(seen).toEqual([]);
+  });
+
+  test("an async execute is awaited and an undefined result is null", async () => {
+    const run = (execute: () => unknown) =>
+      new ToolSet({ echo: new FunctionTool({ ...FIELDS, execute }) }).invoke("echo", { text: "hi" });
+
+    expect(await run(async () => "later")).toBe("later");
+    expect(await run(() => undefined)).toBeNull();
+    expect(await run(async () => undefined)).toBeNull();
+  });
+
+  test("a sync throw and a rejection both reject invoke, unchanged", async () => {
+    const boom = new Error("boom");
+    for (const execute of [
+      () => {
+        throw boom;
+      },
+      async () => {
+        throw boom;
+      },
+    ]) {
+      const tools = new ToolSet({ echo: new FunctionTool({ ...FIELDS, execute }) });
+      const promise = tools.invoke("echo", { text: "hi" });
+      expect(promise).toBeInstanceOf(Promise);
+      expect(await rejection(promise, Error)).toBe(boom);
+    }
   });
 });

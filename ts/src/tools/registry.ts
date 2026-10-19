@@ -11,17 +11,30 @@
  * The reserved `ask_user` id never lives here: each run gets its handler through
  * `new ToolSet({ ask_user: handler, ... })`.
  *
- * Knows about: `tools/context`, `tools/function_tools`, `tools/mcp`, `skills/tool` (the reserved
- * `load_skill` name), typesys and diagnostics.
+ * Knows about: `tools/context`, `tools/function_tools`, `tools/mcp`, `tools/types`, `skills/tool`
+ * (the reserved `load_skill` name), `defaults`, typesys and diagnostics.
  */
 
+import { current } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { LOAD_SKILL } from "../skills/tool.ts";
-import type { JsonObject } from "../typesys/json.ts";
-import { isRecord, jsTypeName, writeAsText } from "../typesys/values.ts";
-import { ASK_USER, type ToolContext } from "./context.ts";
+import { type JsonObject, parseJson } from "../typesys/json.ts";
+import { defaultRunId } from "../typesys/seeding.ts";
+import {
+  buildValueAs,
+  fromHost,
+  isRecord,
+  jsTypeName,
+  setField,
+  toHost,
+  TypeCheckError,
+  type ValueRecord,
+  writeAsText,
+} from "../typesys/values.ts";
+import { ASK_USER, ToolContext } from "./context.ts";
 import { FunctionTool, isFunctionTool } from "./function_tools.ts";
 import { isMcpServer, type McpServer } from "./mcp.ts";
+import { inputTypeFromJsonSchema } from "./types.ts";
 
 export { ASK_USER };
 
@@ -51,6 +64,34 @@ const ASK_USER_PARAMETERS: JsonObject = {
   required: ["question"],
   type: "object",
 };
+
+// The full schema a trusted call (a HUMAN_INPUT node) is checked against: the public one plus the
+// host-injected question and display metadata, which the model never sees.
+const ASK_USER_TRUSTED_PARAMETERS: JsonObject = {
+  ...ASK_USER_PARAMETERS,
+  properties: {
+    ...(ASK_USER_PARAMETERS.properties as JsonObject),
+    questions: { anyOf: [{ items: { type: "object" }, type: "array" }, { type: "null" }], default: null },
+    answerSchema: { anyOf: [{ items: { type: "object" }, type: "array" }, { type: "null" }], default: null },
+    title: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+    nodeId: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+  },
+};
+
+/** Options for one tool call. */
+export interface InvokeOptions {
+  /** The expanded id of the calling node, passed as `ToolContext.node`; defaults to `""`. */
+  node?: string;
+  /**
+   * The call's id. Absent, it is `"<runId>/<node>"` on a run-bound set given a `node`, and a fresh
+   * random hex id otherwise.
+   */
+  callId?: string;
+  /** The attempt number of this call, starting at 1; defaults to 1. */
+  attempt?: number;
+  /** The call's abort signal. Absent, the bound run's signal, else a signal that never aborts. */
+  signal?: AbortSignal;
+}
 
 /** The request a run's `ask_user` handler receives; an absent field is `null`. */
 export interface AskUserRequest {
@@ -161,6 +202,48 @@ export function resolveTools(ids: readonly string[]): FunctionTool[] {
     }
     return tool;
   });
+}
+
+/**
+ * Clean model-sent `ask_user` options; any shape is accepted, none throws.
+ *
+ * A JSON list string is parsed; any other string is one label. Non-string items are dropped.
+ * Labels are collapsed to one line, empty and case-insensitive duplicate labels are dropped,
+ * labels longer than `current().maxQuestionOptionChars` code points are cut, and at most
+ * `current().maxQuestionOptions` are kept.
+ *
+ * @returns The cleaned labels, or `null` when none is left.
+ */
+export function normalizeOptions(value: unknown): string[] | null {
+  if (typeof value === "string") {
+    let parsed: unknown = null;
+    try {
+      parsed = parseJson(value, "plain");
+    } catch {
+      // Not JSON: the string is one label.
+    }
+    value = Array.isArray(parsed) ? parsed : [value];
+  }
+  if (!Array.isArray(value)) return null;
+  const caps = current();
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    let label = item.split(/\s+/).filter((part) => part !== "").join(" ");
+    // Code points, as Python's `len` counts them.
+    const chars = Array.from(label);
+    if (chars.length > caps.maxQuestionOptionChars) {
+      label = chars.slice(0, caps.maxQuestionOptionChars - 1).join("") + "…";
+    }
+    // Close to Python's `casefold`: "Straße" and "STRASSE" are the same label.
+    const key = label.toUpperCase().toLowerCase();
+    if (label === "" || seen.has(key)) continue;
+    seen.add(key);
+    labels.push(label);
+    if (labels.length === caps.maxQuestionOptions) break;
+  }
+  return labels.length > 0 ? labels : null;
 }
 
 /** Return a map's keys sorted by code unit. */
@@ -321,7 +404,9 @@ export class ToolSet {
         const name = item.name;
         if (RESERVED_TOOL_NAMES.has(name)) {
           const hint =
-            name === ASK_USER ? "pass the handler as the top-level tools['ask_user'] entry" : "granting skills binds it";
+            name === ASK_USER
+              ? "pass the handler as the top-level tools['ask_user'] entry"
+              : "granting skills binds it";
           throw new RangeError(`group ${reprText(group)} has a tool named ${reprText(name)}, a reserved name; ${hint}`);
         }
         if (topLevel.has(name)) {
@@ -443,4 +528,203 @@ export class ToolSet {
   resolve(ids: readonly string[]): FunctionTool[] {
     return ids.map((id) => this.lookup(id));
   }
+
+  /**
+   * Check one call's public arguments as `invoke` does, without calling the tool.
+   *
+   * A caller that retries a call checks its arguments once up front, so a bad argument fails
+   * before the first attempt instead of inside the retries.
+   *
+   * @param toolId The id of the tool the call is for.
+   * @param inputs Public arguments keyed by parameter name.
+   * @throws {RangeError} The id is not visible to this run, an argument is not in the schema, or
+   *   a required argument is missing.
+   * @throws {TypeError} `inputs` is not a record.
+   * @throws {TypeCheckError} An argument is not a yian value, or doesn't fit its property's type.
+   *
+   * @example
+   * const tools = new ToolSet({ weather: lookup });
+   * await tools.validate("weather", { city: "Paris" }); // passes; lookup is not called
+   * await tools.validate("weather", { town: "Paris" }); // rejects with a RangeError
+   */
+  async validate(toolId: string, inputs: Record<string, unknown>): Promise<void> {
+    this.check(toolId, inputs, false);
+  }
+
+  /**
+   * Check and call one tool through its model-visible public schema.
+   *
+   * Errors from the check and from the tool propagate unchanged.
+   *
+   * @param toolId The id of the tool to call.
+   * @param inputs Public arguments keyed by parameter name.
+   * @param options The calling node, call id, attempt and abort signal the tool's context carries.
+   * @returns The tool's result, awaited; `undefined` becomes `null`.
+   * @throws {RangeError} The id is not visible to this run, an argument is not in the public
+   *   schema, or a required argument is missing.
+   * @throws {TypeError} `inputs` is not a record.
+   * @throws {TypeCheckError} An argument is not a yian value, or doesn't fit its property's type.
+   */
+  async invoke(toolId: string, inputs: Record<string, unknown>, options?: InvokeOptions): Promise<unknown> {
+    const [tool, payload] = this.check(toolId, inputs, false);
+    return await this.call(tool, toolId, payload, options);
+  }
+
+  /**
+   * Check and call one tool through its full schema, including host-injected fields.
+   *
+   * Only `ask_user` has injected fields (`questions`, `answerSchema`, `title`, `nodeId`); every
+   * other tool is checked as `invoke` checks it.
+   *
+   * @param toolId The id of the tool to call.
+   * @param inputs Public and injected arguments keyed by parameter name.
+   * @param options The calling node, call id, attempt and abort signal the tool's context carries.
+   * @returns The tool's result, awaited; `undefined` becomes `null`.
+   * @throws {RangeError} The id is not visible to this run, an argument is not in the full schema,
+   *   or a required argument is missing.
+   * @throws {TypeError} `inputs` is not a record.
+   * @throws {TypeCheckError} An argument is not a yian value, or doesn't fit its property's type.
+   */
+  async invokeTrusted(toolId: string, inputs: Record<string, unknown>, options?: InvokeOptions): Promise<unknown> {
+    const [tool, payload] = this.check(toolId, inputs, true);
+    return await this.call(tool, toolId, payload, options);
+  }
+
+  /**
+   * Return whether a call with these arguments may run beside other calls.
+   *
+   * `true` only when the tool's `isConcurrencySafe` returns exactly `true` for the host form of
+   * the arguments. It never throws: no such function, an unknown tool, arguments that aren't a
+   * yian record, a throw or any other result give `false`. It doesn't check the arguments against
+   * the schema; callers check each call first.
+   */
+  isConcurrencySafe(toolId: string, inputs: Record<string, unknown>): boolean {
+    try {
+      const check = this.lookup(toolId).isConcurrencySafe;
+      if (check === null) return false;
+      const payload = fromHost(inputs, `tool ${reprText(toolId)} arguments`);
+      return isRecord(payload) && check(toHost(payload) as Record<string, unknown>) === true;
+    } catch {
+      // A call whose safety can't be read runs alone.
+      return false;
+    }
+  }
+
+  /**
+   * Look the tool up and check one call's arguments; return the tool and the checked arguments
+   * as a fresh yian record, `ask_user`'s `options` cleaned.
+   */
+  private check(toolId: string, inputs: Record<string, unknown>, trusted: boolean): [FunctionTool, ValueRecord] {
+    const tool = this.lookup(toolId);
+    const where = `tool ${reprText(toolId)} arguments`;
+    const payload = fromHost(inputs, where);
+    if (!isRecord(payload)) throw new TypeError(`${where} must be a record, got ${jsTypeName(inputs)}`);
+    if (toolId !== ASK_USER) {
+      checkArguments(toolId, tool.parametersJsonSchema, payload, null);
+    } else {
+      if (Object.hasOwn(payload, "options")) payload.options = normalizeOptions(payload.options);
+      const schema = trusted ? ASK_USER_TRUSTED_PARAMETERS : tool.parametersJsonSchema;
+      checkArguments(toolId, schema, payload, trusted ? "trusted" : "public");
+    }
+    return [tool, payload];
+  }
+
+  /** Call a checked tool with the host form of its arguments and this call's context. */
+  private async call(
+    tool: FunctionTool,
+    toolId: string,
+    payload: ValueRecord,
+    options: InvokeOptions = {},
+  ): Promise<unknown> {
+    const node = options.node ?? "";
+    const ctx = new ToolContext({
+      // Without a run and a node nothing makes two calls the same call, so each gets its own id.
+      callId: options.callId ?? (this.boundRunId && node ? `${this.boundRunId}/${node}` : defaultRunId()),
+      attempt: options.attempt ?? 1,
+      toolName: toolId,
+      runId: this.boundRunId,
+      node,
+      context: this.hostContext,
+      signal: options.signal ?? this.boundSignal ?? new AbortController().signal,
+    });
+    const result = await tool.execute(toHost(payload) as Record<string, unknown>, ctx);
+    return result === undefined ? null : result;
+  }
+}
+
+/**
+ * Check call arguments against a tool's JSON Schema.
+ *
+ * Unknown keys are rejected unless `additionalProperties` is `true` or a schema, in which case
+ * extra values are checked against that schema. Missing required keys are rejected, in the
+ * schema's `required` order. Each value is checked against the yian type its JSON Schema
+ * translates to; a schema with no translation is not checked. `scope` names the invocation path
+ * in the unknown-key message (`ask_user` has two).
+ *
+ * @throws {RangeError} An unknown or missing key.
+ * @throws {TypeCheckError} A value doesn't fit its property's translated type.
+ */
+function checkArguments(
+  toolId: string,
+  schema: JsonObject,
+  payload: ValueRecord,
+  scope: "public" | "trusted" | null,
+): void {
+  const name = reprText(toolId);
+  // Own keys only: a schema is a plain object, so `toString` must not read as a property.
+  const own = (record: ValueRecord, key: string): unknown => (Object.hasOwn(record, key) ? record[key] : undefined);
+  const found = own(schema, "properties");
+  const properties: ValueRecord = isRecord(found) ? found : {};
+  const extra = own(schema, "additionalProperties");
+  const extraSchema = isRecord(extra) ? extra : undefined;
+  const unsupported = Object.keys(payload)
+    .filter((key) => !Object.hasOwn(properties, key))
+    .sort(compareCodeUnits);
+  if (unsupported.length > 0 && extra !== true && extraSchema === undefined) {
+    const path = scope === null ? "" : ` on its ${scope} invocation path`;
+    const allowed = Object.keys(properties).sort(compareCodeUnits);
+    throw new RangeError(
+      `tool ${name} received unsupported argument(s) ${writeAsText(unsupported)}${path}; ` +
+        `allowed: ${writeAsText(allowed)}`,
+    );
+  }
+  const required = own(schema, "required");
+  const missing = (Array.isArray(required) ? required : []).filter(
+    (key): key is string => typeof key === "string" && !Object.hasOwn(payload, key),
+  );
+  if (missing.length > 0) throw new RangeError(`tool ${name} is missing required argument(s) ${writeAsText(missing)}`);
+  for (const [key, value] of Object.entries(payload)) {
+    const prop = Object.hasOwn(properties, key) ? properties[key] : extraSchema;
+    if (prop === undefined) continue;
+    const typ = inputTypeFromJsonSchema(prop, schema);
+    if (typ === null) continue;
+    try {
+      buildValueAs(typ, value);
+    } catch (error) {
+      if (!(error instanceof TypeCheckError)) throw error;
+      throw new TypeCheckError(`tool ${name} argument ${reprText(key)}: ${error.message}`, {
+        path: [key, ...error.path],
+        cause: error,
+      });
+    }
+  }
+}
+
+/**
+ * Check and call one registered tool through its model-visible public schema.
+ *
+ * Errors from the check and the tool propagate unchanged. The tool gets a context outside any
+ * run: `runId` and `node` are `""` and `callId` is a fresh random hex id.
+ */
+export function invokeTool(toolId: string, inputs: Record<string, unknown>): Promise<unknown> {
+  return new ToolSet().invoke(toolId, inputs);
+}
+
+/**
+ * Check and call one registered tool through its full schema, including host-injected fields.
+ *
+ * The tool gets a context outside any run, as with `invokeTool`.
+ */
+export function invokeToolTrusted(toolId: string, inputs: Record<string, unknown>): Promise<unknown> {
+  return new ToolSet().invokeTrusted(toolId, inputs);
 }

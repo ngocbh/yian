@@ -1,8 +1,12 @@
 /**
- * The tool registry and `ToolSet` construction and lookup, a port of
- * `tests/engine/test_tool_registry.py` (registration and lookup rows) with rows for each
- * construction and group error, `expand`, `forRun`, `toolIds` and `groups`. The invocation rows
- * land with `ToolSet.invoke`.
+ * The tool registry and `ToolSet`, a port of `tests/engine/test_tool_registry.py` with rows for
+ * each construction and group error, `expand`, `forRun`, `toolIds`, `groups`, `validate`,
+ * `isConcurrencySafe` and the `ask_user` options cleaning, plus `test_injected_arguments_are_not_inputs`
+ * and `test_function_tool_types` from `test_tool_types.py`. Not ported:
+ * `test_invocation_supports_pydantic_v1_schema` and `test_invocation_rejects_unvalidated_json_schema_tools`
+ * (TS has only `FunctionTool`s), `test_install_ask_user_is_removed` (it never existed in TS),
+ * `test_tool_node_uses_public_invocation_path` (needs the TOOL node), and the LangChain binding
+ * half of `test_ask_user_openai_schema_offers_optional_string_options`.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -10,6 +14,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import {
+  type AskUserRequest,
+  invokeTool,
+  invokeToolTrusted,
   registeredTools,
   registerTool,
   resolveTools,
@@ -17,6 +24,8 @@ import {
   ToolSet,
   type ToolEntry,
 } from "../../src/tools/registry.ts";
+import { toolTypes } from "../../src/tools/types.ts";
+import { canonicalTypeLabel } from "../../src/typesys/values.ts";
 
 let saved: [string, FunctionTool][] = [];
 
@@ -44,11 +53,29 @@ function thrown(fn: () => unknown, kind: typeof TypeError | typeof RangeError): 
   try {
     fn();
   } catch (error) {
-    expect(error).toBeInstanceOf(kind);
     expect((error as Error).constructor).toBe(kind);
     return (error as Error).message;
   }
   throw new Error("expected an error");
+}
+
+/** Return the message of the error `promise` rejects with, after checking its class. */
+async function rejected(promise: Promise<unknown>, kind: typeof TypeError | typeof RangeError): Promise<string> {
+  try {
+    await promise;
+  } catch (error) {
+    expect((error as Error).constructor).toBe(kind);
+    return (error as Error).message;
+  }
+  throw new Error("expected a rejection");
+}
+
+/** Build an `ask_user` handler that records each request and returns `answer`. */
+function recordingHandler(seen: AskUserRequest[], answer: unknown = "answer") {
+  return (request: AskUserRequest) => {
+    seen.push(request);
+    return answer;
+  };
 }
 
 /** Build a tool set from a mapping the types would refuse. */
@@ -89,6 +116,10 @@ describe("registerTool", () => {
   });
 
   test("checks the reserved id before a duplicate, and a duplicate before the target", () => {
+    TOOL_REGISTRY.set("ask_user", tool("ask_user"));
+    expect(thrown(() => registerTool("ask_user", tool("ask_user")), RangeError)).toBe(
+      "tool id 'ask_user' is reserved; pass tools: {...registeredTools(), ask_user: handler} to runFlow or resumeFlow",
+    );
     registerTool("echo", tool("echo"));
     expect(thrown(() => registerTool("echo", null as unknown as FunctionTool), RangeError)).toBe(
       "Duplicate tool id 'echo'",
@@ -258,7 +289,8 @@ describe("ToolSet construction", () => {
       seen.push([request, ctx]);
       return "answer";
     };
-    const [askUser] = new ToolSet({ ask_user: handler }).resolve(["ask_user"]);
+    const tools = new ToolSet({ ask_user: handler });
+    const [askUser] = tools.resolve(["ask_user"]);
     expect(askUser!.name).toBe("ask_user");
     expect(askUser!.description).toBe(
       "Ask the user one short question and wait for the answer. Use only when you need a decision or information that only the user can provide. Put the context they need in one or two sentences. When there are clear choices, pass 2-4 short `options`; the user can always type their own answer.",
@@ -266,19 +298,20 @@ describe("ToolSet construction", () => {
     expect(JSON.stringify(askUser!.parametersJsonSchema)).toBe(
       '{"properties":{"question":{"type":"string"},"options":{"anyOf":[{"items":{"type":"string"},"type":"array"},{"type":"null"}],"default":null,"description":"Optional 2-4 short answer choices. The user can always type a different answer."}},"required":["question"],"type":"object"}',
     );
-    const ctx = new ToolContext({
-      callId: "c",
-      attempt: 1,
-      toolName: "ask_user",
-      runId: "",
-      node: "",
-      context: null,
-      signal: new AbortController().signal,
+    expect(await tools.invoke("ask_user", { question: "Approve?" }, { callId: "c" })).toBe("answer");
+    expect(seen).toHaveLength(1);
+    const [request, ctx] = seen[0]!;
+    expect(request).toEqual({
+      question: "Approve?",
+      options: null,
+      questions: null,
+      answerSchema: null,
+      title: null,
+      nodeId: null,
     });
-    expect(await askUser!.execute({ question: "Approve?" }, ctx)).toBe("answer");
-    expect(seen).toEqual([
-      [{ question: "Approve?", options: null, questions: null, answerSchema: null, title: null, nodeId: null }, ctx],
-    ]);
+    expect(ctx).toBeInstanceOf(ToolContext);
+    expect((ctx as ToolContext).callId).toBe("c");
+    expect((ctx as ToolContext).toolName).toBe("ask_user");
     expect(TOOL_REGISTRY.has("ask_user")).toBe(false);
   });
 });
@@ -397,4 +430,255 @@ describe("ToolSet.forRun", () => {
     expect(Object.getPrototypeOf(bound)).toBe(Sub.prototype);
     expect(bound.runId).toBe("r");
   });
+});
+
+describe("ask_user invocation", () => {
+  const NO_FIELDS = { options: null, questions: null, answerSchema: null, title: null, nodeId: null };
+
+  test("test_ask_user_public_schema_contains_question_and_options", async () => {
+    const seen: AskUserRequest[] = [];
+    const tools = new ToolSet({ ask_user: recordingHandler(seen) });
+
+    const [askUser] = tools.resolve(["ask_user"]);
+    expect(Object.keys(askUser!.parametersJsonSchema.properties as object)).toEqual(["question", "options"]);
+    expect(await tools.invoke("ask_user", { question: "Approve?" })).toBe("answer");
+
+    expect(seen).toEqual([{ question: "Approve?", ...NO_FIELDS }]);
+    expect(TOOL_REGISTRY.has("ask_user")).toBe(false);
+  });
+
+  test("test_ask_user_openai_schema_offers_optional_string_options", () => {
+    const [askUser] = new ToolSet({ ask_user: recordingHandler([]) }).resolve(["ask_user"]);
+    const schema = askUser!.parametersJsonSchema as any;
+
+    expect(schema.required).toEqual(["question"]);
+    expect(schema.properties.options.anyOf).toEqual([{ type: "array", items: { type: "string" } }, { type: "null" }]);
+    expect(schema.properties.options.description).toContain("user can always type a different answer");
+  });
+
+  const INJECTED: [string, unknown][] = [
+    ["questions", [{ id: "reason", prompt: "Why?" }]],
+    ["answerSchema", [{ name: "reason", type: "str" }]],
+    ["title", "Approval"],
+    ["nodeId", "gate"],
+    ["unexpected", true],
+  ];
+  for (const [key, value] of INJECTED) {
+    test(`test_public_invocation_rejects_injected_and_unknown_keys[${key}]`, async () => {
+      const seen: AskUserRequest[] = [];
+      const tools = new ToolSet({ ask_user: recordingHandler(seen) });
+
+      expect(await rejected(tools.invoke("ask_user", { question: "Approve?", [key]: value }), RangeError)).toBe(
+        `tool 'ask_user' received unsupported argument(s) ["${key}"] on its public invocation path; ` +
+          'allowed: ["options","question"]',
+      );
+      expect(seen).toEqual([]);
+    });
+  }
+
+  for (const [label, invoke] of [
+    ["invokeTool", invokeTool],
+    ["invokeToolTrusted", invokeToolTrusted],
+  ] as const) {
+    test(`test_invocation_rejects_unknown_tool[${label}]`, async () => {
+      expect(await rejected(invoke("not_registered", {}), RangeError)).toContain("unknown tool id 'not_registered'");
+    });
+  }
+
+  test("test_trusted_invocation_passes_structured_metadata", async () => {
+    const seen: AskUserRequest[] = [];
+    const metadata = {
+      question: "Review the proposal",
+      questions: [{ id: "decision", prompt: "Approve?" }],
+      answerSchema: [{ name: "decision", type: "bool" }],
+      title: "Human review",
+      nodeId: "approval",
+    };
+    const tools = new ToolSet({ ask_user: recordingHandler(seen, { decision: true }) });
+
+    expect(await tools.invokeTrusted("ask_user", metadata)).toEqual({ decision: true });
+
+    expect(seen).toEqual([{ ...metadata, options: null }]);
+  });
+
+  test("test_trusted_invocation_rejects_unknown_metadata", async () => {
+    const tools = new ToolSet({ ask_user: recordingHandler([]) });
+
+    const inputs = { question: "Approve?", not_metadata: "model supplied" };
+    expect(await rejected(tools.invokeTrusted("ask_user", inputs), RangeError)).toBe(
+      "tool 'ask_user' received unsupported argument(s) [\"not_metadata\"] on its trusted invocation path; " +
+        'allowed: ["answerSchema","nodeId","options","question","questions","title"]',
+    );
+  });
+
+  test("the trusted path checks the metadata's types", async () => {
+    const tools = new ToolSet({ ask_user: recordingHandler([]) });
+
+    await expect(tools.invokeTrusted("ask_user", { question: "Approve?", title: 3 })).rejects.toThrow(
+      /^tool 'ask_user' argument 'title': /,
+    );
+  });
+
+  test("test_ask_user_never_falls_back_to_the_global_registry (invoke)", async () => {
+    TOOL_REGISTRY.set("ask_user", tool("ask_user", "global answer"));
+    for (const tools of [new ToolSet(), new ToolSet({})]) {
+      expect(await rejected(tools.invoke("ask_user", { question: "Approve?" }), RangeError)).toBe(
+        "no ask_user handler for this run; pass tools: {...registeredTools(), ask_user: handler} to runFlow or resumeFlow",
+      );
+    }
+  });
+
+  const OPTION_ROWS: [string, unknown, string[] | null][] = [
+    ["a JSON list string", '["A","B"]', ["A", "B"]],
+    ["a plain string", "A, B", ["A, B"]],
+    ["mixed items", [1, "", " a ", "A", null], ["a"]],
+    ["labels equal under case folding", ["Straße", "STRASSE"], ["Straße"]],
+    ["bad JSON", '["a","a"', ['["a","a"']],
+    ["a record", { x: 1 }, null],
+  ];
+  for (const [label, options, expected] of OPTION_ROWS) {
+    test(`cleans options: ${label}`, async () => {
+      const seen: AskUserRequest[] = [];
+      await new ToolSet({ ask_user: recordingHandler(seen) }).invoke("ask_user", { question: "Q?", options });
+      expect(seen[0]!.options).toEqual(expected);
+    });
+  }
+
+  test("test_injected_arguments_are_not_inputs", () => {
+    const [askUser] = new ToolSet({ ask_user: () => "yes" }).resolve(["ask_user"]);
+    const types = toolTypes(askUser!);
+    const labels = Object.fromEntries(
+      [...types.inputs!].map(([name, typ]) => [name, typ === null ? null : canonicalTypeLabel(typ)]),
+    );
+
+    expect(labels).toEqual({ question: "str", options: null });
+    expect(types.required).toEqual(new Set(["question"]));
+  });
+});
+
+describe("validate", () => {
+  test("checks the arguments without calling the tool", async () => {
+    let calls = 0;
+    const counted = new FunctionTool({
+      name: "echo",
+      description: "Echo.",
+      parametersJsonSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+      execute: () => ++calls,
+    });
+    const tools = new ToolSet({ echo: counted });
+
+    expect(await tools.validate("echo", { text: "hi" })).toBeUndefined();
+    expect(await rejected(tools.validate("echo", { town: "Paris" }), RangeError)).toBe(
+      'tool \'echo\' received unsupported argument(s) ["town"]; allowed: ["text"]',
+    );
+    expect(await rejected(tools.validate("nope", {}), RangeError)).toContain("unknown tool id 'nope'");
+    expect(calls).toBe(0);
+  });
+
+  test("refuses arguments that aren't a record", async () => {
+    const tools = new ToolSet({ echo: tool("echo") });
+    expect(await rejected(tools.validate("echo", [] as never), TypeError)).toBe(
+      "tool 'echo' arguments must be a record, got Array",
+    );
+    expect(await rejected(tools.invoke("echo", "hi" as never), TypeError)).toBe(
+      "tool 'echo' arguments must be a record, got string",
+    );
+  });
+});
+
+describe("isConcurrencySafe", () => {
+  /** Build a tool whose `isConcurrencySafe` is `check`. */
+  function guarded(check: ((args: Record<string, unknown>) => boolean) | null): ToolSet {
+    return new ToolSet({
+      echo: new FunctionTool({
+        name: "echo",
+        description: "Echo.",
+        parametersJsonSchema: { type: "object", properties: { n: { type: "integer" } } },
+        execute: () => null,
+        isConcurrencySafe: check,
+      }),
+    });
+  }
+
+  const ROWS: [string, ((args: Record<string, unknown>) => boolean) | null, boolean][] = [
+    ["absent", null, false],
+    ["true", () => true, true],
+    ["false", () => false, false],
+    ["a truthy non-true result", () => 1 as unknown as boolean, false],
+    [
+      "a throw",
+      () => {
+        throw new Error("boom");
+      },
+      false,
+    ],
+  ];
+  for (const [label, check, expected] of ROWS) {
+    test(`${label} gives ${expected}`, () => {
+      expect(guarded(check).isConcurrencySafe("echo", { n: 1 })).toBe(expected);
+    });
+  }
+
+  test("an unknown tool, non-record arguments or arguments holding undefined give false", () => {
+    const tools = guarded(() => true);
+    expect(tools.isConcurrencySafe("nope", {})).toBe(false);
+    expect(tools.isConcurrencySafe("echo", [] as never)).toBe(false);
+    expect(tools.isConcurrencySafe("echo", { n: undefined })).toBe(false);
+  });
+
+  test("receives the host form of the arguments", () => {
+    const seen: Record<string, unknown>[] = [];
+    const args = { n: 2n, big: 2n ** 60n, list: [1] };
+    const tools = guarded((received) => {
+      seen.push(received);
+      return true;
+    });
+
+    expect(tools.isConcurrencySafe("echo", args)).toBe(true);
+    expect(seen).toEqual([{ n: 2, big: 2n ** 60n, list: [1] }]);
+    expect(seen[0]).not.toBe(args);
+    expect(seen[0]!.list).not.toBe(args.list);
+  });
+
+  test("the ask_user tool is unsafe", () => {
+    expect(new ToolSet({ ask_user: () => "yes" }).isConcurrencySafe("ask_user", { question: "Q?" })).toBe(false);
+  });
+});
+
+describe("test_function_tool_types", () => {
+  const place = new FunctionTool({
+    name: "place",
+    description: "Place an order.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        sym: { type: "string" },
+        qty: { type: "integer", minimum: 1 },
+        mode: { enum: ["a", "b"], type: "string" },
+      },
+      required: ["sym", "qty"],
+    },
+    execute: () => null,
+  });
+  const BUILDS: [string, () => FunctionTool][] = [
+    [
+      "registerTool",
+      () => {
+        registerTool("place", place);
+        return new ToolSet().resolve(["place"])[0]!;
+      },
+    ],
+    ["mapping entry", () => new ToolSet({ place }).resolve(["place"])[0]!],
+    ["group item", () => new ToolSet({ g: [place] }).resolve(["place"])[0]!],
+  ];
+  for (const [label, build] of BUILDS) {
+    test(label, () => {
+      const types = toolTypes(build());
+      const labels = Object.fromEntries(
+        [...types.inputs!].map(([name, typ]) => [name, typ === null ? null : canonicalTypeLabel(typ)]),
+      );
+      expect(labels).toEqual({ sym: "str", qty: "int(1..)", mode: "Literal(a, b)" });
+      expect(types.required).toEqual(new Set(["sym", "qty"]));
+    });
+  }
 });

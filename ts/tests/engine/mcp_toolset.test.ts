@@ -1,7 +1,7 @@
 /**
  * `ToolSet` takes an open MCP server as a tool group, a port of `tests/engine/test_mcp_toolset.py`
- * (construction and `expand` rows) with a fake open server. The invoke rows, the `McpServerClosed`
- * row and the import-without-the-SDK row land with the MCP client; the exports row lands with the
+ * (construction, `expand` and invoke rows) with a fake open server. The `McpServerClosed` row and
+ * the import-without-the-SDK row land with the MCP client; the exports row lands with the
  * package entry point.
  */
 
@@ -71,11 +71,12 @@ function thrown(fn: () => unknown, kind: typeof TypeError | typeof RangeError): 
 const server = new FakeServer("fake", [serverTool("echo"), serverTool("add")]);
 
 describe("an MCP server in a ToolSet", () => {
-  test("test_an_open_server_is_a_group_of_its_tools", () => {
+  test("test_an_open_server_is_a_group_of_its_tools", async () => {
     const tools = new ToolSet({ fake: server });
     expect(tools.groups).toEqual(["fake"]);
     expect(tools.expand(["fake"])).toEqual(server.tools.map((tool) => tool.name));
     expect(tools.resolve(["echo"])).toEqual([server.tools[0]!]);
+    expect(await tools.invoke("echo", { text: "hi" })).toBe("hi");
   });
 
   test("test_an_unopened_server_is_rejected", () => {
@@ -111,7 +112,7 @@ describe("an MCP server in a ToolSet", () => {
     expect(tools.expand(["a", "b"])).toEqual(server.tools.map((tool) => tool.name));
   });
 
-  test("test_a_renamed_tool_in_a_list_group_calls_the_servers_tool", () => {
+  test("test_a_renamed_tool_in_a_list_group_calls_the_servers_tool", async () => {
     const echo = server.tools.find((tool) => tool.name === "echo")!;
     const renamed = new FunctionTool({
       name: "other",
@@ -122,6 +123,7 @@ describe("an MCP server in a ToolSet", () => {
     const tools = new ToolSet({ renamed: [renamed] });
     expect(tools.expand(["renamed"])).toEqual(["other"]);
     expect(tools.resolve(["other"])[0]!.execute).toBe(echo.execute);
+    expect(await tools.invoke("other", { text: "hi" })).toBe("hi");
   });
 
   test("test_a_dead_server_is_rejected", () => {

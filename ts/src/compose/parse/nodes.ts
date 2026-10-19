@@ -23,13 +23,34 @@
 
 import { END_ID, START_ID } from "../../compile/model.ts";
 import { compareCodeUnits, reprText } from "../../diagnostics.ts";
+import { ExpressionError } from "../../expr/expressions.ts";
 import { EXPRESSION_KEYWORDS } from "../../expr/grammar.ts";
-import { isRecord } from "../../typesys/values.ts";
+import { scanTemplate, Span } from "../../expr/template.ts";
+import {
+  buildValue,
+  isList,
+  isListKind,
+  isRecord,
+  listKindForElement,
+  Type,
+  TypeCheckError,
+  typeEquals,
+  ValueKind,
+} from "../../typesys/values.ts";
+import { CALL_HEAD } from "../helpers/directives.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
+import { oneLineText } from "../helpers/source.ts";
+import { QUOTED_STYLES, suggestTag, yamlQuoted } from "../helpers/tags.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { type NodeDescriptor, notTextError, siteKey } from "../nodes/base.ts";
 import { KINDS, REMOVED_KINDS } from "../nodes/index.ts";
-import { SourceAccessError, type SourceCursor } from "../source/index.ts";
+import type { ScalarStyle } from "../source/common.ts";
+import {
+  parseYamlLiteral,
+  SourceAccessError,
+  type SourceCursor,
+  SourceSyntaxError,
+} from "../source/index.ts";
 
 // Singular source keys are projected onto the descriptors' plural field names while keeping
 // their original child sources.
@@ -42,6 +63,14 @@ const INPUT_OUTPUT_REMAP: ReadonlyMap<string, string> = new Map([
 // non-ASCII letter (`café`).
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const NON_IDENTIFIER_CHAR = /[^A-Za-z0-9_]/gu;
+
+// Item types a list of numbers joins to `float`.
+const INT = Type.scalar(ValueKind.INTEGER);
+const FLOAT = Type.scalar(ValueKind.NUMBER);
+// A null while list items are joined: its type is the other items' type, made optional.
+const NULL = new Type({ kind: ValueKind.NONE, nullable: true });
+// The item type of a list whose items share no type.
+const ANY = Type.scalar(ValueKind.ANY);
 
 /** The identifier rule, as node id messages state it. */
 export const IDENTIFIER_RULE = "ASCII letters, digits, and _, not starting with a digit";
@@ -234,7 +263,10 @@ function rejectReservedNodeId(nodeId: string, cursor: SourceCursor): void {
 }
 
 /**
- * Reject an untagged scalar, list or null entry with the node-or-value message, at the entry.
+ * Reject an untagged scalar, list or null entry, showing the tag to write, at the entry.
+ *
+ * A literal gets an example of the entry with its tag. A `${...}` or `call(...)` value is not a
+ * literal, and no tag holds a value that contains itself, so neither gets an example.
  *
  * @throws LoadError always; one nested deeper than a yian value may reports the nesting limit
  *   instead.
@@ -244,10 +276,160 @@ function rejectUntaggedValue(
   cursor: SourceCursor,
   diagnostics: LoadDiagnostics,
 ): never {
+  const value = cursor.value;
   const range = cursor.range ?? cursor.keyRange;
-  // First: a value past the nesting limit couldn't load as a tagged entry either.
-  checkWrittenValue(cursor.value, `value entry ${reprText(nodeId)}`, range, diagnostics);
-  throw diagnostics.error(nodeOrValue(nodeId), { range });
+  // First: the checks below walk the value recursively, and one past the limit couldn't load as
+  // the suggested entry either.
+  checkWrittenValue(value, `value entry ${reprText(nodeId)}`, range, diagnostics);
+  let message = nodeOrValue(nodeId);
+  if (!isReference(value, cursor.scalarStyle) && !containsItself(value)) {
+    const typ = exampleType(value);
+    if (typ !== null) message += `, e.g. ${suggestTag(nodeId, typ, exampleText(value, cursor))}`;
+  }
+  throw diagnostics.error(message, { range });
+}
+
+/** Return whether an untagged value is a `${...}` template or a `call(...)` directive. */
+function isReference(value: unknown, style: ScalarStyle | null): boolean {
+  if (typeof value !== "string") return false;
+  if (isBindingText(value)) return true;
+  // A quoted `call(...)` is text, as in a binding.
+  return !QUOTED_STYLES.has(style) && CALL_HEAD.test(value.trim());
+}
+
+/**
+ * Return whether `value` is template text holding at least one `${...}` span: plain text, a
+ * `$${...}` escape (literal text) and malformed template text are not.
+ */
+function isBindingText(value: string): boolean {
+  try {
+    return scanTemplate(value).some((segment) => segment instanceof Span);
+  } catch (error) {
+    if (error instanceof ExpressionError) return false;
+    throw error;
+  }
+}
+
+/**
+ * Return the widened type to tag an authored value with in an example.
+ *
+ * `Optional(str)` for null, `object` for a record, a list of its items' joined type, else the
+ * widened type of the value (`float` for an infinity); `null` for a value no type holds. Items
+ * join recursively: a null makes the type optional, ints and floats join to `float`, and an
+ * empty list joins any list, so `[[1], [null]]` is `list(list(Optional(int)))` and `[[], [1]]`
+ * is `list(list(int))`. A list of nulls only is `list(Optional(str))`. Items that share no type
+ * are `Any`, or `Optional(Any)` when one of them is null, so `[1, a]` is `list(Any)` and
+ * `[null, 1, a]` is `list(Optional(Any))`.
+ *
+ * @param value An authored YAML value that does not contain itself.
+ */
+export function exampleType(value: unknown): Type | null {
+  const typ = itemType(value);
+  return typ === null ? null : settled(typ);
+}
+
+/** Return `exampleType(value)`, but with `NULL` for a null left to be joined. */
+function itemType(value: unknown): Type | null {
+  if (value === null) return NULL;
+  if (isRecord(value)) return Type.scalar(ValueKind.OBJECT);
+  if (isList(value) && value.length > 0) {
+    const types = value.map(itemType);
+    if (types.some((typ) => typ === null)) return null;
+    let element: Type | null = types[0]!;
+    for (const typ of types.slice(1)) {
+      element = element === null ? null : joined(element, typ!);
+    }
+    if (element !== null) return listOf(element);
+    return listOf(ANY.replace({ nullable: value.includes(null) }));
+  }
+  try {
+    // An empty list is a `list(Optional(Any))` with no element type, which joins any list.
+    return Type.scalar(buildValue(value).kind);
+  } catch (error) {
+    if (error instanceof TypeCheckError) return null;
+    throw error;
+  }
+}
+
+/** Return the one type two item types widen to, or `null` when there is none. */
+function joined(first: Type, second: Type): Type | null {
+  if (first.kind === ValueKind.NONE) return second.replace({ nullable: true });
+  if (second.kind === ValueKind.NONE) return first.replace({ nullable: true });
+  const nullable = first.nullable || second.nullable;
+  const a = first.replace({ nullable: false });
+  const b = second.replace({ nullable: false });
+  const isNumber = (typ: Type) => typeEquals(typ, INT) || typeEquals(typ, FLOAT);
+  let result: Type;
+  if (typeEquals(a, b)) {
+    result = a;
+  } else if (isNumber(a) && isNumber(b)) {
+    result = FLOAT;
+  } else if (isListKind(a.kind) && isListKind(b.kind)) {
+    if (a.element === undefined || b.element === undefined) {
+      result = a.element === undefined ? b : a;
+    } else {
+      const element = joined(a.element, b.element);
+      if (element === null) return null;
+      result = listOf(element);
+    }
+  } else {
+    return null;
+  }
+  return nullable ? result.replace({ nullable: true }) : result;
+}
+
+/** Return `typ` with each `NULL` left in it read as `Optional(str)`. */
+function settled(typ: Type): Type {
+  if (typ.kind === ValueKind.NONE) return new Type({ kind: ValueKind.STRING, nullable: true });
+  if (typ.element === undefined) return typ;
+  const element = settled(typ.element);
+  return typ.replace({ kind: listKindForElement(element), element });
+}
+
+/** Return the list type of an element type. */
+function listOf(element: Type): Type {
+  return new Type({ kind: listKindForElement(element), element });
+}
+
+/**
+ * Return whether a list or record holds itself at some depth, through a YAML alias
+ * (`&R [*R]`).
+ *
+ * @param value An authored YAML value or a part of one.
+ * @param active The lists and records enclosing `value`.
+ */
+export function containsItself(value: unknown, active: ReadonlySet<object> = new Set()): boolean {
+  if (!isList(value) && !isRecord(value)) return false;
+  if (active.has(value)) return true;
+  const inner = new Set(active).add(value);
+  const items = isList(value) ? value : Object.values(value);
+  return items.some((item) => containsItself(item, inner));
+}
+
+/**
+ * Spell an untagged entry's value for its example: a value written over several lines (a block
+ * list) as `...`, and text YAML would not read back as the same text quoted (`!!str 3` as
+ * `"3"`).
+ */
+function exampleText(value: unknown, cursor: SourceCursor): string {
+  if (value === null) return "null";
+  const text = cursor.scalarText;
+  if (typeof value === "string") {
+    if (cursor.scalarStyle === "plain" && text !== null && readsAs(text, value)) return text;
+    return yamlQuoted(value);
+  }
+  if (text !== null) return text;
+  return oneLineText(cursor.document, cursor.range) || "...";
+}
+
+/** Return whether the plain scalar `text` reads back as the string `value`. */
+function readsAs(text: string, value: string): boolean {
+  try {
+    return parseYamlLiteral(text) === value;
+  } catch (error) {
+    if (error instanceof SourceSyntaxError) return false;
+    throw error;
+  }
 }
 
 /**

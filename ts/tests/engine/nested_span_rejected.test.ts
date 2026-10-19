@@ -16,6 +16,7 @@
 
 import { expect, test } from "bun:test";
 
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import {
   conditionRefs,
   ExpressionError,
@@ -24,7 +25,8 @@ import {
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, rejectNestedSpans, Token } from "../../src/expr/grammar.ts";
 import { scanTemplate } from "../../src/expr/template.ts";
-import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { ValueContract } from "../../src/nodes/contracts.ts";
+import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { assembled, assembledWith, handChild, parametersFromYaml, runCase } from "../compose/declarations.ts";
 
 const NESTED = "`${...}` can't appear inside an expression";
@@ -153,11 +155,16 @@ test("assembled: load-core/engine_nested_span_rejected__case_condition_shows_the
   runCase({ id: "load-core/engine_nested_span_rejected__case_condition_shows_the_rewrite", call: assembled });
 });
 
-/** The `step` def of the LOOP case: it reads `{n, exited}` and returns them. */
+/**
+ * The `step` def of the LOOP case: it reads `{n, exited}`, and its producer `s` returns the record
+ * `{n: int, exited: bool}`, which the def outputs.
+ */
 function stepBody(): ComposedFlow {
+  const record = new ValueContract(typeFor("Rec", readTypedefs({ Rec: { n: "int", exited: "bool" } })));
   return handChild({
     inputs: parametersFromYaml("input:\n  n: !int\n  exited: !bool\n", new Map()),
-    output: { n: "${input.n}", exited: "${input.exited}" },
+    producers: { s: record },
+    output: "${s.output}",
   });
 }
 

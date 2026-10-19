@@ -29,6 +29,7 @@
 
 import { expect, test } from "bun:test";
 
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import { BuildContext, siteKey } from "../../src/compose/nodes/base.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
@@ -176,7 +177,7 @@ test("a lone surrogate in while is refused at the value", () => {
 });
 
 /** Parse loop `nodeId` of `text` and build it over a resolver returning `child`. */
-function buildLoop(text: string, nodeId: string, child: ReturnType<typeof handChild>) {
+function buildLoop(text: string, nodeId: string, child: ComposedFlow) {
   const desc = nodesOf(text).get(nodeId)!;
   return desc.build(
     new BuildContext({ registry: new Map(), resolver: () => child, diagnostics: new LoadDiagnostics("<flow>", text) }),

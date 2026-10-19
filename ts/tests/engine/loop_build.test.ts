@@ -1,6 +1,6 @@
 /**
- * `LoopDescriptor.build`: the driver, the counts and the carried record's field-name contract, a
- * port of rows of `tests/engine/test_loop_build.py`.
+ * `LoopDescriptor.build`: the driver, the counts, the carried record's field-name contract, the
+ * predicate's names and the never-ending check, a port of rows of `tests/engine/test_loop_build.py`.
  *
  * Ported: `test_predicate_loop_without_max_builds_unlimited` (3),
  * `test_predicate_loop_with_max_keeps_its_limit`, `test_times_with_null_max_builds`,
@@ -42,8 +42,8 @@
  * largest safe integer builds), and a float `max: 2.0` is refused as `(got 2)`; `times:` is
  * refused below 1 and as a float, a bool or text, as `max:` is; `times:` beside `while:` is a
  * second driver; a body input that isn't a carried field is refused; a count error and a
- * field-name error are joined at the node; and a hand-constructed descriptor's `number` count is
- * refused.
+ * field-name error are joined at the node, as are a count error and a predicate that doesn't
+ * parse; and a hand-constructed descriptor's `number` count is refused.
  *
  * Pinned at the end (`assembledWith`, each def built by hand): the
  * `load-loop/engine_loop_build__*` cases whose error is a driver, count, field-name, predicate-name
@@ -780,8 +780,24 @@ test.each([
   expect(error.message).toBe(message);
 });
 
+test("a predicate that doesn't parse beside another error joins it at the node", () => {
+  const text = swap(NEVER_ENDS, "    until: done\n", '    until: "done and"\n    max: 0\n');
+
+  const error = loadError(() => buildWait(text));
+
+  expect(error.message).toBe(
+    "loop node 'wait': `max:` must be >= 1 (got 0)\n" +
+      "  loop node 'wait': `until:` is not a valid boolean expression: could not parse expression 'done and': " +
+      "unexpected end of expression at line 1, column 9",
+  );
+  // At the node (the `wait:` line), not the `until:` line.
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(4);
+});
+
 test("a never-changing condition with max loads", () => {
-  const node = buildWait(swap(NEVER_ENDS, "    until: done\n", "    until: done\n    max: 3\n")).node as LoopNode;
+  const text = swap(NEVER_ENDS, "    until: done\n", "    until: done\n    max: 3\n");
+
+  const node = loopOf(text, neverEndsBody(), { nodeId: "wait" });
 
   expect(node.maxIters).toBe(3);
   expect(node.returnedFields).toEqual(["attempts"]);
@@ -789,7 +805,9 @@ test("a never-changing condition with max loads", () => {
 
 test("a condition reading one returned field loads", () => {
   // `done` is never returned, but `attempts` is, so the condition can change.
-  const node = buildWait(swap(NEVER_ENDS, "    until: done\n", "    until: done or attempts >= 3\n")).node as LoopNode;
+  const text = swap(NEVER_ENDS, "    until: done\n", "    until: done or attempts >= 3\n");
+
+  const node = loopOf(text, neverEndsBody(), { nodeId: "wait" });
 
   expect(node.maxIters).toBeNull();
 });

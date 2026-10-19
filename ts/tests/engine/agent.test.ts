@@ -45,7 +45,9 @@
  * `test_a_stop_during_a_refused_structured_call_stops_the_node`,
  * `test_provider_auth_failure_message_is_scrubbed`).
  *
- * Not ported: `test_agent_run_has_no_scratch_kwarg` (signature introspection).
+ * Not ported: `test_agent_run_has_no_scratch_kwarg` (signature introspection), and
+ * `compose/test_agent_mode_removed.py`'s `test_python_agent_node_has_no_mode` (Python's `MODES`,
+ * `register_mode` and `mode=` keyword have no TS counterpart).
  */
 
 import { mkdtempSync, rmSync } from "node:fs";

@@ -614,8 +614,8 @@ function memoriesManifest(values: unknown, ctx: ManifestContext, path: string): 
  * built-in form `{"builtin": "identity", "field": name}`.
  *
  * @throws TypeError when `code` is neither text nor a built-in identity form.
- * @throws RangeError when a built-in form has a key other than `builtin` and `field`, or an empty
- *   `field`.
+ * @throws RangeError when a built-in form's keys aren't exactly `builtin` and `field`, or its
+ *   `field` is empty.
  */
 function codeManifest(code: unknown, path: string): JsonObject {
   // Text is classified from itself, not the stored `mode`, which is a derived cache.
@@ -697,7 +697,8 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string): JsonObjec
       const tool = node as ToolNode;
       manifest.tool_id = tool.toolId;
       const retries = count(tool.retries, `${path}.retries`, false);
-      // Omitted when zero so flows that never opt in keep their identity.
+      // Left out at zero, so retries don't change the identity of flows that don't set them (the
+      // shape follows Python's manifest).
       if (retries !== 0) manifest.retries = retries;
       break;
     }

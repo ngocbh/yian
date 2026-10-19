@@ -69,8 +69,6 @@
  * - The non-JSON row uses a `Map`, a `Uint8Array`, a class instance, a function and `undefined`.
  * - The malformed type-table rows are a record instead of a `Map`, a `Map` with a `bigint` key, and
  *   a `Map` whose value is the string `"int"`.
- * - Setting a CODE node's `kind` to `"agent"` is refused as not ported, since AGENT's manifest
- *   comes with AGENT.
  * - The deep-union row has no call counter (an ES module can't be monkeypatched): a depth-30 union
  *   must manifest within the test's timeout, which an exponential encoding never does.
  * - The census is `Object.keys`, so the trait fields and `kind`, which a kind fixes, are ignored
@@ -82,11 +80,13 @@
  * TS-only: typed floats (`1.5`, `Infinity`, `-0`), NaN refused, `2n` vs `2`, a cyclic env record vs
  * a shared alias, a `FileRef` encoded as its mapping, `params` that isn't an array, a forged END
  * count, a list END's `names`, seed-path indexes as counts, the pinned fingerprint and expansion
- * digest of `fragment()`, a missing node field, a node whose `kind` isn't its class's, labels and a
- * CODE or TOOL title or base directory outside identity, the CODE descriptors (`{"inline": ...}`,
- * `{"ref": ...}`, `{"builtin": "identity", "field": ...}`) and their refusals, and TOOL `retries`
- * (absent at 0, identity otherwise, a forged count refused), and the flow fields: a typed wiring
- * binding's `binding_types` and a typed output's `type`, a plain `Flow`'s missing CompiledFlow keys,
+ * digest of `fragment()`, a missing node field, a node whose `kind` isn't its class's, a CODE node
+ * whose `kind` is `"agent"` refused as not ported (AGENT's manifest comes with AGENT), a node value
+ * that isn't a `Node`, labels and a CODE or TOOL title or base directory outside identity, the CODE
+ * descriptors (`{"inline": ...}`, `{"ref": ...}`, `{"builtin": "identity", "field": ...}`) and
+ * their refusals, and TOOL `retries` (absent at 0, identity otherwise, a forged count refused), and
+ * the flow fields: a typed wiring binding's `binding_types` and a typed output's `type`, a plain
+ * `Flow`'s missing CompiledFlow keys,
  * the flow `llm_config:` layer (literal values are identity and key order isn't; the
  * `ValueTemplate` and `Binding` arms), the LLM value types and adjacency index outside identity,
  * the flow id and flow memories (identity when present, never expansion topology, forged values
@@ -423,6 +423,14 @@ test.each([
   expectError(() => flowManifest(flow), cls, message);
 });
 
+test("a node value that isn't a Node is refused", () => {
+  const flow = compiled();
+  // Flow keeps `nodes` by identity, so this forges a non-Node value under a node id.
+  flow.nodes.set("step", "not a node" as unknown as Node);
+
+  expectError(() => flowManifest(flow), TypeError, "flow.nodes.step: expected Node, got string");
+});
+
 test("labels, a CODE or TOOL title and a base directory are not identity", () => {
   const original = compiled();
   const changed = compiled();
@@ -586,7 +594,7 @@ test.each([
 test("test_prompts_code_and_tool_ids_keep_uri_text", () => {
   const firstUri = "https://first-user:first-secret@example.test/path?token=first-token";
   const secondUri = "https://second-user:second-secret@example.test/path?token=second-token";
-  const pairs = [
+  const pairs: [Node, Node][] = [
     [
       new CodeNode("node", { code: `return ${JSON.stringify(firstUri)}` }),
       new CodeNode("node", { code: `return ${JSON.stringify(secondUri)}` }),
@@ -595,8 +603,8 @@ test("test_prompts_code_and_tool_ids_keep_uri_text", () => {
   ];
 
   for (const [first, second] of pairs) {
-    expect(flowFingerprint(singleNodeFlow(first!))).not.toBe(flowFingerprint(singleNodeFlow(second!)));
-    expect(canonicalJson(flowManifest(singleNodeFlow(first!)))).toContain("first-secret");
+    expect(flowFingerprint(singleNodeFlow(first))).not.toBe(flowFingerprint(singleNodeFlow(second)));
+    expect(canonicalJson(flowManifest(singleNodeFlow(first)))).toContain("first-secret");
   }
 });
 

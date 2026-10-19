@@ -123,7 +123,7 @@ const HTTP = (...exchanges: string[]) =>
 const RESPONSE = (response: string) =>
   HTTP(`request: {method: POST, url: u}, response: ${response}`);
 const STATUS = "`http[0].response.status` must be an int from 100 to 599";
-const DELAY = "`http[0].response.delay` must be a non-negative number";
+const DELAY = "`http[0].response.delay` must be a finite non-negative number";
 const EXISTS = (path: string) =>
   `\`expect.exists\`: \`${path}\` must be a relative path without \`..\``;
 const TOOL = (results: string) =>

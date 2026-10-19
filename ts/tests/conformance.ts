@@ -376,7 +376,7 @@ function checkHttp(value: Value | undefined): void {
     // Finite, as Python's runner needs: a wait can't take an infinite timeout.
     const finite = typeof delay === "number" && delay >= 0 && delay < Infinity;
     if (!finite && !(typeof delay === "bigint" && delay >= 0n)) {
-      throw new Error(`\`${where}.response.delay\` must be a non-negative number`);
+      throw new Error(`\`${where}.response.delay\` must be a finite non-negative number`);
     }
   });
 }

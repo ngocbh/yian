@@ -1,0 +1,81 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "openrouter_error_chunk: text, then an error chunk with code 502 and finish_reason error, retried; the second attempt succeeds.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "authorization": "<redacted>"
+        },
+        "json": {
+          "model": "anthropic/claude-sonnet-4.5",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hi"
+            }
+          ],
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"anthropic/claude-sonnet-4.5\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"anthropic/claude-sonnet-4.5\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"ok\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"anthropic/claude-sonnet-4.5\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"error\", \"logprobs\": null}], \"error\": {\"message\": \"Provider disconnected\", \"code\": 502}}\n\n",
+          "data: [DONE]\n\n"
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "authorization": "<redacted>"
+        },
+        "json": {
+          "model": "anthropic/claude-sonnet-4.5",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hi"
+            }
+          ],
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"anthropic/claude-sonnet-4.5\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"anthropic/claude-sonnet-4.5\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"ok\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"anthropic/claude-sonnet-4.5\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"anthropic/claude-sonnet-4.5\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\", \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"anthropic/claude-sonnet-4.5\", \"choices\": [], \"usage\": {\"prompt_tokens\": 21, \"completion_tokens\": 40, \"total_tokens\": 61, \"prompt_tokens_details\": {\"cached_tokens\": 5}, \"completion_tokens_details\": {\"reasoning_tokens\": 30}}}\n\n",
+          "data: [DONE]\n\n"
+        ]
+      }
+    }
+  ]
+}

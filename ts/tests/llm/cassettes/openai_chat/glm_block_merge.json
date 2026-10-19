@@ -1,0 +1,51 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "glm_block_merge: the glm block (thinking with clear_thinking, do_sample, max_tokens).",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.z.ai/api/paas/v4/chat/completions",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "authorization": "<redacted>"
+        },
+        "json": {
+          "model": "glm-4.6",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hi"
+            }
+          ],
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "thinking": {
+            "type": "enabled",
+            "clear_thinking": false
+          },
+          "do_sample": false,
+          "max_tokens": 64
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"glm-4.6\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"glm-4.6\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"ok\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"glm-4.6\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"glm-4.6\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\", \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"glm-4.6\", \"choices\": [], \"usage\": {\"prompt_tokens\": 21, \"completion_tokens\": 40, \"total_tokens\": 61, \"prompt_tokens_details\": {\"cached_tokens\": 5}, \"completion_tokens_details\": {\"reasoning_tokens\": 30}}}\n\n",
+          "data: [DONE]\n\n"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "xai_tool_call_shapes: a call whose id and name repeat on every delta, a second call reusing index 0 with a new id, and a call without an index whose arguments are cut short (an invalid call keeping its raw text).",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.x.ai/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "authorization": "<redacted>"
+        },
+        "json": {
+          "model": "grok-4",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Double 3."
+            }
+          ],
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "double",
+                "description": "Double an integer.",
+                "parameters": {
+                  "properties": {
+                    "value": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "type": "object"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"grok-4\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"grok-4\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call_1\", \"type\": \"function\", \"function\": {\"name\": \"double\", \"arguments\": \"{\\\"value\\\"\"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"grok-4\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call_1\", \"type\": \"function\", \"function\": {\"name\": \"double\", \"arguments\": \":3}\"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"grok-4\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call_2\", \"type\": \"function\", \"function\": {\"name\": \"double\", \"arguments\": \"{\\\"value\\\":4}\"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"grok-4\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"id\": \"call_3\", \"type\": \"function\", \"function\": {\"name\": \"double\", \"arguments\": \"{\\\"value\\\": 5\"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"grok-4\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"tool_calls\", \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"grok-4\", \"choices\": [], \"usage\": {\"prompt_tokens\": 21, \"completion_tokens\": 40, \"total_tokens\": 61, \"prompt_tokens_details\": {\"cached_tokens\": 5}, \"completion_tokens_details\": {\"reasoning_tokens\": 30}}}\n\n",
+          "data: [DONE]\n\n"
+        ]
+      }
+    }
+  ]
+}

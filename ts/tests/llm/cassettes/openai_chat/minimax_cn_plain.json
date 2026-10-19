@@ -1,0 +1,51 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "minimax_cn_plain: the minimax-cn endpoint, with reasoning_split.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.minimaxi.com/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "authorization": "<redacted>"
+        },
+        "json": {
+          "model": "MiniMax-M2.7",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Say hello."
+            }
+          ],
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "reasoning_split": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"MiniMax-M2.7\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"MiniMax-M2.7\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_details\": [{\"type\": \"reasoning.text\", \"id\": \"r1\", \"format\": \"MiniMax-response-v1\", \"index\": 0, \"text\": \"Thinking.\"}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"MiniMax-M2.7\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"Hello\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"MiniMax-M2.7\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \" there.\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"MiniMax-M2.7\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\", \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"MiniMax-M2.7\", \"choices\": [], \"usage\": {\"prompt_tokens\": 21, \"completion_tokens\": 40, \"total_tokens\": 61, \"prompt_tokens_details\": {\"cached_tokens\": 5}, \"completion_tokens_details\": {\"reasoning_tokens\": 30}}}\n\n",
+          "data: [DONE]\n\n"
+        ]
+      }
+    }
+  ]
+}

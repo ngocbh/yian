@@ -69,6 +69,23 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   directories and parses their frontmatter with `parseYamlLiteral`.
 - Reads are synchronous. Skill files are read as strict UTF-8, with CRLF and lone CR read as LF.
 
+## Tools
+
+- `src/tools/` imports no engine or front-end layer (`nodes`, `compile`, `compose`, `runtime`,
+  `run`, `cli`); `index.ts` is its public face.
+- A host tool is a `FunctionTool` (`execute(args, ctx)`, sync or async); a run's `ask_user`
+  handler is wrapped into one, so a `ToolSet` holds only `FunctionTool`s.
+- Tool errors, `FunctionTool`, `McpServer` and the MCP errors are recognized by `Symbol.for`
+  brands, never by `instanceof`, so a tool built against another copy of yian works.
+  `toolErrorKinds`, the tool error guards (`isPermanentToolError`, ...) and `isMcpError` read
+  the error brands; the registry checks the `FunctionTool` and `McpServer` brands.
+- Arguments enter through `fromHost` and reach `execute` through `toHost`: fresh arrays and
+  records, ints within ±(2^53−1) as `number`, larger ones as `bigint`.
+- `invoke` returns the tool's result raw, awaited, with `undefined` read as `null`; the callers
+  run value intake on it at their own boundaries (`contract.output`).
+- A `FunctionTool`'s `parametersJsonSchema` must be JSON within the nesting limit, since the
+  model sees it; tools still receive and may return a real `Infinity`.
+
 ## LLM layer
 
 - `src/llm/` is a leaf: it imports only `defaults`, `platform` and `typesys/json` (the layer

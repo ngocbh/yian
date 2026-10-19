@@ -563,6 +563,28 @@ also works as `@function_tool` or `@function_tool(name_override="buy")`.
 function or `FunctionTool` it registers. A `FunctionTool`'s name must equal its
 `tools=` key or `register_tool` id.
 
+Changed (TS yian): every tool is a `FunctionTool`, built with
+`new FunctionTool({ name, description, parametersJsonSchema, execute, isConcurrencySafe })`;
+a plain function is not a tool, and `registerTool(id, tool, { descriptionOverride })`
+takes a `FunctionTool`. `execute(args, ctx)` gets the arguments first and the context
+second, and may be sync or async. `ToolSet`'s `invoke`, `invokeTrusted` and `validate`,
+and the functions `invokeTool` and `invokeToolTrusted`, return Promises.
+`ctx`'s fields are camelCase (`callId`, `toolName`, `runId`), `context` is `undefined`
+when none is given, and `signal` is an `AbortSignal` aborted when the call must end
+early (the run stops, or a sibling call fails the node); `forRun(runId, { signal })`
+binds it. Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not
+`instanceof`, so ones built against another copy of yian (an npm install beside a
+workspace one) are accepted and classified.
+
+Arguments enter through host value intake, so a non-yian value (`undefined`,
+`NaN`, a `Date`) anywhere in them is refused, and reach the tool as fresh host values:
+an int within ±(2^53−1) arrives as a `number`, a larger one as a `bigint`, and an
+infinite float as a real `Infinity`, which a tool may also return. `isConcurrencySafe(args)`
+is opt-in, so a tool without it is unsafe. It receives the host form of the arguments,
+and a call counts as safe only when it returns exactly `true`; a throw or any other
+result counts as unsafe. Once the AGENT loop is ported, consecutive safe calls in one
+turn may run together.
+
 ### TOOL retries
 
 A TOOL node with `retries: N` calls its tool again after a failed attempt, up to N
@@ -582,6 +604,9 @@ Every exception from the tool is retried, except:
   whose `on_invoke` returns an awaitable raises `ToolCheckError`. None of these is
   retried;
 - a host stop, such as Ctrl-C or a sibling node's failure, which ends the node.
+
+Changed (TS yian): the check on the returned value refuses NaN but not `Infinity`:
+a host tool may return `Infinity`, which is a float value.
 
 A `ReportedToolError` is retried like any other failure, unless it is also a
 `PermanentToolError`.
@@ -663,6 +688,15 @@ def read_file(path: str) -> str:
     return file.read_text()
 ```
 
+Changed (TS yian): yian classifies tool errors by their `TOOL_ERROR` brand, never by
+`instanceof`, so an error thrown by a tool built against another copy of yian still
+counts; `toolErrorKinds(error)` and `isPermanentToolError`, `isTransientToolError`,
+`isReportedToolError` and `isToolCheckError` read it. With no multiple inheritance, a
+reported error that also stops retries is `new ReportedToolError(message, { permanent:
+true })`, and the wait is `new TransientToolError("rate limited", { retryAfter: 5 })`;
+a bad `retryAfter` throws `TypeError` or `RangeError`. `execute` may return a Promise,
+which is awaited, so no awaitable raises `ToolCheckError`.
+
 ### Tool groups
 
 A host can fill a named group of tools per run. The flow grants the group by
@@ -730,6 +764,10 @@ of its fingerprint. Each run gets its own groups, so concurrent runs never see e
 other's tools, and `resume_flow` uses the groups passed to it (see
 [Durable recovery](#durable-recovery-with-resume_flow)).
 
+Changed (TS yian): each item of a group array is a `FunctionTool`, named by its `name`;
+anything else throws `TypeError`. Groups follow the mapping's JS key order, so
+integer-like keys come first.
+
 ### MCP servers
 
 A Model Context Protocol (MCP) server offers tools over a standard protocol, and
@@ -767,6 +805,16 @@ passed in `env`. `timeout` and `connect_timeout` set the call and connect timeou
 (below) for this server. `label` names the server in errors and is the command's
 basename, or the URL's host, by default. A bad argument raises `TypeError` or
 `ValueError` at once; nothing starts until the server opens.
+
+Changed (TS yian): `mcpServer({ command, args, env, cwd, url, headers, timeout,
+connectTimeout, label, concurrencySafe })` takes camelCase options; a bad one throws
+`TypeError` or `RangeError`. `concurrencySafe` (`true`, or an array of tool names) marks
+the server's tools, or the named ones, safe to run beside other calls (default `false`;
+see [Tool context](#tool-context)). The MCP errors carry the tool error kinds of the
+table below as brands, and `isMcpError` recognizes one from any copy of yian. `url`
+must start with `http://` or `https://`. A URL server's default label is the host as
+WHATWG `new URL` reads it, so an IPv6 host keeps its brackets and an international
+host reads as punycode. A server can't be opened in TS yet: `open()` rejects.
 
 Credentials stay with the host: the flow names the server only by its key. An
 AGENT grants the server's key, which grants every tool the server lists, or single
@@ -957,6 +1005,14 @@ the name and required-input checks. A `FunctionTool`'s inputs are read from its
 `params_json_schema`, and a TOOL node can invoke it. Any other `BaseTool` with a
 raw JSON Schema `args_schema` (a dict) is checked, but a TOOL node can't invoke it
 yet.
+
+Changed (TS yian): inputs are read from a `FunctionTool`'s `parametersJsonSchema`, and
+no tool declares a return type yet. A schema number reads as an int when it is a
+`bigint` or a safe integer (`1.0` and `1` are one JS number) and as a float otherwise.
+The model sees the schema, so one that isn't JSON (holding `Infinity` or a `Date`) or
+nests deeper than `YIAN_MAX_VALUE_NESTING` throws `TypeError` when the tool is built;
+Python left a too-deep input unchecked. An integral float within ±(2^53−1) passes for
+an `integer` as in Python, but one beyond it (`1e20`) reads as a float and is refused.
 
 Changed: a limit on only one end (pydantic `Field(ge=0)`, JSON Schema `minimum`
 alone) and an exclusive `number` limit used to be dropped. They are now kept, so a
@@ -2213,6 +2269,12 @@ so a flow that also uses registered tools passes
 global registry: a run without its own handler fails any HUMAN_INPUT node that
 asks, a flow whose AGENT grants `ask_user` fails before the run starts, and
 `register_tool("ask_user")` is rejected.
+
+Changed (TS yian): the handler is `(request, ctx) => answer`, always given the call's
+`ToolContext` second, and may return a Promise. `request` is camelCase, `{ question,
+options, questions, answerSchema, title, nodeId }`, with `null` for an absent field;
+`invokeTrusted("ask_user", ...)` takes the same keys. There is no signature check: any
+function is accepted as the handler.
 
 CODE nodes cannot ask. A CODE function does not see the run's tools, so
 `invoke_tool("ask_user", ...)` inside it fails. Ask through a `human_input` node,

@@ -526,6 +526,67 @@ export function fromHost(value: unknown, where: string): Value {
   return root;
 }
 
+/** An open array or record in `toHost`, with the fresh copy being filled. */
+interface ToHostFrame {
+  readonly source: Value[] | ValueRecord;
+  /** The record's keys, or `null` for an array. */
+  readonly keys: readonly string[] | null;
+  /** The number of entries: the array's length or the record's key count, read once. */
+  readonly size: number;
+  readonly copy: Value[] | ValueRecord;
+  index: number;
+}
+
+/**
+ * Return a yian value as a fresh host value, by design 3.2.1's host boundary (D9A).
+ *
+ * An int within ±(2^53−1) becomes a `number`; a bigger one stays a `bigint`. A float
+ * (`±Infinity` included), text, a boolean, `null` and a `FileRef` are handed over as they are.
+ * Arrays and records become fresh arrays and records, their entries taken the same way; a
+ * record key is set as an own data property, so a `__proto__` key stays data. A value shared
+ * by two parents is copied once, and the walk uses an explicit stack, so any depth works.
+ *
+ * Example: `toHost({a: [1n, 2.5]})` gives `{a: [1, 2.5]}`.
+ */
+export function toHost(value: Value): unknown {
+  const stack: ToHostFrame[] = [];
+  const copies = new Map<object, Value[] | ValueRecord>();
+
+  /** Return what `item` is handed over as; push a new container's frame. */
+  const enter = (item: Value): Value => {
+    if (typeof item === "bigint") {
+      const n = Number(item);
+      return Number.isSafeInteger(n) ? n : item;
+    }
+    if (item === null || typeof item !== "object" || FileRef.isFileRef(item)) return item;
+    const shared = copies.get(item);
+    if (shared !== undefined) return shared;
+    const keys = Array.isArray(item) ? null : Object.keys(item);
+    const size = keys === null ? (item as Value[]).length : keys.length;
+    const copy: Value[] | ValueRecord = keys === null ? [] : {};
+    copies.set(item, copy);
+    stack.push({ source: item, keys, size, copy, index: 0 });
+    return copy;
+  };
+
+  const root = enter(value);
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1]!;
+    if (frame.index === frame.size) {
+      stack.pop();
+      continue;
+    }
+    const index = frame.index++;
+    if (frame.keys === null) {
+      (frame.copy as Value[]).push(enter((frame.source as Value[])[index]!));
+    } else {
+      const key = frame.keys[index]!;
+      setField(frame.copy as ValueRecord, key, enter((frame.source as ValueRecord)[key]!));
+    }
+  }
+  return root;
+}
+
 // --------------------------------------------------------------------------------------- //
 // Type vocabulary
 // --------------------------------------------------------------------------------------- //

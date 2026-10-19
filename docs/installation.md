@@ -217,11 +217,12 @@ selected connection. Failed authentication never falls back to another credentia
 
 Changed (TS yian): the file keeps the same format, so TS yian uses logins saved by
 Python yian. An `expires_at` that is a whole number of seconds is written without
-`.0` (`1767225600`, where Python writes `1767225600.0`); both read either. TS yian locks `auth.json.lock` (the file's path plus
-`.lock`) with its own lock, which Python's doesn't see: don't run Python and TS yian
-against the same saved logins at the same time (a refresh rotates the token); point
-`YIAN_AUTH_FILE` at a copy instead. The path expands only `~` and a leading `~/`, not
-`~user`, and an empty `YIAN_AUTH_FILE` counts as unset.
+`.0` (`1767225600`, where Python writes `1767225600.0`); both read either. TS yian
+locks `auth.json.lock` (the file's path plus `.lock`) with its own lock, which
+Python's doesn't see: don't run Python and TS yian against the same saved logins at
+the same time (a refresh rotates the token); point `YIAN_AUTH_FILE` at a copy
+instead. The path expands only `~` and a leading `~/`, not `~user`, and an empty
+`YIAN_AUTH_FILE` counts as unset.
 
 #### OpenAI {#openai-authentication}
 

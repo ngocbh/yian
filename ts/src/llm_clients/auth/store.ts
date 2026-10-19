@@ -302,8 +302,10 @@ export class AuthStore {
     try {
       fd = fs.openSync(this.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     } catch (error) {
-      if (isMissing(error)) return [null, new Map()];
-      throw accessError();
+      if (!isMissing(error)) throw accessError();
+      // A missing file in a swapped-in directory says nothing about the checked one.
+      this.#checkSameDirectory(directory);
+      return [null, new Map()];
     }
     let size = 0;
     try {
@@ -367,8 +369,9 @@ export class AuthStore {
   /**
    * Atomically replace the store in `directory` with `defaultProvider` and `providers`.
    *
-   * Writes a private temporary file beside the store, then renames it over the store and checks
-   * that the store path and its directory still name what was written and checked.
+   * Checks that the directory path still names `directory`, writes a private temporary file
+   * beside the store, then renames it over the store and checks that the store path and its
+   * directory still name what was written and checked.
    */
   #write(directory: Directory, defaultProvider: string | null, providers: Providers): void {
     const value = {
@@ -391,6 +394,8 @@ export class AuthStore {
     };
     const raw = new TextEncoder().encode(`${pythonJson(value)}\n`);
     if (raw.length > current().maxAuthStoreBytes) throw new AuthError(OVERSIZED);
+    // Checked before the temporary file exists, so a swapped-in directory never receives it.
+    this.#checkSameDirectory(directory);
     const temporary = join(dirname(this.path), `.auth-${randomBytes(16).toString("hex")}`);
     const { O_CREAT, O_EXCL, O_NOFOLLOW, O_WRONLY } = fs.constants;
     const fd = access(() => fs.openSync(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600));

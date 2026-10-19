@@ -2070,7 +2070,8 @@ block, including inside the free-form mappings `openrouter.provider` and
 a float field stays an int and is sent as written (`temperature: 1` sends `1`), as
 everywhere in TS yian (see [Types → Two constructors](typing.md#two-constructors-infer-vs-check)).
 Choice values in these errors are spelled in the text form: `Input should be "auto" or
-"standard_only"`.
+"standard_only"`. A union member's label in a key path follows the same form:
+`literal["low","high"]`.
 
 | Provider | API yian calls | Reference |
 | --- | --- | --- |

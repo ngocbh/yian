@@ -594,6 +594,58 @@ describe("AuthStore", () => {
     expect(new AuthStore(file).selection()?.provider).toBe("openai");
   });
 
+  test("a directory swapped before a missing file's open is refused", () => {
+    const directory = join(tmp, "auth");
+    fs.mkdirSync(directory, { mode: 0o700 });
+    const real = fs.openSync;
+    let swapped = false;
+    const spy = spyOn(fs, "openSync").mockImplementation(((target: fs.PathLike, ...rest: unknown[]) => {
+      if (target === file && !swapped) {
+        swapped = true;
+        fs.renameSync(directory, join(tmp, "moved"));
+        fs.mkdirSync(directory, { mode: 0o700 });
+      }
+      return Reflect.apply(real, fs, [target, ...rest]);
+    }) as typeof fs.openSync);
+    try {
+      const error = thrown(() => new AuthStore(file).read());
+      expect(swapped).toBe(true);
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("Credential storage must use a regular private path");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("a directory swapped before a write never receives the store file", async () => {
+    writeStore(file, savedStore);
+    const directory = join(tmp, "auth");
+    const real = fs.readSync;
+    let swapped = false;
+    // The swap lands after the load's directory compare, before the write creates its file.
+    const spy = spyOn(fs, "readSync").mockImplementation(((...args: unknown[]) => {
+      if (!swapped) {
+        swapped = true;
+        fs.renameSync(directory, join(tmp, "moved"));
+        fs.mkdirSync(directory, { mode: 0o700 });
+      }
+      return Reflect.apply(real, fs, args);
+    }) as typeof fs.readSync);
+    let error: Error;
+    try {
+      error = await rejected(new AuthStore(file).save("anthropic", new ApiKeyCredentials("new-key"), "new-model"));
+    } finally {
+      spy.mockRestore();
+    }
+    expect(swapped).toBe(true);
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toBe("Credential storage must use a regular private path");
+    expect(fs.readdirSync(directory).filter((name) => name === "auth.json" || name.startsWith(".auth-"))).toEqual(
+      [],
+    );
+    expect(new AuthStore(join(tmp, "moved", "auth.json")).selection()?.provider).toBe("openai");
+  });
+
   const timings: [string, Record<string, number>][] = [
     ["NaN lock timeout", { lockTimeoutMs: Number.NaN }],
     ["infinite lock timeout", { lockTimeoutMs: Number.POSITIVE_INFINITY }],

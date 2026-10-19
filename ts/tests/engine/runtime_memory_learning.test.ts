@@ -16,7 +16,8 @@
  * TS-only: the run id, memory and mutation-item messages of `memoryCommitId`; a float payload
  * digests its `logJson` text; `failureJson` equals `toJSON()`, refuses a value that isn't exactly
  * a `Failure` and revalidates the failure's fields; `episodeOutcome` projects a success's canonical
- * value and a failed record's failure JSON, and refuses a record of another class.
+ * value and a failed record's failure JSON, and refuses a record of another class and a forged
+ * success without a canonical typed value.
  *
  * Later, in this item: the rewrites of
  * `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow` and
@@ -33,7 +34,8 @@
  *
  * Later (T4-7, with `computeBackward` and the engine): the owner-context and episode tests
  * (`test_owner_contexts_include_general_occurrences_and_empty_memories` through
- * `test_owner_variable_batches_follow_captured_inventory_across_wire_round_trip`,
+ * `test_owner_variable_batches_follow_captured_inventory_across_wire_round_trip`, except
+ * `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow`, listed above;
  * `test_runstarted_retains_defensive_memory_authority_and_projects_episodes`,
  * `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome`,
  * `test_failure_episode_uses_full_canonical_durable_failure_json`,
@@ -206,4 +208,13 @@ test("an episode projects a success's canonical value and a failed record's fail
     TypeError,
     "unsupported graph outcome for episode projection",
   );
+});
+
+test("an episode refuses a success without a canonical typed value", () => {
+  // A constructed record always holds a typed wire, so the record is forged through its prototype.
+  const forged = Object.assign(Object.create(NodeSucceededRecord.prototype) as NodeSucceededRecord, {
+    nodeId: "agent",
+    value: { kind: "int" },
+  });
+  expectError(() => episodeOutcome(forged), RangeError, "successful record has no canonical typed value");
 });

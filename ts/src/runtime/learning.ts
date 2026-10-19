@@ -7,8 +7,8 @@
  * records, and retained traces sit below it; state and callback drivers consume its pure
  * projections. It invokes no callbacks or backend operations.
  *
- * Knows about:   diagnostics, expr/lineage, memory, nodes/base, runtime/contracts, runtime/log,
- *                runtime/trace, typesys.
+ * Knows about:   diagnostics, expr/lineage, memory, nodes/base, nodes/contracts, runtime/contracts,
+ *                runtime/log, runtime/trace, typesys.
  * Never imports: runtime state or backward, engine or run, compile, compose, or the CLI.
  */
 
@@ -222,17 +222,11 @@ function routeContextData(contexts: readonly RouteContext[], cache: ContextCache
  * Resolve only the accepted values one transient callback view needs: the message's attribution
  * and its materialized contexts, shared with other messages. Integers are `bigint`s.
  *
- * @param _trace The trace whose accepted sources are resolved; `cache` reads it, so it's unused.
  * @param message The message to describe.
  * @param index The message's position among its receiver's messages.
- * @param cache This backward pass's cache over `trace`.
+ * @param cache This backward pass's cache over the trace whose accepted sources are resolved.
  */
-export function materializeContext(
-  _trace: RetainedTrace,
-  message: BackwardMessage,
-  index: number,
-  cache: ContextCache,
-): JsonObject {
+export function materializeContext(message: BackwardMessage, index: number, cache: ContextCache): JsonObject {
   const attribution = message.attribution;
   return {
     message_index: BigInt(index),
@@ -279,6 +273,7 @@ function outputContext(
   const paths = outputPaths(context);
   if (paths === null || !Object.hasOwn(paths, name)) return [];
   const path = paths[name]!;
+  // Only refuses a path absent from the output; the context references the output, not the value.
   structuralOutput(context.output, path);
   const operand: RoutePath = path.map((part) => (typeof part === "string" ? part : Number(part)));
   const positions = path.length > 0 && typeof path[0] !== "string" ? [[Number(path[0])]] : [];
@@ -482,7 +477,11 @@ export function projectRootBackward(
         let selected: FeedbackValue = null;
         if (typeof feedback === "string") selected = feedback;
         else if (isRecord(feedback) && Object.hasOwn(feedback, name)) selected = feedback[name]!;
-        if (hasFeedback(selected)) inputs.set(name, [...(inputs.get(name) ?? []), selected]);
+        if (!hasFeedback(selected)) continue;
+        // Each batch in `inputs` is a fresh copy, so it's appended to in place.
+        const batch = inputs.get(name);
+        if (batch === undefined) inputs.set(name, [selected]);
+        else batch.push(selected);
       }
     }
   }
@@ -531,7 +530,7 @@ export function validateAttributedBackward(
     if (
       !sameItems(item.feedback, received, sameFeedback) ||
       !sameItems(item.attribution, attribution, sameBackwardAttribution) ||
-      item.invoked !== messages.length > 0
+      item.invoked !== (messages.length > 0)
     ) {
       throw new RangeError("backward received feedback and attribution must match exact transfers");
     }

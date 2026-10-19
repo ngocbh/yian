@@ -10,8 +10,10 @@
  * TS-only, over `chainTrace()` (START, `p` and END driven through `prepareTrace` and `apply`):
  * `validateAttributedBackward` accepts the exact transfers END → p → START → source 0, and merges
  * the root inputs when START is reached and `p` also routes to source 0; one refusal per rule
- * (inventory order, feedback, attribution, invoked, a local contract violation, the root, feedback
- * to an unavailable occurrence, a non-terminal trace); empty feedback seeds nothing; a node-data
+ * (inventory order, feedback, attribution, a reached occurrence's result that isn't invoked (the
+ * feedback check refuses it, since a result that isn't invoked has no feedback), a local contract
+ * violation, the root, feedback to an unavailable occurrence, a non-terminal trace); refusals pin
+ * the error's exact class and message; empty feedback seeds nothing; a node-data
  * path absent from the accepted output; an int-headed path's output context and its materialized
  * form; `materializeContext`'s shape and `bigint` integers; `ContextCache.lookup` looking a source
  * up once and not caching a failure; `takeMessages` order.
@@ -59,6 +61,21 @@ import { type PrepareTraceOptions, prepareTrace, RetainedTrace, TraceTerminal } 
 import { VariablePool } from "../../src/typesys/index.ts";
 import { logJson } from "../../src/typesys/json.ts";
 
+/** The two error classes the refusals throw. */
+type ErrorClass = typeof TypeError | typeof RangeError;
+
+/** Assert that `fn` throws exactly `cls` with exactly `message`. */
+function expectError(fn: () => unknown, cls: ErrorClass, message: string): void {
+  let caught: unknown;
+  try {
+    fn();
+  } catch (error) {
+    caught = error;
+  }
+  expect((caught as Error | undefined)?.constructor).toBe(cls);
+  expect((caught as Error).message).toBe(message);
+}
+
 test("an explicitly synthetic source-free failure keeps the direct root text", () => {
   const trace = new RetainedTrace("synthetic", START_ID, END_ID);
   trace.terminal = new TraceTerminal(
@@ -69,8 +86,10 @@ test("an explicitly synthetic source-free failure keeps the direct root text", (
   );
   const root = new BackwardResult({ selfFeedback: ["original text"] });
   expect(() => validateAttributedBackward(trace, "original text", root, [])).not.toThrow();
-  expect(() => validateAttributedBackward(trace, "original text", new BackwardResult(), [])).toThrow(
-    new RangeError("backward root result must match the accepted START and source-zero projection"),
+  expectError(
+    () => validateAttributedBackward(trace, "original text", new BackwardResult(), []),
+    RangeError,
+    "backward root result must match the accepted START and source-zero projection",
   );
 });
 
@@ -237,14 +256,16 @@ test("START's root inputs merge with another node's source-zero feedback", () =>
   expect(() => validateAttributedBackward(trace, "Too low.", root, results)).not.toThrow();
   expect(results[0]!.result.inputFeedback).toEqual({ x: ["Raise v."] });
   const startOnly = new BackwardResult({ inputFeedback: { x: ["Raise v."] } });
-  expect(() => validateAttributedBackward(trace, "Too low.", startOnly, results)).toThrow(
-    new RangeError("backward root result must match the accepted START and source-zero projection"),
+  expectError(
+    () => validateAttributedBackward(trace, "Too low.", startOnly, results),
+    RangeError,
+    "backward root result must match the accepted START and source-zero projection",
   );
 });
 
 const TRANSFER_MISMATCH = "backward received feedback and attribution must match exact transfers";
 
-test.each<[string, (results: AttributedBackwardResult[], trace: RetainedTrace) => unknown, ErrorConstructor, string]>([
+test.each<[string, (results: AttributedBackwardResult[], trace: RetainedTrace) => unknown, ErrorClass, string]>([
   [
     "a wrong inventory order",
     (results, trace) =>
@@ -277,6 +298,8 @@ test.each<[string, (results: AttributedBackwardResult[], trace: RetainedTrace) =
     TRANSFER_MISMATCH,
   ],
   [
+    // An AttributedBackwardResult ties `invoked` to having messages, so a result that isn't invoked
+    // has no feedback either: this row fails on the feedback check before the invoked flag.
     "a wrong invoked flag",
     (results, trace) => {
       results[0] = unreached(S);
@@ -339,7 +362,7 @@ test.each<[string, (results: AttributedBackwardResult[], trace: RetainedTrace) =
   ],
 ])("validateAttributedBackward refuses %s", (_name, call, cls, message) => {
   const { trace } = chainTrace();
-  expect(() => call(chainResults(), trace)).toThrow(new cls(message));
+  expectError(() => call(chainResults(), trace), cls, message);
 });
 
 test("empty feedback seeds nothing", () => {
@@ -362,14 +385,16 @@ test("seedBackward sends copied root feedback to the terminal source", () => {
   expect(Object.isFrozen(message!.feedback)).toBe(true);
   expect(message!.order).toEqual([0]);
   expect(message!.attribution).toEqual(ROOT_SEED);
-  expect(() => seedBackward(trace, { b: "Wrong." })).toThrow(new RangeError("feedback selects unknown field 'b'"));
+  expectError(() => seedBackward(trace, { b: "Wrong." }), RangeError, "feedback selects unknown field 'b'");
 });
 
 test("a node-data path absent from the accepted output fails the structural walk", () => {
   const { trace } = chainTrace({ startPaths: { x: ["y"] } });
   const root = new BackwardResult({ inputFeedback: { x: ["Raise v."] } });
-  expect(() => validateAttributedBackward(trace, "Too low.", root, chainResults())).toThrow(
-    new RangeError("structural output path is absent from the accepted output"),
+  expectError(
+    () => validateAttributedBackward(trace, "Too low.", root, chainResults()),
+    RangeError,
+    "structural output path is absent from the accepted output",
   );
 });
 
@@ -404,7 +429,7 @@ test("an int-headed node-data path gives the output context positions", () => {
   expect(output.sources).toEqual([P]);
   expect(output.operand).toEqual([0]);
   expect(output.positions).toEqual([[0]]);
-  const materialized = materializeContext(trace, message, 0, cache).contexts as Record<string, unknown>[];
+  const materialized = materializeContext(message, 0, cache).contexts as Record<string, unknown>[];
   const detail = materialized[pMessages[0]!.context.length]!;
   expect(detail.positions).toEqual([[0n]]);
   expect(detail.operand).toEqual([0n]);
@@ -415,7 +440,7 @@ test("materializeContext describes a message with bigint integers", () => {
   const { trace } = chainTrace();
   const cache = new ContextCache(trace);
   const message = new BackwardMessage("Raise v.", new BackwardAttribution(P, "v", 0, 0, [0]), [0, 0], []);
-  expect(materializeContext(trace, message, 1, cache)).toEqual({
+  expect(materializeContext(message, 1, cache)).toEqual({
     message_index: 1n,
     sender: { run_id: RUN, execution_seq: 3n, path: [] },
     input_name: "v",
@@ -436,7 +461,7 @@ test("materializeContext resolves a source context once and shares it", () => {
   const [[, message]] = contextualTransfers(trace, trace.occurrence(E), context, endMessages, result, cache) as [
     [SourceRef, BackwardMessage],
   ];
-  const materialized = materializeContext(trace, message, 0, cache);
+  const materialized = materializeContext(message, 0, cache);
   expect(materialized).toEqual({
     message_index: 0n,
     sender: { run_id: RUN, execution_seq: 5n, path: [] },
@@ -458,7 +483,7 @@ test("materializeContext resolves a source context once and shares it", () => {
       },
     ],
   });
-  const again = materializeContext(trace, message, 0, cache);
+  const again = materializeContext(message, 0, cache);
   expect((again.contexts as unknown[])[0]).toBe((materialized.contexts as unknown[])[0]);
 });
 
@@ -478,7 +503,7 @@ test("materializeContext keeps an evaluated result, bigint indexes and a snapsho
     snapshot,
   });
   const message = new BackwardMessage("x", ROOT_SEED, [0], [context]);
-  const [detail] = materializeContext(trace, message, 0, cache).contexts as Record<string, unknown>[];
+  const [detail] = materializeContext(message, 0, cache).contexts as Record<string, unknown>[];
   expect(detail).toEqual({
     expression: "${a[0]}",
     result: [1n],
@@ -497,7 +522,7 @@ test("materializeContext keeps an evaluated result, bigint indexes and a snapsho
     role: "projection",
     operand: ["x"],
   });
-  const [projected] = materializeContext(trace, new BackwardMessage("x", ROOT_SEED, [0], [projection]), 0, cache)
+  const [projected] = materializeContext(new BackwardMessage("x", ROOT_SEED, [0], [projection]), 0, cache)
     .contexts as Record<string, unknown>[];
   expect(projected!.result).toBe(1n);
   expect(projected!.operand).toEqual(["x"]);
@@ -518,8 +543,9 @@ test("ContextCache.lookup looks a source up once and doesn't cache a failure", (
   expect(cache.lookup(new SourceRef(RUN, 0))).toBe(first);
   expect(looked).toEqual([sourceKey(ZERO)]);
   const missing = new SourceRef(RUN, 9);
-  expect(() => cache.lookup(missing)).toThrow(RangeError);
-  expect(() => cache.lookup(missing)).toThrow(RangeError);
+  const absent = `no accepted source for ${sourceKey(missing)}`;
+  expectError(() => cache.lookup(missing), RangeError, absent);
+  expectError(() => cache.lookup(missing), RangeError, absent);
   expect(looked).toEqual([sourceKey(ZERO), sourceKey(missing), sourceKey(missing)]);
 });
 
@@ -534,3 +560,4 @@ test("takeMessages pops one source's messages sorted by order", () => {
   expect(takeMessages(pending, S)).toEqual([]);
   expect(Object.isFrozen(message([0]))).toBe(true);
 });
+

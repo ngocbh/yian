@@ -965,5 +965,6 @@ describe("merges", () => {
 
 test.each([
   "yaml/compose_source_document__syntax_error_after_crlf_lines",
+  "yaml/compose_source_document__syntax_error_after_lone_cr_lines",
   "yaml/compose_source_document__syntax_error_after_yaml11_only_line_breaks",
 ])("parseSourceDocument: %s", (id) => runTextCase({ id, call: parseSourceDocument }));

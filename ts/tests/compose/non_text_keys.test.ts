@@ -248,6 +248,7 @@ test.each([
   { id: "yaml/compose_non_text_keys__boolean_key_as_a_node_id" },
   { id: "yaml/compose_non_text_keys__date_key_in_a_record_literal" },
   { id: "yaml/compose_non_text_keys__datetime_key" },
+  { id: "yaml/compose_non_text_keys__empty_key_asks_for_a_name" },
   { id: "yaml/compose_non_text_keys__float_key_as_a_typedef_field" },
   { id: "yaml/compose_non_text_keys__hex_key_is_shown_as_written" },
   { id: "yaml/compose_non_text_keys__integer_key_as_a_flow_input" },

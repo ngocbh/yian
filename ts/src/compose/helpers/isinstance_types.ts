@@ -93,7 +93,7 @@ export function expressionTrees(
   source: unknown,
   options: { condition?: boolean } = {},
 ): ExprNode[] {
-  if (options.condition ?? false) {
+  if (options.condition) {
     const value = bindingSource(source);
     return typeof value === "string" ? [parseCondition(value)] : [];
   }

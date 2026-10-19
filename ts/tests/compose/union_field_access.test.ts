@@ -17,7 +17,12 @@
 import { expect, test } from "bun:test";
 
 import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
-import { outputContractFieldError, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
+import {
+  isExactly,
+  outputContractFieldError,
+  PartialRecordContract,
+  ValueContract,
+} from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 
@@ -159,6 +164,8 @@ test("a shared field one member does not require reads as optional", () => {
       }),
     ],
   });
-  const projected = projectOutputContract(new ValueContract(union), ["note"]) as ValueContract;
-  expect(typeEquals(projected.type, new Type({ kind: ValueKind.STRING, nullable: true }))).toBe(true);
+  const projected = projectOutputContract(new ValueContract(union), ["note"]);
+  expect(isExactly(projected, ValueContract)).toBe(true);
+  const optionalText = new Type({ kind: ValueKind.STRING, nullable: true });
+  expect(typeEquals((projected as ValueContract).type, optionalText)).toBe(true);
 });

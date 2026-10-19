@@ -70,8 +70,7 @@ export function projectOutputContract(contract: OutputContract, fields: readonly
   }
   if (!isExactly(contract, ValueContract)) {
     throw new TypeError(
-      "output contract must be an exact ValueContract or " +
-        `PartialRecordContract, got ${jsTypeName(contract)}`,
+      `output contract must be an exact ValueContract or PartialRecordContract, got ${jsTypeName(contract)}`,
     );
   }
   if (fields.length === 0) return contract;
@@ -99,11 +98,10 @@ export function projectOutputContract(contract: OutputContract, fields: readonly
     typ = fieldType;
   }
   if (pathNullable && !typ.nullable) typ = typ.replace({ nullable: true });
-  const prefix = fields;
   const entries = contract.origins.entries
-    .filter(([path]) => path.length > prefix.length && sameItems(path.slice(0, prefix.length), prefix))
-    .map(([path, origin]) => [path.slice(prefix.length), origin] as const);
-  return new ValueContract(typ, new ContractOrigins({ default: contract.origins.at(prefix), entries }));
+    .filter(([path]) => path.length > fields.length && sameItems(path.slice(0, fields.length), fields))
+    .map(([path, origin]) => [path.slice(fields.length), origin] as const);
+  return new ValueContract(typ, new ContractOrigins({ default: contract.origins.at(fields), entries }));
 }
 
 /**
@@ -125,28 +123,28 @@ export function referenceContract(
   const head = parts[0];
   if (head === "input" && parts.length >= 2) {
     const name = parts[1]!;
-    const contract = flowInputs.get(name) ?? null;
-    if (contract !== null && !isExactly(contract, ValueContract)) {
+    const contract = flowInputs.get(name);
+    if (contract === undefined) return null;
+    if (!isExactly(contract, ValueContract)) {
       throw new TypeError(
         "flow input contracts must be exact ValueContract values, " +
           `got ${jsTypeName(contract)} for ${reprText(name)}`,
       );
     }
-    if (contract === null) return null;
     return projectOutputContract(contract, parts.slice(2));
   }
   if (parts.length < 2 || parts[1] !== "output") return null;
 
   const producerId = parts[0]!;
-  const contract = producers.get(producerId) ?? null;
-  if (contract !== null && !isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
+  const contract = producers.get(producerId);
+  if (contract === undefined) return null;
+  if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
     throw new TypeError(
       "output producer contracts must be ValueContract or " +
         "PartialRecordContract values, " +
         `got ${jsTypeName(contract)} for ${reprText(producerId)}`,
     );
   }
-  if (contract === null) return null;
   return projectOutputContract(contract, parts.slice(2));
 }
 
@@ -174,8 +172,7 @@ export function outputContractPathError(
     tagHint?: boolean;
   } = {},
 ): string | null {
-  const { partialUnionFields = false, unionRoot = null, isinstanceHint = false, tagHint = false } = options;
-  return outputContractFieldError(contract, fields, path, { partialUnionFields, isinstanceHint, tagHint, unionRoot });
+  return outputContractFieldError(contract, fields, path, options);
 }
 
 /**

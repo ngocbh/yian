@@ -45,10 +45,10 @@ function resolve(source: string, producers: Record<string, OutputContract>): Out
   return resolveOutputBindingContract(source, new Map(Object.entries(producers)), new Map());
 }
 
-/** Return the type of `contract`, requiring it to be an exact `ValueContract`. */
-function exactType(contract: OutputContract | null): Type {
+/** Return `contract`, requiring it to be an exact `ValueContract`. */
+function exact(contract: OutputContract | null): ValueContract {
   if (!isExactly(contract, ValueContract)) throw new Error("expected an exact ValueContract");
-  return contract.type;
+  return contract;
 }
 
 test("a null default over a reference is optional and keeps its origins", () => {
@@ -56,15 +56,15 @@ test("a null default over a reference is optional and keeps its origins", () => 
 
   const resolved = resolve("${p.output:-null}", { p: new ValueContract(STR, origins) });
 
-  expect(isExactly(resolved, ValueContract)).toBe(true);
-  expect(typeEquals(exactType(resolved), OPTIONAL_STR)).toBe(true);
-  expect((resolved as ValueContract).origins).toBe(origins);
+  const contract = exact(resolved);
+  expect(typeEquals(contract.type, OPTIONAL_STR)).toBe(true);
+  expect(contract.origins).toBe(origins);
 });
 
 test("a null default over a dotted field is optional", () => {
   const resolved = resolve("${p.output.f :- null}", { p: new ValueContract(record({ f: INT })) });
 
-  expect(typeEquals(exactType(resolved), INT.replace({ nullable: true }))).toBe(true);
+  expect(typeEquals(exact(resolved).type, INT.replace({ nullable: true }))).toBe(true);
 });
 
 test("a null default over a coalesce of equal types is optional", () => {
@@ -85,7 +85,7 @@ test("a null default over a coalesce of different types is untyped", () => {
 test("a null default over a nullable head stays optional", () => {
   const resolved = resolve("${p.output :- null}", { p: new ValueContract(OPTIONAL_STR) });
 
-  expect(typeEquals(exactType(resolved), OPTIONAL_STR)).toBe(true);
+  expect(typeEquals(exact(resolved).type, OPTIONAL_STR)).toBe(true);
 });
 
 test("a null default over a partial or unknown producer is untyped", () => {
@@ -110,5 +110,5 @@ test("a null default over a flow input is optional", () => {
 
   const resolved = resolveOutputBindingContract("${input.x :- null}", new Map(), inputs);
 
-  expect(typeEquals(exactType(resolved), OPTIONAL_STR)).toBe(true);
+  expect(typeEquals(exact(resolved).type, OPTIONAL_STR)).toBe(true);
 });

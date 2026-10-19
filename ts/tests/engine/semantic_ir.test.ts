@@ -37,8 +37,8 @@
  * or partial field, a non-contract), `recordFieldOrigins` (canonical order), `referenceContract`
  * (`input.x.f`, `<id>.output.f`, unknown paths, a wrong contract class), `localFieldError` (any
  * alternative accepting, else the first error), `directReferencePath` and `directReferenceParts`
- * (a dotted reference, a call, an index, `:-`, embedded text), and `projectOutputContract` on a
- * non-contract.
+ * (a dotted reference, a call, an index, `:-`, embedded text), `projectOutputContract` on a
+ * non-contract, and output-contract resolution of embedded text over a partial record.
  *
  * Changed:
  * - Python's bare `Node` is a minimal subclass; node and wiring tables are `Map`s, and a non-string
@@ -605,8 +605,7 @@ function exact(contract: OutputContract | null): ValueContract {
 
 test("output contract resolution retains whole-value identity", () => {
   // Raw and wrapped references resolve to the producer's exact carrier.
-  const outputType = Type.scalar(ValueKind.STRING);
-  const contract = new ValueContract(outputType, new ContractOrigins({ default: origin("producer-output") }));
+  const contract = new ValueContract(STR, new ContractOrigins({ default: origin("producer-output") }));
   const source = "${producer.output}";
   const producers = { producer: contract };
 
@@ -634,12 +633,12 @@ test("output contract resolution retains whole-value identity", () => {
   expect(resolveContract("${producer.output + 1}", { producer: contract })).toBe(null);
 
   expectError(
-    () => resolveContract("${input.topic}", {}, { topic: outputType as unknown as ValueContract }),
+    () => resolveContract("${input.topic}", {}, { topic: STR as unknown as ValueContract }),
     TypeError,
     "flow input contracts must be exact ValueContract values, got Type for 'topic'",
   );
   expectError(
-    () => resolveContract('${producer.output == "/exit"}', { producer: outputType as unknown as ValueContract }),
+    () => resolveContract('${producer.output == "/exit"}', { producer: STR as unknown as ValueContract }),
     TypeError,
     "output producer contracts must be ValueContract or PartialRecordContract values, got Type for 'producer'",
   );
@@ -743,7 +742,12 @@ test("output contract resolution projects proven partial record fields", () => {
   expect(exact(resolveContract("${producer.output == null}", producers)).type).toEqual(
     Type.scalar(ValueKind.BOOLEAN),
   );
-  expect(exact(resolveContract("record: ${producer.output}", producers)).type).toEqual(STR);
+});
+
+test("output contract resolution types embedded text over a partial record as a string", () => {
+  const partial = new PartialRecordContract([["opaque", null]]);
+
+  expect(exact(resolveContract("record: ${producer.output}", { producer: partial })).type).toEqual(STR);
 });
 
 test.each<[string, unknown, Type | null]>([

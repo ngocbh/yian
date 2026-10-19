@@ -48,7 +48,7 @@ import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ExpressionError } from "../../src/expr/index.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
-import { isRecord, type Type, TypeCheckError, typeEquals } from "../../src/typesys/values.ts";
+import { TypeCheckError, typeEquals } from "../../src/typesys/values.ts";
 import type { Case } from "../conformance.ts";
 import { caseDocument, caseRegistry, cursorAt } from "./declarations.ts";
 
@@ -146,6 +146,7 @@ describe("resolution", () => {
   test("constructorTypeFn maps a typedef to its type, once, and other names to null", () => {
     const typeFn = constructorTypeFn(REG);
     const first = typeFn("Buy");
+    expect(first).not.toBeNull();
     expect(typeEquals(first!, BUY)).toBe(true);
     expect(typeFn("Buy")).toBe(first);
     expect(typeFn("int")).toBeNull();
@@ -153,6 +154,7 @@ describe("resolution", () => {
 
   test("isinstanceMembers narrows a union to the named member", () => {
     const members = isinstanceMembers(typeFor("Decision", REG), BUY);
+    expect(members).not.toBeNull();
     expect(members!.length).toBe(1);
     expect(typeEquals(members![0]!, BUY)).toBe(true);
     expect(isinstanceMembers(BUY, BUY)).toBeNull();
@@ -173,6 +175,7 @@ interface NameRow {
   condition?: boolean;
   /** The source is a record or list read as a value template. */
   template?: boolean;
+  /** Which resolver the site calls. */
   kind: "isinstance" | "constructor";
 }
 
@@ -184,15 +187,14 @@ function runNameRow(row: NameRow): void {
   const { case_, document } = caseDocument(row.id);
   const registry = caseRegistry(document);
   const raw = cursorAt(document, row.at).value;
-  const source =
-    row.template && (isRecord(raw) || Array.isArray(raw)) ? new ValueTemplate(raw) : raw;
+  const source = row.template ? new ValueTemplate(raw as Record<string, unknown>) : raw;
   const condition = row.condition ?? false;
   const isinstance = row.kind === "isinstance";
   const collect = isinstance ? collectIsinstanceNames : collectConstructorNames;
   const names = collect(source, { condition });
   expect(names.length).toBeGreaterThan(0);
   const resolve = isinstance ? resolveIsinstanceType : resolveConstructorType;
-  const error = typeCheckError(() => names.map((name): Type => resolve(name, registry)));
+  const error = typeCheckError(() => names.map((name) => resolve(name, registry)));
   const expected = (case_["expect"] as Case)["load"] as Case;
   const caseMessage = (expected["diagnostics"] as Case[])[0]!["message"] as string;
   expect(caseMessage).toBe(row.prefix + error.message);

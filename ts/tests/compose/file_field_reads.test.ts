@@ -10,7 +10,7 @@
 import { expect, test } from "bun:test";
 
 import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
-import { ValueContract } from "../../src/nodes/contracts.ts";
+import { isExactly, ValueContract } from "../../src/nodes/contracts.ts";
 import { fileFieldType, Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
@@ -41,14 +41,15 @@ test("projectOutputContract types the fields of a file", () => {
   });
   const contract = new ValueContract(record);
 
-  /** The projected type of `fields`, or `null` when the path doesn't project. */
-  const projected = (...fields: string[]): Type | null => {
+  /** The projected type of `fields`, requiring the path to project to an exact `ValueContract`. */
+  const projected = (...fields: string[]): Type => {
     const result = projectOutputContract(contract, fields);
-    return result === null ? null : (result as ValueContract).type;
+    expect(isExactly(result, ValueContract)).toBe(true);
+    return (result as ValueContract).type;
   };
 
-  expect(typeEquals(projected("f", "uri")!, STR)).toBe(true);
-  expect(typeEquals(projected("f", "mime")!, OPTIONAL_STR)).toBe(true);
-  expect(typeEquals(projected("g", "uri")!, OPTIONAL_STR)).toBe(true);
-  expect(projected("f", "urii")).toBe(null);
+  expect(typeEquals(projected("f", "uri"), STR)).toBe(true);
+  expect(typeEquals(projected("f", "mime"), OPTIONAL_STR)).toBe(true);
+  expect(typeEquals(projected("g", "uri"), OPTIONAL_STR)).toBe(true);
+  expect(projectOutputContract(contract, ["f", "urii"])).toBe(null);
 });

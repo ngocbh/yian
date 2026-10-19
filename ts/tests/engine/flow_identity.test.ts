@@ -2,8 +2,12 @@
  * Stable authored-flow manifests and deterministic expansion-topology digests
  * (`compile/manifest.ts`): rows of `tests/engine/test_flow_identity.py`.
  *
- * Ported: `test_flow_manifest_emits_the_literal_node_kind` (the CODE row),
- * `test_flow_fingerprint_covers_each_parameter_field`,
+ * Ported: `test_flow_manifest_emits_the_literal_node_kind`,
+ * `test_flow_fingerprint_covers_each_included_common_node_field`,
+ * `test_node_origin_does_not_affect_program_or_expansion_identity`,
+ * `test_node_origin_context_does_not_affect_program_or_expansion_identity`,
+ * `test_prompts_code_and_tool_ids_keep_uri_text` (the CODE and TOOL pairs; the AGENT prompt pair
+ * comes with AGENT), `test_flow_fingerprint_covers_each_parameter_field`,
  * `test_flow_fingerprint_covers_parameter_default_independently`,
  * `test_flow_fingerprint_preserves_parameter_order`,
  * `test_parameter_origins_do_not_affect_program_or_expansion_identity`,
@@ -29,6 +33,10 @@
  * `test_flow_fingerprint_changes_with_wiring_types_asserts_and_env`,
  * `test_flow_manifest_sorts_mapping_keys_without_reordering_semantic_lists`,
  * `test_manifest_rejects_non_json_values_without_repr_fallback`,
+ * `test_manifest_rejects_unknown_execution_fields_instead_of_omitting_them` (with the retired
+ * node-range fields of `tests/engine/test_node_range.py::test_manifest_rejects_retired_node_range_fields`
+ * as rows), `test_manifest_emits_a_node_type_table_only_when_non_empty`,
+ * `test_manifest_rejects_a_malformed_type_table`,
  * `test_manifest_has_no_redaction_markers`,
  * `test_credential_named_parameter_without_default_has_the_null_default`, and three of Python's
  * parametrized rows each of `test_node_input_literals_are_identity`,
@@ -52,6 +60,10 @@
  * - Python's `ValueError` is a `RangeError`; error names are TS field names (`outputContract`,
  *   `futureField`) in text form (`["futureField"]`).
  * - The non-JSON row uses a `Map`, a `Uint8Array`, a class instance, a function and `undefined`.
+ * - The malformed type-table rows are a record instead of a `Map`, a `Map` with a `bigint` key, and
+ *   a `Map` whose value is the string `"int"`.
+ * - Setting a CODE node's `kind` to `"agent"` is refused as not ported, since AGENT's manifest
+ *   comes with AGENT.
  * - The deep-union row has no call counter (an ES module can't be monkeypatched): a depth-30 union
  *   must manifest within the test's timeout, which an exponential encoding never does.
  * - The census is `Object.keys`, so the trait fields and `kind`, which a kind fixes, are ignored
@@ -62,8 +74,11 @@
  *
  * TS-only: typed floats (`1.5`, `Infinity`, `-0`), NaN refused, `2n` vs `2`, a cyclic env record vs
  * a shared alias, a `FileRef` encoded as its mapping, `params` that isn't an array, a forged END
- * count, a list END's `names`, seed-path indexes as counts, and the pinned fingerprint and expansion
- * digest of `fragment()`.
+ * count, a list END's `names`, seed-path indexes as counts, the pinned fingerprint and expansion
+ * digest of `fragment()`, a missing node field, a node whose `kind` isn't its class's, labels and a
+ * CODE or TOOL title or base directory outside identity, the CODE descriptors (`{"inline": ...}`,
+ * `{"ref": ...}`, `{"builtin": "identity", "field": ...}`) and their refusals, and TOOL `retries`
+ * (absent at 0, identity otherwise, a forged count refused).
  *
  * Later (T3-22): the loader rows `test_loaded_flow_stores_only_exact_parameter_carriers`,
  * `test_flow_fingerprint_ignores_comments_and_python_object_identity`,
@@ -111,9 +126,10 @@ import {
   SeedConnection,
   ValueContract,
 } from "../../src/nodes/contracts.ts";
-import { CodeNode } from "../../src/nodes/code/node.ts";
+import { type BuiltinCode, CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { FileRef, Type, typeFor, ValueKind } from "../../src/typesys/index.ts";
 import { canonicalJson, type JsonObject, type JsonValue } from "../../src/typesys/json.ts";
 
@@ -257,8 +273,8 @@ function envValue(flow: Flow, id: string, key: string): JsonValue {
   return typedMappingValue(nodeManifest(flow, id).env!, key);
 }
 
-/** Assert that `fn` throws `cls` with exactly `message`. */
-function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
+/** Assert that `fn` throws exactly `cls` (not a subclass) with exactly `message`. */
+function expectError(fn: () => unknown, cls: typeof Error, message: string): void {
   let caught: unknown;
   try {
     fn();
@@ -266,6 +282,7 @@ function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeErro
     caught = error;
   }
   expect(caught).toBeInstanceOf(cls);
+  expect((caught as Error).constructor).toBe(cls);
   expect((caught as Error).message).toBe(message);
 }
 
@@ -336,9 +353,11 @@ test("a seed-path index is a count: -0 fingerprints like 0 and an unsafe int is 
 });
 
 test("test_flow_manifest_emits_the_literal_node_kind", () => {
-  const manifest = nodeManifest(singleNodeFlow(new CodeNode("node", { code: 'return "ok"' })), "node");
+  const codeManifest = nodeManifest(singleNodeFlow(new CodeNode("node", { code: 'return "ok"' })), "node");
+  const toolManifest = nodeManifest(singleNodeFlow(new ToolNode("node", { toolId: "t", retries: 0 })), "node");
 
-  expect(manifest.kind).toBe("code");
+  expect(codeManifest.kind).toBe("code");
+  expect(toolManifest.kind).toBe("tool");
 });
 
 test("test_flow_manifest_sorts_mapping_keys_without_reordering_semantic_lists", () => {
@@ -353,6 +372,239 @@ test("test_flow_manifest_sorts_mapping_keys_without_reordering_semantic_lists", 
   expect(manifest).toEqual(flowManifest(original));
   expect(flowFingerprint(shuffled)).toBe(flowFingerprint(original));
   expect(manifest.edges).toEqual(flowManifest(original).edges!);
+});
+
+// ---- Node field policy -----------------------------------------------------------------------
+
+test.each([["futureExecutionFlag"], ["range"], ["fieldRanges"], ["preAssertRanges"], ["postAssertRanges"]])(
+  "test_manifest_rejects_unknown_execution_fields_instead_of_omitting_them: %s",
+  (field) => {
+    const flow = compiled();
+    Object.assign(code(flow, "step"), { [field]: true });
+
+    expectError(
+      () => flowManifest(flow),
+      RangeError,
+      `flow.nodes.step: unknown noncanonical execution field(s) for code: ["${field}"]`,
+    );
+  },
+);
+
+test("a node missing a field is refused", () => {
+  const flow = compiled();
+  Reflect.deleteProperty(code(flow, "step"), "env");
+
+  expectError(() => flowManifest(flow), RangeError, 'flow.nodes.step: missing canonical field(s): ["env"]');
+});
+
+test.each([
+  ["tool", RangeError, "flow.nodes.step: node kind 'tool' requires ToolNode, got CodeNode"],
+  ["nope", RangeError, "flow.nodes.step: node kind must be a NodeKind"],
+  ["agent", Error, "flow.nodes.step: node kind 'agent' manifest is not ported yet (T3-22)"],
+] as const)("a CODE node whose kind is %p is refused", (kind, cls, message) => {
+  const flow = compiled();
+  Object.assign(code(flow, "step"), { kind });
+
+  expectError(() => flowManifest(flow), cls, message);
+});
+
+test("labels, a CODE or TOOL title and a base directory are not identity", () => {
+  const original = compiled();
+  const changed = compiled();
+  const step = code(changed, "step");
+  step.wiringLabels = new Map([["x", "cases[1].when"]]);
+  step.bindingLabels = new Map([["x", "binding 'x'"]]);
+  step.title = "A different title";
+  step.baseDir = "/elsewhere";
+  const tool = (title: string | null) => singleNodeFlow(new ToolNode("node", { toolId: "t", title, retries: 0 }));
+
+  expect(flowManifest(changed)).toEqual(flowManifest(original));
+  expect(flowFingerprint(changed)).toBe(flowFingerprint(original));
+  expect(flowFingerprint(tool("Place"))).toBe(flowFingerprint(tool(null)));
+});
+
+test.each([
+  ["id", (node: CodeNode) => (node.id = "renamed-body")],
+  ["output-contract", (node: CodeNode) => (node.outputContract = new ValueContract(Type.scalar(ValueKind.NUMBER)))],
+  ["pre-asserts", (node: CodeNode) => (node.preAsserts = [new Assertion("x > 0", "x > 0")])],
+  ["post-asserts", (node: CodeNode) => (node.postAsserts = [new Assertion("output > 0", "output > 0")])],
+  ["commit-as", (node: CodeNode) => (node.commitAs = "owner")],
+  ["origin-id", (node: CodeNode) => (node.originId = "origin")],
+  ["env", (node: CodeNode) => (node.env = { threshold: 2n })],
+])("test_flow_fingerprint_covers_each_included_common_node_field: %s", (_, change) => {
+  const original = fragment();
+  const changed = fragment();
+  change(code(changed, "body"));
+
+  expect(flowFingerprint(changed)).not.toBe(flowFingerprint(original));
+});
+
+test("test_node_origin_does_not_affect_program_or_expansion_identity", () => {
+  const first = fragment();
+  const second = fragment();
+  code(second, "body").origin = new OriginRef("root/node/body");
+
+  expect(flowManifest(first)).toEqual(flowManifest(second));
+  expect(flowFingerprint(first)).toBe(flowFingerprint(second));
+  expect(expansionDigest(first)).toBe(expansionDigest(second));
+});
+
+test("test_node_origin_context_does_not_affect_program_or_expansion_identity", () => {
+  const first = fragment();
+  const second = fragment();
+  code(second, "body").originContext = [new OriginRef("root/nodes/invoke"), new OriginRef("child/nodes/map")];
+
+  expect(flowManifest(first)).toEqual(flowManifest(second));
+  expect(flowFingerprint(first)).toBe(flowFingerprint(second));
+  expect(expansionDigest(first)).toBe(expansionDigest(second));
+});
+
+test("test_manifest_emits_a_node_type_table_only_when_non_empty", () => {
+  const tagged = (tag: string) => new Type({ kind: ValueKind.STRING, tags: new Set([tag]) });
+  const withTypes = (types: Map<string, Type>) => {
+    const flow = compiled();
+    code(flow, "step").types = types;
+    return flow;
+  };
+  const original = compiled();
+  const typed = withTypes(
+    new Map([
+      ["Small", tagged("small")],
+      ["Big", tagged("big")],
+    ]),
+  );
+  const retyped = withTypes(
+    new Map([
+      ["Small", tagged("small")],
+      ["Big", tagged("huge")],
+    ]),
+  );
+
+  for (const node of Object.values(flowManifest(original).nodes as JsonObject)) {
+    expect("types" in (node as JsonObject)).toBe(false);
+  }
+  const table = nodeManifest(typed, "step").types as JsonObject[];
+  expect(table.map((entry) => entry.name)).toEqual(["Big", "Small"]);
+  expect(flowFingerprint(typed)).not.toBe(flowFingerprint(original));
+  expect(flowFingerprint(retyped)).not.toBe(flowFingerprint(typed));
+  expect(flowFingerprint(withTypes(new Map()))).toBe(flowFingerprint(original));
+});
+
+test.each([
+  ["record", { Big: Type.scalar(ValueKind.INTEGER) }, "flow.nodes.step.types: expected Map, got Object"],
+  [
+    "non-string key",
+    new Map([[1n, Type.scalar(ValueKind.INTEGER)]]),
+    "flow.nodes.step.types: keys must be strings, got bigint",
+  ],
+  ["non-Type value", new Map([["Big", "int"]]), "flow.nodes.step.types.Big: expected Type, got string"],
+])("test_manifest_rejects_a_malformed_type_table: %s", (_, types, message) => {
+  const flow = compiled();
+  Object.assign(code(flow, "step"), { types });
+
+  expectError(() => flowManifest(flow), TypeError, message);
+});
+
+// ---- CODE and TOOL ---------------------------------------------------------------------------
+
+/** The manifest of a lone CODE node `node` whose `code` is `source`. */
+function codeNodeManifest(source: string | BuiltinCode): JsonObject {
+  return nodeManifest(singleNodeFlow(new CodeNode("node", { code: source })), "node");
+}
+
+/** The fingerprint of a lone CODE node `node` whose `code` is `source`. */
+function codeFingerprint(source: string | BuiltinCode, options: Partial<CodeNode> = {}): string {
+  return flowFingerprint(singleNodeFlow(Object.assign(new CodeNode("node", { code: source }), options)));
+}
+
+test("CODE text is described as an inline body or a reference, and a built-in as its form", () => {
+  expect(codeNodeManifest('return "ok"').code).toEqual({ inline: 'return "ok"' });
+  expect(codeNodeManifest("./h.ts:fn").code).toEqual({ ref: "./h.ts:fn" });
+  expect(codeNodeManifest({ builtin: "identity", field: "x" }).code).toEqual({ builtin: "identity", field: "x" });
+});
+
+test("different CODE texts and built-in fields fingerprint differently", () => {
+  expect(codeFingerprint("return 1")).not.toBe(codeFingerprint("return 2"));
+  expect(codeFingerprint("./h.ts:fn")).not.toBe(codeFingerprint("./h.ts:other"));
+  expect(codeFingerprint({ builtin: "identity", field: "x" })).not.toBe(
+    codeFingerprint({ builtin: "identity", field: "y" }),
+  );
+  expect(codeFingerprint("./h.ts:fn")).not.toBe(codeFingerprint("return 1"));
+});
+
+test("CODE mode, base directory and origins keep the fingerprint", () => {
+  const baseline = codeFingerprint("./h.ts:fn");
+
+  expect(codeFingerprint("./h.ts:fn", { mode: "inline" })).toBe(baseline);
+  expect(codeFingerprint("./h.ts:fn", { baseDir: "/flows" })).toBe(baseline);
+  expect(codeFingerprint("./h.ts:fn", { codeOrigin: new OriginRef("code") })).toBe(baseline);
+  expect(codeFingerprint("./h.ts:fn", { codeLineOrigins: [new OriginRef("code/line/0")] })).toBe(baseline);
+});
+
+test.each([
+  ["a number", 42, TypeError, "flow.nodes.node.code: expected code text or a built-in operation, got number"],
+  [
+    "a built-in with an extra key",
+    { builtin: "identity", field: "x", extra: 1n },
+    RangeError,
+    'flow.nodes.node.code: unknown noncanonical field(s): ["extra"]',
+  ],
+  [
+    "an unknown built-in",
+    { builtin: "nope", field: "x" },
+    TypeError,
+    "flow.nodes.node.code: expected code text or a built-in operation, got Object",
+  ],
+  [
+    "an empty built-in field",
+    { builtin: "identity", field: "" },
+    RangeError,
+    "flow.nodes.node.code: built-in field must be non-empty",
+  ],
+] as const)("CODE code that is %s is refused", (_, value, cls, message) => {
+  const node = new CodeNode("node", { code: 'return "ok"' });
+  Object.assign(node, { code: value });
+
+  expectError(() => flowManifest(singleNodeFlow(node)), cls, message);
+});
+
+test("test_prompts_code_and_tool_ids_keep_uri_text", () => {
+  const firstUri = "https://first-user:first-secret@example.test/path?token=first-token";
+  const secondUri = "https://second-user:second-secret@example.test/path?token=second-token";
+  const pairs = [
+    [
+      new CodeNode("node", { code: `return ${JSON.stringify(firstUri)}` }),
+      new CodeNode("node", { code: `return ${JSON.stringify(secondUri)}` }),
+    ],
+    [new ToolNode("node", { toolId: firstUri, retries: 0 }), new ToolNode("node", { toolId: secondUri, retries: 0 })],
+  ];
+
+  for (const [first, second] of pairs) {
+    expect(flowFingerprint(singleNodeFlow(first!))).not.toBe(flowFingerprint(singleNodeFlow(second!)));
+    expect(canonicalJson(flowManifest(singleNodeFlow(first!)))).toContain("first-secret");
+  }
+});
+
+test("TOOL retries is absent at zero and identity when non-zero", () => {
+  const tool = (retries: number) => singleNodeFlow(new ToolNode("node", { toolId: "t", retries }));
+  const zero = nodeManifest(tool(0), "node");
+
+  expect(zero.tool_id).toBe("t");
+  expect("retries" in zero).toBe(false);
+  expect(nodeManifest(tool(2), "node").retries).toBe(2);
+  expect(flowFingerprint(tool(2))).not.toBe(flowFingerprint(tool(0)));
+  expect(flowFingerprint(tool(2))).not.toBe(flowFingerprint(tool(1)));
+});
+
+test("a forged TOOL retries count is refused with its path", () => {
+  const node = new ToolNode("node", { toolId: "t", retries: 0 });
+  node.retries = 1.5;
+
+  expectError(
+    () => flowManifest(singleNodeFlow(node)),
+    TypeError,
+    "flow.nodes.node.retries: expected a safe integer, got 1.5",
+  );
 });
 
 // ---- Values ----------------------------------------------------------------------------------

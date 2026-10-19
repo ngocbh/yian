@@ -161,6 +161,7 @@ const NODE_FIELDS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
   ]),
 );
 
+const BUILTIN_CODE_FIELDS = new Set(["builtin", "field"]);
 const EDGE_FIELDS = new Set(["id", "from", "to", "sourceHandle", "inputGroup", "optional", "ordering"]);
 const FLOW_OUTPUT_FIELDS = new Set(["name", "binding"]);
 // Canonical fields, then ignored ones.
@@ -610,6 +611,25 @@ function memoriesManifest(values: unknown, ctx: ManifestContext, path: string): 
 }
 
 /**
+ * Describe a CODE node's `code`: `{"inline": body}` or `{"ref": "./x.ts:fn"}` for text, or the
+ * built-in form `{"builtin": "identity", "field": name}`.
+ *
+ * @throws TypeError when `code` is neither text nor a built-in identity form.
+ * @throws RangeError when a built-in form has a key other than `builtin` and `field`, or an empty
+ *   `field`.
+ */
+function codeManifest(code: unknown, path: string): JsonObject {
+  // Text is classified from itself, not the stored `mode`, which is a derived cache.
+  if (typeof code === "string") return classifyCodeSource(code) === "reference" ? { ref: code } : { inline: code };
+  const message = `${path}: expected code text or a built-in operation, got ${typeName(code)}`;
+  if (!isRecord(code)) throw new TypeError(message);
+  checkFields(code, BUILTIN_CODE_FIELDS, path);
+  if (code.builtin !== "identity" || typeof code.field !== "string") throw new TypeError(message);
+  if (code.field === "") throw new RangeError(`${path}: built-in field must be non-empty`);
+  return { builtin: "identity", field: code.field };
+}
+
+/**
  * Canonicalize one concrete node under its exhaustive per-kind field policy.
  *
  * @throws TypeError or RangeError when a field breaks the policy or holds a value that isn't
@@ -671,13 +691,15 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string): JsonObjec
       manifest.n = list ? count(end.n, `${path}.n`, false) : null;
       break;
     }
-    case NodeKind.CODE: {
-      const source: unknown = (node as CodeNode).code;
-      if (typeof source !== "string") {
-        throw new TypeError(`${path}.code: expected code text or a built-in operation, got ${typeName(source)}`);
-      }
-      // Classified from the text, not the stored `mode`, which is a derived cache.
-      manifest.code = classifyCodeSource(source) === "reference" ? { ref: source } : { inline: source };
+    case NodeKind.CODE:
+      manifest.code = codeManifest((node as CodeNode).code, `${path}.code`);
+      break;
+    case NodeKind.TOOL: {
+      const tool = node as ToolNode;
+      manifest.tool_id = tool.toolId;
+      const retries = count(tool.retries, `${path}.retries`, false);
+      // Omitted when zero so flows that never opt in keep their identity.
+      if (retries !== 0) manifest.retries = retries;
       break;
     }
     default:

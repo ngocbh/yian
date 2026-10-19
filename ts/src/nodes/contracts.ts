@@ -825,11 +825,10 @@ function memberOnlyFieldError(
   tagHint = false,
   readUnionPath = "",
 ): string {
-  const tagFields = unionTagFields(union);
+  const tag = unionTagFields(union)[0];
   let which: string;
   let fix: string;
-  if (tagFields.length > 0) {
-    const tag = tagFields[0]!;
+  if (tag !== undefined) {
     const tags = having.map((member) => member.fields!.get(tag)!.tags!.values().next().value!).join(", ");
     which = `only union members with ${tag} ${tags} have`;
     fix = `read it inside a case on \${${unionPath}.${tag}}`;
@@ -837,8 +836,7 @@ function memberOnlyFieldError(
     which = `only ${having.length} of ${union.variants!.length} union members have`;
     fix = `check the member with isinstance(${unionPath}, <Type>) in a case first`;
   }
-  if (tagHint && tagFields.length > 0) {
-    const tag = tagFields[0]!;
+  if (tagHint && tag !== undefined) {
     const value = [...having[0]!.fields!.get(tag)!.tags!].sort(compareCodeUnits)[0]!;
     fix = `check the member first with \`${readUnionPath}.${tag} == "${value}" and ...\``;
   } else if (isinstanceHint && !tagHint) {
@@ -1012,14 +1010,13 @@ export function validateOutputContract(contract: OutputContract | null, value: u
   const exactType = outputContractType(contract);
   if (exactType !== null) return buildValueAs(exactType, value).toObject();
   if (value instanceof TypedValue) value = value.toObject();
-  if (contract === null) return value;
-  const partial = contract as PartialRecordContract;
+  if (!isExactly(contract, PartialRecordContract)) return value;
   if (!isRecord(value)) {
     throw new TypeCheckError(`${valueRepr(value)} is not an object for a partial record contract`);
   }
 
-  const expected = new Set(partial.names);
-  const missing = partial.names.filter((name) => !Object.hasOwn(value, name));
+  const expected = new Set(contract.names);
+  const missing = contract.names.filter((name) => !Object.hasOwn(value, name));
   if (missing.length > 0) {
     throw new TypeCheckError(`record missing required fields: ${pythonList(missing)}`, { path: [missing[0]!] });
   }
@@ -1032,7 +1029,7 @@ export function validateOutputContract(contract: OutputContract | null, value: u
   }
   const checked: ValueRecord = {};
   for (const name of Object.keys(value)) setField(checked, name, value[name] as Value);
-  for (const [name, fieldContract] of partial.fields) {
+  for (const [name, fieldContract] of contract.fields) {
     if (fieldContract === null) continue;
     try {
       setField(checked, name, buildValueAs(fieldContract.type, value[name]).toObject());

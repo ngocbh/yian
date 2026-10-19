@@ -265,14 +265,16 @@ test("partial record contract enforces closed shape and known fields", () => {
   expect(outputContractOrigin(contract, ["count"])).toBe(known);
   expect(outputContractOrigin(contract, ["note"])).toBe(null);
 
-  expect(() => validateOutputContract(contract, { count: "one", note: "x" })).toThrow(TypeCheckError);
-  expect(() => validateOutputContract(contract, { count: "one", note: "x" })).toThrow(
-    /does not match declared type int/,
-  );
-  expect(() => validateOutputContract(contract, { count: 1n })).toThrow(TypeCheckError);
-  expect(() => validateOutputContract(contract, { count: 1n })).toThrow(/missing required/);
-  expect(() => validateOutputContract(contract, { count: 1n, note: "x", extra: true })).toThrow(TypeCheckError);
-  expect(() => validateOutputContract(contract, { count: 1n, note: "x", extra: true })).toThrow(/unknown fields/);
+  const cases: [Record<string, unknown>, RegExp][] = [
+    [{ count: "one", note: "x" }, /does not match declared type int/],
+    [{ count: 1n }, /missing required/],
+    [{ count: 1n, note: "x", extra: true }, /unknown fields/],
+  ];
+  for (const [value, message] of cases) {
+    const error = thrown(() => validateOutputContract(contract, value));
+    expect(error).toBeInstanceOf(TypeCheckError);
+    expect(error.message).toMatch(message);
+  }
 });
 
 test("output contract field error rejects fields on fieldless types", () => {

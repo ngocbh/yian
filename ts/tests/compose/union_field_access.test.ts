@@ -4,6 +4,12 @@
  * and `::test_member_only_hint_names_the_union_root`. `typeFor` stands in for compose's
  * `read_type`.
  *
+ * TS-only: the member-only fix hints, which Python checks only through flows the loader builds
+ * (a tag comparison hint read from the local path, through a union root and below a shared
+ * field; an `isinstance` hint; an untagged union keeping the case hint under both hints), the
+ * shared-field walk (continuing into a nested union, stopping at an untyped shared field, and
+ * reading below a merged `Literal` field), and reading below a file field.
+ *
  * Later: the rest needs compose and the runtime.
  */
 
@@ -11,16 +17,22 @@ import { expect, test } from "bun:test";
 
 import { outputContractFieldError, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
-import type { Type } from "../../src/typesys/values.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
+
+const DECISION_TYPEDEFS = {
+  Buy: { action: "Literal(buy)", qty: "int" },
+  Sell: { action: "Literal(sell)", price: "float" },
+  Decision: "Union(Buy, Sell)",
+};
 
 /** The tagged union `Decision` of `Buy {action, qty}` and `Sell {action, price}`. */
 function decision(): Type {
-  const registry = readTypedefs({
-    Buy: { action: "Literal(buy)", qty: "int" },
-    Sell: { action: "Literal(sell)", price: "float" },
-    Decision: "Union(Buy, Sell)",
-  });
-  return typeFor("Decision", registry);
+  return typeFor("Decision", readTypedefs(DECISION_TYPEDEFS));
+}
+
+/** The untagged union `Reply` of `Text {text}` and `Num {num}`. */
+function reply(): Type {
+  return typeFor("Reply", readTypedefs({ Text: { text: "str" }, Num: { num: "int" }, Reply: "Union(Text, Num)" }));
 }
 
 test("shared walk allows member-only fields when asked", () => {
@@ -49,10 +61,74 @@ test("member-only hint names the union root", () => {
     "reference ${v.order.qty} reads field 'qty', which only union members with " +
       "action buy have; read it inside a case on ${d.output.order.action}",
   );
-  const registry = readTypedefs({ Text: { text: "str" }, Num: { num: "int" }, Reply: "Union(Text, Num)" });
-  const untagged = new ValueContract(typeFor("Reply", registry));
+  const untagged = new ValueContract(reply());
   expect(outputContractFieldError(untagged, ["text"], "v.text", { unionRoot: "s.output" })).toBe(
     "reference ${v.text} reads field 'text', which only 1 of 2 union members have; " +
       "check the member with isinstance(s.output, <Type>) in a case first",
+  );
+});
+
+test("member-only hints point at a tag comparison or an isinstance conjunct", () => {
+  const contract = new ValueContract(decision());
+  const buyFirst = "reference ${v.qty} reads field 'qty', which only union members with action buy have; ";
+  expect(outputContractFieldError(contract, ["qty"], "v.qty", { tagHint: true, unionRoot: "d.output" })).toBe(
+    buyFirst + 'check the member first with `v.action == "buy" and ...`',
+  );
+  expect(outputContractFieldError(contract, ["qty"], "v.qty", { isinstanceHint: true, unionRoot: "d.output" })).toBe(
+    buyFirst + "check the member first with `isinstance(d.output, <Type>) and ...`",
+  );
+  expect(outputContractFieldError(contract, ["qty"], "v.qty", { isinstanceHint: true, tagHint: true })).toBe(
+    buyFirst + 'check the member first with `v.action == "buy" and ...`',
+  );
+
+  const untagged = new ValueContract(reply());
+  const caseFirst =
+    "reference ${v.text} reads field 'text', which only 1 of 2 union members have; " +
+    "check the member with isinstance(s.output, <Type>) in a case first";
+  expect(outputContractFieldError(untagged, ["text"], "v.text", { tagHint: true, unionRoot: "s.output" })).toBe(
+    caseFirst,
+  );
+  const bothHints = { tagHint: true, isinstanceHint: true, unionRoot: "s.output" };
+  expect(outputContractFieldError(untagged, ["text"], "v.text", bothHints)).toBe(caseFirst);
+});
+
+test("a shared union field continues the walk with its shared type", () => {
+  const registry = readTypedefs({
+    ...DECISION_TYPEDEFS,
+    BoxA: { kind: "Literal(a)", order: "Decision" },
+    BoxB: { kind: "Literal(b)", order: "Decision" },
+    Boxes: "Union(BoxA, BoxB)",
+    Word: { v: "str" },
+    Count: { v: "int" },
+    Mixed: "Union(Word, Count)",
+  });
+  const boxes = new ValueContract(typeFor("Boxes", registry));
+  const orderBuyFirst = "reference ${v.order.qty} reads field 'qty', which only union members with action buy have; ";
+  expect(outputContractFieldError(boxes, ["order", "qty"], "v.order.qty", { unionRoot: "d.output" })).toBe(
+    orderBuyFirst + "read it inside a case on ${d.output.order.action}",
+  );
+  const tagHint = { tagHint: true, unionRoot: "d.output" };
+  expect(outputContractFieldError(boxes, ["order", "qty"], "v.order.qty", tagHint)).toBe(
+    orderBuyFirst + 'check the member first with `v.order.action == "buy" and ...`',
+  );
+  expect(outputContractFieldError(boxes, ["order", "zzz"], "v.order.zzz")).toBe(
+    "reference ${v.order.zzz} reads unknown field 'zzz' on record",
+  );
+
+  const contract = new ValueContract(decision());
+  expect(outputContractFieldError(contract, ["action"], "d.output.action")).toBe(null);
+  expect(outputContractFieldError(contract, ["action", "x"], "d.output.action.x")).toBe(
+    "reference ${d.output.action.x} reads field 'x' on type Literal(buy, sell), which has no fields",
+  );
+  // `v` is `str` in one member and `int` in the other, so the read is untyped and not checked below.
+  const mixed = new ValueContract(typeFor("Mixed", registry));
+  expect(outputContractFieldError(mixed, ["v", "x"], "m.output.v.x")).toBe(null);
+});
+
+test("a file field read continues with the field's type", () => {
+  const file = new ValueContract(Type.scalar(ValueKind.FILE));
+  expect(outputContractFieldError(file, ["uri"], "f.uri")).toBe(null);
+  expect(outputContractFieldError(file, ["uri", "x"], "f.uri.x")).toBe(
+    "reference ${f.uri.x} reads field 'x' on type str, which has no fields",
   );
 });

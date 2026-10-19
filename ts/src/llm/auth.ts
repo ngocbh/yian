@@ -223,6 +223,7 @@ const FIELD_VALUE = /^[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*$/;
 function checkFieldValue(name: string, value: unknown): string {
   if (typeof value !== "string") throw new TypeError(`header ${name} value must be a string`);
   const limit = current().maxHeaderValueChars;
+  // Spread counts code points, as Python's len does, not UTF-16 units.
   if ([...value].length > limit) throw new TypeError(`header ${name} value must be at most ${limit} characters`);
   if (!FIELD_VALUE.test(value)) {
     throw new TypeError(
@@ -249,7 +250,7 @@ export class ExtraHeadersAuth implements Auth {
   constructor(auth: Auth, headers: Record<string, string>) {
     this.auth = auth;
     // Copied so a caller mutating its own object cannot change what is sent.
-    this.extra = Object.freeze(Object.fromEntries(Object.entries(headers)));
+    this.extra = Object.freeze({ ...headers });
     for (const [name, value] of Object.entries(this.extra)) checkFieldValue(name, value);
   }
 

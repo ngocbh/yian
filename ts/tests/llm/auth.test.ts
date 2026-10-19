@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  type Auth,
   BasicAuth,
   BearerAuth,
   ExtraHeadersAuth,
@@ -15,10 +16,12 @@ import {
   scrub,
   secretForms,
 } from "../../src/llm/auth.ts";
+import { current } from "../../src/defaults.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { RouteModel } from "../../src/llm/executor.ts";
 import { Request } from "../../src/llm/messages.ts";
 import { Route } from "../../src/llm/route.ts";
+import { validateHeaderValue } from "../../src/llm_clients/connection_settings.ts";
 
 /** Return a source yielding `values` in turn, and a counter of its calls. */
 function countingSource<T>(...values: T[]): [() => T, { count: number }] {
@@ -275,6 +278,23 @@ describe("scrub", () => {
   });
 });
 
+/** Return the error a `RouteModel` over `auth` ends with when the server answers 401 echoing `secret`. */
+async function errorEchoing(secret: string, auth: Auth): Promise<ProviderError> {
+  const send = async () => new Response(JSON.stringify({ error: `bad credential ${secret}` }), { status: 401 });
+  const model = new RouteModel({
+    route: new Route({ provider: "ollama", baseUrl: "http://gpu-box:11434", path: "api/chat", auth }),
+    protocol: { name: "test", model: "m", framing: "sse", buildBody: () => ({}), async *parse() {} },
+    send,
+  });
+  const error = await rejection(
+    (async () => {
+      for await (const _ of model.stream(new Request({ messages: [] })));
+    })(),
+  );
+  expect(error).toBeInstanceOf(ProviderError);
+  return error as ProviderError;
+}
+
 describe("BasicAuth", () => {
   test("sends Basic and the base64 of user:password", async () => {
     const auth = new BasicAuth("u", "p");
@@ -297,30 +317,7 @@ describe("BasicAuth", () => {
 
   test("a 401 echoing the password is scrubbed from the error", async () => {
     const password = "hunter2-secret-pw";
-    const send = async () =>
-      new Response(JSON.stringify({ error: `bad password ${password}` }), { status: 401 });
-    const model = new RouteModel({
-      route: new Route({
-        provider: "ollama",
-        baseUrl: "http://gpu-box:11434",
-        path: "api/chat",
-        auth: new BasicAuth("me", password),
-      }),
-      protocol: {
-        name: "test",
-        model: "m",
-        framing: "sse",
-        buildBody: () => ({}),
-        async *parse() {},
-      },
-      send,
-    });
-    const error = await rejection(
-      (async () => {
-        for await (const _ of model.stream(new Request({ messages: [] })));
-      })(),
-    );
-    expect(error).toBeInstanceOf(ProviderError);
+    const error = await errorEchoing(password, new BasicAuth("me", password));
     expect(error.message).toContain(REDACTED);
     expect(error.message).not.toContain(password);
     expect(error.stack ?? "").not.toContain(password);
@@ -358,6 +355,45 @@ describe("ExtraHeadersAuth", () => {
       if (value) expect((error as TypeError).stack ?? "").not.toContain(value);
     });
   }
+
+  test("an extra header value is scrubbed from the error", async () => {
+    const value = "org-secret-header-value";
+    const error = await errorEchoing(value, new ExtraHeadersAuth(new NoAuth(), { "x-org-secret": value }));
+    expect(error.message).toContain(REDACTED);
+    expect(error.message).not.toContain(value);
+    expect(error.stack ?? "").not.toContain(value);
+  });
+
+  test("checks values exactly as validateHeaderValue does", () => {
+    const limit = current().maxHeaderValueChars;
+    const values: unknown[] = [
+      ...["a\tb", "a b", " a", "a ", "\ta", "a\t", "a\nb", "é", ""],
+      "x".repeat(limit),
+      "x".repeat(limit + 1),
+      42,
+    ];
+    /** Return `"ok"` or the message `check` throws, and the class it throws. */
+    const outcome = (check: () => unknown): [string, string] => {
+      try {
+        check();
+        return ["ok", ""];
+      } catch (error) {
+        return [(error as Error).message, (error as Error).constructor.name];
+      }
+    };
+    for (const value of values) {
+      const ours = outcome(() => new ExtraHeadersAuth(new NoAuth(), { x: value as string }));
+      const theirs = outcome(() => validateHeaderValue("x", value));
+      expect(ours[0], JSON.stringify(value)).toBe(theirs[0]);
+      if (ours[0] !== "ok") expect([ours[1], theirs[1]]).toEqual(["TypeError", "RangeError"]);
+    }
+    // Both accept exactly these.
+    expect(values.filter((value) => outcome(() => validateHeaderValue("x", value))[0] === "ok")).toEqual([
+      "a\tb",
+      "a b",
+      "x".repeat(limit),
+    ]);
+  });
 
   test("copies its input", async () => {
     const headers = { "x-extra": "before" };

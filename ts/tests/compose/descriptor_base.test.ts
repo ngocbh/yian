@@ -1,8 +1,10 @@
 /**
  * The base descriptor contract shared by every node kind: a port of
- * `tests/compose/test_descriptor_base.py`.
+ * `tests/compose/test_descriptor_base.py`, with a test-local `D` as Python's.
  *
- * TS-only: the `message builders` rows, which Python tests through `load_flow` or its
+ * TS-only: `replace` keeps the class and re-runs the origin check (Python's
+ * `dataclasses.replace`), the instance `kind`, and a subclass's `allow` unioning its parent's
+ * set. And the `message builders` rows, which Python tests through `load_flow` or its
  * docstrings: `valueTypeError` (its docstring examples), `rejectNonText`,
  * `rejectContainerSpans`, `inputShapeProblem` (the shapes of
  * `tests/compose/test_node_input_shape.py`; a text value is spelled by `valueRepr`, so `"abc"`
@@ -10,8 +12,6 @@
  *
  * Dropped: the date row of `test_non_mapping_input_is_a_load_error` (TS reads an unquoted date
  * as text).
- *
- * Later (T3-14, the descriptor base): the 8 rows of `tests/compose/test_descriptor_base.py`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -19,17 +19,117 @@ import { describe, expect, test } from "bun:test";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import {
   inputShapeProblem,
+  NodeDescriptor,
+  type NodeDescriptorFields,
   rejectContainerSpans,
   rejectNonText,
   siteKey,
   valueTypeError,
 } from "../../src/compose/nodes/base.ts";
-import { SourceRange } from "../../src/diagnostics.ts";
+import { SourceCursor } from "../../src/compose/source/index.ts";
+import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 import { loadError } from "./declarations.ts";
 
 const RANGE = new SourceRange(2, 5, 2, 9);
 const DIAGNOSTICS = new LoadDiagnostics("f.yaml", "nodes:\n  a: 1234\n");
+
+/** A kind with one own field, `greeting`. */
+class D extends NodeDescriptor {
+  static override kind = "d";
+  static override allowed = this.allow("greeting");
+  readonly greeting: unknown;
+
+  constructor(fields: NodeDescriptorFields & { greeting?: unknown }) {
+    super(fields);
+    this.greeting = fields.greeting ?? "";
+  }
+}
+
+describe("NodeDescriptor", () => {
+  test("allow unions with the parent", () => {
+    expect(NodeDescriptor.allowed.has("kind")).toBe(true);
+    expect(NodeDescriptor.allow("x")).toEqual(new Set([...NodeDescriptor.allowed, "x"]));
+  });
+
+  test("require unions with the parent", () => {
+    expect(NodeDescriptor.required).toEqual(new Set());
+    expect(NodeDescriptor.require("a")).toEqual(new Set(["a"]));
+  });
+
+  test("the common keys are allowed", () => {
+    for (const key of ["kind", "node_name", "depends_on", "runs_after", "env"]) {
+      expect(NodeDescriptor.allowed.has(key)).toBe(true);
+    }
+  });
+
+  test("_validateFields rejects bad asserts by default", () => {
+    const fields = { asserts: [1n, 2n] };
+    loadError(() => D._validateFields("n", fields, new Map(), null, new LoadDiagnostics()));
+  });
+
+  test("_validateFields skips absent asserts by default", () => {
+    D._validateFields("n", {}, new Map(), null, new LoadDiagnostics());
+  });
+
+  test("_normalizeCursor returns the cursor unchanged by default", () => {
+    const cursor = SourceCursor.virtual({ a: 1n });
+    expect(NodeDescriptor._normalizeCursor(cursor)).toBe(cursor);
+  });
+
+  test("the template parse constructs the subclass from a virtual cursor", () => {
+    const reader = SourceCursor.virtual({
+      kind: "d",
+      greeting: "hi",
+      node_name: "n1",
+      env: { K: "v" },
+    });
+    const desc = D.parse("n1", reader);
+    expect(desc).toBeInstanceOf(D);
+    expect(desc.id).toBe("n1");
+    expect(desc.greeting).toBe("hi");
+    expect(desc.nodeName).toBe("n1");
+    expect(desc.env).toEqual({ K: "v" });
+    expect(desc.fieldRanges).toEqual(new Map()); // virtual: no ranges recorded
+  });
+
+  test("the template parse rejects an unknown key", () => {
+    const reader = SourceCursor.virtual({ kind: "d", bogus: 1n });
+    const error = loadError(() => D.parse("n1", reader));
+    expect(error.diagnostic.message).toBe(
+      "node 'n1' (kind=d): field 'bogus' is not allowed " +
+        "(allowed: depends_on, env, greeting, kind, node_name, runs_after)",
+    );
+  });
+
+  test("replace keeps the class and re-runs the origin check", () => {
+    const desc = D.parse("n1", SourceCursor.virtual({ kind: "d", greeting: "hi" }));
+    const labels = new Map([["greeting", "node 'h' greeting"]]);
+    const labelled = desc.replace({ fieldLabels: labels });
+    expect(labelled).toBeInstanceOf(D);
+    expect(labelled.greeting).toBe("hi");
+    expect(labelled.fieldLabels).toBe(labels);
+    expect(desc.fieldLabels).toEqual(new Map());
+    expect(desc.replace({ origin: new OriginRef("o") }).origin).toEqual(new OriginRef("o"));
+    expect(() => desc.replace({ origin: "o" as unknown as OriginRef })).toThrow(
+      new TypeError("node descriptor origin must be an OriginRef or null"),
+    );
+  });
+
+  test("the instance kind is the class's", () => {
+    expect(new D({ id: "n" }).kind).toBe("d");
+    expect(new NodeDescriptor({ id: "n" }).kind).toBe("");
+  });
+
+  test("a subclass's allow unions its parent's set", () => {
+    class E extends D {
+      static override allowed = this.allow("farewell");
+    }
+    expect(E.allowed).toEqual(new Set([...D.allowed, "farewell"]));
+    expect(D.allowed.has("farewell")).toBe(false);
+    expect(D.allowed.has("greeting")).toBe(true);
+  });
+});
 
 describe("message builders", () => {
   test("valueTypeError names what YAML read the value as", () => {

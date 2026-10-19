@@ -43,7 +43,12 @@ export const MAX_RETRY_AFTER_SECONDS = 120;
 const OVERFLOW_RETRY_AFTER = 121;
 const DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 const FLOAT_LITERAL = /^([+-]?)(inf|infinity|nan)$/i;
-const CONTEXT_PHRASES = ["context_length_exceeded", "prompt is too long", "maximum context length"];
+const CONTEXT_PHRASES = [
+  "context_length_exceeded",
+  "prompt is too long",
+  "maximum context length",
+  "exceeds the maximum number of tokens allowed",
+];
 const MAX_DETAIL_CHARS = 2000;
 
 // RFC 5322 dates as HTTP sends them: `[Day, ]D[D] Mon YYYY HH:MM[:SS] zone`.
@@ -162,7 +167,10 @@ function parseHttpDate(text: string): number | null {
  * - 529, or a 503 whose body says "overloaded": overloaded.
  * - Any other 5xx: server.
  * - 3xx: redirect.
- * - A 400, 413 or 422 whose body names a context overflow: context length.
+ * - A 400 naming `API_KEY_INVALID`: auth (Gemini's invalid key).
+ * - A 400, 413 or 422 whose body names a context overflow ("context_length_exceeded",
+ *   "prompt is too long", "maximum context length", or Gemini's "exceeds the maximum
+ *   number of tokens allowed"): context length.
  * - Any other 4xx: bad request.
  * - Anything else: protocol.
  */
@@ -187,6 +195,7 @@ export function kindForStatus(status: number, body: string): ErrorKind {
   if (status === 503 && lowered.includes("overloaded")) return "overloaded";
   if (status >= 500) return "server";
   if (status >= 300 && status < 400) return "redirect";
+  if (status === 400 && lowered.includes("api_key_invalid")) return "auth";
   if ([400, 413, 422].includes(status) && CONTEXT_PHRASES.some((phrase) => lowered.includes(phrase))) {
     return "context_length";
   }

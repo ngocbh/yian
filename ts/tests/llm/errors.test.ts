@@ -69,6 +69,44 @@ describe("kinds", () => {
     expect(reply(500, {}, "maximum context length").kind).toBe("server");
   });
 
+  const geminiBadKey = JSON.stringify({
+    error: {
+      code: 400,
+      message: "API key not valid. Please pass a valid API key.",
+      status: "INVALID_ARGUMENT",
+      details: [
+        { "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "API_KEY_INVALID", domain: "googleapis.com" },
+      ],
+    },
+  });
+
+  test("Gemini's invalid-key 400 is auth; the same text keeps other statuses' kinds", () => {
+    expect(kindForStatus(400, geminiBadKey)).toBe("auth");
+    expect(kindForStatus(403, geminiBadKey)).toBe("permission");
+    expect(kindForStatus(404, geminiBadKey)).toBe("not_found");
+    expect(kindForStatus(400, '{"error": {"message": "invalid argument", "status": "INVALID_ARGUMENT"}}')).toBe(
+      "bad_request",
+    );
+  });
+
+  test("Gemini's token-limit 400 is context_length", () => {
+    const body = JSON.stringify({
+      error: {
+        code: 400,
+        message: "The input token count (1048577) exceeds the maximum number of tokens allowed (1048576).",
+        status: "INVALID_ARGUMENT",
+      },
+    });
+    expect(kindForStatus(400, body)).toBe("context_length");
+  });
+
+  test("errorFromResponse on Gemini's invalid-key 400", () => {
+    const err = errorFromResponse(400, new Headers(), geminiBadKey, { provider: "google" });
+    expect(err.kind).toBe("auth");
+    expect(err.retryable).toBe(false);
+    expect(err.message).toBe("google returned HTTP 400 (auth): API key not valid. Please pass a valid API key.");
+  });
+
   test("an unexpected status is a protocol error", () => {
     expect(kindForStatus(200, "")).toBe("protocol");
     expect(kindForStatus(101, "")).toBe("protocol");

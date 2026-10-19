@@ -376,10 +376,13 @@ function readProperty(target: object, name: PropertyKey): unknown {
   }
 }
 
-/** Return the length of `value` when it is an array, else 0; 0 when reading it throws. */
+/** Return the length of `value` when it is an array and the length is a non-negative safe integer, else 0. */
 function arrayLength(value: unknown): number {
   try {
-    return Array.isArray(value) ? value.length : 0;
+    const length: unknown = Array.isArray(value) ? value.length : 0;
+    // A Proxy's `length` trap can return anything; a Symbol or a throwing `valueOf` would throw
+    // in the loop's comparison, and Infinity would never end it.
+    return Number.isSafeInteger(length) && (length as number) > 0 ? (length as number) : 0;
   } catch {
     return 0;
   }

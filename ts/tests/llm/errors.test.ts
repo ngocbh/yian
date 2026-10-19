@@ -628,6 +628,20 @@ describe("scrubError", () => {
     expect(error.message).toBe(`trapped ${REDACTED}`);
   });
 
+  test.each([
+    ["a Symbol", Symbol("length")],
+    ["Infinity", Infinity],
+    ["a throwing valueOf", { valueOf: () => { throw new Error("no number"); } }],
+    ["a negative number", -1],
+  ])("an errors Proxy whose length is %s doesn't throw or hang", (_, length) => {
+    const errors = new Proxy([`member ${KEY}`], {
+      get: (target, name, receiver) => (name === "length" ? length : Reflect.get(target, name, receiver)),
+    });
+    const error = Object.assign(new Error(`odd length ${KEY}`), { errors });
+    expect(scrubError(error, redact)).toBe(error);
+    expect(error.message).toBe(`odd length ${REDACTED}`);
+  }, 1000);
+
   test("a ProviderError keeps its class and fields", () => {
     const error = new ProviderError("auth", `rejected ${KEY}`, { status: 401, provider: "openai" });
     expect(scrubError(error, redact)).toBe(error);

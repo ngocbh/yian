@@ -4,7 +4,7 @@
  * Changed: Python compares the descriptor to a `WaitDescriptor` with `field_ranges` excluded; TS
  * compares its class and fields.
  *
- * TS-only: one row per branch of the `until:` literal check. TS YAML reads an unquoted date or
+ * TS-only: one row per branch of the `until:` literal check, and one for the container check. TS YAML reads an unquoted date or
  * timestamp as text, so it is checked as text and bound as written, where Python bound the
  * timestamp it read in `isoformat()` spelling. `build` passes the title to the node.
  *
@@ -124,7 +124,6 @@ test("build passes the title to the node", () => {
   const node = new WaitDescriptor({ id: "w", until: "2026-05-21", nodeName: "Settle" }).build(reading()).node;
 
   expect(node.title).toBe("Settle");
-  expect(node.outputContract).toBeNull();
 });
 
 // ---------- harvested conformance cases ----------

@@ -5,13 +5,16 @@
  * Changed: `test_retired_agent_authoring_fields_are_rejected` keeps its load half; its
  * `AgentNode(...)` half is not ported, since the TS options type has no such keys.
  *
- * Not ported: `test_checkpoint_and_suspension_modules_are_gone` and
- * `test_agent_continuation_packages_and_builders_are_gone` (Python modules and attributes; the
+ * Not ported: `test_checkpoint_and_suspension_modules_are_gone` and the module and attribute rows
+ * of `test_agent_continuation_packages_and_builders_are_gone` (Python modules and attributes; the
  * descriptor-field half is the load row here), `test_shipped_blocking_node_packages_cannot_construct_pause`
- * (an AST scan of Python packages), `test_shipped_blocking_node_bodies_are_typed_to_output`
- * (Python type hints; TS checks this statically), and `test_final_log_only_runtime_and_public_surface`
- * (Python run and runtime signatures). `test_effect_nodes_drop_scratch_keys` and
+ * (an AST scan of Python packages) and `test_shipped_blocking_node_bodies_are_typed_to_output`
+ * (Python type hints; TS checks this statically). `test_effect_nodes_drop_scratch_keys` and
  * `test_wait_event_mode_and_the_watchdog_are_gone` are recorded in `resolve_until.test.ts`.
+ *
+ * Later (T3-22): the `build_grow` row of `test_agent_continuation_packages_and_builders_are_gone`
+ * (`compile/expand`). Later (T4-8): `test_final_log_only_runtime_and_public_surface` (the run
+ * API).
  */
 
 import { expect, test } from "bun:test";

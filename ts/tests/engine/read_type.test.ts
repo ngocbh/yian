@@ -249,9 +249,6 @@ test.each([
   { id: `${OUTPUT_ORIGINS}non_text_nested_output_type`, call: emit },
   { id: `${OUTPUT_ORIGINS}unknown_nested_output_type`, call: emit },
 ])("$id", ({ id, call }) => {
-  const env = (caseDocument(id).case_["env"] ?? {}) as Record<string, string>;
-  reload((name) => (Object.hasOwn(env, name) ? env[name] : undefined));
-  // Read again under the case's env: the document and the typedefs read the configured limits.
   const { case_, document } = caseDocument(id);
   const flow = document.root.value as Record<string, unknown>;
   const typedefs = flow["typedefs"] as Record<string, unknown> | undefined;

@@ -1,33 +1,30 @@
 /**
- * Reading a slot's type through its YAML tag and spelling tags for messages: a port of the
- * `read_tag_type` and `suggest_tag` tests in `tests/compose/test_tags.py`.
+ * Reading a slot's type and value through its YAML tags, spelling tags for messages, and
+ * rejecting tags outside a slot: a port of `tests/compose/test_tags.py` (the `read_tag_type`,
+ * `suggest_tag` and `read_tagged_value` tests). The `read_tagged_value` tests read with a `read`
+ * helper as Python's; ints are `bigint`, an unquoted date is text (rule `dates`), so
+ * `x: [!str 2026-01-01]` loads where Python asks for quotes, and a missing-field list is written
+ * in the text form (`["action"]`).
  *
- * TS-only: direct rows for `splitTypedText`, `oldTypedText`, `spellTypeText`,
- * `closeTypeName`, `suggestedLiteral` (a literal that doesn't parse is kept as written, where
- * Python reads an unbound name), `yamlQuoted`, `pathLabel`, `hasSpan` and `namedTypeLabel`,
- * which Python tests only through `load_flow`; and the fragments of conformance messages these
- * helpers produce, each the exact text in its case. `suggestTag` with neither a type nor its
- * text throws `TypeError`, where Python asserts.
+ * TS-only: direct rows for `splitTypedText`, `oldTypedText`, `spellTypeText`, `closeTypeName`,
+ * `suggestedLiteral` (a literal that doesn't parse is kept as written, where Python reads an
+ * unbound name), `yamlQuoted`, `pathLabel`, `hasSpan`, `namedTypeLabel`, `rejectTaggedOutput`
+ * and `rejectUnreadTags`, which Python tests only through `load_flow`; the fragments of
+ * conformance messages these helpers produce, each the exact text in its case; `suggestTag`
+ * with neither a type nor its text, which throws `TypeError` where Python asserts; a verbatim
+ * tag carrying `[`, `]` or `,`, a flow-style tag cut at its `,`, a `%XX` escape kept raw in a
+ * tag, and `!Any` on a date and on a null; and the harvested-case tables, which make the
+ * loader's calls on the slots of the conformance cases these functions decide, comparing the
+ * message and the last frame.
  *
- * The `read_tagged_value` tests are ported with a `read` helper as Python's. Ints are `bigint`;
- * an unquoted date is text (rule `dates`), so `x: [!str 2026-01-01]` loads, where Python asks
- * for quotes; a missing-field list is written in the text form (`["action"]`).
- *
- * TS-only: a verbatim tag carrying `[`, `]` or `,`, a flow-style tag cut at its `,`, a `%XX`
- * escape kept raw in a tag, `!Any` on a date and on a null, and direct rows for
- * `rejectTaggedOutput` and `rejectUnreadTags`, which Python tests only through `load_flow`.
- * The harvested-case tables make the loader's calls on the slots of the conformance cases these
- * functions decide, comparing the message and the last frame.
- *
- * Not ported: `read_tag_type`'s long-int message (`the tag` in place of a tag that repeats
- * every digit); ints are unbounded in TS, so the message always shows the tag. And
+ * Not ported: `read_tag_type`'s long-int message (`the tag` in place of a tag that repeats every
+ * digit); ints are unbounded in TS, so the message always shows the tag. And
  * `test_any_other_value_error_from_the_check_is_a_located_load_error`: TS has no value models,
  * so the check throws only `TypeCheckError` for an author's value; anything else is a bug and
  * propagates.
  */
 
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import {
@@ -51,12 +48,17 @@ import {
 } from "../../src/compose/helpers/tags.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
-import { forget, reload } from "../../src/defaults.ts";
+import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import { type Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
-import { type Case, readCase } from "../conformance.ts";
+import type { Case } from "../conformance.ts";
 import { caseDocument } from "./declarations.ts";
+
+// Pinned before `REG` is read too, so neither depends on the shell's `YIAN_*` limits.
+install(BUILTIN);
+beforeEach(() => install(BUILTIN));
+afterEach(forget);
 
 const REG = readTypedefs({
   Buy: { action: "Literal(buy)", conviction: "float" },
@@ -659,20 +661,23 @@ describe("tag positions", () => {
 
 // ---------- Harvested cases ----------
 
-/** The call the loader makes on a case's document; `builder` holds the ledger reads. */
+/**
+ * The call the loader makes on a case's document. `registry` reads the flow's typedefs on
+ * first use, so a check that runs before them (`typedefsOnly`) doesn't; `builder` holds the
+ * ledger reads.
+ */
 type Call = (
   document: SourceDocument,
-  registry: TypeRegistry,
+  registry: () => TypeRegistry,
   diagnostics: LoadDiagnostics,
   builder: SourceCatalogBuilder,
 ) => void;
 
-/** A slot `readTaggedValue` reads: its path from the root, its label, and its options. */
-type Slot = [
-  path: (string | number)[],
-  label: string,
-  options?: { literalOnly?: boolean; nestedCallFix?: string },
-];
+/**
+ * A slot `readTaggedValue` reads: its path from the root and its options. Its label is the
+ * path's last step, as the loader's labels are for every harvested slot.
+ */
+type Slot = [path: string[], options?: { literalOnly?: boolean; nestedCallFix?: string }];
 
 interface Row {
   /** The case, `group/name`. */
@@ -688,22 +693,23 @@ interface Row {
 
 const LLM_CONFIG_CALL_FIX =
   "compute it in a node and read that node's output with `${...}`, or reword the text";
+const LITERAL = { literalOnly: true };
 
 /** Return the cursor at `path` from the document root. */
-function at(document: SourceDocument, path: (string | number)[]): SourceCursor {
+function at(document: SourceDocument, path: string[]): SourceCursor {
   return path.reduce((cursor: SourceCursor, step) => cursor.child(step), document.root);
 }
 
 /** Read `slot` as the loader does, with the file's consumed-tag ledger. */
 function readSlot(
-  [path, label, options = {}]: Slot,
+  [path, options = {}]: Slot,
   document: SourceDocument,
   registry: TypeRegistry,
   diagnostics: LoadDiagnostics,
   builder: SourceCatalogBuilder,
 ): void {
   readTaggedValue(at(document, path), registry, {
-    label,
+    label: path.at(-1)!,
     sitePath: path,
     catalogBuilder: builder,
     diagnostics,
@@ -715,10 +721,10 @@ function readSlot(
 const slot =
   (...read: Slot): Call =>
   (document, registry, diagnostics, builder) =>
-    readSlot(read, document, registry, diagnostics, builder);
+    readSlot(read, document, registry(), diagnostics, builder);
 
 const output =
-  (path: (string | number)[]): Call =>
+  (path: string[]): Call =>
   (document, _registry, diagnostics) =>
     rejectTaggedOutput(at(document, path), diagnostics);
 
@@ -727,151 +733,137 @@ const unread =
   (document, _registry, diagnostics, builder) =>
     rejectUnreadTags(document, builder.consumedTags, diagnostics, options);
 
-/** Return the case's `env:`, read before any flow parses. */
-function caseEnv(id: string): Record<string, string> {
-  const url = new URL(`../../../conformance/cases/${id}.yaml`, import.meta.url);
-  return (readCase(readFileSync(url, "utf8"))["env"] ?? {}) as Record<string, string>;
-}
-
 /** Make the row's call on its case and compare the result with the case's `expect`. */
 function runRow(row: Row): void {
-  const env = caseEnv(row.id);
-  reload((name) => (Object.hasOwn(env, name) ? env[name] : undefined));
-  try {
-    const { case_, document } = caseDocument(row.id, { file: row.file });
-    const root = document.root;
-    const registry: TypeRegistry = root.has("typedefs")
-      ? readTypedefs(root.mapping("typedefs"))
-      : new Map();
-    const diagnostics = LoadDiagnostics.fromDocument(document);
-    const builder = new SourceCatalogBuilder();
-    for (const read of row.ledger ?? []) readSlot(read, document, registry, diagnostics, builder);
-    const expected = (case_["expect"] as Case)["load"];
-    if (expected === "ok") {
-      row.call(document, registry, diagnostics, builder);
-      return;
-    }
-    const error = loadError(() => row.call(document, registry, diagnostics, builder));
-    const frame = error.diagnostic.frames.at(-1)!;
-    const range = frame.range;
-    const diagnostic = ((expected as Case)["diagnostics"] as Case[])[0]!;
-    const expectedFrame = (diagnostic["frames"] as Case[]).at(-1)!;
-    const message = diagnostic["message"] as string;
-    const prefix = row.prefix ?? "";
-    expect(message.startsWith(prefix)).toBe(true);
-    expect([
-      error.message,
-      frame.label,
-      [range.startLine, range.startCol, range.endLine, range.endCol],
-    ]).toEqual([
-      message.slice(prefix.length),
-      expectedFrame["label"] as string,
-      (expectedFrame["range"] as bigint[]).map(Number),
-    ]);
-  } finally {
-    forget();
+  const { case_, document } = caseDocument(row.id, { file: row.file });
+  const root = document.root;
+  let typedefs: TypeRegistry | undefined;
+  const registry = (): TypeRegistry =>
+    (typedefs ??= root.has("typedefs") ? readTypedefs(root.mapping("typedefs")) : new Map());
+  const diagnostics = LoadDiagnostics.fromDocument(document);
+  const builder = new SourceCatalogBuilder();
+  for (const read of row.ledger ?? []) readSlot(read, document, registry(), diagnostics, builder);
+  const expected = (case_["expect"] as Case)["load"];
+  if (expected === "ok") {
+    row.call(document, registry, diagnostics, builder);
+    return;
   }
+  const error = loadError(() => row.call(document, registry, diagnostics, builder));
+  const frame = error.diagnostic.frames.at(-1)!;
+  const range = frame.range;
+  const diagnostic = ((expected as Case)["diagnostics"] as Case[])[0]!;
+  const expectedFrame = (diagnostic["frames"] as Case[]).at(-1)!;
+  const message = diagnostic["message"] as string;
+  const prefix = row.prefix ?? "";
+  expect(message.startsWith(prefix)).toBe(true);
+  expect([
+    error.message,
+    frame.label,
+    [range.startLine, range.startCol, range.endLine, range.endCol],
+  ]).toEqual([
+    message.slice(prefix.length),
+    expectedFrame["label"] as string,
+    (expectedFrame["range"] as bigint[]).map(Number),
+  ]);
 }
 
 describe("harvested cases", () => {
   test.each<Row>([
     {
       id: "types/compose_open_range_flows__no_ends_in_a_tag",
-      call: slot(["nodes", "use", "input", "x"], "x"),
+      call: slot(["nodes", "use", "input", "x"]),
     },
     {
       id: "types/compose_open_range_flows__tagged_literal_outside_an_open_range",
-      call: slot(["nodes", "use", "input", "x"], "x"),
+      call: slot(["nodes", "use", "input", "x"]),
     },
     {
       id: "load-types/compose_any_flows__a_null_any_literal_is_a_load_error",
-      call: slot(["nodes", "n", "input", "x"], "x"),
+      call: slot(["nodes", "n", "input", "x"]),
     },
     {
       id: "load-types/compose_tagged_bindings__tagged_mapping_output_that_does_not_fit_fails",
-      call: slot(["output"], "output"),
+      call: slot(["output"]),
     },
     {
       id: "load-types/compose_tagged_bindings__unknown_tag_on_an_input_offers_a_close_match",
-      call: slot(["nodes", "use", "input", "qty"], "qty"),
+      call: slot(["nodes", "use", "input", "qty"]),
     },
     {
       id: "load-types/compose_typed_bindings_check__null_literal_for_an_output_field",
-      call: slot(["output", "x"], "x"),
+      call: slot(["output", "x"]),
     },
     {
       id: "load-types/compose_typed_bindings_check__number_literal_for_str_suggests_quoting",
-      call: slot(["nodes", "use", "input", "x"], "x"),
+      call: slot(["nodes", "use", "input", "x"]),
     },
     {
       id: "load-types/compose_typed_bindings_check__text_literal_for_int_fails_at_its_line",
-      call: slot(["nodes", "use", "input", "x"], "x"),
+      call: slot(["nodes", "use", "input", "x"]),
     },
     {
       id: "load-types/compose_typed_bindings_check__true_literal_for_str_explains_yaml_booleans",
-      call: slot(["nodes", "use", "input", "x"], "x"),
+      call: slot(["nodes", "use", "input", "x"]),
     },
     {
       id: "load-case/compose_value_entries_load__a_list_under_an_object_tag_is_rejected",
-      call: slot(["nodes", "x"], "x"),
+      call: slot(["nodes", "x"]),
     },
     {
       id: "load-case/compose_value_entries_load__a_mistyped_literal_under_a_credential_name",
-      call: slot(["nodes", "api_key"], "api_key"),
+      call: slot(["nodes", "api_key"]),
     },
     {
       id: "load-case/compose_value_entries_load__a_nested_tag_is_checked_at_its_own_line",
-      call: slot(["nodes", "x"], "x"),
+      call: slot(["nodes", "x"]),
     },
     {
       id: "load-case/compose_value_entries_load__a_number_under_a_str_tag_asks_for_quotes",
-      call: slot(["nodes", "x"], "x"),
+      call: slot(["nodes", "x"]),
     },
     {
       id: "load-case/compose_value_entries_load__a_spaced_tag_is_rejected",
-      call: slot(["nodes", "x"], "x"),
+      call: slot(["nodes", "x"]),
     },
     {
       id: "load-case/compose_value_entries_load__a_tag_does_not_fill_in_a_missing_field",
-      call: slot(["nodes", "x"], "x"),
+      call: slot(["nodes", "x"]),
     },
     {
       id: "load-case/compose_value_entries_load__an_unknown_tag_suggests_a_type",
-      call: slot(["nodes", "x"], "x"),
+      call: slot(["nodes", "x"]),
     },
     {
       id: "load-agent/compose_llm_config_values_load__a_call_inside_an_llm_config_string_fails",
-      call: slot(["nodes", "a", "llm_config"], "llm_config", {
-        nestedCallFix: LLM_CONFIG_CALL_FIX,
-      }),
+      call: slot(["nodes", "a", "llm_config"], { nestedCallFix: LLM_CONFIG_CALL_FIX }),
     },
     {
       id: "yaml/compose_untyped_output_dates__any_tag_on_a_date",
-      call: slot(["output", "as_of"], "as_of"),
+      call: slot(["output", "as_of"]),
     },
     {
       id: "yaml/compose_yaml_node_limit__a_recursive_alias_keeps_its_error",
-      call: slot(["nodes", "use", "input", "topic"], "topic"),
+      call: slot(["nodes", "use", "input", "topic"]),
     },
     {
       id: "yaml/compose_yaml_words__former_boolean_in_a_bool_slot",
-      call: slot(["output", "ok"], "ok"),
+      call: slot(["output", "ok"]),
     },
     {
       id: "yaml/compose_yaml_words__former_boolean_inside_a_list_gets_no_fix",
-      call: slot(["output", "ok"], "ok"),
+      call: slot(["output", "ok"]),
     },
     {
       id: "types/compose_any_name_literals__a_typed_binding_under_a_credential_name_loads",
-      call: slot(["nodes", "fetch", "input", "password"], "password"),
+      call: slot(["nodes", "fetch", "input", "password"]),
     },
     {
       id: "load-types/compose_typed_bindings_check__a_null_literal_fits_an_optional_tag",
-      call: slot(["nodes", "use", "input", "x"], "x"),
+      call: slot(["nodes", "use", "input", "x"]),
     },
     {
       id: "load-types/compose_typed_bindings_check__str_into_literal_loads",
-      call: slot(["nodes", "use", "input", "x"], "x"),
+      call: slot(["nodes", "use", "input", "x"]),
     },
   ])("readTaggedValue: $id", runRow);
 
@@ -911,13 +903,13 @@ describe("harvested cases", () => {
     {
       id: "load-types/compose_tag_positions__tag_outside_a_slot_in_a_def_is_rejected",
       call: unread(),
-      ledger: [[["defs", "sub", "input", "x"], "x", { literalOnly: true }]],
+      ledger: [[["defs", "sub", "input", "x"], LITERAL]],
     },
     {
       id: "load-types/compose_tag_positions__tag_outside_a_slot_in_a_uses_child_is_rejected",
       call: unread(),
       file: "child.yaml",
-      ledger: [[["input", "x"], "x", { literalOnly: true }]],
+      ledger: [[["input", "x"], LITERAL]],
     },
     {
       id: "load-types/compose_tag_positions__tag_outside_a_slot_in_an_inline_body_is_rejected",
@@ -935,22 +927,22 @@ describe("harvested cases", () => {
       id: "load-types/compose_tag_positions__tags_in_flow_inputs_load",
       call: unread(),
       ledger: [
-        [["input", "n"], "n", { literalOnly: true }],
-        [["input", "m"], "m", { literalOnly: true }],
+        [["input", "n"], LITERAL],
+        [["input", "m"], LITERAL],
       ],
     },
     {
       id: "load-types/compose_tag_positions__tags_in_a_def_slot_load",
       call: unread(),
       ledger: [
-        [["defs", "sub", "input", "x"], "x", { literalOnly: true }],
-        [["defs", "sub", "nodes", "echo", "input", "value"], "value"],
+        [["defs", "sub", "input", "x"], LITERAL],
+        [["defs", "sub", "nodes", "echo", "input", "value"]],
       ],
     },
     {
       id: "load-types/compose_tag_positions__tag_under_an_extension_key_aliased_into_a_slot_loads",
       call: unread(),
-      ledger: [[["nodes", "n", "input", "qty"], "qty"]],
+      ledger: [[["nodes", "n", "input", "qty"]]],
     },
   ])("rejectUnreadTags: $id", runRow);
 });

@@ -59,6 +59,7 @@ import type {
   Memory,
   MemorySession,
   PolicyCommitStatus,
+  VisibleInteraction,
 } from "../../src/memory/index.ts";
 import { BackwardFailure } from "../../src/runtime/contracts.ts";
 
@@ -366,6 +367,7 @@ test("the package doc and exports describe keyed memories", () => {
   expect(Object.keys(memoryPackage)).toEqual([
     "BUILTIN_MEMORY_CONFIG_KEYS",
     "DeclSite",
+    "EvaluationEvidence",
     "LearningFailure",
     "LearningResult",
     "MEMORY_IDENTIFIER_PATTERN",
@@ -376,11 +378,16 @@ test("the package doc and exports describe keyed memories", () => {
     "MemoryOperationError",
     "MemoryOperationFailure",
     "MemoryScope",
+    "MemorySection",
     "MemorySetupError",
     "MemorySnapshotEnvelope",
     "MemorySpec",
     "MemoryStack",
+    "ModelTextInteraction",
+    "ModelValueInteraction",
     "PolicyCommitOutcome",
+    "ToolCallInteraction",
+    "ToolResultInteraction",
     "checkMemoryDeclaration",
     "isMemory",
   ]);

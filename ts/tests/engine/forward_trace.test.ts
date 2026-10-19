@@ -4,8 +4,9 @@
  * `test_forward_capture_round_trips_invocation_names_and_structural_layout` (the caller's later
  * edit of `node_data` doesn't show),
  * `test_forward_capture_rejects_malformed_invocation_inventory_and_paths` (10 rows) and
- * `test_forward_capture_rejects_noncanonical_embedded_json` (5 rows). Python's `ValueError` is a
- * `RangeError` here.
+ * `test_forward_capture_rejects_noncanonical_embedded_json` (5 rows), and
+ * `test_scope_free_evidence_rejects_recalled_sections`. Python's `ValueError` is a `RangeError`
+ * here.
  *
  * TS-only: one row per `ForwardCapture` message with its class; a capture with items, scope and
  * node data keeps frozen copies; `ForwardCapture`'s defaults; an unfinished capture may keep an
@@ -33,6 +34,7 @@
 import { expect, test } from "bun:test";
 
 import { ValueRoute } from "../../src/expr/lineage.ts";
+import { EvaluationEvidence, MemorySection } from "../../src/memory/contracts.ts";
 import { ExecutionPosition, ExecutionScope } from "../../src/nodes/contracts.ts";
 import { BackwardCapture, ForwardCapture } from "../../src/runtime/contracts.ts";
 import { JSONDecodeError } from "../../src/typesys/json.ts";
@@ -358,4 +360,10 @@ test.each<[string, string, unknown, ErrorClass, string]>([
   const build = () => new BackwardCapture(options as never);
   expect(build).toThrow(cls);
   expect(build).toThrow(message);
+});
+
+test("scope-free evidence rejects recalled sections", () => {
+  const build = () => new EvaluationEvidence(null, {}, null, null, [new MemorySection("outer", "recalled")]);
+  expect(build).toThrow(RangeError);
+  expect(build).toThrow("memory_sections memories must appear in scope.memories");
 });

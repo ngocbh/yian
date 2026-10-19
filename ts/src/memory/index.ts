@@ -15,9 +15,12 @@
  * failures, recorded snapshots, the host memory objects (`Memory`, its run `MemorySession`,
  * and `isMemory`, which stands in for Python's `isinstance` check against the runtime-checkable
  * `Memory` protocol), and the learning results (`MemoryMutation`, `LearningFailure`,
- * `PolicyCommitOutcome`, `LearningResult`). The declaration origin traversal and rewrite and the
- * mutation batch check `validateMutations` aren't re-exported (Python keeps them out of
- * `__all__`); their callers import `contracts.ts`. The recall, learning evidence and session
+ * `PolicyCommitOutcome`, `LearningResult`), and the visible evidence of one node outcome
+ * (`EvaluationEvidence`, `MemorySection`, and the `VisibleInteraction` carriers
+ * `ModelTextInteraction`, `ModelValueInteraction`, `ToolCallInteraction`,
+ * `ToolResultInteraction`). The declaration origin traversal and rewrite and the mutation batch
+ * check `validateMutations` aren't re-exported (Python keeps them out of `__all__`); their callers
+ * import `contracts.ts`. The recall and learning contexts, the episodes and the session
  * conversation contracts, and the conversation, session, summary, storage and backend modules are
  * not ported yet.
  *
@@ -35,11 +38,13 @@ export type {
   Memory,
   MemorySession,
   PolicyCommitStatus,
+  VisibleInteraction,
 } from "./contracts.ts";
 export {
   BUILTIN_MEMORY_CONFIG_KEYS,
   checkMemoryDeclaration,
   DeclSite,
+  EvaluationEvidence,
   isMemory,
   LearningFailure,
   LearningResult,
@@ -51,9 +56,14 @@ export {
   MemoryOperationError,
   MemoryOperationFailure,
   MemoryScope,
+  MemorySection,
   MemorySetupError,
   MemorySnapshotEnvelope,
   MemorySpec,
   MemoryStack,
+  ModelTextInteraction,
+  ModelValueInteraction,
   PolicyCommitOutcome,
+  ToolCallInteraction,
+  ToolResultInteraction,
 } from "./contracts.ts";

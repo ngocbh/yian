@@ -4,32 +4,38 @@
  *
  * Routes are data: one small builder per provider family returns a `RouteModel`; there is no
  * plugin loading and no SDK. The environment is read only through the injected `env` (default
- * `processEnv`): what `connection.ts` reads for the snapshot and credentials, and
- * `OPENAI_BASE_URL` for a host key on a pinned subscription connection.
+ * `processEnv`), at build: what `connection.ts` reads for the snapshot and credentials;
+ * `OPENAI_BASE_URL` for a host key on a pinned subscription connection; each Chat Completions
+ * vendor's key variable (`getApiKeyEnv`) and `VLLM_BASE_URL`; and `AZURE_OPENAI_AD_TOKEN`,
+ * `AZURE_OPENAI_API_KEY` and `OPENAI_API_VERSION` for Azure. An empty value counts as unset.
  */
 
 import { type Env, processEnv } from "../defaults.ts";
+import { reprText } from "../diagnostics.ts";
 import {
   type Auth,
   BearerAuth,
   ExtraHeadersAuth,
+  HeaderKeyAuth,
   type Secret,
   SubscriptionAuth,
 } from "../llm/auth.ts";
 import { RouteModel } from "../llm/executor.ts";
 import type { ReplayDegradedReason } from "../llm/messages.ts";
+import { OpenAIChat } from "../llm/protocols/openai_chat.ts";
 import { OpenAIResponses } from "../llm/protocols/openai_responses.ts";
 import { Route } from "../llm/route.ts";
 import type { Scheduler, Send } from "../platform.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost } from "../typesys/values.ts";
+import { getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS } from "./api_key_env.ts";
 import {
   ApiKeyCredentials,
   AuthError,
   type Credentials,
   OAuthCredentials,
 } from "./auth/common.ts";
-import { LLMConfig, SUPPORTED_LLM_PROVIDERS } from "./config.ts";
+import { azureResourceEndpoint, LLMConfig, SUPPORTED_LLM_PROVIDERS } from "./config.ts";
 import {
   checkModelConfig,
   type Connection,
@@ -176,9 +182,12 @@ function credentialsOf<T extends Credentials>(
 interface Resolved {
   model: string;
   block: JsonObject;
-  /** What the auth sends: a key, or a function reading it per request. */
+  /**
+   * What the auth sends: a key, or a function reading it per request (OpenAI only); `null` leaves
+   * the key to the provider's environment default.
+   */
   key: Secret | null;
-  /** The key as read at build, for the replay account. */
+  /** The key as read at build, for the replay account; outside OpenAI it equals `key`. */
   keyAtBuild: string | null;
   baseUrl: string | null;
   /** OpenAI-Organization and OpenAI-Project, sent as route headers. */
@@ -221,6 +230,125 @@ function openaiModel(resolved: Resolved, wiring: Wiring): RouteModel {
     block: resolved.block,
     onReplayDegraded: wiring.onReplayDegraded,
   });
+  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+}
+
+/**
+ * Return whether `model` goes to the Responses API (`prefersResponses`) on a Chat Completions
+ * `provider` or Azure.
+ *
+ * Throws `RangeError` if it does and `block`, which mirrors the Chat Completions request, is not
+ * empty.
+ */
+function routedToResponses(provider: string, model: string, block: JsonObject): boolean {
+  if (!prefersResponses(model)) return false;
+  if (Object.keys(block).length > 0) {
+    throw new RangeError(
+      `The ${reprText(provider)} block mirrors the Chat Completions request, but model ` +
+        `${reprText(model)} is routed to the Responses API; remove the block or use a model ` +
+        "served through Chat Completions.",
+    );
+  }
+  return true;
+}
+
+/**
+ * Build a Chat Completions vendor's route (xAI, DeepSeek, Qwen, GLM, MiniMax, OpenRouter, vLLM):
+ * `chat/completions`, or `responses` for a name-routed model, with a bearer key.
+ *
+ * The key is the resolved one, else the provider's non-empty key variable, else `"EMPTY"` for
+ * vLLM; the base URL the resolved one, else (vLLM) a non-empty `VLLM_BASE_URL` as written, else
+ * `PROVIDER_BASE_URL`. Throws `RangeError` naming the key variable if no key is found, or if a
+ * name-routed model has a block.
+ */
+function vendorModel(provider: string, resolved: Resolved, wiring: Wiring): RouteModel {
+  const { model, block } = resolved;
+  const variable = getApiKeyEnv(provider)!;
+  const key = resolved.keyAtBuild ?? (wiring.env(variable) || null);
+  if (key === null && !OPTIONAL_API_KEY_PROVIDERS.has(provider)) {
+    throw new RangeError(
+      `API key for provider '${provider}' is not set. Please set the ${variable} environment ` +
+        `variable (e.g. add ${variable}=your_key to your .env file).`,
+    );
+  }
+  const envBaseUrl = provider === "vllm" ? wiring.env("VLLM_BASE_URL") : undefined;
+  const responses = routedToResponses(provider, model, block);
+  const route = new Route({
+    provider,
+    baseUrl: resolved.baseUrl ?? (envBaseUrl || PROVIDER_BASE_URL[provider]!),
+    path: responses ? "responses" : "chat/completions",
+    // A keyless vLLM server takes any bearer value; OpenAI-compatible servers expect one.
+    auth: withHeaders(new BearerAuth(key ?? "EMPTY"), resolved.secretHeaders),
+  });
+  const { onReplayDegraded } = wiring;
+  const protocol = responses
+    ? new OpenAIResponses({
+        model,
+        provider,
+        // The keyless placeholder names no account.
+        account: key === null ? null : accountHash(key),
+        onReplayDegraded,
+      })
+    : new OpenAIChat({ model, provider, block, onReplayDegraded });
+  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+}
+
+/**
+ * Build the Azure OpenAI route: the deployment's `chat/completions` at the resource endpoint, or
+ * `openai/responses` for a name-routed deployment, with `api-version` from `OPENAI_API_VERSION`.
+ *
+ * Auth, first match wins: the resolved key as `api-key`; a non-empty `AZURE_OPENAI_AD_TOKEN` as a
+ * bearer token; a non-empty `AZURE_OPENAI_API_KEY` as `api-key`. Throws `RangeError` if none is
+ * found, then if `OPENAI_API_VERSION` is unset or empty, then if a name-routed deployment has a
+ * block.
+ */
+function azureModel(resolved: Resolved, wiring: Wiring): RouteModel {
+  const { model, block } = resolved;
+  const { env } = wiring;
+  // `checkModelConfig` requires an Azure config's base_url.
+  const endpoint = azureResourceEndpoint(resolved.baseUrl!);
+  const adToken = env("AZURE_OPENAI_AD_TOKEN");
+  const envKey = env("AZURE_OPENAI_API_KEY");
+  let auth: Auth;
+  // The replay account: the key sent, or the resource for an AD token, which rotates about
+  // hourly while the reasoning stays bound to the resource.
+  let account: string;
+  if (resolved.keyAtBuild !== null) {
+    auth = new HeaderKeyAuth("api-key", resolved.keyAtBuild);
+    account = accountHash(resolved.keyAtBuild);
+  } else if (adToken) {
+    auth = new BearerAuth(adToken);
+    account = accountHash(endpoint);
+  } else if (envKey) {
+    auth = new HeaderKeyAuth("api-key", envKey);
+    account = accountHash(envKey);
+  } else {
+    throw new RangeError(
+      "provider azure has no credential; set llm_config.api_key with llm_config.base_url, run " +
+        "'yian auth azure', or set AZURE_OPENAI_API_KEY or AZURE_OPENAI_AD_TOKEN",
+    );
+  }
+  const version = env("OPENAI_API_VERSION");
+  if (!version) {
+    throw new RangeError(
+      "provider azure needs OPENAI_API_VERSION, the Azure OpenAI API version (for example " +
+        "2025-03-01-preview)",
+    );
+  }
+  const responses = routedToResponses("azure", model, block);
+  const route = new Route({
+    provider: "azure",
+    baseUrl: endpoint,
+    path: responses
+      ? "openai/responses"
+      : `openai/deployments/${encodeURIComponent(model)}/chat/completions`,
+    query: { "api-version": version },
+    auth: withHeaders(auth, resolved.secretHeaders),
+  });
+  const { onReplayDegraded } = wiring;
+  const protocol = responses
+    ? new OpenAIResponses({ model, provider: "azure", account, onReplayDegraded })
+    : new OpenAIChat({ model, provider: "azure", block, onReplayDegraded });
   return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
 }
 
@@ -273,13 +401,16 @@ async function subscriptionModel(
  * environment key sends none. A model outside the provider's known list gets
  * `onWarning("Model '<model>' is not in the known model list for provider '<p>'. Continuing
  * anyway.")` (default: `process.emitWarning`, once per text per process); the subscription never
- * warns.
+ * warns. A Chat Completions vendor's or Azure deployment's model that `prefersResponses` goes to
+ * the Responses API.
  *
  * `send` and `scheduler` go to the model's transport (`scheduler` also to the credential store),
  * `signal` to every credential read, and `onReplayDegraded` to the protocol.
  *
  * Throws `RangeError` if `checkModelConfig` rejects the config (e.g. a block the API it reaches
- * refuses) or the provider has no route yet; `AuthError` if a pinned login changed or was removed,
+ * refuses), the provider has no route yet, a vendor key is missing, Azure has no credential or
+ * no `OPENAI_API_VERSION`, or a model routed to the Responses API has a Chat Completions block;
+ * `AuthError` if a pinned login changed or was removed,
  * an OpenAI key is missing or changed, or saved header names differ from the recorded ones; a
  * `TypeCheckError` for a record that holds a non-yian value.
  */
@@ -365,5 +496,7 @@ export async function chatModelFromConfig(
     );
   }
   if (provider === "openai") return openaiModel(resolved, wiring);
+  if (provider === "azure") return azureModel(resolved, wiring);
+  if (OPENAI_COMPATIBLE.includes(provider)) return vendorModel(provider, resolved, wiring);
   throw new RangeError(`chatModelFromConfig does not route provider ${provider} yet`);
 }

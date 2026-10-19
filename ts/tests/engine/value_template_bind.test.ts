@@ -354,7 +354,7 @@ test("a nested typed binding rejects a missing field at its origin", () => {
     ),
   );
 
-  expect(error.message).toContain("'action'");
+  expect(error.message).toContain('["action"]');
   expect(error.failureCode).toBe("binding.type");
   expect(error.origin).toEqual(nestedOrigin);
   expect(error.message.startsWith("binding 'p.order':")).toBe(true);

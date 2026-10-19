@@ -68,7 +68,7 @@ describe("NaN at intake", () => {
   test.each<[unknown, (string | number)[], string]>([
     [{ a: [0, NaN] }, ["a", 1], "input 'y' at a[1]: NaN is not a yian value"],
     [{ a: [0, { b: NaN }] }, ["a", 1, "b"], "input 'y' at a[1].b: NaN is not a yian value"],
-    [[{ "my key": NaN }], [0, "my key"], "input 'y' at [0]['my key']: NaN is not a yian value"],
+    [[{ "my key": NaN }], [0, "my key"], `input 'y' at [0]["my key"]: NaN is not a yian value`],
   ])("names where and the path: %p", (value, path, message) => {
     const error = typeCheckError(() => fromHost(value, "input 'y'"));
     expect(error.message).toBe(message);

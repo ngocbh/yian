@@ -111,7 +111,7 @@ describe("rejectDeepNesting", () => {
   test("a key that isn't an identifier renders quoted", () => {
     const error = deepError({ "my key": nest(100) });
     expect(error.path).toEqual(["my key", ...repeat("a", 99)]);
-    expect(error.message).toBe(message("['my key']." + repeat("a", 99).join(".")));
+    expect(error.message).toBe(message('["my key"].' + repeat("a", 99).join(".")));
   });
 
   test("a FileRef at the last level passes", () => {

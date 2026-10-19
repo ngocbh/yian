@@ -281,7 +281,7 @@ function groupTools(group: string, items: readonly unknown[]): FunctionTool[] {
   const tools: FunctionTool[] = [];
   for (let index = 0; index < items.length; index++) {
     const item = items[index];
-    const where = `tools[${reprText(group)}][${index}]`;
+    const where = `tools[${JSON.stringify(group)}][${index}]`;
     if (isMcpServer(item)) {
       throw new TypeError(`${where} is an MCP server; pass it as its own tools entry, which becomes its group`);
     }
@@ -300,11 +300,11 @@ function groupTools(group: string, items: readonly unknown[]): FunctionTool[] {
 function serverTools(key: string, server: McpServer): readonly FunctionTool[] {
   if (!server.isOpen) {
     throw new TypeError(
-      `tools[${reprText(key)}] is an MCP server that isn't open; open it with "await server.open()" ` +
+      `tools[${JSON.stringify(key)}] is an MCP server that isn't open; open it with "await server.open()" ` +
         "or pass it to runFlow/resumeFlow, which open it",
     );
   }
-  if (server.isClosed) throw new RangeError(`tools[${reprText(key)}]: MCP server '${server.label}' is closed`);
+  if (server.isClosed) throw new RangeError(`tools[${JSON.stringify(key)}]: MCP server '${server.label}' is closed`);
   return groupTools(key, server.tools);
 }
 
@@ -373,7 +373,7 @@ export class ToolSet {
       if (key === ASK_USER) {
         // A FunctionTool is an object, so this also rejects one.
         if (typeof entry !== "function") {
-          throw new TypeError("tools['ask_user'] must be a plain function handler; the engine supplies its schema");
+          throw new TypeError(`tools["ask_user"] must be a plain function handler; the engine supplies its schema`);
         }
         built.set(key, askUserTool(entry as AskUserHandler));
       } else if (isFunctionTool(entry)) {
@@ -389,7 +389,7 @@ export class ToolSet {
         groupItems.set(key, groupTools(key, entry));
       } else {
         throw new TypeError(
-          `tools[${reprText(key)}] must be a FunctionTool, an MCP server, or an array of FunctionTools, ` +
+          `tools[${JSON.stringify(key)}] must be a FunctionTool, an MCP server, or an array of FunctionTools, ` +
             `got ${jsTypeName(entry)}`,
         );
       }
@@ -404,13 +404,13 @@ export class ToolSet {
         if (RESERVED_TOOL_NAMES.has(name)) {
           const hint =
             name === ASK_USER
-              ? "pass the handler as the top-level tools['ask_user'] entry"
+              ? `pass the handler as the top-level tools["ask_user"] entry`
               : "granting skills binds it";
           throw new RangeError(`group ${reprText(group)} has a tool named ${reprText(name)}, a reserved name; ${hint}`);
         }
         if (topLevel.has(name)) {
           throw new RangeError(
-            `tool ${reprText(name)} in group ${reprText(group)} clashes with tools[${reprText(name)}]`,
+            `tool ${reprText(name)} in group ${reprText(group)} clashes with tools[${JSON.stringify(name)}]`,
           );
         }
         names.add(name);

@@ -250,7 +250,7 @@ function jsonText(value: Value, indent: number | null, level: number): string {
 }
 
 /**
- * Render a value path as `a[1].b`, quoting a key that isn't an identifier as `['my key']`.
+ * Render a value path as `a[1].b`, quoting a key that isn't an identifier as `["my key"]`.
  *
  * Each key is cut with `shownText`, and a rendering longer than four times the shown-value
  * cap keeps its start and end around `…` (counting code points).
@@ -264,7 +264,7 @@ export function renderValuePath(path: readonly (string | number)[]): string {
       const shown = shownText(segment);
       parts.push(parts.length > 0 ? `.${shown}` : shown);
     } else {
-      parts.push(`[${shownText(reprText(segment))}]`);
+      parts.push(`[${shownText(JSON.stringify(segment))}]`);
     }
   }
   const text = parts.join("");
@@ -939,14 +939,9 @@ export function requireFields(
   const extra = actual.filter((key) => !expected.includes(key)).sort(compareCodeUnits);
   if (missing.length > 0 || extra.length > 0) {
     throw new RangeError(
-      `invalid ${label} fields; missing=${pythonList(missing)}, extra=${pythonList(extra)}`,
+      `invalid ${label} fields; missing=${writeAsText(missing)}, extra=${writeAsText(extra)}`,
     );
   }
-}
-
-/** Spell a list of names as Python prints it: `['a', 'b']`. */
-export function pythonList(names: readonly string[]): string {
-  return "[" + names.map(reprText).join(", ") + "]";
 }
 
 /** Set `record[key]` as an own data property, so a `__proto__` key stays data. */
@@ -2204,7 +2199,7 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
 
   if (typ.tags !== undefined) {
     if (typeof value !== "string" || !typ.tags.has(value)) {
-      const tags = pythonList([...typ.tags].sort(compareCodeUnits));
+      const tags = writeAsText([...typ.tags].sort(compareCodeUnits));
       throw new TypeCheckError(`${valueRepr(value)} is not a member of variant ${tags}`, { path });
     }
     return new TypedValue(ValueKind.STRING, value);
@@ -2219,14 +2214,14 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
       .filter((name) => !Object.hasOwn(value, name))
       .sort(compareCodeUnits);
     if (missing.length > 0) {
-      throw new TypeCheckError(`record missing required fields: ${pythonList(missing)}`, {
+      throw new TypeCheckError(`record missing required fields: ${writeAsText(missing)}`, {
         path: [...path, missing[0]!],
       });
     }
     const names = Object.keys(value);
     const unknown = names.filter((name) => !fields.has(name)).sort(compareCodeUnits);
     if (unknown.length > 0) {
-      const shown = shownText(unknown.map(reprText).join(", "));
+      const shown = shownText(unknown.map((name) => JSON.stringify(name)).join(","));
       throw new TypeCheckError(`record has unknown fields: [${shown}]`, {
         path: [...path, unknown[0]!],
       });
@@ -2284,14 +2279,14 @@ function buildForUnion(typ: Type, value: unknown, path: ValuePath): TypedValue {
   if (tagged !== null) {
     const [field, member] = tagged;
     if (!Object.hasOwn(value, field)) {
-      const expected = pythonList(tagValues(members, field));
+      const expected = writeAsText(tagValues(members, field));
       throw new TypeCheckError(
         `missing tag field ${reprText(field)} (expected one of ${expected})`,
         { path: [...path, field] },
       );
     }
     if (member === null) {
-      const expected = pythonList(tagValues(members, field));
+      const expected = writeAsText(tagValues(members, field));
       throw new TypeCheckError(
         `${valueRepr(value[field])} is not a tag of the union (expected one of ${expected})`,
         { path: [...path, field] },

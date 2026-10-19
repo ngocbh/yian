@@ -296,7 +296,7 @@ describe("declared-type write boundary", () => {
     expect(buildValueAs(action, "Approve").value).toBe("Approve");
     expectTypeCheckError(
       () => buildValueAs(action, "approve"),
-      "\"approve\" is not a member of variant ['Approve', 'Defer', 'Reject']",
+      '"approve" is not a member of variant ["Approve","Defer","Reject"]',
       [],
     );
   });
@@ -379,12 +379,12 @@ describe("declared-type write boundary", () => {
     });
     expectTypeCheckError(
       () => buildValueAs(typ, {}),
-      "record missing required fields: ['alpha', 'beta']",
+      'record missing required fields: ["alpha","beta"]',
       ["alpha"],
     );
     expectTypeCheckError(
       () => buildValueAs(typ, { alpha: 1n, beta: 2n, zeta: 3n, extra: 4n }),
-      "record has unknown fields: ['extra', 'zeta']",
+      'record has unknown fields: ["extra","zeta"]',
       ["extra"],
     );
   });
@@ -473,7 +473,7 @@ describe("TS-only: -0, NaN and lone surrogates at typed positions", () => {
       "a lone surrogate key in a typed record",
       record({ a: Type.scalar(ValueKind.INTEGER) }),
       { a: 1n, "\ud800": 1n },
-      "record has unknown fields: ['\\ud800']",
+      'record has unknown fields: ["\\ud800"]',
       ["\ud800"],
     ],
   ])("refuses %s", (_id, declared, value, message, path) => {
@@ -610,10 +610,10 @@ describe("TypedValue.fromWire refuses", () => {
       'typed-value kind must be a storage kind, got "Any"',
     );
     expect(() => TypedValue.fromWire({ kind: "int", value: 1n, extra: 1n })).toThrow(
-      "invalid typed value fields; missing=[], extra=['extra']",
+      'invalid typed value fields; missing=[], extra=["extra"]',
     );
     expect(() => TypedValue.fromWire({ kind: "file", value: { uri: "u" } })).toThrow(
-      "invalid file reference fields; missing=['mime', 'name'], extra=[]",
+      'invalid file reference fields; missing=["mime","name"], extra=[]',
     );
     expect(() =>
       TypedValue.fromWire({ kind: "file", value: { uri: 1n, mime: null, name: null } }),

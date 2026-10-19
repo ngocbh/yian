@@ -120,7 +120,7 @@ describe("fromHost", () => {
     [
       "a class instance",
       { "my key": new Foo() },
-      "output at ['my key']: Foo is not a yian value",
+      'output at ["my key"]: Foo is not a yian value',
       ["my key"],
     ],
     ["an Array subclass", Sub.from([1]), "output: Sub is not a yian value", []],

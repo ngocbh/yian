@@ -251,7 +251,7 @@ describe("VariablePool round trip", () => {
     [
       "a missing and an extra key",
       { store: {}, start_id: "s", x: 1n },
-      "invalid variable pool fields; missing=['system'], extra=['x']",
+      'invalid variable pool fields; missing=["system"], extra=["x"]',
     ],
     [
       "store an array",

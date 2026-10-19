@@ -266,7 +266,7 @@ describe("FunctionTool in a ToolSet and the registry", () => {
 
   test("it can't be the ask_user handler", () => {
     expect(() => new ToolSet({ ask_user: build({ name: "ask_user" }) as never })).toThrow(
-      new TypeError("tools['ask_user'] must be a plain function handler; the engine supplies its schema"),
+      new TypeError('tools["ask_user"] must be a plain function handler; the engine supplies its schema'),
     );
   });
 
@@ -281,7 +281,7 @@ describe("FunctionTool in a ToolSet and the registry", () => {
     );
     expect(isFunctionTool(hostile)).toBe(false);
     expect(() => new ToolSet({ x: hostile as never })).toThrow(
-      new TypeError("tools['x'] must be a FunctionTool, an MCP server, or an array of FunctionTools, got Object"),
+      new TypeError('tools["x"] must be a FunctionTool, an MCP server, or an array of FunctionTools, got Object'),
     );
     expect(() => registerTool("x", hostile as never)).toThrow(
       new TypeError(
@@ -301,7 +301,7 @@ describe("FunctionTool in a ToolSet and the registry", () => {
       const branded = { ...forged, [brand]: true };
       expect(isFunctionTool(branded)).toBe(false);
       expect(() => new ToolSet({ box: [branded as never] })).toThrow(
-        new TypeError("tools['box'][0] must be a FunctionTool, got Object"),
+        new TypeError('tools["box"][0] must be a FunctionTool, got Object'),
       );
     }
   });

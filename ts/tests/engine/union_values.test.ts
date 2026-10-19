@@ -283,14 +283,14 @@ describe("buildValueAs", () => {
 
   test("a tagged union missing its tag", () => {
     const error = typeCheckError(() => buildValueAs(U, { qty: 2n }));
-    expect(error.message).toBe("missing tag field 'action' (expected one of ['buy', 'sell'])");
+    expect(error.message).toBe(`missing tag field 'action' (expected one of ["buy","sell"])`);
     expect(error.path).toEqual(["action"]);
   });
 
   test("a tagged union with an unknown tag", () => {
     const error = typeCheckError(() => buildValueAs(U, { action: "hold" }));
     expect(error.message).toBe(
-      `"hold" is not a tag of the union (expected one of ['buy', 'sell'])`,
+      `"hold" is not a tag of the union (expected one of ["buy","sell"])`,
     );
     expect(error.path).toEqual(["action"]);
   });
@@ -301,7 +301,7 @@ describe("buildValueAs", () => {
 
   test("a tagged union checks the member record", () => {
     let error = typeCheckError(() => buildValueAs(U, { action: "sell", price: 1.0, qty: 2n }));
-    expect(error.message).toContain("unknown fields: ['qty']");
+    expect(error.message).toContain('unknown fields: ["qty"]');
     expect(error.path).toEqual(["qty"]);
 
     error = typeCheckError(() => buildValueAs(U, { action: "sell", qty: 2n }));
@@ -332,7 +332,7 @@ describe("buildValueAs", () => {
     const textLabel = canonicalTypeLabel(text);
     expect(error.message).toBe(
       `value matches no member of ${canonicalTypeLabel(UNTAGGED)}: ` +
-        `${callLabel}: record missing required fields: ['input', 'name']; ` +
+        `${callLabel}: record missing required fields: ["input","name"]; ` +
         `${textLabel}: 3 does not match declared type str`,
     );
     expect(error.path).toEqual([]);
@@ -348,7 +348,7 @@ describe("buildValueAs", () => {
     expect(error.message).toBe(
       `value matches no member of ${canonicalTypeLabel(outer)}: ` +
         `${wrapLabel}: value matches no member of ${canonicalTypeLabel(inner)}; ` +
-        `${cLabel}: record missing required fields: ['c']`,
+        `${cLabel}: record missing required fields: ["c"]`,
     );
     expect(error.path).toEqual([]);
   });

@@ -28,10 +28,10 @@ import {
   fileFieldType,
   hasFile,
   jsTypeName,
-  pythonList,
   setField,
   shownText,
   valueRepr,
+  writeAsText,
 } from "../typesys/values.ts";
 
 /** A source-neutral path through record fields and list indices. */
@@ -1018,13 +1018,13 @@ export function validateOutputContract(contract: OutputContract | null, value: u
   const expected = new Set(contract.names);
   const missing = contract.names.filter((name) => !Object.hasOwn(value, name));
   if (missing.length > 0) {
-    throw new TypeCheckError(`record missing required fields: ${pythonList(missing)}`, { path: [missing[0]!] });
+    throw new TypeCheckError(`record missing required fields: ${writeAsText(missing)}`, { path: [missing[0]!] });
   }
   const unknown = Object.keys(value)
     .filter((name) => !expected.has(name))
     .sort(compareCodeUnits);
   if (unknown.length > 0) {
-    const shown = shownText(unknown.map(reprText).join(", "));
+    const shown = shownText(unknown.map((name) => JSON.stringify(name)).join(","));
     throw new TypeCheckError(`record has unknown fields: [${shown}]`, { path: [unknown[0]!] });
   }
   const checked: ValueRecord = {};

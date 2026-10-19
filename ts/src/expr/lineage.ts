@@ -623,7 +623,7 @@ export function validateFeedback(
 ): asserts feedback is FeedbackValue {
   if (feedback === null || typeof feedback === "string") return;
 
-  const location = `feedback${path.map((part) => `[${typeof part === "string" ? reprText(part) : part}]`).join("")}`;
+  const location = `feedback${path.map((part) => `[${typeof part === "string" ? JSON.stringify(part) : part}]`).join("")}`;
   if (isRecord(feedback)) {
     if (!isRecord(value)) throw new RangeError(`${location} requires a recorded object`);
     for (const name of Object.keys(feedback)) {

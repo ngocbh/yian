@@ -273,10 +273,10 @@ test("routes are immutable and serializable", () => {
 
 describe("validateFeedback and hasFeedback", () => {
   test.each([
-    ["feedback['tags'][1] requires a recorded object", { tags: [null, { a: "x" }] }, { tags: ["a", "s"] }],
-    ["feedback['tags'][1] selects unknown field 'b'", { tags: [null, { b: "x" }] }, { tags: ["a", { c: 1n }] }],
-    ["feedback['tags'][1] requires a recorded list", { tags: [null, ["x"]] }, { tags: ["a", "b"] }],
-    ["feedback['tags'][1] must have exactly 2 items; got 1", { tags: [null, [null]] }, { tags: ["a", ["b", "c"]] }],
+    ['feedback["tags"][1] requires a recorded object', { tags: [null, { a: "x" }] }, { tags: ["a", "s"] }],
+    [`feedback["tags"][1] selects unknown field 'b'`, { tags: [null, { b: "x" }] }, { tags: ["a", { c: 1n }] }],
+    ['feedback["tags"][1] requires a recorded list', { tags: [null, ["x"]] }, { tags: ["a", "b"] }],
+    ['feedback["tags"][1] must have exactly 2 items; got 1', { tags: [null, [null]] }, { tags: ["a", ["b", "c"]] }],
   ])("%s", (message, feedback, value) => {
     const error = thrown(() => validateFeedback(feedback, value));
     expect(error).toBeInstanceOf(RangeError);
@@ -289,7 +289,7 @@ describe("validateFeedback and hasFeedback", () => {
     );
     expect(() => validateFeedback(new Date(0), {})).toThrow(TypeError);
     expect(() => validateFeedback({ tags: [null, 5] }, { tags: ["a", "b"] })).toThrow(
-      new TypeError("feedback['tags'][1] must be a string, object, list, or None"),
+      new TypeError('feedback["tags"][1] must be a string, object, list, or None'),
     );
   });
 

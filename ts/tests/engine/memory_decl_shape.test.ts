@@ -190,11 +190,11 @@ test("built-in types accept only allowlisted keys", () => {
   expectError(
     () => decl("notes", "episodic", { max_items: 5n }),
     RangeError,
-    "episodic memory config has unknown key(s) ['max_items'] (allowed: max_episodes, recall_limit)",
+    'episodic memory config has unknown key(s) ["max_items"] (allowed: max_episodes, recall_limit)',
   );
   expect(() => decl("chat", "session", { budget: 1n })).toThrow("allowed: history_budget_chars, recent_turns");
   expect(() => decl("notes", "episodic", { max_items: 5n, b: 1n })).toThrow(
-    "unknown key(s) ['b', 'max_items']",
+    'unknown key(s) ["b","max_items"]',
   );
 });
 

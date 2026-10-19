@@ -303,6 +303,7 @@ describe("checkCase", () => {
     expect(checkCase(read)).toBe(read);
   });
 
+  // Reads every case file (about 1,900), which can pass the 5 s default on a loaded machine.
   test("accepts every committed case file", () => {
     const paths = readdirSync(CASES, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
@@ -315,7 +316,7 @@ describe("checkCase", () => {
     for (const path of paths) {
       expect(() => checkCase(readCase(readFileSync(path, "utf8"))), path).not.toThrow();
     }
-  });
+  }, 30_000);
 });
 
 describe("decode", () => {

@@ -157,6 +157,9 @@ import { canonicalTypeLabel, Type, TypeCheckError, typesOverlap, ValueKind } fro
 import type { Case } from "../conformance.ts";
 import { caseDocument, caseRegistry, cursorAt } from "./declarations.ts";
 
+// `caseDocument` reloads the defaults from each case's `env:`.
+afterEach(forget);
+
 const TYPEDEFS = {
   Limit: { type: "Literal(limit)", price: "float" },
   Market: { type: "Literal(market)" },
@@ -861,8 +864,6 @@ describe("an unknown check kind fails loudly", () => {
 // --------------------------------------------------------------------------- //
 // Harvested conformance cases
 // --------------------------------------------------------------------------- //
-
-afterEach(forget);
 
 /** One harvested case whose message a narrowing call decides. */
 interface NarrowingRow {

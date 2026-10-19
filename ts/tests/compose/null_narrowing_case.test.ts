@@ -27,7 +27,7 @@
 
 import { expect, test } from "bun:test";
 
-import { type Guard, Holds, NOTHING, NotNullCheck } from "../../src/compose/helpers/condition_guards.ts";
+import { Holds, NOTHING, NotNullCheck } from "../../src/compose/helpers/condition_guards.ts";
 import { type BaseTypeOf, checkedRefs, Exact, guardEnv } from "../../src/compose/helpers/narrowing_facts.ts";
 import { readType } from "../../src/compose/helpers/types.ts";
 import { parseCondition } from "../../src/expr/index.ts";
@@ -40,10 +40,11 @@ test("a read after an is-null check in an or is guarded", () => {
   const baseTypeOf: BaseTypeOf = (base) => (base === "x.output" ? declared : null);
 
   const refs = checkedRefs(tree, baseTypeOf, registry);
-  expect(refs).toHaveLength(2);
-  const [[, first], [, second]] = refs as [[string, Guard | null], [string, Guard | null]];
-  expect(second).toStrictEqual(new Holds(new NotNullCheck("x.output"), true));
-  expect(first).toStrictEqual(NOTHING);
-  const env = guardEnv(second!, baseTypeOf, registry);
+  const guard = new Holds(new NotNullCheck("x.output"), true);
+  expect(refs).toStrictEqual([
+    ["x.output", NOTHING],
+    ["x.output", guard],
+  ]);
+  const env = guardEnv(guard, baseTypeOf, registry);
   expect(env).toStrictEqual(new Map([["x.output", new Exact(readType("int", registry))]]));
 });

@@ -76,7 +76,7 @@ class Node:
 
 Changed (TS yian): `run(inputs, caps)` returns a promise, and `forward(inputs, caps)` returns a
 result or a promise; every failure rejects the promise. The capabilities arrive as one `caps`
-object (`caps.bindItem`, `caps.steps`). The run-owned stop event is the node's own
+object (`caps.bindItem`, `caps.steps`, `caps.tools`). The run-owned stop event is the node's own
 `caps.signal`, an `AbortSignal`: every node gets one, so there is no `needs_stop_event` trait.
 No node returns a streaming generator; the AGENT streams through its `emit_stream` sink
 (`needs_live_events`).

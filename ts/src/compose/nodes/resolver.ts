@@ -12,8 +12,8 @@
  */
 
 import type { CompiledFlow } from "../../compile/model.ts";
-import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { current } from "../../defaults.ts";
+import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 
 /** A resolved child flow; structural, so this module need not import the pipeline. */

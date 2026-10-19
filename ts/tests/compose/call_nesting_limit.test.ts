@@ -29,7 +29,7 @@
  * `test_call_directive_counts` (T3-17); `test_map_and_loop_bodies_count` (T3-16).
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import {
@@ -105,6 +105,7 @@ function resolveError(child: ResolvedChild): unknown {
   return thrown(() => resolveChild("n", "c", () => child));
 }
 
+beforeEach(() => forget());
 afterEach(() => forget());
 
 test("call nesting counts levels, not paths", () => {

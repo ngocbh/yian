@@ -76,7 +76,7 @@ export class BuildRequest {
 }
 
 /** What the build cache reads of a descriptor: its build, and its range when it has one. */
-export type BuildableDescriptor = Pick<NodeDescriptor, "build"> & { readonly range?: SourceRange | null };
+type BuildableDescriptor = Pick<NodeDescriptor, "build" | "range">;
 
 /**
  * Builds descriptors lazily once while retaining dependency-cycle provenance.
@@ -134,9 +134,8 @@ export class DescriptorBuildCache {
         result = descriptor.build(this.#context);
       } catch (error) {
         if (!(error instanceof LoadError) || error.diagnostic.frames.length > 0) throw error;
-        const descriptorRange = descriptor.range ?? null;
-        if (descriptorRange === null) throw error;
-        throw this.#context.diagnostics.prepend(error, { range: descriptorRange, cause: error });
+        if (descriptor.range === null) throw error;
+        throw this.#context.diagnostics.prepend(error, { range: descriptor.range, cause: error });
       }
       this.#built.set(nodeId, result);
       return result;
@@ -219,6 +218,7 @@ export class ComposedFlow {
    * The one canonical flow signature stored on the START node.
    *
    * @throws TypeError when the START params aren't an exact list of exact `Parameter` values.
+   * @throws RangeError when the compiled flow has no START node.
    */
   get input(): readonly Parameter[] {
     const start = this.compiled.nodes.get(this.compiled.startId);
@@ -278,11 +278,11 @@ export class ComposedFlow {
           return unavailable;
         }
 
-        const coordinates = [range.startLine, range.startCol, range.endLine, range.endCol];
+        const { startLine, startCol, endLine, endCol } = range;
+        const coordinates = [startLine, startCol, endLine, endCol];
         if (coordinates.some((coordinate) => !Number.isInteger(coordinate) || coordinate <= 0)) {
           return unavailable;
         }
-        const [startLine, startCol, endLine, endCol] = coordinates as [number, number, number, number];
         if (endLine < startLine || (endLine === startLine && endCol < startCol)) return unavailable;
 
         frames.push(
@@ -524,7 +524,7 @@ export function stampNodeWiringOrigins(
  * @throws LoadError when a tag is malformed, has no value after it, or does not fit its tagged
  *   literal, or the value is in the old `Type = value` form.
  */
-export function splitTypedValue(
+function splitTypedValue(
   value: unknown,
   cursor: SourceCursor | null,
   options: {

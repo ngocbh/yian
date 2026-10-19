@@ -12,8 +12,11 @@
  *
  * Later (the conductor, in this item): the input representation guards
  * (`test_resolved_parameters_reject_both_input_representations`,
- * `test_resolved_parameters_reject_missing_input_representation`). Later (T3-17): the resolved
- * parameter boundary (`test_resolved_parameters_preserve_structural_contract_identity`,
+ * `test_resolved_parameters_reject_missing_input_representation`). Later (T3-17): the value-entry
+ * rows of `stampNodeWiringOrigins` (a value entry's input owns its parameter and binding at the
+ * entry itself) and `splitTypedInputs` (a value entry is returned unchanged), once `isValueEntry`
+ * is real; the resolved parameter boundary
+ * (`test_resolved_parameters_preserve_structural_contract_identity`,
  * `test_resolved_parameters_accept_zero_args_and_wire_empty_start`), the seed edge and boundary
  * rows (`test_seed01_*`, `test_seed02_*`, `test_seed05_*`, `test_seed06_*`, `test_seed18_*`,
  * `test_terminal_edge_ids_unique`, `test_assembled_edges_have_start_and_end`,
@@ -61,7 +64,17 @@ afterEach(() => forget());
 
 const EMPTY: TypeRegistry = new Map();
 
-/** Return source text large enough for synthetic descriptor ranges. */
+/** Return the error `run` throws, failing when it returns. */
+function thrown(run: () => unknown): Error {
+  try {
+    run();
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error("expected an error");
+}
+
+/** Return diagnostics over source text large enough for synthetic descriptor ranges. */
 function rangeDiagnostics(): LoadDiagnostics {
   return new LoadDiagnostics("flow.yaml", ("x".repeat(80) + "\n").repeat(60));
 }
@@ -465,12 +478,9 @@ describe("attachInputContracts", () => {
 
   test("a declared type with no binding is an internal error", () => {
     const run = () => attachInputContracts(descriptors, new Map([["use", new Map()]]));
-    expect(run).toThrow("node 'use': typed input 'qty' has no wiring binding");
-    try {
-      run();
-    } catch (error) {
-      expect(error).not.toBeInstanceOf(LoadError);
-    }
+    const error = thrown(run);
+    expect(error.message).toBe("node 'use': typed input 'qty' has no wiring binding");
+    expect(error.constructor).toBe(Error);
   });
 });
 
@@ -538,13 +548,9 @@ describe("stampFlowOutputOrigins", () => {
       [record, "flow output carriers do not align with their section"],
       [bare, "a bare flow output requires exactly one carrier"],
     ] as const) {
-      expect(run).toThrow(message);
-      try {
-        run();
-      } catch (error) {
-        expect(error).toBeInstanceOf(RangeError);
-        expect(error).not.toBeInstanceOf(LoadError);
-      }
+      const error = thrown(run);
+      expect(error.message).toBe(message);
+      expect(error.constructor).toBe(RangeError);
     }
   });
 

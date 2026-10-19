@@ -1,3 +1,4 @@
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each restarted node (decision 20); the trace still pins the resume.
 # From tests/engine/test_run_lifecycle.py::test_nonterminal_resume_commits_exact_retries_and_selected_workers[recorded].
 # Also tests/engine/test_run_recovery_matrix.py::test_resume_prepends_ordered_effect_retries_before_existing_ready_work.
 # The node in flight at the crash is retried ahead of the siblings that were already ready, and an absent
@@ -107,36 +108,6 @@ expect:
   - - node_succeeded
     - __end__
     - value:
-        a: 7
-        b: 7
-        c: 7
-  events:
-  - [RunResumed]
-  - - NodeStarted
-    - node_id: a
-  - - NodeSucceeded
-    - node_id: a
-      output: 7
-  - - NodeStarted
-    - node_id: b
-  - - NodeSucceeded
-    - node_id: b
-      output: 7
-  - - NodeStarted
-    - node_id: c
-  - - NodeSucceeded
-    - node_id: c
-      output: 7
-  - - NodeStarted
-    - node_id: __end__
-  - - NodeSucceeded
-    - node_id: __end__
-      output:
-        a: 7
-        b: 7
-        c: 7
-  - - RunSucceeded
-    - output:
         a: 7
         b: 7
         c: 7

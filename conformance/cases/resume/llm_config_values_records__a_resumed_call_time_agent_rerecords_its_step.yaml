@@ -1,3 +1,4 @@
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each restarted node (decision 20); the trace still pins the resume.
 # From tests/engine/test_llm_config_values_records.py::test_resume_recomputes_the_recorded_config.
 # A call-time llm_config agent records its resolved config as a step before its model call; resumed after a
 # crash in that call, it recomputes the config and records an equal step.
@@ -88,32 +89,6 @@ expect:
   - - node_succeeded
     - __end__
     - value: ok
-  events:
-  - [RunResumed]
-  - - NodeStarted
-    - node_id: chat
-  - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: gpt-picked
-      node_id: chat
-      provider: openai
-      purpose: chat
-  - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: gpt-picked
-      node_id: chat
-      provider: openai
-      purpose: chat
-  - - NodeSucceeded
-    - node_id: chat
-      output: ok
-  - - NodeStarted
-    - node_id: __end__
-  - - NodeSucceeded
-    - node_id: __end__
-      output: ok
-  - - RunSucceeded
-    - output: ok
   stream:
   - chunk: ok
     exchange_id: <id:1>

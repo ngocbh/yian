@@ -1,3 +1,4 @@
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each restarted node (decision 20); the trace still pins the resume.
 # From tests/engine/test_typed_bindings_replay.py::test_typed_consumer_after_resume_accepts_a_matching_answer.
 # Also tests/engine/test_run_recovery_matrix.py::test_effect_start_prefix_replays_without_running_effect_work[human_input].
 # A HUMAN_INPUT that started before the crash is retried and asked again; the consumer binds the answer given
@@ -56,25 +57,6 @@ expect:
   - - node_succeeded
     - __end__
     - value: 3
-  events:
-  - [RunResumed]
-  - - NodeStarted
-    - node_id: ask
-  - - NodeSucceeded
-    - node_id: ask
-      output: 3
-  - - NodeStarted
-    - node_id: use
-  - - NodeSucceeded
-    - node_id: use
-      output: 3
-  - - NodeStarted
-    - node_id: __end__
-  - - NodeSucceeded
-    - node_id: __end__
-      output: 3
-  - - RunSucceeded
-    - output: 3
   tool_calls:
     ask_user:
     - args:

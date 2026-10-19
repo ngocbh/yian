@@ -1,3 +1,4 @@
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each restarted node (decision 20); the trace still pins the resume.
 # From tests/engine/test_loop_run.py::test_loop_without_max_resumes_from_its_log.
 # A while LOOP without `max:` cut in the middle of its run resumes from the recorded drivers to the same output.
 # Record 15 is loop#1/step's node_started (mid-iteration): the step runs, its result is refused.
@@ -173,72 +174,6 @@ expect:
   - - node_succeeded
     - __end__
     - value:
-        exited: true
-        n: 3
-  events:
-  - [RunResumed]
-  - - NodeStarted
-    - node_id: loop#1/step
-  - - NodeSucceeded
-    - node_id: loop#1/step
-      output:
-        exited: false
-        n: 2
-  - - NodeStarted
-    - node_id: loop#1/__end__
-  - - NodeSucceeded
-    - node_id: loop#1/__end__
-      output:
-        exited: false
-        n: 2
-  - - NodeStarted
-    - node_id: loop~2
-  - - NodeExpanded
-    - node_id: loop~2
-      grow:
-        seed:
-        - exited: false
-          n: 2
-        - 2
-        prune: [loop#1/__end__, loop#1/__start__, loop#1/step, loop~2]
-  - - NodeStarted
-    - node_id: loop#2/__start__
-  - - NodeSucceeded
-    - node_id: loop#2/__start__
-      output:
-        exited: false
-        n: 2
-  - - NodeStarted
-    - node_id: loop#2/step
-  - - NodeSucceeded
-    - node_id: loop#2/step
-      output:
-        exited: true
-        n: 3
-  - - NodeStarted
-    - node_id: loop#2/__end__
-  - - NodeSucceeded
-    - node_id: loop#2/__end__
-      output:
-        exited: true
-        n: 3
-  - - NodeStarted
-    - node_id: loop~3
-  - - NodeSucceeded
-    - node_id: loop~3
-      output:
-        exited: true
-        n: 3
-      commit_as: loop
-  - - NodeStarted
-    - node_id: __end__
-  - - NodeSucceeded
-    - node_id: __end__
-      output:
-        exited: true
-        n: 3
-  - - RunSucceeded
-    - output:
         exited: true
         n: 3
 resume: {}

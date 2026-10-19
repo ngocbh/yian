@@ -1,3 +1,4 @@
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each restarted node (decision 20); the trace still pins the resume.
 # From tests/engine/test_run_recovery_matrix.py::test_effect_start_prefix_replays_without_running_effect_work[agent].
 # An AGENT that started before the crash is retried on resume, and its model is called again.
 # Record 3 is effect's node_started: its first model call runs (the first reply), its result is refused.
@@ -8,7 +9,7 @@ flow: |
   nodes:
     effect:
       kind: agent
-      prompt: this model must never be invoked
+      prompt: hi
       llm_config:
         provider: openai
         model: offline-test
@@ -68,32 +69,6 @@ expect:
   - - node_succeeded
     - __end__
     - value: again
-  events:
-  - [RunResumed]
-  - - NodeStarted
-    - node_id: effect
-  - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: offline-test
-      node_id: effect
-      provider: openai
-      purpose: chat
-  - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: offline-test
-      node_id: effect
-      provider: openai
-      purpose: chat
-  - - NodeSucceeded
-    - node_id: effect
-      output: again
-  - - NodeStarted
-    - node_id: __end__
-  - - NodeSucceeded
-    - node_id: __end__
-      output: again
-  - - RunSucceeded
-    - output: again
   stream:
   - chunk: again
     exchange_id: <id:1>

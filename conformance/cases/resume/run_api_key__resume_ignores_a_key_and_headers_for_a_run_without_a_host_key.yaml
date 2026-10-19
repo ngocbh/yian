@@ -1,3 +1,4 @@
+# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each restarted node (decision 20); the trace still pins the resume.
 # From tests/engine/test_run_api_key.py::test_resume_ignores_a_key_for_a_run_started_without_one.
 # Also tests/engine/test_run_connection_settings.py::test_resume_ignores_headers_on_a_run_with_no_key_agents.
 # A run that recorded no host-key agent ignores a resume's api_key and headers (one branch drops both).
@@ -70,32 +71,6 @@ expect:
   - - node_succeeded
     - __end__
     - value: ok
-  events:
-  - [RunResumed]
-  - - NodeStarted
-    - node_id: agent
-  - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: served-model
-      node_id: agent
-      provider: vllm
-      purpose: chat
-  - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: served-model
-      node_id: agent
-      provider: vllm
-      purpose: chat
-  - - NodeSucceeded
-    - node_id: agent
-      output: ok
-  - - NodeStarted
-    - node_id: __end__
-  - - NodeSucceeded
-    - node_id: __end__
-      output: ok
-  - - RunSucceeded
-    - output: ok
   stream:
   - chunk: ok
     exchange_id: <id:1>

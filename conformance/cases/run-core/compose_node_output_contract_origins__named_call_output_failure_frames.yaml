@@ -1,4 +1,4 @@
-# hand TS expect: `code` is left out of rules; the frame and message are about flow structure, not the CODE body.
+# hand TS expect (rules curated by hand): `code` is left out of rules; the frame and message are about flow structure, not the CODE body.
 kind: run
 rules: [messages]
 flow: |

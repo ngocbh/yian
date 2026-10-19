@@ -2,6 +2,7 @@
 # Also ::test_recorded_nested_growth_resumes_with_exact_memory_and_trace (without its memory).
 # A run cut after a nested MAP's expansion inside a CALL resumes the grown nodes from the recorded growth.
 # Record 8 is outer/mapped's node_expanded: an expansion settles its spawner, so nothing is in flight.
+# The LOOP after the cut stays because the source test asserts its output.
 kind: resume
 flow: |
   id: recovery-matrix-growth

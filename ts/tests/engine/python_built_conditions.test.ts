@@ -75,7 +75,7 @@ test("times loop has no predicate to check", () => {
     maxIters: 2,
   });
 
-  node.validateConditions();
+  expect(() => node.validateConditions()).not.toThrow();
 });
 
 test("validate conditions names the given path", () => {

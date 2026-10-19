@@ -245,9 +245,9 @@ for (const [label, make] of [
     copy.rewriteLocalOrigins((o) => origin(`mapped/${o.key}`));
 
     expect([...copy.iterLocalOrigins()].map((o) => o.key)).toEqual(["mapped/driver", "mapped/signature"]);
-    expect(copy.childInputs![0]).not.toBe(signature);
+    expect(copy.childInputs[0]).not.toBe(signature);
     expect([...driver.iterLocalOrigins()].map((o) => o.key)).toEqual(["driver", "signature"]);
-    expect(driver.childInputs![0]).toBe(signature);
+    expect(driver.childInputs[0]).toBe(signature);
     expect(signature.origin).toEqual(origin("signature"));
   });
 }

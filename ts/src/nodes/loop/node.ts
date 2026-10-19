@@ -20,8 +20,7 @@
  * The compile-owned injected builder constructs body and driver at the origin callsite
  * (`this.originId`), never `this.id`, so live and durable-replay windows are byte-identical. The
  * node also owns origin traversal for its cached body signature and exposes the baked body
- * through the source-neutral `originChildren` hook. The body (`forward`) comes later; `respawn`
- * comes next, in this file.
+ * through the source-neutral `originChildren` hook.
  *
  * Knows about:   nodes/base, nodes/contracts, expr, diagnostics and typesys.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
@@ -71,8 +70,11 @@ export class LoopNode extends Node {
   flowVersion: string | null;
   /** The compiled body flow (`'a -> 'a`) used by the injected growth builder. */
   child: unknown;
-  /** The body's canonical parameters (a subset of the carried record). */
-  childInputs: readonly Parameter[] | null;
+  /**
+   * The body's canonical parameters (a subset of the carried record); an omitted signature is
+   * stored as an empty list, as CALL and MAP do.
+   */
+  childInputs: readonly Parameter[];
   /** One of `while`, `until` or `times`. */
   predicateKind: "while" | "until" | "times";
   /**
@@ -100,7 +102,7 @@ export class LoopNode extends Node {
    * @param options.flowId The id of the body flow.
    * @param options.flowVersion A pinned body flow version, if any.
    * @param options.child The compiled body flow; `null` until Compose bakes it.
-   * @param options.childInputs The body's canonical parameters, if known.
+   * @param options.childInputs The body's canonical parameters; omitted, none.
    * @param options.predicateKind `while` (the default), `until` or `times`.
    * @param options.predicate The `while`/`until` boolean source; `null` for `times`.
    * @param options.times The fixed run count of a `times` loop.
@@ -145,7 +147,7 @@ export class LoopNode extends Node {
     this.flowId = flowId;
     this.flowVersion = flowVersion;
     this.child = child;
-    this.childInputs = childInputs;
+    this.childInputs = childInputs ?? [];
     this.predicateKind = predicateKind;
     this.predicate = predicate;
     this.times = times;
@@ -164,14 +166,12 @@ export class LoopNode extends Node {
   /** Yield the common origins, then the cached body signature's. */
   override *iterLocalOrigins(seen: Set<object> = new Set()): Generator<OriginRef> {
     yield* super.iterLocalOrigins(seen);
-    if (this.childInputs === null) return;
     for (const parameter of this.childInputs) yield* iterOriginCarrier(parameter, seen);
   }
 
   /** Rewrite the common and the cached signature's origins on a copied LOOP. */
   override rewriteLocalOrigins(mapper: OriginMapper, seen: Map<object, object> = new Map()): void {
     super.rewriteLocalOrigins(mapper, seen);
-    if (this.childInputs === null) return;
     this.childInputs = this.childInputs.map((parameter) => rewriteOriginCarrier(parameter, mapper, seen));
   }
 
@@ -253,7 +253,7 @@ export class LoopNode extends Node {
     return iteration >= this.maxIters;
   }
 
-  /** The loop body; not ported yet. */
+  /** The loop policy; not ported yet. */
   override forward(): never {
     throw new Error(`node ${reprText(this.id)} (LoopNode) forward is not ported yet (T4-10)`);
   }

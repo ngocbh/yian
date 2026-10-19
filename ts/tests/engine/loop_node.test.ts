@@ -8,9 +8,10 @@
  * Changed: `NodeKind` is a const object of strings, so a member is its value and has no `.value`;
  * a trait is read on an instance, not the class. The child is a stub object.
  *
- * TS-only: the traits on an instance; `exceptionCode` classifies `LoopMaxExceeded` as
- * `loop.max_exceeded` and defers a plain `Error` to `node.execute`; `skippedOutputTarget()` is the
- * origin id on a node built with `originId`; a baked LOOP's `run` rejects as not ported yet.
+ * TS-only: the other traits (`kind`, `isLoop`, `growDepthDelta`) on an instance; `exceptionCode`
+ * classifies `LoopMaxExceeded` as `loop.max_exceeded` and defers a plain `Error` to
+ * `node.execute`; `skippedOutputTarget()` is the origin id on a node built with `originId`; a baked
+ * LOOP's `run` rejects as not ported yet.
  *
  * Covered elsewhere: `test_node_origin_id_defaults_none` (`base_node.test.ts`).
  *
@@ -77,10 +78,9 @@ test("should stop without max never stops", () => {
   expect(node.shouldStop(10 ** 9)).toBe(false);
 });
 
-test("a loop's traits are read on an instance", () => {
+test("a loop's other traits are read on an instance", () => {
   const node = new LoopNode("lp", { flowId: "f" });
   expect(node.kind).toBe(NodeKind.LOOP);
-  expect(node.isSpawner).toBe(true);
   expect(node.isLoop).toBe(true);
   expect(node.growDepthDelta).toBe(0);
 });

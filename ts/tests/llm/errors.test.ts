@@ -519,13 +519,21 @@ describe("scrubError", () => {
   const KEY = "sk-sentinel-scrub-zqxw";
   const redact = (text: string) => redactKeys(text, [KEY]);
 
-  test("rewrites the stack along with the message", () => {
-    const error = new Error(`bad key ${KEY}`);
-    expect(error.stack).toContain(KEY);
+  test("rewrites the stack along with the message, across the graph", () => {
+    const member = new Error(`member ${KEY}`);
+    const group = new AggregateError([member], `group ${KEY}`);
+    const inner = new ProviderError("auth", `inner ${KEY}`);
+    inner.cause = group;
+    const error = new Error(`bad key ${KEY}`, { cause: inner });
+    const graph = [error, inner, group, member];
+    // Reading each stack first builds it while the message still holds the key.
+    for (const each of graph) expect(each.stack).toContain(KEY);
     expect(scrubError(error, redact)).toBe(error);
     expect(error.message).toBe(`bad key ${REDACTED}`);
-    for (const text of [error.stack!, String(error), error.message]) expect(text).not.toContain(KEY);
-    expect(error.stack).toContain(REDACTED);
+    for (const each of graph) {
+      for (const text of [each.stack!, String(each), each.message]) expect(text).not.toContain(KEY);
+      expect(each.stack).toContain(REDACTED);
+    }
   });
 
   test("a cause cycle terminates", () => {
@@ -600,6 +608,26 @@ describe("scrubError", () => {
     expect(deepest.message).toBe(`deepest ${REDACTED}`);
   });
 
+  test("a revoked Proxy as errors doesn't throw", () => {
+    const { proxy, revoke } = Proxy.revocable<unknown[]>([], {});
+    revoke();
+    const error = Object.assign(new Error(`revoked ${KEY}`), { errors: proxy });
+    expect(scrubError(error, redact)).toBe(error);
+    expect(error.message).toBe(`revoked ${REDACTED}`);
+  });
+
+  test("an errors Proxy whose length trap throws doesn't throw", () => {
+    const errors = new Proxy([`member ${KEY}`], {
+      get(target, name, receiver) {
+        if (name === "length") throw new Error("no length");
+        return Reflect.get(target, name, receiver);
+      },
+    });
+    const error = Object.assign(new Error(`trapped ${KEY}`), { errors });
+    expect(scrubError(error, redact)).toBe(error);
+    expect(error.message).toBe(`trapped ${REDACTED}`);
+  });
+
   test("a ProviderError keeps its class and fields", () => {
     const error = new ProviderError("auth", `rejected ${KEY}`, { status: 401, provider: "openai" });
     expect(scrubError(error, redact)).toBe(error);
@@ -608,10 +636,11 @@ describe("scrubError", () => {
     expect([error.kind, error.status, error.retryable, error.provider]).toEqual(["auth", 401, false, "openai"]);
   });
 
-  test("a 10 000-deep cause chain doesn't overflow", () => {
+  // 100 000, not 10 000: Bun's stack survives a recursive walk 10 000 deep.
+  test("a 100 000-deep cause chain doesn't overflow", () => {
     const deepest = new Error(`deepest ${KEY}`);
     let top = deepest;
-    for (let i = 0; i < 10_000; i++) top = new Error(`wrap ${KEY}`, { cause: top });
+    for (let i = 0; i < 100_000; i++) top = new Error(`wrap ${KEY}`, { cause: top });
     scrubError(top, redact);
     expect(top.message).toBe(`wrap ${REDACTED}`);
     expect(deepest.message).toBe(`deepest ${REDACTED}`);

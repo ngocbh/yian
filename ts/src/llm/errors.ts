@@ -353,14 +353,14 @@ export function scrubError<T>(error: T, redact: (text: string) => string): T {
     if (seen.has(current)) continue;
     seen.add(current);
     // The message first: the stack is read after it, in case reading one rebuilds the other.
-    for (const name of ["message", "stack", "cause"]) redactProperty(current, name, redact);
-    const cause = readProperty(current, "cause");
+    redactProperty(current, "message", redact);
+    redactProperty(current, "stack", redact);
+    const cause = redactProperty(current, "cause", redact);
     if (typeof cause === "object" && cause !== null) pending.push(cause);
     const errors = readProperty(current, "errors");
-    if (!Array.isArray(errors)) continue;
-    for (let i = 0; i < errors.length; i++) {
-      redactProperty(errors, i, redact);
-      const member = readProperty(errors, i);
+    const count = arrayLength(errors);
+    for (let i = 0; i < count; i++) {
+      const member = redactProperty(errors as unknown[], i, redact);
       if (typeof member === "object" && member !== null) pending.push(member);
     }
   }
@@ -376,15 +376,31 @@ function readProperty(target: object, name: PropertyKey): unknown {
   }
 }
 
-/** Replace string `target[name]` with its redaction; a throw or an unsettable property skips it. */
-function redactProperty(target: object, name: PropertyKey, redact: (text: string) => string): void {
+/** Return the length of `value` when it is an array, else 0; 0 when reading it throws. */
+function arrayLength(value: unknown): number {
   try {
-    const value = Reflect.get(target, name);
-    if (typeof value !== "string") return;
+    return Array.isArray(value) ? value.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Read `target[name]` once, replace it with its redaction when it is a string, and return the
+ * value read (`undefined` when reading throws). A throw or an unsettable property skips the write.
+ */
+function redactProperty(target: object, name: PropertyKey, redact: (text: string) => string): unknown {
+  let value: unknown;
+  try {
+    value = Reflect.get(target, name);
+    if (typeof value !== "string") return value;
     const redacted = redact(value);
-    if (redacted === value || Reflect.set(target, name, redacted) || !Object.isExtensible(target)) return;
+    if (redacted === value) return value;
+    if (Reflect.set(target, name, redacted)) return value;
+    if (!Object.isExtensible(target)) return value;
     Object.defineProperty(target, name, { value: redacted, writable: true, enumerable: false, configurable: true });
   } catch {
     // Scrubbing must neither stop the walk nor replace the error it was given.
   }
+  return value;
 }

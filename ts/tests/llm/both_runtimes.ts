@@ -425,11 +425,13 @@ async function scrubbedErrors(): Promise<void> {
   const inner = new ProviderError("auth", `inner: ${echo}`);
   inner.cause = group;
   const outer = new Error(`outer: ${echo}`, { cause: inner });
-  assert.ok(outer.stack?.includes(KEY), "the stack holds the key before scrubbing");
+  const graph = [outer, inner, group, member];
+  // Reading each stack first builds it while the message still holds the key.
+  for (const error of graph) assert.ok(error.stack?.includes(KEY), `${error.name}'s stack holds the key before scrubbing`);
 
   assert.equal(scrubError(outer, (text) => redactKeys(text, [KEY])), outer);
   const texts: string[] = [group.cause as string, group.errors[1] as string];
-  for (const error of [outer, inner, group, member]) {
+  for (const error of graph) {
     assert.ok(error.message.includes(REDACTED), error.message);
     texts.push(error.message, error.stack ?? "", String(error));
   }

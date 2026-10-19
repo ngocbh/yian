@@ -3870,6 +3870,8 @@ poll:
   updates; return `done` from the body, or add `max:` ``). With `max:`, it loads, and
   fails with `loop.max_exceeded` if it reaches the cap.
 
+Changed (TS yian): a `max:` or `times:` above 9007199254740991 is a load error.
+
 The node's value is the final merged carried record (committed under the loop
 node's id once the loop stops).
 

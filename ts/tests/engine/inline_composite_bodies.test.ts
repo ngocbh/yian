@@ -8,7 +8,10 @@
  * TS-only: a CALL or MAP descriptor built with `childLabel: "inline body of node 'each'"` over a
  * hand-built child names the body by that label, reproducing the message composition of
  * `test_inline_map_output_error_uses_friendly_child_label` (a MAP over a body with no output) and
- * of an undeclared argument of an inline call (the inline body itself is T3-17's).
+ * of an undeclared argument of an inline call (the inline body itself is T3-17's); and a LOOP
+ * descriptor built with `childLabel: "inline body of node 'repeat'"` the same way, reproducing
+ * the message composition of the scalar-output and record-fields rows of
+ * `test_inline_loop_contract_diagnostics_are_friendly_and_redacted`.
  *
  * Pinned at the end (`parsedNodes`):
  * `load-map-call/engine_inline_composite_bodies__llm_config_on_an_inline_{call,loop,map}`, whose
@@ -95,12 +98,20 @@ import { expect, test } from "bun:test";
 
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
+import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { type CaseRow, handChild, loadError, parsedNodes, runCase } from "../compose/declarations.ts";
+import {
+  type CaseRow,
+  handChild,
+  loadError,
+  parametersFromYaml,
+  parsedNodes,
+  runCase,
+} from "../compose/declarations.ts";
 
 test.each([
   ["call", "call: named", "asserts, call, depends_on, env, input, kind, node_name, runs_after"],
@@ -162,6 +173,44 @@ test("an inline call's undeclared argument names the body by its child label", (
   expect(error.message).toBe(
     "call node 'each': binding 'topic' is not a declared input of inline body of node 'each'",
   );
+});
+
+test.each([
+  [
+    "scalar output",
+    new ValueContract(Type.scalar(ValueKind.INTEGER)),
+    "body inline body of node 'repeat' must return a record with at least one carried field (a subset of the " +
+      'carried record ["n"]); write `output: {field: ...}` or a whole reference to a node with a record output',
+  ],
+  [
+    "record fields",
+    new ValueContract(
+      new Type({
+        kind: ValueKind.OBJECT,
+        fields: new Map([["value", Type.scalar(ValueKind.INTEGER)]]),
+        required: new Set(["value"]),
+      }),
+    ),
+    'body output field(s) ["value"] are not carried record fields ["n"] (a body returns a subset of the ' +
+      "carried record)",
+  ],
+])("an inline loop's contract error names the body by its child label: %s", (_name, step, message) => {
+  const body = handChild({
+    inputs: parametersFromYaml("input:\n  n: !int\n", new Map()),
+    producers: { step },
+    output: "${step.output}",
+  });
+  const desc = new LoopDescriptor({
+    id: "repeat",
+    call: "inline-body",
+    inputs: { n: "${input.seed}" },
+    times: 1n,
+    childLabel: "inline body of node 'repeat'",
+  });
+
+  const error = loadError(() => desc.build(new BuildContext({ registry: new Map(), resolver: () => body })));
+
+  expect(error.message).toBe(`loop node 'repeat': ${message}`);
 });
 
 // ---------- harvested conformance cases ----------

@@ -1199,9 +1199,10 @@ Changed (TS yian): `loadSkills(roots, { skipInvalid, warn })` returns a `Map` so
 name; with `skipInvalid` it passes each `skipped skill: ...` message to `warn` (default
 `process.emitWarning`). `new Skill({ name, description, instructions, directory })` takes a
 path string or `null` for `directory`. `defaultSkillRoots({ cwd, home, env })` reads `HOME`
-through `env`. Frontmatter lines break only at LF, CRLF, and CR, and a leading BOM is
-allowed. Every frontmatter key must be text (see
-[Syntax → YAML values](syntax.md#yaml-values)).
+through `env`, and an empty `HOME` counts as unset. Frontmatter lines break only at LF,
+CRLF, and CR, and a leading BOM is allowed. Every frontmatter key must be text (see
+[Syntax → YAML values](syntax.md#yaml-values)). Frontmatter that is `false`, `0`, `""` or
+`[]` is "frontmatter must be a mapping" (Python asks for a description).
 
 A skill's text is read once, when `load_skills` runs, so every node in the run sees
 the same instructions. The listing becomes part of the node's recorded

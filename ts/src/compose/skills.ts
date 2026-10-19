@@ -130,7 +130,8 @@ export function loadSkills(
  * Codex root.
  *
  * @param options `cwd` is the project directory (default the process working directory);
- *   `home` the user home (default `HOME` from `env`, else the account's home directory).
+ *   `home` the user home (default `HOME` from `env` when set and non-empty, else the account's
+ *   home directory).
  * @returns `~/.claude/skills`, `~/.agents/skills`, then `<dir>/.claude/skills` and
  *   `<dir>/.agents/skills` for each project level.
  */
@@ -139,7 +140,7 @@ export function defaultSkillRoots({
   home,
   env = processEnv,
 }: { cwd?: string; home?: string; env?: Env } = {}): string[] {
-  const homeDir = home ?? env("HOME") ?? userInfo().homedir;
+  const homeDir = home ?? (env("HOME") || userInfo().homedir);
   const start = resolvedPath(cwd ?? process.cwd());
   const chain = [start];
   for (let parent = dirname(start); parent !== chain.at(-1); parent = dirname(parent)) chain.push(parent);

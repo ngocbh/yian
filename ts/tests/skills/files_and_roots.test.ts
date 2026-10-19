@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -135,6 +135,12 @@ test("default roots outside git use only cwd", () => {
 test("default roots read the home from the injected env", () => {
   const roots = defaultSkillRoots({ cwd: tmp, env: (name) => (name === "HOME" ? "/h" : undefined) });
   expect(roots.slice(0, 2)).toEqual(["/h/.claude/skills", "/h/.agents/skills"]);
+});
+
+test("default roots treat an empty HOME as unset", () => {
+  const roots = defaultSkillRoots({ cwd: tmp, env: () => "" });
+  const homeDir = userInfo().homedir;
+  expect(roots.slice(0, 2)).toEqual([join(homeDir, ".claude", "skills"), join(homeDir, ".agents", "skills")]);
 });
 
 test("dangling links and link loops do not exist", () => {

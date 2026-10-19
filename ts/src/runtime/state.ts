@@ -14,18 +14,19 @@
  */
 
 import { CompiledFlow, type Edge } from "../compile/model.ts";
-import { BUILTIN, type Defaults } from "../defaults.ts";
-import { type Failure, reprText } from "../diagnostics.ts";
+import { BUILTIN, type Defaults, fromRecorded } from "../defaults.ts";
+import { Failure, reprText } from "../diagnostics.ts";
 import { RunStarted, type RunEvent, type RunFailed, type RunSucceeded } from "../events.ts";
 import type { MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../memory/index.ts";
 import type { Node } from "../nodes/base.ts";
 import { type Binding, isExactly, type OutputContract } from "../nodes/contracts.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
-import { isRecord, type Type } from "../typesys/values.ts";
+import { isRecord, type Type, writeAsText } from "../typesys/values.ts";
 import { NodeState } from "./common.ts";
 import { RuntimeBackwardState } from "./learning.ts";
 import {
+  canonicalSeed,
   decodePool,
   decodeRecord,
   encodePool,
@@ -35,11 +36,12 @@ import {
   NodeRoutedRecord,
   NodeSucceededRecord,
   RecordEnvelope,
+  type RunLog,
   type RunRecord,
   RunStartedRecord,
   SCHEMA_VERSION,
 } from "./log.ts";
-import { type PrepareTraceOptions, prepareTrace, type RetainedTrace, type TraceDelta } from "./trace.ts";
+import { type PrepareTraceOptions, prepareTrace, RetainedTrace, TraceDelta } from "./trace.ts";
 
 /** @internal Immutable identity roots established by canonical RunStarted decoding. Frozen. */
 export class MemoryAuthority {
@@ -508,6 +510,55 @@ export function prepareRunStarted(state: RunState, data: RunStartData): Prepared
   return new PreparedTransition(record, envelope.runId, envelope.seq, plan, [new RunStarted()]);
 }
 
+/** Every plan kind `commitPrepared` dispatches. */
+const PLAN_KINDS: ReadonlySet<string> = new Set([
+  "runStarted",
+  "frontier",
+  "success",
+  "route",
+  "failure",
+  "growth",
+  "backward",
+]);
+
+/**
+ * Append one prepared record, verify the log's result, then apply its total plan.
+ *
+ * A log that durably appends but returns a different envelope has broken the `RunLog` protocol.
+ * The live state stays unapplied; the caller must discard it and rebuild from the log's durable
+ * prefix. This function can't and doesn't try to roll durable authority back.
+ *
+ * @param log The borrowed single-run authority; this function never closes it.
+ * @param state The live state at the sequence and identity captured during preparation.
+ * @param prepared The canonical record and frozen plan prepared against `state`.
+ * @returns The observers, made visible only after durable append and total apply.
+ * @throws RangeError when the state, the log, the preparation or the log's append result
+ *   disagree on identity, sequence or the exact record.
+ * @throws TypeError when the transition holds an unsupported plan.
+ * @throws the log's append error, unchanged, before any state change.
+ */
+export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
+  if (!isExactly(state, RunState)) throw new TypeError("commitPrepared expects a RunState");
+  if (!isExactly(prepared, PreparedTransition)) throw new TypeError("commitPrepared expects a PreparedTransition");
+  const plan: unknown = prepared._plan;
+  if (typeof plan !== "object" || plan === null || !PLAN_KINDS.has((plan as { kind: unknown }).kind as string)) {
+    throw new TypeError("unsupported prepared transition plan");
+  }
+  const traceDelta = prepared._plan.traceDelta;
+  if (prepared._plan.kind === "backward") requirePostterminalTraceDelta(state, traceDelta);
+  if (traceDelta !== null) traceDelta.validateOrigin(state.trace);
+  let observers: readonly RunEvent[];
+  switch (prepared._plan.kind) {
+    case "runStarted":
+      observers = commitRunStarted(log, state, prepared);
+      break;
+    default:
+      throw new TypeError("unsupported prepared transition plan");
+  }
+  if (traceDelta !== null) state.trace = traceDelta.apply();
+  return observers;
+}
+
 /**
  * Prepare the accepted trace change while the executing node still exists.
  *
@@ -535,6 +586,235 @@ function outcomeNodeId(record: RunRecord): string | null {
   if (isExactly(record, NodeExpandedRecord)) return record.spawnerId;
   if (isExactly(record, NodeSucceededRecord) || isExactly(record, NodeRoutedRecord)) return record.nodeId;
   return null;
+}
+
+/** Validate, append and install one initialization transition. */
+function commitRunStarted(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
+  const plan = prepared._plan;
+  if (plan.kind !== "runStarted") throw new TypeError("RunStarted commit requires a RunStarted plan");
+  if (!isExactly(prepared.record, RunStartedRecord)) throw new TypeError("RunStarted plan requires a RunStartedRecord");
+  requirePreparedOrigin(state, plan);
+  requirePristine(state);
+  requireAuthorityCoordinates(log, state, prepared, false);
+  requireUnchangedRecord(prepared, plan.envelopeJson);
+  const apply = materializeRunStarted(state, prepared, plan);
+
+  appendAndVerify(log, prepared);
+  applyRunStarted(state, apply);
+  return apply.observers;
+}
+
+/** Require the exact sequence-only trace change before accepting a post-terminal record. */
+function requirePostterminalTraceDelta(state: RunState, delta: TraceDelta | null): void {
+  const message = "postterminal trace delta must only advance the accepted sequence";
+  if (
+    !isExactly(delta, TraceDelta) ||
+    delta.originatingTrace !== state.trace ||
+    !Number.isSafeInteger(delta.sequence) ||
+    delta.sequence !== state.nextSequence ||
+    delta.resumed !== false
+  ) {
+    throw new RangeError(message);
+  }
+  const singles = [
+    delta.initialized,
+    delta.started,
+    delta.occurrence,
+    delta.handler,
+    delta.writer,
+    delta.consumedConnection,
+    delta.boundaryUpdate,
+    delta.rootStartSource,
+    delta.rootWriter,
+    delta.causalRouteSource,
+    delta.terminal,
+  ];
+  const lists: unknown[] = [delta.pruneIds, delta.connections, delta.boundaries];
+  if (
+    singles.some((value) => value !== null) ||
+    lists.some((values) => !Array.isArray(values) || values.length !== 0)
+  ) {
+    throw new RangeError(message);
+  }
+}
+
+/** Require the exact state, adopted flow and boundary nodes of the preparation. */
+function requirePreparedOrigin(state: RunState, plan: PreparedPlan): void {
+  if (state !== plan.originatingState) {
+    throw new RangeError("prepared transition belongs to a different originating RunState");
+  }
+  requireOriginatingFlow(state, plan);
+}
+
+/** Require the state, the prepared transition and the log to share identity and sequence. */
+function requireAuthorityCoordinates(
+  log: RunLog,
+  state: RunState,
+  prepared: PreparedTransition,
+  initialized: boolean,
+): void {
+  if (prepared.expectedSequence !== state.nextSequence) {
+    throw new RangeError(
+      `run-state sequence mismatch: prepared ${prepared.expectedSequence}, state ${state.nextSequence}`,
+    );
+  }
+  if (prepared.expectedSequence !== log.nextSequence) {
+    throw new RangeError(`run-log sequence mismatch: prepared ${prepared.expectedSequence}, log ${log.nextSequence}`);
+  }
+  if (prepared.expectedRunId !== log.runId) {
+    throw new RangeError(
+      `run-log run_id mismatch: prepared ${reprText(prepared.expectedRunId)}, log ${reprText(log.runId)}`,
+    );
+  }
+  if (initialized) {
+    if (state.runId !== prepared.expectedRunId) {
+      const found = state.runId === null ? writeAsText(null) : reprText(state.runId);
+      throw new RangeError(`run-state run_id mismatch: prepared ${reprText(prepared.expectedRunId)}, state ${found}`);
+    }
+  } else if (state.runId !== null) {
+    throw new RangeError("RunStarted requires state.run_id to be None");
+  }
+}
+
+/**
+ * @internal Reject a changed or mismatched public record carrier: the record and coordinates must
+ * encode to `envelopeJson`, the canonical text of the preparation.
+ *
+ * @throws RangeError when the coordinates or the record changed.
+ */
+export function requireUnchangedRecord(prepared: PreparedTransition, envelopeJson: string): void {
+  const frozen = decodeRecord(envelopeJson);
+  if (frozen.runId !== prepared.expectedRunId || frozen.seq !== prepared.expectedSequence) {
+    throw new RangeError("prepared coordinates changed after validation");
+  }
+  const current = encodeRecord(
+    new RecordEnvelope(frozen.schema, prepared.expectedRunId, prepared.expectedSequence, prepared.record),
+  );
+  if (current !== envelopeJson) throw new RangeError("prepared record changed after validation");
+}
+
+/** Append the canonical record and reject any protocol-breaking result. */
+function appendAndVerify(log: RunLog, prepared: PreparedTransition): void {
+  const envelope: unknown = log.append(prepared.record);
+  // The record compare is the envelope text compare: the coordinates already match, and the
+  // prepared record encodes to the plan's text (`requireUnchangedRecord`).
+  if (
+    !isExactly(envelope, RecordEnvelope) ||
+    envelope.runId !== prepared.expectedRunId ||
+    envelope.seq !== prepared.expectedSequence ||
+    log.nextSequence !== prepared.expectedSequence + 1 ||
+    encodeRecord(envelope) !== prepared._plan.envelopeJson
+  ) {
+    throw new RangeError("run-log append result does not match prepared transition");
+  }
+}
+
+/** Check the initialized reducer roots and the recorded memory authority. */
+function requireInitialized(state: RunState): void {
+  const exactContainers =
+    isExactly(state.pool, VariablePool) &&
+    isExactly(state.nodeState, Map) &&
+    isExactly(state.edgeState, Map) &&
+    Array.isArray(state.ready) &&
+    isExactly(state.inFlight, Set) &&
+    isExactly(state.acceptedStarts, Map) &&
+    isExactly(state.nodeStarts, Map) &&
+    isExactly(state.nodeSteps, Map) &&
+    isExactly(state.depth, Map) &&
+    isExactly(state.growthOwner, Map) &&
+    isExactly(state.deferredPrune, Set) &&
+    isExactly(state.wiringOverrides, Map) &&
+    isRecord(state.input) &&
+    isRecord(state.effectiveLlmByStaticPath) &&
+    isExactly(state.backwardState, RuntimeBackwardState) &&
+    isExactly(state.memoryAuthority, MemoryAuthority) &&
+    isExactly(state.initialStaticIds, Set);
+  if (!exactContainers) throw new RangeError("transition requires initialized reducer containers");
+  if (typeof state.runId !== "string" || !state.runId) throw new RangeError("run state is not initialized");
+  if (typeof state.flowFingerprint !== "string" || !state.flowFingerprint) {
+    throw new RangeError("run state is not initialized with a flow fingerprint");
+  }
+  if (!Number.isSafeInteger(state.nextSequence) || state.nextSequence < 1) {
+    throw new RangeError("run state is not initialized with a valid sequence");
+  }
+  const sequences = [...state.acceptedStarts.values()];
+  if (
+    !sameIds(state.inFlight, state.acceptedStarts.keys()) ||
+    sequences.some((sequence) => !Number.isSafeInteger(sequence) || !(0 < sequence && sequence < state.nextSequence)) ||
+    new Set(sequences).size !== sequences.length
+  ) {
+    throw new RangeError("accepted starts must match the unfinished invocation inventory");
+  }
+  // Every apply path indexes these maps by node, so a broken map must fail here, before the
+  // append, rather than between append and apply.
+  if (
+    [...state.inFlight].some((nodeId) => !state.nodeStarts.has(nodeId)) ||
+    [...state.nodeStarts.values()].some((count) => !Number.isSafeInteger(count) || count < 1) ||
+    [...state.nodeSteps.keys()].some((nodeId) => !state.nodeStarts.has(nodeId)) ||
+    [...state.nodeSteps.values()].some(
+      (steps) => !Array.isArray(steps) || steps.length === 0 || steps.some((step) => !isRecord(step)),
+    )
+  ) {
+    throw new RangeError("node starts and steps must match the unsettled invocations");
+  }
+  if (!Number.isSafeInteger(state.numWorkers) || state.numWorkers < 0) {
+    throw new RangeError("run state has an invalid worker count");
+  }
+  const failure = state.terminalUnreachableFailure;
+  if (failure !== null) {
+    if (!isExactly(failure, Failure)) throw new TypeError("terminal-unreachable latch must be a Failure or None");
+    if (failure.code !== "graph.terminal_unreachable") {
+      throw new RangeError("terminal-unreachable latch has the wrong failure code");
+    }
+    if (typeof failure.nodeId !== "string" || !failure.nodeId) {
+      throw new RangeError("terminal-unreachable latch requires a causal node ID");
+    }
+  }
+  if (!state.flow.nodes.has(state.flow.startId)) {
+    throw new RangeError("initialized run state is missing its START boundary");
+  }
+  if (state.pool.startId !== state.flow.startId) {
+    throw new RangeError("initialized pool START must match the adopted flow");
+  }
+  if (!state.initialStaticIds.has(state.flow.startId)) {
+    throw new RangeError("initialized run state START is not an initial static node");
+  }
+  if (state.learnable) {
+    if (
+      !isExactly(state.trace, RetainedTrace) ||
+      state.trace.runId !== state.runId ||
+      state.trace.nextSequence !== state.nextSequence
+    ) {
+      throw new RangeError("run-state trace disagrees with recorded authority");
+    }
+  } else if (state.trace !== null) {
+    throw new RangeError("trace requires recorded learning");
+  }
+  validateRuntimeMemoryConfiguration(state);
+}
+
+/** Require an initialized graph state before its primary terminal outcome. */
+function requireInitializedNonterminal(state: RunState): void {
+  requireInitialized(state);
+  if (state.result !== null) throw new RangeError("terminal run state cannot prepare another graph transition");
+}
+
+/** Require the identity roots of canonical RunStarted decoding. */
+function validateRuntimeMemoryConfiguration(state: RunState): void {
+  const authority = state.memoryAuthority;
+  if (!isExactly(authority, MemoryAuthority)) throw new TypeError("run-state memory authority has the wrong type");
+  if (
+    !(
+      state.memorySnapshots === authority.snapshots &&
+      state.memories === authority.memories &&
+      state.memoryStacks === authority.memoryStacks &&
+      typeof state.learnable === "boolean" &&
+      state.learnable === authority.learnable &&
+      state.backwardState.memoryOrder === authority.memoryOrder
+    )
+  ) {
+    throw new RangeError("run-state memory roots disagree with RunStarted authority");
+  }
 }
 
 /** Whether two sets of ids hold the same ids, in any order. */
@@ -607,4 +887,153 @@ function requirePristine(state: RunState): void {
     authority.memoryOrder === state.backwardState.memoryOrder &&
     sameIds(state.initialStaticIds, flow.nodes.keys());
   if (!pristine) throw new RangeError("RunStarted requires a pristine RunState at sequence 0");
+}
+
+/**
+ * Reject a replaced adopted flow object or boundary node.
+ *
+ * The graph is a valid private `CompiledFlow` whose execution fields reducer transitions own. This
+ * guard enforces that ownership boundary; it deliberately doesn't pretend to fingerprint arbitrary
+ * in-place mutation by external code.
+ */
+function requireOriginatingFlow(state: RunState, plan: PreparedPlan): void {
+  const flow = state.flow;
+  if (
+    !(
+      flow === plan.originatingFlow &&
+      flow.startId === plan.startId &&
+      flow.nodes.has(plan.startId) &&
+      flow.nodes.get(plan.startId) === plan.startNode &&
+      flow.endId === plan.endId &&
+      (flow.nodes.get(plan.endId) ?? null) === plan.endNode
+    )
+  ) {
+    throw new RangeError("transition requires its originating flow and boundary identities");
+  }
+}
+
+/** The detached values one initialization installs, all built before the durable append. */
+interface RunStartedApply {
+  pool: VariablePool;
+  nodeState: Map<string, NodeState>;
+  edgeState: Map<string, NodeState>;
+  ready: string[];
+  inFlight: Set<string>;
+  acceptedStarts: Map<string, number>;
+  terminalUnreachableFailure: Failure | null;
+  depth: Map<string, number>;
+  growthOwner: Map<string, string>;
+  wiringOverrides: Map<string, JsonObject>;
+  runId: string;
+  flowFingerprint: string;
+  nextSequence: number;
+  numWorkers: number;
+  input: JsonObject;
+  effectiveLlmByStaticPath: Record<string, JsonObject>;
+  callTimeLlm: JsonObject | null;
+  memorySnapshots: readonly MemorySnapshotEnvelope[] | null;
+  memories: readonly MemorySpec[] | null;
+  memoryStacks: readonly MemoryStack[] | null;
+  learnable: boolean;
+  runDefaults: Defaults;
+  backwardState: RuntimeBackwardState;
+  memoryAuthority: MemoryAuthority;
+  observers: readonly RunEvent[];
+}
+
+/** Decode and detach every apply value before the record becomes durable. */
+function materializeRunStarted(state: RunState, prepared: PreparedTransition, plan: RunStartedPlan): RunStartedApply {
+  const envelope = decodeRecord(plan.envelopeJson);
+  const record = envelope.record;
+  if (
+    !(
+      envelope.runId === prepared.expectedRunId &&
+      envelope.seq === prepared.expectedSequence &&
+      isExactly(record, RunStartedRecord)
+    )
+  ) {
+    throw new RangeError("immutable RunStarted plan does not match its transition");
+  }
+
+  const pool = decodePool(record.initialPool);
+  const startId = plan.startId;
+  if (pool.startId !== startId) throw new RangeError("immutable RunStarted pool start_id mismatch");
+  if (pool.resolve("system", ["run_id"]) !== envelope.runId) {
+    throw new RangeError("immutable RunStarted pool system.run_id mismatch");
+  }
+  const primedStart = pool.get(startId);
+  if (!isRecord(primedStart)) throw new RangeError("immutable RunStarted pool START value must be a dict");
+
+  const wiring = canonicalSeed(record.startWiringOverride)[1];
+  const effective = canonicalSeed(record.effectiveLlmByStaticPath)[1];
+  const input = canonicalSeed(primedStart)[1];
+  if (!isRecord(wiring)) throw new TypeError("canonical START wiring is not a dict");
+  if (!isRecord(effective)) throw new TypeError("canonical effective LLM map is not a dict");
+  if (!isRecord(input)) throw new TypeError("canonical START input is not a dict");
+
+  const backwardState = new RuntimeBackwardState(
+    record.memories === null ? [] : record.memories.map((spec) => spec.key),
+  );
+  return {
+    pool,
+    nodeState: new Map(state.nodeState),
+    edgeState: new Map(state.edgeState),
+    ready: [startId],
+    inFlight: new Set(),
+    acceptedStarts: new Map(),
+    terminalUnreachableFailure: null,
+    depth: new Map(),
+    growthOwner: new Map(),
+    wiringOverrides: new Map([[startId, wiring as JsonObject]]),
+    runId: envelope.runId,
+    flowFingerprint: record.flowFingerprint,
+    nextSequence: envelope.seq + 1,
+    numWorkers: record.numWorkers,
+    input: input as JsonObject,
+    effectiveLlmByStaticPath: effective as Record<string, JsonObject>,
+    callTimeLlm: record.callTimeLlm === null ? null : (canonicalSeed(record.callTimeLlm)[1] as JsonObject),
+    memorySnapshots: record.memorySnapshots,
+    memories: record.memories,
+    memoryStacks: record.memoryStacks,
+    learnable: record.learnable,
+    runDefaults: fromRecorded(record.defaults),
+    backwardState,
+    memoryAuthority: new MemoryAuthority(
+      record.memorySnapshots,
+      record.learnable,
+      record.memories,
+      record.memoryStacks,
+      backwardState.memoryOrder,
+    ),
+    observers: [new RunStarted()],
+  };
+}
+
+/** Install the already detached values with total replacement assignments only. */
+function applyRunStarted(state: RunState, apply: RunStartedApply): void {
+  state.pool = apply.pool;
+  state.nodeState = apply.nodeState;
+  state.edgeState = apply.edgeState;
+  state.ready = apply.ready;
+  state.inFlight = apply.inFlight;
+  state.acceptedStarts = apply.acceptedStarts;
+  state.result = null;
+  state.terminalUnreachableFailure = apply.terminalUnreachableFailure;
+  state.depth = apply.depth;
+  state.growthOwner = apply.growthOwner;
+  state.wiringOverrides = apply.wiringOverrides;
+  state.runId = apply.runId;
+  state.flowFingerprint = apply.flowFingerprint;
+  state.numWorkers = apply.numWorkers;
+  state.input = apply.input;
+  state.effectiveLlmByStaticPath = apply.effectiveLlmByStaticPath;
+  state.callTimeLlm = apply.callTimeLlm;
+  state.memorySnapshots = apply.memorySnapshots;
+  state.memories = apply.memories;
+  state.memoryStacks = apply.memoryStacks;
+  state.learnable = apply.learnable;
+  state.runDefaults = apply.runDefaults;
+  state.backwardState = apply.backwardState;
+  state.memoryAuthority = apply.memoryAuthority;
+  state.nextSequence = apply.nextSequence;
 }

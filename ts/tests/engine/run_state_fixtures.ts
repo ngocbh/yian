@@ -12,7 +12,7 @@ import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts
 import { Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { encodePool } from "../../src/runtime/log.ts";
+import { encodePool, MemoryRunLog, type RecordEnvelope, type RunLog, type RunRecord } from "../../src/runtime/log.ts";
 import type { RunStartData, RunState } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 
@@ -202,4 +202,39 @@ export function stateSnapshot(state: RunState): Record<string, unknown> {
     input: structuredClone(state.input),
     effectiveLlmByStaticPath: structuredClone(state.effectiveLlmByStaticPath),
   };
+}
+
+/** A memory log whose append fails before it retains the record. */
+export class FailingLog extends MemoryRunLog {
+  override append(_record: RunRecord): RecordEnvelope {
+    throw new Error("disk full");
+  }
+}
+
+/** A minimal custom log that returns a caller-selected append result and never advances. */
+export class ReturningLog implements RunLog {
+  readonly runId = RUN_ID;
+  readonly path = null;
+  readonly nextSequence = 0;
+  readonly #result: (record: RunRecord) => RecordEnvelope;
+
+  constructor(result: (record: RunRecord) => RecordEnvelope) {
+    this.#result = result;
+  }
+
+  [Symbol.iterator](): Iterator<RecordEnvelope> {
+    return [][Symbol.iterator]();
+  }
+
+  records(): readonly RecordEnvelope[] {
+    return [];
+  }
+
+  append(record: RunRecord): RecordEnvelope {
+    return this.#result(record);
+  }
+
+  close(): void {}
+
+  [Symbol.dispose](): void {}
 }

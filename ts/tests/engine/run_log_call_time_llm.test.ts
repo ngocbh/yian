@@ -21,7 +21,9 @@
  *   its row is dropped; the other 10 rows are pinned with the record's class and message (a part of
  *   the wrong JSON type is a `TypeError`, where Python's pydantic raises `ValueError`).
  *
- * Later: the run-start tests, with the run state.
+ * Ported, through the run state: `test_run_start_records_and_applies_call_time_llm`,
+ * `test_run_start_without_call_time_agents_leaves_it_none` and
+ * `test_run_start_requires_a_pristine_call_time_llm` (its message pinned).
  */
 
 import { expect, test } from "bun:test";
@@ -30,12 +32,15 @@ import {
   decodeRecord,
   encodePool,
   encodeRecord,
+  MemoryRunLog,
   RecordEnvelope,
   RunStartedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
+import { commitPrepared, type PreparedTransition, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
 import { TypeCheckError, VariablePool } from "../../src/typesys/index.ts";
 import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
+import { flow } from "./run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`, and return it. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): Error {
@@ -197,4 +202,41 @@ test("a NaN in the record keeps the value layer's error as its cause", () => {
     "RunStarted call_time_llm: NaN is not a yian value",
   );
   expect(caught.cause).toBeInstanceOf(TypeCheckError);
+});
+
+/** Prepare the start of run `r1` over `state` with an empty START record and `callTimeLlm`. */
+function start(state: RunState, callTimeLlm: Record<string, unknown> | null): PreparedTransition {
+  const pool = new VariablePool(state.flow.startId);
+  pool.set(state.flow.startId, {});
+  pool.addSystem("run_id", "r1");
+  return prepareRunStarted(state, {
+    runId: "r1",
+    flowFingerprint: "a".repeat(64),
+    initialPool: pool,
+    startWiringOverride: {},
+    effectiveLlmByStaticPath: { agent: { provider: "openai", model: "gpt-test" } },
+    numWorkers: 1,
+    callTimeLlm,
+  });
+}
+
+test("run start records and applies call_time_llm", () => {
+  const state = new RunState(flow());
+  expect(state.callTimeLlm).toBeNull();
+  const authority = new MemoryRunLog("r1");
+  commitPrepared(authority, state, start(state, structuredClone(CALL_TIME)));
+  expect(state.callTimeLlm).toEqual(CALL_TIME);
+  expect((authority.records()[0]!.record as RunStartedRecord).callTimeLlm).toEqual(CALL_TIME);
+});
+
+test("run start without call-time agents leaves it null", () => {
+  const state = new RunState(flow());
+  commitPrepared(new MemoryRunLog("r1"), state, start(state, null));
+  expect(state.callTimeLlm).toBeNull();
+});
+
+test("run start requires a pristine call_time_llm", () => {
+  const state = new RunState(flow());
+  state.callTimeLlm = structuredClone(CALL_TIME);
+  expectError(() => start(state, null), RangeError, "RunStarted requires a pristine RunState at sequence 0");
 });

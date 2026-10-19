@@ -74,6 +74,14 @@ class Node:
   model access: its loop (`run_agent`) builds the configured model directly through
   `llm_clients`.
 
+Changed (TS yian): `run(inputs, caps)` returns a promise, and `forward(inputs, caps)` returns a
+result or a promise; every failure rejects the promise. The capabilities arrive as one `caps`
+object (`caps.bindItem`, `caps.steps`). The run-owned stop event is the node's own
+`caps.signal`, an `AbortSignal`: every node gets one, so there is no `needs_stop_event` trait.
+No node returns a streaming generator; the AGENT streams through its emit capability.
+`BackwardContext` and `BackwardResult` hold frozen copies of their values: read them, and copy a
+value before changing it. A feedback batch is an array, not a tuple.
+
 **Why only `forward`?** Default filling and assertion checks are identical for every
 kind — so they are protocol, not kind behavior, and live in the base template. See
 [the engine loop](engine.md#the-loop-read-eval-record-reduce).
@@ -166,7 +174,7 @@ branching on kind.
 | `binds_per_item` | map | bind inputs per element via `caps["bind_item"]`, not once up front |
 | `bind_reserved` / `reserved_wiring_keys` | wait, map | reserved keys resolved before `run` (`until`, `over`); the names for load-time checks |
 | `grow_depth_delta` / `is_loop` | spawners | recursion-depth stamp; loop bookkeeping |
-| `needs_stop_event` | agent, wait, tool | receive the run-owned cooperative stop event |
+| `needs_stop_event` | agent, wait, tool | receive the run-owned cooperative stop event (TS yian: `caps.signal`, every node) |
 | `needs_tools` | tool, human_input, agent | receive the run's `ToolSet` (its tools, tool groups, and `ask_user` handler) |
 | `granted_tools()` | base; agent overrides | tool and group ids the run boundary checks against the run's tools before the run starts |
 | `needs_steps` | tool | receive `caps["steps"]`, a `NodeSteps`: the node's start count, the steps its earlier starts recorded, and `record(step)`, which appends a step to the run log and returns once it is applied |

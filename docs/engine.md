@@ -373,6 +373,11 @@ do not leak into the dispatcher or later worker calls.
 | diagnostic-only projections | `exception_origin(exc)` selects the local origin; `failure_trace(operation_origin=None)` combines it with ordered ancestry without affecting program identity |
 | `node.skipped_output_target()` | logical output whose successors observe this physical node's absence |
 
+Changed (TS yian): `run` and `forward` are async, every node gets its stop as `caps.signal`
+instead of the `needs_stop_event` trait, and no node returns a streaming generator, so the
+streaming-generator cleanup in [the loop](#the-loop-read-eval-record-reduce) is Python only;
+see [the node contract](nodes.md#the-contract).
+
 The pattern is a small set of traits and hooks around the shared run/body pair.
 Runtime may read `NodeKind` for diagnostic text, but behavior and scheduling never
 branch on it.

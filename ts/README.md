@@ -131,6 +131,18 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   properties, copying each value. A `BindingCollector` records each input's route at the same
   read, and `freeze()` returns a frozen `BindingCapture` whose `boundInputs` is a fresh copy on
   every read.
+- `src/nodes/base.ts` holds `Node`. `run(inputs, caps)` is async and resolves to one `Output`,
+  `Route` or `Grow`; a kind's `forward(inputs, caps)` may return the result or a promise. The
+  capabilities are one `NodeCaps` object (`signal`, `bindItem`, `steps`); every node gets its own
+  `caps.signal`.
+- `BackwardContext` and `BackwardResult` deep-copy and deep-freeze their values once, in the
+  constructor: read them, and copy before you change one (unlike `BindingCapture.boundInputs`,
+  which gives a fresh copy per read).
+- A compile-owned node copy is shallow (same prototype, own fields copied). Code that changes a
+  copy reassigns a field and never mutates a carrier, array, record or map in place. Node classes
+  use no ES `#` members (a copy never ran the constructor, so it has no private brand) and no
+  instance field that captures `this` (an arrow-function field or a bound callback would stay
+  bound to the original); use TS `private` and prototype methods.
 
 ## Memory
 

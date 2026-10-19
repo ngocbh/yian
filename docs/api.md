@@ -1108,7 +1108,10 @@ is for debugging only; don't branch on it.
 
 Changed (TS yian): the codes marked (TS yian) exist only in TS yian; Python yian
 reports these failures as `node.execute`, except that an `asserts:` condition that
-fails to evaluate counts as false (`assertion.failed`).
+fails to evaluate counts as false (`assertion.failed`). For a node's `asserts:`, the
+`condition.evaluate` message reads
+``node 'n' pre-assert '<display>' (`<expression>`) could not be evaluated: <error>``
+(`post-assert` after the body); the expression shows only when it differs from the display.
 
 `loop.max_exceeded` is on the LOOP node, with a message such as `loop 'refine'
 exceeded max (5)`. A failure inside the body keeps its own code, and a `times:` loop

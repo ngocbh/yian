@@ -120,6 +120,10 @@ mapping `{uri, mime, name}`, not a `FileRef`. Its `backward()` hook returns thre
 | `self_feedback` | The occurrence's own learning context |
 | `variable_feedback` | The occurrence's declared local variables, retained as advice only |
 
+Changed (TS yian): a feedback batch is an array, not a tuple, and `BackwardContext` and
+`BackwardResult` hold frozen copies of their values: read them, and copy a value before
+changing it.
+
 The base hook returns empty channels and stops transfer. An AGENT can make one
 tool-free model call from its accepted rendered prompt, locals, evidence, and
 effective model configuration. No prompt rendering, recall, tool execution,

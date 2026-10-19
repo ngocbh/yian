@@ -22,7 +22,7 @@
  * the loader, which would be a back-edge.
  */
 
-import { CompiledFlow, FlowOutput } from "../../compile/model.ts";
+import { CompiledFlow, type Edge, FlowOutput } from "../../compile/model.ts";
 import {
   compareCodeUnits,
   Diagnostic,
@@ -34,9 +34,18 @@ import {
   SourceRange,
 } from "../../diagnostics.ts";
 import type { Node } from "../../nodes/base.ts";
-import { asBinding, Binding, isExactly, Parameter, type ValueContract } from "../../nodes/contracts.ts";
+import {
+  asBinding,
+  type Assertion,
+  Binding,
+  isExactly,
+  type OutputContract,
+  Parameter,
+  type ValueContract,
+  type ValuePath,
+} from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { isList, isRecord, type Value } from "../../typesys/values.ts";
+import { isList, isRecord, type Type, type Value } from "../../typesys/values.ts";
 import { type LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import {
   oldFormSuggestion,
@@ -46,10 +55,16 @@ import {
   suggestTag,
   yamlQuoted,
 } from "../helpers/tags.ts";
-import type { BuildContext, BuildResult, NodeDescriptor } from "../nodes/base.ts";
+import type { BuildContext, BuildResult, NodeDescriptor, OriginPresenter } from "../nodes/base.ts";
 import { normalizeNodeSignatureCursor } from "../parse/nodes.ts";
 import type { SourceCatalogBuilder, SourceSitePath } from "../source/catalog.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
+// T3-13 imports
+// T3-15 imports
+// T3-17 imports
+// T3-18 imports
+// T3-19 imports
+// T3-20 imports
 
 // Name for the single output of a bare whole-string `output:` binding. The value-mode EndNode
 // returns the bare resolved value, so the name only labels the carrier.
@@ -314,6 +329,19 @@ export interface CallableScope extends PrivateRegistrar {
   readonly catalogBuilder: SourceCatalogBuilder;
   /** Resolve one named or compiler-owned callable in this file scope. */
   resolve(flowId: string, version?: string | null): ComposedFlow;
+}
+
+/** Python's `compose.build.pipeline._register_inline_bodies`; not ported yet. */
+function registerInlineBodies(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  bodies: ReadonlyMap<string, InlineBody>,
+  options: {
+    registrar: PrivateRegistrar;
+    diagnostics?: LoadDiagnostics | null;
+    buildChild: (body: InlineBody, descriptor: NodeDescriptor) => ComposedFlow;
+  },
+): Map<string, NodeDescriptor> {
+  return new Map(descriptors);
 }
 
 /**
@@ -646,6 +674,61 @@ export function splitTypedInputs(
   return split;
 }
 
+/** Python's `compose.build.pipeline._split_typed_llm_config`; not ported yet. */
+function splitTypedLlmConfig(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  nodesCursor: SourceCursor,
+  options: {
+    registry: TypeRegistry;
+    owner: readonly string[];
+    catalogBuilder: SourceCatalogBuilder;
+    diagnostics: LoadDiagnostics;
+  },
+): Map<string, NodeDescriptor> {
+  return new Map(descriptors);
+}
+
+/** Python's `compose.build.pipeline._attach_llm_config_wiring`; not ported yet. */
+function attachLlmConfigWiring(
+  buildResults: ReadonlyMap<string, BuildResult>,
+  flowWiring: ReadonlyMap<string, Map<string, unknown>>,
+  flowLlmConfig: unknown,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  options: { typeFn?: TypeFn | null } = {},
+): (readonly [ValuePath, Type | null])[] {
+  return [];
+}
+
+/** Python's `compose.build.pipeline._binding_style`; not ported yet. */
+function bindingStyle(
+  nodesCursor: SourceCursor,
+  nodeId: string,
+  field: string,
+  key: string,
+  options: { valueEntries: ReadonlySet<string>; diagnostics: LoadDiagnostics },
+): string | null {
+  return null;
+}
+
+/** Python's `compose.build.pipeline._output_style`; not ported yet. */
+function outputStyle(
+  outputsCursor: SourceCursor | null,
+  key: unknown,
+  options: { diagnostics: LoadDiagnostics },
+): string | null {
+  return null;
+}
+
+/** Python's `compose.build.pipeline._case_output_cursor`; not ported yet. */
+function caseOutputCursor(
+  nodesCursor: SourceCursor,
+  nodeId: string,
+  options: { diagnostics: LoadDiagnostics },
+): SourceCursor | null {
+  return null;
+}
+
 /**
  * Put each declared input type on its node's final wiring binding.
  *
@@ -674,6 +757,20 @@ export function attachInputContracts(
       wiring.set(name, new Binding(binding.source, { origin: binding.origin, contract }));
     }
   }
+}
+
+/** Python's `compose.build.pipeline._split_typed_outputs`; not ported yet. */
+function splitTypedOutputs(
+  outputsSection: unknown,
+  outputsCursor: SourceCursor | null,
+  options: {
+    registry: TypeRegistry;
+    owner: readonly string[];
+    catalogBuilder: SourceCatalogBuilder;
+    diagnostics: LoadDiagnostics;
+  },
+): [outputsSection: unknown, outputTypes: Map<string, ValueContract>] {
+  return [outputsSection, new Map()];
 }
 
 /**
@@ -753,15 +850,535 @@ export function stampFlowOutputOrigins(
   });
 }
 
+/** Python's `compose.build.pipeline._stamp_inline_call_origins`; not ported yet. */
+function stampInlineCallOrigins(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  nodesCursor: SourceCursor,
+  nodes: ReadonlyMap<string, Node>,
+  flowWiring: ReadonlyMap<string, Map<string, unknown>>,
+  flowOutputs: readonly FlowOutput[],
+  flowAsserts: readonly Assertion[] | null,
+  options: { owner: readonly string[]; catalogBuilder: SourceCatalogBuilder; diagnostics: LoadDiagnostics },
+): void {}
+
+/** Python's `compose.build.pipeline._fill_type_tables`; not ported yet. */
+function fillTypeTables(
+  nodes: ReadonlyMap<string, Node>,
+  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+  buildResults: ReadonlyMap<string, BuildResult>,
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  flowAsserts: readonly Assertion[],
+  flowAssertionRanges: readonly (SourceRange | null)[],
+  outputsCursor: SourceCursor | null,
+  outputsRange: SourceRange | null,
+  registry: TypeRegistry,
+  diagnostics: LoadDiagnostics,
+): void {}
+
+/** Python's `compose.build.pipeline._value_cases`; not ported yet. */
+function valueCases(descriptors: ReadonlyMap<string, NodeDescriptor>, read: ReadonlySet<string>): ReadonlySet<string> {
+  return new Set();
+}
+
 // ---------- Passes not ported yet ----------
 //
-// Each sub-block holds the stand-ins for one owner's passes, under a header naming the owner and
-// its files. The owner's change deletes its stubs and imports the ported passes; the call sites
-// keep their shape.
+// Every placeholder, by owner. Kind 1 is a stub in its owner's sub-block below: the owner deletes
+// the stub (and its sub-block's local type aliases) and imports the port under its import slot,
+// keeping the sub-block header. Kind 2 is a pipeline helper stubbed at its Python position: the
+// owner ports its body in place, adding the private helpers named beside it. Kind 3 is a `const`
+// inside `assemble`: the owner replaces that line. Until then a placeholder returns nothing,
+// except as noted; "throws" means `Error("<python name> is not ported yet (T3-xx)")`.
+//
+//   T3-13  constructorTypeFn (1): returns `() => null`. T3-13's merge or T3-17, whichever edits
+//          this file first, swaps it for the import, with `TypeFn`.
+//   T3-15  splitTypedLlmConfig (2): returns the descriptors.
+//   T3-17  extractInlineBodies (1): returns `[nodesCursor, new Map()]`.
+//          readValueEntry (1): throws.
+//          isValueEntry (1): returns `false`.
+//          splitTypedOutputs (2, with _check_output_names, _reject_non_json_literals and
+//            _raise_if_non_json_literal): returns `[outputsSection, new Map()]`.
+//          synthIdGen (1): returns a minter that throws.
+//          desugarInlineCalls (1): returns `[descriptors, outputsSection, assertsSection]`;
+//            bindingStyle, outputStyle (2): return `null`.
+//          desugarAdaptiveQuestions, desugarCaseCallTargets (1): return the descriptors.
+//          caseOutputReads (1), valueCases (2): return `new Set()`.
+//          expandCaseOutputs (1): returns `[descriptors, outputsSection]`.
+//          buildInlineChild (3, `(body: InlineBody, descriptor: NodeDescriptor) => ComposedFlow`):
+//            throws.
+//          readBindingContract (3, `BindingContractReader | null`): `null`.
+//          registerInlineBodies (2): returns the descriptors.
+//          inferDataEdges, hostControlEdges, inferOrderingEdges (1): return `[]`.
+//          stampInlineCallOrigins (2).
+//          synthesizeBoundaryGraph (1): returns `[new Map(), [], new Map()]`, so
+//            `ComposedFlow.input` throws until it is ported.
+//          synthWires (3, `ReadonlySet<string>`, reads `QPARAM`): `new Set()`.
+//   T3-18  checkWrittenValues, stampToolInputTypes, checkWiringParity, validateReferences,
+//          validateHumanQuestions, checkReservedSources, rejectCycles, checkCaseHandles (1).
+//          fillTypeTables (2, with _site_range).
+//   T3-19  attachLlmConfigWiring (2, with _llm_value_types): returns `[]`.
+//          checkTypedInputs, checkCallMapTypes, checkLoopTypeContract, checkTypedOutputs,
+//          checkLlmConfigSources (1).
+//          inlineLoops (3, `ReadonlySet<string>`): `new Set()`.
+//          localInputContracts (1): returns `new Map()`.
+//   T3-20  checkCaseBranches (1); caseOutputCursor (2): returns `null`.
+//          computeNarrowing (1): returns `{ unordered: new Set() }`.
+//          checkCaseWhenValues, checkImpossibleWhens, checkCaseExhaustive, validateNodeAsserts,
+//          checkSkippedArithmetic (1).
+//          lowerFlowAsserts (1): returns `null`.
+//          exhaustiveCases (1): returns `new Set()`; skipModel (1, Python's `SkipModel` class):
+//            returns `null`; nullSkippedOutputs (1): returns the outputs.
+//          searchedWhens (3, `ReadonlyMap<string, readonly SearchedWhen[]>`): `new Map()`.
 
-// T3-17: compose/desugar/value_entries.ts
+// T3-13: compose/helpers/{isinstance_types,output_contracts}.ts
 
-/** Whether `descriptor` is a value entry's; none is until value entries are ported. */
-function isValueEntry(_descriptor: NodeDescriptor): boolean {
+/** Python's `compose.helpers.output_contracts.TypeFn`: the type a constructor name builds. */
+type TypeFn = (name: string) => Type | null;
+
+/** Python's `compose.helpers.isinstance_types.constructor_type_fn`; not ported yet. */
+function constructorTypeFn(registry: TypeRegistry): TypeFn {
+  return () => null;
+}
+
+// T3-15: compose/nodes/{agent,code,tool,human_input,wait}.ts
+
+// T3-17: compose/desugar/*.ts, compose/edges/*.ts, compose/build/{boundary,inline_inputs}.ts
+
+type InlineBody = unknown;
+type ValueEntryDescriptor = NodeDescriptor;
+
+/** Python's `compose.desugar.inline_bodies.extract_inline_bodies`; not ported yet. */
+function extractInlineBodies(
+  nodesCursor: SourceCursor,
+  options: { owner: readonly string[] },
+): [nodesCursor: SourceCursor, inlineBodies: Map<string, InlineBody>] {
+  return [nodesCursor, new Map()];
+}
+
+/** Python's `compose.desugar.value_entries.read_value_entry`; not ported yet. */
+function readValueEntry(
+  nodeId: string,
+  cursor: SourceCursor,
+  options: {
+    registry: TypeRegistry;
+    owner: readonly string[];
+    catalogBuilder: SourceCatalogBuilder;
+    diagnostics: LoadDiagnostics;
+  },
+): ValueEntryDescriptor {
+  throw new Error("read_value_entry is not ported yet (T3-17)");
+}
+
+/** Python's `isinstance(descriptor, compose.desugar.value_entries.ValueEntryDescriptor)`; not ported yet. */
+function isValueEntry(descriptor: NodeDescriptor): boolean {
   return false;
 }
+
+/** Python's `compose.desugar.inline_calls._synth_id_gen`; not ported yet. */
+function synthIdGen(): () => string {
+  return () => {
+    throw new Error("_synth_id_gen is not ported yet (T3-17)");
+  };
+}
+
+/** Python's `compose.desugar.inline_calls.desugar_inline_calls`; not ported yet. */
+function desugarInlineCalls(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  outputsSection: unknown,
+  options: {
+    assertsSection?: readonly unknown[] | null;
+    outputsRange?: SourceRange | null;
+    assertionRangeAt?: ((index: number) => SourceRange | null) | null;
+    assertionOriginAt?: ((index: number) => OriginRef | null) | null;
+    bindingStyleAt?: ((nodeId: string, field: string, key: string) => string | null) | null;
+    outputStyleAt?: ((key: unknown) => string | null) | null;
+    typedOutputs?: ReadonlySet<string | null>;
+    nextId?: (() => string) | null;
+    typeNames?: ReadonlySet<string>;
+    diagnostics?: LoadDiagnostics | null;
+  } = {},
+): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown, assertsSection: Assertion[]] {
+  return [new Map(descriptors), outputsSection, (options.assertsSection ?? []) as Assertion[]];
+}
+
+/** Python's `compose.desugar.adaptive_questions.desugar_adaptive_questions`; not ported yet. */
+function desugarAdaptiveQuestions(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  options: { diagnostics?: LoadDiagnostics | null } = {},
+): Map<string, NodeDescriptor> {
+  return new Map(descriptors);
+}
+
+/** Python's `compose.desugar.case_targets.desugar_case_call_targets`; not ported yet. */
+function desugarCaseCallTargets(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  mint: () => string,
+  options: { diagnostics?: LoadDiagnostics | null } = {},
+): Map<string, NodeDescriptor> {
+  return new Map(descriptors);
+}
+
+/** Python's `compose.desugar.case_outputs.case_output_reads`; not ported yet. */
+function caseOutputReads(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  outputsSection: unknown,
+): ReadonlySet<string> {
+  return new Set();
+}
+
+/** Python's `compose.desugar.case_outputs.expand_case_outputs`; not ported yet. */
+function expandCaseOutputs(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  outputsSection: unknown,
+  assertsSection: readonly Assertion[],
+  options: {
+    outputsRange?: SourceRange | null;
+    assertionRangeAt?: ((index: number) => SourceRange | null) | null;
+    diagnostics?: LoadDiagnostics | null;
+  } = {},
+): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown] {
+  return [new Map(descriptors), outputsSection];
+}
+
+/** Python's `compose.edges.data.infer_data_edges`; not ported yet. */
+function inferDataEdges(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+): Edge[] {
+  return [];
+}
+
+/** Python's `compose.edges.hosts.host_control_edges`; not ported yet. */
+function hostControlEdges(descriptors: ReadonlyMap<string, NodeDescriptor>, edges: readonly Edge[]): Edge[] {
+  return [];
+}
+
+/** Python's `compose.edges.ordering.infer_ordering_edges`; not ported yet. */
+function inferOrderingEdges(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  nodeIds: ReadonlySet<string>,
+  options: { diagnostics?: LoadDiagnostics | null } = {},
+): Edge[] {
+  return [];
+}
+
+/** Python's `compose.build.boundary.synthesize_boundary_graph`; not ported yet. */
+function synthesizeBoundaryGraph(
+  inputParameters: readonly Parameter[],
+  outputs: readonly FlowOutput[],
+  nodeIds: ReadonlySet<string>,
+  bodyEdges: readonly Edge[],
+  options: { lowered?: LoweredAsserts | null; record: boolean },
+): [nodes: Map<string, Node>, edges: Edge[], wiring: Map<string, Map<string, unknown>>] {
+  return [new Map(), [], new Map()];
+}
+
+// T3-18: compose/validate/{value_nesting,tool_inputs,wiring_parity,references,human_questions,
+// reserved_sources,cycles,handles}.ts
+
+/** Python's `compose.validate.value_nesting.check_written_values`; not ported yet. */
+function checkWrittenValues(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  outputsSection: unknown,
+  options: {
+    outputsTagged: boolean;
+    outputRange: (name: unknown) => SourceRange | null;
+    outputsRange: SourceRange | null;
+    diagnostics: LoadDiagnostics;
+  },
+): void {}
+
+/** Python's `compose.validate.tool_inputs.stamp_tool_input_types`; not ported yet. */
+function stampToolInputTypes(
+  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  buildResults: ReadonlyMap<string, BuildResult>,
+  options: { narrowing?: Narrowing | null; typeFn?: TypeFn | null } = {},
+): void {}
+
+/** Python's `compose.validate.wiring_parity.check_wiring_parity`; not ported yet. */
+function checkWiringParity(
+  buildResults: ReadonlyMap<string, BuildResult>,
+  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+  options: { diagnostics?: LoadDiagnostics | null } = {},
+): void {}
+
+/** Python's `compose.validate.references.validate_references`; not ported yet. */
+function validateReferences(
+  buildResults: ReadonlyMap<string, BuildResult>,
+  flowInputs: ReadonlySet<string>,
+  producers: ReadonlyMap<string, OutputContract>,
+  outputs: unknown,
+  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+  options: {
+    inputContracts?: ReadonlyMap<string, ValueContract> | null;
+    outputsRange?: SourceRange | null;
+    narrowing?: Narrowing | null;
+    localContracts?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>> | null;
+    registry?: TypeRegistry | null;
+    resolveOrigin?: OriginPresenter | null;
+    diagnostics?: LoadDiagnostics | null;
+  } = {},
+): void {}
+
+/** Python's `compose.validate.human_questions.validate_human_questions`; not ported yet. */
+function validateHumanQuestions(
+  buildResults: ReadonlyMap<string, BuildResult>,
+  options: { diagnostics?: LoadDiagnostics | null } = {},
+): void {}
+
+/** Python's `compose.validate.reserved_sources.check_reserved_sources`; not ported yet. */
+function checkReservedSources(
+  buildResults: ReadonlyMap<string, BuildResult>,
+  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  options: {
+    narrowing?: Narrowing | null;
+    typeFn?: TypeFn | null;
+    registry?: TypeRegistry | null;
+    resolveOrigin?: OriginPresenter | null;
+    diagnostics?: LoadDiagnostics | null;
+  } = {},
+): void {}
+
+/** Python's `compose.validate.cycles.reject_cycles`; not ported yet. */
+function rejectCycles(
+  edges: readonly Edge[],
+  nodeIds: ReadonlySet<string>,
+  options: {
+    nodeRanges?: ReadonlyMap<string, SourceRange> | null;
+    diagnostics?: LoadDiagnostics | null;
+    gateIds?: ReadonlySet<string>;
+    synthHosts?: ReadonlyMap<string, string> | null;
+    synthWires?: ReadonlySet<string>;
+  } = {},
+): void {}
+
+/** Python's `compose.validate.handles.check_case_handles`; not ported yet. */
+function checkCaseHandles(
+  nodes: ReadonlyMap<string, Node>,
+  edges: readonly Edge[],
+  options: { diagnostics?: LoadDiagnostics | null } = {},
+): void {}
+
+// T3-19: compose/validate/{typed_bindings,call_types,loop_types,llm_config_sources}.ts
+
+type LocalInput = unknown;
+
+/** Python's `compose.validate.typed_bindings.check_typed_inputs`; not ported yet. */
+function checkTypedInputs(
+  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  buildResults: ReadonlyMap<string, BuildResult>,
+  options: {
+    narrowing?: Narrowing | null;
+    typeFn?: TypeFn | null;
+    registry?: TypeRegistry | null;
+    resolveOrigin?: OriginPresenter | null;
+    diagnostics?: LoadDiagnostics | null;
+  } = {},
+): void {}
+
+/** Python's `compose.validate.call_types.check_call_map_types`; not ported yet. */
+function checkCallMapTypes(
+  buildResults: ReadonlyMap<string, BuildResult>,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+  options: {
+    narrowing?: Narrowing | null;
+    typeFn?: TypeFn | null;
+    registry?: TypeRegistry | null;
+    diagnostics?: LoadDiagnostics | null;
+  } = {},
+): void {}
+
+/** Python's `compose.validate.loop_types.check_loop_type_contract`; not ported yet. */
+function checkLoopTypeContract(
+  buildResults: ReadonlyMap<string, BuildResult>,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+  options: {
+    inlineLoops?: ReadonlySet<string>;
+    registry?: TypeRegistry | null;
+    diagnostics?: LoadDiagnostics | null;
+  } = {},
+): void {}
+
+/** Python's `compose.validate.typed_bindings.local_input_contracts`; not ported yet. */
+function localInputContracts(
+  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  buildResults: ReadonlyMap<string, BuildResult>,
+  options: { narrowing?: Narrowing | null; typeFn?: TypeFn | null } = {},
+): Map<string, Map<string, LocalInput>> {
+  return new Map();
+}
+
+/** Python's `compose.validate.typed_bindings.check_typed_outputs`; not ported yet. */
+function checkTypedOutputs(
+  flowOutputs: readonly FlowOutput[],
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  options: {
+    valueMode?: boolean;
+    outputsRange?: SourceRange | null;
+    typeFn?: TypeFn | null;
+    registry?: TypeRegistry | null;
+    resolveOrigin?: OriginPresenter | null;
+    diagnostics?: LoadDiagnostics | null;
+  } = {},
+): void {}
+
+/** Python's `compose.validate.llm_config_sources.check_llm_config_sources`; not ported yet. */
+function checkLlmConfigSources(
+  buildResults: ReadonlyMap<string, BuildResult>,
+  flowLlmConfig: unknown,
+  flowLabel: string,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  options: {
+    typeFn?: TypeFn | null;
+    registry?: TypeRegistry | null;
+    resolveOrigin?: OriginPresenter | null;
+    diagnostics?: LoadDiagnostics | null;
+  } = {},
+): void {}
+
+// T3-20: compose/validate/{case_branches,narrowing,case_exhaustive,asserts,skips}.ts
+
+/** What each node may assume about union values from the CASE branches that route it. */
+interface Narrowing {
+  /** Nodes a topological order could not reach, on or after a cycle; they get no facts. */
+  readonly unordered: ReadonlySet<string>;
+}
+type LoweredAsserts = unknown;
+type SkipModel = unknown;
+/** One searched `when:` as authored: its index, text, origin and range. */
+type SearchedWhen = readonly [index: number, when: unknown, origin: OriginRef | null, range: SourceRange | null];
+
+/** Python's `compose.validate.case_branches.check_case_branches`; not ported yet. */
+function checkCaseBranches(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  options: {
+    registry: TypeRegistry;
+    inputTypes: ReadonlyMap<string, Type>;
+    outputAt: (nodeId: string) => SourceCursor | null;
+    diagnostics: LoadDiagnostics;
+  },
+): void {}
+
+/** Python's `compose.validate.narrowing.compute_narrowing`; not ported yet. */
+function computeNarrowing(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  edges: readonly Edge[],
+  producers: ReadonlyMap<string, OutputContract>,
+  inputs: ReadonlyMap<string, ValueContract>,
+  options: { registry?: TypeRegistry | null } = {},
+): Narrowing {
+  return { unordered: new Set() };
+}
+
+/** Python's `compose.validate.case_exhaustive.check_case_when_values`; not ported yet. */
+function checkCaseWhenValues(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  options: { narrowing?: Narrowing | null; diagnostics?: LoadDiagnostics | null } = {},
+): void {}
+
+/** Python's `compose.validate.narrowing.check_impossible_whens`; not ported yet. */
+function checkImpossibleWhens(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  producers: ReadonlyMap<string, OutputContract>,
+  inputs: ReadonlyMap<string, ValueContract>,
+  narrowing: Narrowing,
+  options: { registry?: TypeRegistry | null; diagnostics?: LoadDiagnostics | null } = {},
+): void {}
+
+/** Python's `compose.validate.case_exhaustive.check_case_exhaustive`; not ported yet. */
+function checkCaseExhaustive(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  producers: ReadonlyMap<string, OutputContract>,
+  options: {
+    narrowing?: Narrowing | null;
+    valueCases?: ReadonlySet<string>;
+    diagnostics?: LoadDiagnostics | null;
+  } = {},
+): void {}
+
+/** Python's `compose.validate.asserts.validate_node_asserts`; not ported yet. */
+function validateNodeAsserts(
+  nodes: ReadonlyMap<string, Node>,
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  options: {
+    assertionSiteAt?:
+      | ((nodeId: string, index: number) => readonly [OriginRef | null, SourceRange | null] | null)
+      | null;
+    typeNames?: ReadonlySet<string>;
+    localContracts?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>> | null;
+    partialUnionNodes?: ReadonlySet<string>;
+    registry?: TypeRegistry | null;
+    diagnostics?: LoadDiagnostics | null;
+  } = {},
+): void {}
+
+/** Python's `compose.validate.asserts.lower_flow_asserts`; not ported yet. */
+function lowerFlowAsserts(
+  assertList: readonly Assertion[],
+  flowInputs: ReadonlySet<string>,
+  validTargets: ReadonlySet<string>,
+  producers: ReadonlyMap<string, OutputContract>,
+  assertRanges: readonly (SourceRange | null)[] | null = null,
+  options: {
+    inputContracts?: ReadonlyMap<string, ValueContract> | null;
+    registry?: TypeRegistry | null;
+    diagnostics?: LoadDiagnostics | null;
+  } = {},
+): LoweredAsserts {
+  return null;
+}
+
+/** Python's `compose.validate.case_exhaustive.exhaustive_cases`; not ported yet. */
+function exhaustiveCases(
+  descriptors: ReadonlyMap<string, NodeDescriptor>,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract> | null = null,
+  options: { narrowing?: Narrowing | null } = {},
+): Set<string> {
+  return new Set();
+}
+
+/** Python's `compose.validate.skips.SkipModel` constructor; not ported yet. */
+function skipModel(
+  nodeIds: Iterable<string>,
+  edges: Iterable<Edge>,
+  exhaustive: ReadonlySet<string>,
+  options: { limit?: number | null } = {},
+): SkipModel {
+  return null;
+}
+
+/** Python's `compose.validate.skips.null_skipped_outputs`; not ported yet. */
+function nullSkippedOutputs(flowOutputs: FlowOutput[], model: SkipModel): FlowOutput[] {
+  return flowOutputs;
+}
+
+/** Python's `compose.validate.skips.check_skipped_arithmetic`; not ported yet. */
+function checkSkippedArithmetic(
+  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+  flowOutputs: readonly FlowOutput[],
+  model: SkipModel,
+  buildResults: ReadonlyMap<string, BuildResult>,
+  options: {
+    valueMode?: boolean;
+    outputsRange?: SourceRange | null;
+    resolveOrigin?: OriginPresenter | null;
+    diagnostics?: LoadDiagnostics | null;
+    searchedWhens?: ReadonlyMap<string, readonly SearchedWhen[]> | null;
+  } = {},
+): void {}

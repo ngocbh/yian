@@ -9,7 +9,9 @@
  * TS-only: one row per carrier and evidence message with its class, in Python's check order; an
  * exact-class row for each nested carrier (a subclass is refused); the number rule of the evidence
  * JSON (`value`, `arguments`, `boundInputs`): `±Infinity` kept, `-0` read back as `0`, NaN refused;
- * bound inputs deeper than the value nesting limit are kept.
+ * bound inputs deeper than the value nesting limit are kept; evidence keeps its fields, and the
+ * section and interaction arrays are copied, frozen and keep their order and their carriers by
+ * reference.
  *
  * Changed (TS yian):
  * - The carriers hold deep-frozen copies, with no copy on read: a reader's edit of `value`,
@@ -149,13 +151,16 @@ test("evidence keeps its fields and the sections and interactions in order", () 
     new ToolResultInteraction("search", ""),
   ];
   const evidence = new EvaluationEvidence(SCOPE, {}, "", "", sections, interactions);
+  const kept = [...interactions];
   sections.pop();
   interactions.pop();
   expect(evidence.scope).toBe(SCOPE);
   expect([evidence.baseSystemPrompt, evidence.prompt]).toEqual(["", ""]);
   expect(evidence.memorySections.map((section) => section.memory)).toEqual(["notes", "reflective"]);
-  expect(evidence.interactions.length).toBe(4);
-  expect(Object.isFrozen(evidence.memorySections) && Object.isFrozen(evidence.interactions)).toBe(true);
+  expect(evidence.interactions).toEqual(kept);
+  expect(evidence.interactions[3]).toBe(kept[3]!);
+  expect(Object.isFrozen(evidence.memorySections)).toBe(true);
+  expect(Object.isFrozen(evidence.interactions)).toBe(true);
   expect(new EvaluationEvidence(null, null, null, null).scope).toBeNull();
 });
 
@@ -184,7 +189,12 @@ test.each<[string, () => unknown, ErrorClass, string]>([
     TypeError,
     "value must contain exact JSON values",
   ],
-  ["a model value holding NaN", () => new ModelValueInteraction([NaN]), RangeError, "value[0] must not contain NaN"],
+  [
+    "a model value holding NaN",
+    () => new ModelValueInteraction([NaN]),
+    RangeError,
+    "value[0] JSON number must not be NaN",
+  ],
   [
     "a tool call name that isn't a string",
     () => new ToolCallInteraction(1 as never, {}),
@@ -202,7 +212,7 @@ test.each<[string, () => unknown, ErrorClass, string]>([
     "tool call arguments holding NaN",
     () => new ToolCallInteraction("search", { x: NaN }),
     RangeError,
-    "arguments.x must not contain NaN",
+    "arguments.x JSON number must not be NaN",
   ],
   ["an empty tool result name", () => new ToolResultInteraction("", "x"), RangeError, "name must be non-empty"],
   [
@@ -239,7 +249,7 @@ test.each<[string, () => unknown, ErrorClass, string]>([
     "bound inputs holding NaN",
     () => new EvaluationEvidence(null, { x: [NaN] }, null, null),
     RangeError,
-    "bound_inputs.x[0] must not contain NaN",
+    "bound_inputs.x[0] JSON number must not be NaN",
   ],
   [
     "a prompt without a base system prompt",

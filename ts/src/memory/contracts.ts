@@ -106,7 +106,7 @@ function freezeJson(
       if (!Number.isFinite(value)) throw new RangeError(`${name} JSON number must be finite`);
       return value;
     }
-    if (Number.isNaN(value)) throw new RangeError(`${name} must not contain NaN`);
+    if (Number.isNaN(value)) throw new RangeError(`${name} JSON number must not be NaN`);
     return Object.is(value, -0) ? 0 : value;
   }
   const array = isPlainArray(value);
@@ -164,6 +164,11 @@ function freezeJsonObject(
   if (!isPlainObject(value)) throw new TypeError(`${name} must be an exact JSON object`);
   const limit = (options.limitNesting ?? true) ? current().maxValueNesting : Number.POSITIVE_INFINITY;
   return freezeJson(value, name, new Set(), 0, limit, options.valueNumbers ?? false) as JsonObject;
+}
+
+/** Validate and copy one evidence JSON value at any depth under the yian value number rule. */
+function freezeEvidenceJson(value: unknown, name: string): JsonValue {
+  return freezeJson(value, name, new Set(), 0, Number.POSITIVE_INFINITY, true);
 }
 
 /** Return `vocabulary` with the predictable plural form of each term added. */
@@ -770,7 +775,7 @@ export class ModelValueInteraction {
    * @throws RangeError for NaN, a lone surrogate or a cycle.
    */
   constructor(value: unknown) {
-    this.value = freezeJson(value, "value", new Set(), 0, Number.POSITIVE_INFINITY, true);
+    this.value = freezeEvidenceJson(value, "value");
     Object.freeze(this);
   }
 }
@@ -871,12 +876,9 @@ export class EvaluationEvidence {
     if ((baseSystemPrompt === null) !== (prompt === null)) {
       throw new RangeError("base_system_prompt and prompt must both be present or absent");
     }
-    if (baseSystemPrompt !== null) {
-      requireString(baseSystemPrompt, "base_system_prompt", false);
-      requireString(prompt, "prompt", false);
-    }
-    this.baseSystemPrompt = baseSystemPrompt;
-    this.prompt = prompt;
+    this.baseSystemPrompt =
+      baseSystemPrompt === null ? null : requireString(baseSystemPrompt, "base_system_prompt", false);
+    this.prompt = prompt === null ? null : requireString(prompt, "prompt", false);
 
     if (!isPlainArray(memorySections)) throw new TypeError("memory_sections must be an array");
     const stackPositions = new Map((scope?.memories ?? []).map((key, index) => [key, index]));

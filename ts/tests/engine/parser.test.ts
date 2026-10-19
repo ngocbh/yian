@@ -5,13 +5,16 @@
  * The seed rows read the conformance cases `load-core/seed_00_hello_agent` and
  * `load-core/seed_11_reuse_anchors`, which hold Python's `tests/seeds/` flows.
  *
- * Changed: TS checks the schema by hand and reports the first failure alone, located as Python's
- * `_validation_error_range` locates it. So `name: [bad]` with no `id:` reports the missing `id`
- * at the root range (Python's error lists both, located at the first one that replays: `name`).
+ * Changed: TS checks the schema by hand and reports one failure, at the range Python's
+ * `_validation_error_range` picks: the first located failure, else a missing required key at the
+ * root. Its message is that failure's own; Python's error lists every failure (pydantic's text)
+ * when a missing key comes first, as in `name: [bad]` with no `id:`.
  * `uses: {7: child}` now fails at the document, as a key YAML read as non-text, still at the key.
+ * A recursive alias inside a tagged `nodes:` entry now parses; Python recursed until its generic
+ * `except` reported the overflow with no location.
  *
  * TS-only: the messages of the schema rows, whose Python text is pydantic's except for a text
- * field read as non-text.
+ * field read as non-text, and the tagged recursive-alias row.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -73,6 +76,9 @@ test.each([
   ["id: x\nname: x\nnodes: {}\nasserts:\n  - true\n", new SourceRange(5, 5, 5, 9)],
   ["id: x\nname: x\nnodes: {}\ninput: []\n", new SourceRange(4, 8, 4, 10)],
   ["id: x\nname: x\nnodes: {}\nuses:\n  7: child\n", new SourceRange(5, 3, 5, 4)],
+  // A missing required key never replays, so the later located failure wins.
+  ["name: x\nnodes: [1]\n", new SourceRange(2, 8, 2, 11)],
+  ["id: x\nname: x\nasserts: [1]\n", new SourceRange(3, 11, 3, 12)],
 ])("a schema error is located at its field: %#", (text, expected) => {
   expect(lastRange(loadError(() => parseFile(text)))).toEqual(expected);
 });
@@ -108,12 +114,12 @@ test.each([
   expect(loadError(() => parseFile(text)).message).toBe(message);
 });
 
-test("the first schema failure is reported alone", () => {
+test("a schema error uses the first location that replays", () => {
   const document = parseSourceDocument("name: [bad]\nnodes: {}\n", "flow.yaml");
   const error = loadError(() => parseFile(document));
 
-  expect(error.message).toBe("missing required top-level key 'id'");
-  expect(lastRange(error)).toEqual(document.root.range);
+  expect(error.message).toBe("`name:` must be text, but YAML read it as a list; put it in quotes");
+  expect(lastRange(error)).toEqual(new SourceRange(1, 7, 1, 12));
 });
 
 test("a missing schema field falls back to the root range", () => {
@@ -122,6 +128,12 @@ test("a missing schema field falls back to the root range", () => {
 
   expect(error.message).toBe("missing required top-level key 'nodes'");
   expect(lastRange(error)).toEqual(document.root.range);
+});
+
+test("a recursive alias inside a tagged nodes entry parses", () => {
+  const f = parseFile("id: x\nname: x\nnodes:\n  a: !int &m\n    nodes:\n      b: *m\n");
+
+  expect(Object.keys(f.nodes)).toEqual(["a"]);
 });
 
 test("x-* keys are ignored", () => {

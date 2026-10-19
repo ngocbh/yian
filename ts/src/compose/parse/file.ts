@@ -7,7 +7,8 @@
  * - **Top-level sections only** (`id`/`name`/`description?`/`version?`/`input`/`nodes`/`output`/
  *   `asserts`/`typedefs`/`defs`/`uses`/`system`/`llm_config`/`env`/`long_term_memory`): a typo'd
  *   top-level key (`nodez:`) is loud rather than silently dropped. The schema is checked by hand,
- *   field by field in this order, and the first failure throws.
+ *   field by field in this order, and the first located failure throws; a missing required key
+ *   throws only when no other field fails.
  * - **`x-*` extension keys** at the top level are stripped first: custom metadata and YAML-anchor
  *   holders the engine ignores.
  * - **YAML anchors** (`&` / `*` / `<<:` merge) are expanded by the document's one construction
@@ -23,7 +24,6 @@
  */
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
-import { siteLabel } from "../../nodes/human_input/node.ts";
 import { isList, isRecord, type Value, type ValueRecord } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { isExtensionKey } from "../helpers/source.ts";
@@ -50,7 +50,7 @@ const NESTED_SECTIONS = [
   ["defs", "defs entry", "defs"],
 ] as const;
 
-/** The authored spellings of the top-level keys, in the schema's field order. */
+/** The authored spellings of the top-level keys. */
 const TOP_SURFACE_KEYS: readonly string[] = [
   "id",
   "name",
@@ -69,20 +69,34 @@ const TOP_SURFACE_KEYS: readonly string[] = [
   "long_term_memory",
 ];
 
-// The plural carrier names are absent: `normalizeSectionKeys` rejects them before this check.
+/**
+ * The top-level keys a flow may hold. The plural carrier names are absent, since
+ * `rejectLegacyTopKeys` rejects them before this check.
+ */
 const ALLOWED_TOP: ReadonlySet<string> = new Set(TOP_SURFACE_KEYS);
 
-// Compact (single-node) flow: these flow-metadata keys stay at the flow level on desugar; every
-// other key (the node `kind:` and its logic fields) becomes the single node's body. `input:` and
-// `output:` get special treatment (see `desugarCompact`).
+/** The allowed top-level keys as an unknown-key message lists them. */
+const ALLOWED_TOP_MESSAGE = [...TOP_SURFACE_KEYS].sort(compareCodeUnits).join(", ");
+
+/**
+ * The flow-metadata keys a compact flow keeps at the flow level on desugar; every other key (the
+ * node `kind:` and its logic fields) becomes the single node's body. `input:` and `output:` get
+ * special treatment (see `desugarCompact`).
+ */
 const COMPACT_FLOW_KEYS: readonly string[] = ["id", "name", "description", "version", "typedefs"];
 
-// Compact form is restricted to value-producing leaf kinds. case/call/map reference other nodes
-// or callables that a one-node flow has none of, so an author who needs them writes `nodes:`.
-const COMPACT_KINDS: ReadonlySet<string> = new Set(["agent", "code", "tool", "human_input"]);
+/** The kinds a compact flow may use: the value-producing leaf kinds. */
+const COMPACT_KINDS: ReadonlySet<string> = new Set([
+  // case/call/map reference other nodes or callables that a one-node flow has none of, so an
+  // author who needs them writes `nodes:`.
+  "agent",
+  "code",
+  "tool",
+  "human_input",
+]);
 
 /** The fields of a `ComposeFile`; an absent optional field takes its default. */
-export interface ComposeFileFields {
+interface ComposeFileFields {
   id: string;
   name: string;
   description?: string | null;
@@ -163,7 +177,7 @@ export class ComposeFile {
  *
  * Node and def bodies are checked by `rejectNestedLegacyKeys`.
  */
-function normalizeSectionKeys(
+function rejectLegacyTopKeys(
   body: ValueRecord,
   root: SourceCursor,
   diagnostics: LoadDiagnostics,
@@ -226,24 +240,23 @@ function rejectNestedLegacyKeys(cursor: SourceCursor, diagnostics: LoadDiagnosti
  * recursively through `nodes:` and `defs:` entries; a non-mapping is returned as it is.
  *
  * @param active The records on the current path; a recursive alias back to one of them is kept
- *   as it is, so the walk ends.
+ *   as it is, so the walk ends. A tagged `nodes:` entry can alias back to itself, since
+ *   `rejectNestedLegacyKeys` skips it and so never fails at the alias; Python recursed here until
+ *   its generic `except` turned the overflow into an unlocated error, and TS has no such `except`.
  */
 function backMapToPlural(body: Value, active: Set<ValueRecord> = new Set()): Value {
   if (!isRecord(body) || active.has(body)) return body;
   active.add(body);
   // A spread defines a `__proto__` key as data.
   const out: ValueRecord = { ...body };
-  for (const [singular, plural] of [
-    ["input", "inputs"],
-    ["output", "outputs"],
-  ] as const) {
+  for (const [plural, singular] of LEGACY_KEYS) {
     if (Object.hasOwn(out, singular)) {
       const value = out[singular]!;
       delete out[singular];
       out[plural] = value;
     }
   }
-  for (const section of ["nodes", "defs"]) {
+  for (const [section] of NESTED_SECTIONS) {
     const entries = Object.hasOwn(out, section) ? out[section] : null;
     if (isRecord(entries)) {
       out[section] = Object.fromEntries(
@@ -255,7 +268,10 @@ function backMapToPlural(body: Value, active: Set<ValueRecord> = new Set()): Val
   return out;
 }
 
-/** Whether `value` is one Python reads as false: null, false, a zero, `""`, `[]` or `{}`. */
+/**
+ * Whether `value` is null, false, zero, empty text or an empty container: a compact `input:` that
+ * declares no params.
+ */
 function isEmptyValue(value: Value): boolean {
   if (isList(value)) return value.length === 0;
   if (isRecord(value)) return Object.keys(value).length === 0;
@@ -371,8 +387,9 @@ function schemaRange(root: SourceCursor, path: readonly (string | number)[]): So
  * Check `body`, back-mapped to the carrier names, against the flow schema, field by field in
  * the schema's order, and return it as a `ComposeFile`.
  *
- * @throws LoadError at the first failure: a missing required field at the root; a text field
- *   YAML read as non-text, or a section of the wrong container type, at its value.
+ * @throws LoadError at the first failure that has a location: a text field YAML read as
+ *   non-text, or a section of the wrong container type, at its value. A missing required field
+ *   has no location, so it is reported, at the root, only when every other field passes.
  */
 function readComposeFile(
   body: ValueRecord,
@@ -382,29 +399,36 @@ function readComposeFile(
   const fields = backMapToPlural(body) as ValueRecord;
   const fail = (message: string, path: readonly (string | number)[]) =>
     diagnostics.error(message, { range: schemaRange(root, path) });
-  const has = (key: string) => Object.hasOwn(fields, key);
+  const get = (key: string): Value | undefined =>
+    Object.hasOwn(fields, key) ? fields[key]! : undefined;
 
-  const required = (key: string): Value => {
-    if (!has(key)) {
-      throw diagnostics.error(`missing required top-level key ${reprText(key)}`, {
-        range: root.range,
-      });
-    }
-    return fields[key]!;
+  // Python's schema collects every failure and locates the first one that replays; a missing
+  // key never replays, so a later located failure wins over it.
+  let missing: string | null = null;
+  const required = (key: string): Value | undefined => {
+    const value = get(key);
+    if (value === undefined) missing ??= key;
+    return value;
   };
-  const text = (key: string, value: Value): string => {
-    if (typeof value !== "string") throw fail(notTextError(key, value), [key]);
+  /** Check that `value`, at `path`, is text, naming it `label`; an absent value passes. */
+  const text = (
+    label: string,
+    value: Value | undefined,
+    path: readonly (string | number)[] = [label],
+  ): string | undefined => {
+    if (value !== undefined && typeof value !== "string") {
+      throw fail(notTextError(label, value), path);
+    }
     return value;
   };
   const optionalText = (key: string): string | null => {
-    const value = has(key) ? fields[key]! : null;
-    return value === null ? null : text(key, value);
+    const value = get(key) ?? null;
+    return value === null ? null : text(key, value)!;
   };
   /** Read the mapping at carrier `key`, authored as `label`. */
-  const mapping = (key: string, label = key): ValueRecord | undefined => {
-    if (!has(key)) return undefined;
-    const value = fields[key]!;
-    if (!isRecord(value)) {
+  const mapping = (key: string, label = key, isRequired = false): ValueRecord | undefined => {
+    const value = isRequired ? required(key) : get(key);
+    if (value !== undefined && !isRecord(value)) {
       throw fail(valueTypeError(label, "a mapping", value, "write a mapping"), [label]);
     }
     return value;
@@ -415,44 +439,34 @@ function readComposeFile(
   const description = optionalText("description");
   const version = optionalText("version");
   const inputs = mapping("inputs", "input");
-  const nodes = required("nodes");
-  if (!isRecord(nodes)) {
-    throw fail(valueTypeError("nodes", "a mapping", nodes, "write a mapping"), ["nodes"]);
-  }
-  const outputs = has("outputs") ? fields["outputs"]! : null;
-  let asserts: string[] | undefined;
-  if (has("asserts")) {
-    const value = fields["asserts"]!;
-    if (!isList(value)) {
-      throw fail(valueTypeError("asserts", "a list", value, "write a list"), ["asserts"]);
+  const nodes = mapping("nodes", "nodes", true);
+  const outputs = get("outputs");
+  const asserts = get("asserts");
+  if (asserts !== undefined) {
+    if (!isList(asserts)) {
+      throw fail(valueTypeError("asserts", "a list", asserts, "write a list"), ["asserts"]);
     }
-    value.forEach((item, index) => {
-      const path = ["asserts", index];
-      if (typeof item !== "string") throw fail(notTextError(siteLabel(path), item), path);
-    });
-    asserts = value as string[];
+    asserts.forEach((item, index) => text(`asserts[${index}]`, item, ["asserts", index]));
   }
   const typedefs = mapping("typedefs");
   const defs = mapping("defs");
   const uses = mapping("uses");
-  for (const [key, ref] of Object.entries(uses ?? {})) {
-    const path = ["uses", key];
-    if (typeof ref !== "string") throw fail(notTextError(siteLabel(path), ref), path);
-  }
+  for (const [key, ref] of Object.entries(uses ?? {})) text(`uses.${key}`, ref, ["uses", key]);
   const system = mapping("system");
-  const llmConfig = has("llm_config") ? fields["llm_config"]! : undefined;
+  const llmConfig = get("llm_config");
   const env = mapping("env");
-  const longTermMemory = has("long_term_memory") ? fields["long_term_memory"]! : null;
+  const longTermMemory = get("long_term_memory");
+  if (missing !== null) throw fail(`missing required top-level key ${reprText(missing)}`, []);
 
   return new ComposeFile({
-    id,
-    name,
+    id: id!,
+    name: name!,
     description,
     version,
     inputs,
-    nodes,
+    nodes: nodes!,
     outputs,
-    asserts,
+    asserts: asserts as string[] | undefined,
     typedefs,
     defs,
     uses: uses as Record<string, string> | undefined,
@@ -577,7 +591,7 @@ export function parseFile(source: string | SourceDocument): ComposeFile {
       .filter((key) => !isExtensionKey(key))
       .map((key) => [key, root.get(key)]),
   );
-  normalizeSectionKeys(body, root, diagnostics);
+  rejectLegacyTopKeys(body, root, diagnostics);
   try {
     rejectNestedLegacyKeys(root, diagnostics);
   } catch (error) {
@@ -593,10 +607,8 @@ export function parseFile(source: string | SourceDocument): ComposeFile {
 
   for (const key of Object.keys(body)) {
     if (!ALLOWED_TOP.has(key)) {
-      // Name the authored spellings; the plural carrier names fail to load.
       throw diagnostics.error(
-        `unknown top-level key ${reprText(key)} ` +
-          `(allowed: ${[...TOP_SURFACE_KEYS].sort(compareCodeUnits).join(", ")})`,
+        `unknown top-level key ${reprText(key)} (allowed: ${ALLOWED_TOP_MESSAGE})`,
         { range: root.keyRangeOf(key) },
       );
     }

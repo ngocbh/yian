@@ -10,7 +10,8 @@
  * Python reaches `test_compact_digit_id_rejected_without_parser_dump` and the full-form half of
  * `test_full_form_flow_id_may_keep_hyphens` through `load_flow`; TS calls `parseFile`.
  *
- * Later (T3-22): `test_compact_code_runs`, `test_compact_record_output_runs`, which run flows.
+ * Later (T3-22): `test_compact_code_runs`, `test_compact_record_output_runs`, which run flows,
+ * and the compiled-nodes check of `test_full_form_flow_id_may_keep_hyphens`.
  */
 
 import { expect, test } from "bun:test";

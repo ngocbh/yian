@@ -123,7 +123,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - `LLMConfig` holds the key, the header values and the blocks in `#private` fields. The key and
   headers are never dumped; the blocks are read through `blockFor` and `dump`.
 - Lookups by a user key use `Object.hasOwn`. `PROVIDER_BLOCKS` and the schema tables have no
-  prototype, so `in` and indexing by a user key are safe too.
+  prototype, so an inherited name such as `toString` or `__proto__` is never an entry.
 - Validation errors are `ValidationError` with pydantic-shaped `issues` (`loc`, `type`, `msg`);
   for a `value_error`, `error` holds the validator's own text.
 

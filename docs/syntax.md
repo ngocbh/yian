@@ -2068,7 +2068,7 @@ Changed (TS yian): a number that is not finite, or a file, is refused anywhere i
 block, including inside the free-form mappings `openrouter.provider` and
 `vllm.chat_template_kwargs`, which Python yian passes through. A whole number given for
 a float field stays an int and is sent as written (`temperature: 1` sends `1`), as
-everywhere in TS yian (#535).
+everywhere in TS yian (see [Types → Two constructors](typing.md#two-constructors-infer-vs-check)).
 
 | Provider | API yian calls | Reference |
 | --- | --- | --- |

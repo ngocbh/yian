@@ -471,6 +471,7 @@ export class LLMConfig {
 
 /** Return `url` without its trailing slashes. */
 function stripTrailingSlashes(url: string): string {
+  // A loop, not `/\/+$/`: that regex backtracks quadratically on a long run of inner slashes.
   let end = url.length;
   while (end > 0 && url[end - 1] === "/") end -= 1;
   return url.slice(0, end);
@@ -537,7 +538,10 @@ export function hostOnlyFieldError(config: unknown): string | null {
   return null;
 }
 
-/** Whether Python would read `value` as false: unset, `false`, `""`, zero, or an empty list or record. */
+/**
+ * Whether Python would read `value` as false: unset, `false`, `""`, zero, or an empty list or record
+ * (a record whose values are all `undefined` counts as empty).
+ */
 function isFalsy(value: unknown): boolean {
   if (value === undefined || value === null || value === false || value === "" || value === 0n || value === 0) {
     return true;

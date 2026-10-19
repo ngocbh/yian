@@ -257,8 +257,6 @@ test("tools/index.ts exports the tools API, the same objects as its modules'", (
   };
   // Exactly these names: no translator, no `ask_user` id, no `isFunctionTool` or `isMcpServer`.
   expect(Object.keys(tools).sort()).toEqual(Object.keys(expected).sort());
-  // `CheckedCall` is a type only: a host gets a call from `validate`, never builds one.
-  expect(Object.keys(tools)).not.toContain("CheckedCall");
   const exported = tools as Record<string, unknown>;
   expect(Object.keys(expected).filter((name) => exported[name] !== expected[name])).toEqual([]);
   // The type exports, checked by `tsc`.

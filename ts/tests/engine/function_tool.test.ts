@@ -4,16 +4,18 @@
  * `tests/engine/test_function_tool.py` and of the JSON Schema and output rows of
  * `test_tool_types.py` that read a tool. The `function_tool` rows are ported as `tool()` rows, with
  * a Standard Schema validator or a JSON Schema in place of the function's signature; the two
- * invocation rows, `test_function_tool_result_validates_like_a_function_and_passes_the_context`
- * and `test_function_tool_without_context_gets_its_validated_arguments`, are in the checking-order
- * rows, where the validator plays pydantic's role. Not ported:
- * the decorator form and the docstring defaults (TS has no runtime signatures), the async refusal
- * (TS awaits an async `execute`), the unresolvable annotation row (TS has no runtime annotations),
- * Python's lax `"2"` to 2 coercion (yian's argument check refuses `"2"` for an integer first),
+ * invocation rows, `test_function_tool_result_validates_like_a_function_and_passes_the_context` and
+ * `test_function_tool_without_context_gets_its_validated_arguments`, are in the checking-order
+ * rows, where the validator plays pydantic's role. Not ported: the decorator form and the docstring
+ * defaults (TS has no runtime signatures), the async refusal (TS awaits an async `execute`), the
+ * unresolvable annotation row (TS has no runtime annotations), Python's lax `"2"` to 2 coercion
+ * (yian's argument check refuses `"2"` for an integer first),
  * `test_replace_drops_the_function_schema` (no `dataclasses.replace`),
- * `test_run_entry_points_and_tool_set_annotate_function_tool_entries` (needs the run entry
- * points), `test_function_tool_without_a_signature_cannot_be_called_directly`, and the LangChain
- * binding rows. The exports row, `test_tool_names_are_exported_from_yian_and_yian_tools`, is in
+ * `test_run_entry_points_and_tool_set_annotate_function_tool_entries` (needs the run entry points),
+ * `test_function_tool_without_a_signature_cannot_be_called_directly`, the second half of
+ * `test_function_tool_without_context_gets_its_validated_arguments` (calling `on_invoke` directly
+ * validates; calling `execute` directly runs no validator), and the LangChain binding rows. The
+ * exports row, `test_tool_names_are_exported_from_yian_and_yian_tools`, is in
  * `tool_errors.test.ts`. With `YIAN_TEST_NODE` set to a Node binary, the built tools code on Node,
  * beside a second copy of its leaves.
  */
@@ -1111,7 +1113,7 @@ describe("tool() checking order", () => {
 
   test("an async validator is awaited, and a throwing one propagates unchanged", async () => {
     const delayed = handTool(async (value) => {
-      await new Promise((resolve) => setTimeout(resolve, 1));
+      await Promise.resolve();
       return { value: { ...(value as object), late: true } };
     });
     expect(await new ToolSet({ x: delayed }).invoke("x", { text: "hi" })).toEqual({ text: "hi", late: true });

@@ -2,10 +2,10 @@
  * The tool registry and `ToolSet`, a port of `tests/engine/test_tool_registry.py` with rows for
  * each construction and group error, `expand`, `forRun`, `toolIds`, `groups`, `validate` and the
  * `CheckedCall` it returns, `invoke` of a call, `isConcurrencySafe` and the `ask_user` options
- * cleaning, plus `test_injected_arguments_are_not_inputs`
- * and `test_function_tool_types` from `test_tool_types.py`. Not ported:
- * `test_invocation_supports_pydantic_v1_schema` and `test_invocation_rejects_unvalidated_json_schema_tools`
- * (TS has only `FunctionTool`s), `test_install_ask_user_is_removed` (it never existed in TS),
+ * cleaning, plus `test_injected_arguments_are_not_inputs` and `test_function_tool_types` from
+ * `test_tool_types.py`. Not ported: `test_invocation_supports_pydantic_v1_schema` and
+ * `test_invocation_rejects_unvalidated_json_schema_tools` (TS has only `FunctionTool`s),
+ * `test_install_ask_user_is_removed` (it never existed in TS),
  * `test_tool_node_uses_public_invocation_path` (needs the TOOL node), and the LangChain binding
  * half of `test_ask_user_openai_schema_offers_optional_string_options`.
  */

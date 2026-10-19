@@ -196,6 +196,8 @@ export function registerTool(
           parametersJsonSchema: tool.parametersJsonSchema,
           execute: tool.execute,
           isConcurrencySafe: tool.isConcurrencySafe,
+          // A tool from an older copy of yian (the brand check accepts one) lacks the next three
+          // fields; `FunctionTool` stores their `undefined` as `null`.
           parametersValidator: tool.parametersValidator,
           outputJsonSchema: tool.outputJsonSchema,
           outputValidator: tool.outputValidator,
@@ -383,7 +385,8 @@ function serverTools(key: string, server: McpServer): readonly FunctionTool[] {
  * tools.expand(["toolbox"]); // ["weather", "forecast"]
  * const runTools = new ToolSet({ place }, { context: broker }).forRun("run-1");
  * const call = await runTools.validate("place", { sym: "X" });
- * if (runTools.isConcurrencySafe(call)) await runTools.invoke(call, { node: "buy" });
+ * const parallel = runTools.isConcurrencySafe(call); // true: it may run beside other calls
+ * await runTools.invoke(call, { node: "buy" }); // runs either way
  */
 export class ToolSet {
   // Plain private fields, not `#` ones, so `forRun` can fill a copy of a subclass instance.
@@ -569,7 +572,7 @@ export class ToolSet {
    * Check one call's public arguments, without calling the tool, and return the checked call.
    *
    * yian checks the arguments against the tool's JSON Schema first. When the tool has a
-   * `parametersValidator`, it then runs once, here, and every `invoke` of the returned call gives
+   * `parametersValidator`, the validator then runs once, here, and every `invoke` of the returned call gives
    * `execute` its output; a caller that retries a call validates it once up front, so a bad
    * argument fails before the first attempt instead of inside the retries.
    *
@@ -688,6 +691,7 @@ export class ToolSet {
     signal: AbortSignal | undefined = this.boundSignal,
   ): Promise<CheckedCall> {
     const [tool, payload] = this.check(toolId, inputs, trusted);
+    // `??`: a tool built by an older copy of yian has no `parametersValidator` field.
     const validator = tool.parametersValidator ?? null;
     let args: () => Record<string, unknown>;
     if (validator === null) {
@@ -751,16 +755,14 @@ export class ToolSet {
  * each issue as `<path>: <message>`, or `<message>` when it has no path, joined by `"; "`.
  */
 function validatorFailure(toolId: string, issues: ReadonlyArray<StandardIssue>): string {
-  const shown: string[] = [];
-  // Iterated, never spread: ArkType's issues are its `ArkErrors` result, an Array subclass.
-  for (const issue of issues) {
-    const path: (string | number)[] = [];
-    for (const segment of issue.path ?? []) {
+  const shown = issues.map((issue) => {
+    const path = (issue.path ?? []).map((segment) => {
+      // `null` is outside the type, but a host validator may still send it.
       const key = typeof segment === "object" && segment !== null ? segment.key : segment;
-      path.push(typeof key === "symbol" ? String(key) : key);
-    }
-    shown.push(path.length > 0 ? `${renderValuePath(path)}: ${issue.message}` : issue.message);
-  }
+      return typeof key === "symbol" ? String(key) : key;
+    });
+    return path.length > 0 ? `${renderValuePath(path)}: ${issue.message}` : issue.message;
+  });
   const head = `tool ${reprText(toolId)} arguments failed its validator`;
   return shown.length > 0 ? `${head}: ${shown.join("; ")}` : head;
 }

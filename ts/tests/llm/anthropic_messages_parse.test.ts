@@ -1,13 +1,14 @@
 /**
  * Tests for Anthropic Messages reply parsing in `src/llm/protocols/anthropic_messages.ts`: SSE
  * events into deltas, parts with replay records, dense indexes, tool-call arguments, usage, the
- * finish point and finish reasons.
+ * finish point and finish reasons, stream errors, failed stop reasons, truncation, shape errors,
+ * and parsed replies sent back.
  */
 
 import { describe, expect, test } from "bun:test";
 
 import { encodeBody } from "../../src/llm/body.ts";
-import { ProviderError } from "../../src/llm/errors.ts";
+import { type ErrorKind, ProviderError } from "../../src/llm/errors.ts";
 import {
   collect,
   type Event,
@@ -24,11 +25,14 @@ import {
   type Part,
   ReasoningPart,
   readReplayRecord,
+  type ReplayDegradedReason,
   type ReplayKey,
   replayRecord,
+  Request,
   Response,
   TextPart,
   ToolCallPart,
+  ToolResultPart,
   Usage,
 } from "../../src/llm/messages.ts";
 import { AnthropicMessages, PROTOCOL } from "../../src/llm/protocols/anthropic_messages.ts";
@@ -753,5 +757,400 @@ describe("records", () => {
   test("text and call parts carry no payload", async () => {
     const parts = await partsOf(events(messageObj([TEXT, TOOL_USE], { stopReason: "tool_use" })));
     expect(parts.map((part) => part.providerPayload)).toEqual([null, null]);
+  });
+});
+
+describe("error events", () => {
+  /** Return an `error` event carrying `error`. */
+  function errorEvent(error: JsonValue): JsonObject {
+    return { type: "error", error };
+  }
+
+  const TEXT_START = blockStart(0n, { type: "text", text: "Hi" });
+
+  const TYPES: [string, ErrorKind, boolean][] = [
+    ["overloaded_error", "overloaded", true],
+    ["rate_limit_error", "rate_limit", true],
+    ["api_error", "server", true],
+    ["timeout_error", "timeout", true],
+    ["authentication_error", "auth", false],
+    ["permission_error", "permission", false],
+    ["billing_error", "quota", false],
+    ["not_found_error", "not_found", false],
+    ["request_too_large", "bad_request", false],
+    ["invalid_request_error", "bad_request", false],
+    ["future_error", "server", true],
+  ];
+
+  test.each(TYPES)("an error event of type %p after text raises %s", async (type, kind, retryable) => {
+    const [out, error] = await failing([start(), TEXT_START, errorEvent({ type, message: "It broke." }), STOP]);
+    expect(error.kind).toBe(kind);
+    expect(error.retryable).toBe(retryable);
+    expect(error.message).toBe(`anthropic stream failed (${kind}): It broke.`);
+    expect(out).toEqual([new TextDelta(0, "Hi")]);
+  });
+
+  test("an error with no type, or an error that isn't an object, is a server error", async () => {
+    const error = await failure([start(), errorEvent({ message: "It broke." })]);
+    expect(error.kind).toBe("server");
+    expect(error.retryable).toBe(true);
+    expect(error.message).toBe("anthropic stream failed (server): It broke.");
+    for (const value of [{ type: 5n, message: "It broke." }, "It broke.", null]) {
+      expect((await failure([start(), errorEvent(value)])).kind).toBe("server");
+    }
+    expect((await failure([start(), { type: "error" }])).message).toBe("anthropic stream failed (server): no message");
+  });
+
+  test("invalid_request_error with a context phrase is context_length", async () => {
+    const message = "prompt is too long: 210000 tokens > 200000 maximum";
+    const error = await failure([start(), errorEvent({ type: "invalid_request_error", message })]);
+    expect(error.kind).toBe("context_length");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toBe(`anthropic stream failed (context_length): ${message}`);
+  });
+
+  test("an empty, missing or non-string message is no message", async () => {
+    for (const message of ["", null, 3n, ["It broke."], undefined] as (JsonValue | undefined)[]) {
+      const body: JsonObject = { type: "overloaded_error" };
+      if (message !== undefined) body["message"] = message;
+      const error = await failure([start(), errorEvent(body)]);
+      expect(error.message).toBe("anthropic stream failed (overloaded): no message");
+    }
+  });
+
+  test("an untyped error frame raises the same way", async () => {
+    for (const type of TYPES.map(([each]) => each)) {
+      const body = { type, message: "It broke." };
+      const typed = await failure([start(), TEXT_START, errorEvent(body)]);
+      const frame = new SSEEvent({ data: encodeBody({ error: body }) });
+      const [out, untyped] = await failing([start(), TEXT_START, frame, STOP]);
+      expect([untyped.kind, untyped.retryable, untyped.message]).toEqual([typed.kind, typed.retryable, typed.message]);
+      expect(out).toEqual([new TextDelta(0, "Hi")]);
+    }
+  });
+
+  test("an error after a message_delta with end_turn raises with no UsageReport or Finish", async () => {
+    const items = [start(), TEXT_START, blockStop(0n), messageDelta("end_turn", A_USAGE)];
+    for (const ending of [[errorEvent({ type: "overloaded_error", message: "Busy." }), STOP], [errorEvent({})]]) {
+      const [out] = await failing([...items, ...ending]);
+      expect(out).toEqual([new TextDelta(0, "Hi"), new PartDone(0, new TextPart("Hi"))]);
+    }
+  });
+
+  test("the message is the provider's text uncapped", async () => {
+    const message = "x".repeat(2500);
+    const error = await failure([start(), errorEvent({ type: "api_error", message })]);
+    expect(error.message).toBe(`anthropic stream failed (server): ${message}`);
+  });
+});
+
+describe("failed stop reasons", () => {
+  const FAILED: [string, ErrorKind][] = [
+    ["refusal", "refused"],
+    ["pause_turn", "incomplete"],
+    ["model_context_window_exceeded", "context_length"],
+  ];
+
+  test.each(FAILED)("%s raises %s at message_stop and at the end of input", async (stopReason, kind) => {
+    const items = events(messageObj([TEXT], { stopReason }));
+    for (const ending of [items, items.slice(0, -1)]) {
+      const [out, error] = await failing(ending);
+      expect(error.kind).toBe(kind);
+      expect(error.retryable).toBe(false);
+      expect(error.message).toBe(`anthropic response did not complete (${stopReason})`);
+      expect(out).toEqual([new TextDelta(0, "Hello"), new TextDelta(0, " there."), new PartDone(0, TEXT_PART)]);
+    }
+  });
+});
+
+describe("truncation", () => {
+  const TRUNCATED = "anthropic stream ended before a complete response";
+  const TEXT_START: JsonObject = { type: "text", text: "" };
+
+  test("the end of input after text deltas with no message_delta is incomplete and retryable", async () => {
+    const items = [start(), blockStart(0n, TEXT_START), blockDelta(0n, { type: "text_delta", text: "Hi" })];
+    const [out, error] = await failing(items);
+    expect(error.kind).toBe("incomplete");
+    expect(error.retryable).toBe(true);
+    expect(error.message).toBe(TRUNCATED);
+    expect(out).toEqual([new TextDelta(0, "Hi")]);
+  });
+
+  test("a message_stop with no stop reason is incomplete", async () => {
+    const items = [start(), blockStart(0n, TEXT), blockStop(0n), messageDelta(null, A_USAGE), STOP];
+    const [out, error] = await failing(items);
+    expect([error.kind, error.retryable, error.message]).toEqual(["incomplete", true, TRUNCATED]);
+    expect(out).toEqual([new TextDelta(0, "Hello there."), new PartDone(0, TEXT_PART)]);
+    expect((await failure([start(), STOP])).message).toBe(TRUNCATED);
+  });
+
+  test("an empty stream is incomplete", async () => {
+    const [out, error] = await failing([]);
+    expect([error.kind, error.retryable, error.message]).toEqual(["incomplete", true, TRUNCATED]);
+    expect(out).toEqual([]);
+  });
+});
+
+describe("invalid event JSON", () => {
+  const INVALID: [string, string][] = [
+    ["not JSON", "{not json test-key-1"],
+    ["a lone surrogate escape", '{"type": "content_block_delta", "index": 0, "delta": {"text": "\\ud800 test-key-1"}}'],
+    ["a duplicate key", '{"type": "message_delta", "type": "test-key-1"}'],
+  ];
+
+  test.each(INVALID)("%s is a protocol error that doesn't echo the event", async (_, data) => {
+    const [out, error] = await failing([start(), blockStart(0n, TEXT), new SSEEvent({ data }), STOP]);
+    expect(error.kind).toBe("protocol");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toBe("invalid JSON in anthropic stream event");
+    expect(error.cause).toBeUndefined();
+    expect(error.causeName).toBeNull();
+    expect(String(error.stack)).not.toContain("test-key-1");
+    expect(out).toEqual([new TextDelta(0, "Hello there.")]);
+  });
+});
+
+describe("shape errors", () => {
+  /** Assert `items` (after a `message_start`) raise a protocol error naming `type`. */
+  async function invalid(type: string, ...items: (JsonObject | SSEEvent)[]): Promise<void> {
+    const error = await failure([start(), ...items, messageDelta(), STOP]);
+    expect(error.kind).toBe("protocol");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toBe(`invalid ${type} in anthropic stream event`);
+  }
+
+  test("a block event whose index isn't an int", async () => {
+    for (const index of ["0", null, true, [0n]] as JsonValue[]) {
+      await invalid("content_block_start", { type: "content_block_start", index, content_block: TEXT });
+      const delta = { type: "text_delta", text: "x" };
+      await invalid("content_block_delta", { type: "content_block_delta", index, delta });
+      await invalid("content_block_stop", { type: "content_block_stop", index });
+    }
+    await invalid("content_block_stop", { type: "content_block_stop" });
+    // Raw JSON, so `0.0` reaches the parser as a float.
+    const data = encodeBody({ type: "content_block_stop", index: "INDEX" }).replace('"INDEX"', "0.0");
+    await invalid("content_block_stop", blockStart(0n, TEXT), new SSEEvent({ data }));
+  });
+
+  test("a start whose content_block isn't an object", async () => {
+    for (const content of ["text", null, [TEXT], 1n] as JsonValue[]) {
+      await invalid("content_block_start", { type: "content_block_start", index: 0n, content_block: content });
+    }
+    await invalid("content_block_start", { type: "content_block_start", index: 0n });
+  });
+
+  test("a delta whose delta isn't an object", async () => {
+    for (const delta of ["x", null, [], 1n] as JsonValue[]) {
+      await invalid("content_block_delta", blockStart(0n, TEXT), { type: "content_block_delta", index: 0n, delta });
+    }
+  });
+
+  test("a required delta string missing or not a string", async () => {
+    const starts: [string, string, JsonObject][] = [
+      ["text_delta", "text", { type: "text", text: "" }],
+      ["thinking_delta", "thinking", { type: "thinking", thinking: "", signature: "" }],
+      ["signature_delta", "signature", { type: "thinking", thinking: "", signature: "" }],
+      ["input_json_delta", "partial_json", { type: "tool_use", id: "toolu_01", name: "double", input: {} }],
+    ];
+    for (const [deltaType, field, content] of starts) {
+      for (const value of [undefined, null, 5n, {}] as (JsonValue | undefined)[]) {
+        const delta: JsonObject = { type: deltaType };
+        if (value !== undefined) delta[field] = value;
+        await invalid("content_block_delta", blockStart(0n, content), blockDelta(0n, delta));
+      }
+    }
+  });
+
+  test("a redacted_thinking start whose data is missing or not a string", async () => {
+    for (const data of [undefined, null, 5n, ["x"]] as (JsonValue | undefined)[]) {
+      const content: JsonObject = { type: "redacted_thinking" };
+      if (data !== undefined) content["data"] = data;
+      await invalid("content_block_start", blockStart(0n, content));
+    }
+  });
+
+  test("an optional start string present, not null and not a string", async () => {
+    const cases: JsonObject[] = [
+      { type: "text", text: 5n },
+      { type: "text", text: ["x"] },
+      { type: "thinking", thinking: 5n, signature: "" },
+      { type: "thinking", thinking: "", signature: {} },
+      { type: "thinking", thinking: true },
+    ];
+    for (const content of cases) await invalid("content_block_start", blockStart(0n, content));
+  });
+
+  test("a tool_use start without a non-empty string id and name", async () => {
+    const cases: JsonObject[] = [
+      { type: "tool_use", name: "double", input: {} },
+      { type: "tool_use", id: "", name: "double", input: {} },
+      { type: "tool_use", id: 5n, name: "double", input: {} },
+      { type: "tool_use", id: "toolu_01", input: {} },
+      { type: "tool_use", id: "toolu_01", name: "", input: {} },
+      { type: "tool_use", id: "toolu_01", name: null, input: {} },
+    ];
+    for (const content of cases) await invalid("content_block_start", blockStart(0n, content));
+  });
+
+  test("a message_start whose message isn't an object", async () => {
+    for (const message of [null, "msg_1", [], undefined] as (JsonValue | undefined)[]) {
+      const data: JsonObject = { type: "message_start" };
+      if (message !== undefined) data["message"] = message;
+      const error = await failure([data, messageDelta(), STOP]);
+      expect(error.kind).toBe("protocol");
+      expect(error.message).toBe("invalid message_start in anthropic stream event");
+    }
+  });
+
+  test("a message_delta whose delta isn't an object or whose stop_reason isn't a string or null", async () => {
+    for (const delta of [null, "end_turn", [], undefined] as (JsonValue | undefined)[]) {
+      const data: JsonObject = { type: "message_delta" };
+      if (delta !== undefined) data["delta"] = delta;
+      await invalid("message_delta", data);
+    }
+    for (const stopReason of [5n, true, {}, ["end_turn"]] as JsonValue[]) {
+      await invalid("message_delta", messageDelta(stopReason));
+    }
+  });
+
+  test("message_start id and model that aren't strings are ignored", async () => {
+    const out = await parse([{ type: "message_start", message: { id: 5n, model: null } }, messageDelta(), STOP]);
+    const providerPayload = replayRecord(KEY, {});
+    expect(out).toEqual([new Finish({ reason: "stop", responseId: null, protocol: PROTOCOL, providerPayload })]);
+  });
+});
+
+describe("usage errors", () => {
+  const DETAILS = "anthropic response usage details are not objects";
+  const NOT_INT = "anthropic response usage has a count that is not an int";
+
+  test.each(["cache_creation", "output_tokens_details"])("usage %s that aren't objects", async (field) => {
+    for (const details of ["x", [1n], 3n, true] as JsonValue[]) {
+      const usage = { input_tokens: 12n, output_tokens: 1n, [field]: details };
+      for (const items of [[start(usage)], [start(), messageDelta("end_turn", usage)]]) {
+        const error = await failure([...items, STOP]);
+        expect(error.kind).toBe("protocol");
+        expect(error.retryable).toBe(false);
+        expect(error.message).toBe(DETAILS);
+      }
+    }
+  });
+
+  const counts: [string, (count: JsonValue) => JsonObject][] = [
+    ["input_tokens", (count) => ({ input_tokens: count })],
+    ["output_tokens", (count) => ({ output_tokens: count })],
+    ["cache_read_input_tokens", (count) => ({ cache_read_input_tokens: count })],
+    ["cache_creation_input_tokens", (count) => ({ cache_creation_input_tokens: count })],
+    ["ephemeral_5m_input_tokens", (count) => ({ cache_creation: { ephemeral_5m_input_tokens: count } })],
+    ["thinking_tokens", (count) => ({ output_tokens_details: { thinking_tokens: count } })],
+  ];
+  test.each(counts)("a usage %s that isn't a safe int", async (_, usage) => {
+    // Raw JSON, so a float count that is an integer (`1.0`, `1e3`) reaches the parser.
+    for (const token of ["1.0", "1e3", "1.5", "9007199254740992", "18446744073709551616", '"3"', "true", "-1.5"]) {
+      const data = encodeBody(messageDelta("end_turn", usage("COUNT"))).replace('"COUNT"', token);
+      const [out, error] = await failing([start(), blockStart(0n, TEXT), new SSEEvent({ data }), STOP]);
+      expect(error.kind).toBe("protocol");
+      expect(error.retryable).toBe(false);
+      expect(error.message).toBe(NOT_INT);
+      expect(out).toEqual([new TextDelta(0, "Hello there.")]);
+    }
+  });
+
+  test("a sum past 2^53 - 1 is a protocol error before any part is done", async () => {
+    const usage = { input_tokens: 2n ** 53n - 1n, output_tokens: 1n };
+    const [out, error] = await failing([start(usage), blockStart(0n, TEXT), messageDelta(), STOP]);
+    expect(error.kind).toBe("protocol");
+    expect(error.message).toBe(NOT_INT);
+    expect(out).toEqual([new TextDelta(0, "Hello there.")]);
+  });
+});
+
+describe("round trips", () => {
+  const ASK = new Message({ role: "user", parts: [new TextPart("Double 3.")] });
+  const RESULT = new Message({
+    role: "tool",
+    parts: [new ToolResultPart({ callId: "toolu_01", name: "double", content: "6", isError: false })],
+  });
+  const ENABLED: JsonObject = { thinking: { type: "enabled", budget_tokens: 2048n } };
+  const TOOL_RESULT: JsonObject = {
+    role: "user",
+    content: [{ type: "tool_result", content: "6", tool_use_id: "toolu_01", is_error: false }],
+  };
+  const REQUIRED =
+    "anthropic needs its signed thinking to continue a tool call with thinking on; finish the tool turn on the " +
+    "original model or turn thinking off in the anthropic block";
+
+  /** Return the reply parsed from the s3 probe's stream of `content`. */
+  async function replyOf(content: JsonObject[]): Promise<Message> {
+    return (await collected(events(messageObj(content, { stopReason: "tool_use" })))).message;
+  }
+
+  /** Return a protocol for `model` with `block`, pushing each degraded reason to `reasons`. */
+  function protocolFor(model: string, block: JsonObject | null, reasons: ReplayDegradedReason[] = []) {
+    return new AnthropicMessages({ model, provider: "anthropic", block, onReplayDegraded: (r) => reasons.push(r) });
+  }
+
+  /** Return the messages `protocol` sends for `messages`. */
+  function sentBy(protocol: AnthropicMessages, messages: Message[]): JsonValue {
+    return protocol.buildBody(new Request({ messages }))["messages"]!;
+  }
+
+  const FIRST_BLOCKS: JsonObject[] = [
+    { type: "thinking", thinking: "Let me think.", signature: "SIG-1" },
+    { type: "redacted_thinking", data: "REDACTED-DATA-1" },
+    { type: "text", text: "Hello there." },
+    { type: "tool_use", id: "toolu_01", name: "double", input: { value: 3n } },
+  ];
+
+  test("a thinking, redacted, text and tool_use reply goes back in order with its signature and data", async () => {
+    const first = await replyOf([THINKING, REDACTED, TEXT, TOOL_USE]);
+    const reasons: ReplayDegradedReason[] = [];
+    expect(sentBy(protocolFor(SONNET, ENABLED, reasons), [ASK, first, RESULT])).toEqual([
+      { role: "user", content: "Double 3." },
+      { role: "assistant", content: FIRST_BLOCKS },
+      TOOL_RESULT,
+    ]);
+    expect(reasons).toEqual([]);
+  });
+
+  test("a later tool_use-only reply with its tool result goes out without error", async () => {
+    const first = await replyOf([THINKING, REDACTED, TEXT, TOOL_USE]);
+    const second = await replyOf([{ ...TOOL_USE, id: "toolu_02" }]);
+    const secondResult = new Message({
+      role: "tool",
+      parts: [new ToolResultPart({ callId: "toolu_02", name: "double", content: "12", isError: false })],
+    });
+    expect(sentBy(protocolFor(SONNET, ENABLED), [ASK, first, RESULT, second, secondResult])).toEqual([
+      { role: "user", content: "Double 3." },
+      { role: "assistant", content: FIRST_BLOCKS },
+      TOOL_RESULT,
+      { role: "assistant", content: [{ type: "tool_use", id: "toolu_02", name: "double", input: { value: 3n } }] },
+      { role: "user", content: [{ type: "tool_result", content: "12", tool_use_id: "toolu_02", is_error: false }] },
+    ]);
+  });
+
+  test("on claude-opus-4-5 the reasoning is left out with other_model; thinking enabled throws", async () => {
+    const first = await replyOf([THINKING, REDACTED, TEXT, TOOL_USE]);
+    const reasons: ReplayDegradedReason[] = [];
+    let error: unknown = null;
+    try {
+      sentBy(protocolFor("claude-opus-4-5", ENABLED, reasons), [ASK, first, RESULT]);
+    } catch (thrown) {
+      error = thrown;
+    }
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).kind).toBe("bad_request");
+    expect((error as ProviderError).retryable).toBe(false);
+    const message = `the last assistant turn came from anthropic/${SONNET}; ${REQUIRED}`;
+    expect((error as ProviderError).message).toBe(message);
+    expect(reasons).toEqual(["other_model"]);
+
+    const off: ReplayDegradedReason[] = [];
+    expect(sentBy(protocolFor("claude-opus-4-5", null, off), [ASK, first, RESULT])).toEqual([
+      { role: "user", content: "Double 3." },
+      { role: "assistant", content: FIRST_BLOCKS.slice(2) },
+      TOOL_RESULT,
+    ]);
+    expect(off).toEqual(["other_model"]);
   });
 });

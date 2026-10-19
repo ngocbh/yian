@@ -18,9 +18,10 @@
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
-import { reprText } from "../diagnostics.ts";
-import { type FeedbackValue, validateFeedback } from "../expr/index.ts";
+import { Failure, OriginRef, reprText } from "../diagnostics.ts";
+import { type FeedbackValue, hasFeedback, validateFeedback } from "../expr/index.ts";
 import { isList, isRecord, setField, type Value, type ValueRecord } from "../typesys/values.ts";
+import { ExecutionScope, isExactly } from "./contracts.ts";
 
 /** The closed vocabulary of node kinds. Dispatch is an explicit `switch`, never a registry. */
 export const NodeKind = {
@@ -229,5 +230,263 @@ export function copyBackwardValue(value: unknown, name: string, memo?: Map<objec
   // Only finished copies are stored, so a failing container fails again, with the same name,
   // wherever it reappears.
   memo?.set(value, result);
+  return result;
+}
+
+/**
+ * Require one inventory of distinct authored names. `BackwardContext` and the kinds that capture
+ * backward inputs use it.
+ *
+ * @throws TypeError when `names` isn't an array of strings.
+ * @throws RangeError for a repeated name.
+ */
+export function validateDeclaredNames(names: unknown, fieldName: string): void {
+  if (!isList(names)) throw new TypeError(`${fieldName} must be an array`);
+  for (const name of names) {
+    if (typeof name !== "string") throw new TypeError(`${fieldName} must contain only strings`);
+  }
+  if (new Set(names).size !== names.length) throw new RangeError(`${fieldName} must contain unique names`);
+}
+
+/**
+ * Validate the optional source-neutral paths from declared inputs into the output, held in
+ * `data.input_output_paths`. `BackwardContext` and the structural backward hooks use it.
+ *
+ * A path part is a string, a non-negative `bigint`, or a non-negative safe-integer `number`.
+ *
+ * @throws TypeError when the paths aren't a record of arrays.
+ * @throws RangeError for an undeclared input or an invalid path part.
+ */
+export function validateInputOutputPaths(data: Readonly<Record<string, unknown>>, inputNames: readonly string[]): void {
+  if (!Object.hasOwn(data, "input_output_paths")) return;
+  const paths = data.input_output_paths;
+  if (!isRecord(paths)) throw new TypeError("input_output_paths must be a record");
+  for (const name of Object.keys(paths)) {
+    if (!inputNames.includes(name)) throw new RangeError("input_output_paths must name declared inputs");
+    const path = paths[name];
+    if (!isList(path)) throw new TypeError("input_output_paths values must be arrays");
+    for (const part of path) {
+      const valid =
+        typeof part === "string" ||
+        (typeof part === "bigint" && part >= 0n) ||
+        (typeof part === "number" && Number.isSafeInteger(part) && part >= 0);
+      if (!valid) throw new RangeError("output path components must be strings or non-negative integers");
+    }
+  }
+}
+
+/**
+ * Detached forward material and attribution supplied to one backward hook. Frozen.
+ *
+ * Input declarations stay separate from recorded values: an early binding failure has
+ * `inputs === null` even when the owner declares input names. JSON values are deep-frozen copies
+ * made by the constructor; copy one before you modify it. The failure's trace keeps canonical
+ * origin keys without subclass state.
+ */
+export class BackwardContext {
+  /** The bound JSON input record, or `null` when no usable record was retained. */
+  readonly inputs: Readonly<Record<string, unknown>> | null;
+  /** Authored input names this owner may address, including defaults. */
+  readonly inputNames: readonly string[];
+  /** Declared local variables; an empty inventory rejects all targets. */
+  readonly variableNames: readonly string[];
+  /** The recorded JSON output, when the forward invocation produced one. */
+  readonly output: unknown;
+  /** The recorded forward failure, independent of backward's outcome. */
+  readonly failure: Failure | null;
+  /** The authored path and structured child position, when available. */
+  readonly scope: ExecutionScope | null;
+  /** The recorded run id. */
+  readonly runId: string | null;
+  /** The display id of the executing node; it is never parsed to infer scope. */
+  readonly nodeId: string | null;
+  /** The positive accepted node-start sequence, paired with the run id. */
+  readonly nodeStartedSeq: number | null;
+  /** Node-owned JSON material retained for backward. */
+  readonly nodeData: Readonly<Record<string, unknown>>;
+  /** Ordered JSON attribution accompanying feedback messages. */
+  readonly downstreamContext: readonly Readonly<Record<string, unknown>>[];
+
+  /**
+   * Validate the invocation metadata and retain frozen copies of its values.
+   *
+   * @param inputs The canonical bound JSON input record; `null` means no usable input record was
+   *   retained.
+   * @param options.inputNames Authored input names; defaults to empty.
+   * @param options.variableNames Declared local variables; defaults to empty.
+   * @param options.output The recorded JSON output; defaults to `null`.
+   * @param options.failure The recorded forward failure, rebuilt with plain `OriginRef`s; defaults
+   *   to `null`.
+   * @param options.scope The execution scope; defaults to `null`.
+   * @param options.runId The recorded run id; defaults to `null`.
+   * @param options.nodeId The executing node's display id; defaults to `null`.
+   * @param options.nodeStartedSeq The positive node-start sequence; defaults to `null`.
+   * @param options.nodeData Node-owned JSON material; `null` or omitted is `{}`.
+   * @param options.downstreamContext Ordered JSON attribution records; defaults to empty. They
+   *   are copied with one memo, so a subtree they share is copied once and stays shared.
+   * @throws TypeError for malformed metadata or non-JSON values.
+   * @throws RangeError for duplicate declarations, an invalid position or path, or NaN.
+   */
+  constructor(
+    inputs: Readonly<Record<string, unknown>> | null,
+    options: {
+      inputNames?: readonly string[];
+      variableNames?: readonly string[];
+      output?: unknown;
+      failure?: Failure | null;
+      scope?: ExecutionScope | null;
+      runId?: string | null;
+      nodeId?: string | null;
+      nodeStartedSeq?: number | null;
+      nodeData?: Readonly<Record<string, unknown>> | null;
+      downstreamContext?: readonly Readonly<Record<string, unknown>>[];
+    } = {},
+  ) {
+    const {
+      inputNames = [],
+      variableNames = [],
+      output = null,
+      scope = null,
+      runId = null,
+      nodeId = null,
+      nodeStartedSeq = null,
+      downstreamContext = [],
+    } = options;
+    let { failure = null } = options;
+    if (inputs !== null && !isRecord(inputs)) throw new TypeError("inputs must be a record or null");
+    validateDeclaredNames(inputNames, "input_names");
+    validateDeclaredNames(variableNames, "variable_names");
+    if (failure !== null) {
+      if (!isExactly(failure, Failure)) throw new TypeError("failure must be a Failure or null");
+      failure = new Failure({ ...failure, trace: failure.trace.map((origin) => new OriginRef(origin.key)) });
+      Object.freeze(failure.trace);
+      Object.freeze(failure);
+    }
+    if (scope !== null && !isExactly(scope, ExecutionScope)) {
+      throw new TypeError("scope must be an ExecutionScope or null");
+    }
+    if (runId !== null && typeof runId !== "string") throw new TypeError("run_id must be a string or null");
+    if (nodeId !== null && typeof nodeId !== "string") throw new TypeError("node_id must be a string or null");
+    if (nodeStartedSeq !== null) {
+      if (!Number.isSafeInteger(nodeStartedSeq)) throw new TypeError("node_started_seq must be an integer or null");
+      if (nodeStartedSeq <= 0) throw new RangeError("node_started_seq must be positive");
+    }
+    const data: unknown = options.nodeData ?? {};
+    if (!isRecord(data)) throw new TypeError("node_data must be a record");
+    validateInputOutputPaths(data, inputNames);
+    if (!isList(downstreamContext)) throw new TypeError("downstream_context must be an array");
+    for (const item of downstreamContext) {
+      if (!isRecord(item)) throw new TypeError("downstream_context must contain records");
+    }
+
+    this.inputs = copyBackwardValue(inputs, "inputs") as typeof this.inputs;
+    this.inputNames = Object.freeze([...inputNames]);
+    this.variableNames = Object.freeze([...variableNames]);
+    this.output = copyBackwardValue(output, "output");
+    this.failure = failure;
+    this.scope = scope;
+    this.runId = runId;
+    this.nodeId = nodeId;
+    this.nodeStartedSeq = nodeStartedSeq;
+    this.nodeData = copyBackwardValue(data, "node_data") as typeof this.nodeData;
+    // Messages below one route node share their route contexts, so the items are copied with one
+    // memo: each shared subtree is copied once.
+    const memo = new Map<object, unknown>();
+    this.downstreamContext = Object.freeze(
+      downstreamContext.map((item, index) => copyBackwardValue(item, `downstream_context[${index}]`, memo)),
+    ) as typeof this.downstreamContext;
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Validate every feedback channel before routing any input message.
+ *
+ * @param result The owner's proposed feedback channels.
+ * @param context The recorded bound values and the owner's declared input and local variable
+ *   inventories.
+ * @throws TypeError for a result or context of another class, or an invalid message type.
+ * @throws RangeError for an undeclared target, an unavailable input value, or a nested feedback
+ *   shape mismatch.
+ */
+export function validateBackwardResult(result: BackwardResult, context: BackwardContext): void {
+  if (!isExactly(result, BackwardResult)) throw new TypeError("result must be a BackwardResult");
+  if (!isExactly(context, BackwardContext)) throw new TypeError("context must be a BackwardContext");
+  const inputs = context.inputs;
+  const names = Object.keys(result.inputFeedback);
+  if (names.length > 0 && inputs === null) throw new RangeError("input_feedback requires usable recorded inputs");
+  for (const name of names) {
+    if (!context.inputNames.includes(name)) {
+      throw new RangeError(`input_feedback selects undeclared input ${reprText(name)}`);
+    }
+    if (inputs === null || !Object.hasOwn(inputs, name)) {
+      throw new RangeError(`input_feedback has no recorded input ${reprText(name)}`);
+    }
+    for (const message of result.inputFeedback[name]!) validateFeedback(message, inputs[name], [name]);
+  }
+  for (const name of Object.keys(result.variableFeedback)) {
+    if (!context.variableNames.includes(name)) {
+      throw new RangeError(`variable_feedback selects undeclared variable ${reprText(name)}`);
+    }
+  }
+}
+
+/**
+ * Select input messages through the captured output paths without rewriting text. The
+ * structural kinds (START, END, LOOP) use it as their backward.
+ *
+ * @param context The backward context; its `nodeData.input_output_paths` maps declared inputs to
+ *   their paths into the output.
+ * @param feedback Independent messages addressing the output.
+ * @returns Each input's messages selected at its path; an input with no path or no selected text
+ *   gets none, and no recorded inputs give an empty result.
+ * @throws TypeError when `feedback` isn't an array.
+ * @throws RangeError for missing captured paths, a path absent from the accepted output, or
+ *   feedback that doesn't fit the output.
+ */
+export function projectStructuralFeedback(
+  context: BackwardContext,
+  feedback: readonly FeedbackValue[],
+): BackwardResult {
+  if (!isList(feedback)) throw new TypeError("feedback must be an array of independent messages");
+  const inputs = context.inputs;
+  if (inputs === null) return new BackwardResult();
+  const data = context.nodeData;
+  validateInputOutputPaths(data, context.inputNames);
+  if (!Object.hasOwn(data, "input_output_paths")) {
+    throw new RangeError("structural backward requires captured input_output_paths");
+  }
+  const output = context.failure !== null ? null : context.output;
+  for (const message of feedback) validateFeedback(message, output);
+  const projected: [string, FeedbackValue[]][] = [];
+  const paths = data.input_output_paths as Readonly<Record<string, readonly (string | bigint | number)[]>>;
+  for (const name of context.inputNames) {
+    if (!Object.hasOwn(inputs, name) || !Object.hasOwn(paths, name)) continue;
+    const path = paths[name]!;
+    if (context.failure === null) {
+      let value = output;
+      for (const part of path) {
+        if (typeof part === "string" && isRecord(value) && Object.hasOwn(value, part)) value = value[part];
+        else if (typeof part !== "string" && isList(value) && Number(part) < value.length) value = value[Number(part)];
+        else throw new RangeError("captured output path does not exist in the accepted output");
+      }
+    }
+    const messages: FeedbackValue[] = [];
+    for (const message of feedback) {
+      let selected = message;
+      for (const part of path) {
+        if (selected === null || typeof selected === "string") break;
+        const key = typeof part === "string" ? part : Number(part);
+        // An own-key read: a partial message that omits the field selects nothing here.
+        if (isRecord(selected)) selected = Object.hasOwn(selected, key) ? selected[key]! : null;
+        else selected = selected[key as number]!;
+      }
+      if (hasFeedback(selected)) messages.push(selected);
+    }
+    if (messages.length > 0) projected.push([name, messages]);
+  }
+  // `fromEntries` defines each key as data, so an input named `__proto__` stays an entry.
+  const result = new BackwardResult({ inputFeedback: Object.fromEntries(projected) });
+  validateBackwardResult(result, context);
   return result;
 }

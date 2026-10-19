@@ -1,28 +1,53 @@
 /**
- * Backward results and execution scopes: a port of `tests/engine/test_backward_contracts.py`
- * (the feedback value checks, `BackwardResult`, and the two `ExecutionScope`/`ExecutionPosition`
- * tests).
+ * Backward contracts: a port of `tests/engine/test_backward_contracts.py`. Ported: the feedback
+ * value checks, `BackwardResult`, `validateBackwardResult`, the `ExecutionScope` and
+ * `ExecutionPosition` tests, and the `BackwardContext` halves of
+ * `test_backward_context_and_outcome_do_not_expose_mutable_authority`,
+ * `test_retained_failure_origins_drop_mutable_subclass_state` (the two `context` cases) and
+ * `test_backward_contracts_reject_invalid_snapshots_and_outcomes`.
  *
  * TS-only: `copyBackwardValue` keeps a `__proto__` key as data, writes `-0` as `0`, keeps a
- * shared subtree shared, and names the nested value it refuses; a `null` channel is an empty one.
+ * shared subtree shared, and names the nested value it refuses; a `null` channel is an empty one;
+ * `projectStructuralFeedback` selects through `input_output_paths`; record membership reads own
+ * keys only (`constructor`, `toString`).
  *
- * Changed: `FrozenInstanceError` is the `TypeError` an assignment to a frozen object throws in a
- * module; dataclass `!=` is `not.toEqual`; each rejected row names its one error class, where
- * Python accepts either `TypeError` or `ValueError` (`RangeError`); a `BackwardResult` holds
- * frozen values, so a reader's edit throws instead of changing a private copy.
+ * Changed:
+ * - Infinity is a backward JSON value (decision 34), so the `output=float("inf")` row is accepted;
+ *   an `output: NaN` row is refused instead.
+ * - `BackwardResult` and `BackwardContext` hold frozen copies, with no copy on read: a reader's
+ *   edit throws a `TypeError` where Python changes a private copy. `FrozenInstanceError` is the
+ *   `TypeError` an assignment to a frozen object throws in a module.
+ * - Message batches and declared names are arrays, not tuples. Dataclass `!=` is `not.toEqual`;
+ *   each rejected row names its one error class, where Python accepts either `TypeError` or
+ *   `ValueError` (`RangeError`).
  *
- * Left for later: the backward contexts and the result check need `BackwardContext`; memory and
- * the run contracts need the runtime.
+ * Later (T4-1 / T3-9): `test_attributed_backward_result_detaches_messages_and_keeps_reference_coordinates`,
+ * `test_backward_attribution_rejects_malformed_root_coordinates`,
+ * `test_backward_outcome_does_not_normalize_its_caller_owned_failure`,
+ * `test_backward_outcome_can_succeed_without_memory` and
+ * `test_backward_outcome_copy_preserves_ordered_policy_dispositions` need the runtime contracts
+ * (T4-1), as do the outcome and failure halves of the three partly ported tests;
+ * `test_declared_variables_supply_local_backward_targets_without_activating_hooks` needs the AGENT
+ * node (T3-9).
  *
  * Not ported: the rows that pass a list where Python wants a tuple (`static_path=["node"]`,
- * `occurrence_path=[]`, a list batch) and the tuple type checks: TS has only arrays. The
- * feedback rows `(("Bad.",), ["text"])` and `({1: "Bad."}, {1: "text"})` are valid in TS.
+ * `occurrence_path=[]`, `input_names=["text"]`, a list batch, `{"path": (1,)}`) and the tuple
+ * type checks: TS has only arrays. The non-text-key rows (`({1: "Bad."}, {1: "text"})`,
+ * `inputs={1: "text"}`): a record key is always text. The feedback row `(("Bad.",), ["text"])` is
+ * a valid positional message in TS.
  */
 
 import { expect, test } from "bun:test";
 
+import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { type FeedbackValue, hasFeedback, validateFeedback } from "../../src/expr/index.ts";
-import { BackwardResult, copyBackwardValue } from "../../src/nodes/base.ts";
+import {
+  BackwardContext,
+  BackwardResult,
+  copyBackwardValue,
+  projectStructuralFeedback,
+  validateBackwardResult,
+} from "../../src/nodes/base.ts";
 import { ExecutionPosition, ExecutionScope } from "../../src/nodes/contracts.ts";
 
 test("execution scopes keep root-relative structured positions", () => {
@@ -198,4 +223,214 @@ test.each<[string, unknown, typeof TypeError | typeof RangeError, string]>([
 ])("copyBackwardValue refuses %s with the nested name", (_name, value, cls, message) => {
   expect(() => copyBackwardValue(value, "value")).toThrow(cls);
   expect(() => copyBackwardValue(value, "value")).toThrow(message);
+});
+
+test("result validates input shapes and declared variable names", () => {
+  const context = new BackwardContext(
+    { tags: ["a", "b"], summary: "text", reserved: 7n },
+    { inputNames: ["tags", "summary"], variableNames: ["instruction"] },
+  );
+  validateBackwardResult(
+    new BackwardResult({
+      inputFeedback: { tags: [[null, "Irrelevant."], "Review the list."] },
+      selfFeedback: ["Be concise."],
+      variableFeedback: { instruction: ["Make the task explicit."] },
+    }),
+    context,
+  );
+  for (const name of ["missing", "reserved"]) {
+    const result = new BackwardResult({ inputFeedback: { [name]: ["Bad."] } });
+    expect(() => validateBackwardResult(result, context)).toThrow(RangeError);
+    expect(() => validateBackwardResult(result, context)).toThrow(name);
+  }
+  const tags = new BackwardResult({ inputFeedback: { tags: [["Bad."]] } });
+  expect(() => validateBackwardResult(tags, context)).toThrow(RangeError);
+  expect(() => validateBackwardResult(tags, context)).toThrow(/tags/);
+  const parent = new BackwardResult({ variableFeedback: { parent_instruction: ["Bad."] } });
+  expect(() => validateBackwardResult(parent, context)).toThrow(RangeError);
+  expect(() => validateBackwardResult(parent, context)).toThrow(/parent_instruction/);
+  const instruction = new BackwardResult({ variableFeedback: { instruction: ["Bad."] } });
+  expect(() => validateBackwardResult(instruction, new BackwardContext({}))).toThrow(RangeError);
+  expect(() => validateBackwardResult(instruction, new BackwardContext({}))).toThrow(/instruction/);
+
+  const earlyFailure = new BackwardContext(null, { inputNames: ["tags"] });
+  validateBackwardResult(new BackwardResult({ selfFeedback: ["Binding failed."] }), earlyFailure);
+  for (const batch of [[], [null], ["Bad."]]) {
+    const result = new BackwardResult({ inputFeedback: { tags: batch } });
+    expect(() => validateBackwardResult(result, earlyFailure)).toThrow(RangeError);
+    expect(() => validateBackwardResult(result, earlyFailure)).toThrow(/inputs/);
+  }
+});
+
+test("backward context does not expose mutable authority", () => {
+  const inputs = { tags: ["a", "b"] };
+  const inputNames = ["tags"];
+  const output = { summary: ["result"] };
+  const data = { prompt: ["Summarize."] };
+  const downstream = [{ source_path: ["summary", 0n] }];
+  const forwardFailure = new Failure({ code: "node.execute", message: "Forward failed.", nodeId: "writer" });
+  const scope = new ExecutionScope(["writer"]);
+  const context = new BackwardContext(inputs, {
+    inputNames,
+    variableNames: ["instruction"],
+    output,
+    failure: forwardFailure,
+    scope,
+    runId: "run-1",
+    nodeId: "writer",
+    nodeStartedSeq: 17,
+    nodeData: data,
+    downstreamContext: downstream,
+  });
+  inputs.tags.length = 0;
+  inputNames.length = 0;
+  output.summary.length = 0;
+  data.prompt.length = 0;
+  downstream[0]!.source_path.length = 0;
+  for (const array of [
+    context.inputs!.tags,
+    context.inputNames,
+    (context.output as typeof output).summary,
+    context.nodeData.prompt,
+    context.downstreamContext[0]!.source_path,
+  ]) {
+    expect(() => {
+      (array as unknown[]).length = 0;
+    }).toThrow(TypeError);
+  }
+  expect(context.inputs).toEqual({ tags: ["a", "b"] });
+  expect(context.inputNames).toEqual(["tags"]);
+  expect(context.output).toEqual({ summary: ["result"] });
+  expect(context.nodeData).toEqual({ prompt: ["Summarize."] });
+  expect(context.downstreamContext).toEqual([{ source_path: ["summary", 0n] }]);
+  expect([context.runId, context.nodeStartedSeq]).toEqual(["run-1", 17]);
+  expect(context.scope).toEqual(scope);
+  expect(context.failure).toStrictEqual(forwardFailure);
+  expect(context.failure).not.toBe(forwardFailure);
+  expect(Object.isFrozen(context.failure)).toBe(true);
+  expect(Object.isFrozen(context.failure!.trace)).toBe(true);
+  expect(() => {
+    (context as { inputNames: readonly string[] }).inputNames = [];
+  }).toThrow(TypeError);
+});
+
+class AnnotatedOrigin extends OriginRef {
+  notes: string[];
+
+  constructor(key: string, notes: string[]) {
+    super(key);
+    this.notes = notes;
+  }
+}
+
+test.each(["argument", "public view"])(
+  "retained failure origins drop mutable subclass state (context, %s)",
+  (mutation) => {
+    const origin = new AnnotatedOrigin("writer.prompt", ["authored note"]);
+    const failure = new Failure({
+      code: "node.execute",
+      message: "Forward failed.",
+      nodeId: "writer",
+      trace: [origin, new OriginRef("writer"), origin],
+      causeType: "LookupError",
+      traceback: "original debugging detail",
+    });
+    const retained = new BackwardContext(null, { failure }).failure!;
+
+    if (mutation === "argument") {
+      origin.notes.push("changed through the constructor argument");
+    } else {
+      for (const item of retained.trace) {
+        if (item instanceof AnnotatedOrigin) item.notes.push("changed through a public diagnostic view");
+      }
+    }
+
+    expect(retained).toStrictEqual(
+      new Failure({
+        code: "node.execute",
+        message: "Forward failed.",
+        nodeId: "writer",
+        trace: [new OriginRef("writer.prompt"), new OriginRef("writer"), new OriginRef("writer.prompt")],
+        causeType: "LookupError",
+        traceback: "original debugging detail",
+      }),
+    );
+    expect(retained.trace.every((item) => Object.getPrototypeOf(item) === OriginRef.prototype)).toBe(true);
+    expect(failure.trace[0]).toBe(origin);
+  },
+);
+
+test.each<[string, () => unknown, typeof TypeError | typeof RangeError]>([
+  ["array inputs", () => new BackwardContext([] as never), TypeError],
+  ["a class instance in the inputs", () => new BackwardContext({ text: new Point() }), TypeError],
+  ["a NaN output", () => new BackwardContext({}, { output: NaN }), RangeError],
+  ["a duplicate input name", () => new BackwardContext({}, { inputNames: ["text", "text"] }), RangeError],
+  ["a non-text variable name", () => new BackwardContext({}, { variableNames: [7] as never }), TypeError],
+  ["a boolean start sequence", () => new BackwardContext({}, { nodeStartedSeq: true as never }), TypeError],
+  ["a zero start sequence", () => new BackwardContext({}, { nodeStartedSeq: 0 }), RangeError],
+  ["array node data", () => new BackwardContext({}, { nodeData: [] as never }), TypeError],
+])("backward contracts reject invalid snapshots (%s)", (_name, factory, cls) => {
+  expect(factory).toThrow(cls);
+});
+
+test("backward context accepts an infinite output", () => {
+  expect(new BackwardContext({}, { output: Infinity }).output).toBe(Infinity);
+});
+
+test("projectStructuralFeedback selects through input_output_paths and skips inputs with no path", () => {
+  const context = new BackwardContext(
+    { topic: "reefs", item: "b", extra: "x" },
+    {
+      inputNames: ["topic", "item", "extra"],
+      output: { summary: "text", items: ["a", "b"] },
+      nodeData: { input_output_paths: { topic: ["summary"], item: ["items", 1n] } },
+    },
+  );
+  const result = projectStructuralFeedback(context, [
+    { summary: "Shorter.", items: [null, "Wrong item."] },
+    "Whole output.",
+  ]);
+  expect(result.inputFeedback).toEqual({
+    topic: ["Shorter.", "Whole output."],
+    item: ["Wrong item.", "Whole output."],
+  });
+});
+
+test("projectStructuralFeedback refuses a missing path and missing input_output_paths", () => {
+  const missingPath = new BackwardContext(
+    { topic: "reefs" },
+    { inputNames: ["topic"], output: { summary: "text" }, nodeData: { input_output_paths: { topic: ["other"] } } },
+  );
+  expect(() => projectStructuralFeedback(missingPath, ["Bad."])).toThrow(RangeError);
+  expect(() => projectStructuralFeedback(missingPath, ["Bad."])).toThrow(
+    "captured output path does not exist in the accepted output",
+  );
+  const noPaths = new BackwardContext({ topic: "reefs" }, { inputNames: ["topic"], output: "text" });
+  expect(() => projectStructuralFeedback(noPaths, ["Bad."])).toThrow(RangeError);
+  expect(() => projectStructuralFeedback(noPaths, ["Bad."])).toThrow(
+    "structural backward requires captured input_output_paths",
+  );
+});
+
+test("projectStructuralFeedback gives no feedback to a path a partial message omits", () => {
+  const context = new BackwardContext(
+    { topic: "reefs" },
+    { inputNames: ["topic"], output: { a: "1", b: "2" }, nodeData: { input_output_paths: { topic: ["b"] } } },
+  );
+  expect(projectStructuralFeedback(context, [{ a: "x" }]).inputFeedback).toEqual({});
+});
+
+test("projectStructuralFeedback skips an input named constructor with no path", () => {
+  const context = new BackwardContext(
+    { constructor: "x" },
+    { inputNames: ["constructor"], output: "text", nodeData: { input_output_paths: {} } },
+  );
+  expect(projectStructuralFeedback(context, ["Note."]).inputFeedback).toEqual({});
+});
+
+test("input feedback for an unrecorded toString input is refused", () => {
+  const result = new BackwardResult({ inputFeedback: { toString: ["Bad."] } });
+  const context = new BackwardContext({}, { inputNames: ["toString"] });
+  expect(() => validateBackwardResult(result, context)).toThrow(RangeError);
+  expect(() => validateBackwardResult(result, context)).toThrow("input_feedback has no recorded input 'toString'");
 });

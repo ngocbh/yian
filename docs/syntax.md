@@ -1694,6 +1694,10 @@ JSON-schema mode rejects an open part. On Anthropic with `thinking` on, an `obje
 back as `{}` and an `Any` failed before the request was sent. Both now go through a tool
 call that isn't strict.
 
+Changed (TS yian): fields starting with `_` are part of the schema. Integer-like field names
+come first in the schema's `properties`. A nested schema's name replaces each character outside
+letters, digits, `_` and `-` with `_`, and names that clash are numbered `name__1`, `name__2`.
+
 Two providers also need a closed schema rewritten. On Chat Completions and
 Responses-routed deployments alike, Azure rejects keywords its strict mode doesn't
 support: an `int(0..10)` slot's `minimum` and `maximum`, `minLength`, `maxLength`,

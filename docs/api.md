@@ -1784,6 +1784,9 @@ uses current instructions (the node's rendered `system_prompt:` or the framework
 instruction), recall, and tool grants. Historical system/developer
 instructions are not reinstated as current instructions.
 
+Changed (TS yian): the message format is `yian.message.v1`; TS yian never reads Python memory
+stores.
+
 ### API history summaries
 
 ```python

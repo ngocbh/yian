@@ -30,9 +30,9 @@ function read(link: object, name: string): unknown {
  * `api_key_invalid` in its text: Gemini reports an invalid key as a 400 whose only distinguishing
  * mark is that reason, so the substring match is deliberate. A link whose `kind` is `"refused"`
  * doesn't count by its status: yian read that reply as a content-filter refusal, such as
- * OpenRouter's 403 content-policy reply, and the refusal is the root cause. Callers run this inside a `catch`,
- * so it never throws: a link whose property or text can't be read doesn't count, and a `cause`
- * that can't be read ends the walk.
+ * OpenRouter's 403 content-policy reply, and the refusal is the root cause. Callers run this
+ * inside a `catch`, so it never throws: a link whose property or text can't be read doesn't
+ * count, and a `cause` that can't be read ends the walk.
  */
 export function isAuthFailure(error: unknown): boolean {
   const seen = new Set<object>();

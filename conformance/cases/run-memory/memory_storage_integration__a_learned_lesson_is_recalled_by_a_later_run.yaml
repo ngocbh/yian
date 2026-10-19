@@ -1,0 +1,167 @@
+# From tests/engine/test_memory_storage_integration.py::test_explicit_learning_remains_saved_after_reopen (reflective)
+# and tests/engine/test_reflective_memory.py::test_recall_all_and_context_ranking_are_deterministic.
+# Pins: lessons a reflective learner adds on an earlier run's backward persist (fresh memories over the
+# same root), the next run's AGENT recalls the `recall_limit` best for its context in its memory block,
+# and the whole recall lists every lesson in order.
+# YIAN_DEFAULT_PROVIDER/MODEL: a reflective learner's model config comes from the defaults, not the flow.
+kind: run
+flow: |
+  id: tutor
+  name: tutor
+  llm_config: {provider: openai, model: gpt-5.5}
+  long_term_memory:
+    lessons: {type: reflective, config: {recall_limit: 2}}
+  input:
+    q: !str
+  nodes:
+    answer:
+      kind: agent
+      input: {q: "${input.q}", tone: BLUE}
+      prompt: ${q}
+      output: str
+  output: ${answer.output}
+env:
+  YIAN_DEFAULT_PROVIDER: openai
+  YIAN_DEFAULT_MODEL: gpt-5.5
+inputs:
+  q: RED berry
+run:
+  run_id: r2
+  num_workers: 0
+host:
+  memory:
+    before:
+    - inputs:
+        q: first
+      run:
+        run_id: r1
+        num_workers: 0
+        learnable: true
+      backward:
+      - feedback: Answer about fruit.
+  models:
+    answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: a1
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: a2
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: |-
+                You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+
+                Memory context (canonical JSON; sections are ordered from outer workflow to local agent):
+                {"order":"outer-to-local","sections":[{"index":1,"memory":"lessons","text":"[a] blue berry\n[c] red berry"}]}
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: RED berry
+      backward:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"input_feedback": {}, "self_feedback": [], "variable_feedback": {}}'
+    __memory__:
+      memory:lessons:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"actions":[{"action":"add","lesson_id":"b","text":"red apple"},{"action":"add","lesson_id":"a","text":"blue berry"},{"action":"add","lesson_id":"c","text":"red berry"}]}'
+expect:
+  output:
+    status: succeeded
+    output: a2
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        answer:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      inputs:
+        q: RED berry
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        q: RED berry
+  - [node_started, answer]
+  - - node_succeeded
+    - answer
+    - value: a2
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: a2
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        q: RED berry
+  - - NodeStarted
+    - node_id: answer
+  - - ModelCallStarted
+    - exchange_id: <id:5>
+      model: gpt-5.5
+      node_id: answer
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:5>
+      model: gpt-5.5
+      node_id: answer
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: answer
+      output: a2
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: a2
+  - - RunSucceeded
+    - output: a2
+  stream:
+  - chunk: a2
+    exchange_id: <id:5>
+    final: false
+    key: text
+    node_id: answer
+  - chunk: ''
+    exchange_id: <id:5>
+    final: true
+    key: text
+    node_id: answer
+  memory:
+    lessons: |-
+      [b] red apple
+      [a] blue berry
+      [c] red berry

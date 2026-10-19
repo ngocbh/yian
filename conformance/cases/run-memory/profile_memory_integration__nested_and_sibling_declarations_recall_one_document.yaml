@@ -1,0 +1,201 @@
+# From tests/engine/test_profile_memory_integration.py::test_nested_declarations_of_one_key_show_and_rewrite_the_document_once
+# and ::test_sibling_agents_recall_one_shared_profile_document, merged into one flow.
+# Pins: a profile key declared at the flow and again on each of two sibling AGENTs is one document,
+# shown once in each AGENT's system prompt; the document is seeded as a file at its storage path.
+kind: run
+flow: |
+  id: siblings
+  name: siblings
+  llm_config: {provider: openai, model: test-model}
+  long_term_memory: profile
+  input:
+    message: !str
+  nodes:
+    first:
+      kind: agent
+      long_term_memory: profile
+      input:
+        message: ${input.message}
+      prompt: ${message}
+      output: str
+    second:
+      kind: agent
+      long_term_memory: profile
+      input:
+        message: ${input.message}
+      prompt: ${message}
+      output: str
+  output: ${first.output}
+files:
+  memory/siblings/profile.md: |
+    # Ada
+    - Works on reefs.
+inputs:
+  message: hi
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  memory: {}
+  models:
+    first:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: a
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: |-
+                You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+
+                Memory context (canonical JSON; sections are ordered from outer workflow to local agent):
+                {"order":"outer-to-local","sections":[{"index":1,"memory":"profile","text":"# Ada\n- Works on reefs.\n"}]}
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: hi
+    second:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: b
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: |-
+                You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+
+                Memory context (canonical JSON; sections are ordered from outer workflow to local agent):
+                {"order":"outer-to-local","sections":[{"index":1,"memory":"profile","text":"# Ada\n- Works on reefs.\n"}]}
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: hi
+expect:
+  output:
+    status: succeeded
+    output: a
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        first:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: test-model
+          provider: openai
+        second:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: test-model
+          provider: openai
+      inputs:
+        message: hi
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        message: hi
+  - [node_started, first]
+  - - node_succeeded
+    - first
+    - value: a
+  - [node_started, second]
+  - - node_succeeded
+    - second
+    - value: b
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: a
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        message: hi
+  - - NodeStarted
+    - node_id: first
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: test-model
+      node_id: first
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: test-model
+      node_id: first
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: first
+      output: a
+  - - NodeStarted
+    - node_id: second
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: test-model
+      node_id: second
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: test-model
+      node_id: second
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: second
+      output: b
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: a
+  - - RunSucceeded
+    - output: a
+  stream:
+  - chunk: a
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: first
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: first
+  - chunk: b
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: second
+  - chunk: ''
+    exchange_id: <id:2>
+    final: true
+    key: text
+    node_id: second

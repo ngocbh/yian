@@ -1,0 +1,54 @@
+kind: run
+flow: |
+  id: memory-run
+  name: memory_run
+  long_term_memory: test
+  nodes:
+    work:
+      kind: code
+      code: return 7
+      output: int
+  output: ${work.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: 7
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, work]
+  - - node_succeeded
+    - work
+    - value: 7
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: 7
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: work
+  - - NodeSucceeded
+    - node_id: work
+      output: 7
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: 7
+  - - RunSucceeded
+    - output: 7

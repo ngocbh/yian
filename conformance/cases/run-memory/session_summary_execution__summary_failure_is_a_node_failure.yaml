@@ -1,0 +1,124 @@
+# From tests/engine/test_session_summary_execution.py::test_summary_failure_is_a_node_failure_without_answer_or_history_deletion.
+# Pins: a history summary that fails is the AGENT's node failure, and no answer call follows. Shortest
+# form: `recent_turns: 0` makes the one earlier turn eligible.
+kind: run
+flow: |
+  id: summarized-session
+  name: summarized_session
+  llm_config: {provider: openai, model: old-model}
+  input:
+    question: !str
+  nodes:
+    answer:
+      kind: agent
+      long_term_memory: {session: {type: session, config: {history_budget_chars: 1, recent_turns: 0}}}
+      input: {question: "${input.question}"}
+      prompt: ${question}
+      output: str
+  output: ${answer.output}
+inputs:
+  question: current question
+run:
+  run_id: r2
+  num_workers: 0
+host:
+  memory:
+    before:
+    - inputs:
+        question: prior question
+      run:
+        run_id: r1
+        num_workers: 0
+  models:
+    answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: prior answer
+      summary:
+      - chunks: []
+        raise:
+          class: RuntimeError
+          message: summary request failed
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      frames:
+      - label: flow.yaml
+        range: [7, 3, 7, 9]
+      message: summary request failed
+      node: answer
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        answer:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: old-model
+          provider: openai
+      inputs:
+        question: current question
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        question: current question
+  - [node_started, answer]
+  - - node_failed
+    - answer
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [7, 3, 7, 9]
+        message: summary request failed
+        node: answer
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        question: current question
+  - - NodeStarted
+    - node_id: answer
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: old-model
+      node_id: answer
+      provider: openai
+      purpose: history_summary
+  - - ModelCallFinished
+    - error: RuntimeError
+      exchange_id: <id:1>
+      model: old-model
+      node_id: answer
+      provider: openai
+      purpose: history_summary
+  - - NodeFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [7, 3, 7, 9]
+        message: summary request failed
+        node: answer
+  - - RunFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [7, 3, 7, 9]
+        message: summary request failed
+        node: answer

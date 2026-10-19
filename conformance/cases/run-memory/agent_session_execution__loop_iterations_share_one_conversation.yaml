@@ -1,0 +1,442 @@
+# From tests/engine/test_agent_session_execution.py::test_loop_iterations_share_one_authored_conversation.
+# Pins: a session AGENT in a LOOP body keeps one conversation across iterations: each iteration's
+# request holds the earlier iterations' turns.
+kind: run
+flow: |
+  id: session-loop
+  name: session_loop
+  llm_config: {provider: openai, model: fake-model}
+  defs:
+    body:
+      input:
+        question: !str
+      nodes:
+        answer:
+          kind: agent
+          long_term_memory: session
+          input: {question: "${input.question}"}
+          prompt: ${question}
+          output: str
+        carry:
+          kind: code
+          input: {answer: "${answer.output}"}
+          code: "return {'question': inputs['answer']}"
+          output: {question: str}
+      output: ${carry.output}
+  nodes:
+    repeat:
+      kind: loop
+      call: body
+      input: {question: first}
+      times: 3
+  output: ${repeat.output.question}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  memory: {}
+  models:
+    repeat#0/answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: reply-1
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: first
+    repeat#1/answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: reply-2
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: first
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: text
+              text: reply-1
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: reply-1
+    repeat#2/answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: reply-3
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: first
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: text
+              text: reply-1
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: reply-1
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: text
+              text: reply-2
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: reply-2
+expect:
+  output:
+    status: succeeded
+    output: reply-3
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        repeat/answer:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: fake-model
+          provider: openai
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, repeat]
+  - - node_expanded
+    - repeat
+    - prune_ids: []
+      seed:
+      - question: first
+      - 0
+  - [node_started, repeat#0/__start__]
+  - - node_succeeded
+    - repeat#0/__start__
+    - value:
+        question: first
+  - [node_started, repeat#0/answer]
+  - - node_succeeded
+    - repeat#0/answer
+    - value: reply-1
+  - [node_started, repeat#0/carry]
+  - - node_succeeded
+    - repeat#0/carry
+    - value:
+        question: reply-1
+  - [node_started, repeat#0/__end__]
+  - - node_succeeded
+    - repeat#0/__end__
+    - value:
+        question: reply-1
+  - [node_started, repeat~1]
+  - - node_expanded
+    - repeat~1
+    - prune_ids:
+      - repeat#0/__end__
+      - repeat#0/__start__
+      - repeat#0/answer
+      - repeat#0/carry
+      - repeat~1
+      seed:
+      - question: reply-1
+      - 1
+  - [node_started, repeat#1/__start__]
+  - - node_succeeded
+    - repeat#1/__start__
+    - value:
+        question: reply-1
+  - [node_started, repeat#1/answer]
+  - - node_succeeded
+    - repeat#1/answer
+    - value: reply-2
+  - [node_started, repeat#1/carry]
+  - - node_succeeded
+    - repeat#1/carry
+    - value:
+        question: reply-2
+  - [node_started, repeat#1/__end__]
+  - - node_succeeded
+    - repeat#1/__end__
+    - value:
+        question: reply-2
+  - [node_started, repeat~2]
+  - - node_expanded
+    - repeat~2
+    - prune_ids:
+      - repeat#1/__end__
+      - repeat#1/__start__
+      - repeat#1/answer
+      - repeat#1/carry
+      - repeat~2
+      seed:
+      - question: reply-2
+      - 2
+  - [node_started, repeat#2/__start__]
+  - - node_succeeded
+    - repeat#2/__start__
+    - value:
+        question: reply-2
+  - [node_started, repeat#2/answer]
+  - - node_succeeded
+    - repeat#2/answer
+    - value: reply-3
+  - [node_started, repeat#2/carry]
+  - - node_succeeded
+    - repeat#2/carry
+    - value:
+        question: reply-3
+  - [node_started, repeat#2/__end__]
+  - - node_succeeded
+    - repeat#2/__end__
+    - value:
+        question: reply-3
+  - [node_started, repeat~3]
+  - - node_succeeded
+    - repeat~3
+    - commit_target: repeat
+      value:
+        question: reply-3
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: reply-3
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: repeat
+  - - NodeExpanded
+    - grow:
+        prune: []
+        seed:
+        - question: first
+        - 0
+      node_id: repeat
+  - - NodeStarted
+    - node_id: repeat#0/__start__
+  - - NodeSucceeded
+    - node_id: repeat#0/__start__
+      output:
+        question: first
+  - - NodeStarted
+    - node_id: repeat#0/answer
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: fake-model
+      node_id: repeat#0/answer
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: fake-model
+      node_id: repeat#0/answer
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: repeat#0/answer
+      output: reply-1
+  - - NodeStarted
+    - node_id: repeat#0/carry
+  - - NodeSucceeded
+    - node_id: repeat#0/carry
+      output:
+        question: reply-1
+  - - NodeStarted
+    - node_id: repeat#0/__end__
+  - - NodeSucceeded
+    - node_id: repeat#0/__end__
+      output:
+        question: reply-1
+  - - NodeStarted
+    - node_id: repeat~1
+  - - NodeExpanded
+    - grow:
+        prune:
+        - repeat#0/__end__
+        - repeat#0/__start__
+        - repeat#0/answer
+        - repeat#0/carry
+        - repeat~1
+        seed:
+        - question: reply-1
+        - 1
+      node_id: repeat~1
+  - - NodeStarted
+    - node_id: repeat#1/__start__
+  - - NodeSucceeded
+    - node_id: repeat#1/__start__
+      output:
+        question: reply-1
+  - - NodeStarted
+    - node_id: repeat#1/answer
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: fake-model
+      node_id: repeat#1/answer
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: fake-model
+      node_id: repeat#1/answer
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: repeat#1/answer
+      output: reply-2
+  - - NodeStarted
+    - node_id: repeat#1/carry
+  - - NodeSucceeded
+    - node_id: repeat#1/carry
+      output:
+        question: reply-2
+  - - NodeStarted
+    - node_id: repeat#1/__end__
+  - - NodeSucceeded
+    - node_id: repeat#1/__end__
+      output:
+        question: reply-2
+  - - NodeStarted
+    - node_id: repeat~2
+  - - NodeExpanded
+    - grow:
+        prune:
+        - repeat#1/__end__
+        - repeat#1/__start__
+        - repeat#1/answer
+        - repeat#1/carry
+        - repeat~2
+        seed:
+        - question: reply-2
+        - 2
+      node_id: repeat~2
+  - - NodeStarted
+    - node_id: repeat#2/__start__
+  - - NodeSucceeded
+    - node_id: repeat#2/__start__
+      output:
+        question: reply-2
+  - - NodeStarted
+    - node_id: repeat#2/answer
+  - - ModelCallStarted
+    - exchange_id: <id:3>
+      model: fake-model
+      node_id: repeat#2/answer
+      provider: openai
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:3>
+      model: fake-model
+      node_id: repeat#2/answer
+      provider: openai
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: repeat#2/answer
+      output: reply-3
+  - - NodeStarted
+    - node_id: repeat#2/carry
+  - - NodeSucceeded
+    - node_id: repeat#2/carry
+      output:
+        question: reply-3
+  - - NodeStarted
+    - node_id: repeat#2/__end__
+  - - NodeSucceeded
+    - node_id: repeat#2/__end__
+      output:
+        question: reply-3
+  - - NodeStarted
+    - node_id: repeat~3
+  - - NodeSucceeded
+    - commit_as: repeat
+      node_id: repeat~3
+      output:
+        question: reply-3
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: reply-3
+  - - RunSucceeded
+    - output: reply-3
+  stream:
+  - chunk: reply-1
+    exchange_id: <id:1>
+    final: false
+    key: text
+    node_id: repeat#0/answer
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: repeat#0/answer
+  - chunk: reply-2
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: repeat#1/answer
+  - chunk: ''
+    exchange_id: <id:2>
+    final: true
+    key: text
+    node_id: repeat#1/answer
+  - chunk: reply-3
+    exchange_id: <id:3>
+    final: false
+    key: text
+    node_id: repeat#2/answer
+  - chunk: ''
+    exchange_id: <id:3>
+    final: true
+    key: text
+    node_id: repeat#2/answer

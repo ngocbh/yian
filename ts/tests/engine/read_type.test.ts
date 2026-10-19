@@ -12,23 +12,24 @@
  * `LoadError`, where Python's `read_type({"": "int"}, {})` returns a type.
  */
 
-import { readFileSync } from "node:fs";
-
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import { readType, readValueContract } from "../../src/compose/helpers/types.ts";
 import { encodeSitePath, SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
-import { forget, reload } from "../../src/defaults.ts";
+import { BUILTIN, forget, install, reload } from "../../src/defaults.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { type Type, ValueKind } from "../../src/typesys/values.ts";
-import { type Case, prepare, readCase } from "../conformance.ts";
+import { caseDocument } from "../compose/declarations.ts";
+import type { Case } from "../conformance.ts";
 
 const EMPTY: TypeRegistry = new Map();
 const LIMIT_TEXT = "the limit for a type (each record and list is a level)";
 
+// Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
+beforeEach(() => install(BUILTIN));
 afterEach(forget);
 
 /** Return the `LoadError` `call` throws. */
@@ -223,12 +224,6 @@ function output(path: readonly string[], nodeId: string): Call {
     });
 }
 
-/** Read the conformance case `id`, decoded as the TS runner runs it. */
-function loadCase(id: string): Case {
-  const url = new URL(`../../../conformance/cases/${id}.yaml`, import.meta.url);
-  return prepare(readCase(readFileSync(url, "utf8")));
-}
-
 const RECORD_NESTING = "types/compose_record_type_nesting__";
 const UNION_TYPEDEFS = "types/engine_union_typedefs__";
 const OUTPUT_ORIGINS = "load-core/compose_node_output_contract_origins__";
@@ -254,31 +249,26 @@ test.each([
   { id: `${OUTPUT_ORIGINS}non_text_nested_output_type`, call: emit },
   { id: `${OUTPUT_ORIGINS}unknown_nested_output_type`, call: emit },
 ])("$id", ({ id, call }) => {
-  const case_ = loadCase(id);
-  const env = (case_["env"] ?? {}) as Record<string, string>;
-  try {
-    // Before parsing: the document and the typedefs read the configured limits.
-    reload((name) => (Object.hasOwn(env, name) ? env[name] : undefined));
-    const document = SourceDocument.parse(case_["flow"] as string, "flow.yaml");
-    const flow = document.root.value as Record<string, unknown>;
-    const typedefs = flow["typedefs"] as Record<string, unknown> | undefined;
-    const registry = typedefs !== undefined ? readTypedefs(typedefs) : new Map();
-    const diagnostics = LoadDiagnostics.fromDocument(document);
-    const expected = (case_["expect"] as Case)["load"];
-    if (expected === "ok") {
-      call(document, registry, diagnostics);
-      return;
-    }
-    const wanted = ((expected as Case)["diagnostics"] as Case[])[0]!;
-    const frame = (wanted["frames"] as Case[]).at(-1)!;
-    const error = loadError(() => call(document, registry, diagnostics));
-    const last = error.diagnostic.frames.at(-1);
-    expect([error.message, last?.label, last?.range]).toEqual([
-      wanted["message"] as string,
-      frame["label"] as string,
-      new SourceRange(...((frame["range"] as bigint[]).map(Number) as [number, number, number, number])),
-    ]);
-  } finally {
-    forget();
+  const env = (caseDocument(id).case_["env"] ?? {}) as Record<string, string>;
+  reload((name) => (Object.hasOwn(env, name) ? env[name] : undefined));
+  // Read again under the case's env: the document and the typedefs read the configured limits.
+  const { case_, document } = caseDocument(id);
+  const flow = document.root.value as Record<string, unknown>;
+  const typedefs = flow["typedefs"] as Record<string, unknown> | undefined;
+  const registry = typedefs !== undefined ? readTypedefs(typedefs) : new Map();
+  const diagnostics = LoadDiagnostics.fromDocument(document);
+  const expected = (case_["expect"] as Case)["load"];
+  if (expected === "ok") {
+    call(document, registry, diagnostics);
+    return;
   }
+  const wanted = ((expected as Case)["diagnostics"] as Case[])[0]!;
+  const frame = (wanted["frames"] as Case[]).at(-1)!;
+  const error = loadError(() => call(document, registry, diagnostics));
+  const last = error.diagnostic.frames.at(-1);
+  expect([error.message, last?.label, last?.range]).toEqual([
+    wanted["message"] as string,
+    frame["label"] as string,
+    new SourceRange(...((frame["range"] as bigint[]).map(Number) as [number, number, number, number])),
+  ]);
 });

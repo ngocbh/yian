@@ -16,7 +16,7 @@
 import { type OriginRef, reprText } from "../../diagnostics.ts";
 import { current } from "../../defaults.ts";
 import { comparePaths, ContractOrigins, ValueContract, type ValuePath } from "../../nodes/contracts.ts";
-import type { SourceCatalogBuilder } from "../source/catalog.ts";
+import type { SourceCatalogBuilder, SourceSitePath } from "../source/catalog.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
 import { encodesAsUtf8, pythonTypeName, type TypeRegistry, typeFor } from "../../typesys/types.ts";
 import {
@@ -111,7 +111,7 @@ function readTypeAndSites(
 ): [Type, Site[]] {
   const { cursor, path, diagnostics, levels = 0 } = options;
   const limit = current().maxTypeNesting;
-  const range = cursor !== null ? cursor.range : null;
+  const range = cursor?.range ?? null;
   if (typeof node === "string") {
     let typ: Type;
     try {
@@ -142,9 +142,7 @@ function readTypeAndSites(
 
   if (isRecord(node)) {
     return readRecordType(
-      Object.entries(node).map(
-        ([key, value]) => [key, value, cursor !== null ? cursor.child(key) : null] as const,
-      ),
+      Object.entries(node).map(([key, value]) => [key, value, cursor?.child(key) ?? null] as const),
       registry,
       { path, diagnostics, levels: levels + 1 },
     );
@@ -154,16 +152,16 @@ function readTypeAndSites(
     // The list syntax is another spelling of one record: the first occurrence of a key
     // keeps its place and the last one its value, along with that value's source.
     const merged = new Map<string, readonly [unknown, SourceCursor | null]>();
-    node.forEach((element: unknown, index) => {
-      const itemCursor = cursor !== null ? cursor.child(index) : null;
+    for (const [index, element] of (node as unknown[]).entries()) {
+      const itemCursor = cursor?.child(index) ?? null;
       if (!(isRecord(element) && Object.keys(element).length === 1)) {
         throw diagnostics.error(`a list of fields must hold single-key maps, got ${valueRepr(element)}`, {
-          range: itemCursor !== null ? itemCursor.range : null,
+          range: itemCursor?.range ?? null,
         });
       }
       const [key, value] = Object.entries(element)[0]!;
-      merged.set(key, [value, itemCursor !== null ? itemCursor.child(key) : null]);
-    });
+      merged.set(key, [value, itemCursor?.child(key) ?? null]);
+    }
     return readRecordType(
       [...merged].map(([key, [value, childCursor]]) => [key, value, childCursor] as const),
       registry,
@@ -206,27 +204,24 @@ export function readValueContract(
   cursor: SourceCursor,
   registry: TypeRegistry,
   options: {
-    sitePath: readonly (string | number)[];
+    sitePath: SourceSitePath;
     catalogBuilder: SourceCatalogBuilder;
     diagnostics?: LoadDiagnostics | null;
   },
 ): ValueContract {
   const { sitePath, catalogBuilder } = options;
   const diagnostics = options.diagnostics ?? LoadDiagnostics.fromCursor(cursor);
-  let typ: Type;
-  let fallback: OriginRef | null;
-  const entries: [ValuePath, OriginRef][] = [];
   try {
-    let sites: Site[];
-    [typ, sites] = readTypeAndSites(cursor.value, registry, { cursor, path: [], diagnostics });
-    fallback = catalogBuilder.register([...sitePath, "root"], cursor);
+    const [typ, sites] = readTypeAndSites(cursor.value, registry, { cursor, path: [], diagnostics });
+    const fallback = catalogBuilder.register([...sitePath, "root"], cursor);
+    const entries: [ValuePath, OriginRef][] = [];
     for (const [path, fieldCursor] of sites.sort(([a], [b]) => comparePaths(a, b))) {
       const origin = catalogBuilder.register([...sitePath, "path", ...path], fieldCursor);
       if (origin !== null) entries.push([path, origin]);
     }
+    return new ValueContract(typ, new ContractOrigins({ default: fallback, entries }));
   } catch (error) {
     if (!(error instanceof SourceAccessError)) throw error;
     throw diagnostics.error(error.message, { range: error.range, cause: error });
   }
-  return new ValueContract(typ, new ContractOrigins({ default: fallback, entries }));
 }

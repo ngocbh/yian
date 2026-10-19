@@ -1,4 +1,4 @@
-# The null value is shown in the text form in TS (rules: messages).
+# hand TS expect: The null value is shown in the text form in TS (rules: messages).
 kind: run
 rules: [messages]
 flow: |

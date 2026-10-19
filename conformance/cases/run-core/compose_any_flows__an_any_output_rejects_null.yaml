@@ -1,4 +1,4 @@
-# The TS CODE body returns null; the message shows it in the text form (rules: messages).
+# hand TS expect: The TS CODE body returns null; the message shows it in the text form (rules: messages).
 kind: run
 rules: [messages]
 flow: |

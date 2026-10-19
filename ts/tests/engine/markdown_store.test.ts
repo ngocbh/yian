@@ -40,7 +40,7 @@
  * are checked by the typecheck).
  *
  * The fixture is the output of this script, run from the yian root with
- * `PYTHONPATH=src python -I make_markdown_fixture.py > conformance/fixtures/markdown_store.json`:
+ * `PYTHONPATH=src python make_markdown_fixture.py > conformance/fixtures/markdown_store.json`:
  *
  * ```python
  * """Write the FileMarkdownStore golden files with Python yian; print them as JSON {relative path: text}."""

@@ -1317,6 +1317,9 @@ ordinary messages. These tuples are batches; positional lists inside them remain
 structured messages. Node self/variable channels contain ordered text messages
 and remain attributed to their own occurrences, rather than becoming root channels.
 
+Changed (TS yian): there is no 128-level memory bound, so copying memory JSON never fails
+for depth; values are bounded by value nesting where they are produced.
+
 Changed (TS yian): `BackwardOutcome`, `LearningResult` and `PolicyCommitOutcome` hold
 the frozen values they were given, where Python copies them; these classes,
 `BackwardFailure` and `LearningFailure` are frozen. Feedback batches, `failures` and
@@ -1739,6 +1742,14 @@ Each key in the AGENT's stack is recalled once, outermost first, and contributes
 one notes section. Only a session memory, whose one owner is the AGENT itself,
 may contribute a transcript. A notes memory beside a session adds context
 without hiding the session.
+
+Changed (TS yian): every host memory method (`Memory.openRun({ snapshot })` and
+`reset()`, the session's `recall`, `learn`, `commit` and `close`,
+`TranscriptSource.openTurn`, and the turn's `request`, `observe`, `close` and
+`prepareHistory`) may return a value or a promise, and yian awaits it. A session
+has no `with` form: call `close()`. `openTurn(request, { signal })` resolves to an
+admitted turn, and the stop is that `AbortSignal` (there is no `check_stopped`).
+`ConversationTurn.close(error?)` replaces the context manager's exit.
 
 The evaluator gives agents one `MemoryContext`, containing labelled text sections
 and an optional transcript turn. This is analogous to using a session transcript

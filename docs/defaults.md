@@ -102,8 +102,8 @@ Two bounds follow `YIAN_MAX_VALUE_NESTING` and have no variable of their own:
   `(derived from YIAN_MAX_VALUE_NESTING)`. The bound also guards stored memory, so a
   memory store written under a higher value limit may not load under a lower one.
 
-Changed (TS yian): memory JSON nesting doesn't exist. Stores are read without a depth
-limit, and stored values are checked against value nesting.
+Changed (TS yian): memory JSON nesting doesn't exist. Memory carriers and stores have no
+depth limit; values are bounded by value nesting where they are produced.
 
 ## Why the nesting limits have maxima
 

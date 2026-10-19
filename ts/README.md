@@ -299,7 +299,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   (`MemoryMutation`, `LearningFailure`, `PolicyCommitOutcome`, `LearningResult`), and the
   evidence carriers (`EvaluationEvidence`, `MemorySection`, `ModelTextInteraction`,
   `ModelValueInteraction`, `ToolCallInteraction`, `ToolResultInteraction`), and the learning
-  inputs (`MemoryEpisodeStatus`, `MemoryEpisode`, `LearnContext`).
+  inputs (`MemoryEpisodeStatus`, `MemoryEpisode`, `LearnContext`), the recall carriers
+  (`RecallContext`, `MemoryContextRequest`, `MemoryContent`, `MemoryContext`, `MemoryRecallError`)
+  and the session conversation contracts (`Conversation*`, `TranscriptSource`, `ConversationTurn`).
   `src/memory/index.ts` re-exports the public names; the mutation batch check `validateMutations`
   and the feedback snapshot `freezeFeedback` are exported from `memory/contracts.ts` only, as
   Python keeps `_validate_mutations` and `_freeze_feedback` private.
@@ -313,9 +315,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   a learn context's feedback are deep-frozen copies under the same value number rule, with no
   memory nesting limit; a context keeps its episodes by reference. `freezeFeedback` takes a memo
   shared across calls, so a subtree repeated across feedback items is one frozen copy.
-- Changed: a mutation payload and a snapshot envelope's export have no checked depth limit (Python
-  bounds both at the value nesting limit plus 28); a payload deep enough to overflow the stack
-  throws the engine's RangeError.
+- Changed: memory JSON (a mutation payload, a snapshot envelope's export, learn feedback, a stored
+  state) has no depth limit (Python bounds it at the value nesting limit plus 28). It is copied
+  with an explicit stack, not recursion, so a deep value can't overflow the call stack.
 - A config or snapshot is a deep-frozen copy whose keys are inserted in code-unit order; JS still
   lists integer-like keys (`"9"`, `"10"`) first, in numeric order.
 - The declarations are frozen, so `rewriteMemoryDeclOrigins` returns rebuilt declarations and
@@ -323,8 +325,24 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - An int in a config is a `bigint`; a `number` is a float, so a built-in key refuses `5` and takes
   `5n`.
 - A host memory is any object with `openRun({ snapshot })` and `reset()` (`isMemory` checks it, as
-  Python's `isinstance(value, Memory)`); both are synchronous, and a session has no `with` form:
-  the caller calls `close()` in `finally`.
+  Python's `isinstance(value, Memory)`). Every method of a host memory interface (`Memory`,
+  `MemorySession`, `TranscriptSource`, `ConversationTurn`, `MarkdownStore.read/write`) may return a
+  value or a promise, and yian always awaits it, as for tools; property reads (`snapshot`, `view`),
+  `ConversationTurn.interrupt()` and the engine's `EvaluationTrace` stay synchronous. A session has
+  no `with` form: the caller calls `close()` in `finally`.
+- `TranscriptSource.openTurn(request, { signal })` resolves to an admitted turn (Python's
+  `open_turn` and `__enter__`); the stop is that `AbortSignal` (no `CheckStopped`), and
+  `ConversationTurn.close(error?)` replaces `__exit__`.
+- `src/memory/conversation.ts` holds the conversation fold and its codecs and digests;
+  `src/memory/summary.ts` holds whole-turn selection and the summary prefix proof. Neither is
+  re-exported by `memory/index.ts`, as Python's `memory/__init__.py` doesn't import them.
+- Changed: conversation JSON and `RecallContext.inputs` follow the value number rule (NaN refused,
+  `±Infinity` kept, `-0` read as `0`); Python refuses non-finite numbers in conversation JSON.
+- Conversation counters are safe-integer `number`s; wire JSON writes them as ints (`bigint`s) and
+  the decoders check them.
+- Conversation and summary digests are SHA-256 of `logJson` text. They equal Python's for ints and
+  text and differ only for floats, astral key order and records shaped like the codec's
+  `$float`/`$record` tags; TS stores are read only by TS.
 - `src/memory/storage/sqlite.ts` holds `SQLiteStorage`, the single-owner SQLite state file, opened
   through `platform.ts`'s `openSqlite`. Changed: the envelope is version 3 (Python's is 2), so a
   Python file fails `storage.version`; `±Infinity` is kept with the codec's `$float` tag; there is
@@ -336,11 +354,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   and unreachable storage a Node system error. The document, kept versions and write log are
   byte-compatible with Python's, pinned by `conformance/fixtures/markdown_store.json`, which
   Python yian wrote. The `.<name>.lock` file is a SQLite lock that Python's `flock` doesn't see.
-- A host-implemented memory interface (here `MarkdownStore`) may return a value or a promise;
-  yian awaits.
-- The recall context, the session conversation contracts, the session's recall, learn and commit
-  methods, and the built-in backends that use the storage (episodic, reflective, session, profile)
-  are not ported yet.
+- The built-in backends that use the storage (session, episodic, reflective, profile) are not
+  ported yet.
 
 ## Runtime
 

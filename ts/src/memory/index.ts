@@ -18,22 +18,36 @@
  * `PolicyCommitOutcome`, `LearningResult`), the visible evidence of one node outcome
  * (`EvaluationEvidence`, `MemorySection`, and the `VisibleInteraction` carriers
  * `ModelTextInteraction`, `ModelValueInteraction`, `ToolCallInteraction`,
- * `ToolResultInteraction`), and the learning inputs (`MemoryEpisode` with its
- * `MemoryEpisodeStatus`, and `LearnContext`). The declaration origin traversal and rewrite, the
- * mutation batch check `validateMutations` and the feedback snapshot `freezeFeedback` aren't
+ * `ToolResultInteraction`), the learning inputs (`MemoryEpisode` with its
+ * `MemoryEpisodeStatus`, and `LearnContext`), the recall carriers (`RecallContext`,
+ * `MemoryContextRequest`, `MemoryContent`, `MemoryContext`, `MemoryRecallError`, and the engine's
+ * `EvaluationTrace`), and the session conversation contracts: the frozen checkpoints and views
+ * (`ConversationInvocation` through `ConversationClosed`, with `ConversationCheckpoint`) and the
+ * host interfaces `TranscriptSource` and `ConversationTurn`. Python's `CheckStopped` has no
+ * counterpart: `openTurn` takes an `AbortSignal`. The declaration origin traversal and rewrite,
+ * the mutation batch check `validateMutations` and the feedback snapshot `freezeFeedback` aren't
  * re-exported (Python keeps them out of `__all__`), nor are the `same*` value comparisons; their
- * callers import `contracts.ts`. `storage/sqlite.ts` and `storage/markdown.ts` are ported: private
- * adapters the facade doesn't re-export, as Python's `memory/__init__.py` doesn't. The recall
- * context and the session conversation contracts, and the conversation, session, summary and
- * backend modules are not ported yet.
+ * callers import `contracts.ts`.
  *
- * Knows about: `diagnostics` and `defaults`, through `contracts.ts`; `storage/` also knows
- * `platform` and `typesys`.
+ * `conversation.ts` owns the pure conversation fold, strict codecs and digests; `summary.ts` owns
+ * whole-turn selection and summary prefix proofs. `storage/sqlite.ts` and `storage/markdown.ts`
+ * are the storage adapters below the backends. The facade re-exports none of these modules, as
+ * Python's `memory/__init__.py` doesn't import them. The session, episodic, reflective and profile
+ * backends are not ported yet.
+ *
+ * Knows about: `diagnostics` and `defaults`, through `contracts.ts`; `conversation.ts` and
+ * `summary.ts` also know `typesys`; `storage/` also knows `platform` and `typesys`.
  * Never imports: `nodes`, `compile`, `compose`, `runtime`, `run`, the CLI, `llm`, or persistence
  * frameworks.
  */
 
 export type {
+  ConversationCheckpoint,
+  ConversationEffectKind,
+  ConversationEffectStatus,
+  ConversationTurn,
+  ConversationTurnStatus,
+  EvaluationTrace,
   JsonObject,
   JsonScalar,
   JsonValue,
@@ -42,11 +56,24 @@ export type {
   Memory,
   MemorySession,
   PolicyCommitStatus,
+  TranscriptSource,
   VisibleInteraction,
 } from "./contracts.ts";
 export {
   BUILTIN_MEMORY_CONFIG_KEYS,
   checkMemoryDeclaration,
+  ConversationAdmitted,
+  ConversationApplied,
+  ConversationClosed,
+  ConversationCompletion,
+  ConversationEffectObserved,
+  ConversationEffectRequested,
+  ConversationEffectState,
+  ConversationInvocation,
+  ConversationItem,
+  ConversationRequest,
+  ConversationStamp,
+  ConversationView,
   DeclSite,
   EvaluationEvidence,
   isMemory,
@@ -54,6 +81,9 @@ export {
   LearningFailure,
   LearningResult,
   MEMORY_IDENTIFIER_PATTERN,
+  MemoryContent,
+  MemoryContext,
+  MemoryContextRequest,
   MemoryDecl,
   MemoryEpisode,
   MemoryEpisodeStatus,
@@ -62,6 +92,7 @@ export {
   MemoryOccurrenceSegment,
   MemoryOperationError,
   MemoryOperationFailure,
+  MemoryRecallError,
   MemoryScope,
   MemorySection,
   MemorySetupError,
@@ -71,6 +102,7 @@ export {
   ModelTextInteraction,
   ModelValueInteraction,
   PolicyCommitOutcome,
+  RecallContext,
   ToolCallInteraction,
   ToolResultInteraction,
 } from "./contracts.ts";

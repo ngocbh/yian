@@ -61,8 +61,8 @@
  *   `fs.statSync`, just before SQLite opens, where Python patches `sqlite3.connect`.
  *
  * Not ported: `test_envelope_depth_rejection_preserves_old_state_and_usable_handle` and
- * `test_maximum_valid_envelope_depth_roundtrips` (TS has no 128-level memory JSON limit; a deep
- * state is a later round-trip test, once the copy no longer recurses);
+ * `test_maximum_valid_envelope_depth_roundtrips` (TS has no 128-level memory JSON limit; a
+ * 100 000-level state round-trips instead);
  * `test_shared_connection_serializes_threads` (JS runs one thread, so there is no per-handle lock);
  * `test_postfork_guard_precedes_python_lock_and_sqlite` (JS can't fork a live process, so there is no
  * fork guard); Python's exception classes (the `KeyboardInterrupt` and `SystemExit` rows are a plain
@@ -80,7 +80,7 @@ import { pathToFileURL } from "node:url";
 import { MemoryOperationError } from "../../src/memory/contracts.ts";
 import { checkStoragePath, realStoragePath, SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
 import { openSqlite, type Sqlite } from "../../src/platform.ts";
-import type { JsonObject } from "../../src/typesys/json.ts";
+import { type JsonObject, logJson } from "../../src/typesys/json.ts";
 
 /** Assert `fn` throws a storage `MemoryOperationError` with code `storage.<code>`, and return it. */
 function expectStorageError(fn: () => unknown, code: string): MemoryOperationError {
@@ -256,6 +256,24 @@ test("a round trip is detached and survives reopening", () => {
     store.close();
   }
   expect(reloaded(file)).toEqual(expected);
+});
+
+// Compared as log JSON text: Bun's `toEqual` overflows the stack at this depth, and `===` keeps a
+// failure from printing the whole 600 KB text.
+test("a 100 000-level state round-trips and survives reopening", () => {
+  const file = path.join(dir, "memory.sqlite");
+  let deep: unknown = 1n;
+  for (let i = 0; i < 100_000; i++) deep = i % 2 === 0 ? [deep] : { a: deep };
+  const state = { deep };
+  const text = logJson(state);
+  const store = new SQLiteStorage(file, "session");
+  try {
+    store.save(state);
+    expect(logJson(store.load()) === text).toBe(true);
+  } finally {
+    store.close();
+  }
+  expect(logJson(reloaded(file)) === text).toBe(true);
 });
 
 class Opaque {}

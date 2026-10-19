@@ -16,9 +16,14 @@
  * `freezeFeedback`), whose JSON follows the yian value number rule; and the value comparisons of
  * the scope, operation failure and learning carriers (`sameMemoryScope`,
  * `sameMemoryOperationFailure`, `sameMemoryMutation`, `sameLearningFailure`,
- * `samePolicyCommitOutcome`, `sameLearningResult`). It imports only `diagnostics` and `defaults`.
- * The recall context, the conversation contracts and the session's recall, learn and commit
- * methods are not ported yet.
+ * `samePolicyCommitOutcome`, `sameLearningResult`). It also holds the conversation carriers (the
+ * invocation, request, item, stamp, effect state, completion, applied entry, view and the four
+ * checkpoints), the recall carriers (`RecallContext`, `MemoryContent`, `MemoryContextRequest`,
+ * `MemoryContext`, `MemoryRecallError`), and the host interfaces: `Memory` and its run
+ * `MemorySession` (`recall`, `learn`, `commit`), `TranscriptSource` and its `ConversationTurn`, and
+ * the engine's `EvaluationTrace` sink. A host interface method may return a value or a promise,
+ * and yian always awaits it; property reads (`snapshot`, `view`), `ConversationTurn.interrupt()`
+ * and `EvaluationTrace` stay synchronous. It imports only `diagnostics` and `defaults`.
  */
 
 import { current } from "../defaults.ts";
@@ -97,74 +102,96 @@ function requirePath(value: unknown, name: string, allowEmpty = false): readonly
   return Object.freeze([...(value as string[])]);
 }
 
+/** One container `freezeJson` is copying: its source, its path, and the children copied so far. */
+interface FreezeFrame {
+  readonly source: unknown[] | Record<string, unknown>;
+  readonly path: string;
+  readonly nesting: number;
+  /** The object's keys in code-unit order; `null` for an array. */
+  readonly keys: string[] | null;
+  readonly copy: JsonValue[];
+}
+
 /**
- * Validate and copy one JSON value into frozen containers; see `freezeJsonObject`. With
- * `valueNumbers`, numbers follow the yian value rule: NaN refused, `±Infinity` kept, `-0` copied
- * as `0`. With `memo`, a container already frozen through the same memo returns its copy, so a
- * repeated subtree is shared; a memo is for unlimited nesting, since a cached copy isn't measured
- * against `limit` again.
+ * Validate and copy one JSON value into frozen containers at any depth; see `freezeJsonObject`.
+ * With `valueNumbers`, numbers follow the yian value rule: NaN refused, `±Infinity` kept, `-0`
+ * copied as `0`. With `memo`, a container already frozen through the same memo returns its copy,
+ * so a repeated subtree is shared; a memo is for unlimited nesting, since a cached copy isn't
+ * measured against `limit` again.
  */
 function freezeJson(
   value: unknown,
   name: string,
-  active: Set<object> = new Set(),
-  nesting = 0,
   limit = Number.POSITIVE_INFINITY,
   valueNumbers = false,
   memo: Map<object, JsonValue> | null = null,
 ): JsonValue {
-  if (value === null || typeof value === "boolean" || typeof value === "bigint") return value;
-  if (typeof value === "string") return requireString(value, name, false);
-  if (typeof value === "number") {
-    if (!valueNumbers) {
-      if (!Number.isFinite(value)) throw new RangeError(`${name} JSON number must be finite`);
-      return value;
-    }
-    if (Number.isNaN(value)) throw new RangeError(`${name} JSON number must not be NaN`);
-    return Object.is(value, -0) ? 0 : value;
-  }
-  const array = isPlainArray(value);
-  if (!array && !isPlainObject(value)) throw new TypeError(`${name} must contain exact JSON values`);
-  if (nesting >= limit) {
-    throw new RangeError(
-      `${name} nests deeper than ${limit} levels, the limit for a yian value (each record and list is a level)`,
-    );
-  }
-  // A memo holds only finished copies, so a container on the active path is never found here.
-  const cached = memo?.get(value);
-  if (cached !== undefined) return cached;
-  // Only the containers on the current path count, so a subtree reached twice is not a cycle.
-  if (active.has(value)) throw new RangeError(`${name} contains a circular JSON value`);
-  active.add(value);
-  let frozen: JsonValue;
-  try {
-    if (array) {
-      const items: JsonValue[] = [];
-      // By index, so a hole reads `undefined` and is refused.
-      for (let i = 0; i < value.length; i++) {
-        items.push(freezeJson(value[i], `${name}[${i}]`, active, nesting + 1, limit, valueNumbers, memo));
+  // An explicit stack, not recursion, so depth is bounded by memory rather than the call stack.
+  // It visits children depth-first in index or sorted-key order, as a recursive walk would, so the
+  // first error it finds is the one a recursive walk would find.
+  const stack: FreezeFrame[] = [];
+  // The containers on the current path, so a subtree reached twice is not a cycle.
+  const active = new Set<object>();
+
+  // Return a scalar's or a memo'd container's copy, or check a new container and push its frame.
+  const enter = (item: unknown, path: string, nesting: number): JsonValue | undefined => {
+    if (item === null || typeof item === "boolean" || typeof item === "bigint") return item;
+    if (typeof item === "string") return requireString(item, path, false);
+    if (typeof item === "number") {
+      if (!valueNumbers) {
+        if (!Number.isFinite(item)) throw new RangeError(`${path} JSON number must be finite`);
+        return item;
       }
-      frozen = Object.freeze(items);
-    } else {
-      if (Object.getOwnPropertySymbols(value).length > 0) {
-        throw new TypeError(`${name} JSON object keys must be strings`);
-      }
-      const keys = Object.keys(value);
-      for (const key of keys) requireString(key, `${name} JSON object key`, false);
-      const entries = keys
-        .sort(compareCodeUnits)
-        .map(
-          (key) =>
-            [key, freezeJson(value[key], `${name}.${key}`, active, nesting + 1, limit, valueNumbers, memo)] as const,
-        );
-      // `Object.fromEntries` defines own data properties, so a `__proto__` key stays data.
-      frozen = Object.freeze(Object.fromEntries(entries));
+      if (Number.isNaN(item)) throw new RangeError(`${path} JSON number must not be NaN`);
+      return Object.is(item, -0) ? 0 : item;
     }
-  } finally {
-    active.delete(value);
+    const array = isPlainArray(item);
+    if (!array && !isPlainObject(item)) throw new TypeError(`${path} must contain exact JSON values`);
+    if (nesting >= limit) {
+      throw new RangeError(
+        `${path} nests deeper than ${limit} levels, the limit for a yian value (each record and list is a level)`,
+      );
+    }
+    // A memo holds only finished copies, so a container on the active path is never found here.
+    const cached = memo?.get(item);
+    if (cached !== undefined) return cached;
+    if (active.has(item)) throw new RangeError(`${path} contains a circular JSON value`);
+    let keys: string[] | null = null;
+    if (!array) {
+      if (Object.getOwnPropertySymbols(item).length > 0) {
+        throw new TypeError(`${path} JSON object keys must be strings`);
+      }
+      keys = Object.keys(item);
+      for (const key of keys) requireString(key, `${path} JSON object key`, false);
+      keys.sort(compareCodeUnits);
+    }
+    active.add(item);
+    stack.push({ source: item, path, nesting, keys, copy: [] });
+    return undefined;
+  };
+
+  let result = enter(value, name, 0);
+  while (stack.length > 0) {
+    const { source, path, nesting, keys, copy } = stack.at(-1)!;
+    const index = copy.length;
+    // The next child, or finish the container. An array's length is read each step and its
+    // children by index, so a hole reads `undefined` and is refused.
+    if (index < (keys ?? (source as unknown[])).length) {
+      const child =
+        keys === null
+          ? enter((source as unknown[])[index], `${path}[${index}]`, nesting + 1)
+          : enter((source as Record<string, unknown>)[keys[index]!], `${path}.${keys[index]!}`, nesting + 1);
+      if (child !== undefined) copy.push(child);
+      continue;
+    }
+    stack.pop();
+    active.delete(source);
+    // `Object.fromEntries` defines own data properties, so a `__proto__` key stays data.
+    result = Object.freeze(keys === null ? copy : Object.fromEntries(keys.map((key, i) => [key, copy[i]!])));
+    memo?.set(source, result);
+    stack.at(-1)?.copy.push(result);
   }
-  memo?.set(value, frozen);
-  return frozen;
+  return result!;
 }
 
 /**
@@ -185,12 +212,12 @@ export function freezeJsonObject(
 ): JsonObject {
   if (!isPlainObject(value)) throw new TypeError(`${name} must be an exact JSON object`);
   const limit = (options.limitNesting ?? true) ? current().maxValueNesting : Number.POSITIVE_INFINITY;
-  return freezeJson(value, name, new Set(), 0, limit, options.valueNumbers ?? false) as JsonObject;
+  return freezeJson(value, name, limit, options.valueNumbers ?? false) as JsonObject;
 }
 
 /** Validate and copy one evidence JSON value at any depth under the yian value number rule. */
 function freezeEvidenceJson(value: unknown, name: string): JsonValue {
-  return freezeJson(value, name, new Set(), 0, Number.POSITIVE_INFINITY, true);
+  return freezeJson(value, name, Number.POSITIVE_INFINITY, true);
 }
 
 /** Return `vocabulary` with the predictable plural form of each term added. */
@@ -977,6 +1004,32 @@ function freezeValueObject(value: unknown, name: string): JsonObject {
   return freezeJsonObject(value, name, { limitNesting: false, valueNumbers: true });
 }
 
+/** Visible AGENT context from which a memory may derive a query. Frozen. */
+export class RecallContext {
+  readonly baseSystemPrompt: string;
+  readonly prompt: string;
+  /** The deep-frozen visible node inputs, keys in code-unit order; any depth. */
+  readonly inputs: JsonObject;
+  /** The non-empty authored path of the consuming AGENT. */
+  readonly consumerStaticPath: readonly string[];
+
+  /**
+   * Validate the prompts, snapshot the inputs under the yian value number rule and copy the path,
+   * in that order.
+   *
+   * @throws TypeError when a prompt isn't a string, `inputs` isn't an exact JSON object or holds a
+   *   non-JSON value, or the path isn't an array of strings.
+   * @throws RangeError for a lone surrogate, NaN, a cycle, or an empty path or component.
+   */
+  constructor(baseSystemPrompt: string, prompt: string, inputs: unknown, consumerStaticPath: readonly string[]) {
+    this.baseSystemPrompt = requireString(baseSystemPrompt, "base_system_prompt", false);
+    this.prompt = requireString(prompt, "prompt", false);
+    this.inputs = freezeValueObject(inputs, "inputs");
+    this.consumerStaticPath = requirePath(consumerStaticPath, "consumer_static_path");
+    Object.freeze(this);
+  }
+}
+
 /**
  * One reducer-accepted source-neutral execution episode. Frozen.
  *
@@ -1104,7 +1157,7 @@ export function freezeFeedback(
 ): readonly JsonValue[] {
   return Object.freeze(
     Array.from(entries, (item, index) =>
-      freezeJson(item, `feedback[${firstIndex + index}]`, new Set(), 0, Number.POSITIVE_INFINITY, true, memo),
+      freezeJson(item, `feedback[${firstIndex + index}]`, Number.POSITIVE_INFINITY, true, memo),
     ),
   );
 }
@@ -1363,6 +1416,27 @@ export class MemorySetupError extends RangeError {
     super(message);
     this.origin = checkedOrigin;
     this.related = Object.freeze([...related]);
+  }
+}
+
+/** Ordinary recall failure attributed to a memory declaration site. */
+export class MemoryRecallError extends Error {
+  override name = "MemoryRecallError";
+  /** The memory's declaration site. */
+  readonly origin: OriginRef | null;
+
+  /**
+   * Create one recall wrapper; `cause` (Python's `raise ... from`) is passed to `Error` when given.
+   *
+   * @throws TypeError when `message` isn't a string or `origin` is neither `null` nor an `OriginRef`.
+   * @throws RangeError when `message` holds a lone surrogate.
+   */
+  constructor(message: string, options: { origin?: OriginRef | null; cause?: unknown } = {}) {
+    const { origin = null } = options;
+    requireString(message, "message", false);
+    const checkedOrigin = requireOrigin(origin, "origin");
+    super(message, "cause" in options ? { cause: options.cause } : undefined);
+    this.origin = checkedOrigin;
   }
 }
 
@@ -1668,7 +1742,749 @@ export class MemoryOperationError extends Error {
   }
 }
 
-/** One run session over a host-provided memory object. */
+/**
+ * Return one counter: a safe integer, not a boolean or a `bigint`.
+ *
+ * @throws TypeError when `value` isn't a safe-integer number.
+ * @throws RangeError when it's below 1 with `positive` set, or below 0 otherwise.
+ */
+function requireCounter(value: unknown, name: string, positive = false): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new TypeError(`${name} must be an integer`);
+  if (value < (positive ? 1 : 0)) throw new RangeError(`${name} must be ${positive ? "positive" : "non-negative"}`);
+  return value;
+}
+
+/** One run's accepted node start, independent of its conversation owner. Frozen. */
+export class ConversationInvocation {
+  readonly runId: string;
+  readonly startSequence: number;
+
+  /**
+   * Require a non-empty run identifier and a positive start sequence.
+   *
+   * @throws TypeError when `runId` isn't a string or `startSequence` isn't a safe integer.
+   * @throws RangeError for an empty `runId`, a lone surrogate, or a start sequence below 1.
+   */
+  constructor(runId: string, startSequence: number) {
+    this.runId = requireString(runId, "run_id");
+    this.startSequence = requireCounter(startSequence, "start_sequence", true);
+    Object.freeze(this);
+  }
+}
+
+/** Whether two invocations have equal fields (Python's dataclass equality). */
+export function sameConversationInvocation(a: ConversationInvocation, b: ConversationInvocation): boolean {
+  return a.runId === b.runId && a.startSequence === b.startSequence;
+}
+
+/** Return `value` when it's exactly a `ConversationInvocation`. */
+function requireInvocation(value: unknown): ConversationInvocation {
+  if (!isExactly(value, ConversationInvocation)) throw new TypeError("invocation must be a ConversationInvocation");
+  return value;
+}
+
+/** An invocation's authored consumer and snapshotted compatibility descriptor. Frozen. */
+export class ConversationRequest {
+  /** The non-empty authored leaf path. */
+  readonly consumerStaticPath: readonly string[];
+  readonly invocation: ConversationInvocation;
+  /** The deep-frozen opaque descriptor, keys in code-unit order; any depth. */
+  readonly compatibility: JsonObject;
+
+  /**
+   * Validate the identity and snapshot the descriptor under the yian value number rule; the path
+   * is copied and the invocation kept by reference.
+   *
+   * @throws TypeError when the path isn't an array of strings, `invocation` isn't exactly a
+   *   `ConversationInvocation`, or `compatibility` isn't an exact JSON object.
+   * @throws RangeError for an empty path or component, a lone surrogate, NaN or a cycle.
+   */
+  constructor(consumerStaticPath: readonly string[], invocation: ConversationInvocation, compatibility: unknown) {
+    this.consumerStaticPath = requirePath(consumerStaticPath, "consumer_static_path");
+    this.invocation = requireInvocation(invocation);
+    this.compatibility = freezeValueObject(compatibility, "compatibility");
+    Object.freeze(this);
+  }
+}
+
+/** One immutable, uniquely identified opaque conversation payload. Frozen. */
+export class ConversationItem {
+  /** Stable identifier, unique in its conversation. */
+  readonly itemId: string;
+  /** Opaque payload format identifier. */
+  readonly format: string;
+  /** The deep-frozen payload, keys in code-unit order; any depth. */
+  readonly payload: JsonObject;
+
+  /**
+   * Require non-empty identifiers and snapshot the payload under the yian value number rule.
+   *
+   * @throws TypeError when an identifier isn't a string or `payload` isn't an exact JSON object.
+   * @throws RangeError for an empty identifier, a lone surrogate, NaN or a cycle.
+   */
+  constructor(itemId: string, format: string, payload: unknown) {
+    this.itemId = requireString(itemId, "item_id");
+    this.format = requireString(format, "format");
+    this.payload = freezeValueObject(payload, "payload");
+    Object.freeze(this);
+  }
+}
+
+/** The conversation generation, predecessor revision and operation identity. Frozen. */
+export class ConversationStamp {
+  readonly invocation: ConversationInvocation;
+  readonly namespace: string;
+  readonly generation: number;
+  readonly expectedRevision: number;
+  /** The operation's ordinal within its invocation; 0 only for admission. */
+  readonly ordinal: number;
+
+  /**
+   * Validate the namespace, the invocation (kept by reference) and the non-negative counters, in
+   * Python's order.
+   *
+   * @throws TypeError when `namespace` isn't a string, `invocation` isn't exactly a
+   *   `ConversationInvocation`, or a counter isn't a safe integer.
+   * @throws RangeError for an empty namespace, a lone surrogate, or a negative counter.
+   */
+  constructor(
+    invocation: ConversationInvocation,
+    namespace: string,
+    generation: number,
+    expectedRevision: number,
+    ordinal: number,
+  ) {
+    this.namespace = requireString(namespace, "namespace");
+    this.invocation = requireInvocation(invocation);
+    this.generation = requireCounter(generation, "generation");
+    this.expectedRevision = requireCounter(expectedRevision, "expected_revision");
+    this.ordinal = requireCounter(ordinal, "ordinal");
+    Object.freeze(this);
+  }
+}
+
+const CONVERSATION_EFFECT_KINDS = ["model", "tool"] as const;
+const CONVERSATION_EFFECT_STATUSES = ["pending", "completed", "failed", "interrupted"] as const;
+const CONVERSATION_TURN_STATUSES = ["completed", "failed", "interrupted"] as const;
+
+/** A conversation's external effect: a model or a tool call. */
+export type ConversationEffectKind = (typeof CONVERSATION_EFFECT_KINDS)[number];
+/** An effect's latest actual disposition. */
+export type ConversationEffectStatus = (typeof CONVERSATION_EFFECT_STATUSES)[number];
+/** An invocation's terminal disposition. */
+export type ConversationTurnStatus = (typeof CONVERSATION_TURN_STATUSES)[number];
+
+/** Return one member of the closed effect vocabulary. */
+function requireEffectKind(value: ConversationEffectKind): ConversationEffectKind {
+  requireString(value, "kind");
+  if (!CONVERSATION_EFFECT_KINDS.includes(value)) throw new RangeError("unsupported conversation effect kind");
+  return value;
+}
+
+/** Return a terminal disposition without interpreting its cause. */
+function requireTurnStatus(value: ConversationTurnStatus): ConversationTurnStatus {
+  requireString(value, "status");
+  if (!CONVERSATION_TURN_STATUSES.includes(value)) throw new RangeError("invalid conversation turn status");
+  return value;
+}
+
+/** Validate an effect disposition and return its optional known failure. */
+function requireEffectFailure(
+  status: ConversationEffectStatus,
+  failure: MemoryOperationFailure | null,
+): MemoryOperationFailure | null {
+  requireString(status, "status");
+  if (!CONVERSATION_EFFECT_STATUSES.includes(status)) throw new RangeError("invalid conversation effect status");
+  if (failure !== null && !isExactly(failure, MemoryOperationFailure)) {
+    throw new TypeError("failure must be a MemoryOperationFailure or null");
+  }
+  if ((status === "pending" || status === "completed") && failure !== null) {
+    throw new RangeError("pending or completed effect cannot carry a failure");
+  }
+  if (status === "failed" && failure === null) throw new RangeError("failed effect requires a failure");
+  return failure;
+}
+
+/** One requested effect with its actual ordered observation disposition. Frozen. */
+export class ConversationEffectState {
+  readonly invocation: ConversationInvocation;
+  /** The positive request ordinal within the invocation. */
+  readonly effectOrdinal: number;
+  readonly kind: ConversationEffectKind;
+  /** The deep-frozen original effect request; any depth. */
+  readonly request: JsonObject;
+  readonly status: ConversationEffectStatus;
+  /** Strictly increasing ordinals after the request; non-empty for a terminal disposition. */
+  readonly observationOrdinals: readonly number[];
+  /** Required for `failed`, optional for `interrupted`, `null` for `pending` and `completed`. */
+  readonly failure: MemoryOperationFailure | null;
+
+  /**
+   * Snapshot the request and validate the ordered, later observation ordinals; the ordinals are
+   * copied, the invocation and failure kept by reference.
+   *
+   * @throws TypeError when `invocation` isn't exactly a `ConversationInvocation`, a counter isn't a
+   *   safe integer, `kind` or `status` isn't a string, `request` isn't an exact JSON object,
+   *   `failure` is neither `null` nor exactly a `MemoryOperationFailure`, or the ordinals aren't an
+   *   array.
+   * @throws RangeError for an effect ordinal below 1, an unknown kind or status, a bad JSON value,
+   *   a failure the status doesn't allow, ordinals that don't increase after the request, or a
+   *   terminal effect without an observation.
+   */
+  constructor(
+    invocation: ConversationInvocation,
+    effectOrdinal: number,
+    kind: ConversationEffectKind,
+    request: unknown,
+    status: ConversationEffectStatus,
+    observationOrdinals: readonly number[],
+    failure: MemoryOperationFailure | null,
+  ) {
+    this.invocation = requireInvocation(invocation);
+    this.effectOrdinal = requireCounter(effectOrdinal, "effect_ordinal", true);
+    this.kind = requireEffectKind(kind);
+    this.request = freezeValueObject(request, "request");
+    this.failure = requireEffectFailure(status, failure);
+    if (!isPlainArray(observationOrdinals)) throw new TypeError("observation_ordinals must be an array");
+    let previous = effectOrdinal;
+    for (const ordinal of observationOrdinals) {
+      requireCounter(ordinal, "observation ordinal", true);
+      if (ordinal <= previous) throw new RangeError("observation ordinals must increase after the request");
+      previous = ordinal;
+    }
+    if (status !== "pending" && observationOrdinals.length === 0) {
+      throw new RangeError("terminal effect requires an observation");
+    }
+    this.status = status;
+    this.observationOrdinals = Object.freeze([...observationOrdinals]);
+    Object.freeze(this);
+  }
+}
+
+/** An invocation's actual closed ordinal and terminal disposition. Frozen. */
+export class ConversationCompletion {
+  readonly invocation: ConversationInvocation;
+  readonly closedOrdinal: number;
+  readonly status: ConversationTurnStatus;
+
+  /**
+   * Require an exact invocation (kept by reference), a positive ordinal and a terminal status.
+   *
+   * @throws TypeError when `invocation` isn't exactly a `ConversationInvocation`, `closedOrdinal`
+   *   isn't a safe integer, or `status` isn't a string.
+   * @throws RangeError for an ordinal below 1 or a status that isn't terminal.
+   */
+  constructor(invocation: ConversationInvocation, closedOrdinal: number, status: ConversationTurnStatus) {
+    this.invocation = requireInvocation(invocation);
+    this.closedOrdinal = requireCounter(closedOrdinal, "closed_ordinal", true);
+    this.status = requireTurnStatus(status);
+    Object.freeze(this);
+  }
+}
+
+const SHA256_DIGEST = /^[0-9a-f]{64}$/;
+
+/** Content evidence for one exactly identified applied checkpoint. Frozen. */
+export class ConversationApplied {
+  /** The canonical JSON text `[run_id, start_sequence, ordinal]`. */
+  readonly operationId: string;
+  readonly eventDigest: string;
+  readonly beforeDigest: string;
+  readonly afterDigest: string;
+
+  /**
+   * Validate the canonical operation identity, then each digest's lowercase SHA-256 shape.
+   *
+   * @throws TypeError when a field isn't a string, or an encoded counter isn't a safe integer.
+   * @throws RangeError when `operationId` isn't JSON for `[run_id, start_sequence, ordinal]` or
+   *   isn't its canonical text, an encoded field is out of range, or a digest is empty or isn't 64
+   *   lowercase hex digits.
+   */
+  constructor(operationId: string, eventDigest: string, beforeDigest: string, afterDigest: string) {
+    requireString(operationId, "operation_id");
+    const shape = "operation_id must encode [run_id, start_sequence, ordinal]";
+    let parts: unknown;
+    try {
+      parts = JSON.parse(operationId);
+    } catch (error) {
+      // Python's `json.loads` raises `JSONDecodeError`, a `ValueError`.
+      if (error instanceof SyntaxError) throw new RangeError(shape);
+      throw error;
+    }
+    if (!isPlainArray(parts) || parts.length !== 3) throw new RangeError(shape);
+    requireString(parts[0], "run_id");
+    requireCounter(parts[1], "start_sequence", true);
+    requireCounter(parts[2], "ordinal");
+    // Equal to Python's `json.dumps(ensure_ascii=False, separators=(",", ":"))` for these parts.
+    if (JSON.stringify(parts) !== operationId) throw new RangeError("operation_id must be canonical JSON");
+    const digests = [
+      ["event_digest", eventDigest],
+      ["before_digest", beforeDigest],
+      ["after_digest", afterDigest],
+    ] as const;
+    for (const [name, digest] of digests) {
+      if (!SHA256_DIGEST.test(requireString(digest, name))) {
+        throw new RangeError(`${name} must be a lowercase SHA-256 digest`);
+      }
+    }
+    this.operationId = operationId;
+    this.eventDigest = eventDigest;
+    this.beforeDigest = beforeDigest;
+    this.afterDigest = afterDigest;
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Return a frozen copy of one item array with unique ids; the items are kept by reference.
+ *
+ * @throws TypeError when `value` isn't an array or an item isn't exactly a `ConversationItem`.
+ * @throws RangeError when two items share an id.
+ */
+function requireConversationItems(value: unknown): readonly ConversationItem[] {
+  if (!isPlainArray(value)) throw new TypeError("items must be an array");
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!isExactly(item, ConversationItem)) throw new TypeError("items must contain ConversationItem values");
+    if (seen.has(item.itemId)) throw new RangeError("conversation item IDs must be unique");
+    seen.add(item.itemId);
+  }
+  return Object.freeze([...(value as ConversationItem[])]);
+}
+
+/**
+ * Complete conversation state with shaped application evidence. Frozen.
+ *
+ * Construction checks carrier shape and identity uniqueness. The pure conversation fold separately
+ * proves cross-event ordering and content digests.
+ */
+export class ConversationView {
+  readonly namespace: string;
+  /** The non-negative reset generation. */
+  readonly generation: number;
+  /** The non-negative count of accepted checkpoints. */
+  readonly revision: number;
+  /** The deep-frozen retained compatibility descriptor; any depth. */
+  readonly compatibility: JsonObject;
+  /** Ordered items with unique ids. */
+  readonly items: readonly ConversationItem[];
+  /** Unique invocation and request-ordinal pairs, in retained order. */
+  readonly effects: readonly ConversationEffectState[];
+  /** One actual completion per closed invocation, in retained order. */
+  readonly closedInvocations: readonly ConversationCompletion[];
+  /** One unique operation entry per revision; the digest chain is the fold's to prove. */
+  readonly applied: readonly ConversationApplied[];
+
+  /**
+   * Validate the state in Python's order; the arrays are copied and their carriers kept by
+   * reference, and `compatibility` is snapshotted under the yian value number rule.
+   *
+   * @throws TypeError when `namespace` isn't a string, a counter isn't a safe integer,
+   *   `compatibility` isn't an exact JSON object, an array isn't an array, or an item isn't exactly
+   *   its carrier class.
+   * @throws RangeError for an empty namespace, a lone surrogate, a negative counter, a bad JSON
+   *   value, a repeated item id, effect identity, closed invocation or operation id, an applied
+   *   count other than `revision`, or history at revision zero.
+   */
+  constructor(
+    namespace: string,
+    generation: number,
+    revision: number,
+    compatibility: unknown,
+    items: readonly ConversationItem[],
+    effects: readonly ConversationEffectState[],
+    closedInvocations: readonly ConversationCompletion[],
+    applied: readonly ConversationApplied[],
+  ) {
+    this.namespace = requireString(namespace, "namespace");
+    this.generation = requireCounter(generation, "generation");
+    this.revision = requireCounter(revision, "revision");
+    this.compatibility = freezeValueObject(compatibility, "compatibility");
+    this.items = requireConversationItems(items);
+
+    if (!isPlainArray(effects)) throw new TypeError("effects must be an array");
+    const effectIds = new Set<string>();
+    for (const effect of effects) {
+      if (!isExactly(effect, ConversationEffectState)) {
+        throw new TypeError("effects must contain ConversationEffectState values");
+      }
+      // JSON text, so equal identities built apart collide, as Python's dataclass hash does.
+      const { runId, startSequence } = effect.invocation;
+      const identity = JSON.stringify([runId, startSequence, effect.effectOrdinal]);
+      if (effectIds.has(identity)) throw new RangeError("conversation effect identities must be unique");
+      effectIds.add(identity);
+    }
+    this.effects = Object.freeze([...effects]);
+
+    if (!isPlainArray(closedInvocations)) throw new TypeError("closed_invocations must be an array");
+    const closedIds = new Set<string>();
+    for (const completion of closedInvocations) {
+      if (!isExactly(completion, ConversationCompletion)) {
+        throw new TypeError("closed_invocations must contain ConversationCompletion values");
+      }
+      // JSON text, so equal identities built apart collide, as Python's dataclass hash does.
+      const { runId, startSequence } = completion.invocation;
+      const identity = JSON.stringify([runId, startSequence]);
+      if (closedIds.has(identity)) throw new RangeError("closed invocation identities must be unique");
+      closedIds.add(identity);
+    }
+    this.closedInvocations = Object.freeze([...closedInvocations]);
+
+    if (!isPlainArray(applied)) throw new TypeError("applied must be an array");
+    const operationIds = new Set<string>();
+    for (const entry of applied) {
+      if (!isExactly(entry, ConversationApplied)) {
+        throw new TypeError("applied must contain ConversationApplied values");
+      }
+      if (operationIds.has(entry.operationId)) throw new RangeError("applied operation IDs must be unique");
+      operationIds.add(entry.operationId);
+    }
+    this.applied = Object.freeze([...applied]);
+
+    if (applied.length !== revision) {
+      throw new RangeError("conversation revision requires one applied entry per checkpoint");
+    }
+    if (revision === 0 && (items.length > 0 || effects.length > 0 || closedInvocations.length > 0)) {
+      throw new RangeError("revision-zero conversation must have empty history");
+    }
+    Object.freeze(this);
+  }
+}
+
+/** Return `value` when it's exactly a stamp in its operation's ordinal domain. */
+function requireStamp(value: unknown, admission = false): ConversationStamp {
+  if (!isExactly(value, ConversationStamp)) throw new TypeError("stamp must be a ConversationStamp");
+  if ((value.ordinal === 0) !== admission) throw new RangeError("only conversation admission has ordinal zero");
+  return value;
+}
+
+/** Admission checkpoint with the complete predecessor conversation view. Frozen. */
+export class ConversationAdmitted {
+  readonly stamp: ConversationStamp;
+  readonly baseline: ConversationView;
+
+  /**
+   * Require an ordinal-zero stamp that matches its baseline; both are kept by reference.
+   *
+   * @throws TypeError when `stamp` isn't exactly a `ConversationStamp` or `baseline` exactly a
+   *   `ConversationView`.
+   * @throws RangeError for a non-zero ordinal, or a namespace, generation or expected revision
+   *   other than the baseline's.
+   */
+  constructor(stamp: ConversationStamp, baseline: ConversationView) {
+    this.stamp = requireStamp(stamp, true);
+    if (!isExactly(baseline, ConversationView)) throw new TypeError("baseline must be a ConversationView");
+    this.baseline = baseline;
+    if (
+      this.stamp.namespace !== baseline.namespace ||
+      this.stamp.generation !== baseline.generation ||
+      this.stamp.expectedRevision !== baseline.revision
+    ) {
+      throw new RangeError("admission stamp must match its baseline");
+    }
+    Object.freeze(this);
+  }
+}
+
+/** One effect request carrying only newly retained conversation items. Frozen. */
+export class ConversationEffectRequested {
+  readonly stamp: ConversationStamp;
+  readonly kind: ConversationEffectKind;
+  /** The deep-frozen external-effect request; any depth. */
+  readonly payload: JsonObject;
+  /** Newly retained items only, unique by id. */
+  readonly items: readonly ConversationItem[];
+
+  /**
+   * Validate a positive-ordinal stamp, the kind, the payload snapshot and the new items; the items
+   * array is copied and the carriers kept by reference.
+   *
+   * @throws TypeError when `stamp` isn't exactly a `ConversationStamp`, `kind` isn't a string,
+   *   `payload` isn't an exact JSON object, `items` isn't an array, or an item isn't exactly a
+   *   `ConversationItem`.
+   * @throws RangeError for ordinal zero, an unknown kind, a bad JSON value, or a repeated item id.
+   */
+  constructor(
+    stamp: ConversationStamp,
+    kind: ConversationEffectKind,
+    payload: unknown,
+    items: readonly ConversationItem[],
+  ) {
+    this.stamp = requireStamp(stamp);
+    this.kind = requireEffectKind(kind);
+    this.payload = freezeValueObject(payload, "payload");
+    this.items = requireConversationItems(items);
+    Object.freeze(this);
+  }
+}
+
+/** An actual observation of a prior requested effect within one invocation. Frozen. */
+export class ConversationEffectObserved {
+  readonly stamp: ConversationStamp;
+  readonly effectOrdinal: number;
+  readonly status: ConversationEffectStatus;
+  readonly items: readonly ConversationItem[];
+  readonly failure: MemoryOperationFailure | null;
+
+  /**
+   * Validate the observation without inventing a terminal disposition; the items array is copied
+   * and the carriers kept by reference.
+   *
+   * @throws TypeError when `stamp` isn't exactly a `ConversationStamp`, `effectOrdinal` isn't a safe
+   *   integer, `items` isn't an array, an item isn't exactly a `ConversationItem`, `status` isn't a
+   *   string, or `failure` is neither `null` nor exactly a `MemoryOperationFailure`.
+   * @throws RangeError for ordinal zero, an effect ordinal below 1 or not before the stamp's, a
+   *   repeated item id, an unknown status, or a failure the status doesn't allow.
+   */
+  constructor(
+    stamp: ConversationStamp,
+    effectOrdinal: number,
+    status: ConversationEffectStatus,
+    items: readonly ConversationItem[],
+    failure: MemoryOperationFailure | null,
+  ) {
+    this.stamp = requireStamp(stamp);
+    this.effectOrdinal = requireCounter(effectOrdinal, "effect_ordinal", true);
+    if (effectOrdinal >= this.stamp.ordinal) {
+      throw new RangeError("observed effect ordinal must precede the observation");
+    }
+    this.items = requireConversationItems(items);
+    this.failure = requireEffectFailure(status, failure);
+    this.status = status;
+    Object.freeze(this);
+  }
+}
+
+/** A positive-ordinal checkpoint closing one admitted invocation. Frozen. */
+export class ConversationClosed {
+  readonly stamp: ConversationStamp;
+  readonly status: ConversationTurnStatus;
+
+  /**
+   * Require a positive-ordinal stamp (kept by reference) and an actual terminal disposition.
+   *
+   * @throws TypeError when `stamp` isn't exactly a `ConversationStamp` or `status` isn't a string.
+   * @throws RangeError for ordinal zero or a status that isn't terminal.
+   */
+  constructor(stamp: ConversationStamp, status: ConversationTurnStatus) {
+    this.stamp = requireStamp(stamp);
+    this.status = requireTurnStatus(status);
+    Object.freeze(this);
+  }
+}
+
+/** One checkpoint of the closed conversation checkpoint sum. */
+export type ConversationCheckpoint =
+  | ConversationAdmitted
+  | ConversationEffectRequested
+  | ConversationEffectObserved
+  | ConversationClosed;
+
+/**
+ * A leased invocation that directly retains requests and actual observations.
+ *
+ * The turn calls `signal.throwIfAborted()` (Python's `check_stopped()`) on the signal it was opened
+ * with while queuing and between effects, never before recording an actual observation; that
+ * failure propagates unchanged. A method may return a value or a promise, and yian awaits it;
+ * `view` and `interrupt()` stay synchronous.
+ *
+ * Callers probe two optional capabilities with `typeof turn.x === "function"`: `prepareHistory`
+ * projects and summarizes retained history for an API request, and `interrupt()` asks the turn to
+ * close as `interrupted` when its body later returns normally, as a steerable AGENT does after a
+ * host interrupt. A turn without them closes as usual.
+ */
+export interface ConversationTurn {
+  /** The latest persisted conversation view. */
+  readonly view: ConversationView;
+  /**
+   * Persist one request, then return its positive effect ordinal; only after persistence does the
+   * external effect run.
+   *
+   * @param kind - The external-effect category.
+   * @param payload - Opaque source-neutral request data.
+   * @param options.items - Newly retained items; none by default.
+   */
+  request(
+    kind: ConversationEffectKind,
+    payload: JsonObject,
+    options?: { items?: readonly ConversationItem[] },
+  ): number | Promise<number>;
+  /**
+   * Persist only actual observation evidence for a requested effect.
+   *
+   * @param effectOrdinal - A positive request ordinal from this turn.
+   * @param status - The actual observed disposition.
+   * @param options.items - Newly retained evidence; none by default.
+   * @param options.failure - The known failure: required for `failed`, optional for `interrupted`;
+   *   `null` by default.
+   */
+  observe(
+    effectOrdinal: number,
+    status: ConversationEffectStatus,
+    options?: { items?: readonly ConversationItem[]; failure?: MemoryOperationFailure | null },
+  ): void | Promise<void>;
+  /**
+   * Record the turn's terminal disposition and release its lease (Python's `__exit__`).
+   *
+   * `error` is undefined after the body returns normally, else the body's thrown value. The turn
+   * records `interrupted` when its signal aborted, its session was closed, or `interrupt()` was
+   * called before a normal return; `failed` when `error` is given; else `completed`. It never
+   * rethrows `error`, and throws its own close failure only when `error` is undefined. With `error`
+   * undefined and the signal aborted, it records `interrupted`, releases the lease, then throws
+   * `signal.reason`. It releases the lease even when recording fails. While `error` is pending, its
+   * own close failure never replaces `error`; the implementation chooses how to report it. Since
+   * `undefined` means a normal return, a caller that caught `undefined` passes an `Error` in its
+   * place. A second call does nothing.
+   */
+  close(error?: unknown): void | Promise<void>;
+  /**
+   * Prepare opaque prior context while keeping this turn's FIFO lease; optional.
+   *
+   * @param options.projectionVersion - The non-empty identity of the adapter's projection format,
+   *   independent of the current model.
+   * @param options.project - Encode exactly the selected prior invocations of the view as text.
+   * @param options.summarize - Condense historical text towards the soft character budget, as
+   *   non-empty text.
+   * @returns The cached or new summary, or `null`, and the projection of the remaining prior turns;
+   *   the current invocation is excluded.
+   */
+  prepareHistory?(options: {
+    projectionVersion: string;
+    project: (view: ConversationView, prior: readonly ConversationInvocation[]) => string | Promise<string>;
+    summarize: (text: string, budget: number) => string | Promise<string>;
+  }):
+    | readonly [summary: string | null, projection: string]
+    | Promise<readonly [summary: string | null, projection: string]>;
+  /** Close this turn as `interrupted` when its body later returns normally; optional. */
+  interrupt?(): void;
+}
+
+/** Explicit recall contribution that admits a serialized session transcript. */
+export interface TranscriptSource {
+  /**
+   * Open one turn for an invocation, admitted under the source's FIFO lease (Python's `open_turn`
+   * and `__enter__`).
+   *
+   * A non-`ConversationRequest` throws `TypeError` before any waiting. It then waits for the lease,
+   * persists the admission and resolves to the admitted turn. If opening fails or the signal aborts
+   * after the lease is reserved, it records the close of a persisted admission (`interrupted` for an
+   * abort), releases the lease and rejects with that failure unchanged; the caller then has no turn
+   * to close.
+   *
+   * @param request - The authored consumer, invocation and compatibility descriptor, without
+   *   backend-owned identity.
+   * @param options.signal - Aborted when a cooperative stop is requested.
+   */
+  openTurn(
+    request: ConversationRequest,
+    options: { signal: AbortSignal },
+  ): ConversationTurn | Promise<ConversationTurn>;
+}
+
+/**
+ * One memory's transient notes and optional transcript source. Frozen.
+ *
+ * Return `new MemoryContent({ text: "Prefer concise answers." })` from a notes memory, or
+ * `new MemoryContent({ transcript: this })` from a memory that owns a conversation.
+ */
+export class MemoryContent {
+  /** The notes; empty text contributes no visible section. */
+  readonly text: string;
+  /** The live source, kept by reference and only for this admission. */
+  readonly transcript: TranscriptSource | null;
+
+  /**
+   * Require the notes, then a source whose `openTurn` is a function, or `null`.
+   *
+   * @throws TypeError when `text` isn't a string or the source lacks `openTurn`.
+   * @throws RangeError when `text` holds a lone surrogate.
+   */
+  constructor(options: { text?: string; transcript?: TranscriptSource | null } = {}) {
+    const { text = "", transcript = null } = options;
+    this.text = requireString(text, "text", false);
+    if (transcript !== null && typeof (transcript as { openTurn?: unknown }).openTurn !== "function") {
+      throw new TypeError("transcript must supply openTurn or be null");
+    }
+    this.transcript = transcript;
+    Object.freeze(this);
+  }
+}
+
+/** The recall inputs and accepted invocation for one context admission. Frozen. */
+export class MemoryContextRequest {
+  readonly recall: RecallContext;
+  /** The accepted node start; `null` permits text-only context without a transcript. */
+  readonly invocation: ConversationInvocation | null;
+  /** The deep-frozen descriptor a selected transcript source uses, keys in code-unit order; any depth. */
+  readonly compatibility: JsonObject;
+
+  /**
+   * Require exact carriers (kept by reference) and snapshot the descriptor under the yian value
+   * number rule. `new MemoryContextRequest(recall, null, {})` evaluates text-only memories; a
+   * transcript contribution needs an invocation.
+   *
+   * @throws TypeError when `recall` isn't exactly a `RecallContext`, `invocation` is neither `null`
+   *   nor exactly a `ConversationInvocation`, or `compatibility` isn't an exact JSON object or holds
+   *   a non-JSON value.
+   * @throws RangeError for NaN, a lone surrogate or a cycle in `compatibility`.
+   */
+  constructor(recall: RecallContext, invocation: ConversationInvocation | null, compatibility: unknown) {
+    if (!isExactly(recall, RecallContext)) throw new TypeError("recall must be a RecallContext");
+    this.recall = recall;
+    this.invocation = invocation === null ? null : requireInvocation(invocation);
+    this.compatibility = freezeValueObject(compatibility, "compatibility");
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Ordered visible notes and an optional admitted live transcript. Frozen.
+ *
+ * `new MemoryContext()` is the empty context of an invocation without memory.
+ */
+export class MemoryContext {
+  /** The sections in outer-to-local ownership order; admission checks the scope order. */
+  readonly sections: readonly MemorySection[];
+  /** The live leased transcript, whose lifetime the caller owns; kept by reference. */
+  readonly transcript: ConversationTurn | null;
+
+  /**
+   * Copy the sections array, keeping its sections by reference.
+   *
+   * @throws TypeError when `sections` isn't an array or an item isn't exactly a `MemorySection`.
+   */
+  constructor(options: { sections?: readonly MemorySection[]; transcript?: ConversationTurn | null } = {}) {
+    const { sections = [], transcript = null } = options;
+    if (!isPlainArray(sections)) throw new TypeError("sections must be an array");
+    for (const section of sections) {
+      if (!isExactly(section, MemorySection)) throw new TypeError("sections must contain MemorySection values");
+    }
+    this.sections = Object.freeze([...sections]);
+    this.transcript = transcript;
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Write-only sink for visible evidence from one AGENT invocation.
+ *
+ * Implementations accept only the exact carriers of this module. It has no read surface: the
+ * evaluator freezes the invocation's trace into durable evidence. The engine implements it, so its
+ * methods are synchronous.
+ */
+export interface EvaluationTrace {
+  /** Record the one visible model prompt of an AGENT invocation; no memory sections by default. */
+  recordPrompt(baseSystemPrompt: string, prompt: string, memorySections?: readonly MemorySection[]): void;
+  /** Append one exact visible model or tool interaction. */
+  recordInteraction(interaction: VisibleInteraction): void;
+}
+
+/**
+ * One run session over a host-provided memory object.
+ *
+ * A method may return a value or a promise, and yian always awaits it, as for tools; `snapshot` is
+ * read synchronously. A session has no `with` form: its caller calls `close()` in `finally`.
+ */
 export interface MemorySession {
   /**
    * The backend's public durable export, persisted verbatim for run recovery: no host
@@ -1676,15 +2492,32 @@ export interface MemorySession {
    */
   readonly snapshot: JsonObject;
   /** Release resources held by this run session. */
-  close(): void;
+  close(): void | Promise<void>;
+  /**
+   * Return notes and an optional transcript source for one invocation; `null` or no context asks
+   * for the whole memory, as a host inspection does.
+   */
+  recall(context?: RecallContext | null): string | MemoryContent | Promise<string | MemoryContent>;
+  /** Return this memory's proposed mutations for one batch, as an array. */
+  learn(context: LearnContext): readonly MemoryMutation[] | Promise<readonly MemoryMutation[]>;
+  /**
+   * Atomically commit one immutable mutation batch.
+   *
+   * `commitId` is stable within one backward attempt, so a repeated commit of that attempt may be a
+   * no-op. Every later attempt that requests commits gets a distinct id, even for an identical batch.
+   */
+  commit(commitId: string, mutations: readonly MemoryMutation[]): void | Promise<void>;
 }
 
-/** Host-injected memory object that opens run sessions and can be reset. */
+/**
+ * Host-injected memory object that opens run sessions and can be reset. A method may return a
+ * value or a promise, and yian always awaits it.
+ */
 export interface Memory {
   /** Open one run session, optionally restoring a recorded snapshot. */
-  openRun(options?: { snapshot?: JsonObject | null }): MemorySession;
+  openRun(options?: { snapshot?: JsonObject | null }): MemorySession | Promise<MemorySession>;
   /** Clear current memory state according to the backend's policy. */
-  reset(): void;
+  reset(): void | Promise<void>;
 }
 
 /** Whether `value` has `Memory`'s methods (Python's runtime-checkable `isinstance`). */

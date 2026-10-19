@@ -12,8 +12,8 @@
  * A call without an id gets one (`yian_call_<n>`). The finish is held until the stream ends, so
  * the usage chunk that follows it is read. Reasoning parts carry replay records naming the wire
  * field they came from, so only reasoning this route parsed from `reasoning_content` is echoed.
- * DeepSeek requires every earlier turn's `reasoning_content` when the request sends tools, so
- * there a turn with none to echo (another provider's or model's, `deepseek-chat`'s) sends `""`.
+ * DeepSeek requires every earlier turn's `reasoning_content` when the request sends tools, so on
+ * a tool request a turn with no reasoning to echo sends `reasoning_content: ""`.
  * A reply that failed, was filtered, ran out of capacity or ended early raises `ProviderError`.
  * An error message holds the provider's text uncapped; `RouteModel` scrubs it of the route's
  * credentials and then caps it.

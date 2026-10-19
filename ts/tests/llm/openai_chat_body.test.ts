@@ -663,7 +663,7 @@ describe("reasoning echo on a request with tools", () => {
     });
   }
 
-  test("a usable record is echoed as without tools", () => {
+  test("a usable record is echoed unchanged with tools", () => {
     const turn = callTurn(thought("Need the tool."));
     expect(echoed([turn], { tools })).toEqual([[callSent({ reasoning_content: "Need the tool." })], []]);
   });

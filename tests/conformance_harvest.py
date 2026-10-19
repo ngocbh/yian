@@ -1502,7 +1502,7 @@ def _ts_names(text: str, python_only: bool = False) -> str:
     A list holding anything but texts is left alone, but a list of texts nested in another
     list or a mapping is converted alone (`{'k': ['a']}` reads `{'k': ["a"]}`). With
     `python_only`, a list whose texts are all double-quoted (JSON, as `json.dumps` writes it)
-    is left alone too. Not matched: a list cut by `shown_text`, and names joined without
+    is left alone too, as is Python's list of names that each hold a `'`. Not matched: a list cut by `shown_text`, and names joined without
     brackets by Python's own `", ".join(repr(...))`. Converted too: such a list inside a text
     value or source text the message quotes. Review `messages` cases by hand.
     """

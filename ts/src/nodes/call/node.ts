@@ -14,7 +14,7 @@
  * for its cached child signature and exposes its baked child through the source-neutral
  * `originChildren` hook.
  *
- * Knows about:   nodes/base and peer node modules.
+ * Knows about:   nodes/base, nodes/contracts and diagnostics.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 

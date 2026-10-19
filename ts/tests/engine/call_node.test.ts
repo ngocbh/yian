@@ -42,14 +42,12 @@ test("map node kind and parallel fields", () => {
 
 test("call unbaked child raises", async () => {
   const node = new CallNode("c", { flowId: "child", child: null });
-  await expect(node.run({ topic: "ACME" })).rejects.toThrow("not baked");
   await expect(node.run({ topic: "ACME" })).rejects.toThrow("CALL node 'c': child flow 'child' not baked");
 });
 
 test("map unbaked child raises", async () => {
   const node = new MapNode("m", { flowId: "child", child: null });
   const caps: NodeCaps = { bindItem: (element) => ({ topic: element }) };
-  await expect(node.run({ over: ["ACME"] }, caps)).rejects.toThrow("not baked");
   await expect(node.run({ over: ["ACME"] }, caps)).rejects.toThrow("MAP node 'm': child flow 'child' not baked");
 });
 

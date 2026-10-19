@@ -204,19 +204,15 @@ test("failure trace rejects malformed ancestry", () => {
   expect(() => node.failureTrace()).toThrow(RangeError);
 });
 
-/** Build one CALL fixture over a baked child and cached signature. */
-function callDriver(child: object, signature: Parameter): CallNode {
-  return new CallNode("call", { flowId: "child", child, childInputs: [signature] });
-}
-
-/** Build one MAP fixture over a baked child and cached signature. */
-function mapDriver(child: object, signature: Parameter): MapNode {
-  return new MapNode("map", { flowId: "child", child, childInputs: [signature] });
-}
-
 for (const [label, make] of [
-  ["call", callDriver],
-  ["map", mapDriver],
+  [
+    "call",
+    (child: object, signature: Parameter) => new CallNode("call", { flowId: "child", child, childInputs: [signature] }),
+  ],
+  [
+    "map",
+    (child: object, signature: Parameter) => new MapNode("map", { flowId: "child", child, childInputs: [signature] }),
+  ],
 ] as const) {
   test(`each composite exposes its signature and baked child (${label}, local half)`, () => {
     const signature = new Parameter("item", { origin: origin("signature") });

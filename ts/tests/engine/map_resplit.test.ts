@@ -3,6 +3,9 @@
  * retired ref kind and package stay absent; `CallNode` carries no `over` or `parallel`, while
  * `MapNode` has its own kind and keeps the `over` source in flow wiring.
  *
+ * Ported: `test_retired_ref_kind_is_absent_and_call_map_are_distinct`,
+ * `test_retired_ref_package_is_absent` and `test_call_node_excludes_map_fields`.
+ *
  * Changed: `NodeKind` is a const object of strings, so a member is its value and has no
  * `.value`; `hasattr` is the `in` operator. In `test_retired_ref_package_is_absent` a package
  * import is a dynamic `import()` of the kind's `node.ts`; the missing module's specifier is
@@ -24,7 +27,7 @@ test("retired ref kind is absent and call map are distinct", () => {
 
 test("retired ref package is absent", async () => {
   const retired = "../../src/nodes/ref/" + "node.ts";
-  await expect(import(retired)).rejects.toThrow();
+  await expect(import(retired)).rejects.toMatchObject({ code: "ERR_MODULE_NOT_FOUND" });
   await import("../../src/nodes/call/node.ts");
   await import("../../src/nodes/map/node.ts");
 });

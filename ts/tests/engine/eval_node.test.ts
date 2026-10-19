@@ -11,6 +11,9 @@
  * `test_map_over_accepts_a_binding_carrier` checks the resolved `over` list, not the `Grow` the
  * MAP body builds from it. The not-a-list message is pinned as the golden format's text.
  *
+ * TS-only: `test_map_over_not_a_list_message_is_byte_identical` also checks the error's `origin`
+ * (the carrier's, else `null`).
+ *
  * Later (T3-8, LOOP): the LOOP row of `test_unbaked_composite_is_a_setup_fault`.
  *
  * Later (T4-6): the evaluator and the other rows.
@@ -34,15 +37,14 @@ test("map over accepts a binding carrier", () => {
   expect(node.bindReserved(wiring, new VariablePool())).toEqual({ over: ["first", "second"] });
 });
 
-for (const [label, make] of [
-  ["call", () => new CallNode("call", { flowId: "child" })],
-  ["map", () => new MapNode("map", { flowId: "child" })],
+for (const [label, make, inputs] of [
+  ["call", () => new CallNode("call", { flowId: "child" }), {}],
+  ["map", () => new MapNode("map", { flowId: "child" }), { over: [] }],
 ] as const) {
   test(`unbaked composite is a setup fault (${label})`, async () => {
     // A missing compiled child is malformed setup, not expected node rejection.
     const node: Node = make();
     node.preAsserts = [new Assertion("false", "must not mask malformed setup")];
-    const inputs = node instanceof MapNode ? { over: [] } : {};
 
     await expect(node.run(inputs)).rejects.toThrow("baked");
   });

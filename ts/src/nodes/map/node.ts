@@ -17,7 +17,7 @@
  * carried for the `over` case. The node also owns origin traversal for its cached child signature
  * and exposes its baked child through the source-neutral `originChildren` hook.
  *
- * Knows about:   nodes/base, expr, and peer node modules.
+ * Knows about:   nodes/base, nodes/binding, nodes/contracts, diagnostics and typesys.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
@@ -49,6 +49,7 @@ export class MapNode extends Node {
   override readonly isSpawner: boolean = true;
   /** Binds call-args per element through the `bindItem` capability, not up front. */
   override readonly bindsPerItem: boolean = true;
+  /** Each element is read from the bound `over` list. */
   override readonly itemSourceKey: string | null = "over";
   /** Each child is one call level deeper. */
   override readonly growDepthDelta: number | null = 1;
@@ -142,17 +143,15 @@ export class MapNode extends Node {
     const { bind = null } = options;
     if (!nodeWiring.has("over")) throw new Error(`MAP node ${reprText(this.id)} has no \`over\` wiring`);
     const overSrc = nodeWiring.get("over");
+    const origin = sourceOrigin(overSrc);
+    // Python formats the source with `str()`, so source text is shown as written.
+    const raw = bindingSource(overSrc);
+    const label = `MAP node ${reprText(this.id)}: \`over\` (${typeof raw === "string" ? raw : valueRepr(raw)})`;
     const validate = (items: unknown): unknown => {
-      // Python formats the source with `str()`, so source text is shown as written.
-      const raw = bindingSource(overSrc);
-      const shown = typeof raw === "string" ? raw : valueRepr(raw);
       if (items === null || !isList(items)) {
-        throw new BindingError(`MAP node ${reprText(this.id)}: \`over\` (${shown}) did not resolve to a list`, {
-          failureCode: "contract.input",
-          origin: sourceOrigin(overSrc),
-        });
+        throw new BindingError(`${label} did not resolve to a list`, { failureCode: "contract.input", origin });
       }
-      rejectInvalidBinding(items, `MAP node ${reprText(this.id)}: \`over\` (${shown})`, sourceOrigin(overSrc));
+      rejectInvalidBinding(items, label, origin);
       return items;
     };
     const items = bind === null ? validate(resolveSource(overSrc, pool)) : bind("over", overSrc, validate);

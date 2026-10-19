@@ -1,0 +1,72 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "deepseek_tools: the double tool on deepseek-reasoner; a reasoning + tool call reply.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/chat/completions",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "authorization": "<redacted>"
+        },
+        "json": {
+          "model": "deepseek-reasoner",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Double 3."
+            }
+          ],
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "double",
+                "description": "Double an integer.",
+                "parameters": {
+                  "properties": {
+                    "value": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "type": "object"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"deepseek-reasoner\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"deepseek-reasoner\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \"Need th\", \"content\": null}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"deepseek-reasoner\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \"e tool.\", \"content\": null}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"deepseek-reasoner\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call_1\", \"type\": \"function\", \"function\": {\"name\": \"double\", \"arguments\": \"\"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"deepseek-reasoner\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"{\\\"val\"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"deepseek-reasoner\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"ue\\\":3}\"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"deepseek-reasoner\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"tool_calls\", \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"deepseek-reasoner\", \"choices\": [], \"usage\": {\"prompt_tokens\": 21, \"completion_tokens\": 40, \"total_tokens\": 61, \"prompt_cache_hit_tokens\": 5, \"prompt_cache_miss_tokens\": 16, \"completion_tokens_details\": {\"reasoning_tokens\": 30}}}\n\n",
+          "data: [DONE]\n\n"
+        ]
+      }
+    }
+  ]
+}

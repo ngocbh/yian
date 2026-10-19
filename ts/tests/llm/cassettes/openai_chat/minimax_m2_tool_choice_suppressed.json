@@ -1,0 +1,72 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "minimax_m2_tool_choice_suppressed: MiniMax-M2.7 rejects a named tool_choice, so it is left out; parallel_tool_calls false and reasoning_split are sent.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.minimax.io/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "authorization": "<redacted>"
+        },
+        "json": {
+          "model": "MiniMax-M2.7",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Answer."
+            }
+          ],
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "Answer",
+                "description": "An answer.",
+                "parameters": {
+                  "properties": {
+                    "answer": {
+                      "type": "string"
+                    },
+                    "score": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "answer",
+                    "score"
+                  ],
+                  "type": "object"
+                }
+              }
+            }
+          ],
+          "parallel_tool_calls": false,
+          "reasoning_split": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"MiniMax-M2.7\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"MiniMax-M2.7\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call_1\", \"type\": \"function\", \"function\": {\"name\": \"Answer\", \"arguments\": \"\"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"MiniMax-M2.7\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"{\\\"answer\\\": \\\"x\"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"MiniMax-M2.7\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"\\\", \\\"score\\\": 1}\"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"MiniMax-M2.7\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"tool_calls\", \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"MiniMax-M2.7\", \"choices\": [], \"usage\": {\"prompt_tokens\": 21, \"completion_tokens\": 40, \"total_tokens\": 61, \"prompt_tokens_details\": {\"cached_tokens\": 5}, \"completion_tokens_details\": {\"reasoning_tokens\": 30}}}\n\n",
+          "data: [DONE]\n\n"
+        ]
+      }
+    }
+  ]
+}

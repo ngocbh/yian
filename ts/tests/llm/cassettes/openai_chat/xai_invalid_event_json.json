@@ -1,0 +1,40 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "xai_invalid_event_json: an event that is not JSON fails as a protocol error, not retried.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.x.ai/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "authorization": "<redacted>"
+        },
+        "json": {
+          "model": "grok-4",
+          "messages": [
+            {
+              "role": "user",
+              "content": "hi"
+            }
+          ],
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {not json}\n\n"
+        ]
+      }
+    }
+  ]
+}

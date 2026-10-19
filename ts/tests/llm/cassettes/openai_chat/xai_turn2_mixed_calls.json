@@ -1,0 +1,101 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "xai_turn2_mixed_calls: a turn with text, a valid call with a non-ASCII argument and an invalid call: the valid call first with compact arguments, the invalid one with its raw text.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.x.ai/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "authorization": "<redacted>"
+        },
+        "json": {
+          "model": "grok-4",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Double 3."
+            },
+            {
+              "role": "assistant",
+              "content": "Let me check.",
+              "tool_calls": [
+                {
+                  "type": "function",
+                  "id": "call_1",
+                  "function": {
+                    "name": "double",
+                    "arguments": "{\"value\":3,\"label\":\"Bùi\"}"
+                  }
+                },
+                {
+                  "type": "function",
+                  "id": "call_2",
+                  "function": {
+                    "name": "double",
+                    "arguments": "{\"value\": 3"
+                  }
+                }
+              ]
+            },
+            {
+              "role": "tool",
+              "tool_call_id": "call_2",
+              "content": "invalid arguments"
+            },
+            {
+              "role": "tool",
+              "tool_call_id": "call_1",
+              "content": "6"
+            }
+          ],
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "double",
+                "description": "Double an integer.",
+                "parameters": {
+                  "properties": {
+                    "value": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "type": "object"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"grok-4\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"grok-4\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"It is\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"grok-4\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \" 6.\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"grok-4\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\", \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"grok-4\", \"choices\": [], \"usage\": {\"prompt_tokens\": 21, \"completion_tokens\": 40, \"total_tokens\": 61, \"prompt_tokens_details\": {\"cached_tokens\": 5}, \"completion_tokens_details\": {\"reasoning_tokens\": 30}}}\n\n",
+          "data: [DONE]\n\n"
+        ]
+      }
+    }
+  ]
+}

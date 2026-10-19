@@ -2091,6 +2091,16 @@ A few providers need a note:
     error. Reasoning sent back on the next turn is left out when it came from another
     provider, model, or account.
 
+- `azure`, `xai`, `deepseek`, `qwen`, `glm`, `minimax`, `openrouter` and `vllm` (and the
+  `-cn` twins) use Chat Completions.
+
+    Changed (TS yian): every call streams, DeepSeek included. A reply that ends without
+    its finish reason fails the model call and is retried; an error in the stream fails
+    it, retried when its kind allows (an unknown code counts as a server error). A
+    content-filter stop is `provider.refused`; DeepSeek's `insufficient_system_resource`
+    and the `error` and `aborted` finish reasons are retried. Reasoning goes back only to
+    DeepSeek, and only to the model that wrote it.
+
 - `google` uses the REST names and enum spellings: camelCase keys and upper-case
   levels, such as `google: {generationConfig: {thinkingConfig: {thinkingLevel: HIGH}}}`.
 - `anthropic` with `thinking` on (any `type` other than `disabled`) gets structured

@@ -1,0 +1,78 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "azure_tool_choice_named: a named tool choice on a deployment other than gpt-4o: parallel_tool_calls is not sent.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://res.openai.azure.com/openai/deployments/my-deploy/chat/completions?api-version=2025-03-01-preview",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "api-key": "<redacted>"
+        },
+        "json": {
+          "model": "my-deploy",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Answer."
+            }
+          ],
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "Open",
+                "description": "",
+                "parameters": {
+                  "properties": {
+                    "answer": {
+                      "type": "string"
+                    },
+                    "extra": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "answer",
+                    "extra"
+                  ],
+                  "type": "object"
+                }
+              }
+            }
+          ],
+          "tool_choice": {
+            "type": "function",
+            "function": {
+              "name": "Open"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"id\": \"\", \"object\": \"\", \"created\": 0, \"model\": \"\", \"choices\": [], \"prompt_filter_results\": [{\"prompt_index\": 0, \"content_filter_results\": {}}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call_1\", \"type\": \"function\", \"function\": {\"name\": \"Open\", \"arguments\": \"\"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"{\\\"answer\\\": \\\"x\\\", \\\"\"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"extra\\\": {\\\"k\\\": 1}}\"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"tool_calls\", \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [], \"usage\": {\"prompt_tokens\": 21, \"completion_tokens\": 40, \"total_tokens\": 61, \"prompt_tokens_details\": {\"cached_tokens\": 5}, \"completion_tokens_details\": {\"reasoning_tokens\": 30}}}\n\n",
+          "data: [DONE]\n\n"
+        ]
+      }
+    }
+  ]
+}

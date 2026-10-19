@@ -202,11 +202,11 @@ export class AnthropicMessages implements SseProtocol {
    * comes next; otherwise it is hoisted to `system`, with LangChain's warning through
    * `process.emitWarning` (once per instance). An assistant message is sent as its blocks in
    * part order: thinking, redacted thinking, text and `tool_use` (an invalid call with empty
-   * `input`), one lone text as a string; refusals are not sent. Its reasoning goes back from its replay records, only
-   * with a text or call, and is all left out when any reasoning part has no record or one that
-   * can't be used, `onReplayDegraded` being called once for the latter (a throw from the callback
-   * propagates). The final assistant message is stripped at the end, and an empty assistant
-   * message is skipped unless it is the final one.
+   * `input`), one lone text as a string; refusals are not sent. Its reasoning goes back from its
+   * replay records, only with a text or call, and is all left out when any reasoning part has no
+   * record or one that can't be used, `onReplayDegraded` being called once for the latter (a
+   * throw from the callback propagates). The final assistant message is stripped at the end, and
+   * an empty assistant message is skipped unless it is the final one.
    *
    * @throws {ProviderError} A `bad_request` when thinking is `enabled`, the request continues a
    *   tool loop, and the loop's first assistant message had its reasoning left out for an

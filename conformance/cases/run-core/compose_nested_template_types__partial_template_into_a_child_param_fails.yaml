@@ -4,13 +4,6 @@ flow: |
     Rec:
       a: str
       n: int
-    Buy:
-      conviction: float
-    Obj:
-      n: int
-    Trade:
-      action: Literal(buy)
-      conviction: float
   id: nested_call
   name: nested_call
   defs:
@@ -39,9 +32,9 @@ expect:
       code: contract.input
       frames:
       - label: flow.yaml
-        range: [25, 3, 25, 4]
+        range: [18, 3, 18, 4]
       - label: flow.yaml
-        range: [17, 10, 17, 14]
+        range: [10, 10, 10, 14]
       message: 'input ''p'': 5 does not match declared type str'
       node: c/__start__
   trace:
@@ -73,9 +66,9 @@ expect:
         code: contract.input
         frames:
         - label: flow.yaml
-          range: [25, 3, 25, 4]
+          range: [18, 3, 18, 4]
         - label: flow.yaml
-          range: [17, 10, 17, 14]
+          range: [10, 10, 10, 14]
         message: 'input ''p'': 5 does not match declared type str'
         node: c/__start__
   events:
@@ -107,9 +100,9 @@ expect:
         code: contract.input
         frames:
         - label: flow.yaml
-          range: [25, 3, 25, 4]
+          range: [18, 3, 18, 4]
         - label: flow.yaml
-          range: [17, 10, 17, 14]
+          range: [10, 10, 10, 14]
         message: 'input ''p'': 5 does not match declared type str'
         node: c/__start__
   - - RunFailed
@@ -117,8 +110,8 @@ expect:
         code: contract.input
         frames:
         - label: flow.yaml
-          range: [25, 3, 25, 4]
+          range: [18, 3, 18, 4]
         - label: flow.yaml
-          range: [17, 10, 17, 14]
+          range: [10, 10, 10, 14]
         message: 'input ''p'': 5 does not match declared type str'
         node: c/__start__

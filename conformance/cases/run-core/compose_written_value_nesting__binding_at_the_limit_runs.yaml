@@ -19,8 +19,6 @@ python_flow: |
       input:
         topic: [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
   output: ${use.output}
-env:
-  YIAN_MAX_YAML_NODES: '10000000'
 run:
   num_workers: 0
 expect:
@@ -31,9 +29,7 @@ expect:
   trace:
   - - run_started
     - null
-    - defaults:
-        MAX_YAML_NODES: 10000000
-      inputs: {}
+    - inputs: {}
       learnable: false
       num_workers: 0
   - [node_started, __start__]

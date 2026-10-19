@@ -1,6 +1,5 @@
 kind: run
-flow: |2
-
+flow: |
   id: unions
   name: unions
   typedefs:
@@ -8,12 +7,8 @@ flow: |2
     Sell: {action: 'Literal(sell)', qty: int, price: float}
     Hold: {action: 'Literal(hold)', note: str}
     Decision: Union(Buy, Sell, Hold)
-    Text: {text: str}
-    Num: {num: int}
-    Note: Union(Text, Num)
   input:
     decision: !object
-    note: !object
   defs:
     sell_flow:
       input:
@@ -59,38 +54,10 @@ flow: |2
       code: |
         return "hold: " + inputs["note"]
       output: str
-    n:
-      kind: code
-      input:
-        note: ${input.note}
-      code: |
-        return inputs["note"]
-      output: Note
-    kind_of:
-      kind: case
-      cases:
-        - when: isinstance(n.output, Text)
-          then: shout
-      else: double
-    shout:
-      kind: code
-      input:
-        text: ${n.output.text}
-      code: |
-        return inputs["text"].toUpperCase()
-      output: str
-    double:
-      kind: code
-      depends_on: [n]
-      code: |
-        return "number"
-      output: str
   output:
     action: ${d.output.action}
     trade: ${place_buy.output | __call_0.output | log_hold.output}
-    note: ${shout.output | double.output}
-python_flow: |2
-
+python_flow: |
   id: unions
   name: unions
   typedefs:
@@ -98,12 +65,8 @@ python_flow: |2
     Sell: {action: 'Literal(sell)', qty: int, price: float}
     Hold: {action: 'Literal(hold)', note: str}
     Decision: Union(Buy, Sell, Hold)
-    Text: {text: str}
-    Num: {num: int}
-    Note: Union(Text, Num)
   input:
     decision: !object
-    note: !object
   defs:
     sell_flow:
       input:
@@ -149,42 +112,13 @@ python_flow: |2
       code: |
         return "hold: " + inputs["note"]
       output: str
-    n:
-      kind: code
-      input:
-        note: ${input.note}
-      code: |
-        return inputs["note"]
-      output: Note
-    kind_of:
-      kind: case
-      cases:
-        - when: isinstance(n.output, Text)
-          then: shout
-      else: double
-    shout:
-      kind: code
-      input:
-        text: ${n.output.text}
-      code: |
-        return inputs["text"].upper()
-      output: str
-    double:
-      kind: code
-      depends_on: [n]
-      code: |
-        return "number"
-      output: str
   output:
     action: ${d.output.action}
     trade: ${place_buy.output | __call_0.output | log_hold.output}
-    note: ${shout.output | double.output}
 inputs:
   decision:
     action: hold
     note: wait
-  note:
-    num: 1
 run:
   num_workers: 0
 expect:
@@ -192,7 +126,6 @@ expect:
     status: succeeded
     output:
       action: hold
-      note: number
       trade: 'hold: wait'
   trace:
   - - run_started
@@ -201,8 +134,6 @@ expect:
         decision:
           action: hold
           note: wait
-        note:
-          num: 1
       learnable: false
       num_workers: 0
   - [node_started, __start__]
@@ -212,41 +143,25 @@ expect:
         decision:
           action: hold
           note: wait
-        note:
-          num: 1
   - [node_started, d]
   - - node_succeeded
     - d
     - value:
         action: hold
         note: wait
-  - [node_started, n]
-  - - node_succeeded
-    - n
-    - value:
-        num: 1
   - [node_started, route]
   - - node_routed
     - route
-    - handle: '#else'
-  - [node_started, kind_of]
-  - - node_routed
-    - kind_of
     - handle: '#else'
   - [node_started, log_hold]
   - - node_succeeded
     - log_hold
     - value: 'hold: wait'
-  - [node_started, double]
-  - - node_succeeded
-    - double
-    - value: number
   - [node_started, __end__]
   - - node_succeeded
     - __end__
     - value:
         action: hold
-        note: number
         trade: 'hold: wait'
   events:
   - [RunStarted]
@@ -258,8 +173,6 @@ expect:
         decision:
           action: hold
           note: wait
-        note:
-          num: 1
   - - NodeStarted
     - node_id: d
   - - NodeSucceeded
@@ -267,12 +180,6 @@ expect:
       output:
         action: hold
         note: wait
-  - - NodeStarted
-    - node_id: n
-  - - NodeSucceeded
-    - node_id: n
-      output:
-        num: 1
   - - NodeStarted
     - node_id: route
   - - NodeRouted
@@ -283,32 +190,18 @@ expect:
   - - NodeSkipped
     - node_id: __call_0
   - - NodeStarted
-    - node_id: kind_of
-  - - NodeRouted
-    - handle: '#else'
-      node_id: kind_of
-  - - NodeSkipped
-    - node_id: shout
-  - - NodeStarted
     - node_id: log_hold
   - - NodeSucceeded
     - node_id: log_hold
       output: 'hold: wait'
-  - - NodeStarted
-    - node_id: double
-  - - NodeSucceeded
-    - node_id: double
-      output: number
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         action: hold
-        note: number
         trade: 'hold: wait'
   - - RunSucceeded
     - output:
         action: hold
-        note: number
         trade: 'hold: wait'

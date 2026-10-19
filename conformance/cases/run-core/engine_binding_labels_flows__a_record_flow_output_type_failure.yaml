@@ -1,6 +1,16 @@
 kind: run
 rules: [messages]
-flow: "\nid: f\nname: f\nnodes:\n  m:\n    kind: code\n    code: |\n      return \"x\"\noutput: \n  r: !int ${m.output}\n"
+flow: |2
+
+  id: f
+  name: f
+  nodes:
+    m:
+      kind: code
+      code: |
+        return "x"
+  output:
+    r: !int ${m.output}
 run:
   num_workers: 0
 expect:

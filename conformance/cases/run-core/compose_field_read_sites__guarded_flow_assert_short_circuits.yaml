@@ -4,22 +4,12 @@ flow: |
   name: p
   typedefs:
     Rec: {a: str}
-    Rec3: {a: str, b: Optional(str)}
     Buy: {action: 'Literal(buy)', qty: int}
     Sell: {action: 'Literal(sell)'}
     Order: Union(Buy, Sell)
-    Short: {action: 'Literal(short)', qty: int}
-    Hold: {action: 'Literal(hold)'}
-    Trade: Union(Buy, Short, Hold)
-    Sized: Union(Buy, Short)
-    A: {x: int}
-    B: {y: str}
-    AB: Union(A, B)
   input:
     s: !str
-    r: !Rec
     o: !Order
-    ab: !AB
   nodes:
     step:
       kind: code
@@ -35,22 +25,12 @@ python_flow: |
   name: p
   typedefs:
     Rec: {a: str}
-    Rec3: {a: str, b: Optional(str)}
     Buy: {action: 'Literal(buy)', qty: int}
     Sell: {action: 'Literal(sell)'}
     Order: Union(Buy, Sell)
-    Short: {action: 'Literal(short)', qty: int}
-    Hold: {action: 'Literal(hold)'}
-    Trade: Union(Buy, Short, Hold)
-    Sized: Union(Buy, Short)
-    A: {x: int}
-    B: {y: str}
-    AB: Union(A, B)
   input:
     s: !str
-    r: !Rec
     o: !Order
-    ab: !AB
   nodes:
     step:
       kind: code
@@ -63,12 +43,8 @@ python_flow: |
     - "not isinstance(input.o, Buy) or input.o.qty > 0"
 inputs:
   s: x
-  r:
-    a: x
   o:
     action: sell
-  ab:
-    x: 1
 run:
   num_workers: 0
 expect:
@@ -80,12 +56,8 @@ expect:
   - - run_started
     - null
     - inputs:
-        ab:
-          x: 1
         o:
           action: sell
-        r:
-          a: x
         s: x
       learnable: false
       num_workers: 0
@@ -93,12 +65,8 @@ expect:
   - - node_succeeded
     - __start__
     - value:
-        ab:
-          x: 1
         o:
           action: sell
-        r:
-          a: x
         s: x
   - [node_started, step]
   - - node_succeeded
@@ -117,12 +85,8 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output:
-        ab:
-          x: 1
         o:
           action: sell
-        r:
-          a: x
         s: x
   - - NodeStarted
     - node_id: step

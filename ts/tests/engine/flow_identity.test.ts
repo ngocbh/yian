@@ -107,20 +107,19 @@
  * descriptors (`{"inline": ...}`, `{"ref": ...}`, `{"builtin": "identity", "field": ...}`) and
  * their refusals, and TOOL `retries` (absent at 0, identity otherwise, a forged count refused), and
  * the flow fields: a typed wiring binding's `binding_types` and a typed output's `type`, a plain
- * `Flow`'s missing CompiledFlow keys,
- * the flow `llm_config:` layer (literal values are identity and key order isn't; the
- * `ValueTemplate` and `Binding` arms), the LLM value types and adjacency index outside identity,
- * the flow id and flow memories (identity when present, never expansion topology, forged values
- * refused in both modes), the root outputs and LLM layer outside the expansion digest, and an
- * unknown flow field, a `Flow` subclass, a non-Flow, a wiring value that isn't a `Binding`, a node
- * wiring that isn't a `Map`, node and wiring tables that aren't `Map`s, a non-string node, wiring
- * or parameter key, an edge that isn't an `Edge`, a forged `Edge`, a `flowLlmConfig` that isn't a
- * record, memories that aren't an array and an output that isn't a `FlowOutput` refused; the HUMAN_INPUT
- * fields as typed values, a CALL child that isn't a `Flow` refused, a literal in MAP wiring and a
- * CALL argument literal as identity, LOOP `times` as a typed int (`null` for a `while` loop), forged
- * LOOP counts, a CASE branch that isn't a `Case` and CASE `cases` that isn't an array refused,
- * forged memory scopes and segments and a non-`ExecutionScope` scope refused, and the
- * execution-scope projection.
+ * `Flow`'s missing CompiledFlow keys, the flow `llm_config:` layer (literal values are identity and
+ * key order isn't; the `ValueTemplate` and `Binding` arms), the LLM value types and adjacency index
+ * outside identity, the flow id and flow memories (identity when present, never expansion topology,
+ * forged values refused in both modes), the root outputs and LLM layer outside the expansion
+ * digest, and an unknown flow field, a `Flow` subclass, a non-Flow, a wiring value that isn't a
+ * `Binding`, a node wiring that isn't a `Map`, node and wiring tables that aren't `Map`s, a
+ * non-string node, wiring or parameter key, an edge that isn't an `Edge`, a forged `Edge`, a
+ * `flowLlmConfig` that isn't a record, memories that aren't an array and an output that isn't a
+ * `FlowOutput` refused; the HUMAN_INPUT fields as typed values, a CALL child that isn't a `Flow`
+ * refused, a literal in MAP wiring and a CALL argument literal as identity, LOOP `times` as a typed
+ * int (`null` for a `while` loop), forged LOOP counts, a CASE branch that isn't a `Case` and CASE
+ * `cases` that isn't an array refused, forged memory scopes and segments and a non-`ExecutionScope`
+ * scope refused, and the execution-scope projection.
  *
  * Later (T3-22): the loader rows `test_loaded_flow_stores_only_exact_parameter_carriers`,
  * `test_flow_fingerprint_ignores_comments_and_python_object_identity`,
@@ -471,7 +470,7 @@ test.each([
 test("a node value that isn't a Node is refused", () => {
   const flow = compiled();
   // Flow keeps `nodes` by identity, so this forges a non-Node value under a node id.
-  flow.nodes.set("step", "not a node" as unknown as Node);
+  (flow.nodes as Map<string, unknown>).set("step", "not a node");
 
   expectError(() => flowManifest(flow), TypeError, "flow.nodes.step: expected Node, got string");
 });

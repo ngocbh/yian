@@ -14,9 +14,10 @@
  *
  * `model.ts` owns the graph, its growth-metadata check and `copyGraph`, `origins.ts` the origin
  * traversal and rewrites, `execution_layout.ts` the static execution scopes, and `validation.ts`
- * the cycle, path and type checks. This index re-exports Python's `__all__` and nothing else;
- * callers of any other name import the module that defines it. Expansion, manifests,
- * fingerprints, memory layout and the LLM configuration map are not ported yet.
+ * the cycle, path and type checks, and `manifest.ts` the manifests, fingerprints and expansion
+ * digests. This index re-exports Python's `__all__` and nothing else; callers of any other name
+ * import the module that defines it. Expansion, memory layout and the LLM configuration map are
+ * not ported yet.
  *
  * Knows about: diagnostics, nodes, memory contracts and typesys.
  * Never imports: compose, runtime, the package-root run boundary, the CLI, or provider SDKs.

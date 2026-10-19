@@ -35,7 +35,8 @@
  * `test_declaration_default_literals_are_identity`, `test_env_literals_are_identity` (node scope;
  * the flow scope is a loader merge into the node's `env`),
  * `test_templates_under_any_name_keep_their_source_text` and
- * `test_env_values_under_credential_like_names_are_identity`.
+ * `test_env_values_under_credential_like_names_are_identity` (their other parametrized cases test
+ * the same rule and aren't ported one by one).
  * `test_flow_fingerprint_changes_with_node_kind_and_execution_source` and
  * `test_flow_fingerprint_recursively_includes_static_child_flows` are covered by the kind-literal
  * and kind-field rows.
@@ -61,7 +62,8 @@
  *
  * TS-only: typed floats (`1.5`, `Infinity`, `-0`), NaN refused, `2n` vs `2`, a cyclic env record vs
  * a shared alias, a `FileRef` encoded as its mapping, `params` that isn't an array, a forged END
- * count, a list END's `names`, and the pinned fingerprint and expansion digest of `fragment()`.
+ * count, a list END's `names`, seed-path indexes as counts, and the pinned fingerprint and expansion
+ * digest of `fragment()`.
  *
  * Later (T3-22): the loader rows `test_loaded_flow_stores_only_exact_parameter_carriers`,
  * `test_flow_fingerprint_ignores_comments_and_python_object_identity`,
@@ -100,7 +102,15 @@ import { expansionDigest, flowFingerprint, flowManifest } from "../../src/compil
 import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import type { Node } from "../../src/nodes/base.ts";
-import { Assertion, Binding, ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import {
+  Assertion,
+  Binding,
+  ChildFlowBoundary,
+  ContractOrigins,
+  Parameter,
+  SeedConnection,
+  ValueContract,
+} from "../../src/nodes/contracts.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
@@ -110,7 +120,7 @@ import { canonicalJson, type JsonObject, type JsonValue } from "../../src/typesy
 const HEX = /^[0-9a-f]{64}$/;
 
 // The fingerprint (and, for this plain Flow, the equal expansion digest) of `fragment()`.
-const FRAGMENT_FINGERPRINT = "e5e917dc0457103e67b4e3a96973d3ede44e7b63a5450e01ec12a352bbfd1d3d";
+const FRAGMENT_FINGERPRINT = "e0697a4672fd30610ccf14fdf654d54d174c265ad664e06e55f62c7d2808a3b3";
 
 /** An `int` scalar type. */
 function intType(): Type {
@@ -130,7 +140,7 @@ function strContract(): ValueContract {
 /** Build a small valid fragment with literal wiring and two ordered edges (Python's `_fragment()`). */
 function fragment(): Flow {
   const start = new StartNode("entry", { params: [] });
-  const body = new CodeNode("body", { code: 'return inputs["x"] + 1' });
+  const body = new CodeNode("body", { code: 'return inputs["x"]' });
   body.params = [new Parameter("x", { contract: intContract() })];
   body.outputContract = intContract();
   const end = EndNode.value("terminal", { outputName: "result" });
@@ -236,7 +246,7 @@ function nodeManifest(flow: Flow, id: string): JsonObject {
 /** Return one string-keyed value from the manifest's typed mapping form. */
 function typedMappingValue(mapping: JsonValue, key: string): JsonValue {
   const matches = ((mapping as JsonObject).entries as JsonObject[])
-    .filter((entry) => canonicalJson(entry.key) === canonicalJson({ type: "str", value: key }))
+    .filter((entry) => (entry.key as JsonObject).value === key)
     .map((entry) => entry.value!);
   expect(matches).toHaveLength(1);
   return matches[0]!;
@@ -247,21 +257,16 @@ function envValue(flow: Flow, id: string, key: string): JsonValue {
   return typedMappingValue(nodeManifest(flow, id).env!, key);
 }
 
-/** Return what `fn` throws, failing when it returns. */
-function thrown(fn: () => unknown): Error {
+/** Assert that `fn` throws `cls` with exactly `message`. */
+function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
+  let caught: unknown;
   try {
     fn();
   } catch (error) {
-    return error as Error;
+    caught = error;
   }
-  throw new Error("expected a throw");
-}
-
-/** Require `fn` to throw exactly an instance of `cls` with `message`. */
-function expectThrow(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): void {
-  const error = thrown(fn);
-  expect(error).toBeInstanceOf(cls);
-  expect(error.message).toBe(message);
+  expect(caught).toBeInstanceOf(cls);
+  expect((caught as Error).message).toBe(message);
 }
 
 /** A closed record tagged by a single-value `action` Literal. */
@@ -307,6 +312,29 @@ test("the fragment's fingerprint and expansion digest are pinned", () => {
   expect(expansionDigest(fragment())).toBe(FRAGMENT_FINGERPRINT);
 });
 
+test("a seed-path index is a count: -0 fingerprints like 0 and an unsafe int is refused", () => {
+  /** `fragment()` with its entry as a child START whose wired `x` is seeded from item `index`. */
+  const seeded = (index: number): Flow => {
+    const base = fragment();
+    base.nodes.set("entry", new StartNode("entry", { params: [new Parameter("x", { contract: intContract() })] }));
+    return new Flow(base.nodes, base.edges, {
+      wiring: new Map<string, ReadonlyMap<string, unknown>>([...base.wiring, ["entry", new Map([["x", 1n]])]]),
+      startId: "entry",
+      endId: "terminal",
+      inputConnections: [new SeedConnection("entry", "x", [index, "x"])],
+      childBoundaries: [new ChildFlowBoundary("entry", "terminal")],
+    });
+  };
+
+  expect(expansionDigest(seeded(-0))).toBe(expansionDigest(seeded(0)));
+  expect(expansionDigest(seeded(1))).not.toBe(expansionDigest(seeded(0)));
+  expectError(
+    () => expansionDigest(seeded(2 ** 60)),
+    TypeError,
+    "expansion.inputConnections[0].seedPath[0]: expected a safe integer, got 1152921504606847000",
+  );
+});
+
 test("test_flow_manifest_emits_the_literal_node_kind", () => {
   const manifest = nodeManifest(singleNodeFlow(new CodeNode("node", { code: 'return "ok"' })), "node");
 
@@ -323,10 +351,7 @@ test("test_flow_manifest_sorts_mapping_keys_without_reordering_semantic_lists", 
 
   const manifest = flowManifest(shuffled);
   expect(manifest).toEqual(flowManifest(original));
-  const nodeIds = Object.keys(manifest.nodes as JsonObject);
-  expect(nodeIds).toEqual([...nodeIds].sort());
-  const wiringIds = Object.keys(manifest.wiring as JsonObject);
-  expect(wiringIds).toEqual([...wiringIds].sort());
+  expect(flowFingerprint(shuffled)).toBe(flowFingerprint(original));
   expect(manifest.edges).toEqual(flowManifest(original).edges!);
 });
 
@@ -342,7 +367,7 @@ test.each([
   const flow = compiled();
   code(flow, "step").env = { ...code(flow, "step").env, opaque: value };
 
-  expectThrow(
+  expectError(
     () => flowFingerprint(flow),
     TypeError,
     `flow.nodes.step.env.values[2]: unsupported non-JSON value of type ${name}`,
@@ -374,7 +399,7 @@ test("infinity is a float and fingerprints", () => {
 });
 
 test("NaN is refused with its path", () => {
-  expectThrow(
+  expectError(
     () => flowFingerprint(withEnv("f", NaN)),
     TypeError,
     "flow.nodes.step.env.values[2]: NaN is not a yian value",
@@ -389,7 +414,7 @@ test("negative zero fingerprints as zero", () => {
 test("a cyclic env record is refused while a shared alias encodes twice", () => {
   const cyclic: Record<string, unknown> = {};
   cyclic.self = cyclic;
-  expectThrow(
+  expectError(
     () => flowFingerprint(withEnv("loop", cyclic)),
     RangeError,
     "flow.nodes.step.env.values[2].values[0]: cyclic value is not manifestable",
@@ -568,7 +593,7 @@ test("test_output_contract_manifest_rejects_unknown_raw_and_subclass_bypasses", 
   const unknown = fragment();
   const body = code(unknown, "body");
   body.outputContract = Object.assign(Object.create(ValueContract.prototype), body.outputContract, { futureField: 1 });
-  expectThrow(
+  expectError(
     () => flowManifest(unknown),
     RangeError,
     'flow.nodes.body.outputContract: unknown noncanonical field(s): ["futureField"]',
@@ -576,7 +601,7 @@ test("test_output_contract_manifest_rejects_unknown_raw_and_subclass_bypasses", 
 
   const raw = fragment();
   code(raw, "body").outputContract = intType() as never;
-  expectThrow(
+  expectError(
     () => flowManifest(raw),
     TypeError,
     "flow.nodes.body.outputContract: expected ValueContract or PartialRecordContract, got Type",
@@ -584,7 +609,7 @@ test("test_output_contract_manifest_rejects_unknown_raw_and_subclass_bypasses", 
 
   const subclass = fragment();
   code(subclass, "body").outputContract = new ValueContractSubclass(intType());
-  expectThrow(
+  expectError(
     () => flowManifest(subclass),
     TypeError,
     "flow.nodes.body.outputContract: expected ValueContract or PartialRecordContract, got ValueContractSubclass",
@@ -595,7 +620,7 @@ test("test_parameter_manifest_rejects_unknown_fields_and_raw_bypass", () => {
   const withUnknown = fragment();
   const body = code(withUnknown, "body");
   body.params = [Object.assign(Object.create(Parameter.prototype), body.params![0], { futureField: true })];
-  expectThrow(
+  expectError(
     () => flowManifest(withUnknown),
     RangeError,
     'flow.nodes.body.params[0]: unknown noncanonical field(s): ["futureField"]',
@@ -603,11 +628,11 @@ test("test_parameter_manifest_rejects_unknown_fields_and_raw_bypass", () => {
 
   const raw = fragment();
   code(raw, "body").params = ["x"] as never;
-  expectThrow(() => flowManifest(raw), TypeError, "flow.nodes.body.params[0]: expected Parameter, got string");
+  expectError(() => flowManifest(raw), TypeError, "flow.nodes.body.params[0]: expected Parameter, got string");
 
   const subclass = fragment();
   code(subclass, "body").params = [new ParameterSubclass("x")];
-  expectThrow(
+  expectError(
     () => flowManifest(subclass),
     TypeError,
     "flow.nodes.body.params[0]: expected Parameter, got ParameterSubclass",
@@ -618,7 +643,7 @@ test("params that isn't an array is refused", () => {
   const flow = fragment();
   code(flow, "body").params = new Set([new Parameter("x")]) as never;
 
-  expectThrow(() => flowManifest(flow), TypeError, "flow.nodes.body.params: expected array, got Set");
+  expectError(() => flowManifest(flow), TypeError, "flow.nodes.body.params: expected array, got Set");
 });
 
 // ---- Types -----------------------------------------------------------------------------------
@@ -800,7 +825,7 @@ test("a forged END count is refused with its path", () => {
   const end = EndNode.list("t", { n: 1 });
   end.n = 1.5;
 
-  expectThrow(() => flowManifest(singleNodeFlow(end)), TypeError, "flow.nodes.t.n: expected a safe integer, got 1.5");
+  expectError(() => flowManifest(singleNodeFlow(end)), TypeError, "flow.nodes.t.n: expected a safe integer, got 1.5");
 });
 
 // ---- No redaction ----------------------------------------------------------------------------

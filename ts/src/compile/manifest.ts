@@ -153,6 +153,13 @@ const KIND_CLASSES: Readonly<Record<string, abstract new (...args: never[]) => N
   [NodeKind.LOOP]: LoopNode,
 };
 const NODE_KINDS: ReadonlySet<unknown> = new Set(Object.values(NodeKind));
+// Each kind's full field policy, built once.
+const NODE_FIELDS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  Object.keys(KIND_FIELDS).map((kind) => [
+    kind,
+    new Set([...COMMON_NODE_FIELDS, ...IGNORED_NODE_FIELDS, ...KIND_FIELDS[kind]!, ...IGNORED_KIND_FIELDS[kind]!]),
+  ]),
+);
 
 const EDGE_FIELDS = new Set(["id", "from", "to", "sourceHandle", "inputGroup", "optional", "ordering"]);
 const FLOW_OUTPUT_FIELDS = new Set(["name", "binding"]);
@@ -220,29 +227,35 @@ function within<T>(stack: Set<object>, value: object, message: string, body: () 
 /**
  * Require an object's own enumerable fields to match an explicit manifest policy.
  *
+ * @param label Names the unknown fields in the message.
  * @throws RangeError naming the unknown fields, else the missing ones.
  */
-function checkFields(value: object, expected: ReadonlySet<string>, path: string): void {
+function checkFields(
+  value: object,
+  expected: ReadonlySet<string>,
+  path: string,
+  label = "noncanonical field(s)",
+): void {
   const actual = new Set(Object.keys(value));
   const unknown = [...actual].filter((name) => !expected.has(name)).sort(compareCodeUnits);
   const missing = [...expected].filter((name) => !actual.has(name)).sort(compareCodeUnits);
-  if (unknown.length > 0) throw new RangeError(`${path}: unknown noncanonical field(s): ${writeAsText(unknown)}`);
+  if (unknown.length > 0) throw new RangeError(`${path}: unknown ${label}: ${writeAsText(unknown)}`);
   if (missing.length > 0) throw new RangeError(`${path}: missing canonical field(s): ${writeAsText(missing)}`);
 }
 
 /**
- * Project one canonical binding to its identity-bearing source data.
+ * Check one canonical binding, whose source is identity-bearing data.
  *
  * The declared contract is canonical too, but callers project it separately so an untyped binding
- * keeps its source-only encoding.
+ * has a source-only encoding.
  *
  * @throws TypeError when `value` isn't a `Binding`.
  * @throws RangeError when its fields aren't the policy's.
  */
-function bindingManifestSource(value: unknown, path: string): unknown {
+function checkedBinding(value: unknown, path: string): Binding {
   if (!(value instanceof Binding)) throw new TypeError(`${path}: expected Binding, got ${typeName(value)}`);
   checkFields(value, BINDING_FIELDS, path);
-  return value.source;
+  return value;
 }
 
 /** Return a binding's canonical declared type, or `undefined` when untyped. */
@@ -252,17 +265,17 @@ function bindingTypeManifest(value: Binding, ctx: ManifestContext, path: string)
 }
 
 /**
- * Project direct wiring carriers to `[parameter, source]` entries, in wiring order.
+ * Check direct wiring carriers, returning the `[parameter, binding]` entries in wiring order.
  *
  * @throws TypeError when a key isn't a string or a value isn't a `Binding`.
  */
-function bindingManifestEntries(value: ReadonlyMap<unknown, unknown>, path: string): [string, unknown][] {
+function bindingManifestEntries(value: ReadonlyMap<unknown, unknown>, path: string): [string, Binding][] {
   for (const key of value.keys()) {
     if (typeof key !== "string") throw new TypeError(`${path}: mapping keys must be strings, got ${typeName(key)}`);
   }
-  return Array.from(value, ([key, item], index): [string, unknown] => [
+  return Array.from(value, ([key, item], index): [string, Binding] => [
     key as string,
-    bindingManifestSource(item, `${path}.values[${index}]`),
+    checkedBinding(item, `${path}.values[${index}]`),
   ]);
 }
 
@@ -288,32 +301,16 @@ function assertionManifest(value: unknown, ctx: ManifestContext, path: string): 
  * @throws Error for an AGENT node, whose manifest isn't ported yet.
  */
 function checkNodeFields(node: Node, path: string): void {
-  const kind: unknown = node.kind;
+  const kind = node.kind;
   if (!NODE_KINDS.has(kind)) throw new RangeError(`${path}: node kind must be a NodeKind`);
   if (kind === NodeKind.AGENT) throw new Error(`${path}: node kind 'agent' manifest is not ported yet (T3-22)`);
-  const expectedClass = KIND_CLASSES[kind as string]!;
+  const expectedClass = KIND_CLASSES[kind]!;
   if (!isExactly(node, expectedClass)) {
-    throw new RangeError(
-      `${path}: node kind ${reprText(kind as string)} requires ${expectedClass.name}, got ${typeName(node)}`,
-    );
-  }
-  const expected = new Set([
-    ...COMMON_NODE_FIELDS,
-    ...IGNORED_NODE_FIELDS,
-    ...KIND_FIELDS[kind as string]!,
-    ...IGNORED_KIND_FIELDS[kind as string]!,
-  ]);
-  const actual = new Set(Object.keys(node));
-  const unknown = [...actual].filter((name) => !expected.has(name)).sort(compareCodeUnits);
-  if (unknown.length > 0) {
-    throw new RangeError(
-      `${path}: unknown noncanonical execution field(s) for ${kind as string}: ${writeAsText(unknown)}`,
-    );
+    throw new RangeError(`${path}: node kind ${reprText(kind)} requires ${expectedClass.name}, got ${typeName(node)}`);
   }
   // Every field is constructor-owned and must be present, or the object is not a complete
   // canonical node.
-  const missing = [...expected].filter((name) => !actual.has(name)).sort(compareCodeUnits);
-  if (missing.length > 0) throw new RangeError(`${path}: missing canonical field(s): ${writeAsText(missing)}`);
+  checkFields(node, NODE_FIELDS.get(kind)!, path, `noncanonical execution field(s) for ${kind}`);
 }
 
 /**
@@ -333,8 +330,8 @@ function sortedMapping(value: unknown, ctx: ManifestContext, path: string): Json
 /**
  * Canonicalize one authored `llm_config` layer as written.
  *
- * A literal layer keeps its sorted-mapping encoding, a layer holding values encodes as its
- * `ValueTemplate`, and a whole record written as one value as its `Binding`.
+ * A literal layer encodes as a sorted mapping, a layer holding values as its `ValueTemplate`, and
+ * a whole record written as one value as its `Binding`.
  *
  * @throws TypeError when a literal layer isn't a plain record.
  */
@@ -365,23 +362,18 @@ function canonicalSequence(
  * @param entries The entries of a record or a `Map`.
  * @param owner The container, put on the cycle stack while its values encode.
  * @param encode Encodes each value: `canonicalValue`, or `templateTreeManifest` inside a tree.
- * @throws TypeError when a key isn't a string.
  */
 function mappingManifest(
-  entries: Iterable<readonly [unknown, unknown]>,
+  entries: Iterable<readonly [string, unknown]>,
   owner: object,
   ctx: ManifestContext,
   path: string,
   encode: (item: unknown, ctx: ManifestContext, path: string) => JsonValue,
 ): JsonObject {
-  const all = [...entries];
-  for (const [key] of all) {
-    if (typeof key !== "string") throw new TypeError(`${path}: mapping keys must be strings, got ${typeName(key)}`);
-  }
   return within(ctx.values, owner, `${path}: cyclic value is not manifestable`, () => {
-    const encoded = all.map(([key, item], index): [string, JsonObject] => [
-      key as string,
-      { key: { type: "str", value: key as string }, value: encode(item, ctx, `${path}.values[${index}]`) },
+    const encoded = Array.from(entries, ([key, item], index): [string, JsonObject] => [
+      key,
+      { key: { type: "str", value: key }, value: encode(item, ctx, `${path}.values[${index}]`) },
     ]);
     encoded.sort(([a], [b]) => compareCodeUnits(a, b));
     return { entries: encoded.map(([, entry]) => entry), type: "mapping" };
@@ -404,7 +396,7 @@ function templateTreeManifest(value: unknown, ctx: ManifestContext, path: string
   if (value instanceof Binding) {
     checkFields(value, BINDING_FIELDS, path);
     const contract =
-      value.contract === null ? null : valueContractManifest(value.contract, ctx, `${path}.contract`).type!;
+      value.contract === null ? null : valueContractManifest(value.contract, ctx, `${path}.contract`).type;
     return { contract, source: templateTreeManifest(value.source, ctx, `${path}.source`), type: "binding" };
   }
   if (isList(value)) return { items: canonicalSequence(value, ctx, path, templateTreeManifest), type: "list" };
@@ -413,7 +405,8 @@ function templateTreeManifest(value: unknown, ctx: ManifestContext, path: string
 }
 
 /**
- * Return a node count as a raw JSON int: `null` where `nullable` allows it, else a safe integer.
+ * Return a node count as a raw JSON int: `null` where `nullable` allows it (LOOP `maxIters`), else a
+ * safe integer.
  *
  * @throws TypeError for anything else (a float, infinity, a bigint).
  */
@@ -470,7 +463,7 @@ function canonicalValue(value: unknown, ctx: ManifestContext, path: string): Jso
     const fields = { uri: value.uri, mime: value.mime, name: value.name };
     return mappingManifest(Object.entries(fields), value, ctx, path, canonicalValue);
   }
-  if (Array.isArray(value)) return { items: canonicalSequence(value, ctx, path), type: "list" };
+  if (isList(value)) return { items: canonicalSequence(value, ctx, path), type: "list" };
   if (isRecord(value)) return mappingManifest(Object.entries(value), value, ctx, path, canonicalValue);
   throw new TypeError(`${path}: unsupported non-JSON value of type ${jsTypeName(value)}`);
 }
@@ -524,7 +517,7 @@ function typeManifest(value: Type | null | undefined, ctx: ManifestContext, path
  * @throws TypeError when `value` isn't exactly a `ValueContract`, or its origins exactly a
  *   `ContractOrigins`.
  */
-function valueContractManifest(value: unknown, ctx: ManifestContext, path: string): JsonObject {
+function valueContractManifest(value: unknown, ctx: ManifestContext, path: string): { type: JsonValue } {
   if (!isExactly(value, ValueContract)) throw new TypeError(`${path}: expected ValueContract, got ${typeName(value)}`);
   checkFields(value, VALUE_CONTRACT_FIELDS, path);
   if (!isExactly(value.origins, ContractOrigins)) {
@@ -541,7 +534,7 @@ function valueContractManifest(value: unknown, ctx: ManifestContext, path: strin
  *   `PartialRecordContract`.
  */
 function outputContractManifest(value: unknown, ctx: ManifestContext, path: string): JsonValue {
-  if (isExactly(value, ValueContract)) return valueContractManifest(value, ctx, path).type!;
+  if (isExactly(value, ValueContract)) return valueContractManifest(value, ctx, path).type;
   if (!isExactly(value, PartialRecordContract)) {
     throw new TypeError(`${path}: expected ValueContract or PartialRecordContract, got ${typeName(value)}`);
   }
@@ -550,7 +543,7 @@ function outputContractManifest(value: unknown, ctx: ManifestContext, path: stri
   return {
     partial_record: value.fields.map(([name, contract]) => ({
       name,
-      type: contract === null ? null : valueContractManifest(contract, ctx, `${path}.fields.${name}`).type!,
+      type: contract === null ? null : valueContractManifest(contract, ctx, `${path}.fields.${name}`).type,
     })),
   };
 }
@@ -612,7 +605,7 @@ function memoryDeclManifest(value: unknown, ctx: ManifestContext, path: string):
  * @throws TypeError when `values` isn't an array.
  */
 function memoriesManifest(values: unknown, ctx: ManifestContext, path: string): JsonObject[] {
-  if (!Array.isArray(values)) throw new TypeError(`${path}: expected an array of MemoryDecl values`);
+  if (!isList(values)) throw new TypeError(`${path}: expected an array of MemoryDecl values`);
   return values.map((value, index) => memoryDeclManifest(value, ctx, `${path}[${index}]`));
 }
 
@@ -638,8 +631,7 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string): JsonObjec
     id: node.id,
     kind: node.kind,
     origin_id: canonicalValue(node.originId, ctx, `${path}.originId`),
-    // Preserve the pre-contract wire shape: the carrier is canonical in memory, while its
-    // diagnostic origins remain outside program identity.
+    // The contract's diagnostic origins stay outside program identity.
     output_type: outputType,
     params,
     post_asserts: Array.from(node.postAsserts, (assertion, index) =>
@@ -650,20 +642,16 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string): JsonObjec
     ),
   };
 
-  // Emitted only when non-empty so nodes without `isinstance` or a `T(...)` constructor keep
-  // their fingerprints.
+  // Emitted only when non-empty, so a node without `isinstance` or a `T(...)` constructor doesn't
+  // carry the key (the shape follows Python's manifest).
   const types: unknown = node.types;
   if (!isExactly(types, Map)) throw new TypeError(`${path}.types: expected Map, got ${typeName(types)}`);
-  for (const [name, typ] of types as Map<unknown, unknown>) {
-    if (typeof name !== "string") throw new TypeError(`${path}.types: keys must be strings, got ${typeName(name)}`);
+  const typeEntries = sortedStringKeys(types, `${path}.types`).map((name) => {
+    const typ: unknown = types.get(name);
     if (!isExactly(typ, Type)) throw new TypeError(`${path}.types.${name}: expected Type, got ${typeName(typ)}`);
-  }
-  const table = types as Map<string, Type>;
-  if (table.size > 0) {
-    manifest.types = [...table.keys()]
-      .sort(compareCodeUnits)
-      .map((name) => ({ name, type: typeManifest(table.get(name), ctx, `${path}.types.${name}`) }));
-  }
+    return { name, type: typeManifest(typ, ctx, `${path}.types.${name}`) };
+  });
+  if (typeEntries.length > 0) manifest.types = typeEntries;
 
   switch (node.kind) {
     case NodeKind.START:
@@ -671,13 +659,13 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string): JsonObjec
     case NodeKind.END: {
       const end = node as EndNode;
       const list = end.mode === "list";
-      // A value terminal keeps the encoding a one-input (or input-free) record END had.
+      // A value terminal encodes as a record END, as Python's manifest does.
       manifest.mode = list ? "list" : "record";
       manifest.names = list ? null : canonicalSequence(end.names, ctx, `${path}.names`);
       if (end.mode === "record" && end.names.length <= 1) {
         // A zero- or one-field record would otherwise encode like a value END with the same
-        // names, though it returns a record; `keyed` separates them while value and multi-field
-        // ENDs keep their fingerprints.
+        // names, though it returns a record. `keyed` separates them; it is left out elsewhere, so
+        // it doesn't change the identity of value and multi-field ENDs.
         manifest.keyed = true;
       }
       manifest.n = list ? count(end.n, `${path}.n`, false) : null;
@@ -717,13 +705,13 @@ function edgeManifest(edge: unknown, ctx: ManifestContext, path: string): JsonOb
 function outputManifest(output: unknown, ctx: ManifestContext, path: string): JsonObject {
   if (!isExactly(output, FlowOutput)) throw new TypeError(`${path}: expected FlowOutput, got ${typeName(output)}`);
   checkFields(output, FLOW_OUTPUT_FIELDS, path);
-  const source = bindingManifestSource(output.binding, `${path}.binding`);
+  const binding = checkedBinding(output.binding, `${path}.binding`);
   const manifest: JsonObject = {
-    from: canonicalValue(source, ctx, `${path}.binding.source`),
+    from: canonicalValue(binding.source, ctx, `${path}.binding.source`),
     name: output.name,
   };
-  // Only a typed output adds a key, so untyped outputs keep their identity.
-  const outputType = bindingTypeManifest(output.binding, ctx, `${path}.binding`);
+  // Only a typed output adds a key, so typing doesn't change the identity of untyped outputs.
+  const outputType = bindingTypeManifest(binding, ctx, `${path}.binding`);
   if (outputType !== undefined) manifest.type = outputType;
   return manifest;
 }
@@ -769,14 +757,14 @@ function flowManifestOf(flow: unknown, ctx: ManifestContext, path: string, topol
       if (!(nodeWiring instanceof Map)) {
         throw new TypeError(`${path}.wiring.${nodeId}: expected Map, got ${typeName(nodeWiring)}`);
       }
-      const sources = bindingManifestEntries(nodeWiring, `${path}.wiring.${nodeId}`);
+      const bindings = bindingManifestEntries(nodeWiring, `${path}.wiring.${nodeId}`);
+      const sources = bindings.map(([param, binding]): [string, unknown] => [param, binding.source]);
       wiringEntries.push([
         nodeId,
         mappingManifest(sources, nodeWiring, ctx, `${path}.wiring.${nodeId}`, canonicalValue),
       ]);
       const nodeTypes: [string, JsonValue][] = [];
-      for (const param of sources.map(([name]) => name).sort(compareCodeUnits)) {
-        const binding = nodeWiring.get(param) as Binding;
+      for (const [param, binding] of bindings.sort(([a], [b]) => compareCodeUnits(a, b))) {
         const paramType = bindingTypeManifest(binding, ctx, `${path}.wiring.${nodeId}.${param}`);
         if (paramType !== undefined) nodeTypes.push([param, paramType]);
       }
@@ -791,17 +779,26 @@ function flowManifestOf(flow: unknown, ctx: ManifestContext, path: string, topol
       start_id: flow.startId,
       wiring: Object.fromEntries(wiringEntries),
     };
-    // Declared binding types live beside the wiring rather than inside it, so every untyped flow
-    // keeps its manifest.
+    // Declared binding types live beside the wiring rather than inside it, and only when present,
+    // so typing doesn't change the identity of untyped flows (the shape follows Python's manifest).
     if (bindingTypes.length > 0) manifest.binding_types = Object.fromEntries(bindingTypes);
     if (topologyOnly && flow.inputConnections.length > 0) {
-      manifest.input_connections = [...flow.inputConnections]
-        .sort((a, b) => compareCodeUnits(a.childStartId, b.childStartId) || compareCodeUnits(a.inputName, b.inputName))
-        .map((connection) => ({
-          child_start_id: connection.childStartId,
-          input_name: connection.inputName,
-          seed_path: [...connection.seedPath],
-        }));
+      manifest.input_connections = flow.inputConnections
+        .map((connection, index) => {
+          const itemPath = `${path}.inputConnections[${index}].seedPath`;
+          return {
+            child_start_id: connection.childStartId,
+            input_name: connection.inputName,
+            // An item index is a count, so `-0` is written as `0`.
+            seed_path: connection.seedPath.map((item, step) =>
+              typeof item === "number" ? count(item, `${itemPath}[${step}]`, false) : item,
+            ),
+          };
+        })
+        .sort(
+          (a, b) =>
+            compareCodeUnits(a.child_start_id, b.child_start_id) || compareCodeUnits(a.input_name, b.input_name),
+        );
     }
     if (topologyOnly && flow.childBoundaries.length > 0) {
       manifest.child_boundaries = [...flow.childBoundaries]
@@ -816,7 +813,7 @@ function flowManifestOf(flow: unknown, ctx: ManifestContext, path: string, topol
       const memories = memoriesManifest(flow.memories, ctx, `${path}.memories`);
       if (!topologyOnly) {
         if (flowId !== null) manifest.flow_id = flowId;
-        // Omitted when empty so memory-free flows keep their identity.
+        // Omitted when empty, so memories don't change the identity of memory-free flows.
         if (memories.length > 0) manifest.memories = memories;
         manifest.flow_llm_config = llmLayerManifest(flow.flowLlmConfig, ctx, `${path}.flowLlmConfig`);
         manifest.outputs = Array.from(flow.outputs, (output, index) =>

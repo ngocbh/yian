@@ -3568,8 +3568,7 @@ def test_raised_reports_a_private_class_as_its_public_base() -> None:
 
 
 def test_compose_codefns_references_are_exported() -> None:
-    """Committed cases name `_compose_codefns` fixture functions in their flow or files, and
-    the fixture exports each one."""
+    """Committed cases name `_compose_codefns` fixture functions, and the fixture exports each."""
     from tests import conformance_harvest as harvest
 
     file = harvest._FIXTURE_MODULES["tests.engine._compose_codefns"]

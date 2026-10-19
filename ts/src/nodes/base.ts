@@ -14,11 +14,13 @@
  * Invariant: a node never writes the pool. It describes its one output value as
  * `new Output(value)`; the engine performs the write under the node's id. This keeps nodes pure.
  *
- * Knows about:   diagnostics, expr, memory contracts, tools, typesys, nodes/binding, nodes/contracts.
+ * Knows about:   diagnostics, events, expr, memory contracts, skills, tools, typesys, nodes/binding,
+ *                nodes/contracts.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
 import { Failure, type FailureCode, OriginRef, reprText } from "../diagnostics.ts";
+import type { IN_LOOP_EVENTS, StreamChunk } from "../events.ts";
 import {
   ExpressionError,
   type FeedbackValue,
@@ -29,6 +31,7 @@ import {
 } from "../expr/index.ts";
 import { evaluateWhenRecord } from "../expr/expressions.ts";
 import type { MemoryScope } from "../memory/contracts.ts";
+import type { Skill } from "../skills/catalog.ts";
 import type { ToolSet } from "../tools/registry.ts";
 import type { VariablePool } from "../typesys/pool.ts";
 import {
@@ -678,6 +681,22 @@ export class CapabilityFault extends Error {
   }
 }
 
+/**
+ * A host inbox read by a running steerable node, keyed by its node id.
+ *
+ * The id is the node's expanded id: an expanded LOOP or MAP node has its own id per occurrence.
+ * Steering is push-based: the host aborts the node's interrupt signal to stop its loop and
+ * return now, and the node drains queued steer messages between its effects, awaiting a promise.
+ * The interrupt signal is separate from the node's own `caps.signal`, so an interrupt never
+ * aborts a running tool.
+ */
+export interface Steering {
+  /** The signal the host aborts to interrupt node `nodeId` (its expanded id). */
+  interruptSignal(nodeId: string): AbortSignal;
+  /** Remove and return the steer messages queued for `nodeId`, oldest first. */
+  drain(nodeId: string): readonly string[] | Promise<readonly string[]>;
+}
+
 /** A stage marker for an assertion failure of the base run template. Used by the evaluator. */
 export class AssertionStageError extends Error {
   override name = "AssertionStageError";
@@ -704,6 +723,16 @@ export interface NodeCaps {
   readonly steps?: NodeSteps;
   /** The run's tool set; supplied to a node that declares `needsTools`. */
   readonly tools?: ToolSet;
+  /** The run's host-supplied skills by name; supplied to a node that declares `needsSkills`. */
+  readonly skills?: ReadonlyMap<string, Skill>;
+  /** The transient stream-chunk sink; supplied to a node that declares `needsLiveEvents`. */
+  readonly emitStream?: (chunk: StreamChunk) => void;
+  /** The transient model and tool call observer sink; supplied with `needsLiveEvents`. */
+  readonly emitEvent?: (event: InstanceType<(typeof IN_LOOP_EVENTS)[number]>) => void;
+  /** Receives the node's render capture once; supplied to a node that declares `needsRenderCapture`. */
+  readonly captureRender?: (captured: Readonly<Record<string, unknown>>) => void;
+  /** The host inbox; supplied to a node that declares `needsSteering`. */
+  readonly steering?: Steering;
 }
 
 /**

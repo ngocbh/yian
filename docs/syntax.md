@@ -2108,7 +2108,7 @@ A few providers need a note:
     unless every earlier assistant turn carries `reasoning_content`, so on such a request a
     turn with no reasoning to send back (such as a turn from another provider or model, a
     `deepseek-chat` turn, or one whose reasoning record can't be used) gets
-    `reasoning_content: ""`.
+    `reasoning_content: ""`. Tools set only in the `deepseek` block don't count.
 
 - `google` uses the REST names and enum spellings: camelCase keys and upper-case
   levels, such as `google: {generationConfig: {thinkingConfig: {thinkingLevel: HIGH}}}`.

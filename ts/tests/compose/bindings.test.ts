@@ -1,10 +1,8 @@
 /**
  * The kind-blind binding-field walk: a port of `tests/compose/test_bindings.py`. The rows use the
  * real `AgentDescriptor`, `ToolDescriptor`, `HumanInputDescriptor`, `WaitDescriptor`,
- * `CaseDescriptor`, `CallDescriptor` and `MapDescriptor` with the registered `BINDING_FIELDS`, as
- * Python does; the loop half of `test_human_input_and_loop_inputs_rewritten` uses a stand-in
- * (`standIn("loop")`, whose only binding field is `inputs`), registered with `withKinds`, since
- * the loop kind isn't ported yet.
+ * `CaseDescriptor`, `CallDescriptor`, `MapDescriptor` and `LoopDescriptor` with the registered
+ * `BINDING_FIELDS`, as Python does.
  *
  * TS-only: `mapBindingSources` hands the mapper a `ValueTemplate` whole, in a record field and in
  * a scalar field, and `keyless` drops the field and key.
@@ -17,14 +15,12 @@ import { keyless, mapBindingSources, mapBindingStrings } from "../../src/compose
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
+import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { WaitDescriptor } from "../../src/compose/nodes/wait.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { ValueTemplate } from "../../src/nodes/contracts.ts";
-import { standIn, withKinds } from "./stand_ins.ts";
-
-const StandInLoop = standIn("loop", { bindingFields: ["inputs"] });
 
 function up(_field: string, _key: string, value: string): string {
   return value.toUpperCase();
@@ -97,9 +93,9 @@ describe("mapBindingStrings", () => {
   test("human_input and loop inputs rewritten", () => {
     for (const desc of [
       new HumanInputDescriptor({ id: "h", inputs: { q: "${qs}" }, prompt: "hi" }),
-      new StandInLoop({ id: "l", inputs: { q: "${qs}" } }),
+      new LoopDescriptor({ id: "l", call: "body", inputs: { q: "${qs}" } }),
     ]) {
-      const out = withKinds([StandInLoop], () => mapBindingStrings(desc, up));
+      const out = mapBindingStrings(desc, up);
       expect(out.inputs).toEqual({ q: "${QS}" });
       expect(out).not.toBe(desc);
     }

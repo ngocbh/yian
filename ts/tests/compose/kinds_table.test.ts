@@ -1,18 +1,15 @@
 /**
  * The kind dispatch tables `KINDS` and `BINDING_FIELDS`, and `REMOVED_KINDS`: a port of
- * `tests/compose/test_kinds_table.py`. TS-era: only some kinds are ported, so the tables hold
- * kinds of `ALL_KIND_NAMES`, and the agreement row also runs on the nine stand-ins registered
- * with `withKinds`.
+ * `tests/compose/test_kinds_table.py`.
  *
- * Ported: `test_kinds_maps_string_to_descriptor_class`, and the `case`, `call` and `map` kinds'
- * entries in both tables (the call and map halves of `test_all_authored_kinds_registered`).
+ * Ported: `test_kinds_tables_present`, `test_kinds_maps_string_to_descriptor_class`,
+ * `test_all_authored_kinds_registered`, `test_removed_kinds_are_not_registered`,
+ * `test_kinds_and_binding_fields_agree`.
  *
- * TS-only: the `code`, `human_input` and `wait` rows; `withKinds` restores the tables after its
- * function returns or throws.
+ * TS-only: every kind's class in `KINDS`; the `case`, `call`, `map` and `loop` binding fields;
+ * `withKinds` restores the tables after its function returns or throws.
  *
  * Dropped: `test_retired_kindspec_is_not_public` (a Python import).
- *
- * Later (T3-16, the loop kind): the rest of `test_all_authored_kinds_registered`.
  */
 
 import { expect, test } from "bun:test";
@@ -23,10 +20,24 @@ import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import { BINDING_FIELDS, KINDS, REMOVED_KINDS } from "../../src/compose/nodes/index.ts";
+import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { WaitDescriptor } from "../../src/compose/nodes/wait.ts";
-import { ALL_KIND_NAMES, StandInCode, standIn, withKinds } from "./stand_ins.ts";
+import { StandInCode, standIn, withKinds } from "./stand_ins.ts";
+
+// The author-written kinds (as `docs/syntax.md` lists them; the loader makes `start` and `end`).
+const AUTHORED_KINDS: readonly string[] = [
+  "agent",
+  "call",
+  "case",
+  "code",
+  "human_input",
+  "loop",
+  "map",
+  "tool",
+  "wait",
+];
 
 /** Expect `KINDS` and `BINDING_FIELDS` to name the same kinds, each with its class's fields. */
 function expectTablesAgree(): void {
@@ -37,10 +48,9 @@ function expectTablesAgree(): void {
   }
 }
 
-test("the kind tables are maps of authored kinds", () => {
+test("the kind tables are maps", () => {
   expect(KINDS).toBeInstanceOf(Map);
   expect(BINDING_FIELDS).toBeInstanceOf(Map);
-  expect([...KINDS.keys()].filter((kind) => !ALL_KIND_NAMES.includes(kind))).toEqual([]);
 });
 
 test("KINDS maps the kind text to its descriptor class", () => {
@@ -52,7 +62,13 @@ test("KINDS maps the kind text to its descriptor class", () => {
   expect(KINDS.get("case")).toBe(CaseDescriptor);
   expect(KINDS.get("call")).toBe(CallDescriptor);
   expect(KINDS.get("map")).toBe(MapDescriptor);
+  expect(KINDS.get("loop")).toBe(LoopDescriptor);
   for (const [kind, cls] of KINDS) expect(cls.kind).toBe(kind);
+});
+
+test("all authored kinds are registered", () => {
+  expect(AUTHORED_KINDS.filter((kind) => !KINDS.has(kind))).toEqual([]);
+  expect(AUTHORED_KINDS.filter((kind) => !BINDING_FIELDS.has(kind))).toEqual([]);
 });
 
 test("a case carries no binding fields", () => {
@@ -64,6 +80,10 @@ test("a call and a map bind their inputs and over", () => {
   expect(BINDING_FIELDS.get("map")).toEqual(["inputs", "over"]);
 });
 
+test("a loop binds its inputs", () => {
+  expect(BINDING_FIELDS.get("loop")).toEqual(["inputs"]);
+});
+
 test("removed kinds are not registered", () => {
   expect([...REMOVED_KINDS.keys()].filter((kind) => KINDS.has(kind))).toEqual([]);
   expect(REMOVED_KINDS.get("model")).toBe(
@@ -73,11 +93,6 @@ test("removed kinds are not registered", () => {
 
 test("KINDS and BINDING_FIELDS agree", () => {
   expectTablesAgree();
-  const classes = ALL_KIND_NAMES.map((kind) => standIn(kind, { bindingFields: ["inputs"] }));
-  withKinds(classes, () => {
-    expect(KINDS.size).toBe(9);
-    expectTablesAgree();
-  });
 });
 
 test("withKinds restores the tables after a return or a throw", () => {

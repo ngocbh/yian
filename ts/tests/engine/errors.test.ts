@@ -1,7 +1,7 @@
 /**
  * Negative fixtures and their located source diagnostics: a port of `tests/engine/test_errors.py`
  * (the rows the parse phase decides), through `parseFile`, `flowNodesCursor` and `parseNodes`
- * with the registered kinds, plus stand-ins for the kinds not registered yet.
+ * with the registered kinds.
  *
  * All five gallery rows read conformance cases holding Python's `tests/seeds/errors/` flows:
  * `load-core/seed_e09_unknown_top_level_key`, `seed_e10_unknown_node_kind` and
@@ -37,12 +37,8 @@ import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { caseText, loadError, nodesOf } from "../compose/declarations.ts";
-import { standIn, UNREGISTERED_KIND_NAMES } from "../compose/stand_ins.ts";
 
 afterEach(() => forget());
-
-/** Stand-ins for the author-written kinds not registered yet, so a message lists all nine. */
-const UNREGISTERED_KINDS = UNREGISTERED_KIND_NAMES.map((kind) => standIn(kind));
 
 /** The flow text of conformance case `id`. */
 function seed(id: string): () => string {
@@ -57,7 +53,7 @@ test.each([
   ["e11", seed("load-leaves/seed_e11_field_not_allowed"), "field 'prompt' is not allowed", 13],
   ["e12", seed("load-leaves/seed_e12_missing_required_field"), "missing required field 'code'", 8],
 ] as const)("compile error gallery: %s", (_, flow, substr, line) => {
-  const error = loadError(() => nodesOf(flow(), UNREGISTERED_KINDS));
+  const error = loadError(() => nodesOf(flow()));
 
   expect(error.message).toContain(substr);
   expect(error.diagnostic.frames[0]!.range.startLine).toBe(line);

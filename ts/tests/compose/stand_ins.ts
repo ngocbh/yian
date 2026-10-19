@@ -1,8 +1,7 @@
 /**
- * Stand-in node kinds for the Compose tests, for kinds not ported yet or rows that need a minimal
- * kind: `StandInCode` shaped like the real kind, `standIn` for one-off classes,
- * `UNREGISTERED_KIND_NAMES`, and `withKinds`, which registers classes in `KINDS` and
- * `BINDING_FIELDS` for one call.
+ * Stand-in node kinds for the Compose tests, for rows that need a minimal kind: `StandInCode`
+ * shaped like the real kind, `standIn` for one-off classes, and `withKinds`, which registers
+ * classes in `KINDS` and `BINDING_FIELDS` for one call.
  */
 
 import {
@@ -13,22 +12,6 @@ import {
 } from "../../src/compose/nodes/base.ts";
 import { BINDING_FIELDS, type DescriptorClass, KINDS } from "../../src/compose/nodes/index.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-
-/** The nine author-written kinds. */
-export const ALL_KIND_NAMES: readonly string[] = [
-  "agent",
-  "call",
-  "case",
-  "code",
-  "human_input",
-  "loop",
-  "map",
-  "tool",
-  "wait",
-];
-
-/** The author-written kinds no real descriptor is registered for yet, for rows that need all nine. */
-export const UNREGISTERED_KIND_NAMES: readonly string[] = ALL_KIND_NAMES.filter((kind) => !KINDS.has(kind));
 
 /** A `code` stand-in requiring `code` and taking `input`, `output` and `asserts`; it builds. */
 export class StandInCode extends NodeDescriptor {

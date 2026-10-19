@@ -1,9 +1,9 @@
 /**
  * Inline composite bodies: a port of `tests/engine/test_inline_composite_bodies.py`, so far the
- * rows the CALL and MAP parse decides.
+ * rows the CALL, MAP and LOOP parse decides.
  *
- * Ported: the call and map rows of `test_child_label_is_not_authorable`, through `parseNodes` with
- * the registered kinds; the TS message names the field and lists the allowed keys.
+ * Ported: `test_child_label_is_not_authorable`, through `parseNodes` with the registered kinds;
+ * the TS message names the field and lists the allowed keys.
  *
  * TS-only: a CALL or MAP descriptor built with `childLabel: "inline body of node 'each'"` over a
  * hand-built child names the body by that label, reproducing the message composition of
@@ -11,12 +11,9 @@
  * of an undeclared argument of an inline call (the inline body itself is T3-17's).
  *
  * Pinned at the end (`parsedNodes`):
- * `load-map-call/engine_inline_composite_bodies__llm_config_on_an_inline_{call,map}`, whose
+ * `load-map-call/engine_inline_composite_bodies__llm_config_on_an_inline_{call,loop,map}`, whose
  * body-key check reaches `llm_config:`, the second key, before the inline `nodes:` key and before
  * the missing-`call:` check.
- *
- * Later (T3-16, the loop kind): the loop row of `test_child_label_is_not_authorable` and
- * `load-map-call/engine_inline_composite_bodies__llm_config_on_an_inline_loop`.
  *
  * Later (T3-17, inline body extraction and registration):
  * `test_unchanged_inline_projection_preserves_alias_sharing`,
@@ -112,6 +109,11 @@ test.each([
     "call: named\n    over: ${input.items}",
     "asserts, call, depends_on, env, input, kind, node_name, over, parallel, runs_after",
   ],
+  [
+    "loop",
+    "call: named\n    times: 1",
+    "asserts, call, depends_on, env, input, kind, max, node_name, runs_after, times, until, while",
+  ],
 ])("child_label is not authorable on %s", (kind, body, allowed) => {
   const nodes = SourceDocument.parse(
     `nodes:\n  composite:\n    kind: ${kind}\n    ${body}\n    child_label: forged\n`,
@@ -166,5 +168,6 @@ test("an inline call's undeclared argument names the body by its child label", (
 
 test.each<CaseRow>([
   { id: "load-map-call/engine_inline_composite_bodies__llm_config_on_an_inline_call", call: parsedNodes },
+  { id: "load-map-call/engine_inline_composite_bodies__llm_config_on_an_inline_loop", call: parsedNodes },
   { id: "load-map-call/engine_inline_composite_bodies__llm_config_on_an_inline_map", call: parsedNodes },
 ])("parseNodes: $id", runCase);

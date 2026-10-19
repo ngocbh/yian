@@ -106,8 +106,18 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   the error brands; the registry checks the `FunctionTool` and `McpServer` brands.
 - Arguments enter through `fromHost` and reach `execute` through `toHost`: fresh arrays and
   records, ints within ±(2^53−1) as `number`, larger ones as `bigint`.
-- `invoke` returns the tool's result raw, awaited, with `undefined` read as `null`; the callers
-  run value intake on it at their own boundaries (`contract.output`).
+- `tool()` builds a `FunctionTool` from Standard Schema v1 validators (with the Standard JSON
+  Schema interface) or raw JSON Schemas. yian depends only on those interfaces; zod, valibot and
+  ArkType are dev dependencies for the tests.
+- `validate` checks a call (JSON Schema, then the validator once) and returns a `CheckedCall`;
+  `invoke(call)` runs it without checking the arguments again and `isConcurrencySafe(call)` reads
+  it; both see what the validator returned, or the checked arguments when there is no validator.
+  `invoke(toolId, args)` validates first.
+- `invoke` returns the tool's result raw, awaited, with `undefined` read as `null`, unless the
+  tool declares an output: then it checks the result and returns the checked value in host form.
+  The callers run value intake on it at their own boundaries (`contract.output`).
+- Intake (`fromHost`) refuses getters, setters and Proxies, so no host code runs while it reads
+  a value and the value checked is the value recorded.
 - A `FunctionTool`'s `parametersJsonSchema` must be JSON within the nesting limit, since the
   model sees it; tools still receive and may return a real `Infinity`.
 

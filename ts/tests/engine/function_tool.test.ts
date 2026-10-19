@@ -1,15 +1,25 @@
 /**
- * `FunctionTool` construction, the types `toolTypes` reads from its JSON Schema, and a
- * `FunctionTool` in a `ToolSet` and the registry, a port of `tests/engine/test_function_tool.py`
- * and of the JSON Schema rows of `test_tool_types.py` that read a tool. Not ported: the
- * `function_tool` and decorator rows and `test_replace_drops_the_function_schema` (a later
- * `tool()` builds a tool from a function),
- * `test_run_entry_points_and_tool_set_annotate_function_tool_entries` (needs the run entry
- * points), `test_function_tool_without_a_signature_cannot_be_called_directly`, the async-refusal
- * rows (TS accepts and awaits an async `execute`), and the LangChain binding rows. The exports
- * row, `test_tool_names_are_exported_from_yian_and_yian_tools`, is in `tool_errors.test.ts`. With
- * `YIAN_TEST_NODE` set to a Node binary, the built tools code on Node, beside a second copy of its
- * leaves.
+ * `FunctionTool` construction, `tool()`, the types `toolTypes` reads from a tool's JSON Schemas,
+ * and a `FunctionTool` in a `ToolSet` and the registry, a port of
+ * `tests/engine/test_function_tool.py` and of the JSON Schema and output rows of
+ * `test_tool_types.py` that read a tool. The `function_tool` rows are ported as `tool()` rows, with
+ * a Standard Schema validator or a JSON Schema in place of the function's signature; the two
+ * invocation rows, `test_function_tool_result_validates_like_a_function_and_passes_the_context` and
+ * `test_function_tool_without_context_gets_its_validated_arguments`, are in the checking-order
+ * rows, where the validator plays pydantic's role. Not ported: the decorator form and the docstring
+ * defaults (TS has no runtime signatures), the async refusal (TS awaits an async `execute`), the
+ * unresolvable annotation row (TS has no runtime annotations), Python's lax `"2"` to 2 coercion
+ * (yian's argument check refuses `"2"` for an integer first),
+ * `test_replace_drops_the_function_schema` (no `dataclasses.replace`),
+ * `test_run_entry_points_and_tool_set_annotate_function_tool_entries` (needs the run entry points),
+ * `test_function_tool_without_a_signature_cannot_be_called_directly`, the second half of
+ * `test_function_tool_without_context_gets_its_validated_arguments` (calling `on_invoke` directly
+ * validates; calling `execute` directly runs no validator), and the LangChain binding rows. The
+ * exports row, `test_tool_names_are_exported_from_yian_and_yian_tools`, is in
+ * `tool_errors.test.ts`. The library matrix builds one `place` tool with zod, valibot (with a JSON
+ * Schema beside it, and through its Standard JSON Schema interface), ArkType and a raw JSON Schema.
+ * With `YIAN_TEST_NODE` set to a Node binary, the built tools code on Node, beside a second copy of
+ * its leaves, and a zod `tool()` there.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -18,9 +28,21 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { toJsonSchema, toStandardJsonSchema } from "@valibot/to-json-schema";
+import { type } from "arktype";
+import * as v from "valibot";
+import { z } from "zod";
+
 import { ToolContext } from "../../src/tools/context.ts";
-import { FunctionTool, isFunctionTool } from "../../src/tools/function_tools.ts";
-import { registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
+import { isToolCheckError, ToolCheckError } from "../../src/tools/errors.ts";
+import {
+  FunctionTool,
+  isFunctionTool,
+  type StandardResult,
+  type StandardSchemaV1,
+  tool,
+} from "../../src/tools/function_tools.ts";
+import { registeredTools, registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
 import { toolTypes } from "../../src/tools/types.ts";
 import { type JsonObject, parseJson } from "../../src/typesys/json.ts";
 import { canonicalTypeLabel, Type, TypeCheckError, typeEquals, ValueKind } from "../../src/typesys/values.ts";
@@ -50,6 +72,69 @@ function inputLabels(tool: FunctionTool): Record<string, string | null> | null {
   return Object.fromEntries(
     [...inputs].map(([name, typ]) => [name, typ === null ? null : canonicalTypeLabel(typ)]),
   );
+}
+
+/** Return the error `promise` rejects with, after checking its class. */
+async function rejection(promise: Promise<unknown>, kind: abstract new (...args: never[]) => Error): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    expect((error as Error).constructor).toBe(kind);
+    return error as Error;
+  }
+  throw new Error("expected a rejection");
+}
+
+/** Parameters yian's check accepts where the validator refines, fills a default or transforms. */
+const CHECKED_PARAMETERS = z.object({
+  sym: z.string().refine((s) => s === s.toUpperCase(), "must be upper case"),
+  qty: z.number().int().min(1).default(1),
+  note: z
+    .string()
+    .transform((s) => s.trim())
+    .optional(),
+});
+
+/** What `CHECKED_PARAMETERS` gives `execute`. */
+type Checked = z.output<typeof CHECKED_PARAMETERS>;
+
+/** A call `checkedPlace`'s `execute` saw: its arguments and context. */
+type SeenCall = [Checked, ToolContext<any>];
+
+/**
+ * Build the `place` tool on `CHECKED_PARAMETERS` behind a hand-built async validator that counts
+ * its calls in `count` and runs `during` while it validates. `execute` records each call in `seen`.
+ */
+function checkedPlace(
+  options: { during?: () => void; isConcurrencySafe?: (args: Checked) => boolean } = {},
+): { placed: FunctionTool; seen: SeenCall[]; count: { calls: number } } {
+  const seen: SeenCall[] = [];
+  const count = { calls: 0 };
+  const zod = CHECKED_PARAMETERS["~standard"];
+  const validator: StandardSchemaV1<unknown, Checked> = {
+    "~standard": {
+      version: 1,
+      vendor: "hand",
+      validate: async (value) => {
+        count.calls++;
+        options.during?.();
+        await Promise.resolve();
+        return (await zod.validate(value)) as StandardResult<Checked>;
+      },
+    },
+  };
+  const placed = tool({
+    name: "place",
+    description: "Place an order.",
+    parameters: validator,
+    parametersJsonSchema: zod.jsonSchema.input({ target: "draft-2020-12" }) as JsonObject,
+    execute: (args, ctx) => {
+      seen.push([args, ctx]);
+      return `${args.sym}:${args.qty}`;
+    },
+    isConcurrencySafe: options.isConcurrencySafe,
+  });
+  return { placed, seen, count };
 }
 
 describe("FunctionTool construction", () => {
@@ -98,6 +183,18 @@ describe("FunctionTool construction", () => {
       TypeError,
       "FunctionTool 'echo' isConcurrencySafe must be a function",
     ],
+    [
+      "a non-object output schema",
+      { outputJsonSchema: [1] },
+      TypeError,
+      "FunctionTool 'echo' outputJsonSchema must be an object, got Array",
+    ],
+    [
+      "an infinite number in the output schema",
+      { outputJsonSchema: { maximum: Infinity } },
+      TypeError,
+      "FunctionTool 'echo' outputJsonSchema.maximum: float is not finite",
+    ],
   ];
 
   for (const [what, changes, error, message] of ROWS) {
@@ -112,6 +209,51 @@ describe("FunctionTool construction", () => {
       expect((thrown as Error).message).toBe(message);
     });
   }
+
+  for (const option of ["parametersValidator", "outputValidator"]) {
+    const bad: [string, unknown][] = [
+      ["an object with no ~standard", {}],
+      ["a version 2 ~standard", { "~standard": { version: 2, validate() {} } }],
+      ["a ~standard with no validate", { "~standard": { version: 1 } }],
+      ["a string", "zod"],
+    ];
+    for (const [what, validator] of bad) {
+      test(`refuses ${what} as ${option}`, () => {
+        expect(() => build({ [option]: validator })).toThrow(
+          new TypeError(`FunctionTool 'echo' ${option} must be a Standard Schema v1 validator`),
+        );
+      });
+    }
+  }
+
+  test("accepts a callable validator, as ArkType's types are", () => {
+    const validator = Object.assign(() => null, {
+      "~standard": { version: 1 as const, vendor: "fn", validate: (value: unknown) => ({ value }) },
+    });
+    expect(build({ parametersValidator: validator }).parametersValidator).toBe(validator);
+  });
+
+  test("its validator and output fields are null by default, and it stays frozen", () => {
+    const tool = build({});
+    expect(tool.parametersValidator).toBeNull();
+    expect(tool.outputJsonSchema).toBeNull();
+    expect(tool.outputValidator).toBeNull();
+    const nulls = build({ parametersValidator: null, outputJsonSchema: null, outputValidator: null });
+    expect(nulls.outputJsonSchema).toBeNull();
+    expect(Object.isFrozen(tool)).toBe(true);
+  });
+
+  test("stores a frozen copy of the output schema", () => {
+    const schema = { type: "object", properties: { n: { type: "integer" } } };
+    const tool = build({ outputJsonSchema: schema });
+    schema.properties.n.type = "string";
+    expect(tool.outputJsonSchema).toEqual({ type: "object", properties: { n: { type: "integer" } } });
+    const properties = tool.outputJsonSchema!.properties as Record<string, JsonObject>;
+    expect(() => {
+      properties.n!.type = "string";
+    }).toThrow(TypeError);
+    expect(Object.isFrozen(tool.outputJsonSchema)).toBe(true);
+  });
 
   test("refuses a Date in the schema", () => {
     const schema = { type: "object", properties: { x: { type: "string", default: new Date(0) } } };
@@ -281,11 +423,11 @@ describe("FunctionTool in a ToolSet and the registry", () => {
     );
     expect(isFunctionTool(hostile)).toBe(false);
     expect(() => new ToolSet({ x: hostile as never })).toThrow(
-      new TypeError('tools["x"] must be a FunctionTool, an MCP server, or an array of FunctionTools, got Object'),
+      new TypeError('tools["x"] must be a FunctionTool, an MCP server, or an array of FunctionTools, got Proxy'),
     );
     expect(() => registerTool("x", hostile as never)).toThrow(
       new TypeError(
-        "registerTool('x') got a Object; it accepts a FunctionTool. " +
+        "registerTool('x') got a Proxy; it accepts a FunctionTool. " +
           "Pass anything else in the run's tools mapping instead",
       ),
     );
@@ -362,17 +504,6 @@ describe("FunctionTool invocation", () => {
       },
     });
     return [tool, seen];
-  }
-
-  /** Return the error `promise` rejects with, after checking its class. */
-  async function rejection(promise: Promise<unknown>, kind: abstract new (...args: never[]) => Error): Promise<Error> {
-    try {
-      await promise;
-    } catch (error) {
-      expect((error as Error).constructor).toBe(kind);
-      return error as Error;
-    }
-    throw new Error("expected a rejection");
   }
 
   test("test_function_tool_is_invoked_with_a_context_and_its_arguments", async () => {
@@ -597,6 +728,779 @@ describe("FunctionTool invocation", () => {
   });
 });
 
+describe("tool()", () => {
+  let saved: [string, FunctionTool][] = [];
+
+  // Keep process-global registrations isolated between tests.
+  beforeEach(() => {
+    saved = [...TOOL_REGISTRY];
+  });
+  afterEach(() => {
+    TOOL_REGISTRY.clear();
+    for (const [id, tool] of saved) TOOL_REGISTRY.set(id, tool);
+  });
+
+  const PLACE_PARAMETERS = z.object({
+    sym: z.string().describe("The ticker."),
+    qty: z.number().int().min(1),
+    mode: z.enum(["a", "b"]).optional(),
+  });
+  const FILLED = z.object({ filled: z.number().int() });
+
+  /** Build the zod `place` tool. */
+  function place(): FunctionTool {
+    return tool({
+      name: "place",
+      description: "Place an order.",
+      parameters: PLACE_PARAMETERS,
+      output: FILLED,
+      execute: (args) => ({ filled: args.qty }),
+    });
+  }
+
+  /** Check `place`'s types as `toolTypes` reads them. */
+  function expectPlaceTypes(placed: FunctionTool): void {
+    const types = toolTypes(placed);
+    expect(inputLabels(placed)).toEqual({ sym: "str", qty: "int(1..9007199254740991)", mode: "Literal(a, b)" });
+    expect(types.required).toEqual(new Set(["sym", "qty"]));
+    const filled = new Type({
+      kind: ValueKind.OBJECT,
+      fields: new Map([
+        ["filled", new Type({ kind: ValueKind.INTEGER, bounds: [-9007199254740991n, 9007199254740991n] })],
+      ]),
+      required: new Set(["filled"]),
+    });
+    expect(types.output).not.toBeNull();
+    expect(typeEquals(types.output!, filled)).toBe(true);
+  }
+
+  /** Return the error `build` throws, after checking its class. */
+  function thrown(build: () => unknown, kind: abstract new (...args: never[]) => Error): Error {
+    try {
+      build();
+    } catch (error) {
+      expect((error as Error).constructor).toBe(kind);
+      return error as Error;
+    }
+    throw new Error("expected a throw");
+  }
+
+  test("test_function_tool_builds_a_function_tool_from_a_function", () => {
+    const placed = place();
+
+    expect(isFunctionTool(placed)).toBe(true);
+    expect(placed.name).toBe("place");
+    expect(placed.description).toBe("Place an order.");
+    expect(placed.parametersJsonSchema).toEqual(
+      PLACE_PARAMETERS["~standard"].jsonSchema.input({ target: "draft-2020-12" }) as JsonObject,
+    );
+    expect(placed.parametersValidator).toBe(PLACE_PARAMETERS);
+    expect(placed.outputJsonSchema).toEqual(
+      FILLED["~standard"].jsonSchema.input({ target: "draft-2020-12" }) as JsonObject,
+    );
+    expect(placed.outputValidator).toBe(FILLED);
+  });
+
+  test("a description in the validator reaches the JSON Schema", () => {
+    const properties = place().parametersJsonSchema.properties as Record<string, JsonObject>;
+    expect(properties.sym!.description).toBe("The ticker.");
+  });
+
+  test("test_function_tool_result_binds_and_reads_types_like_a_function, test_function_tool_types", () => {
+    expectPlaceTypes(place());
+  });
+
+  test("test_function_tool_registers_with_register_tool: registry, mapping and group read the same types", () => {
+    const placed = place();
+    registerTool("place", placed);
+
+    expectPlaceTypes(TOOL_REGISTRY.get("place")!);
+    expectPlaceTypes(new ToolSet().resolve(["place"])[0]!);
+    expectPlaceTypes(new ToolSet({ place: placed }).resolve(["place"])[0]!);
+    expectPlaceTypes(new ToolSet({ g: [placed] }).resolve(["place"])[0]!);
+  });
+
+  test("test_register_tool_description_override_on_a_function_tool_from_a_function", async () => {
+    const placed = place();
+    registerTool("place", placed, { descriptionOverride: "Buy." });
+
+    const stored = TOOL_REGISTRY.get("place")!;
+    expect(stored).not.toBe(placed);
+    expect(stored.description).toBe("Buy.");
+    expect(stored.parametersValidator).toBe(PLACE_PARAMETERS);
+    expect(stored.outputValidator).toBe(FILLED);
+    expect(stored.outputJsonSchema).toEqual(placed.outputJsonSchema!);
+    expectPlaceTypes(stored);
+
+    // The copy carries the validator, so a call through the registry runs it.
+    TOOL_REGISTRY.delete("place");
+    const { placed: checked, seen } = checkedPlace();
+    registerTool("place", checked, { descriptionOverride: "Buy." });
+    const error = await rejection(new ToolSet().invoke("place", { sym: "abc" }), ToolCheckError);
+    expect(error.message).toBe("tool 'place' arguments failed its validator: sym: must be upper case");
+    expect(await new ToolSet().invoke("place", { sym: "X" })).toBe("X:1");
+    expect(seen.map(([args]) => args)).toEqual([{ sym: "X", qty: 1 }]);
+  });
+
+  test("test_registered_tools_copy_keeps_the_output_type", () => {
+    registerTool("place", place());
+
+    expectPlaceTypes(new ToolSet(registeredTools()).resolve(["place"])[0]!);
+  });
+
+  test("a raw JSON Schema has no validators and its output type is read", () => {
+    const echoed = tool({
+      name: "echo",
+      description: "Echo.",
+      parameters: ECHO_SCHEMA,
+      output: { type: "string" },
+      execute: (args) => String(args.text),
+    });
+
+    expect(echoed.parametersJsonSchema).toEqual(ECHO_SCHEMA);
+    expect(echoed.parametersValidator).toBeNull();
+    expect(echoed.outputValidator).toBeNull();
+    expect(echoed.outputJsonSchema).toEqual({ type: "string" });
+    expect(typeEquals(toolTypes(echoed).output!, Type.scalar(ValueKind.STRING))).toBe(true);
+    const plain = tool({ name: "echo", description: "", parameters: ECHO_SCHEMA, execute: () => null });
+    expect(plain.outputJsonSchema).toBeNull();
+  });
+
+  test("test_explicit_none_return_is_none_kind", () => {
+    const nothing = tool({
+      name: "echo",
+      description: "",
+      parameters: ECHO_SCHEMA,
+      output: { type: "null" },
+      execute: () => null,
+    });
+
+    expect(typeEquals(toolTypes(nothing).output!, Type.scalar(ValueKind.NONE))).toBe(true);
+  });
+
+  for (const output of [{}, { allOf: [{ type: "string" }, { minLength: 1 }] }] as JsonObject[]) {
+    test(`test_return_without_a_json_like_type_has_no_output[${JSON.stringify(output)}]`, () => {
+      const untyped = tool({ name: "echo", description: "", parameters: ECHO_SCHEMA, output, execute: () => null });
+
+      expect(untyped.outputJsonSchema).toEqual(output);
+      expect(toolTypes(untyped).output).toBeNull();
+    });
+  }
+
+  test("a validator with no Standard JSON Schema needs parametersJsonSchema", () => {
+    const hand: StandardSchemaV1 = { "~standard": { version: 1, vendor: "hand", validate: (value) => ({ value }) } };
+
+    const error = thrown(() => tool({ name: "x", description: "", parameters: hand, execute: () => null }), TypeError);
+    expect(error.message).toBe(
+      "tool 'x' parameters: the hand validator has no Standard JSON Schema (~standard.jsonSchema); " +
+        "pass parametersJsonSchema too",
+    );
+    const built = tool({
+      name: "x",
+      description: "",
+      parameters: hand,
+      parametersJsonSchema: ECHO_SCHEMA,
+      execute: () => null,
+    });
+    expect(built.parametersJsonSchema).toEqual(ECHO_SCHEMA);
+    expect(built.parametersValidator).toBe(hand);
+
+    const outputError = thrown(
+      () => tool({ name: "x", description: "", parameters: ECHO_SCHEMA, output: hand, execute: () => null }),
+      TypeError,
+    );
+    expect(outputError.message).toBe(
+      "tool 'x' output: the hand validator has no Standard JSON Schema (~standard.jsonSchema); " +
+        "pass outputJsonSchema too",
+    );
+    const withOutput = tool({
+      name: "x",
+      description: "",
+      parameters: ECHO_SCHEMA,
+      output: hand,
+      outputJsonSchema: { type: "string" },
+      execute: () => null,
+    });
+    expect(withOutput.outputJsonSchema).toEqual({ type: "string" });
+    expect(withOutput.outputValidator).toBe(hand);
+  });
+
+  for (const [what, bad] of [
+    ["a non-object ~standard", { "~standard": 5 }],
+    ["a version 2 ~standard", { "~standard": { version: 2, validate() {} } }],
+  ] as unknown as [string, StandardSchemaV1][]) {
+    test(`refuses ${what} as parameters`, () => {
+      expect(() => tool({ name: "x", description: "", parameters: bad, execute: () => null })).toThrow(
+        new TypeError("tool 'x' parameters must be a Standard Schema v1 validator"),
+      );
+      // Refused up front, even with a JSON Schema beside it.
+      expect(() =>
+        tool({ name: "x", description: "", parameters: bad, parametersJsonSchema: ECHO_SCHEMA, execute: () => null }),
+      ).toThrow(new TypeError("tool 'x' parameters must be a Standard Schema v1 validator"));
+    });
+  }
+
+  test("refuses a non-v1 validator as output", () => {
+    const bad = { "~standard": { version: 2, validate() {} } } as unknown as StandardSchemaV1;
+    expect(() =>
+      tool({ name: "x", description: "", parameters: ECHO_SCHEMA, output: bad, execute: () => null }),
+    ).toThrow(new TypeError("tool 'x' output must be a Standard Schema v1 validator"));
+  });
+
+  test("a plain valibot schema needs parametersJsonSchema", () => {
+    const error = thrown(
+      () => tool({ name: "x", description: "", parameters: v.object({ symbol: v.string() }), execute: () => null }),
+      TypeError,
+    );
+    expect(error.message).toBe(
+      "tool 'x' parameters: the valibot validator has no Standard JSON Schema (~standard.jsonSchema); " +
+        "pass parametersJsonSchema too",
+    );
+  });
+
+  test("test_function_tool_names_the_tool_when_an_argument_has_no_json_schema", () => {
+    const error = thrown(
+      () =>
+        tool({ name: "when", description: "", parameters: z.object({ when: z.coerce.date() }), execute: () => null }),
+      TypeError,
+    );
+    expect(error.message).toBe(
+      "tool 'when' has an argument type with no JSON Schema: Date cannot be represented in JSON Schema",
+    );
+    expect(error.cause).toBeInstanceOf(Error);
+
+    const outputError = thrown(
+      () => tool({ name: "x", description: "", parameters: ECHO_SCHEMA, output: z.date(), execute: () => new Date(0) }),
+      TypeError,
+    );
+    expect(outputError.message).toBe(
+      "tool 'x' has an output type with no JSON Schema: Date cannot be represented in JSON Schema",
+    );
+  });
+
+  test("parametersJsonSchema and outputJsonSchema are only for a validator", () => {
+    expect(() =>
+      tool({
+        name: "x",
+        description: "",
+        parameters: ECHO_SCHEMA,
+        parametersJsonSchema: ECHO_SCHEMA,
+        execute: () => null,
+      }),
+    ).toThrow(new TypeError("tool 'x' parametersJsonSchema is only for a validator"));
+    expect(() =>
+      tool({
+        name: "x",
+        description: "",
+        parameters: ECHO_SCHEMA,
+        output: { type: "string" },
+        outputJsonSchema: { type: "string" },
+        execute: () => null,
+      }),
+    ).toThrow(new TypeError("tool 'x' outputJsonSchema is only for a validator"));
+  });
+
+  test.each<[string, "parameters" | "output", unknown]>([
+    ["parameters missing", "parameters", undefined],
+    ["parameters as a string", "parameters", "object"],
+    ["parameters as an array", "parameters", []],
+    ["output as a string", "output", "string"],
+  ])("%s: neither a JSON Schema object nor a validator", (_label, role, value) => {
+    const options = { name: "x", description: "", parameters: ECHO_SCHEMA, execute: () => null, [role]: value };
+    expect(() => tool(options as Parameters<typeof tool>[0])).toThrow(
+      new TypeError(`tool 'x' ${role} must be a JSON Schema object or a Standard Schema v1 validator`),
+    );
+  });
+
+  test("outputJsonSchema needs an output validator", () => {
+    expect(() =>
+      tool({ name: "x", description: "", parameters: ECHO_SCHEMA, outputJsonSchema: ECHO_SCHEMA, execute: () => null }),
+    ).toThrow(new TypeError("tool 'x' outputJsonSchema needs an output validator"));
+  });
+
+  test("parametersJsonSchema given with a zod validator replaces zod's schema", () => {
+    const built = tool({
+      name: "x",
+      description: "",
+      parameters: PLACE_PARAMETERS,
+      parametersJsonSchema: ECHO_SCHEMA,
+      execute: () => null,
+    });
+
+    expect(built.parametersJsonSchema).toEqual(ECHO_SCHEMA);
+    expect(built.parametersValidator).toBe(PLACE_PARAMETERS);
+  });
+
+  test("a zod parameter that isn't an object gets FunctionTool's check", () => {
+    expect(() => tool({ name: "x", description: "", parameters: z.string(), execute: () => null })).toThrow(
+      new RangeError("FunctionTool 'x' parametersJsonSchema must have type 'object'"),
+    );
+  });
+
+  test("execute and isConcurrencySafe get the validator's output type", () => {
+    const counted = tool({
+      name: "count",
+      description: "Count.",
+      parameters: z.object({ n: z.number() }),
+      output: z.number(),
+      execute: (args) => {
+        // @ts-expect-error `missing` is not a parameter.
+        void args.missing;
+        return args.n + 1;
+      },
+      isConcurrencySafe: (args) => args.n > 0,
+    });
+    expect(counted.isConcurrencySafe!({ n: 1 })).toBe(true);
+    // @ts-expect-error a string is not the output type.
+    tool({ name: "bad", description: "", parameters: ECHO_SCHEMA, output: z.number(), execute: () => "no" });
+  });
+});
+
+describe("tool() checking order", () => {
+  /** Build a tool `x` on the echo schema whose validator is `validate`. */
+  function handTool(validate: StandardSchemaV1["~standard"]["validate"]): FunctionTool {
+    return tool({
+      name: "x",
+      description: "",
+      parameters: { "~standard": { version: 1, vendor: "hand", validate } },
+      parametersJsonSchema: ECHO_SCHEMA,
+      execute: (args) => args,
+    });
+  }
+
+  test("yian's check runs first and the validator is never called", async () => {
+    const { placed, seen, count } = checkedPlace();
+    const tools = new ToolSet({ place: placed });
+
+    const unknown = await rejection(tools.validate("place", { sym: "X", ctx: "forged" }), RangeError);
+    expect(unknown.message).toBe(
+      'tool \'place\' received unsupported argument(s) ["ctx"]; allowed: ["note","qty","sym"]',
+    );
+    await rejection(tools.invoke("place", { sym: "X", qty: "2" }), TypeCheckError);
+    expect(count.calls).toBe(0);
+    expect(seen).toEqual([]);
+  });
+
+  test("the validator's issues fail the call as a ToolCheckError", async () => {
+    const { placed, seen } = checkedPlace();
+
+    const error = await rejection(new ToolSet({ place: placed }).invoke("place", { sym: "abc" }), ToolCheckError);
+    expect(isToolCheckError(error)).toBe(true);
+    expect(error.message).toBe("tool 'place' arguments failed its validator: sym: must be upper case");
+    expect(seen).toEqual([]);
+  });
+
+  test("each issue is shown with its path, when it has one", async () => {
+    const issues = [
+      { message: "no path" },
+      { message: "empty path", path: [] },
+      { message: "keyed", path: ["a", { key: 0 }, { key: "b" }] },
+      { message: "symbol", path: [Symbol("s")] },
+    ];
+    const tools = new ToolSet({ x: handTool(() => ({ issues })) });
+
+    const error = await rejection(tools.validate("x", { text: "hi" }), ToolCheckError);
+    expect(error.message).toBe(
+      'tool \'x\' arguments failed its validator: no path; empty path; a[0].b: keyed; ["Symbol(s)"]: symbol',
+    );
+    const empty = new ToolSet({ x: handTool(() => ({ issues: [] })) });
+    const none = await rejection(empty.validate("x", { text: "hi" }), ToolCheckError);
+    expect(none.message).toBe("tool 'x' arguments failed its validator");
+  });
+
+  test("the validator runs once in validate and every attempt gets its output", async () => {
+    const { placed, seen, count } = checkedPlace();
+    const tools = new ToolSet({ place: placed });
+
+    const call = await tools.validate("place", { sym: "X", note: " hi " });
+    expect(count.calls).toBe(1);
+    for (const attempt of [1, 2, 3]) expect(await tools.invoke(call, { attempt })).toBe("X:1");
+
+    expect(count.calls).toBe(1);
+    expect(seen.map(([, ctx]) => ctx.attempt)).toEqual([1, 2, 3]);
+    expect(seen[0]![0]).toEqual({ sym: "X", qty: 1, note: "hi" });
+    expect(seen[1]![0]).toBe(seen[0]![0]);
+    expect(seen[2]![0]).toBe(seen[0]![0]);
+  });
+
+  test("a one-shot invoke runs the validator once per call", async () => {
+    const { placed, count } = checkedPlace();
+    const tools = new ToolSet({ place: placed });
+
+    await tools.invoke("place", { sym: "X" });
+    await tools.invoke("place", { sym: "Y", qty: 2 });
+
+    expect(count.calls).toBe(2);
+  });
+
+  test("an async validator is awaited, and a throwing one propagates unchanged", async () => {
+    const delayed = handTool(async (value) => {
+      await Promise.resolve();
+      return { value: { ...(value as object), late: true } };
+    });
+    expect(await new ToolSet({ x: delayed }).invoke("x", { text: "hi" })).toEqual({ text: "hi", late: true });
+
+    const boom = new Error("boom");
+    const throwing = handTool(() => {
+      throw boom;
+    });
+    expect(await rejection(new ToolSet({ x: throwing }).validate("x", { text: "hi" }), Error)).toBe(boom);
+  });
+
+  test.each<[string, unknown, string]>([
+    ["undefined", undefined, "undefined"],
+    ["an object with neither issues nor value", {}, "Object"],
+    ["issues that aren't an array", { issues: 5 }, "Object"],
+    ["null issues", { issues: null }, "Object"],
+  ])("a validator that returns %s is a TypeError", async (_label, result, name) => {
+    const tools = new ToolSet({ x: handTool(() => result as never) });
+
+    const error = await rejection(tools.validate("x", { text: "hi" }), TypeError);
+    expect(error.message).toBe(`tool 'x' arguments: the validator returned ${name}, not a Standard Schema result`);
+  });
+
+  test("an already-aborted signal stops validate before the validator runs", async () => {
+    const { placed, count } = checkedPlace();
+    const controller = new AbortController();
+    const reason = new Error("stopped");
+    controller.abort(reason);
+
+    const tools = new ToolSet({ place: placed });
+    await expect(tools.validate("place", { sym: "X" }, { signal: controller.signal })).rejects.toBe(reason);
+    expect(count.calls).toBe(0);
+    // With no signal passed, the one `forRun` bound is used.
+    await expect(tools.forRun("r", { signal: controller.signal }).validate("place", { sym: "X" })).rejects.toBe(reason);
+    await expect(tools.forRun("r", { signal: controller.signal }).invoke("place", { sym: "X" })).rejects.toBe(reason);
+    expect(count.calls).toBe(0);
+  });
+
+  test("a stop while the validator runs rejects after it returns", async () => {
+    const controller = new AbortController();
+    const reason = new Error("stopped");
+    const { placed, seen, count } = checkedPlace({ during: () => controller.abort(reason) });
+
+    const tools = new ToolSet({ place: placed });
+    await expect(tools.invoke("place", { sym: "X" }, { signal: controller.signal })).rejects.toBe(reason);
+    expect(count.calls).toBe(1);
+    expect(seen).toEqual([]);
+  });
+
+  test("isConcurrencySafe receives the object execute gets", async () => {
+    const safe: Checked[] = [];
+    const { placed, seen } = checkedPlace({
+      isConcurrencySafe: (args) => {
+        safe.push(args);
+        return true;
+      },
+    });
+    const tools = new ToolSet({ place: placed });
+    const call = await tools.validate("place", { sym: "X" });
+
+    expect(tools.isConcurrencySafe(call)).toBe(true);
+    await tools.invoke(call);
+
+    expect(safe[0]).toEqual({ sym: "X", qty: 1 });
+    expect(seen[0]![0]).toBe(safe[0]!);
+  });
+
+  test("invokeTrusted runs the validator too", async () => {
+    const { placed, count } = checkedPlace();
+    const tools = new ToolSet({ place: placed });
+
+    await rejection(tools.invokeTrusted("place", { sym: "abc" }), ToolCheckError);
+    expect(await tools.invokeTrusted("place", { sym: "X" })).toBe("X:1");
+    expect(count.calls).toBe(2);
+  });
+
+  test("test_function_tool_result_validates_like_a_function_and_passes_the_context", async () => {
+    const app = { name: "broker" };
+    const { placed, seen } = checkedPlace();
+    const tools = new ToolSet({ place: placed }, { context: app }).forRun("r");
+
+    expect(await tools.invoke("place", { sym: "X", qty: 2 }, { node: "n" })).toBe("X:2");
+
+    const [args, ctx] = seen[0]!;
+    expect(args).toEqual({ sym: "X", qty: 2 });
+    expect(ctx.callId).toBe("r/n");
+    expect(ctx.context).toBe(app);
+    await rejection(tools.invoke("place", { sym: "X", ctx: "forged" }), RangeError);
+    await rejection(tools.invoke("place", { sym: "X", qty: "many" }), TypeCheckError);
+  });
+
+  test("test_function_tool_without_context_gets_its_validated_arguments", async () => {
+    const add = tool({
+      name: "add",
+      description: "Add two integers.",
+      parameters: z.object({ a: z.number().int(), b: z.number().int().default(4) }),
+      execute: (args) => args.a + args.b,
+    });
+
+    expect(await new ToolSet({ add }).invoke("add", { a: 3 })).toBe(7);
+  });
+});
+
+describe("tool() results", () => {
+  /** Call a tool `name` with no arguments, whose `execute` returns `result`, declaring `output`. */
+  function returning(
+    output: StandardSchemaV1 | JsonObject | undefined,
+    result: unknown,
+    name = "x",
+  ): Promise<unknown> {
+    const made = tool({
+      name,
+      description: "",
+      parameters: { type: "object", properties: {} },
+      output,
+      // Each row returns what its check must see, whatever the output type says.
+      execute: () => result as never,
+    });
+    return new ToolSet({ [name]: made }).invoke(name, {});
+  }
+
+  /** Return the `ToolCheckError` `promise` rejects with, after checking the TOOL node won't retry it. */
+  async function checkFailure(promise: Promise<unknown>): Promise<Error> {
+    const error = await rejection(promise, ToolCheckError);
+    expect(isToolCheckError(error)).toBe(true);
+    return error;
+  }
+
+  const OBJECT_SCHEMA: JsonObject = {
+    type: "object",
+    properties: { filled: { type: "integer" } },
+    required: ["filled"],
+  };
+
+  test("a raw JSON Schema output checks the result's yian type", async () => {
+    const integer: JsonObject = { type: "integer" };
+
+    const fraction = await checkFailure(returning(integer, 2.5, "count"));
+    expect(fraction.message).toStartWith("tool 'count' result: ");
+    expect(fraction.cause).toBeInstanceOf(TypeCheckError);
+    const nan = await checkFailure(returning(integer, NaN, "count"));
+    expect(nan.message).toBe("tool 'count' result: NaN is not a yian value");
+    expect(nan.cause).toBeInstanceOf(TypeCheckError);
+    expect(await returning(integer, 3, "count")).toBe(3);
+    expect(await returning(integer, 2n ** 70n, "count")).toBe(2n ** 70n);
+  });
+
+  test("a zod output passes yian's open check, then its validator checks and strips", async () => {
+    const output = z.object({ filled: z.number() });
+
+    const error = await checkFailure(returning(output, { filled: "x" }, "place"));
+    expect(error.message).toBe(
+      "tool 'place' result failed its output validator: filled: Invalid input: expected number, received string",
+    );
+    expect(await returning(output, { filled: 1, extra: "x" }, "place")).toEqual({ filled: 1 });
+  });
+
+  test("an open object schema checks only that the result is an object", async () => {
+    expect(await returning(OBJECT_SCHEMA, { filled: "x" })).toEqual({ filled: "x" });
+    const list = await checkFailure(returning(OBJECT_SCHEMA, []));
+    expect(list.message).toBe("tool 'x' result: [] does not match declared type object");
+  });
+
+  test("a closed object schema and an array schema check inside, at a path", async () => {
+    const closed = await checkFailure(returning({ ...OBJECT_SCHEMA, additionalProperties: false }, { filled: "x" }));
+    expect(closed.message).toBe('tool \'x\' result at filled: "x" does not match declared type int');
+    expect(closed.cause).toBeInstanceOf(TypeCheckError);
+    const items = await checkFailure(returning({ type: "array", items: { type: "integer" } }, [1, 2.5]));
+    expect(items.message).toBe("tool 'x' result at [1]: 2.5 does not match declared type int");
+  });
+
+  test("a validator's issues on the result fail the call", async () => {
+    const error = await checkFailure(returning(z.string().regex(/^ok/), "no"));
+    expect(error.message).toStartWith("tool 'x' result failed its output validator: ");
+  });
+
+  test("the validator's output passes intake again and is what invoke returns", async () => {
+    const dated = await checkFailure(returning(z.string().transform((s) => new Date(s)), "2026-01-01"));
+    expect(dated.message).toBe("tool 'x' result: Date is not a yian value");
+    expect(dated.cause).toBeInstanceOf(TypeCheckError);
+    expect(await returning(z.string().transform((s) => s.trim()), " a ")).toBe("a");
+  });
+
+  test("a throw from the output validator is a ToolCheckError, its cause the original", async () => {
+    const boom = new Error("boom");
+    const output = z.string().transform(() => {
+      throw boom;
+    });
+
+    const error = await checkFailure(returning(output, "a"));
+    expect(error.message).toBe("tool 'x' result: the output validator threw: boom");
+    expect(error.cause).toBe(boom);
+  });
+
+  test("an output validator that throws a non-Error or returns no result fails as a ToolCheckError", async () => {
+    /** Call a tool whose output validator is `validate`. */
+    const handReturning = (validate: () => unknown): Promise<unknown> => {
+      const made = tool({
+        name: "x",
+        description: "",
+        parameters: { type: "object", properties: {} },
+        output: { "~standard": { version: 1, vendor: "hand", validate: validate as never } },
+        outputJsonSchema: { type: "string" },
+        execute: () => "a",
+      });
+      return new ToolSet({ x: made }).invoke("x", {});
+    };
+
+    const thrown = await checkFailure(
+      handReturning(() => {
+        throw "bad";
+      }),
+    );
+    expect(thrown.message).toBe("tool 'x' result: the output validator threw: bad");
+    expect(thrown.cause).toBe("bad");
+    // A thrown value `String` can't convert is named by its type.
+    const bare = Object.create(null) as object;
+    const opaque = await checkFailure(
+      handReturning(() => {
+        throw bare;
+      }),
+    );
+    expect(opaque.message).toBe("tool 'x' result: the output validator threw: object");
+    expect(opaque.cause).toBe(bare);
+    // A thrown Proxy runs no trap, and an `Error` whose message isn't text still gives a message.
+    const trapped = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error("trap");
+        },
+      },
+    );
+    const proxy = await checkFailure(
+      handReturning(() => {
+        throw trapped;
+      }),
+    );
+    expect(proxy.message).toBe("tool 'x' result: the output validator threw: Proxy");
+    expect(proxy.cause).toBe(trapped);
+    const symbolMessage = Object.assign(new Error(), { message: Symbol("s") as unknown as string });
+    const symbol = await checkFailure(
+      handReturning(() => {
+        throw symbolMessage;
+      }),
+    );
+    expect(symbol.message).toBe("tool 'x' result: the output validator threw: Symbol(s)");
+    expect(symbol.cause).toBe(symbolMessage);
+    const none = await checkFailure(handReturning(() => undefined));
+    expect(none.message).toBe("tool 'x' result: the output validator returned undefined, not a Standard Schema result");
+  });
+
+  test("an ArkType issue at the root has no path", async () => {
+    const made = tool({
+      name: "x",
+      description: "",
+      parameters: { type: "object", properties: {} },
+      // A string pattern yian's check doesn't carry, so the validator sees the value.
+      output: type(/^ok/),
+      execute: () => "s",
+    });
+    const error = await checkFailure(new ToolSet({ x: made }).invoke("x", {}));
+    expect(error.message).toBe('tool \'x\' result failed its output validator: must be matched by ^ok (was "s")');
+  });
+
+  test("an untranslatable output schema still runs intake", async () => {
+    const nan = await checkFailure(returning({}, NaN));
+    expect(nan.message).toBe("tool 'x' result: NaN is not a yian value");
+    expect(await returning({}, { a: [1, "b"] })).toEqual({ a: [1, "b"] });
+  });
+
+  test("a tool without an output returns its raw result", async () => {
+    const date = new Date(0);
+    expect(await returning(undefined, date)).toBe(date);
+  });
+});
+
+describe("Standard Schema libraries", () => {
+  /** `place`'s arguments in valibot: a `symbol` of 3 or more characters and an integer `qty` that defaults to 1. */
+  const VALIBOT_PLACE = v.object({
+    symbol: v.pipe(v.string(), v.minLength(3)),
+    qty: v.optional(v.pipe(v.number(), v.integer()), 1),
+  });
+
+  /** Build `place` on `parameters`, with `parametersJsonSchema` when given; `execute` returns its arguments. */
+  function libraryPlace(parameters: StandardSchemaV1 | JsonObject, parametersJsonSchema?: JsonObject): FunctionTool {
+    return tool({
+      name: "place",
+      description: "Place an order.",
+      parameters,
+      parametersJsonSchema,
+      execute: (args) => args,
+    });
+  }
+
+  /**
+   * Check `placed`: its input types (`symbol` a `str`, `qty` labelled `qtyLabel`) and required
+   * `symbol`; a good call reaches `execute` as `good`; yian's check refuses `symbol: 1`; and
+   * `symbol: "ab"` fails the validator with `refused`, or, with no validator (`null`), reaches
+   * `execute` as given.
+   */
+  async function expectPlace(
+    placed: FunctionTool,
+    qtyLabel: string,
+    good: Record<string, unknown>,
+    refused: string | null,
+  ): Promise<void> {
+    expect(inputLabels(placed)).toEqual({ symbol: "str", qty: qtyLabel });
+    expect(toolTypes(placed).required).toEqual(new Set(["symbol"]));
+    const tools = new ToolSet({ place: placed });
+    expect(await tools.invoke(await tools.validate("place", { symbol: "abc" }))).toStrictEqual(good);
+    // yian's message, not the validator's: its check refused the value before the validator ran.
+    const wrong = await rejection(tools.invoke("place", { symbol: 1 }), TypeCheckError);
+    expect(wrong.message).toBe("tool 'place' argument 'symbol': 1 does not match declared type str");
+    if (refused === null) {
+      expect(await tools.invoke("place", { symbol: "ab" })).toStrictEqual({ symbol: "ab" });
+      return;
+    }
+    const error = await rejection(tools.invoke("place", { symbol: "ab" }), ToolCheckError);
+    expect(error.message).toBe(`tool 'place' arguments failed its validator: symbol: ${refused}`);
+  }
+
+  test("zod 4", async () => {
+    const parameters = z.object({ symbol: z.string().refine((s) => s.length > 2), qty: z.number().int().default(1) });
+
+    await expectPlace(
+      libraryPlace(parameters),
+      "int(-9007199254740991..9007199254740991)",
+      { symbol: "abc", qty: 1 },
+      "Invalid input",
+    );
+  });
+
+  test("valibot with parametersJsonSchema", async () => {
+    const placed = libraryPlace(VALIBOT_PLACE, toJsonSchema(VALIBOT_PLACE) as JsonObject);
+
+    expect(placed.parametersJsonSchema.$schema).toBe("http://json-schema.org/draft-07/schema#");
+    await expectPlace(placed, "int", { symbol: "abc", qty: 1 }, "Invalid length: Expected >=3 but received 2");
+  });
+
+  test("valibot through its Standard JSON Schema interface", async () => {
+    const placed = libraryPlace(toStandardJsonSchema(VALIBOT_PLACE));
+
+    expect(placed.parametersJsonSchema.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
+    await expectPlace(placed, "int", { symbol: "abc", qty: 1 }, "Invalid length: Expected >=3 but received 2");
+  });
+
+  test("ArkType", async () => {
+    const placed = libraryPlace(type({ symbol: "string > 2", qty: "number.integer = 1" }));
+
+    await expectPlace(placed, "int", { symbol: "abc", qty: 1 }, "symbol must be at least length 3 (was 2)");
+  });
+
+  test("raw JSON Schema", async () => {
+    const placed = libraryPlace({
+      type: "object",
+      properties: { symbol: { type: "string" }, qty: { type: "integer", default: 1 } },
+      required: ["symbol"],
+    });
+
+    expect(placed.parametersValidator).toBeNull();
+    await expectPlace(placed, "int", { symbol: "abc" }, null);
+  });
+});
+
 /** The `ts/` directory. */
 const ROOT = resolve(import.meta.dir, "../..");
 const BUILT = join(ROOT, "dist/src/tools/index.js");
@@ -625,7 +1529,7 @@ const NODE = ((): string | undefined => {
 })();
 
 test.skipIf(!NODE)(
-  "the built tools code runs on Node beside a second copy of its leaves",
+  "the built tools code runs on Node beside a second copy of its leaves, and a zod tool() there",
   () => {
     const url = (file: string) => JSON.stringify(pathToFileURL(join(ROOT, file)).href);
     // Node keys modules by full URL, so a query loads a second instance of that module. Copying
@@ -666,9 +1570,23 @@ test.skipIf(!NODE)(
       });
       assert.ok(!(echo instanceof tools.FunctionTool));
       assert.equal(await new tools.ToolSet({ echo }).invoke("echo", { text: "hi" }), "hi from echo");
+
+      const { z } = await import("zod");
+      const place = tools.tool({
+        name: "place",
+        description: "Place an order.",
+        parameters: z.object({ symbol: z.string().refine((s) => s.length > 2), qty: z.number().int().default(1) }),
+        execute: (args) => args,
+      });
+      const placeSet = new tools.ToolSet({ place });
+      const call = await placeSet.validate("place", { symbol: "abc" });
+      assert.deepEqual(await placeSet.invoke(call), { symbol: "abc", qty: 1 });
+      await assert.rejects(placeSet.invoke("place", { symbol: "ab" }), { name: "ToolCheckError" });
       console.log("ok");
     `;
-    expect(execFileSync(NODE!, ["--input-type=module", "-e", script], { encoding: "utf8" })).toBe("ok\n");
+    // From `ts/`, so the script's bare "zod" import resolves from `ts/node_modules`.
+    const output = execFileSync(NODE!, ["--input-type=module", "-e", script], { cwd: ROOT, encoding: "utf8" });
+    expect(output).toBe("ok\n");
   },
   30_000,
 );

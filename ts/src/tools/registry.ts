@@ -11,8 +11,8 @@
  * The reserved `ask_user` id never lives here: each run gets its handler through
  * `new ToolSet({ ask_user: handler, ... })`.
  *
- * Knows about: `tools/context`, `tools/function_tools`, `tools/mcp`, `tools/types`, `skills/tool`
- * (the reserved `load_skill` name), `defaults`, typesys and diagnostics.
+ * Knows about: `tools/context`, `tools/errors`, `tools/function_tools`, `tools/mcp`, `tools/types`,
+ * `skills/tool` (the reserved `load_skill` name), `defaults`, typesys and diagnostics.
  */
 
 import { current } from "../defaults.ts";
@@ -25,13 +25,16 @@ import {
   fromHost,
   isRecord,
   jsTypeName,
+  renderValuePath,
   toHost,
   TypeCheckError,
+  type Value,
   type ValueRecord,
   writeAsText,
 } from "../typesys/values.ts";
 import { ASK_USER, ToolContext } from "./context.ts";
-import { FunctionTool, isFunctionTool } from "./function_tools.ts";
+import { isToolCheckError, ToolCheckError } from "./errors.ts";
+import { FunctionTool, isFunctionTool, type StandardIssue, type StandardResult } from "./function_tools.ts";
 import { isMcpServer, type McpServer } from "./mcp.ts";
 import { inputTypeFromJsonSchema } from "./types.ts";
 
@@ -91,6 +94,34 @@ export interface InvokeOptions {
   /** The call's abort signal. Absent, the bound run's signal, else a signal that never aborts. */
   signal?: AbortSignal;
 }
+
+/** One tool call whose arguments `ToolSet.validate` checked; `invoke` and `isConcurrencySafe` take it. */
+class CheckedCall {
+  /** The id of the tool the call is for. */
+  readonly toolId: string;
+
+  /** Build a frozen call; only `checkedCall` builds one, and records it in `CALLS`. */
+  constructor(toolId: string) {
+    this.toolId = toolId;
+    Object.freeze(this);
+  }
+}
+
+// A type only: a host gets a call from `validate`, so it can't forge one.
+export type { CheckedCall };
+
+/** What a `CheckedCall` stands for: the tool `validate` looked up and the argument `execute` gets. */
+interface CallEntry {
+  readonly tool: FunctionTool;
+  /**
+   * Return the argument for `execute`: the validator's output, the same object each time, or a
+   * fresh host copy of the checked arguments when the tool has no validator.
+   */
+  readonly args: () => Record<string, unknown>;
+}
+
+// Keyed by the call, so nothing host-visible holds the validator's output.
+const CALLS = new WeakMap<CheckedCall, CallEntry>();
 
 /** The request a run's `ask_user` handler receives; an absent field is `null`. */
 export interface AskUserRequest {
@@ -166,6 +197,11 @@ export function registerTool(
           parametersJsonSchema: tool.parametersJsonSchema,
           execute: tool.execute,
           isConcurrencySafe: tool.isConcurrencySafe,
+          // A tool from an older copy of yian (the brand check accepts one) lacks the next three
+          // fields; `FunctionTool` stores their `undefined` as `null`.
+          parametersValidator: tool.parametersValidator,
+          outputJsonSchema: tool.outputJsonSchema,
+          outputValidator: tool.outputValidator,
         })
       : tool,
   );
@@ -324,7 +360,10 @@ function serverTools(key: string, server: McpServer): readonly FunctionTool[] {
  * A tool's `execute(args, ctx)` receives a `ToolContext` on each call: the call id, attempt, tool
  * name, run id, calling node, this set's `context` and the call's abort signal.
  *
- * `forRun` binds a copy to one run's id and abort signal.
+ * `validate` checks a call's arguments, runs the tool's validator once, and returns a
+ * `CheckedCall`; `invoke` takes that call, or a tool id and arguments to check first, and checks
+ * the result of a tool that declares an output; `isConcurrencySafe` takes a call. `forRun` binds
+ * a copy to one run's id and abort signal.
  *
  * @param tools The run's tools keyed by tool id. A `FunctionTool` must use its key as its name.
  *   An array is a group keyed by its group name; each item is a `FunctionTool` named by its
@@ -347,6 +386,9 @@ function serverTools(key: string, server: McpServer): readonly FunctionTool[] {
  * const tools = new ToolSet({ toolbox: [weather, forecast] }); // two FunctionTools
  * tools.expand(["toolbox"]); // ["weather", "forecast"]
  * const runTools = new ToolSet({ place }, { context: broker }).forRun("run-1");
+ * const call = await runTools.validate("place", { sym: "X" });
+ * const parallel = runTools.isConcurrencySafe(call); // true: it may run beside other calls
+ * await runTools.invoke(call, { node: "buy" }); // runs either way
  */
 export class ToolSet {
   // Plain private fields, not `#` ones, so `forRun` can fill a copy of a subclass instance.
@@ -529,81 +571,121 @@ export class ToolSet {
   }
 
   /**
-   * Check one call's public arguments as `invoke` does, without calling the tool.
+   * Check one call's public arguments, without calling the tool, and return the checked call.
    *
-   * A caller that retries a call checks its arguments once up front, so a bad argument fails
-   * before the first attempt instead of inside the retries.
+   * yian checks the arguments against the tool's JSON Schema first. When the tool has a
+   * `parametersValidator`, the validator then runs once, here, and every `invoke` of the returned
+   * call gives `execute` its output; a caller that retries a call validates it once up front, so a
+   * bad argument fails before the first attempt instead of inside the retries.
    *
    * @param toolId The id of the tool the call is for.
    * @param inputs Public arguments keyed by parameter name.
+   * @param options `signal` stops the call before and after the validator runs; absent, the
+   *   bound run's signal.
+   * @returns The checked call, for `invoke` and `isConcurrencySafe`.
    * @throws {RangeError} The id is not visible to this run, an argument is not in the schema, or
    *   a required argument is missing.
-   * @throws {TypeError} `inputs` is not a record.
+   * @throws {TypeError} `inputs` is not a record, or the validator returned no Standard Schema
+   *   result.
    * @throws {TypeCheckError} An argument is not a yian value, or doesn't fit its property's type.
+   * @throws {ToolCheckError} The validator reported issues.
+   * @throws The signal's reason when it aborts, and whatever the validator throws, unchanged.
    *
    * @example
    * const tools = new ToolSet({ weather: lookup });
-   * await tools.validate("weather", { city: "Paris" }); // passes; lookup is not called
+   * const call = await tools.validate("weather", { city: "Paris" }); // lookup is not called
+   * await tools.invoke(call, { attempt: 1 });
    * await tools.validate("weather", { town: "Paris" }); // rejects with a RangeError
    */
-  async validate(toolId: string, inputs: Record<string, unknown>): Promise<void> {
-    this.check(toolId, inputs, false);
+  async validate(
+    toolId: string,
+    inputs: Record<string, unknown>,
+    options?: { signal?: AbortSignal },
+  ): Promise<CheckedCall> {
+    return await this.checkedCall(toolId, inputs, false, options?.signal);
   }
 
   /**
-   * Check and call one tool through its model-visible public schema.
+   * Call one tool: a call `validate` returned, or a tool id and its public arguments.
    *
-   * Errors from the check and from the tool propagate unchanged.
+   * `invoke(call, options)` runs the tool `validate` looked up, with this set's context, run id
+   * and signal; it checks no argument again. `invoke(toolId, inputs, options)` validates the
+   * arguments first, as `validate` does, then calls the tool. Errors from the argument checks and
+   * from the tool propagate unchanged.
    *
+   * When the tool declares an output (`outputJsonSchema` or `outputValidator`), the result must be
+   * a yian value; it is checked against the type the output schema translates to, read open (an
+   * object's fields are checked only when the schema sets `additionalProperties: false`), then
+   * the output validator runs on it and its output must be a yian value too. `invoke` returns that
+   * value in host form. A tool without an output returns its result as it is.
+   *
+   * @param call A call `validate` returned, on this set or any other.
    * @param toolId The id of the tool to call.
    * @param inputs Public arguments keyed by parameter name.
    * @param options The calling node, call id, attempt and abort signal the tool's context carries.
-   * @returns The tool's result, awaited; `undefined` becomes `null`.
-   * @throws {RangeError} The id is not visible to this run, an argument is not in the public
-   *   schema, or a required argument is missing.
-   * @throws {TypeError} `inputs` is not a record.
-   * @throws {TypeCheckError} An argument is not a yian value, or doesn't fit its property's type.
+   * @returns The tool's result, awaited, `undefined` read as `null`; for a tool that declares an
+   *   output, the checked value in host form.
+   * @throws {TypeError} The first argument is neither a tool id nor a `CheckedCall`; and as
+   *   `validate` throws.
+   * @throws {ToolCheckError} A declared result is not a yian value or doesn't fit the output
+   *   schema's type; or the output validator threw (the error is the `cause`), returned no
+   *   Standard Schema result, reported issues or gave a value that isn't a yian value.
+   * @throws Whatever the tool throws, unchanged.
    */
-  async invoke(toolId: string, inputs: Record<string, unknown>, options?: InvokeOptions): Promise<unknown> {
-    const [tool, payload] = this.check(toolId, inputs, false);
-    return await this.call(tool, toolId, payload, options);
+  invoke(call: CheckedCall, options?: InvokeOptions): Promise<unknown>;
+  invoke(toolId: string, inputs: Record<string, unknown>, options?: InvokeOptions): Promise<unknown>;
+  async invoke(
+    target: CheckedCall | string,
+    inputsOrOptions?: Record<string, unknown> | InvokeOptions,
+    options?: InvokeOptions,
+  ): Promise<unknown> {
+    if (typeof target === "string") {
+      const inputs = inputsOrOptions as Record<string, unknown>;
+      return await this.invoke(await this.validate(target, inputs, { signal: options?.signal }), options);
+    }
+    const entry = CALLS.get(target);
+    if (entry === undefined) throw new TypeError("invoke takes a tool id or a CheckedCall from validate");
+    return await this.call(entry.tool, target.toolId, entry.args(), inputsOrOptions as InvokeOptions | undefined);
   }
 
   /**
    * Check and call one tool through its full schema, including host-injected fields.
    *
    * Only `ask_user` has injected fields (`questions`, `answerSchema`, `title`, `nodeId`); every
-   * other tool is checked as `invoke` checks it.
+   * other tool is checked as `invoke` checks it, its validator included.
    *
    * @param toolId The id of the tool to call.
    * @param inputs Public and injected arguments keyed by parameter name.
    * @param options The calling node, call id, attempt and abort signal the tool's context carries.
-   * @returns The tool's result, awaited; `undefined` becomes `null`.
+   * @returns The tool's result, awaited, `undefined` read as `null`; for a tool that declares an
+   *   output, the checked value in host form.
    * @throws {RangeError} The id is not visible to this run, an argument is not in the full schema,
    *   or a required argument is missing.
-   * @throws {TypeError} `inputs` is not a record.
+   * @throws {TypeError} `inputs` is not a record, or the validator returned no Standard Schema
+   *   result.
    * @throws {TypeCheckError} An argument is not a yian value, or doesn't fit its property's type.
+   * @throws {ToolCheckError} The validator reported issues, or a declared result failed its checks,
+   *   a throw from the output validator included.
+   * @throws Whatever the tool or the validator throws, unchanged.
    */
   async invokeTrusted(toolId: string, inputs: Record<string, unknown>, options?: InvokeOptions): Promise<unknown> {
-    const [tool, payload] = this.check(toolId, inputs, true);
-    return await this.call(tool, toolId, payload, options);
+    return await this.invoke(await this.checkedCall(toolId, inputs, true, options?.signal), options);
   }
 
   /**
-   * Return whether a call with these arguments may run beside other calls.
+   * Return whether a checked call may run beside other calls.
    *
-   * `true` only when the tool's `isConcurrencySafe` returns exactly `true` for the host form of
-   * the arguments. It never throws: no such function, an unknown tool, arguments that aren't a
-   * yian record, a throw, a Promise or any other result give `false`. It doesn't check the arguments against
-   * the schema; callers check each call first.
+   * `true` only when the tool's `isConcurrencySafe` returns exactly `true` for the argument
+   * `execute` gets. It never throws: no such function, a value that isn't a `CheckedCall`, a
+   * throw, a Promise or any other result give `false`.
    */
-  isConcurrencySafe(toolId: string, inputs: Record<string, unknown>): boolean {
+  isConcurrencySafe(call: CheckedCall): boolean {
     try {
-      const check = this.lookup(toolId).isConcurrencySafe;
+      const entry = CALLS.get(call);
+      if (entry === undefined) return false;
+      const check = entry.tool.isConcurrencySafe;
       if (check === null) return false;
-      const payload = fromHost(inputs, `tool ${reprText(toolId)} arguments`);
-      if (!isRecord(payload)) return false;
-      const safe: unknown = check(toHost(payload) as Record<string, unknown>);
+      const safe: unknown = check(entry.args());
       if (typeof (safe as { then?: unknown } | null)?.then === "function") {
         // A Promise isn't `true`; handle its rejection so it can't crash the process.
         Promise.resolve(safe).catch(() => {});
@@ -614,6 +696,42 @@ export class ToolSet {
       // A call whose safety can't be read runs alone.
       return false;
     }
+  }
+
+  /**
+   * Check one call as `validate` describes, against the trusted schema when `trusted` is set, and
+   * return the call recorded with its tool and argument.
+   */
+  private async checkedCall(
+    toolId: string,
+    inputs: Record<string, unknown>,
+    trusted: boolean,
+    signal: AbortSignal | undefined = this.boundSignal,
+  ): Promise<CheckedCall> {
+    const [tool, payload] = this.check(toolId, inputs, trusted);
+    // `??`: a tool built by an older copy of yian has no `parametersValidator` field.
+    const validator = tool.parametersValidator ?? null;
+    let args: () => Record<string, unknown>;
+    if (validator === null) {
+      args = () => toHost(payload) as Record<string, unknown>;
+    } else {
+      signal?.throwIfAborted();
+      const returned: unknown = await validator["~standard"].validate(toHost(payload));
+      // The validator may be slow; a run that stopped meanwhile doesn't call the tool.
+      signal?.throwIfAborted();
+      const result = standardResult(returned, `tool ${reprText(toolId)} arguments: the validator`, TypeError);
+      if (result.issues !== undefined) {
+        throw new ToolCheckError(
+          validatorFailure(`tool ${reprText(toolId)} arguments failed its validator`, result.issues),
+        );
+      }
+      // The validator's output is the tool's own argument type, not necessarily a record.
+      const value = result.value as Record<string, unknown>;
+      args = () => value;
+    }
+    const call = new CheckedCall(toolId);
+    CALLS.set(call, { tool, args });
+    return call;
   }
 
   /**
@@ -632,11 +750,14 @@ export class ToolSet {
     return [tool, payload];
   }
 
-  /** Call a checked tool with the host form of its arguments and this call's context. */
+  /**
+   * Call a checked tool with its argument and this call's context, then check the result when the
+   * tool declares an output, as `invoke` describes.
+   */
   private async call(
     tool: FunctionTool,
     toolId: string,
-    payload: ValueRecord,
+    args: Record<string, unknown>,
     options: InvokeOptions = {},
   ): Promise<unknown> {
     const node = options.node ?? "";
@@ -650,9 +771,108 @@ export class ToolSet {
       context: this.hostContext,
       signal: options.signal ?? this.boundSignal ?? new AbortController().signal,
     });
-    const result = await tool.execute(toHost(payload) as Record<string, unknown>, ctx);
-    return result === undefined ? null : result;
+    let result = await tool.execute(args, ctx);
+    if (result === undefined) result = null;
+    // `??`: a tool built by an older copy of yian has no output fields.
+    const schema = tool.outputJsonSchema ?? null;
+    const validator = tool.outputValidator ?? null;
+    if (schema === null && validator === null) return result;
+    const where = `tool ${reprText(toolId)} result`;
+    // A failing result check is a `ToolCheckError`, which the TOOL node never retries.
+    const intake = (host: unknown): Value => {
+      try {
+        return fromHost(host, where);
+      } catch (error) {
+        // `fromHost`'s message already names the result and the path.
+        if (error instanceof TypeCheckError) throw new ToolCheckError(error.message, { cause: error });
+        throw error;
+      }
+    };
+    let value = intake(result);
+    // The open translation: the check never refuses a result the schema accepts.
+    const typ = schema === null ? null : inputTypeFromJsonSchema(schema);
+    if (typ !== null) {
+      try {
+        buildValueAs(typ, value);
+      } catch (error) {
+        if (!(error instanceof TypeCheckError)) throw error;
+        const at = error.path.length > 0 ? ` at ${renderValuePath(error.path)}` : "";
+        throw new ToolCheckError(`${where}${at}: ${error.message}`, { cause: error });
+      }
+    }
+    if (validator !== null) {
+      let output: unknown;
+      try {
+        const returned: unknown = await validator["~standard"].validate(toHost(value));
+        const checked = standardResult(returned, `${where}: the output validator`, ToolCheckError);
+        if (checked.issues !== undefined) {
+          throw new ToolCheckError(validatorFailure(`${where} failed its output validator`, checked.issues));
+        }
+        output = checked.value;
+      } catch (error) {
+        // The guard, not `instanceof`, which would run a thrown Proxy's traps.
+        if (isToolCheckError(error)) throw error;
+        // `execute` has run, so a retry would repeat it: any other throw here, from the validator
+        // or from reading its result, fails the call for good.
+        throw new ToolCheckError(`${where}: the output validator threw: ${thrownText(error)}`, { cause: error });
+      }
+      // The validator's output is what yian records, so it must be a yian value too.
+      value = intake(output);
+    }
+    return toHost(value);
   }
+}
+
+/**
+ * Return a thrown value's text for a message: an `Error`'s message, else the value as text, else
+ * its type name. Never throws, so a hostile thrown value (a Proxy, a Symbol message) can't escape.
+ */
+function thrownText(error: unknown): string {
+  try {
+    return String(error instanceof Error ? error.message : error);
+  } catch {
+    return jsTypeName(error);
+  }
+}
+
+/**
+ * Return a validator's result as `{ issues }` or `{ value }`, each read once, when it is a Standard
+ * Schema result: an object whose `issues` is an array, or whose `issues` is absent and which holds
+ * `value`.
+ *
+ * @throws `kind`, with the message `<head> returned <type>, not a Standard Schema result`, for
+ *   anything else.
+ */
+function standardResult(
+  result: unknown,
+  head: string,
+  kind: new (message: string) => Error,
+): StandardResult<unknown> {
+  if (typeof result === "object" && result !== null) {
+    const issues: unknown = (result as { issues?: unknown }).issues;
+    if (Array.isArray(issues)) return { issues };
+    if (issues === undefined && "value" in result) return { value: (result as { value: unknown }).value };
+  }
+  throw new kind(`${head} returned ${jsTypeName(result)}, not a Standard Schema result`);
+}
+
+/**
+ * Return the message for a validator's issues: `head` (for example `tool 'x' arguments failed its
+ * validator`), then each issue as `<path>: <message>`, or `<message>` when it has no path, joined
+ * by `"; "`.
+ */
+function validatorFailure(head: string, issues: ReadonlyArray<StandardIssue>): string {
+  const shown = issues.map((issue) => {
+    // `Array.from`, not `.map`: a library's path may be an Array subclass whose species
+    // constructor builds a different array (ArkType's empty path maps to `[0]`).
+    const path = Array.from(issue.path ?? [], (segment) => {
+      // `null` is outside the type, but a host validator may still send it.
+      const key = typeof segment === "object" && segment !== null ? segment.key : segment;
+      return typeof key === "symbol" ? String(key) : key;
+    });
+    return path.length > 0 ? `${renderValuePath(path)}: ${issue.message}` : issue.message;
+  });
+  return shown.length > 0 ? `${head}: ${shown.join("; ")}` : head;
 }
 
 /**

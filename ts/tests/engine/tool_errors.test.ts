@@ -24,13 +24,17 @@ import {
   type ToolErrorKind,
   TransientToolError,
 } from "../../src/tools/errors.ts";
-import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import * as tools from "../../src/tools/index.ts";
 import type {
   AskUserHandler,
   AskUserRequest,
+  CheckedCall,
   InvokeOptions,
   McpServerOptions,
+  StandardIssue,
+  StandardResult,
+  StandardSchemaV1,
   ToolEntry,
   ToolErrorKind as IndexToolErrorKind,
 } from "../../src/tools/index.ts";
@@ -230,6 +234,7 @@ test("tools/index.ts exports the tools API, the same objects as its modules'", (
     isReportedToolError,
     isToolCheckError,
     FunctionTool,
+    tool,
     TOOL_REGISTRY: registry.TOOL_REGISTRY,
     ToolSet: registry.ToolSet,
     registerTool: registry.registerTool,
@@ -260,5 +265,18 @@ test("tools/index.ts exports the tools API, the same objects as its modules'", (
   const entry: ToolEntry = handler;
   const options: McpServerOptions = { command: "echo" };
   const invoke: InvokeOptions = { callId: "c1" };
-  expect([kind, typeof entry, options.command, invoke.callId]).toEqual(["permanent", "function", "echo", "c1"]);
+  const toolIdOf = (call: CheckedCall): string => call.toolId;
+  const issue: StandardIssue = { message: "bad", path: ["a", { key: 0 }] };
+  const result: StandardResult<number> = { issues: [issue] };
+  const validator: StandardSchemaV1<number> = {
+    "~standard": { version: 1, vendor: "hand", validate: (value) => ({ value: Number(value) }) },
+  };
+  expect([kind, typeof entry, options.command, invoke.callId, typeof toolIdOf]).toEqual([
+    "permanent",
+    "function",
+    "echo",
+    "c1",
+    "function",
+  ]);
+  expect([result.issues?.length, validator["~standard"].vendor]).toEqual([1, "hand"]);
 });

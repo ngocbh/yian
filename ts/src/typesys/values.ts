@@ -16,6 +16,8 @@
  * canonical labels, union member order and overlap check.
  */
 
+import { types } from "node:util";
+
 import { current } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { parseDate, parseDatetime } from "./temporal.ts";
@@ -172,14 +174,17 @@ function bigintText(value: bigint): string {
 /**
  * Name a JS value's type for a message: the name of its prototype's own `constructor`
  * (`Date`, `Map`, `Foo`; not `value.constructor`, which the value can fake), else its
- * `typeof` (`symbol`, `function`, `undefined`), else `object`.
+ * `typeof` (`symbol`, `function`, `undefined`), else `object`. A `Proxy` names `Proxy`, and a
+ * prototype or constructor that is a `Proxy` names `object`, so naming a value runs none of
+ * its traps.
  */
 export function jsTypeName(value: unknown): string {
+  if (types.isProxy(value)) return "Proxy";
   if (typeof value !== "object" || value === null) return typeof value;
   const proto: unknown = Object.getPrototypeOf(value);
-  if (proto === null) return "object";
+  if (proto === null || types.isProxy(proto)) return "object";
   const constructor: unknown = Object.getOwnPropertyDescriptor(proto, "constructor")?.value;
-  if (typeof constructor !== "function") return "object";
+  if (typeof constructor !== "function" || types.isProxy(constructor)) return "object";
   const name: unknown = Object.getOwnPropertyDescriptor(constructor, "name")?.value;
   return typeof name === "string" && name !== "" ? name : "object";
 }
@@ -470,9 +475,10 @@ interface HostFrame {
  * symbol keys, non-enumerable keys and extra array properties are skipped. A record key is
  * set as an own data property, so a `__proto__` key stays data.
  *
- * Each property is read once, and a value shared by two parents is copied once, so sharing
- * is kept and a diamond costs linear time. The walk uses an explicit stack, so any depth works;
- * depth is left to `rejectDeepNesting`.
+ * Intake reads only own data properties, each once, and refuses accessors and Proxies, so no
+ * host code runs while it reads a value and the value checked is the value recorded. A value
+ * shared by two parents is copied once, so sharing is kept and a diamond costs linear time.
+ * The walk uses an explicit stack, so any depth works; depth is left to `rejectDeepNesting`.
  *
  * Example: `fromHost({a: [1, 2.5]}, "output")` gives `{a: [1n, 2.5]}`.
  *
@@ -480,10 +486,11 @@ interface HostFrame {
  *   <path>]: <reason>`: `undefined` or an array hole is `undefined is not a yian value; use
  *   null`; NaN is `NaN is not a yian value`; text or a record key holding a lone surrogate
  *   (a key: at its record's path) is `text holding a lone surrogate is not a yian value`; a
- *   container inside itself is `value contains itself` at the entry holding it; anything else
+ *   container inside itself is `value contains itself` at the entry holding it; an accessor
+ *   property (a getter or a setter) on a record key or array index is `accessor property is
+ *   not a yian value` at that entry; a `Proxy` is `Proxy is not a yian value`; anything else
  *   (a `Date`, a `Map`, a class instance, a `TypedValue`, a symbol, a function) is
  *   `<Name> is not a yian value`.
- * @throws whatever a getter or proxy trap throws, unchanged.
  */
 export function fromHost(value: unknown, where: string): Value {
   const stack: HostFrame[] = [];
@@ -493,6 +500,13 @@ export function fromHost(value: unknown, where: string): Value {
   const fail = (reason: string, ...keys: (string | number)[]): never => {
     // The path is built only on a throw.
     throw locatedError(where, [...framePath(stack), ...keys], reason);
+  };
+
+  /** Return `source`'s own data property `key` (`undefined` for a hole); refuse an accessor. */
+  const dataProperty = (source: object, key: string | number): unknown => {
+    const descriptor = Object.getOwnPropertyDescriptor(source, key);
+    if (descriptor === undefined || "value" in descriptor) return descriptor?.value;
+    return fail("accessor property is not a yian value", key);
   };
 
   /** Return what `item`, the top frame's entry `key`, stores as; push a new container's frame. */
@@ -510,6 +524,9 @@ export function fromHost(value: unknown, where: string): Value {
       case "undefined":
         return fail("undefined is not a yian value; use null", ...at);
     }
+    // Checked first: every later check (FileRef.isFileRef, isList, isRecord, jsTypeName) could
+    // run a trap.
+    if (types.isProxy(item)) fail("Proxy is not a yian value", ...at);
     if (item === null || FileRef.isFileRef(item)) return item;
     const list = isList(item);
     if (list || isRecord(item)) {
@@ -538,11 +555,11 @@ export function fromHost(value: unknown, where: string): Value {
     }
     const index = frame.index++;
     if (frame.keys === null) {
-      (frame.copy as Value[]).push(enter(frame.source[index], index));
+      (frame.copy as Value[]).push(enter(dataProperty(frame.source, index), index));
     } else {
       const key = frame.keys[index]!;
       if (!key.isWellFormed()) fail(LONE_SURROGATE_REASON);
-      setField(frame.copy as ValueRecord, key, enter(frame.source[key], key));
+      setField(frame.copy as ValueRecord, key, enter(dataProperty(frame.source, key), key));
     }
   }
   return root;

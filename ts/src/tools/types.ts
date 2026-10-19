@@ -1,5 +1,6 @@
 /**
- * Read a tool's declared input and return types as yian `Type`s.
+ * Read a tool's declared input and return types as yian `Type`s, from its argument and output
+ * JSON Schemas.
  *
  * The translation is never narrower than what the schema accepts; it may widen. That keeps a
  * run-start check against the result from reporting a binding as disjoint when the tool would
@@ -347,20 +348,25 @@ export interface ToolTypes {
   readonly inputs: ReadonlyMap<string, Type | null> | null;
   /** The names of the inputs a call must pass. */
   readonly required: ReadonlySet<string>;
-  /** The return type, or `null` when it is not checked. */
+  /**
+   * The return type, read from `outputJsonSchema` as a closed schema, or `null` when it is not
+   * checked: the tool has no output schema, or yian can't translate it.
+   */
   readonly output: Type | null;
 }
 
 /**
- * Read the declared input and return types of `tool` from its `parametersJsonSchema`.
+ * Read the declared input and return types of `tool` from its `parametersJsonSchema` and
+ * `outputJsonSchema`.
  *
  * Each part is `null` where it cannot be read without risking a narrower type than the tool
  * accepts or returns.
  */
 export function toolTypes(tool: FunctionTool): ToolTypes {
+  const output = outputType(tool);
   const schema = tool.parametersJsonSchema;
   const properties = get(schema, "properties");
-  if (!isRecord(properties)) return { inputs: null, required: new Set(), output: null };
+  if (!isRecord(properties)) return { inputs: null, required: new Set(), output };
   const inputs = new Map<string, Type | null>();
   for (const [name, prop] of Object.entries(properties)) {
     // The run cleans `ask_user`'s `options` before checking it, so any shape is accepted.
@@ -372,6 +378,21 @@ export function toolTypes(tool: FunctionTool): ToolTypes {
   return {
     inputs,
     required: new Set(names.filter((name): name is string => typeof name === "string")),
-    output: null,
+    output,
   };
+}
+
+/** Translate `tool`'s output JSON Schema as a closed schema, or return `null` when it has none. */
+function outputType(tool: FunctionTool): Type | null {
+  // `??`: a tool built by an older copy of yian has no `outputJsonSchema` field.
+  const schema = tool.outputJsonSchema ?? null;
+  if (schema === null) return null;
+  try {
+    return typeFromJsonSchema(schema, { closed: true });
+  } catch (error) {
+    // Deep nesting overflows the translator's recursion; the output is then unchecked, as an
+    // input is in `inputTypeFromJsonSchema`.
+    if (error instanceof RangeError) return null;
+    throw error;
+  }
 }

@@ -121,7 +121,7 @@ export class TransientToolError extends Error {
   }
 }
 
-/** A check yian runs on a tool call's result failed; TOOL retries never retry it. */
+/** A check yian runs on a tool call's arguments or result failed; TOOL retries never retry it. */
 export class ToolCheckError extends TypeError {
   override name = "ToolCheckError";
   readonly [TOOL_ERROR]: readonly ToolErrorKind[] = CHECK;

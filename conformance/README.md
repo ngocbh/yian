@@ -24,8 +24,8 @@ A case file is YAML 1.2 core schema: `true`/`false`, `null`/`~`, integers (decim
 keys or `yes`/`no` booleans. A tag (`!!str`, `!!timestamp`, `!x` or a bare `!`) is an error. A
 duplicate key or a mapping key that isn't text is an error. `1` is an int and `1.0` a float.
 
-Values in a case (everything except flow text, `files`, `python_files`, `stdin` and `read`) are
-read in yian's JSON codec form: `{$float: inf}` and `{$float: -inf}` are the floats infinity and
+Values in a case (everything except flow text, `files`, `python_files`, `stdin`, `read` and `http`)
+are read in yian's JSON codec form: `{$float: inf}` and `{$float: -inf}` are the floats infinity and
 minus infinity, and `{$record: X}` is the record `X`. A record that is exactly `{$float: inf}` or
 `{$float: -inf}`, or whose only key is `$record`, is written inside `$record`. A bare `.inf` or
 `.nan` in a value is an error.
@@ -72,10 +72,12 @@ keys and results each kind requires (Kinds, below); `python_expect` needs `rules
 
 Every case runs in a new temporary directory, the *case directory*:
 
-- `flow` (or `python_flow`) is written to `flow.yaml`, and each `files` (or `python_files`)
-  entry to its relative path; `fixtures/` is a copy of `conformance/fixtures/`. A TS CODE
-  reference resolves relative to the file that holds it, so `flow.yaml`, or a `files` entry at
-  the top of the case directory, names a shared helper `./fixtures/<file>.ts:<fn>`.
+- `flow` (or `python_flow`) is written to `flow.yaml`, and each `files` (or `python_files`) entry to
+  its relative path with mode 0600; `fixtures/` is a copy of `conformance/fixtures/`. The case
+  directory, and every directory the runner makes for `files`, is 0700 (yian's auth store refuses
+  anything others can read; its own checks are pinned by `tests/test_provider_auth.py`, not by
+  cases). A TS CODE reference resolves relative to the file that holds it, so `flow.yaml`, or a
+  `files` entry at the top of the case directory, names a shared helper `./fixtures/<file>.ts:<fn>`.
 - The flow is loaded from the text of `flow.yaml` with the source label `flow.yaml`, resolving
   `uses:` and `call:` paths in the case directory. Frame labels are what the loader gives:
   `flow.yaml` for the case's flow, and a `uses:` child's file name (`child.yaml` for
@@ -88,10 +90,10 @@ Every case runs in a new temporary directory, the *case directory*:
   with the kinds the case file gives them: `inputs`, stub tool results, human answers,
   `value`, `values` and `item`. (So `2.0` reaches a TS run as a float; a TS runner passes these
   without the host number intake of design 3.2.1.)
-- **Secrets** are written as `<key:N>` (N a number) in `run`, `resume`, `backward`, `env`, `host`
-  and `stdin`. The runner replaces each with the text `sk-conformance-N` and fails the case if one
-  appears in the trace, events, stream, tool calls, output, the raised error's message, stdout,
-  stderr or a run log file.
+- **Secrets** are written as `<key:N>` (N a number) in `run`, `resume`, `backward`, `env`, `host`,
+  `stdin` and `http`. The runner replaces each with the text `sk-conformance-N` and fails the case
+  if one appears in the trace, events, stream, tool calls, output, the raised error's message,
+  stdout, stderr or a run log file.
 - **Time.** The TS runner uses a virtual scheduler, so waits take no time. The Python runner
   waits for real, so a case keeps its waits short.
 
@@ -112,7 +114,7 @@ it says "or". A `run`, `resume` or `backward` case's `expect` has exactly one of
 | `value` | `type` and `value` (required), `typedefs`, `env` | `expect.value` and `expect.kind`, or `expect.raises` |
 | `defaults` | `env` | `expect.defaults` or `expect.raises` |
 | `fingerprint` | `flow` and `other` (required), `files`, `env` | `expect.fingerprint` |
-| `cli` | `flow`, `files`, `env`, `args`, `stdin`, `signal` | `expect.exit`, then `stdout`, `stderr`, `json`, `json_lines` when present |
+| `cli` | `flow`, `files`, `env`, `args`, `stdin`, `signal`, `http` | `expect.exit`, then `stdout`, `stderr`, `json`, `json_lines`, `exists` when present |
 | `json` | exactly one of `read` (with `mode`) and `write` (with `form`) | `expect.value` (a read), `expect.text` (a write), or `expect.raises` |
 
 ### `load`
@@ -221,13 +223,52 @@ against `conformance/schema/cli.schema.json` before it is compared; a document t
 match fails the case. Runners use a JSON Schema 2020-12 validator (in TS a dev-only dependency,
 shared with the event and message schema tests).
 
+`expect.exists` maps relative paths under the case directory (not absolute, no `..` part) to
+`true` or `false`: whether each exists after the command (a dangling symlink exists).
+
 `signal: {name: SIGINT, after: <text>}` interrupts the command: the runner starts it, sends the
 signal once `after` appears in what it has written to stdout or stderr so far, then waits for it
-to exit. The case fails if the command exits before `after` appears, if 60 seconds pass first,
-or if the command dies from the signal instead of exiting (yian handles SIGINT and exits 130).
-The command starts with SIGINT's default disposition: a shell can start background jobs with it
-ignored, so a runner resets it in the child (libuv resets dispositions; a runner on another
-spawn checks its own). SIGINT is the only signal so far.
+to exit. `name` is `SIGINT` or `SIGTERM`. The case fails if the command exits before `after`
+appears, if 60 seconds pass first, or if the command dies from the signal instead of exiting
+(yian handles both and exits 130). The command starts with both signals at their default
+disposition: a shell can start background jobs with SIGINT ignored, so a runner resets them in
+the child (libuv resets dispositions; a runner on another spawn checks its own).
+
+`http` is a stub HTTP server: a list of exchanges, answered in order.
+
+```yaml
+http:
+  - request: {method: POST, url: "https://auth.openai.com/api/accounts/deviceauth/usercode",
+              json: {client_id: app_EMoamEEZ73f0CkXaXp7hrann}}
+    response: {status: 200, json: {device_auth_id: dev-1, user_code: ABCD-1234, interval: 1}}
+  - request: {method: GET, url: "https://gateway.example/v1/models",
+              headers: {authorization: "Bearer <key:1>"}}
+    response: {status: 200, json: {data: [{id: b}, {id: a}]}, delay: 0.0}
+    repeat: true        # only on the last exchange: it answers zero or more requests
+```
+
+- `request` takes `method` and `url` (required; the full URL, query included), `headers` (names
+  compared case-insensitively; each listed one must be sent with that value, others are
+  ignored) and at most one of `json` (the body read as JSON, compared exactly) and `form` (the
+  urlencoded body as a mapping of text, compared exactly). `response` takes `status`
+  (required, an int from 100 to 599), `json` (absent: an empty body) and `delay` (seconds
+  before answering, a finite int or float ≥ 0, cut short when the runner stops the server).
+  `repeat: true` is allowed only on the last exchange.
+- `http` is plain JSON: runners don't decode it (a `$float` or `$record` mapping is just a
+  mapping), but they fill its secrets, so the secret check covers stub tokens and device ids
+  written as `<key:N>`.
+- A `cli` case makes no HTTP request beyond those its `http` lists. The runner checks every
+  request yian's auth and model-listing transport makes against `http` (an empty list when the
+  case has none): it starts one server on 127.0.0.1 for every `cli` case and routes each such
+  request to it, whatever its origin, with the original URL. How it routes is the runner's: the
+  Python runner wraps yian's request function in the command's process and sends the original
+  URL in an `x-conformance-url` header, which the request check ignores; a TS runner hooks its
+  own HTTP seam.
+- An exchange counts as requested once its request has been read, before its `delay`. A request
+  that doesn't match the next exchange, or comes after the last one (unless that one has
+  `repeat`), is answered 500 with no body and fails the case whatever the exit code. After the
+  command exits, the runner waits for the handlers that have read a request, then fails the case
+  if an exchange without `repeat` was never requested.
 
 ### `json`
 
@@ -368,8 +409,7 @@ uses it:
 
 Not in the format yet (each comes as an addition when a case needs it): file values in
 `values`/`item`, output schemas for stub tools, `files` for the `other` flow of a fingerprint
-case, a clock for `system.now`, signals other than SIGINT, and stub HTTP servers for `cli`
-commands that call providers.
+case and a clock for `system.now`.
 
 ## Forms
 

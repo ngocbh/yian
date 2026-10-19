@@ -12,6 +12,7 @@ from dataclasses import fields, is_dataclass
 from datetime import date
 from functools import reduce
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import inspect
 import json
 import math
@@ -27,6 +28,7 @@ import threading
 import time
 import traceback
 from typing import NoReturn
+from urllib.parse import parse_qsl
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import best_match
@@ -162,7 +164,7 @@ _KIND_KEYS = {
     "defaults": {"env"},
     # Both runners load `flow` and `other` as written: no `python_flow` or `python_files`.
     "fingerprint": _FLOW - {"python_flow", "python_files"} | {"other"},
-    "cli": _FLOW | {"args", "stdin", "signal"},
+    "cli": _FLOW | {"args", "stdin", "signal", "http"},
     "json": {"read", "mode", "write", "form"},
 }
 _REQUIRED = {
@@ -185,7 +187,7 @@ _RESULTS = {
 _RUN_OPTIONAL = {"trace", "events", "stream", "tool_calls", "memory"}
 _OPTIONAL = {
     "run": _RUN_OPTIONAL, "resume": _RUN_OPTIONAL, "backward": _RUN_OPTIONAL | {"backward"},
-    "cli": {"stdout", "stderr", "json", "json_lines"},
+    "cli": {"stdout", "stderr", "json", "json_lines", "exists"},
 }
 _EXPECT_KEYS = {kind: _OPTIONAL.get(kind, set()).union(*groups)
                 for kind, groups in _RESULTS.items()}
@@ -213,9 +215,10 @@ _RULES = {
     "messages", "text", "yaml", "dates", "infinity", "llm", "code",
 }
 _RESERVED = [("host", key) for key in _RESERVED_HOST_KEYS]
-# Keys holding text that is not a case value: no codec form, no number checks.
-_TEXT_KEYS = {"flow", "python_flow", "other", "files", "python_files", "stdin", "read"}
-_SECRET_KEYS = {"run", "resume", "backward", "env", "host", "stdin"}
+# Keys holding text, or plain JSON (`http`), that is not a case value: no codec form, no number
+# checks.
+_TEXT_KEYS = {"flow", "python_flow", "other", "files", "python_files", "stdin", "read", "http"}
+_SECRET_KEYS = {"run", "resume", "backward", "env", "host", "stdin", "http"}
 _SECRET = re.compile(r"<key:([0-9]+)>")
 _FILLED = re.compile(r"sk-conformance-[0-9]+")
 _ENV_SUFFIXES = ("_API_KEY", "_BASE_URL", "_ENDPOINT", "_API_VERSION")
@@ -505,6 +508,44 @@ def _check_host(host: object, kind: str) -> None:
         raise ValueError("`host.jitter` must be a list of numbers in [0, 1)")
 
 
+def _check_http(http: object) -> None:
+    """Raise unless `http` is a list of `{request, response, repeat}` exchanges.
+
+    A request is `{method, url, headers, json, form}` with at most one of `json` and `form`, a
+    response `{status, json, delay}`, and only the last exchange may repeat.
+    """
+    if not isinstance(http, list):
+        raise ValueError("`http` must be a list")
+    for index, exchange in enumerate(http):
+        where = f"http[{index}]"
+        _keys(where, exchange, {"request", "response", "repeat"},
+              required=("request", "response"))
+        if not isinstance(exchange.get("repeat", False), bool):
+            raise ValueError(f"`{where}.repeat` must be true or false")
+        if exchange.get("repeat") and index != len(http) - 1:
+            raise ValueError(f"`{where}.repeat`: only the last exchange repeats")
+        request = exchange["request"]
+        _keys(f"{where}.request", request, {"method", "url", "headers", "json", "form"},
+              required=("method", "url"))
+        if not isinstance(request["method"], str) or not isinstance(request["url"], str):
+            raise ValueError(f"`{where}.request` `method` and `url` must be text")
+        if {"json", "form"} <= request.keys():
+            raise ValueError(f"`{where}.request` takes at most one of `json` and `form`")
+        for key in ("headers", "form"):
+            texts = _mapping(f"{where}.request.{key}", request.get(key, {})).values()
+            if any(not isinstance(text, str) for text in texts):
+                raise ValueError(f"`{where}.request.{key}` values must be text")
+        response = exchange["response"]
+        _keys(f"{where}.response", response, {"status", "json", "delay"}, required=("status",))
+        status = response["status"]
+        if type(status) is not int or not 100 <= status <= 599:
+            raise ValueError(f"`{where}.response.status` must be an int from 100 to 599")
+        delay = response.get("delay", 0)
+        # Finite: a wait can't take an infinite timeout.
+        if type(delay) not in (int, float) or not 0 <= delay < math.inf:
+            raise ValueError(f"`{where}.response.delay` must be a non-negative number")
+
+
 def _check(case: dict, candidate: bool = False) -> dict:
     """Return `case` after checking it against the closed format; raise naming the problem.
 
@@ -538,7 +579,7 @@ def _check(case: dict, candidate: bool = False) -> dict:
     for key in ("env", "files", "python_files"):
         if any(not isinstance(text, str) for text in _mapping(key, case.get(key, {})).values()):
             raise ValueError(f"`{key}` values must be text")
-    for key in _TEXT_KEYS - {"files", "python_files"}:
+    for key in _TEXT_KEYS - {"files", "python_files", "http"}:
         if not isinstance(case.get(key, ""), str):
             raise ValueError(f"`{key}` must be text")
     for key, allowed in (("run", _RUN_KEYS), ("resume", _RESUME_KEYS)):
@@ -548,10 +589,18 @@ def _check(case: dict, candidate: bool = False) -> dict:
         _check_backward("backward", case["backward"])
     if "signal" in case:
         _keys("signal", case["signal"], {"name", "after"}, required=("name", "after"))
-        if case["signal"]["name"] != "SIGINT":
-            raise ValueError("`signal.name` must be SIGINT")
+        if case["signal"]["name"] not in ("SIGINT", "SIGTERM"):
+            raise ValueError("`signal.name` must be SIGINT or SIGTERM")
         if not isinstance(case["signal"]["after"], str) or not case["signal"]["after"]:
             raise ValueError("`signal.after` must be non-empty text")
+    if "http" in case:
+        _check_http(case["http"])
+    for key in expects:
+        for path, exists in _mapping(f"{key}.exists", case.get(key, {}).get("exists", {})).items():
+            if not isinstance(exists, bool):
+                raise ValueError(f"`{key}.exists` values must be true or false")
+            if path.startswith("/") or ".." in path.split("/"):
+                raise ValueError(f"`{key}.exists`: `{path}` must be a relative path without `..`")
     if "host" in case:
         _check_host(case["host"], kind)
     for key in expects:
@@ -661,13 +710,22 @@ def _params() -> list:
 
 
 def _set_up(case: dict, case_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Write the case directory and, except for `cli`, give yian only the case's variables."""
+    """Write the case directory (0700, its files 0600) and, except for `cli`, give yian only the
+    case's variables."""
+    # yian refuses an auth file, or a directory holding one, that others can read.
+    case_dir.chmod(0o700)
     if "flow" in case:
         (case_dir / "flow.yaml").write_text(case["flow"], encoding="utf-8")
     for name, text in case.get("files", {}).items():
+        directory = case_dir
+        for part in Path(name).parts[:-1]:
+            directory /= part
+            if not directory.exists():
+                directory.mkdir()
+                directory.chmod(0o700)
         path = case_dir / name
-        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
+        path.chmod(0o600)
     if _FIXTURES.is_dir():
         shutil.copytree(_FIXTURES, case_dir / "fixtures")
     if case["kind"] == "cli":
@@ -675,8 +733,6 @@ def _set_up(case: dict, case_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None
     for name in list(os.environ):
         if name.startswith("YIAN_") or name.endswith(_ENV_SUFFIXES):
             monkeypatch.delenv(name)
-    # yian refuses an auth file in a directory others can read.
-    case_dir.chmod(0o700)
     monkeypatch.setenv("YIAN_AUTH_FILE", str(case_dir / "auth.json"))
     for name, value in case.get("env", {}).items():
         monkeypatch.setenv(name, value)
@@ -1737,17 +1793,21 @@ def _recall(memory: object, key: str) -> str:
     return content if isinstance(content, str) else content.text
 
 
-def _interrupted(argv: list, case_dir: Path, env: dict, stdin: str, after: str) -> tuple:
-    """Run `argv`, send it SIGINT once `after` is in its stdout or stderr, and return
+def _interrupted(argv: list, case_dir: Path, env: dict, stdin: str, name: str,
+                 after: str) -> tuple:
+    """Run `argv`, send it the signal `name` once `after` is in its stdout or stderr, and return
     `(returncode, stdout, stderr)` once it exits.
 
     Fails the case when the command exits before `after` appears or 60 seconds pass first.
     """
+    def reset() -> None:
+        # A shell can start background jobs with SIGINT ignored, and the child would keep that.
+        for number in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(number, signal.SIG_DFL)
+
     process = subprocess.Popen(
         argv, cwd=case_dir, env=env, encoding="utf-8", stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        # A shell can start background jobs with SIGINT ignored, and the child would keep that.
-        preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=reset,
     )
     out, err = [], []
 
@@ -1782,11 +1842,11 @@ def _interrupted(argv: list, case_dir: Path, env: dict, stdin: str, after: str) 
             if time.monotonic() > deadline:
                 _fail(f"{after!r} didn't appear within 60 seconds")
             time.sleep(0.02)
-        process.send_signal(signal.SIGINT)
+        process.send_signal(getattr(signal, name))
         try:
             process.wait(timeout=120)
         except subprocess.TimeoutExpired:
-            _fail(f"the command didn't exit within 120 seconds after SIGINT\n--- stdout\n"
+            _fail(f"the command didn't exit within 120 seconds after {name}\n--- stdout\n"
                   f"{''.join(out)}--- stderr\n{''.join(err)}")
     finally:
         # Ends a command the case gave up on; a no-op once it has exited.
@@ -1800,25 +1860,154 @@ def _interrupted(argv: list, case_dir: Path, env: dict, stdin: str, after: str) 
     return process.returncode, "".join(out), "".join(err)
 
 
+def _matches(expected: dict, method: str, url: str, headers, body: bytes) -> bool:
+    """Return whether a request matches the `request` of an `http` exchange, `expected`."""
+    if method != expected["method"] or url != expected["url"]:
+        return False
+    # `headers` looks names up case-insensitively.
+    if any(headers.get(name) != value for name, value in expected.get("headers", {}).items()):
+        return False
+    try:
+        if "json" in expected:
+            return _same(json.loads(body), expected["json"])
+        if "form" in expected:
+            return _same(dict(parse_qsl(body.decode(), keep_blank_values=True)), expected["form"])
+    except ValueError:  # JSONDecodeError and UnicodeDecodeError are ValueErrors
+        return False
+    return True
+
+
+class _StubHandler(BaseHTTPRequestHandler):
+    """Answer one request to a `_Stub` as the exchange it matches says, or 500 with no body."""
+
+    server: _Stub
+
+    def __getattr__(self, name: str):
+        # Any method a command sends is checked and answered, not only the ones named here.
+        if name.startswith("do_"):
+            return self.answer
+        raise AttributeError(name)
+
+    def answer(self) -> None:
+        """Check the request against the next exchange, then answer it."""
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        stub, url = self.server, self.headers.get("x-conformance-url", self.path)
+        with stub.lock:
+            stub.handlers.append(threading.current_thread())
+            index = stub.taken
+            if index == len(stub.http) and stub.http and stub.http[-1].get("repeat"):
+                index -= 1
+            response = {"status": 500}
+            if index == len(stub.http):
+                stub.problems.append(f"{self.command} {url}: `http` has no exchange left for it")
+            elif not _matches(stub.http[index]["request"], self.command, url, self.headers,
+                              body):
+                stub.problems.append(f"{self.command} {url} doesn't match `http[{index}]`")
+            else:
+                stub.taken = index + 1
+                response = stub.http[index]["response"]
+        stub.stop.wait(response.get("delay", 0))
+        data = json.dumps(response["json"]).encode() if "json" in response else b""
+        self.send_response(response["status"])
+        if "json" in response:
+            self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, format: str, *args: object) -> None:
+        """Write nothing: the case reports what went wrong."""
+
+
+class _Stub(ThreadingHTTPServer):
+    """A stub HTTP server on 127.0.0.1, serving on its own thread, for the exchanges `http`.
+
+    Each request names the URL it was meant for in an `x-conformance-url` header. One that
+    doesn't match the next exchange is recorded in `problems`. Setting `stop` cuts `delay`s
+    short.
+    """
+
+    # `close` joins only the handlers that read a request; one a command never wrote to would
+    # block a join of every handler.
+    block_on_close = False
+
+    def __init__(self, http: list) -> None:
+        super().__init__(("127.0.0.1", 0), _StubHandler)
+        self.http, self.taken, self.problems, self.handlers = http, 0, [], []
+        self.lock, self.stop = threading.Lock(), threading.Event()
+        threading.Thread(target=self.serve_forever, daemon=True).start()
+
+    def handle_error(self, request: object, client_address: object) -> None:
+        """Write nothing: a command can drop a connection the stub is still answering."""
+
+    def close(self) -> list:
+        """Stop serving once the handlers that read a request finish; return the problems,
+        then each exchange without `repeat` that was never requested."""
+        self.stop.set()
+        with self.lock:
+            handlers = list(self.handlers)
+        for handler in handlers:
+            handler.join(timeout=10)
+        self.shutdown()
+        self.server_close()
+        problems = [*self.problems, *(
+            f"`http[{index}]` was never requested" for index in range(self.taken, len(self.http))
+            if not self.http[index].get("repeat")
+        )]
+        if any(handler.is_alive() for handler in handlers):
+            problems.append("a stub HTTP handler was still answering 10 seconds after the "
+                            "command exited")
+        return problems
+
+
+def _program(server: str) -> str:
+    """Return the `-c` program that runs `yian`, sending every request of yian's auth and
+    model-listing transport to the stub at `server` with its URL in `x-conformance-url`."""
+    return f"""\
+import sys
+sys.argv[0] = "yian"
+from yian.llm_clients import model_list
+from yian.llm_clients.auth import openai
+
+def routed(request):
+    def send(method, url, *args, headers, **kwargs):
+        headers = dict(headers)
+        headers["x-conformance-url"] = url
+        return request(method, {server!r}, *args, headers=headers, **kwargs)
+    return send
+
+openai._request = routed(openai._request)
+model_list._request = routed(model_list._request)
+from yian.cli import main
+main()
+"""
+
+
 def _actual_cli(case: dict, case_dir: Path) -> dict:
-    """Run `yian` with `args` in the case directory; return `exit`, `stdout` and `stderr`.
+    """Run `yian` with `args` in the case directory; return `exit`, `stdout`, `stderr` and, for
+    each path `expect.exists` names, whether it exists.
 
     With `signal`, the command is sent the signal once `signal.after` appears in its output.
+    Its HTTP requests go to a `_Stub` for `http`; a problem the stub records fails the case.
     """
     (case_dir / "home").mkdir()
     env = {"PATH": os.environ["PATH"], "HOME": str(case_dir / "home"), "COLUMNS": "1000",
            "PYTHONPATH": os.pathsep.join(sys.path), **case.get("env", {})}
-    command = "import sys; sys.argv[0] = 'yian'; from yian.cli import main; main()"
-    argv = [sys.executable, "-c", command, *case.get("args", [])]
-    if "signal" in case:
-        returncode, out, err = _interrupted(argv, case_dir, env, case.get("stdin", ""),
-                                            case["signal"]["after"])
-    else:
-        done = subprocess.run(
-            argv, cwd=case_dir, input=case.get("stdin", ""), capture_output=True,
-            encoding="utf-8", timeout=120, env=env,
-        )
-        returncode, out, err = done.returncode, done.stdout, done.stderr
+    stub = _Stub(case.get("http", []))
+    argv = [sys.executable, "-c", _program(f"http://127.0.0.1:{stub.server_port}/"),
+            *case.get("args", [])]
+    try:
+        if "signal" in case:
+            returncode, out, err = _interrupted(argv, case_dir, env, case.get("stdin", ""),
+                                                case["signal"]["name"], case["signal"]["after"])
+        else:
+            done = subprocess.run(
+                argv, cwd=case_dir, input=case.get("stdin", ""), capture_output=True,
+                encoding="utf-8", timeout=120, env=env,
+            )
+            returncode, out, err = done.returncode, done.stdout, done.stderr
+    finally:
+        problems = stub.close()
 
     def normal(text: str) -> str:
         # Longest first: the resolved path can hold the given one (`/private/var` on macOS).
@@ -1827,11 +2016,15 @@ def _actual_cli(case: dict, case_dir: Path) -> dict:
         return re.sub(r" +$", "", text, flags=re.MULTILINE)
 
     stdout, stderr = normal(out), normal(err)
+    if problems:
+        _fail("\n".join(problems) + f"\n--- stdout\n{stdout}--- stderr\n{stderr}")
     _check_secrets(case, {"stdout": stdout, "stderr": stderr, **{
         str(path.relative_to(case_dir)): path.read_text(encoding="utf-8")
         for path in case_dir.rglob("*.jsonl")
     }})
-    return {"exit": returncode, "stdout": stdout, "stderr": stderr}
+    exists = {path: os.path.lexists(case_dir / path)
+              for path in case.get("expect", {}).get("exists", {})}
+    return {"exit": returncode, "stdout": stdout, "stderr": stderr, "exists": exists}
 
 
 _KINDS = {
@@ -1842,7 +2035,8 @@ _KINDS = {
 
 
 def _check_cli(expect: dict, actual: dict) -> None:
-    """Compare a `cli` case's exit code, stdout and stderr, and stdout read as JSON."""
+    """Compare a `cli` case's exit code, stdout and stderr, stdout read as JSON, and which
+    paths exist."""
     stdout, stderr = actual["stdout"], actual["stderr"]
 
     def refuse(token: str) -> None:
@@ -1877,6 +2071,8 @@ def _check_cli(expect: dict, actual: dict) -> None:
     if "json_lines" in expect:
         _compare("json_lines", [document(line) for line in stdout.splitlines() if line.strip()],
                  expect["json_lines"], optional_message=True)
+    if "exists" in expect:
+        _compare("exists", actual["exists"], expect["exists"])
 
 
 def _check_results(case: dict, actual: dict) -> None:
@@ -4119,6 +4315,96 @@ def test_resume_end_first_run_raises(tmp_path: Path) -> None:
     """A first run that raises (here, an input check before the log) fails the case."""
     with pytest.raises(pytest.fail.Exception, match="the run raised before its end"):
         results(_end_case({"nope": 1}), tmp_path, candidate=True)
+
+
+_USERCODE = "https://auth.openai.com/api/accounts/deviceauth/usercode"
+# Text-mode device sign-in into the default store under the runner's `HOME`; its first request
+# posts `usercode`.
+_DEVICE_LOGIN = ["auth", "openai", "--method", "subscription", "--login", "device", "--model", "m"]
+
+
+def _exchange(method: str = "POST", url: str = _USERCODE, status: int = 200) -> dict:
+    """Return an `http` exchange: a `method` request to `url`, answered with `status`."""
+    return {"request": {"method": method, "url": url}, "response": {"status": status}}
+
+
+def test_cli_format_accepts_and_refuses() -> None:
+    """`signal.name`, `http` and `expect.exists` are checked."""
+    base = {"kind": "cli", "args": ["providers"], "expect": {"exit": 0}}
+    listing = {
+        "request": {"method": "GET", "url": "https://gateway.example/v1/models",
+                    "headers": {"authorization": "Bearer <key:1>"}, "json": {"a": 1}},
+        "response": {"status": 200, "json": {"data": [{"id": "a"}]}, "delay": 0.5},
+        "repeat": True,
+    }
+    _check({**base, "signal": {"name": "SIGTERM", "after": "x"}, "http": [_exchange(), listing],
+            "expect": {"exit": 0, "exists": {"home/a.json": True, "b": False}}})
+
+    def response(**change: object) -> dict:
+        return {"http": [{**_exchange(), "response": {"status": 200, **change}}]}
+
+    status = "`http[0].response.status` must be an int from 100 to 599"
+    exists = "`expect.exists`: `{}` must be a relative path without `..`"
+    problems = [
+        ("`signal.name` must be SIGINT or SIGTERM", {"signal": {"name": "SIGHUP", "after": "x"}}),
+        ("`http` must be a list", {"http": {}}),
+        ("`http[0].repeat`: only the last exchange repeats",
+         {"http": [{**_exchange(), "repeat": True}, _exchange()]}),
+        ("`http[0].repeat` must be true or false", {"http": [{**_exchange(), "repeat": 1}]}),
+        ("`http[0].request.url` is required",
+         {"http": [{"request": {"method": "GET"}, "response": {"status": 200}}]}),
+        ("`http[0].request` takes at most one of `json` and `form`",
+         {"http": [{**_exchange(), "request": {"method": "POST", "url": _USERCODE,
+                                               "json": {}, "form": {}}}]}),
+        ("`http[0].request.form` values must be text",
+         {"http": [{**_exchange(), "request": {"method": "POST", "url": _USERCODE,
+                                               "form": {"a": 1}}}]}),
+        (status, response(status=700)),
+        (status, response(status=200.0)),
+        ("`http[0].response.delay` must be a non-negative number", response(delay=-1)),
+        ("`expect.exists` values must be true or false",
+         {"expect": {"exit": 0, "exists": {"a": "yes"}}}),
+        (exists.format("a/../b"), {"expect": {"exit": 0, "exists": {"a/../b": True}}}),
+        (exists.format("/a"), {"expect": {"exit": 0, "exists": {"/a": True}}}),
+    ]
+    for message, change in problems:
+        with pytest.raises(ValueError, match=re.escape(message)):
+            _check({**base, **change})
+
+
+def test_cli_http_unrequested(tmp_path: Path) -> None:
+    """An exchange the command never requests fails the case."""
+    case = {"kind": "cli", "args": ["providers", "--json"], "http": [_exchange()],
+            "expect": {"exit": 0}}
+    with pytest.raises(pytest.fail.Exception, match=re.escape("`http[0]` was never requested")):
+        _check_results(case, results(case, tmp_path))
+
+
+def test_cli_http_mismatch(tmp_path: Path) -> None:
+    """A request that doesn't match the next exchange fails the case, naming the request."""
+    case = {"kind": "cli", "args": _DEVICE_LOGIN, "http": [_exchange("GET")],
+            "expect": {"exit": 1}}
+    with pytest.raises(pytest.fail.Exception,
+                       match=re.escape(f"POST {_USERCODE} doesn't match `http[0]`")):
+        _check_results(case, results(case, tmp_path))
+
+
+def test_cli_http_unlisted(tmp_path: Path) -> None:
+    """A request the case doesn't list fails the case, naming the request."""
+    case = {"kind": "cli", "args": _DEVICE_LOGIN, "expect": {"exit": 1}}
+    with pytest.raises(pytest.fail.Exception,
+                       match=re.escape(f"POST {_USERCODE}: `http` has no exchange left for it")):
+        _check_results(case, results(case, tmp_path))
+
+
+def test_cli_http_routes(tmp_path: Path) -> None:
+    """yian's auth requests reach the stub, which checks the body and answers as scripted."""
+    exchange = _exchange(status=500)
+    exchange["request"]["json"] = {"client_id": "app_EMoamEEZ73f0CkXaXp7hrann"}
+    case = {"kind": "cli", "args": _DEVICE_LOGIN, "http": [exchange], "expect": {"exit": 1}}
+    actual = results(case, tmp_path)
+    _check_results(case, actual)
+    assert "(HTTP 500)" in actual["stderr"]
 
 
 _CODE_TESTS = '''

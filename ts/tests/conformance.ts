@@ -83,7 +83,7 @@ const KIND_KEYS = {
   defaults: new Set(["env"]),
   // Both runners load `flow` and `other` as written: no `python_flow` or `python_files`.
   fingerprint: new Set(["flow", "files", "env", "other"]),
-  cli: new Set([...FLOW, "args", "stdin", "signal"]),
+  cli: new Set([...FLOW, "args", "stdin", "signal", "http"]),
   json: new Set(["read", "mode", "write", "form"]),
 } satisfies Record<Kind, ReadonlySet<string>>;
 const REQUIRED: Partial<Record<Kind, readonly string[]>> = {
@@ -110,7 +110,7 @@ const OPTIONAL: Partial<Record<Kind, ReadonlySet<string>>> = {
   run: RUN_OPTIONAL,
   resume: RUN_OPTIONAL,
   backward: new Set([...RUN_OPTIONAL, "backward"]),
-  cli: new Set(["stdout", "stderr", "json", "json_lines"]),
+  cli: new Set(["stdout", "stderr", "json", "json_lines", "exists"]),
 };
 const KIND_NAMES = Object.keys(KIND_KEYS) as Kind[];
 
@@ -142,12 +142,13 @@ const RULES: ReadonlySet<string> = new Set([
   "numbers", "int-in-float", "arithmetic", "compare", "text-form", "canonical", "columns",
   "messages", "text", "yaml", "dates", "infinity", "llm", "code",
 ]);
-// Keys holding text that is not a case value: no codec form, no number checks.
+// Keys holding text, or plain JSON (`http`), that is not a case value: no codec form, no number
+// checks.
 const TEXT_KEYS: ReadonlySet<string> = new Set([
-  "flow", "python_flow", "other", "files", "python_files", "stdin", "read",
+  "flow", "python_flow", "other", "files", "python_files", "stdin", "read", "http",
 ]);
 const SECRET_KEYS: ReadonlySet<string> = new Set([
-  "run", "resume", "backward", "env", "host", "stdin",
+  "run", "resume", "backward", "env", "host", "stdin", "http",
 ]);
 const SECRET = /<key:([0-9]+)>/g;
 const ENV_SUFFIXES: readonly string[] = ["_API_KEY", "_BASE_URL", "_ENDPOINT", "_API_VERSION"];
@@ -330,6 +331,56 @@ function checkHost(value: Value | undefined, kind: Kind): void {
   }
 }
 
+/**
+ * Throw unless `value` is a list of `{request, response, repeat}` exchanges. A request is
+ * `{method, url, headers, json, form}` with at most one of `json` and `form`, a response
+ * `{status, json, delay}`, and only the last exchange may repeat.
+ */
+function checkHttp(value: Value | undefined): void {
+  if (!Array.isArray(value)) throw new Error("`http` must be a list");
+  value.forEach((item, index) => {
+    const where = `http[${index}]`;
+    const exchange = keys(where, item, new Set(["request", "response", "repeat"]), {
+      required: ["request", "response"],
+    });
+    const repeat = get(exchange, "repeat", false);
+    if (typeof repeat !== "boolean") throw new Error(`\`${where}.repeat\` must be true or false`);
+    if (repeat && index !== value.length - 1) {
+      throw new Error(`\`${where}.repeat\`: only the last exchange repeats`);
+    }
+    const requestKeys = new Set(["method", "url", "headers", "json", "form"]);
+    const request = keys(`${where}.request`, exchange["request"], requestKeys, {
+      required: ["method", "url"],
+    });
+    if (typeof request["method"] !== "string" || typeof request["url"] !== "string") {
+      throw new Error(`\`${where}.request\` \`method\` and \`url\` must be text`);
+    }
+    if (Object.hasOwn(request, "json") && Object.hasOwn(request, "form")) {
+      throw new Error(`\`${where}.request\` takes at most one of \`json\` and \`form\``);
+    }
+    for (const key of ["headers", "form"]) {
+      const texts = Object.values(mapping(`${where}.request.${key}`, get(request, key, {})));
+      if (texts.some((text) => typeof text !== "string")) {
+        throw new Error(`\`${where}.request.${key}\` values must be text`);
+      }
+    }
+    const responseKeys = new Set(["status", "json", "delay"]);
+    const response = keys(`${where}.response`, exchange["response"], responseKeys, {
+      required: ["status"],
+    });
+    const status = response["status"];
+    if (typeof status !== "bigint" || status < 100n || status > 599n) {
+      throw new Error(`\`${where}.response.status\` must be an int from 100 to 599`);
+    }
+    const delay = get(response, "delay", 0n);
+    // Finite, as Python's runner needs: a wait can't take an infinite timeout.
+    const finite = typeof delay === "number" && delay >= 0 && delay < Infinity;
+    if (!finite && !(typeof delay === "bigint" && delay >= 0n)) {
+      throw new Error(`\`${where}.response.delay\` must be a non-negative number`);
+    }
+  });
+}
+
 /** Return whether `value` names a kind of case. */
 function isKind(value: Value | undefined): value is Kind {
   return typeof value === "string" && Object.hasOwn(KIND_KEYS, value);
@@ -383,7 +434,8 @@ export function checkCase(case_: Case): Case {
     }
   }
   for (const key of TEXT_KEYS) {
-    if (key !== "files" && key !== "python_files" && typeof get(case_, key, "") !== "string") {
+    if (["files", "python_files", "http"].includes(key)) continue;
+    if (typeof get(case_, key, "") !== "string") {
       throw new Error(`\`${key}\` must be text`);
     }
   }
@@ -399,10 +451,27 @@ export function checkCase(case_: Case): Case {
     const signal = keys("signal", case_["signal"], new Set(["name", "after"]), {
       required: ["name", "after"],
     });
-    if (get(signal, "name") !== "SIGINT") throw new Error("`signal.name` must be SIGINT");
+    const name = get(signal, "name");
+    if (name !== "SIGINT" && name !== "SIGTERM") {
+      throw new Error("`signal.name` must be SIGINT or SIGTERM");
+    }
     const after = get(signal, "after");
     if (typeof after !== "string" || after === "") {
       throw new Error("`signal.after` must be non-empty text");
+    }
+  }
+  if (Object.hasOwn(case_, "http")) checkHttp(case_["http"]);
+  for (const key of ["expect", "python_expect"]) {
+    // Checked as a mapping above when present.
+    const expect = get(case_, key, {}) as Case;
+    const paths = mapping(`${key}.exists`, get(expect, "exists", {}));
+    for (const [path, exists] of Object.entries(paths)) {
+      if (typeof exists !== "boolean") {
+        throw new Error(`\`${key}.exists\` values must be true or false`);
+      }
+      if (path.startsWith("/") || path.split("/").includes("..")) {
+        throw new Error(`\`${key}.exists\`: \`${path}\` must be a relative path without \`..\``);
+      }
     }
   }
   if (Object.hasOwn(case_, "backward")) {
@@ -703,10 +772,12 @@ export function setUp(case_: Case, fixturesDir: string): CaseContext {
   try {
     const flow = get(case_, "flow");
     if (typeof flow === "string") writeFileSync(join(dir, "flow.yaml"), flow);
+    // yian refuses an auth file, or a directory holding one, that others can read; `mkdtempSync`
+    // makes the case directory 0700.
     for (const [name, text] of Object.entries(get(case_, "files", {}) as Record<string, string>)) {
       const path = join(dir, name);
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, text);
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+      writeFileSync(path, text, { mode: 0o600 });
     }
     if (statSync(fixturesDir, { throwIfNoEntry: false })?.isDirectory()) {
       cpSync(fixturesDir, join(dir, "fixtures"), { recursive: true });

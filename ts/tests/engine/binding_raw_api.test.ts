@@ -6,16 +6,22 @@
  * These cover the binding semantics (a typed whole span, an embedded span written as text, `$$`,
  * coalesce `|`, default `:-`, required `:?`, a default reference `${x :- y}`, the `${item}`
  * scope) and full expressions inside a binding span (arithmetic, text and list operations). The
- * values follow the TS number model (ints are `bigint`s).
+ * values follow the TS number model (ints are `bigint`s). A binding capture marks only the
+ * inputs whose template it actually evaluated.
  *
- * Left for later: `test_capture_marks_actual_template_evaluation_in_materialized_seed` lands
- * with `nodes/binding.ts` and `lineage.ts`.
+ * Changed: `test_capture_marks_actual_template_evaluation_in_materialized_seed` leaves out its
+ * `scanned == ["missing | absent"]` line, which counts parses by patching the grammar's
+ * `parse_expr`: an ES module export can't be patched. `evaluatedKeys` and the literal routes
+ * still pin the behavior.
  */
 
 import { expect, test } from "bun:test";
 
 import { evalBinding, exprRefsOf, RequiredError } from "../../src/expr/index.ts";
-import type { Value, ValueRecord } from "../../src/typesys/index.ts";
+import { ResolvedValue } from "../../src/expr/lineage.ts";
+import { BindingCollector, bindParams } from "../../src/nodes/binding.ts";
+import { Parameter } from "../../src/nodes/contracts.ts";
+import { type Value, type ValueRecord, VariablePool } from "../../src/typesys/index.ts";
 
 /** Return a `resolve` over a flat record: a path it lacks is `null`, the binding miss. */
 function from(values: ValueRecord): (path: string) => Value {
@@ -88,4 +94,22 @@ test("exprRefsOf collects embedded, default and arithmetic references", () => {
 test("exprRefsOf collects item references", () => {
   // The caller skips them when minting edges.
   expect(exprRefsOf("${item.x}")).toEqual(["item.x"]);
+});
+
+test("capture marks actual template evaluation in a materialized seed", () => {
+  const collector = new BindingCollector();
+  const result = bindParams(
+    [new Parameter("evaluated"), new Parameter("escaped"), new Parameter("literal")],
+    new Map<string, unknown>([
+      ["evaluated", "${missing | absent}"],
+      ["escaped", "$${missing | absent}"],
+      ["literal", null],
+    ]),
+    new VariablePool(),
+    { collector, sourceResolver: () => new ResolvedValue(null, false) },
+  );
+  const captured = collector.freeze();
+  expect(result).toEqual({ evaluated: null, escaped: "${missing | absent}", literal: null });
+  expect(captured.evaluatedKeys).toEqual(new Set(["evaluated"]));
+  expect(captured.route.children.every((route) => route.kind === "literal")).toBe(true);
 });

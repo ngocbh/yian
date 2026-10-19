@@ -88,6 +88,24 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   records them with every credential redacted by value, and refuses to save one that still holds
   a credential. Record only when `recordMode(processEnv)` says so (`RECORD=1`, never under `CI`).
 
+## Nodes
+
+- The carriers in `src/nodes/contracts.ts` (`Binding`, `ValueTemplate`, `Parameter`, the
+  contracts) are frozen. To change an origin, rebuild: `mapOrigins` returns a new carrier, and
+  `rewriteOriginCarrier` rebuilds a whole graph; pass it one `seen` map so a carrier reached twice
+  comes back as one shared object.
+- Supplied text becomes a value only at the run boundary, in `coerceParam` (one input) and
+  `coerceInputs` (the flow's supplied inputs). `bindParams` never converts text: a CALL, MAP or
+  LOOP edge is not a flow boundary.
+- For a parameter with `coerceStrings`, text for a `float` input that spells an int reads as that
+  int (`"2"` is `2n`); `"2.0"` reads as a float, and `inf` and `-inf` as infinity.
+- `coerceInputs` and `applyDefaults` take and return plain records; `checkInputNames` checks one.
+- `bindParams(params, wiring, pool, {item, types, labels, collector, sourceResolver})` takes the
+  wiring as a `ReadonlyMap` (`name -> source`) and returns a fresh plain record of own data
+  properties, copying each value. A `BindingCollector` records each input's route at the same
+  read, and `freeze()` returns a frozen `BindingCapture` whose `boundInputs` is a fresh copy on
+  every read.
+
 ## Commands
 
 Run from `ts/`:

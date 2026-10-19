@@ -678,6 +678,12 @@ instead (`'g': numbers must be finite (got .nan)`; see [above](#yaml-values)); i
 input, a default, or a tagged output it still fails at run time with `binding.evaluate`.
 See [Expressions → Non-finite results](expressions.md#non-finite-results).
 
+Changed (TS yian): infinity is a float value (`inf`, `-inf`), so a binding may hold it, and
+there are no complex numbers. Only NaN, and anything else that isn't a yian value, fails a
+binding with `binding.evaluate`, in intake's message: `input 'y' at a[1]: NaN is not a yian
+value`; a default reads `default for 'x': ...`. A binding's int has no digit limit, so an int
+longer than 4300 digits binds too.
+
 A value nests at most 100 levels (`YIAN_MAX_VALUE_NESTING` can lower it; see [Defaults
 and limits](defaults.md)); each record and list is a level, and a record or list built
 around a value is one level deeper. A binding (an expression result, or a written-out
@@ -885,6 +891,11 @@ A supplied string coerces to `int` or `float` when it parses as one. For `bool`,
 `off` become false, ignoring case and surrounding whitespace. Any other string
 is left as text, so the declared type rejects it: `--input approved=ture` fails
 with `input 'approved': 'ture' does not match declared type bool`.
+
+Changed (TS yian): text for a `float` input reads by the TS text rules. An int spelling is an
+int at any size (`--input x=2` gives `2`, kept an int in the float slot), `2.0` or `1e3` is a
+float, and `inf`/`-inf` is infinity; a spelling beyond the float range is refused. An `int`
+input's text has no digit limit. Digits are ASCII.
 
 A string is never coerced for an `Any` input: `--input x=3` gives the text `"3"`. Pass a
 number, a list, or an object to an `Any` input in an `--inputs` file.

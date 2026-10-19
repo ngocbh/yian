@@ -884,12 +884,12 @@ export function requireFields(
 }
 
 /** Spell a list of names as Python prints it: `['a', 'b']`. */
-function pythonList(names: readonly string[]): string {
+export function pythonList(names: readonly string[]): string {
   return "[" + names.map(reprText).join(", ") + "]";
 }
 
 /** Set `record[key]` as an own data property, so a `__proto__` key stays data. */
-function setField(record: ValueRecord, key: string, value: Value): void {
+export function setField(record: ValueRecord, key: string, value: Value): void {
   if (key === "__proto__") {
     Object.defineProperty(record, key, {
       value,

@@ -7,8 +7,9 @@
  * TS-only: `-0`, NaN and lone surrogates inside `object` and `Any` values, and an array whose
  * prototype was swapped to `Object.prototype` refused at the write boundary.
  *
- * Later: the compatibility, proof and field-read tests (with the compile checks and node
- * contracts), and the flow loading tests.
+ * It also ports the field-read test of node contracts (`test_a_field_read_on_any_is_not_checked`).
+ *
+ * Later: the compatibility and proof tests (with the compile checks), and the flow loading tests.
  *
  * Not ported: the tuple rows, `test_any_path_unwraps_a_str_subclass_key`, and the non-text key
  * rows (`test_object_rejects_a_non_text_key`,
@@ -19,6 +20,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { outputContractFieldError, ValueContract } from "../../src/nodes/contracts.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { parseType, readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import {
@@ -406,6 +408,13 @@ describe("Any values", () => {
     expect(decoded.kind).toBe(typed.kind);
     expect(decoded.value).toEqual(typed.value);
     expect(jsTypes(decoded.value)).toEqual(jsTypes(typed.value));
+  });
+});
+
+describe("field reads on Any", () => {
+  test("a field read on Any is not checked", () => {
+    const contract = new ValueContract(ANY);
+    expect(outputContractFieldError(contract, ["anything"], "xs.anything")).toBe(null);
   });
 });
 

@@ -115,8 +115,8 @@ export class BindingCapture {
   ) {
     this.#boundInputs = boundInputs;
     this.route = route;
-    this.evaluatedKeys = evaluatedKeys;
-    this.items = Object.freeze([...items]);
+    this.evaluatedKeys = new Set(evaluatedKeys);
+    this.items = Object.freeze(items.map(([index, capture]) => Object.freeze([index, capture] as const)));
     Object.freeze(this);
   }
 
@@ -142,7 +142,7 @@ export class BindingCollector {
   /**
    * Retain a route from the same scan and evaluation that produced a value.
    *
-   * Internal to the binder: `resolveSource` and `bindParams` call it.
+   * Used by the binder and the node evaluator (a reserved value's route); not for hosts.
    *
    * @throws Error when the collector is frozen.
    */
@@ -223,8 +223,8 @@ export class BindingCollector {
     return new BindingCapture(
       this.#complete ? this.#values : null,
       ValueRoute.record(this.#routes),
-      new Set(this.#evaluated),
-      [...this.#items].map(([index, item]) => Object.freeze([index, item.freeze()] as const)),
+      this.#evaluated,
+      [...this.#items].map(([index, item]) => [index, item.freeze()] as const),
     );
   }
 }
@@ -514,7 +514,7 @@ class SourceReader {
    */
   string(text: string): SourceRead {
     if (!this.trace) {
-      // Only a traced bind gets a `ResolvedValue` item; this read needs just its value.
+      // The item may be a traced caller's `ResolvedValue`; an untraced read needs just its value.
       const item = this.item instanceof ResolvedValue ? this.item.value : this.item;
       const value = evalBinding(text, (path) => resolveReference(path, this.pool), { item, types: this.types });
       return [value, null, false];

@@ -18,9 +18,9 @@
  * rebuilt template yields is mapped; a record holding a binding and shared by two bindings' sources
  * comes back as one shared record, as Python's `copy.deepcopy` keeps it.
  *
- * Later: `test_template_routes_record_each_part_and_route_feedback` leaves out its
- * `_validate_route(captured.route)` line, which checks the route with the runtime's validator;
- * it lands with `runtime/contracts.ts`.
+ * Changed: `test_template_routes_record_each_part_and_route_feedback` leaves out its
+ * `_validate_route(captured.route)` line (the runtime's route validator); that check lands with
+ * `runtime/contracts.ts`.
  *
  * Not ported: the rows that differ from a good one only by a tuple where Python wants a list or
  * the reverse (a tuple template, a list of origins, a list path): TS has only arrays; and

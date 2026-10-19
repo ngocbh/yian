@@ -9,9 +9,9 @@
  * `float` parameter stays the int `90n` (Python widens it to `90.0`), and in
  * `test_binding_capture_matches_the_value_actually_delivered` the `count` read as `12n` into a
  * `float` parameter stays `12n`. That test registers its `observe` builtin with
- * `registerTemplateFn` and removes it after, as Python's `monkeypatch.setitem` does. Changed
- * (values in messages use the text form): `test_bind_never_converts_a_supplied_string` reads
- * `"30" does not match declared type int`.
+ * `registerTemplateFn` and puts back the previous entry (or its absence) after, as Python's
+ * `monkeypatch.setitem` does. Changed (values in messages use the text form):
+ * `test_bind_never_converts_a_supplied_string` reads `"30" does not match declared type int`.
  *
  * TS-only: a `Set` as `params` is refused as not an exact list; the copy a bind delivers
  * writes `-0` as `0`, keeps a container shared inside the value shared, keeps a `FileRef` by
@@ -130,6 +130,7 @@ test("binding capture matches the value actually delivered", () => {
     return new ResolvedValue(value, true, new SourceRef("run", 1, [path]));
   };
 
+  const previous = TEMPLATE_FNS.get("observe");
   registerTemplateFn("observe", {
     params: [{ name: "value" }],
     call: (value) => {
@@ -162,7 +163,8 @@ test("binding capture matches the value actually delivered", () => {
       [new SourceRef("run", 1), { count: "Too large." }],
     ]);
   } finally {
-    TEMPLATE_FNS.delete("observe");
+    if (previous === undefined) TEMPLATE_FNS.delete("observe");
+    else TEMPLATE_FNS.set("observe", previous);
   }
 });
 
@@ -758,7 +760,7 @@ test("a collector freezes once", () => {
   const collector = new BindingCollector();
   collector.freeze();
   const error = errorOf(() => collector.freeze());
-  expect(error).toBeInstanceOf(Error);
+  expect(error.constructor).toBe(Error);
   expect(error.message).toBe("binding capture is already frozen");
 });
 

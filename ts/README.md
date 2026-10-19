@@ -97,11 +97,14 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - Supplied text becomes a value only at the run boundary, in `coerceParam` (one input) and
   `coerceInputs` (the flow's supplied inputs). `bindParams` never converts text: a CALL, MAP or
   LOOP edge is not a flow boundary.
-- Text for a `float` input that spells an int reads as that int (`"2"` is `2n`); `"2.0"` reads as
-  a float, and `inf` and `-inf` as infinity.
-- `checkInputNames` checks, and `coerceInputs` and `applyDefaults` take and return, plain records.
-- `bindParams(params, wiring, pool, {item, types, labels})` takes the wiring as a `ReadonlyMap`
-  (`name -> source`) and returns a fresh plain record of own data properties, copying each value.
+- For a parameter with `coerceStrings`, text for a `float` input that spells an int reads as that
+  int (`"2"` is `2n`); `"2.0"` reads as a float, and `inf` and `-inf` as infinity.
+- `coerceInputs` and `applyDefaults` take and return plain records; `checkInputNames` checks one.
+- `bindParams(params, wiring, pool, {item, types, labels, collector, sourceResolver})` takes the
+  wiring as a `ReadonlyMap` (`name -> source`) and returns a fresh plain record of own data
+  properties, copying each value. A `BindingCollector` records each input's route at the same
+  read, and `freeze()` returns a frozen `BindingCapture` whose `boundInputs` is a fresh copy on
+  every read.
 
 ## Commands
 

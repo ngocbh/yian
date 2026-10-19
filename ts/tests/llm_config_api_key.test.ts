@@ -2,16 +2,19 @@
  * Mirrors `tests/test_llm_config_api_key.py`: the 4 `LLMConfig` tests, the empty-key test without
  * its `model_from_config` half (that half goes with the factory). `split_model_config`,
  * `resolve_model_config`, `connection_credentials` and `validate_connection` go with
- * `connection.ts`; `scrub_key(s)` and `redact_key` with `redact.ts`; the client tests with the
- * factory.
+ * `connection.ts`; the client tests with the factory. The `redact_key(s)` text tests are here, in
+ * `describe("redact")`, with the text half of the `scrub_key(s)` chain tests; the exception-walk
+ * tests go with `scrubError` in `llm/errors.ts`.
  */
 
 import { inspect } from "node:util";
 
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
+import { REDACTED as AUTH_REDACTED } from "../src/llm/auth.ts";
 import { LLMConfig } from "../src/llm_clients/config.ts";
 import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
+import { REDACTED, redactKey, redactKeys } from "../src/llm_clients/redact.ts";
 
 const SENTINEL = "sk-sentinel-3f9c1a7e";
 
@@ -59,4 +62,108 @@ test.each([
 
 test("an empty key is rejected instead of falling back", () => {
   expect(thrown({ provider: "google", api_key: "" }).message).toContain("api_key");
+});
+
+describe("redact", () => {
+  test("the key and its masked fragments leave a chain's messages", () => {
+    const key = "sk-sentinel-scrub-zqxw";
+    const messages = [
+      `Incorrect API key provided: ${key.slice(0, 8)}****${key.slice(-4)}.`,
+      `wrapped: ${key}`,
+      key,
+    ].map((message) => redactKey(message, key));
+    const text = messages.join("\n");
+    for (const fragment of [key, key.slice(0, 8), "*" + key.slice(-4)]) {
+      expect(text).not.toContain(fragment);
+    }
+    expect(messages).toEqual(["Incorrect API key provided: [REDACTED].", "wrapped: [REDACTED]", "[REDACTED]"]);
+  });
+
+  test("unrelated masks are left alone", () => {
+    expect(redactKey("token ab****yz and **bold**", "sk-sentinel-zqxw")).toBe("token ab****yz and **bold**");
+    expect(redactKey("anything", null)).toBe("anything");
+  });
+
+  test.each([
+    ["run", "f".repeat(100_000)],
+    ["single-stars", "ab*".repeat(33_000)],
+    ["hex-blob", "0123456789abcdef".repeat(6_250) + "!"],
+    ["dots", "a.".repeat(50_000)],
+  ])("redaction is linear on long text: %s", (_name: string, text: string) => {
+    const started = performance.now();
+    redactKey(text, "sk-sentinel-scrub-zqxw");
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  test("masked echoes need three visible characters", () => {
+    const key = "sk-sentinel-scrub-zqxz";
+    expect(redactKey("s**t, **z, and sk**", key)).toBe("s**t, **z, and sk**");
+    expect(redactKey("sk***, ***xz, and ****qxz", key)).toBe("sk***, ***xz, and [REDACTED]");
+    expect(redactKey("sk-***", key)).toBe("[REDACTED]");
+  });
+
+  test("masked echoes of a key with other characters are redacted whole", () => {
+    const key = "sk.sentinel+scrub/zq.w";
+    for (const echo of [`${key.slice(0, 8)}****${key.slice(-4)}`, `${key.slice(0, 9)}...`, `***${key.slice(-5)}`]) {
+      expect(redactKey(`provided: ${echo}.`, key)).toBe("provided: [REDACTED].");
+    }
+  });
+
+  test("each key leaves a chain's messages", () => {
+    // Distinct prefixes and suffixes, so each masked echo matches only its own key.
+    const first = "ak-first-sentinel-zqxw";
+    const second = "sk-second-sentinel-yvkt";
+    const messages = [
+      `Incorrect API key provided: ${second.slice(0, 8)}****${second.slice(-4)}. Also ${first.slice(0, 8)}...${first.slice(-4)}`,
+      `wrapped: ${first}`,
+    ].map((message) => redactKeys(message, [first, second, null, undefined, ""]));
+    const text = messages.join("\n");
+    for (const fragment of [first, second, first.slice(0, 8), second.slice(0, 8), "." + first.slice(-4), "*" + second.slice(-4)]) {
+      expect(text).not.toContain(fragment);
+    }
+    expect(messages).toEqual(["Incorrect API key provided: [REDACTED]. Also [REDACTED]", "wrapped: [REDACTED]"]);
+  });
+
+  test("a containing key is redacted whole", () => {
+    const text = redactKeys("rejected abcdefgh-longer-1234 here", ["abcdefgh", "abcdefgh-longer-1234"]);
+    expect(text).toBe("rejected [REDACTED] here");
+    expect(text).not.toContain("-longer-1234");
+  });
+
+  test("encoded and masked echoes of a key with /, a space, ~ and ] are removed", () => {
+    const key = "sk/sent inel~scr]ub-zqxw";
+    const json = JSON.stringify(key).slice(1, -1).replaceAll("/", "\\/");
+    expect(json).toBe("sk\\/sent inel~scr]ub-zqxw");
+    expect(redactKey(`body: {"key": "${json}"}`, key)).toBe(`body: {"key": "[REDACTED]"}`);
+    expect(redactKey("GET /v1?key=sk%2Fsent%20inel~scr%5Dub-zqxw", key)).toBe("GET /v1?key=[REDACTED]");
+    expect(redactKey(`provided: ${key.slice(0, 8)}****${key.slice(-4)}.`, key)).toBe("provided: [REDACTED].");
+  });
+
+  test("masked echoes with ... and … are removed", () => {
+    const key = "sk-sentinel-scrub-zqxw";
+    expect(redactKey(`a ${key.slice(0, 9)}... b …${key.slice(-4)} c ${key.slice(0, 6)}…`, key)).toBe(
+      "a [REDACTED] b [REDACTED] c [REDACTED]",
+    );
+  });
+
+  test("a key with astral characters counts visible characters in code points", () => {
+    const key = "sk-sentinel-zq\u{1F600}\u{1F389}";
+    // Two astral characters are four UTF-16 units but only two visible characters.
+    expect(redactKey("x ***\u{1F600}\u{1F389} y", key)).toBe("x ***\u{1F600}\u{1F389} y");
+    expect(redactKey("x ***q\u{1F600}\u{1F389} y", key)).toBe("x [REDACTED] y");
+    expect(redactKey("x sk-senti**** y", key)).toBe("x [REDACTED] y");
+    expect(redactKey("x \u{1F600}\u{1F389}****", "\u{1F600}\u{1F389}abc")).toBe("x \u{1F600}\u{1F389}****");
+    expect(redactKey("x \u{1F600}\u{1F389}a****", "\u{1F600}\u{1F389}abc")).toBe("x [REDACTED]");
+  });
+
+  test("null, undefined and empty keys are ignored", () => {
+    const text = "provided: sk-***";
+    for (const key of [null, undefined, ""]) expect(redactKey(text, key)).toBe(text);
+    expect(redactKeys(text, [null, undefined, ""])).toBe(text);
+    expect(redactKey("", "sk-sentinel")).toBe("");
+  });
+
+  test("REDACTED is llm/auth.ts's marker", () => {
+    expect(REDACTED).toBe(AUTH_REDACTED);
+  });
 });

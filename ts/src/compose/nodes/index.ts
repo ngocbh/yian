@@ -22,7 +22,9 @@ import { HumanInputDescriptor } from "./human_input.ts";
 import { ToolDescriptor } from "./tool.ts";
 import { WaitDescriptor } from "./wait.ts";
 // T3-16: case, call, map, loop
+import { CallDescriptor } from "./call.ts";
 import { CaseDescriptor } from "./case.ts";
+import { MapDescriptor } from "./map.ts";
 
 /** A descriptor class: `NodeDescriptor` or a kind's subclass. */
 export type DescriptorClass = typeof NodeDescriptor;
@@ -40,6 +42,8 @@ export const DESCRIPTORS: readonly DescriptorClass[] = [
   HumanInputDescriptor,
   // T3-16: case, call, map, loop
   CaseDescriptor,
+  CallDescriptor,
+  MapDescriptor,
 ];
 
 /** The `kind:` text to its descriptor class, for the shared parse and build dispatch. */

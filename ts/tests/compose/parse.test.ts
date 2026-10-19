@@ -1,6 +1,6 @@
 /**
  * The parse phase's `nodes:` mapping pass: a port of `tests/compose/test_parse.py`, with the real
- * `agent`, `code` and `case` kinds, and a stand-in for the map kind (`standIn`).
+ * `agent`, `code`, `case` and `map` kinds.
  *
  * Changed: `test_case_rejects_numeric_key` asserts "field '1' is not allowed", since TS keeps the
  * key `1` as the text written. Python compares the descriptor to an `AgentDescriptor` with
@@ -22,7 +22,6 @@ import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { loadError, nodesOf, runTextCase } from "./declarations.ts";
-import { standIn } from "./stand_ins.ts";
 
 afterEach(() => forget());
 
@@ -164,14 +163,14 @@ test("input binding and assert ranges are stamped after the kind parse", () => {
   expect(desc.range).toEqual(nodes.keyRangeOf("x"));
 });
 
-/** A node `a` of `kind` whose `input:` binds `name`. */
-function inputNamed(kind: string, name: string): string {
+/** A node `a` of `kind` whose body is `body` and whose `input:` binds `name`. */
+function inputNamed(kind: string, name: string, body = "code: return 1"): string {
   return `id: f
 name: f
 nodes:
   a:
     kind: ${kind}
-    code: return 1
+    ${body}
     input:
       ${name}: \${input.x}
 output: \${a.output}
@@ -201,9 +200,10 @@ test("a generated input named inf is refused at its node", () => {
 });
 
 test("an input named inf parses where the inputs aren't locals", () => {
-  const map = standIn("map", { allow: ["code", "inputs"], inputsAreLocals: false });
+  // A map's input names are its child's parameters, never read as bare names.
+  const text = inputNamed("map", "inf", "call: child\n    over: ${input.xs}");
 
-  expect(nodesOf(inputNamed("map", "inf"), [map]).get("a")!.inputs).toEqual({ inf: "${input.x}" });
+  expect(nodesOf(text).get("a")!.inputs).toEqual({ inf: "${input.x}" });
 });
 
 test("an input named infinity parses", () => {

@@ -4,24 +4,26 @@
  * kinds of `ALL_KIND_NAMES`, and the agreement row also runs on the nine stand-ins registered
  * with `withKinds`.
  *
- * Ported: `test_kinds_maps_string_to_descriptor_class`, and the `case` kind's entries in both
- * tables.
+ * Ported: `test_kinds_maps_string_to_descriptor_class`, and the `case`, `call` and `map` kinds'
+ * entries in both tables (the call and map halves of `test_all_authored_kinds_registered`).
  *
  * TS-only: the `code`, `human_input` and `wait` rows; `withKinds` restores the tables after its
  * function returns or throws.
  *
  * Dropped: `test_retired_kindspec_is_not_public` (a Python import).
  *
- * Later (T3-16, the call, map and loop kinds): `test_all_authored_kinds_registered`.
+ * Later (T3-16, the loop kind): the rest of `test_all_authored_kinds_registered`.
  */
 
 import { expect, test } from "bun:test";
 
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
+import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import { BINDING_FIELDS, KINDS, REMOVED_KINDS } from "../../src/compose/nodes/index.ts";
+import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { WaitDescriptor } from "../../src/compose/nodes/wait.ts";
 import { ALL_KIND_NAMES, StandInCode, standIn, withKinds } from "./stand_ins.ts";
@@ -48,11 +50,18 @@ test("KINDS maps the kind text to its descriptor class", () => {
   expect(KINDS.get("human_input")).toBe(HumanInputDescriptor);
   expect(KINDS.get("wait")).toBe(WaitDescriptor);
   expect(KINDS.get("case")).toBe(CaseDescriptor);
+  expect(KINDS.get("call")).toBe(CallDescriptor);
+  expect(KINDS.get("map")).toBe(MapDescriptor);
   for (const [kind, cls] of KINDS) expect(cls.kind).toBe(kind);
 });
 
 test("a case carries no binding fields", () => {
   expect(BINDING_FIELDS.get("case")).toEqual([]);
+});
+
+test("a call and a map bind their inputs and over", () => {
+  expect(BINDING_FIELDS.get("call")).toEqual(["inputs", "over"]);
+  expect(BINDING_FIELDS.get("map")).toEqual(["inputs", "over"]);
 });
 
 test("removed kinds are not registered", () => {

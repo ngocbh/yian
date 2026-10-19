@@ -65,7 +65,8 @@ async function listen(): Promise<CallbackListener> {
   // Created now, so a callback arriving while the browser still opens isn't lost.
   const callbackUrl = new Promise<string>((resolve) => (found = resolve));
   const waiting = new Set<net.Socket>();
-  // Half-open, so a peer that ends its side early still gets its answer.
+  // Half-open, so a peer that ends its side early keeps its socket writable until it is answered,
+  // rather than relying on the answer being written before the runtime's automatic end.
   const server = net.createServer({ allowHalfOpen: true }, (socket) => {
     const limit = current().maxOauthCallbackBytes;
     let received = Buffer.alloc(0);

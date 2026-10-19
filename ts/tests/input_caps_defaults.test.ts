@@ -165,4 +165,11 @@ test("oauth callback cap", async () => {
   expect((error as AuthError).message).toMatch(/timed out/);
   expect(replies).toHaveLength(1);
   expect((await replies[0]!).toString("latin1")).toStartWith("HTTP/1.1 400");
+  // The listener is closed: the port binds again.
+  const check = net.createServer();
+  await new Promise<void>((resolve, reject) => {
+    check.once("error", reject);
+    check.listen({ host: "127.0.0.1", port: 1455 }, resolve);
+  });
+  await new Promise<void>((resolve) => check.close(() => resolve()));
 });

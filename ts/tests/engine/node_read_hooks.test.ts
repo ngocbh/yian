@@ -1,7 +1,7 @@
 /**
  * The node-owned read hooks of the `Node` base: a port of `tests/engine/test_node_read_hooks.py`.
- * Ported: `test_plain_node_defaults`, `test_map_binds_per_item_and_resolves_over` and
- * `test_map_over_not_a_list_raises`.
+ * Ported: `test_wait_bind_reserved_resolves_until`, `test_plain_node_defaults`,
+ * `test_map_binds_per_item_and_resolves_over` and `test_map_over_not_a_list_raises`.
  *
  * Changed: the node wiring is a `Map`; the `binds_per_item` trait is read on an instance.
  *
@@ -9,9 +9,8 @@
  * `reservedKeyLabel` and `wiringRefLabel` phrases; MAP reserves `over`, labelled `map over`; a MAP
  * wiring without `over` throws a plain `Error` (Python's `KeyError`), not a `BindingError`; a
  * `bind` capability gets `over`, its source and the normalizer, whose result comes back as `over`;
- * a resolved list holding NaN is a `binding.evaluate` `BindingError`.
- *
- * Later (T3-8, WAIT): `test_wait_bind_reserved_resolves_until`.
+ * a resolved list holding NaN is a `binding.evaluate` `BindingError`. WAIT's `until` is labelled
+ * `wait until`; a WAIT wiring without `until` throws a plain `Error`.
  */
 
 import { expect, test } from "bun:test";
@@ -21,12 +20,37 @@ import { Node, NodeKind } from "../../src/nodes/base.ts";
 import { BindingError, type ReservedBinder } from "../../src/nodes/binding.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
+import { WaitNode } from "../../src/nodes/wait/node.ts";
 import { VariablePool } from "../../src/typesys/index.ts";
 
 /** A minimal ordinary node (no reserved keys, binds up front) for the default-hook check. */
 class PlainNode extends Node {
   readonly kind = NodeKind.CODE;
 }
+
+test("wait bind reserved resolves until", () => {
+  // WAIT pre-resolves its `until` source (from nodeWiring) into a concrete ISO deadline.
+  const pool = new VariablePool();
+  pool.set("deadline", "2026-01-01T00:00:00");
+  const node = new WaitNode("w");
+  const got = node.bindReserved(new Map([["until", "${deadline.output}"]]), pool);
+  expect(got).toEqual({ until: "2026-01-01T00:00:00" });
+});
+
+test("WAIT labels until as wait until, and a wiring without it is a setup fault", () => {
+  const node = new WaitNode("w");
+  expect(node.reservedKeyLabel("until")).toBe("wait until");
+
+  let caught: unknown = null;
+  try {
+    node.bindReserved(new Map(), new VariablePool());
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught).not.toBeInstanceOf(BindingError);
+  expect((caught as Error).message).toBe("WAIT node 'w' has no `until` wiring");
+});
 
 test("plain node defaults", () => {
   // An ordinary node reserves no keys and binds up front (not per item).

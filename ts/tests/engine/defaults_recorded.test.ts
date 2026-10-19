@@ -5,7 +5,7 @@
  * Ported: `test_record_rejects_a_bad_recorded_value` (string, bool, float `5000`, empty name; each
  * with its exact error), `test_record_rejects_a_list_of_pairs_as_a_type_error`,
  * `test_record_keeps_its_own_copy_of_the_values`. The record is built directly, not from the
- * decoded `_RECORDED_ROUTE` line (the codec comes later).
+ * decoded `_RECORDED_ROUTE` line: TS has no `_RECORDED_ROUTE` golden fixture.
  *
  * TS-only: the values are `bigint`s, so a `number` (even a whole one) is refused; a `Map` is
  * refused like the list of pairs; omitted defaults are `{}`; the copy is frozen.
@@ -14,14 +14,17 @@
  * `test_append_revalidates_the_recorded_values` (it forges the frozen record with
  * `object.__setattr__`).
  *
- * Ported, the codec: `test_recorded_values_encode_and_decode`,
- * `test_recorded_values_are_sorted_by_name` (also pinned as bytes),
- * `test_decode_rejects_a_bad_recorded_value` (each row with its class and message; the line is
- * built from a record, not from `_RECORDED_ROUTE`).
+ * Ported, the codec: `test_recorded_values_encode_and_decode` and
+ * `test_recorded_values_are_sorted_by_name` (also pinned as bytes). The decoded lines are built
+ * from records, since TS has no `_RECORDED_ROUTE` golden fixture.
  *
- * Changed (TS yian): the log half of `test_default_run_log_is_unchanged`: schema 10 always writes
- * `defaults`, so an all-default run writes `"defaults":{}` and reads it back as `{}` (Python omits
- * the field for byte compatibility within schema 9).
+ * Changed (TS yian):
+ * - The log half of `test_default_run_log_is_unchanged`: schema 10 always writes `defaults`, so
+ *   an all-default run writes `"defaults":{}` and reads it back as `{}` (Python omits the field
+ *   for byte compatibility within schema 9).
+ * - `test_decode_rejects_a_bad_recorded_value`: each row with its class and message; the string,
+ *   bool and float rows are `TypeError`s where Python raised a `ValidationError` (a `ValueError`),
+ *   and the empty-name row is a `RangeError`.
  *
  * Later: the run, resume and mismatch tests, with the engine.
  */

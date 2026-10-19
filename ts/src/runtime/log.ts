@@ -23,6 +23,10 @@ import {
 import {
   DeclSite,
   EvaluationEvidence,
+  LearningFailure,
+  type LearningOperation,
+  LearningResult,
+  type LearningStatus,
   MemoryMutation,
   MemoryOccurrenceKind,
   MemoryOccurrenceSegment,
@@ -34,6 +38,8 @@ import {
   MemoryStack,
   ModelTextInteraction,
   ModelValueInteraction,
+  PolicyCommitOutcome,
+  type PolicyCommitStatus,
   ToolCallInteraction,
   ToolResultInteraction,
   validateMutations,
@@ -61,7 +67,10 @@ import {
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
 import {
   AttributedBackwardResult,
+  BackwardAttribution,
+  BackwardFailure,
   BackwardOutcome,
+  type BackwardStatus,
   ForwardCapture,
   MemoryProposal,
   validateRoute,
@@ -1124,17 +1133,19 @@ function failurePayload(failure: Failure): JsonObject {
 
 /**
  * Rebuild a `Failure` from its wire object; `label` names it in errors. Its node id must be a
- * non-empty string.
+ * non-empty string, or any string or `null` when `optionalNodeId` is set (a backward failure's
+ * cause).
  *
- * @throws RangeError for missing or extra fields, an empty node id or origin key, or an unknown
- *   code.
+ * @throws RangeError for missing or extra fields, an empty required node id or origin key, or an
+ *   unknown code.
  * @throws TypeError when a field has the wrong JSON type.
  */
-function failureFromPayload(value: unknown, label: string): Failure {
+function failureFromPayload(value: unknown, label: string, optionalNodeId = false): Failure {
   const wire = wireObject(value, label, ["code", "message", "node_id", "trace", "cause_type", "traceback"]);
   const code = wireText(wire["code"], `${label} code`);
   const message = wireText(wire["message"], `${label} message`);
-  const nodeId = wireName(wire["node_id"], `${label} node_id`);
+  const nodeLabel = `${label} node_id`;
+  const nodeId = optionalNodeId ? wireNullableText(wire["node_id"], nodeLabel) : wireName(wire["node_id"], nodeLabel);
   const trace = wireArray(wire["trace"], `${label} trace`).map((item) => {
     const origin = wireObject(item, `${label} trace item`, ["key"]);
     return new OriginRef(wireName(origin["key"], `${label} trace item key`));
@@ -1379,13 +1390,12 @@ function sourcePayload(source: SourceRef): JsonObject {
 }
 
 /**
- * Decode and check one source identity.
+ * Decode and check one source identity; `label` names it in errors.
  *
  * @throws RangeError for missing or extra fields, besides `validateSource`'s errors.
  * @throws TypeError when a field has the wrong JSON type.
  */
-function sourceFromPayload(value: unknown): SourceRef {
-  const label = "route source";
+function sourceFromPayload(value: unknown, label: string): SourceRef {
   const wire = wireObject(value, label, ["run_id", "execution_seq", "path"]);
   const source = new SourceRef(
     wireText(wire["run_id"], `${label} run_id`),
@@ -1533,7 +1543,7 @@ export function routeFromPayload(payload: unknown): ValueRoute {
   }
   if (snapshot !== null && !isRecord(snapshot)) throw new TypeError("route snapshot must be an object or null");
   const route = new ValueRoute(wire["kind"] as RouteKind, {
-    source: source === null ? null : sourceFromPayload(source),
+    source: source === null ? null : sourceFromPayload(source, "route source"),
     valueJson,
     children: childWires.map(routeFromPayload),
     expression,
@@ -1697,6 +1707,264 @@ function memoryFailureFromPayload(value: unknown, label: string): MemoryOperatio
   );
 }
 
+/** Encode the three channels of a backward result, each batch in its order. */
+function backwardResultPayload(result: BackwardResult): JsonObject {
+  return {
+    input_feedback: result.inputFeedback as JsonObject,
+    self_feedback: [...result.selfFeedback],
+    variable_feedback: result.variableFeedback as JsonObject,
+  };
+}
+
+/**
+ * Decode a backward result through its constructor; `label` names it in errors. Messages are
+ * ordinary feedback, not memory JSON.
+ *
+ * @throws RangeError for missing or extra fields, besides the result's own errors.
+ * @throws TypeError when a channel has the wrong JSON type, besides the result's own errors.
+ */
+function backwardResultFromPayload(value: unknown, label: string): BackwardResult {
+  const wire = wireObject(value, label, ["input_feedback", "self_feedback", "variable_feedback"]);
+  return new BackwardResult({
+    inputFeedback: wireObject(wire["input_feedback"], `${label} input_feedback`) as Record<string, FeedbackValue[]>,
+    selfFeedback: wireArray(wire["self_feedback"], `${label} self_feedback`) as string[],
+    variableFeedback: wireObject(wire["variable_feedback"], `${label} variable_feedback`) as Record<string, string[]>,
+  });
+}
+
+/** Encode one message's transfer coordinates, without the downstream context they point at. */
+function attributionPayload(item: BackwardAttribution): JsonObject {
+  return {
+    sender: item.sender === null ? null : sourcePayload(item.sender),
+    input_name: item.inputName,
+    message_index: BigInt(item.messageIndex),
+    contribution_index: item.contributionIndex === null ? null : BigInt(item.contributionIndex),
+    parents: item.parents.map((parent) => BigInt(parent)),
+  };
+}
+
+/**
+ * Decode one message's coordinates through `BackwardAttribution`; `label` names it in errors.
+ * Agreement with the trace belongs to the reducer.
+ *
+ * @throws RangeError for missing or extra fields or a counter beyond ±(2^53 - 1), besides the
+ *   source's and the attribution's own errors.
+ * @throws TypeError when a field has the wrong JSON type.
+ */
+function attributionFromPayload(value: unknown, label: string): BackwardAttribution {
+  const wire = wireObject(value, label, ["sender", "input_name", "message_index", "contribution_index", "parents"]);
+  const sender = wire["sender"];
+  const contribution = wire["contribution_index"];
+  return new BackwardAttribution(
+    sender === null ? null : sourceFromPayload(sender, `${label} sender`),
+    wireNullableText(wire["input_name"], `${label} input_name`),
+    wireInt(wire["message_index"], `${label} message_index`),
+    contribution === null ? null : wireInt(contribution, `${label} contribution_index`),
+    wireArray(wire["parents"], `${label} parents`).map((parent) => wireInt(parent, `${label} parents item`)),
+  );
+}
+
+/** Encode one occurrence's received feedback, its attribution and its callback result. */
+function attributedResultPayload(item: AttributedBackwardResult): JsonObject {
+  return {
+    source: sourcePayload(item.source),
+    feedback: [...item.feedback] as JsonValue[],
+    attribution: item.attribution.map(attributionPayload),
+    result: backwardResultPayload(item.result),
+    invoked: item.invoked,
+  };
+}
+
+/**
+ * Decode one occurrence's result through `AttributedBackwardResult`, without rebuilding an
+ * invocation or a route; `label` names it in errors.
+ *
+ * @throws RangeError for missing or extra fields, besides the nested carriers' own errors.
+ * @throws TypeError when a field has the wrong JSON type, besides the nested carriers' own errors.
+ */
+function attributedResultFromPayload(value: unknown, label: string): AttributedBackwardResult {
+  const wire = wireObject(value, label, ["source", "feedback", "attribution", "result", "invoked"]);
+  return new AttributedBackwardResult(
+    sourceFromPayload(wire["source"], `${label} source`),
+    wireArray(wire["feedback"], `${label} feedback`) as FeedbackValue[],
+    wireArray(wire["attribution"], `${label} attribution`).map((item) =>
+      attributionFromPayload(item, `${label} attribution item`),
+    ),
+    backwardResultFromPayload(wire["result"], `${label} result`),
+    wireBool(wire["invoked"], `${label} invoked`),
+  );
+}
+
+/** Encode one memory's proposed mutation batch, in order. */
+function memoryProposalPayload(proposal: MemoryProposal): JsonObject {
+  return { memory: proposal.memory, mutations: proposal.mutations.map(mutationPayload) };
+}
+
+/**
+ * Decode one memory's proposal through `MemoryProposal`; `label` names it in errors.
+ *
+ * @throws RangeError for missing or extra fields, an empty memory key or two mutations with one id.
+ * @throws TypeError when a field has the wrong JSON type.
+ */
+function memoryProposalFromPayload(value: unknown, label: string): MemoryProposal {
+  const wire = wireObject(value, label, ["memory", "mutations"]);
+  return new MemoryProposal(
+    wireName(wire["memory"], `${label} memory`),
+    wireArray(wire["mutations"], `${label} mutations`).map((item) =>
+      mutationFromPayload(item, `${label} mutations item`),
+    ),
+  );
+}
+
+/** Encode a learning result's failures and per-memory commit dispositions, in order. */
+function learningResultPayload(result: LearningResult): JsonObject {
+  return {
+    status: result.status,
+    failures: result.failures.map((item) => ({
+      memory: item.memory,
+      operation: item.operation,
+      failure: memoryFailurePayload(item.failure),
+    })),
+    policies: result.policies.map((item) => ({
+      memory: item.memory,
+      status: item.status,
+      commit_id: item.commitId,
+      failure: item.failure === null ? null : memoryFailurePayload(item.failure),
+    })),
+  };
+}
+
+/**
+ * Decode a learning result through its carriers, without inferring the attempt's completion;
+ * `label` names it in errors.
+ *
+ * @throws RangeError for missing or extra fields or an empty memory key, besides the carriers'
+ *   own errors.
+ * @throws TypeError when a field has the wrong JSON type.
+ */
+function learningResultFromPayload(value: unknown, label: string): LearningResult {
+  const wire = wireObject(value, label, ["status", "failures", "policies"]);
+  const failures = wireArray(wire["failures"], `${label} failures`).map((item) => {
+    const itemLabel = `${label} failures item`;
+    const failure = wireObject(item, itemLabel, ["memory", "operation", "failure"]);
+    return new LearningFailure(
+      wireName(failure["memory"], `${itemLabel} memory`),
+      wireText(failure["operation"], `${itemLabel} operation`) as LearningOperation,
+      memoryFailureFromPayload(failure["failure"], `${itemLabel} failure`),
+    );
+  });
+  const policies = wireArray(wire["policies"], `${label} policies`).map((item) => {
+    const itemLabel = `${label} policies item`;
+    const policy = wireObject(item, itemLabel, ["memory", "status", "commit_id", "failure"]);
+    const failure = policy["failure"];
+    return new PolicyCommitOutcome(
+      wireName(policy["memory"], `${itemLabel} memory`),
+      wireText(policy["status"], `${itemLabel} status`) as PolicyCommitStatus,
+      {
+        commitId: wireNullableText(policy["commit_id"], `${itemLabel} commit_id`),
+        failure: failure === null ? null : memoryFailureFromPayload(failure, `${itemLabel} failure`),
+      },
+    );
+  });
+  return new LearningResult(wireText(wire["status"], `${label} status`) as LearningStatus, { failures, policies });
+}
+
+/** Encode one attributed backward diagnostic and its `Failure` or memory-operation cause. */
+function backwardFailurePayload(failure: BackwardFailure): JsonObject {
+  const { cause } = failure;
+  return {
+    stage: failure.stage,
+    code: failure.code,
+    message: failure.message,
+    scope: executionScopePayload(failure.scope),
+    run_id: failure.runId,
+    node_id: failure.nodeId,
+    node_started_seq: failure.nodeStartedSeq === null ? null : BigInt(failure.nodeStartedSeq),
+    memory: failure.memory,
+    cause: cause === null ? null : cause instanceof Failure ? failurePayload(cause) : memoryFailurePayload(cause),
+    cause_type: failure.causeType,
+    traceback: failure.traceback,
+  };
+}
+
+/** The fields of a backward failure's wire object. */
+const BACKWARD_FAILURE_FIELDS = [
+  "stage",
+  "code",
+  "message",
+  "scope",
+  "run_id",
+  "node_id",
+  "node_started_seq",
+  "memory",
+  "cause",
+  "cause_type",
+  "traceback",
+];
+
+/**
+ * Decode one backward diagnostic through `BackwardFailure`; `label` names it in errors. A cause
+ * with a `stage` field is a memory-operation failure, any other a `Failure` (the two shapes are
+ * disjoint, so nothing is inferred).
+ *
+ * @throws RangeError for missing or extra fields or a counter beyond ±(2^53 - 1), besides the
+ *   nested carriers' own errors.
+ * @throws TypeError when a field has the wrong JSON type.
+ */
+function backwardFailureFromPayload(value: unknown, label: string): BackwardFailure {
+  const wire = wireObject(value, label, BACKWARD_FAILURE_FIELDS);
+  const causeLabel = `${label} cause`;
+  const cause = wireNullableObject(wire["cause"], causeLabel);
+  const seq = wire["node_started_seq"];
+  return new BackwardFailure(
+    wireText(wire["stage"], `${label} stage`),
+    wireText(wire["code"], `${label} code`),
+    wireText(wire["message"], `${label} message`),
+    {
+      scope: executionScopeFromPayload(wire["scope"], `${label} scope`),
+      runId: wireNullableText(wire["run_id"], `${label} run_id`),
+      nodeId: wireNullableText(wire["node_id"], `${label} node_id`),
+      nodeStartedSeq: seq === null ? null : wireInt(seq, `${label} node_started_seq`),
+      memory: wireNullableText(wire["memory"], `${label} memory`),
+      cause:
+        cause === null
+          ? null
+          : Object.hasOwn(cause, "stage")
+            ? memoryFailureFromPayload(cause, causeLabel)
+            : failureFromPayload(cause, causeLabel, true),
+      causeType: wireNullableText(wire["cause_type"], `${label} cause_type`),
+      traceback: wireNullableText(wire["traceback"], `${label} traceback`),
+    },
+  );
+}
+
+/** Encode a backward outcome with its optional feedback, failure and learning result. */
+function backwardOutcomePayload(outcome: BackwardOutcome): JsonObject {
+  return {
+    status: outcome.status,
+    feedback: outcome.feedback === null ? null : backwardResultPayload(outcome.feedback),
+    failure: outcome.failure === null ? null : backwardFailurePayload(outcome.failure),
+    learning: outcome.learning === null ? null : learningResultPayload(outcome.learning),
+  };
+}
+
+/**
+ * Decode a backward outcome through `BackwardOutcome`, without fabricating missing computation;
+ * `label` names it in errors.
+ *
+ * @throws RangeError for missing or extra fields, besides the nested carriers' own errors.
+ * @throws TypeError when a field has the wrong JSON type.
+ */
+function backwardOutcomeFromPayload(value: unknown, label: string): BackwardOutcome {
+  const wire = wireObject(value, label, ["status", "feedback", "failure", "learning"]);
+  const { feedback, failure, learning } = wire;
+  return new BackwardOutcome(wireText(wire["status"], `${label} status`) as BackwardStatus, {
+    feedback: feedback === null ? null : backwardResultFromPayload(feedback, `${label} feedback`),
+    failure: failure === null ? null : backwardFailureFromPayload(failure, `${label} failure`),
+    learning: learning === null ? null : learningResultFromPayload(learning, `${label} learning`),
+  });
+}
+
 /** Encode an outcome record's optional evidence and capture. */
 function outcomePayload(record: OutcomeCarriers): JsonObject {
   const { evidence = null, forwardCapture = null } = record;
@@ -1806,7 +2074,23 @@ function payloadForRecord(record: RunRecord): JsonObject {
       failure: memoryFailurePayload(record.failure),
     };
   }
-  throw new Error(`${kindForRecord(record)} records are not encoded yet`);
+  if (record instanceof BackwardStartedRecord) {
+    return { attempt_id: BigInt(record.attemptId), feedback: record.feedback as JsonValue };
+  }
+  if (record instanceof BackwardReadyRecord) {
+    return {
+      attempt_id: BigInt(record.attemptId),
+      root_result: backwardResultPayload(record.rootResult),
+      attributed_results: record.attributedResults.map(attributedResultPayload),
+      proposals: record.proposals.map(memoryProposalPayload),
+    };
+  }
+  // The one kind left is backward_finished.
+  return {
+    attempt_id: BigInt(record.attemptId),
+    outcome: backwardOutcomePayload(record.outcome),
+    attributed_results: record.attributedResults.map(attributedResultPayload),
+  };
 }
 
 /**
@@ -1822,6 +2106,8 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
   switch (kind) {
     case "run_started":
       requireFields(payload, RUN_STARTED_FIELDS, label);
+      // The record's constructor checks the fields cast here (the pool, the agents' configs, the
+      // defaults and the call-time agents), so a bad value is named by its entry.
       return new RunStartedRecord({
         flowFingerprint: wireText(payload["flow_fingerprint"], `${label} flow_fingerprint`),
         initialPool: wireObject(payload["initial_pool"], `${label} initial_pool`) as unknown as PoolWire,
@@ -1839,9 +2125,7 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         learnable: wireBool(payload["learnable"], `${label} learnable`),
         memories: wireNullableItems(payload["memories"], `${label} memories`, memorySpecFromPayload),
         memoryStacks: wireNullableItems(payload["memory_stacks"], `${label} memory_stacks`, memoryStackFromPayload),
-        // The record checks each value, so a bad default is named by its entry.
         defaults: wireObject(payload["defaults"], `${label} defaults`) as Record<string, bigint>,
-        // The record checks the call-time agents' shape, `null` included.
         callTimeLlm: payload["call_time_llm"] as JsonObject | null,
       });
     case "run_resumed":
@@ -1930,9 +2214,42 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         memoryFailureFromPayload(payload["failure"], `${label} failure`),
         wireInt(payload["attempt_id"], `${label} attempt_id`),
       );
+    case "backward_started":
+      requireFields(payload, ["attempt_id", "feedback"], label);
+      return new BackwardStartedRecord(
+        wireInt(payload["attempt_id"], `${label} attempt_id`),
+        payload["feedback"] as FeedbackValue,
+      );
+    case "backward_ready":
+      requireFields(payload, ["attempt_id", "root_result", "attributed_results", "proposals"], label);
+      return new BackwardReadyRecord(
+        wireInt(payload["attempt_id"], `${label} attempt_id`),
+        backwardResultFromPayload(payload["root_result"], `${label} root_result`),
+        attributedResultsFromPayload(payload["attributed_results"], `${label} attributed_results`),
+        wireArray(payload["proposals"], `${label} proposals`).map((item) =>
+          memoryProposalFromPayload(item, `${label} proposals item`),
+        ),
+      );
+    case "backward_finished":
+      requireFields(payload, ["attempt_id", "outcome", "attributed_results"], label);
+      return new BackwardFinishedRecord(
+        wireInt(payload["attempt_id"], `${label} attempt_id`),
+        backwardOutcomeFromPayload(payload["outcome"], `${label} outcome`),
+        attributedResultsFromPayload(payload["attributed_results"], `${label} attributed_results`),
+      );
     default:
-      throw new Error(`${kind} records are not encoded yet`);
+      throw new RangeError(`unknown run-record kind: ${reprText(kind)}`);
   }
+}
+
+/**
+ * Decode a record's array of occurrence results; `label` names it in errors.
+ *
+ * @throws RangeError or TypeError as `attributedResultFromPayload`, or TypeError when `value`
+ *   isn't an array.
+ */
+function attributedResultsFromPayload(value: unknown, label: string): AttributedBackwardResult[] {
+  return wireArray(value, label).map((item) => attributedResultFromPayload(item, `${label} item`));
 }
 
 /**

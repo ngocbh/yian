@@ -27,11 +27,10 @@
  * `test_decode_rejects_flattened_failure_aliases`,
  * `test_decode_rejects_duplicate_keys_at_any_object_depth` (`invalid run-record JSON`, caused by
  * the reader's `JSONDecodeError` `duplicate JSON object key: "node_id"`, double-quoted),
- * `test_invalid_record_json_keeps_its_message`, and the round-trip rows of
- * `test_every_record_round_trips_through_a_validated_envelope` for `run_started`, `run_resumed`,
- * `run_stopped`, `node_started`, `node_step`, `node_succeeded`, `node_routed`, `node_expanded`,
- * `node_failed`, `memory_commit_requested`, `memory_commit_succeeded` and `memory_commit_failed`
- * (each also decoded from bytes).
+ * `test_invalid_record_json_keeps_its_message`,
+ * `test_every_record_round_trips_through_a_validated_envelope` (each row also decoded from
+ * bytes) and
+ * `test_record_wire_examples_cover_the_closed_record_inventory` (against `RUN_RECORD_TYPES`).
  *
  * TS-only: a seed keeps `±Infinity` as a float (a TS yian value, unlike Python's); a seed's
  * record keys come out in code-unit order; the envelope's schema rows (7, 8 and 11 are
@@ -104,10 +103,22 @@ import { expect, test } from "bun:test";
 
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
-import { EvaluationEvidence, MemoryMutation, MemoryOperationFailure } from "../../src/memory/contracts.ts";
+import {
+  EvaluationEvidence,
+  LearningResult,
+  MemoryMutation,
+  MemoryOperationFailure,
+  PolicyCommitOutcome,
+} from "../../src/memory/contracts.ts";
 import { BackwardResult } from "../../src/nodes/base.ts";
 import { ExecutionPosition, ExecutionScope } from "../../src/nodes/contracts.ts";
-import { BackwardOutcome, ForwardCapture } from "../../src/runtime/contracts.ts";
+import {
+  AttributedBackwardResult,
+  BackwardAttribution,
+  BackwardOutcome,
+  ForwardCapture,
+  MemoryProposal,
+} from "../../src/runtime/contracts.ts";
 import {
   BackwardFinishedRecord,
   BackwardReadyRecord,
@@ -790,6 +801,21 @@ function roundTripRunStarted(): RunStartedRecord {
   });
 }
 
+/** The three-channel result of the backward round trips. */
+function backwardResult(): BackwardResult {
+  return new BackwardResult({
+    inputFeedback: { topic: [[null, { uri: "Review." }]] },
+    selfFeedback: ["Behavior."],
+    variableFeedback: { tone: ["Concise."] },
+  });
+}
+
+/** The invoked occurrence of the backward round trips, with a root attribution. */
+function backwardOccurrences(): AttributedBackwardResult[] {
+  const root = new BackwardAttribution(null, null, 0, null, []);
+  return [new AttributedBackwardResult(new SourceRef("run", 1), ["Review."], [root], backwardResult(), true)];
+}
+
 const ROUND_TRIP_RECORDS: [string, RunRecord][] = [
   ["RunStartedRecord", roundTripRunStarted()],
   ["RunResumedRecord", new RunResumedRecord(["slow", "later"], 4)],
@@ -827,6 +853,26 @@ const ROUND_TRIP_RECORDS: [string, RunRecord][] = [
       "commit-1",
       new MemoryOperationFailure("backend", "backend.failed", "Failed.", true),
       1,
+    ),
+  ],
+  ["BackwardStartedRecord", new BackwardStartedRecord(1, [null, { uri: "Review." }])],
+  [
+    "BackwardReadyRecord",
+    new BackwardReadyRecord(1, backwardResult(), backwardOccurrences(), [
+      new MemoryProposal("agent", [new MemoryMutation("m1", { notes: ["one"] })]),
+    ]),
+  ],
+  [
+    "BackwardFinishedRecord",
+    new BackwardFinishedRecord(
+      1,
+      new BackwardOutcome("succeeded", {
+        feedback: backwardResult(),
+        learning: new LearningResult("succeeded", {
+          policies: [new PolicyCommitOutcome("history", "succeeded", { commitId: "commit-1" })],
+        }),
+      }),
+      backwardOccurrences(),
     ),
   ],
 ];
@@ -932,6 +978,10 @@ test.each(ROUND_TRIP_RECORDS)("every record round trips through a validated enve
   expect(decoded.payload).toEqual((parseJson(encoded, "codec") as JsonObject)["payload"] as JsonObject);
   expect(Object.isFrozen(decoded.payload)).toBe(true);
   expect(decodeRecord(new TextEncoder().encode(encoded))).toEqual(envelope);
+});
+
+test("the record wire examples cover the closed record inventory", () => {
+  expect(new Set(ROUND_TRIP_RECORDS.map(([, record]) => record.constructor))).toEqual(new Set(RUN_RECORD_TYPES));
 });
 
 test.each([

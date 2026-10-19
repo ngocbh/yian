@@ -76,9 +76,9 @@
  * a decoded mutation payload is frozen, so a reader's edit throws `TypeError` (Python edits a
  * private copy).
  *
- * Later: the `MemoryProposal` half of `test_proposals_preserve_order_and_reject_duplicate_ids` and
- * the backward-ready half of `test_memory_payloads_name_keys_on_the_wire`, with the backward
- * records' codec.
+ * Ported, the backward wire: the backward-ready half of `test_memory_payloads_name_keys_on_the_wire`
+ * (its extra `frame_ref` row with its class and message) and the `MemoryProposal` line of
+ * `test_proposals_preserve_order_and_reject_duplicate_ids`.
  */
 
 import { expect, test } from "bun:test";
@@ -102,7 +102,10 @@ import {
   ToolCallInteraction,
   ToolResultInteraction,
 } from "../../src/memory/contracts.ts";
+import { BackwardResult } from "../../src/nodes/base.ts";
+import { MemoryProposal } from "../../src/runtime/contracts.ts";
 import {
+  BackwardReadyRecord,
   decodeRecord,
   encodePool,
   encodeRecord,
@@ -869,9 +872,10 @@ test.each([1, 2])("the memory commit wire requires an explicit positive attempt 
   }
 });
 
-// The mutation half of test_proposals_preserve_order_and_reject_duplicate_ids.
-test("a commit request keeps its mutation order and rejects duplicate ids", () => {
+// test_proposals_preserve_order_and_reject_duplicate_ids
+test("proposals preserve order and reject duplicate ids", () => {
   const ordered = [new MemoryMutation("m2", { sequence: 1n }), new MemoryMutation("m1", { sequence: 2n })];
+  expect(new MemoryProposal("reflective", ordered).mutations).toEqual(ordered);
   expect(new MemoryCommitRequestedRecord("reflective", "commit", ordered, 1).mutations).toEqual(ordered);
   expectError(
     () => {
@@ -956,6 +960,25 @@ test("a decoded commit's mutation payloads are frozen", () => {
 test("a commit request names its mutations on the wire", () => {
   const commit = new MemoryCommitRequestedRecord("reflective", "c1", [new MemoryMutation("m1", { add: 1n })], 1);
   expect(wireOf(commit).payload.mutations).toEqual([{ mutation_id: "m1", payload: { add: 1n } }]);
+});
+
+// The backward-ready half of test_memory_payloads_name_keys_on_the_wire.
+test("a backward-ready record names its proposals' memory keys on the wire", () => {
+  const proposal = new MemoryProposal("reflective", [new MemoryMutation("m1", { add: 1n })]);
+  const ready = new BackwardReadyRecord(1, new BackwardResult(), [], [proposal]);
+  const wire = wireOf(ready);
+  expect(wire.payload.proposals).toEqual([
+    { memory: "reflective", mutations: [{ mutation_id: "m1", payload: { add: 1n } }] },
+  ]);
+  expect(Object.hasOwn(wire.payload, "frame_proposals")).toBe(false);
+  expect((roundTrip(ready) as BackwardReadyRecord).proposals).toEqual([proposal]);
+
+  wire.payload.proposals[0].frame_ref = null;
+  expectError(
+    () => decodeRecord(logJson(wire)),
+    RangeError,
+    'invalid backward_ready payload proposals item fields; missing=[], extra=["frame_ref"]',
+  );
 });
 
 const MEMORY_LABEL = "run_started payload memories item";

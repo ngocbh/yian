@@ -182,7 +182,9 @@ test.each(MALFORMED)("a malformed record is rejected: %s", (_name, value, cls, m
 });
 
 // The log can't hold a NaN, so its row has no wire form.
-test.each(MALFORMED.slice(0, -1))("a malformed payload is rejected: %s", (_name, value, cls, message) => {
+const MALFORMED_WIRE = MALFORMED.filter(([name]) => name !== "a NaN");
+
+test.each(MALFORMED_WIRE)("a malformed payload is rejected: %s", (_name, value, cls, message) => {
   const wire = parseJson(encode(record()), "codec") as { payload: Record<string, unknown> };
   wire.payload["call_time_llm"] = value;
   expectError(() => decodeRecord(logJson(wire)), cls, message);

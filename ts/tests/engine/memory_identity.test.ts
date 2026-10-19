@@ -68,6 +68,7 @@ import {
   RecordEnvelope,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
+import { parseJson } from "../../src/typesys/json.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
@@ -366,7 +367,7 @@ test("a backward failure and the commit records name their memory key", () => {
   ]) {
     expect(record.memory).toBe("notes");
     const wire = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "run", 0, record));
-    expect(JSON.parse(wire).payload.memory).toBe("notes");
+    expect((parseJson(wire, "codec") as { payload: { memory: string } }).payload.memory).toBe("notes");
     expect(decodeRecord(wire).record).toEqual(record);
   }
 });

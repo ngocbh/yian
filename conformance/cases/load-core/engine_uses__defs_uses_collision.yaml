@@ -18,6 +18,23 @@ flow: |
       nodes:
         c: {kind: code, code: ./fixtures/seeds.ts:one_line_summary, input: {x: "${x}"}}
       output: {y: "${c.output}"}
+python_flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    a: {kind: call, call: dup, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+  uses:
+    dup: child
+  defs:
+    dup:
+      input:
+        x: !str
+      nodes:
+        c: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${x}"}}
+      output: {y: "${c.output}"}
 expect:
   load:
     diagnostics:

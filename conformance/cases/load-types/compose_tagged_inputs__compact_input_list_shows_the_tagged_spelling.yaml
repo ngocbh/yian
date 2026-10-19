@@ -6,6 +6,13 @@ flow: |
   kind: code
   output: object
   code: "return {...inputs}"
+python_flow: |
+  id: f
+  name: f
+  input: [topic]
+  kind: code
+  output: object
+  code: return dict(inputs)
 expect:
   load:
     diagnostics:

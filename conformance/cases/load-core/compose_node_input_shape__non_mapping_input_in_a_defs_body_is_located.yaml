@@ -29,6 +29,36 @@ flow: |
       input:
         n: ${input.z}
   output: ${run.output}
+python_flow: |
+  id: input-shape-defs
+  name: input_shape_defs
+  input:
+    z: !int
+  defs:
+    step:
+      input:
+        n: !int
+      nodes:
+        b:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": inputs["n"] + 1}
+        c:
+          kind: code
+          input: ${b.output}
+          code: return 1
+      output: ${b.output}
+  nodes:
+    run:
+      kind: call
+      call: step
+      input:
+        n: ${input.z}
+  output: ${run.output}
 expect:
   load:
     diagnostics:

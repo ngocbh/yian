@@ -1,4 +1,5 @@
-# TS writes the seed value as JSON text without spaces (rules: messages); Python's json.dumps text in python_expect.
+# TS writes the seed value in compact text form, {"n":0} (rules: messages); Python's text from yian's
+# shown_literal (compose/validate/typed_bindings.py), {"n": 0}, in python_expect.
 kind: load
 rules: [messages]
 flow: |

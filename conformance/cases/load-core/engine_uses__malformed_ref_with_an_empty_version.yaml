@@ -9,6 +9,16 @@ flow: |
   output: {y: "${a.output}"}
   uses:
     m: 'name@'
+python_flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    a: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+  uses:
+    m: 'name@'
 expect:
   load:
     diagnostics:

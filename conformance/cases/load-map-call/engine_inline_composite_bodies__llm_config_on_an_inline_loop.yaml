@@ -19,6 +19,26 @@ flow: |
             n: int
       output: ${inner.output}
   output: ${composite.output}
+python_flow: |
+  id: inline-llm-config-rejected
+  name: inline_llm_config_rejected
+  nodes:
+    composite:
+      kind: loop
+      llm_config: {model: forbidden}
+      times: 1
+      input: {n: 0}
+      nodes:
+        inner:
+          kind: code
+          code: |
+            return {"n": inputs["n"] + 1}
+          input:
+            n: ${input.n}
+          output:
+            n: int
+      output: ${inner.output}
+  output: ${composite.output}
 expect:
   load:
     diagnostics:

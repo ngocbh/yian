@@ -1731,9 +1731,9 @@ test("admissions read turn order, including effect-free turns", () => {
 test("the prefix digest equals Python yian's and proves every earlier ledger entry", () => {
   const value = summaryView();
   // Computed with Python yian's `prefix_digest` over the same history.
-  expect(prefixDigest(value, 2)).toBe("b76c35cd21ab71ef39c7f3eb541c6904f9498fd9195b16d9425a4e265c33b67c");
+  const original = "b76c35cd21ab71ef39c7f3eb541c6904f9498fd9195b16d9425a4e265c33b67c";
+  expect(prefixDigest(value, 2)).toBe(original);
   expect(prefixDigest(value, 0)).toBe("4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945");
-  const original = prefixDigest(value, 2);
   for (const index of value.applied.keys()) {
     for (const field of ["event", "after"] as const) {
       const entries = value.applied.with(index, withDigest(value.applied[index]!, { [field]: "d".repeat(64) }));
@@ -1771,7 +1771,8 @@ test.each([
   ["", "empty"],
   [" \t\n", "whitespace"],
   ["\x1c", "a file separator"],
-  ["\u3000\x85", "Python-only whitespace"],
+  ["\u3000", "an ideographic space"],
+  ["\x85", "NEL, whitespace only to Python"],
 ])("a summary of %p is blank (%s)", (text) => {
   expectError(
     () => new Summary("namespace", 0, "v1", [], "a".repeat(64), text),
@@ -1815,4 +1816,9 @@ test("a summary matches only its own namespace, generation, version and complete
   expect(make({}).matches(value, prior.slice(0, 1), "v1")).toBe(false);
   expect(make({ digest: prefixDigest(value, 1) }).matches(value, prior, "v1")).toBe(false);
   expect(make({ digest: "a".repeat(64) }).matches(value, prior, "v1")).toBe(false);
+  expectError(
+    () => make({ covered: [...prior], digest: "a".repeat(64) }).matches(value, prior, "v1"),
+    RangeError,
+    "a summary prefix must precede the current admission",
+  );
 });

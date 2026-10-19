@@ -6,13 +6,23 @@
  * `test_typed_object_output_records_a_nested_file_as_its_mapping`,
  * `test_recorded_object_past_the_nesting_limit_still_replays`,
  * `test_seed_keeps_supported_values_and_independent_canonical_copies`,
- * `test_pool_decoder_rejects_unknown_fields_and_wrong_types` (3 rows). Python's `ValueError` is
- * a `RangeError` here.
+ * `test_pool_decoder_rejects_unknown_fields_and_wrong_types` (3 rows),
+ * `test_records_and_envelopes_are_frozen` (every record of this module and the envelope, nested
+ * values too; assignment is a `TypeError`). Python's `ValueError` is a `RangeError` here.
  *
  * TS-only: a seed keeps `±Infinity` as a float (a TS yian value, unlike Python's); a seed's
- * record keys come out in code-unit order.
+ * record keys come out in code-unit order; the envelope's schema rows (7, 8 and 11 are
+ * unsupported, 9 names Python yian, a boolean is unsupported, and the schema is checked first),
+ * its run-id rows (empty, a lone surrogate) and its unsupported-record row; the `RunStopped`
+ * rows (an unknown reason, an empty or repeated node id, a non-text message; no node ids is
+ * valid); a failure without a node id and an evidence or capture of another class, refused by
+ * the record's constructor.
  *
  * Changed:
+ * - `test_encode_validates_programmatically_constructed_envelopes`: the record's constructor
+ *   refuses the bad node id and the non-`Failure` (Python refused them at encode).
+ * - `test_encode_rejects_invalid_id_tuple_carriers`: the 9 rows are constructor rejections
+ *   (Python refused them at encode); "tuple" reads "array".
  * - `test_typed_object_output_rejects_a_non_json_member`: Python's date and datetime rows are one
  *   JS `Date` row, refused by the value layer as `<Date object> is not a JSON value`.
  * - `test_seed_canonicalizes_tuple_date_and_file_ref`: only the `FileRef` half (TS has no tuples
@@ -29,7 +39,8 @@
  * - `test_pool_codec_is_canonical_and_lossless_for_typed_values`: no date value; the tuple is an
  *   array.
  *
- * Not ported: the `inf` and `-inf` rows (a TS float may be infinite) and the tuple, model and
+ * Not ported: the two list rows of `test_encode_rejects_invalid_id_tuple_carriers` (a TS id
+ * carrier is an array); the `inf` and `-inf` rows (a TS float may be infinite) and the tuple, model and
  * dataclass rows of the non-finite seed test; the pydantic-extras tests; the dataclass row of the
  * unordered-container test; `test_canonical_seed_rejects_keys_before_json_stringification` (JS
  * object keys are always text); `test_typed_object_output_canonicalizes_a_tuple` (TS has no
@@ -39,7 +50,24 @@
 
 import { expect, test } from "bun:test";
 
-import { canonicalSeed, canonicalTyped, decodePool, encodePool } from "../../src/runtime/log.ts";
+import { Failure } from "../../src/diagnostics.ts";
+import {
+  canonicalSeed,
+  canonicalTyped,
+  decodePool,
+  encodePool,
+  NodeExpandedRecord,
+  NodeFailedRecord,
+  NodeRoutedRecord,
+  NodeStartedRecord,
+  NodeStepRecord,
+  NodeSucceededRecord,
+  RecordEnvelope,
+  RUN_STOP_REASONS,
+  RunResumedRecord,
+  RunStoppedRecord,
+  SCHEMA_VERSION,
+} from "../../src/runtime/log.ts";
 import {
   FileRef,
   type PoolWire,
@@ -62,6 +90,20 @@ function expectTypeCheck(fn: () => unknown, message: string, path: readonly (str
   expect((caught as TypeCheckError).message).toBe(message);
   expect((caught as TypeCheckError).path).toEqual(path);
 }
+
+/** Assert `fn` throws an error of exactly class `cls` with exactly `message`. */
+function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): void {
+  let caught: unknown;
+  try {
+    fn();
+  } catch (error) {
+    caught = error;
+  }
+  expect((caught as Error | undefined)?.constructor).toBe(cls);
+  expect((caught as Error).message).toBe(message);
+}
+
+const TOPOLOGY_DIGEST = "b".repeat(64);
 
 test("a typed object output rejects a non-JSON member", () => {
   expectTypeCheck(
@@ -194,4 +236,176 @@ test.each<[string, unknown, string]>([
   }
   expect((caught as Error).constructor).toBe(RangeError);
   expect((caught as Error).message).toBe(message);
+});
+
+test("records and envelopes are frozen", () => {
+  const record = new NodeStartedRecord("work");
+  const envelope = new RecordEnvelope(SCHEMA_VERSION, "run", 0, record);
+  const failure = new Failure({ code: "node.execute", message: "boom", nodeId: "work" });
+  const assignments: [string, () => unknown][] = [
+    ["node started", () => ((record as { nodeId: string }).nodeId = "changed")],
+    ["envelope", () => ((envelope as { seq: number }).seq = 1)],
+    ["run resumed", () => (new RunResumedRecord(["a"], 1).retryNodeIds as string[]).push("b")],
+    ["run stopped", () => (new RunStoppedRecord("signal", "stop", ["a"]).nodeIds as string[]).push("b")],
+    ["node step", () => ((new NodeStepRecord("a", { n: { m: 1n } }).step["n"] as { m: unknown }).m = 2n)],
+    [
+      "node succeeded",
+      () => ((new NodeSucceededRecord("a", "a", { kind: "int", value: 1n }).value as { value: unknown }).value = 2n),
+    ],
+    ["node routed", () => ((new NodeRoutedRecord("a", "next") as { handle: string }).handle = "other")],
+    [
+      "node expanded",
+      () => {
+        const record = new NodeExpandedRecord("grow", { items: [1n] }, [], TOPOLOGY_DIGEST);
+        (record.seed as { items: unknown[] }).items.push(2n);
+      },
+    ],
+    [
+      "node failed",
+      () => ((new NodeFailedRecord(failure).failure as { message: string }).message = "changed"),
+    ],
+  ];
+
+  expect(envelope.kind).toBe("node_started");
+  for (const [, assign] of assignments) expect(assign).toThrow(TypeError);
+});
+
+test("record constructors validate programmatically constructed values", () => {
+  expectError(() => new NodeStartedRecord(3 as never), TypeError, "node_id must be a string");
+  expectError(() => new NodeFailedRecord({} as never), TypeError, "NodeFailedRecord failure must be a Failure");
+});
+
+test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
+  [
+    "a failure without a node id",
+    () => new NodeFailedRecord(new Failure({ code: "node.execute", message: "", nodeId: null })),
+    RangeError,
+    "NodeFailedRecord failure node_id must be a non-empty string",
+  ],
+  [
+    "a terminal failure without a node id",
+    () =>
+      new NodeRoutedRecord("a", "next", {
+        terminalFailure: new Failure({ code: "graph.terminal_unreachable", message: "", nodeId: "" }),
+      }),
+    RangeError,
+    "NodeRoutedRecord failure node_id must be a non-empty string",
+  ],
+  [
+    "evidence of another class",
+    () => new NodeSucceededRecord("a", "a", { kind: "int", value: 1n }, { evidence: {} as never }),
+    TypeError,
+    "evidence must be an EvaluationEvidence or null",
+  ],
+  [
+    "a capture of another class",
+    () => new NodeExpandedRecord("grow", {}, [], TOPOLOGY_DIGEST, { forwardCapture: {} as never }),
+    TypeError,
+    "forward_capture must be a ForwardCapture or null",
+  ],
+])("record constructors refuse %s", (_name, fn, cls, message) => {
+  expectError(fn, cls, message);
+});
+
+test.each<[string, () => unknown, string]>([
+  ["text retry ids", () => new RunResumedRecord("ab" as never, 1), "retry_node_ids must be an array of strings"],
+  [
+    "a non-text retry id",
+    () => new RunResumedRecord(["a", 2] as never, 1),
+    "retry_node_ids must contain only non-empty strings",
+  ],
+  ["an empty retry id", () => new RunResumedRecord([""], 1), "retry_node_ids must contain only non-empty strings"],
+  ["a repeated retry id", () => new RunResumedRecord(["a", "a"], 1), "retry_node_ids must contain unique IDs"],
+  [
+    "text prune ids",
+    () => new NodeExpandedRecord("grow", {}, "ab" as never, TOPOLOGY_DIGEST),
+    "prune_ids must be an array of strings",
+  ],
+  [
+    "a non-text prune id",
+    () => new NodeExpandedRecord("grow", {}, ["a", 2] as never, TOPOLOGY_DIGEST),
+    "prune_ids must contain only non-empty strings",
+  ],
+  [
+    "an empty prune id",
+    () => new NodeExpandedRecord("grow", {}, [""], TOPOLOGY_DIGEST),
+    "prune_ids must contain only non-empty strings",
+  ],
+  [
+    "a repeated prune id",
+    () => new NodeExpandedRecord("grow", {}, ["a", "a"], TOPOLOGY_DIGEST),
+    "prune_ids must contain unique IDs",
+  ],
+  [
+    "unsorted prune ids",
+    () => new NodeExpandedRecord("grow", {}, ["b", "a"], TOPOLOGY_DIGEST),
+    "prune_ids must be sorted",
+  ],
+])("record constructors reject invalid id arrays: %s", (_name, fn, message) => {
+  expectError(fn, RangeError, message);
+});
+
+test.each<[string, unknown, string]>([
+  ["7", 7, "unsupported run-record schema: 7"],
+  ["8", 8, "unsupported run-record schema: 8"],
+  ["9", 9, "run log schema 9 was written by Python yian; resume it with Python yian"],
+  ["11", 11, "unsupported run-record schema: 11"],
+  ["true", true, "unsupported run-record schema: true"],
+])("the envelope refuses schema %s", (_name, schema, message) => {
+  expectError(() => new RecordEnvelope(schema as never, "run", 0, new NodeStartedRecord("work")), RangeError, message);
+});
+
+test("the envelope checks its schema before any other field", () => {
+  expectError(
+    () => new RecordEnvelope(9, "", -1, {} as never),
+    RangeError,
+    "run log schema 9 was written by Python yian; resume it with Python yian",
+  );
+});
+
+test.each<[string, string, string]>([
+  ["empty", "", "run-record envelope run_id must be a non-empty string"],
+  ["a lone surrogate", "run-\ud800", "Unicode surrogate is not valid canonical JSON"],
+])("the envelope refuses a run id: %s", (_name, runId, message) => {
+  expectError(() => new RecordEnvelope(SCHEMA_VERSION, runId, 0, new NodeStartedRecord("work")), RangeError, message);
+});
+
+test("the envelope refuses an unsupported record", () => {
+  expectError(
+    () => new RecordEnvelope(SCHEMA_VERSION, "run", 0, {} as never),
+    TypeError,
+    "unsupported run record: Object",
+  );
+});
+
+test("a run-stopped record keeps its reason, message and in-flight node ids", () => {
+  const record = new RunStoppedRecord("callback", "the host callback threw", ["b", "a"]);
+  expect(RUN_STOP_REASONS).toEqual(["signal", "callback"]);
+  expect([record.reason, record.message, record.nodeIds]).toEqual(["callback", "the host callback threw", ["b", "a"]]);
+  expect(new RunStoppedRecord("signal", "", []).nodeIds).toEqual([]);
+  expect(new RecordEnvelope(SCHEMA_VERSION, "run", 3, record).kind).toBe("run_stopped");
+});
+
+test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
+  [
+    "an unknown reason",
+    () => new RunStoppedRecord("timeout" as never, "stop", []),
+    RangeError,
+    `reason must be one of ["signal","callback"], got 'timeout'`,
+  ],
+  [
+    "an empty node id",
+    () => new RunStoppedRecord("signal", "stop", [""]),
+    RangeError,
+    "node_ids must contain only non-empty strings",
+  ],
+  [
+    "a repeated node id",
+    () => new RunStoppedRecord("signal", "stop", ["a", "a"]),
+    RangeError,
+    "node_ids must contain unique IDs",
+  ],
+  ["a non-text message", () => new RunStoppedRecord("signal", 3 as never, []), TypeError, "message must be a string"],
+])("a run-stopped record refuses %s", (_name, fn, cls, message) => {
+  expectError(fn, cls, message);
 });

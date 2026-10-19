@@ -15,34 +15,67 @@
  * not sent, Ollama having none of them.
  *
  * Each line of the reply is one JSON object holding a piece of the message; the line with
- * `done: true` ends it with the finish reason and the token counts. A reply that failed or ended
+ * `done: true` ends it with the finish reason and the token counts, and nothing after it is read.
+ * Thinking and content stream as deltas into the reply's one reasoning part and one text part,
+ * even when a call or the other kind comes between their pieces, because an Ollama message has
+ * one `thinking` and one `content` field and both go back whole. Each call arrives whole, as one
+ * delta, keeping the server's id unless it is missing or repeated. The reasoning part carries a
+ * replay record, and the reply's record holds the model the server named. A `load` line with no
+ * content is skipped; logprobs and other unknown fields are not read. A reply that failed or ended
  * early raises `ProviderError`; an error message holds the provider's text uncapped, which
  * `RouteModel` scrubs of the route's credentials and then caps.
  */
 
-import { mergeRequestBody } from "../body.ts";
+import { encodeBody, mergeRequestBody } from "../body.ts";
 import type { JsonObject, JsonValue } from "../../typesys/json.ts";
-import type { Event } from "../events.ts";
+import { ProviderError } from "../errors.ts";
+import {
+  type Event,
+  Finish,
+  PartDone,
+  parseArguments,
+  ReasoningDelta,
+  TextDelta,
+  ToolCallDelta,
+  UsageReport,
+} from "../events.ts";
 import type { NdjsonProtocol } from "../executor.ts";
 import {
   copyJson,
+  isPlainObject,
   MediaPart,
   type Message,
+  MessageFormatError,
   type Part,
   readReplayRecord,
   ReasoningPart,
   type ReplayDegradedReason,
   type ReplayKey,
+  replayRecord,
   type Request,
   TextPart,
   ToolCallPart,
   ToolResultPart,
   type ToolSpec,
+  Usage,
 } from "../messages.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "ollama_chat";
 const NO_MEDIA = "the ollama_chat route does not send media parts yet";
+
+/** A part being streamed. */
+type Streamed =
+  | { kind: "text" | "reasoning"; text: string }
+  | { kind: "call"; id: string; name: string; args: JsonObject | null; rawArguments: string | null };
+
+/** A call read from a line's `tool_calls`. */
+interface WireCall {
+  id: string | null;
+  name: string;
+  args: JsonObject | null;
+  rawArguments: string | null;
+}
 
 /** What `OllamaChat` is built from. */
 export interface OllamaChatOptions {
@@ -175,9 +208,91 @@ export class OllamaChat implements NdjsonProtocol {
     return "";
   }
 
-  /** Turn the reply's NDJSON lines into stream events; not built yet. */
-  async *parse(_frames: AsyncIterable<JsonValue>): AsyncGenerator<Event> {
-    throw new Error("the ollama_chat route cannot read replies yet");
+  /**
+   * Turn the reply's NDJSON lines into stream events.
+   *
+   * Lines are read in order until the one with `done: true`. A missing or `null` `message`,
+   * `content`, `thinking` or `tool_calls` reads as absent, and unknown fields (logprobs, durations,
+   * `remote_model`, anything new) are ignored. A `load` line (`done_reason: "load"` with missing or
+   * blank content) is skipped whole and does not end the reply. The last string `model` on any
+   * line is kept. On each line its thinking, then its content, then its calls are read: thinking
+   * pieces join the reply's one reasoning part and content pieces its one text part, each opened
+   * by its first non-empty piece, with dense part indexes in the order parts open. Each call is a
+   * new part: its id is its own unless missing, empty or already in the reply, else
+   * `yian_call_<n>`, `n` its position among the calls, with `_<k>` appended while taken; its
+   * `arguments` are an object as sent, a string parsed with `parseArguments`, `{}` when missing,
+   * and anything else makes an invalid call with the raw JSON. Usage comes from the `done` line:
+   * `prompt_eval_count` is input and `eval_count` output (a missing one is 0, the total their sum)
+   * and `prompt_eval_cached_count` the cache reads.
+   *
+   * @param frames The reply's parsed NDJSON lines, in order.
+   * @returns The deltas (one `ToolCallDelta` per call, with its id, name and arguments text), then
+   *   at the `done` line a `PartDone` for each part in index order (the reasoning part with a
+   *   replay record), `UsageReport` unless every count is 0 or missing, and `Finish`: `length` for
+   *   `done_reason: "length"`, else `tool_calls` when a call came, else `stop` for `stop`, a
+   *   missing, `null` or empty reason, else the reason as given, with a record of the model.
+   * @throws {ProviderError} For a line that is not a JSON object or a count that is not an int
+   *   (`protocol`), or a reply that ends with no `done` line (`incomplete`, retryable).
+   */
+  async *parse(frames: AsyncIterable<JsonValue>): AsyncGenerator<Event> {
+    const provider = this.provider;
+    // Part index = position, so indexes are dense in the order parts open.
+    const parts: Streamed[] = [];
+    // The index of the reply's one text part and one reasoning part, once opened.
+    const opened = new Map<"text" | "reasoning", number>();
+    // Every call id in the reply so far, the server's and those generated.
+    const taken = new Set<string>();
+    let calls = 0;
+    let responseModel: string | null = null;
+    for await (const line of frames) {
+      if (!isPlainObject(line)) throw new ProviderError("protocol", `${provider} stream line is not a JSON object`);
+      const message = (line["message"] ?? {}) as JsonObject;
+      const content = (message["content"] ?? null) as string | null;
+      const thinking = (message["thinking"] ?? null) as string | null;
+      const toolCalls = (message["tool_calls"] ?? []) as JsonValue[];
+      const done = line["done"] === true;
+      // Ollama sends this for a request with no messages, which only loads the model.
+      if (done && line["done_reason"] === "load" && (content ?? "").trim() === "") continue;
+      if (typeof line["model"] === "string") responseModel = line["model"];
+      for (const [kind, piece] of [
+        ["reasoning", thinking],
+        ["text", content],
+      ] as const) {
+        if (!piece) continue;
+        const index = opened.get(kind) ?? parts.push({ kind, text: "" }) - 1;
+        opened.set(kind, index);
+        const part = parts[index];
+        if (part?.kind === kind) part.text += piece;
+        yield kind === "text" ? new TextDelta(index, piece) : new ReasoningDelta(index, piece);
+      }
+      for (const entry of toolCalls) {
+        const { id: wireId, name, args, rawArguments } = readCall(entry);
+        const id = callId(wireId, calls++, taken);
+        const index = parts.push({ kind: "call", id, name, args, rawArguments }) - 1;
+        yield new ToolCallDelta({ index, id, name, arguments: rawArguments ?? encodeBody(args) });
+      }
+      if (!done) continue;
+      // Counted first, so usage that can't be read fails before any part is done.
+      const usage = usageOf(line, provider);
+      for (const [index, part] of parts.entries()) yield new PartDone(index, this.#part(part));
+      if (usage !== null) yield new UsageReport(usage);
+      const providerPayload = replayRecord(this.#key, responseModel === null ? {} : { response_model: responseModel });
+      const doneReason = (line["done_reason"] ?? null) as string | null;
+      // `length` says the calls may be cut short, so it wins over them.
+      const reason = doneReason === "length" ? "length" : calls > 0 ? "tool_calls" : doneReason || "stop";
+      yield new Finish({ reason, responseId: null, protocol: PROTOCOL, providerPayload });
+      return;
+    }
+    throw new ProviderError("incomplete", `${provider} stream ended before a complete response`, { retryable: true });
+  }
+
+  /** Build a streamed part; only a reasoning part carries a record, of the key alone. */
+  #part(part: Streamed): Part {
+    if (part.kind !== "call") {
+      return part.kind === "text" ? new TextPart(part.text) : new ReasoningPart(part.text, replayRecord(this.#key, {}));
+    }
+    const { id, name, args, rawArguments } = part;
+    return new ToolCallPart({ id, name, arguments: args, rawArguments });
   }
 }
 
@@ -227,4 +342,78 @@ function functionTool(spec: ToolSpec): JsonObject {
 function wrongPart(part: Part, role: string): string {
   const article = role === "assistant" ? "an" : "a";
   return `the ollama_chat route cannot send a ${part.constructor.name} in ${article} ${role} message`;
+}
+
+/**
+ * Read a `tool_calls` entry: its id (`null` when missing or empty), name, and arguments: an
+ * object as sent, a string through `parseArguments`, `{}` when missing, else `null` with the raw
+ * JSON.
+ */
+function readCall(entry: JsonValue): WireCall {
+  const call = entry as JsonObject;
+  const fn = call["function"] as JsonObject;
+  const id = ((call["id"] ?? null) as string | null) || null;
+  const name = fn["name"] as string;
+  const value = fn["arguments"] ?? null;
+  if (value === null) return { id, name, args: {}, rawArguments: null };
+  if (isPlainObject(value)) return { id, name, args: value, rawArguments: null };
+  if (typeof value === "string") {
+    const [args, rawArguments] = parseArguments(value);
+    return { id, name, args, rawArguments };
+  }
+  return { id, name, args: null, rawArguments: encodeBody(value) };
+}
+
+/**
+ * Return a call's id: its own unless missing or in `taken`, else `yian_call_<n>` with `_<k>`
+ * appended while that is in `taken`. The id it gets is added to `taken`.
+ *
+ * @param n The call's position among the reply's calls.
+ * @param taken The ids in the reply so far: the server's and those generated.
+ */
+function callId(id: string | null, n: number, taken: Set<string>): string {
+  let out = id;
+  if (out === null || taken.has(out)) {
+    out = `yian_call_${n}`;
+    for (let k = 1; taken.has(out); k++) out = `yian_call_${n}_${k}`;
+  }
+  taken.add(out);
+  return out;
+}
+
+/**
+ * Return the `done` line's usage, or `null` when input, output and cache reads are all 0 or
+ * missing. A missing input or output count is 0 and the total their sum; the cache reads are
+ * `prompt_eval_cached_count`, `null` when missing.
+ *
+ * @throws {ProviderError} A count, or the total, is not an int within `Number.MAX_SAFE_INTEGER`
+ *   (kind `protocol`).
+ */
+function usageOf(line: JsonObject, provider: string): Usage | null {
+  const notInt = `${provider} response usage has a count that is not an int`;
+  const inputTokens = tokenCount(line["prompt_eval_count"], notInt) ?? 0;
+  const outputTokens = tokenCount(line["eval_count"], notInt) ?? 0;
+  const cacheReadTokens = tokenCount(line["prompt_eval_cached_count"], notInt);
+  if (inputTokens + outputTokens === 0 && !cacheReadTokens) return null;
+  try {
+    return new Usage({
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      cacheReadTokens,
+      cacheCreationTokens: null,
+      reasoningTokens: null,
+    });
+  } catch (error) {
+    // `Usage` refuses a sum past `Number.MAX_SAFE_INTEGER`, which `Number` arithmetic rounds.
+    if (error instanceof MessageFormatError) throw new ProviderError("protocol", notInt);
+    throw error;
+  }
+}
+
+/** Return a usage count as a number, `null` when it is `null` or absent; throw `notInt` otherwise. */
+function tokenCount(value: JsonValue | undefined, notInt: string): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "bigint" || !Number.isSafeInteger(Number(value))) throw new ProviderError("protocol", notInt);
+  return Number(value);
 }

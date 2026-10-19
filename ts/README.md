@@ -239,8 +239,12 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - `src/memory/contracts.ts` holds the memory identities that compile records (`DeclSite`,
   `MemoryDecl`, `MemorySpec`, `MemoryStack`, `MemoryScope`), the declaration check
   `checkMemoryDeclaration`, the setup and operation failures, recorded snapshots, and the host
-  memory objects (`Memory`, `MemorySession`, `isMemory`). `src/memory/index.ts` re-exports the
-  public names.
+  memory objects (`Memory`, `MemorySession`, `isMemory`), and the learning result carriers
+  (`MemoryMutation`, `LearningFailure`, `PolicyCommitOutcome`, `LearningResult`).
+  `src/memory/index.ts` re-exports the public names; the mutation batch check `validateMutations`
+  is exported from `memory/contracts.ts` only, as Python keeps `_validate_mutations` private.
+- The learning result carriers are frozen and hold their nested carriers by reference (checked by
+  exact class), where Python copies them.
 - A config or snapshot is a deep-frozen copy whose keys are inserted in code-unit order; JS still
   lists integer-like keys (`"9"`, `"10"`) first, in numeric order.
 - The declarations are frozen, so `rewriteMemoryDeclOrigins` returns rebuilt declarations and
@@ -250,8 +254,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - A host memory is any object with `openRun({ snapshot })` and `reset()` (`isMemory` checks it, as
   Python's `isinstance(value, Memory)`); both are synchronous, and a session has no `with` form:
   the caller calls `close()` in `finally`.
-- The recall, learning evidence, learning and session conversation contracts, the session's
-  recall, learn and commit methods, and the built-in backends are not ported yet.
+- The recall, learning evidence and session conversation contracts, the session's recall, learn
+  and commit methods, and the built-in backends are not ported yet.
 
 ## Compile
 

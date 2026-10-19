@@ -12,26 +12,40 @@
  * `contracts.ts` owns that vocabulary: the memory JSON snapshot types, the per-declaration shape
  * check (`checkMemoryDeclaration`, with `MEMORY_IDENTIFIER_PATTERN` and
  * `BUILTIN_MEMORY_CONFIG_KEYS`), node scopes and their occurrence paths, the setup and operation
- * failures, recorded snapshots, and the host memory objects (`Memory`, its run `MemorySession`,
+ * failures, recorded snapshots, the host memory objects (`Memory`, its run `MemorySession`,
  * and `isMemory`, which stands in for Python's `isinstance` check against the runtime-checkable
- * `Memory` protocol). The declaration origin traversal and rewrite aren't re-exported (Python
- * keeps them out of `__all__`); their callers import `contracts.ts`. The recall, learning
- * evidence, learning and session conversation contracts, and the conversation, session, summary,
- * storage and backend modules are not ported yet.
+ * `Memory` protocol), and the learning results (`MemoryMutation`, `LearningFailure`,
+ * `PolicyCommitOutcome`, `LearningResult`). The declaration origin traversal and rewrite and the
+ * mutation batch check `validateMutations` aren't re-exported (Python keeps them out of
+ * `__all__`); their callers import `contracts.ts`. The recall, learning evidence and session
+ * conversation contracts, and the conversation, session, summary, storage and backend modules are
+ * not ported yet.
  *
  * Knows about: `diagnostics` and `defaults`, through `contracts.ts`.
  * Never imports: `nodes`, `compile`, `compose`, `runtime`, `run`, the CLI, `llm`, or persistence
  * frameworks.
  */
 
-export type { JsonObject, JsonScalar, JsonValue, Memory, MemorySession } from "./contracts.ts";
+export type {
+  JsonObject,
+  JsonScalar,
+  JsonValue,
+  LearningOperation,
+  LearningStatus,
+  Memory,
+  MemorySession,
+  PolicyCommitStatus,
+} from "./contracts.ts";
 export {
   BUILTIN_MEMORY_CONFIG_KEYS,
   checkMemoryDeclaration,
   DeclSite,
   isMemory,
+  LearningFailure,
+  LearningResult,
   MEMORY_IDENTIFIER_PATTERN,
   MemoryDecl,
+  MemoryMutation,
   MemoryOccurrenceKind,
   MemoryOccurrenceSegment,
   MemoryOperationError,
@@ -41,4 +55,5 @@ export {
   MemorySnapshotEnvelope,
   MemorySpec,
   MemoryStack,
+  PolicyCommitOutcome,
 } from "./contracts.ts";

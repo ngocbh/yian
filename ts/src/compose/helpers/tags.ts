@@ -14,6 +14,7 @@
  */
 
 import {
+  compareCodeUnits,
   getCloseMatches,
   isPrintable,
   type OriginRef,
@@ -340,7 +341,7 @@ export function closeTypeName(text: string, registry: TypeRegistry): string | nu
   const head = HEAD_IDENTIFIER.exec(text)?.[0];
   const names = new Set([...BUILTIN_TYPE_NAMES, ...registry.keys()]);
   if (head === undefined || names.has(head)) return null;
-  const sorted = [...names].sort();
+  const sorted = [...names].sort(compareCodeUnits);
   const matches = getCloseMatches(head, sorted, 1, CLOSE_MATCH_CUTOFF);
   if (matches.length > 0) return matches[0]!;
   // A wrong capital (`Strr`, `INT`) costs a whole character in the ratio, so a case-blind
@@ -352,7 +353,7 @@ export function closeTypeName(text: string, registry: TypeRegistry): string | nu
   }
   const lowered = getCloseMatches(
     head.toLowerCase(),
-    [...byLower.keys()].sort(),
+    [...byLower.keys()].sort(compareCodeUnits),
     1,
     CLOSE_MATCH_CUTOFF,
   );

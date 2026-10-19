@@ -145,7 +145,7 @@ export class Gemini implements SseProtocol {
    * message has text, `tools` and `toolConfig`, `safetySettings: []` and
    * `generationConfig: {candidateCount: 1}`, then the block merged over them. A request with an
    * `outputFormat` adds `responseMimeType: "application/json"` and its schema (copied, as
-   * written) as `responseJsonSchema` to `generationConfig`.
+   * written) as `responseJsonSchema` to `generationConfig`; its name and `strict` are not sent.
    *
    * Every system message's non-empty text parts, wherever the message is, join
    * `systemInstruction.parts` in order. A user message is a `user` content of its non-empty text
@@ -188,12 +188,12 @@ export class Gemini implements SseProtocol {
       if (config !== null) body["toolConfig"] = config;
     }
     body["safetySettings"] = [];
-    const config: JsonObject = { candidateCount: 1n };
+    const generationConfig: JsonObject = { candidateCount: 1n };
     if (request.outputFormat !== null) {
-      config["responseMimeType"] = "application/json";
-      config["responseJsonSchema"] = copyJson(request.outputFormat.schema);
+      generationConfig["responseMimeType"] = "application/json";
+      generationConfig["responseJsonSchema"] = copyJson(request.outputFormat.schema);
     }
-    body["generationConfig"] = config;
+    body["generationConfig"] = generationConfig;
     if (this.#block) mergeRequestBody(body, this.#block);
     return body;
   }

@@ -462,6 +462,7 @@ describe("the output format", () => {
       properties: { answer: { type: "string" }, score: { type: "integer" } },
       required: ["answer", "score"],
     },
+    strict: true,
   });
 
   test("outputFormat is sent as format, the schema as given, and tools: [] stays", () => {
@@ -470,11 +471,11 @@ describe("the output format", () => {
       model: QWEN,
       stream: true,
       options: {},
-      messages: [{ role: "user", content: "Hi." }],
       format: RECORD.schema,
+      messages: [{ role: "user", content: "Hi." }],
       tools: [],
     });
-    expect(Object.keys(body)).toEqual(["model", "stream", "options", "messages", "format", "tools"]);
+    expect(Object.keys(body)).toEqual(["model", "stream", "options", "format", "messages", "tools"]);
   });
 
   test("a block's think lands beside format", () => {

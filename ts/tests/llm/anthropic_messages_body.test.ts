@@ -770,6 +770,26 @@ describe("the block", () => {
     ]);
     expect(encodeBody(body)).not.toContain("beta");
   });
+
+  test("block returns a copy: changing it leaves later bodies unchanged", () => {
+    const protocol = new AnthropicMessages({
+      model: SONNET,
+      provider: "anthropic",
+      block: { thinking: { type: "adaptive" } },
+    });
+    const block = protocol.block!;
+    expect(block).toEqual({ thinking: { type: "adaptive" } });
+    (block["thinking"] as JsonObject)["type"] = "enabled";
+    block["temperature"] = 0.9;
+    expect(protocol.block).toEqual({ thinking: { type: "adaptive" } });
+    const body = protocol.buildBody(new Request({ messages: [user("Hi.")] }));
+    expect(body["thinking"]).toEqual({ type: "adaptive" });
+    expect(Object.hasOwn(body, "temperature")).toBe(false);
+  });
+
+  test("block is null without a block", () => {
+    expect(new AnthropicMessages({ model: SONNET, provider: "anthropic" }).block).toBeNull();
+  });
 });
 
 describe("the output format", () => {
@@ -813,28 +833,6 @@ describe("the output format", () => {
     const format = (body["output_config"] as JsonObject)["format"] as JsonObject;
     ((format["schema"] as JsonObject)["required"] as JsonValue[]).push("x");
     expect(RECORD.schema["required"]).toEqual(["answer", "score"]);
-  });
-});
-
-describe("the block getter", () => {
-  test("block returns a copy: changing it leaves later bodies unchanged", () => {
-    const protocol = new AnthropicMessages({
-      model: SONNET,
-      provider: "anthropic",
-      block: { thinking: { type: "adaptive" } },
-    });
-    const block = protocol.block!;
-    expect(block).toEqual({ thinking: { type: "adaptive" } });
-    (block["thinking"] as JsonObject)["type"] = "enabled";
-    block["temperature"] = 0.9;
-    expect(protocol.block).toEqual({ thinking: { type: "adaptive" } });
-    const body = protocol.buildBody(new Request({ messages: [user("Hi.")] }));
-    expect(body["thinking"]).toEqual({ type: "adaptive" });
-    expect(Object.hasOwn(body, "temperature")).toBe(false);
-  });
-
-  test("block is null without a block", () => {
-    expect(new AnthropicMessages({ model: SONNET, provider: "anthropic" }).block).toBeNull();
   });
 });
 

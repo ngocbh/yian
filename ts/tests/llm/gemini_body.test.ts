@@ -518,6 +518,7 @@ describe("the output format", () => {
       properties: { answer: { type: "string" }, score: { type: "integer" } },
       required: ["answer", "score"],
     },
+    strict: true,
   });
 
   test("outputFormat is sent as responseJsonSchema with a JSON responseMimeType, beside candidateCount", () => {

@@ -199,8 +199,8 @@ export class AnthropicMessages implements SseProtocol {
    * Build the Messages request body: `model`, `max_tokens` (the model's default), `messages`,
    * `system` when there is one, `tools` and `tool_choice` when tools are sent,
    * `output_config: {format: {type: "json_schema", schema}}` when the request has an
-   * `outputFormat` (its schema copied, its name not sent: the API has none), and `stream: true`,
-   * then the provider block, whose keys replace yian's.
+   * `outputFormat` (its schema copied; its name and `strict` are not sent, the API having neither),
+   * and `stream: true`, then the provider block, whose keys replace yian's.
    *
    * A tool is its name, its parameters as `input_schema`, its description (always) and `strict`
    * when set. The tool choice is sent only with tools; `parallelToolCalls`, when set, becomes

@@ -224,7 +224,7 @@ export class OpenAIChat implements SseProtocol {
     if (request.parallelToolCalls !== null && this.options.sendParallelToolCalls) {
       body["parallel_tool_calls"] = request.parallelToolCalls;
     }
-    if (request.outputFormat) body["response_format"] = responseFormat(request.outputFormat);
+    if (request.outputFormat !== null) body["response_format"] = responseFormat(request.outputFormat);
     // Set before the merge, so a block's own value wins.
     if (this.options.reasoningSplit) body["reasoning_split"] = true;
     if (this.#block) mergeRequestBody(body, this.#block);

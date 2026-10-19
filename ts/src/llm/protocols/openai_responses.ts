@@ -176,7 +176,7 @@ export class OpenAIResponses implements SseProtocol {
     if (choice instanceof NamedTool) body["tool_choice"] = { type: "function", name: choice.name };
     else if (choice !== null) body["tool_choice"] = choice;
     if (request.parallelToolCalls !== null) body["parallel_tool_calls"] = request.parallelToolCalls;
-    if (request.outputFormat) body["text"] = { format: textFormat(request.outputFormat) };
+    if (request.outputFormat !== null) body["text"] = { format: textFormat(request.outputFormat) };
     if (this.#block) mergeRequestBody(body, this.#block);
     if (this.subscription) {
       // Applied after the block so it cannot switch them off: the backend keeps no state, so

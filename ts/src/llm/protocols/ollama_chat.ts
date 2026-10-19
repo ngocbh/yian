@@ -3,16 +3,17 @@
  * uses the native endpoint, not Ollama's OpenAI-compatible `/v1`, because only the native one
  * carries `think`, `options` and `keep_alive`.
  *
- * The body is `model`, `stream: true`, `options: {}`, `messages` and `tools`, in that order, then
- * the provider block merged over them; `think`, `keep_alive`, `logprobs`, `top_logprobs` and
- * `options.*` come only from the block. Every message is sent in place, neither merged nor lifted,
- * with empty fields left out: a system or user message as its text parts joined with `"\n"`, an
- * assistant message as its joined text, its thinking and its calls (with their ids) in part order,
- * its refusals left out, and each tool result as its own `tool` message carrying the tool's name
- * and the call id. Thinking goes back only from reasoning this route parsed for the same provider,
- * model and account; one record that doesn't match leaves all of that message's thinking out.
- * Tools go with their parameters as written; the tool choice, parallel tool calls and `strict` are
- * not sent, Ollama having none of them.
+ * The body is `model`, `stream: true`, `options: {}`, `format` when the request has an
+ * `outputFormat`, `messages` and `tools`, in that order, then the provider block merged over them;
+ * `think`, `keep_alive`, `logprobs`, `top_logprobs` and `options.*` come only from the block. Every
+ * message is sent in place, neither merged nor lifted, with empty fields left out: a system or user
+ * message as its text parts joined with `"\n"`, an assistant message as its joined text, its
+ * thinking and its calls (with their ids) in part order, its refusals left out, and each tool
+ * result as its own `tool` message carrying the tool's name and the call id. Thinking goes back
+ * only from reasoning this route parsed for the same provider, model and account; one record that
+ * doesn't match leaves all of that message's thinking out. Tools go with their parameters as
+ * written; the tool choice, parallel tool calls and `strict` are not sent, Ollama having none of
+ * them.
  *
  * Each line of the reply is one JSON object holding a piece of the message; the line with
  * `done: true` ends it with the finish reason and the token counts, and nothing after it is read.
@@ -120,9 +121,9 @@ export class OllamaChat implements NdjsonProtocol {
   }
 
   /**
-   * Build the `/api/chat` request body: `model`, `stream: true`, `options: {}`, `messages`,
-   * `format` (the request's `outputFormat` schema, copied as written) when there is one, and
-   * `tools` (`[]` with none), then the block merged over them.
+   * Build the `/api/chat` request body: `model`, `stream: true`, `options: {}`, `format` (the
+   * request's `outputFormat` schema, copied as written; its name and `strict` are not sent) when
+   * there is one, `messages`, and `tools` (`[]` with none), then the block merged over them.
    *
    * Every message is sent in place. A system or user message is `{role, content}`, its text parts
    * joined with `"\n"`. An assistant message is `{role, content, thinking, tool_calls}`: its text
@@ -154,8 +155,9 @@ export class OllamaChat implements NdjsonProtocol {
       else if (message.role === "assistant") messages.push(this.#assistant(message));
       else messages.push(withContent({ role: message.role }, joinedText(message)));
     }
-    const body: JsonObject = { model: this.model, stream: true, options: {}, messages };
+    const body: JsonObject = { model: this.model, stream: true, options: {} };
     if (request.outputFormat !== null) body["format"] = copyJson(request.outputFormat.schema);
+    body["messages"] = messages;
     body["tools"] = request.tools.map(functionTool);
     if (this.#block) mergeRequestBody(body, this.#block);
     return body;

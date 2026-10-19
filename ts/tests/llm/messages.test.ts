@@ -724,6 +724,7 @@ describe("requests and replies", () => {
     expect(request.tools).toEqual([]);
     expect(request.toolChoice).toBeNull();
     expect(request.parallelToolCalls).toBeNull();
+    expect(request.outputFormat).toBeNull();
   });
 
   test("a request with tools and a named tool", () => {

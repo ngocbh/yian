@@ -21,22 +21,25 @@
  * `test_a_tagged_unknown_provider_is_checked_as_a_literal`, `test_a_tagged_literal_block_field_is_checked`,
  * `test_a_tagged_literal_azure_allows_a_literal_base_url`, `test_a_tagged_literal_inherit_is_accepted`,
  * `test_a_call_inside_an_llm_config_string_fails`,
- * `test_a_literal_field_error_in_a_value_layer_points_at_the_field`; and the node halves of
+ * `test_a_literal_field_error_in_a_value_layer_points_at_the_field`; the node halves of
  * `test_a_layer_of_only_tagged_literals_is_a_literal_layer` and
- * `test_a_tag_with_no_value_on_the_layer_fails`.
+ * `test_a_tag_with_no_value_on_the_layer_fails`; and
+ * `test_a_composer_tag_on_the_whole_mapping_names_the_gate` (the gate's layer read raises it).
  *
  * Changed: `LLMConfig` spells the provider choices in text form (`"openai"`) where pydantic writes
  * `'openai'`.
  *
  * TS-only: the `ownLlmConfig`/`llmConfig` split for an empty record, `null`, a `ValueTemplate`
- * and a `Binding`; the origin of a whole-record `Binding`; the harvested cases of the node layer.
+ * and a `Binding`; the origin of a whole-record `Binding`; the adaptive gate's layer on the gate's
+ * descriptor (a value layer is a `ValueTemplate` ranged on the gate, a literal one stays a record),
+ * which Python observes only through the composer; the harvested cases of the node layer.
  *
  * Later (T3-18): the node half of `test_a_malformed_span_is_a_located_load_error` (the reference
  * check reports it). Later (T3-17), the adaptive composer `ask__compose`:
  * `test_a_composer_value_loads_as_a_template`, `test_a_composer_tag_is_read_and_consumed`,
  * `test_a_composer_excluded_field_from_a_value_names_the_gate`,
  * `test_a_composer_literal_block_field_beside_a_value_names_the_gate`,
- * `test_a_composer_tag_on_the_whole_mapping_names_the_gate`, `test_a_literal_composer_layer_is_unchanged`.
+ * `test_a_literal_composer_layer_is_unchanged`.
  * Later (T3-22), the flow layer the loader reads: `test_a_flow_field_value_loads_as_a_template`,
  * `test_a_flow_whole_record_value_loads_as_a_binding`, `test_a_flow_tag_is_read_and_consumed`,
  * `test_a_tag_on_a_typedef_still_fails_beside_a_flow_value`,
@@ -49,9 +52,11 @@
  * and the flow and def halves of the three split tests above.
  */
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
+import { siteKey } from "../../src/compose/nodes/base.ts";
+import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
@@ -368,6 +373,61 @@ test.each([
   expect(error.message).toStartWith("node 'a': llm_config:");
   expect(error.message).toContain(needle);
   expect(lineOf(error)).toBe(lineHolding(text, line));
+});
+
+// ---------- the adaptive gate's layer ----------
+
+const ASK = `\
+id: f
+name: f
+input: {proj: !str , m: !str , t: !float }
+nodes:
+  ask:
+    kind: human_input
+    input: {proj: '\${input.proj}'}
+    adaptive_questions:
+      prompt: "Q \${proj}"
+      llm_config:
+LLM
+output: \${ask.output}
+`;
+
+const ASK_SITE = "node 'ask' adaptive_questions.llm_config";
+
+/** Return a flow whose adaptive gate has `llmLines` under `llm_config:` (indented 8). */
+const ask = (llmLines: string) => ASK.replace("LLM\n", llmLines);
+
+/** Assemble flow `text` and return the gate `ask`'s descriptor as its build received it. */
+function gateOf(text: string): HumanInputDescriptor {
+  const build = spyOn(HumanInputDescriptor.prototype, "build");
+  try {
+    assembleText(text, "f.yaml");
+    return build.mock.contexts[0] as HumanInputDescriptor;
+  } finally {
+    build.mockRestore();
+  }
+}
+
+test("the gate's value layer loads as a template ranged on the gate", () => {
+  const text = ask("        model: ${input.m}\n");
+  const gate = gateOf(text);
+  const layer = (gate.adaptiveQuestions as Record<string, unknown>)["llm_config"];
+  expect(layer).toBeInstanceOf(ValueTemplate);
+  expect((layer as ValueTemplate).value).toEqual({ model: "${input.m}" });
+  expect(gate.fieldRanges.get(siteKey("llm_config", "model"))!.startLine).toBe(lineHolding(text, "model:"));
+});
+
+test("the gate's literal layer stays a record", () => {
+  const gate = gateOf(ask("        provider: openai\n        model: gpt-x\n"));
+  const layer = (gate.adaptiveQuestions as Record<string, unknown>)["llm_config"];
+  expect(Object.getPrototypeOf(layer)).toBe(Object.prototype);
+  expect(layer).toEqual({ provider: "openai", model: "gpt-x" });
+  expect(gate.fieldRanges.has(siteKey("llm_config", "model"))).toBe(false);
+});
+
+test("a composer tag on the whole mapping names the gate", () => {
+  const text = ASK.replace("      llm_config:\nLLM\n", "      llm_config: !object {model: m}\n");
+  expect(loadFails(text).message).toStartWith(`${ASK_SITE}: a tag on the whole mapping`);
 });
 
 // ---------- harvested conformance cases ----------

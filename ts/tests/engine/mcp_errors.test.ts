@@ -17,8 +17,9 @@
  * `test_a_restarted_session_http_server_is_closed` (404 for the old session, and 400 before any
  * client initialized the restarted server), a redirect mid-session (Python's
  * `test_an_sdk_redirect_answer_hides_the_location`, through a real server), the DELETE that
- * closing a session server sends, and the scrubbing of a header's value and bare token (a value
- * shorter than 8 characters is left in the text).
+ * closing a session server sends, a JSON answer cut mid-body (a tool error) and an SSE answer cut
+ * mid-stream (a timeout), and the scrubbing of a header's value and bare token (a value shorter
+ * than 8 characters is left in the text). Over stdio, a server whose answer comes after its exit.
  *
  * Elsewhere: `test_structured_content_failing_the_output_schema_is_a_tool_error` is in
  * `mcp_calls.test.ts`. Not ported: `test_a_raw_timeout_is_a_transport_error` (a failed request is
@@ -255,6 +256,17 @@ describe("errors that end a call", () => {
   );
 
   test(
+    "a server whose answer reaches stdout after it exits still answers the call",
+    async () => {
+      // The exit comes before the answer reaches stdout, as it may when the runtime reports an
+      // exit before reading the pipe's last bytes.
+      const server = await fake([], { label: "parting" }).open();
+      expect(await tools(server).invoke("answer_then_exit", {})).toBe("bye");
+    },
+    SLOW,
+  );
+
+  test(
     "test_close_from_another_thread_ends_a_waiting_call",
     async () => {
       const server = await fake([], { label: "closing" }).open();
@@ -419,6 +431,30 @@ describe("errors over HTTP", () => {
       expect(error.message).not.toContain(new URL(REDIRECT_LOCATION).host);
       // Nothing carries the Location: the `RedirectError` isn't kept as the cause.
       expect(error.cause).toBeUndefined();
+    }, SLOW);
+  }
+
+  for (const mode of ["auto", "legacy"] as const) {
+    test(`a JSON answer cut mid-body fails only that call, as a tool error (${mode})`, async () => {
+      const http = await serveHttp({ cutCalls: "json" });
+      const server = await httpServer({ url: http.url }, mode).open();
+      const error = await rejection(tools(server).invoke("echo", { text: "x" }));
+      expect(error).toBeInstanceOf(McpToolError);
+      expect(error.message).toMatch(/^MCP server 'localhost' tool 'echo' failed \(\w+\)$/);
+      expect(isReportedToolError(error)).toBe(true);
+      expect(isPermanentToolError(error)).toBe(false);
+      expect(server.isClosed).toBe(false);
+    }, SLOW);
+
+    test(`an SSE answer cut mid-stream waits out the call timeout (${mode})`, async () => {
+      const http = await serveHttp({ cutCalls: "sse" });
+      const server = await httpServer({ url: http.url, timeout: 1 }, mode).open();
+      const { error, ended } = await timed(tools(server).invoke("echo", { text: "x" }));
+      expect(error).toBeInstanceOf(McpTimeoutError);
+      expect(error!.message).toBe("MCP server 'localhost' tool 'echo' timed out after 1 s");
+      expect(ended).toBeGreaterThan(0.9);
+      expect(ended).toBeLessThan(3);
+      expect(server.isClosed).toBe(false);
     }, SLOW);
   }
 

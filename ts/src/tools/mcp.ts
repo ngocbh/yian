@@ -756,10 +756,12 @@ export class McpServer {
   /** The body of `callTool`, before scrubbing. */
   private async sendCall(tool: ListedTool, args: Record<string, unknown>, ctx: ToolContext<unknown>): Promise<unknown> {
     const { name, inputSchema } = tool;
-    const refused = unsendable(args, this.spec.url !== undefined);
+    const http = this.spec.url !== undefined;
+    const refused = unsendable(args, http);
     if (refused !== null) {
       throw new ToolCheckError(`tool call '${name}' arguments at ${renderValuePath(refused.path)}: ${refused.reason}`);
     }
+    const sent = http ? (numbersForBigints(args) as Record<string, unknown>) : args;
     // The connection this call goes to; a later open replaces it.
     const generation = this.generation;
     if (this.closeRequested || generation?.gone) throw this.closedError();
@@ -778,7 +780,7 @@ export class McpServer {
     let result: unknown;
     try {
       result = await generation.client.callTool(
-        { name, arguments: args, _meta: { "yian/call_id": ctx.callId, "yian/attempt": ctx.attempt } },
+        { name, arguments: sent, _meta: { "yian/call_id": ctx.callId, "yian/attempt": ctx.attempt } },
         // No `outputSchema`, so the SDK never validates the output itself; yian checks it below.
         {
           toolDefinition: { name, inputSchema: inputSchema as Sdk.Tool["inputSchema"] },
@@ -950,6 +952,33 @@ function unsendable(args: unknown, http: boolean): { path: (string | number)[]; 
     }
   }
   return null;
+}
+
+/**
+ * Return `value` with each `bigint` as a `number`, for an HTTP server, whose SDK writes requests
+ * with `JSON.stringify`; `unsendable` has refused the unsafe ones. Copies only the arrays and
+ * records on the way to a `bigint`, so the caller's arguments stay as they were.
+ */
+function numbersForBigints(value: unknown, seen = new Set<object>()): unknown {
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value !== "object" || value === null || seen.has(value)) return value;
+  // A cycle is left as is; `JSON.stringify` refuses it.
+  seen.add(value);
+  if (Array.isArray(value)) {
+    let copy: unknown[] | undefined;
+    value.forEach((item, i) => {
+      const next = numbersForBigints(item, seen);
+      if (next !== item) (copy ??= [...value])[i] = next;
+    });
+    return copy ?? value;
+  }
+  if (!isRecord(value)) return value;
+  let copy: Record<string, unknown> | undefined;
+  for (const [key, item] of Object.entries(value)) {
+    const next = numbersForBigints(item, seen);
+    if (next !== item) (copy ??= { ...value })[key] = next;
+  }
+  return copy ?? value;
 }
 
 Object.defineProperty(McpServer.prototype, MCP_SERVER, { value: true });
@@ -1239,6 +1268,7 @@ export class StdioTransport {
   private pending: Buffer[] = [];
   private pendingBytes = 0;
   private stderrText = "";
+  private stdoutEnded = false;
   private stderrEnded = false;
   private exited = false;
   private closed = false;
@@ -1311,7 +1341,10 @@ export class StdioTransport {
       child.stdin!.on("error", (error) => this.report(error));
       child.stdout!.on("error", (error) => this.report(error));
       child.stdout!.on("data", (chunk: Buffer) => this.read(chunk));
-      child.stdout!.once("end", () => this.end());
+      child.stdout!.once("end", () => {
+        this.stdoutEnded = true;
+        this.end();
+      });
       child.stderr!.on("error", () => {});
       child.stderr!.setEncoding("utf8");
       child.stderr!.on("data", (text: string) => {
@@ -1464,16 +1497,23 @@ export class StdioTransport {
     }
   }
 
-  /** Fire `onclose` once the process exited or stdout ended, after stderr drained or 200 ms. */
+  /**
+   * Fire `onclose` once the process exited or stdout ended, after both stdout and stderr ended or
+   * 200 ms, so a grandchild holding a pipe open can't delay it longer.
+   */
   private end(): void {
     if (this.ended) return;
     this.ended = true;
-    if (this.stderrEnded) return this.fireClose();
+    // `exit` may come before the pipes end: the server's last answer must reach `onmessage` first.
     const timer = setTimeout(() => this.fireClose(), 200);
-    this.child?.stderr?.once("close", () => {
+    const check = () => {
+      if (!this.stdoutEnded || !this.stderrEnded) return;
       clearTimeout(timer);
       this.fireClose();
-    });
+    };
+    this.child?.stdout?.once("end", check);
+    this.child?.stderr?.once("close", check);
+    check();
   }
 
   /** Call `onclose`, once. */

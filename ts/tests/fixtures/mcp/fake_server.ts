@@ -162,6 +162,19 @@ export function buildServer({ name = "fake", only, marker, flood }: FakeServerOp
   tool("pid", { description: "Return the server's process id." }, () => text(String(process.pid)));
   tool("exit_now", { description: "Exit the server process mid-call." }, () => process.exit(3));
   tool(
+    "answer_then_exit",
+    { description: 'Exit at once, leaving a `sh` that writes the answer "bye" 50 ms later.' },
+    (ctx) => {
+      // The `sh` holds stdout but not stderr, so stderr ends at the exit and the answer comes later.
+      const answer = JSON.stringify({ jsonrpc: "2.0", id: ctx.mcpReq.id, result: text("bye") });
+      spawn("sh", ["-c", 'sleep 0.05; printf "%s\\n" "$ANSWER"'], {
+        env: { ...process.env, ANSWER: answer },
+        stdio: ["ignore", "inherit", "ignore"],
+      });
+      process.exit(0);
+    },
+  );
+  tool(
     "gate",
     {
       description: "Wait `seconds`, tracking how many calls overlap.",
@@ -268,6 +281,11 @@ export interface HttpServerOptions {
   stateful?: boolean;
   /** Answer every request after the first `tools/list` with a 307 to another local URL. */
   redirectAfterInit?: boolean;
+  /**
+   * Answer every `tools/call` with the headers and the start of a body, then drop the connection:
+   * a JSON body (`"json"`) or an SSE stream (`"sse"`).
+   */
+  cutCalls?: "json" | "sse";
 }
 
 /** The fake server over streamable HTTP, from {@link startHttpServer}. */
@@ -335,13 +353,33 @@ function listen(
   });
 }
 
-/** Whether `body` is a JSON-RPC `tools/list` request. */
-function isToolsList(body: string): boolean {
+/** The method of the JSON-RPC request `body`, or `undefined`. */
+function rpcMethod(body: string): unknown {
   try {
-    return JSON.parse(body).method === "tools/list";
+    return JSON.parse(body).method;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+/**
+ * A 200 answer that sends its headers and the start of a `kind` body, then fails, so `listen`
+ * drops the connection.
+ */
+function cutResponse(kind: "json" | "sse"): Response {
+  const start = kind === "json" ? '{"jsonrpc":"2.0","id":' : 'event: message\ndata: {"jsonrpc":"2.0","id":';
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(start));
+    },
+    async pull(controller) {
+      // Late enough that the headers and the first bytes reach the client before the drop.
+      await sleep(0.1);
+      controller.error(new Error("cut"));
+    },
+  });
+  const type = kind === "json" ? "application/json" : "text/event-stream";
+  return new Response(body, { status: 200, headers: { "content-type": type } });
 }
 
 /**
@@ -355,6 +393,7 @@ export async function startHttpServer({
   port = 0,
   stateful = false,
   redirectAfterInit = false,
+  cutCalls,
 }: HttpServerOptions = {}): Promise<HttpServer> {
   const keep = only === undefined ? undefined : [...only];
   const modern = createMcpHandler(() => buildServer({ only: keep }));
@@ -372,7 +411,9 @@ export async function startHttpServer({
     );
     recordedMethods.push(request.method);
     if (redirecting) return new Response(null, { status: 307, headers: { location: REDIRECT_LOCATION } });
-    if (redirectAfterInit && isToolsList(await request.clone().text())) redirecting = true;
+    const method = redirectAfterInit || cutCalls !== undefined ? rpcMethod(await request.clone().text()) : undefined;
+    if (redirectAfterInit && method === "tools/list") redirecting = true;
+    if (cutCalls !== undefined && method === "tools/call") return cutResponse(cutCalls);
     if (session !== undefined && (await isLegacyRequest(request))) return session.handleRequest(request);
     return modern.fetch(request);
   });

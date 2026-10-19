@@ -1059,9 +1059,11 @@ a JSON response body is being read ends the connection instead, and the server i
 then gone (`McpServerClosed`). The proxy environment variables
 (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`) apply.
 
-Changed (TS yian): each request is its own exchange, so a failure while a response body is
-being read fails only that call, as an `McpToolError` (which `retries:` apply to), and the
-server stays open. Proxies, CA files, and TLS checks are the runtime's settings (see
+Changed (TS yian): each request is its own exchange, so the server stays open when a
+response breaks mid-way. A JSON response body that fails while it is read fails that call
+as an `McpToolError`; a streamed (SSE) response that ends before its answer leaves the call
+waiting until the call timeout (`McpTimeoutError`), unless the server supports resumption.
+`retries:` apply to both. Proxies, CA files, and TLS checks are the runtime's settings (see
 [Proxies and certificates](installation.md#proxies-and-certificates)).
 
 **Protocol.** yian talks to servers that use the 2026-07-28 protocol and to older

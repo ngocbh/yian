@@ -10,7 +10,8 @@
  * `test_structured_content_failing_the_output_schema_is_a_tool_error` from `test_mcp_errors.py`.
  * Python runs each row in the `auto`, `legacy` and `http` modes; stdio connects only in `legacy`
  * here, and the HTTP rows run in both the `auto` and `legacy` modes, with an integer past 2^53
- * read as a `number` over HTTP (the SDK parses with `JSON.parse`) and refused in the arguments.
+ * read as a `number` over HTTP (the SDK parses with `JSON.parse`) and refused in the arguments,
+ * where a safe `bigint` is sent as a `number`.
  * `test_a_tool_node_calls_a_host_opened_server` is run-level and lands with the runs that open
  * servers.
  */
@@ -218,6 +219,19 @@ for (const mode of ["auto", "legacy"] as const) {
 
     test("a tool with an x-mcp-header parameter answers", async () => {
       expect(await tools().invoke("region", { region: "eu" })).toBe("eu");
+    }, SLOW);
+
+    test("a safe bigint in the arguments is sent as a number, leaving the caller's arguments alone", async () => {
+      const find = (name: string) => server.tools.find((tool) => tool.name === name)!;
+      const args = { a: 2n, b: -3n };
+      expect(await find("add").execute(args, context("add"))).toEqual({ result: -1 });
+      expect(args).toEqual({ a: 2n, b: -3n });
+      const item = { name: "p", point: { x: 1n, y: 2 } };
+      expect(await find("nested").execute({ item }, context("nested"))).toBe('{"name":"p","point":{"x":1,"y":2}}');
+      expect(item.point.x).toBe(1n);
+      const extra = [1n, [2n ** 53n - 1n]];
+      expect(await find("slow").execute({ seconds: 0, extra }, context("slow"))).toBe("done");
+      expect(extra).toEqual([1n, [2n ** 53n - 1n]]);
     }, SLOW);
 
     test("an integer past 2^53 in the arguments is refused before the server is called", async () => {

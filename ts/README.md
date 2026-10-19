@@ -115,6 +115,22 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   read, and `freeze()` returns a frozen `BindingCapture` whose `boundInputs` is a fresh copy on
   every read.
 
+## Memory
+
+- `src/memory/contracts.ts` holds the memory identities compile records (`DeclSite`,
+  `MemoryDecl`, `MemorySpec`, `MemoryStack`, `MemoryScope`), the declaration check
+  `checkMemoryDeclaration`, the setup and operation failures, recorded snapshots, and the host
+  memory objects (`Memory`, `MemorySession`, `isMemory`). `src/memory/index.ts` re-exports the
+  public names.
+- A config or snapshot is a deep-frozen copy whose keys are inserted in code-unit order; JS still
+  lists integer-like keys (`"9"`, `"10"`) first, in numeric order.
+- The declarations are frozen, so `rewriteMemoryDeclOrigins` returns rebuilt declarations and
+  leaves its inputs unchanged; pass it one `seen` map for a whole graph.
+- An int in a config is a `bigint`; a `number` is a float, so a built-in key refuses `5` and takes
+  `5n`.
+- The recall, learning evidence, learning and session conversation contracts, the session's
+  recall, learn and commit methods, and the built-in backends are not ported yet.
+
 ## Commands
 
 Run from `ts/`:

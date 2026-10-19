@@ -5,10 +5,11 @@
  * `test_memory_decl_snapshots_config_and_rejects_private_keys`,
  * `test_memory_decl_origins_traverse_and_rewrite_shared_carriers_once`,
  * `test_memory_spec_requires_sorted_owners_and_derived_eligibility`,
- * `test_memory_stack_requires_locator_and_unique_keys` and
- * `test_snapshot_envelope_names_its_memory_key`; plus a lone-surrogate node id, a compiled spec
- * whose key and config the declaration check would refuse, and a snapshot deeper than the value
- * nesting limit.
+ * `test_memory_stack_requires_locator_and_unique_keys`,
+ * `test_snapshot_envelope_names_its_memory_key` and
+ * `test_package_docstring_and_exports_describe_keyed_memories`; plus a lone-surrogate node id, a
+ * compiled spec whose key and config the declaration check would refuse, and a snapshot deeper than
+ * the value nesting limit.
  *
  * Changed: sites sort with `DeclSite.compare` (Python sorts by `DeclSite.sort_key()`; the order
  * message names `DeclSite.compare`), and equal sites compare 0. A declaration's config is its
@@ -16,13 +17,14 @@
  * declarations are frozen, so the origin rewrite returns rebuilt declarations and leaves the inputs
  * unchanged (Python rewrites them in place); rewriting the same array with the same `seen` returns
  * the same array. An envelope's snapshot is its deep-frozen copy (Python returns a fresh copy).
+ * The package test reads `memory/index.ts`'s leading TSDoc for the docstring and pins the exact
+ * list of runtime exports for `__all__` (the type-only exports are checked by the typecheck).
  * Python's `ValueError` is `RangeError`; a frozen field throws `TypeError` where Python raises
  * `FrozenInstanceError`.
  *
  * Not ported: the list-for-tuple row (TS has only arrays); the origin re-check during traversal
  * and rewrite (`memory declaration origin must be an OriginRef or None`), since a frozen
- * `MemoryDecl` checked its origin when built; the `__all__` and docstring test
- * `test_package_docstring_and_exports_describe_keyed_memories` (no memory package facade yet).
+ * `MemoryDecl` checked its origin when built.
  *
  * Left for later: `test_learning_carriers_name_their_memory_key` and
  * `test_backward_failure_and_commit_records_name_their_memory_key`, with the learning carriers and
@@ -30,6 +32,7 @@
  */
 
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 
 import { OriginRef } from "../../src/diagnostics.ts";
 import {
@@ -41,6 +44,7 @@ import {
   MemoryStack,
   rewriteMemoryDeclOrigins,
 } from "../../src/memory/contracts.ts";
+import type { JsonObject, JsonScalar, JsonValue, Memory, MemorySession } from "../../src/memory/index.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
@@ -175,6 +179,7 @@ test("declaration origins traverse and rewrite shared carriers once", () => {
     other.site,
     other.config,
   ]);
+  expect(rewritten[1]!.site).toBe(other.site);
   expect([shared.origin, other.origin]).toEqual([a, b]);
   expect(shared.origin).toBe(a);
   expect(rewriteMemoryDeclOrigins(decls, mapper, seen)).toBe(rewritten);
@@ -189,7 +194,6 @@ test("declaration origins traverse and rewrite shared carriers once", () => {
   expect(calls).toEqual(["a", "b", "c"]);
   expect(again[1]).toBe(rewritten[0]!);
   expect(again[0]!.site).toBe(third.site);
-  expect(rewritten[1]!.site).toBe(other.site);
 
   const visited = new Set<object>();
   expect([...iterMemoryDeclOrigins(decls, visited)]).toEqual([a, b]);
@@ -308,13 +312,39 @@ test("a snapshot envelope names its memory key", () => {
 });
 
 test("a snapshot envelope takes a snapshot deeper than the value nesting limit", () => {
-  let deep: Record<string, unknown> = {};
+  let deep: JsonObject = {};
   for (let i = 0; i < 150; i++) deep = { d: deep };
-  let level: unknown = new MemorySnapshotEnvelope("notes", deep).snapshot;
-  let depth = 0;
-  while (Object.hasOwn(level as object, "d")) {
-    level = (level as { d: unknown }).d;
-    depth++;
+  expect(new MemorySnapshotEnvelope("notes", deep).snapshot).toEqual(deep);
+});
+
+// The type-only exports; `bun run typecheck` fails if one goes missing.
+type PackageTypes = [JsonScalar, JsonValue, JsonObject, Memory, MemorySession];
+
+// test_package_docstring_and_exports_describe_keyed_memories
+test("the package doc and exports describe keyed memories", async () => {
+  const source = readFileSync(new URL("../../src/memory/index.ts", import.meta.url), "utf8");
+  expect(source.startsWith("/**")).toBe(true);
+  const doc = source.slice(0, source.indexOf("*/"));
+  expect(doc).not.toMatch(/\bframes?\b/i);
+  for (const phrase of ["memory key", "DeclSite", "MemoryDecl", "MemorySpec", "MemoryStack"]) {
+    expect(doc).toContain(phrase);
   }
-  expect(depth).toBe(150);
+  // Exact, so a leaked internal (the origin traversal or rewrite) fails.
+  expect(Object.keys(await import("../../src/memory/index.ts"))).toEqual([
+    "BUILTIN_MEMORY_CONFIG_KEYS",
+    "DeclSite",
+    "MEMORY_IDENTIFIER_PATTERN",
+    "MemoryDecl",
+    "MemoryOccurrenceKind",
+    "MemoryOccurrenceSegment",
+    "MemoryOperationError",
+    "MemoryOperationFailure",
+    "MemoryScope",
+    "MemorySetupError",
+    "MemorySnapshotEnvelope",
+    "MemorySpec",
+    "MemoryStack",
+    "checkMemoryDeclaration",
+    "isMemory",
+  ]);
 });

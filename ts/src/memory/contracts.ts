@@ -37,6 +37,16 @@ function requireString(value: unknown, name: string, nonempty = true): string {
   return value;
 }
 
+/**
+ * Return one boolean.
+ *
+ * @throws TypeError when `value` isn't a boolean.
+ */
+function requireBoolean(value: unknown, name: string): boolean {
+  if (typeof value !== "boolean") throw new TypeError(`${name} must be a boolean`);
+  return value;
+}
+
 /** Whether `value` is a plain array (not a subclass). */
 function isPlainArray(value: unknown): value is unknown[] {
   return Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype;
@@ -818,11 +828,10 @@ export class MemorySpec {
       throw new RangeError("owners must be sorted and unique by DeclSite.compare");
     }
     this.owners = Object.freeze([...owners]);
-    if (typeof conversationEligible !== "boolean") throw new TypeError("conversation_eligible must be a boolean");
+    this.conversationEligible = requireBoolean(conversationEligible, "conversation_eligible");
     if (conversationEligible !== (owners.length === 1 && owners[0]!.node !== null)) {
       throw new RangeError("conversation_eligible must be true exactly for one AGENT owner");
     }
-    this.conversationEligible = conversationEligible;
     Object.freeze(this);
   }
 }
@@ -896,12 +905,6 @@ export class MemorySnapshotEnvelope {
   }
 }
 
-/** Throw unless `value` is a boolean. */
-function requireRetryable(value: unknown): boolean {
-  if (typeof value !== "boolean") throw new TypeError("retryable must be a boolean");
-  return value;
-}
-
 /** Sanitized durable failure from one memory operation. Frozen. */
 export class MemoryOperationFailure {
   readonly stage: string;
@@ -919,7 +922,7 @@ export class MemoryOperationFailure {
     this.stage = requireString(stage, "stage");
     this.code = requireString(code, "code");
     this.message = requireString(message, "message");
-    this.retryable = requireRetryable(retryable);
+    this.retryable = requireBoolean(retryable, "retryable");
     Object.freeze(this);
   }
 }
@@ -940,10 +943,12 @@ export class MemoryOperationError extends Error {
   constructor(stage: string, code: string, message: string, retryable: boolean) {
     const checkedStage = requireString(stage, "stage");
     const checkedCode = requireString(code, "code");
-    super(requireString(message, "message"));
+    const checkedMessage = requireString(message, "message");
+    const checkedRetryable = requireBoolean(retryable, "retryable");
+    super(checkedMessage);
     this.stage = checkedStage;
     this.code = checkedCode;
-    this.retryable = requireRetryable(retryable);
+    this.retryable = checkedRetryable;
   }
 }
 

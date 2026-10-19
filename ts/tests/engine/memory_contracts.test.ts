@@ -12,7 +12,9 @@
  * `test_memory_errors_expose_typed_fields_and_origin`, the `Memory` half of
  * `test_protocols_accept_narrow_structural_implementations`, the scope row of
  * `test_nested_memory_carriers_reject_forged_subclass_values` and the subclass row of
- * `test_memory_origins_revalidate_subclass_keys_without_losing_identity`; plus JavaScript's own
+ * `test_memory_origins_revalidate_subclass_keys_without_losing_identity`, the memory package and
+ * `contracts.ts` halves of `test_frame_types_are_gone` and
+ * `test_importing_memory_contracts_does_not_load_heavy_backends`; plus JavaScript's own
  * values (a `"__proto__"` key, a null-prototype object, a repeated subtree, an array hole), the
  * value nesting limit, the occurrence nesting order and the operation failure's field checks
  * (Python pins those through the learning outcome and backward records).
@@ -28,8 +30,11 @@
  * extra constructor arguments silently). The scope row of the forged-carrier test passes a plain
  * object shaped like a segment. The memory protocol is checked with `isMemory` on plain-object
  * fakes (Python's `isinstance` on a runtime-checkable protocol); a session has no context-manager
- * methods, so the test calls `close()`. Python's `ValueError` is `RangeError`; a frozen field
- * throws `TypeError` where Python raises `FrozenInstanceError`.
+ * methods, so the test calls `close()`. The backend-import test reads `memory/index.ts` and checks
+ * that it imports only `./contracts.ts` (the layer-direction test pins `contracts.ts` to
+ * `diagnostics` and `defaults`), where Python imports the package in a fresh interpreter. Python's
+ * `ValueError` is `RangeError`; a frozen field throws `TypeError` where Python raises
+ * `FrozenInstanceError`.
  *
  * Not ported: the tuple and bytes rows and the list-for-tuple path row (TS has only arrays and no
  * bytes in a config); `test_memory_json_rejects_nesting_beyond_the_memory_limit` (its carriers
@@ -38,9 +43,9 @@
  * `test_memory_origins_revalidate_subclass_keys_without_losing_identity` (a JS subclass can't skip
  * its base constructor, so no carrier holds an unvalidated segment or origin);
  * `test_memory_operation_error_survives_copy_and_pickle` (no `copy` or `pickle`); dataclass `==`
- * and `hash` (Bun's `toEqual` replaces equality);
- * `test_importing_memory_contracts_does_not_load_heavy_backends` (the layer-direction test pins
- * this module's imports).
+ * and `hash` (Bun's `toEqual` replaces equality); the `runtime/contracts.ts` and `MemorySession`
+ * rows of `test_frame_types_are_gone` (the runtime contracts aren't ported, and `MemorySession` is
+ * an interface, with no runtime members to check).
  *
  * Left for later: the recall, learning evidence, learning and conversation tests, with their
  * carriers (`MemoryEpisode`, `LearnContext` and the rest), and the `recall`, `learn` and `commit`
@@ -48,6 +53,7 @@
  */
 
 import { afterEach, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
@@ -66,6 +72,8 @@ import {
   type MemorySession,
   MemorySetupError,
 } from "../../src/memory/contracts.ts";
+import * as memoryPackage from "../../src/memory/index.ts";
+import { importStatements } from "./source_scan.ts";
 
 /** Build a custom-type declaration, so the built-in key allowlist does not apply. */
 function decl(config: unknown, origin: OriginRef | null = null): MemoryDecl {
@@ -340,8 +348,13 @@ test("an operation error exposes its typed fields", () => {
   expect(operation.name).toBe("MemoryOperationError");
   expect(operation.message).toBe("the session is stale");
   expect([operation.stage, operation.code, operation.retryable]).toEqual(["commit", "stale_revision", false]);
-  expect(() => new MemoryOperationError("learn", "bad", "failed", 1 as never)).toThrow(/retryable/);
+  expectError(
+    () => new MemoryOperationError("learn", "bad", "failed", 1 as never),
+    TypeError,
+    "retryable must be a boolean",
+  );
   expectError(() => new MemoryOperationError("", "bad", "failed", true), RangeError, "stage must be non-empty");
+  expectError(() => new MemoryOperationError("learn", "", "failed", true), RangeError, "code must be non-empty");
   expectError(() => new MemoryOperationError("learn", "bad", "", true), RangeError, "message must be non-empty");
 });
 
@@ -367,20 +380,17 @@ test("an operation failure checks its fields and freezes", () => {
 });
 
 /** Build a plain-object memory whose sessions record the snapshot they opened with. */
-function fakeMemory(): Memory & { resets: number; opened: (JsonObject | null)[] } {
+function fakeMemory(): Memory & { resets: number; closes: number; opened: (JsonObject | null)[] } {
   return {
     resets: 0,
+    closes: 0,
     opened: [],
     openRun({ snapshot = null } = {}) {
       this.opened.push(snapshot);
-      const session = {
-        snapshot: { namespace: "test" },
-        closed: false,
-        close() {
-          session.closed = true;
-        },
+      const close = (): void => {
+        this.closes++;
       };
-      return session;
+      return { snapshot: { namespace: "test" }, close };
     },
     reset() {
       this.resets++;
@@ -402,7 +412,7 @@ test("the memory protocol accepts a narrow structural implementation", () => {
   expect(memory.opened[1]).toBeNull();
   expect(session.snapshot).toEqual({ namespace: "test" });
   session.close();
-  expect((session as MemorySession & { closed: boolean }).closed).toBe(true);
+  expect(memory.closes).toBe(1);
   memory.reset();
   expect(memory.resets).toBe(1);
 });
@@ -436,5 +446,23 @@ test("a scope carries a root-relative path and memory keys", () => {
     () => new MemoryScope(["child"], { occurrencePath: [segment] }),
     RangeError,
     "the innermost occurrence segment must contain the scoped node",
+  );
+});
+
+// test_frame_types_are_gone (the memory package and contracts.ts halves)
+test("the frame types are gone", () => {
+  for (const name of ["MemoryFrame", "MemoryFrameRef", "MemoryFrameSpec", "MemoryOccurrenceRef", "MemoryOwner"]) {
+    expect(name in memoryPackage).toBe(false);
+    expect(name in contracts).toBe(false);
+  }
+});
+
+// test_importing_memory_contracts_does_not_load_heavy_backends
+test("the memory package imports only its contracts", () => {
+  // The facade must stay a dependency-light leaf: contracts.ts's own imports are pinned by the
+  // layer-direction test, so the facade importing nothing else keeps the whole package light.
+  const source = readFileSync(new URL("../../src/memory/index.ts", import.meta.url), "utf8");
+  expect(new Set(importStatements(source).map((statement) => statement.specifier))).toEqual(
+    new Set(["./contracts.ts"]),
   );
 });

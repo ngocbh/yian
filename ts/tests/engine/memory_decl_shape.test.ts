@@ -8,8 +8,9 @@
  * `test_builtin_config_values_are_checked`, `test_builtin_config_rules_cover_the_allowlist`, the
  * check halves of `test_builtin_config_values_at_their_limits_load_and_build`,
  * `test_builtin_config_rules_match_the_backends` (its null half) and
- * `test_shape_check_is_public_and_exported`, and a table of the private-key rules. Also
- * `test_builtin_allowlist_is_a_static_table` and `test_setup_error_carries_related_origins`.
+ * `test_shape_check_is_public_and_exported` (with the package facade's exports), and a table of
+ * the private-key rules. Also `test_builtin_allowlist_is_a_static_table` and
+ * `test_setup_error_carries_related_origins`.
  *
  * Changed: ints are `bigint`; a `number` is a float, so `{recall_limit: 3}` is refused as YAML
  * `3.0` is. A value in a message is compact JSON with JS number spelling (`got [1]`, `got 1` for
@@ -20,8 +21,7 @@
  * (TS has only arrays) and checks the error's `name`.
  *
  * Not ported: the backend halves of `test_builtin_config_values_at_their_limits_load_and_build` and
- * `test_builtin_config_rules_match_the_backends` (the built-in backends aren't ported); the
- * `__all__` half of `test_shape_check_is_public_and_exported` (no memory package facade yet).
+ * `test_builtin_config_rules_match_the_backends` (the built-in backends aren't ported).
  *
  * The private-key rows' outcomes come from Python, run on the same keys:
  *
@@ -46,6 +46,7 @@ import {
   MemoryDecl,
   MemorySetupError,
 } from "../../src/memory/contracts.ts";
+import * as memoryPackage from "../../src/memory/index.ts";
 
 const SITE = new DeclSite([], ["root"], null);
 
@@ -271,10 +272,13 @@ test.each([Number.NaN, Number.POSITIVE_INFINITY])("non-finite config %p is rejec
   expectError(() => decl("notes", "vector", { x }), RangeError, "config.x JSON number must be finite");
 });
 
-// test_shape_check_is_public_and_exported (the check half)
-test("the shape check is public", () => {
+// test_shape_check_is_public_and_exported
+test("the shape check is public and exported", () => {
   checkMemoryDeclaration("notes", "episodic", { recall_limit: 2n });
   expect(() => checkMemoryDeclaration("a.b", "episodic", {})).toThrow("memory name");
+  expect(memoryPackage.BUILTIN_MEMORY_CONFIG_KEYS).toBe(BUILTIN_MEMORY_CONFIG_KEYS);
+  expect(memoryPackage.MEMORY_IDENTIFIER_PATTERN).toBe(MEMORY_IDENTIFIER_PATTERN);
+  expect(memoryPackage.checkMemoryDeclaration).toBe(checkMemoryDeclaration);
 });
 
 // test_setup_error_carries_related_origins

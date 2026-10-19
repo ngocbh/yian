@@ -13,8 +13,8 @@
  * record keys come out in code-unit order.
  *
  * Changed:
- * - `test_typed_object_output_rejects_a_non_json_member`: the member is a JS `Date`, refused by
- *   the value layer as `<Date object> is not a JSON value`.
+ * - `test_typed_object_output_rejects_a_non_json_member`: Python's date and datetime rows are one
+ *   JS `Date` row, refused by the value layer as `<Date object> is not a JSON value`.
  * - `test_seed_canonicalizes_tuple_date_and_file_ref`: only the `FileRef` half (TS has no tuples
  *   or dates among its values).
  * - `test_seed_rejects_nonfinite_before_json_mode_normalization`: the NaN rows `raw`, `dict` and
@@ -169,13 +169,29 @@ test("the pool codec is canonical and lossless for typed values", () => {
   expect(encodePool(decoded)).toEqual(wire);
 });
 
-test.each<[string, unknown]>([
-  ["an extra pool field", { store: {}, system: {}, start_id: "start", extra: true }],
-  ["an int typed value holding text", { store: { node: { kind: "int", value: "1" } }, system: {}, start_id: "start" }],
+test.each<[string, unknown, string]>([
+  [
+    "an extra pool field",
+    { store: {}, system: {}, start_id: "start", extra: true },
+    'invalid variable pool fields; missing=[], extra=["extra"]',
+  ],
+  [
+    "an int typed value holding text",
+    { store: { node: { kind: "int", value: "1" } }, system: {}, start_id: "start" },
+    'invalid int typed value: expected a bigint, got "1"',
+  ],
   [
     "an extra typed-value field",
     { store: { node: { kind: "int", value: 1n, extra: true } }, system: {}, start_id: "start" },
+    'invalid typed value fields; missing=[], extra=["extra"]',
   ],
-])("the pool decoder rejects %s", (_name, wire) => {
-  expect(() => decodePool(wire as PoolWire)).toThrow(RangeError);
+])("the pool decoder rejects %s", (_name, wire, message) => {
+  let caught: unknown;
+  try {
+    decodePool(wire as PoolWire);
+  } catch (error) {
+    caught = error;
+  }
+  expect((caught as Error).constructor).toBe(RangeError);
+  expect((caught as Error).message).toBe(message);
 });

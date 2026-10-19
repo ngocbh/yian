@@ -29,7 +29,7 @@
 import { expect, test } from "bun:test";
 
 import { canonicalTyped } from "../../src/runtime/log.ts";
-import { FileRef, TypeCheckError, ValueKind } from "../../src/typesys/index.ts";
+import { FileRef, type StorageKind, TypeCheckError, type Value, ValueKind } from "../../src/typesys/index.ts";
 
 /** Assert `fn` throws a `TypeCheckError` with exactly `message` at `path`. */
 function expectTypeCheck(fn: () => unknown, message: string, path: readonly (string | number)[]): void {
@@ -53,13 +53,13 @@ test.each<[string, unknown, string, (string | number)[]]>([
 
 const FILE_WIRE = { uri: "f", mime: null, name: null };
 
-test.each<[string, unknown, unknown]>([
+test.each<[string, unknown, { kind: StorageKind; value: Value }]>([
   ["field", { f: new FileRef({ uri: "f" }) }, { kind: "object", value: { f: FILE_WIRE } }],
   ["item", [new FileRef({ uri: "f" })], { kind: "list[Any]", value: [FILE_WIRE] }],
 ])("canonicalTyped accepts an untyped file: %s", (_name, value, expected) => {
   const [wire] = canonicalTyped(value, null);
   // A nested file is recorded as a plain object.
-  expect(wire).toEqual(expected as never);
+  expect(wire).toEqual(expected);
 });
 
 test.each<[string, unknown, ValueKind, string, (string | number)[]]>([

@@ -32,8 +32,9 @@ type TypedWire = ReturnType<TypedValue["toWire"]>;
 /**
  * Canonicalize a node value through its durable typed JSON representation.
  *
- * `value` is a live node output, or an existing `TypedValue`; `declared` is the target output
- * type, or `null` to infer the natural storage type (`buildValue`; else `buildValueAs`).
+ * `value` is a live node output, or an existing `TypedValue`. `declared` is the target output
+ * type (checked with `buildValueAs`), or `null` to infer the natural storage type
+ * (`buildValue`).
  *
  * Returns the canonical typed wire object (a fresh JSON copy, keys in code-unit order, each
  * `FileRef` as its mapping) and the value decoded from an independent copy of that exact
@@ -45,8 +46,8 @@ type TypedWire = ReturnType<TypedValue["toWire"]>;
  */
 export function canonicalTyped(value: unknown, declared: ValueKind | Type | null): [TypedWire, TypedValue] {
   const typed = declared === null ? buildValue(value) : buildValueAs(declared, value);
-  const wire = canonicalCopy(typed.toWire()) as TypedWire;
-  return [wire, TypedValue.fromWire(canonicalCopy(wire))];
+  const text = logJson(typed.toWire());
+  return [parseJson(text, "codec") as TypedWire, TypedValue.fromWire(parseJson(text, "codec"))];
 }
 
 /**
@@ -60,8 +61,8 @@ export function canonicalTyped(value: unknown, declared: ValueKind | Type | null
  *   `jsonPart`): NaN, text holding a lone surrogate, a container inside itself, a `Date`, ...
  */
 export function canonicalSeed(value: unknown): [JsonValue, JsonValue] {
-  const wire = canonicalCopy(jsonPart(value, [], "mapping"));
-  return [wire, canonicalCopy(wire)];
+  const text = logJson(jsonPart(value, [], "mapping"));
+  return [parseJson(text, "codec"), parseJson(text, "codec")];
 }
 
 /**

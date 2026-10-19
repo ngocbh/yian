@@ -1,0 +1,120 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "az_union: a tagged union on Azure: the strict schema of Union ($defs and $refs kept, root closed), nothing moved. azure/my-deploy on openai_chat. Schema Union (corpus:Union), name ScalarWrapper. Strategy json_schema. Request: response_format {type: \"json_schema\", json_schema: {name: \"ScalarWrapper\", schema: the strict schema of Union, strict: true}}. Expected: plan.parse(response) returns {\"value\":{\"kind\":\"buy\",\"x\":1}}.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://res.openai.azure.com/openai/deployments/my-deploy/chat/completions?api-version=2025-03-01-preview",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "api-key": "<redacted>"
+        },
+        "json": {
+          "model": "my-deploy",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Answer."
+            }
+          ],
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "ScalarWrapper",
+              "schema": {
+                "$defs": {
+                  "buy": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "buy",
+                        "title": "Kind",
+                        "type": "string"
+                      },
+                      "x": {
+                        "title": "X",
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "x"
+                    ],
+                    "title": "buy",
+                    "type": "object"
+                  },
+                  "sell": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "sell",
+                        "title": "Kind",
+                        "type": "string"
+                      },
+                      "n": {
+                        "title": "N",
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "n"
+                    ],
+                    "title": "sell",
+                    "type": "object"
+                  }
+                },
+                "properties": {
+                  "value": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/buy"
+                      },
+                      {
+                        "$ref": "#/$defs/sell"
+                      }
+                    ],
+                    "title": "Value"
+                  }
+                },
+                "required": [
+                  "value"
+                ],
+                "title": "ScalarWrapper",
+                "type": "object",
+                "additionalProperties": false
+              },
+              "strict": true
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"id\": \"\", \"object\": \"\", \"created\": 0, \"model\": \"\", \"choices\": [], \"prompt_filter_results\": [{\"prompt_index\": 0, \"content_filter_results\": {}}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"{\\\"val\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"ue\\\": {\\\"kind\\\": \\\"buy\\\", \\\"x\\\": 1}}\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\", \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [], \"usage\": {\"prompt_tokens\": 21, \"completion_tokens\": 40, \"total_tokens\": 61, \"prompt_tokens_details\": {\"cached_tokens\": 5}, \"completion_tokens_details\": {\"reasoning_tokens\": 30}}}\n\n",
+          "data: [DONE]\n\n"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "az_open_block: the block's temperature beside the forced open tool. azure/my-deploy on openai_chat. Block {\"temperature\":0.2}. Schema Open (corpus:Open), name Record. Strategy forced_tool. Request: tools [Record the function-tool parameters of Open]; tool_choice {type: \"function\", function: {name: \"Record\"}}; temperature 0.2. Expected: plan.parse(response) returns {\"answer\":\"x\",\"data\":{\"k\":1}}.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://res.openai.azure.com/openai/deployments/my-deploy/chat/completions?api-version=2025-03-01-preview",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "api-key": "<redacted>"
+        },
+        "json": {
+          "model": "my-deploy",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Answer."
+            }
+          ],
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "Record",
+                "description": "",
+                "parameters": {
+                  "properties": {
+                    "answer": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "answer",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            }
+          ],
+          "tool_choice": {
+            "type": "function",
+            "function": {
+              "name": "Record"
+            }
+          },
+          "temperature": 0.2
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"id\": \"\", \"object\": \"\", \"created\": 0, \"model\": \"\", \"choices\": [], \"prompt_filter_results\": [{\"prompt_index\": 0, \"content_filter_results\": {}}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call_1\", \"type\": \"function\", \"function\": {\"name\": \"Record\", \"arguments\": \"\"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"{\\\"answer\\\": \\\"x\\\", \"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"\\\"data\\\": {\\\"k\\\": 1}}\"}}]}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"tool_calls\", \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [], \"usage\": {\"prompt_tokens\": 21, \"completion_tokens\": 40, \"total_tokens\": 61, \"prompt_tokens_details\": {\"cached_tokens\": 5}, \"completion_tokens_details\": {\"reasoning_tokens\": 30}}}\n\n",
+          "data: [DONE]\n\n"
+        ]
+      }
+    }
+  ]
+}

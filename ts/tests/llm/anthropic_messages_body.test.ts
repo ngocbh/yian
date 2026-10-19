@@ -1,8 +1,8 @@
 /**
  * Tests for Anthropic Messages body building in `src/llm/protocols/anthropic_messages.ts`: the
  * top-level keys, turn merging, the system field, user, tool and assistant turns, tool ids, the
- * default `max_tokens`, tools, the tool choice, the block, determinism, reasoning replay records
- * and the required-signature error.
+ * default `max_tokens`, tools, the tool choice, the block, the output format, determinism,
+ * reasoning replay records and the required-signature error.
  */
 
 import { describe, expect, spyOn, test } from "bun:test";
@@ -13,6 +13,7 @@ import {
   MediaPart,
   Message,
   NamedTool,
+  OutputFormat,
   type Part,
   ReasoningPart,
   RefusalPart,
@@ -80,6 +81,7 @@ interface BodyOptions {
   tools?: ToolSpec[];
   toolChoice?: ToolChoice;
   parallelToolCalls?: boolean | null;
+  outputFormat?: OutputFormat | null;
   account?: string | null;
   onReplayDegraded?: (reason: ReplayDegradedReason) => void;
 }
@@ -99,6 +101,7 @@ function bodyOf(messages: Message[], options: BodyOptions = {}): JsonObject {
       tools: options.tools,
       toolChoice: options.toolChoice,
       parallelToolCalls: options.parallelToolCalls,
+      outputFormat: options.outputFormat,
     }),
   );
 }
@@ -766,6 +769,70 @@ describe("the block", () => {
       ...Object.keys(block),
     ]);
     expect(encodeBody(body)).not.toContain("beta");
+  });
+
+  test("block returns a copy: changing it leaves later bodies unchanged", () => {
+    const protocol = new AnthropicMessages({
+      model: SONNET,
+      provider: "anthropic",
+      block: { thinking: { type: "adaptive" } },
+    });
+    const block = protocol.block!;
+    expect(block).toEqual({ thinking: { type: "adaptive" } });
+    (block["thinking"] as JsonObject)["type"] = "enabled";
+    block["temperature"] = 0.9;
+    expect(protocol.block).toEqual({ thinking: { type: "adaptive" } });
+    const body = protocol.buildBody(new Request({ messages: [user("Hi.")] }));
+    expect(body["thinking"]).toEqual({ type: "adaptive" });
+    expect(Object.hasOwn(body, "temperature")).toBe(false);
+  });
+
+  test("block is null without a block", () => {
+    expect(new AnthropicMessages({ model: SONNET, provider: "anthropic" }).block).toBeNull();
+  });
+});
+
+describe("the output format", () => {
+  const RECORD = new OutputFormat({
+    name: "Record",
+    schema: {
+      type: "object",
+      properties: { answer: { type: "string" }, score: { type: "integer" } },
+      required: ["answer", "score"],
+      additionalProperties: false,
+    },
+    strict: true,
+  });
+
+  test("outputFormat is sent as output_config.format, without a name, before stream", () => {
+    const body = bodyOf([system("S."), user("Hi.")], { outputFormat: RECORD });
+    expect(body).toEqual({
+      model: SONNET,
+      max_tokens: 64000n,
+      messages: [{ role: "user", content: "Hi." }],
+      system: "S.",
+      output_config: { format: { type: "json_schema", schema: RECORD.schema } },
+      stream: true,
+    });
+    expect(Object.keys(body)).toEqual(["model", "max_tokens", "messages", "system", "output_config", "stream"]);
+  });
+
+  test("a block's output_config.effort and thinking land beside format", () => {
+    const block: JsonObject = { thinking: { type: "adaptive" }, output_config: { effort: "high" } };
+    const body = bodyOf([user("Hi.")], { block, outputFormat: RECORD });
+    expect(body["output_config"]).toEqual({ format: { type: "json_schema", schema: RECORD.schema }, effort: "high" });
+    expect(body["thinking"]).toEqual({ type: "adaptive" });
+  });
+
+  test("a body without outputFormat has no output_config", () => {
+    expect(Object.hasOwn(bodyOf([user("Hi.")]), "output_config")).toBe(false);
+  });
+
+  test("the rendered schema is a copy", () => {
+    const body = bodyOf([user("Hi.")], { outputFormat: RECORD });
+    const format = (body["output_config"] as JsonObject)["format"] as JsonObject;
+    ((format["schema"] as JsonObject)["required"] as JsonValue[]).push("x");
+    expect(RECORD.schema["required"]).toEqual(["answer", "score"]);
   });
 });
 

@@ -1,6 +1,6 @@
 /**
  * Tests for OpenAI Chat Completions body building in `src/llm/protocols/openai_chat.ts`: the
- * per-route options, messages, tools, tool choice, block merge, reasoning echo.
+ * per-route options, messages, tools, tool choice, output format, block merge, reasoning echo.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -10,6 +10,7 @@ import {
   MediaPart,
   Message,
   NamedTool,
+  OutputFormat,
   type Part,
   ReasoningPart,
   RefusalPart,
@@ -70,6 +71,7 @@ interface BodyOptions {
   tools?: ToolSpec[];
   toolChoice?: ToolChoice;
   parallelToolCalls?: boolean | null;
+  outputFormat?: OutputFormat | null;
 }
 
 function bodyOf(messages: Message[], options: BodyOptions = {}): JsonObject {
@@ -86,6 +88,7 @@ function bodyOf(messages: Message[], options: BodyOptions = {}): JsonObject {
       tools: options.tools,
       toolChoice: options.toolChoice,
       parallelToolCalls: options.parallelToolCalls,
+      outputFormat: options.outputFormat,
     }),
   );
 }
@@ -415,6 +418,60 @@ describe("tools, tool choice, parallel tool calls", () => {
     expect(Object.hasOwn(other, "parallel_tool_calls")).toBe(false);
     expect(other["tool_choice"]).toEqual({ type: "function", function: { name: "double" } });
     expect(bodyOf([user("Hi.")], { ...options, model: "gpt-4o", tools: [DOUBLE] })["parallel_tool_calls"]).toBe(false);
+  });
+});
+
+describe("output format", () => {
+  const schema: JsonObject = { properties: { value: { type: "integer" } }, required: ["value"], type: "object" };
+
+  test("a strict format is sent as response_format after parallel_tool_calls, before reasoning_split", () => {
+    const outputFormat = new OutputFormat({ name: "Record", schema, strict: true });
+    const body = bodyOf([user("Hi.")], {
+      provider: "minimax",
+      model: "MiniMax-M2.7",
+      parallelToolCalls: false,
+      outputFormat,
+    });
+    expect(body["response_format"]).toEqual({
+      type: "json_schema",
+      json_schema: { name: "Record", schema, strict: true },
+    });
+    expect(Object.keys(body).slice(-3)).toEqual(["parallel_tool_calls", "response_format", "reasoning_split"]);
+  });
+
+  test("strict null is not sent", () => {
+    const outputFormat = new OutputFormat({ name: "Record", schema });
+    expect(bodyOf([user("Hi.")], { outputFormat })["response_format"]).toEqual({
+      type: "json_schema",
+      json_schema: { name: "Record", schema },
+    });
+  });
+
+  test("a block's temperature and max_completion_tokens land beside response_format", () => {
+    const outputFormat = new OutputFormat({ name: "Record", schema, strict: true });
+    const block: JsonObject = { temperature: 0.2, max_completion_tokens: 100n };
+    const body = bodyOf([user("Hi.")], { provider: "azure", model: "my-deploy", block, outputFormat });
+    expect(body).toEqual({
+      model: "my-deploy",
+      messages: [{ role: "user", content: "Hi." }],
+      stream: true,
+      stream_options: { include_usage: true },
+      response_format: { type: "json_schema", json_schema: { name: "Record", schema, strict: true } },
+      temperature: 0.2,
+      max_completion_tokens: 100n,
+    });
+  });
+
+  test("the schema is copied", () => {
+    const outputFormat = new OutputFormat({ name: "Record", schema });
+    const rendered = bodyOf([user("Hi.")], { outputFormat })["response_format"] as JsonObject;
+    const sentSchema = (rendered["json_schema"] as JsonObject)["schema"] as JsonObject;
+    (sentSchema["required"] as JsonValue[]).push("x");
+    expect(outputFormat.schema["required"]).toEqual(["value"]);
+  });
+
+  test("no output format omits response_format", () => {
+    expect(Object.hasOwn(bodyOf([user("Hi.")]), "response_format")).toBe(false);
   });
 });
 

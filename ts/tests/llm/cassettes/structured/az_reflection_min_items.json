@@ -1,0 +1,123 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "az_reflection_min_items: the reflection schema on Azure: strict (defaults dropped, every property required), minItems moved (the strict schema of Reflection with the rejected keywords moved into descriptions). azure/my-deploy on openai_chat. Schema Reflection (corpus:_ReflectionResponse), name _ReflectionResponse. Strategy json_schema. Request: response_format {type: \"json_schema\", json_schema: {name: \"_ReflectionResponse\", schema: the strict schema of Reflection with the rejected keywords moved into descriptions, strict: true}}. Expected: plan.parse(response) returns {\"actions\":[{\"action\":\"add\",\"lesson_id\":null,\"text\":\"be terse\"}]}.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://res.openai.azure.com/openai/deployments/my-deploy/chat/completions?api-version=2025-03-01-preview",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "api-key": "<redacted>"
+        },
+        "json": {
+          "model": "my-deploy",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are terse."
+            },
+            {
+              "role": "user",
+              "content": "Answer."
+            }
+          ],
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "_ReflectionResponse",
+              "schema": {
+                "$defs": {
+                  "_ReflectionAction": {
+                    "additionalProperties": false,
+                    "description": "One closed model-proposed lesson action.",
+                    "properties": {
+                      "action": {
+                        "enum": [
+                          "add",
+                          "revise",
+                          "remove",
+                          "noop"
+                        ],
+                        "title": "Action",
+                        "type": "string"
+                      },
+                      "lesson_id": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "title": "Lesson Id"
+                      },
+                      "text": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "title": "Text"
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "lesson_id",
+                      "text"
+                    ],
+                    "title": "_ReflectionAction",
+                    "type": "object"
+                  }
+                },
+                "additionalProperties": false,
+                "description": "Strict structured result from one reflective model call.",
+                "properties": {
+                  "actions": {
+                    "items": {
+                      "$ref": "#/$defs/_ReflectionAction"
+                    },
+                    "title": "Actions",
+                    "type": "array",
+                    "description": "{minItems: 1}"
+                  }
+                },
+                "required": [
+                  "actions"
+                ],
+                "title": "_ReflectionResponse",
+                "type": "object"
+              },
+              "strict": true
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "data: {\"id\": \"\", \"object\": \"\", \"created\": 0, \"model\": \"\", \"choices\": [], \"prompt_filter_results\": [{\"prompt_index\": 0, \"content_filter_results\": {}}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"{\\\"act\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"ions\\\": [{\\\"action\\\": \\\"add\\\", \\\"lesson_id\\\": null, \\\"text\\\": \\\"be terse\\\"}]}\"}, \"finish_reason\": null, \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\", \"logprobs\": null}]}\n\n",
+          "data: {\"id\": \"chatcmpl-az1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"gpt-5.5-2026-01-01\", \"choices\": [], \"usage\": {\"prompt_tokens\": 21, \"completion_tokens\": 40, \"total_tokens\": 61, \"prompt_tokens_details\": {\"cached_tokens\": 5}, \"completion_tokens_details\": {\"reasoning_tokens\": 30}}}\n\n",
+          "data: [DONE]\n\n"
+        ]
+      }
+    }
+  ]
+}

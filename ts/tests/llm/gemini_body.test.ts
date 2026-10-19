@@ -1,8 +1,8 @@
 /**
  * Tests for Gemini body building in `src/llm/protocols/gemini.ts`: the protocol object, the
  * contents (system, user, tool and assistant messages), tool results and their ids, the media and
- * wrong-part refusals, tools, the tool choice, the block, determinism, thought signatures sent back
- * from replay records and the placeholder signature.
+ * wrong-part refusals, tools, the tool choice, the output format, the block, determinism, thought
+ * signatures sent back from replay records and the placeholder signature.
  */
 
 import { describe, expect, spyOn, test } from "bun:test";
@@ -12,6 +12,7 @@ import {
   MediaPart,
   Message,
   NamedTool,
+  OutputFormat,
   type Part,
   ReasoningPart,
   RefusalPart,
@@ -84,6 +85,7 @@ interface BodyOptions {
   tools?: ToolSpec[];
   toolChoice?: ToolChoice;
   parallelToolCalls?: boolean | null;
+  outputFormat?: OutputFormat | null;
 }
 
 function bodyOf(messages: Message[], options: BodyOptions = {}): JsonObject {
@@ -100,6 +102,7 @@ function bodyOf(messages: Message[], options: BodyOptions = {}): JsonObject {
       tools: options.tools,
       toolChoice: options.toolChoice,
       parallelToolCalls: options.parallelToolCalls,
+      outputFormat: options.outputFormat,
     }),
   );
 }
@@ -504,6 +507,53 @@ describe("tool choice", () => {
         expect(encodeBody(body)).not.toMatch(/parallel/i);
       }
     }
+  });
+});
+
+describe("the output format", () => {
+  const RECORD = new OutputFormat({
+    name: "Record",
+    schema: {
+      type: "object",
+      properties: { answer: { type: "string" }, score: { type: "integer" } },
+      required: ["answer", "score"],
+    },
+    strict: true,
+  });
+
+  test("outputFormat is sent as responseJsonSchema with a JSON responseMimeType, beside candidateCount", () => {
+    const body = bodyOf([user("Hi.")], { outputFormat: RECORD });
+    expect(body).toEqual({
+      contents: [{ role: "user", parts: [{ text: "Hi." }] }],
+      safetySettings: [],
+      generationConfig: { candidateCount: 1n, responseMimeType: "application/json", responseJsonSchema: RECORD.schema },
+    });
+    expect(Object.keys(body["generationConfig"] as JsonObject)).toEqual([
+      "candidateCount",
+      "responseMimeType",
+      "responseJsonSchema",
+    ]);
+  });
+
+  test("a block's generationConfig.maxOutputTokens lands beside the two keys", () => {
+    const body = bodyOf([user("Hi.")], { block: { generationConfig: { maxOutputTokens: 64n } }, outputFormat: RECORD });
+    expect(body["generationConfig"]).toEqual({
+      candidateCount: 1n,
+      responseMimeType: "application/json",
+      responseJsonSchema: RECORD.schema,
+      maxOutputTokens: 64n,
+    });
+  });
+
+  test("a body without outputFormat sends generationConfig: {candidateCount: 1}", () => {
+    expect(bodyOf([user("Hi.")])["generationConfig"]).toEqual({ candidateCount: 1n });
+  });
+
+  test("the rendered schema is a copy", () => {
+    const body = bodyOf([user("Hi.")], { outputFormat: RECORD });
+    const config = body["generationConfig"] as JsonObject;
+    ((config["responseJsonSchema"] as JsonObject)["required"] as JsonValue[]).push("x");
+    expect(RECORD.schema["required"]).toEqual(["answer", "score"]);
   });
 });
 

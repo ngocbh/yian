@@ -1,6 +1,6 @@
 /**
  * Tests for OpenAI Responses body building in `src/llm/protocols/openai_responses.ts`: input
- * items, assistant replay, tools, tool choice, block merge, subscription.
+ * items, assistant replay, tools, tool choice, output format, block merge, subscription.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -10,6 +10,7 @@ import {
   MediaPart,
   Message,
   NamedTool,
+  OutputFormat,
   type Part,
   ReasoningPart,
   RefusalPart,
@@ -59,6 +60,7 @@ interface BodyOptions {
   tools?: ToolSpec[];
   toolChoice?: ToolChoice;
   parallelToolCalls?: boolean | null;
+  outputFormat?: OutputFormat | null;
 }
 
 function bodyOf(messages: Message[], options: BodyOptions = {}): JsonObject {
@@ -76,6 +78,7 @@ function bodyOf(messages: Message[], options: BodyOptions = {}): JsonObject {
       tools: options.tools,
       toolChoice: options.toolChoice,
       parallelToolCalls: options.parallelToolCalls,
+      outputFormat: options.outputFormat,
     }),
   );
 }
@@ -651,6 +654,45 @@ describe("tools, tool choice, parallel tool calls", () => {
       expect(Object.hasOwn(bodyOf([user("Hi.")]), "parallel_tool_calls")).toBe(false);
     });
   }
+});
+
+describe("output format", () => {
+  const schema: JsonObject = { properties: { value: { type: "integer" } }, required: ["value"], type: "object" };
+
+  test("a strict format is sent as text.format after parallel_tool_calls", () => {
+    const outputFormat = new OutputFormat({ name: "Record", schema, strict: true });
+    const body = bodyOf([user("Hi.")], { parallelToolCalls: false, outputFormat });
+    expect(body["text"]).toEqual({ format: { type: "json_schema", name: "Record", schema, strict: true } });
+    expect(Object.keys(body).slice(-2)).toEqual(["parallel_tool_calls", "text"]);
+  });
+
+  test("strict null is not sent", () => {
+    const outputFormat = new OutputFormat({ name: "Record", schema });
+    expect(bodyOf([user("Hi.")], { outputFormat })["text"]).toEqual({
+      format: { type: "json_schema", name: "Record", schema },
+    });
+  });
+
+  test("a block's text.verbosity lands beside format", () => {
+    const outputFormat = new OutputFormat({ name: "Record", schema, strict: true });
+    const body = bodyOf([user("Hi.")], { block: { text: { verbosity: "low" } }, outputFormat });
+    expect(body["text"]).toEqual({
+      format: { type: "json_schema", name: "Record", schema, strict: true },
+      verbosity: "low",
+    });
+  });
+
+  test("the schema is copied", () => {
+    const outputFormat = new OutputFormat({ name: "Record", schema });
+    const text = bodyOf([user("Hi.")], { outputFormat })["text"] as JsonObject;
+    const sentSchema = (text["format"] as JsonObject)["schema"] as JsonObject;
+    (sentSchema["required"] as JsonValue[]).push("x");
+    expect(outputFormat.schema["required"]).toEqual(["value"]);
+  });
+
+  test("no output format omits text", () => {
+    expect(Object.hasOwn(bodyOf([user("Hi.")]), "text")).toBe(false);
+  });
 });
 
 describe("block merge", () => {

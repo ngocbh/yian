@@ -19,6 +19,7 @@ import {
   Message,
   MessageFormatError,
   NamedTool,
+  OutputFormat,
   readReplayRecord,
   ReasoningPart,
   RefusalPart,
@@ -683,6 +684,36 @@ describe("tool specs", () => {
   });
 });
 
+describe("OutputFormat", () => {
+  test("fields are kept, strict null when absent", () => {
+    const format = new OutputFormat({ name: "Rec", schema: { type: "object" }, strict: true });
+    expect([format.name, format.schema, format.strict]).toEqual(["Rec", { type: "object" }, true]);
+    expect(new OutputFormat({ name: "Rec", schema: {} }).strict).toBeNull();
+  });
+
+  test("the schema is copied", () => {
+    const schema = { type: "object", properties: {} as Data };
+    const format = new OutputFormat({ name: "Rec", schema });
+    schema.properties["x"] = {};
+    expect(format.schema).toEqual({ type: "object", properties: {} });
+  });
+
+  test("a non-string name, non-object schema or non-boolean strict is refused", () => {
+    expect(formatError(() => new OutputFormat({ name: bad(1), schema: {} })).message).toBe(
+      "name: expected string, got number",
+    );
+    expect(formatError(() => new OutputFormat({ name: "Rec", schema: bad([]) })).message).toBe(
+      "schema: expected an object, got array",
+    );
+    expect(formatError(() => new OutputFormat({ name: "Rec", schema: bad(null) })).message).toBe(
+      "schema: expected an object, got null",
+    );
+    expect(formatError(() => new OutputFormat({ name: "Rec", schema: {}, strict: bad("yes") })).message).toBe(
+      "strict: expected boolean, got string",
+    );
+  });
+});
+
 describe("requests and replies", () => {
   const hello = () => new Message({ role: "user", parts: [new TextPart("hi")] });
 
@@ -693,6 +724,7 @@ describe("requests and replies", () => {
     expect(request.tools).toEqual([]);
     expect(request.toolChoice).toBeNull();
     expect(request.parallelToolCalls).toBeNull();
+    expect(request.outputFormat).toBeNull();
   });
 
   test("a request with tools and a named tool", () => {
@@ -751,6 +783,16 @@ describe("requests and replies", () => {
     expect(formatError(() => new Request({ messages: [], parallelToolCalls: bad("yes") })).message).toBe(
       "parallel_tool_calls: expected boolean, got string",
     );
+  });
+
+  test("outputFormat", () => {
+    const format = new OutputFormat({ name: "Rec", schema: { type: "object" } });
+    expect(new Request({ messages: [] }).outputFormat).toBeNull();
+    expect(new Request({ messages: [], outputFormat: null }).outputFormat).toBeNull();
+    expect(new Request({ messages: [], outputFormat: format }).outputFormat).toBe(format);
+    expect(
+      formatError(() => new Request({ messages: [], outputFormat: bad({ name: "Rec", schema: {} }) })).message,
+    ).toBe("output_format: expected an OutputFormat or null");
   });
 
   test("a response's message must be an assistant message", () => {

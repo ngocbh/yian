@@ -36,6 +36,7 @@ import {
   type Message,
   MessageFormatError,
   NamedTool,
+  type OutputFormat,
   type Part,
   put,
   ReasoningPart,
@@ -158,8 +159,8 @@ export class OpenAIResponses implements SseProtocol {
 
   /**
    * Build the Responses request body: `model`, `input` and `stream: true`, then the tools, the
-   * tool choice and `parallel_tool_calls` when set, then the provider block, then (on the
-   * subscription) its settings.
+   * tool choice and `parallel_tool_calls` when set, then `text.format` when the request sets
+   * `outputFormat`, then the provider block, then (on the subscription) its settings.
    *
    * An assistant message whose replay records can't be used is sent from its neutral fields,
    * and `onReplayDegraded` is called once for it; a throw from the callback propagates.
@@ -175,6 +176,7 @@ export class OpenAIResponses implements SseProtocol {
     if (choice instanceof NamedTool) body["tool_choice"] = { type: "function", name: choice.name };
     else if (choice !== null) body["tool_choice"] = choice;
     if (request.parallelToolCalls !== null) body["parallel_tool_calls"] = request.parallelToolCalls;
+    if (request.outputFormat !== null) body["text"] = { format: textFormat(request.outputFormat) };
     if (this.#block) mergeRequestBody(body, this.#block);
     if (this.subscription) {
       // Applied after the block so it cannot switch them off: the backend keeps no state, so
@@ -817,6 +819,14 @@ function tool(spec: ToolSpec): JsonObject {
     parameters: copyJson(spec.parameters),
   };
   if (spec.strict !== null) rendered["strict"] = spec.strict;
+  return rendered;
+}
+
+/** Render an output format as a `text.format` entry, `strict` only when set. */
+function textFormat(format: OutputFormat): JsonObject {
+  // Copied so changing a body cannot change the format it came from.
+  const rendered: JsonObject = { type: "json_schema", name: format.name, schema: copyJson(format.schema) };
+  if (format.strict !== null) rendered["strict"] = format.strict;
   return rendered;
 }
 

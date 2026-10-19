@@ -188,9 +188,19 @@ export class AnthropicMessages implements SseProtocol {
   }
 
   /**
+   * The provider block the bodies merge, or `null`; a copy, for callers that choose request
+   * fields by it (e.g. structured output under `thinking`).
+   */
+  get block(): JsonObject | null {
+    return this.#block ? copyJson(this.#block) : null;
+  }
+
+  /**
    * Build the Messages request body: `model`, `max_tokens` (the model's default), `messages`,
-   * `system` when there is one, `tools` and `tool_choice` when tools are sent, and
-   * `stream: true`, then the provider block, whose keys replace yian's.
+   * `system` when there is one, `tools` and `tool_choice` when tools are sent,
+   * `output_config: {format: {type: "json_schema", schema}}` when the request has an
+   * `outputFormat` (its schema copied; its name and `strict` are not sent, the API having neither),
+   * and `stream: true`, then the provider block, whose keys replace yian's.
    *
    * A tool is its name, its parameters as `input_schema`, its description (always) and `strict`
    * when set. The tool choice is sent only with tools; `parallelToolCalls`, when set, becomes
@@ -227,6 +237,9 @@ export class AnthropicMessages implements SseProtocol {
       body["tools"] = request.tools.map(tool);
       const choice = toolChoice(request.toolChoice, request.parallelToolCalls);
       if (choice !== null) body["tool_choice"] = choice;
+    }
+    if (request.outputFormat !== null) {
+      body["output_config"] = { format: { type: "json_schema", schema: copyJson(request.outputFormat.schema) } };
     }
     body["stream"] = true;
     if (this.#block) mergeRequestBody(body, this.#block);

@@ -1,0 +1,78 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "a_json_invalid_value: a string score: returned as sent, unvalidated. anthropic/claude-sonnet-4-5 on anthropic_messages. Block {\"thinking\":{\"type\":\"adaptive\"},\"output_config\":{\"effort\":\"high\"}}. Schema Rec (corpus:Rec), name Record. Strategy json_schema. Request: output_config {format: {type: \"json_schema\", schema: the Anthropic output schema of Rec}, effort: \"high\"}; thinking {type: \"adaptive\"}; max_tokens 64000. Expected: plan.parse(response) returns {\"answer\":\"x\",\"score\":\"notint\"}.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-api-key": "<redacted>",
+          "anthropic-version": "2023-06-01"
+        },
+        "json": {
+          "model": "claude-sonnet-4-5",
+          "max_tokens": 64000,
+          "messages": [
+            {
+              "role": "user",
+              "content": "Answer."
+            }
+          ],
+          "system": "You are terse.",
+          "output_config": {
+            "format": {
+              "type": "json_schema",
+              "schema": {
+                "type": "object",
+                "title": "Record",
+                "properties": {
+                  "answer": {
+                    "type": "string",
+                    "title": "Answer"
+                  },
+                  "score": {
+                    "type": "integer",
+                    "title": "Score"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "answer",
+                  "score"
+                ]
+              }
+            },
+            "effort": "high"
+          },
+          "stream": true,
+          "thinking": {
+            "type": "adaptive"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_1\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-sonnet-4-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 12, \"output_tokens\": 1, \"cache_read_input_tokens\": 100, \"cache_creation_input_tokens\": 30}}}\n\n",
+          "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"thinking\", \"thinking\": \"\", \"signature\": \"\"}}\n\n",
+          "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"Let me think.\"}}\n\n",
+          "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"signature_delta\", \"signature\": \"SIG-1\"}}\n\n",
+          "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\n",
+          "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 1, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n",
+          "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"{\\\"ans\"}}\n\n",
+          "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"wer\\\": \\\"x\\\", \\\"score\\\": \\\"notint\\\"}\"}}\n\n",
+          "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 1}\n\n",
+          "event: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"input_tokens\": 12, \"output_tokens\": 40, \"cache_read_input_tokens\": 100, \"cache_creation_input_tokens\": 30}}\n\n",
+          "event: message_stop\ndata: {\"type\": \"message_stop\"}\n\n"
+        ]
+      }
+    }
+  ]
+}

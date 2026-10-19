@@ -425,19 +425,25 @@ describe("the load line and the end of the reply", () => {
     }
   });
 
-  test("lines after the done line are never read", async () => {
+  test("lines after the done line are never read, and the source is closed", async () => {
+    let closed = false;
     let pulled = 0;
     async function* source(): AsyncGenerator<JsonValue> {
-      pulled++;
-      yield oChunk("Hi");
-      pulled++;
-      yield oDone();
-      throw new Error("read past the done line");
+      try {
+        pulled++;
+        yield oChunk("Hi");
+        pulled++;
+        yield oDone();
+        throw new Error("read past the done line");
+      } finally {
+        closed = true;
+      }
     }
     const out: Event[] = [];
     for await (const event of ollama().parse(source())) out.push(event);
     expect(out.at(-1)).toEqual(finish("stop"));
     expect(pulled).toBe(2);
+    expect(closed).toBe(true);
   });
 
   test("a reply that ends before its done line is incomplete and retryable", async () => {

@@ -19,11 +19,12 @@
  * Thinking and content stream as deltas into the reply's one reasoning part and one text part,
  * even when a call or the other kind comes between their pieces, because an Ollama message has
  * one `thinking` and one `content` field and both go back whole. Each call arrives whole, as one
- * delta, keeping the server's id unless it is missing or repeated. The reasoning part carries a
- * replay record, and the reply's record holds the model the server named. A `load` line with no
- * content is skipped; logprobs and other unknown fields are not read. A reply that failed or ended
- * early raises `ProviderError`; an error message holds the provider's text uncapped, which
- * `RouteModel` scrubs of the route's credentials and then caps.
+ * delta, keeping the server's id unless it is missing, empty or repeated. The reasoning part
+ * carries a replay record, and the reply's record holds the model the server named. A `done` line
+ * with `done_reason: "load"` and missing or blank content is skipped; logprobs and other unknown
+ * fields are not read. A reply that failed or ended early raises `ProviderError`; an error message
+ * holds the provider's text uncapped, which `RouteModel` scrubs of the route's credentials and
+ * then caps.
  */
 
 import { encodeBody, mergeRequestBody } from "../body.ts";
@@ -64,9 +65,12 @@ import {
 export const PROTOCOL = "ollama_chat";
 const NO_MEDIA = "the ollama_chat route does not send media parts yet";
 
+/** A text or reasoning part being streamed. */
+type Prose = { kind: "text" | "reasoning"; text: string };
+
 /** A part being streamed. */
 type Streamed =
-  | { kind: "text" | "reasoning"; text: string }
+  | Prose
   | { kind: "call"; id: string; name: string; args: JsonObject | null; rawArguments: string | null };
 
 /** A call read from a line's `tool_calls`. */
@@ -213,13 +217,13 @@ export class OllamaChat implements NdjsonProtocol {
    *
    * Lines are read in order until the one with `done: true`. A missing or `null` `message`,
    * `content`, `thinking` or `tool_calls` reads as absent, and unknown fields (logprobs, durations,
-   * `remote_model`, anything new) are ignored. A `load` line (`done_reason: "load"` with missing or
-   * blank content) is skipped whole and does not end the reply. The last string `model` on any
-   * line is kept. On each line its thinking, then its content, then its calls are read: thinking
-   * pieces join the reply's one reasoning part and content pieces its one text part, each opened
-   * by its first non-empty piece, with dense part indexes in the order parts open. Each call is a
-   * new part: its id is its own unless missing, empty or already in the reply, else
-   * `yian_call_<n>`, `n` its position among the calls, with `_<k>` appended while taken; its
+   * `remote_model`, anything new) are ignored. A `done` line with `done_reason: "load"` and missing
+   * or blank content is skipped whole, its `model` included, and does not end the reply. The last
+   * string `model` on any line read is kept. On each line its thinking, then its content, then its
+   * calls are read: thinking pieces join the reply's one reasoning part and content pieces its one
+   * text part, each opened by its first non-empty piece, with dense part indexes in the order parts
+   * open. Each call is a new part: its id is its own unless missing, empty or already in the reply,
+   * else `yian_call_<n>`, `n` its position among the calls, with `_<k>` appended while taken; its
    * `arguments` are an object as sent, a string parsed with `parseArguments`, `{}` when missing,
    * and anything else makes an invalid call with the raw JSON. Usage comes from the `done` line:
    * `prompt_eval_count` is input and `eval_count` output (a missing one is 0, the total their sum)
@@ -238,8 +242,8 @@ export class OllamaChat implements NdjsonProtocol {
     const provider = this.provider;
     // Part index = position, so indexes are dense in the order parts open.
     const parts: Streamed[] = [];
-    // The index of the reply's one text part and one reasoning part, once opened.
-    const opened = new Map<"text" | "reasoning", number>();
+    // The reply's one text part and one reasoning part, with their indexes, once opened.
+    const opened = new Map<Prose["kind"], { index: number; part: Prose }>();
     // Every call id in the reply so far, the server's and those generated.
     const taken = new Set<string>();
     let calls = 0;
@@ -251,19 +255,23 @@ export class OllamaChat implements NdjsonProtocol {
       const thinking = (message["thinking"] ?? null) as string | null;
       const toolCalls = (message["tool_calls"] ?? []) as JsonValue[];
       const done = line["done"] === true;
+      const doneReason = (line["done_reason"] ?? null) as string | null;
       // Ollama sends this for a request with no messages, which only loads the model.
-      if (done && line["done_reason"] === "load" && (content ?? "").trim() === "") continue;
+      if (done && doneReason === "load" && (content ?? "").trim() === "") continue;
       if (typeof line["model"] === "string") responseModel = line["model"];
       for (const [kind, piece] of [
         ["reasoning", thinking],
         ["text", content],
       ] as const) {
         if (!piece) continue;
-        const index = opened.get(kind) ?? parts.push({ kind, text: "" }) - 1;
-        opened.set(kind, index);
-        const part = parts[index];
-        if (part?.kind === kind) part.text += piece;
-        yield kind === "text" ? new TextDelta(index, piece) : new ReasoningDelta(index, piece);
+        let open = opened.get(kind);
+        if (open === undefined) {
+          const part = { kind, text: "" };
+          open = { index: parts.push(part) - 1, part };
+          opened.set(kind, open);
+        }
+        open.part.text += piece;
+        yield kind === "text" ? new TextDelta(open.index, piece) : new ReasoningDelta(open.index, piece);
       }
       for (const entry of toolCalls) {
         const { id: wireId, name, args, rawArguments } = readCall(entry);
@@ -277,7 +285,6 @@ export class OllamaChat implements NdjsonProtocol {
       for (const [index, part] of parts.entries()) yield new PartDone(index, this.#part(part));
       if (usage !== null) yield new UsageReport(usage);
       const providerPayload = replayRecord(this.#key, responseModel === null ? {} : { response_model: responseModel });
-      const doneReason = (line["done_reason"] ?? null) as string | null;
       // `length` says the calls may be cut short, so it wins over them.
       const reason = doneReason === "length" ? "length" : calls > 0 ? "tool_calls" : doneReason || "stop";
       yield new Finish({ reason, responseId: null, protocol: PROTOCOL, providerPayload });
@@ -394,7 +401,7 @@ function usageOf(line: JsonObject, provider: string): Usage | null {
   const inputTokens = tokenCount(line["prompt_eval_count"], notInt) ?? 0;
   const outputTokens = tokenCount(line["eval_count"], notInt) ?? 0;
   const cacheReadTokens = tokenCount(line["prompt_eval_cached_count"], notInt);
-  if (inputTokens + outputTokens === 0 && !cacheReadTokens) return null;
+  if (inputTokens + outputTokens === 0 && (cacheReadTokens ?? 0) === 0) return null;
   try {
     return new Usage({
       inputTokens,

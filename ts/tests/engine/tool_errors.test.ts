@@ -1,8 +1,9 @@
 /**
  * TOOL retry defaults, the errors a host tool throws to steer retries, their brands, and
  * `ToolContext`, a port of `tests/engine/test_tool_errors.py`. Not ported:
- * `test_tool_errors_are_public` (the package exports land with the package index) and
- * `test_function_tool_awaitable_result_raises_a_tool_check_error` (it needs `FunctionTool`).
+ * `test_tool_errors_are_public` (the package exports land with `tools/index.ts`) and
+ * `test_function_tool_awaitable_result_raises_a_tool_check_error` (a `FunctionTool`'s execute may
+ * return a Promise, so an async result is not an error in TS).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -19,6 +20,7 @@ import {
   TOOL_ERROR,
   ToolCheckError,
   toolErrorKinds,
+  type ToolErrorKind,
   TransientToolError,
 } from "../../src/tools/errors.ts";
 
@@ -88,6 +90,7 @@ test("the tool errors are independent classes", () => {
 
 test("ReportedToolError refuses a non-boolean permanent", () => {
   expect(() => new ReportedToolError("x", { permanent: 1 as unknown as boolean })).toThrow(TypeError);
+  expect(() => new ReportedToolError("x", { permanent: 1 as unknown as boolean })).toThrow("permanent");
 });
 
 describe("kinds and guards", () => {
@@ -97,18 +100,21 @@ describe("kinds and guards", () => {
     reported: isReportedToolError,
     check: isToolCheckError,
   };
-  const cases: [string, unknown, string[]][] = [
+  const cases: [string, unknown, ToolErrorKind[]][] = [
     ["PermanentToolError", new PermanentToolError("x"), ["permanent"]],
     ["TransientToolError", new TransientToolError("x"), ["transient"]],
     ["ReportedToolError", new ReportedToolError("x"), ["reported"]],
     ["permanent ReportedToolError", new ReportedToolError("x", { permanent: true }), ["reported", "permanent"]],
     ["ToolCheckError", new ToolCheckError("x"), ["check"]],
+    ["an array brand with an unknown kind", { [TOOL_ERROR]: ["fatal", "permanent"] }, ["permanent"]],
   ];
   for (const [label, error, kinds] of cases) {
     test(label, () => {
-      expect(toolErrorKinds(error)).toEqual(kinds as never);
+      expect(toolErrorKinds(error)).toEqual(kinds);
       expect(Object.isFrozen(toolErrorKinds(error))).toBe(true);
-      for (const [kind, guard] of Object.entries(guards)) expect(guard(error)).toBe(kinds.includes(kind));
+      for (const [kind, guard] of Object.entries(guards)) {
+        expect(guard(error)).toBe(kinds.some((each) => each === kind));
+      }
     });
   }
 
@@ -117,12 +123,21 @@ describe("kinds and guards", () => {
       throw new Error("boom");
     },
   });
+  const trappedArray = new Proxy([], {
+    get() {
+      throw new Error("trap");
+    },
+  });
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
   const unbranded: [string, unknown][] = [
     ["a plain Error", new Error("x")],
     ["null", null],
     ["a string", "permanent"],
     ["a string brand", { [TOOL_ERROR]: "permanent" }],
     ["a throwing getter", throwing],
+    ["a brand array whose proxy traps throw", { [TOOL_ERROR]: trappedArray }],
+    ["a revoked proxy", revoked.proxy],
   ];
   for (const [label, value] of unbranded) {
     test(`${label} has no kinds`, () => {

@@ -20,6 +20,8 @@ export const TOOL_ERROR = Symbol.for("yian.tool_error");
 /** A kind a tool error belongs to; an error can belong to several. */
 export type ToolErrorKind = "permanent" | "transient" | "reported" | "check";
 
+const KINDS: ReadonlySet<unknown> = new Set<ToolErrorKind>(["permanent", "transient", "reported", "check"]);
+
 const NONE: readonly ToolErrorKind[] = Object.freeze([]);
 const PERMANENT: readonly ToolErrorKind[] = Object.freeze(["permanent"]);
 const TRANSIENT: readonly ToolErrorKind[] = Object.freeze(["transient"]);
@@ -121,14 +123,15 @@ export class ToolCheckError extends TypeError {
 }
 
 /**
- * Return the kinds `error` is branded with: its `TOOL_ERROR` value when that is an array, else
- * none. Never throws, so a hostile object (a throwing getter or proxy trap) has no kinds.
+ * Return the known kinds in `error`'s `TOOL_ERROR` array, frozen, or none when it has no such
+ * array. Never throws, so a hostile object (a throwing getter or proxy trap) has no kinds.
  */
 export function toolErrorKinds(error: unknown): readonly ToolErrorKind[] {
-  if ((typeof error !== "object" || error === null) && typeof error !== "function") return NONE;
+  if (error === null || (typeof error !== "object" && typeof error !== "function")) return NONE;
   try {
     const kinds: unknown = (error as { [TOOL_ERROR]?: unknown })[TOOL_ERROR];
-    return Array.isArray(kinds) ? (kinds as readonly ToolErrorKind[]) : NONE;
+    if (!Array.isArray(kinds)) return NONE;
+    return Object.freeze(kinds.filter((kind): kind is ToolErrorKind => KINDS.has(kind)));
   } catch {
     return NONE;
   }

@@ -156,7 +156,7 @@ function freezeJson(
  * @throws TypeError when `value` isn't a plain object, holds a non-JSON value, or has a symbol key.
  * @throws RangeError for a refused number, a lone surrogate, a cycle, or nesting past the limit.
  */
-function freezeJsonObject(
+export function freezeJsonObject(
   value: unknown,
   name: string,
   options: { limitNesting?: boolean; valueNumbers?: boolean } = {},

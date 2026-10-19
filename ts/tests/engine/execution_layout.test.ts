@@ -24,7 +24,6 @@
  * - The stale-graph row's replaced target is `copyGraph(node)` (Python's `copy.deepcopy`).
  * - The invalid-layout row's "mutable-targets" is a forged layout whose `targets` isn't an array.
  * - The atomic-scope row's string subclass is a path holding `new String("last")`.
- * - The manifest-policy row's misspelled field is the own field `misspelledExecutionScope`.
  *
  * Later (T3-22): `test_callsites_to_one_definition_have_distinct_paths`,
  * `test_agent_variable_owners_are_authored_callsites_and_survive_call_cloning`,

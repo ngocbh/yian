@@ -1381,11 +1381,11 @@ function checkLiteral(
 ): void {
   const { top, problems } = walk;
   const add = (parts: Loc, message: string): void => {
-    const same = (problem: BlockProblem) =>
-      problem.message === message &&
-      problem.keys.length === parts.length &&
-      problem.keys.every((part, i) => part === parts[i]);
-    if (!problems.some(same)) problems.push(new BlockProblem(parts, message));
+    // Keys hold only strings and numbers, so equal JSON means equal keys.
+    const keysJson = JSON.stringify(parts);
+    if (!problems.some((problem) => problem.message === message && JSON.stringify(problem.keys) === keysJson)) {
+      problems.push(new BlockProblem(parts, message));
+    }
   };
   if (model === top) {
     // Python assigns the field to the block, whose key walk runs first and stops on a problem.
@@ -1412,7 +1412,7 @@ function writtenPath(path: string, keys: Loc, value: unknown, loc: Loc): [string
     if (typeof part === "number" && isList(node) && part < node.length) {
       path += `[${part}]`;
       node = node[part];
-    } else if (typeof part === "string" && isRecord(node) && Object.hasOwn(node, part)) {
+    } else if (typeof part === "string" && isRecord(node) && Object.hasOwn(node, part) && node[part] !== undefined) {
       path += `.${part}`;
       node = node[part];
     } else {

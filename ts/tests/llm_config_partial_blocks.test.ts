@@ -203,14 +203,14 @@ describe("blockFieldAnnotation", () => {
   });
 
   test.each([
-    ["openai", ["metadata"], {}],
-    ["anthropic", ["thinking"], {}],
-    ["anthropic", ["stop_sequences"], {}],
-    ["ollama", ["think"], {}],
-    ["anthropic", ["thinking", "budget_tokens"], { thinking: { type: new Value() } }],
-    ["anthropic", ["thinking", "budget_tokens"], {}],
-    ["anthropic", ["nope"], {}],
-  ] as const)("no annotation for fields checked when the value resolves: %s %p", (block, path, tree) => {
+    ["a mapping", "openai", ["metadata"], {}],
+    ["an object", "anthropic", ["thinking"], {}],
+    ["a list", "anthropic", ["stop_sequences"], {}],
+    ["a union", "ollama", ["think"], {}],
+    ["a variant tag given as a value", "anthropic", ["thinking", "budget_tokens"], { thinking: { type: new Value() } }],
+    ["no variant tag", "anthropic", ["thinking", "budget_tokens"], {}],
+    ["an unknown path", "anthropic", ["nope"], {}],
+  ] as const)("no annotation for fields checked when the value resolves: %s", (_label, block, path, tree) => {
     expect(blockFieldAnnotation(block, path, tree)).toBeNull();
   });
 });
@@ -252,6 +252,15 @@ describe("TS additions", () => {
     expect(problems("openai", { metadata: { a: null, b: new Value() } })).toEqual([
       "`openai.metadata.a`: Input should be a valid string",
     ]);
+  });
+
+  test("a key written as undefined is absent", () => {
+    const tree = { safetySettings: [{ category: "HARM_CATEGORY_HATE_SPEECH", threshold: undefined }] };
+    expect(locatedBlockProblems("google", tree, isValue)).toEqual([
+      new BlockProblem(["safetySettings", 0], "`google.safetySettings[0]`: Field required"),
+    ]);
+    const thinking = { type: "enabled", budget_tokens: undefined, display: new Value() };
+    expect(problems("anthropic", { thinking })).toEqual(["`anthropic.thinking.budget_tokens` is required"]);
   });
 
   test("a problem and its keys are frozen", () => {

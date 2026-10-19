@@ -15,9 +15,6 @@ import { isRecord } from "../../typesys/values.ts";
 import type { NodeDescriptor } from "./base.ts";
 import { BINDING_FIELDS } from "./index.ts";
 
-/** Kind to the descriptor fields carrying binding text: `BINDING_FIELDS`'s shape. */
-export type BindingFieldTable = ReadonlyMap<string, readonly string[]>;
-
 /** Whether `value` is a binding source the walk maps: a string or a `ValueTemplate`. */
 function isSource(value: unknown): value is string | ValueTemplate {
   return typeof value === "string" || value instanceof ValueTemplate;
@@ -39,25 +36,23 @@ function isSource(value: unknown): value is string | ValueTemplate {
 export function mapBindingSources<D extends NodeDescriptor>(
   desc: D,
   mapper: (field: string, key: string, source: string | ValueTemplate) => unknown,
-  { bindingFields = BINDING_FIELDS }: { bindingFields?: BindingFieldTable } = {},
+  options: { bindingFields?: typeof BINDING_FIELDS } = {},
 ): D {
+  const { bindingFields = BINDING_FIELDS } = options;
   const fields = bindingFields.get(desc.kind) ?? [];
   const updates: Record<string, unknown> = {};
-  let visited = false;
   for (const name of fields) {
     const current = (desc as unknown as Record<string, unknown>)[name];
     if (isRecord(current)) {
       updates[name] = Object.fromEntries(
         Object.entries(current).map(([key, value]) => [key, isSource(value) ? mapper(name, key, value) : value]),
       );
-      visited = true;
     } else if (isSource(current)) {
       updates[name] = mapper(name, name, current);
-      visited = true;
     }
     // null or a literal scalar: nothing to rewrite.
   }
-  return visited ? desc.replace(updates as Partial<D>) : desc;
+  return Object.keys(updates).length > 0 ? desc.replace(updates) : desc;
 }
 
 /**
@@ -74,7 +69,7 @@ export function mapBindingSources<D extends NodeDescriptor>(
 export function mapBindingStrings<D extends NodeDescriptor>(
   desc: D,
   mapper: (field: string, key: string, text: string) => unknown,
-  options: { bindingFields?: BindingFieldTable } = {},
+  options: { bindingFields?: typeof BINDING_FIELDS } = {},
 ): D {
   return mapBindingSources(
     desc,

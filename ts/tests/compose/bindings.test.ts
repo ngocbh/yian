@@ -20,8 +20,8 @@ import { StandInCase, standIn } from "./stand_ins.ts";
 
 /** A `call` stand-in with the scalar `over` binding field beside `inputs`. */
 class StandInCall extends NodeDescriptor {
-  static override kind = "call";
-  static override bindingFields: readonly string[] = ["inputs", "over"];
+  static override readonly kind: string = "call";
+  static override readonly bindingFields: readonly string[] = ["inputs", "over"];
   readonly over: unknown;
 
   constructor(fields: NodeDescriptorFields & { over?: unknown }) {
@@ -32,7 +32,7 @@ class StandInCall extends NodeDescriptor {
 
 /** A `map` stand-in: Python's `MapDescriptor` subclasses `CallDescriptor`. */
 class StandInMap extends StandInCall {
-  static override kind = "map";
+  static override readonly kind = "map";
 }
 
 const StandInAgent = standIn("agent", { bindingFields: ["inputs"] });

@@ -28,8 +28,8 @@ export const ALL_KIND_NAMES: readonly string[] = [
 
 /** An `agent` stand-in taking `prompt`, `input` and `output`. */
 export class StandInAgent extends NodeDescriptor {
-  static override kind = "agent";
-  static override allowed = this.allow("prompt", "inputs", "outputs");
+  static override readonly kind = "agent";
+  static override readonly allowed = this.allow("prompt", "inputs", "outputs");
   readonly prompt: unknown;
 
   constructor(fields: NodeDescriptorFields & { prompt?: unknown }) {
@@ -40,9 +40,9 @@ export class StandInAgent extends NodeDescriptor {
 
 /** A `code` stand-in requiring `code` and taking `input`, `output` and `asserts`; it builds. */
 export class StandInCode extends NodeDescriptor {
-  static override kind = "code";
-  static override allowed = this.allow("code", "inputs", "outputs", "asserts");
-  static override required = this.require("code");
+  static override readonly kind = "code";
+  static override readonly allowed = this.allow("code", "inputs", "outputs", "asserts");
+  static override readonly required = this.require("code");
   readonly code: unknown;
   readonly asserts: unknown;
 
@@ -60,9 +60,9 @@ export class StandInCode extends NodeDescriptor {
 
 /** A `case` stand-in taking `on`, `cases` and `else`, which it reads as `else_`. */
 export class StandInCase extends NodeDescriptor {
-  static override kind = "case";
-  static override allowed = this.allow("on", "cases", "else");
-  static override keywordRemap: ReadonlyMap<string, string> = new Map([["else", "else_"]]);
+  static override readonly kind = "case";
+  static override readonly allowed = this.allow("on", "cases", "else");
+  static override readonly keywordRemap: ReadonlyMap<string, string> = new Map([["else", "else_"]]);
   readonly on: unknown;
   readonly cases: unknown;
   readonly else_: unknown;
@@ -90,17 +90,18 @@ export function standIn(
 ): DescriptorClass {
   const { allow = [], require = [], bindingFields = [], keywordRemap = new Map() } = options;
   return class extends NodeDescriptor {
-    static override kind = kind;
-    static override allowed = this.allow(...allow);
-    static override required = this.require(...require);
-    static override bindingFields = bindingFields;
-    static override keywordRemap = keywordRemap;
+    static override readonly kind = kind;
+    static override readonly allowed = this.allow(...allow);
+    static override readonly required = this.require(...require);
+    static override readonly bindingFields = bindingFields;
+    static override readonly keywordRemap = keywordRemap;
   };
 }
 
 /**
  * Run `fn` with `classes` registered in `KINDS` and `BINDING_FIELDS` under their kinds, then
- * restore the previous entries, also after a throw.
+ * restore the previous entries, also after a throw. `fn` must be synchronous: the tables are
+ * restored in `finally`, before a returned promise settles.
  */
 export function withKinds<T>(classes: readonly DescriptorClass[], fn: () => T): T {
   const kinds = KINDS as Map<string, DescriptorClass>;

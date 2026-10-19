@@ -3,15 +3,12 @@
  * `tests/compose/test_descriptor_base.py`, with a test-local `D` as Python's.
  *
  * TS-only: `replace` keeps the class and re-runs the origin check (Python's
- * `dataclasses.replace`), the instance `kind`, and a subclass's `allow` unioning its parent's
- * set. And the `message builders` rows, which Python tests through `load_flow` or its
- * docstrings: `valueTypeError` (its docstring examples), `rejectNonText`,
- * `rejectContainerSpans`, `inputShapeProblem` (the shapes of
- * `tests/compose/test_node_input_shape.py`; a text value is spelled by `valueRepr`, so `"abc"`
- * and `true` where Python shows `'abc'` and `True`) and `siteKey`.
- *
- * Dropped: the date row of `test_non_mapping_input_is_a_load_error` (TS reads an unquoted date
- * as text).
+ * `dataclasses.replace`), takes a kind's own field from the kind's method and returns the
+ * kind's type; a kind's `parse` override typechecks; the instance `kind`; and a subclass's
+ * `allow` unioning its parent's set. And the `message builders` rows, which Python tests
+ * through `load_flow` or its docstrings: `valueTypeError` (its docstring examples),
+ * `rejectNonText`, `rejectContainerSpans`, `inputShapeProblem`'s binding noun per kind (the
+ * shapes run through `parse` in `node_input_shape.test.ts`) and `siteKey`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -28,7 +25,6 @@ import {
 } from "../../src/compose/nodes/base.ts";
 import { SourceCursor } from "../../src/compose/source/index.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
-import { Binding } from "../../src/nodes/contracts.ts";
 import { loadError } from "./declarations.ts";
 
 const RANGE = new SourceRange(2, 5, 2, 9);
@@ -36,8 +32,8 @@ const DIAGNOSTICS = new LoadDiagnostics("f.yaml", "nodes:\n  a: 1234\n");
 
 /** A kind with one own field, `greeting`. */
 class D extends NodeDescriptor {
-  static override kind = "d";
-  static override allowed = this.allow("greeting");
+  static override readonly kind = "d";
+  static override readonly allowed = this.allow("greeting");
   readonly greeting: unknown;
 
   constructor(fields: NodeDescriptorFields & { greeting?: unknown }) {
@@ -65,7 +61,8 @@ describe("NodeDescriptor", () => {
 
   test("_validateFields rejects bad asserts by default", () => {
     const fields = { asserts: [1n, 2n] };
-    loadError(() => D._validateFields("n", fields, new Map(), null, new LoadDiagnostics()));
+    const error = loadError(() => D._validateFields("n", fields, new Map(), null, new LoadDiagnostics()));
+    expect(error.diagnostic.message).toBe("node 'n' (kind=d): `asserts:` must be a list of strings");
   });
 
   test("_validateFields skips absent asserts by default", () => {
@@ -116,6 +113,47 @@ describe("NodeDescriptor", () => {
     );
   });
 
+  test("replace takes a kind's own field from the kind's method and returns the kind", () => {
+    /** A kind whose method replaces its own field. */
+    class M extends NodeDescriptor {
+      static override readonly kind = "m";
+      readonly memories: readonly string[];
+
+      constructor(fields: NodeDescriptorFields & { memories?: readonly string[] }) {
+        super(fields);
+        this.memories = fields.memories ?? [];
+      }
+
+      remember(memory: string): this {
+        return this.replace({ memories: [...this.memories, memory] });
+      }
+    }
+    const desc = new M({ id: "n", memories: ["a"] });
+    const remembered: M = desc.remember("b");
+    expect(remembered).toBeInstanceOf(M);
+    expect(remembered.memories).toEqual(["a", "b"]);
+    const renamed: M = desc.replace({ nodeName: "N" });
+    expect(renamed.nodeName).toBe("N");
+    expect(renamed.memories).toEqual(["a"]);
+  });
+
+  test("a kind's parse override keeps the kind's type", () => {
+    /** A kind whose `parse` upper-cases the greeting after the template parse. */
+    class P extends D {
+      static override parse<T extends typeof NodeDescriptor>(
+        this: T,
+        nodeId: string,
+        cursor: SourceCursor,
+      ): InstanceType<T> {
+        const desc = super.parse(nodeId, cursor) as P;
+        return desc.replace({ greeting: String(desc.greeting).toUpperCase() }) as InstanceType<T>;
+      }
+    }
+    const desc: P = P.parse("n1", SourceCursor.virtual({ kind: "d", greeting: "hi" }));
+    expect(desc).toBeInstanceOf(P);
+    expect(desc.greeting).toBe("HI");
+  });
+
   test("the instance kind is the class's", () => {
     expect(new D({ id: "n" }).kind).toBe("d");
     expect(new NodeDescriptor({ id: "n" }).kind).toBe("");
@@ -123,7 +161,7 @@ describe("NodeDescriptor", () => {
 
   test("a subclass's allow unions its parent's set", () => {
     class E extends D {
-      static override allowed = this.allow("farewell");
+      static override readonly allowed = this.allow("farewell");
     }
     expect(E.allowed).toEqual(new Set([...D.allowed, "farewell"]));
     expect(D.allowed.has("farewell")).toBe(false);
@@ -190,41 +228,6 @@ describe("message builders", () => {
     ["a whole span", "${a.output}"],
   ])("rejectContainerSpans lets %s through", (_label, value) => {
     rejectContainerSpans("map", "m", "over", value, RANGE, DIAGNOSTICS);
-  });
-
-  const LOOP_TAIL = "list each carried field, such as `<field>: ...`";
-  test.each([
-    ["a number", 5n, `(got 5); ${LOOP_TAIL}`],
-    ["a list", [1n], `(got [1]); ${LOOP_TAIL}`],
-    ["text", "abc", `(got "abc"); ${LOOP_TAIL}`],
-    ["a boolean", true, `(got true); ${LOOP_TAIL}`],
-    ["an empty list", [], "(got []); write `input: {}` or remove `input:`"],
-    ["empty text", "", '(got ""); write `input: {}` or remove `input:`'],
-    [
-      "a tagged reference",
-      new Binding("${seed.output}"),
-      "(got the reference '${seed.output}'); list each carried field, such as " +
-        "`<field>: ${seed.output.<field>}`",
-    ],
-    [
-      "a nested reference",
-      "${seed.output.n}",
-      "(got the reference '${seed.output.n}'); list each carried field, such as " +
-        "`<field>: ${seed.output.n.<field>}`",
-    ],
-    [
-      "an expression",
-      "${seed.output.n + 1}",
-      "(got the expression '${seed.output.n + 1}'); list each carried field, such as " +
-        "`<field>: ${...}`",
-    ],
-    [
-      "an embedded span",
-      "x ${seed.output}",
-      '(got "x ${seed.output}"); list each carried field, such as `<field>: ${...}`',
-    ],
-  ])("inputShapeProblem describes %s", (_label, value, tail) => {
-    expect(inputShapeProblem("loop", value)).toBe(`\`input:\` must be a mapping of carried fields ${tail}`);
   });
 
   test.each([

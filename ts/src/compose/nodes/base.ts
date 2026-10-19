@@ -193,32 +193,46 @@ export function rejectNonText(
   }
 }
 
+/** Resolves a child flow by id and version for call, map and loop. */
+export type ChildResolver = (flowId: string, version: string | null) => unknown;
+
+/** Presents an origin registered before the file's catalog is final. */
+export type OriginPresenter = (origin: OriginRef) => DiagnosticFrame | null;
+
+/** Compiles one node's authored `output:` declaration at its build position. */
+export type OutputContractReader = (nodeId: string, outputSpec: unknown) => ValueContract | null;
+
+/** Compiles one node's local variable declarations at their build position. */
+export type VariableDeclarationReader = (nodeId: string, declarations: unknown) => Parameter[] | null;
+
+/**
+ * Resolves one parent binding's output contract from the flow inputs and the producers it
+ * references, given a diagnostic label, the binding and the binding's range.
+ */
+export type BindingContractReader = (
+  label: string,
+  binding: unknown,
+  range: SourceRange | null,
+) => OutputContract | null;
+
 /** The inputs a node `build` reads; frozen. */
 export class BuildContext {
   /** The flow's named types, for reading declared types. */
   readonly registry: TypeRegistry;
   /** Resolves a child flow by id and version for call, map and loop; `null` for leaves. */
-  readonly resolver: ((flowId: string, version: string | null) => unknown) | null;
+  readonly resolver: ChildResolver | null;
   /** The opaque file name an inline CODE body reports in its errors. */
   readonly sourceFile: string;
   /** Presents an origin registered before the file's catalog is final. */
-  readonly resolveOrigin: ((origin: OriginRef) => DiagnosticFrame | null) | null;
+  readonly resolveOrigin: OriginPresenter | null;
   /** Factory for located load errors. */
   readonly diagnostics: LoadDiagnostics;
   /** Compiles one authored `output:` declaration at its build position. */
-  readonly outputContractReader: ((nodeId: string, outputSpec: unknown) => ValueContract | null) | null;
+  readonly outputContractReader: OutputContractReader | null;
   /** Compiles one node's local variable declarations at their build position. */
-  readonly variableDeclarationReader:
-    | ((nodeId: string, declarations: unknown) => Parameter[] | null)
-    | null;
-  /**
-   * Resolves one parent binding's output contract from the flow inputs and the producers it
-   * references (diagnostic label, binding, binding range); LOOP reads it to type a carried field
-   * its body omits.
-   */
-  readonly bindingContractReader:
-    | ((label: string, binding: unknown, range: SourceRange | null) => OutputContract | null)
-    | null;
+  readonly variableDeclarationReader: VariableDeclarationReader | null;
+  /** Resolves one parent binding's output contract; LOOP reads it to type a carried field its body omits. */
+  readonly bindingContractReader: BindingContractReader | null;
   /** The lexical flow path of the flow being assembled; AGENT stamps it into memory sites. */
   readonly owner: readonly string[];
 
@@ -229,15 +243,13 @@ export class BuildContext {
    */
   constructor(options: {
     registry: TypeRegistry;
-    resolver?: ((flowId: string, version: string | null) => unknown) | null;
+    resolver?: ChildResolver | null;
     sourceFile?: string;
-    resolveOrigin?: ((origin: OriginRef) => DiagnosticFrame | null) | null;
+    resolveOrigin?: OriginPresenter | null;
     diagnostics?: LoadDiagnostics;
-    outputContractReader?: ((nodeId: string, outputSpec: unknown) => ValueContract | null) | null;
-    variableDeclarationReader?: ((nodeId: string, declarations: unknown) => Parameter[] | null) | null;
-    bindingContractReader?:
-      | ((label: string, binding: unknown, range: SourceRange | null) => OutputContract | null)
-      | null;
+    outputContractReader?: OutputContractReader | null;
+    variableDeclarationReader?: VariableDeclarationReader | null;
+    bindingContractReader?: BindingContractReader | null;
     owner?: readonly string[];
   }) {
     const {
@@ -340,37 +352,45 @@ export interface NodeDescriptorFields {
 }
 
 /**
- * The base every `compose/nodes/<kind>.ts` descriptor extends: the fields common to all nodes,
- * so no kind redeclares them.
+ * The base every `compose/nodes/<kind>.ts` descriptor extends: the fields common to all nodes.
  *
- * The statics are the per-kind parse contract each kind overrides. A kind assigns its own fields
- * after `super(fields)`, and `replace` rebuilds through the kind's constructor.
+ * The statics are the per-kind parse contract each kind overrides, e.g.
+ * `static override readonly allowed = this.allow("prompt")`.
+ *
+ * Descriptors are readonly but not frozen: the base can't freeze before the subclass assigns its
+ * fields. Each constructor takes one options object keyed by field names, and each class assigns
+ * its own fields after `super(fields)`; `replace` rebuilds through the kind's constructor. A kind
+ * must not redeclare a base field, since an ES2022 class field resets it to `undefined` after
+ * `super()`; to narrow a base field's type, write `declare readonly x: T`.
  */
 export class NodeDescriptor {
-  /** The kind's `kind:` discriminator; empty on the base. */
-  static kind = "";
+  /**
+   * The kind's `kind:` discriminator; empty on the base. A kind another kind extends declares it
+   * `: string`, since a readonly literal would type it as that one text.
+   */
+  static readonly kind: string = "";
   /**
    * The complete set of body keys this kind accepts: the commons and `kind` here, which each
    * kind extends with `allow`. `inputs` and `outputs` are the carriers for the authored
    * `input:` and `output:`.
    */
-  static allowed: ReadonlySet<string> = new Set(["kind", "node_name", "depends_on", "runs_after", "env"]);
+  static readonly allowed: ReadonlySet<string> = new Set(["kind", "node_name", "depends_on", "runs_after", "env"]);
   /** The body keys this kind requires; empty on the base, extended with `require`. */
-  static required: ReadonlySet<string> = new Set();
+  static readonly required: ReadonlySet<string> = new Set();
   /**
    * Appended to the unknown-key error for an authored `when:`, since no kind takes a top-level
    * condition and the bare error would leave the author guessing where it goes.
    */
-  static whenHint =
+  static readonly whenHint: string =
     "; to run a node only when a condition holds, route to it from a `case` node " +
     "(`cases: [{when: ..., then: <node>}]`)";
   /** The descriptor fields carrying `${...}` binding text, for the kind-blind ref walk. */
-  static bindingFields: readonly string[] = [];
+  static readonly bindingFields: readonly string[] = [];
   /**
    * Body key to descriptor field name, where a key collides with a reserved word (`case`'s
    * `else` is `else_`); other keys take their camelCase name.
    */
-  static keywordRemap: ReadonlyMap<string, string> = new Map();
+  static readonly keywordRemap: ReadonlyMap<string, string> = new Map();
 
   /** The node's key in the `nodes:` map. */
   readonly id: string;
@@ -451,6 +471,21 @@ export class NodeDescriptor {
    * Runs `_normalizeCursor`, then `_checkKeys`, then reads each present own key (`allowed`
    * minus the base's) under its field name, recording its range under `siteKey("field", key)`,
    * then `_validateFields` and `_readCommonFields`, and constructs the descriptor.
+   *
+   * A kind that overrides it keeps the `this: T` signature and casts, since `super.parse`
+   * returns the generic `InstanceType<T>`, which doesn't expose the kind's fields:
+   *
+   * ```ts
+   * static override parse<T extends typeof NodeDescriptor>(
+   *   this: T,
+   *   nodeId: string,
+   *   cursor: SourceCursor,
+   * ): InstanceType<T> {
+   *   const desc = super.parse(nodeId, cursor) as AgentDescriptor;
+   *   // ... check or rewrite `desc` ...
+   *   return desc as InstanceType<T>;
+   * }
+   * ```
    *
    * @param nodeId The node's id.
    * @param cursor The node body.
@@ -714,8 +749,13 @@ export class NodeDescriptor {
     });
   }
 
-  /** Return a copy with `changes` applied, rebuilt through this class's constructor. */
-  replace(changes: Partial<this>): this {
+  /**
+   * Return a copy with `changes` applied, rebuilt through this class's constructor.
+   *
+   * `changes` is keyed by field name; the base fields are type-checked and a kind's own fields
+   * pass through, so a kind's method can call `this.replace({ memories })`.
+   */
+  replace(changes: Partial<NodeDescriptorFields> & Readonly<Record<string, unknown>>): this {
     const cls = this.constructor as new (fields: NodeDescriptorFields) => this;
     return new cls({ ...this, ...changes });
   }

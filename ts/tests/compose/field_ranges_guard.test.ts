@@ -7,7 +7,9 @@
  * per-binding `input` ranges come from `parseNodes`, which is not ported yet. Row 3 drops its
  * equality half (TS has no dataclass `==`).
  *
- * Later (T3-16): `test_case_generated_input_range_stays_in_build_result`.
+ * Later (T3-16): `test_case_generated_input_range_stays_in_build_result`. Later (this item's
+ * parse/nodes task): restore Python's `("input", "topic")` line-10 assertion once `parseNodes`
+ * records input ranges.
  */
 
 import { expect, test } from "bun:test";

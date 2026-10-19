@@ -1490,17 +1490,15 @@ def _ts_value_repr(value: object) -> str:
 # a quoted key, `x['k']`) and as `", ".join` of text-form names gives one (`["a", "b"]`).
 _QUOTED = r"'(?:[^'\\\n]|\\.)*'" "|" r'"(?:[^"\\\n]|\\.)*"'
 _NAME_LIST = re.compile(rf"\[(?:{_QUOTED})(?:, (?:{_QUOTED}))*\]")
-# The result keys holding yian-written text.
-_MESSAGE_KEYS = frozenset({"message", "note", "notes"})
-
-
 def _ts_names(text: str) -> str:
     """Return `text` with each bracketed list of quoted texts written as compact JSON.
 
     So `unknown key(s) ['max_items']` reads `unknown key(s) ["max_items"]`, `["a", "b"]` reads
     `["a","b"]`, and a quoted key `x['my key']` reads `x["my key"]`, as TS writes them
-    (decision 43). A list holding anything but texts is left alone. Not matched: a list cut by
-    `shown_text`. Converted too: such a list inside a text value the message quotes.
+    (decision 43). A list holding anything but texts is left alone, but a list of texts
+    nested in another list or a mapping is converted alone (`{'k': ['a']}` reads
+    `{'k': ["a"]}`). Not matched: a list cut by `shown_text`. Converted too: such a list
+    inside a text value or source text the message quotes. Review `messages` cases by hand.
     """
     def write(match: re.Match) -> str:
         try:
@@ -1513,19 +1511,27 @@ def _ts_names(text: str) -> str:
 
 
 def _ts_messages(value: object) -> object:
-    """Return a runner result with `_ts_names` applied to its `message`, `note` and `notes` texts."""
+    """Return a runner result with `_ts_names` applied to the text of each error in it.
+
+    An error is a mapping with a text `message` beside a `class` (a raise) or a `code` (a
+    failure or a diagnostic); its `notes` and its frames' `note`s are converted too. Values
+    a flow or a tool returned are left alone, even a record with a `message` field.
+    """
     if isinstance(value, list):
         return [_ts_messages(item) for item in value]
     if not isinstance(value, dict):
         return value
-    converted = {}
-    for key, item in value.items():
-        if key in _MESSAGE_KEYS and isinstance(item, str):
-            converted[key] = _ts_names(item)
-        elif key in _MESSAGE_KEYS and isinstance(item, list):
-            converted[key] = [_ts_names(text) if isinstance(text, str) else text for text in item]
-        else:
-            converted[key] = _ts_messages(item)
+    converted = {key: _ts_messages(item) for key, item in value.items()}
+    if isinstance(value.get("message"), str) and ("class" in value or "code" in value):
+        converted["message"] = _ts_names(value["message"])
+        if isinstance(value.get("notes"), list):
+            converted["notes"] = [_ts_names(note) if isinstance(note, str) else note
+                                  for note in value["notes"]]
+        if isinstance(value.get("frames"), list):
+            converted["frames"] = [
+                frame | {"note": _ts_names(frame["note"])}
+                if isinstance(frame, dict) and isinstance(frame.get("note"), str) else frame
+                for frame in converted["frames"]]
     return converted
 
 

@@ -3885,6 +3885,27 @@ def test_shim_ts_names() -> None:
     assert [harvest._ts_names(text) for text, _ in rows] == [text for _, text in rows]
 
 
+def test_shim_ts_messages() -> None:
+    """`_ts_messages` converts the texts of raises, failures and diagnostics, not values."""
+    from tests import conformance_harvest as harvest
+
+    py, ts = "unknown key(s) ['a']", 'unknown key(s) ["a"]'
+    result = {
+        "raises": {"class": "ValueError", "message": py},
+        "load": {"diagnostics": [{"code": "c", "message": py, "notes": [py, 1],
+                                  "frames": [{"label": "f", "note": py}, {"label": "g"}]}]},
+        "trace": [["node_failed", "n", {"failure": {"code": "c", "message": py, "node": "n"}}]],
+        "output": {"status": "succeeded", "output": {"message": py, "notes": [py]}},
+    }
+    assert harvest._ts_messages(result) == {
+        "raises": {"class": "ValueError", "message": ts},
+        "load": {"diagnostics": [{"code": "c", "message": ts, "notes": [ts, 1],
+                                  "frames": [{"label": "f", "note": ts}, {"label": "g"}]}]},
+        "trace": [["node_failed", "n", {"failure": {"code": "c", "message": ts, "node": "n"}}]],
+        "output": {"status": "succeeded", "output": {"message": py, "notes": [py]}},
+    }
+
+
 def test_shim_messages_replay(tmp_path: Path) -> None:
     """A replay under `messages` writes a Python list of names in its messages as JSON."""
     from tests import conformance_harvest as harvest

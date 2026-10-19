@@ -27,7 +27,6 @@ test.each([
   ["  call (f, x=1)  ", ["f", " x=1"]],
   ["call(my-flow, a=1)", ["my-flow", " a=1"]],
   ["call(f, 30)", ["f", " 30"]],
-  ["call(f, x=call(g) tail)", ["f", " x=call(g) tail"]],
 ] as const)("a whole-value directive %p is recognized", (value, expected) => {
   expect(matchCallDirective(value)).toEqual([...expected]);
 });
@@ -44,23 +43,8 @@ test("CALL_HEAD anchors at the start", () => {
   expect(CALL_HEAD.test("pre call(f)")).toBe(false);
 });
 
-const NEVER_CLOSED = "`call(` is never closed (check its parentheses and quotes)";
-const notFirst = (first: string) =>
-  `a call(...) must start with a flow id (a bare name) and a comma, got ${first}`;
-
-test.each([
-  ["call(f) tail", "text follows the closing `)`: 'tail'; a call(...) must be the whole value"],
-  ["call(f, x=1", NEVER_CLOSED],
-  ['call(f, x="a)', NEVER_CLOSED],
-  ["call(f x=1)", notFirst("'f x=1'")],
-  ["call(f.g)", notFirst("'f.g'")],
-  ["call()", notFirst("''")],
-  [
-    "call(f) and more",
-    "text follows the closing `)`: 'and more'; a call(...) must be the whole value",
-  ],
-  ["call(g) tail", "text follows the closing `)`: 'tail'; a call(...) must be the whole value"],
-])("a malformed directive %p throws its message", (value, message) => {
+/** Assert `matchCallDirective(value)` throws an `ExpressionError` with exactly `message`. */
+function expectThrows(value: string, message: string): void {
   let caught: unknown;
   try {
     matchCallDirective(value);
@@ -69,6 +53,36 @@ test.each([
   }
   expect(caught).toBeInstanceOf(ExpressionError);
   expect((caught as ExpressionError).message).toBe(message);
+}
+
+const NEVER_CLOSED = "`call(` is never closed (check its parentheses and quotes)";
+const notFirst = (first: string) =>
+  `a call(...) must start with a flow id (a bare name) and a comma, got ${first}`;
+
+test.each([
+  ["call(f) tail", "text follows the closing `)`: 'tail'; a call(...) must be the whole value"],
+  ["call(f, x=1", NEVER_CLOSED],
+  ['call(f, x="a)', NEVER_CLOSED],
+  ["call(f, x=${g)", NEVER_CLOSED],
+  ["call(f x=1)", notFirst("'f x=1'")],
+  ["call(f.g)", notFirst("'f.g'")],
+  ["call()", notFirst("''")],
+  [
+    "call(f) and more",
+    "text follows the closing `)`: 'and more'; a call(...) must be the whole value",
+  ],
+])("a malformed directive %p throws its message", (value, message) => {
+  expectThrows(value, message);
+});
+
+// The outer call keeps a malformed nested call in its remainder; the error comes from the nested
+// call when the desugarer recurses into it.
+test("a nested call's trailing text is the nested call's error", () => {
+  expect(matchCallDirective("call(f, x=call(g) tail)")).toEqual(["f", " x=call(g) tail"]);
+  expectThrows(
+    "call(g) tail",
+    "text follows the closing `)`: 'tail'; a call(...) must be the whole value",
+  );
 });
 
 test.each([
@@ -77,6 +91,7 @@ test.each([
   ["call(f, x=call(g, y=1))", 22],
   ["call(f)", 6],
   ["call(f, x=${g(1)", null],
+  ["call(f, x=${g)", null],
   ["call(f, x=(1)", null],
 ] as const)("findParenEnd(%p) is %p", (text, expected) => {
   expect(findParenEnd(text, 5)).toBe(expected);
@@ -88,6 +103,7 @@ test.each([
     ",",
     ["a=1", " b=f(1, 2)", ' c="x,y"', " d=${h(1, 2)}"],
   ],
+  ["a=${[1, 2]}, b=1", ",", ["a=${[1, 2]}", " b=1"]],
   ["x=a=b", "=", ["x", "a", "b"]],
   ["a), b", ",", ["a)", " b"]],
   ["c='a=b'", "=", ["c", "'a=b'"]],

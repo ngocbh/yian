@@ -39,9 +39,9 @@
  * half-open span of code points in the rendered text, so feedback on the text can go back to its
  * sources.
  *
- * Compose's `call(...)` directive shares its call-parsing helpers with this module: `InlineCall`,
- * the record a desugared call produces, and `findParenEnd` and `splitCallsAware`, the paren-,
- * quote- and span-aware splitters the directive's recognizer reuses.
+ * This module also holds the call-parsing helpers that compose's `call(...)` directive reuses:
+ * `InlineCall`, the record a desugared call produces, and `findParenEnd` and `splitCallsAware`,
+ * the paren-, quote- and span-aware splitters the directive's recognizer uses.
  *
  * Knows about: `expressions` (the evaluator, `ResolveMode`, `exprRefs`, `rewriteExprRefs`,
  * `checkCalls`, `valueArgs`, `conversionHint`, `ISINSTANCE`, `resolveInRecord`,

@@ -3,15 +3,17 @@
  *
  * `planStructured` picks a strategy (a forced or unforced tool, the route's JSON-schema output
  * format, or a prompt for a model with no native structured output) from the first matching row
- * of a fixed table, and the request fields it needs. The caller validates replies against the
- * schema it passed. Ported from Python yian's `with_structured_output` overrides in
- * `llm_clients/*_client.py` and the native-structured gate in `nodes/agent/structured.py`.
+ * of a fixed table, and the request fields it needs; `StructuredPlan.parse` reads the reply's JSON
+ * object. The caller validates replies against the schema it passed. Ported from Python yian's
+ * `with_structured_output` overrides in `llm_clients/*_client.py`, the native-structured gate and
+ * code-fence strip in `nodes/agent/structured.py`, and `missing_tool_call` in
+ * `llm_clients/base_client.py`.
  */
 
 import type { JsonObject } from "../typesys/json.ts";
 import { encodeBody } from "./body.ts";
 import { getCapabilities, supportsNativeStructured } from "./capabilities.ts";
-import type { ChatModel } from "./events.ts";
+import { type ChatModel, parseArguments } from "./events.ts";
 import { RouteModel } from "./executor.ts";
 import {
   anthropicOutputSchema,
@@ -26,12 +28,25 @@ import {
   isPlainObject,
   NamedTool,
   OutputFormat,
+  RefusalPart,
   Request,
+  type Response,
   type ToolChoice,
+  ToolCallPart,
   type ToolSpec,
 } from "./messages.ts";
 import { AnthropicMessages } from "./protocols/anthropic_messages.ts";
 import { OpenAIResponses } from "./protocols/openai_responses.ts";
+
+/** A structured reply that holds no valid answer: no JSON object, or a refusal. */
+export class StructuredOutputError extends Error {
+  override name = "StructuredOutputError";
+}
+
+/** A structured reply that did not call the schema's tool. */
+export class MissingToolCallError extends StructuredOutputError {
+  override name = "MissingToolCallError";
+}
 
 /**
  * How a structured call is sent: a tool the model must call, a tool it may call, the route's
@@ -170,6 +185,66 @@ export class StructuredPlan {
         : "Respond with valid data matching the schema.";
     return `Your previous output was invalid: ${detail}. ${ask}`;
   }
+
+  /**
+   * Return the JSON object `response` answers with, unvalidated (ints as `bigint`).
+   *
+   * The tool strategies read the first call of the schema's tool whose arguments parsed. The
+   * text strategies read the message's text, stripped of whitespace and backticks, or else the
+   * text inside its first code fence up to the last one; either must be one JSON object, with no
+   * repair.
+   *
+   * @throws {MissingToolCallError} A tool strategy's reply has no valid call of the schema's tool.
+   * @throws {StructuredOutputError} A text strategy's reply holds no JSON object; the message
+   *   names the model's refusal, if any, else the text.
+   */
+  parse(response: Response): JsonObject {
+    const parts = response.message.parts;
+    if (this.strategy === "forced_tool" || this.strategy === "unforced_tool") {
+      for (const part of parts) {
+        if (part instanceof ToolCallPart && part.name === this.name && part.arguments !== null) return part.arguments;
+      }
+      throw new MissingToolCallError(`the reply did not call the ${this.name} tool; call it with the answer`);
+    }
+    const text = response.message.text();
+    const value = parseObject(strip(text)) ?? (text.includes(FENCE) ? parseObject(fenced(text)) : null);
+    if (value !== null) return value;
+    const refusals = parts.filter((part) => part instanceof RefusalPart);
+    if (refusals.length > 0) {
+      throw new StructuredOutputError(`the model refused: ${refusals.map((part) => part.text).join("\n")}`);
+    }
+    throw new StructuredOutputError(`Invalid json output: ${text.trim()}`);
+  }
+}
+
+const FENCE = "```";
+/** LangChain's strip set: Python's `" \n\r\t`"`. */
+const STRIPPED = " \n\r\t`";
+
+/** Return `text` without the whitespace and backticks around it. */
+function strip(text: string): string {
+  // A loop, not a `[...]+$` regex, which backtracks quadratically over a long inner run.
+  let start = 0;
+  let end = text.length;
+  while (start < end && STRIPPED.includes(text[start]!)) start++;
+  while (end > start && STRIPPED.includes(text[end - 1]!)) end--;
+  return text.slice(start, end);
+}
+
+/**
+ * Return the text inside the first code fence of `text`, without its info string (e.g. `json`),
+ * up to the last fence after it or the end, stripped like `strip`. Taking the last fence
+ * keeps fences inside the JSON's strings.
+ */
+function fenced(text: string): string {
+  const body = text.slice(text.indexOf(FENCE) + FENCE.length).replace(/^[A-Za-z0-9_+.-]*/, "");
+  const end = body.lastIndexOf(FENCE);
+  return strip(end === -1 ? body : body.slice(0, end));
+}
+
+/** Return the JSON object `text` holds, or `null`; an empty text holds none. */
+function parseObject(text: string): JsonObject | null {
+  return text === "" ? null : parseArguments(text)[0];
 }
 
 /**

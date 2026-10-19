@@ -1,11 +1,14 @@
 /**
  * Tests for the structured-output strategy choice in `src/llm/structured.ts`: `structuredTarget`,
  * `planStructured` (one test per row of the selection table, first match wins), `forcesTool` and
- * `sendsJsonSchemaAsTool`, and a plan's `apply`, `instruction` and `correction`, ported from Python
- * yian's Anthropic, Azure, open-schema and structured-node tests.
+ * `sendsJsonSchemaAsTool`, a plan's `apply`, `instruction`, `correction` and `parse`, and the
+ * structured-output errors, ported from Python yian's Anthropic, Azure, open-schema and
+ * structured-node tests.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+
+import { BUILTIN, install } from "../../src/defaults.ts";
 
 import { NoAuth } from "../../src/llm/auth.ts";
 import { encodeBody } from "../../src/llm/body.ts";
@@ -18,7 +21,19 @@ import {
   moveAzureKeywords,
   strictJsonSchema,
 } from "../../src/llm/json_schema.ts";
-import { copyJson, Message, NamedTool, OutputFormat, Request, TextPart } from "../../src/llm/messages.ts";
+import {
+  copyJson,
+  Message,
+  NamedTool,
+  OutputFormat,
+  type Part,
+  ReasoningPart,
+  RefusalPart,
+  Request,
+  Response,
+  TextPart,
+  ToolCallPart,
+} from "../../src/llm/messages.ts";
 import { AnthropicMessages } from "../../src/llm/protocols/anthropic_messages.ts";
 import { Gemini } from "../../src/llm/protocols/gemini.ts";
 import { OllamaChat } from "../../src/llm/protocols/ollama_chat.ts";
@@ -28,8 +43,10 @@ import { Route } from "../../src/llm/route.ts";
 import {
   FORCED_TOOL_REFUSING_PREFIXES,
   forcesTool,
+  MissingToolCallError,
   planStructured,
   sendsJsonSchemaAsTool,
+  StructuredOutputError,
   type StructuredPlan,
   type StructuredTarget,
   structuredTarget,
@@ -152,6 +169,11 @@ function thrown(run: () => unknown): Error {
     return error as Error;
   }
   throw new Error("expected an error");
+}
+
+/** Return a reply whose assistant message holds `parts`. */
+function reply(parts: Part[]): Response {
+  return new Response({ message: new Message({ role: "assistant", parts }) });
 }
 
 /** Return a plan's fields as plain JSON-like values, the tool choice's name under `named`. */
@@ -639,5 +661,191 @@ describe("StructuredPlan: apply, instruction and correction", () => {
       "Your previous output was invalid: the reply did not call the Record tool; call it with the answer. " +
         "Respond with valid data matching the schema.",
     );
+  });
+});
+
+describe("StructuredPlan: parse a tool reply", () => {
+  const forced = planStructured(target({ provider: "xai", model: "grok-4", protocol: "openai_chat" }), REC);
+  const unforced = planStructured(
+    target({ provider: "deepseek", model: "deepseek-reasoner", protocol: "openai_chat" }),
+    REC,
+  );
+  const toolPlans: [string, StructuredPlan][] = [
+    ["forced_tool", forced],
+    ["unforced_tool", unforced],
+  ];
+  const call = (name: string, args: JsonObject | null, id = "c1") =>
+    new ToolCallPart({ id, name, arguments: args, rawArguments: args === null ? "{bad" : null });
+
+  test("the plans use the tool strategies", () => {
+    expect(forced.strategy).toBe("forced_tool");
+    expect(unforced.strategy).toBe("unforced_tool");
+  });
+
+  test.each(toolPlans)("%s: one call gives its arguments", (_strategy, plan) => {
+    expect(plan.parse(reply([call("Record", { answer: "x", score: 1n })]))).toEqual({ answer: "x", score: 1n });
+  });
+
+  test.each(toolPlans)("%s: of two calls of the tool the first wins", (_strategy, plan) => {
+    const parts = [call("Record", { answer: "a", score: 1n }), call("Record", { answer: "b", score: 2n }, "c2")];
+    expect(plan.parse(reply(parts))).toEqual({ answer: "a", score: 1n });
+  });
+
+  test.each(toolPlans)("%s: an invalid call counts as none, so the valid one after it wins", (_strategy, plan) => {
+    const parts = [call("Record", null), call("Record", { answer: "b", score: 2n }, "c2")];
+    expect(plan.parse(reply(parts))).toEqual({ answer: "b", score: 2n });
+  });
+
+  test.each(toolPlans)("%s: another tool's call first is skipped", (_strategy, plan) => {
+    const parts = [call("search", { q: "x" }), call("Record", { answer: "b", score: 2n }, "c2")];
+    expect(plan.parse(reply(parts))).toEqual({ answer: "b", score: 2n });
+  });
+
+  test.each(toolPlans)("%s: the arguments are returned unvalidated", (_strategy, plan) => {
+    expect(plan.parse(reply([call("Record", { answer: "x", score: "notint" })]))).toEqual({
+      answer: "x",
+      score: "notint",
+    });
+  });
+
+  const missing: [string, Part[]][] = [
+    ["text only", [new TextPart('{"answer": "x", "score": 1}')]],
+    ["only another tool's call", [call("search", { q: "x" })]],
+    ["only an invalid call", [call("Record", null)]],
+  ];
+  for (const [strategy, plan] of toolPlans) {
+    test.each(missing)(`${strategy}: %s is a missing tool call`, (_label, parts) => {
+      const error = thrown(() => plan.parse(reply(parts)));
+      expect(error).toBeInstanceOf(MissingToolCallError);
+      expect(error.message).toBe("the reply did not call the Record tool; call it with the answer");
+    });
+  }
+});
+
+describe("StructuredPlan: parse a text reply", () => {
+  afterEach(() => install(BUILTIN));
+
+  const textPlans: [string, StructuredPlan][] = [
+    ["json_schema", planStructured(target({ provider: "azure", model: "gpt-4o" }), BOUNDED)],
+    [
+      "prompt",
+      planStructured(target({ provider: "xai", model: "no-structured-sentinel", protocol: "openai_chat" }), REC),
+    ],
+  ];
+  const fence = "```";
+
+  test("the plans use the text strategies", () => {
+    expect(textPlans.map(([, plan]) => plan.strategy)).toEqual(["json_schema", "prompt"]);
+  });
+
+  const valid: [string, string, JsonObject][] = [
+    ["plain JSON", '{"answer": "x", "score": 1}', { answer: "x", score: 1n }],
+    ["a json fence", `${fence}json\n{"answer": "x"}\n${fence}`, { answer: "x" }],
+    ["a bare fence", `${fence}\n{"answer": "x"}\n${fence}`, { answer: "x" }],
+    ["a JSON info string", `${fence}JSON\n{"answer": "x"}\n${fence}`, { answer: "x" }],
+    ["a jsonc info string", `${fence}jsonc\n{"answer": "x"}\n${fence}`, { answer: "x" }],
+    ["whitespace and backticks around", ' \n\t`{"answer": "x"}`\r\n ', { answer: "x" }],
+    [
+      "prose before and after a fence",
+      `Here it is:\n${fence}json\n{"answer": "x"}\n${fence}\nHope that helps.`,
+      { answer: "x" },
+    ],
+    [
+      "a fenced JSON whose string holds a fence",
+      `${fence}json\n{"code": "${fence}py\\nx\\n${fence}"}\n${fence}`,
+      { code: `${fence}py\nx\n${fence}` },
+    ],
+    ["a raw tab inside a string", '{"answer": "a\tb"}', { answer: "a\tb" }],
+    [
+      "a float and a nested value",
+      '{"a": 1.5, "b": [true, null, {"c": "d"}]}',
+      { a: 1.5, b: [true, null, { c: "d" }] },
+    ],
+  ];
+  for (const [strategy, plan] of textPlans) {
+    test.each(valid)(`${strategy}: %s parses`, (_label, text, value) => {
+      expectSame(plan.parse(reply([new TextPart(text)])), value);
+    });
+  }
+
+  test.each(textPlans)("%s: a 5000-digit int is read whole as a bigint", (_strategy, plan) => {
+    const digits = "7".repeat(5000);
+    expect(plan.parse(reply([new TextPart(`{"score": ${digits}}`)]))).toEqual({ score: BigInt(digits) });
+  });
+
+  test.each(textPlans)("%s: two text parts are joined with a newline", (_strategy, plan) => {
+    // The parts split inside a string, so the separator shows in the value ("" would give "xy").
+    const parts = [new TextPart('{"answer": "x'), new TextPart('y"}')];
+    expect(plan.parse(reply(parts))).toEqual({ answer: "x\ny" });
+  });
+
+  test.each(textPlans)("%s: reasoning parts are left out", (_strategy, plan) => {
+    const parts = [new ReasoningPart("thinking {not json"), new TextPart('{"answer": "x"}')];
+    expect(plan.parse(reply(parts))).toEqual({ answer: "x" });
+  });
+
+  const invalid: [string, string][] = [
+    ["not json", "not json"],
+    ["truncated JSON", '{"answer": "x", "sco'],
+    ["two objects", '{"answer": "x"} {"answer": "y"}'],
+    ["a JSON array", '[{"answer": "x"}]'],
+    ["empty text", ""],
+    ["only backticks and whitespace", " ``` \n"],
+    ["an empty fence", `${fence}json\n${fence}`],
+  ];
+  for (const [strategy, plan] of textPlans) {
+    test.each(invalid)(`${strategy}: %s is invalid`, (_label, text) => {
+      const error = thrown(() => plan.parse(reply([new TextPart(text)])));
+      expect(error.constructor).toBe(StructuredOutputError);
+      expect(error.message).toBe(`Invalid json output: ${text.trim()}`);
+    });
+  }
+
+  test.each(textPlans)("%s: the error trims only whitespace from the text", (_strategy, plan) => {
+    const error = thrown(() => plan.parse(reply([new TextPart("\n  `not json`  \n")])));
+    expect(error.message).toBe("Invalid json output: `not json`");
+  });
+
+  test.each(textPlans)("%s: nesting past maxValueNesting is invalid", (_strategy, plan) => {
+    install({ ...BUILTIN, maxValueNesting: 3 });
+    expect(plan.parse(reply([new TextPart('{"a": {"b": [1]}}')]))).toEqual({ a: { b: [1n] } });
+    const error = thrown(() => plan.parse(reply([new TextPart('{"a": {"b": [[1]]}}')])));
+    expect(error.message).toBe('Invalid json output: {"a": {"b": [[1]]}}');
+  });
+
+  test.each(textPlans)("%s: a refusal with no text names the refusal", (_strategy, plan) => {
+    const error = thrown(() => plan.parse(reply([new RefusalPart("I can't help with that.")])));
+    expect(error.constructor).toBe(StructuredOutputError);
+    expect(error.message).toBe("the model refused: I can't help with that.");
+  });
+
+  test.each(textPlans)("%s: refusals beside invalid text are joined with a newline", (_strategy, plan) => {
+    const parts = [new RefusalPart("No."), new TextPart("not json"), new RefusalPart("Still no.")];
+    expect(thrown(() => plan.parse(reply(parts))).message).toBe("the model refused: No.\nStill no.");
+  });
+
+  test.each(textPlans)("%s: a refusal beside valid JSON gives the value", (_strategy, plan) => {
+    const parts = [new RefusalPart("I can't help with that."), new TextPart('{"answer": "x"}')];
+    expect(plan.parse(reply(parts))).toEqual({ answer: "x" });
+  });
+
+  test.each(textPlans)("%s: tool calls are ignored", (_strategy, plan) => {
+    const parts = [new ToolCallPart({ id: "c1", name: "Record", arguments: { answer: "t" } }), new TextPart("nope")];
+    expect(thrown(() => plan.parse(reply(parts))).message).toBe("Invalid json output: nope");
+  });
+});
+
+describe("structured-output errors", () => {
+  test("MissingToolCallError is a StructuredOutputError is an Error", () => {
+    const missing = new MissingToolCallError("m");
+    expect(missing).toBeInstanceOf(StructuredOutputError);
+    expect(missing).toBeInstanceOf(Error);
+    expect(missing.name).toBe("MissingToolCallError");
+    expect(missing.message).toBe("m");
+    const invalid = new StructuredOutputError("i");
+    expect(invalid).toBeInstanceOf(Error);
+    expect(invalid).not.toBeInstanceOf(MissingToolCallError);
+    expect(invalid.name).toBe("StructuredOutputError");
+    expect(String(invalid)).toBe("StructuredOutputError: i");
   });
 });

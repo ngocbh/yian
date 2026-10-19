@@ -988,17 +988,19 @@ describe("tool calls", () => {
     expect(parts).toEqual([callPart("call_a", '{"value":3}'), callPart("call_b", '{"value":4}')]);
   });
 
-  test("a reused index with a new id opens a second call; a later id-less delta there joins it", async () => {
+  test("a reused index with a new id opens a second call; later deltas there join by id, else the last", async () => {
     const events = await parse([
-      calls(wire(0, "call_1", "double", '{"value":3}')),
+      calls(wire(0, "call_1", "double", '{"value":')),
       calls(wire(0, "call_2", "double", '{"value":')),
       calls(wire(0, undefined, undefined, "4}")),
+      calls(wire(0, "call_1", undefined, "3}")),
       CALLS_DONE,
     ]);
     expect(events).toEqual([
-      delta(0, "call_1", "double", '{"value":3}'),
+      delta(0, "call_1", "double", '{"value":'),
       delta(1, "call_2", "double", '{"value":'),
       delta(1, null, null, "4}"),
+      delta(0, null, null, "3}"),
       new PartDone(0, callPart("call_1", '{"value":3}')),
       new PartDone(1, callPart("call_2", '{"value":4}')),
       finish("tool_calls"),
@@ -1184,9 +1186,9 @@ describe("round trips", () => {
     return (await collect(await parse(chunks, protocol))).message;
   }
 
-  /** Return the messages `protocol` sends for the question and `answer`. */
-  function sentBack(answer: Message, protocol: OpenAIChat): JsonValue {
-    return protocol.buildBody(new Request({ messages: [ASK, answer] }))["messages"]!;
+  /** Return the messages `protocol` sends for the question, `answer` and any messages `after` it. */
+  function sentBack(answer: Message, protocol: OpenAIChat, ...after: Message[]): JsonValue {
+    return protocol.buildBody(new Request({ messages: [ASK, answer, ...after] }))["messages"]!;
   }
 
   const ASKED: JsonObject = { role: "user", content: "Double 3." };
@@ -1201,17 +1203,16 @@ describe("round trips", () => {
       deepseek(),
     );
     const call = { type: "function", id: "call_1", function: { name: "double", arguments: '{"value":3}' } };
-    expect(sentBack(answer, deepseek())).toEqual([
-      ASKED,
-      { role: "assistant", content: null, tool_calls: [call], reasoning_content: "Thinking." },
-    ]);
-    // The tool result follows as its own message.
     const result = new Message({
       role: "tool",
       parts: [new ToolResultPart({ callId: "call_1", name: "double", content: "6", isError: false })],
     });
-    const messages = deepseek().buildBody(new Request({ messages: [ASK, answer, result] }))["messages"];
-    expect((messages as JsonValue[]).at(-1)).toEqual({ role: "tool", tool_call_id: "call_1", content: "6" });
+    expect(sentBack(answer, deepseek(), result)).toEqual([
+      ASKED,
+      { role: "assistant", content: null, tool_calls: [call], reasoning_content: "Thinking." },
+      // The tool result follows as its own message.
+      { role: "tool", tool_call_id: "call_1", content: "6" },
+    ]);
   });
 
   test("a reply whose only reasoning is an empty reasoning_content echoes it empty", async () => {

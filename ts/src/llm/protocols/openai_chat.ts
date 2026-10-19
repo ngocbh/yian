@@ -227,8 +227,8 @@ export class OpenAIChat implements SseProtocol {
    * Reasoning, text and tool calls stream as deltas; refusal pieces are collected. Part indexes
    * are dense, in the order each part gets its first non-empty piece (a call, its first entry);
    * inside one chunk the order is reasoning, text, refusal, calls. A call entry joins the call
-   * opened at its wire `index`, unless it brings a different id; without an index it joins the
-   * call with its id, else the last call. A call's id and name are the first non-empty ones,
+   * at its wire `index` with its id, else the last call at that index unless it brings a
+   * different id; without an index it joins the call with its id, else the last call. A call's id and name are the first non-empty ones,
    * carried by the delta that brings them. A chunk's reasoning is its first non-empty source of
    * `reasoning_content`, `reasoning` and the `reasoning.text` items of `reasoning_details`; on
    * a route that echoes reasoning an empty `reasoning_content` opens the part too. A list
@@ -265,8 +265,10 @@ export class OpenAIChat implements SseProtocol {
       const calls = parts.filter(isCall);
       let call: CallAssembly | undefined;
       if (piece.wireIndex !== null) {
-        call = calls.findLast((each) => each.wireIndex === piece.wireIndex);
-        // Some vendors send two calls at the same index, told apart by their ids.
+        // Some vendors send two calls at the same index, told apart by their ids: an entry joins
+        // the call there with its id, else the last call there unless both ids are set and differ.
+        const atIndex = calls.filter((each) => each.wireIndex === piece.wireIndex);
+        call = (piece.id === null ? undefined : atIndex.findLast((each) => each.id === piece.id)) ?? atIndex.at(-1);
         if (call?.id && piece.id && call.id !== piece.id) call = undefined;
       } else {
         call = piece.id === null ? calls.at(-1) : calls.findLast((each) => each.id === piece.id);
@@ -337,8 +339,16 @@ export class OpenAIChat implements SseProtocol {
     // Every part is built before the first PartDone, so a call with no name fails first.
     const taken = new Set<string>();
     for (const part of parts) if (isCall(part) && part.id !== null) taken.add(part.id);
+    const done: Part[] = [];
     let callCount = 0;
-    const done = parts.map((part) => (isCall(part) ? callPart(part, callCount++, taken, provider) : this.#part(part)));
+    for (const part of parts) {
+      if (isCall(part)) {
+        done.push(callPart(part, callCount, taken, provider));
+        callCount += 1;
+      } else {
+        done.push(this.#part(part));
+      }
+    }
     for (const [index, part] of done.entries()) yield new PartDone(index, part);
     if (usage !== null) yield new UsageReport(usage);
     const fields: JsonObject = {};
@@ -347,7 +357,7 @@ export class OpenAIChat implements SseProtocol {
     if (responseModel !== null) fields["response_model"] = responseModel;
     const providerPayload = replayRecord(this.#key, fields);
     // `length` says the calls may be cut short, so it wins; any other reason with calls is a tool call finish.
-    const reason = finishReason === "length" || callCount === 0 ? finishReason : "tool_calls";
+    const reason = finishReason !== "length" && parts.some(isCall) ? "tool_calls" : finishReason;
     yield new Finish({ reason, responseId, protocol: PROTOCOL, providerPayload });
   }
 

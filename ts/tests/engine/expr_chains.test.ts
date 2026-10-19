@@ -2,8 +2,7 @@
  * Operator chains are flat nodes that evaluate and trace like the old binary trees, at any
  * length: a port of `tests/engine/test_expr_chains.py`.
  *
- * Left for later: `_validate_route` and the route payload round trips wait for
- * `runtime/contracts.ts` and `runtime/log.ts`.
+ * Later (T4-2): the route payload round trips wait for `runtime/log.ts`.
  *
  * Not ported: the repeat tests and the repeats mixed into the traced concat chains, since
  * repetition is a type error in TS. `test_the_grammar_has_no_lalr_conflict` has no counterpart,
@@ -25,6 +24,7 @@ import {
   type TracedValue,
   ValueRoute,
 } from "../../src/expr/lineage.ts";
+import { validateRoute } from "../../src/runtime/contracts.ts";
 import type { Value, ValueRecord } from "../../src/typesys/index.ts";
 import { fieldOf, isRecord } from "../../src/typesys/values.ts";
 
@@ -495,6 +495,7 @@ test("a long traced list chain stays shallow", () => {
   expect(result.value).toEqual(Array(3000).fill("v"));
   expect(depth(route)).toBeLessThanOrEqual(13);
   expect(routeValue(route, sources.lookup)).toEqual(result.value);
+  validateRoute(route);
   const feedback = Array.from({ length: 3000 }, (_, i) => `m${i}`);
   expect(messages(sources.feedback(result, feedback))).toEqual(feedback.map((m) => [sources.identities.x!, m]));
 });
@@ -510,7 +511,7 @@ test("a scalar chain traces as one scalar", () => {
   expect(sources.evaluate("left + right").route.expression).toBe("(left + right)");
 });
 
-test("an old nested concat route routes feedback", () => {
+test("an old nested concat route still validates and routes feedback", () => {
   const sources = new Sources({ a: ["a"], b: ["b", "c"], c: ["d"] });
   const source = (name: string) =>
     new ValueRoute("source", { source: sources.identities[name]!, expression: name });
@@ -520,6 +521,7 @@ test("an old nested concat route routes feedback", () => {
     sizes: [1, 2],
   });
   const old = new ValueRoute("concat", { children: [inner, source("c")], expression: "((a + b) + c)", sizes: [3, 1] });
+  validateRoute(old);
   expect(routeValue(old, sources.lookup)).toEqual(["a", "b", "c", "d"]);
   const got = sources.evaluate("a + b + c");
   expect(got.route).not.toEqual(old);

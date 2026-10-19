@@ -18,10 +18,6 @@
  * rebuilt template yields is mapped; a record holding a binding and shared by two bindings' sources
  * comes back as one shared record, as Python's `copy.deepcopy` keeps it.
  *
- * Changed: `test_template_routes_record_each_part_and_route_feedback` leaves out its
- * `_validate_route(captured.route)` line (the runtime's route validator); that check lands with
- * `runtime/contracts.ts`.
- *
  * Not ported: the rows that differ from a good one only by a tuple where Python wants a list or
  * the reverse (a tuple template, a list of origins, a list path): TS has only arrays; and
  * `test_value_template_keys_must_be_strings_throughout`, which has no counterpart, since a
@@ -46,6 +42,7 @@ import {
   ValueTemplate,
   type ValuePath,
 } from "../../src/nodes/contracts.ts";
+import { validateRoute } from "../../src/runtime/contracts.ts";
 import { Type, typeFor, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 
@@ -450,6 +447,7 @@ test("template routes record each part and route feedback", () => {
   expect(captured.boundInputs).toEqual(delivered);
   expect(delivered).toEqual({ p: { a: 3n, b: [1n, "x"], c: "lit" } });
   expect(captured.evaluatedKeys).toEqual(new Set(["p"]));
+  validateRoute(captured.route);
   const route = captured.route.children[0]!;
   expect(route.kind).toBe("record");
   expect(route.names).toEqual(["a", "b", "c"]);

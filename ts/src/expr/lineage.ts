@@ -33,7 +33,8 @@ export type RoutePath = readonly (string | number)[];
  *
  * Sequence zero addresses run inputs; other sequences identify the accepted node-start record.
  * Values themselves remain in the caller's source store. A `SourceRef` is frozen and compares by
- * identity; match one by its `runId`, `executionSeq` and `path`.
+ * identity; match one by its `runId`, `executionSeq` and `path`, and key maps and sets by
+ * `sourceKey(ref)`.
  */
 export class SourceRef {
   readonly runId: string;
@@ -47,6 +48,11 @@ export class SourceRef {
     this.path = Object.freeze([...path]);
     Object.freeze(this);
   }
+}
+
+/** A text key equal for two `SourceRef`s exactly when their run id, sequence and path are equal. */
+export function sourceKey(ref: SourceRef): string {
+  return JSON.stringify([ref.runId, ref.executionSeq, ...ref.path]);
 }
 
 /** The kinds of recorded composition a `ValueRoute` holds. */

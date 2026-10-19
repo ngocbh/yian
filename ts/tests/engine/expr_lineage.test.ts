@@ -6,10 +6,11 @@
  * TS-only: the codec form of literal snapshots, a file as an unavailable leaf, own-key record
  * fields, the depth bound inside a partial snapshot, the focused `validateFeedback` and
  * `hasFeedback` checks, a scalar route lifting a projected selection, a traced resolver that
- * doesn't return `ResolvedValue`, interpolation spans counting code points, and frozen routed
- * feedback. Python's `test_routes_are_immutable_serializable_and_keep_opaque_snapshots` is split
- * in two: `routes are immutable and serializable` (hand-built) and `routes keep opaque snapshots`
- * (through a traced binding).
+ * doesn't return `ResolvedValue`, interpolation spans counting code points (also in
+ * `validateRoute`), frozen routed feedback, and `sourceKey`. Python's
+ * `test_routes_are_immutable_serializable_and_keep_opaque_snapshots` is split in two: `routes are
+ * immutable and serializable` (hand-built) and `routes keep opaque snapshots` (through a traced
+ * binding).
  *
  * Changed: an infinite temporary has a codec snapshot (`{"$float":"inf"}`), where Python's JSON
  * has none; `a deep temporary keeps a complete snapshot` (10,000 levels) replaces
@@ -55,10 +56,12 @@ import {
   routeFeedback,
   routeValue,
   SourceRef,
+  sourceKey,
   type TracedValue,
   ValueRoute,
 } from "../../src/expr/lineage.ts";
 import { evalBinding, evalTemplate, scanTemplate } from "../../src/expr/template.ts";
+import { validateRoute } from "../../src/runtime/contracts.ts";
 import { FileRef, isRecord, type Value, type ValueRecord } from "../../src/typesys/index.ts";
 import { logJson } from "../../src/typesys/json.ts";
 
@@ -798,6 +801,20 @@ test("spans count code points", () => {
     [1, 2],
     [3, 4],
   ]);
+  // The result has 4 code points but 5 UTF-16 units, so an end of 5 is past it.
+  validateRoute(rendered.route);
+  expect(() => validateRoute(rendered.route.with({ spans: [[1, 2], [3, 5]] }))).toThrow(
+    new RangeError("interpolation spans must be ordered within the result"),
+  );
+});
+
+test("sourceKey is equal exactly when run id, sequence and path are equal", () => {
+  const key = sourceKey(new SourceRef("run", 1, ["a", 0]));
+  expect(sourceKey(new SourceRef("run", 1, ["a", 0]))).toBe(key);
+  expect(sourceKey(new SourceRef("run", 1, ["a", "0"]))).not.toBe(key);
+  expect(sourceKey(new SourceRef("other", 1, ["a", 0]))).not.toBe(key);
+  expect(sourceKey(new SourceRef("run", 2, ["a", 0]))).not.toBe(key);
+  expect(sourceKey(new SourceRef("run", 1, ["a"]))).not.toBe(key);
 });
 
 test.each([

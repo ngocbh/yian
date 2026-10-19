@@ -988,7 +988,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   let { nodesCursor, outputsSection, outputsRange = null, memories = [] } = options;
 
   if ((inputsSection === null) === (inputParameters === null)) {
-    throw new RangeError("_assemble requires exactly one of inputs_section or input_parameters");
+    throw new RangeError("assemble requires exactly one of inputsSection or inputParameters");
   }
   if (inputParameters !== null && inputsCursor !== null) {
     throw new RangeError("pre-resolved input parameters cannot carry an inputs cursor");
@@ -1042,6 +1042,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   /** Return one authored flow assertion's retained positional range. */
   const flowAssertionRangeAt = (index: number): SourceRange | null => flowAssertionRanges[index]!;
 
+  // These readers run only during the build below, after `valueEntries` exists.
   /** Return the origin and range from one authored assertion cursor. */
   const nodeAssertionSiteAt = (
     nodeId: string,
@@ -1201,8 +1202,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
         return outputsCursor.child(outputName).range;
       }
     } catch (error) {
-      // a bare `output:` value has no named children
       if (!(error instanceof SourceAccessError)) throw error;
+      // Swallowed: a bare `output:` value has no named children, so the whole range stands in.
     }
     return outputsRange;
   };
@@ -1300,6 +1301,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     diagnostics,
   });
 
+  // The inline-child and binding-contract readers read it lazily once ported; it is set just
+  // before the build.
   let descriptorCache: DescriptorBuildCache | null = null;
 
   // T3-17: assembles one retained body lazily in this file's callable scope.
@@ -1628,10 +1631,11 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // the stub and imports the port under its import slot, keeping the sub-block header. A local type
 // alias is replaced by a `type` import of the same name under that slot, never just deleted, since
 // other owners' stubs use the shared ones: `TypeFn` (T3-13), `Narrowing` (T3-20), `LocalInput`
-// (T3-19) and `LoweredAsserts` (T3-20). Kind 2 is a pipeline helper stubbed at its Python position: the
-// owner ports its body in place, adding the private helpers named beside it. Kind 3 is a `const`
-// inside `assemble`: the owner replaces that line. Until then a placeholder returns nothing,
-// except as noted; "throws" means `Error("<python name> is not ported yet (T3-xx)")`.
+// (T3-19) and `LoweredAsserts` (T3-20).
+// Kind 2 is a pipeline helper stubbed at its Python position: the owner ports its body in place,
+// adding the private helpers named beside it. Kind 3 is a `const` inside `assemble`: the owner
+// replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
+// `Error("<python name> is not ported yet (T3-xx)")`.
 //
 //   T3-13  constructorTypeFn (1): returns `() => null`. T3-13 swaps it for the import, with
 //          `TypeFn`, if this file exists when it merges; otherwise T3-17 does.

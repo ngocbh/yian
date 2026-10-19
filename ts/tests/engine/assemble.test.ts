@@ -51,7 +51,7 @@ import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model.ts";
-import { forget } from "../../src/defaults.ts";
+import { forget, reload } from "../../src/defaults.ts";
 import {
   DiagnosticFrame,
   Failure,
@@ -716,7 +716,7 @@ describe("assemble", () => {
     const error = thrown(() => assemble({ ...bare(), ...inputs }));
     expect(error).toBeInstanceOf(RangeError);
     expect(error).not.toBeInstanceOf(LoadError);
-    expect(error.message).toBe("_assemble requires exactly one of inputs_section or input_parameters");
+    expect(error.message).toBe("assemble requires exactly one of inputsSection or inputParameters");
   });
 
   test("resolved parameters can't carry an inputs cursor", () => {
@@ -784,10 +784,16 @@ describe("assemble", () => {
     expect(scope.resolved).toEqual([]);
   });
 
-  test("a value entry is checked, then read by the value-entry reader", () => {
+  test("a value entry reaches the value-entry reader", () => {
     const error = thrown(() => assembleText("id: f\nname: f\nnodes:\n  v: !int 5\noutput: null\n"));
     expect(error.constructor).toBe(Error);
     expect(error.message).toBe("read_value_entry is not ported yet (T3-17)");
+  });
+
+  test("a value entry's nesting is checked before the value-entry reader runs", () => {
+    reload((name) => (name === "YIAN_MAX_VALUE_NESTING" ? "1" : undefined));
+    const error = loadError(() => assembleText("id: f\nname: f\nnodes:\n  v: !list [[1]]\noutput: null\n"));
+    expect(error.message).toStartWith("value entry 'v' at [0]: value nests deeper than 1 levels");
   });
 
   test("two nodes assemble in source order, with env, origins, the typed input and the outputs", () => {
@@ -826,6 +832,7 @@ output:
 
     const compiled = flow.compiled;
     expect([...compiled.nodes.keys()]).toEqual(["a", "b"]);
+    // No data edges or boundary until those passes are ported.
     expect(compiled.edges).toEqual([]);
     expect(scope.resolved).toEqual(["helper"]);
     expect([flow.version, flow.name, flow.description, compiled.flowId]).toEqual(["1", "f", "two steps", "f"]);

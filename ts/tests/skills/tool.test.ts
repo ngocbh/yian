@@ -59,7 +59,6 @@ test("listing truncates long descriptions", () => {
 
 test("tool schema is name and optional path", () => {
   const tool = loadSkillTool();
-  expect(tool.name).toBe(LOAD_SKILL);
   expect(tool.name).toBe("load_skill");
   expect(tool.parameters).toEqual({
     type: "object",
@@ -101,7 +100,10 @@ test("invoke rejects bad arguments", () => {
     () => invokeLoadSkill(granted, { name: "notes", extra: 1, a: 2 }),
     'load_skill got unexpected arguments: ["a","extra"]',
   );
-  expectSkillError(() => invokeLoadSkill(granted, { name: "other" }), "load_skill: skill 'other' is not granted to this node");
+  expectSkillError(
+    () => invokeLoadSkill(granted, { name: "other" }),
+    "load_skill: skill 'other' is not granted to this node",
+  );
   // TS-only: only own keys are arguments; an inherited `name` is not one, an own `__proto__` is.
   expectSkillError(() => invokeLoadSkill(granted, Object.create({ name: "notes" })), "needs a string `name`");
   expectSkillError(

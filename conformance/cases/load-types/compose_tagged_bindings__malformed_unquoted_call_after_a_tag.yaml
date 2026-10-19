@@ -1,6 +1,5 @@
-# TS spells the trailing text as JSON text (rules: messages); Python's repr in python_expect.
+# Trailing text after call(...) is source text shown as written: Python-quoted, shared.
 kind: load
-rules: [messages]
 flow: |2
 
   id: tagged
@@ -54,14 +53,6 @@ python_flow: |2
       output: int
   output: ${use.output}
 expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'use: text follows the closing `)`: "and more"; a call(...) must be the whole value'
-      frames:
-      - label: flow.yaml
-        range: [23, 12, 23, 33]
-python_expect:
   load:
     diagnostics:
     - code: compose.load

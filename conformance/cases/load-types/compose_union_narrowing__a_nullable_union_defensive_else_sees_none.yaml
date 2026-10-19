@@ -1,4 +1,4 @@
-# `source is 'None'`: None is yian's type text for null, shared.
+# `None` is yian's type name for null (type text), shared.
 kind: load
 flow: |
   id: p
@@ -17,51 +17,7 @@ flow: |
       input:
         s: ${input.s}
       output: Optional(Decision)
-      code: "return null"
-    route:
-      kind: case
-      on: ${d.output.action}
-      cases:
-        - when: buy
-          then: b
-        - when: sell
-          then: b
-        - when: hold
-          then: b
-      else: call(place_rest, order=${d.output})
-    b:
-      kind: code
       code: return 1
-  output: ${d.output.action}
-  defs:
-    place_rest:
-      input:
-        order: !HoldOrSell
-      nodes:
-        p:
-          kind: code
-          input:
-            o: ${input.order}
-          code: return 1
-      output: ${p.output}
-python_flow: |
-  id: p
-  name: p
-  typedefs:
-    Buy: {action: 'Literal(buy)', qty: int, limit: float}
-    Hold: {action: 'Literal(hold)', note: str}
-    Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}
-    Decision: Union(Buy, Hold, Sell)
-    HoldOrSell: Union(Hold, Sell)
-  input:
-    s: !str
-  nodes:
-    d:
-      kind: code
-      input:
-        s: ${input.s}
-      output: Optional(Decision)
-      code: return None
     route:
       kind: case
       on: ${d.output.action}

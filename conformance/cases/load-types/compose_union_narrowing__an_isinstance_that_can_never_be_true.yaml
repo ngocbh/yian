@@ -16,40 +16,7 @@ flow: |
       input:
         s: ${input.s}
       output: Decision
-      code: "return null"
-    route:
-      kind: case
-      cases:
-        - when: input.s == 'x'
-          then: b
-        - when: "isinstance(d.output, Text)"
-          then: b
-      else: e
-    b:
-      kind: code
       code: return 1
-    e:
-      kind: code
-      code: return 1
-  output: ${d.output.action}
-python_flow: |
-  id: p
-  name: p
-  typedefs:
-    Buy: {action: 'Literal(buy)', qty: int, limit: float}
-    Hold: {action: 'Literal(hold)', note: str}
-    Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}
-    Decision: Union(Buy, Hold, Sell)
-    Text: {text: str}
-  input:
-    s: !str
-  nodes:
-    d:
-      kind: code
-      input:
-        s: ${input.s}
-      output: Decision
-      code: return None
     route:
       kind: case
       cases:

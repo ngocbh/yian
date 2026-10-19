@@ -1,4 +1,4 @@
-# `input.x is None`: None is yian's type name for null (type text), shared.
+# `None` is yian's type name for null (type text), shared.
 kind: load
 flow: |
   id: p

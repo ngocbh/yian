@@ -1,5 +1,5 @@
+# Python's full message: TS typesys keeps the grammar hint too, shared.
 kind: load
-rules: [messages]
 flow: |
   id: f
   name: f
@@ -7,14 +7,6 @@ flow: |
     at: !datetime "20200101T000000"
   nodes: {}
 expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: '''at'': `"20200101T000000"` is not a valid datetime'
-      frames:
-      - label: flow.yaml
-        range: [4, 7, 4, 34]
-python_expect:
   load:
     diagnostics:
     - code: compose.load

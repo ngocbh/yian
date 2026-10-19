@@ -1,11 +1,14 @@
 /**
- * Mirrors `tests/test_provider_auth.py`: the credential values, the store and `isAuthFailure`.
- * The OAuth flow, refresh HTTP and model-catalog tests go with `auth/openai.ts` and
- * `auth/http.ts`, as does `test_refresh_is_serialized_across_processes`.
+ * Mirrors `tests/test_provider_auth.py`: `auth/index.ts`'s exports, the credential values, the
+ * store, `isAuthFailure`, `request`, and `OpenAIAuth`'s sign-in flows, refresh and model catalogs;
+ * and the scenarios of `auth_both_runtimes.ts`, on Bun and, with `YIAN_TEST_NODE`, built on Node.
  */
 
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
+import net, { type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -17,13 +20,18 @@ import { ProviderError } from "../src/llm/errors.ts";
 import {
   ApiKeyCredentials,
   AuthError,
+  type Credentials,
+  HttpResponse,
   isAuthFailure,
   OAuthCredentials,
   ProviderSelection,
 } from "../src/llm_clients/auth/common.ts";
+import { request } from "../src/llm_clients/auth/http.ts";
+import { type AuthRequest, OpenAIAuth } from "../src/llm_clients/auth/openai.ts";
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
-import { lockFile, realScheduler, type Scheduler, virtualScheduler } from "../src/platform.ts";
+import { lockFile, realScheduler, type Scheduler, USER_AGENT, virtualScheduler } from "../src/platform.ts";
 import { parseJson } from "../src/typesys/json.ts";
+import { SCENARIOS } from "./auth_both_runtimes.ts";
 
 const PLATFORM_URL = pathToFileURL(join(import.meta.dir, "..", "src", "platform.ts")).href;
 
@@ -46,6 +54,21 @@ async function rejected(promise: Promise<unknown>): Promise<Error> {
   }
   throw new Error("expected a rejection");
 }
+
+test("auth/index.ts exports Python's auth package names", async () => {
+  // The types (AuthState, Credentials) have no runtime value.
+  const names = Object.keys(await import("../src/llm_clients/auth/index.ts")).sort();
+  expect(names).toEqual([
+    "ApiKeyCredentials",
+    "AuthError",
+    "AuthStore",
+    "HttpResponse",
+    "OAuthCredentials",
+    "OpenAIAuth",
+    "ProviderSelection",
+    "isAuthFailure",
+  ]);
+});
 
 describe("ApiKeyCredentials", () => {
   const refusedHeaders: [string, unknown][] = [
@@ -829,6 +852,207 @@ describe("AuthStore", () => {
     expect(store.selection()).toEqual(selection);
   });
 
+  /** Return a promise and the function that resolves it. */
+  function gate(): [Promise<void>, () => void] {
+    let open!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return [opened, open];
+  }
+
+  /** Return a promise that rejects with `signal.reason` once `signal` aborts. */
+  function aborted(signal: AbortSignal): Promise<never> {
+    return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+  }
+
+  /** Return the access token of each resolved `credentials` result. */
+  function accessTokens(results: Credentials[]): string[] {
+    return results.map((result) => (result as OAuthCredentials).accessToken);
+  }
+
+  test("a refresh slower than the lock timeout doesn't fail parallel callers", async () => {
+    const scheduler = virtualScheduler(1_000_000);
+    const store = new AuthStore(file, { scheduler, lockTimeoutMs: 300 });
+    const selection = await store.save("openai", oauth("old", "old-refresh", 900), "model");
+    let calls = 0;
+    const refresh = async () => {
+      calls++;
+      await scheduler.sleep(1000);
+      return oauth("new", "new-refresh", 5000);
+    };
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => store.credentials("openai", selection.credentialId, { refresh })),
+    );
+    expect(accessTokens(results)).toEqual(Array(5).fill("new"));
+    expect(calls).toBe(1);
+  });
+
+  test("a joiner whose signal aborts rejects with its reason and leaves the flight to the others", async () => {
+    const store = new AuthStore(file, { scheduler: fixedClock(1_000_000) });
+    const selection = await store.save("openai", oauth("old", "old-refresh", 900), "model");
+    const [entered, enter] = gate();
+    const [finished, finish] = gate();
+    let calls = 0;
+    const refresh = async () => {
+      calls++;
+      enter();
+      await finished;
+      return oauth("new", "new-refresh", 5000);
+    };
+    const controller = new AbortController();
+    const reason = new Error("stopped");
+    const leader = store.credentials("openai", selection.credentialId, { refresh });
+    const joiner = new AuthStore(file, { scheduler: fixedClock(1_000_000), signal: controller.signal }).credentials(
+      "openai",
+      selection.credentialId,
+      { refresh },
+    );
+    const others = Array.from({ length: 3 }, () => store.credentials("openai", selection.credentialId, { refresh }));
+    await entered;
+    controller.abort(reason);
+    expect(await rejected(joiner)).toBe(reason);
+    finish();
+    expect(accessTokens(await Promise.all([leader, ...others]))).toEqual(Array(4).fill("new"));
+    expect(calls).toBe(1);
+  });
+
+  test("a stopped leader rejects with its reason and one joiner refreshes for the rest", async () => {
+    const store = new AuthStore(file, { scheduler: fixedClock(1_000_000) });
+    const selection = await store.save("openai", oauth("old", "old-refresh", 900), "model");
+    const controller = new AbortController();
+    const reason = new Error("stopped");
+    const [entered, enter] = gate();
+    const calls: string[] = [];
+    const leader = new AuthStore(file, { scheduler: fixedClock(1_000_000), signal: controller.signal }).credentials(
+      "openai",
+      selection.credentialId,
+      {
+        refresh: () => {
+          calls.push("leader");
+          enter();
+          return aborted(controller.signal);
+        },
+      },
+    );
+    const refresh = async () => {
+      calls.push("joiner");
+      return oauth("new", "new-refresh", 5000);
+    };
+    const joiners = Array.from({ length: 4 }, () => store.credentials("openai", selection.credentialId, { refresh }));
+    await entered;
+    controller.abort(reason);
+    expect(await rejected(leader)).toBe(reason);
+    expect(accessTokens(await Promise.all(joiners))).toEqual(Array(4).fill("new"));
+    expect(calls).toEqual(["leader", "joiner"]);
+  });
+
+  test("a failed refresh is shared, and a later call refreshes again", async () => {
+    const store = new AuthStore(file, { scheduler: fixedClock(1_000_000) });
+    const selection = await store.save("openai", oauth("old", "old-refresh", 900), "model");
+    const failure = new Error("refresh failed");
+    let calls = 0;
+    const refresh = async () => {
+      calls++;
+      if (calls === 1) throw failure;
+      return oauth("new", "new-refresh", 5000);
+    };
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, () => store.credentials("openai", selection.credentialId, { refresh })),
+    );
+    expect(results.every((result) => result.status === "rejected" && result.reason === failure)).toBe(true);
+    expect(calls).toBe(1);
+    const later = (await store.credentials("openai", selection.credentialId, { refresh })) as OAuthCredentials;
+    expect(later.accessToken).toBe("new");
+    expect(calls).toBe(2);
+  });
+
+  test("a flight is per store path, provider and credential id", async () => {
+    const clock = fixedClock(1_000_000);
+    const other = join(tmp, "other", "auth.json");
+    const first = new AuthStore(file, { scheduler: clock });
+    const second = new AuthStore(other, { scheduler: clock });
+    // A copied store pins the same credential id on both paths, so only the path tells them apart.
+    const copied = await first.save("openai", oauth("old", "old-refresh", 900), "model");
+    writeRaw(other, fs.readFileSync(file));
+    // Each refresh waits until both have started, so they finish only if they run in parallel.
+    const [firstStarted, startFirst] = gate();
+    const [secondStarted, startSecond] = gate();
+    const both = Promise.all([firstStarted, secondStarted]);
+    const parallel = await Promise.all([
+      first.credentials("openai", copied.credentialId, {
+        refresh: async () => {
+          startFirst();
+          await both;
+          return oauth("first", "r", 5000);
+        },
+      }),
+      second.credentials("openai", copied.credentialId, {
+        refresh: async () => {
+          startSecond();
+          await both;
+          return oauth("second", "r", 5000);
+        },
+      }),
+    ]);
+    expect(accessTokens(parallel)).toEqual(["first", "second"]);
+
+    // Two providers on one path with the same credential id: each gets its own refresh, one after
+    // the other under the lock.
+    const path = join(tmp, "providers", "auth.json");
+    const store = new AuthStore(path, { scheduler: clock });
+    const a = await store.save("a", oauth("old", "r", 900), "model");
+    await store.save("b", oauth("old", "r", 900), "model");
+    const data = JSON.parse(fs.readFileSync(path, "utf8"));
+    data.providers.b.credential_id = a.credentialId;
+    writeRaw(path, JSON.stringify(data));
+    const providers = await Promise.all([
+      store.credentials("a", a.credentialId, { refresh: async () => oauth("new-a", "r", 5000) }),
+      store.credentials("b", a.credentialId, { refresh: async () => oauth("new-b", "r", 5000) }),
+    ]);
+    expect(accessTokens(providers)).toEqual(["new-a", "new-b"]);
+
+    // A caller pinned to another credential id of the same provider never receives this login.
+    const original = await first.save("openai", oauth("old", "old-refresh", 900), "model");
+    const [entered, enter] = gate();
+    const [finished, finish] = gate();
+    const pinnedFirst = first.credentials("openai", original.credentialId, {
+      refresh: async () => {
+        enter();
+        await finished;
+        return oauth("pinned", "r", 5000);
+      },
+    });
+    await entered;
+    // Replace the file while the first refresh holds the lock, so the next caller pins a different
+    // credential id of the same provider (a shared flight would hand it `pinned`).
+    const replacement = await second.save("openai", oauth("old", "old-refresh", 900), "model");
+    writeRaw(file, fs.readFileSync(other));
+    let replacementCalls = 0;
+    const pinnedReplacement = first.credentials("openai", replacement.credentialId, {
+      refresh: async () => {
+        replacementCalls++;
+        return oauth("replacement", "r", 5000);
+      },
+    });
+    finish();
+    expect(((await pinnedFirst) as OAuthCredentials).accessToken).toBe("pinned");
+    expect((await rejected(pinnedReplacement)).message).toBe("The saved connection changed");
+    expect(replacementCalls).toBe(0);
+  });
+
+  test("without a refresh, parallel callers each fail on an expired token", async () => {
+    const store = new AuthStore(file, { scheduler: fixedClock(1_000_000) });
+    const selection = await store.save("openai", oauth("old", "old-refresh", 900), "model");
+    const errors = await Promise.all(
+      Array.from({ length: 5 }, () => rejected(store.credentials("openai", selection.credentialId))),
+    );
+    expect(errors.map((error) => error.message)).toEqual(
+      Array(5).fill("Subscription credentials expired; sign in again"),
+    );
+    expect(new Set(errors).size).toBe(5);
+  });
+
   test("the store saves each credential kind", async () => {
     const store = new AuthStore(file);
     const saved = await savedKinds(store);
@@ -1301,5 +1525,1261 @@ describe("AuthStore", () => {
       }
     },
     20_000,
+  );
+});
+
+/** A request a local server received. */
+interface Received {
+  method: string;
+  headers: http.IncomingHttpHeaders;
+  body: string;
+}
+
+/** A local HTTP server on 127.0.0.1. */
+interface LocalServer {
+  url: string;
+  received: Received[];
+  close(): Promise<void>;
+}
+
+/** Start a server on 127.0.0.1 that records each request, then lets `handle` answer it. */
+async function localServer(handle: (res: http.ServerResponse, received: Received) => void): Promise<LocalServer> {
+  const received: Received[] = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk: string) => (body += chunk));
+    req.on("end", () => {
+      const each = { method: req.method!, headers: req.headers, body };
+      received.push(each);
+      handle(res, each);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}/`,
+    received,
+    async close() {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+describe("request", () => {
+  for (const status of [200, 401, 302]) {
+    test(`builtin http decodes responses and never follows redirects: ${status}`, async () => {
+      const body = '{"data":[{"id":"gpt-test"}]}';
+      const server = await localServer((res) => {
+        res.writeHead(status, { location: `${server.url}redirected`, "content-length": body.length });
+        res.end(body);
+      });
+      try {
+        const response = await request("GET", server.url, { headers: {}, timeoutMs: 1000 });
+        expect(response).toBeInstanceOf(HttpResponse);
+        expect(response.status).toBe(status);
+        // A 3xx body is cancelled unread, and no caller reads a non-2xx body.
+        expect(response.data).toEqual(status === 302 ? null : { data: [{ id: "gpt-test" }] });
+        expect(server.received).toHaveLength(1);
+        expect(server.received[0]!.method).toBe("GET");
+      } finally {
+        await server.close();
+      }
+    });
+  }
+
+  test("integers in data are bigints", async () => {
+    const server = await localServer((res) => {
+      res.writeHead(200);
+      res.end('{"expires_in": 3600, "ratio": 1.5}');
+    });
+    try {
+      const response = await request("GET", server.url, { headers: {}, timeoutMs: 1000 });
+      expect(response.data).toEqual({ expires_in: 3600n, ratio: 1.5 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a non-JSON body gives null data and keeps the status", async () => {
+    const server = await localServer((res) => {
+      res.writeHead(500);
+      res.end("<html>oops</html>");
+    });
+    try {
+      const response = await request("GET", server.url, { headers: {}, timeoutMs: 1000 });
+      expect(response.status).toBe(500);
+      expect(response.data).toBeNull();
+    } finally {
+      await server.close();
+    }
+  });
+
+  for (const [bodyLimit, fits] of [
+    [1024, false],
+    [4096, true],
+  ] as const) {
+    test(`builtin http body limit raises a protocol error: ${bodyLimit}`, async () => {
+      const body = JSON.stringify({ pad: "x".repeat(2048) });
+      const server = await localServer((res) => res.end(body));
+      try {
+        const sent = request("GET", server.url, { headers: {}, timeoutMs: 2000, bodyLimit });
+        if (fits) {
+          expect((await sent).data).toEqual({ pad: "x".repeat(2048) });
+        } else {
+          const error = await rejected(sent);
+          expect(error).toBeInstanceOf(ProviderError);
+          expect((error as ProviderError).kind).toBe("protocol");
+          expect(error.message).toBe("HTTP response is larger than 1024 bytes");
+        }
+      } finally {
+        await server.close();
+      }
+    });
+  }
+
+  test("jsonBody is sent as JSON and form as urlencoded text", async () => {
+    const server = await localServer((res, received) => {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ method: received.method, type: received.headers["content-type"], body: received.body }));
+    });
+    try {
+      const json = await request("POST", server.url, {
+        headers: { "Content-Type": "application/json" },
+        timeoutMs: 1000,
+        jsonBody: { client_id: "app", scope: "a b" },
+      });
+      expect(json.data).toEqual({
+        method: "POST",
+        type: "application/json",
+        body: '{"client_id":"app","scope":"a b"}',
+      });
+      const form = await request("POST", server.url, {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        timeoutMs: 1000,
+        form: { grant_type: "refresh_token", scope: "a b&c" },
+      });
+      expect(form.data).toEqual({
+        method: "POST",
+        type: "application/x-www-form-urlencoded",
+        body: "grant_type=refresh_token&scope=a+b%26c",
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("builtin http deadline raises a timeout error", async () => {
+    const server = await localServer(() => {});
+    try {
+      const start = Date.now();
+      const error = await rejected(
+        request("GET", server.url, { headers: {}, timeoutMs: 100, scheduler: realScheduler }),
+      );
+      expect(error).toBeInstanceOf(ProviderError);
+      expect((error as ProviderError).kind).toBe("timeout");
+      expect(Date.now() - start).toBeLessThan(1000);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a caller abort mid-request rejects with the abort reason", async () => {
+    const controller = new AbortController();
+    const reason = new Error("stopped by host");
+    const server = await localServer(() => controller.abort(reason));
+    try {
+      const error = await rejected(
+        request("GET", server.url, { headers: {}, timeoutMs: 5000, signal: controller.signal }),
+      );
+      expect(error).toBe(reason);
+      expect(server.received).toHaveLength(1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("HttpResponse keeps its data out of inspection", () => {
+    const response = new HttpResponse(200, { access_token: "secret-token" });
+    expect(response.status).toBe(200);
+    expect(response.data).toEqual({ access_token: "secret-token" });
+    expect(Object.isFrozen(response)).toBe(true);
+    for (const text of [JSON.stringify(response), String(response), inspect(response)]) {
+      expect(text).not.toContain("secret-token");
+    }
+    expect(JSON.stringify(response)).toBe('{"status":200}');
+  });
+});
+
+/** An unsigned JWT whose payload names `account` in OpenAI's auth claim, plus `claims`. */
+function jwt(account: string | null = "account-test", claims: Record<string, unknown> = {}): string {
+  const value = { "https://api.openai.com/auth": { chatgpt_account_id: account }, ...claims };
+  return `header.${Buffer.from(JSON.stringify(value)).toString("base64url")}.signature`;
+}
+
+/** A token endpoint payload for `account`, with integers as `bigint`s as `request` decodes them. */
+function tokens(account = "account-test", overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return { access_token: jwt(account), refresh_token: "refresh-secret", expires_in: 3600n, ...overrides };
+}
+
+/** A fake `AuthRequest` that records each call and replies from a queue. */
+class FakeHttp {
+  readonly calls: [string, string, Parameters<AuthRequest>[2]][] = [];
+  /** The clock reading at each call, when `clock` is set. */
+  readonly times: number[] = [];
+  clock: Scheduler | undefined;
+  readonly #responses: unknown[];
+
+  constructor(...responses: unknown[]) {
+    this.#responses = responses;
+  }
+
+  readonly request: AuthRequest = async (method, url, options) => {
+    this.calls.push([method, url, options]);
+    if (this.clock) this.times.push(this.clock.now());
+    return this.#responses.shift() as HttpResponse;
+  };
+}
+
+/** Return a never-settling promise, like a host that never answers. */
+function never(): Promise<never> {
+  return new Promise(() => {});
+}
+
+/** An `awaitCallback` answering with the state sent in `urls[0]`, then `&` and `query`. */
+function callbackWith(urls: string[], query: string): (redirectUri: string) => string {
+  return (redirectUri) => redirectUri + "?state=" + new URL(urls[0]!).searchParams.get("state") + "&" + query;
+}
+
+const GATEWAY = "gw-SENTINEL-token-9876";
+const ORG = "org-SENTINEL-1234";
+const PROJECT = "proj_SENTINEL-5678";
+
+/** Check the error and its cause chain for every setting value. */
+function assertNoSettings(error: unknown): void {
+  for (let link = error; link !== undefined; link = (link as Error).cause) {
+    const texts = [String(link), (link as Error).message, (link as Error).stack ?? "", inspect(link)];
+    for (const value of [GATEWAY, ORG, PROJECT]) {
+      for (const text of texts) expect(text).not.toContain(value);
+    }
+  }
+}
+
+const OLD = () =>
+  new OAuthCredentials({
+    accessToken: "old",
+    refreshToken: "old-refresh",
+    expiresAt: 1000,
+    accountId: "acct",
+    residency: "eu",
+  });
+const SUBSCRIPTION = () =>
+  new OAuthCredentials({ accessToken: "access", refreshToken: "refresh", expiresAt: 9000, accountId: "acct" });
+
+describe("OpenAIAuth", () => {
+  test("device protocol uses JSON polls and server PKCE", async () => {
+    const scheduler = virtualScheduler(1_000_000);
+    const http = new FakeHttp(
+      new HttpResponse(200, { device_auth_id: "device-id", user_code: "ABC-DEF", interval: "2" }),
+      new HttpResponse(403, { error: "pending" }),
+      new HttpResponse(404, {}),
+      new HttpResponse(200, { authorization_code: "auth-code", code_verifier: "server-verifier" }),
+      new HttpResponse(200, tokens()),
+    );
+    const display: [string, string][] = [];
+    const auth = new OpenAIAuth({ request: http.request, scheduler });
+    const credentials = await auth.deviceLogin((url, code) => void display.push([url, code]));
+    expect(display).toEqual([["https://auth.openai.com/codex/device", "ABC-DEF"]]);
+    expect(credentials.accountId).toBe("account-test");
+    expect(credentials.expiresAt).toBe(scheduler.now() / 1000 + 3600);
+    expect(scheduler.now()).toBe(1_004_000);
+    expect(http.calls[0]![2].jsonBody).toEqual({ client_id: "app_EMoamEEZ73f0CkXaXp7hrann" });
+    expect(http.calls[1]![2].jsonBody).toEqual({ device_auth_id: "device-id", user_code: "ABC-DEF" });
+    expect(http.calls.at(-1)![2].form).toEqual({
+      grant_type: "authorization_code",
+      code: "auth-code",
+      code_verifier: "server-verifier",
+      client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+      redirect_uri: "https://auth.openai.com/deviceauth/callback",
+    });
+    expect(http.calls.map(([method, url]) => [method, url])).toEqual([
+      ["POST", "https://auth.openai.com/api/accounts/deviceauth/usercode"],
+      ["POST", "https://auth.openai.com/api/accounts/deviceauth/token"],
+      ["POST", "https://auth.openai.com/api/accounts/deviceauth/token"],
+      ["POST", "https://auth.openai.com/api/accounts/deviceauth/token"],
+      ["POST", "https://auth.openai.com/oauth/token"],
+    ]);
+    expect(http.calls[0]![2].headers).toEqual({ "User-Agent": USER_AGENT, "Content-Type": "application/json" });
+    expect(http.calls.at(-1)![2].headers).toEqual({
+      "User-Agent": USER_AGENT,
+      "Content-Type": "application/x-www-form-urlencoded",
+    });
+    expect(http.calls[0]![2].timeoutMs).toBe(30_000);
+    expect(inspect(credentials)).not.toContain("refresh-secret");
+  });
+
+  test("browser login validates state and uses PKCE", async () => {
+    const http = new FakeHttp(new HttpResponse(200, tokens()));
+    const urls: string[] = [];
+    const auth = new OpenAIAuth({ request: http.request });
+    const credentials = await auth.browserLogin((url) => void urls.push(url), {
+      awaitCallback: callbackWith(urls, "code=browser-code"),
+    });
+    const url = new URL(urls[0]!);
+    expect(url.origin + url.pathname).toBe("https://auth.openai.com/oauth/authorize");
+    const query = url.searchParams;
+    expect([...query.keys()]).toEqual([
+      "response_type",
+      "client_id",
+      "redirect_uri",
+      "scope",
+      "code_challenge",
+      "code_challenge_method",
+      "id_token_add_organizations",
+      "codex_cli_simplified_flow",
+      "state",
+      "originator",
+    ]);
+    const form = http.calls[0]![2].form!;
+    const verifier = form.code_verifier!;
+    expect(query.get("code_challenge")).toBe(createHash("sha256").update(verifier).digest("base64url"));
+    expect(query.get("code_challenge_method")).toBe("S256");
+    expect(query.get("redirect_uri")).toBe("http://localhost:1455/auth/callback");
+    expect(query.get("scope")).toBe("openid profile email offline_access");
+    expect(query.get("client_id")).toBe("app_EMoamEEZ73f0CkXaXp7hrann");
+    expect(query.get("originator")).toBe("yian");
+    expect(query.get("state")).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(verifier).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(form).toEqual({
+      grant_type: "authorization_code",
+      code: "browser-code",
+      code_verifier: verifier,
+      client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+      redirect_uri: "http://localhost:1455/auth/callback",
+    });
+    expect(credentials.accountId).toBe("account-test");
+  });
+
+  test("browser state mismatch never exchanges the code", async () => {
+    const http = new FakeHttp();
+    const error = await rejected(
+      new OpenAIAuth({ request: http.request }).browserLogin(() => {}, {
+        awaitCallback: (uri) => uri + "?code=secret-code&state=wrong",
+      }),
+    );
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toMatch(/state/);
+    expect(http.calls).toEqual([]);
+  });
+
+  const REDIRECT = "http://localhost:1455/auth/callback";
+  // Each row turns the valid callback URL (the redirect URI with the sent state) into the result.
+  const invalidCallbacks: [string, (valid: string) => unknown, string][] = [
+    ["state=bad", () => REDIRECT + "?state=bad&code=c", "OpenAI login state did not match"],
+    [
+      "state=bad&state=also-bad",
+      () => REDIRECT + "?state=bad&state=also-bad&code=c",
+      "OpenAI login state did not match",
+    ],
+    ["a doubled ?", (valid) => valid.replace("?", "??") + "&code=c", "OpenAI login state did not match"],
+    ["error=denied", (valid) => valid + "&error=denied", "OpenAI browser authorization was denied"],
+    [
+      "code=one&code=two",
+      (valid) => valid + "&code=one&code=two",
+      "OpenAI callback did not include an authorization code",
+    ],
+    ["empty code", (valid) => valid + "&code=", "OpenAI callback did not include an authorization code"],
+    ["no code", (valid) => valid + "&other=1", "OpenAI callback did not include an authorization code"],
+    [
+      "another host",
+      (valid) => valid.replace("localhost", "127.0.0.1") + "&code=c",
+      "OpenAI returned an invalid callback location",
+    ],
+    [
+      "another scheme",
+      (valid) => valid.replace("http:", "https:") + "&code=c",
+      "OpenAI returned an invalid callback location",
+    ],
+    [
+      "another path",
+      (valid) => valid.replace("/auth/callback", "/auth/callbackx") + "&code=c",
+      "OpenAI returned an invalid callback location",
+    ],
+    ["null", () => null, "OpenAI returned an invalid browser callback"],
+    ["0", () => 0, "OpenAI returned an invalid browser callback"],
+  ];
+  for (const [label, result, message] of invalidCallbacks) {
+    test(`browser callback rejects invalid or denied responses: ${label}`, async () => {
+      const http = new FakeHttp();
+      const urls: string[] = [];
+      const awaitCallback = (uri: string) => result(uri + "?state=" + new URL(urls[0]!).searchParams.get("state"));
+      const error = await rejected(
+        new OpenAIAuth({ request: http.request }).browserLogin((url) => void urls.push(url), {
+          awaitCallback: awaitCallback as (uri: string) => string,
+        }),
+      );
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe(message);
+      expect(http.calls).toEqual([]);
+    });
+  }
+
+  test("refresh preserves missing metadata and rejects an account switch", async () => {
+    const http = new FakeHttp(new HttpResponse(200, { access_token: "new", expires_in: 3600 }));
+    const auth = new OpenAIAuth({ request: http.request, scheduler: virtualScheduler(1_000_000) });
+    const updated = await auth.refresh(OLD());
+    expect(updated).toBeInstanceOf(OAuthCredentials);
+    const { accessToken, refreshToken, expiresAt, accountId, residency } = updated;
+    const fields = [accessToken, refreshToken, expiresAt, accountId, residency];
+    expect(fields).toEqual(["new", "old-refresh", 4600, "acct", "eu"]);
+    expect(http.calls[0]![2].form).toEqual({
+      grant_type: "refresh_token",
+      refresh_token: "old-refresh",
+      client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+    });
+    expect(http.calls[0]![1]).toBe("https://auth.openai.com/oauth/token");
+    const error = await rejected(
+      new OpenAIAuth({ request: new FakeHttp(new HttpResponse(200, tokens("different"))).request }).refresh(OLD()),
+    );
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toMatch(/account/);
+  });
+
+  const invalidExpiries: [string, unknown][] = [
+    ["10n ** 1000n", 10n ** 1000n],
+    ["NaN", NaN],
+    ["Infinity", Infinity],
+    ["true", true],
+    ['{"$float": "inf"}', { $float: "inf" }],
+    ["a string", "3600"],
+    ["null", null],
+    ["0", 0n],
+    ["-1", -1n],
+  ];
+  for (const [label, expiry] of invalidExpiries) {
+    test(`an invalid expiry is rejected: ${label}`, async () => {
+      const http = new FakeHttp(new HttpResponse(200, tokens("account-test", { expires_in: expiry })));
+      const previous = new OAuthCredentials({
+        accessToken: "old",
+        refreshToken: "refresh",
+        expiresAt: 1000,
+        accountId: "account-test",
+      });
+      const error = await rejected(new OpenAIAuth({ request: http.request }).refresh(previous));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("OpenAI returned invalid credential expiry");
+    });
+  }
+
+  describe("account metadata", () => {
+    /** Refresh `OLD()` with `data`. */
+    function refreshWith(data: Record<string, unknown>): Promise<OAuthCredentials> {
+      return new OpenAIAuth({ request: new FakeHttp(new HttpResponse(200, data)).request }).refresh(OLD());
+    }
+
+    test("an id token and access token naming different accounts are refused", async () => {
+      const error = await rejected(refreshWith(tokens("acct", { id_token: jwt("other") })));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("OpenAI refresh changed account identity");
+    });
+
+    test("a non-text account is refused", async () => {
+      for (const token of [jwt(""), jwt("acct", { chatgpt_account_id: 5 })]) {
+        const error = await rejected(refreshWith({ access_token: token, expires_in: 3600n }));
+        expect(error).toBeInstanceOf(AuthError);
+        expect(error.message).toBe("OpenAI returned invalid account metadata");
+      }
+    });
+
+    test("a top-level account wins over the auth claim", async () => {
+      const result = await refreshWith({ access_token: jwt("other", { chatgpt_account_id: "acct" }) });
+      expect(result.accountId).toBe("acct");
+    });
+
+    test("organizations[0].id is used only when both chatgpt ids are absent", async () => {
+      const fallback = await refreshWith({ access_token: jwt(null, { organizations: [{ id: "acct" }] }) });
+      expect(fallback.accountId).toBe("acct");
+      const ignored = await refreshWith({ access_token: jwt("acct", { organizations: [{ id: "org-other" }] }) });
+      expect(ignored.accountId).toBe("acct");
+      const other = jwt(null, { organizations: [{ id: "org-other" }] });
+      const switched = await rejected(refreshWith({ access_token: other }));
+      expect(switched.message).toBe("OpenAI refresh changed account identity");
+    });
+
+    test("residency is read from either claim and no_constraint clears it", async () => {
+      const cleared = await refreshWith({ access_token: jwt("acct", { chatgpt_compute_residency: "no_constraint" }) });
+      expect(cleared.residency).toBeNull();
+      const auth = { chatgpt_account_id: "acct", chatgpt_compute_residency: "us" };
+      const fromAuth = await refreshWith({ access_token: jwt(null, { "https://api.openai.com/auth": auth }) });
+      expect(fromAuth.residency).toBe("us");
+      const kept = await refreshWith({ access_token: jwt("acct") });
+      expect(kept.residency).toBe("eu");
+    });
+
+    test("tokens that aren't JWTs keep the previous account on refresh and fail a login", async () => {
+      const kept = await refreshWith({ access_token: "opaque.token", refresh_token: "r2" });
+      expect(kept.accountId).toBe("acct");
+      expect(kept.refreshToken).toBe("r2");
+      const urls: string[] = [];
+      const http = new FakeHttp(new HttpResponse(200, { access_token: "opaque", refresh_token: "r" }));
+      const error = await rejected(
+        new OpenAIAuth({ request: http.request }).browserLogin((url) => void urls.push(url), {
+          awaitCallback: callbackWith(urls, "code=c"),
+        }),
+      );
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("Invalid subscription credentials");
+    });
+  });
+
+  test("API key validation lists models through the official endpoint", async () => {
+    const data = [{ id: "z-model" }, { id: "a-model" }, { id: "z-model" }];
+    const http = new FakeHttp(new HttpResponse(200, { data }));
+    const models = await new OpenAIAuth({ request: http.request }).apiModels(new ApiKeyCredentials("secret"));
+    expect(models).toEqual(["a-model", "z-model"]);
+    expect(Object.isFrozen(models)).toBe(true);
+    expect(http.calls[0]!.slice(0, 2)).toEqual(["GET", "https://api.openai.com/v1/models"]);
+    expect(http.calls[0]![2].headers.Authorization).toBe("Bearer secret");
+  });
+
+  test("API key validation sends organization, project and headers", async () => {
+    const http = new FakeHttp(new HttpResponse(200, { data: [{ id: "m" }] }));
+    const credentials = new ApiKeyCredentials("secret", { "X-Gateway": GATEWAY });
+    const auth = new OpenAIAuth({ request: http.request });
+    expect(await auth.apiModels(credentials, { organization: ORG, project: PROJECT })).toEqual(["m"]);
+    expect(http.calls[0]![2].headers).toEqual({
+      "User-Agent": USER_AGENT,
+      "X-Gateway": GATEWAY,
+      "OpenAI-Organization": ORG,
+      "OpenAI-Project": PROJECT,
+      Authorization: "Bearer secret",
+    });
+  });
+
+  test("an organization mismatch is an HTTP error without values", async () => {
+    const body = { error: { code: "mismatched_organization", message: `${ORG} ${PROJECT}` } };
+    const http = new FakeHttp(new HttpResponse(401, body));
+    const credentials = new ApiKeyCredentials("secret", { "X-Gateway": GATEWAY });
+    const error = await rejected(
+      new OpenAIAuth({ request: http.request }).apiModels(credentials, { organization: ORG, project: PROJECT }),
+    );
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toBe("OpenAI authentication request failed (HTTP 401)");
+    assertNoSettings(error);
+    expect(http.calls).toHaveLength(1);
+  });
+
+  const invalidSettings: [string, ApiKeyCredentials, { organization?: unknown; project?: unknown }][] = [
+    ["organization with a space", new ApiKeyCredentials("secret"), { organization: ORG + " x" }],
+    ["empty project", new ApiKeyCredentials("secret"), { project: "" }],
+    ["number organization", new ApiKeyCredentials("secret"), { organization: 5 }],
+    // OpenAI takes these through organization / project, not as headers.
+    ["OpenAI-Organization header", new ApiKeyCredentials("secret", { "OpenAI-Organization": ORG }), {}],
+    ["openai-project header", new ApiKeyCredentials("secret", { "openai-project": PROJECT }), {}],
+  ];
+  for (const [label, credentials, settings] of invalidSettings) {
+    test(`invalid connection settings are refused before any request: ${label}`, async () => {
+      const http = new FakeHttp();
+      const error = await rejected(new OpenAIAuth({ request: http.request }).apiModels(credentials, settings));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toStartWith("Invalid OpenAI connection settings");
+      expect(error.cause).toBeUndefined();
+      assertNoSettings(error);
+      expect(http.calls).toEqual([]);
+    });
+  }
+
+  test("a transport error never echoes connection settings or chains its cause", async () => {
+    const broken: AuthRequest = () => {
+      throw new Error(`${GATEWAY} ${ORG} ${PROJECT} sensitive-token-in-url`);
+    };
+    const credentials = new ApiKeyCredentials("secret", { "X-Gateway": GATEWAY });
+    const auth = new OpenAIAuth({ request: broken });
+    const error = await rejected(auth.apiModels(credentials, { organization: ORG, project: PROJECT }));
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toBe("OpenAI authentication request failed");
+    expect(error.cause).toBeUndefined();
+    assertNoSettings(error);
+    expect(error.stack).not.toContain("sensitive");
+    const asyncError = await rejected(
+      new OpenAIAuth({ request: async () => Promise.reject(new Error("sensitive-token-in-url")) }).apiModels(
+        new ApiKeyCredentials("key"),
+      ),
+    );
+    expect(asyncError.message).toBe("OpenAI authentication request failed");
+    expect(asyncError.cause).toBeUndefined();
+  });
+
+  test("the subscription catalog uses account routing and visibility order", async () => {
+    const http = new FakeHttp(
+      new HttpResponse(200, {
+        models: [
+          { slug: "third", visibility: "list", priority: 3n },
+          { slug: "hidden", visibility: "hide", priority: 0n },
+          { slug: "first", visibility: "list", priority: 1n },
+          { slug: "unavailable", visibility: "none", priority: -1n },
+          { slug: "first", visibility: "list", priority: 2n },
+        ],
+      }),
+    );
+    const credentials = new OAuthCredentials({
+      accessToken: "access",
+      refreshToken: "refresh",
+      expiresAt: 9000,
+      accountId: "acct",
+      residency: "eu",
+    });
+    const models = await new OpenAIAuth({ request: http.request }).subscriptionModels(credentials);
+    expect(models).toEqual(["first", "third"]);
+    expect(Object.isFrozen(models)).toBe(true);
+    expect(http.calls[0]!.slice(0, 2)).toEqual([
+      "GET",
+      "https://chatgpt.com/backend-api/codex/models?client_version=0.155.1",
+    ]);
+    expect(http.calls[0]![2].headers).toEqual({
+      "User-Agent": USER_AGENT,
+      Authorization: "Bearer access",
+      "ChatGPT-Account-Id": "acct",
+      originator: "yian",
+      "x-openai-internal-codex-residency": "eu",
+    });
+    for (const clientVersion of ["", "1 2", null, 5]) {
+      const error = await rejected(
+        new OpenAIAuth({ request: new FakeHttp().request }).subscriptionModels(credentials, { clientVersion }),
+      );
+      expect(error).toBeInstanceOf(RangeError);
+      expect(error.message).toBe("Invalid model catalog client version");
+    }
+  });
+
+  const malformedCatalogs: [string, "api" | "subscription", unknown, string][] = [
+    ["empty api list", "api", { data: [] }, "OpenAI returned an invalid or empty model list"],
+    ["empty api id", "api", { data: [{ id: "" }] }, "OpenAI returned an invalid or empty model list"],
+    ["empty models", "subscription", { models: [] }, "OpenAI returned no available subscription models"],
+    [
+      "only hidden models",
+      "subscription",
+      { models: [{ slug: "hidden", visibility: "hide", priority: 0n }] },
+      "OpenAI returned no available subscription models",
+    ],
+    [
+      "boolean priority",
+      "subscription",
+      { models: [{ slug: "bad", visibility: "list", priority: true }] },
+      "OpenAI returned an invalid subscription model list",
+    ],
+    [
+      "float priority",
+      "subscription",
+      { models: [{ slug: "bad", visibility: "list", priority: 1.5 }] },
+      "OpenAI returned an invalid subscription model list",
+    ],
+    [
+      "unknown visibility",
+      "subscription",
+      { models: [{ slug: "bad", visibility: "public", priority: 1n }] },
+      "OpenAI returned an invalid subscription model list",
+    ],
+  ];
+  for (const [label, kind, payload, message] of malformedCatalogs) {
+    test(`a model catalog rejects malformed or empty lists: ${label}`, async () => {
+      const auth = new OpenAIAuth({ request: new FakeHttp(new HttpResponse(200, payload)).request });
+      const error = await rejected(
+        kind === "api" ? auth.apiModels(new ApiKeyCredentials("key")) : auth.subscriptionModels(SUBSCRIPTION()),
+      );
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe(message);
+    });
+  }
+
+  const methods: Record<string, (auth: OpenAIAuth) => Promise<unknown>> = {
+    api: (auth) => auth.apiModels(new ApiKeyCredentials("key")),
+    subscription: (auth) => auth.subscriptionModels(SUBSCRIPTION()),
+    refresh: (auth) => auth.refresh(SUBSCRIPTION()),
+    device: (auth) => auth.deviceLogin(() => {}),
+  };
+  for (const [method, call] of Object.entries(methods)) {
+    test(`HTTP failures do not echo secrets or fall back: ${method}`, async () => {
+      const http = new FakeHttp(new HttpResponse(401, { error: "secret-do-not-print" }));
+      const error = await rejected(call(new OpenAIAuth({ request: http.request })));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toMatch(/HTTP 401/);
+      expect(error.message).not.toContain("secret");
+      expect(http.calls).toHaveLength(1);
+    });
+  }
+
+  test("cancellation comes before the network", async () => {
+    const controller = new AbortController();
+    const reason = new Error("stopped by host");
+    controller.abort(reason);
+    const http = new FakeHttp();
+    const auth = new OpenAIAuth({ request: http.request, signal: controller.signal });
+    expect(await rejected(auth.deviceLogin(() => {}))).toBe(reason);
+    expect(await rejected(auth.browserLogin(() => {}, { awaitCallback: (uri) => uri }))).toBe(reason);
+    expect(await rejected(auth.refresh(SUBSCRIPTION()))).toBe(reason);
+    expect(http.calls).toEqual([]);
+  });
+
+  for (const cancel of [false, true]) {
+    test(`device polling has a bounded cancellable wait: ${cancel ? "cancel" : "timeout"}`, async () => {
+      const scheduler = virtualScheduler(1_000_000);
+      const http = new FakeHttp(
+        new HttpResponse(200, { device_auth_id: "id", usercode: "code", interval: "5" }),
+        new HttpResponse(404, {}),
+      );
+      const controller = new AbortController();
+      const reason = new Error("stopped by host");
+      if (cancel) void scheduler.sleep(500).then(() => controller.abort(reason));
+      const auth = new OpenAIAuth({ request: http.request, scheduler, signal: controller.signal });
+      const error = await rejected(auth.deviceLogin(() => {}, { timeoutMs: 1000 }));
+      if (cancel) {
+        expect(error).toBe(reason);
+      } else {
+        expect(error).toBeInstanceOf(AuthError);
+        expect(error.message).toBe("OpenAI login timed out");
+      }
+      expect(http.calls).toHaveLength(2);
+      expect(scheduler.now()).toBeLessThanOrEqual(1_001_000);
+    });
+  }
+
+  const badIntervals: [string, unknown][] = [
+    ['"nan"', "nan"],
+    ['"inf"', "inf"],
+    ['"infinity"', "infinity"],
+    ["true", true],
+    ['"1__0"', "1__0"],
+    ['"_1"', "_1"],
+    ['"1_"', "1_"],
+    ['""', ""],
+    ['"0x10"', "0x10"],
+    ["[]", []],
+    ['{"$float": "inf"}', { $float: "inf" }],
+    ["null", null],
+    ["10n ** 400n", 10n ** 400n],
+  ];
+  for (const [label, interval] of badIntervals) {
+    test(`device login rejects a non-finite or non-numeric interval: ${label}`, async () => {
+      const http = new FakeHttp(new HttpResponse(200, { device_auth_id: "id", user_code: "code", interval }));
+      const display: string[] = [];
+      const error = await rejected(
+        new OpenAIAuth({ request: http.request }).deviceLogin((_url, code) => void display.push(code)),
+      );
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("OpenAI returned an invalid device polling interval");
+      expect(http.calls).toHaveLength(1);
+      expect(display).toEqual([]);
+    });
+  }
+
+  for (const [interval, gapMs] of [
+    ["0.5", 1000],
+    ["1_0", 10_000],
+    [" 2.5e0 ", 2500],
+    [3n, 3000],
+    [1.5, 1500],
+  ] as const) {
+    test(`device polling interval ${JSON.stringify(String(interval))} waits ${gapMs} ms`, async () => {
+      const scheduler = virtualScheduler(1_000_000);
+      const http = new FakeHttp(
+        new HttpResponse(200, { device_auth_id: "id", user_code: "code", interval }),
+        new HttpResponse(403, {}),
+        new HttpResponse(200, { authorization_code: "c", code_verifier: "v" }),
+        new HttpResponse(200, tokens()),
+      );
+      http.clock = scheduler;
+      await new OpenAIAuth({ request: http.request, scheduler }).deviceLogin(() => {});
+      expect(http.times[2]! - http.times[1]!).toBe(gapMs);
+    });
+  }
+
+  test("a huge device interval doesn't overflow the sleep; the login times out", async () => {
+    const scheduler = virtualScheduler(1_000_000);
+    const http = new FakeHttp(
+      new HttpResponse(200, { device_auth_id: "id", user_code: "code", interval: 1e306 }),
+      new HttpResponse(404, {}),
+    );
+    const error = await rejected(
+      new OpenAIAuth({ request: http.request, scheduler }).deviceLogin(() => {}, { timeoutMs: 5000 }),
+    );
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toBe("OpenAI login timed out");
+    expect(scheduler.now()).toBe(1_005_000);
+  });
+
+  const invalidDeviceData: [string, Record<string, unknown>][] = [
+    ["missing device_auth_id", { user_code: "code" }],
+    ["user_code with a space", { device_auth_id: "id", user_code: "AB CD" }],
+    ["user_code null beside usercode", { device_auth_id: "id", user_code: null, usercode: "X" }],
+    ["number device_auth_id", { device_auth_id: 5n, user_code: "code" }],
+  ];
+  for (const [label, data] of invalidDeviceData) {
+    test(`invalid device authorization data is refused: ${label}`, async () => {
+      const http = new FakeHttp(new HttpResponse(200, data));
+      const error = await rejected(new OpenAIAuth({ request: http.request }).deviceLogin(() => {}));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("OpenAI returned invalid device authorization data");
+      expect(http.calls).toHaveLength(1);
+    });
+  }
+
+  test("usercode is accepted when user_code is absent", async () => {
+    const http = new FakeHttp(
+      new HttpResponse(200, { device_auth_id: "id", usercode: "X-Y" }),
+      new HttpResponse(200, { authorization_code: "c", code_verifier: "v" }),
+      new HttpResponse(200, tokens()),
+    );
+    const display: string[] = [];
+    await new OpenAIAuth({ request: http.request }).deviceLogin((_url, code) => void display.push(code));
+    expect(display).toEqual(["X-Y"]);
+    expect(http.calls[1]![2].jsonBody).toEqual({ device_auth_id: "id", user_code: "X-Y" });
+  });
+
+  test("a failed poll and a missing authorization code are refused", async () => {
+    const failed = new FakeHttp(
+      new HttpResponse(200, { device_auth_id: "id", user_code: "code" }),
+      new HttpResponse(500, { error: "boom" }),
+    );
+    const error = await rejected(new OpenAIAuth({ request: failed.request }).deviceLogin(() => {}));
+    expect(error.message).toBe("OpenAI authentication request failed (HTTP 500)");
+    const missing = new FakeHttp(
+      new HttpResponse(200, { device_auth_id: "id", user_code: "code" }),
+      new HttpResponse(200, { code_verifier: "v" }),
+    );
+    const missingError = await rejected(new OpenAIAuth({ request: missing.request }).deviceLogin(() => {}));
+    expect(missingError).toBeInstanceOf(AuthError);
+    expect(missingError.message).toBe("OpenAI returned invalid authorization data");
+    expect(missing.calls).toHaveLength(2);
+  });
+
+  test("the request timeout and the login timeout are checked", async () => {
+    for (const requestTimeoutMs of [0, -1, NaN, Infinity]) {
+      const error = thrown(() => new OpenAIAuth({ requestTimeoutMs }));
+      expect(error).toBeInstanceOf(RangeError);
+      expect(error.message).toBe("Invalid authentication request timeout");
+    }
+    const http = new FakeHttp();
+    const auth = new OpenAIAuth({ request: http.request, requestTimeoutMs: 1 });
+    for (const timeoutMs of [0, NaN, Infinity]) {
+      for (const login of [
+        () => auth.deviceLogin(() => {}, { timeoutMs }),
+        () => auth.browserLogin(() => {}, { awaitCallback: (uri) => uri, timeoutMs }),
+      ]) {
+        const error = await rejected(login());
+        expect(error).toBeInstanceOf(RangeError);
+        expect(error.message).toBe("Invalid authentication timeout");
+      }
+    }
+    expect(http.calls).toEqual([]);
+  });
+
+  class SubResponse extends HttpResponse {}
+  const invalidResponses: [string, unknown, string][] = [
+    ["a plain object", { status: 200, data: { data: [{ id: "m" }] } }, "returned an invalid response"],
+    ["a subclass", new SubResponse(200, { data: [{ id: "m" }] }), "returned an invalid response"],
+    ["undefined", undefined, "returned an invalid response"],
+    ["status 99", new HttpResponse(99, {}), "returned an invalid response"],
+    ["status 600", new HttpResponse(600, {}), "returned an invalid response"],
+    ["status 1.5", new HttpResponse(1.5, {}), "returned an invalid response"],
+    ["an array body", new HttpResponse(200, [{ id: "m" }]), "returned malformed data"],
+    ["a null body", new HttpResponse(200, null), "returned malformed data"],
+  ];
+  for (const [label, response, message] of invalidResponses) {
+    test(`a response that isn't an HttpResponse with a valid status is refused: ${label}`, async () => {
+      const auth = new OpenAIAuth({ request: async () => response as HttpResponse });
+      const error = await rejected(auth.apiModels(new ApiKeyCredentials("key")));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe(`OpenAI authentication ${message}`);
+    });
+  }
+
+  test("the deadline aborts an in-flight request", async () => {
+    const scheduler = virtualScheduler(1_000_000);
+    const signals: (AbortSignal | undefined)[] = [];
+    const auth = new OpenAIAuth({
+      request: (_method, _url, options) => {
+        signals.push(options.signal);
+        return never();
+      },
+      scheduler,
+    });
+    const urls: string[] = [];
+    const error = await rejected(
+      auth.browserLogin((url) => void urls.push(url), { awaitCallback: callbackWith(urls, "code=c"), timeoutMs: 1000 }),
+    );
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toBe("OpenAI browser login timed out");
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(signals[0]!.reason).toBe(error);
+    expect(scheduler.now()).toBe(1_001_000);
+  });
+
+  test("host callbacks are bounded by the deadline", async () => {
+    const scheduler = virtualScheduler(1_000_000);
+    const http = new FakeHttp(new HttpResponse(200, { device_auth_id: "id", user_code: "code" }));
+    const auth = new OpenAIAuth({ request: http.request, scheduler });
+    for (const login of [
+      () => auth.browserLogin(() => {}, { awaitCallback: never, timeoutMs: 1000 }),
+      () => auth.browserLogin(never, { awaitCallback: (uri) => uri, timeoutMs: 1000 }),
+    ]) {
+      const error = await rejected(login());
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("OpenAI browser login timed out");
+    }
+    const error = await rejected(auth.deviceLogin(never, { timeoutMs: 1000 }));
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toBe("OpenAI login timed out");
+    expect(http.calls).toHaveLength(1);
+  });
+
+  test("a stop while openUrl hangs rejects with the reason", async () => {
+    const scheduler = virtualScheduler(1_000_000);
+    const controller = new AbortController();
+    const reason = new Error("stopped by host");
+    void scheduler.sleep(100).then(() => controller.abort(reason));
+    const auth = new OpenAIAuth({ request: new FakeHttp().request, scheduler, signal: controller.signal });
+    const error = await rejected(auth.browserLogin(never, { awaitCallback: (uri) => uri }));
+    expect(error).toBe(reason);
+    expect(scheduler.now()).toBe(1_000_100);
+  });
+
+  for (const phase of ["headers", "body", "idle_headers", "idle_body"] as const) {
+    for (const cancel of [false, true]) {
+      const label = `${phase}, ${cancel ? "cancel" : "timeout"}`;
+      test(`http trickle respects the deadline, cancellation, and closes the socket: ${label}`, async () => {
+        const controller = new AbortController();
+        const reason = new Error("stopped by host");
+        let peerClosed!: () => void;
+        const closed = new Promise<void>((resolve) => (peerClosed = resolve));
+        const serverErrors: unknown[] = [];
+        const timers: ReturnType<typeof setInterval>[] = [];
+        const sockets: net.Socket[] = [];
+        const wait = new AbortController();
+        const server = net.createServer((socket) => {
+          sockets.push(socket);
+          socket.on("error", () => {});
+          socket.on("close", () => peerClosed());
+          let received = "";
+          socket.on("data", (chunk) => {
+            if (received.includes("\r\n\r\n")) return;
+            received += chunk.toString("latin1");
+            if (!received.includes("\r\n\r\n")) return;
+            const head = phase.endsWith("headers")
+              ? "HTTP/1.1 200 OK\r\nX-Slow: "
+              : "HTTP/1.1 200 OK\r\nContent-Length: 4096\r\n\r\n";
+            socket.write(head, () => {
+              if (cancel) controller.abort(reason);
+            });
+            if (phase.startsWith("idle")) return;
+            let sent = 0;
+            const timer = setInterval(() => {
+              if (sent++ >= 20 || socket.destroyed) return clearInterval(timer);
+              socket.write(" ");
+            }, 50);
+            timers.push(timer);
+          });
+        });
+        server.on("error", (error) => serverErrors.push(error));
+        await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+        const { port } = server.address() as AddressInfo;
+        try {
+          const auth = new OpenAIAuth({
+            request: (method, _url, options) => request(method, `http://127.0.0.1:${port}/`, options),
+            requestTimeoutMs: 250,
+            signal: controller.signal,
+            scheduler: realScheduler,
+          });
+          const start = performance.now();
+          const error = await rejected(auth.apiModels(new ApiKeyCredentials("test-only-key")));
+          if (cancel) {
+            expect(error).toBe(reason);
+          } else {
+            expect(error).toBeInstanceOf(AuthError);
+            expect(error.message).toBe("OpenAI authentication request failed");
+          }
+          expect(performance.now() - start).toBeLessThan(700);
+          const peer = await Promise.race([
+            closed.then(() => true),
+            realScheduler.sleep(1000, wait.signal).then(
+              () => false,
+              () => false,
+            ),
+          ]);
+          expect(peer).toBe(true);
+        } finally {
+          wait.abort();
+          for (const timer of timers) clearInterval(timer);
+          // A socket still open would hold server.close until the runner's timeout.
+          for (const socket of sockets) socket.destroy();
+          await new Promise((resolve) => server.close(resolve));
+        }
+        expect(serverErrors).toEqual([]);
+      });
+    }
+  }
+});
+
+/** Send `data` to the login callback listener and return everything it answers before closing. */
+function callbackExchange(data: string | Buffer, options: { end?: boolean } = {}): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect({ host: "127.0.0.1", port: 1455 }, () => {
+      if (options.end) socket.end(data);
+      else socket.write(data);
+    });
+    const chunks: Buffer[] = [];
+    socket.on("data", (chunk) => chunks.push(chunk));
+    socket.on("error", reject);
+    socket.on("close", () => resolve(Buffer.concat(chunks)));
+  });
+}
+
+/** Open a connection to the login callback listener that sends nothing. */
+function idleConnection(): net.Socket {
+  const socket = net.connect({ host: "127.0.0.1", port: 1455 });
+  socket.on("error", () => {});
+  return socket;
+}
+
+/** A valid callback request carrying the state of the authorize `url`. */
+function callbackRequest(url: string, version = "HTTP/1.1"): string {
+  const state = new URL(url).searchParams.get("state");
+  return `GET /auth/callback?code=code&state=${state} ${version}\r\nHost: localhost:1455\r\n\r\n`;
+}
+
+/** The listener's exact answer for `status` and `body`. */
+function callbackAnswer(status: string, body: string): string {
+  return (
+    `HTTP/1.1 ${status}\r\nContent-Type: text/plain; charset=utf-8\r\n` +
+    `Content-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
+  );
+}
+
+/** Bind 127.0.0.1:1455 and release it, proving no listener still holds it. */
+async function expectCallbackPortFree(): Promise<void> {
+  const server = net.createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port: 1455 }, resolve);
+  });
+  await new Promise((resolve) => server.close(resolve));
+}
+
+describe("browser callback listener", () => {
+  test("the listener is closed after success", async () => {
+    const http = new FakeHttp(new HttpResponse(200, tokens()));
+    const replies: Promise<Buffer>[] = [];
+    const auth = new OpenAIAuth({ request: http.request, scheduler: realScheduler });
+    const credentials = await auth.browserLogin((url) => void replies.push(callbackExchange(callbackRequest(url))), {
+      timeoutMs: 3000,
+    });
+    const reply = (await replies[0]!).toString("latin1");
+    expect(reply).toStartWith("HTTP/1.1 200 OK");
+    expect(reply).toEndWith("Authorization received. Return to Yian.");
+    expect(credentials.accountId).toBe("account-test");
+    expect(http.calls[0]![2].form!.code).toBe("code");
+    await expectCallbackPortFree();
+  });
+
+  test("the listener is closed when the user cancels", async () => {
+    const unhandled: unknown[] = [];
+    const guard = (reason: unknown) => void unhandled.push(reason);
+    process.on("unhandledRejection", guard);
+    try {
+      const cancelled = new Error("cancelled by user");
+      const auth = new OpenAIAuth({ request: new FakeHttp().request, scheduler: realScheduler });
+      const error = await rejected(
+        auth.browserLogin(() => {
+          throw cancelled;
+        }),
+      );
+      expect(error).toBe(cancelled);
+      await realScheduler.sleep(50);
+    } finally {
+      process.off("unhandledRejection", guard);
+    }
+    expect(unhandled).toEqual([]);
+    await expectCallbackPortFree();
+  });
+
+  test("the callback deadline survives an idle local connection", async () => {
+    const sockets: net.Socket[] = [];
+    const auth = new OpenAIAuth({ request: new FakeHttp().request, scheduler: realScheduler });
+    const start = performance.now();
+    try {
+      const error = await rejected(auth.browserLogin(() => void sockets.push(idleConnection()), { timeoutMs: 300 }));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toMatch(/timed out/);
+      expect(performance.now() - start).toBeLessThan(800);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+    }
+    await expectCallbackPortFree();
+  });
+
+  test("an idle connection opened first doesn't hold up a real callback", async () => {
+    const http = new FakeHttp(new HttpResponse(200, tokens()));
+    const sockets: net.Socket[] = [];
+    const replies: Promise<Buffer>[] = [];
+    const auth = new OpenAIAuth({ request: http.request, scheduler: realScheduler });
+    const start = performance.now();
+    try {
+      const credentials = await auth.browserLogin(
+        (url) => {
+          sockets.push(idleConnection());
+          replies.push(callbackExchange(callbackRequest(url)));
+        },
+        { timeoutMs: 3000 },
+      );
+      expect(credentials.accountId).toBe("account-test");
+      expect(performance.now() - start).toBeLessThan(1000);
+      expect((await replies[0]!).toString("latin1")).toStartWith("HTTP/1.1 200 OK");
+    } finally {
+      for (const socket of sockets) socket.destroy();
+    }
+    await expectCallbackPortFree();
+  });
+
+  for (const cancel of [false, true]) {
+    const label = cancel ? "cancel" : "timeout";
+    test(`the callback checks the deadline and cancellation during slow headers: ${label}`, async () => {
+      const controller = new AbortController();
+      const reason = new Error("stopped by host");
+      const sockets: net.Socket[] = [];
+      const timers: ReturnType<typeof setInterval>[] = [];
+      const trickle = () => {
+        const socket = idleConnection();
+        sockets.push(socket);
+        let sent = 0;
+        const timer = setInterval(() => {
+          if (sent++ >= 20 || socket.destroyed) return clearInterval(timer);
+          socket.write("G", () => {
+            if (cancel) controller.abort(reason);
+          });
+        }, 50);
+        timers.push(timer);
+      };
+      const auth = new OpenAIAuth({
+        request: new FakeHttp().request,
+        scheduler: realScheduler,
+        signal: controller.signal,
+      });
+      const start = performance.now();
+      try {
+        const error = await rejected(auth.browserLogin(trickle, { timeoutMs: 250 }));
+        if (cancel) expect(error).toBe(reason);
+        else expect(error).toBeInstanceOf(AuthError);
+        expect(performance.now() - start).toBeLessThan(700);
+      } finally {
+        for (const timer of timers) clearInterval(timer);
+        for (const socket of sockets) socket.destroy();
+      }
+      await expectCallbackPortFree();
+    });
+  }
+
+  test("invalid requests get 400 or 404 and a valid HTTP/1.0 callback still succeeds", async () => {
+    const http = new FakeHttp(new HttpResponse(200, tokens()));
+    const bad = callbackAnswer("400 Bad Request", "Invalid callback request.");
+    const unknown = callbackAnswer("404 Not Found", "Unknown callback path.");
+    const replies: [string, string][] = [];
+    const auth = new OpenAIAuth({ request: http.request, scheduler: realScheduler });
+    const credentials = await auth.browserLogin(
+      async (url) => {
+        const cases: [string | Buffer, string, boolean?][] = [
+          ["POST /auth/callback HTTP/1.1\r\nHost: localhost:1455\r\n\r\n", bad],
+          ["GET /other HTTP/1.1\r\n\r\n", unknown],
+          ["GET //evil/auth/callback HTTP/1.1\r\n\r\n", unknown],
+          ["GET /auth/callback HTTP/2.0\r\n\r\n", bad],
+          ["GET /auth/callback HTTP/1.1 extra\r\n\r\n", bad],
+          [Buffer.from("GET /auth/callback?x=\xe9 HTTP/1.1\r\n\r\n", "latin1"), bad],
+          ["GET /auth/callback HTTP/1.1\r\nHost: localhost:1455\r\n", bad, true],
+          [callbackRequest(url, "HTTP/1.0"), callbackAnswer("200 OK", "Authorization received. Return to Yian.")],
+        ];
+        for (const [data, expected, end] of cases) {
+          replies.push([(await callbackExchange(data, { end })).toString("latin1"), expected]);
+        }
+      },
+      { timeoutMs: 3000 },
+    );
+    for (const [reply, expected] of replies) expect(reply).toBe(expected);
+    expect(replies).toHaveLength(8);
+    expect(credentials.accountId).toBe("account-test");
+    expect(http.calls).toHaveLength(1);
+    await expectCallbackPortFree();
+  });
+
+  test("a taken port is refused before the browser opens", async () => {
+    const blocker = net.createServer();
+    await new Promise<void>((resolve, reject) => {
+      blocker.once("error", reject);
+      blocker.listen({ host: "127.0.0.1", port: 1455 }, resolve);
+    });
+    const opened: string[] = [];
+    try {
+      const auth = new OpenAIAuth({ request: new FakeHttp().request, scheduler: realScheduler });
+      const error = await rejected(auth.browserLogin((url) => void opened.push(url), { timeoutMs: 1000 }));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("Could not open the local login callback; use device login");
+      expect(error.cause).toBeUndefined();
+      expect(opened).toEqual([]);
+    } finally {
+      await new Promise((resolve) => blocker.close(resolve));
+    }
+    await expectCallbackPortFree();
+  });
+});
+
+const BUILT = join(import.meta.dir, "..", "dist", "tests", "auth_both_runtimes.js");
+
+/**
+ * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
+ * value that can't run, a Node older than the `engines` floor, or a missing build
+ * fails the whole file, so a typo can't pass as a run with the Node case skipped.
+ * A copy of `tests/engine/platform.test.ts`'s: importing a test file would run its tests.
+ */
+const NODE = ((): string | undefined => {
+  const node = process.env.YIAN_TEST_NODE;
+  if (!node) return undefined;
+  let version: string;
+  try {
+    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
+  } catch (error) {
+    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
+  }
+  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18)) {
+    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
+  }
+  if (!fs.existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
+  return node;
+})();
+
+describe("the both-runtime scenarios", () => {
+  // More than the cross-process scenario's own 20 s limit, so that limit reports first.
+  for (const [name, run] of Object.entries(SCENARIOS)) test(name, run, 30_000);
+
+  test.skipIf(!NODE)(
+    "all pass on Node, built",
+    () => {
+      const result = spawnSync(NODE!, [BUILT], { encoding: "utf8", timeout: 60_000 });
+      const context = `signal: ${result.signal}\nstderr: ${result.stderr}\nstdout: ${result.stdout}`;
+      expect(result.stdout.trim(), context).not.toBe("");
+      const lines = result.stdout.trim().split("\n").map((line) => {
+        let parsed: { name?: unknown; ok?: unknown; error?: string };
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          throw new Error(`not a JSON line: ${line}\n${context}`);
+        }
+        return parsed;
+      });
+      expect(lines.map((line) => line.name)).toEqual(Object.keys(SCENARIOS));
+      for (const line of lines) expect(line, line.error).toEqual({ name: line.name, ok: true });
+      expect(result.status, context).toBe(0);
+    },
+    90_000,
   );
 });

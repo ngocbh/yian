@@ -9,10 +9,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import type { Env } from "../src/defaults.ts";
 import { ApiKeyCredentials, AuthError, OAuthCredentials, type ProviderSelection } from "../src/llm_clients/auth/common.ts";
+import { OpenAIAuth } from "../src/llm_clients/auth/openai.ts";
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import { LLMConfig } from "../src/llm_clients/config.ts";
 import {
@@ -158,6 +159,70 @@ test("internal metadata is not YAML configuration", () => {
   expect(() => new LLMConfig(config)).toThrow(/Extra inputs/);
   (config["_connection"] as Record<string, unknown>)["token"] = "bad";
   expect(() => splitModelConfig(config)).toThrow(/connection/);
+});
+
+/** Save an OpenAI subscription for `gpt-5.5` that expires in a second and make it the default. */
+function expiringSubscription(): Promise<ProviderSelection> {
+  return authStore().save(
+    "openai",
+    new OAuthCredentials({
+      accessToken: "expired-token",
+      refreshToken: "refresh-token",
+      expiresAt: Date.now() / 1000 + 1,
+      accountId: "account",
+    }),
+    "gpt-5.5",
+  );
+}
+
+/** Return fresh subscription tokens for the same account. */
+function freshTokens(): OAuthCredentials {
+  return new OAuthCredentials({
+    accessToken: "fresh-token",
+    refreshToken: "new-refresh",
+    expiresAt: Date.now() / 1000 + 3600,
+    accountId: "account",
+  });
+}
+
+test("refresh retains connection identity on model requests", async () => {
+  // The connection half of Python's test: model requests resolve credentials this way.
+  const selected = await expiringSubscription();
+  const refreshed: OAuthCredentials[] = [];
+  const spy = spyOn(OpenAIAuth.prototype, "refresh").mockImplementation(async (credentials) => {
+    refreshed.push(credentials);
+    return freshTokens();
+  });
+  try {
+    const connection = resolveModelConfig({}, { env })["_connection"] as Connection;
+    const tokens: string[] = [];
+    for (let call = 0; call < 2; call++) {
+      const credentials = await connectionCredentials(connection, "openai", { env });
+      tokens.push((credentials as OAuthCredentials).accessToken);
+    }
+    expect(refreshed.length).toBe(1);
+    expect(refreshed[0]!.accessToken).toBe("expired-token");
+    expect(tokens).toEqual(["fresh-token", "fresh-token"]);
+    expect(connection.credential_id).toBe(selected.credentialId);
+    expect(authStore().selection("openai")?.credentialId).toBe(selected.credentialId);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test("an explicit refresh wins over OpenAI's", async () => {
+  await expiringSubscription();
+  const spy = spyOn(OpenAIAuth.prototype, "refresh").mockImplementation(async () => {
+    throw new Error("OpenAI's refresh ran");
+  });
+  try {
+    const connection = resolveModelConfig({}, { env })["_connection"];
+    const credentials = await connectionCredentials(connection, "openai", { env, refresh: () => freshTokens() });
+    expect((credentials as OAuthCredentials).accessToken).toBe("fresh-token");
+    expect(spy).not.toHaveBeenCalled();
+  } finally {
+    spy.mockRestore();
+  }
 });
 
 test("endpoint metadata cannot record embedded secrets", () => {

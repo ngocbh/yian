@@ -157,7 +157,16 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - `auth/store.ts`: `AuthStore`, the saved-login file in Python's format. Reads are sync. `save`,
   `remove` and `setDefault` are async and hold `<path>.lock` through `waitForLock`; `credentials`
   is async and takes the lock only to refresh. Node and Bun have no `dir_fd`, so private-path
-  checks use `lstat`, an `O_NOFOLLOW` open and `fstat`.
+  checks use `lstat`, an `O_NOFOLLOW` open and `fstat`. Parallel `credentials` calls in one
+  process that refresh the same login share one refresh (success or failure); the file lock
+  still serializes processes.
+- `auth/http.ts`: `request`, Python's `HttpResponse` over `shortRequest`: one total timeout,
+  redirects never followed (a 3xx comes back with `null` data), the body capped.
+- `auth/openai.ts`: `OpenAIAuth`, browser and device sign-in, refresh and the model catalogs.
+  It takes a `Scheduler` and an `AbortSignal` instead of Python's clock and stop callbacks; a
+  login's deadline is one timer that aborts its signal. The browser callback listener is
+  `node:net` on `127.0.0.1:1455`.
+- `auth/index.ts`: the `auth` package's exports, as Python's `auth/__init__.py`.
 - Values are yian values (ints are `bigint`), so a host `llm_config` goes through `fromHost` first.
 - `LLMConfig` holds the key, the header values and the blocks in `#private` fields. The key and
   headers are never dumped; the blocks are read through `blockFor` and `dump`.

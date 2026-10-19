@@ -300,3 +300,22 @@ export interface AuthState {
   readonly defaultProvider: string | null;
   readonly selections: readonly ProviderSelection[];
 }
+
+/** A decoded HTTP result; the body may contain credentials, so it stays out of inspection. */
+export class HttpResponse {
+  /** The HTTP status. */
+  readonly status: number;
+  // Private, so JSON.stringify, inspect and spreads never show the body.
+  readonly #data: unknown;
+
+  constructor(status: number, data: unknown) {
+    this.status = status;
+    this.#data = data;
+    Object.freeze(this);
+  }
+
+  /** The decoded JSON body, or `null` when the body wasn't JSON or the reply was a redirect. */
+  get data(): unknown {
+    return this.#data;
+  }
+}

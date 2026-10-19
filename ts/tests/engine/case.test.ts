@@ -33,7 +33,11 @@
  *
  * TS-only: the seed `e38` row (`load-case/seed_e38_case_when_ref_locates_node_header`): the build
  * locates each `__rN` at the whole value of its `cases[N].when` (`__r1` on line 36) and labels it
- * so; the conformance case's full error comes from the reference check (T3-18).
+ * so; the conformance case's full error comes from the reference check (T3-18). The missing-`then:`
+ * rows: a searched entry without a `then:` ("each searched case needs a `then:`") is located at
+ * its `then:` range when the descriptor has one (a parsed entry's is null, so no frame), else at
+ * `cases:`, else at the node; an `on:` entry with a `when:` and no `then:` ("each on:-form case
+ * needs a `when:` value and a `then:`") at `cases:`, else at the node.
  *
  * Later (T3-17): the `infer_data_edges` half of
  * `test_build_emits_reconciled_edges_no_provisional_group`.
@@ -56,7 +60,8 @@ import { expect, test } from "bun:test";
 import type { Edge } from "../../src/compile/model.ts";
 import { BuildContext, type BuildResult, siteKey } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
-import type { SourceRange } from "../../src/diagnostics.ts";
+import { LoadDiagnostics, type LoadError } from "../../src/compose/helpers/errors.ts";
+import { SourceRange } from "../../src/diagnostics.ts";
 import { evaluateWhenRecord } from "../../src/expr/expressions.ts";
 import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import { CaseNode } from "../../src/nodes/case/node.ts";
@@ -93,6 +98,13 @@ function split(result: BuildResult): { data: Edge[]; control: Edge[] } {
 /** Return a range as `[startLine, startCol, endLine, endCol]`, or `null`. */
 const span = (range: SourceRange | undefined) =>
   range === undefined ? null : [range.startLine, range.startCol, range.endLine, range.endCol];
+
+/** Return a build context whose load errors locate in `text`, labelled `flow.yaml`. */
+const located = (text: string) =>
+  new BuildContext({ registry: new Map(), diagnostics: new LoadDiagnostics("flow.yaml", text) });
+
+/** Return the range a load error points at, or `null` when it has no frame. */
+const errorRange = (error: LoadError) => error.diagnostic.frames.at(-1)?.range ?? null;
 
 /** Return the built `CaseNode` of a built CASE. */
 const caseNode = (result: BuildResult) => result.node as CaseNode;
@@ -273,6 +285,34 @@ test("searched when: malformed is loud", () => {
   );
 });
 
+test("a searched case without then: is refused at its then:, else at cases:, else at the node", () => {
+  const message = "case node 'gate': each searched case needs a `then:`";
+  const text =
+    "id: c\nname: c\nnodes:\n  gate:\n    kind: case\n    cases:\n      - when: x.output > 1\n        then: hot\n" +
+    "      - when: x.output < 0\n    else: cold\n";
+  const ctx = located(text);
+  const cases = [{ when: "x.output > 1" }];
+  const thenRange = new SourceRange(8, 15, 8, 18);
+  const casesRange = new SourceRange(7, 7, 10, 5);
+  const nodeRange = new SourceRange(5, 5, 11, 1);
+
+  // Parsed, the second entry's `then:` range is null, so the error has no frame (as in Python).
+  const parsed = nodesOf(text, [], "flow.yaml").get("gate") as CaseDescriptor;
+  const unlocated = loadError(() => parsed.build(ctx));
+  expect(unlocated.message).toBe(message);
+  expect(unlocated.diagnostic.frames).toEqual([]);
+  // A descriptor built in code with a `then:` range for the entry: at that range.
+  const atThen = loadError(() => new CaseDescriptor({ id: "gate", cases, thenRanges: [thenRange] }).build(ctx));
+  expect(atThen.message).toBe(message);
+  expect(errorRange(atThen)).toEqual(thenRange);
+  // With no `then:` ranges: at `cases:`, else at the node.
+  const fieldRanges = new Map([[siteKey("field", "cases"), casesRange]]);
+  const atCases = loadError(() => new CaseDescriptor({ id: "gate", cases, fieldRanges, range: nodeRange }).build(ctx));
+  expect(errorRange(atCases)).toEqual(casesRange);
+  const atNode = loadError(() => new CaseDescriptor({ id: "gate", cases, range: nodeRange }).build(ctx));
+  expect(errorRange(atNode)).toEqual(nodeRange);
+});
+
 test("searched reads are allocated in read order", () => {
   const result = searched("x.output.a == 'p' and x.output != null and x.output.b == 'q'");
 
@@ -401,4 +441,25 @@ test("on value with both quotes is a loud load error", () => {
     `case \`on:\` match value 'a\\'b"c' contains both ' and " — unrepresentable in a \`when:\` string ` +
       "literal (no escape support); rename the matched value",
   );
+});
+
+test("an on: case without then: is refused at cases:, else at the node", () => {
+  const message = "case node 'route': each on:-form case needs a `when:` value and a `then:`";
+  const text =
+    "id: c\nname: c\nnodes:\n  route:\n    kind: case\n    on: ${x.output}\n" +
+    "    cases:\n      - when: a\n        then: hot\n      - when: b\n";
+  const ctx = located(text);
+
+  // Parsed, the second entry has a `when:` and a null `then:` range: at `cases:`.
+  const parsed = nodesOf(text, [], "flow.yaml").get("route") as CaseDescriptor;
+  const atCases = loadError(() => parsed.build(ctx));
+  expect(atCases.message).toBe(message);
+  expect(errorRange(atCases)).toEqual(new SourceRange(8, 7, 11, 1));
+  // A descriptor built in code with no ranges but its own: at the node.
+  const nodeRange = new SourceRange(5, 5, 11, 1);
+  const cases = [{ when: "a" }];
+  const desc = new CaseDescriptor({ id: "route", on: "${x.output}", cases, range: nodeRange });
+  const atNode = loadError(() => desc.build(ctx));
+  expect(atNode.message).toBe(message);
+  expect(errorRange(atNode)).toEqual(nodeRange);
 });

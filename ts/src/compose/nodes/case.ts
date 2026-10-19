@@ -174,7 +174,8 @@ export class CaseDescriptor extends NodeDescriptor {
     this.elseTag = fields.elseTag ?? null;
     const whenOrigins: unknown = fields.whenOrigins ?? [];
     if (!Array.isArray(whenOrigins)) throw new TypeError("CASE predicate origins must be an array");
-    this.whenOrigins = whenOrigins;
+    // A frozen copy, so the origins can't change after the alignment check (Python takes a tuple).
+    this.whenOrigins = Object.freeze([...whenOrigins]);
     this._validateOriginAlignment();
     for (const origin of this.whenOrigins) {
       if (origin !== null && !(origin instanceof OriginRef)) {
@@ -418,6 +419,8 @@ function numberText(value: bigint | number): string {
   if (typeof value === "bigint") return String(value);
   if (value === Infinity) return "inf";
   if (value === -Infinity) return "-inf";
+  // YAML reads `-0.0` as the float `0` (yian has no negative zero), so only a descriptor built
+  // in code reaches this branch.
   if (Object.is(value, -0)) return "-0.0";
   // `String` is the shortest round-tripping form, but it may use an exponent: move the point.
   const [mantissa, exponent = "0"] = String(Math.abs(value)).split("e");

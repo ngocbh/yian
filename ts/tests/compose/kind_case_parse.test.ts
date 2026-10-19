@@ -24,7 +24,9 @@
  * origins through `builder.resolveRegistered`, where Python loads the flow and reads the built
  * `CaseNode`; the searched and `on:` rows also assemble the flow (`assembleText`) and read the
  * built node and its `__r0` or `__on` wiring. The misaligned origins are a `RangeError` where
- * Python's are a `ValueError`, and the message says "or null" where Python's says "or None".
+ * Python's are a `ValueError`, and the message says "or null" where Python's says "or None". The
+ * requires-cases row pins the whole message and its range (the node body), where Python matches a
+ * fragment. The misaligned-origins row also checks that the origins are a frozen copy.
  *
  * TS-only: the lowering row also checks the `__on` input's range and label; an `on:` case entry
  * with a null `when:` is refused at that `when:`; a lone surrogate in `on:` or in a searched
@@ -234,9 +236,12 @@ test("an on case entry with a null when is refused at that when", () => {
 test("case parse requires cases", () => {
   const flow = "nodes:\n  route:\n    kind: case\n    on: ${x.output}\n";
 
-  expect(loadError(() => CaseDescriptor.parse("route", readerFor(flow, "route"))).message).toContain(
-    "missing required field 'cases'",
-  );
+  const cursor = readerFor(flow, "route");
+
+  const error = loadError(() => CaseDescriptor.parse("route", cursor));
+
+  expect(error.message).toBe("node 'route' (kind=case): missing required field 'cases'");
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(new SourceRange(3, 5, 5, 1));
 });
 
 test("a case with both on spellings is a located error", () => {
@@ -298,6 +303,12 @@ test("case descriptor rejects misaligned or non-opaque origins", () => {
   expect(desc.cases).toBe(pushed);
   pushed.push({ when: "false", then: "negative" });
   expect(() => desc.build(CTX)).toThrow(new RangeError("CASE predicate origins must align with cases"));
+  // The origins are a frozen copy (Python's tuple): a later push to the given array can't reach them.
+  const given = [new OriginRef("first")];
+  const copied = new CaseDescriptor({ id: "gate", cases, whenOrigins: given });
+  given.push(new OriginRef("second"));
+  expect(copied.whenOrigins).toStrictEqual([new OriginRef("first")]);
+  expect(Object.isFrozen(copied.whenOrigins)).toBe(true);
 });
 
 test("case parse keeps then styles aligned with cases", () => {

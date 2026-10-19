@@ -501,8 +501,10 @@ def _sign_in_lines(auth_file: Optional[str], model: Optional[str]) -> None:
         print_json({"event": "code", "user_code": code, "verification_uri": url})
         print_json({"event": "waiting"})
 
-    saved = {number: signal.signal(number, stop) for number in (signal.SIGTERM, signal.SIGINT)}
+    saved = {}
     try:
+        for number in (signal.SIGTERM, signal.SIGINT):
+            saved[number] = signal.signal(number, stop)
         store = AuthStore(auth_file, check_stopped=check_stopped)
         # Reading first also diagnoses an unusable store before any request.
         make_default = store.read().default_provider is None
@@ -787,10 +789,13 @@ def auth(
         typer.BadParameter: `--json` is given to another form.
         typer.Exit: The command fails or is cancelled; saved logins stay unchanged.
     """
+    # A removal refuses setup options, so its error is the plain document even when they
+    # describe a device sign-in.
     device = (
         (provider or "").lower() == "openai"
         and method == "subscription"
         and login == "device"
+        and not remove
     )
     if json_output and not (remove or device):
         raise typer.BadParameter(
@@ -804,21 +809,21 @@ def auth(
                     method, login, model, api_key_env, endpoint, organization, project
                 )
             ) or bool(header)
-            if not (remove and auth_file is not None):
-                if default or remove or setup:
-                    raise AuthError("Name a provider: yian auth <provider> [options]")
-                _list(AuthStore(auth_file))
+            if remove and auth_file is not None:
+                if default or setup:
+                    raise AuthError(
+                        "--remove without a provider deletes the whole --auth-file; it "
+                        "takes no --default or setup option"
+                    )
+                AuthStore(auth_file).delete()
+                if json_output:
+                    print_json({"ok": True})
+                else:
+                    typer.echo(f"Removed the saved logins in {auth_file}")
                 return
-            if default or setup:
-                raise AuthError(
-                    "--remove without a provider deletes the whole --auth-file and "
-                    "takes no other option"
-                )
-            AuthStore(auth_file).delete()
-            if json_output:
-                print_json({"ok": True})
-            else:
-                typer.echo(f"Removed the saved logins in {auth_file}")
+            if default or remove or setup:
+                raise AuthError("Name a provider: yian auth <provider> [options]")
+            _list(AuthStore(auth_file))
             return
         provider, header_sources = _check_options(
             provider,
@@ -1029,6 +1034,7 @@ def _subscription_models(auth_file: str, timeout: float) -> list[str]:
 
     def service() -> OpenAIAuth:
         remaining = end - time.monotonic()
+        # OpenAIAuth refuses a request timeout that isn't positive.
         if remaining <= 0:
             raise AuthError("No time is left for the request")
         return OpenAIAuth(request_timeout=remaining)
@@ -1057,7 +1063,9 @@ def models(
         None, "--provider", help="Provider whose host is listed, with the key on stdin."
     ),
     base_url: Optional[str] = typer.Option(
-        None, "--base-url", help="Host to list instead of the provider's own; --provider only."
+        None,
+        "--base-url",
+        help="Host to list instead of the provider's own; --provider only.",
     ),
     timeout: float = typer.Option(8.0, "--timeout", help="Seconds for the whole listing."),
     json_output: bool = typer.Option(
@@ -1083,24 +1091,29 @@ def models(
 
     Raises:
         typer.BadParameter: Not exactly one of `auth_file` and `provider` is given,
-            `base_url` comes without `provider`, the provider isn't supported, or
-            `timeout` isn't a finite number above 0.
+            `base_url` comes without `provider`, the provider isn't supported,
+            `timeout` isn't a finite number above 0, or stdin isn't text.
         typer.Exit: With code 1 when the listing fails.
     """
     if (auth_file is None) == (provider is None):
         raise typer.BadParameter("Give exactly one of --auth-file and --provider")
     if base_url is not None and provider is None:
         raise typer.BadParameter("--base-url applies only to --provider")
-    if provider is not None and provider.lower() not in SUPPORTED_LLM_PROVIDERS:
-        raise typer.BadParameter(
-            f"Unsupported provider; choose one of: {', '.join(SUPPORTED_LLM_PROVIDERS)}"
-        )
+    if provider is not None:
+        provider = provider.lower()
+        if provider not in SUPPORTED_LLM_PROVIDERS:
+            raise typer.BadParameter(
+                f"Unsupported provider; choose one of: {', '.join(SUPPORTED_LLM_PROVIDERS)}"
+            )
     if not math.isfinite(timeout) or timeout <= 0:
         raise typer.BadParameter("--timeout must be a finite number of seconds above 0")
     error = None
+    listed = None
     if provider is not None:
-        provider = provider.lower()
-        key = None if sys.stdin.isatty() else sys.stdin.read().strip() or None
+        try:
+            key = None if sys.stdin.isatty() else sys.stdin.read().strip() or None
+        except ValueError:  # UnicodeDecodeError is a ValueError
+            raise typer.BadParameter("stdin must be the API key as text") from None
         try:
             listed = list_models(provider, key, base_url, timeout=timeout)
         except ModelListError as failure:
@@ -1117,14 +1130,14 @@ def models(
         except TimeoutError:
             error = {
                 "code": "models.timeout",
-                "message": f"Listing the models took longer than {timeout:g} seconds",
+                "message": "Couldn't list the openai subscription models: timed out",
                 "status": None,
             }
         except AuthError as failure:
             status = re.search(r"\(HTTP (\d{3})\)$", str(failure))
             error = {
                 "code": "models.failed",
-                "message": str(failure),
+                "message": f"Couldn't list the openai subscription models: {failure}",
                 "status": int(status[1]) if status else None,
             }
     if error is not None:

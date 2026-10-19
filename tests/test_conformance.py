@@ -543,7 +543,7 @@ def _check_http(http: object) -> None:
         delay = response.get("delay", 0)
         # Finite: a wait can't take an infinite timeout.
         if type(delay) not in (int, float) or not 0 <= delay < math.inf:
-            raise ValueError(f"`{where}.response.delay` must be a non-negative number")
+            raise ValueError(f"`{where}.response.delay` must be a finite non-negative number")
 
 
 def _check(case: dict, candidate: bool = False) -> dict:
@@ -1869,18 +1869,19 @@ def _mismatch(expected: dict, method: str, url: str, headers, body: bytes) -> st
         # `headers` looks names up case-insensitively.
         if headers.get(name) != value:
             return f"header {name}: expected {value!r}, got {headers.get(name)!r}"
-    key = next((key for key in ("json", "form") if key in expected), None)
-    if key is None:
+    if "json" not in expected and "form" not in expected:
         return None
+    key = "json" if "json" in expected else "form"
     try:
         if key == "json":
-            same = _same(json.loads(body), expected["json"])
+            got = json.loads(body)
         else:
-            same = _same(dict(parse_qsl(body.decode(), keep_blank_values=True)), expected["form"])
+            got = dict(parse_qsl(body.decode(), keep_blank_values=True))
     except ValueError:  # JSONDecodeError and UnicodeDecodeError are ValueErrors
-        same = False
-    if same:
-        return None
+        pass
+    else:
+        if _same(got, expected[key]):
+            return None
     return (f"body: expected {key} {json.dumps(expected[key])}, "
             f"got {body.decode(errors='replace')[:500]!r}")
 
@@ -4368,8 +4369,8 @@ def test_cli_format_accepts_and_refuses() -> None:
                                                "form": {"a": 1}}}]}),
         (status, response(status=700)),
         (status, response(status=200.0)),
-        ("`http[0].response.delay` must be a non-negative number", response(delay=-1)),
-        ("`http[0].response.delay` must be a non-negative number", response(delay=math.inf)),
+        ("`http[0].response.delay` must be a finite non-negative number", response(delay=-1)),
+        ("`http[0].response.delay` must be a finite non-negative number", response(delay=math.inf)),
         ("`expect.exists` values must be true or false",
          {"expect": {"exit": 0, "exists": {"a": "yes"}}}),
         (exists.format("a/../b"), {"expect": {"exit": 0, "exists": {"a/../b": True}}}),

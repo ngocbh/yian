@@ -18,7 +18,6 @@ from yian.llm_clients.auth import (
     AuthStore,
     OAuthCredentials,
 )
-from yian.llm_clients.auth import store as store_module
 from yian.llm_clients.api_key_env import PROVIDER_API_KEY_ENV
 from yian.llm_clients.model_list import ModelListError
 
@@ -135,31 +134,36 @@ def test_failed_or_cancelled_setup_preserves_previous_connection(
 DEVICE_JSON = ["auth", "openai", "--method", "subscription", "--login", "device", "--json"]
 
 
+STOPS = (signal.SIGTERM, signal.SIGINT)
+
+
 @pytest.fixture
 def device_json(monkeypatch, setup_auth):
-    """Build the fake service only with `check_stopped`, and make a SIGTERM the command
-    doesn't handle fail the test instead of killing pytest."""
+    """Build the fake service only with `check_stopped`, and make a SIGTERM or SIGINT the
+    command doesn't handle fail the test instead of killing pytest."""
     store, service = setup_auth
 
     def build(*, check_stopped):
         return service
 
     def unhandled(number, frame):
-        raise AssertionError("SIGTERM reached the test's own handler")
+        raise AssertionError(f"{signal.Signals(number).name} reached the test's own handler")
 
     monkeypatch.setattr(auth_cli, "OpenAIAuth", build)
-    previous = signal.signal(signal.SIGTERM, unhandled)
+    previous = {number: signal.signal(number, unhandled) for number in STOPS}
     yield store, service, unhandled
-    signal.signal(signal.SIGTERM, previous)
+    for number, handler in previous.items():
+        signal.signal(number, handler)
 
 
+@pytest.mark.parametrize("number", STOPS)
 def test_device_json_stopped_before_the_save_exits_130_and_saves_nothing(
-    monkeypatch, device_json
+    monkeypatch, device_json, number
 ):
     store, service, unhandled = device_json
 
     def stop(credentials):
-        os.kill(os.getpid(), signal.SIGTERM)
+        os.kill(os.getpid(), number)
         return ("gpt-test",)
 
     monkeypatch.setattr(service, "subscription_models", stop)
@@ -168,18 +172,18 @@ def test_device_json_stopped_before_the_save_exits_130_and_saves_nothing(
     lines = [json.loads(line) for line in result.stdout.splitlines()]
     assert [line["event"] for line in lines] == ["code", "waiting"]
     assert not store.path.exists()
-    assert signal.getsignal(signal.SIGTERM) is unhandled
+    assert all(signal.getsignal(number) is unhandled for number in STOPS)
 
 
 def test_device_json_stopped_after_the_rename_is_saved_and_done(monkeypatch, device_json):
     store, service, unhandled = device_json
-    replace = store_module.os.replace
+    replace = os.replace
 
     def replace_then_stop(*args, **kwargs):
         replace(*args, **kwargs)
         os.kill(os.getpid(), signal.SIGTERM)
 
-    monkeypatch.setattr(store_module.os, "replace", replace_then_stop)
+    monkeypatch.setattr(os, "replace", replace_then_stop)
     result = runner.invoke(app, DEVICE_JSON)
     assert result.exit_code == 0, result.output
     assert [json.loads(line) for line in result.stdout.splitlines()] == [
@@ -199,7 +203,18 @@ def test_device_json_stopped_after_the_rename_is_saved_and_done(monkeypatch, dev
     ]
     assert store.read().default_provider == "openai"
     assert store.selection().model == "gpt-test"
-    assert signal.getsignal(signal.SIGTERM) is unhandled
+    assert all(signal.getsignal(number) is unhandled for number in STOPS)
+
+
+def test_models_refuses_stdin_that_is_not_text(monkeypatch):
+    def unexpected(*args, **kwargs):
+        raise AssertionError("listed with an unreadable key")
+
+    monkeypatch.setattr(auth_cli, "list_models", unexpected)
+    args = ["models", "--provider", "openrouter", "--json"]
+    result = runner.invoke(app, args, input=b"\xff\xfe")
+    assert result.exit_code == 2, result.output
+    assert result.stdout == ""
 
 
 @pytest.mark.parametrize(

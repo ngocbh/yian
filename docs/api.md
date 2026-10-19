@@ -353,6 +353,11 @@ run before appending any record.
   values follow the `headers` rules, and an `http_client` or `http_async_client`
   passed beside them must not follow redirects. The `ollama` client and the
   ChatGPT subscription model refuse it, since they send no API key.
+
+  Changed (TS yian): a saved subscription's account id is scrubbed from errors too,
+  and `ANTHROPIC_AUTH_TOKEN` isn't read. [Installation](installation.md#ts-environment)
+  lists the variables TS yian reads, its base URL variables included; an empty
+  variable counts as unset.
 - `memory` — one backend per declared memory key, normally the
   `MemoryRegistry` from `build_memories(flow)`. `None` leaves all declarations
   dormant. A missing key, or one object under two keys, fails setup; extra keys

@@ -1,11 +1,10 @@
-/**
- * Mirrors `tests/test_llm_config_blocks.py`: the `LLMConfig` block tests and the cascade merge
- * tests; the 3 `validate_layer` tests go with `layers.ts`.
- */
+/** Mirrors `tests/test_llm_config_blocks.py`. */
 
 import { describe, expect, test } from "bun:test";
 
+import { compareCodeUnits } from "../src/diagnostics.ts";
 import { LLM_CONFIG_KEYS, LLMConfig, mergeLlmConfig, SUPPORTED_LLM_PROVIDERS } from "../src/llm_clients/config.ts";
+import { validateLayer } from "../src/llm_clients/layers.ts";
 import { type Issue, PROVIDER_BLOCKS, ValidationError } from "../src/llm_clients/provider_blocks.ts";
 import { fromHost } from "../src/typesys/values.ts";
 
@@ -234,6 +233,28 @@ test("merge is associative over every triple of layers", () => {
   expect(checked).toBe(2744);
 });
 
+test("host layer rejects the python spelling of a dash block", () => {
+  const layer = { qwen_cn: { enable_thinking: true } };
+  expect(() => validateLayer(layer)).toThrow(RangeError);
+  expect(() => validateLayer(layer)).toThrow("`qwen_cn` is not an llm_config key; write `qwen-cn`");
+});
+
+test("host layer unknown key lists the authored keys", () => {
+  let message = "";
+  try {
+    validateLayer({ modle: "x" });
+  } catch (error) {
+    expect(error).toBeInstanceOf(RangeError);
+    message = (error as RangeError).message;
+  }
+  expect(message).toContain('unknown field(s) ["modle"]');
+  expect(message).toContain([...LLM_CONFIG_KEYS].sort(compareCodeUnits).join(", "));
+});
+
+test("host layer accepts a dash block", () => {
+  validateLayer({ "qwen-cn": { enable_thinking: true } });
+});
+
 describe("TS additions", () => {
   test("a non-record is not a config", () => {
     for (const data of [[1], null, "provider: openai", new Map()]) {
@@ -287,8 +308,8 @@ describe("TS additions", () => {
         loc: ["provider"],
         type: "literal_error",
         msg:
-          "Input should be 'openai', 'xai', 'deepseek', 'qwen', 'qwen-cn', 'glm', 'glm-cn', 'minimax', " +
-          "'minimax-cn', 'openrouter', 'vllm', 'ollama', 'anthropic', 'google' or 'azure'",
+          'Input should be "openai", "xai", "deepseek", "qwen", "qwen-cn", "glm", "glm-cn", "minimax", ' +
+          '"minimax-cn", "openrouter", "vllm", "ollama", "anthropic", "google" or "azure"',
       },
     ]);
   });

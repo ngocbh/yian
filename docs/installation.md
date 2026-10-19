@@ -135,6 +135,20 @@ deployment name as `model`; no Azure environment variables are needed. Without
 `OPENAI_BASE_URL`) decide where the key goes, so pass `base_url` with the key when
 the endpoint must be fixed.
 
+Changed (TS yian): for model calls and saved logins, yian reads only the variables it
+documents, through one environment accessor: the provider key variables,
+`GOOGLE_API_KEY` then `GEMINI_API_KEY`, `AZURE_OPENAI_API_KEY` and
+`AZURE_OPENAI_AD_TOKEN`, `OPENAI_API_VERSION`, the base URL variables
+(`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `VLLM_BASE_URL`, `OLLAMA_BASE_URL`),
+`YIAN_DEFAULT_PROVIDER`, `YIAN_DEFAULT_MODEL`, `YIAN_AUTH_FILE`, `XDG_CONFIG_HOME`,
+`HOME` and the `YIAN_*` defaults. An empty variable counts as unset, `YIAN_AUTH_FILE`
+too. `GOOGLE_GEMINI_BASE_URL` is not read. `ANTHROPIC_AUTH_TOKEN`, `OLLAMA_API_KEY`,
+`OPENAI_CUSTOM_HEADERS`, `ANTHROPIC_CUSTOM_HEADERS`, the OpenAI organization and
+project variables, and `GOOGLE_GENAI_USE_VERTEXAI` and `GOOGLE_GENAI_USE_ENTERPRISE`
+are not read and draw no warning. Azure doesn't fall back to `OPENAI_API_KEY`. Errors
+are scrubbed of a saved subscription's account id too.
+{: #ts-environment }
+
 When you `yian run` a flow whose AGENT nodes need a provider key that isn't set, the CLI
 prompts for it up front (in an interactive terminal) and continues once entered —
 so a missing key surfaces as a prompt rather than a failure on the first model
@@ -200,6 +214,15 @@ The store is `$XDG_CONFIG_HOME/yian/auth.json`, falling back to
 another private file. The store uses private filesystem permissions (mode `0600`)
 and atomic writes on POSIX hosts; it is not encrypted. Token refresh preserves the
 selected connection. Failed authentication never falls back to another credential.
+
+Changed (TS yian): the file keeps the same format, so TS yian uses logins saved by
+Python yian. An `expires_at` that is a whole number of seconds is written without
+`.0` (`1767225600`, where Python writes `1767225600.0`); both read either. TS yian
+locks `auth.json.lock` (the file's path plus `.lock`) with its own lock, which
+Python's doesn't see: don't run Python and TS yian against the same saved logins at
+the same time (a refresh rotates the token); point `YIAN_AUTH_FILE` at a copy
+instead. The path expands only `~` and a leading `~/`, not `~user`, and an empty
+`YIAN_AUTH_FILE` counts as unset.
 
 #### OpenAI {#openai-authentication}
 
@@ -344,6 +367,10 @@ key as `api_key` instead, and then must pass `base_url` beside it.
 `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT_NAME` are not read: move their
 values into `base_url` and `model`, or save them with `yian auth azure`.
 
+Changed (TS yian): there is no Azure SDK, so a call given no key never falls back to
+`OPENAI_API_KEY`. `AZURE_OPENAI_AD_TOKEN` is scrubbed from errors whenever it is set; see
+[the environment note](#ts-environment).
+
 ### Local models with Ollama
 
 No API key is needed. Save Ollama as a login, or set the defaults in the
@@ -364,6 +391,9 @@ it drops it; unset the variable to silence the warning. So a host that needs a k
 such as Ollama's hosted API, can no longer be used, and nothing replaces it yet. This
 is a breaking change: earlier versions sent the variable as a Bearer token. A user
 name and password written in `OLLAMA_BASE_URL` are still sent as Basic auth.
+
+Changed (TS yian): there is no SDK, so yian doesn't read `OLLAMA_API_KEY` and doesn't
+warn about it; see [the environment note](#ts-environment).
 
 `hello.yaml` is any flow file, for example this one-node flow:
 

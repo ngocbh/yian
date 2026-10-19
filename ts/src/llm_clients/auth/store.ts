@@ -1,0 +1,623 @@
+/** Private credential storage: one saved login per provider, with locked atomic writes and refresh. */
+
+import { randomBytes } from "node:crypto";
+// The default import keeps calls patchable by test spies.
+import fs from "node:fs";
+import { userInfo } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import process from "node:process";
+
+import { current, type Env, processEnv } from "../../defaults.ts";
+import { compareCodeUnits } from "../../diagnostics.ts";
+import { FileLockError, type FileLock, realScheduler, type Scheduler, waitForLock } from "../../platform.ts";
+import { isRecord } from "../../typesys/index.ts";
+import { parseJson } from "../../typesys/json.ts";
+import {
+  ApiKeyCredentials,
+  AuthError,
+  type AuthState,
+  type Credentials,
+  OAuthCredentials,
+  ProviderSelection,
+} from "./common.ts";
+
+// Entry keys written only when set, so a login without them is stored as before.
+const OPTIONAL_ENTRY_KEYS = new Set(["endpoint", "organization", "project"]);
+const ENTRY_KEYS = ["method", "model", "credential_id", "credentials"];
+const STORE_KEYS = ["version", "default_provider", "providers"];
+const OAUTH_KEYS = ["access_token", "refresh_token", "expires_at", "account_id"];
+
+const REGULAR = "Credential storage must use a regular private path";
+const NOT_PRIVATE = "Credential storage must be private to its owner";
+const OVERSIZED = "Credential storage exceeds its size limit";
+const MALFORMED = "Credential storage is malformed; reconnect after repairing it";
+
+/** Saved logins by provider, in file order. */
+type Providers = Map<string, [ProviderSelection, Credentials | null]>;
+
+/** The open store directory and the identity its descriptor had when checked. */
+interface Directory {
+  fd: number;
+  dev: bigint;
+  ino: bigint;
+}
+
+/** Options of an `AuthStore`. */
+export interface AuthStoreOptions {
+  /** The environment read for the default path and for `~` (`HOME`); default `processEnv`. */
+  env?: Env;
+  /** The clock for token expiry and the sleep for the lock wait; default `realScheduler`. */
+  scheduler?: Scheduler;
+  /** Once aborted, store calls throw its reason before touching storage. */
+  signal?: AbortSignal;
+  /** Longest wait for the store's lock, in milliseconds; finite and above 0 (default 30 000). */
+  lockTimeoutMs?: number;
+  /** How long before expiry a subscription token is refreshed, in milliseconds; finite, 0 or more (default 60 000). */
+  refreshMarginMs?: number;
+}
+
+/** Whether `value` has exactly the keys `keys`. */
+function hasKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const own = Object.keys(value);
+  return own.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
+/** Return the storage access error; it has no cause, so no path or system detail shows. */
+function accessError(): AuthError {
+  return new AuthError("Could not access private credential storage");
+}
+
+/** Run a `node:fs` call, turning anything it throws into the storage access error. */
+function access<T>(call: () => T): T {
+  try {
+    return call();
+  } catch {
+    throw accessError();
+  }
+}
+
+/** Whether `error` is a `node:fs` error for a missing path. */
+function isMissing(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === "ENOENT";
+}
+
+/** Close `fd`, turning a failure into the storage access error. */
+function closeFd(fd: number): void {
+  access(() => fs.closeSync(fd));
+}
+
+/**
+ * Check that the open descriptor `fd` is a private directory or regular file; return its status.
+ *
+ * Throws `AuthError` unless it is the kind asked for (a file with at most one link), owned by
+ * this user, and without group or other permission bits.
+ */
+function checkPrivate(fd: number, directory = false): fs.BigIntStats {
+  const info = access(() => fs.fstatSync(fd, { bigint: true }));
+  // An atomic replacement can unlink a snapshot already opened by a reader. Its descriptor
+  // remains valid; multiple links would expose the secrets.
+  if (!(directory ? info.isDirectory() : info.isFile()) || (!directory && info.nlink > 1n)) {
+    throw new AuthError(REGULAR);
+  }
+  if (info.uid !== BigInt(process.getuid!()) || (info.mode & 0o077n) !== 0n) {
+    throw new AuthError(NOT_PRIVATE);
+  }
+  return info;
+}
+
+/**
+ * Return the credentials a stored entry of `method` holds; throw if `value` is not their stored
+ * form.
+ */
+function loadCredentials(method: unknown, value: unknown): Credentials | null {
+  if (method === "none") {
+    if (value !== null) throw new TypeError("credentials");
+    return null;
+  }
+  if (!isRecord(value)) throw new TypeError("credentials");
+  if (method !== "api_key") {
+    const optional = Object.hasOwn(value, "residency") ? ["residency"] : [];
+    if (!hasKeys(value, [...OAUTH_KEYS, ...optional])) throw new TypeError("credentials");
+    const expiresAt = value["expires_at"];
+    return new OAuthCredentials({
+      accessToken: value["access_token"],
+      refreshToken: value["refresh_token"],
+      expiresAt: typeof expiresAt === "bigint" ? Number(expiresAt) : expiresAt,
+      accountId: value["account_id"],
+      residency: value["residency"],
+    });
+  }
+  const hasHeaders = Object.hasOwn(value, "headers");
+  if (!hasKeys(value, hasHeaders ? ["api_key", "headers"] : ["api_key"])) throw new TypeError("credentials");
+  const headers = hasHeaders ? value["headers"] : {};
+  // The writer omits empty headers, so a stored empty mapping is not canonical.
+  if (!isRecord(headers) || (hasHeaders && Object.keys(headers).length === 0)) throw new TypeError("headers");
+  return new ApiKeyCredentials(value["api_key"], headers);
+}
+
+/** Return the stored form of `credentials`, field by field, so a login without headers keeps its bytes. */
+function dumpCredentials(credentials: Credentials | null): Record<string, unknown> | null {
+  if (credentials === null) return null;
+  if (credentials instanceof ApiKeyCredentials) {
+    const value: Record<string, unknown> = { api_key: credentials.apiKey };
+    if (credentials.headers.length > 0) value["headers"] = Object.fromEntries(credentials.headers);
+    return value;
+  }
+  return {
+    access_token: credentials.accessToken,
+    refresh_token: credentials.refreshToken,
+    expires_at: credentials.expiresAt,
+    account_id: credentials.accountId,
+    residency: credentials.residency,
+  };
+}
+
+/**
+ * Serialize `value` (objects, strings, numbers and `null`) as Python's
+ * `json.dumps(value, sort_keys=True)` does, so both write the same bytes. A float is spelled as
+ * JS spells it (`1e-7`, Python `1e-07`; an integral float is `9000`, Python `9000.0`).
+ */
+function pythonJson(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") {
+    // Python's ensure_ascii: each code unit outside printable ASCII as lowercase \uXXXX.
+    return JSON.stringify(value).replace(
+      /[^\x20-\x7e]/g,
+      (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
+  }
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => compareCodeUnits(a, b));
+  return `{${entries.map(([key, item]) => `${pythonJson(key)}: ${pythonJson(item)}`).join(", ")}}`;
+}
+
+/** Return the provider choice and saved logins `text` holds; throw if it is not a v1 store. */
+function parseStore(text: string): [string | null, Providers] {
+  const value = parseJson(text, "plain");
+  if (!isRecord(value) || !hasKeys(value, STORE_KEYS)) throw new TypeError("store");
+  const providerEntries = value["providers"];
+  if (value["version"] !== 1n || !isRecord(providerEntries)) throw new TypeError("store");
+  const providers: Providers = new Map();
+  for (const [provider, entry] of Object.entries(providerEntries)) {
+    if (!isRecord(entry)) throw new TypeError("entry");
+    const optional = Object.keys(entry).filter((key) => OPTIONAL_ENTRY_KEYS.has(key));
+    if (!hasKeys(entry, [...ENTRY_KEYS, ...optional])) throw new TypeError("entry");
+    // The writer omits unset ids, so a stored null is not canonical. A null endpoint stays
+    // readable, as stores before these ids allowed it.
+    if (entry["organization"] === null || entry["project"] === null) throw new TypeError("entry");
+    const credentials = loadCredentials(entry["method"], entry["credentials"]);
+    const selection = new ProviderSelection({
+      provider,
+      method: entry["method"],
+      model: entry["model"],
+      credentialId: entry["credential_id"],
+      endpoint: entry["endpoint"],
+      organization: entry["organization"],
+      project: entry["project"],
+      headerNames: credentials instanceof ApiKeyCredentials ? credentials.headers.map(([name]) => name) : [],
+    });
+    providers.set(provider, [selection, credentials]);
+  }
+  const fallback = value["default_provider"];
+  if (fallback !== null && (typeof fallback !== "string" || !providers.has(fallback))) {
+    throw new TypeError("default_provider");
+  }
+  return [fallback, providers];
+}
+
+/**
+ * Persist one saved login per provider, with an optional default, privately.
+ *
+ * A login holds an API key, a subscription, or no credential; an Azure login also holds its
+ * endpoint. An API-key login may hold connection settings: extra request headers and, for
+ * `openai`, an organization and project id. The store is a JSON file in a directory that, like
+ * the file, must be private to its owner and not a symbolic link. Reading a missing store never
+ * creates a directory or lock file. Selection and credentials are committed together by `save`;
+ * `remove` and `setDefault` change a saved store and never create one. Writes and refreshes hold
+ * the `<path>.lock` file lock; a refresh reloads under it and cannot replace a newer connection.
+ * The store is POSIX-only.
+ *
+ * The path is `path`, else `YIAN_AUTH_FILE`, else `<XDG_CONFIG_HOME or ~/.config>/yian/auth.json`,
+ * with `~` and a leading `~/` expanded from `HOME` (or the account's home directory) and made
+ * absolute. Throws `RangeError` if a timing option is out of range.
+ */
+export class AuthStore {
+  /** The store file's absolute path. */
+  readonly path: string;
+  readonly #scheduler: Scheduler;
+  readonly #signal: AbortSignal | undefined;
+  readonly #lockTimeoutMs: number;
+  readonly #refreshMarginMs: number;
+
+  constructor(path?: string | null, options: AuthStoreOptions = {}) {
+    const {
+      env = processEnv,
+      scheduler = realScheduler,
+      signal,
+      lockTimeoutMs = 30_000,
+      refreshMarginMs = 60_000,
+    } = options;
+    const home = () => env("HOME") || userInfo().homedir;
+    let target = path ?? (env("YIAN_AUTH_FILE") || null);
+    if (target === null) {
+      target = join(env("XDG_CONFIG_HOME") || join(home(), ".config"), "yian", "auth.json");
+    }
+    if (target === "~" || target.startsWith("~/")) target = home() + target.slice(1);
+    this.path = resolve(target);
+    this.#scheduler = scheduler;
+    this.#signal = signal;
+    this.#lockTimeoutMs = lockTimeoutMs;
+    this.#refreshMarginMs = refreshMarginMs;
+    if (
+      typeof lockTimeoutMs !== "number" ||
+      !(lockTimeoutMs > 0 && lockTimeoutMs <= Number.MAX_VALUE) ||
+      typeof refreshMarginMs !== "number" ||
+      !(refreshMarginMs >= 0 && refreshMarginMs <= Number.MAX_VALUE)
+    ) {
+      throw new RangeError("Invalid credential-store timing");
+    }
+  }
+
+  /**
+   * Open and check the store's directory, creating it (0700) first with `create`; return `null`
+   * if it is missing and `create` is not set. The caller closes the descriptor.
+   */
+  #openDirectory(create = false): Directory | null {
+    const directory = dirname(this.path);
+    if (create) access(() => fs.mkdirSync(directory, { recursive: true, mode: 0o700 }));
+    let fd: number;
+    try {
+      fd = fs.openSync(directory, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+    } catch (error) {
+      if (!create && isMissing(error)) return null;
+      throw accessError();
+    }
+    try {
+      const info = checkPrivate(fd, true);
+      return { fd, dev: info.dev, ino: info.ino };
+    } catch (error) {
+      closeFd(fd);
+      throw error;
+    }
+  }
+
+  /**
+   * Throw unless the store's directory path still names the open `directory`.
+   *
+   * The store file is reached by path, not through the checked directory's descriptor, so a
+   * directory swapped in meanwhile would go unchecked.
+   */
+  #checkSameDirectory(directory: Directory): void {
+    const info = access(() => fs.lstatSync(dirname(this.path), { bigint: true }));
+    if (info.dev !== directory.dev || info.ino !== directory.ino) throw new AuthError(REGULAR);
+  }
+
+  /** Read the default provider and saved logins from the store in `directory`; empty if none. */
+  #load(directory: Directory | null): [string | null, Providers] {
+    if (directory === null) return [null, new Map()];
+    const limit = current().maxAuthStoreBytes;
+    // Allocated before the open, so a failed allocation leaves no descriptor open.
+    const raw = new Uint8Array(limit + 1);
+    let fd: number;
+    try {
+      fd = fs.openSync(this.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    } catch (error) {
+      if (!isMissing(error)) throw accessError();
+      // A missing file in a swapped-in directory says nothing about the checked one.
+      this.#checkSameDirectory(directory);
+      return [null, new Map()];
+    }
+    let size = 0;
+    try {
+      this.#checkSameDirectory(directory);
+      checkPrivate(fd);
+      while (size < raw.length) {
+        const n = access(() => fs.readSync(fd, raw, size, raw.length - size, null));
+        if (n === 0) break;
+        size += n;
+      }
+    } finally {
+      closeFd(fd);
+    }
+    if (size > limit) throw new AuthError(OVERSIZED);
+    try {
+      return parseStore(new TextDecoder("utf-8", { fatal: true }).decode(raw.subarray(0, size)));
+    } catch {
+      throw new AuthError(MALFORMED);
+    }
+  }
+
+  /** Load the store without the lock, creating nothing. */
+  #snapshot(): [string | null, Providers] {
+    this.#signal?.throwIfAborted();
+    const directory = this.#openDirectory();
+    try {
+      return this.#load(directory);
+    } finally {
+      if (directory !== null) closeFd(directory.fd);
+    }
+  }
+
+  /**
+   * Run `body` holding the store's lock, waiting for it up to the lock timeout.
+   *
+   * The lock file is only ever touched through `waitForLock`: closing any other descriptor on it
+   * would drop this process's lock.
+   */
+  async #locked<T>(body: () => T | Promise<T>): Promise<T> {
+    let lock: FileLock;
+    try {
+      lock = await waitForLock(`${this.path}.lock`, {
+        private: true,
+        timeoutMs: this.#lockTimeoutMs,
+        signal: this.#signal,
+        scheduler: this.#scheduler,
+      });
+    } catch (error) {
+      if (this.#signal?.aborted && error === this.#signal.reason) throw error;
+      if (!(error instanceof FileLockError)) throw accessError();
+      if (error.reason === "busy") throw new AuthError("Timed out waiting for credential storage");
+      throw new AuthError(error.reason === "not-private" ? NOT_PRIVATE : REGULAR);
+    }
+    try {
+      return await body();
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
+   * Atomically replace the store in `directory` with `defaultProvider` and `providers`.
+   *
+   * Checks that the directory path still names `directory`, writes a private temporary file
+   * beside the store, then renames it over the store and checks that the store path and its
+   * directory still name what was written and checked.
+   */
+  #write(directory: Directory, defaultProvider: string | null, providers: Providers): void {
+    const value = {
+      version: 1,
+      default_provider: defaultProvider,
+      providers: Object.fromEntries(
+        Array.from(providers, ([provider, [selection, credentials]]) => {
+          const entry: Record<string, unknown> = {
+            method: selection.method,
+            model: selection.model,
+            credential_id: selection.credentialId,
+            credentials: dumpCredentials(credentials),
+          };
+          for (const key of ["endpoint", "organization", "project"] as const) {
+            if (selection[key] !== null) entry[key] = selection[key];
+          }
+          return [provider, entry];
+        }),
+      ),
+    };
+    const raw = new TextEncoder().encode(`${pythonJson(value)}\n`);
+    if (raw.length > current().maxAuthStoreBytes) throw new AuthError(OVERSIZED);
+    // Checked before the temporary file exists, so a swapped-in directory never receives it.
+    this.#checkSameDirectory(directory);
+    const temporary = join(dirname(this.path), `.auth-${randomBytes(16).toString("hex")}`);
+    const { O_CREAT, O_EXCL, O_NOFOLLOW, O_WRONLY } = fs.constants;
+    const fd = access(() => fs.openSync(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600));
+    try {
+      let written: fs.BigIntStats;
+      try {
+        written = access(() => fs.fstatSync(fd, { bigint: true }));
+        if (written.dev !== directory.dev) throw new AuthError(REGULAR);
+        let offset = 0;
+        while (offset < raw.length) offset += access(() => fs.writeSync(fd, raw, offset));
+        access(() => fs.fsyncSync(fd));
+      } finally {
+        closeFd(fd);
+      }
+      this.#signal?.throwIfAborted();
+      access(() => fs.renameSync(temporary, this.path));
+      const target = access(() => fs.lstatSync(this.path, { bigint: true }));
+      if (target.dev !== written.dev || target.ino !== written.ino) throw new AuthError(REGULAR);
+      this.#checkSameDirectory(directory);
+      access(() => fs.fsyncSync(directory.fd));
+    } finally {
+      try {
+        fs.unlinkSync(temporary);
+      } catch (error) {
+        if (!isMissing(error)) throw accessError();
+      }
+    }
+  }
+
+  /** Read a nonsecret snapshot without creating or changing storage. */
+  read(): AuthState {
+    const [defaultProvider, providers] = this.#snapshot();
+    const selections = Object.freeze(Array.from(providers.values(), ([selection]) => selection));
+    return Object.freeze({ defaultProvider, selections });
+  }
+
+  /** Find the explicit provider's selection, or the saved default's; `null` if there is none. */
+  selection(provider?: string | null): ProviderSelection | null {
+    const state = this.read();
+    const name = provider ?? state.defaultProvider;
+    return state.selections.find((item) => item.provider === name) ?? null;
+  }
+
+  /**
+   * Return a provider's saved secrets as stored, without refresh or writes.
+   *
+   * Reads without the lock and returns expired subscription tokens as they are, so callers can
+   * scrub every secret the login may send.
+   *
+   * @returns `[apiKey, ...headerValues]` for an API-key login, `[accessToken, refreshToken,
+   *   accountId]` for a subscription, and `[]` for a login without a credential or no login.
+   * @throws AuthError The store is malformed or cannot be read.
+   */
+  savedSecrets(provider: string): readonly string[] {
+    const credentials = this.#snapshot()[1].get(provider)?.[1];
+    if (credentials instanceof ApiKeyCredentials) {
+      return [credentials.apiKey, ...credentials.headers.map(([, value]) => value)];
+    }
+    if (credentials instanceof OAuthCredentials) {
+      return [credentials.accessToken, credentials.refreshToken, credentials.accountId];
+    }
+    return [];
+  }
+
+  /**
+   * Atomically reconnect a provider and optionally make it the default.
+   *
+   * The new login replaces the old one with its settings: settings not given here are not kept.
+   * `credentials` is the validated credential (an API key's headers are saved with it), or `null`
+   * for a provider that needs none; `endpoint` is the provider's base URL, such as an Azure
+   * resource; `organization` and `project` are OpenAI ids, for an `openai` API key only;
+   * `makeDefault` (default `true`) makes the provider the default.
+   *
+   * @returns The saved selection, with a new credential id.
+   * @throws AuthError The values are invalid or storage cannot be written.
+   */
+  async save(
+    provider: string,
+    credentials: Credentials | null,
+    model: string,
+    options: {
+      endpoint?: string | null;
+      organization?: string | null;
+      project?: string | null;
+      makeDefault?: boolean;
+    } = {},
+  ): Promise<ProviderSelection> {
+    const { endpoint = null, organization = null, project = null, makeDefault = true } = options;
+    // Exactly these classes, as Python's `type(x) in`: a subclass could change what is stored.
+    if (
+      credentials !== null &&
+      !(
+        typeof credentials === "object" &&
+        (Object.getPrototypeOf(credentials) === ApiKeyCredentials.prototype ||
+          Object.getPrototypeOf(credentials) === OAuthCredentials.prototype)
+      )
+    ) {
+      throw new AuthError("Unsupported credential type");
+    }
+    const selection = new ProviderSelection({
+      provider,
+      method: credentials === null ? "none" : credentials.method,
+      model,
+      credentialId: randomBytes(16).toString("hex"),
+      endpoint,
+      organization,
+      project,
+      headerNames: credentials instanceof ApiKeyCredentials ? credentials.headers.map(([name]) => name) : [],
+    });
+    this.#signal?.throwIfAborted();
+    const directory = this.#openDirectory(true)!;
+    try {
+      await this.#locked(() => {
+        const [defaultProvider, providers] = this.#load(directory);
+        providers.set(provider, [selection, credentials]);
+        this.#write(directory, makeDefault ? provider : defaultProvider, providers);
+      });
+    } finally {
+      closeFd(directory.fd);
+    }
+    return selection;
+  }
+
+  /** Remove `provider`'s saved login, or make it the default; throw if it has none. */
+  async #update(provider: string, remove: boolean): Promise<void> {
+    const missing = () => new AuthError(`There is no saved ${provider} login; run 'yian auth' to list them`);
+    this.#signal?.throwIfAborted();
+    const directory = this.#openDirectory();
+    if (directory === null) throw missing();
+    try {
+      await this.#locked(() => {
+        let [defaultProvider, providers] = this.#load(directory);
+        if (!providers.has(provider)) throw missing();
+        if (remove) {
+          providers.delete(provider);
+          if (defaultProvider === provider) defaultProvider = null;
+        } else {
+          defaultProvider = provider;
+        }
+        this.#write(directory, defaultProvider, providers);
+      });
+    } finally {
+      closeFd(directory.fd);
+    }
+  }
+
+  /**
+   * Delete a provider's saved login, clearing the default if it names it.
+   *
+   * @throws AuthError The provider has no saved login or storage fails.
+   */
+  remove(provider: string): Promise<void> {
+    return this.#update(provider, true);
+  }
+
+  /**
+   * Make a saved provider the default.
+   *
+   * @throws AuthError The provider has no saved login or storage fails.
+   */
+  setDefault(provider: string): Promise<void> {
+    return this.#update(provider, false);
+  }
+
+  /**
+   * Resolve a pinned connection, refreshing expiring subscription tokens under the lock.
+   *
+   * An API key, or a subscription token valid beyond the refresh margin, returns as saved, read
+   * without the lock. Otherwise this takes the lock, reloads, and, unless another caller has
+   * refreshed meanwhile, saves and returns `refresh(current)`, which must keep the account id and
+   * be fresh. `refresh`'s own errors propagate unchanged.
+   *
+   * @throws AuthError The saved login is no longer `expectedCredentialId`, has no credential, has
+   *   expired without a `refresh`, the refresh is refused, or storage fails.
+   */
+  async credentials(
+    provider: string,
+    expectedCredentialId: string,
+    options: { refresh?: (current: OAuthCredentials) => OAuthCredentials | Promise<OAuthCredentials> } = {},
+  ): Promise<Credentials> {
+    const { refresh } = options;
+    const pinned = (providers: Providers) => {
+      const pair = providers.get(provider);
+      if (pair === undefined || pair[0].credentialId !== expectedCredentialId) {
+        throw new AuthError("The saved connection changed");
+      }
+      if (pair[1] === null) throw new AuthError(`${provider} has no saved credential`);
+      return [pair[0], pair[1]] as const;
+    };
+    const fresh = (credentials: Credentials) =>
+      credentials instanceof ApiKeyCredentials ||
+      credentials.expiresAt * 1000 > this.#scheduler.now() + this.#refreshMarginMs;
+    this.#signal?.throwIfAborted();
+    const directory = this.#openDirectory();
+    try {
+      const [, saved] = pinned(this.#load(directory)[1]);
+      if (fresh(saved)) return saved;
+      // A saved login means the directory exists.
+      return await this.#locked(async () => {
+        const [defaultProvider, providers] = this.#load(directory!);
+        const [selection, credentials] = pinned(providers);
+        if (fresh(credentials)) return credentials;
+        if (refresh === undefined) throw new AuthError("Subscription credentials expired; sign in again");
+        this.#signal?.throwIfAborted();
+        const expired = credentials as OAuthCredentials;
+        const updated: unknown = await refresh(expired);
+        if (
+          typeof updated !== "object" ||
+          updated === null ||
+          Object.getPrototypeOf(updated) !== OAuthCredentials.prototype ||
+          (updated as OAuthCredentials).accountId !== expired.accountId
+        ) {
+          throw new AuthError("Subscription refresh changed account identity");
+        }
+        const checked = updated as OAuthCredentials;
+        if (!fresh(checked)) throw new AuthError("Subscription refresh returned expired credentials");
+        providers.set(provider, [selection, checked]);
+        this.#write(directory!, defaultProvider, providers);
+        return checked;
+      });
+    } finally {
+      if (directory !== null) closeFd(directory.fd);
+    }
+  }
+}

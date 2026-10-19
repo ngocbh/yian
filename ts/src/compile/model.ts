@@ -266,6 +266,7 @@ export function validateGrowthMetadata(flow: Flow): void {
   const starts = new Set<string>();
   const endpoints = new Set<string>();
   for (const boundary of flow.childBoundaries) {
+    // Rebuilding checks a boundary that may have bypassed the constructor.
     new ChildFlowBoundary(boundary.startId, boundary.endId);
     const scopes: (ExecutionScope | null)[] = [];
     for (const [nodeId, role] of [
@@ -281,6 +282,7 @@ export function validateGrowthMetadata(flow: Flow): void {
       const scope: unknown = node.executionScope;
       if (scope !== null) {
         if (!isExactly(scope, ExecutionScope)) throw new TypeError("child boundary scope must be an ExecutionScope");
+        // Rebuilding checks a scope that may have bypassed the constructor.
         new ExecutionScope(scope.staticPath, {
           flowPath: scope.flowPath,
           occurrencePath: scope.occurrencePath,
@@ -293,6 +295,7 @@ export function validateGrowthMetadata(flow: Flow): void {
       }
       scopes.push(scope);
     }
+    // The loop above pushes exactly one scope per endpoint, so there are always two.
     const [start, end] = scopes as [ExecutionScope | null, ExecutionScope | null];
     if (
       start !== null &&
@@ -307,6 +310,7 @@ export function validateGrowthMetadata(flow: Flow): void {
   // Keyed by the JSON of the (target, input) pair, which no two distinct pairs share.
   const targets = new Set<string>();
   for (const connection of flow.inputConnections) {
+    // Rebuilding checks a connection that may have bypassed the constructor.
     new SeedConnection(connection.childStartId, connection.inputName, connection.seedPath);
     const target = JSON.stringify([connection.childStartId, connection.inputName]);
     if (!flow.nodes.has(connection.childStartId)) throw new RangeError("seed connections must name fragment nodes");
@@ -500,11 +504,10 @@ export class CompiledFlow extends Flow {
  *
  * A flow copy gets fresh `nodes`, `edges` and `wiring` containers (the inner wiring maps are
  * read-only and stay shared) and, for a `CompiledFlow`, an adjacency index rebuilt from its
- * `edges`. A node copy is
- * shallow, except that each own field holding a `Flow` (the static child of CALL, MAP and LOOP)
- * holds that flow's copy. Each flow and node is copied once per call, so sharing and cycles carry
- * over to the copy. Carriers, payloads, `env`, type tables and labels stay shared: change a copy
- * only by reassigning a field.
+ * `edges`. A node copy is shallow, except that each own field holding a `Flow` (the static child
+ * of CALL, MAP and LOOP) holds that flow's copy. Each flow and node is copied once per call, so
+ * sharing and cycles carry over to the copy. Carriers, payloads, `env`, type tables and labels
+ * stay shared: change a copy only by reassigning a field.
  */
 export function copyGraph<T extends Flow | Node>(value: T): T {
   return copyOnce(value, new Map());

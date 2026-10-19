@@ -456,6 +456,21 @@ test.each([
     "child boundary scope must be an ExecutionScope",
   ],
   [
+    "a forged boundary scope with a non-array occurrence path",
+    () => {
+      const flow = growthFragment();
+      flow.nodes.get("s")!.executionScope = forged(ExecutionScope, {
+        staticPath: ["call", "s"],
+        flowPath: ["call"],
+        occurrencePath: "x",
+        boundary: "start",
+      });
+      return flow;
+    },
+    TypeError,
+    "occurrence_path must be an array",
+  ],
+  [
     "a boundary role that disagrees with its scope",
     () => {
       const flow = growthFragment();

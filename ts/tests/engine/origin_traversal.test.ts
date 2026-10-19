@@ -904,11 +904,9 @@ test("invalid child is rejected before copying or mapping", () => {
   };
 
   // Traversal is lazy: the call returns, and only draining reaches the bad child.
-  expect(() => iterFlowOrigins(flow)).not.toThrow();
   const pending = iterFlowOrigins(flow);
   expect(() => [...pending]).toThrow(new TypeError("node 'call' origin child must be a Flow, got Object"));
   expect(() => [...iterFlowOrigins(flow)]).toThrow(TypeError);
-  expect(() => [...iterFlowOrigins(flow)]).toThrow("node 'call' origin child must be a Flow, got Object");
   expect(() => rewriteFlowOrigins(flow, mapper)).toThrow(TypeError);
   expect(() => rewriteFlowOrigins(flow, mapper)).toThrow(/origin child must be a Flow/);
   expect(calls).toEqual([]);

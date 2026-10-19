@@ -9,8 +9,8 @@
  * graph or variable pool.
  *
  * Here: the node's construction and its checks, the granted tools and skills, the tool-loop bound
- * and the local variable declarations. Not ported yet: `forward` (T5-11a), which brings
- * `exceptionOrigin` and `exceptionCode`, and `backward` (T6-6).
+ * and the local variable declarations. Not ported yet: `forward`, which brings `exceptionOrigin`
+ * and `exceptionCode`, and `backward`.
  *
  * Knows about:   nodes/base, nodes/contracts, nodes/agent/llm_values, memory contracts,
  *                llm_clients config, skills, defaults, diagnostics and typesys.
@@ -18,7 +18,7 @@
  */
 
 import { current } from "../../defaults.ts";
-import { reprText } from "../../diagnostics.ts";
+import { compareCodeUnits, reprText } from "../../diagnostics.ts";
 import type { HostConnection } from "../../llm_clients/config.ts";
 import { MemoryDecl } from "../../memory/contracts.ts";
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
@@ -109,7 +109,7 @@ export class AgentNode extends Node {
    */
   llmValueTypes: readonly (readonly [ValuePath, Type | null])[];
   /** The field behind `callTime`, an own field so a shallow node copy carries it. */
-  callTimeValue: CallTimeLLM | null = null;
+  private callTimeValue: CallTimeLLM | null = null;
   /**
    * Set per run on the run's private flow, only for an agent given `callTime`: the host key and
    * header values.
@@ -120,7 +120,7 @@ export class AgentNode extends Node {
    * Build an AGENT node.
    *
    * @param nodeId The node's unique id.
-   * @param options.prompt The prompt template; defaults to `""`.
+   * @param options.prompt The prompt template; `null` or omitted means `""`.
    * @param options.systemPrompt A non-empty system prompt template, or `null` (the default).
    * @param options.tools The tool grants; defaults to `[]`.
    * @param options.llmConfig A config record, a `ValueTemplate` or `Binding` for a layer
@@ -143,7 +143,7 @@ export class AgentNode extends Node {
   constructor(
     nodeId: string,
     options: {
-      prompt?: string;
+      prompt?: string | null;
       systemPrompt?: string | null;
       tools?: readonly string[] | null;
       llmConfig?: Readonly<Record<string, unknown>> | ValueTemplate | Binding | null;
@@ -157,7 +157,7 @@ export class AgentNode extends Node {
     } = {},
   ) {
     const {
-      prompt = "",
+      prompt = null,
       systemPrompt = null,
       tools = null,
       llmConfig = null,
@@ -170,7 +170,7 @@ export class AgentNode extends Node {
       steerable = false,
     } = options;
     super(nodeId, { title });
-    this.prompt = prompt;
+    this.prompt = prompt ?? "";
     if (systemPrompt !== null && (typeof systemPrompt !== "string" || systemPrompt === "")) {
       throw new TypeError(`AGENT node ${reprText(nodeId)}: system_prompt must be a non-empty string or null`);
     }
@@ -224,7 +224,8 @@ export class AgentNode extends Node {
   /**
    * Set per run on the run's private flow, never on the authored one: what run start fixed when
    * this agent's config resolves only when it runs; `null` when run start resolved it into
-   * `llmConfig`. Setting it also sets `needsSteps`.
+   * `llmConfig`. Setting it also sets `needsSteps`. It is an accessor because the base declares
+   * `needsSteps` as a field, which a getter can't override, so the setter keeps that field in step.
    */
   get callTime(): CallTimeLLM | null {
     return this.callTimeValue;
@@ -268,7 +269,7 @@ export class AgentNode extends Node {
     }
     let names: string[];
     if (this.skills === "all") {
-      names = [...supplied.keys()].sort();
+      names = [...supplied.keys()].sort(compareCodeUnits);
     } else {
       const missing = this.skills.filter((name) => !supplied.has(name));
       if (missing.length > 0) {
@@ -276,7 +277,7 @@ export class AgentNode extends Node {
           `AGENT node ${reprText(this.id)}: granted skills not supplied by the host: ${writeAsText(missing)}`,
         );
       }
-      names = [...this.skills].sort();
+      names = [...this.skills].sort(compareCodeUnits);
     }
     return names.map((name) => supplied.get(name)!);
   }

@@ -14,7 +14,7 @@ import { expect, test } from "bun:test";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 
-test("a hand-built agent keeps its literal config", () => {
+test("a python built agent keeps its literal config", () => {
   const config = { model: "m" };
   const agent = new AgentNode("a", { prompt: "p", llmConfig: config });
   expect(agent.llmConfig).toEqual({ model: "m" });

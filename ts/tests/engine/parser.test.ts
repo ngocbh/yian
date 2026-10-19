@@ -26,7 +26,13 @@ import { LoadError } from "../../src/compose/helpers/errors.ts";
 import { ComposeFile, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
-import { caseDocument, loadError, runTextCase, type TextCaseRow } from "../compose/declarations.ts";
+import {
+  caseDocument,
+  fileOf,
+  loadError,
+  runTextCase,
+  type TextCaseRow,
+} from "../compose/declarations.ts";
 
 afterEach(() => forget());
 
@@ -196,19 +202,38 @@ test("a flow's version defaults to null", () => {
 
 // ---------- harvested cases ----------
 
+/** yian's message for a plain scalar that reads as a `what` but is not a valid one. */
+const notValid = (what: string, reason: string) =>
+  `invalid YAML: not a valid ${what}: ${reason}; quote it to keep it as text`;
+const BAD_MONTH = notValid("date", "month must be in 1..12");
+
+// A row with `message` pins yian's text where the case leaves out Python's message, which adds
+// PyYAML's mark to it.
 test.each<Omit<TextCaseRow, "call">>([
   // tests/compose/test_unbuildable_scalars.py
-  { id: "yaml/compose_unbuildable_scalars__a_case_when" },
-  { id: "yaml/compose_unbuildable_scalars__a_uses_file", file: "child.yaml" },
-  { id: "yaml/compose_unbuildable_scalars__day_out_of_range" },
-  { id: "yaml/compose_unbuildable_scalars__hour_out_of_range" },
-  { id: "yaml/compose_unbuildable_scalars__month_out_of_range" },
-  { id: "yaml/compose_unbuildable_scalars__offset_minutes_out_of_range" },
-  { id: "yaml/compose_unbuildable_scalars__tagged_input_default" },
-  { id: "yaml/compose_unbuildable_scalars__year_zero" },
+  { id: "yaml/compose_unbuildable_scalars__a_case_when", message: BAD_MONTH },
+  { id: "yaml/compose_unbuildable_scalars__a_uses_file", file: "child.yaml", message: BAD_MONTH },
+  {
+    id: "yaml/compose_unbuildable_scalars__day_out_of_range",
+    message: notValid("date", "day is out of range for month"),
+  },
+  {
+    id: "yaml/compose_unbuildable_scalars__hour_out_of_range",
+    message: notValid("datetime", "hour must be in 0..23"),
+  },
+  { id: "yaml/compose_unbuildable_scalars__month_out_of_range", message: BAD_MONTH },
+  {
+    id: "yaml/compose_unbuildable_scalars__offset_minutes_out_of_range",
+    message: notValid("datetime", "UTC offset minutes must be under 60"),
+  },
+  { id: "yaml/compose_unbuildable_scalars__tagged_input_default", message: BAD_MONTH },
+  {
+    id: "yaml/compose_unbuildable_scalars__year_zero",
+    message: notValid("date", "year 0 is out of range"),
+  },
   // tests/engine/test_long_int_literals.py
   { id: "yaml/engine_long_int_literals__long_int_literal" },
-  // tests/engine/test_limit_overrides.py; the case leaves out Python's message.
+  // tests/engine/test_limit_overrides.py
   {
     id: "load-core/engine_limit_overrides__yaml_nesting_follows_the_variable",
     message:
@@ -228,6 +253,4 @@ test.each([
   "load-core/seed_e09_unknown_top_level_key",
   // tests/engine/test_memory_authoring.py
   "load-agent/engine_memory_authoring__retired_memory_policy_at_the_root",
-])("parseFile: %s", (id) =>
-  runTextCase({ id, call: (text, label) => parseFile(parseSourceDocument(text, label)) }),
-);
+])("parseFile: %s", (id) => runTextCase({ id, call: fileOf }));

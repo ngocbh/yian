@@ -2,12 +2,12 @@
  * Read authored `input:` or `variables:` declarations straight from YAML text: a port of
  * `tests/compose/_declarations.py`.
  *
- * TS-only: `nodesOf`, which parses a flow's `nodes:` with stand-in kinds registered;
- * `caseText` and `caseDocument`, which read a conformance case's flow as text or as a parsed
- * document; and the harvested-case harness built on them (`loadError`, `cursorAt`,
- * `caseRegistry`, `CaseRow`, `runCase`, `TextCaseRow`, `runTextCase`, `inputsAt`,
- * `variablesAt`), which makes the loader's call on a case and compares the result with the
- * case's `expect`.
+ * TS-only: `nodesOf`, which parses a flow's `nodes:` with stand-in kinds registered, and
+ * `fileOf`, which parses its top level; `caseText` and `caseDocument`, which read a conformance
+ * case's flow as text or as a parsed document; and the harvested-case harness built on them
+ * (`loadError`, `cursorAt`, `caseRegistry`, `CaseRow`, `runCase`, `TextCaseRow`, `runTextCase`,
+ * `inputsAt`, `variablesAt`), which makes the loader's call on a case and compares the result
+ * with the case's `expect`.
  */
 
 import { readFileSync } from "node:fs";
@@ -74,6 +74,9 @@ export function nodesOf(
   const cursor = flowNodesCursor(document, parseFile(document).nodes);
   return withKinds(classes, () => parseNodes(cursor));
 }
+
+/** Parse flow `text`'s top level as the loader does (`parseSourceDocument`, `parseFile`). */
+export const fileOf = (text: string, label: string) => parseFile(parseSourceDocument(text, label));
 
 /**
  * Read conformance case `id` (`group/name`) as the TS runner runs it: the prepared case, its flow
@@ -248,6 +251,7 @@ function expectCaseResult(
     if (options.message !== undefined) expect(error.message).toBe(options.message);
     return;
   }
+  expect(options.message).toBeUndefined();
   const prefix = options.prefix ?? "";
   expect(message.startsWith(prefix)).toBe(true);
   expect(error.message).toBe(message.slice(prefix.length));

@@ -32,9 +32,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { notTextError } from "../../src/compose/nodes/base.ts";
-import { parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
+import { parseFile } from "../../src/compose/parse/file.ts";
 import { forget } from "../../src/defaults.ts";
-import { loadError, nodesOf, runTextCase } from "./declarations.ts";
+import { fileOf, loadError, nodesOf, runTextCase } from "./declarations.ts";
 import { ALL_KIND_NAMES, StandInCode, standIn } from "./stand_ins.ts";
 
 afterEach(() => forget());
@@ -267,9 +267,7 @@ describe("parseFile", () => {
     "load-core/compose_non_text_fields__null_compact_id",
     "load-core/compose_non_text_fields__null_compact_kind",
     "load-core/compose_non_text_fields__null_flow_id",
-  ])("case %s", (id) =>
-    runTextCase({ id, call: (text, label) => parseFile(parseSourceDocument(text, label)) }),
-  );
+  ])("case %s", (id) => runTextCase({ id, call: fileOf }));
 });
 
 describe("parseNodes", () => {

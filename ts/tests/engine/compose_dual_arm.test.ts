@@ -10,10 +10,10 @@
 
 import { afterEach, expect, test } from "bun:test";
 
-import { parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
+import { parseFile } from "../../src/compose/parse/file.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
-import { loadError, runTextCase } from "../compose/declarations.ts";
+import { fileOf, loadError, runTextCase } from "../compose/declarations.ts";
 
 afterEach(() => forget());
 
@@ -180,6 +180,4 @@ output: \${c.output}
 test.each([
   "load-case/engine_compose_dual_arm__legacy_def_inputs_key_is_rejected",
   "load-case/engine_compose_dual_arm__legacy_node_inputs_key_is_rejected",
-])("parseFile: %s", (id) =>
-  runTextCase({ id, call: (text, label) => parseFile(parseSourceDocument(text, label)) }),
-);
+])("parseFile: %s", (id) => runTextCase({ id, call: fileOf }));

@@ -36,7 +36,7 @@ import { siteKey } from "../../src/compose/nodes/base.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
-import { caseDocument, caseText, loadError, nodesOf } from "../compose/declarations.ts";
+import { caseText, loadError, nodesOf } from "../compose/declarations.ts";
 import { ALL_KIND_NAMES, StandInCode, standIn, withKinds } from "../compose/stand_ins.ts";
 
 afterEach(() => forget());
@@ -66,7 +66,7 @@ test.each([
 test("input named like a field does not collide", () => {
   // e33 has an `env:` field on L32 and an input named `env` on L35. `siteKey` keys keep
   // separate source ranges for the two.
-  const flow = caseDocument("load-core/seed_e33_input_named_like_field").case_["flow"] as string;
+  const flow = caseText("load-core/seed_e33_input_named_like_field").text;
   const document = SourceDocument.parse(flow.replace("${nope.output}", '"lit"'));
   const fr = withKinds([StandInCode], () => parseNodes(document.root.child("nodes")))
     .get("calc")!.fieldRanges;

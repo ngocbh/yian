@@ -298,6 +298,7 @@ fetch:
 });
 
 test.each([
+  // tests/engine/test_author_id_ban.py
   ["load-core/engine_author_id_ban__author_id_with_hash_is_loud", []],
   ["load-core/engine_node_parse__hyphenated_node_id", []],
   ["load-core/seed_e10_unknown_node_kind", ALL_KIND_NAMES.map((kind) => standIn(kind))],

@@ -36,9 +36,9 @@ import {
   STR_TAG,
   TIMESTAMP_TAG,
 } from "../../src/compose/source/scalars.ts";
+import { forget } from "../../src/defaults.ts";
 import { reprText, SourceRange } from "../../src/diagnostics.ts";
 import { isRecord, type Value } from "../../src/typesys/index.ts";
-import { forget } from "../../src/defaults.ts";
 import { parseDatetime } from "../../src/typesys/temporal.ts";
 import { runTextCase } from "./declarations.ts";
 
@@ -617,8 +617,20 @@ describe("parseYamlLiteral", () => {
   );
 });
 
+// The cases leave out Python's message, which adds PyYAML's mark to yian's text.
 test.each([
-  "yaml/compose_source_scalars__explicit_bool_tag_refuses_yes",
-  "yaml/compose_source_scalars__explicit_int_tag_refuses_non_core_form",
-  "yaml/compose_source_scalars__unbuildable_date_as_a_key",
-])("parseSourceDocument: %s", (id) => runTextCase({ id, call: parseSourceDocument }));
+  [
+    "yaml/compose_source_scalars__explicit_bool_tag_refuses_yes",
+    "invalid YAML: expected a YAML 1.2 core boolean, but found 'yes'",
+  ],
+  [
+    "yaml/compose_source_scalars__explicit_int_tag_refuses_non_core_form",
+    "invalid YAML: expected a YAML 1.2 core integer, but found '1_000'",
+  ],
+  [
+    "yaml/compose_source_scalars__unbuildable_date_as_a_key",
+    "invalid YAML: not a valid date: month must be in 1..12" + QUOTE_FIX,
+  ],
+])("parseSourceDocument: %s", (id, message) =>
+  runTextCase({ id, message, call: parseSourceDocument }),
+);

@@ -25,7 +25,7 @@ import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compo
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
-import { loadError, runTextCase } from "../compose/declarations.ts";
+import { fileOf, loadError, runTextCase } from "../compose/declarations.ts";
 import { StandInCode, withKinds } from "../compose/stand_ins.ts";
 
 afterEach(() => forget());
@@ -190,7 +190,6 @@ test.each([
   "load-core/engine_compact__compact_digit_id_rejected_without_parser_dump",
   "load-core/engine_compact__compact_model_kind_is_removed",
   "load-core/engine_compact__compact_rejects_non_leaf_kind",
+  // tests/compose/test_tagged_inputs.py
   "load-types/compose_tagged_inputs__compact_input_list_shows_the_tagged_spelling",
-])("parseFile: %s", (id) =>
-  runTextCase({ id, call: (text, label) => parseFile(parseSourceDocument(text, label)) }),
-);
+])("parseFile: %s", (id) => runTextCase({ id, call: fileOf }));

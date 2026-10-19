@@ -21,12 +21,12 @@ import { readFileSync } from "node:fs";
 
 import { parse as parseYaml } from "yaml";
 
+import { parseSourceDocument } from "../../src/compose/parse/file.ts";
 import {
   type ArcSequence,
   type Definition,
   SourceSyntaxError,
 } from "../../src/compose/source/common.ts";
-import { parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { SourceCursor } from "../../src/compose/source/cursor.ts";
 import {
   type NonTextKey,

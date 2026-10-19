@@ -59,6 +59,16 @@ export class LoopMaxExceeded extends Error {
   override name = "LoopMaxExceeded";
 }
 
+/** Whether two positions have the same kind, index and static path. */
+function samePosition(a: ExecutionPosition, b: ExecutionPosition): boolean {
+  return (
+    a.kind === b.kind &&
+    a.index === b.index &&
+    a.staticPath.length === b.staticPath.length &&
+    a.staticPath.every((segment, i) => segment === b.staticPath[i])
+  );
+}
+
 /**
  * A higher-order `('a -> 'a) -> 'a -> 'a` driver over a carried record.
  *
@@ -283,7 +293,7 @@ export class LoopNode extends Node {
    *   scope doesn't end in this driver's position.
    * @throws TypeError when the execution scope isn't an `ExecutionScope`.
    */
-  respawn(k: number, carried: Readonly<Record<string, unknown>> | null = null): LoopNode {
+  respawn(k: number, carried: Readonly<Record<string, Value>> | null = null): LoopNode {
     const originId = this.originId ?? this.id;
     if (this.returnedFields !== null && carried === null) {
       throw new RangeError(
@@ -313,16 +323,11 @@ export class LoopNode extends Node {
       const scope = this.executionScope;
       if (!isExactly(scope, ExecutionScope)) throw new TypeError("loop execution scope must be an ExecutionScope");
       const { staticPath, flowPath, occurrencePath, boundary } = scope;
+      // Re-validate a scope that may have bypassed the constructor, as Python's rebuild does.
       new ExecutionScope(staticPath, { flowPath, occurrencePath, boundary });
       const current = new ExecutionPosition("loop_driver", staticPath, this.iteration);
       const last = occurrencePath.at(-1);
-      if (
-        last === undefined ||
-        last.kind !== current.kind ||
-        last.index !== current.index ||
-        last.staticPath.length !== current.staticPath.length ||
-        last.staticPath.some((segment, i) => segment !== current.staticPath[i])
-      ) {
+      if (last === undefined || !samePosition(last, current)) {
         throw new RangeError("loop scope must end in its current driver position");
       }
       clone.executionScope = new ExecutionScope(staticPath, {
@@ -336,7 +341,7 @@ export class LoopNode extends Node {
     } else {
       const returned = this.returnedFields;
       const record = carried!;
-      clone.params = (this.params ?? []).map((param) =>
+      clone.params = this.params?.map((param) =>
         Object.hasOwn(record, param.name) && !returned.includes(param.name)
           ? new Parameter(param.name, {
               contract: param.contract,
@@ -345,10 +350,10 @@ export class LoopNode extends Node {
               defaultOrigin: param.defaultOrigin,
               required: false,
               hasDefault: true,
-              default: this.carriedValue(param.name, record[param.name]),
+              default: this.carriedValue(param.name, record[param.name]!),
             })
           : param,
-      );
+      ) ?? null;
     }
     clone.outputContract = this.outputContract;
     clone.preAsserts = [...this.preAsserts];
@@ -364,10 +369,10 @@ export class LoopNode extends Node {
    * type; a `file` position turns the file's JSON form back into a `FileRef`. An untyped or
    * unknown field is returned as given.
    */
-  private carriedValue(name: string, value: unknown): unknown {
+  private carriedValue(name: string, value: Value): Value {
     for (const parameter of this.childInputs) {
       if (parameter.name === name && parameter.contract !== null) {
-        return normalizeFiles(parameter.contract.type, value as Value);
+        return normalizeFiles(parameter.contract.type, value);
       }
     }
     return value;

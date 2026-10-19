@@ -53,6 +53,18 @@ import {
 import { LoopMaxExceeded, LoopNode } from "../../src/nodes/loop/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 
+/** Assert that `fn` throws exactly `cls` with exactly `message`. */
+function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
+  let caught: unknown;
+  try {
+    fn();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(cls);
+  expect((caught as Error).message).toBe(message);
+}
+
 /** A `while` driver `loop` over a stub body, guarded at 3 runs. */
 function whileLoop(): LoopNode {
   return new LoopNode("loop", { flowId: "body", child: {}, predicateKind: "while", predicate: "${x}", maxIters: 3 });
@@ -141,11 +153,12 @@ test("respawn defaults omitted fields from the carried record", () => {
 
   const clone = node.respawn(1, { n: 1n, person: { name: "A" } });
 
-  const byName = new Map(clone.params!.map((param) => [param.name, param]));
-  expect(byName.get("person")!.hasDefault).toBe(true);
-  expect(byName.get("person")!.default).toEqual({ name: "A" });
-  expect(byName.get("person")!.required).toBe(false);
-  expect(byName.get("n")!.hasDefault).toBe(false);
+  const person = clone.params!.find((param) => param.name === "person")!;
+  const n = clone.params!.find((param) => param.name === "n")!;
+  expect(person.hasDefault).toBe(true);
+  expect(person.default).toEqual({ name: "A" });
+  expect(person.required).toBe(false);
+  expect(n.hasDefault).toBe(false);
   expect(clone.returnedFields).toEqual(["n"]);
   expect(node.params).toBe(originParams);
   expect(node.params).toEqual(originSnapshot);
@@ -153,9 +166,11 @@ test("respawn defaults omitted fields from the carried record", () => {
 });
 
 test("partial respawn requires the carried record", () => {
-  const respawn = () => partialLoop().respawn(1);
-  expect(respawn).toThrow(RangeError);
-  expect(respawn).toThrow(new RangeError("loop 'lp' returns a subset of its record; respawn needs the carried record"));
+  expectError(
+    () => partialLoop().respawn(1),
+    RangeError,
+    "loop 'lp' returns a subset of its record; respawn needs the carried record",
+  );
 });
 
 test("respawn keeps a null omitted value as its default", () => {
@@ -205,8 +220,7 @@ test("respawn refuses an execution scope of another class", () => {
   class Subscope extends ExecutionScope {}
   const node = whileLoop();
   node.executionScope = new Subscope(["loop"], { occurrencePath: [new ExecutionPosition("loop_driver", ["loop"], 0)] });
-  expect(() => node.respawn(1)).toThrow(TypeError);
-  expect(() => node.respawn(1)).toThrow(new TypeError("loop execution scope must be an ExecutionScope"));
+  expectError(() => node.respawn(1), TypeError, "loop execution scope must be an ExecutionScope");
 });
 
 test("respawn refuses a scope that doesn't end in the driver's position", () => {
@@ -218,8 +232,7 @@ test("respawn refuses a scope that doesn't end in the driver's position", () => 
     [new ExecutionPosition("loop_driver", ["other"], 0)],
   ]) {
     node.executionScope = new ExecutionScope(["loop"], { occurrencePath });
-    expect(() => node.respawn(1)).toThrow(RangeError);
-    expect(() => node.respawn(1)).toThrow(new RangeError("loop scope must end in its current driver position"));
+    expectError(() => node.respawn(1), RangeError, "loop scope must end in its current driver position");
   }
 });
 

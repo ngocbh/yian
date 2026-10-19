@@ -1,10 +1,14 @@
 /**
  * Files inside typed containers, a port of the value checks (`buildValueAs`), file
  * normalization (`normalizeFiles`), the overlap tests, the two typed `bindParams` reads, the
- * `field_of` table, the two traced item reads and `test_a_partial_loop_keeps_an_omitted_file_as_a_file`
- * (over a stub body flow) of `tests/engine/test_files_in_containers.py`,
- * with `FileRef` constructor refusals (`RangeError`, as pydantic's `ValidationError` is a
- * `ValueError`). Where Python checks that a value is kept with `is`, these tests use `toBe`.
+ * `field_of` table, the two traced item reads and
+ * `test_a_partial_loop_keeps_an_omitted_file_as_a_file` of
+ * `tests/engine/test_files_in_containers.py`, with `FileRef` constructor refusals (`RangeError`,
+ * as pydantic's `ValidationError` is a `ValueError`). Where Python checks that a value is kept with
+ * `is`, these tests use `toBe`.
+ *
+ * Changed: in `test_a_partial_loop_keeps_an_omitted_file_as_a_file` the child is a stub object in
+ * place of `_child_flow()`, and Python ints in carried values are `bigint`.
  *
  * TS-only: the `normalizeTypedFiles` tests, and the `normalizeFiles` rows keeping an `object`
  * value that holds NaN, turning a `-0` at an `object` position into `0`, and keeping a file
@@ -443,6 +447,6 @@ test("a partial loop keeps an omitted file as a file", () => {
 
   const byName = new Map(clone.params!.map((param) => [param.name, param]));
   expect(byName.get("f")!.default).toEqual(REF);
-  expect(byName.get("f")!.default).toBeInstanceOf(FileRef);
+  expect(Object.getPrototypeOf(byName.get("f")!.default)).toBe(FileRef.prototype);
   expect(byName.get("n")!.hasDefault).toBe(false);
 });

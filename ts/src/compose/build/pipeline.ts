@@ -33,6 +33,7 @@ import {
   reprText,
   SourceRange,
 } from "../../diagnostics.ts";
+import { DeclSite, MemoryDecl } from "../../memory/contracts.ts";
 import type { Node } from "../../nodes/base.ts";
 import {
   asBinding,
@@ -41,22 +42,33 @@ import {
   isExactly,
   type OutputContract,
   Parameter,
-  type ValueContract,
+  PartialRecordContract,
+  ValueContract,
   type ValuePath,
+  type ValueTemplate,
 } from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { isList, isRecord, type Type, type Value } from "../../typesys/values.ts";
-import { type LoadDiagnostics, LoadError } from "../helpers/errors.ts";
+import { isList, isRecord, jsTypeName, type Type, type Value, writeAsText } from "../../typesys/values.ts";
+import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import {
   oldFormSuggestion,
   oldTypedText,
   QUOTED_STYLES,
   readTaggedValue,
+  rejectTaggedOutput,
   suggestTag,
   yamlQuoted,
 } from "../helpers/tags.ts";
-import type { BuildContext, BuildResult, NodeDescriptor, OriginPresenter } from "../nodes/base.ts";
-import { normalizeNodeSignatureCursor } from "../parse/nodes.ts";
+import { readFlowInputs, readSourceFlowInputs, readSourceParameters, readValueContract } from "../helpers/types.ts";
+import { checkWrittenValue } from "../helpers/value_nesting.ts";
+import {
+  BuildContext,
+  type BindingContractReader,
+  type BuildResult,
+  type NodeDescriptor,
+  type OriginPresenter,
+} from "../nodes/base.ts";
+import { normalizeNodeSignatureCursor, parseNodes } from "../parse/nodes.ts";
 import type { SourceCatalogBuilder, SourceSitePath } from "../source/catalog.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
 // T3-13 imports
@@ -878,6 +890,736 @@ function fillTypeTables(
 /** Python's `compose.build.pipeline._value_cases`; not ported yet. */
 function valueCases(descriptors: ReadonlyMap<string, NodeDescriptor>, read: ReadonlySet<string>): ReadonlySet<string> {
   return new Set();
+}
+
+/** Python's `_assemble` keyword arguments: the parsed sections and the scope one assembly reads. */
+export interface AssembleOptions {
+  /** The authored `input:` mapping that still needs parsing; exclusive with `inputParameters`. */
+  inputsSection?: Readonly<Record<string, unknown>> | null;
+  /** Parameters an earlier compiler pass already resolved; exclusive with `inputsSection`. */
+  inputParameters?: readonly Parameter[] | null;
+  /** Retained occurrence of the authored `input:` mapping, or `null`. */
+  inputsCursor?: SourceCursor | null;
+  /** Retained view of the flow's `nodes:` mapping; owns diagnostic locations. */
+  nodesCursor: SourceCursor;
+  /** The raw `output:` section. */
+  outputsSection: unknown;
+  /** The raw flow `asserts:` items in authored order. */
+  assertsSection: readonly unknown[];
+  /** The file's typedefs. */
+  registry: TypeRegistry;
+  /** Owns composite call resolution (defs first) and private child registration. */
+  scope: CallableScope;
+  /** This flow's complete lexical path; seeds stable identities for anonymous children. */
+  owner: readonly string[];
+  /** The flow's `uses:` aliases, each resolved at load. */
+  usesAliases?: readonly string[];
+  /** The flow's declared `version:`. */
+  version?: string | null;
+  /** The flow's declared `name:`. */
+  name?: string | null;
+  /** The flow's declared `description:`. */
+  description?: string | null;
+  /** The flow-level `llm_config:`. */
+  flowLlmConfig?: Readonly<Record<string, unknown>> | ValueTemplate | Binding | null;
+  /** The flow-level `env:` default, merged under each node's own `env:`. */
+  flowEnv?: Readonly<Record<string, unknown>> | null;
+  /** Authored flow-input declaration ranges by input name, for source-free type compilation. */
+  boundaryFieldRanges?: ReadonlyMap<string, SourceRange | null> | null;
+  /** Retained flow `asserts:` sequence; the single authority for each assertion's origin and range. */
+  assertsCursor?: SourceCursor | null;
+  /** The retained authored `output:` range, when one exists. */
+  outputsRange?: SourceRange | null;
+  /** Retained occurrence of each physically authored output binding. */
+  outputsCursor?: SourceCursor | null;
+  /** The authored or generated semantic identity. */
+  flowId?: string | null;
+  /** The flow-owned memory declarations. */
+  memories?: readonly MemoryDecl[];
+  /** Retained occurrence of the `memories:` declarations, or `null`. */
+  memoriesCursor?: SourceCursor | null;
+}
+
+/**
+ * Assemble parsed sections into a `ComposedFlow`: the post-parse pipeline shared by the top-level
+ * flow and every in-file def.
+ *
+ *   flow parameters -> parse nodes (a tagged entry lowers to a CODE node returning its value) ->
+ *   split tagged node inputs and flow outputs into value + declared contract -> check case
+ *   branches (a node or a call; a value or a case `output:` is a load error showing the value
+ *   entry) -> desugar (inline calls, adaptive questions, case call targets, `${case.output}` to a
+ *   coalesce over the case's branch targets) -> build every node kind-blind (`desc.build(ctx)`;
+ *   physical node-output contracts compile at their existing leaf-owned position; a case lowers
+ *   in its own build) -> attach declared input contracts to the node wiring -> cross-flow type
+ *   check + case exhaustiveness -> infer data edges + append each case's own edges + copy each
+ *   host's route/ordering edges and data gates onto the nodes lifted out of it -> validate
+ *   references + classify asserts -> attach authored flow-output binding origins + declared
+ *   output contracts -> synthesize roots/terminals -> resolve `isinstance` type tables -> reject
+ *   cycles + check if/else handles -> `CompiledFlow.fromParts`.
+ *
+ * Exactly one input representation is required: `inputsSection` is the authored mapping that
+ * still needs parsing, while `inputParameters` carries parameters already resolved by an earlier
+ * compiler pass. `inputsCursor` is the optional retained occurrence for the authored mapping;
+ * when present, input parameters and their recursive contracts compile opaque origins from it.
+ * A Compose-owned callable in `BuildContext` compiles a physical node `output:` cursor into its
+ * canonical contract only when the leaf reaches its established output-contract step;
+ * source-free builds use the descriptor's ordinary type reader. Retained ranges and
+ * `nodesCursor` own diagnostic locations; after the common header stamp each descriptor may
+ * immutably attach kind-owned opaque origins. `memories` and its optional cursor carry the
+ * flow-owned declarations; each is restamped with this flow's `DeclSite` and gets one origin per
+ * entry. `scope.catalogBuilder` is the one registry shared by every assembly originating from
+ * this physical document, so root, definitions, and inline bodies mint collision-free local
+ * origins under `owner`. After kind-owned attachment, CODE may present a syntax failure through
+ * the builder's registered-site lookup without freezing the catalog. `assemble` performs one
+ * construction attempt; retriable callable attempts run through the scope's `resolve`, while a
+ * failed top-level load discards its scope.
+ *
+ * @throws RangeError when not exactly one input representation is given, or resolved parameters
+ *   come with an inputs cursor.
+ * @throws TypeError when `memories` isn't an array of exact `MemoryDecl` values, or a flow input
+ *   or producer contract has the wrong class.
+ * @throws LoadError for an authored mistake any pass finds.
+ */
+export function assemble(options: AssembleOptions): ComposedFlow {
+  const { inputsSection = null, inputParameters = null, inputsCursor = null } = options;
+  const { registry, scope, owner, usesAliases = [], flowLlmConfig = null, flowEnv = null } = options;
+  const { boundaryFieldRanges = null, assertsCursor = null, outputsCursor = null } = options;
+  const { version = null, name = null, description = null, flowId = null, memoriesCursor = null } = options;
+  let { nodesCursor, outputsSection, outputsRange = null, memories = [] } = options;
+
+  if ((inputsSection === null) === (inputParameters === null)) {
+    throw new RangeError("_assemble requires exactly one of inputs_section or input_parameters");
+  }
+  if (inputParameters !== null && inputsCursor !== null) {
+    throw new RangeError("pre-resolved input parameters cannot carry an inputs cursor");
+  }
+
+  const diagnostics = LoadDiagnostics.fromCursor(nodesCursor);
+
+  if (outputsRange === null && outputsCursor !== null) outputsRange = outputsCursor.range;
+
+  // Inline-body extraction masks child-only fields for descriptor parsing. Assertion provenance
+  // still belongs to the unmodified authored occurrence tree.
+  const authoredNodesCursor = nodesCursor;
+  let inlineBodies: Map<string, InlineBody>;
+  try {
+    [nodesCursor, inlineBodies] = extractInlineBodies(nodesCursor, { owner });
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw diagnostics.error(error.message, { range: error.range, cause: error });
+  }
+
+  const catalogBuilder = scope.catalogBuilder;
+  // A bound `catalogBuilder.resolveRegistered`, which every pass below presents origins through.
+  const resolveOrigin: OriginPresenter = (origin) => catalogBuilder.resolveRegistered(origin);
+  if (!Array.isArray(memories) || memories.some((decl) => !isExactly(decl, MemoryDecl))) {
+    throw new TypeError("memories must be an array of exact MemoryDecl values");
+  }
+  if (memories.length > 0) {
+    const stamped: MemoryDecl[] = [];
+    for (const decl of memories) {
+      let origin = decl.origin;
+      if (memoriesCursor !== null) {
+        const path = [...owner, "memories", decl.name];
+        if (memoriesCursor.has(decl.name)) {
+          origin = catalogBuilder.register(path, memoriesCursor.child(decl.name), "key");
+        } else {
+          // sugar: the whole scalar value is the one entry
+          origin = catalogBuilder.register(path, memoriesCursor);
+        }
+      }
+      stamped.push(new MemoryDecl(decl.name, decl.type, decl.config, new DeclSite([], owner, null), origin));
+    }
+    memories = stamped;
+  }
+  const flowAssertionCursors = assertionCursors(options.assertsSection, assertsCursor, diagnostics);
+  const flowAssertionRanges = flowAssertionCursors.map((cursor) => (cursor !== null ? cursor.range : null));
+
+  /** Return the registered origin for one authored flow assertion. */
+  const flowAssertionOriginAt = (index: number): OriginRef | null =>
+    registerAssertionOrigin(flowAssertionCursors[index]!, [...owner, "assert", index], catalogBuilder, diagnostics);
+
+  /** Return one authored flow assertion's retained positional range. */
+  const flowAssertionRangeAt = (index: number): SourceRange | null => flowAssertionRanges[index]!;
+
+  /** Return the origin and range from one authored assertion cursor. */
+  const nodeAssertionSiteAt = (
+    nodeId: string,
+    index: number,
+  ): readonly [OriginRef | null, SourceRange | null] | null => {
+    let cursor: SourceCursor;
+    try {
+      if (valueEntries.has(nodeId) || !authoredNodesCursor.has(nodeId)) return null;
+      const nodeCursor = normalizeNodeSignatureCursor(authoredNodesCursor.child(nodeId));
+      if (!nodeCursor.has("asserts")) return null;
+      cursor = nodeCursor.child("asserts").child(index);
+    } catch (error) {
+      if (!(error instanceof SourceAccessError)) throw error;
+      throw diagnostics.error(error.message, { range: error.range, cause: error });
+    }
+    return [
+      registerAssertionOrigin(cursor, [...owner, "node", nodeId, "assert", index], catalogBuilder, diagnostics),
+      cursor.range,
+    ];
+  };
+
+  /**
+   * Compile one physical node-output declaration at its build position.
+   *
+   * @param nodeId Node whose normalized declaration should be selected.
+   * @param outputSpec Semantic type shape already retained by its descriptor.
+   * @returns Located contract, or `null` for a virtual site.
+   * @throws LoadError when source traversal or type compilation fails.
+   */
+  const readAuthoredNodeOutput = (nodeId: string, outputSpec: unknown): ValueContract | null => {
+    try {
+      if (valueEntries.has(nodeId) || !nodesCursor.has(nodeId)) return null;
+      const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
+      if (!nodeCursor.has("outputs")) return null;
+      const outputCursor = nodeCursor.child("outputs");
+      if (outputCursor.range === null) return null;
+      // `withValue` refuses a non-YAML value itself.
+      return readValueContract(outputCursor.withValue(outputSpec as Value), registry, {
+        sitePath: [...owner, "node", nodeId, "output", "contract"],
+        catalogBuilder,
+        diagnostics,
+      });
+    } catch (error) {
+      if (!(error instanceof SourceAccessError)) throw error;
+      throw diagnostics.error(error.message, { range: error.range, cause: error });
+    }
+  };
+
+  /** Compile one physical node's variables through its normalized cursor. */
+  const readAuthoredNodeVariables = (nodeId: string, declarations: unknown): Parameter[] | null => {
+    try {
+      if (valueEntries.has(nodeId) || !nodesCursor.has(nodeId)) return null;
+      const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
+      if (!nodeCursor.has("variables")) return null;
+      const variablesCursor = nodeCursor.child("variables");
+      if (variablesCursor.range === null) return null;
+      return readSourceParameters(variablesCursor.withValue(declarations as Value), registry, {
+        sitePath: [...owner, "node", nodeId],
+        catalogBuilder,
+        diagnostics,
+        fieldName: "variables",
+        declarationLabel: "variable",
+        requireDefault: true,
+      });
+    } catch (error) {
+      if (!(error instanceof SourceAccessError)) throw error;
+      throw diagnostics.error(error.message, { range: error.range, cause: error });
+    }
+  };
+
+  // Inline CODE receives the owning document label only as an opaque traceback file name;
+  // authored locations come from semantic origins. Inert for reference-mode CODE.
+  const flowLabel = diagnostics.label || "<inline-code>";
+  let inputs: Parameter[];
+  if (inputsSection !== null) {
+    if (inputsCursor !== null) {
+      inputs = readSourceFlowInputs(inputsCursor.withValue(inputsSection as Value), registry, {
+        sitePath: owner,
+        catalogBuilder,
+        diagnostics,
+      });
+    } else {
+      const inputRanges = new Map(
+        Object.keys(inputsSection).map((name) => [name, boundaryFieldRanges?.get(name) ?? null]),
+      );
+      inputs = readFlowInputs(inputsSection, registry, inputRanges, { diagnostics });
+    }
+  } else {
+    inputs = [...inputParameters!];
+  }
+  const flowInputContracts = new Map<string, ValueContract>();
+  for (const parameter of inputs) {
+    const contract = parameter.contract;
+    if (contract === null) continue;
+    if (!isExactly(contract, ValueContract)) {
+      throw new TypeError(
+        "flow input contracts must be exact ValueContract values, " +
+          `got ${jsTypeName(contract)} for ${reprText(parameter.name)}`,
+      );
+    }
+    flowInputContracts.set(parameter.name, contract);
+  }
+  const flowInputTypes = new Map([...flowInputContracts].map(([inputName, contract]) => [inputName, contract.type]));
+  // Static inference types a `T(...)` constructor by this flow's own typedefs.
+  const constructorType = constructorTypeFn(registry);
+  const flowInputs = new Set(inputs.map((parameter) => parameter.name));
+
+  /** Lower one tagged `nodes:` entry after checking its nesting. */
+  const readValue = (nodeId: string, cursor: SourceCursor): ValueEntryDescriptor => {
+    // First: the tag read walks the value recursively.
+    checkWrittenValue(cursor.value, `value entry ${reprText(nodeId)}`, cursor.range ?? cursor.keyRange, diagnostics);
+    return readValueEntry(nodeId, cursor, { registry, owner, catalogBuilder, diagnostics });
+  };
+
+  let descriptors = parseNodes(nodesCursor, { readValue });
+  // Value entries have no node body, so every pass below that re-reads a node's body from
+  // `nodesCursor` skips them or reads the entry itself.
+  const valueEntries: ReadonlySet<string> = new Set(
+    [...descriptors].filter(([, descriptor]) => isValueEntry(descriptor)).map(([nodeId]) => nodeId),
+  );
+  try {
+    const locatedDescriptors = new Map<string, NodeDescriptor>();
+    for (const [nodeId, descriptor] of descriptors) {
+      const authoredCursor = nodesCursor.child(nodeId);
+      const nodePath = [...owner, "node", nodeId];
+      const located = descriptor.replace({ origin: catalogBuilder.register(nodePath, authoredCursor, "key") });
+      if (valueEntries.has(nodeId)) {
+        locatedDescriptors.set(nodeId, located);
+        continue;
+      }
+      locatedDescriptors.set(
+        nodeId,
+        located.withSourceOrigins(normalizeNodeSignatureCursor(authoredCursor), { sitePath: nodePath, catalogBuilder }),
+      );
+    }
+    descriptors = locatedDescriptors;
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw diagnostics.error(error.message, { range: error.range, cause: error });
+  }
+
+  // A `uses:` alias shares the callable namespace, so it must not collide with a node id (the
+  // resolver only sees a bare name; the author conflates them). The loader checks the authored
+  // node ids before it resolves aliases; this covers the assembled ids.
+  const collide = [...new Set(usesAliases)].filter((alias) => descriptors.has(alias)).sort(compareCodeUnits);
+  if (collide.length > 0) throw diagnostics.error(`uses: alias ${writeAsText(collide)} collides with a node id`);
+
+  // Every alias is resolved, so a declared-but-uncalled broken/`hub:`/missing target is loud at
+  // load. The loader already resolved them in source order before the defs, so this only hits
+  // its cache.
+  for (const alias of usesAliases) scope.resolve(alias);
+
+  /** One flow output's authored range, else the whole `output:` range. */
+  const outputRange = (outputName: unknown): SourceRange | null => {
+    try {
+      if (outputsCursor !== null && typeof outputName === "string" && outputsCursor.has(outputName)) {
+        return outputsCursor.child(outputName).range;
+      }
+    } catch (error) {
+      // a bare `output:` value has no named children
+      if (!(error instanceof SourceAccessError)) throw error;
+    }
+    return outputsRange;
+  };
+
+  // Bound a written-out value's nesting before the passes below walk it recursively; YAML
+  // aliases can make it deep while the text is shallow.
+  checkWrittenValues(descriptors, outputsSection, {
+    outputsTagged: outputsCursor !== null && outputsCursor.tag !== null,
+    outputRange,
+    outputsRange,
+    diagnostics,
+  });
+
+  // A node's `output:` is a type declaration; a tag there is rejected before a declaration with
+  // nothing after its tag reads as no output at all. A case has no `output:`; the case-branch
+  // check below rejects it, tagged or not, with the rewrite.
+  try {
+    for (const [nodeId, descriptor] of descriptors) {
+      if (descriptor.kind === "case") continue;
+      if (!valueEntries.has(nodeId) && nodesCursor.has(nodeId)) {
+        const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
+        if (nodeCursor.has("outputs")) rejectTaggedOutput(nodeCursor.child("outputs"), diagnostics);
+      }
+    }
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw diagnostics.error(error.message, { range: error.range, cause: error });
+  }
+
+  // Split tagged (`name: !Type value`) input and output bindings before any desugar reads their
+  // values, so an inline `call(...)` or `${case.output}` in the value desugars as usual.
+  descriptors = splitTypedInputs(descriptors, nodesCursor, { registry, owner, catalogBuilder, diagnostics });
+  descriptors = splitTypedLlmConfig(descriptors, nodesCursor, { registry, owner, catalogBuilder, diagnostics });
+  let outputTypes: Map<string, ValueContract>;
+  [outputsSection, outputTypes] = splitTypedOutputs(outputsSection, outputsCursor, {
+    registry,
+    owner,
+    catalogBuilder,
+    diagnostics,
+  });
+
+  // A case branch names a node or calls a flow, and a case has no `output:`. Runs BEFORE the
+  // inline-call desugar so a branch's text is still as authored.
+  checkCaseBranches(descriptors, {
+    registry,
+    inputTypes: flowInputTypes,
+    outputAt: (nodeId) => caseOutputCursor(nodesCursor, nodeId, { diagnostics }),
+    diagnostics,
+  });
+
+  // Desugar inline `${ f(...) }` call expressions: each becomes a synth `call` node
+  // (CallDescriptor, over=null) and its host binding is rewritten to `${<synth>.output}`. Pure
+  // sugar — the rest of the pipeline treats the synth nodes as ordinary `call` nodes
+  // (build/edges/validate/DAG run unchanged).
+  const mint = synthIdGen(); // ONE synth-id minter shared by both inline-call desugars (no collision)
+  let assertsSection: Assertion[];
+  [descriptors, outputsSection, assertsSection] = desugarInlineCalls(descriptors, outputsSection, {
+    assertsSection: options.assertsSection,
+    outputsRange,
+    assertionRangeAt: flowAssertionRangeAt,
+    assertionOriginAt: flowAssertionOriginAt,
+    bindingStyleAt: (nodeId, field, key) =>
+      bindingStyle(nodesCursor, nodeId, field, key, { valueEntries, diagnostics }),
+    outputStyleAt: (key) => outputStyle(outputsCursor, key, { diagnostics }),
+    typedOutputs:
+      outputTypes.size > 0
+        ? new Set<string | null>(isRecord(outputsSection) ? outputTypes.keys() : [null])
+        : new Set(),
+    nextId: mint,
+    typeNames: new Set(registry.keys()),
+    diagnostics,
+  });
+
+  // Lower each `human_input` `adaptive_questions:` block into a synth composer agent + the
+  // rewritten gate. A descriptor-level pass (the `desugarInlineCalls` precedent above): runs
+  // BEFORE the build loop so the synth agent flows through build + prompt-scope validation + ref
+  // wiring like any author-written agent.
+  descriptors = desugarAdaptiveQuestions(descriptors, { diagnostics });
+
+  // `then:/else: ${call}`: a `case` branch target that is an inline call becomes a synth `call`
+  // node, the then:/else: rewritten to its id. Runs BEFORE expandCaseOutputs (so the synth args +
+  // the rewritten then-targets are visible to it) and shares `mint`.
+  descriptors = desugarCaseCallTargets(descriptors, mint, { diagnostics });
+
+  // The cases whose value is used, taken before the expansion below rewrites the reads; each
+  // must be exhaustive (checked once producer types are known).
+  const valueCaseIds = valueCases(descriptors, caseOutputReads(descriptors, outputsSection));
+
+  // Expand `${<case>.output}` value refs to a coalesce over the case's branch targets. Runs after
+  // the inline-call desugar (so synth-node bindings are covered too) and before the build loop —
+  // downstream sees only ordinary branch-target refs.
+  [descriptors, outputsSection] = expandCaseOutputs(descriptors, outputsSection, assertsSection, {
+    outputsRange,
+    assertionRangeAt: flowAssertionRangeAt,
+    diagnostics,
+  });
+
+  let descriptorCache: DescriptorBuildCache | null = null;
+
+  // T3-17: assembles one retained body lazily in this file's callable scope.
+  const buildInlineChild = (body: InlineBody, descriptor: NodeDescriptor): ComposedFlow => {
+    throw new Error("build_inline_child is not ported yet (T3-17)");
+  };
+
+  // T3-17: resolves one parent binding's contract, building referenced producers on demand.
+  const readBindingContract: BindingContractReader | null = null;
+
+  descriptors = registerInlineBodies(descriptors, inlineBodies, {
+    registrar: scope,
+    diagnostics,
+    buildChild: buildInlineChild,
+  });
+
+  // Build EVERY node kind-blind through its own descriptor's `build(ctx)` — leaf, call/map (a
+  // map rides the call descriptor, no branch), loop, AND case (which lowers in its own `build`,
+  // returning its data+control edges in `BuildResult.edges`). The conductor never branches on the
+  // descriptor kind. Flow-owned wiring (the split): `flowWiring[nodeId][param] -> source`, an
+  // empty entry for every node so the key-parity check ranges over all nodes.
+  const ctxBase = new BuildContext({
+    registry,
+    resolver: (childId, childVersion) => scope.resolve(childId, childVersion),
+    sourceFile: flowLabel,
+    resolveOrigin,
+    diagnostics,
+    outputContractReader: readAuthoredNodeOutput,
+    variableDeclarationReader: readAuthoredNodeVariables,
+    bindingContractReader: readBindingContract,
+    owner,
+  });
+  descriptorCache = new DescriptorBuildCache(descriptors, ctxBase);
+  const buildResults = descriptorCache.buildInSourceOrder();
+  const nodesBuilt = new Map([...buildResults].map(([nodeId, result]) => [nodeId, result.node]));
+  const flowWiring = new Map([...buildResults].map(([nodeId, result]) => [nodeId, result.wiring]));
+  stampBindingLabels(buildResults);
+  stampNodeWiringOrigins(descriptors, nodesCursor, nodesBuilt, flowWiring, { owner, catalogBuilder, diagnostics });
+  attachInputContracts(descriptors, flowWiring);
+  // A case's own data+control edges; every other kind returns an empty list.
+  const caseEdges: Edge[] = [...buildResults.values()].flatMap((result) => result.edges);
+  // Stamp each built node's effective static config: the flow-level `env:` default merged under
+  // the node's own `env:` (node override wins), flow-local (a called child flow has its own flow
+  // env). The engine core never reads `Node.env` — only the node's `forward()` path does.
+  const baseEnv = flowEnv ?? {};
+  for (const [nodeId, node] of nodesBuilt) node.env = { ...baseEnv, ...descriptors.get(nodeId)!.env };
+  // producers: each built node's declared output contract (drives the case `on:` enum
+  // exhaustiveness + the dotted-field walk in ref/assert validation). A case node has no
+  // contract, so it is naturally excluded.
+  const producers = new Map<string, OutputContract>();
+  for (const [nodeId, node] of nodesBuilt) {
+    const contract = node.outputContract;
+    if (contract === null) continue;
+    if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
+      throw new TypeError(
+        "output producer contracts must be ValueContract or PartialRecordContract values, " +
+          `got ${jsTypeName(contract)} for ${reprText(nodeId)}`,
+      );
+    }
+    producers.set(nodeId, contract);
+  }
+
+  const flowLlmValueTypes = attachLlmConfigWiring(
+    buildResults,
+    flowWiring,
+    flowLlmConfig ?? {},
+    producers,
+    flowInputContracts,
+    { typeFn: constructorType },
+  );
+
+  // Data edges — the projection of the flow wiring (leaf + WAIT + call/map); a case owns its own
+  // data+control edges (`caseEdges`, from each case descriptor's build), appended below.
+  const dataEdges = inferDataEdges(descriptors, flowWiring);
+  // A node lifted out of an authored node (an inline `call(...)`, an adaptive composer) runs only
+  // on its host's routes, after its host's ordering, and once its host's other data inputs
+  // settle, skipping when they would skip the host. So it gets copies of the routes and ordering
+  // plus data gates here, before narrowing and the skip model read the graph.
+  const hostEdges = hostControlEdges(descriptors, [...dataEdges, ...caseEdges]);
+  // What each node may assume about union values from the CASE branches that route it.
+  const narrowing = computeNarrowing(
+    descriptors,
+    [...dataEdges, ...caseEdges, ...hostEdges],
+    producers,
+    flowInputContracts,
+    { registry },
+  );
+  // Runs before every pass that reads narrowing, so a typo'd tag is reported first.
+  checkCaseWhenValues(descriptors, producers, flowInputContracts, { narrowing, diagnostics });
+  // A searched `when:` check that can never be true, before the reads it makes dead are left
+  // unchecked by the reference pass.
+  checkImpossibleWhens(descriptors, producers, flowInputContracts, narrowing, { registry, diagnostics });
+
+  // Typed node inputs that can never fit their declared type. The CALL, MAP, and LOOP checks
+  // below take a typed binding's declared type as its source, so a value that cannot fit that
+  // type must be reported here first, against the binding itself.
+  checkTypedInputs(flowWiring, producers, flowInputContracts, buildResults, {
+    narrowing,
+    typeFn: constructorType,
+    registry,
+    resolveOrigin,
+    diagnostics,
+  });
+  // The run-start tool check compares these with the host tool's declared input types.
+  stampToolInputTypes(flowWiring, producers, flowInputContracts, buildResults, {
+    narrowing,
+    typeFn: constructorType,
+  });
+  // cross-flow type check: each call/map binding's and loop seed's source type vs the child
+  // input type (needs producers, so it runs after all nodes are built).
+  checkCallMapTypes(buildResults, producers, flowInputContracts, flowWiring, {
+    narrowing,
+    typeFn: constructorType,
+    registry,
+    diagnostics,
+  });
+  // loop `'a -> 'a` type contract (types): each field the body returns is compared with its
+  // carried seed-source Type (needs producers, so it runs alongside the cross-flow call/map type
+  // check above). Each returned field must also fit the body parameter it is bound to on the
+  // next turn: a named body's declared input, or the parameter an inline body generates from its
+  // seed (`inlineLoops` only selects the wording).
+  // T3-19: the loops with an inline body (`childLabel` set).
+  const inlineLoops: ReadonlySet<string> = new Set();
+  checkLoopTypeContract(buildResults, producers, flowInputContracts, flowWiring, {
+    inlineLoops,
+    registry,
+    diagnostics,
+  });
+  // Case `on:` enum exhaustiveness needs the assembled producer types, so it runs after the
+  // cross-flow type contracts while preserving validation error order.
+  checkCaseExhaustive(descriptors, producers, { narrowing, valueCases: valueCaseIds, diagnostics });
+
+  const nodes = new Map(nodesBuilt);
+
+  // Wiring/params key parity over EVERY node (catches an orphan/missing source or a node absent
+  // from the wiring). Runs once the wiring is complete.
+  checkWiringParity(buildResults, flowWiring, { diagnostics });
+
+  const reconciled = [...dataEdges, ...caseEdges, ...hostEdges];
+
+  // The proven contracts of each node-local name, for the field reads a node makes of its own
+  // inputs (prompts and node asserts).
+  const localContracts = localInputContracts(flowWiring, producers, flowInputContracts, buildResults, {
+    narrowing,
+    typeFn: constructorType,
+  });
+
+  // Reference + assert validation over the built flow. Errors locate at the node's line (a bad
+  // node-input ref) or the `output:` section line (a dangling flow-output ref).
+  validateReferences(buildResults, flowInputs, producers, outputsSection, flowWiring, {
+    inputContracts: flowInputContracts,
+    outputsRange,
+    narrowing,
+    localContracts,
+    registry,
+    resolveOrigin,
+    diagnostics,
+  });
+  // human_input gates: structurally check a literal `questions:` list at load, and pin a
+  // ref-form `questions: ${name}` to a declared input (the prompt-scope rule).
+  validateHumanQuestions(buildResults, { diagnostics });
+  // Node-local `asserts:` (per-node contract): validate node-locally + classify pre/post + stamp
+  // onto each built leaf/call node. Shared by defs (a def's internal nodes too).
+  validateNodeAsserts(nodesBuilt, descriptors, {
+    assertionSiteAt: nodeAssertionSiteAt,
+    typeNames: new Set(registry.keys()),
+    localContracts,
+    partialUnionNodes: narrowing.unordered,
+    registry,
+    diagnostics,
+  });
+  // Lower the flow-level `asserts:` into node-local asserts stamped on the synthesized START/END.
+  // Fires uniformly via eval_node — a cross-node post assert's `${producer.output}` becomes a
+  // real END input edge, so it survives child cloning. `flowAssertionRanges` comes from the same
+  // item cursors as each origin and stays aligned 1:1 with the authored assertions, so lowered
+  // START/END asserts and bad-ref errors locate by index — never by non-unique text. Source-free
+  // assertions carry `null`.
+  const lowered = lowerFlowAsserts(
+    assertsSection,
+    flowInputs,
+    new Set(descriptors.keys()),
+    producers,
+    flowAssertionRanges,
+    { inputContracts: flowInputContracts, registry, diagnostics },
+  );
+
+  // Run-ordering edges: depends_on (co-skip) / runs_after (pure order). Folded in BEFORE root
+  // synthesis so an ordering-only dependent is demoted from root, and into the cycle check below
+  // so an ordering cycle is loud.
+  const nodeIds = new Set(descriptors.keys());
+  const orderingEdges = inferOrderingEdges(descriptors, nodeIds, { diagnostics });
+
+  // DAG assembly: synthesize the START_ID/END_ID boundary NODES + their edges over the FULL
+  // reconciled body-edge set (the __start__/__end__ sentinels retire; the strings persist as the
+  // boundary node ids). synthesizeBoundaryGraph mints the END_ID producer edges (one per producer
+  // per output, keyed by output name, with the coalesce/optional stance) + the START_ID root
+  // edges + (0-output) the bare START_ID->END_ID root edge, and returns parity-clean
+  // START_ID/END_ID wiring.
+  let outputs = stampFlowOutputOrigins(flowOutputs(outputsSection), outputsSection, outputsCursor, {
+    owner,
+    catalogBuilder,
+    diagnostics,
+  });
+  stampInlineCallOrigins(descriptors, nodesCursor, nodesBuilt, flowWiring, outputs, assertsSection, {
+    owner,
+    catalogBuilder,
+    diagnostics,
+  });
+  outputs = outputs.map((output) => {
+    const contract = outputTypes.get(output.name);
+    if (contract === undefined) return output;
+    return new FlowOutput(output.name, new Binding(output.binding.source, { origin: output.binding.origin, contract }));
+  });
+  // An output that reads only nodes CASE routing may skip would leave END unreachable; the
+  // explicit null default makes its END edge optional, so the run returns null.
+  const structural = [...reconciled, ...orderingEdges];
+  const skips = skipModel(
+    new Set(descriptors.keys()),
+    structural,
+    exhaustiveCases(descriptors, producers, flowInputContracts, { narrowing }),
+  );
+  outputs = nullSkippedOutputs(outputs, skips);
+  const valueMode = outputsSection !== null && !isRecord(outputsSection);
+  // Arithmetic on such a value would fail at runtime with null; ask for a `:-` default. A
+  // searched `when:` is checked as authored: its wiring holds only its `__rN` reads.
+  // T3-20: each searched case's `[index, when, origin, range]` per authored case.
+  const searchedWhens: ReadonlyMap<string, readonly SearchedWhen[]> = new Map();
+  checkSkippedArithmetic(flowWiring, outputs, skips, buildResults, {
+    valueMode,
+    outputsRange,
+    resolveOrigin,
+    diagnostics,
+    searchedWhens,
+  });
+  // Typed flow outputs that can never fit their declared type (needs the output contracts
+  // attached above).
+  checkTypedOutputs(outputs, producers, flowInputContracts, {
+    valueMode,
+    outputsRange,
+    typeFn: constructorType,
+    registry,
+    resolveOrigin,
+    diagnostics,
+  });
+  const [boundaryNodes, boundaryEdges, boundaryWiring] = synthesizeBoundaryGraph(
+    inputs,
+    outputs,
+    nodeIds,
+    structural,
+    lowered,
+    { record: isRecord(outputsSection) },
+  );
+  for (const [nodeId, node] of boundaryNodes) nodes.set(nodeId, node);
+  for (const [nodeId, wiring] of boundaryWiring) flowWiring.set(nodeId, wiring);
+  const edges: Edge[] = [...structural, ...boundaryEdges];
+
+  // Before the type tables, so a constructor in a config value gets the config's message.
+  checkLlmConfigSources(
+    buildResults,
+    flowLlmConfig ?? {},
+    owner[0] === "def" ? `defs entry ${reprText(owner[1]!)} llm_config` : "flow llm_config",
+    producers,
+    flowInputContracts,
+    { typeFn: constructorType, registry, resolveOrigin, diagnostics },
+  );
+  // Type tables for `isinstance`, once START/END carry the lowered flow asserts and outputs.
+  fillTypeTables(
+    nodes,
+    flowWiring,
+    buildResults,
+    descriptors,
+    assertsSection,
+    flowAssertionRanges,
+    outputsCursor,
+    outputsRange,
+    registry,
+    diagnostics,
+  );
+  // After the type tables, so `isinstance` in `over:`/`until:` keeps its own error.
+  checkReservedSources(buildResults, flowWiring, producers, flowInputContracts, {
+    narrowing,
+    typeFn: constructorType,
+    registry,
+    resolveOrigin,
+    diagnostics,
+  });
+
+  // A cycle spans nodes; every actual member contributes its authored range. START_ID/END_ID are
+  // acyclic by construction (START_ID has no incoming, END_ID has no outgoing).
+  const nodeRanges = new Map<string, SourceRange>();
+  for (const [nodeId, descriptor] of descriptors) {
+    if (descriptor.range !== null) nodeRanges.set(nodeId, descriptor.range);
+  }
+  // A synth node whose text all lives under its host (it has `fieldLabels`) is reported as that
+  // host only when its generated wire into the host alone closes the cycle (an adaptive
+  // composer); otherwise, as for an inline call, a note names its host.
+  const synthHosts = new Map<string, string>();
+  for (const [nodeId, descriptor] of descriptors) {
+    if (descriptor.host !== null && descriptor.fieldLabels.size > 0) synthHosts.set(nodeId, descriptor.host);
+  }
+  // T3-17: the ids of the edges from a synth node into its host's question parameter (`QPARAM`).
+  const synthWires: ReadonlySet<string> = new Set();
+  rejectCycles(edges, nodeIds, {
+    nodeRanges,
+    diagnostics,
+    gateIds: new Set(hostEdges.filter((edge) => edge.inputGroup).map((edge) => edge.id)),
+    synthHosts,
+    synthWires,
+  });
+  checkCaseHandles(nodes, edges, { diagnostics });
+
+  const compiled = CompiledFlow.fromParts(nodes, edges, {
+    outputs,
+    wiring: flowWiring,
+    flowLlmConfig: flowLlmConfig ?? {},
+    flowId,
+    memories,
+  });
+  compiled.flowLlmValueTypes = flowLlmValueTypes;
+  return new ComposedFlow(compiled, { version, name, description });
 }
 
 // ---------- Passes not ported yet ----------

@@ -10,9 +10,12 @@
  * only through `load_flow`; nodes parse with stand-in kinds. The pinned cases run
  * `parseFile`, `parseNodes` and `splitTypedInputs` as `assemble` calls them.
  *
- * Later (the conductor, in this item): the input representation guards
+ * The conductor: the input representation guards
  * (`test_resolved_parameters_reject_both_input_representations`,
- * `test_resolved_parameters_reject_missing_input_representation`). Later (T3-17): the value-entry
+ * `test_resolved_parameters_reject_missing_input_representation`). TS-only conductor rows: a
+ * cursor with resolved parameters, the memory declaration check, the errors `parseNodes`, the
+ * `uses:` alias check and the value-entry reader raise through `assemble`, and one happy path over
+ * stand-in nodes (no boundary until T3-17). Later (T3-17): the value-entry
  * rows of `stampNodeWiringOrigins` (a value entry's input owns its parameter and binding at the
  * entry itself) and `splitTypedInputs` (a value entry is returned unchanged), once `isValueEntry`
  * is real; the resolved parameter boundary
@@ -27,8 +30,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import {
+  type AssembleOptions,
+  assemble,
   assertionCursors,
   attachInputContracts,
+  type CallableScope,
   ComposedFlow,
   DescriptorBuildCache,
   flowOutputs,
@@ -43,7 +49,7 @@ import { BuildContext, BuildResult, type NodeDescriptor } from "../../src/compos
 import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
-import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
+import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { forget } from "../../src/defaults.ts";
 import {
@@ -53,6 +59,7 @@ import {
   type OriginResolver,
   SourceRange,
 } from "../../src/diagnostics.ts";
+import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { Binding, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import type { TypeRegistry } from "../../src/typesys/types.ts";
@@ -640,5 +647,213 @@ describe("ComposedFlow", () => {
     expect(() => flowOf(start()).diagnose({} as Failure)).toThrow(
       new TypeError("diagnose requires a Failure"),
     );
+  });
+});
+
+/** A `code` stand-in whose node shell declares one parameter per `input:` name. */
+class ParamCode extends StandInCode {
+  override build(_ctx: BuildContext): BuildResult {
+    const params = Object.keys(this.inputs).map((name) => new Parameter(name));
+    return this._finish(new StartNode(this.id, { params }), this.sinkWiring());
+  }
+}
+
+/** A callable scope over `catalogBuilder` that records each resolved id and returns an empty flow. */
+function fakeScope(catalogBuilder = new SourceCatalogBuilder()): CallableScope & { resolved: string[] } {
+  const resolved: string[] = [];
+  return {
+    catalogBuilder,
+    resolved,
+    resolve(flowId: string): ComposedFlow {
+      resolved.push(flowId);
+      return new ComposedFlow(new CompiledFlow(new Map(), []));
+    },
+    registerPrivate(): void {},
+  };
+}
+
+/** Assemble flow `text` as the loader does, with `ParamCode` as `code`; `options` override. */
+function assembleText(text: string, options: Partial<AssembleOptions> = {}): ComposedFlow {
+  const document = parseSourceDocument(text, "flow.yaml");
+  const file = parseFile(document);
+  const root = document.root;
+  return withKinds([ParamCode], () =>
+    assemble({
+      inputsSection: file.inputs,
+      inputsCursor: root.has("input") ? root.child("input") : null,
+      nodesCursor: flowNodesCursor(document, file.nodes),
+      outputsSection: file.outputs,
+      outputsCursor: root.has("output") ? root.child("output") : null,
+      assertsSection: file.asserts,
+      registry: caseRegistry(document),
+      scope: fakeScope(),
+      owner: ["root"],
+      version: file.version,
+      name: file.name,
+      description: file.description,
+      flowEnv: file.env,
+      flowId: file.id,
+      ...options,
+    }),
+  );
+}
+
+describe("assemble", () => {
+  /** The required options of a flow with no nodes, and no input representation. */
+  const bare = (): AssembleOptions => ({
+    nodesCursor: SourceCursor.virtual({}),
+    outputsSection: null,
+    assertsSection: [],
+    registry: EMPTY,
+    scope: fakeScope(),
+    owner: ["test"],
+  });
+
+  test.each([
+    ["both input representations", { inputsSection: {}, inputParameters: [] }],
+    ["no input representation", {}],
+  ])("%s are refused", (_name, inputs) => {
+    const error = thrown(() => assemble({ ...bare(), ...inputs }));
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error).not.toBeInstanceOf(LoadError);
+    expect(error.message).toBe("_assemble requires exactly one of inputs_section or input_parameters");
+  });
+
+  test("resolved parameters can't carry an inputs cursor", () => {
+    const error = thrown(() =>
+      assemble({ ...bare(), inputParameters: [], inputsCursor: SourceCursor.virtual({}) }),
+    );
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error).not.toBeInstanceOf(LoadError);
+    expect(error.message).toBe("pre-resolved input parameters cannot carry an inputs cursor");
+  });
+
+  test("memories must be exact MemoryDecl values", () => {
+    class LooseDecl extends MemoryDecl {}
+    const decl = new LooseDecl("notes", "reflective", { max_items: 4n }, new DeclSite([], ["test"]));
+    const error = thrown(() => assemble({ ...bare(), inputParameters: [], memories: [decl] }));
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error.message).toBe("memories must be an array of exact MemoryDecl values");
+  });
+
+  test("memories are restamped with this flow's site and one origin each", () => {
+    const document = parseSourceDocument("memories:\n  notes: reflective\nlog: reflective\n", "flow.yaml");
+    const builder = new SourceCatalogBuilder();
+    const decl = (declName: string) =>
+      new MemoryDecl(declName, "reflective", { max_items: 4n }, new DeclSite(["elsewhere"], ["other"]));
+
+    const flow = assemble({
+      ...bare(),
+      inputParameters: [],
+      scope: fakeScope(builder),
+      memories: [decl("notes"), decl("log")],
+      memoriesCursor: document.root.child("memories"),
+    });
+    const sugar = assemble({
+      ...bare(),
+      inputParameters: [],
+      scope: fakeScope(builder),
+      owner: ["sugar"],
+      memories: [decl("log")],
+      memoriesCursor: document.root.child("log"),
+    });
+
+    const [notes, log] = flow.compiled.memories;
+    expect([notes!.site.scope, notes!.site.owner, notes!.site.node]).toEqual([[], ["test"], null]);
+    expect(resolvedRange(builder, notes!.origin)).toEqual(cursorAt(document, ["memories", "notes"]).keyRange!);
+    expect(resolvedRange(builder, log!.origin)).toEqual(cursorAt(document, ["memories"]).range!);
+    expect(resolvedRange(builder, sugar.compiled.memories[0]!.origin)).toEqual(cursorAt(document, ["log"]).range!);
+  });
+
+  test("a reserved node id surfaces from parseNodes", () => {
+    const error = loadError(() =>
+      assembleText("id: f\nname: f\nnodes:\n  __start__:\n    kind: code\n    code: x\noutput: null\n"),
+    );
+    expect(error.message).toStartWith("node id '__start__' is reserved");
+  });
+
+  test("a uses: alias colliding with a node id is refused before any alias resolves", () => {
+    const scope = fakeScope();
+    const error = loadError(() =>
+      assembleText("id: f\nname: f\nnodes:\n  a:\n    kind: code\n    code: x\noutput: null\n", {
+        scope,
+        usesAliases: ["helper", "a"],
+      }),
+    );
+    expect(error.message).toBe('uses: alias ["a"] collides with a node id');
+    expect(scope.resolved).toEqual([]);
+  });
+
+  test("a value entry is checked, then read by the value-entry reader", () => {
+    const error = thrown(() => assembleText("id: f\nname: f\nnodes:\n  v: !int 5\noutput: null\n"));
+    expect(error.constructor).toBe(Error);
+    expect(error.message).toBe("read_value_entry is not ported yet (T3-17)");
+  });
+
+  test("two nodes assemble in source order, with env, origins, the typed input and the outputs", () => {
+    const text = `\
+id: f
+name: f
+version: "1"
+description: two steps
+input:
+  n: !int
+env:
+  region: eu
+  tier: base
+nodes:
+  a:
+    kind: code
+    code: x
+    env:
+      tier: gold
+    input:
+      qty: !int \${input.n}
+  b:
+    kind: code
+    code: y
+    input:
+      note: \${a.output}
+output:
+  total: \${b.output}
+  first: \${a.output}
+`;
+    const document = parseSourceDocument(text, "flow.yaml");
+    const builder = new SourceCatalogBuilder();
+    const scope = fakeScope(builder);
+
+    const flow = assembleText(text, { scope, usesAliases: ["helper"] });
+
+    const compiled = flow.compiled;
+    expect([...compiled.nodes.keys()]).toEqual(["a", "b"]);
+    expect(compiled.edges).toEqual([]);
+    expect(scope.resolved).toEqual(["helper"]);
+    expect([flow.version, flow.name, flow.description, compiled.flowId]).toEqual(["1", "f", "two steps", "f"]);
+
+    const a = compiled.nodes.get("a")!;
+    const b = compiled.nodes.get("b")!;
+    expect(a.env).toEqual({ region: "eu", tier: "gold" });
+    expect(b.env).toEqual({ region: "eu", tier: "base" });
+    expect(resolvedRange(builder, a.origin)).toEqual(cursorAt(document, ["nodes", "a"]).keyRange!);
+    expect(resolvedRange(builder, b.origin)).toEqual(cursorAt(document, ["nodes", "b"]).keyRange!);
+
+    const qtyEntry = cursorAt(document, ["nodes", "a", "input", "qty"]);
+    const qty = compiled.wiring.get("a")!.get("qty")!;
+    expect(qty.source).toBe("${input.n}");
+    expect(qty.contract!.type.kind).toBe(ValueKind.INTEGER);
+    expect(resolvedRange(builder, qty.origin)).toEqual(qtyEntry.range!);
+    expect(resolvedRange(builder, a.params![0]!.origin)).toEqual(qtyEntry.keyRange!);
+    const note = compiled.wiring.get("b")!.get("note")!;
+    expect(note.contract).toBe(null);
+    expect(resolvedRange(builder, note.origin)).toEqual(cursorAt(document, ["nodes", "b", "input", "note"]).range!);
+
+    expect(compiled.outputs.map((output) => [output.name, output.binding.source])).toEqual([
+      ["total", "${b.output}"],
+      ["first", "${a.output}"],
+    ]);
+    expect(compiled.outputs.map((output) => resolvedRange(builder, output.binding.origin))).toEqual([
+      cursorAt(document, ["output", "total"]).range!,
+      cursorAt(document, ["output", "first"]).range!,
+    ]);
   });
 });

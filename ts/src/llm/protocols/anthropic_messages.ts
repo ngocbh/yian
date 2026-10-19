@@ -80,6 +80,7 @@ const CHOICE_TYPES = { auto: "auto", required: "any", none: "none" } as const;
 const TOOL_ID = /^[a-zA-Z0-9_-]+$/;
 // The fields of a reasoning part's replay record; it holds exactly one.
 const REASONING_FIELDS = ["signature", "redacted"];
+// The required-signature error's text after its source.
 const REQUIRED_SIGNATURE =
   "anthropic needs its signed thinking to continue a tool call with thinking on; finish the tool turn on the " +
   "original model or turn thinking off in the anthropic block";
@@ -248,36 +249,36 @@ export class AnthropicMessages implements SseProtocol {
    * unusable one: with preserved thinking a signature binds every block before it, so sending
    * part of a turn's reasoning risks a refusal.
    *
-   * @returns The `thinking` or `redacted_thinking` block of each reasoning part by part index
-   *   (empty when the reasoning is left out), and the first unusable record, or `null`.
+   * @returns Each part's `thinking` or `redacted_thinking` block, `null` for a part that isn't
+   *   reasoning, all `null` when the reasoning is left out; and the first unusable record, or `null`.
+   * @throws {TypeError} If the message holds a tool result.
    */
-  #reasoning(message: Message): [JsonObject[], JsonObject | null] {
-    const blocks: JsonObject[] = [];
+  #reasoning(message: Message): [(JsonObject | null)[], JsonObject | null] {
+    const blocks: (JsonObject | null)[] = [];
     let reason: ReplayDegradedReason | null = null;
     let unusable: JsonObject | null = null;
     let unsigned = false;
-    for (const [index, part] of message.parts.entries()) {
-      if (!(part instanceof ReasoningPart)) continue;
+    for (const part of message.parts) {
+      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, message.role));
+      if (!(part instanceof ReasoningPart)) {
+        blocks.push(null);
+        continue;
+      }
       if (part.providerPayload === null) {
         unsigned = true;
+        blocks.push(null);
         continue;
       }
-      const read = readReplayRecord(part.providerPayload, this.#key, REASONING_FIELDS);
-      const fields = read.ok ? read.fields : {};
-      const values = REASONING_FIELDS.filter((name) => Object.hasOwn(fields, name)).map((name) => fields[name]);
-      const [value] = values;
-      if (!read.ok || values.length !== 1 || typeof value !== "string" || value === "") {
-        reason ??= read.ok ? "malformed" : read.reason;
+      const read = reasoningBlock(part, this.#key);
+      if (!read.ok) {
+        reason ??= read.reason;
         unusable ??= part.providerPayload;
-        continue;
       }
-      blocks[index] = Object.hasOwn(fields, "signature")
-        ? { type: "thinking", thinking: part.text, signature: value }
-        : { type: "redacted_thinking", data: value };
+      blocks.push(read.ok ? read.block : null);
     }
     if (reason !== null) this.#onReplayDegraded?.(reason);
     // A part without a record is no record mismatch, so nothing is signalled for it.
-    return reason !== null || unsigned ? [[], unusable] : [blocks, null];
+    return reason !== null || unsigned ? [message.parts.map(() => null), unusable] : [blocks, null];
   }
 
   /** Return `content` as the new `system` field, warning that it was moved there. */
@@ -358,20 +359,20 @@ function userContent(blocks: JsonObject[]): JsonValue {
  * Refusals are not sent.
  *
  * @param final Whether this is the last non-system message, whose content is stripped at the end.
- * @param reasoning The reasoning blocks by part index.
+ * @param reasoning Each part's reasoning block, or `null`.
  */
-function assistantContent(message: Message, final: boolean, reasoning: readonly JsonObject[]): JsonValue {
+function assistantContent(message: Message, final: boolean, reasoning: readonly (JsonObject | null)[]): JsonValue {
   const blocks: JsonObject[] = [];
   for (const [index, part] of message.parts.entries()) {
-    if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, message.role));
+    const thinking = reasoning[index] ?? null;
     if (part instanceof TextPart) {
       if (part.text !== "") blocks.push(textBlock(part.text));
     } else if (part instanceof ToolCallPart) {
       // Copied so changing a body cannot change the message it came from.
       const input = part.arguments === null ? {} : copyJson(part.arguments);
       blocks.push({ type: "tool_use", id: toolId(part.id), name: part.name, input });
-    } else if (reasoning[index] !== undefined) {
-      blocks.push(reasoning[index]);
+    } else if (thinking !== null) {
+      blocks.push(thinking);
     }
   }
   const lone = loneText(blocks);
@@ -383,6 +384,30 @@ function assistantContent(message: Message, final: boolean, reasoning: readonly 
   const last = content.at(-1);
   if (final && last?.["type"] === "text") last["text"] = (last["text"] as string).trimEnd();
   return content;
+}
+
+/**
+ * Read a reasoning part's replay record and return the block it replays as: `thinking` with its
+ * `signature`, or `redacted_thinking` with its `redacted` data.
+ *
+ * A record without exactly one of them as a non-empty string is `malformed`.
+ */
+function reasoningBlock(
+  part: ReasoningPart,
+  key: ReplayKey,
+): { ok: true; block: JsonObject } | { ok: false; reason: ReplayDegradedReason } {
+  const read = readReplayRecord(part.providerPayload, key, REASONING_FIELDS);
+  if (!read.ok) return read;
+  const { signature, redacted } = read.fields;
+  if (Object.keys(read.fields).length === 1) {
+    if (typeof signature === "string" && signature !== "") {
+      return { ok: true, block: { type: "thinking", thinking: part.text, signature } };
+    }
+    if (typeof redacted === "string" && redacted !== "") {
+      return { ok: true, block: { type: "redacted_thinking", data: redacted } };
+    }
+  }
+  return { ok: false, reason: "malformed" };
 }
 
 /**
@@ -405,7 +430,8 @@ function sourceOf(message: Message, record: JsonObject): string {
  * tool loop (its last user turn holds no `tool_result`).
  *
  * The API checks the signed thinking at the start of the assistant turn, which spans every step
- * of a tool loop: without interleaved thinking the later steps rightly have none.
+ * of a tool loop: without interleaved thinking the later steps rightly have none. A later step
+ * that sends its own thinking was taken by the API as a new turn start, so nothing is missing.
  *
  * @param degraded Where each such rendered assistant turn came from.
  */
@@ -416,8 +442,14 @@ function degradedTurnStart(rendered: JsonObject[], degraded: Map<JsonObject, str
   const last = rendered.findLast(isUser);
   if (last === undefined || !hasResult(last)) return null;
   const start = rendered.findLastIndex((turn) => isUser(turn) && !hasResult(turn));
-  const first = rendered.slice(start + 1).find((turn) => turn["role"] === "assistant");
-  return first === undefined ? null : (degraded.get(first) ?? null);
+  const [first, ...later] = rendered.slice(start + 1).filter((turn) => turn["role"] === "assistant");
+  const thinks = (turn: JsonObject) =>
+    Array.isArray(turn["content"]) &&
+    turn["content"].some((block) => {
+      const type = (block as JsonObject)["type"];
+      return type === "thinking" || type === "redacted_thinking";
+    });
+  return first === undefined || later.some(thinks) ? null : (degraded.get(first) ?? null);
 }
 
 /** Return the text of `blocks` when they are one text block, else `null`. */

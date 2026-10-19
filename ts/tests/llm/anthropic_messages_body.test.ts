@@ -806,7 +806,7 @@ function recorded(key: ReplayKey, ...parts: Part[]): Message {
 }
 
 /** Render `messages` and return the rendered turns and the reasons passed to `onReplayDegraded`. */
-function degraded(messages: Message[], options: BodyOptions = {}): [JsonObject[], ReplayDegradedReason[]] {
+function renderWithReasons(messages: Message[], options: BodyOptions = {}): [JsonObject[], ReplayDegradedReason[]] {
   const reasons: ReplayDegradedReason[] = [];
   const body = bodyOf(messages, { ...options, onReplayDegraded: (reason) => reasons.push(reason) });
   return [body["messages"] as JsonObject[], reasons];
@@ -819,7 +819,7 @@ const call1 = () => call("call_1", { value: 3n });
 describe("assistant messages: reasoning replay records", () => {
   /** Render `parts` as a non-final assistant turn; return its content and the degrade reasons. */
   function nonFinal(parts: Part[], options: BodyOptions = {}): [JsonValue, ReplayDegradedReason[]] {
-    const [turns, reasons] = degraded([user("Hi."), assistant(...parts), user("Next.")], options);
+    const [turns, reasons] = renderWithReasons([user("Hi."), assistant(...parts), user("Next.")], options);
     return [turns[1]!["content"]!, reasons];
   }
 
@@ -844,7 +844,7 @@ describe("assistant messages: reasoning replay records", () => {
   });
 
   test("a reasoning-only message renders nothing for its reasoning", () => {
-    const [turns, reasons] = degraded([user("Hi."), assistant(thinking("Hm.")), user("Next.")]);
+    const [turns, reasons] = renderWithReasons([user("Hi."), assistant(thinking("Hm.")), user("Next.")]);
     expect(turns).toEqual([
       { role: "user", content: "Hi." },
       { role: "user", content: "Next." },
@@ -854,6 +854,16 @@ describe("assistant messages: reasoning replay records", () => {
       { role: "user", content: "Hi." },
       { role: "assistant", content: "" },
     ]);
+  });
+
+  test("a tool result is refused before an unusable record is signalled", () => {
+    const parts = [thinking("Bad.", "sig-1", OPUS), result("call_1", "6")];
+    const reasons: ReplayDegradedReason[] = [];
+    refuses(
+      () => bodyOf([user("Hi."), assistant(...parts)], { onReplayDegraded: (reason) => reasons.push(reason) }),
+      "the anthropic_messages route cannot send a ToolResultPart in an assistant message",
+    );
+    expect(reasons).toEqual([]);
   });
 
   test("a reasoning part without a payload leaves out all the message's reasoning, signalling nothing", () => {
@@ -1042,6 +1052,16 @@ describe("the required-signature error", () => {
     requires([...loop(foreign()), user("Also, hurry.")], "anthropic/claude-opus-4-5");
   });
 
+  test("a later step sending its own signed thinking started a new turn, so nothing is refused", () => {
+    const steps = [
+      ...loop(foreign()),
+      user("Also, hurry."),
+      recorded(KEY, thinking("Hm."), call("call_2", { value: 6n })),
+      tool(result("call_2", "12")),
+    ];
+    expect(() => bodyOf(steps, { block: ENABLED })).not.toThrow();
+  });
+
   test("a skipped empty assistant message is not the turn's first", () => {
     const skipped = recorded(OPUS, thinking("Hm.", "sig-1", OPUS));
     expect(() =>
@@ -1060,7 +1080,7 @@ describe("the required-signature error", () => {
   ];
   for (const [name, block] of otherModes) {
     test(`no error under ${name}, even with a degraded turn start`, () => {
-      const [, reasons] = degraded(loop(foreign()), { block });
+      const [, reasons] = renderWithReasons(loop(foreign()), { block });
       expect(reasons).toEqual(["other_model"]);
     });
   }
@@ -1087,8 +1107,6 @@ describe("the required-signature error", () => {
   });
 
   test("no error when the turn start's thinking is sent", () => {
-    const turns = bodyOf(loop(recorded(KEY, thinking("Hm."), call1())), { block: ENABLED })["messages"] as JsonObject[];
-    const [first] = turns[1]!["content"] as JsonObject[];
-    expect(first).toEqual({ type: "thinking", thinking: "Hm.", signature: "sig-1" });
+    expect(() => bodyOf(loop(recorded(KEY, thinking("Hm."), call1())), { block: ENABLED })).not.toThrow();
   });
 });

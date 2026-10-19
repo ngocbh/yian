@@ -2159,6 +2159,15 @@ A few providers need a note:
   `options` (`temperature`, `num_ctx`, …), `keep_alive`, `logprobs`, and
   `top_logprobs`. It has no default `think`, so the model's own default applies.
 
+    Changed (TS yian): every call streams, as before. A reply that ends without its final
+    line fails the model call and is retried, and so does an error in the stream.
+    Rate-limit and server errors are retried too, under `YIAN_MODEL_RETRIES`; Ollama calls
+    were never retried before. A prompt longer than the context window is
+    `provider.context_length`. The model's thinking is kept as reasoning and goes back on
+    the next turn only to the provider, model, and account that wrote it. Tool results go
+    back with the tool's name and call id, and tool schemas go as written. A missing token
+    count counts as 0.
+
 An omitted field is not sent, so the provider's default applies. The one exception is
 Anthropic `max_tokens`, which the Messages API requires; the client library fills it in
 when the block leaves it unset. Changed (TS yian): yian fills it in from the model's output

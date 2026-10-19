@@ -376,7 +376,7 @@ function azureModel(resolved: Resolved, wiring: Wiring): RouteModel {
  *
  * The key is the resolved one, else a non-empty `ANTHROPIC_API_KEY`; the base URL the resolved
  * one, else a non-empty `ANTHROPIC_BASE_URL` as written, else `https://api.anthropic.com`. The
- * replay account is the key's, so thinking replays across Claude models on one account. Throws
+ * replay account is the key's (thinking replays only to the same account). Throws
  * `RangeError` naming `ANTHROPIC_API_KEY` if no key is found.
  */
 function anthropicModel(resolved: Resolved, wiring: Wiring): RouteModel {

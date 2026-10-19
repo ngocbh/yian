@@ -113,6 +113,35 @@ describe("mcpServer arguments", () => {
     );
   });
 
+  test("a null option counts as absent, as Python's None", () => {
+    const server = build({
+      command: "x",
+      url: null,
+      args: null,
+      env: null,
+      cwd: null,
+      headers: null,
+      timeout: null,
+      connectTimeout: null,
+      label: null,
+      concurrencySafe: null,
+    });
+    expect(server.label).toBe("x");
+    expect((server as unknown as { spec: Record<string, unknown> }).spec).toEqual({
+      command: "x",
+      args: [],
+      env: undefined,
+      cwd: undefined,
+      url: undefined,
+      headers: undefined,
+      timeout: undefined,
+      connectTimeout: undefined,
+      label: undefined,
+      concurrencySafe: false,
+    });
+    expect(build({ url: "http://h/mcp", command: null, args: null, env: null, cwd: null }).label).toBe("h");
+  });
+
   test("good arguments build an unopened server", () => {
     expect(isMcpServer(build({ url: "http://h/mcp", args: [] }))).toBe(true);
     expect(isMcpServer(build({ url: "HTTPS://h/mcp", headers: { Authorization: "Bearer t" } }))).toBe(true);

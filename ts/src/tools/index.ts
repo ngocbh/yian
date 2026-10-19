@@ -53,6 +53,7 @@ export {
 export {
   type AskUserHandler,
   type AskUserRequest,
+  type InvokeOptions,
   invokeTool,
   invokeToolTrusted,
   registeredTools,

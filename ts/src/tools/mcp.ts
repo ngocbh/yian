@@ -193,7 +193,8 @@ export interface McpServerSpec {
 /**
  * Describe an MCP server, started as a command over stdio or reached by URL.
  *
- * Nothing starts until the server is opened with `open()`.
+ * Nothing starts until the server is opened with `open()`. An option given as `null` counts as
+ * absent, as `undefined` does.
  *
  * @returns The server, not yet open.
  * @throws {TypeError} An option has the wrong type: `args` a string or holding a non-string, `env`
@@ -207,7 +208,18 @@ export interface McpServerSpec {
  * const files = mcpServer({ command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "."] });
  */
 export function mcpServer(options: McpServerOptions): McpServer {
-  const { command, args, env, cwd, url, headers, timeout, connectTimeout, label, concurrencySafe } = options;
+  // As Python's None, a `null` option is absent.
+  const absent = <T>(value: T | null): T | undefined => (value === null ? undefined : value);
+  const command = absent(options.command);
+  const args = absent(options.args);
+  const env = absent(options.env);
+  const cwd = absent(options.cwd);
+  const url = absent(options.url);
+  const headers = absent(options.headers);
+  const timeout = absent(options.timeout);
+  const connectTimeout = absent(options.connectTimeout);
+  const label = absent(options.label);
+  const concurrencySafe = absent(options.concurrencySafe);
   if ((command === undefined) === (url === undefined)) {
     throw new RangeError("mcpServer needs exactly one of command or url");
   }

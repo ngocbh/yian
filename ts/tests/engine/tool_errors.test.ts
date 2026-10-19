@@ -29,6 +29,7 @@ import * as tools from "../../src/tools/index.ts";
 import type {
   AskUserHandler,
   AskUserRequest,
+  InvokeOptions,
   McpServerOptions,
   ToolEntry,
   ToolErrorKind as IndexToolErrorKind,
@@ -258,5 +259,6 @@ test("tools/index.ts exports the tools API, the same objects as its modules'", (
   const handler: AskUserHandler = (request: AskUserRequest) => request.question;
   const entry: ToolEntry = handler;
   const options: McpServerOptions = { command: "echo" };
-  expect([kind, typeof entry, options.command]).toEqual(["permanent", "function", "echo"]);
+  const invoke: InvokeOptions = { callId: "c1" };
+  expect([kind, typeof entry, options.command, invoke.callId]).toEqual(["permanent", "function", "echo", "c1"]);
 });

@@ -53,6 +53,11 @@ function richNode(): { node: BareNode; contract: ValueContract; shared: Assertio
   return { node, contract, shared };
 }
 
+/** Return a shallow copy of `node`: the same prototype, its own fields copied. */
+function shallowCopy(node: BareNode): BareNode {
+  return Object.assign(Object.create(Object.getPrototypeOf(node)) as BareNode, node);
+}
+
 test("generated origin context is not local authored provenance", () => {
   const node = new BareNode("child", { origin: origin("child/node") });
   const ancestry = [origin("outer/call")];
@@ -112,7 +117,7 @@ test("a graph traversal's seen set skips carriers it already visited", () => {
 test("rewriting a shallow copy leaves the original and keeps shared carriers shared", () => {
   const { node, contract, shared } = richNode();
   const { params, preAsserts, postAsserts } = node;
-  const copy = Object.assign(Object.create(Object.getPrototypeOf(node)) as BareNode, node);
+  const copy = shallowCopy(node);
 
   copy.rewriteLocalOrigins((o) => origin(`mapped/${o.key}`));
 
@@ -126,12 +131,7 @@ test("rewriting a shallow copy leaves the original and keeps shared carriers sha
     "shared",
     "post",
   ]);
-  expect([node.outputContract, node.params, node.preAsserts, node.postAsserts]).toEqual([
-    contract,
-    params,
-    preAsserts,
-    postAsserts,
-  ]);
+  expect(node.outputContract).toBe(contract);
   expect(node.params).toBe(params);
   expect(node.preAsserts).toBe(preAsserts);
   expect(node.postAsserts).toBe(postAsserts);
@@ -157,7 +157,7 @@ test("rewriting a shallow copy leaves the original and keeps shared carriers sha
 
 test("a shallow copy validates its assertions", () => {
   const { node } = richNode();
-  const copy = Object.assign(Object.create(Object.getPrototypeOf(node)) as BareNode, node);
+  const copy = shallowCopy(node);
 
   expect(copy.validateAssertions()).toBeUndefined();
   copy.preAsserts = [new Assertion("x >", "broken")];

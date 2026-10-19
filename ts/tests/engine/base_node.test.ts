@@ -4,8 +4,9 @@
  * `test_node_rejects_invalid_output_contract_inputs`. From `tests/engine/test_node_run_wrapper.py`:
  * `test_validate_assertions_names_the_given_path`.
  *
- * TS-only: a new node's defaults, a subclass overriding traits, the parse error's `cause`, and
- * `validatePrompts` being a no-op on the base.
+ * TS-only: a new node's defaults, a subclass overriding traits, the constructor's origin check, the
+ * parse error's `cause`, the node's type table reaching the assertion parse, `checkNamedPrompt`'s
+ * prefix and `cause`, and `validatePrompts` being a no-op on the base.
  *
  * Changed: Python's `vars(node)` is `Object.hasOwn`, and `hasattr` is the `in` operator.
  *
@@ -23,7 +24,7 @@ import { expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
 import { ExpressionError } from "../../src/expr/index.ts";
-import { Node, NodeKind } from "../../src/nodes/base.ts";
+import { checkNamedPrompt, Node, NodeKind } from "../../src/nodes/base.ts";
 import { Assertion, ContractOrigins, type OutputContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 
@@ -94,6 +95,11 @@ test("a new node starts with empty fields and every trait off", () => {
   expect([node.itemSourceKey, node.growDepthDelta]).toEqual([null, null]);
 });
 
+test("node rejects an origin that isn't an OriginRef", () => {
+  expect(() => new FuncNode("n", { origin: "x" as never })).toThrow(TypeError);
+  expect(() => new FuncNode("n", { origin: "x" as never })).toThrow("node origin must be an OriginRef or null");
+});
+
 test("a kind overrides its traits", () => {
   const node = new ToolSpawner("s");
 
@@ -120,8 +126,30 @@ test("validate assertions names the given path", () => {
   expect((error as Error).cause).toBeInstanceOf(ExpressionError);
 });
 
+test("assertions parse against the node's type table", () => {
+  const node = new FuncNode("n");
+  node.preAsserts = [new Assertion("Size(x) == x", "Size(x) == x")];
+
+  expect(() => node.validateAssertions()).toThrow(/^node 'n' pre-assert 'Size\(x\) == x' is not/);
+  node.types = new Map([["Size", Type.scalar(ValueKind.INTEGER)]]);
+  expect(node.validateAssertions()).toBeUndefined();
+});
+
+test("a prompt check names its subject and keeps the template error as the cause", () => {
+  let error: unknown;
+  try {
+    checkNamedPrompt("${", "node 'n' prompt");
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(ExpressionError);
+  expect((error as Error).message).toStartWith("node 'n' prompt: ");
+  expect((error as Error).cause).toBeInstanceOf(ExpressionError);
+});
+
 test("validatePrompts checks nothing on the base", () => {
   const node = new FuncNode("n");
+  // An unparseable assert: the prompt check must not read the assertions.
   node.preAsserts = [new Assertion("${x} > 0", "${x} > 0")];
 
   expect(node.validatePrompts()).toBeUndefined();

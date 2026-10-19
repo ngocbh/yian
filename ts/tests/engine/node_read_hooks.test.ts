@@ -2,7 +2,8 @@
  * The node-owned read hooks of the `Node` base: a port of `tests/engine/test_node_read_hooks.py`.
  * Ported: `test_plain_node_defaults`.
  *
- * TS-only: the default `reservedKeyLabel` and `wiringRefLabel` phrases.
+ * TS-only: the base reserves no wiring keys (`reservedWiringKeys`), and the default
+ * `reservedKeyLabel` and `wiringRefLabel` phrases.
  *
  * Later (T3-8): WAIT and MAP (`test_wait_bind_reserved_resolves_until`,
  * `test_map_binds_per_item_and_resolves_over`, `test_map_over_not_a_list_raises`).
@@ -23,11 +24,12 @@ test("plain node defaults", () => {
   const node = new PlainNode("n");
   expect(node.bindsPerItem).toBe(false);
   expect(node.bindReserved(new Map(), new VariablePool())).toEqual({});
-  expect(node.reservedWiringKeys()).toEqual(new Set());
 });
 
-test("a reserved key is named after the node's kind", () => {
-  expect(new PlainNode("n").reservedKeyLabel("until")).toBe("code until");
+test("the base reserves no wiring keys and names a reserved key after its kind", () => {
+  const node = new PlainNode("n");
+  expect(node.reservedWiringKeys()).toEqual(new Set());
+  expect(node.reservedKeyLabel("until")).toBe("code until");
 });
 
 test("a wiring param is named by its recorded label, else as an input", () => {

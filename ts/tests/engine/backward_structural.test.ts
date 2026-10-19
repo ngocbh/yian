@@ -75,5 +75,5 @@ test.each([
   );
 
   expect(() => node.backward(context, ["Review."])).toThrow(RangeError);
-  expect(() => node.backward(context, ["Review."])).toThrow(/output path/);
+  expect(() => node.backward(context, ["Review."])).toThrow(/output path does not exist/);
 });

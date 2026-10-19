@@ -1,10 +1,14 @@
 /**
  * Mirrors `tests/test_llm_config_base_url.py`: the `LLMConfig`, `host_only_field_error`,
- * `pop_host_credentials` and `check_model_config` tests, and the `resolve_model_config` and
- * `split_model_config` halves of the pinned-connection tests; the client and redirect tests go
- * with the factory. The `splitOllamaBaseUrl` tests come from s3's planned
- * `split_ollama_base_url` list (not in Python yet); its "pinned against today" half runs each
- * value through LangChain and the ollama SDK, so it is left out.
+ * `pop_host_credentials` and `check_model_config` tests, the pinned-connection tests (their
+ * `chatModelFromConfig` half included), and the client tests, which build the model with
+ * `chatModelFromConfig` and record what a fake `send` receives (it answers 400, so a test checks
+ * the request, not a reply). One redirect test stays: `safeFetch` refuses every 3xx, so the
+ * redirect is checked once through the factory for Anthropic and Google, and Python's Azure
+ * redirect test, which pins the openai SDK's and httpx's redirect behavior, is left out. The
+ * `splitOllamaBaseUrl` tests come from s3's planned `split_ollama_base_url` list (not in Python
+ * yet); its "pinned against today" half runs each value through LangChain and the ollama SDK, so
+ * it is left out.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -15,7 +19,11 @@ import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import type { Env } from "../src/defaults.ts";
-
+import { ProviderError } from "../src/llm/errors.ts";
+import { collect } from "../src/llm/events.ts";
+import { Message, Request, TextPart } from "../src/llm/messages.ts";
+import { OAuthCredentials } from "../src/llm_clients/auth/common.ts";
+import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import {
   azureResourceEndpoint,
   HostConnection,
@@ -31,7 +39,9 @@ import {
   resolveModelConfig,
   splitModelConfig,
 } from "../src/llm_clients/connection.ts";
+import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
 import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
+import { type Send, virtualScheduler } from "../src/platform.ts";
 
 const SENTINEL = "sk-sentinel-7d1f3b20";
 const AZURE_V1 = "https://res.openai.azure.com/openai/v1/";
@@ -255,7 +265,7 @@ test("an openai base_url pins a host connection to that endpoint", () => {
   expect([validated.baseUrl, connection!.endpoint]).toEqual([AZURE_V1, AZURE_V1]);
 });
 
-test("a base_url must match its pinned connection", () => {
+test("a base_url must match its pinned connection", async () => {
   const resolved = resolveModelConfig(
     { provider: "openai", model: "gpt-5.4", base_url: AZURE_V1, api_key: SENTINEL },
     { env },
@@ -278,7 +288,108 @@ test("a base_url must match its pinned connection", () => {
     const error = caught(() => splitModelConfig(config));
     expect(error).toBeInstanceOf(RangeError);
     expect(error.message).toContain("host connection endpoint");
+    const built = await chatModelFromConfig(config, { env, onWarning: () => {} }).catch((thrown: Error) => thrown);
+    expect(built).toBeInstanceOf(RangeError);
+    expect((built as Error).message).toContain("host connection endpoint");
   }
+});
+
+// --- clients send the key to the base_url --- //
+
+interface Sent {
+  url: string;
+  headers: Headers;
+  body: string;
+}
+
+/**
+ * A `send` that records each request and answers it 400, or 307 to another origin when
+ * `redirect` is set.
+ */
+function recorder(redirect = false): { requests: Sent[]; send: Send } {
+  const requests: Sent[] = [];
+  const send: Send = async (input, init) => {
+    requests.push({ url: String(input), headers: new Headers(init.headers), body: String(init.body) });
+    if (redirect) return new Response(null, { status: 307, headers: { location: "https://elsewhere.example.com/" } });
+    return new Response(JSON.stringify({ error: { message: "refused" } }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  return { requests, send };
+}
+
+const HI = new Request({ messages: [new Message({ role: "user", parts: [new TextPart("hi")] })] });
+
+/** Build `config` with `send`, ask it "hi" and return the error the call throws, or `null`. */
+async function ask(config: Record<string, unknown>, send: Send): Promise<unknown> {
+  const model = await chatModelFromConfig(config, { env, send, scheduler: virtualScheduler(), onWarning: () => {} });
+  return collect(model.stream(HI)).then(
+    () => null,
+    (thrown: unknown) => thrown,
+  );
+}
+
+const COMPATIBLE = ["vllm", "deepseek", "openrouter"];
+
+test.each(COMPATIBLE)("openai-compatible clients send the key to the base_url (%s)", async (provider) => {
+  // The provider's own endpoint variable and key must not win over the config.
+  vars.set("VLLM_BASE_URL", "http://127.0.0.1:9/v1");
+  vars.set(`${provider.toUpperCase()}_API_KEY`, "sk-environment-key");
+  const { requests, send } = recorder();
+  await ask({ provider, model: "m", base_url: "https://gateway.example.com/v1", api_key: SENTINEL }, send);
+  expect(requests.map(({ url }) => url)).toEqual(["https://gateway.example.com/v1/chat/completions"]);
+  expect(requests[0]!.headers.get("authorization")).toBe(`Bearer ${SENTINEL}`);
+});
+
+test("openai sends the key to an azure v1 base_url", async () => {
+  vars.set("OPENAI_API_KEY", "sk-environment-key");
+  vars.set("OPENAI_BASE_URL", "https://proxy.example.com/v1");
+  // A saved subscription must not take over a keyed config either.
+  await new AuthStore(null, { env }).save(
+    "openai",
+    new OAuthCredentials({
+      accessToken: "access-secret",
+      refreshToken: "refresh-secret",
+      expiresAt: 4102444800,
+      accountId: "account",
+    }),
+    "gpt-5.5",
+  );
+  const { requests, send } = recorder();
+  await ask({ provider: "openai", model: "gpt-5.4", base_url: AZURE_V1, api_key: SENTINEL }, send);
+  expect(requests.map(({ url }) => url)).toEqual(["https://res.openai.azure.com/openai/v1/responses"]);
+  expect(requests[0]!.headers.get("authorization")).toBe(`Bearer ${SENTINEL}`);
+  expect(JSON.parse(requests[0]!.body).model).toBe("gpt-5.4");
+});
+
+// Gemini's base_url is the API root, and the route streams with `alt=sse`.
+const DEDICATED: [string, string, string, string][] = [
+  ["anthropic", "claude-sonnet-4-5", "x-api-key", "v1/messages"],
+  ["google", "gemini-2.5-flash", "x-goog-api-key", "v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"],
+];
+
+test.each(DEDICATED)("dedicated clients send the key to the base_url (%s)", async (provider, model, header, path) => {
+  // Neither the provider's own key nor its endpoint variables may win over the config.
+  for (const name of ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_URL", "GOOGLE_GEMINI_BASE_URL"]) {
+    vars.set(name, "https://decoy.example.com");
+  }
+  vars.set(`${provider.toUpperCase()}_API_KEY`, "sk-environment-key");
+  const { requests, send } = recorder();
+  const error = await ask({ provider, model, base_url: GATEWAY, api_key: SENTINEL }, send);
+  expect(error).toBeInstanceOf(ProviderError);
+  expect(requests.map(({ url, headers }) => [url, headers.get(header)])).toEqual([[`${GATEWAY}${path}`, SENTINEL]]);
+});
+
+const REDIRECT = "dedicated clients do not follow a redirect with the key (%s)";
+
+test.each(DEDICATED)(REDIRECT, async (provider, model, header, path) => {
+  const { requests, send } = recorder(true);
+  const error = await ask({ provider, model, base_url: GATEWAY, api_key: SENTINEL }, send);
+  expect(error).toBeInstanceOf(ProviderError);
+  expect((error as ProviderError).kind).toBe("redirect");
+  // Only the configured URL received the key; nothing went to the redirect's target.
+  expect(requests.map(({ url, headers }) => [url, headers.get(header)])).toEqual([[`${GATEWAY}${path}`, SENTINEL]]);
 });
 
 const OLLAMA_SHAPE =

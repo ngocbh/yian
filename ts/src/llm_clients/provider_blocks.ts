@@ -13,6 +13,9 @@ import { compareCodeUnits } from "../diagnostics.ts";
 import { isList, isRecord } from "../typesys/index.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
 
+/** A path into a value: keys, list indices and pydantic's union labels and variant tags. */
+type Loc = readonly (string | number)[];
+
 /** What a value of one block field must be. */
 export type Field =
   | { readonly kind: "str"; readonly minLength?: number; readonly maxLength?: number; readonly pattern?: string }
@@ -37,7 +40,7 @@ export interface ObjectSchema {
 
 /** One problem the value pass found, shaped like a pydantic error. */
 export interface Issue {
-  readonly loc: readonly (string | number)[];
+  readonly loc: Loc;
   readonly type: string;
   readonly msg: string;
   /** For a `value_error`: the validator's own message, without "Value error, " (Python's `ctx["error"]`). */
@@ -63,8 +66,6 @@ export class ValidationError extends RangeError {
   }
 }
 
-type Loc = readonly (string | number)[];
-
 /** A checked value (meaningless when there are issues) and the issues found. */
 interface Checked {
   value: JsonValue;
@@ -83,17 +84,21 @@ const int = (options: Options<"int"> = {}): Field => Object.freeze({ kind: "int"
 const float = (options: Options<"float"> = {}): Field => Object.freeze({ kind: "float", ...options });
 const bool = (): Field => Object.freeze({ kind: "bool" });
 const literal = (...values: string[]): Field => Object.freeze({ kind: "literal", values: Object.freeze(values) });
-const list = (item: Field, maxLength?: number): Field => Object.freeze({ kind: "list", item, maxLength });
-const map = (key: Field, value: Field, maxLength?: number): Field =>
-  Object.freeze({ kind: "map", key, value, maxLength });
-const object = (fields: Record<string, Field>, required: readonly string[] = []): Field => {
-  const schema: ObjectSchema = Object.freeze({ fields: table(fields), required: Object.freeze([...required]) });
-  return Object.freeze({ kind: "object", schema });
-};
+const list = (item: Field, options: Omit<Options<"list">, "item"> = {}): Field =>
+  Object.freeze({ kind: "list", item, ...options });
+const map = (key: Field, value: Field, options: Omit<Options<"map">, "key" | "value"> = {}): Field =>
+  Object.freeze({ kind: "map", key, value, ...options });
+const schema = (fields: Record<string, Field>, required: readonly string[] = []): ObjectSchema =>
+  Object.freeze({ fields: table(fields), required: Object.freeze([...required]) });
+const object = (of: ObjectSchema): Field => Object.freeze({ kind: "object", schema: of });
 const union = (...members: Field[]): Field => Object.freeze({ kind: "union", members: Object.freeze(members) });
 const tagged = (variants: Record<string, ObjectSchema>): Field =>
   Object.freeze({ kind: "tagged", variants: table(variants) });
 const json = (): Field => Object.freeze({ kind: "json" });
+
+// A JSON array or record is checked as a list or map of JSON values.
+const JSON_LIST: Extract<Field, { kind: "list" }> = Object.freeze({ kind: "list", item: json() });
+const JSON_MAP: Extract<Field, { kind: "map" }> = Object.freeze({ kind: "map", key: str(), value: json() });
 
 const ok = (value: JsonValue): Checked => ({ value, issues: [] });
 const fail = (loc: Loc, type: string, msg: string): Checked => ({ value: null, issues: [{ loc, type, msg }] });
@@ -160,14 +165,14 @@ function checkStr(field: Extract<Field, { kind: "str" }>, value: unknown, loc: L
 /** Check a number against its field's bounds; only the first failure counts. */
 function checkBounds(bounds: Options<"int"> | Options<"float">, value: bigint | number, loc: Loc): Checked {
   const { ge, gt, le, lt } = bounds;
-  if (ge !== undefined && !(value >= ge)) {
+  if (ge !== undefined && value < ge) {
     return fail(loc, "greater_than_equal", `Input should be greater than or equal to ${String(ge)}`);
   }
-  if (gt !== undefined && !(value > gt)) return fail(loc, "greater_than", `Input should be greater than ${String(gt)}`);
-  if (le !== undefined && !(value <= le)) {
+  if (gt !== undefined && value <= gt) return fail(loc, "greater_than", `Input should be greater than ${String(gt)}`);
+  if (le !== undefined && value > le) {
     return fail(loc, "less_than_equal", `Input should be less than or equal to ${String(le)}`);
   }
-  if (lt !== undefined && !(value < lt)) return fail(loc, "less_than", `Input should be less than ${String(lt)}`);
+  if (lt !== undefined && value >= lt) return fail(loc, "less_than", `Input should be less than ${String(lt)}`);
   return ok(value);
 }
 
@@ -177,6 +182,7 @@ function choices(values: readonly string[]): string {
   return quoted.length > 1 ? `${quoted.slice(0, -1).join(", ")} or ${quoted.at(-1)!}` : quoted.join("");
 }
 
+/** Check a list's length, then each item at its index. */
 function checkList(field: Extract<Field, { kind: "list" }>, value: unknown, loc: Loc): Checked {
   if (!isList(value)) return fail(loc, "list_type", "Input should be a valid list");
   // pydantic refuses an over-long list before looking at its items.
@@ -194,6 +200,7 @@ function checkList(field: Extract<Field, { kind: "list" }>, value: unknown, loc:
   return { value: items, issues };
 }
 
+/** Check each entry's key and value, then the mapping's length. */
 function checkMap(field: Extract<Field, { kind: "map" }>, value: unknown, loc: Loc): Checked {
   if (!isRecord(value)) return fail(loc, "dict_type", "Input should be a valid dictionary");
   const entries: [string, JsonValue][] = [];
@@ -239,6 +246,7 @@ function checkFields(schema: ObjectSchema, value: unknown, loc: Loc): Checked {
   return { value: Object.fromEntries(entries), issues };
 }
 
+/** Return the first member that takes `value`, else every member's issues under its label. */
 function checkUnion(members: readonly Field[], value: unknown, loc: Loc): Checked {
   const issues: Issue[] = [];
   for (const member of members) {
@@ -261,6 +269,7 @@ function label(field: Field): string {
   }
 }
 
+/** Check a record against the variant its `type` names, under that tag. */
 function checkTagged(variants: Readonly<Record<string, ObjectSchema>>, value: unknown, loc: Loc): Checked {
   const tag = isRecord(value) && Object.hasOwn(value, "type") ? value["type"] : undefined;
   if (typeof tag !== "string" || !Object.hasOwn(variants, tag)) {
@@ -279,26 +288,7 @@ function checkJson(value: unknown, loc: Loc): Checked {
   if (typeof value === "number") {
     return Number.isFinite(value) ? ok(value) : fail(loc, "finite_number", "Input should be a finite number");
   }
-  if (isList(value)) {
-    const items: JsonValue[] = [];
-    const issues: Issue[] = [];
-    for (let i = 0; i < value.length; i++) {
-      const checked = checkJson(value[i], [...loc, i]);
-      items.push(checked.value);
-      issues.push(...checked.issues);
-    }
-    return { value: items, issues };
-  }
-  if (isRecord(value)) {
-    const entries: [string, JsonValue][] = [];
-    const issues: Issue[] = [];
-    for (const [key, item] of Object.entries(value)) {
-      if (item === undefined) continue;
-      const checked = checkJson(item, [...loc, key]);
-      entries.push([key, checked.value]);
-      issues.push(...checked.issues);
-    }
-    return { value: Object.fromEntries(entries), issues };
-  }
+  if (isList(value)) return checkList(JSON_LIST, value, loc);
+  if (isRecord(value)) return checkMap(JSON_MAP, value, loc);
   return fail(loc, "json_type", "Input should be a JSON value");
 }

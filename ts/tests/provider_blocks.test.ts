@@ -3,8 +3,8 @@
  * (`test_responses_fields_and_reserved_keys_are_keywords_of_responses_create`,
  * `test_responses_nested_fields_are_keys_of_the_sdk_params`,
  * `test_ollama_block_fields_are_keywords_of_client_chat`; TS has no SDKs) and the
- * `merge_request_body` tests (`llm/body.ts`, T5-2, `tests/llm/body.test.ts`; TS has no
- * `top_level`/`extra_body`).
+ * `merge_request_body` tests, which live with `mergeRequestBody` in `tests/llm/body.test.ts`
+ * (TS has no `top_level`/`extra_body`).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -172,9 +172,11 @@ describe("value pass", () => {
 
   test("map entries holding undefined are skipped and not counted", () => {
     const s = schema({ v: { kind: "map", key: STR, value: STR, maxLength: 2 } });
-    expect(value(s, { v: { a: "x", b: undefined, c: "y" } })).toEqual({ v: { a: "x", c: "y" } });
     const result = value(s, { v: { a: "x", b: undefined, c: "y" } }) as { v: object };
-    expect(Object.keys(result.v)).toEqual(["a", "c"]);
+    expect(Object.entries(result.v)).toEqual([
+      ["a", "x"],
+      ["c", "y"],
+    ]);
   });
 
   test("a __proto__ key in a map is an own key of the result", () => {
@@ -297,9 +299,9 @@ describe("value pass", () => {
     });
     const input = { nested: { a: "x", b: null }, list: ["y"], map: { k: { deep: [1n] } } };
     const before = structuredClone(input);
-    const result = value(s, input) as typeof input;
+    const result = value(s, input) as { nested: object; list: string[]; map: { k: { deep: bigint[] } } };
     expect(input).toEqual(before);
-    expect(result).toEqual({ nested: { a: "x" }, list: ["y"], map: { k: { deep: [1n] } } } as unknown as typeof input);
+    expect(result).toStrictEqual({ nested: { a: "x" }, list: ["y"], map: { k: { deep: [1n] } } });
     expect(result.nested).not.toBe(input.nested);
     expect(result.list).not.toBe(input.list);
     expect(result.map).not.toBe(input.map);
@@ -310,11 +312,12 @@ describe("value pass", () => {
 
 describe("ValidationError", () => {
   test("the message has a count line, dotted locations and two-space messages", () => {
-    const error = new ValidationError("SomeBlock", [
+    const given: Issue[] = [
       { loc: ["m", "abc", "[key]"], type: "string_too_long", msg: "String should have at most 2 characters" },
       { loc: ["stop", "list[str]", 1], type: "string_type", msg: "Input should be a valid string" },
       { loc: [], type: "value_error", msg: "Value error, bad", error: "bad" },
-    ]);
+    ];
+    const error = new ValidationError("SomeBlock", given);
     expect(error.message).toBe(
       "3 validation errors for SomeBlock\n" +
         "m.abc.[key]\n  String should have at most 2 characters\n" +
@@ -325,6 +328,13 @@ describe("ValidationError", () => {
     expect(error).toBeInstanceOf(RangeError);
     expect(error.title).toBe("SomeBlock");
     expect(Object.isFrozen(error.issues)).toBe(true);
+    expect(error.issues).toEqual(given);
+    error.issues.forEach((issue, i) => {
+      expect(issue).not.toBe(given[i]);
+      expect(issue.loc).not.toBe(given[i]!.loc);
+      expect(Object.isFrozen(issue)).toBe(true);
+      expect(Object.isFrozen(issue.loc)).toBe(true);
+    });
     expect(error.issues[2]!.error).toBe("bad");
     const one = new ValidationError("B", [{ loc: ["a"], type: "missing", msg: "Field required" }]);
     expect(one.message).toBe("1 validation error for B\na\n  Field required");

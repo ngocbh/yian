@@ -359,11 +359,13 @@ fresh yian value or throws `TypeCheckError` with `path` and the message
 | plain array (a hole is `undefined`), plain record (prototype `Object.prototype` or `null`) | a fresh array or record, its items taken in the same way |
 | `undefined`, at any depth | error: `undefined is not a yian value; use null` |
 | a container inside itself | error: `value contains itself` |
+| an accessor property (getter or setter) on a record or array index | error: `accessor property is not a yian value` |
+| a `Proxy` | error: `Proxy is not a yian value` |
 | anything else | error: `<Name> is not a yian value` (`Date is not a yian value`) |
 
 Like `JSON.stringify`, intake skips symbol keys, non-enumerable keys and extra array
-properties. A `TypedValue` handed in is refused. An error a getter or proxy throws propagates
-unchanged. `fromHost` refuses a top-level `undefined` too: the tool caller reads it as `null`
+properties. A `TypedValue` handed in is refused. Intake reads only own data properties, so no
+host code runs while it reads a value. `fromHost` refuses a top-level `undefined` too: the tool caller reads it as `null`
 first, and a CODE body returning it fails. Depth is checked separately, by `rejectDeepNesting`.
 
 ## `Type` — structure beyond the bare tag

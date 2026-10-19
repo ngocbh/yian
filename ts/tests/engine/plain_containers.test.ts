@@ -6,13 +6,13 @@
  * Python carries a comment naming its rule.
  *
  * Ported: plain values and leaves (a `FileRef` kept; a class instance refused), shared values
- * copied once near the root and deep, the deep chain copied without recursion, an error from
- * the host's own code propagating (a getter's and a proxy trap's), and a `TypedValue` (Python
- * copies its payload; refused here). TS-only: the host-intake table (scalars, numbers,
- * `undefined`, lone surrogates, non-plain objects, an array whose prototype was swapped), a
- * record inside itself refused, `__proto__` kept as an own data key, a getter read once, skipped
- * symbol and non-enumerable keys and extra array properties, and a depth-30 diamond copied in
- * linear time.
+ * copied once near the root and deep, the deep chain copied without recursion, and a
+ * `TypedValue` (Python copies its payload; refused here). TS-only: the host-intake table
+ * (scalars, numbers, `undefined`, lone surrogates, non-plain objects, an array whose prototype
+ * was swapped), a record inside itself refused, `__proto__` kept as an own data key, an accessor
+ * property (a getter or a setter) and a `Proxy` refused without running host code, skipped
+ * symbol and non-enumerable keys (accessors included) and extra array properties, and a
+ * depth-30 diamond copied in linear time.
  *
  * Also here: the cycle row of
  * `test_untyped_output_json.py::test_reject_non_json_locates_the_bad_part`.
@@ -26,7 +26,9 @@
  * (`HiddenList`, `HiddenDict`, `YieldsOneNan`, the namedtuple, the tuple rows), which are
  * refused here as non-plain objects (one row checks an `Array` subclass); the cycle rows,
  * since intake refuses a container inside itself (an array row and a record row check it);
- * and the unhashable-key row (a record key is always a string).
+ * the unhashable-key row (a record key is always a string); and
+ * `test_iteration_error_propagates`, since intake runs no host code (it refuses getters and
+ * Proxies instead of reading them).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -180,16 +182,57 @@ describe("fromHost", () => {
     expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
   });
 
-  test("a getter is read once", () => {
+  // Design 8.1: intake reads only own data properties, so no host code runs during the check.
+  test("a getter is refused without being run", () => {
     let reads = 0;
     const value = {
       get a() {
         reads += 1;
-        return reads;
+        return 1;
       },
     };
-    expect(fromHost(value, "output")).toStrictEqual({ a: 1n });
-    expect(reads).toBe(1);
+    const error = intakeError(value);
+    expect(error.message).toBe("output at a: accessor property is not a yian value");
+    expect(error.path).toEqual(["a"]);
+    expect(reads).toBe(0);
+  });
+
+  test.each<[string, unknown, string, (string | number)[]]>([
+    [
+      "a setter-only property",
+      Object.defineProperty({}, "a", { set() {}, enumerable: true }),
+      "output at a: accessor property is not a yian value",
+      ["a"],
+    ],
+    [
+      "an accessor on an array index",
+      Object.defineProperty([0], 0, { get: () => 1 }),
+      "output at [0]: accessor property is not a yian value",
+      [0],
+    ],
+    [
+      "an accessor in a record inside an array",
+      [Object.defineProperty({}, "x", { get: () => 1, enumerable: true })],
+      "output at [0].x: accessor property is not a yian value",
+      [0, "x"],
+    ],
+  ])("refuses %s", (_id, value, message, path) => {
+    const error = intakeError(value);
+    expect(error.message).toBe(message);
+    expect(error.path).toEqual(path);
+  });
+
+  test("a getter that throws is refused, not run", () => {
+    const value = {
+      s: {
+        get x(): unknown {
+          throw new RangeError("boom");
+        },
+      },
+    };
+    const error = intakeError(value);
+    expect(error.message).toBe("output at s.x: accessor property is not a yian value");
+    expect(error.path).toEqual(["s", "x"]);
   });
 
   test("symbol and non-enumerable keys and extra array properties are skipped", () => {
@@ -202,18 +245,22 @@ describe("fromHost", () => {
     expect(fromHost(list, "output")).toStrictEqual([1n]);
   });
 
-  test("a shared value is copied once", () => {
-    let reads = 0;
-    const shared = {
-      get x() {
-        reads += 1;
-        return 1;
-      },
+  test("a symbol-keyed or non-enumerable accessor is skipped", () => {
+    // Those keys aren't part of the value, so their accessors are never read.
+    const boom = (): never => {
+      throw new RangeError("boom");
     };
+    const record = { a: 1 };
+    Object.defineProperty(record, Symbol("s"), { get: boom, enumerable: true });
+    Object.defineProperty(record, "hidden", { get: boom, enumerable: false });
+    expect(fromHost(record, "output")).toStrictEqual({ a: 1n });
+  });
+
+  test("a shared value is copied once", () => {
+    const shared = { x: 1 };
     const out = fromHost([shared, shared], "output") as Value[];
     expect(out[0]).toBe(out[1]);
     expect(out[0]).toStrictEqual({ x: 1n });
-    expect(reads).toBe(1);
   });
 
   test("a value shared near the root and deep is copied once", () => {
@@ -252,43 +299,40 @@ describe("fromHost", () => {
     expect(depth).toBe(100_000);
   });
 
-  test("an error a getter throws propagates unchanged", () => {
-    const boom = new RangeError("boom");
-    const value = {
-      s: {
-        get x(): unknown {
-          throw boom;
-        },
-      },
+  test("a Proxy is refused without running a trap", () => {
+    const boom = (): never => {
+      throw new RangeError("boom");
     };
-    let thrown: unknown;
-    try {
-      fromHost(value, "output");
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBe(boom);
+    const traps = {
+      get: boom,
+      ownKeys: boom,
+      getPrototypeOf: boom,
+      getOwnPropertyDescriptor: boom,
+      has: boom,
+    };
+    const error = intakeError({ s: new Proxy({}, traps) });
+    expect(error.message).toBe("output at s: Proxy is not a yian value");
+    expect(error.path).toEqual(["s"]);
   });
 
-  test("an error a proxy trap throws propagates unchanged", () => {
-    const boom = new RangeError("boom");
-    const value = {
-      s: new Proxy(
-        {},
-        {
-          ownKeys() {
-            throw boom;
-          },
-        },
-      ),
-    };
-    let thrown: unknown;
-    try {
-      fromHost(value, "output");
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBe(boom);
+  test.each<[string, unknown, string, (string | number)[]]>([
+    [
+      "a Proxy over an array",
+      [new Proxy([1], {})],
+      "output at [0]: Proxy is not a yian value",
+      [0],
+    ],
+    ["a top-level Proxy", new Proxy({ a: 1 }, {}), "output: Proxy is not a yian value", []],
+    [
+      "a Proxy over a function",
+      { f: new Proxy(() => 1, {}) },
+      "output at f: Proxy is not a yian value",
+      ["f"],
+    ],
+  ])("refuses %s", (_id, value, message, path) => {
+    const error = intakeError(value);
+    expect(error.message).toBe(message);
+    expect(error.path).toEqual(path);
   });
 });
 

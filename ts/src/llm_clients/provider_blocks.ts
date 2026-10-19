@@ -405,19 +405,18 @@ function nestedSchema(field: Field, value: Readonly<Record<string, unknown>>): O
   return objects.length === 1 ? objects[0]! : null;
 }
 
-/** What `block` builds a block from; the fields not in `required` are optional. */
+/** What `block` builds a block from. */
 interface BlockOptions {
   readonly title: string;
   readonly name: string;
   readonly api: string;
   readonly reserved: Readonly<Record<string, string>>;
   readonly fields: Readonly<Record<string, Field>>;
-  readonly required?: readonly string[];
 }
 
 /** Return a frozen block schema. */
-function block({ title, name, api, reserved, fields, required = [] }: BlockOptions): BlockSchema {
-  return Object.freeze({ ...schema(fields, required), title, name, api, reserved: table(reserved) });
+function block({ title, name, api, reserved, fields }: BlockOptions): BlockSchema {
+  return Object.freeze({ ...schema(fields), title, name, api, reserved: table(reserved) });
 }
 
 // --------------------------------------------------------------------------------------- //
@@ -529,7 +528,7 @@ export const OpenAISubscriptionBlock: BlockSchema = block({
 // Chat Completions APIs
 // --------------------------------------------------------------------------------------- //
 
-// Chat Completions body fields every vendor below reserves, with what yian builds there.
+/** The Chat Completions body fields every vendor below reserves, with what yian builds there. */
 const CHAT_RESERVED: Readonly<Record<string, string>> = Object.freeze({
   model: "llm_config.model",
   messages: "messages",

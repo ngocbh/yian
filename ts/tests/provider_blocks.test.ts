@@ -1281,9 +1281,9 @@ describe("Chat Completions blocks", () => {
   );
 
   test.each([
-    [OpenRouterChatBlock, "provider"],
-    [VLLMChatBlock, "chat_template_kwargs"],
-  ] as const)("%#: a non-finite number in a pass-through mapping is refused where it is", (block, key) => {
+    [OpenRouterChatBlock.title, OpenRouterChatBlock, "provider"],
+    [VLLMChatBlock.title, VLLMChatBlock, "chat_template_kwargs"],
+  ] as const)("%s: a non-finite number in a pass-through mapping is refused where it is", (_title, block, key) => {
     for (const bad of [NaN, Infinity, -Infinity]) {
       expect(checkBlock(block, { [key]: { a: bad } })).toEqual({
         value: null,
@@ -1362,7 +1362,7 @@ describe("Ollama chat block", () => {
   });
 });
 
-const ALL_BLOCKS: [string, BlockSchema][] = [...new Set([...Object.values(PROVIDER_BLOCKS), OpenAISubscriptionBlock])]
+const ALL_BLOCKS: [string, BlockSchema][] = [...Object.values(PROVIDER_BLOCKS), OpenAISubscriptionBlock]
   .sort((a, b) => compareCodeUnits(a.title, b.title))
   .map((block) => [block.title, block]);
 
@@ -1424,8 +1424,8 @@ describe("logit_bias", () => {
       expect(validateBlock(block, { logit_bias: { "50256": -100n, "1734": 5n } })).toEqual({
         logit_bias: { "50256": -100n, "1734": 5n },
       });
-      // A YAML int or bool key arrives here as text, so `-1` and `true` fail the pattern
-      // where Python reports a type error for the non-string key.
+      // A YAML int, float or bool key arrives as text in TS and fails the digit pattern,
+      // where Python reports a type error.
       for (const badKey of ["abc", "-1", "true", "1.5"]) {
         expect(checkBlock(block, { logit_bias: { [badKey]: 1n } }).issues).toEqual([
           {

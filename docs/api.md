@@ -578,9 +578,11 @@ a plain function is not a tool, and `registerTool(id, tool, { descriptionOverrid
 takes a `FunctionTool`. `execute(args, ctx)` gets the arguments first and the context
 second, and may be sync or async. `ToolSet`'s `invoke`, `invokeTrusted` and `validate`,
 and the functions `invokeTool` and `invokeToolTrusted`, return Promises.
-`ctx`'s fields are camelCase (`callId`, `toolName`, `runId`), `context` is `undefined`
-when none is given, and `signal` is an `AbortSignal` aborted when the call must end
-early (the run stops, or a sibling call fails the node); `forRun(runId, { signal })`
+`validate(toolId, args)` checks a call and returns a `CheckedCall`, which `invoke(call)`
+runs without checking again and `isConcurrencySafe(call)` reads; `invoke(toolId, args)`
+validates first. `ctx`'s fields are camelCase (`callId`, `toolName`, `runId`), `context`
+is `undefined` when none is given, and `signal` is an `AbortSignal` aborted when the call
+must end early (the run stops, or a sibling call fails the node); `forRun(runId, { signal })`
 binds it. Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not
 `instanceof`, so ones built against another copy of yian (an npm install beside a
 workspace one) are accepted and classified.
@@ -590,9 +592,42 @@ Arguments enter through host value intake, so a non-yian value (`undefined`, `Na
 and reach the tool as fresh host values: an int within ±(2^53−1) arrives as a `number`, a
 larger one as a `bigint`, and an infinite float as a real `Infinity`, which a tool may also
 return. `isConcurrencySafe(args)` is opt-in, so a tool without it is unsafe. It receives
-the host form of the arguments, and a call counts as safe only when it returns exactly
+what `execute` receives, and a call counts as safe only when it returns exactly
 `true`; a throw or any other result counts as unsafe. Once the AGENT loop is ported,
 consecutive safe calls in one turn may run together.
+
+Changed (TS yian): in place of `function_tool`,
+`tool({ name, description, parameters, output, execute, isConcurrencySafe })` builds a
+`FunctionTool`. `parameters` and `output` each take a Standard Schema v1 validator with the
+Standard JSON Schema interface (zod 4, ArkType; valibot through `toStandardJsonSchema`), a
+validator with `parametersJsonSchema` (`outputJsonSchema`) beside it, or a raw JSON Schema.
+yian imports no validator library; it reads only those interfaces.
+
+```ts
+const placeOrder = tool({
+  name: "place_order",
+  description: "Place a market order.",
+  parameters: z.object({ symbol: z.string(), qty: z.number().int().default(1) }),
+  execute: async ({ symbol, qty }, ctx) => ctx.context.submit(symbol, qty, { clientOrderId: ctx.callId }),
+});
+```
+
+`validate` checks the arguments against the JSON Schema first, then runs the validator once;
+its output (here with `qty` filled in) is what `execute` gets on every attempt and what
+`isConcurrencySafe` gets, the same object each time, so don't mutate it if you rely on
+retries. The validator's issues raise `ToolCheckError`
+(`tool 'place_order' arguments failed its validator: <path>: <message>; ...`).
+
+For a tool that declares an output, `invoke` checks the result: host value intake, yian's
+check against `outputJsonSchema`, which looks inside an object only when its schema sets
+`additionalProperties: false`, then the output validator, which checks the rest, then intake
+again. It returns the checked value in host form, and a failure raises `ToolCheckError`
+(`tool 'x' result at <path>: ...`, `tool 'x' result failed its output validator: ...`). A tool
+without an output returns its raw result. `execute`'s return type is the output validator's
+input form, so declare a transforming output as a raw JSON Schema of what is recorded, or
+leave `output` out. An `output` with no JSON Schema (none from the validator and no
+`outputJsonSchema`) makes `tool()` throw `TypeError`; Python left such a return type
+unchecked.
 
 ### TOOL retries
 
@@ -615,7 +650,10 @@ Every exception from the tool is retried, except:
 - a host stop, such as Ctrl-C or a sibling node's failure, which ends the node.
 
 Changed (TS yian): the check on the returned value refuses NaN but not `Infinity`:
-a host tool may return `Infinity`, which is a float value.
+a host tool may return `Infinity`, which is a float value. A `tool()` validator's issues
+and the checks on a declared result (see [Tool context](#tool-context)) raise
+`ToolCheckError`, which is never retried; the result checks run inside the call, not after
+the node returns.
 
 A `ReportedToolError` is retried like any other failure, unless it is also a
 `PermanentToolError`.
@@ -1018,8 +1056,9 @@ raw JSON Schema `args_schema` (a dict) is checked, but a TOOL node can't invoke 
 yet.
 
 Changed (TS yian): inputs are read from a `FunctionTool`'s `parametersJsonSchema`, and
-no tool declares a return type yet. A schema number reads as an int when it is a
-`bigint` or a safe integer (`1.0` and `1` are one JS number) and as a float otherwise.
+its return type from its `outputJsonSchema` (from `tool({ output })`), translated closed:
+an object with `properties` is a record unless it allows extra keys. A schema number
+reads as an int when it is a `bigint` or a safe integer (`1.0` and `1` are one JS number) and as a float otherwise.
 The model sees the schema, so one that isn't JSON (holding `Infinity` or a `Date`) or
 nests deeper than `YIAN_MAX_VALUE_NESTING` throws `TypeError` when the tool is built;
 Python left a too-deep input unchecked. An integral float within ±(2^53−1) passes for

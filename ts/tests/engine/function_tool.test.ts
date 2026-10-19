@@ -6,10 +6,17 @@
  * `tool()` builds a tool from a function),
  * `test_run_entry_points_and_tool_set_annotate_function_tool_entries` (needs the run entry
  * points), `test_function_tool_without_a_signature_cannot_be_called_directly`, the async-refusal
- * rows (TS accepts and awaits an async `execute`), and the LangChain binding rows.
+ * rows (TS accepts and awaits an async `execute`), and the LangChain binding rows. The exports
+ * row, `test_tool_names_are_exported_from_yian_and_yian_tools`, is in `tool_errors.test.ts`. With
+ * `YIAN_TEST_NODE` set to a Node binary, the built tools code on Node, beside a second copy of its
+ * leaves.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool, isFunctionTool } from "../../src/tools/function_tools.ts";
@@ -541,3 +548,79 @@ describe("FunctionTool invocation", () => {
     }
   });
 });
+
+/** The `ts/` directory. */
+const ROOT = resolve(import.meta.dir, "../..");
+const BUILT = join(ROOT, "dist/src/tools/index.js");
+
+/**
+ * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
+ * value that can't run, a Node older than the `engines` floor, or a missing build
+ * fails the whole file, so a typo can't pass as a run with the Node case skipped.
+ * A copy of `tests/engine/platform.test.ts`'s: importing a test file would run its tests.
+ */
+const NODE = ((): string | undefined => {
+  const node = process.env.YIAN_TEST_NODE;
+  if (!node) return undefined;
+  let version: string;
+  try {
+    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
+  } catch (error) {
+    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
+  }
+  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18)) {
+    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
+  }
+  if (!existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
+  return node;
+})();
+
+test.skipIf(!NODE)(
+  "the built tools code runs on Node beside a second copy of its leaves",
+  () => {
+    const url = (file: string) => JSON.stringify(pathToFileURL(join(ROOT, file)).href);
+    // Node keys modules by full URL, so a query loads a second instance of that module. Copying
+    // `index.js` would re-run only `index.js` and share its leaves, so the leaves are copied.
+    const script = `
+      import assert from "node:assert/strict";
+
+      const tools = await import(${url("dist/src/tools/index.js")});
+      const copyErrors = await import(${url("dist/src/tools/errors.js")} + "?copy=2");
+      const copyTools = await import(${url("dist/src/tools/function_tools.js")} + "?copy=2");
+
+      const schema = { type: "object", properties: { n: { type: "integer" } }, required: ["n"] };
+      const count = new tools.FunctionTool({
+        name: "count",
+        description: "Count.",
+        parametersJsonSchema: schema,
+        execute: (args) => args.n,
+      });
+      const set = new tools.ToolSet({ count });
+      assert.equal(await set.invoke("count", { n: 3 }), 3);
+      assert.equal(await set.invoke("count", { n: 3n }), 3);
+      assert.equal(await set.invoke("count", { n: 2n ** 70n }), 2n ** 70n);
+      await assert.rejects(set.invoke("count", { n: 2.5 }), { name: "TypeCheckError" });
+
+      assert.notEqual(copyErrors.PermanentToolError, tools.PermanentToolError);
+      assert.notEqual(copyTools.FunctionTool, tools.FunctionTool);
+      const permanent = new copyErrors.PermanentToolError("no");
+      assert.ok(!(permanent instanceof tools.PermanentToolError));
+      assert.ok(tools.isPermanentToolError(permanent));
+      const reported = new copyErrors.ReportedToolError("x", { permanent: true });
+      assert.deepEqual(tools.toolErrorKinds(reported), ["reported", "permanent"]);
+
+      const echo = new copyTools.FunctionTool({
+        name: "echo",
+        description: "Echo.",
+        parametersJsonSchema: { type: "object", properties: { text: { type: "string" } } },
+        execute: (args, ctx) => args.text + " from " + ctx.toolName,
+      });
+      assert.ok(!(echo instanceof tools.FunctionTool));
+      assert.equal(await new tools.ToolSet({ echo }).invoke("echo", { text: "hi" }), "hi from echo");
+      console.log("ok");
+    `;
+    expect(execFileSync(NODE!, ["--input-type=module", "-e", script], { encoding: "utf8" })).toBe("ok\n");
+  },
+  30_000,
+);

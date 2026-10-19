@@ -664,8 +664,7 @@ test.each<[string, (evidence: Record<string, any>) => void, string]>([
     (wire) => {
       wire.interactions[0].kind = "provider_trace";
     },
-    `${EVIDENCE_LABEL} interactions item kind must be one of ` +
-      `["model_text","model_value","tool_call","tool_result"], got 'provider_trace'`,
+    "unknown visible interaction kind: 'provider_trace'",
   ],
   [
     "an extra interaction field",

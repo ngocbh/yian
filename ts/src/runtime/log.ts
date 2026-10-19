@@ -1166,6 +1166,7 @@ const OCCURRENCE_KINDS: readonly string[] = Object.values(MemoryOccurrenceKind);
 function occurrenceSegmentFromPayload(value: unknown, label: string): MemoryOccurrenceSegment {
   const wire = wireObject(value, label, ["kind", "static_path", "index"]);
   const kind = wireText(wire["kind"], `${label} kind`);
+  // The segment refuses an unknown kind as a TypeError; on the wire it is a RangeError.
   if (!OCCURRENCE_KINDS.includes(kind)) {
     throw new RangeError(`${label} kind must be one of ${writeAsText([...OCCURRENCE_KINDS])}, got ${reprText(kind)}`);
   }
@@ -1217,9 +1218,6 @@ function memorySectionFromPayload(value: unknown, label: string): MemorySection 
   return new MemorySection(wireName(wire["memory"], `${label} memory`), wireText(wire["text"], `${label} text`));
 }
 
-/** The closed visible-interaction kinds. */
-const INTERACTION_KINDS = ["model_text", "model_value", "tool_call", "tool_result"];
-
 /** Encode one member of the closed visible-interaction vocabulary. */
 function interactionPayload(interaction: VisibleInteraction): JsonObject {
   // Memory's JSON types are the read-only form of the same frozen values.
@@ -1242,6 +1240,7 @@ function interactionPayload(interaction: VisibleInteraction): JsonObject {
  */
 function interactionFromPayload(value: unknown, label: string): VisibleInteraction {
   const wire = wireObject(value, label);
+  // The other fields depend on the kind, so a missing kind is named before anything else.
   if (!Object.hasOwn(wire, "kind")) requireFields(wire, ["kind"], label);
   const kind = wireText(wire["kind"], `${label} kind`);
   switch (kind) {
@@ -1264,7 +1263,7 @@ function interactionFromPayload(value: unknown, label: string): VisibleInteracti
         wireText(wire["text"], `${label} text`),
       );
     default:
-      throw new RangeError(`${label} kind must be one of ${writeAsText(INTERACTION_KINDS)}, got ${reprText(kind)}`);
+      throw new RangeError(`unknown visible interaction kind: ${reprText(kind)}`);
   }
 }
 
@@ -1405,9 +1404,11 @@ const ROUTE_WIRE_FIELDS = [
 /**
  * Decode a route payload, then check its variant.
  *
- * Every field's JSON type is checked first, since `ValueRoute`'s constructor would reshape a
- * string or a span of another length; then each child and the snapshot are decoded and checked
- * by their own call, so the new node is checked without its subtree and each node once.
+ * Every field's JSON type is checked first: `ValueRoute`'s constructor would reshape a string or
+ * a span of another length, and would turn a missing `expression`, `value_json` or `result_type`
+ * into its default; checking them here also reports a node's own shape errors before its
+ * children's. Then each child and the snapshot are decoded and checked by their own call, so the
+ * new node is checked without its subtree and each node once.
  *
  * @throws TypeError when a field has the wrong JSON type, or for `validateRoute`'s type errors.
  * @throws RangeError for missing or extra fields, or when a field or variant breaks the route
@@ -1422,10 +1423,13 @@ export function routeFromPayload(payload: unknown): ValueRoute {
   if (valueJson !== null && typeof valueJson !== "string") {
     throw new TypeError("route value_json must be a string or null");
   }
-  wireArray(children, "route children");
-  if (typeof wire["expression"] !== "string") throw new TypeError("route expression must be a string");
+  const childWires = wireArray(children, "route children");
+  const expression = wire["expression"];
+  if (typeof expression !== "string") throw new TypeError("route expression must be a string");
   const names = wireArray(wire["names"], "route names");
-  if (!names.every((name) => typeof name === "string")) throw new RangeError("route names must be strings");
+  if (!names.every((name): name is string => typeof name === "string")) {
+    throw new RangeError("route names must be strings");
+  }
   const sizes = wireArray(wire["sizes"], "route sizes").map((size) => {
     if (typeof size !== "bigint") throw new RangeError("route sizes must be non-negative integers");
     return Number(size);
@@ -1445,9 +1449,9 @@ export function routeFromPayload(payload: unknown): ValueRoute {
   const route = new ValueRoute(wire["kind"] as RouteKind, {
     source: source === null ? null : sourceFromPayload(source),
     valueJson,
-    children: (children as JsonValue[]).map(routeFromPayload),
-    expression: wire["expression"],
-    names: names as string[],
+    children: childWires.map(routeFromPayload),
+    expression,
+    names,
     sizes,
     spans,
     path,
@@ -1466,6 +1470,8 @@ export function routeFromPayload(payload: unknown): ValueRoute {
  */
 function capturePayload(capture: ForwardCapture): JsonObject {
   const route = routePayload(capture.route);
+  // `evaluatedKeys` is a `Set`, which stays mutable inside a frozen capture, so it is the one
+  // field checked again.
   const keys = [...capture.evaluatedKeys];
   if (!keys.every((key) => capture.route.names.includes(key))) {
     throw new RangeError("evaluated_keys must name captured routes");
@@ -1673,11 +1679,14 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
     case "node_routed": {
       requireFields(payload, ["node_id", "handle", "terminal_failure", "evidence", "forward_capture"], label);
       const failure = payload["terminal_failure"];
-      const nodeId = wireName(payload["node_id"], `${label} node_id`);
-      return new NodeRoutedRecord(nodeId, wireName(payload["handle"], `${label} handle`), {
-        terminalFailure: failure === null ? null : failureFromPayload(failure, `${label} terminal_failure`),
-        ...outcomeFromPayload(payload, label),
-      });
+      return new NodeRoutedRecord(
+        wireName(payload["node_id"], `${label} node_id`),
+        wireName(payload["handle"], `${label} handle`),
+        {
+          terminalFailure: failure === null ? null : failureFromPayload(failure, `${label} terminal_failure`),
+          ...outcomeFromPayload(payload, label),
+        },
+      );
     }
     case "node_expanded":
       requireFields(

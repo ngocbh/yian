@@ -19,7 +19,10 @@
  * `test_codec_preserves_evaluated_route_variants` (9 rows),
  * `test_codec_preserves_opaque_argument_labels` and
  * `test_codec_rejects_misaligned_or_nonstring_opaque_argument_labels`. Each rejected row names its
- * class and message.
+ * class and message (a `JSONDecodeError` its reason).
+ *
+ * TS-only (run log): repeated or unsorted `evaluated_keys` on the wire, and an evaluated key added
+ * to a capture's mutable `Set` after construction, refused by the encoder.
  *
  * TS-only: one row per `ForwardCapture` message with its class; a capture with items, scope and
  * node data keeps frozen copies; `ForwardCapture`'s defaults; an unfinished capture may keep an
@@ -145,16 +148,34 @@ test.each<[string, string, unknown, ErrorClass, string]>([
   expect(build).toThrow(message);
 });
 
-test.each([
-  ["duplicate key", '{"a":1,"a":2}'],
-  ["nested duplicate key", '{"nested":{"a":1,"a":2}}'],
-  ["surrogate string", '"\\ud800"'],
-  ["surrogate value", '{"nested":"\\ud800"}'],
-  ["surrogate key", '{"\\ud800":1}'],
-])("a forward capture rejects noncanonical embedded JSON: %s", (_label, valueJson) => {
-  const route = new ValueRoute("literal", { valueJson });
-  expect(() => new ForwardCapture({ x: null }, ValueRoute.record([["x", route]]))).toThrow(JSONDecodeError);
-});
+/** Embedded `value_json` texts the reader refuses, each with its `JSONDecodeError` reason. */
+const NONCANONICAL_JSON: [string, string, string][] = [
+  ["duplicate key", '{"a":1,"a":2}', 'duplicate JSON object key: "a"'],
+  ["nested duplicate key", '{"nested":{"a":1,"a":2}}', 'duplicate JSON object key: "a"'],
+  ["surrogate string", '"\\ud800"', "string has an unpaired surrogate"],
+  ["surrogate value", '{"nested":"\\ud800"}', "string has an unpaired surrogate"],
+  ["surrogate key", '{"\\ud800":1}', "object key has an unpaired surrogate"],
+];
+
+/** Assert that `fn` throws exactly a `JSONDecodeError` with `reason`. */
+function expectJsonDecodeError(fn: () => unknown, reason: string): void {
+  let caught: unknown;
+  try {
+    fn();
+  } catch (error) {
+    caught = error;
+  }
+  expect((caught as Error)?.constructor).toBe(JSONDecodeError);
+  expect((caught as JSONDecodeError).reason).toBe(reason);
+}
+
+test.each(NONCANONICAL_JSON)(
+  "a forward capture rejects noncanonical embedded JSON: %s",
+  (_label, valueJson, reason) => {
+    const route = new ValueRoute("literal", { valueJson });
+    expectJsonDecodeError(() => new ForwardCapture({ x: null }, ValueRoute.record([["x", route]])), reason);
+  },
+);
 
 test("a forward capture rejects duplicate record names", () => {
   const route = ValueRoute.record([
@@ -523,17 +544,36 @@ test.each<[string, string, unknown, ErrorClass, string]>([
   expectError(() => decodeWire(wire), cls, message);
 });
 
-test.each([
-  ["duplicate key", '{"a":1,"a":2}'],
-  ["nested duplicate key", '{"nested":{"a":1,"a":2}}'],
-  ["surrogate string", '"\\ud800"'],
-  ["surrogate value", '{"nested":"\\ud800"}'],
-  ["surrogate key", '{"\\ud800":1}'],
-])("a capture's record rejects noncanonical embedded JSON: %s", (_label, valueJson) => {
-  const capture = new ForwardCapture({ x: null }, ValueRoute.record([["x", ValueRoute.literal(null)]]));
-  const wire = wireOf(capturedEnvelope(capture));
-  wire.payload.forward_capture.route.children[0].value_json = valueJson;
-  expect(() => decodeWire(wire)).toThrow(JSONDecodeError);
+test.each(NONCANONICAL_JSON)(
+  "a capture's record rejects noncanonical embedded JSON: %s",
+  (_label, valueJson, reason) => {
+    const capture = new ForwardCapture({ x: null }, ValueRoute.record([["x", ValueRoute.literal(null)]]));
+    const wire = wireOf(capturedEnvelope(capture));
+    wire.payload.forward_capture.route.children[0].value_json = valueJson;
+    expectJsonDecodeError(() => decodeWire(wire), reason);
+  },
+);
+
+// TS-only: the evaluated keys on the wire, and a key added to the capture's mutable `Set` after
+// construction, which the encoder checks again.
+test.each<[string, string[]]>([
+  ["repeated", ["x", "x"]],
+  ["unsorted", ["y", "x"]],
+])("a capture's record rejects %s evaluated keys", (_label, keys) => {
+  const route = ValueRoute.record([
+    ["x", ValueRoute.literal(1n)],
+    ["y", ValueRoute.literal(2n)],
+  ]);
+  const wire = wireOf(capturedEnvelope(new ForwardCapture({ x: 1n, y: 2n }, route)));
+  wire.payload.forward_capture.evaluated_keys = keys;
+  expectError(() => decodeWire(wire), RangeError, "evaluated_keys must be sorted and unique");
+});
+
+test("the encoder refuses an evaluated key added after construction", () => {
+  const capture = new ForwardCapture({ x: 1n }, ValueRoute.record([["x", ValueRoute.literal(1n)]]));
+  (capture.evaluatedKeys as Set<string>).add("y");
+  const envelope = capturedEnvelope(capture);
+  expectError(() => encodeRecord(envelope), RangeError, "evaluated_keys must name captured routes");
 });
 
 test.each(["input_names", "variable_names"])("a capture's record requires its explicit inventory %s", (field) => {
@@ -568,6 +608,9 @@ test("a forward capture round trips without a memory scope", () => {
   expect(() => (decodedCapture.nodeData!.saved as unknown[]).push(9n)).toThrow(TypeError);
   expect(capture.boundInputs).toEqual({ value: [1n, null] });
   expect(capture.nodeData).toEqual({ saved: [2n] });
+  expect(() => {
+    (capture as { scope: ExecutionScope | null }).scope = null;
+  }).toThrow(TypeError);
   expect(decoded.schema).toBe(SCHEMA_VERSION);
   const old = wireOf(envelope);
   old.schema = 6n;

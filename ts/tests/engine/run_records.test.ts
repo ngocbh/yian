@@ -1057,7 +1057,7 @@ test("decode rejects an extra nested route terminal failure field", () => {
   );
 });
 
-const NODE_STARTED ='"kind":"node_started","payload":{"node_id":"work"}';
+const NODE_STARTED = '"kind":"node_started","payload":{"node_id":"work"}';
 
 test.each<[string, string, new (...args: never[]) => Error, string]>([
   ["schema 1", `{"schema":1,"run_id":"run","seq":0,${NODE_STARTED}}`, RangeError, "unsupported run-record schema: 1"],

@@ -1,5 +1,6 @@
 /**
- * The conversation carriers, from `tests/engine/test_session_contracts.py`:
+ * The conversation carriers, the memory context carriers and the conversation interfaces, from
+ * `tests/engine/test_session_contracts.py`: `test_memory_protocol_has_no_frames`,
  * `test_invocation_rejects_boolean_start_sequence`, `test_request_detaches_compatibility`,
  * `test_item_payload_is_detached`, `test_stamp_requires_nonnegative_exact_counters`,
  * `test_conversation_json_rejects_noncanonical_values`, `test_conversation_json_rejects_cycles`,
@@ -14,14 +15,20 @@
  * `test_observed_rejects_invalid_terminal_failure`,
  * `test_observed_preserves_detached_payload_and_actual_status`,
  * `test_observed_requires_a_prior_effect`, `test_closed_accepts_only_turn_dispositions`,
+ * `test_conversation_capabilities_are_optional_and_exact`,
  * `test_conversation_identifiers_are_exact_nonempty_unicode`, `test_effect_kind_is_closed`,
  * `test_terminal_effect_requires_observation`, `test_pending_effect_can_have_no_observations`,
  * `test_view_counters_are_exact_nonnegative_integers`, `test_nested_carrier_subclasses_are_rejected`,
  * the rows without forgery of `test_nested_view_carriers_are_revalidated_and_detached`,
- * `test_effect_checkpoints_reject_zero_ordinal_and_list_items` and the field-order half of
+ * `test_effect_checkpoints_reject_zero_ordinal_and_list_items`,
+ * `test_memory_context_request_detaches_every_value_boundary`,
+ * `test_memory_context_request_rejects_invalid_carriers`,
+ * `test_memory_content_validates_explicit_transcript_sources`, the `contracts.ts` half of
+ * `test_memory_context_carriers_are_contracts_only_exports` and the field-order half of
  * `test_conversation_carriers_have_no_owner_key`; plus JavaScript's own checks: a `-0` payload
  * number reads back `0`, counters must be safe integers, every carrier and its arrays are frozen,
- * `sameConversationInvocation`, and ledger identities compared by value.
+ * `sameConversationInvocation`, ledger identities compared by value, a `RecallContext` subclass
+ * refused by `MemoryContextRequest`, and `MemoryContext`'s section checks.
  *
  * Changed: nested carriers are kept by reference, so where Python asserts a detached copy `is not`
  * the carrier passed in, the test checks that it is the same frozen value. The JSON fields are
@@ -39,17 +46,30 @@
  * constructs the stamp directly (Python's `replace` reruns the same checks). Dataclass `==` becomes
  * `toEqual` or `sameConversationInvocation`.
  *
+ * Changed (memory contexts and interfaces): the fake memory is a plain object, as Python's `_Memory`
+ * fake; Python's `isinstance` on a runtime-checkable protocol becomes `isMemory` or a probe of
+ * `openTurn` with `typeof`. Python's `vars(MemorySession)`, `get_args`, `get_type_hints` and
+ * `inspect.signature` rows become typecheck-only checks: `MemorySession`'s member set, the
+ * checkpoint union, `openTurn`'s parameters (the request and an options object holding the stop
+ * `signal`, with no checkpoint), and fake turns typed as `ConversationTurn` with and without the
+ * optional `prepareHistory` and `interrupt`, whose `request` is called without `items`.
+ * `MemoryContextRequest` keeps its frozen recall context and invocation
+ * by reference, so where Python mutates the originals through `object.__setattr__`, the test
+ * checks that assigning to them throws `TypeError` and that the request holds the same values.
+ * `MemoryContent` takes an options object (`{ text, transcript }`); its rows check each class and
+ * message.
+ *
  * Not ported: the `object.__setattr__` rows of
  * `test_nested_view_carriers_are_revalidated_and_detached` and all of
  * `test_nested_corrupted_identity_is_revalidated` (Python forges a frozen dataclass; a TS carrier is
- * frozen by its constructor and a subclass can't skip it, so none holds an unchecked field).
+ * frozen by its constructor and a subclass can't skip it, so none holds an unchecked field); the
+ * `__enter__` and `__exit__` rows of `test_memory_protocol_has_no_frames` (a session has no `with`
+ * form; its caller calls `close()`).
  *
- * Left for later: `test_memory_protocol_has_no_frames` (`:17`) and the memory-context tests
- * (`:1302`–`:1357`), with the recall contracts; `test_conversation_capabilities_are_optional_and_exact`
- * (`:334`), with the conversation turn and transcript source contracts;
- * `test_conversation_contracts_are_exported_without_concrete_backend` (`:361`) and the export half
- * of `test_conversation_carriers_have_no_owner_key` (`:1367`), with the package exports; and the
- * fold and codec tests (`:523` onward), with `conversation.ts`.
+ * Left for later: `test_conversation_contracts_are_exported_without_concrete_backend` (`:361`), the
+ * `memory.__all__` half of `test_memory_context_carriers_are_contracts_only_exports` (`:1357`) and
+ * the export half of `test_conversation_carriers_have_no_owner_key` (`:1367`), with the package
+ * exports; and the fold and codec tests (`:523` onward), with `conversation.ts`.
  */
 
 import { expect, test } from "bun:test";
@@ -58,6 +78,7 @@ import * as contracts from "../../src/memory/contracts.ts";
 import {
   ConversationAdmitted,
   ConversationApplied,
+  type ConversationCheckpoint,
   ConversationClosed,
   ConversationCompletion,
   type ConversationEffectKind,
@@ -69,10 +90,21 @@ import {
   ConversationItem,
   ConversationRequest,
   ConversationStamp,
+  type ConversationTurn,
   type ConversationTurnStatus,
   ConversationView,
+  isMemory,
+  LearnContext,
+  type Memory,
+  MemoryContent,
+  MemoryContext,
+  MemoryContextRequest,
   MemoryOperationFailure,
+  MemorySection,
+  type MemorySession,
+  RecallContext,
   sameConversationInvocation,
+  type TranscriptSource,
 } from "../../src/memory/contracts.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError;
@@ -143,6 +175,66 @@ function view(changes: Partial<ViewFields> = {}): ConversationView {
 class Point {
   x = 1n;
 }
+
+/** Whether two types are mutually assignable; a typecheck-only equality. */
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+
+/** An observable plain-object memory, as Python's `_Memory` fake. */
+interface ObservableMemory extends Memory {
+  readonly recallContexts: (RecallContext | null)[];
+  readonly learnContexts: LearnContext[];
+}
+
+/** Build a memory whose sessions recall `recallText`, learn nothing and record their contexts. */
+function observableMemory(recallText = ""): ObservableMemory {
+  const recallContexts: (RecallContext | null)[] = [];
+  const learnContexts: LearnContext[] = [];
+  return {
+    recallContexts,
+    learnContexts,
+    openRun: () => ({
+      snapshot: { namespace: "test" },
+      close() {},
+      recall: (context = null) => {
+        recallContexts.push(context);
+        return recallText;
+      },
+      learn: (context) => {
+        learnContexts.push(context);
+        return [];
+      },
+      commit() {},
+    }),
+    reset() {},
+  };
+}
+
+/** Build a turn without the optional capabilities whose requests all get ordinal 1. */
+function plainTurn(): ConversationTurn {
+  return { view: view(), request: () => 1, observe() {}, close() {} };
+}
+
+// test_memory_protocol_has_no_frames
+test("the memory protocol has no frames", async () => {
+  const memory = observableMemory("notes");
+  const session = await memory.openRun();
+  expect(isMemory(memory)).toBe(true);
+  // The typecheck fails if `MemorySession` gains or loses a member.
+  const members: Record<keyof MemorySession, true> = {
+    snapshot: true,
+    close: true,
+    recall: true,
+    learn: true,
+    commit: true,
+  };
+  expect(Object.keys(session).sort()).toEqual(Object.keys(members).sort());
+  expect("openFrame" in session).toBe(false);
+  expect(await session.recall()).toBe("notes");
+  expect(await session.learn(new LearnContext("run", "notes", []))).toEqual([]);
+  expect(memory.recallContexts).toEqual([null]);
+  expect(memory.learnContexts.map((context) => context.memory)).toEqual(["notes"]);
+  await session.close();
+});
 
 // test_invocation_rejects_boolean_start_sequence
 test.each<[unknown, ErrorClass, string]>([
@@ -565,6 +657,45 @@ test.each<ConversationTurnStatus>(["completed", "failed", "interrupted"])(
   },
 );
 
+// test_conversation_capabilities_are_optional_and_exact
+test("conversation capabilities are optional and exact", async () => {
+  const session = await observableMemory().openRun();
+  // Probed as `MemoryContent` probes a transcript source.
+  expect(typeof (session as Partial<TranscriptSource>).openTurn).toBe("undefined");
+  const checkpoints: Same<
+    ConversationCheckpoint,
+    ConversationAdmitted | ConversationEffectRequested | ConversationEffectObserved | ConversationClosed
+  > = true;
+  // `openTurn` takes the request and the stop signal, with no checkpoint parameter.
+  const openTurnParameters: Same<
+    Parameters<TranscriptSource["openTurn"]>,
+    [request: ConversationRequest, options: { signal: AbortSignal }]
+  > = true;
+  expect([checkpoints, openTurnParameters]).toEqual([true, true]);
+
+  const plain = plainTurn();
+  // `items` is optional, as Python's `()` default.
+  expect(await plain.request("model", {})).toBe(1);
+  expect(typeof plain.prepareHistory).toBe("undefined");
+  expect(typeof plain.interrupt).toBe("undefined");
+  const capable: ConversationTurn = {
+    ...plain,
+    prepareHistory: async ({ project }) => [null, await project(plain.view, [])],
+    interrupt() {},
+  };
+  expect(typeof capable.prepareHistory).toBe("function");
+  expect(typeof capable.interrupt).toBe("function");
+
+  const source: TranscriptSource = {
+    openTurn: (_request, { signal }) => {
+      signal.throwIfAborted();
+      return capable;
+    },
+  };
+  const request = new ConversationRequest(["root", "agent"], invocation(), {});
+  expect(await source.openTurn(request, { signal: new AbortController().signal })).toBe(capable);
+});
+
 // test_conversation_identifiers_are_exact_nonempty_unicode
 test.each(
   (
@@ -712,6 +843,119 @@ test("effect checkpoints refuse ordinal zero and non-array items", () => {
     TypeError,
     "items must be an array",
   );
+});
+
+// test_memory_context_request_detaches_every_value_boundary
+test("a memory context request snapshots its JSON and keeps its carriers", () => {
+  const inputs = { nested: ["original"] };
+  const compatibility = { provider: "test", format: { version: 1n } };
+  const recall = new RecallContext("system", "prompt", inputs, ["root", "agent"]);
+  const identity = new ConversationInvocation("run", 3);
+  const request = new MemoryContextRequest(recall, identity, compatibility);
+  inputs.nested.push("outside");
+  compatibility.format.version = 2n;
+  expect(() => {
+    (request.recall.inputs as { nested: string[] }).nested.push("returned");
+  }).toThrow(TypeError);
+  expect(() => {
+    (request.compatibility as { format: { version: bigint } }).format.version = 3n;
+  }).toThrow(TypeError);
+  expect(() => {
+    (recall as { prompt: string }).prompt = "mutated";
+  }).toThrow(TypeError);
+  expect(() => {
+    (identity as { runId: string }).runId = "mutated";
+  }).toThrow(TypeError);
+  expect(request.recall.inputs).toEqual({ nested: ["original"] });
+  expect(request.recall.prompt).toBe("prompt");
+  expect(request.compatibility).toEqual({ provider: "test", format: { version: 1n } });
+  expect(request.recall).toBe(recall);
+  expect(request.invocation).toBe(identity);
+  expect(() => {
+    (request as { recall: RecallContext }).recall = recall;
+  }).toThrow(TypeError);
+  expect(new MemoryContextRequest(request.recall, null, {}).invocation).toBeNull();
+});
+
+class SubRecall extends RecallContext {}
+
+// test_memory_context_request_rejects_invalid_carriers
+test.each<[string, string, unknown, ErrorClass, string]>([
+  ["a null recall", "recall", null, TypeError, "recall must be a RecallContext"],
+  ["a plain-object recall", "recall", {}, TypeError, "recall must be a RecallContext"],
+  ["a recall subclass", "recall", new SubRecall("", "", {}, ["a"]), TypeError, "recall must be a RecallContext"],
+  ["a plain-object invocation", "invocation", {}, TypeError, "invocation must be a ConversationInvocation"],
+  ["a string invocation", "invocation", "run", TypeError, "invocation must be a ConversationInvocation"],
+  ["an array compatibility", "compatibility", [], TypeError, "compatibility must be an exact JSON object"],
+  ["NaN", "compatibility", { n: Number.NaN }, RangeError, "compatibility.n JSON number must not be NaN"],
+])("a memory context request refuses %s", (_name, field, value, cls, message) => {
+  const args: Record<string, unknown> = {
+    recall: new RecallContext("", "", {}, ["root", "agent"]),
+    invocation: invocation(),
+    compatibility: {},
+    [field]: value,
+  };
+  const build = () => new MemoryContextRequest(args.recall as never, args.invocation as never, args.compatibility);
+  expectError(build, cls, message);
+});
+
+// test_memory_content_validates_explicit_transcript_sources
+test("memory content validates explicit transcript sources", () => {
+  const source: TranscriptSource = { openTurn: () => plainTurn() };
+  const content = new MemoryContent({ text: "notes", transcript: source });
+  expect(content.text).toBe("notes");
+  expect(content.transcript).toBe(source);
+  expect(new MemoryContent()).toEqual(new MemoryContent({ text: "", transcript: null }));
+  expect([new MemoryContent().text, new MemoryContent().transcript]).toEqual(["", null]);
+  for (const [text, cls, message] of [
+    [null, TypeError, "text must be a string"],
+    [7, TypeError, "text must be a string"],
+    ["\ud800", RangeError, "Unicode surrogate is not valid canonical JSON"],
+  ] as const) {
+    expectError(() => new MemoryContent({ text: text as never }), cls, message);
+  }
+  for (const bad of [new Point(), { openTurn: null }]) {
+    expectError(
+      () => new MemoryContent({ transcript: bad as never }),
+      TypeError,
+      "transcript must supply openTurn or be null",
+    );
+  }
+  expect(() => {
+    (content as { text: string }).text = "changed";
+  }).toThrow(TypeError);
+});
+
+test("a memory context requires exact sections and keeps its transcript", () => {
+  const empty = new MemoryContext();
+  expect([empty.sections, empty.transcript]).toEqual([[], null]);
+  const section = new MemorySection("notes", "outer");
+  const sections = [section];
+  const turn = plainTurn();
+  const context = new MemoryContext({ sections, transcript: turn });
+  sections.push(new MemorySection("chat", "inner"));
+  expect(context.sections).toEqual([section]);
+  expect(context.sections[0]).toBe(section);
+  expect(context.transcript).toBe(turn);
+  expect(Object.isFrozen(context)).toBe(true);
+  expect(Object.isFrozen(context.sections)).toBe(true);
+  expectError(() => new MemoryContext({ sections: new Set() as never }), TypeError, "sections must be an array");
+  expectError(
+    () => new MemoryContext({ sections: [{ memory: "notes", text: "" }] as never }),
+    TypeError,
+    "sections must contain MemorySection values",
+  );
+});
+
+// test_memory_context_carriers_are_contracts_only_exports, its contracts.ts half
+test("the memory context carriers are contracts exports", () => {
+  for (const name of ["MemoryContent", "MemoryContext", "MemoryContextRequest"]) expect(name in contracts).toBe(true);
+  expect("ConversationFrame" in contracts).toBe(false);
+  // `TranscriptSource` is an interface, so the typecheck pins its export.
+  const source: contracts.TranscriptSource | null = null;
+  // @ts-expect-error the stop check is the turn's AbortSignal, not an export
+  const check: contracts.CheckStopped | null = null;
+  expect([source, check]).toEqual([null, null]);
 });
 
 // test_conversation_carriers_have_no_owner_key, its field-order half

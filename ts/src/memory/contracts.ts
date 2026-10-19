@@ -16,9 +16,13 @@
  * `freezeFeedback`), whose JSON follows the yian value number rule; and the value comparisons of
  * the scope, operation failure and learning carriers (`sameMemoryScope`,
  * `sameMemoryOperationFailure`, `sameMemoryMutation`, `sameLearningFailure`,
- * `samePolicyCommitOutcome`, `sameLearningResult`). It imports only `diagnostics` and `defaults`.
- * The recall context, the conversation contracts and the session's recall, learn and commit
- * methods are not ported yet.
+ * `samePolicyCommitOutcome`, `sameLearningResult`). It also holds the conversation carriers (the
+ * invocation, request, item, stamp, effect state, completion, applied entry, view and the four
+ * checkpoints), the recall carriers (`RecallContext`, `MemoryContent`, `MemoryContextRequest`,
+ * `MemoryContext`, `MemoryRecallError`), and the host interfaces: `Memory` and its run
+ * `MemorySession` (`recall`, `learn`, `commit`), `TranscriptSource` and its `ConversationTurn`, and
+ * the engine's `EvaluationTrace` sink. A host interface method may return a value or a promise,
+ * and yian always awaits it. It imports only `diagnostics` and `defaults`.
  */
 
 import { current } from "../defaults.ts";
@@ -999,6 +1003,32 @@ function freezeValueObject(value: unknown, name: string): JsonObject {
   return freezeJsonObject(value, name, { limitNesting: false, valueNumbers: true });
 }
 
+/** Visible AGENT context from which a memory may derive a query. Frozen. */
+export class RecallContext {
+  readonly baseSystemPrompt: string;
+  readonly prompt: string;
+  /** The deep-frozen visible node inputs, keys in code-unit order; any depth. */
+  readonly inputs: JsonObject;
+  /** The non-empty authored path of the consuming AGENT. */
+  readonly consumerStaticPath: readonly string[];
+
+  /**
+   * Validate the prompts, snapshot the inputs under the yian value number rule and copy the path,
+   * in that order.
+   *
+   * @throws TypeError when a prompt isn't a string, `inputs` isn't an exact JSON object or holds a
+   *   non-JSON value, or the path isn't an array of strings.
+   * @throws RangeError for a lone surrogate, NaN, a cycle, or an empty path or component.
+   */
+  constructor(baseSystemPrompt: string, prompt: string, inputs: unknown, consumerStaticPath: readonly string[]) {
+    this.baseSystemPrompt = requireString(baseSystemPrompt, "base_system_prompt", false);
+    this.prompt = requireString(prompt, "prompt", false);
+    this.inputs = freezeValueObject(inputs, "inputs");
+    this.consumerStaticPath = requirePath(consumerStaticPath, "consumer_static_path");
+    Object.freeze(this);
+  }
+}
+
 /**
  * One reducer-accepted source-neutral execution episode. Frozen.
  *
@@ -1385,6 +1415,27 @@ export class MemorySetupError extends RangeError {
     super(message);
     this.origin = checkedOrigin;
     this.related = Object.freeze([...related]);
+  }
+}
+
+/** Ordinary recall failure attributed to a memory declaration site. */
+export class MemoryRecallError extends Error {
+  override name = "MemoryRecallError";
+  /** The memory's declaration site. */
+  readonly origin: OriginRef | null;
+
+  /**
+   * Create one recall wrapper; `cause` (Python's `raise ... from`) is passed to `Error` when given.
+   *
+   * @throws TypeError when `message` isn't a string or `origin` is neither `null` nor an `OriginRef`.
+   * @throws RangeError when `message` holds a lone surrogate.
+   */
+  constructor(message: string, options: { origin?: OriginRef | null; cause?: unknown } = {}) {
+    const { origin = null } = options;
+    requireString(message, "message", false);
+    const checkedOrigin = requireOrigin(origin, "origin");
+    super(message, "cause" in options ? { cause: options.cause } : undefined);
+    this.origin = checkedOrigin;
   }
 }
 
@@ -2228,7 +2279,208 @@ export type ConversationCheckpoint =
   | ConversationEffectObserved
   | ConversationClosed;
 
-/** One run session over a host-provided memory object. */
+/**
+ * A leased invocation that directly retains requests and actual observations.
+ *
+ * `TranscriptSource.openTurn` resolves to a turn already admitted under its FIFO lease. The turn
+ * calls `signal.throwIfAborted()` on the signal it was opened with while queuing and between
+ * effects, never before recording an actual observation; that failure propagates unchanged. A
+ * method may return a value or a promise, and yian awaits it; `view` and `interrupt()` stay
+ * synchronous.
+ *
+ * Callers probe two optional capabilities with `typeof turn.x === "function"`: `prepareHistory`
+ * projects and summarizes retained history for an API request, and `interrupt()` asks the turn to
+ * close as `interrupted` when its body later returns normally, as a steerable AGENT does after a
+ * host interrupt. A turn without them closes as usual.
+ */
+export interface ConversationTurn {
+  /** The latest persisted conversation view. */
+  readonly view: ConversationView;
+  /**
+   * Persist one request, then return its positive effect ordinal; only after persistence does the
+   * external effect run.
+   *
+   * @param kind - The external-effect category.
+   * @param payload - Opaque source-neutral request data.
+   * @param options.items - Newly retained items; none by default.
+   */
+  request(
+    kind: ConversationEffectKind,
+    payload: JsonObject,
+    options?: { items?: readonly ConversationItem[] },
+  ): number | Promise<number>;
+  /**
+   * Persist only actual observation evidence for a requested effect.
+   *
+   * @param effectOrdinal - A positive request ordinal from this turn.
+   * @param status - The actual observed disposition.
+   * @param options.items - Newly retained evidence; none by default.
+   * @param options.failure - The known failure: required for `failed`, optional for `interrupted`;
+   *   `null` by default.
+   */
+  observe(
+    effectOrdinal: number,
+    status: ConversationEffectStatus,
+    options?: { items?: readonly ConversationItem[]; failure?: MemoryOperationFailure | null },
+  ): void | Promise<void>;
+  /**
+   * Record the turn's terminal disposition and release its lease (Python's `__exit__`).
+   *
+   * `error` is undefined after the body returns normally, else the body's thrown value. The turn
+   * records `interrupted` when its signal aborted, its session was closed, or `interrupt()` was
+   * called before a normal return; `failed` when `error` is given; else `completed`. It never
+   * rethrows `error`, and throws its own close failure only when `error` is undefined. With `error`
+   * undefined and the signal aborted, it records `interrupted`, releases the lease, then throws
+   * `signal.reason`.
+   */
+  close(error?: unknown): void | Promise<void>;
+  /**
+   * Prepare opaque prior context while keeping this turn's FIFO lease; optional.
+   *
+   * @param options.projectionVersion - The non-empty identity of the adapter's projection format,
+   *   independent of the current model.
+   * @param options.project - Encode exactly the selected prior invocations of the view as text.
+   * @param options.summarize - Condense historical text towards the soft character budget, as
+   *   non-empty text.
+   * @returns The cached or new summary, or `null`, and the projection of the remaining prior turns;
+   *   the current invocation is excluded.
+   */
+  prepareHistory?(options: {
+    projectionVersion: string;
+    project: (view: ConversationView, prior: readonly ConversationInvocation[]) => string | Promise<string>;
+    summarize: (text: string, budget: number) => string | Promise<string>;
+  }):
+    | readonly [summary: string | null, projection: string]
+    | Promise<readonly [summary: string | null, projection: string]>;
+  /** Close this turn as `interrupted` when its body later returns normally; optional. */
+  interrupt?(): void;
+}
+
+/** Explicit recall contribution that admits a serialized session transcript. */
+export interface TranscriptSource {
+  /**
+   * Open one turn for an invocation, admitted under the source's FIFO lease (Python's `open_turn`
+   * and `__enter__`).
+   *
+   * It checks the request's types before any waiting, then waits for the lease, persists the
+   * admission and resolves to the admitted turn; it may return the turn or a promise of it. The
+   * turn calls `signal.throwIfAborted()` where Python calls `check_stopped()`.
+   *
+   * @param request - The authored consumer, invocation and compatibility descriptor, without
+   *   backend-owned identity.
+   * @param options.signal - Aborted when a cooperative stop is requested.
+   */
+  openTurn(
+    request: ConversationRequest,
+    options: { signal: AbortSignal },
+  ): ConversationTurn | Promise<ConversationTurn>;
+}
+
+/**
+ * One memory's transient notes and optional transcript source. Frozen.
+ *
+ * Return `new MemoryContent({ text: "Prefer concise answers." })` from a notes memory, or
+ * `new MemoryContent({ transcript: this })` from a memory that owns a conversation.
+ */
+export class MemoryContent {
+  /** The notes; empty text contributes no visible section. */
+  readonly text: string;
+  /** The live source, kept by reference and only for this admission. */
+  readonly transcript: TranscriptSource | null;
+
+  /**
+   * Require the notes, then a source whose `openTurn` is a function, or `null`.
+   *
+   * @throws TypeError when `text` isn't a string or the source lacks `openTurn`.
+   * @throws RangeError when `text` holds a lone surrogate.
+   */
+  constructor({ text = "", transcript = null }: { text?: string; transcript?: TranscriptSource | null } = {}) {
+    this.text = requireString(text, "text", false);
+    if (transcript !== null && typeof (transcript as { openTurn?: unknown }).openTurn !== "function") {
+      throw new TypeError("transcript must supply openTurn or be null");
+    }
+    this.transcript = transcript;
+    Object.freeze(this);
+  }
+}
+
+/** The recall inputs and accepted invocation for one context admission. Frozen. */
+export class MemoryContextRequest {
+  readonly recall: RecallContext;
+  /** The accepted node start; `null` permits text-only context without a transcript. */
+  readonly invocation: ConversationInvocation | null;
+  /** The deep-frozen descriptor a selected transcript source uses, keys in code-unit order; any depth. */
+  readonly compatibility: JsonObject;
+
+  /**
+   * Require exact carriers (kept by reference) and snapshot the descriptor under the yian value
+   * number rule. `new MemoryContextRequest(recall, null, {})` evaluates text-only memories; a
+   * transcript contribution needs an invocation.
+   *
+   * @throws TypeError when `recall` isn't exactly a `RecallContext`, `invocation` is neither `null`
+   *   nor exactly a `ConversationInvocation`, or `compatibility` isn't an exact JSON object or holds
+   *   a non-JSON value.
+   * @throws RangeError for NaN, a lone surrogate or a cycle in `compatibility`.
+   */
+  constructor(recall: RecallContext, invocation: ConversationInvocation | null, compatibility: unknown) {
+    if (!isExactly(recall, RecallContext)) throw new TypeError("recall must be a RecallContext");
+    this.recall = recall;
+    this.invocation = invocation === null ? null : requireInvocation(invocation);
+    this.compatibility = freezeValueObject(compatibility, "compatibility");
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Ordered visible notes and an optional admitted live transcript. Frozen.
+ *
+ * `new MemoryContext()` is the empty context of an invocation without memory.
+ */
+export class MemoryContext {
+  /** The sections in outer-to-local ownership order; admission checks the scope order. */
+  readonly sections: readonly MemorySection[];
+  /** The live leased transcript, whose lifetime the caller owns; kept by reference. */
+  readonly transcript: ConversationTurn | null;
+
+  /**
+   * Copy the sections array, keeping its sections by reference.
+   *
+   * @throws TypeError when `sections` isn't an array or an item isn't exactly a `MemorySection`.
+   */
+  constructor({
+    sections = [],
+    transcript = null,
+  }: { sections?: readonly MemorySection[]; transcript?: ConversationTurn | null } = {}) {
+    if (!isPlainArray(sections)) throw new TypeError("sections must be an array");
+    for (const section of sections) {
+      if (!isExactly(section, MemorySection)) throw new TypeError("sections must contain MemorySection values");
+    }
+    this.sections = Object.freeze([...sections]);
+    this.transcript = transcript;
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Write-only sink for visible evidence from one AGENT invocation.
+ *
+ * Implementations accept only the exact carriers of this module. It has no read surface: the
+ * evaluator freezes the invocation's trace into durable evidence. The engine implements it, so its
+ * methods are synchronous.
+ */
+export interface EvaluationTrace {
+  /** Record the one visible model prompt of an AGENT invocation; no memory sections by default. */
+  recordPrompt(baseSystemPrompt: string, prompt: string, memorySections?: readonly MemorySection[]): void;
+  /** Append one exact visible model or tool interaction. */
+  recordInteraction(interaction: VisibleInteraction): void;
+}
+
+/**
+ * One run session over a host-provided memory object.
+ *
+ * A method may return a value or a promise, and yian always awaits it, as for tools; `snapshot` is
+ * read synchronously. A session has no `with` form: its caller calls `close()` in `finally`.
+ */
 export interface MemorySession {
   /**
    * The backend's public durable export, persisted verbatim for run recovery: no host
@@ -2236,15 +2488,32 @@ export interface MemorySession {
    */
   readonly snapshot: JsonObject;
   /** Release resources held by this run session. */
-  close(): void;
+  close(): void | Promise<void>;
+  /**
+   * Return notes and an optional transcript source for one invocation; `null` or no context asks
+   * for the whole memory, as a host inspection does.
+   */
+  recall(context?: RecallContext | null): string | MemoryContent | Promise<string | MemoryContent>;
+  /** Return this memory's proposed mutations for one batch, as an array. */
+  learn(context: LearnContext): MemoryMutation[] | Promise<MemoryMutation[]>;
+  /**
+   * Atomically commit one immutable mutation batch.
+   *
+   * `commitId` is stable within one backward attempt, so a repeated commit of that attempt may be a
+   * no-op. Every later attempt that requests commits gets a distinct id, even for an identical batch.
+   */
+  commit(commitId: string, mutations: readonly MemoryMutation[]): void | Promise<void>;
 }
 
-/** Host-injected memory object that opens run sessions and can be reset. */
+/**
+ * Host-injected memory object that opens run sessions and can be reset. A method may return a
+ * value or a promise, and yian always awaits it.
+ */
 export interface Memory {
   /** Open one run session, optionally restoring a recorded snapshot. */
-  openRun(options?: { snapshot?: JsonObject | null }): MemorySession;
+  openRun(options?: { snapshot?: JsonObject | null }): MemorySession | Promise<MemorySession>;
   /** Clear current memory state according to the backend's policy. */
-  reset(): void;
+  reset(): void | Promise<void>;
 }
 
 /** Whether `value` has `Memory`'s methods (Python's runtime-checkable `isinstance`). */

@@ -323,8 +323,11 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - An int in a config is a `bigint`; a `number` is a float, so a built-in key refuses `5` and takes
   `5n`.
 - A host memory is any object with `openRun({ snapshot })` and `reset()` (`isMemory` checks it, as
-  Python's `isinstance(value, Memory)`); both are synchronous, and a session has no `with` form:
-  the caller calls `close()` in `finally`.
+  Python's `isinstance(value, Memory)`). Every method of a host memory interface (`Memory`,
+  `MemorySession`, `TranscriptSource`, `ConversationTurn`) may return a value or a promise, and
+  yian always awaits it, as for tools; property reads (`snapshot`, `view`),
+  `ConversationTurn.interrupt()` and the engine's `EvaluationTrace` stay synchronous. A session has
+  no `with` form: the caller calls `close()` in `finally`.
 - `src/memory/storage/sqlite.ts` holds `SQLiteStorage`, the single-owner SQLite state file, opened
   through `platform.ts`'s `openSqlite`. Changed: the envelope is version 3 (Python's is 2), so a
   Python file fails `storage.version`; `±Infinity` is kept with the codec's `$float` tag; there is

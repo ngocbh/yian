@@ -1081,6 +1081,10 @@ are never string-coerced: write `!int 30`, not `!int "30"`. Quote a date default
 to quote. Compatible payloads keep their authored representation, so `!float 30` stays
 the integer `30`. String coercion applies only to values supplied at a flow boundary.
 
+Changed (TS yian): an unquoted date or timestamp default is text, so it fills a `str` slot,
+and a `date` or `datetime` slot checks its text (`!date 2026/01/01` fails with `date must
+look like 2026-05-21`); see the note in [YAML values](#yaml-values).
+
 A record input names its record in `typedefs:` and tags the input with it
 (`cfg: !Cfg`). `!object` is an unstructured mapping: any JSON object. `!Any` takes any
 JSON value except null.
@@ -1125,6 +1129,17 @@ the tag `!Union(Buy`). Elsewhere, a tag written with one of them inside (`!Union
 invalid YAML: Tags and anchors must be separated from the next token by white space
 hint: a YAML tag ends at `,`, `[`, `]`, `{` or `}`; name a type with several arguments in `typedefs:` and tag with its name (e.g. `Decision: Union(Buy, Sell)`, then `!Decision`), and write `list(str)`, not `list[str]`
 ```
+
+Inside `{...}` or `[...]`, the cut tag fails as not a complete type:
+
+```text
+'d': `!Union(Buy` is not a complete type: a YAML tag ends at the first space and can't contain `,`; name a type with several arguments in `typedefs:` (e.g. `Decision: Union(Buy, Sell)`) and tag with its name (`!Decision`)
+```
+
+The bracket and comma messages above now come only from a verbatim tag, which still carries
+`,`, `[`, `]`, `{`, and `}` into the tag: `!<!list[str]>` fails with ``a tag can't contain
+`[`, `]`, `{` or `}` (strict YAML 1.2); write `!list(str)` ``, and `!<!Union(Buy,Sell)>` with
+the comma message.
 
 ### The value
 

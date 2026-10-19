@@ -211,7 +211,10 @@ async function browserLoginThroughTheListener(): Promise<void> {
     (url) => {
       const state = new URL(url).searchParams.get("state");
       const callback = `GET /auth/callback?code=code&state=${state} HTTP/1.1\r\nHost: localhost:1455\r\n\r\n`;
-      replies.push(callbackExchange(callback));
+      const reply = callbackExchange(callback);
+      // Awaited below only when the login succeeds; a failed one must not leave it unhandled.
+      reply.catch(() => {});
+      replies.push(reply);
     },
     { timeoutMs: 5000 },
   );

@@ -10,9 +10,9 @@
  *
  * Knows about: Node's built-in modules (`node:net` for the browser callback listener,
  * `node:crypto`, the file system), `defaults.ts`, `platform.ts`'s scheduler and file lock, the
- * transport's `shortRequest` and `llm/errors.ts`'s `ProviderError`, the `typesys` and `diagnostics.ts` helpers,
- * the connection settings checks in `connection_settings.ts`, and injected HTTP, clock, and host
- * callbacks.
+ * transport's `shortRequest` and `llm/errors.ts`'s `ProviderError`, the `typesys` and
+ * `diagnostics.ts` helpers, the connection settings checks in `connection_settings.ts`, and
+ * injected HTTP, clock, and host callbacks.
  * Never imports: provider SDKs, settings, nodes, memory, compile, runtime, or CLI.
  */
 

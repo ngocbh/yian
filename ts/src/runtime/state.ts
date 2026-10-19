@@ -1300,9 +1300,13 @@ function validateNodeStep(state: RunState, record: NodeStepRecord): void {
   if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeStep node ${reprText(nodeId)} is not in-flight`);
 }
 
-/** Drop a settled node's start count and recorded steps. */
+/**
+ * Drop a settled node's start count and recorded steps.
+ *
+ * @throws RangeError when the node has no start count, as Python's `del` raises `KeyError`.
+ */
 function forgetNodeSteps(state: RunState, nodeId: string): void {
-  state.nodeStarts.delete(nodeId);
+  if (!state.nodeStarts.delete(nodeId)) throw new RangeError(`node ${reprText(nodeId)} has no start count`);
   state.nodeSteps.delete(nodeId);
 }
 

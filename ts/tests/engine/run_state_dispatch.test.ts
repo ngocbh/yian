@@ -44,15 +44,17 @@
  * - `test_frontier_plan_is_frozen_and_contains_only_an_immutable_delta`: the envelope is canonical
  *   text, not bytes; assigning a plan field is a `TypeError`, and the delta is frozen too.
  * - The state snapshot keeps the root containers by reference and asserts each with `toBe`, for
- *   Python's `id()` values; it compares the pool as its wire object and adds the start counts and
- *   steps.
+ *   Python's `id()` values; it compares the pool as its wire object, keeps the terminal-unreachable
+ *   latch as Python does, and adds the start counts and steps.
  *
  * TS-only (RunStopped): `prepareRunStopped` lists the in-flight nodes in dispatch order; its
  * commit changes only the sequence and returns no observers; a record whose ids differ in order,
  * miss one or add one is refused; a plan whose stop delta disagrees with its record is refused;
  * nothing in flight records no ids; a terminal state refuses it; after a stop, a step and a resume
- * still commit and the resume puts the stopped nodes first. Also: a frontier plan holding an
- * outcome record is refused.
+ * still commit and the resume puts the stopped nodes first; an in-flight node missing from the
+ * flow or not `UNKNOWN` is refused. Also: a frontier plan holding an outcome record is refused;
+ * `prepareRecord` refuses a `RunStartedRecord`, hands a backward record to its stub even on a
+ * pristine state, and an expansion with a builder to the growth stub.
  *
  * Not ported (ESM): the module patches of `test_frontier_commit_uses_only_the_prevalidated_delta`
  * (`_validate_node_started`, `_validate_run_resumed`, `encode_pool`, `decode_pool`).
@@ -76,6 +78,7 @@ import {
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeStartedRecord,
+  BackwardStartedRecord,
   NodeStepRecord,
   RecordEnvelope,
   RunResumedRecord,
@@ -194,7 +197,12 @@ interface Snapshot {
 /** Return `state`'s snapshot, with its start counts and steps as well. */
 function snapshot(state: RunState): Snapshot {
   return {
-    values: { ...stateSnapshot(state), nodeStarts: [...state.nodeStarts], nodeSteps: [...state.nodeSteps] },
+    values: {
+      ...stateSnapshot(state),
+      terminalUnreachableFailure: state.terminalUnreachableFailure,
+      nodeStarts: [...state.nodeStarts],
+      nodeSteps: [...state.nodeSteps],
+    },
     roots: roots(state),
   };
 }
@@ -499,6 +507,34 @@ test("prepareRecord requires a builder for expansion replay", () => {
   );
 });
 
+test("prepareRecord refuses a RunStartedRecord", () => {
+  const { state, log } = initialized();
+  const started = log.records()[0]!.record;
+
+  expectError(
+    () => prepareRecord(state, started),
+    TypeError,
+    "unsupported run record for state preparation: RunStartedRecord",
+  );
+});
+
+test("prepareRecord hands a backward record to the backward reducer, even on a pristine state", () => {
+  const pristine = new RunState(dispatchFlow());
+
+  expectError(() => prepareRecord(pristine, new BackwardStartedRecord(1, null)), Error, "not ported yet (T4-5)");
+});
+
+test("prepareRecord hands an expansion with a builder to the growth reducer", () => {
+  const { state } = initialized();
+  const record = new NodeExpandedRecord("first", {}, [], "0".repeat(64));
+
+  expectError(
+    () => prepareRecord(state, record, { growBuilder: () => state.flow }),
+    Error,
+    "not ported yet (T4-5)",
+  );
+});
+
 test("dispatch and resume require an initialized nonterminal state", () => {
   const pristine = new RunState(dispatchFlow());
   expectError(() => prepareNodeStarted(pristine, START_ID), RangeError, /^run state is not initialized$/);
@@ -760,6 +796,22 @@ test.each([
 
   expectUnchanged(state, before);
   expect(log.nextSequence).toBe(3);
+});
+
+test.each([
+  ["missing", /^RunStopped node 'first' does not exist in the flow$/],
+  ["taken", /^RunStopped node 'first' must have UNKNOWN disposition$/],
+] as const)("RunStopped rejects an invalid in-flight node: %s", (kind, message) => {
+  const { state, log } = initialized();
+  startFrontier(state, log, "first");
+  if (kind === "missing") state.flow.nodes.delete("first");
+  else state.nodeState.set("first", NodeState.TAKEN);
+  const before = snapshot(state);
+
+  expectError(() => prepareRecord(state, new RunStoppedRecord("signal", "", ["first"])), RangeError, message);
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(2);
 });
 
 test("a RunStopped plan whose delta disagrees with its record is refused", () => {

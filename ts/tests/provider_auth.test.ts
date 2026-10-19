@@ -2757,8 +2757,8 @@ const NODE = ((): string | undefined => {
   return node;
 })();
 
-describe("the cross-process scenarios", () => {
-  // More than the scenario's own 20 s limit, so that limit reports first.
+describe("the both-runtime scenarios", () => {
+  // More than the cross-process scenario's own 20 s limit, so that limit reports first.
   for (const [name, run] of Object.entries(SCENARIOS)) test(name, run, 30_000);
 
   test.skipIf(!NODE)(

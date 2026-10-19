@@ -224,6 +224,11 @@ the same time (a refresh rotates the token); point `YIAN_AUTH_FILE` at a copy
 instead. The path expands only `~` and a leading `~/`, not `~user`, and an empty
 `YIAN_AUTH_FILE` counts as unset.
 
+Changed (TS yian): model calls in one process that find the same subscription token
+expiring share one refresh instead of each waiting for the file lock. The browser
+sign-in answers each connection to its local callback on its own, so a stray idle
+connection can't hold up the real one.
+
 #### OpenAI {#openai-authentication}
 
 ```console

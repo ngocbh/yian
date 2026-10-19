@@ -70,7 +70,7 @@
  * names only; a resume clearing unfinished starts; an applied delta leaving earlier occurrences
  * alone; a `TraceDelta`'s defaults and frozen arrays.
  *
- * Later (T4-3): the trace tests, which run flows.
+ * Later (T4-4 to T4-7): the trace tests that run flows.
  */
 
 import { afterEach, expect, test } from "bun:test";

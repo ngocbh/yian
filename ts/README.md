@@ -291,15 +291,21 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   memory objects (`Memory`, `MemorySession`, `isMemory`), the learning result carriers
   (`MemoryMutation`, `LearningFailure`, `PolicyCommitOutcome`, `LearningResult`), and the
   evidence carriers (`EvaluationEvidence`, `MemorySection`, `ModelTextInteraction`,
-  `ModelValueInteraction`, `ToolCallInteraction`, `ToolResultInteraction`).
+  `ModelValueInteraction`, `ToolCallInteraction`, `ToolResultInteraction`), and the learning
+  inputs (`MemoryEpisodeStatus`, `MemoryEpisode`, `LearnContext`).
   `src/memory/index.ts` re-exports the public names; the mutation batch check `validateMutations`
-  is exported from `memory/contracts.ts` only, as Python keeps `_validate_mutations` private.
+  and the feedback snapshot `freezeFeedback` are exported from `memory/contracts.ts` only, as
+  Python keeps `_validate_mutations` and `_freeze_feedback` private.
 - The learning result carriers are frozen and hold their nested carriers by reference (checked by
   exact class), where Python copies them.
 - The evidence carriers are frozen too and hold their nested carriers the same way. Their JSON
   values (bound inputs, a model value, tool arguments) are deep-frozen copies under the value
   number rule: NaN is refused, `±Infinity` kept and `-0` copied as `0`. They have no memory
   nesting limit.
+- Episodes and learn contexts are frozen as well. An episode's JSON (inputs, output, failure) and
+  a learn context's feedback are deep-frozen copies under the same value number rule, with no
+  memory nesting limit; a context keeps its episodes by reference. `freezeFeedback` takes a memo
+  shared across calls, so a subtree repeated across feedback items is one frozen copy.
 - Changed: a mutation payload and a snapshot envelope's export have no checked depth limit (Python
   bounds both at the value nesting limit plus 28); a payload deep enough to overflow the stack
   throws the engine's RangeError.
@@ -325,9 +331,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   Python yian wrote. The `.<name>.lock` file is a SQLite lock that Python's `flock` doesn't see.
 - A host-implemented memory interface (here `MarkdownStore`) may return a value or a promise;
   yian awaits.
-- The recall and learning contexts, the episodes, the session conversation contracts, the
-  session's recall, learn and commit methods, and the built-in backends that use the storage
-  (episodic, reflective, session, profile) are not ported yet.
+- The recall context, the session conversation contracts, the session's recall, learn and commit
+  methods, and the built-in backends that use the storage (episodic, reflective, session, profile)
+  are not ported yet.
 
 ## Runtime
 
@@ -371,6 +377,31 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - For inspection, `readRunLog(path)` reads the complete prefix without the lock and without
   changing the file, so it may see a line a concurrent writer later rolls back;
   `isRunLogLocked(path)` probes the resolved log's `.lock`.
+- `src/runtime/trace.ts` holds the retained trace of a learnable run (`RetainedTrace`: accepted
+  sources, occurrences, current writers, boundaries and the terminal). `prepareTrace` checks one
+  record against the trace and returns a frozen `TraceDelta`; the caller applies it
+  (`delta.apply()`) only after the log accepts the record, so a refused append leaves the trace
+  unchanged. Sources are keyed by `sourceKey`. Typed values (`SourceEntry.valueJson`,
+  `TraceTerminal.outputJson`, the system values) are held as canonical log text (`logJson` of the
+  typed wire) and decoded on each read, so every read gets a fresh value and equality is text
+  equality. An occurrence holds its envelope's round trip `decodeRecord(encodeRecord(envelope))`.
+- `src/runtime/learning.ts` holds the pure backward transfer (`seedBackward`,
+  `contextualTransfers`, `projectRootBackward`; `ContextCache` materializes each route context
+  once per pass), the attributed validation `validateAttributedBackward`, the attempt state and
+  its reducer (`BackwardAttempt`, `RuntimeBackwardState`, `reduceBackwardRecord`), the owner
+  contexts (`projectOwnerContexts`, `OwnerContextError`), the episode outcome (`episodeOutcome`,
+  `failureJson`) and the commit ids (`memoryCommitId`). It invokes no callbacks or backends. The
+  integers in the JSON it builds (sequences, indexes, `parents`) are `bigint`s, since a `number`
+  is a float there.
+- Changed: `memoryCommitId` digests the `logJson` text of its input, not Python's sorted compact
+  `json.dumps`; see `docs/api.md` for where the two differ.
+- Value equality: each carrier class has one `same*` helper in the module that owns it
+  (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
+  `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the
+  memory carriers' in `memory/contracts.ts`, `sameSourceEntry` in `runtime/trace.ts`). Every
+  `same*` takes non-null values; compare a nullable pair with `sameOptional(a, b, same)` from
+  `nodes/contracts.ts`. `memory/contracts.ts` writes its null checks inline, since it imports
+  only `diagnostics` and `defaults`. A `BackwardFailure`'s cause compares by value, never `===`.
 
 ## Compile
 

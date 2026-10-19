@@ -1734,6 +1734,16 @@ epoch restores successfully. Its later `learn` fails with
 `episodic.stale_generation` or `reflective.stale_generation` without rebasing;
 the backward outcome retains the completed feedback.
 
+Changed (TS yian): the commit-ID digest input is yian's run-log canonical JSON
+(`logJson`: keys in UTF-16 code-unit order, ints of any size, floats marked by
+`.0`) of `[run_id, attempt_id, memory, [[mutation_id, payload], ...]]`, not
+Python's `json.dumps(sort_keys=True, ensure_ascii=False, separators=(",", ":"))`.
+The two texts differ only for floats, for objects shaped like the codec's escapes
+(`{"$record": ...}`, `{"$float": "inf"}`), and for the order of keys holding
+characters outside the Basic Multilingual Plane (UTF-16 code units versus code
+points); elsewhere the IDs match. A run log never spans both implementations, so
+the prefix stays `ac-memory-v3`.
+
 ## SessionMemory foundation
 
 `yian.memory.session.SessionMemory` retains AGENT

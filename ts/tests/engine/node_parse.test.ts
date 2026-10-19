@@ -1,15 +1,16 @@
 /**
  * The keyed-map flat-body node descriptors `parseNodes` reads: a port of
- * `tests/engine/test_node_parse.py`. Agent rows parse with the registered `agent` kind; kinds not
- * yet ported use the stand-ins of `tests/compose/stand_ins.ts` (`StandInCode`, and a `tool`
- * stand-in taking `tool_id` and `input:`).
+ * `tests/engine/test_node_parse.py`. The rows read through `parseNodes` parse with the registered
+ * kinds.
  *
  * TS-only: `inf` is an expression keyword, so it is a rejected node id too.
  *
- * Changed: `test_agent_knobs_parse` reads seed 14 through the conformance case
- * `load-agent/seed_14_agent_tools`.
+ * Changed: `test_agent_knobs_parse`, `test_code_parses`, `test_tool_parses` and
+ * `test_seed_11_anchored_nodes_parse` read seeds 14, 01, 08 and 11 through the conformance cases
+ * `load-agent/seed_14_agent_tools`, `load-agent/seed_01_structured_agent`,
+ * `load-leaves/seed_08_tool_news` and `load-core/seed_11_reuse_anchors`; seed 01's CODE reference
+ * is the TS form (`./fixtures/seeds.ts:one_line_summary`).
  *
- * Later (T3-15): `test_code_parses`, `test_tool_parses`, `test_seed_11_anchored_nodes_parse`.
  * Later (T3-16): `test_case_searched_parses`, `test_case_on_parses`,
  * `test_case_carries_no_inputs`, `test_call_ref_form_parses`, `test_node_asserts_rejected_on_case`,
  * `test_call_map_form_parses`, `test_map_without_over_is_loud`, `test_over_on_kind_call_is_loud`.
@@ -21,25 +22,22 @@
  *
  * The harvested cases whose error `parseNodes` raises are pinned at the end, with
  * `load-core/engine_author_id_ban__author_id_with_hash_is_loud` (from
- * `tests/engine/test_author_id_ban.py`) and the e10 and e42 seeds; the e10 row registers the
- * nine `ALL_KIND_NAMES` stand-ins, since its message lists them.
+ * `tests/engine/test_author_id_ban.py`) and the e10 and e42 seeds; the e10 row registers
+ * stand-ins for the kinds not registered yet, since its message lists all nine.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
+import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
+import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { reprText } from "../../src/diagnostics.ts";
 import { caseText, loadError, nodesOf, runTextCase } from "../compose/declarations.ts";
-import {
-  ALL_KIND_NAMES,
-  StandInCode,
-  standIn,
-  withKinds,
-} from "../compose/stand_ins.ts";
+import { standIn, UNREGISTERED_KIND_NAMES, withKinds } from "../compose/stand_ins.ts";
 
 afterEach(() => forget());
 
@@ -141,7 +139,7 @@ nodes:
     code: "return 1"
 output: \${fetch-data.output}
 `;
-    const error = loadError(() => nodesOf(flow, [StandInCode]));
+    const error = loadError(() => nodesOf(flow));
 
     expect(error.message).toMatch(/node id 'fetch-data' must be an identifier.*try 'fetch_data'/);
     expect(error.message).not.toContain("unknown namespace");
@@ -179,6 +177,22 @@ describe("agent", () => {
   });
 });
 
+describe("code", () => {
+  test("code parses", () => {
+    // seed 01 verdict node
+    const { text, label } = caseText("load-agent/seed_01_structured_agent");
+    const node = nodesOf(text, [], label).get("verdict") as CodeDescriptor;
+
+    expect(node).toBeInstanceOf(CodeDescriptor);
+    expect(node.code).toBe("./fixtures/seeds.ts:one_line_summary");
+    expect(node.inputs).toEqual({
+      rating: "${score.output.rating}",
+      rationale: "${score.output.rationale}",
+    });
+    expect(node.outputs).toBe("str");
+  });
+});
+
 describe("tool", () => {
   test("model kind is removed and points at tool", () => {
     // ML inference is a host capability: `kind: model` names `kind: tool` as the replacement,
@@ -191,12 +205,20 @@ describe("tool", () => {
     expect(error.diagnostic.frames.at(-1)!.range!.startLine).toBe(3);
   });
 
+  test("tool parses", () => {
+    const { text, label } = caseText("load-leaves/seed_08_tool_news");
+    const node = nodesOf(text, [], label).get("news") as ToolDescriptor;
+
+    expect(node).toBeInstanceOf(ToolDescriptor);
+    expect(node.toolId).toBe("get_facts");
+    expect(node.inputs).toEqual({ symbol: "${input.topic}", limit: 10n });
+  });
+
   test("tool legacy args key is loud", () => {
     // `args:` was retired in favor of `input:`: the old key is an unknown field, no silent alias.
-    const tool = standIn("tool", { allow: ["tool_id", "inputs"] });
     const text =
       "\nnews:\n  kind: tool\n  tool_id: get_facts\n  args:\n    symbol: ${input.topic}\n";
-    const error = loadError(() => nodes(text, [tool]));
+    const error = loadError(() => nodes(text));
 
     expect(error.message).toContain("args");
     expect(error.message).toContain("not allowed");
@@ -216,14 +238,14 @@ x:
   asserts:
     - "output >= 0"
 `;
-    const node = nodes(text, [StandInCode]).get("x") as StandInCode;
+    const node = nodes(text).get("x") as CodeDescriptor;
 
     expect(node.asserts).toEqual(["output >= 0"]);
   });
 
   test("node asserts must be list of str", () => {
     const text = "\nx:\n  kind: code\n  code: m:f\n  output: int\n  asserts: not-a-list\n";
-    const error = loadError(() => nodes(text, [StandInCode]));
+    const error = loadError(() => nodes(text));
 
     expect(error.message).toBe("node 'x' (kind=code): `asserts:` must be a list of strings");
   });
@@ -235,6 +257,19 @@ x:
     expect(error.message).toContain("ref");
     expect(error.message).toContain("unknown kind");
   });
+});
+
+test("seed 11 anchored nodes parse", () => {
+  // merged-anchor agent nodes all parse to AgentDescriptors
+  const { text, label } = caseText("load-core/seed_11_reuse_anchors");
+  const descs = nodesOf(text, [], label);
+
+  for (const nodeId of ["pro", "con", "judge"]) {
+    const node = descs.get(nodeId) as AgentDescriptor;
+    expect(node).toBeInstanceOf(AgentDescriptor);
+    expect(node.outputs).toBe("str");
+    expect((node.llmConfig as Record<string, unknown>)["provider"]).toBe("anthropic");
+  }
 });
 
 describe("common fields and loud rules", () => {
@@ -253,10 +288,9 @@ fetch:
     values: list(float)
   code: tests.seeds.fns:fetch_facts
 `,
-      [StandInCode],
     ).get("fetch")!;
 
-    expect(node).toBeInstanceOf(StandInCode);
+    expect(node).toBeInstanceOf(CodeDescriptor);
     expect(node.nodeName).toBe("Fetch values");
     expect(node.dependsOn).toEqual(["warm_cache"]);
     expect(node.runsAfter).toEqual(["log_start"]);
@@ -275,7 +309,7 @@ fetch:
   test("field illegal for kind is loud", () => {
     // `prompt` is an agent field, illegal on a code node.
     const text = "\nn:\n  kind: code\n  code: tests.seeds.fns:f\n  prompt: not allowed here\n";
-    const error = loadError(() => nodes(text, [StandInCode]));
+    const error = loadError(() => nodes(text));
 
     expect(error.message).toContain("prompt");
     expect(error.diagnostic.frames.at(-1)!.range).not.toBeNull();
@@ -312,7 +346,7 @@ fetch:
         // A non-list, or a list of non-strings, is a located load error at parse time, not a
         // silent iteration over a string's characters or a mapping's keys.
         const text = `use:\n  kind: code\n  ${key}: ${value}\n  output: str\n  code: m:f\n`;
-        const error = loadError(() => nodes(text, [StandInCode]));
+        const error = loadError(() => nodes(text));
 
         expect(error.message).toContain(`\`${key}:\` must be a list of node ids`);
         expect(error.diagnostic.frames[0]!.range).not.toBeNull();
@@ -323,7 +357,7 @@ fetch:
       // `depends_on: fetch` is the natural slip; the error names the list spelling to write.
       const text = `use:\n  kind: code\n  ${key}: fetch\n  output: str\n  code: m:f\n`;
 
-      expect(loadError(() => nodes(text, [StandInCode])).message).toContain(
+      expect(loadError(() => nodes(text)).message).toContain(
         `write \`${key}: [fetch]\``,
       );
     });
@@ -334,7 +368,7 @@ test.each([
   // tests/engine/test_author_id_ban.py
   ["load-core/engine_author_id_ban__author_id_with_hash_is_loud", []],
   ["load-core/engine_node_parse__hyphenated_node_id", []],
-  ["load-core/seed_e10_unknown_node_kind", ALL_KIND_NAMES.map((kind) => standIn(kind))],
+  ["load-core/seed_e10_unknown_node_kind", UNREGISTERED_KIND_NAMES.map((kind) => standIn(kind))],
   ["load-core/seed_e42_removed_model_kind", []],
 ] as const)("parseNodes: %s", (id, kinds) =>
   runTextCase({ id, call: (text, label) => nodesOf(text, kinds, label) }),

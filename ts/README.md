@@ -86,7 +86,11 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   of `isinstance` and constructors. These helpers return messages and never throw a `LoadError`.
 - Kind readers live in `src/compose/nodes/<kind>.ts`. YAML counts (`retries:`) are checked as
   safe integers and stored as numbers. An `llm_config:` layer holding `${...}` values is a
-  `ValueTemplate` (a `Binding` for one whole-record value), read before the node builds.
+  `ValueTemplate` (a `Binding` for one whole-record value), read before the node builds. The CODE
+  reader compiles nothing at load yet: checking an inline body's syntax and `return`, and a
+  reference's file, waits for an awaited load step. A CODE node's `baseDir`, the directory its
+  reference resolves against, comes from `BuildContext.baseDir` (`null` by default). WAIT keeps an
+  `until:` date or datetime as the text written, after checking it parses.
 
 ## Skills
 

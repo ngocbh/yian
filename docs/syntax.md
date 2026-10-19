@@ -2510,6 +2510,8 @@ The default is 0 (`YIAN_TOOL_RETRIES`; see [Defaults and limits](defaults.md)), 
 the tool is called once unless the flow opts in. `retries:` must be a non-negative
 integer; anything else fails at load.
 
+Changed (TS yian): `retries:` is at most 9,007,199,254,740,991 (JavaScript's largest safe integer).
+
 ```yaml
 quote:
   kind: tool
@@ -3254,6 +3256,9 @@ The block takes only `prompt:`, `llm_config:`, and `retries:`. Any other key is 
 error at that key that lists the allowed keys. `adaptive_questions.mode:` was removed;
 writing it is a load error.
 
+Changed (TS yian): `adaptive_questions.retries:` is at most 9,007,199,254,740,991 (JavaScript's
+largest safe integer).
+
 Changed: a bad brief used to be reported on `node 'ask__compose' prompt` and point at
 the gate's `prompt:` line, or at the node when the gate had no `prompt:`. An
 `llm_config:` error and an input error also used to name `ask__compose`, the
@@ -3310,6 +3315,9 @@ node 'w' (kind=wait): `until:` must be a date or datetime, but the value is int;
 ```
 
 Changed: a wrong-typed `until:` used to load and fail when the node ran.
+
+Changed (TS yian): an unquoted date or timestamp in `until:` is text, bound as written; Python
+bound the timestamp it read in `isoformat()` spelling.
 
 ### `call` / `map` — composition over child flows
 

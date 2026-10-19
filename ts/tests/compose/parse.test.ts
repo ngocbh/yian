@@ -1,6 +1,6 @@
 /**
  * The parse phase's `nodes:` mapping pass: a port of `tests/compose/test_parse.py`, with the real
- * `agent` kind (`AgentDescriptor`) and `StandInCase` for the case kind.
+ * `agent` and `code` kinds, and stand-ins for the case and map kinds (`StandInCase`, `standIn`).
  *
  * Changed: `test_case_rejects_numeric_key` asserts "field '1' is not allowed", since TS keeps the
  * key `1` as the text written. Python compares the descriptor to an `AgentDescriptor` with
@@ -21,7 +21,7 @@ import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { loadError, nodesOf, runTextCase } from "./declarations.ts";
-import { StandInCase, StandInCode, standIn, withKinds } from "./stand_ins.ts";
+import { StandInCase, standIn, withKinds } from "./stand_ins.ts";
 
 afterEach(() => forget());
 
@@ -153,7 +153,7 @@ test("input binding and assert ranges are stamped after the kind parse", () => {
 `;
   const nodes = SourceDocument.parse(source).root.child("nodes");
 
-  const desc = withKinds([StandInCode], () => parseNodes(nodes).get("x")!);
+  const desc = parseNodes(nodes).get("x")!;
 
   expect(desc.fieldRanges.get(siteKey("input", "n"))!.startLine).toBe(6);
   expect(desc.fieldRanges.get(siteKey("field", "inputs"))).toBeDefined();
@@ -178,7 +178,7 @@ output: \${a.output}
 
 test("a node input named inf is refused at its key", () => {
   const text = inputNamed("code", "inf");
-  const error = loadError(() => nodesOf(text, [StandInCode]));
+  const error = loadError(() => nodesOf(text));
 
   expect(error.message).toBe(
     "node 'a' input 'inf': `inf` is infinity in an expression, so ${inf} can't read it; rename it",
@@ -192,7 +192,7 @@ test("a generated input named inf is refused at its node", () => {
   const document = SourceDocument.parse("id: f\nname: f\nkind: code\ncode: return 1\n");
   const nodes = { f: { kind: "code", code: "return 1", inputs: { inf: "${input.inf}" } } };
   const cursor = flowNodesCursor(document, nodes);
-  const error = loadError(() => withKinds([StandInCode], () => parseNodes(cursor)));
+  const error = loadError(() => parseNodes(cursor));
 
   expect(error.message).toContain("node 'f' input 'inf': `inf` is infinity");
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(cursor.child("f").range!);
@@ -205,7 +205,7 @@ test("an input named inf parses where the inputs aren't locals", () => {
 });
 
 test("an input named infinity parses", () => {
-  const desc = nodesOf(inputNamed("code", "infinity"), [StandInCode]).get("a")!;
+  const desc = nodesOf(inputNamed("code", "infinity")).get("a")!;
 
   expect(desc.inputs).toEqual({ infinity: "${input.x}" });
 });
@@ -213,5 +213,5 @@ test("an input named infinity parses", () => {
 test("parseNodes: load-core/compose_infinity_names__a_node_input_named_inf", () =>
   runTextCase({
     id: "load-core/compose_infinity_names__a_node_input_named_inf",
-    call: (text, label) => nodesOf(text, [StandInCode], label),
+    call: (text, label) => nodesOf(text, [], label),
   }));

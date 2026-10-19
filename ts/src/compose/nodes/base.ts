@@ -52,11 +52,12 @@ import type { ChildResolver } from "./resolver.ts";
 
 /**
  * Return the key of a descriptor's `fieldRanges` entry for the site named `name`: a field, an
- * `input:` binding or an `llm_config` field.
+ * `input:` binding, an `llm_config` field, or a text a HUMAN_INPUT renders as a template.
  *
- * Example: `siteKey("field", "inputs")` is `"field:inputs"`.
+ * Example: `siteKey("field", "inputs")` is `"field:inputs"`;
+ * `siteKey("text", "questions[0].question")` is `"text:questions[0].question"`.
  */
-export function siteKey(kind: "field" | "input" | "llm_config", name: string): string {
+export function siteKey(kind: "field" | "input" | "llm_config" | "text", name: string): string {
   // One text key, since a Map compares a [kind, name] pair by identity, not by value.
   return `${kind}:${name}`;
 }
@@ -290,6 +291,8 @@ export class BuildContext {
   readonly resolver: ChildResolver | null;
   /** The opaque file name an inline CODE body reports in its errors. */
   readonly sourceFile: string;
+  /** The directory a CODE reference resolves against; `null` when not known. */
+  readonly baseDir: string | null;
   /** Presents an origin registered before the file's catalog is final. */
   readonly resolveOrigin: OriginPresenter | null;
   /** Factory for located load errors. */
@@ -304,14 +307,15 @@ export class BuildContext {
   readonly owner: readonly string[];
 
   /**
-   * Create a context. Only `registry` is required; the readers and `resolver` default to
-   * `null`, `sourceFile` to `"<inline-code>"`, `diagnostics` to an unlocated context and
+   * Create a context. Only `registry` is required; the readers, `resolver` and `baseDir` default
+   * to `null`, `sourceFile` to `"<inline-code>"`, `diagnostics` to an unlocated context and
    * `owner` to `["root"]`, which is copied.
    */
   constructor(options: {
     registry: TypeRegistry;
     resolver?: ChildResolver | null;
     sourceFile?: string;
+    baseDir?: string | null;
     resolveOrigin?: OriginPresenter | null;
     diagnostics?: LoadDiagnostics;
     outputContractReader?: OutputContractReader | null;
@@ -323,6 +327,7 @@ export class BuildContext {
       registry,
       resolver = null,
       sourceFile = "<inline-code>",
+      baseDir = null,
       resolveOrigin = null,
       diagnostics = new LoadDiagnostics(),
       outputContractReader = null,
@@ -333,6 +338,7 @@ export class BuildContext {
     this.registry = registry;
     this.resolver = resolver;
     this.sourceFile = sourceFile;
+    this.baseDir = baseDir;
     this.resolveOrigin = resolveOrigin;
     this.diagnostics = diagnostics;
     this.outputContractReader = outputContractReader;

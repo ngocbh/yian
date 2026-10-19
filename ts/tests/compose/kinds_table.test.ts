@@ -4,20 +4,24 @@
  * kinds of `ALL_KIND_NAMES`, and the agreement row also runs on the nine stand-ins registered
  * with `withKinds`.
  *
- * Ported: the `agent` half of `test_kinds_maps_string_to_descriptor_class`.
+ * Ported: `test_kinds_maps_string_to_descriptor_class`.
  *
- * TS-only: `withKinds` restores the tables after its function returns or throws.
+ * TS-only: the `code`, `human_input` and `wait` rows; `withKinds` restores the tables after its
+ * function returns or throws.
  *
  * Dropped: `test_retired_kindspec_is_not_public` (a Python import).
  *
- * Later (T3-15): the `tool` half of `test_kinds_maps_string_to_descriptor_class`. Later (T3-16):
- * `test_all_authored_kinds_registered`.
+ * Later (T3-16): `test_all_authored_kinds_registered`.
  */
 
 import { expect, test } from "bun:test";
 
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
+import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
+import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import { BINDING_FIELDS, KINDS, REMOVED_KINDS } from "../../src/compose/nodes/index.ts";
+import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
+import { WaitDescriptor } from "../../src/compose/nodes/wait.ts";
 import { ALL_KIND_NAMES, StandInCode, standIn, withKinds } from "./stand_ins.ts";
 
 /** Expect `KINDS` and `BINDING_FIELDS` to name the same kinds, each with its class's fields. */
@@ -37,6 +41,10 @@ test("the kind tables are maps of authored kinds", () => {
 
 test("KINDS maps the kind text to its descriptor class", () => {
   expect(KINDS.get("agent")).toBe(AgentDescriptor);
+  expect(KINDS.get("code")).toBe(CodeDescriptor);
+  expect(KINDS.get("tool")).toBe(ToolDescriptor);
+  expect(KINDS.get("human_input")).toBe(HumanInputDescriptor);
+  expect(KINDS.get("wait")).toBe(WaitDescriptor);
   for (const [kind, cls] of KINDS) expect(cls.kind).toBe(kind);
 });
 

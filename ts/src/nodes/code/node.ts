@@ -109,8 +109,13 @@ function validateCode(code: unknown): string | BuiltinCode {
   return Object.freeze({ builtin: "identity", field: code.field });
 }
 
-/** Require source-neutral CODE diagnostic carriers; only the selector passes a node origin. */
-function validateCodeOrigins(codeOrigin: unknown, codeLineOrigins: unknown, nodeOrigin: unknown = null): void {
+/**
+ * Require source-neutral CODE diagnostic carriers; only the selector passes a node origin.
+ *
+ * @throws TypeError when `codeOrigin` or `nodeOrigin` isn't an `OriginRef` or `null`, or
+ *   `codeLineOrigins` isn't an array of `OriginRef`s.
+ */
+export function validateCodeOrigins(codeOrigin: unknown, codeLineOrigins: unknown, nodeOrigin: unknown = null): void {
   validateOptionalOrigin(codeOrigin, "CODE source origin");
   validateOptionalOrigin(nodeOrigin, "node origin");
   if (!Array.isArray(codeLineOrigins)) throw new TypeError("CODE line origins must be an array");

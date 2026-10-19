@@ -6,15 +6,18 @@
  * Changed: the test also sets `YIAN_TOOL_RETRIES=3`, so the node is shown to read the default
  * rather than hard-code the built-in 0. `test_nonzero_retries_changes_the_flow_fingerprint` builds
  * its flows by hand and compares against the same flow with `retries: 0`, not a pinned digest.
+ * `test_retries_loads_onto_the_node`, `test_omitted_retries_uses_the_default` and
+ * `test_bad_retries_is_a_load_error_at_its_line` assemble the root flow with `assembleText`, where
+ * Python loads it; the bad value is spelled by `valueRepr` (`true`, `"2"`, `null` where Python
+ * shows `True`, `'2'`, `None`).
  *
- * Later (T3-15, T3-22): `test_retries_loads_onto_the_node`,
- * `test_omitted_retries_uses_the_default` and `test_bad_retries_is_a_load_error_at_its_line`
- * need the loader.
+ * The harvested `load-leaves/compose_tool_retries_load__negative_retries` and
+ * `load-leaves/compose_tool_retries_load__retries_loads` are pinned at the end.
  *
  * Later (T3-22): `test_zero_retries_keeps_the_flow_fingerprint` pins a loaded flow's fingerprint.
  */
 
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { CompiledFlow, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
@@ -24,6 +27,30 @@ import { Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
+import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
+
+afterEach(() => forget());
+
+// A flow recorded before TOOL nodes had `retries:`.
+const FLOW = `id: old_tool_crash
+name: old_tool_crash
+nodes:
+  place:
+    kind: tool
+    tool_id: place
+    input: {symbol: "ACME"}
+output: \${place.output}
+`;
+
+/** Return `FLOW` with `fieldLine` added to the TOOL node, as line 7. */
+function withLine(fieldLine: string): string {
+  return FLOW.replace("    tool_id: place\n", `    tool_id: place\n${fieldLine}\n`);
+}
+
+/** Return the retries of the built TOOL node of flow `text`. */
+function retriesOf(text: string): number {
+  return (assembleText(text).flow.compiled.nodes.get("place") as ToolNode).retries;
+}
 
 /** Python's `FLOW` (a TOOL `place` called with `{symbol: "ACME"}`) with the TOOL's `retries`. */
 function toolFlow(retries: number): CompiledFlow {
@@ -59,6 +86,39 @@ test("tool node retries defaults to the tool retries default", () => {
   }
 });
 
+test("retries loads onto the node", () => {
+  expect(retriesOf(withLine("    retries: 2"))).toBe(2);
+});
+
+test("omitted retries uses the default", () => {
+  expect(retriesOf(FLOW)).toBe(current().toolRetries);
+  reload((name) => (name === "YIAN_TOOL_RETRIES" ? "3" : undefined));
+  expect(retriesOf(FLOW)).toBe(3);
+});
+
+test.each([
+  ["    retries: -1", "-1"],
+  ["    retries: true", "true"],
+  ['    retries: "2"', '"2"'],
+  ["    retries: 1.5", "1.5"],
+  ["    retries: null", "null"],
+])("bad retries is a load error at its line: %s", (line, got) => {
+  const error = loadError(() => assembleText(withLine(line)));
+
+  expect(error.message).toBe(`node 'place' (kind=tool): \`retries:\` must be a non-negative integer, got ${got}`);
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(7);
+});
+
 test("nonzero retries changes the flow fingerprint", () => {
   expect(flowFingerprint(toolFlow(1))).not.toBe(flowFingerprint(toolFlow(0)));
 });
+
+test.each<CaseRow>([{ id: "load-leaves/compose_tool_retries_load__negative_retries", call: parsedNodes }])(
+  "parseNodes: $id",
+  runCase,
+);
+
+test.each<CaseRow>([{ id: "load-leaves/compose_tool_retries_load__retries_loads", call: assembled }])(
+  "assembles: $id",
+  runCase,
+);

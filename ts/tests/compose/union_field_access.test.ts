@@ -2,7 +2,8 @@
  * Reading fields of a union of records through an output contract, a port of
  * `tests/compose/test_union_field_access.py::test_shared_walk_allows_member_only_fields_when_asked`,
  * `::test_member_only_hint_names_the_union_root` and
- * `::test_shared_field_one_member_does_not_require_reads_as_optional`. `typeFor` stands in for
+ * `::test_shared_field_one_member_does_not_require_reads_as_optional` and
+ * `::test_human_input_answer_schema_for_a_union_is_one_object_entry`. `typeFor` stands in for
  * compose's `read_type`.
  *
  * TS-only: the member-only fix hints, which Python checks only through flows the loader builds
@@ -17,6 +18,7 @@
 import { expect, test } from "bun:test";
 
 import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
+import { answerSchema } from "../../src/compose/nodes/human_input.ts";
 import {
   isExactly,
   outputContractFieldError,
@@ -52,6 +54,10 @@ test("shared walk allows member-only fields when asked", () => {
   expect(outputContractFieldError(contract, ["zzz"], "d.output.zzz", { partialUnionFields: true })).toBe(
     "reference ${d.output.zzz} reads unknown field 'zzz' on record",
   );
+});
+
+test("human_input answer schema for a union is one object entry", () => {
+  expect(answerSchema(decision())).toEqual([{ name: "answer", type: "object", required: true }]);
 });
 
 test("member-only hint names the union root", () => {

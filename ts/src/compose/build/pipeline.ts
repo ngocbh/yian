@@ -76,6 +76,7 @@ import { SourceAccessError, type SourceCursor } from "../source/index.ts";
 // T3-15 imports
 import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
 import { siteKey } from "../nodes/base.ts";
+import { HumanInputDescriptor } from "../nodes/human_input.ts";
 // T3-17 imports
 // T3-18 imports
 // T3-19 imports
@@ -690,12 +691,13 @@ export function splitTypedInputs(
 }
 
 /**
- * Read each AGENT's `llm_config:` with the values and tags in it.
+ * Read each AGENT's and adaptive gate's `llm_config:` with the values and tags in it.
  *
- * A layer holding values becomes a `ValueTemplate` (a `Binding` for a whole record written as one
- * value), and the value range of each key in it lands in the descriptor's `fieldRanges` under
- * `siteKey("llm_config", "<dotted.path>")`, so its errors point at the field. A layer without
- * values stays a plain record.
+ * An AGENT's own layer and an adaptive gate's `adaptive_questions.llm_config` are read. A layer
+ * holding values becomes a `ValueTemplate` (a `Binding` for a whole record written as one value),
+ * and the value range of each key in it lands in the descriptor's `fieldRanges` under
+ * `siteKey("llm_config", "<dotted.path>")`, so its errors point at the field; the adaptive desugar
+ * copies both to the composer agent. A layer without values stays a plain record.
  *
  * @param descriptors Located descriptors keyed by node id.
  * @param nodesCursor Retained view of the flow's node mapping.
@@ -721,20 +723,44 @@ function splitTypedLlmConfig(
   const split = new Map(descriptors);
   try {
     for (const [nodeId, descriptor] of descriptors) {
-      if (!nodesCursor.has(nodeId) || !(descriptor instanceof AgentDescriptor)) continue;
-      const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
-      if (!nodeCursor.has("llm_config")) continue;
-      const cursor = nodeCursor.child("llm_config");
-      if (!cursor.holds(descriptor.llmConfig as Value)) continue;
-      const [llmConfig, ranges] = readLlmConfig(cursor, registry, {
-        prefix: `node ${reprText(nodeId)}: llm_config`,
-        sitePath: [...owner, "node", nodeId, "llm_config"],
+      if (!nodesCursor.has(nodeId)) continue;
+      let path: readonly string[];
+      let written: unknown;
+      let prefix: string;
+      if (descriptor instanceof AgentDescriptor) {
+        path = ["llm_config"];
+        written = descriptor.llmConfig;
+        prefix = `node ${reprText(nodeId)}: llm_config`;
+      } else if (descriptor instanceof HumanInputDescriptor && isRecord(descriptor.adaptiveQuestions)) {
+        path = ["adaptive_questions", "llm_config"];
+        written = descriptor.adaptiveQuestions["llm_config"];
+        prefix = `node ${reprText(nodeId)} adaptive_questions.llm_config`;
+      } else {
+        continue;
+      }
+      let cursor: SourceCursor | null = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
+      for (const key of path) {
+        cursor = cursor.has(key) ? cursor.child(key) : null;
+        if (cursor === null) break;
+      }
+      if (cursor === null || !cursor.holds(written as Value)) continue;
+      const [layer, ranges] = readLlmConfig(cursor, registry, {
+        prefix,
+        sitePath: [...owner, "node", nodeId, ...path],
         catalogBuilder,
         diagnostics,
       });
       const fieldRanges = new Map(descriptor.fieldRanges);
       for (const [key, range] of ranges) fieldRanges.set(siteKey("llm_config", key), range);
-      split.set(nodeId, descriptor.replace({ llmConfig, fieldRanges }));
+      split.set(
+        nodeId,
+        descriptor instanceof AgentDescriptor
+          ? descriptor.replace({ llmConfig: layer, fieldRanges })
+          : descriptor.replace({
+              adaptiveQuestions: { ...(descriptor.adaptiveQuestions as Record<string, unknown>), llm_config: layer },
+              fieldRanges,
+            }),
+      );
     }
   } catch (error) {
     if (!(error instanceof SourceAccessError)) throw error;
@@ -1680,7 +1706,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
-//   T3-15  splitTypedLlmConfig (2): the adaptive-gate branch is not ported yet.
 //   T3-17  extractInlineBodies (1): returns `[nodesCursor, new Map()]`.
 //          readValueEntry (1): throws.
 //          isValueEntry (1): returns `false`.

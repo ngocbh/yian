@@ -410,6 +410,9 @@ describe("isAuthFailure", () => {
     ["throwing-instanceof", prototypeTrap(), false],
     ["provider-error-auth", new ProviderError("auth", "API key not valid", { status: 400 }), true],
     ["provider-error-bad-request", new ProviderError("bad_request", "invalid argument", { status: 400 }), false],
+    // A content-filter 403 (OpenRouter's content-policy reply) is a refusal, not an auth failure.
+    ["provider-error-refused-403", new ProviderError("refused", "flagged", { status: 403 }), false],
+    ["provider-error-permission-403", new ProviderError("permission", "forbidden", { status: 403 }), true],
     ["not an object", "401", false],
     ["null", null, false],
   ];

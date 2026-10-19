@@ -335,5 +335,10 @@ describe("scrubbing with a garbage config never throws", () => {
       },
     };
     expect(scrubCallCredentials(error, config, { env, sent: broken })).toBe(error);
+    // A throwing sent still leaves the config's own credentials scrubbed.
+    const host = { provider: "vllm", model: "m", api_key: "sk-host-sentinel-zqxw" };
+    const fresh = new Error("rejected sk-host-sentinel-zqxw");
+    expect(scrubCallCredentials(fresh, host, { env, sent: broken })).toBe(fresh);
+    expect(fresh.message).toBe("rejected [REDACTED]");
   });
 });

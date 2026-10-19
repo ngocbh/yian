@@ -1294,7 +1294,11 @@ export function scrubCallCredentials<T>(
   options: { env?: Env; sent?: Iterable<string> } = {},
 ): T {
   try {
-    const keys = [...callCredentials(config, options), ...(options.sent ?? [])];
+    const keys = [...callCredentials(config, options)];
+    // A throwing `sent` must not drop the config's credentials from the scrub.
+    try {
+      keys.push(...(options.sent ?? []));
+    } catch {}
     return scrubError(error, (text) => redactKeys(text, keys));
   } catch {
     // Scrubbing is best effort; the provider error must survive it.

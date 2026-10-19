@@ -260,7 +260,8 @@ export interface ErrorFromResponseOptions {
  * Build the error for a non-2xx HTTP reply; `body` must already be stripped of
  * credentials. The kind comes from `kindForStatus`. `retryable` follows openai's
  * `_should_retry`: a finite retry-after over `maxRetryAfter` refuses, then
- * `x-should-retry` decides, then a quota error refuses, then 408, 409, 429 and 5xx retry.
+ * `x-should-retry` decides, then a quota or refused error refuses, then 408, 409, 429 and 5xx
+ * retry.
  */
 export function errorFromResponse(
   status: number,
@@ -293,7 +294,7 @@ function isRetryable(
   const shouldRetry = headers.get("x-should-retry");
   if (shouldRetry === "true") return true;
   if (shouldRetry === "false") return false;
-  if (kind === "quota") return false;
+  if (kind === "quota" || kind === "refused") return false;
   return [408, 409, 429].includes(status) || status >= 500;
 }
 

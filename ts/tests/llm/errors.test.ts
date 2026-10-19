@@ -178,6 +178,14 @@ describe("kinds", () => {
     expect(err.retryable).toBe(false);
   });
 
+  test("a content-filter 429 is refused, retried only on x-should-retry", () => {
+    const body = JSON.stringify({ error: { code: "content_filter" } });
+    const err = reply(429, {}, body);
+    expect(err.kind).toBe("refused");
+    expect(err.retryable).toBe(false);
+    expect(reply(429, { "x-should-retry": "true" }, body).retryable).toBe(true);
+  });
+
   test("content_filter only in the message text, or a non-JSON body, stays bad_request", () => {
     expect(kindForStatus(400, '{"error": {"message": "blocked by content_filter"}}')).toBe("bad_request");
     expect(kindForStatus(400, "content_filter")).toBe("bad_request");

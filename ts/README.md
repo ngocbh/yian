@@ -162,7 +162,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   from provider text. `connection.ts`'s `scrubCallCredentials(error, config, {env, sent})` scrubs
   an error of everything `callCredentials` lists plus what the route sent.
 - `model_catalog.ts`: Python's static model catalog (`MODEL_OPTIONS`, `getKnownModels`);
-  `validators.ts`: `validateModel`, which the unknown-model warning reads.
+  `validators.ts`: `validateModel`, whether a model is in the catalog (any model for ollama,
+  openrouter and vllm).
 - `auth/common.ts`: `AuthError`, the credential classes and `ProviderSelection`.
 - `auth/store.ts`: `AuthStore`, the saved-login file in Python's format. Reads are sync. `save`,
   `remove` and `setDefault` are async and hold `<path>.lock` through `waitForLock`; `credentials`

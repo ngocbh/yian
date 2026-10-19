@@ -1132,7 +1132,9 @@ couldn't supply them:
   new run can help without changing the credentials;
 - the provider answered HTTP 401 or 403, or 400 naming `API_KEY_INVALID` (Gemini's
   invalid key). Another provider's missing key is `provider.auth` only when the
-  provider answers 401 or 403.
+  provider answers 401 or 403. Changed (TS yian): a 4xx that yian reads as a
+  content-filter refusal, such as OpenRouter's 403 content-policy reply, is
+  `provider.refused`, not `provider.auth`.
 
 Typed-output correction retries stop at once on it. A TOOL node's or a granted tool's
 own 401 is `node.execute`. An agent that resolves its `llm_config` when it runs and

@@ -1,7 +1,8 @@
 /**
  * Tests for the structured-output strategy choice in `src/llm/structured.ts`: `structuredTarget`,
  * `planStructured` (one test per row of the selection table, first match wins), `forcesTool` and
- * `sendsJsonSchemaAsTool`, ported from Python yian's Anthropic, Azure and open-schema tests.
+ * `sendsJsonSchemaAsTool`, and a plan's `apply`, `instruction` and `correction`, ported from Python
+ * yian's Anthropic, Azure, open-schema and structured-node tests.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -17,7 +18,7 @@ import {
   moveAzureKeywords,
   strictJsonSchema,
 } from "../../src/llm/json_schema.ts";
-import { copyJson, NamedTool } from "../../src/llm/messages.ts";
+import { copyJson, Message, NamedTool, OutputFormat, Request, TextPart } from "../../src/llm/messages.ts";
 import { AnthropicMessages } from "../../src/llm/protocols/anthropic_messages.ts";
 import { Gemini } from "../../src/llm/protocols/gemini.ts";
 import { OllamaChat } from "../../src/llm/protocols/ollama_chat.ts";
@@ -561,5 +562,82 @@ describe("structuredTarget", () => {
       block: null,
       subscription: false,
     });
+  });
+});
+
+describe("StructuredPlan: apply, instruction and correction", () => {
+  const messages = [
+    new Message({ role: "system", parts: [new TextPart("be brief")] }),
+    new Message({ role: "user", parts: [new TextPart("rate it")] }),
+  ];
+  const chat = (provider: string, model: string) => target({ provider, model, protocol: "openai_chat" });
+  const prompted = () => planStructured(chat("xai", "no-structured-sentinel"), REC);
+  /** One plan per strategy. */
+  const plans: [string, () => StructuredPlan][] = [
+    ["forced_tool", () => planStructured(chat("xai", "grok-4"), REC)],
+    ["unforced_tool", () => planStructured(chat("deepseek", "deepseek-reasoner"), REC)],
+    ["json_schema", () => planStructured(target({ provider: "azure", model: "gpt-4o" }), BOUNDED)],
+    ["prompt", prompted],
+  ];
+  const native = plans.filter(([strategy]) => strategy !== "prompt");
+
+  test.each(native)("apply sets the %s plan's fields and keeps the messages", (strategy, make) => {
+    const plan = make();
+    expect(plan.strategy).toBe(strategy as StructuredPlan["strategy"]);
+    const request = new Request({ messages, toolChoice: "auto", parallelToolCalls: true });
+    const applied = plan.apply(request);
+    expect(applied).not.toBe(request);
+    expect(applied.messages).toEqual(messages);
+    applied.messages.forEach((message, i) => expect(message).toBe(messages[i]!));
+    expect([...applied.tools]).toEqual([...plan.tools]);
+    expect(applied.toolChoice).toBe(plan.toolChoice);
+    expect(applied.parallelToolCalls).toBe(plan.parallelToolCalls);
+    expect(applied.outputFormat).toBe(plan.outputFormat);
+    expect(request.toolChoice).toBe("auto");
+    expect(request.parallelToolCalls).toBe(true);
+  });
+
+  test("apply returns the prompt request unchanged", () => {
+    const request = new Request({ messages, toolChoice: "auto" });
+    expect(prompted().apply(request)).toBe(request);
+  });
+
+  test.each(plans)("apply refuses a request with tools or an output format (%s)", (_strategy, make) => {
+    const plan = make();
+    const tooled = new Request({ messages, tools: [functionTool(OPEN, null)] });
+    const formatted = new Request({ messages, outputFormat: new OutputFormat({ name: "Other", schema: OPEN }) });
+    for (const request of [tooled, formatted]) {
+      const error = thrown(() => plan.apply(request));
+      expect(error).toBeInstanceOf(TypeError);
+      expect(error.message).toBe("a structured request carries only the schema's tool");
+    }
+  });
+
+  test("the prompt instruction writes the schema as compact JSON", () => {
+    expect(prompted().instruction()).toBe(
+      "Respond with ONLY a JSON object matching this JSON schema (no prose, no code fences):\n" +
+        '{"properties":{"answer":{"title":"Answer","type":"string"},"score":{"title":"Score","type":"integer"}},' +
+        '"required":["answer","score"],"title":"Record","type":"object"}',
+    );
+  });
+
+  test.each(native)("the %s plan has no instruction", (_strategy, make) => {
+    const error = thrown(() => make().instruction());
+    expect(error.constructor).toBe(Error);
+    expect(error.message).toBe("only the prompt strategy has an instruction");
+  });
+
+  test("the prompt correction asks for a JSON object", () => {
+    expect(prompted().correction("not json")).toBe(
+      "Your previous output was invalid: not json. Respond with ONLY a JSON object matching the schema.",
+    );
+  });
+
+  test.each(native)("the %s correction asks for valid data", (_strategy, make) => {
+    // The retry text Python sends after a reply that did not call the tool.
+    expect(make().correction("the reply did not call the Record tool; call it with the answer")).toBe(
+      "Your previous output was invalid: the reply did not call the Record tool; call it with the answer. " +
+        "Respond with valid data matching the schema.",
+    );
   });
 });

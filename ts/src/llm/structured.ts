@@ -9,6 +9,7 @@
  */
 
 import type { JsonObject } from "../typesys/json.ts";
+import { encodeBody } from "./body.ts";
 import { getCapabilities, supportsNativeStructured } from "./capabilities.ts";
 import type { ChatModel } from "./events.ts";
 import { RouteModel } from "./executor.ts";
@@ -20,7 +21,15 @@ import {
   moveAzureKeywords,
   strictJsonSchema,
 } from "./json_schema.ts";
-import { copyJson, isPlainObject, NamedTool, OutputFormat, type ToolChoice, type ToolSpec } from "./messages.ts";
+import {
+  copyJson,
+  isPlainObject,
+  NamedTool,
+  OutputFormat,
+  Request,
+  type ToolChoice,
+  type ToolSpec,
+} from "./messages.ts";
 import { AnthropicMessages } from "./protocols/anthropic_messages.ts";
 import { OpenAIResponses } from "./protocols/openai_responses.ts";
 
@@ -119,6 +128,47 @@ export class StructuredPlan {
     this.toolChoice = options.toolChoice ?? null;
     this.parallelToolCalls = options.parallelToolCalls ?? null;
     this.outputFormat = options.outputFormat ?? null;
+  }
+
+  /**
+   * Return `request` with this plan's tools, tool choice, parallel calls flag and output format;
+   * its messages are kept. The prompt strategy returns `request` itself: the caller appends
+   * `instruction()` as a user message.
+   *
+   * @throws {TypeError} When `request` already has tools or an output format, whatever the strategy.
+   */
+  apply(request: Request): Request {
+    if (request.tools.length > 0 || request.outputFormat !== null) {
+      throw new TypeError("a structured request carries only the schema's tool");
+    }
+    if (this.strategy === "prompt") return request;
+    return new Request({
+      messages: request.messages,
+      tools: this.tools,
+      toolChoice: this.toolChoice,
+      parallelToolCalls: this.parallelToolCalls,
+      outputFormat: this.outputFormat,
+    });
+  }
+
+  /**
+   * Return the user message that asks a prompt-strategy model for JSON matching the schema.
+   *
+   * @throws {Error} When the strategy is not `prompt`.
+   */
+  instruction(): string {
+    if (this.strategy !== "prompt") throw new Error("only the prompt strategy has an instruction");
+    const schema = encodeBody(this.schema);
+    return `Respond with ONLY a JSON object matching this JSON schema (no prose, no code fences):\n${schema}`;
+  }
+
+  /** Return the user message that asks for a new reply after an invalid one, `detail` saying why. */
+  correction(detail: string): string {
+    const ask =
+      this.strategy === "prompt"
+        ? "Respond with ONLY a JSON object matching the schema."
+        : "Respond with valid data matching the schema.";
+    return `Your previous output was invalid: ${detail}. ${ask}`;
   }
 }
 

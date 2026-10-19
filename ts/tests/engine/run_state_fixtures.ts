@@ -85,6 +85,20 @@ export function flow(): CompiledFlow {
   ]);
 }
 
+/** Return a complete graph whose START success makes `first` and `second` ready in order. */
+export function fanoutFlow(): CompiledFlow {
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID)],
+    ["first", new FuncNode("first", (inputs) => inputs)],
+    ["second", new FuncNode("second", (inputs) => inputs)],
+    [END_ID, EndNode.value(END_ID, { outputName: null })],
+  ]);
+  return CompiledFlow.fromParts(nodes, [
+    new Edge("start-first", START_ID, "first"),
+    new Edge("start-second", START_ID, "second"),
+  ]);
+}
+
 /** Return the complete pool a fresh run of `flow` records under `runId`. */
 export function pool(flow: CompiledFlow, runId: string = RUN_ID): VariablePool {
   const built = new VariablePool(flow.startId);

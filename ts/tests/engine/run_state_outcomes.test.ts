@@ -19,14 +19,18 @@
  * `test_success_append_failure_leaves_every_state_coordinate_unchanged`,
  * `test_success_delta_preserves_all_reducer_container_identities`,
  * `test_success_canonical_copies_isolate_input_record_pool_and_observers`,
- * `test_competing_success_plans_reject_the_second_sequence_before_append` and
- * `test_success_record_replay_reconstructs_identical_state`. Python's `ValueError` is a
- * `RangeError` here, and a type mismatch the value layer's `TypeCheckError`; each rejected row
+ * `test_competing_success_plans_reject_the_second_sequence_before_append`,
+ * `test_success_record_replay_reconstructs_identical_state`,
+ * `test_end_output_waits_for_full_quiescence`, `test_newly_ready_successor_prevents_quiescence`,
+ * `test_terminal_success_values_are_mutation_isolated`, and the `success` rows of
+ * `test_terminal_derivation_replays_from_causal_records_only` (the record class names, not
+ * Python's type names) and `test_terminal_append_failure_leaves_result_frontier_and_pool_unchanged`.
+ * Python's `ValueError` is a `RangeError` here, and a type mismatch the value layer's `TypeCheckError`; each rejected row
  * names its one class and full message, where Python matches a part of the message. A rejection
  * Python raises as `_NodeDataError` is a `NodeDataError` whose `original` is the `RangeError` or
  * `TypeCheckError`. `RUN_ID` and `FINGERPRINT` are the shared fixture's; the failing log is the
  * shared `FailingLog` (its error is `disk full`, Python's `append failed`); tuple outputs are arrays
- * and ints `bigint`s. Each test pins `state.ready` after its commits.
+ * and ints `bigint`s. Each test that commits an outcome pins `state.ready` after it.
  *
  * Changed:
  * - `test_success_validates_ordinary_target_against_output_contract_type`: a `float` slot keeps
@@ -36,6 +40,10 @@
  *   bytes; assigning a delta field is a `TypeError`, and the id arrays are frozen.
  * - `test_success_commit_uses_only_the_prevalidated_delta`: only the instance patches, throwing
  *   `flow.incoming` and `flow.outgoing`.
+ * - `test_typed_none_end_membership_succeeds_at_quiescence`: the terminal output is canonical
+ *   text, not bytes, and assigning it is a `TypeError`.
+ * - the `success` row of `test_terminal_commit_performs_no_materialization_after_append`: after
+ *   the append the log patches only the instance's `flow.incoming` and `flow.outgoing` to throw.
  * - `test_success_rejects_touched_topology_invariant_breaks` (3 rows): the `incoming` row clears the
  *   public `flow.incomingEdges` entry of `after-baked`.
  * - The state snapshot keeps the root containers by reference and asserts each with `toBe`, for
@@ -54,15 +62,8 @@
  *
  * Not ported (ESM): the module patches of `test_success_commit_uses_only_the_prevalidated_delta`
  * (`_validate_success_value`, `_prepare_success_delta`, `canonical_typed`, `encode_pool`,
- * `decode_pool`).
- *
- * Later (T4-4 task 3b): `test_end_output_waits_for_full_quiescence`,
- * `test_newly_ready_successor_prevents_quiescence`,
- * `test_typed_none_end_membership_succeeds_at_quiescence`,
- * `test_terminal_success_values_are_mutation_isolated`, and the `success` rows of
- * `test_terminal_derivation_replays_from_causal_records_only`,
- * `test_terminal_append_failure_leaves_result_frontier_and_pool_unchanged` and
- * `test_terminal_commit_performs_no_materialization_after_append`.
+ * `decode_pool`) and of `test_terminal_commit_performs_no_materialization_after_append`
+ * (`RunSucceeded`, `RunFailed`, `_materialize_terminal`).
  *
  * Later (T4-4 PR 2), routes and failures: `test_route_derives_skip_closure_without_skip_record`,
  * `test_route_takes_every_edge_matching_else_or_named_handle`,
@@ -109,7 +110,7 @@
 import { expect, test } from "bun:test";
 
 import { CompiledFlow, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
-import { NodeSucceeded } from "../../src/events.ts";
+import { NodeSucceeded, RunSucceeded } from "../../src/events.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import { type OutputContract, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
@@ -119,6 +120,8 @@ import {
   MemoryRunLog,
   NodeStartedRecord,
   NodeSucceededRecord,
+  type RecordEnvelope,
+  type RunRecord,
   RunStartedRecord,
 } from "../../src/runtime/log.ts";
 import {
@@ -135,6 +138,7 @@ import {
   commitStartSuccess,
   expectUnchanged,
   FailingLog,
+  fanoutFlow,
   FuncNode,
   initializedAndStarted,
   reducerSnapshot,
@@ -181,19 +185,6 @@ function node(flow: CompiledFlow, nodeId: string): Node {
 /** A pass-through node. */
 function func(nodeId: string, options: { outputContract?: OutputContract | null } = {}): FuncNode {
   return new FuncNode(nodeId, (inputs) => inputs, options);
-}
-
-/** Return a complete graph whose START success makes two nodes ready in order. */
-function fanoutFlow(): CompiledFlow {
-  return CompiledFlow.fromParts(
-    new Map<string, Node>([
-      [START_ID, new StartNode(START_ID)],
-      ["first", func("first")],
-      ["second", func("second")],
-      [END_ID, EndNode.value(END_ID, { outputName: null })],
-    ]),
-    [new Edge("start-first", START_ID, "first"), new Edge("start-second", START_ID, "second")],
-  );
 }
 
 /** Return a graph with fan-out, a two-edge join and an existing ready node. */
@@ -323,6 +314,59 @@ function partialRecordWorking(): { state: RunState; log: MemoryRunLog } {
   commitStartSuccess(state, log);
   commitPrepared(log, state, prepareNodeStarted(state, "work"));
   return { state, log };
+}
+
+/** Return a graph whose END, sibling and queued leaf run concurrently. */
+function endAndSiblingFlow(): CompiledFlow {
+  return CompiledFlow.fromParts(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID)],
+      ["sibling", func("sibling")],
+      ["queued", func("queued")],
+      [END_ID, EndNode.value(END_ID, { outputName: null })],
+    ]),
+    [
+      new Edge("start-end", START_ID, END_ID),
+      new Edge("start-sibling", START_ID, "sibling"),
+      new Edge("start-queued", START_ID, "queued"),
+    ],
+  );
+}
+
+/** Return a live run whose END value exists while its last sibling runs. */
+function endCommittedWithSiblingInFlight(): { state: RunState; log: MemoryRunLog } {
+  const { state, log } = initializedAndStarted(endAndSiblingFlow());
+  commitStartSuccess(state, log);
+  commitPrepared(log, state, prepareNodeStarted(state, END_ID));
+  commitPrepared(log, state, prepareNodeStarted(state, "sibling"));
+  commitPrepared(log, state, prepareNodeSucceeded(state, END_ID, { terminal: ["stable"] }));
+  return { state, log };
+}
+
+/** Return `START -> END`. */
+function startEndFlow(): CompiledFlow {
+  return CompiledFlow.fromParts(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID)],
+      [END_ID, EndNode.value(END_ID, { outputName: null })],
+    ]),
+    [new Edge("start-end", START_ID, END_ID)],
+  );
+}
+
+/** Return a live run with END the sole in-flight node and no ready work. */
+function endOnlyInFlight(): { state: RunState; log: MemoryRunLog } {
+  const { state, log } = initializedAndStarted(startEndFlow());
+  commitStartSuccess(state, log);
+  commitPrepared(log, state, prepareNodeStarted(state, END_ID));
+  return { state, log };
+}
+
+/** Return the terminal of `prepared`'s plan; throw unless the plan is a success plan. */
+function successTerminal(prepared: PreparedTransition) {
+  const plan = prepared._plan;
+  if (plan.kind !== "success") throw new Error(`expected a success plan, found ${plan.kind}`);
+  return plan.terminal;
 }
 
 test("a success commits the canonical value before its FIFO successors", () => {
@@ -471,6 +515,7 @@ test("a success replay revalidates the target's output contract type", () => {
   const replay = replayOutcomeLog(redirectFlow(), live.log);
   expect(reducerSnapshot(replay.state)).toEqual(reducerSnapshot(live.state));
   expect(replay.log.records()).toEqual(live.log.records());
+  expect(replay.state.ready).toEqual(["after-baked"]);
 
   const incompatible = redirectFlow();
   node(incompatible, "baked").outputContract = new ValueContract(Type.scalar(ValueKind.INTEGER));
@@ -688,6 +733,7 @@ test("a success's canonical copies isolate the input, the record, the pool and t
   expect(recorded.value).toEqual(expected);
   (state.pool.get(START_ID) as typeof raw).nested[0]!.push("pool mutation");
   expect(recorded.value).toEqual(expected);
+  expect(state.ready).toEqual(["first", "second"]);
 });
 
 test("competing success plans refuse the second sequence before append", () => {
@@ -700,6 +746,7 @@ test("competing success plans refuse the second sequence before append", () => {
   expectError(() => commitPrepared(log, state, second), RangeError, "run-state sequence mismatch: prepared 2, state 3");
 
   expect(log.nextSequence).toBe(sequence);
+  expect(state.ready).toEqual(["first", "second"]);
 });
 
 test("a success record replay reconstructs an identical state", () => {
@@ -754,4 +801,183 @@ test("a whole float output stays a float", () => {
   expect((prepared.record as NodeSucceededRecord).value).toEqual({ kind: "float", value: 2 });
   expect(state.pool.getValue("first")!.kind).toBe("float");
   expect(state.pool.get("first")).toBe(2);
+});
+
+test("the END output waits for full quiescence", () => {
+  const { state, log } = endCommittedWithSiblingInFlight();
+
+  expect(state.pool.get(END_ID)).toEqual({ terminal: ["stable"] });
+  expect(state.result).toBeNull();
+  expect(state.ready).toEqual(["queued"]);
+  expect([...state.inFlight]).toEqual(["sibling"]);
+
+  let observers = commitPrepared(log, state, prepareNodeSucceeded(state, "sibling", { done: true }));
+
+  expect(observers).toStrictEqual([new NodeSucceeded({ nodeId: "sibling", output: { done: true } })]);
+  expect(state.result).toBeNull();
+  expect(state.ready).toEqual(["queued"]);
+  expect([...state.inFlight]).toEqual([]);
+
+  commitPrepared(log, state, prepareNodeStarted(state, "queued"));
+  observers = commitPrepared(log, state, prepareNodeSucceeded(state, "queued", { done: "last" }));
+
+  expect(observers).toStrictEqual([
+    new NodeSucceeded({ nodeId: "queued", output: { done: "last" } }),
+    new RunSucceeded({ output: { terminal: ["stable"] } }),
+  ]);
+  expect(state.result).toStrictEqual(new RunSucceeded({ output: { terminal: ["stable"] } }));
+  expect(state.ready).toEqual([]);
+  expect([...state.inFlight]).toEqual([]);
+});
+
+test("a newly ready successor prevents quiescence", () => {
+  const flow = CompiledFlow.fromParts(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID)],
+      ["worker", func("worker")],
+      ["after", func("after")],
+      [END_ID, EndNode.value(END_ID, { outputName: null })],
+    ]),
+    [
+      new Edge("start-end", START_ID, END_ID),
+      new Edge("start-worker", START_ID, "worker"),
+      new Edge("worker-after", "worker", "after"),
+    ],
+  );
+  const { state, log } = initializedAndStarted(flow);
+  commitStartSuccess(state, log);
+  commitPrepared(log, state, prepareNodeStarted(state, END_ID));
+  commitPrepared(log, state, prepareNodeStarted(state, "worker"));
+  commitPrepared(log, state, prepareNodeSucceeded(state, END_ID, "done"));
+
+  const observers = commitPrepared(log, state, prepareNodeSucceeded(state, "worker", "worker-done"));
+
+  expect(observers).toStrictEqual([new NodeSucceeded({ nodeId: "worker", output: "worker-done" })]);
+  expect(state.result).toBeNull();
+  expect(state.ready).toEqual(["after"]);
+  expect([...state.inFlight]).toEqual([]);
+});
+
+test("a typed null END membership succeeds at quiescence", () => {
+  const { state, log } = endOnlyInFlight();
+
+  const prepared = prepareNodeSucceeded(state, END_ID, null);
+
+  const terminal = successTerminal(prepared)!;
+  expect(typeof terminal.outputJson).toBe("string");
+  expect(() => {
+    (terminal as { outputJson: unknown }).outputJson = "changed";
+  }).toThrow(TypeError);
+  expect(prepared.observers).toStrictEqual([
+    new NodeSucceeded({ nodeId: END_ID, output: null }),
+    new RunSucceeded({ output: null }),
+  ]);
+  const observers = commitPrepared(log, state, prepared);
+
+  expect(state.pool.store.has(END_ID)).toBe(true);
+  expect(state.pool.getValue(END_ID)).not.toBeNull();
+  expect(state.pool.get(END_ID)).toBeNull();
+  expect(state.result).toStrictEqual(new RunSucceeded({ output: null }));
+  expect(observers).toStrictEqual(prepared.observers);
+  expect(state.ready).toEqual([]);
+});
+
+test("a terminal derivation replays from the causal records only (success)", () => {
+  const live = endOnlyInFlight();
+  const expected = commitPrepared(live.log, live.state, prepareNodeSucceeded(live.state, END_ID, { value: [1n, 2n] }));
+
+  const replay = replayOutcomeLog(startEndFlow(), live.log);
+
+  expect(replay.observers.at(-1)).toStrictEqual(expected);
+  expect(reducerSnapshot(replay.state)).toEqual(reducerSnapshot(live.state));
+  expect(replay.log.records()).toEqual(live.log.records());
+  expect(replay.state.ready).toEqual([]);
+  expect(
+    replay.log
+      .records()
+      .every(
+        (envelope) =>
+          !envelope.record.constructor.name.startsWith("RunSucceeded") &&
+          !envelope.record.constructor.name.startsWith("RunFailed"),
+      ),
+  ).toBe(true);
+});
+
+test("a terminal append failure leaves the result, the frontier and the pool unchanged (success)", () => {
+  const { state, log: prior } = endOnlyInFlight();
+  const prepared = prepareNodeSucceeded(state, END_ID, { value: [1n, 2n] });
+  const before = snapshot(state);
+  const log = new FailingLog(RUN_ID, prior.records());
+
+  expectError(() => commitPrepared(log, state, prepared), Error, "disk full");
+
+  expectUnchanged(state, before);
+  expect(state.result).toBeNull();
+  expect(log.nextSequence).toBe(prior.nextSequence);
+});
+
+test("terminal success values are mutation isolated", () => {
+  const { state, log } = endOnlyInFlight();
+  type Nested = { nested: string[][] };
+  const raw: Nested = { nested: [["original"]] };
+  const prepared = prepareNodeSucceeded(state, END_ID, raw);
+  raw.nested[0]!.push("raw mutation");
+  ((prepared.observers[0] as NodeSucceeded).output as Nested).nested[0]!.push("prepared node mutation");
+  ((prepared.observers[1] as RunSucceeded).output as Nested).nested[0]!.push("prepared run mutation");
+
+  const observers = commitPrepared(log, state, prepared);
+
+  const expected = { nested: [["original"]] };
+  expect(state.pool.get(END_ID)).toEqual(expected);
+  expect(state.result).toStrictEqual(new RunSucceeded({ output: expected }));
+  expect(observers).toStrictEqual([
+    new NodeSucceeded({ nodeId: END_ID, output: expected }),
+    new RunSucceeded({ output: expected }),
+  ]);
+  const nodeOutput = (observers[0] as NodeSucceeded).output as Nested;
+  const runOutput = (observers[1] as RunSucceeded).output as Nested;
+  const resultOutput = (state.result as RunSucceeded).output as Nested;
+  expect(nodeOutput).not.toBe(runOutput);
+  expect(runOutput).not.toBe(resultOutput);
+  nodeOutput.nested[0]!.push("returned node mutation");
+  runOutput.nested[0]!.push("returned run mutation");
+  resultOutput.nested[0]!.push("state mutation");
+  expect(state.pool.get(END_ID)).toEqual(expected);
+  expect(state.ready).toEqual([]);
+});
+
+/** A memory log holding `source`'s records that makes `flow`'s adjacency throw once it appends. */
+class PoisonAfterAppendLog extends MemoryRunLog {
+  readonly #flow: CompiledFlow;
+
+  constructor(source: MemoryRunLog, flow: CompiledFlow) {
+    super(source.runId);
+    for (const envelope of source.records()) super.append(envelope.record);
+    this.#flow = flow;
+  }
+
+  override append(record: RunRecord): RecordEnvelope {
+    const envelope = super.append(record);
+    const unexpected = (): never => {
+      throw new Error("terminal commit materialized data after append");
+    };
+    this.#flow.incoming = unexpected;
+    this.#flow.outgoing = unexpected;
+    return envelope;
+  }
+}
+
+test("a terminal commit does no materialization after append (success)", () => {
+  const { state, log: prior } = endOnlyInFlight();
+  const prepared = prepareNodeSucceeded(state, END_ID, { value: [1n, 2n] });
+  const log = new PoisonAfterAppendLog(prior, state.flow);
+
+  const observers = commitPrepared(log, state, prepared);
+
+  expect(observers).toStrictEqual([
+    new NodeSucceeded({ nodeId: END_ID, output: { value: [1n, 2n] } }),
+    new RunSucceeded({ output: { value: [1n, 2n] } }),
+  ]);
+  expect(state.result).toStrictEqual(new RunSucceeded({ output: { value: [1n, 2n] } }));
+  expect(state.ready).toEqual([]);
 });

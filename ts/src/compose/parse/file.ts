@@ -28,7 +28,7 @@ import { isList, isRecord, type Value, type ValueRecord } from "../../typesys/va
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { isExtensionKey } from "../helpers/source.ts";
 import { yamlReadAs } from "../helpers/yaml_words.ts";
-import { notTextError, valueTypeError } from "../nodes/base.ts";
+import { notTextError, rejectInfinityName, valueTypeError } from "../nodes/base.ts";
 import { REMOVED_KINDS } from "../nodes/index.ts";
 import {
   SourceAccessError,
@@ -292,7 +292,7 @@ function isEmptyValue(value: Value): boolean {
  * @returns The canonical body, with a `nodes:` mapping, for the schema check.
  * @throws LoadError for a `kind:` YAML read as non-text (`null` included), a removed kind, a
  *   non-leaf kind, a flow `id:` YAML read as non-text, a missing, null, empty or non-identifier
- *   flow `id:`, or an `input:` that isn't a mapping.
+ *   flow `id:`, an `input:` that isn't a mapping, or a flow input named `inf`.
  */
 function desugarCompact(body: ValueRecord, root: SourceCursor): ValueRecord {
   const diagnostics = LoadDiagnostics.fromCursor(root);
@@ -348,6 +348,15 @@ function desugarCompact(body: ValueRecord, root: SourceCursor): ValueRecord {
     );
   }
   const params: ValueRecord = isRecord(input) ? input : {};
+  // The node reads each flow input by bare name, so `inf` would read infinity instead.
+  if (Object.hasOwn(params, "inf")) {
+    rejectInfinityName(
+      "compact (single-node) flow: input 'inf'",
+      "inf",
+      root.child("input").keyRangeOf("inf"),
+      diagnostics,
+    );
+  }
 
   // The node body is the kind and its logic fields. The flow inputs are auto-wired by name, and
   // the flow `output:` is carried through as the node's output type.

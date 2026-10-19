@@ -8,16 +8,21 @@
  *
  * TS-only: the `input:` binding ranges and positional `asserts:` ranges stamped after the kind
  * parse, which Python tests through later phases; and a node input named `inf`, refused where
- * the node reads its inputs by bare name (`inputsAreLocals`), with its harvested case.
+ * the node reads its inputs by bare name (`inputsAreLocals`), at its key or, for a generated
+ * binding, at the node, with its harvested case.
  */
 
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 
 import { siteKey } from "../../src/compose/nodes/base.ts";
+import { flowNodesCursor } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
+import { forget } from "../../src/defaults.ts";
 import { loadError, nodesOf, runTextCase } from "./declarations.ts";
 import { StandInAgent, StandInCase, StandInCode, standIn, withKinds } from "./stand_ins.ts";
+
+afterEach(() => forget());
 
 /** Return the physical cursor over a flow document's `nodes:` mapping. */
 function nodesReader(text: string): SourceCursor {
@@ -179,6 +184,17 @@ test("a node input named inf is refused at its key", () => {
   );
   const key = SourceDocument.parse(text).root.child("nodes").child("a").child("input");
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(key.keyRangeOf("inf")!);
+});
+
+test("a generated input named inf is refused at its node", () => {
+  // A compact flow's auto-wired bindings are virtual, so the error falls back to the node body.
+  const document = SourceDocument.parse("id: f\nname: f\nkind: code\ncode: return 1\n");
+  const nodes = { f: { kind: "code", code: "return 1", inputs: { inf: "${input.inf}" } } };
+  const cursor = flowNodesCursor(document, nodes);
+  const error = loadError(() => withKinds([StandInCode], () => parseNodes(cursor)));
+
+  expect(error.message).toContain("node 'f' input 'inf': `inf` is infinity");
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(cursor.child("f").range!);
 });
 
 test("an input named inf parses where the inputs aren't locals", () => {

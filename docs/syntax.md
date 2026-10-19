@@ -86,7 +86,8 @@ multi-node def name may keep hyphens.
 Changed (TS yian): `inf` is an expression keyword too, so a node named `inf` must be
 renamed. So must a node input named `inf`, since `${inf}` reads infinity, not the input; a
 `map` argument may keep the name (the child reads it as `${input.inf}`, and a `map` has no
-node asserts).
+node asserts). A compact flow's input named `inf` must be renamed too, since its node reads
+it by bare name.
 
 Changed: a node id that isn't an identifier, or is an expression keyword, used to load,
 and failed only when a `${...}` referenced it, with an error that didn't name the node
@@ -1358,6 +1359,9 @@ output:
 node 'x': an entry in `nodes:` is a node or a value; add `kind:` for a node, or a tag (`!object`, `!Buy`, ...) for a value, e.g. `x: !int 5`
 ```
 
+Changed (TS yian): an unquoted date is text, so a list holding one gets the example its
+items' type gives, like any text (`[1, 2024-01-01]` gets `!list(Any)`).
+
 ### Reading the value
 
 A value entry is read like a [typed binding](#the-value):
@@ -1451,6 +1455,9 @@ Other errors:
 - A tag with no value: ``value entry 'x' needs a value after its tag, e.g. `x: !int ...` ``.
 - A number that is not finite, at any depth, fails at its line:
   `x: !float .inf` gives `'x': numbers must be finite (got .inf)`.
+- Changed (TS yian): infinity is a float value, so `x: !float .inf` loads, and an untagged
+  `x: .inf` gets the example `x: !float .inf`; `.nan` stays a load error (the YAML layer
+  refuses it).
 - Reserved node ids, such as `input`, apply to value entries too.
 
 ## Per-node configuration — `env:`

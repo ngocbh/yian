@@ -138,6 +138,22 @@ test("a compact flow's invalid input is located at its value", () => {
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(new SourceRange(4, 8, 4, 15));
 });
 
+test("a compact flow's input named inf is rejected at its key", () => {
+  const document = parseSourceDocument(
+    "id: f\nname: f\nkind: code\ncode: m:f\ninput:\n  inf: !float\n",
+    "compact.yaml",
+  );
+  const error = loadError(() => parseFile(document));
+
+  expect(error.message).toBe(
+    "compact (single-node) flow: input 'inf': `inf` is infinity in an expression, so ${inf} " +
+      "can't read it; rename it",
+  );
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(
+    document.root.child("input").keyRangeOf("inf")!,
+  );
+});
+
 const COMPACT_HYPHEN_ID = `
 id: hello-agent
 name: hello

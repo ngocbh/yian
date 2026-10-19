@@ -207,7 +207,8 @@ function parseNode(
     const inputs = normalized.child("inputs");
     for (const name of localNames) {
       const where = `node ${reprText(nodeId)} input ${reprText(name)}`;
-      rejectInfinityName(where, name, inputs.keyRangeOf(name), diagnostics);
+      // A generated binding (a compact flow's auto-wiring) has no key, so point at the body.
+      rejectInfinityName(where, name, inputs.keyRangeOf(name) ?? normalized.range, diagnostics);
     }
   }
   return desc;

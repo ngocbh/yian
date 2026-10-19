@@ -258,7 +258,8 @@ test("a round trip is detached and survives reopening", () => {
   expect(reloaded(file)).toEqual(expected);
 });
 
-// Compared as log JSON text: Bun's `toEqual` overflows the stack at this depth.
+// Compared as log JSON text: Bun's `toEqual` overflows the stack at this depth, and `===` keeps a
+// failure from printing the whole 600 KB text.
 test("a 100 000-level state round-trips and survives reopening", () => {
   const file = path.join(dir, "memory.sqlite");
   let deep: unknown = 1n;

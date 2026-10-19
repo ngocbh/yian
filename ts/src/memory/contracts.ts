@@ -100,7 +100,7 @@ function requirePath(value: unknown, name: string, allowEmpty = false): readonly
 /** One container `freezeJson` is copying: its source, its path, and the children copied so far. */
 interface FreezeFrame {
   readonly source: unknown[] | Record<string, unknown>;
-  readonly name: string;
+  readonly path: string;
   readonly nesting: number;
   /** The object's keys in code-unit order; `null` for an array. */
   readonly keys: string[] | null;
@@ -122,7 +122,8 @@ function freezeJson(
   memo: Map<object, JsonValue> | null = null,
 ): JsonValue {
   // An explicit stack, not recursion, so depth is bounded by memory rather than the call stack.
-  // It visits values in the recursive order, so the first error found is the same.
+  // It visits children depth-first in index or sorted-key order, as a recursive walk would, so the
+  // first error it finds is the one a recursive walk would find.
   const stack: FreezeFrame[] = [];
   // The containers on the current path, so a subtree reached twice is not a cycle.
   const active = new Set<object>();
@@ -160,35 +161,32 @@ function freezeJson(
       keys.sort(compareCodeUnits);
     }
     active.add(item);
-    stack.push({ source: item, name: path, nesting, keys, copy: [] });
+    stack.push({ source: item, path, nesting, keys, copy: [] });
     return undefined;
   };
 
-  const ready = enter(value, name, 0);
-  if (ready !== undefined) return ready;
-  for (;;) {
-    const frame = stack.at(-1)!;
-    const { source, name: path, nesting, keys, copy } = frame;
+  let result = enter(value, name, 0);
+  while (stack.length > 0) {
+    const { source, path, nesting, keys, copy } = stack.at(-1)!;
     const index = copy.length;
-    let child: JsonValue | undefined;
-    if (keys === null && index < (source as unknown[]).length) {
-      // By index, so a hole reads `undefined` and is refused.
-      child = enter((source as unknown[])[index], `${path}[${index}]`, nesting + 1);
-    } else if (keys !== null && index < keys.length) {
-      const key = keys[index]!;
-      child = enter((source as Record<string, unknown>)[key], `${path}.${key}`, nesting + 1);
-    } else {
-      stack.pop();
-      active.delete(source);
-      // `Object.fromEntries` defines own data properties, so a `__proto__` key stays data.
-      child = Object.freeze(keys === null ? copy : Object.fromEntries(keys.map((key, i) => [key, copy[i]!])));
-      memo?.set(source, child);
-      if (stack.length === 0) return child;
-      stack.at(-1)!.copy.push(child);
+    // The next child, or finish the container. An array's length is read each step and its
+    // children by index, so a hole reads `undefined` and is refused.
+    if (index < (keys ?? (source as unknown[])).length) {
+      const child =
+        keys === null
+          ? enter((source as unknown[])[index], `${path}[${index}]`, nesting + 1)
+          : enter((source as Record<string, unknown>)[keys[index]!], `${path}.${keys[index]!}`, nesting + 1);
+      if (child !== undefined) copy.push(child);
       continue;
     }
-    if (child !== undefined) copy.push(child);
+    stack.pop();
+    active.delete(source);
+    // `Object.fromEntries` defines own data properties, so a `__proto__` key stays data.
+    result = Object.freeze(keys === null ? copy : Object.fromEntries(keys.map((key, i) => [key, copy[i]!])));
+    memo?.set(source, result);
+    stack.at(-1)?.copy.push(result);
   }
+  return result!;
 }
 
 /**

@@ -1317,10 +1317,8 @@ ordinary messages. These tuples are batches; positional lists inside them remain
 structured messages. Node self/variable channels contain ordered text messages
 and remain attributed to their own occurrences, rather than becoming root channels.
 
-Changed (TS yian): there is no 128-level memory bound, so depth is never the cause of a
-`memory.invalid_context` failure. The memory carriers (snapshots, mutation payloads, learn
-feedback, storage state) have no depth limit; values are bounded by value nesting where they
-are produced.
+Changed (TS yian): there is no 128-level memory bound, so copying memory JSON never fails
+for depth; values are bounded by value nesting where they are produced.
 
 Changed (TS yian): `BackwardOutcome`, `LearningResult` and `PolicyCommitOutcome` hold
 the frozen values they were given, where Python copies them; these classes,

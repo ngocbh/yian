@@ -33,12 +33,12 @@
  * `test_freeze_still_detects_cycles`, `test_freeze_shares_a_repeated_subtree` and
  * `test_learn_context_equal_feedback`; plus JavaScript's own
  * values (a `"__proto__"` key, a null-prototype object, a repeated subtree, an array hole), the
- * value nesting limit, the depth-first order of the first error, 100 000-level arrays and objects
- * copied through a snapshot envelope, a mutation and learn feedback (compared as log JSON text,
- * since Bun's `toEqual` overflows the stack at that depth) and an error deep inside one naming its
- * full path, the occurrence nesting order, the operation failure's field checks
- * (Python pins those through the learning outcome and backward records), `validateMutations`, a
- * mutation's id and payload checks (a payload deeper than the value nesting limit is kept), and
+ * value nesting limit, and the depth-first order of the first error. 100 000-level arrays and
+ * objects are copied through a snapshot envelope, a mutation and learn feedback (compared as log
+ * JSON text, since Bun's `toEqual` overflows the stack at that depth), and an error deep inside one
+ * names its full path. It also covers the occurrence nesting order, the operation failure's field
+ * checks (Python pins those through the learning outcome and backward records), `validateMutations`,
+ * a mutation's id and payload checks (a payload deeper than the value nesting limit is kept), and
  * each learning carrier's field checks in Python's order.
  *
  * TS-only (episodes and learn contexts): one row per `MemoryEpisode` and `LearnContext`
@@ -305,7 +305,8 @@ function deepValue(leaf: unknown, key: string | null): unknown {
   return value;
 }
 
-// Compared as log JSON text: Bun's `toEqual` overflows the stack at this depth.
+// Compared as log JSON text: Bun's `toEqual` overflows the stack at this depth, and `===` keeps a
+// failure from printing the whole 600 KB text.
 test.each([
   ["array", null],
   ["object", "a"],

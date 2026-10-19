@@ -292,7 +292,7 @@ def _check_endpoint(endpoint: str) -> None:
 
 
 def _check_options(
-    provider: Optional[str],
+    provider: str,
     *,
     method: Optional[str],
     login: Optional[str],
@@ -304,17 +304,16 @@ def _check_options(
     organization: Optional[str] = None,
     project: Optional[str] = None,
     header: Optional[list[str]] = None,
-) -> tuple[Optional[str], dict[str, Optional[str]]]:
+) -> tuple[str, dict[str, Optional[str]]]:
     """Validate the option combination and return the provider name and headers to use.
 
-    `provider` is `None` only for removing the whole auth file, which takes no setup
-    option and no `default`. Azure setup also needs `OPENAI_API_VERSION` and a valid `endpoint`, when given.
+    Azure setup also needs `OPENAI_API_VERSION` and a valid `endpoint`, when given.
     `organization` and `project` apply to an OpenAI API key, and `header` to every
     provider sent a key (see `_header_sources`).
 
     Returns:
-        `tuple[str | None, dict[str, str | None]]`: The provider name, and each header
-        name with its value from the environment or `None` to prompt.
+        `tuple[str, dict[str, str | None]]`: The provider name, and each header name
+        with its value from the environment or `None` to prompt.
 
     Raises:
         AuthError: The provider or an option does not apply, a connection setting is
@@ -734,15 +733,28 @@ def auth(
             "--json applies to --remove and to openai --method subscription --login device"
         )
     try:
-        if provider is None and not (remove and auth_file is not None):
-            if default or remove or any(
+        if provider is None:
+            setup = any(
                 value is not None
                 for value in (
                     method, login, model, api_key_env, endpoint, organization, project
                 )
-            ) or header:
-                raise AuthError("Name a provider: yian auth <provider> [options]")
-            _list(AuthStore(auth_file))
+            ) or bool(header)
+            if not (remove and auth_file is not None):
+                if default or remove or setup:
+                    raise AuthError("Name a provider: yian auth <provider> [options]")
+                _list(AuthStore(auth_file))
+                return
+            if default or setup:
+                raise AuthError(
+                    "--remove without a provider deletes the whole --auth-file and "
+                    "takes no other option"
+                )
+            AuthStore(auth_file).delete()
+            if json_output:
+                print_json({"ok": True})
+            else:
+                typer.echo(f"Removed the saved logins in {auth_file}")
             return
         provider, header_sources = _check_options(
             provider,
@@ -758,13 +770,6 @@ def auth(
             header=header,
         )
         store = AuthStore(auth_file)
-        if remove and provider is None:
-            store.delete()
-            if json_output:
-                print_json({"ok": True})
-            else:
-                typer.echo(f"Removed the saved logins in {auth_file}")
-            return
         if remove:
             state = store.read()
             saved = {selection.provider for selection in state.selections}
@@ -814,8 +819,14 @@ def auth(
         else:
             typer.echo(str(error), err=True)
         raise typer.Exit(1) from None
-    except (KeyboardInterrupt, EOFError):
-        typer.echo(_CANCELLED, err=True)
+    except (KeyboardInterrupt, EOFError) as error:
+        if not json_output:
+            typer.echo(_CANCELLED, err=True)
+        elif isinstance(error, KeyboardInterrupt):
+            # A stopped --json command exits 130 and writes no document.
+            raise typer.Exit(130) from None
+        else:
+            print_json({"error": {"code": "auth.failed", "message": _CANCELLED}})
         raise typer.Exit(1) from None
 
 

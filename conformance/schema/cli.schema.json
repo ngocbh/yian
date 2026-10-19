@@ -80,7 +80,7 @@
       ]
     },
     "error_document": {
-      "description": "Written by a --json command that exits 1 without its own result document. auth.failed: `yian auth` sign-in, the auth file, or removal failed (options that don't apply, a denied or expired sign-in, an HTTP failure, a store that isn't private or is malformed, a lock timeout, a missing login to remove, a model the subscription doesn't offer).",
+      "description": "Written by a --json command that exits 1 without its own result document.",
       "type": "object",
       "required": ["format", "error"],
       "properties": {

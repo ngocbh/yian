@@ -14,6 +14,7 @@ import { BearerAuth, HeaderKeyAuth, SubscriptionAuth } from "../../src/llm/auth.
 import { type ErrorKind, ProviderError } from "../../src/llm/errors.ts";
 import { callWithRetries, type RetryInfo, RouteModel } from "../../src/llm/executor.ts";
 import { Message, Request, TextPart } from "../../src/llm/messages.ts";
+import { AnthropicMessages } from "../../src/llm/protocols/anthropic_messages.ts";
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { OpenAIResponses } from "../../src/llm/protocols/openai_responses.ts";
 import { Route } from "../../src/llm/route.ts";
@@ -120,6 +121,7 @@ const MISSING = {
   error: MissingToolCallError,
   message: "the reply did not call the Record tool; call it with the answer",
 };
+const THINKING: JsonObject = { thinking: { type: "adaptive" }, output_config: { effort: "high" } };
 const REFUSED = { error: StructuredOutputError, message: "the model refused: I can't help with that." };
 const TRUNCATED = { error: StructuredOutputError, message: 'Invalid json output: {"answer": "x", "score": 1' };
 
@@ -135,9 +137,9 @@ type Expected =
 interface Scenario {
   /**
    * The wire: the Responses API with a key (OpenAI's or Azure's), the ChatGPT subscription, or
-   * Chat Completions (a vendor's or an Azure deployment's).
+   * Chat Completions (a vendor's or an Azure deployment's), or Anthropic's Messages API.
    */
-  family: "responses" | "subscription" | "chat";
+  family: "responses" | "subscription" | "chat" | "anthropic";
   provider: string;
   model: string;
   schema: string;
@@ -258,13 +260,103 @@ const SCENARIOS: Record<string, Scenario> = {
   az_resp_refusal: scenario("responses", "azure", "gpt-5-codex", "corpus:Rec", "json_schema", REFUSED),
   // `response.incomplete` with `max_output_tokens`.
   az_resp_incomplete: scenario("responses", "azure", "gpt-5-codex", "corpus:Rec", "json_schema", TRUNCATED),
+  // No `disable_parallel_tool_use` beside the forced tool.
+  a_forced_closed: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "forced_tool", { value: REC }),
+  a_union: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Union", "forced_tool", { value: UNION }),
+  a_forced_open: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Open", "forced_tool", {
+    value: OPEN,
+  }),
+  // Another tool's call comes first; the Record call is parsed by name.
+  a_forced_other_first: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "forced_tool", {
+    value: REC,
+  }),
+  // `output_config.format` is sent beside the block's `effort`, with no tools.
+  a_thinking_closed: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", {
+    value: REC,
+  }, { block: THINKING }),
+  // The block's `max_tokens` replaces the model's.
+  a_thinking_enabled_closed: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", {
+    value: REC,
+  }, { block: { thinking: { type: "enabled", budget_tokens: 2048n }, max_tokens: 4096n } }),
+  a_between_tools_closed: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", {
+    value: REC,
+  }, { block: { thinking: { type: "between_tools" }, output_config: { effort: "high" } } }),
+  // Thinking rules out a forced tool, and the open schema rules out a format: no `tool_choice`.
+  a_thinking_open: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Open", "unforced_tool", {
+    value: OPEN,
+  }, { block: THINKING }),
+  a_thinking_open_no_call: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Open", "unforced_tool",
+    MISSING, { block: THINKING }),
+  // Thinking turned off keeps the forced tool; the block's `thinking` is sent as written.
+  a_thinking_disabled: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "forced_tool", {
+    value: REC,
+  }, { block: { thinking: { type: "disabled" } } }),
+  // Models that refuse a forced tool get it unforced.
+  a_refuse_opus_5_5: scenario("anthropic", "anthropic", "claude-opus-5-5", "corpus:Rec", "unforced_tool", {
+    value: REC,
+  }),
+  // Tools only, no `output_config.format`.
+  a_refuse_mythos_5_1: scenario("anthropic", "anthropic", "claude-mythos-5-1", "corpus:Rec", "unforced_tool", {
+    value: REC,
+  }),
+  a_refuse_thinking_closed: scenario("anthropic", "anthropic", "claude-opus-5-5", "corpus:Rec", "json_schema", {
+    value: REC,
+  }, { block: THINKING }),
+  a_no_call_unforced: scenario("anthropic", "anthropic", "claude-opus-5-5", "corpus:Rec", "unforced_tool", MISSING),
+  a_other_tool_first: scenario("anthropic", "anthropic", "claude-opus-5-5", "corpus:Rec", "unforced_tool", {
+    value: REC,
+  }),
+  a_json_fenced: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", {
+    value: REC,
+  }, { block: THINKING }),
+  // The fence body runs to the last fence.
+  a_json_fence_in_string: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", {
+    value: { answer: "```py\nx\n```", score: 1n },
+  }, { block: THINKING }),
+  a_json_invalid: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", {
+    error: StructuredOutputError,
+    message: "Invalid json output: not json",
+  }, { block: THINKING }),
+  a_json_invalid_value: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", {
+    value: { answer: "x", score: "notint" },
+  }, { block: THINKING }),
+  // Truncated JSON is not repaired.
+  a_json_truncated: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", TRUNCATED, {
+    block: THINKING,
+  }),
+  a_json_prose_then_fence: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", {
+    value: REC,
+  }, { block: THINKING }),
+  a_json_two_objects: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", {
+    error: StructuredOutputError,
+    message: 'Invalid json output: {"answer": "a", "score": 1}\n{"answer": "b", "score": 2}',
+  }, { block: THINKING }),
+  // One object split over two text blocks, joined with a newline.
+  a_json_two_text_blocks: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:Rec", "json_schema", {
+    value: REC,
+  }, { block: { thinking: { type: "adaptive" } } }),
+  // The output schema keeps the nullable fields' `{default: null}`.
+  a_thinking_reflection: scenario("anthropic", "anthropic", "claude-sonnet-4-5", "corpus:_ReflectionResponse",
+    "json_schema", { value: { actions: [{ action: "add", lesson_id: null, text: "be terse" }] } }, {
+    block: THINKING,
+  }),
 };
 
 /**
- * Build a scenario's route as the Responses and Chat cassette tests build theirs: Azure's on
- * either wire, the ChatGPT subscription's, OpenAI's Responses API, or a Chat vendor's base URL.
+ * Build a scenario's route as the Responses, Chat and Anthropic cassette tests build theirs:
+ * Anthropic's Messages API, Azure's on either wire, the ChatGPT subscription's, OpenAI's
+ * Responses API, or a Chat vendor's base URL.
  */
 function route({ family, provider, model }: Scenario): Route {
+  if (family === "anthropic") {
+    return new Route({
+      provider,
+      baseUrl: "https://api.anthropic.com",
+      path: "v1/messages",
+      auth: new HeaderKeyAuth("x-api-key", "test-key-1"),
+      headers: { "anthropic-version": "2023-06-01" },
+    });
+  }
   if (family === "subscription") {
     const account = { accessToken: "test-token-1", accountId: "test-account-1", residency: null };
     return new Route({
@@ -296,9 +388,11 @@ function route({ family, provider, model }: Scenario): Route {
 function buildModel(scenario: Scenario, send: Send): RouteModel {
   const { family, provider, model, block } = scenario;
   const protocol =
-    family === "chat"
-      ? new OpenAIChat({ model, provider, block })
-      : new OpenAIResponses({ model, provider, block, subscription: family === "subscription" });
+    family === "anthropic"
+      ? new AnthropicMessages({ model, provider, block })
+      : family === "chat"
+        ? new OpenAIChat({ model, provider, block })
+        : new OpenAIResponses({ model, provider, block, subscription: family === "subscription" });
   return new RouteModel({ route: route(scenario), protocol, send });
 }
 

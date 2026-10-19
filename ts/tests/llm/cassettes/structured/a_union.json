@@ -1,0 +1,108 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "a_union: a tagged union: the forced ScalarWrapper tool (the function-tool parameters of Union). anthropic/claude-sonnet-4-5 on anthropic_messages. Schema Union (corpus:Union), name ScalarWrapper. Strategy forced_tool. Request: tools [ScalarWrapper the function-tool parameters of Union]; tool_choice {type: \"tool\", name: \"ScalarWrapper\"}; max_tokens 64000. Expected: plan.parse(response) returns {\"value\":{\"kind\":\"buy\",\"x\":1}}.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-api-key": "<redacted>",
+          "anthropic-version": "2023-06-01"
+        },
+        "json": {
+          "model": "claude-sonnet-4-5",
+          "max_tokens": 64000,
+          "messages": [
+            {
+              "role": "user",
+              "content": "Answer."
+            }
+          ],
+          "system": "You are terse.",
+          "tools": [
+            {
+              "name": "ScalarWrapper",
+              "input_schema": {
+                "properties": {
+                  "value": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "buy",
+                            "title": "Kind",
+                            "type": "string"
+                          },
+                          "x": {
+                            "title": "X",
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "x"
+                        ],
+                        "title": "buy",
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "sell",
+                            "title": "Kind",
+                            "type": "string"
+                          },
+                          "n": {
+                            "title": "N",
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "n"
+                        ],
+                        "title": "sell",
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "value"
+                ],
+                "type": "object"
+              },
+              "description": ""
+            }
+          ],
+          "tool_choice": {
+            "type": "tool",
+            "name": "ScalarWrapper"
+          },
+          "stream": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_1\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-sonnet-4-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 12, \"output_tokens\": 1, \"cache_read_input_tokens\": 100, \"cache_creation_input_tokens\": 30}}}\n\n",
+          "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"tool_use\", \"id\": \"toolu_01\", \"name\": \"ScalarWrapper\", \"input\": {}}}\n\n",
+          "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"{\\\"value\\\": {\\\"kind\\\"\"}}\n\n",
+          "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \": \\\"buy\\\", \\\"x\\\": 1}}\"}}\n\n",
+          "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\n",
+          "event: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"tool_use\", \"stop_sequence\": null}, \"usage\": {\"input_tokens\": 12, \"output_tokens\": 40, \"cache_read_input_tokens\": 100, \"cache_creation_input_tokens\": 30}}\n\n",
+          "event: message_stop\ndata: {\"type\": \"message_stop\"}\n\n"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+kind: cli
+files:
+  auth.json: |
+    {"version": 1, "default_provider": "openai", "providers": {
+      "openai": {"method": "subscription", "model": "gpt-a", "credential_id": "id-1",
+                 "credentials": {"access_token": "fake-access", "refresh_token": "fake-refresh",
+                                 "expires_at": 1, "account_id": "account-1",
+                                 "residency": null}}}}
+args: [models, --auth-file, auth.json, --json]
+http:
+  - request:
+      method: POST
+      url: "https://auth.openai.com/oauth/token"
+      form:
+        grant_type: refresh_token
+        refresh_token: fake-refresh
+        client_id: app_EMoamEEZ73f0CkXaXp7hrann
+    response: {status: 400, json: {error: invalid_grant}}
+expect:
+  exit: 1
+  json: {format: yian.cli.v1, error: {code: models.failed, status: 400}}

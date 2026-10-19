@@ -1,0 +1,8 @@
+kind: cli
+args: [models, --provider, ollama, --json]
+http:
+  - request: {method: GET, url: "http://localhost:11434/api/tags"}
+    response: {status: 200, json: {models: [{name: "llama3:latest"}, {name: "gemma:2b"}]}}
+expect:
+  exit: 0
+  json: {format: yian.cli.v1, models: ["gemma:2b", "llama3:latest"]}

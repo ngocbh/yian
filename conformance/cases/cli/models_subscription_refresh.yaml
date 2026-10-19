@@ -1,0 +1,35 @@
+kind: cli
+files:
+  auth.json: |
+    {"version": 1, "default_provider": "openai", "providers": {
+      "openai": {"method": "subscription", "model": "gpt-a", "credential_id": "id-1",
+                 "credentials": {"access_token": "fake-access", "refresh_token": "fake-refresh",
+                                 "expires_at": 1, "account_id": "account-1",
+                                 "residency": null}}}}
+args: [models, --auth-file, auth.json, --json]
+http:
+  - request:
+      method: POST
+      url: "https://auth.openai.com/oauth/token"
+      form:
+        grant_type: refresh_token
+        refresh_token: fake-refresh
+        client_id: app_EMoamEEZ73f0CkXaXp7hrann
+    response:
+      status: 200
+      json: {access_token: "<key:2>", refresh_token: "<key:3>", expires_in: 3600}
+  - request:
+      method: GET
+      url: "https://chatgpt.com/backend-api/codex/models?client_version=0.155.1"
+      headers: {authorization: "Bearer <key:2>", chatgpt-account-id: account-1}
+    response:
+      status: 200
+      json:
+        models:
+          - {slug: gpt-b, visibility: list, priority: 2}
+          - {slug: gpt-hidden, visibility: hide, priority: 0}
+          - {slug: gpt-none, visibility: none, priority: 0}
+          - {slug: gpt-a, visibility: list, priority: 1}
+expect:
+  exit: 0
+  json: {format: yian.cli.v1, models: [gpt-a, gpt-b]}

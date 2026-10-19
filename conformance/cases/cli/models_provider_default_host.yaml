@@ -1,0 +1,10 @@
+kind: cli
+stdin: "<key:1>\n"
+args: [models, --provider, anthropic, --json]
+http:
+  - request: {method: GET, url: "https://api.anthropic.com/v1/models?limit=1000",
+              headers: {x-api-key: "<key:1>", anthropic-version: "2023-06-01"}}
+    response: {status: 200, json: {data: [{id: claude-b}, {id: claude-a}], has_more: false}}
+expect:
+  exit: 0
+  json: {format: yian.cli.v1, models: [claude-a, claude-b]}

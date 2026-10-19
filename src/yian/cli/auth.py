@@ -1,17 +1,24 @@
-"""Provider setup over staged authentication and an atomic store, `llm_config` checks, and
-the provider list.
+"""Provider setup over staged authentication and an atomic store, `llm_config` checks, the
+provider list, and model listings.
 
-`config_check` checks a host `llm_config` layer read from stdin, and `providers` lists
-the providers and the login kinds `auth` can save for each.
+`auth` works on the store at `--auth-file`, `$YIAN_AUTH_FILE` or the default path; with
+`--json`, its removal prints one `yian.cli.v1` document and its OpenAI device sign-in
+prints JSON lines. `config_check` checks a host `llm_config` layer read from stdin,
+`providers` lists the providers and the login kinds `auth` can save for each, and
+`models` (`yian models`) lists the models an OpenAI subscription login or a provider's
+key offers.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 import json
+import math
 import os
+import re
 import signal
 import sys
+import time
 from typing import Optional
 import warnings
 import webbrowser
@@ -1005,3 +1012,131 @@ def providers(
         variable = provider["api_key_env"]
         suffix = f" ({variable})" if variable else ""
         typer.echo(f"{provider['name']}: {', '.join(provider['methods'])}{suffix}")
+
+
+def _subscription_models(auth_file: str, timeout: float) -> list[str]:
+    """Return the models the openai subscription login in `auth_file` offers, in its order.
+
+    An expiring token is refreshed first. The store's lock wait and each request get what
+    is left of `timeout` seconds.
+
+    Raises:
+        AuthError: There is no openai subscription login, or the store, the refresh or the
+            listing failed.
+        TimeoutError: `timeout` passed first.
+    """
+    end = time.monotonic() + timeout
+
+    def service() -> OpenAIAuth:
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            raise AuthError("No time is left for the request")
+        return OpenAIAuth(request_timeout=remaining)
+
+    try:
+        store = AuthStore(auth_file, lock_timeout=timeout)
+        selection = store.selection("openai")
+        if selection is None or selection.method != "subscription":
+            raise AuthError(f"There is no saved openai subscription login in {auth_file}")
+        credentials = store.credentials(
+            "openai", selection.credential_id, refresh=lambda old: service().refresh(old)
+        )
+        return list(service().subscription_models(credentials))
+    except AuthError:
+        # A request cut short by the deadline fails with a plain AuthError.
+        if time.monotonic() >= end:
+            raise TimeoutError from None
+        raise
+
+
+def models(
+    auth_file: Optional[str] = typer.Option(
+        None, "--auth-file", help="Auth file whose openai subscription login is listed."
+    ),
+    provider: Optional[str] = typer.Option(
+        None, "--provider", help="Provider whose host is listed, with the key on stdin."
+    ),
+    base_url: Optional[str] = typer.Option(
+        None, "--base-url", help="Host to list instead of the provider's own; --provider only."
+    ),
+    timeout: float = typer.Option(8.0, "--timeout", help="Seconds for the whole listing."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print one yian.cli.v1 JSON document on stdout."
+    ),
+) -> None:
+    """List the models an openai subscription login or a provider's key offers.
+
+    `yian models --auth-file F` lists the models the openai subscription login
+    saved in F offers, in its order, refreshing an expiring token first.
+
+    `yian models --provider P` lists the model ids P's host gives the key read
+    from stdin (none when stdin is empty), sorted; --base-url lists another
+    host. azure has no model listing.
+
+    \f
+    Args:
+        auth_file (`str | None`): Auth file holding the openai subscription login.
+        provider (`str | None`): Provider to list; case-insensitive.
+        base_url (`str | None`): Host to list instead of the provider's default.
+        timeout (`float`): Seconds for the whole listing; finite and above 0.
+        json_output (`bool`): Print a `yian.cli.v1` document instead of text.
+
+    Raises:
+        typer.BadParameter: Not exactly one of `auth_file` and `provider` is given,
+            `base_url` comes without `provider`, the provider isn't supported, or
+            `timeout` isn't a finite number above 0.
+        typer.Exit: With code 1 when the listing fails.
+    """
+    if (auth_file is None) == (provider is None):
+        raise typer.BadParameter("Give exactly one of --auth-file and --provider")
+    if base_url is not None and provider is None:
+        raise typer.BadParameter("--base-url applies only to --provider")
+    if provider is not None and provider.lower() not in SUPPORTED_LLM_PROVIDERS:
+        raise typer.BadParameter(
+            f"Unsupported provider; choose one of: {', '.join(SUPPORTED_LLM_PROVIDERS)}"
+        )
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise typer.BadParameter("--timeout must be a finite number of seconds above 0")
+    error = None
+    if provider is not None:
+        provider = provider.lower()
+        key = None if sys.stdin.isatty() else sys.stdin.read().strip() or None
+        try:
+            listed = list_models(provider, key, base_url, timeout=timeout)
+        except ModelListError as failure:
+            reason = str(failure)
+            status = re.fullmatch(r"HTTP (\d{3})", reason)
+            error = {
+                "code": "models.timeout" if reason == "timed out" else "models.failed",
+                "message": f"Couldn't list the {provider} models: {reason}",
+                "status": int(status[1]) if status else None,
+            }
+    else:
+        try:
+            listed = _subscription_models(auth_file, timeout)
+        except TimeoutError:
+            error = {
+                "code": "models.timeout",
+                "message": f"Listing the models took longer than {timeout:g} seconds",
+                "status": None,
+            }
+        except AuthError as failure:
+            status = re.search(r"\(HTTP (\d{3})\)$", str(failure))
+            error = {
+                "code": "models.failed",
+                "message": str(failure),
+                "status": int(status[1]) if status else None,
+            }
+    if error is not None:
+        if json_output:
+            print_json({"error": error})
+        else:
+            typer.echo(error["message"], err=True)
+        raise typer.Exit(1)
+    if json_output:
+        print_json({"models": None if listed is None else list(listed)})
+    elif listed is None:
+        typer.echo(f"{provider} has no model listing", err=True)
+    else:
+        for model in listed:
+            typer.echo(model)

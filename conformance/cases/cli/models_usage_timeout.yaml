@@ -1,0 +1,5 @@
+kind: cli
+args: [models, --provider, openrouter, --timeout, "0", --json]
+expect:
+  exit: 2
+  stdout: ""

@@ -10,7 +10,8 @@
     {"$ref": "#/$defs/providers_document"},
     {"$ref": "#/$defs/skills_document"},
     {"$ref": "#/$defs/remove_document"},
-    {"$ref": "#/$defs/auth_event"}
+    {"$ref": "#/$defs/auth_event"},
+    {"$ref": "#/$defs/models_document"}
   ],
   "$defs": {
     "format": {
@@ -92,9 +93,20 @@
             {
               "properties": {
                 "code": {
-                  "enum": ["compose.load", "defaults.invalid", "run.setup", "run.cancelled", "auth.failed"]
-                }
+                  "enum": [
+                    "compose.load", "defaults.invalid", "run.setup", "run.cancelled", "auth.failed",
+                    "models.failed", "models.timeout"
+                  ]
+                },
+                "status": {"type": ["integer", "null"]}
               }
+            },
+            {
+              "if": {
+                "required": ["code"],
+                "properties": {"code": {"enum": ["models.failed", "models.timeout"]}}
+              },
+              "then": {"required": ["status"]}
             }
           ]
         }
@@ -300,6 +312,15 @@
           }
         }
       ]
+    },
+    "models_document": {
+      "description": "`yian models --json`: the models the openai subscription login in --auth-file offers, in its order, or the model ids the --provider's host lists, sorted; null when the provider has no model listing (azure).",
+      "type": "object",
+      "required": ["format", "models"],
+      "properties": {
+        "format": {"$ref": "#/$defs/format"},
+        "models": {"type": ["array", "null"], "items": {"type": "string"}}
+      }
     }
   }
 }

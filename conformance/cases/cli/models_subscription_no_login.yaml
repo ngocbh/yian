@@ -1,0 +1,6 @@
+kind: cli
+args: [models, --auth-file, auth.json, --json]
+expect:
+  exit: 1
+  json: {format: yian.cli.v1, error: {code: models.failed, status: null}}
+  exists: {auth.json: false}

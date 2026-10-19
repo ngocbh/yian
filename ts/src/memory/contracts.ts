@@ -6,8 +6,10 @@
  * Python import paths), and the per-declaration shape check `checkMemoryDeclaration`, with the
  * built-in types' config tables. It also holds the frozen identity values compile records:
  * declaration sites, declarations and their origin rewrite, node scopes with their occurrence
- * paths, memory specs and stacks, and the setup error. It imports only `diagnostics` and
- * `defaults`. The runtime memory, recall, learning and conversation contracts are not ported yet.
+ * paths, memory specs and stacks, and the setup error; and the host memory objects (`Memory` and
+ * its run `MemorySession`), their typed failures and their recorded snapshots. It imports only
+ * `diagnostics` and `defaults`. The recall, learning and conversation contracts and the session's
+ * recall, learn and commit methods are not ported yet.
  */
 
 import { current } from "../defaults.ts";
@@ -547,9 +549,9 @@ function comparePaths(a: readonly string[], b: readonly string[]): number {
   return a.length - b.length;
 }
 
-/** Whether `prefix` is a prefix of `path`. */
-function startsWith(path: readonly string[], prefix: readonly string[]): boolean {
-  return prefix.length <= path.length && prefix.every((part, i) => path[i] === part);
+/** Whether `prefix` is a strict (shorter) prefix of `path`. */
+function isStrictPrefix(path: readonly string[], prefix: readonly string[]): boolean {
+  return prefix.length < path.length && prefix.every((part, i) => path[i] === part);
 }
 
 /** Throw when `keys` repeats a key. */
@@ -621,7 +623,7 @@ export class MemoryOccurrenceSegment {
     if (!OCCURRENCE_KINDS.includes(kind)) throw new TypeError("kind must be a MemoryOccurrenceKind");
     this.kind = kind;
     this.staticPath = requirePath(staticPath, "static_path");
-    if (typeof index !== "number" || !Number.isInteger(index)) throw new TypeError("index must be an integer");
+    if (!Number.isInteger(index)) throw new TypeError("index must be an integer");
     if (index < 0) throw new RangeError("index must be non-negative");
     this.index = index;
     Object.freeze(this);
@@ -636,7 +638,7 @@ function requireOccurrencePath(value: unknown): readonly MemoryOccurrenceSegment
     if (!(segment instanceof MemoryOccurrenceSegment)) {
       throw new TypeError("occurrence_path items must be MemoryOccurrenceSegment values");
     }
-    if (prior !== null && (segment.staticPath.length <= prior.length || !startsWith(segment.staticPath, prior))) {
+    if (prior !== null && !isStrictPrefix(segment.staticPath, prior)) {
       throw new RangeError("occurrence segments must follow lexical nesting order");
     }
     prior = segment.staticPath;
@@ -674,7 +676,7 @@ export class MemoryScope {
     requireUnique(this.memories, "memories");
     this.occurrencePath = requireOccurrencePath(occurrencePath);
     const inner = this.occurrencePath.at(-1)?.staticPath;
-    if (inner !== undefined && (inner.length >= this.staticPath.length || !startsWith(this.staticPath, inner))) {
+    if (inner !== undefined && !isStrictPrefix(this.staticPath, inner)) {
       throw new RangeError("the innermost occurrence segment must contain the scoped node");
     }
     Object.freeze(this);
@@ -699,9 +701,10 @@ export class MemoryDecl {
    * @throws RangeError when a value breaks a shape rule.
    */
   constructor(name: string, type: string, config: unknown, site: DeclSite, origin: OriginRef | null = null) {
-    this.config = checkedConfig(name, type, config);
+    const checked = checkedConfig(name, type, config);
     this.name = name;
     this.type = type;
+    this.config = checked;
     if (!(site instanceof DeclSite)) throw new TypeError("site must be a DeclSite");
     this.site = site;
     this.origin = requireOrigin(origin, "origin");
@@ -871,4 +874,101 @@ export class MemorySetupError extends RangeError {
     this.origin = checkedOrigin;
     this.related = Object.freeze([...related]);
   }
+}
+
+/** One opaque public durable snapshot declared by a memory backend. Frozen. */
+export class MemorySnapshotEnvelope {
+  readonly memory: string;
+  /** The backend's deep-frozen public export, keys in code-unit order; any depth. */
+  readonly snapshot: JsonObject;
+
+  /**
+   * Snapshot `snapshot`, then check the memory key, as Python does.
+   *
+   * @throws TypeError when `snapshot` isn't an exact JSON object or `memory` isn't a string.
+   * @throws RangeError for a bad JSON value, an empty `memory`, or a lone surrogate.
+   */
+  constructor(memory: string, snapshot: unknown) {
+    const frozen = freezeJsonObject(snapshot, "snapshot", { limitNesting: false });
+    this.memory = requireString(memory, "memory");
+    this.snapshot = frozen;
+    Object.freeze(this);
+  }
+}
+
+/** Throw unless `value` is a boolean. */
+function requireRetryable(value: unknown): boolean {
+  if (typeof value !== "boolean") throw new TypeError("retryable must be a boolean");
+  return value;
+}
+
+/** Sanitized durable failure from one memory operation. Frozen. */
+export class MemoryOperationFailure {
+  readonly stage: string;
+  readonly code: string;
+  readonly message: string;
+  readonly retryable: boolean;
+
+  /**
+   * Require non-empty string fields and a boolean retry flag.
+   *
+   * @throws TypeError when a field isn't a string or `retryable` isn't a boolean.
+   * @throws RangeError when a string is empty or holds a lone surrogate.
+   */
+  constructor(stage: string, code: string, message: string, retryable: boolean) {
+    this.stage = requireString(stage, "stage");
+    this.code = requireString(code, "code");
+    this.message = requireString(message, "message");
+    this.retryable = requireRetryable(retryable);
+    Object.freeze(this);
+  }
+}
+
+/** Typed ordinary failure raised by a memory or session operation. */
+export class MemoryOperationError extends Error {
+  override name = "MemoryOperationError";
+  readonly stage: string;
+  readonly code: string;
+  readonly retryable: boolean;
+
+  /**
+   * Create one stable memory or session failure; `message` is the error's own message.
+   *
+   * @throws TypeError when a field isn't a string or `retryable` isn't a boolean.
+   * @throws RangeError when a string is empty or holds a lone surrogate.
+   */
+  constructor(stage: string, code: string, message: string, retryable: boolean) {
+    const checkedStage = requireString(stage, "stage");
+    const checkedCode = requireString(code, "code");
+    super(requireString(message, "message"));
+    this.stage = checkedStage;
+    this.code = checkedCode;
+    this.retryable = requireRetryable(retryable);
+  }
+}
+
+/** One run session over a host-provided memory object. */
+export interface MemorySession {
+  /**
+   * The backend's public durable export, persisted verbatim for run recovery: no host
+   * credentials, live handles, backend paths or tenant ids.
+   */
+  readonly snapshot: JsonObject;
+  /** Release resources held by this run session. */
+  close(): void;
+}
+
+/** Host-injected memory object that opens run sessions and can be reset. */
+export interface Memory {
+  /** Open one run session, optionally restoring a recorded snapshot. */
+  openRun(options?: { snapshot?: JsonObject | null }): MemorySession;
+  /** Clear current memory state according to the backend's policy. */
+  reset(): void;
+}
+
+/** Whether `value` has `Memory`'s methods (Python's runtime-checkable `isinstance`). */
+export function isMemory(value: unknown): value is Memory {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as { openRun?: unknown; reset?: unknown };
+  return typeof candidate.openRun === "function" && typeof candidate.reset === "function";
 }

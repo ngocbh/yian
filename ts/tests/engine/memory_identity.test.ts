@@ -4,19 +4,20 @@
  * `test_decl_site_sort_is_total_and_puts_flow_before_agent`,
  * `test_memory_decl_snapshots_config_and_rejects_private_keys`,
  * `test_memory_decl_origins_traverse_and_rewrite_shared_carriers_once`,
- * `test_memory_spec_requires_sorted_owners_and_derived_eligibility` and
- * `test_memory_stack_requires_locator_and_unique_keys`; plus a lone-surrogate node id and a
- * compiled spec whose key and config the declaration check would refuse.
+ * `test_memory_spec_requires_sorted_owners_and_derived_eligibility`,
+ * `test_memory_stack_requires_locator_and_unique_keys` and
+ * `test_snapshot_envelope_names_its_memory_key`; plus a lone-surrogate node id, a compiled spec
+ * whose key and config the declaration check would refuse, and a snapshot deeper than the value
+ * nesting limit.
  *
  * Changed: sites sort with `DeclSite.compare` (Python sorts by `DeclSite.sort_key()`; the order
  * message names `DeclSite.compare`), and equal sites compare 0. A declaration's config is its
  * deep-frozen snapshot, so assigning to it throws `TypeError` (Python returns a fresh copy). The
  * declarations are frozen, so the origin rewrite returns rebuilt declarations and leaves the inputs
  * unchanged (Python rewrites them in place); rewriting the same array with the same `seen` returns
- * the same array. Python's `ValueError` is `RangeError`; a frozen field throws `TypeError` where
- * Python raises `FrozenInstanceError`.
- *
- * Ported by the next commit: `test_snapshot_envelope_names_its_memory_key`.
+ * the same array. An envelope's snapshot is its deep-frozen copy (Python returns a fresh copy).
+ * Python's `ValueError` is `RangeError`; a frozen field throws `TypeError` where Python raises
+ * `FrozenInstanceError`.
  *
  * Not ported: the list-for-tuple row (TS has only arrays); the origin re-check during traversal
  * and rewrite (`memory declaration origin must be an OriginRef or None`), since a frozen
@@ -35,6 +36,7 @@ import {
   DeclSite,
   iterMemoryDeclOrigins,
   MemoryDecl,
+  MemorySnapshotEnvelope,
   MemorySpec,
   MemoryStack,
   rewriteMemoryDeclOrigins,
@@ -133,8 +135,16 @@ test("a declaration snapshots its config and rejects private keys", () => {
     TypeError,
     "origin must be an OriginRef or null",
   );
-  expect(() => new MemoryDecl("", "episodic", {}, site)).toThrow(RangeError);
-  expect(() => new MemoryDecl("notes", "", {}, site)).toThrow(RangeError);
+  expectError(
+    () => new MemoryDecl("", "episodic", {}, site),
+    RangeError,
+    "memory name '' must match [A-Za-z_][A-Za-z0-9_-]*",
+  );
+  expectError(
+    () => new MemoryDecl("notes", "", {}, site),
+    RangeError,
+    "memory type '' must match [A-Za-z_][A-Za-z0-9_-]*",
+  );
 });
 
 // test_memory_decl_origins_traverse_and_rewrite_shared_carriers_once
@@ -169,6 +179,21 @@ test("declaration origins traverse and rewrite shared carriers once", () => {
   expect(shared.origin).toBe(a);
   expect(rewriteMemoryDeclOrigins(decls, mapper, seen)).toBe(rewritten);
   expect(calls).toEqual(["a", "b"]);
+  expect(decls).toEqual([shared, other, shared, plain]);
+  expect(decls[0]).toBe(shared);
+
+  // A different array sharing a declaration reuses its rebuilt form through the same `seen`.
+  const c = new OriginRef("c");
+  const third = decl("third", null, c);
+  const again = rewriteMemoryDeclOrigins([third, shared], mapper, seen);
+  expect(calls).toEqual(["a", "b", "c"]);
+  expect(again[1]).toBe(rewritten[0]!);
+  expect(again[0]!.site).toBe(third.site);
+  expect(rewritten[1]!.site).toBe(other.site);
+
+  const visited = new Set<object>();
+  expect([...iterMemoryDeclOrigins(decls, visited)]).toEqual([a, b]);
+  expect([...iterMemoryDeclOrigins([third, shared, other], visited)]).toEqual([c]);
 });
 
 test("the origin rewrite keeps the mapper's origin and checks its result", () => {
@@ -256,4 +281,40 @@ test("a stack requires a locator and unique keys", () => {
   expectError(() => new MemoryStack([], ["notes"]), RangeError, "locator must be non-empty");
   expectError(() => new MemoryStack(["ask"], ["notes", "notes"]), RangeError, "memories must be unique");
   expectError(() => new MemoryStack(["ask"], [""]), RangeError, "memories components must be non-empty");
+});
+
+// test_snapshot_envelope_names_its_memory_key
+test("a snapshot envelope names its memory key", () => {
+  const snapshot: Record<string, unknown> = { v: 1n };
+  const envelope = new MemorySnapshotEnvelope("notes", snapshot);
+  snapshot.v = 2n;
+  expect(envelope.memory).toBe("notes");
+  expect(envelope.snapshot).toEqual({ v: 1n });
+  expect(Object.isFrozen(envelope)).toBe(true);
+  expect(Object.isFrozen(envelope.snapshot)).toBe(true);
+  expect(() => {
+    (envelope.snapshot as Record<string, unknown>).v = 3n;
+  }).toThrow(TypeError);
+  expect("policyName" in envelope).toBe(false);
+  expectError(() => new MemorySnapshotEnvelope("", {}), RangeError, "memory must be non-empty");
+  expectError(() => new MemorySnapshotEnvelope(1n as never, {}), TypeError, "memory must be a string");
+  expectError(
+    () => new MemorySnapshotEnvelope("\uD800", {}),
+    RangeError,
+    "Unicode surrogate is not valid canonical JSON",
+  );
+  // The snapshot is checked first, as Python does.
+  expectError(() => new MemorySnapshotEnvelope("", []), TypeError, "snapshot must be an exact JSON object");
+});
+
+test("a snapshot envelope takes a snapshot deeper than the value nesting limit", () => {
+  let deep: Record<string, unknown> = {};
+  for (let i = 0; i < 150; i++) deep = { d: deep };
+  let level: unknown = new MemorySnapshotEnvelope("notes", deep).snapshot;
+  let depth = 0;
+  while (Object.hasOwn(level as object, "d")) {
+    level = (level as { d: unknown }).d;
+    depth++;
+  }
+  expect(depth).toBe(150);
 });

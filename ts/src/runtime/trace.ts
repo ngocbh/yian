@@ -57,11 +57,6 @@ export type OutcomeRecord = NodeSucceededRecord | NodeRoutedRecord | NodeExpande
 /** A node's bound backward handler, kept in the trace's private index. */
 type BackwardHandler = Node["backward"];
 
-/** Whether `part` is a source path index inside the array `value`. */
-function isIndexInto(part: string | number, value: JsonValue): value is JsonValue[] {
-  return typeof part === "number" && isList(value) && Number.isInteger(part) && part >= 0 && part < value.length;
-}
-
 /** Decode a typed value from its canonical log text. */
 function decodeTyped(text: string): TypedValue {
   return TypedValue.fromWire(parseJson(text, "codec"));
@@ -259,10 +254,15 @@ export class TraceOccurrence {
 
 /** One accepted expansion's child flow and its actual accepted endpoints. Frozen. */
 export class TraceBoundary {
+  /** The expansion occurrence that owns the child flow. */
   readonly owner: SourceRef;
+  /** The child flow's START id. */
   readonly startId: string;
+  /** The child flow's END id. */
   readonly endId: string;
+  /** The child START's accepted source, once known. */
   readonly startSource: SourceRef | null;
+  /** The child END's accepted source, once known. */
   readonly endSource: SourceRef | null;
 
   /** Hold the boundary's fields as given. */
@@ -284,7 +284,9 @@ export class TraceBoundary {
 
 /** Candidate input routes owned by one accepted growth occurrence. Frozen. */
 export class SeedRoutes {
+  /** The growth occurrence that owns the routes. */
   readonly owner: SourceRef;
+  /** The candidate `(input name, route)` pairs. */
   readonly fields: readonly (readonly [string, ValueRoute])[];
 
   /** Hold the owner and a frozen copy of its `(input name, route)` pairs. */
@@ -372,6 +374,8 @@ export class RetainedTrace {
   currentBoundaries = new Map<string, readonly [number, "startSource" | "endSource"]>();
 
   /**
+   * Start an empty trace for one run's root START and END.
+   *
    * @throws TypeError or RangeError when `rootInputNames` isn't an array of distinct strings.
    */
   constructor(runId: string, startId: string, endId: string | null = null, rootInputNames: readonly string[] = []) {
@@ -430,8 +434,8 @@ export class RetainedTrace {
     for (const part of source.path) {
       if (typeof part === "string" && isRecord(value) && Object.hasOwn(value, part)) {
         value = value[part] as JsonValue;
-      } else if (isIndexInto(part, value)) {
-        value = value[part as number] as JsonValue;
+      } else if (typeof part === "number" && isList(value) && part >= 0 && part < value.length) {
+        value = value[part] as JsonValue;
       } else {
         throw new RangeError("source path is absent from its accepted value");
       }

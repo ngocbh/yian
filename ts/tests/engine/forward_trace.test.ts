@@ -53,8 +53,8 @@
  *
  * TS-only (trace), with entries installed by setting the trace's internal maps: `captureBindings`
  * over a hand-built `BindingCapture` with one item and its two type errors; `SourceEntry.value`
- * restoring files through `files` where `storedValue` doesn't, each read fresh; one row per
- * `TraceTerminal` message and its `output`; `checkMemoryScope`; a `TraceOccurrence` keeping a decoded
+ * restoring files through `files` where `storedValue` doesn't, each read fresh; `sameSourceEntry`
+ * over each field; one row per `TraceTerminal` message and its `output`; `checkMemoryScope`; a `TraceOccurrence` keeping a decoded
  * copy of its envelope; `selectSeedRoute`; `RetainedTrace`'s defaults, `lookupSource`, `resolve`,
  * `occurrence` and `backwardContext`.
  *
@@ -83,15 +83,16 @@ import {
   NodeStartedRecord,
   NodeSucceededRecord,
   RecordEnvelope,
-  type RunRecord,
   RunStartedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import {
   captureBindings,
   checkMemoryScope,
+  type OutcomeRecord,
   RetainedTrace,
   SourceEntry,
+  sameSourceEntry,
   selectSeedRoute,
   TraceOccurrence,
   TraceTerminal,
@@ -865,8 +866,8 @@ function install(trace: RetainedTrace, target: string, entry: SourceEntry): void
 }
 
 /** Install the occurrence of `a` started at seq 1, accepted with `record` at seq 2. */
-function installOccurrence(trace: RetainedTrace, record: RunRecord): TraceOccurrence {
-  const capture = (record as NodeSucceededRecord).forwardCapture!;
+function installOccurrence(trace: RetainedTrace, record: OutcomeRecord): TraceOccurrence {
+  const capture = record.forwardCapture!;
   const envelope = new RecordEnvelope(SCHEMA_VERSION, RUN, 2, record);
   const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route);
   trace._occurrences.push(occurrence);
@@ -878,7 +879,7 @@ function installOccurrence(trace: RetainedTrace, record: RunRecord): TraceOccurr
  * A trace of `learnableRun()`: START's source 0, `a`'s output (source 1) and its occurrence, accepted
  * with `record` (by default the run's `NodeSucceeded`).
  */
-function chainTrace(record: RunRecord = learnableRun()[2]!.record): RetainedTrace {
+function learnableTrace(record: OutcomeRecord = learnableRun()[2]!.record as NodeSucceededRecord): RetainedTrace {
   const trace = new RetainedTrace(RUN, "__start__", "end", ["x"]);
   install(trace, "__start__", new SourceEntry(new SourceRef(RUN, 0), 0, typedJson({ x: 1n })));
   install(trace, "a", new SourceEntry(new SourceRef(RUN, 1), 2, typedJson(2n)));
@@ -957,6 +958,25 @@ test("a source entry's value restores files through its type, its stored value d
   expect(entry.value).not.toBe(entry.value);
   expect(entry.storedValue).not.toBe(entry.storedValue);
   expect(Object.isFrozen(entry)).toBe(true);
+});
+
+test("sameSourceEntry compares source keys, outcome sequences, value texts and files", () => {
+  const files = Type.scalar(ValueKind.FILE);
+  const valueJson = logJson({ kind: "int", value: 1n });
+  const entry = (
+    source: SourceRef | null = new SourceRef(RUN, 1),
+    seq = 2,
+    text = valueJson,
+    type: Type | null = files,
+  ) => new SourceEntry(source, seq, text, type);
+
+  expect(sameSourceEntry(entry(), entry())).toBe(true);
+  expect(sameSourceEntry(entry(), entry(new SourceRef(RUN, 2)))).toBe(false);
+  expect(sameSourceEntry(entry(null), entry())).toBe(false);
+  expect(sameSourceEntry(entry(), entry(null))).toBe(false);
+  expect(sameSourceEntry(entry(), entry(undefined, 3))).toBe(false);
+  expect(sameSourceEntry(entry(), entry(undefined, 2, logJson({ kind: "int", value: 2n })))).toBe(false);
+  expect(sameSourceEntry(entry(undefined, 2, valueJson, null), entry())).toBe(false);
 });
 
 const TERMINAL_FAILURE = new Failure({ code: "node.execute", message: "Failed.", nodeId: "a" });
@@ -1130,7 +1150,7 @@ test("lookupSource reads a root value or a path inside it as fresh canonical JSO
 });
 
 test("resolve pairs each read's value, presence and producer", () => {
-  const trace = chainTrace();
+  const trace = learnableTrace();
   install(trace, "b", new SourceEntry(new SourceRef(RUN, 3), 4, typedJson({ f: "text" })));
   trace.system.set("k", typedJson("ambient"));
 
@@ -1146,7 +1166,7 @@ test("resolve pairs each read's value, presence and producer", () => {
 });
 
 test("occurrence finds an accepted occurrence by its start", () => {
-  const trace = chainTrace();
+  const trace = learnableTrace();
   expect(trace.occurrence(new SourceRef(RUN, 1)).nodeId).toBe("a");
   expect(trace.occurrences.map((item) => item.nodeId)).toEqual(["a"]);
   expectError(
@@ -1159,7 +1179,7 @@ test("occurrence finds an accepted occurrence by its start", () => {
 test("backwardContext adds the evaluation evidence and reads a success's output", () => {
   const evidence = new EvaluationEvidence(null, { v: 1n }, "System.", "Prompt.");
   const { value, forwardCapture } = learnableRun()[2]!.record as NodeSucceededRecord;
-  const trace = chainTrace(new NodeSucceededRecord("a", "a", value, { evidence, forwardCapture }));
+  const trace = learnableTrace(new NodeSucceededRecord("a", "a", value, { evidence, forwardCapture }));
   const context = trace.backwardContext(new SourceRef(RUN, 1), { downstreamContext: [{ index: 0n }] });
 
   expect(context.inputs).toEqual({ v: 1n });
@@ -1178,7 +1198,7 @@ test("backwardContext refuses captured node data using the reserved evidence key
   const capture = new ForwardCapture({ v: 1n }, ValueRoute.record([["v", ValueRoute.literal(1n)]]), {
     nodeData: { _evaluation_evidence: "forged" },
   });
-  const trace = chainTrace(new NodeRoutedRecord("a", "next", { forwardCapture: capture }));
+  const trace = learnableTrace(new NodeRoutedRecord("a", "next", { forwardCapture: capture }));
   expectError(
     () => trace.backwardContext(new SourceRef(RUN, 1)),
     RangeError,
@@ -1192,7 +1212,8 @@ test("backwardContext takes a routed terminal failure and reads output only for 
   });
   const failure = new Failure({ code: "graph.terminal_unreachable", message: "Unreachable.", nodeId: "a" });
   // Source 1 holds a value, so the null output comes from the record's class.
-  const trace = chainTrace(new NodeRoutedRecord("a", "next", { terminalFailure: failure, forwardCapture: capture }));
+  const record = new NodeRoutedRecord("a", "next", { terminalFailure: failure, forwardCapture: capture });
+  const trace = learnableTrace(record);
 
   const context = trace.backwardContext(new SourceRef(RUN, 1));
 

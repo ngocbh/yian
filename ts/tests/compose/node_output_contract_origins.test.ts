@@ -98,9 +98,7 @@ test("full code output compiles root and nested contract origins", () => {
   const { contract, builder } = contractOf(NESTED_OUTPUT_FLOW, "emit", "nested.yaml");
   const entries = entriesOf(contract);
 
-  expectSite(builder, contract.origins.default, output);
-  expectSite(builder, entries.get("profile"), output.child("profile"));
-  expectSite(builder, entries.get("profile.age"), output.child("profile").child("age"));
+  expectProfileSites(builder, contract, output);
   expectSite(builder, entries.get("profile.name"), output.child("profile").child("name"));
   expectSite(builder, entries.get("ok"), output.child("ok"));
 });
@@ -240,9 +238,11 @@ nodes:
 output: \${code_leaf.output}
 `;
   const nodes = SourceDocument.parse(text, "leaves.yaml").root.child("nodes");
+  const { flow, builder } = assembleText(text, "leaves.yaml");
 
   for (const nodeId of ["agent_leaf", "code_leaf"]) {
-    const { contract, builder } = contractOf(text, nodeId, "leaves.yaml");
+    const contract = flow.compiled.nodes.get(nodeId)!.outputContract as ValueContract;
+    expect(contract.constructor).toBe(ValueContract);
     expect(contract.origins.entries).toEqual([]);
     expectSite(builder, contract.origins.default, nodes.child(nodeId).child("output"));
   }

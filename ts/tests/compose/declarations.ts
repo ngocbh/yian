@@ -62,14 +62,14 @@ export function parametersFromYaml(
 
 /**
  * Parse flow `text`'s `nodes:` as the loader reads them (`parseSourceDocument`, `parseFile`,
- * `flowNodesCursor`, `parseNodes`), with `classes` registered as the node kinds.
+ * `flowNodesCursor`, `parseNodes`), with `classes` (default none) registered as the node kinds.
  *
  * @param label The file name diagnostics name (default `<flow>`).
  * @returns The node descriptors by id.
  */
 export function nodesOf(
   text: string,
-  classes: readonly DescriptorClass[],
+  classes: readonly DescriptorClass[] = [],
   label = "<flow>",
 ): Map<string, NodeDescriptor> {
   const document = parseSourceDocument(text, label);

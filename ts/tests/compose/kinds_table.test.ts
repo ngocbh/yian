@@ -4,10 +4,9 @@
  * kinds of `ALL_KIND_NAMES`, and the agreement row also runs on the nine stand-ins registered
  * with `withKinds`.
  *
- * Ported: `test_kinds_maps_string_to_descriptor_class` (its `agent` and `tool` rows), with a `code`
- * row.
+ * Ported: `test_kinds_maps_string_to_descriptor_class`.
  *
- * TS-only: `withKinds` restores the tables after its function returns or throws.
+ * TS-only: a `code` row; `withKinds` restores the tables after its function returns or throws.
  *
  * Dropped: `test_retired_kindspec_is_not_public` (a Python import).
  *

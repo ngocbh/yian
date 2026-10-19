@@ -7,7 +7,8 @@
  *
  * Changed: a flow with no `nodes:` says "missing required top-level key 'nodes'", where Python's
  * text is pydantic's. The null and text `node_name:` rows and the null optional flow field rows
- * check the parsed value, where Python loads the flow.
+ * check the parsed value, where Python loads the flow. `test_text_code_and_tool_id_still_load`
+ * assembles the root flow with `assembleText`, where Python loads it.
  *
  * The `llm_config` rows (`test_non_text_llm_config_field_is_a_load_error`,
  * `test_nested_llm_config_text_field`, `test_other_llm_config_errors_are_unchanged`) load the node
@@ -19,11 +20,7 @@
  * Dropped: the date rows (TS reads an unquoted date as text) and
  * `test_not_text_detail_reads_the_first_string_error` (`not_text_detail` reads a pydantic error).
  *
- * Changed: `test_text_code_and_tool_id_still_load` assembles the root flow with `assembleText`,
- * where Python loads it.
- *
- * Later (T3-16): the
- * `call:`, `on:` and loop/case rows (`test_non_text_call_is_a_load_error`,
+ * Later (T3-16): the `call:`, `on:` and loop/case rows (`test_non_text_call_is_a_load_error`,
  * `test_null_call_is_empty`, `test_text_call_still_loads`, `test_non_text_case_on_is_a_load_error`,
  * `test_null_case_on_is_absent`, `test_text_case_on_still_loads`, and the while, until,
  * searched-when, on-when, then and else rows of `test_already_located_fields_are_unchanged`).
@@ -318,7 +315,7 @@ describe("parseNodes", () => {
   test.each(NON_TEXT)("non-text node name is a load error: %s", (value, phrase) => {
     const text = nodeNameFlow(value);
 
-    const error = loadError(() => nodesOf(text, []));
+    const error = loadError(() => nodesOf(text));
 
     expect(error.message).toContain(
       `node 'a' (kind=code): \`node_name:\` must be text, but YAML read it as ${phrase}; ` +
@@ -331,7 +328,7 @@ describe("parseNodes", () => {
     ["null", null],
     ["'5'", "5"],
   ])("null and text node name still parse: %s", (value, expected) => {
-    expect(nodesOf(nodeNameFlow(value), []).get("a")!.nodeName).toBe(expected);
+    expect(nodesOf(nodeNameFlow(value)).get("a")!.nodeName).toBe(expected);
   });
 
   test.each(NON_TEXT)("non-text kind is a load error: %s", (value, phrase) => {
@@ -357,7 +354,7 @@ describe("parseNodes", () => {
   test("a node's asserts must be a list of strings, located", () => {
     const text = FLOW.replace("    output: str\n", '    output: str\n    asserts: ["true", 5]\n');
 
-    const error = loadError(() => nodesOf(text, []));
+    const error = loadError(() => nodesOf(text));
 
     expect(error.message).toContain("`asserts:` must be a list of strings");
     expect(startLine(error)).toBe(lineOf(text, "asserts: "));
@@ -366,7 +363,7 @@ describe("parseNodes", () => {
   test.each(NON_TEXT)("non-text code is a load error: %s", (value, phrase) => {
     const text = codeFlow(value);
 
-    const error = loadError(() => nodesOf(text, []));
+    const error = loadError(() => nodesOf(text));
 
     expect(error.message).toContain(
       `node 'a' (kind=code): \`code:\` must be text, but YAML read it as ${phrase}; put it in quotes`,
@@ -377,7 +374,7 @@ describe("parseNodes", () => {
   test.each(NON_TEXT)("non-text tool id is a load error: %s", (value, phrase) => {
     const text = toolFlow(value);
 
-    const error = loadError(() => nodesOf(text, []));
+    const error = loadError(() => nodesOf(text));
 
     expect(error.message).toContain(
       `node 'a' (kind=tool): \`tool_id:\` must be text, but YAML read it as ${phrase}; put it in quotes`,
@@ -389,7 +386,7 @@ describe("parseNodes", () => {
     [codeFlow("null"), "code", "code"],
     [toolFlow("null"), "tool", "tool_id"],
   ])("null code and tool id are empty: %#", (text, kind, key) => {
-    const error = loadError(() => nodesOf(text, []));
+    const error = loadError(() => nodesOf(text));
 
     expect(error.message).toContain(
       `node 'a' (kind=${kind}): \`${key}:\` must be text, but it is empty; write the text`,
@@ -403,7 +400,7 @@ describe("parseNodes", () => {
 
   test("tagged non-text tool id", () => {
     // `!str 5` still reads as an integer here; the tag's own error comes once it is quoted.
-    expect(loadError(() => nodesOf(toolFlow("!str 5"), [])).message).toContain(
+    expect(loadError(() => nodesOf(toolFlow("!str 5"))).message).toContain(
       "`tool_id:` must be text, but YAML read it as an integer; put it in quotes",
     );
   });

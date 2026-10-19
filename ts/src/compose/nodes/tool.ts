@@ -5,7 +5,7 @@
  * `NodeDescriptor` (which records each field's `SourceRange`), checks its own fields, and builds
  * the runtime `ToolNode`. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
  *
- * Knows about: diagnostics, compose source and helpers, nodes (tool) and defaults.
+ * Knows about: diagnostics, compose helpers, the AGENT reader (`retriesError`), nodes (tool) and defaults.
  * Never imports: compose/parse, the runtime or the CLI.
  */
 

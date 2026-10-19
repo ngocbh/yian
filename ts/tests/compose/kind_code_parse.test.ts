@@ -48,9 +48,8 @@ function fieldsOf(desc: CodeDescriptor): Record<string, unknown> {
   return fields;
 }
 
-/** A context over an empty registry, with the `flow.yaml` source label. */
-const reading = (baseDir?: string | null) =>
-  new BuildContext({ registry: new Map(), sourceFile: "flow.yaml", baseDir });
+/** A context over an empty registry, with `baseDir` when given. */
+const reading = (baseDir?: string | null) => new BuildContext({ registry: new Map(), baseDir });
 
 test("code parse matches descriptor and records body range", () => {
   const desc = CodeDescriptor.parse("verdict", readerFor(FLOW, "verdict"));

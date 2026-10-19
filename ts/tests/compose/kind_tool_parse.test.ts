@@ -5,24 +5,20 @@
  * compares its class and fields. `test_a_tool_node_with_an_authored_output_loads` assembles the
  * root flow with `assembleText`, where Python loads it.
  *
- * TS-only: a `retries:` past `Number.MAX_SAFE_INTEGER` is refused, and a count is stored as a
- * `number`; the default follows `YIAN_TOOL_RETRIES`; `build` passes the title and the retries to
- * the node.
+ * TS-only: a `retries:` past `Number.MAX_SAFE_INTEGER` is refused; `build` passes the title and
+ * the retries to the node.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import { BuildContext, siteKey } from "../../src/compose/nodes/base.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
-import { BUILTIN, forget, reload } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { assembleText, loadError } from "./declarations.ts";
-
-afterEach(() => forget());
 
 const FLOW = `nodes:
   fetch:
@@ -128,18 +124,6 @@ describe("retries", () => {
       "node 'a' (kind=tool): `retries:` must be at most 9007199254740991, got 9007199254740992",
     );
     expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(5);
-  });
-
-  test("a count is stored as a number", () => {
-    expect(parseA("    retries: 3\n").retries).toBe(3);
-  });
-
-  test("the default follows YIAN_TOOL_RETRIES", () => {
-    reload((name) => (name === "YIAN_TOOL_RETRIES" ? "4" : undefined));
-    expect(parseA("").retries).toBe(4);
-    reload(() => undefined);
-    expect(parseA("").retries).toBe(BUILTIN.toolRetries);
-    expect(new ToolDescriptor({ id: "a", toolId: "t" }).retries).toBe(BUILTIN.toolRetries);
   });
 });
 

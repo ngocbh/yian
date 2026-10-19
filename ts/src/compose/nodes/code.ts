@@ -8,13 +8,12 @@
  * compiled at load here: the node takes the body as text. Registered in `KINDS` and
  * `BINDING_FIELDS` by `compose/nodes/index.ts`.
  *
- * Knows about: diagnostics, compose source and helpers, and nodes (code and contracts).
+ * Knows about: diagnostics, compose source and helpers, and nodes (code).
  * Never imports: compose/parse, the runtime or the CLI.
  */
 
-import { OriginRef, type SourceRange } from "../../diagnostics.ts";
-import { CodeNode } from "../../nodes/code/node.ts";
-import { validateOptionalOrigin } from "../../nodes/contracts.ts";
+import type { OriginRef, SourceRange } from "../../diagnostics.ts";
+import { CodeNode, validateCodeOrigins } from "../../nodes/code/node.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
 import type { SourceCatalogBuilder } from "../source/catalog.ts";
 import type { SourceCursor } from "../source/index.ts";
@@ -68,11 +67,7 @@ export class CodeDescriptor extends NodeDescriptor {
   constructor(fields: CodeDescriptorFields) {
     super(fields);
     const { codeOrigin = null, codeLineOrigins = [] } = fields;
-    validateOptionalOrigin(codeOrigin, "CODE source origin");
-    if (!Array.isArray(codeLineOrigins)) throw new TypeError("CODE line origins must be an array");
-    if (!codeLineOrigins.every((origin) => origin instanceof OriginRef)) {
-      throw new TypeError("CODE line origins must contain only OriginRef values");
-    }
+    validateCodeOrigins(codeOrigin, codeLineOrigins);
     this.code = fields.code;
     this.asserts = fields.asserts ?? [];
     this.codeOrigin = codeOrigin;

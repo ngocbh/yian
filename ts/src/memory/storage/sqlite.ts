@@ -37,11 +37,20 @@ function isIoError(error: unknown): boolean {
   return sqliteErrorCode(error) !== undefined || isSystemError(error);
 }
 
+const SQLITE_BUSY = 5;
+const SQLITE_LOCKED = 6;
+const SQLITE_CORRUPT = 11;
+const SQLITE_NOTADB = 26;
+
 /** Map an I/O failure to a sanitized storage error, by its SQLite primary code. */
 function ioError(error: unknown): MemoryOperationError {
   const code = (sqliteErrorCode(error) ?? 0) & 0xff;
-  if (code === 5 || code === 6) return storageError("busy", "Memory storage is already owned or busy.");
-  if (code === 11 || code === 26) return storageError("corrupt", "Memory storage is not a valid SQLite database.");
+  if (code === SQLITE_BUSY || code === SQLITE_LOCKED) {
+    return storageError("busy", "Memory storage is already owned or busy.");
+  }
+  if (code === SQLITE_CORRUPT || code === SQLITE_NOTADB) {
+    return storageError("corrupt", "Memory storage is not a valid SQLite database.");
+  }
   return storageError("io", "Memory storage I/O failed.");
 }
 
@@ -111,7 +120,7 @@ function normpath(path: string): string {
     if (comp !== ".." || (!initialSlashes && comps.length === 0) || comps.at(-1) === "..") comps.push(comp);
     else if (comps.length > 0) comps.pop();
   }
-  return "/".repeat(initialSlashes) + comps.join("/") || ".";
+  return ("/".repeat(initialSlashes) + comps.join("/")) || ".";
 }
 
 /**
@@ -172,6 +181,7 @@ function joinRealPath(path: string, rest: string, seen: Map<string, string | nul
  * Return `path` with its symlinks resolved, as Python's non-strict `os.path.realpath` does: a
  * missing component is kept and later ones are still resolved, a symlink is followed before a
  * later `..` applies, a loop leaves the rest unresolved, and the result is absolute and normalized.
+ * The markdown store resolves its paths with it too.
  *
  * @throws Error when reading a symlink fails (a Node system error).
  */
@@ -213,7 +223,7 @@ export function checkStoragePath(path: unknown): string {
  */
 export class SQLiteStorage {
   readonly #backend: string;
-  readonly #path: string;
+  // TS-private, not `#`, so tests can inspect it, as Python's tests read `store._connection`.
   private connection: Sqlite | null = null;
   #closed = false;
   #poisoned = false;
@@ -231,20 +241,21 @@ export class SQLiteStorage {
     }
     this.#backend = backend;
     const checked = checkStoragePath(path);
+    let real: string;
     try {
-      this.#path = realStoragePath(checked);
+      real = realStoragePath(checked);
     } catch (error) {
       if (isIoError(error)) throw ioError(error);
       throw error;
     }
     try {
-      if (createParent) fs.mkdirSync(split(this.#path)[0], { recursive: true });
+      if (createParent) fs.mkdirSync(split(real)[0], { recursive: true });
       let fd: number | undefined;
       try {
         const { O_CREAT, O_EXCL, O_WRONLY } = fs.constants;
-        fd = fs.openSync(this.#path, O_CREAT | O_EXCL | O_WRONLY, 0o600);
+        fd = fs.openSync(real, O_CREAT | O_EXCL | O_WRONLY, 0o600);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException | null)?.code !== "EEXIST") throw error;
+        if (!isSystemError(error) || error.code !== "EEXIST") throw error;
       }
       if (fd !== undefined) {
         try {
@@ -258,8 +269,8 @@ export class SQLiteStorage {
         }
         fs.closeSync(fd);
       }
-      if (!fs.statSync(this.#path).isFile()) throw storageError("path", "Memory storage requires a regular file.");
-      this.connection = openSqlite(this.#path);
+      if (!fs.statSync(real).isFile()) throw storageError("path", "Memory storage requires a regular file.");
+      this.connection = openSqlite(real);
       const connection = this.connection;
       connection.exec("PRAGMA busy_timeout = 0");
       connection.exec("PRAGMA locking_mode = EXCLUSIVE");
@@ -270,7 +281,7 @@ export class SQLiteStorage {
       connection.exec("BEGIN EXCLUSIVE");
       // A creator can die before SQLite initialization. Only genuinely empty files may
       // initialize; an unrelated empty SQLite database is not ours.
-      if (fs.statSync(this.#path).size === 0) {
+      if (fs.statSync(real).size === 0) {
         connection.exec(SCHEMA);
         connection.prepare("INSERT INTO memory_state (id, envelope) VALUES (1, ?)").run(encode(this.#backend, null));
       }
@@ -284,7 +295,6 @@ export class SQLiteStorage {
           this.connection.close();
         } catch {}
       }
-      this.#closed = true;
       if (isIoError(error)) throw ioError(error);
       throw error;
     }
@@ -334,6 +344,7 @@ export class SQLiteStorage {
   }
 
   #rollback(): void {
+    // The original failure must win over a rollback failure.
     try {
       this.connection?.exec("ROLLBACK");
     } catch {}

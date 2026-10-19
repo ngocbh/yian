@@ -79,12 +79,12 @@ function expectStorageError(fn: () => unknown, code: string): MemoryOperationErr
 
 /** Return the store's private connection, as Python's tests read `store._connection`. */
 function connectionOf(store: SQLiteStorage): Sqlite {
-  return (store as unknown as { connection: Sqlite }).connection;
+  return store["connection"]!;
 }
 
 /** Return the one value of `sql`'s single result row. */
 function pragma(connection: Sqlite, sql: string): unknown {
-  return Object.values(connection.prepare(sql).get()!);
+  return Object.values(connection.prepare(sql).get()!)[0];
 }
 
 /** Return the permission bits of the file at `file`. */
@@ -161,7 +161,6 @@ test.each([
   try {
     store.save(state);
     expect(store.load()).toEqual(expected);
-    if ("x" in expected && expected.x === 0) expect(Object.is(store.load()!.x, 0)).toBe(true);
   } finally {
     store.close();
   }
@@ -199,7 +198,14 @@ test.each([
   ["null", null],
   ["a number", 3],
 ])("only file paths are accepted (%s)", (_label, candidate) => {
-  expectStorageError(() => new SQLiteStorage(candidate, "session"), "path");
+  // A regression that accepted a relative path would create it here, not under `ts/`.
+  const previous = process.cwd();
+  process.chdir(dir);
+  try {
+    expectStorageError(() => new SQLiteStorage(candidate, "session"), "path");
+  } finally {
+    process.chdir(previous);
+  }
 });
 
 test.each([
@@ -234,10 +240,10 @@ test("a new file is private and the connection has the storage settings", () => 
   try {
     expect(mode(file)).toBe(0o600);
     const connection = connectionOf(store);
-    expect(pragma(connection, "PRAGMA synchronous")).toEqual([3]);
-    expect(pragma(connection, "PRAGMA locking_mode")).toEqual(["exclusive"]);
-    expect(pragma(connection, "PRAGMA journal_mode")).toEqual(["delete"]);
-    expect(pragma(connection, "PRAGMA busy_timeout")).toEqual([0]);
+    expect(pragma(connection, "PRAGMA synchronous")).toBe(3);
+    expect(pragma(connection, "PRAGMA locking_mode")).toBe("exclusive");
+    expect(pragma(connection, "PRAGMA journal_mode")).toBe("delete");
+    expect(pragma(connection, "PRAGMA busy_timeout")).toBe(0);
   } finally {
     store.close();
   }
@@ -306,8 +312,11 @@ test.each([
 ])("an invalid store (%s) is rejected without overwriting it or leaking the owner", (damage, code) => {
   const file = path.join(dir, "memory.sqlite");
   const store = new SQLiteStorage(file, "session");
-  store.save({ old: true });
-  store.close();
+  try {
+    store.save({ old: true });
+  } finally {
+    store.close();
+  }
   const connection = openSqlite(file);
   try {
     let raw: string | Uint8Array = connection.prepare("SELECT envelope FROM memory_state").get()!.envelope as string;

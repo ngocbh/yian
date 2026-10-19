@@ -20,9 +20,10 @@
  * `ModelTextInteraction`, `ModelValueInteraction`, `ToolCallInteraction`,
  * `ToolResultInteraction`). The declaration origin traversal and rewrite and the mutation batch
  * check `validateMutations` aren't re-exported (Python keeps them out of `__all__`); their callers
- * import `contracts.ts`. The recall and learning contexts, the episodes and the session
- * conversation contracts, and the conversation, session, summary, storage and backend modules are
- * not ported yet.
+ * import `contracts.ts`. `storage/sqlite.ts` is ported: a private adapter the facade doesn't
+ * re-export, as Python's `memory/__init__.py` doesn't. The recall and learning contexts, the
+ * episodes and the session conversation contracts, and the conversation, session, summary and
+ * backend modules are not ported yet.
  *
  * Knows about: `diagnostics` and `defaults`, through `contracts.ts`.
  * Never imports: `nodes`, `compile`, `compose`, `runtime`, `run`, the CLI, `llm`, or persistence

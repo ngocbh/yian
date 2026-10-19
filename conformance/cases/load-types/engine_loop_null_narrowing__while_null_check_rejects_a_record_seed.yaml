@@ -37,7 +37,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'loop node ''pages'': binding ''page'' — child expects ''{"n":int,"next":str}'', but the value {"n":0} does not fit (record missing required fields: [''next''])'
+      message: 'loop node ''pages'': binding ''page'' — child expects ''{"n":int,"next":str}'', but the value {"n":0} does not fit (record missing required fields: ["next"])'
       frames:
       - label: flow.yaml
         range: [28, 7, 29, 5]

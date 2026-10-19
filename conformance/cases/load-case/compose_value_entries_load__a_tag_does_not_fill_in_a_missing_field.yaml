@@ -1,4 +1,6 @@
+# TS writes the missing-field list in the text form (rules: messages); Python's wording in python_expect.
 kind: load
+rules: [messages]
 flow: |
   id: f
   name: f
@@ -17,6 +19,14 @@ flow: |
     x: !Buy {conviction: 1}
   output: ${x.output}
 expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''x'': the value is not a valid Buy: record missing required fields: ["action"] (at `x.action`)'
+      frames:
+      - label: flow.yaml
+        range: [15, 6, 15, 26]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

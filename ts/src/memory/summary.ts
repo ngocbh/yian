@@ -39,7 +39,7 @@ export function admissions(view: ConversationView): readonly ConversationInvocat
     const [runId, sequence, ordinal] = JSON.parse(entry.operationId) as OperationId;
     if (ordinal === 0) result.push(new ConversationInvocation(runId, sequence));
   }
-  return result;
+  return Object.freeze(result);
 }
 
 /**

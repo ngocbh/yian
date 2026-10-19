@@ -101,7 +101,8 @@
  * host-fault row spies on `crypto.createHash` (Python patches `hashlib.sha256`). The deep row
  * compares `logJson` text, not `toEqual`. The view decoder's freeze paths read
  * `conversation wire.<field>`, where Python's read `conversation wire.baseline.<field>` (its
- * admission-wrapper reservation, dropped).
+ * admission-wrapper reservation, dropped). Wire counters are converted before the carriers' own
+ * checks, so a record with several faults may report a different one first than Python does.
  *
  * Not ported (conversation): the wire-nesting tests
  * `test_wire_nesting_is_checked_before_fold_and_encoder_return` (`:1055`),

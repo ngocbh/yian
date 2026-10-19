@@ -21,7 +21,7 @@
  * `ToolResultInteraction`), the learning inputs (`MemoryEpisode` with its
  * `MemoryEpisodeStatus`, and `LearnContext`), the recall carriers (`RecallContext`,
  * `MemoryContextRequest`, `MemoryContent`, `MemoryContext`, `MemoryRecallError`, and the engine's
- * `EvaluationTrace`), and the session conversation contracts: the detached checkpoints and views
+ * `EvaluationTrace`), and the session conversation contracts: the frozen checkpoints and views
  * (`ConversationInvocation` through `ConversationClosed`, with `ConversationCheckpoint`) and the
  * host interfaces `TranscriptSource` and `ConversationTurn`. Python's `CheckStopped` has no
  * counterpart: `openTurn` takes an `AbortSignal`. The declaration origin traversal and rewrite,

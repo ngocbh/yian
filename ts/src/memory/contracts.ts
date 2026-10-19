@@ -2332,7 +2332,9 @@ export interface ConversationTurn {
    * rethrows `error`, and throws its own close failure only when `error` is undefined. With `error`
    * undefined and the signal aborted, it records `interrupted`, releases the lease, then throws
    * `signal.reason`. It releases the lease even when recording fails. While `error` is pending, its
-   * own close failure is attached to `error` rather than lost.
+   * own close failure never replaces `error`; the implementation chooses how to report it. Since
+   * `undefined` means a normal return, a caller that caught `undefined` passes an `Error` in its
+   * place. A second call does nothing.
    */
   close(error?: unknown): void | Promise<void>;
   /**

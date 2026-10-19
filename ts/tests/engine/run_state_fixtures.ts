@@ -204,22 +204,35 @@ export function stateSnapshot(state: RunState): Record<string, unknown> {
   };
 }
 
-/** A memory log whose append fails before it retains the record. */
+/** A memory log, holding `prior`'s records, whose append fails before it retains the record. */
 export class FailingLog extends MemoryRunLog {
+  constructor(runId: string, prior: Iterable<RecordEnvelope> = []) {
+    super(runId);
+    for (const envelope of prior) super.append(envelope.record);
+  }
+
   override append(_record: RunRecord): RecordEnvelope {
     throw new Error("disk full");
   }
 }
 
-/** A minimal custom log that returns a caller-selected append result and never advances. */
+/**
+ * A minimal custom log that returns a caller-selected append result and never advances. It has
+ * run id `RUN_ID` and next sequence 0 unless `options` says otherwise.
+ */
 export class ReturningLog implements RunLog {
-  readonly runId = RUN_ID;
+  readonly runId: string;
   readonly path = null;
-  readonly nextSequence = 0;
+  readonly nextSequence: number;
   readonly #result: (record: RunRecord) => RecordEnvelope;
 
-  constructor(result: (record: RunRecord) => RecordEnvelope) {
+  constructor(
+    result: (record: RunRecord) => RecordEnvelope,
+    options: { runId?: string; nextSequence?: number } = {},
+  ) {
     this.#result = result;
+    this.runId = options.runId ?? RUN_ID;
+    this.nextSequence = options.nextSequence ?? 0;
   }
 
   [Symbol.iterator](): Iterator<RecordEnvelope> {

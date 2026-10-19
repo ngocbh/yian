@@ -16,7 +16,7 @@
 import { CompiledFlow, type Edge, type Flow } from "../compile/model.ts";
 import { BUILTIN, type Defaults, fromRecorded } from "../defaults.ts";
 import { Failure, reprText } from "../diagnostics.ts";
-import { RunStarted, type RunEvent, type RunFailed, type RunSucceeded } from "../events.ts";
+import { NodeStarted, RunStarted, type RunEvent, type RunFailed, type RunSucceeded } from "../events.ts";
 import type { MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../memory/index.ts";
 import type { Grow, Node } from "../nodes/base.ts";
 import { type Binding, isExactly, type OutputContract } from "../nodes/contracts.ts";
@@ -26,14 +26,21 @@ import { isRecord, type Type, writeAsText } from "../typesys/values.ts";
 import { NodeState } from "./common.ts";
 import { RuntimeBackwardState } from "./learning.ts";
 import {
+  BackwardFinishedRecord,
+  BackwardReadyRecord,
+  BackwardStartedRecord,
   canonicalSeed,
   decodePool,
   decodeRecord,
   encodePool,
   encodeRecord,
+  MemoryCommitFailedRecord,
+  MemoryCommitRequestedRecord,
+  MemoryCommitSucceededRecord,
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
+  NodeStartedRecord,
   NodeSucceededRecord,
   type OutcomeCarriers,
   RecordEnvelope,
@@ -515,6 +522,106 @@ export function prepareRunStarted(state: RunState, data: RunStartData): Prepared
 }
 
 /**
+ * Prepare moving the exact ready-head node into ordered in-flight work.
+ *
+ * @param state An initialized nonterminal state whose ready head is being dispatched.
+ * @param nodeId The exact non-empty id at the head of `state.ready`.
+ * @returns The canonical `NodeStartedRecord` and a detached append-before-apply plan.
+ * @throws TypeError when `state` or `nodeId` has the wrong type.
+ * @throws RangeError when the state is uninitialized or terminal, or doesn't expose `nodeId` as
+ *   one unknown, non-in-flight ready head.
+ */
+export function prepareNodeStarted(state: RunState, nodeId: string): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeStarted expects a RunState");
+  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  return prepareRecord(state, new NodeStartedRecord(nodeId));
+}
+
+/** The post-terminal records `prepareRecord` hands to the backward reducer. */
+const BACKWARD_RECORDS = [
+  BackwardStartedRecord,
+  BackwardReadyRecord,
+  BackwardFinishedRecord,
+  MemoryCommitRequestedRecord,
+  MemoryCommitSucceededRecord,
+  MemoryCommitFailedRecord,
+] as const;
+
+/**
+ * Validate one supported authoritative record against the current frontier.
+ *
+ * This is the shared reducer seam for live dispatch and historical replay. Graph records require
+ * an initialized nonterminal state; backward and memory-commit records require an initialized
+ * primary terminal with learning enabled.
+ *
+ * @param state The initialized reducer state immediately before `record`.
+ * @param record One supported graph, frontier or backward-attempt record.
+ * @param options.growBuilder Required only for `NodeExpandedRecord` replay; rebuilds and verifies
+ *   the recorded fragment through the same injected path used live.
+ * @returns The canonically copied record, its frozen plan and its observers.
+ * @throws TypeError when `state` has the wrong type or the record is unsupported here.
+ * @throws RangeError when the record isn't the exact next transition for this state.
+ */
+export function prepareRecord(
+  state: RunState,
+  record: RunRecord,
+  options: { growBuilder?: GrowBuilder | null } = {},
+): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareRecord expects a RunState");
+  if (BACKWARD_RECORDS.some((cls) => isExactly<RunRecord>(record, cls))) {
+    return prepareBackwardTransition(state, record);
+  }
+
+  requireInitializedNonterminal(state);
+
+  if (isExactly(record, NodeExpandedRecord)) {
+    if (typeof options.growBuilder !== "function") {
+      throw new TypeError("NodeExpandedRecord replay requires a callable grow_builder");
+    }
+    return prepareGrowthRecord(state, record, options.growBuilder);
+  }
+  if (isExactly(record, NodeStartedRecord)) {
+    validateNodeStarted(state, record);
+  } else {
+    const name = (record as { constructor?: { name?: unknown } } | null)?.constructor?.name;
+    throw new TypeError(`unsupported run record for state preparation: ${String(name)}`);
+  }
+
+  const runId = state.runId;
+  // Established by the initialized-state check.
+  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
+  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
+  const envelope = decodeRecord(envelopeJson);
+  const canonical = envelope.record;
+  let delta: FrontierPlan["delta"];
+  let observers: RunEvent[];
+  if (isExactly(canonical, NodeStartedRecord)) {
+    validateNodeStarted(state, canonical);
+    delta = { kind: "started", nodeId: canonical.nodeId };
+    observers = [new NodeStarted({ nodeId: canonical.nodeId })];
+  } else {
+    // An exhaustive codec invariant.
+    throw new TypeError("frontier envelope decoded to a different record kind");
+  }
+
+  const startId = state.flow.startId;
+  const endId = state.flow.endId;
+  const plan: FrontierPlan = Object.freeze({
+    kind: "frontier",
+    originatingState: state,
+    originatingFlow: state.flow,
+    envelopeJson,
+    startId,
+    startNode: state.flow.nodes.get(startId)!,
+    endId,
+    endNode: state.flow.nodes.get(endId) ?? null,
+    traceDelta: prepareRecordTrace(state, envelope),
+    delta: Object.freeze(delta),
+  });
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
+}
+
+/**
  * Prepare a live expansion: validate `grow` against the expanding node and build its fragment
  * with `growBuilder`, without mutating `state`.
  *
@@ -580,12 +687,16 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
   const kind = (prepared._plan as { kind?: unknown } | null)?.kind;
   if (typeof kind !== "string" || !PLAN_KINDS.has(kind)) throw new TypeError("unsupported prepared transition plan");
   const traceDelta = prepared._plan.traceDelta;
-  if (prepared._plan.kind === "backward") requirePostterminalTraceDelta(state, traceDelta);
+  if (kind === "backward") requirePostterminalTraceDelta(state, traceDelta);
+  else if (kind === "frontier") requireFrontierTraceDelta(state, prepared);
   if (traceDelta !== null) traceDelta.validateOrigin(state.trace);
   let observers: readonly RunEvent[];
   switch (prepared._plan.kind) {
     case "runStarted":
       observers = commitRunStarted(log, state, prepared);
+      break;
+    case "frontier":
+      observers = commitFrontier(log, state, prepared);
       break;
     case "growth":
       observers = commitGrowth(log, state, prepared);
@@ -660,6 +771,40 @@ function commitRunStarted(log: RunLog, state: RunState, prepared: PreparedTransi
   return apply.observers;
 }
 
+/** Validate, append and apply one sparse dispatch, recovery, step or stop delta. */
+function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
+  const plan = prepared._plan;
+  if (plan.kind !== "frontier") throw new TypeError("frontier commit requires a frontier plan");
+  const record = prepared.record;
+  if (!isExactly(record, NodeStartedRecord)) {
+    throw new TypeError("frontier plan requires a dispatch, resume, step or stop record");
+  }
+  requirePreparedOrigin(state, plan);
+  requireInitializedNonterminal(state);
+  requireAuthorityCoordinates(log, state, prepared, true);
+  requireUnchangedRecord(prepared, plan.envelopeJson);
+  const delta = plan.delta;
+  let observers: readonly RunEvent[];
+  if (isExactly(record, NodeStartedRecord) && delta.kind === "started") {
+    if (delta.nodeId !== record.nodeId) throw new RangeError("frontier start delta disagrees with its record");
+    observers = [new NodeStarted({ nodeId: delta.nodeId })];
+  } else {
+    throw new TypeError("frontier record and prevalidated delta disagree");
+  }
+
+  appendAndVerify(log, prepared);
+  switch (delta.kind) {
+    case "started":
+      state.ready.shift();
+      state.inFlight.add(delta.nodeId);
+      state.acceptedStarts.set(delta.nodeId, prepared.expectedSequence);
+      state.nodeStarts.set(delta.nodeId, (state.nodeStarts.get(delta.nodeId) ?? 0) + 1);
+      break;
+  }
+  state.nextSequence = prepared.expectedSequence + 1;
+  return observers;
+}
+
 /** Append and apply one prepared expansion. Not ported yet (T4-5): it always throws. */
 function commitGrowth(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   throw new Error("not ported yet (T4-5)");
@@ -696,6 +841,57 @@ function requirePostterminalTraceDelta(state: RunState, delta: TraceDelta | null
     lists.some((values) => !Array.isArray(values) || values.length !== 0)
   ) {
     throw new RangeError(message);
+  }
+}
+
+/** Permit only the canonical dispatch, resume, step or stop trace change before append. */
+function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition): void {
+  const delta = prepared._plan.traceDelta;
+  const record = prepared.record;
+  if (state.trace === null) {
+    if (delta !== null) throw new RangeError("an unretained frontier cannot carry a frontier trace delta");
+    return;
+  }
+  if (
+    !isExactly(delta, TraceDelta) ||
+    delta.originatingTrace !== state.trace ||
+    !Number.isSafeInteger(delta.sequence) ||
+    delta.sequence !== state.nextSequence
+  ) {
+    throw new RangeError("frontier trace delta requires its exact accepted sequence");
+  }
+  if (isExactly(record, NodeStartedRecord)) {
+    const started: unknown = delta.started;
+    if (
+      !Array.isArray(started) ||
+      started.length !== 2 ||
+      started[0] !== record.nodeId ||
+      started[1] !== prepared.expectedSequence ||
+      delta.resumed !== false
+    ) {
+      throw new RangeError("frontier trace start disagrees with its canonical record");
+    }
+  } else {
+    throw new RangeError("frontier trace requires a dispatch, resume, step or stop record");
+  }
+  const singles = [
+    delta.initialized,
+    delta.occurrence,
+    delta.handler,
+    delta.writer,
+    delta.consumedConnection,
+    delta.boundaryUpdate,
+    delta.rootStartSource,
+    delta.rootWriter,
+    delta.causalRouteSource,
+    delta.terminal,
+  ];
+  const lists: unknown[] = [delta.pruneIds, delta.connections, delta.boundaries];
+  if (
+    singles.some((value) => value !== null) ||
+    lists.some((values) => !Array.isArray(values) || values.length !== 0)
+  ) {
+    throw new RangeError("frontier trace cannot change outcome or terminal history");
   }
 }
 
@@ -881,6 +1077,23 @@ function validateRuntimeMemoryConfiguration(state: RunState): void {
   ) {
     throw new RangeError("run-state memory roots disagree with RunStarted authority");
   }
+}
+
+/** Require `record` to dispatch exactly one eligible ready-head node. */
+function validateNodeStarted(state: RunState, record: NodeStartedRecord): void {
+  const nodeId: unknown = record.nodeId;
+  if (typeof nodeId !== "string") throw new TypeError("NodeStartedRecord node_id must be a string");
+  if (state.ready.length === 0 || state.ready[0] !== nodeId) {
+    const found = state.ready.length === 0 ? writeAsText(null) : reprText(state.ready[0]!);
+    throw new RangeError(`NodeStarted requires ready head ${reprText(nodeId)}, found ${found}`);
+  }
+  if (!state.flow.nodes.has(nodeId)) {
+    throw new RangeError(`NodeStarted node ${reprText(nodeId)} does not exist in the flow`);
+  }
+  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
+    throw new RangeError(`NodeStarted node ${reprText(nodeId)} must have UNKNOWN disposition`);
+  }
+  if (state.inFlight.has(nodeId)) throw new RangeError(`NodeStarted node ${reprText(nodeId)} is already in-flight`);
 }
 
 /** Whether two sets of ids hold the same ids, in any order. */

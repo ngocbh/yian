@@ -60,6 +60,15 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - `SourceCatalog` turns an opaque origin into a diagnostic frame by replaying the occurrence
   path it kept.
 
+## Skills
+
+- `src/skills/` is a leaf: it holds `Skill`, the `load_skill` tool and the system-message
+  listing, and imports only `defaults`, `diagnostics`, `typesys` and `llm`. Its `index.ts`
+  never re-exports the Compose loaders.
+- `src/compose/skills.ts` (`loadSkills`, `loadSkillDir`, `defaultSkillRoots`) reads `SKILL.md`
+  directories and parses their frontmatter with `parseYamlLiteral`.
+- Reads are synchronous. Skill files are read as strict UTF-8, with CRLF and lone CR read as LF.
+
 ## LLM layer
 
 - `src/llm/` is a leaf: it imports only `defaults`, `platform` and `typesys/json` (the layer

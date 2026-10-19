@@ -1,4 +1,6 @@
 # The null value is shown in the text form in TS (rules: messages).
+# hand TS expect: Python prints `from=None` in this message and no shim converts it, so the TS
+# text `from=null` was written by hand.
 kind: run
 rules: [messages]
 flow: |

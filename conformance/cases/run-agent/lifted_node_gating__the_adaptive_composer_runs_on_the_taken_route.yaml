@@ -1,7 +1,8 @@
 # From tests/engine/test_lifted_node_gating.py::test_adaptive_composer_runs_on_the_taken_route.
 # On the taken CASE route, the gate's synthetic composer AGENT `ask__compose` makes one
 # structured call (consumer `compose`); its one question (header DB) reaches the host's
-# ask_user from node `ask`, and the answer is the gate's output: {r: {DB: Postgres}}.
+# ask_user from node `ask` (its question is the gate's prompt), and the answer is the gate's
+# output: {r: {DB: Postgres}}.
 kind: run
 rules: [llm]
 flow: |
@@ -19,6 +20,7 @@ flow: |
       else: done
     ask:
       kind: human_input
+      prompt: "Pick one"
       input:
         ctx: ${input.go}
       adaptive_questions:
@@ -161,7 +163,7 @@ expect:
           required: true
           type: object
         node_id: ask
-        question: ''
+        question: Pick one
         questions:
         - header: DB
           multi_select: false
@@ -286,7 +288,7 @@ python_expect:
           required: true
           type: object
         node_id: ask
-        question: ''
+        question: Pick one
         questions:
         - header: DB
           multi_select: false

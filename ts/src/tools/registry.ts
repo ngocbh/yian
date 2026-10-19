@@ -34,7 +34,7 @@ import {
 } from "../typesys/values.ts";
 import { ASK_USER, ToolContext } from "./context.ts";
 import { ToolCheckError } from "./errors.ts";
-import { FunctionTool, isFunctionTool, type StandardIssue } from "./function_tools.ts";
+import { FunctionTool, isFunctionTool, type StandardIssue, type StandardResult } from "./function_tools.ts";
 import { isMcpServer, type McpServer } from "./mcp.ts";
 import { inputTypeFromJsonSchema } from "./types.ts";
 
@@ -100,7 +100,7 @@ class CheckedCall {
   /** The id of the tool the call is for. */
   readonly toolId: string;
 
-  /** Build a frozen call; only this module builds one, and records it in `CALLS`. */
+  /** Build a frozen call; only `checkedCall` builds one, and records it in `CALLS`. */
   constructor(toolId: string) {
     this.toolId = toolId;
     Object.freeze(this);
@@ -585,7 +585,8 @@ export class ToolSet {
    * @returns The checked call, for `invoke` and `isConcurrencySafe`.
    * @throws {RangeError} The id is not visible to this run, an argument is not in the schema, or
    *   a required argument is missing.
-   * @throws {TypeError} `inputs` is not a record.
+   * @throws {TypeError} `inputs` is not a record, or the validator returned no Standard Schema
+   *   result.
    * @throws {TypeCheckError} An argument is not a yian value, or doesn't fit its property's type.
    * @throws {ToolCheckError} The validator reported issues.
    * @throws The signal's reason when it aborts, and whatever the validator throws, unchanged.
@@ -626,10 +627,10 @@ export class ToolSet {
    *   output, the checked value in host form.
    * @throws {TypeError} The first argument is neither a tool id nor a `CheckedCall`; and as
    *   `validate` throws.
-   * @throws {ToolCheckError} A declared result is not a yian value, doesn't fit the output
-   *   schema's type, or the output validator reported issues or gave a value that isn't a yian
-   *   value.
-   * @throws Whatever the tool or the output validator throws, unchanged.
+   * @throws {ToolCheckError} A declared result is not a yian value or doesn't fit the output
+   *   schema's type; or the output validator threw (the error is the `cause`), returned no
+   *   Standard Schema result, reported issues or gave a value that isn't a yian value.
+   * @throws Whatever the tool throws, unchanged.
    */
   invoke(call: CheckedCall, options?: InvokeOptions): Promise<unknown>;
   invoke(toolId: string, inputs: Record<string, unknown>, options?: InvokeOptions): Promise<unknown>;
@@ -660,9 +661,12 @@ export class ToolSet {
    *   output, the checked value in host form.
    * @throws {RangeError} The id is not visible to this run, an argument is not in the full schema,
    *   or a required argument is missing.
-   * @throws {TypeError} `inputs` is not a record.
+   * @throws {TypeError} `inputs` is not a record, or the validator returned no Standard Schema
+   *   result.
    * @throws {TypeCheckError} An argument is not a yian value, or doesn't fit its property's type.
-   * @throws {ToolCheckError} The validator reported issues, or a declared result failed its checks.
+   * @throws {ToolCheckError} The validator reported issues, or a declared result failed its checks,
+   *   a throw from the output validator included.
+   * @throws Whatever the tool or the validator throws, unchanged.
    */
   async invokeTrusted(toolId: string, inputs: Record<string, unknown>, options?: InvokeOptions): Promise<unknown> {
     return await this.invoke(await this.checkedCall(toolId, inputs, true, options?.signal), options);
@@ -712,9 +716,10 @@ export class ToolSet {
       args = () => toHost(payload) as Record<string, unknown>;
     } else {
       signal?.throwIfAborted();
-      const result = await validator["~standard"].validate(toHost(payload));
+      const returned: unknown = await validator["~standard"].validate(toHost(payload));
       // The validator may be slow; a run that stopped meanwhile doesn't call the tool.
       signal?.throwIfAborted();
+      const result = standardResult(returned, `tool ${reprText(toolId)} arguments: the validator`, TypeError);
       if (result.issues !== undefined) {
         throw new ToolCheckError(
           validatorFailure(`tool ${reprText(toolId)} arguments failed its validator`, result.issues),
@@ -796,15 +801,44 @@ export class ToolSet {
       }
     }
     if (validator !== null) {
-      const checked = await validator["~standard"].validate(toHost(value));
-      if (checked.issues !== undefined) {
-        throw new ToolCheckError(validatorFailure(`${where} failed its output validator`, checked.issues));
+      let output: unknown;
+      try {
+        const returned: unknown = await validator["~standard"].validate(toHost(value));
+        const checked = standardResult(returned, `${where}: the output validator`, ToolCheckError);
+        if (checked.issues !== undefined) {
+          throw new ToolCheckError(validatorFailure(`${where} failed its output validator`, checked.issues));
+        }
+        output = checked.value;
+      } catch (error) {
+        if (error instanceof ToolCheckError) throw error;
+        // `execute` has run, so a retry would repeat it: any other throw here, from the validator
+        // or from reading its result, fails the call for good.
+        const message = error instanceof Error ? error.message : String(error);
+        throw new ToolCheckError(`${where}: the output validator threw: ${message}`, { cause: error });
       }
       // The validator's output is what yian records, so it must be a yian value too.
-      value = intake(checked.value);
+      value = intake(output);
     }
     return toHost(value);
   }
+}
+
+/**
+ * Return a validator's result when it is a Standard Schema result: an object holding `issues` or
+ * `value`.
+ *
+ * @throws `kind`, with the message `<head> returned <type>, not a Standard Schema result`, for
+ *   anything else.
+ */
+function standardResult(
+  result: unknown,
+  head: string,
+  kind: new (message: string) => Error,
+): StandardResult<unknown> {
+  if (typeof result === "object" && result !== null && ("issues" in result || "value" in result)) {
+    return result as StandardResult<unknown>;
+  }
+  throw new kind(`${head} returned ${jsTypeName(result)}, not a Standard Schema result`);
 }
 
 /**

@@ -38,6 +38,7 @@ import {
   buildValue,
   FileRef,
   fromHost,
+  jsTypeName,
   toHost,
   TypeCheckError,
   type Value,
@@ -333,6 +334,10 @@ describe("fromHost", () => {
     const error = intakeError(value);
     expect(error.message).toBe("output at a: object is not a yian value");
     expect(error.path).toEqual(["a"]);
+  });
+
+  test("jsTypeName names a Proxy without running a trap", () => {
+    expect(jsTypeName(new Proxy({}, throwingTraps()))).toBe("Proxy");
   });
 
   test.each<[string, unknown, string, (string | number)[]]>([

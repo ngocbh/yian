@@ -174,10 +174,12 @@ function bigintText(value: bigint): string {
 /**
  * Name a JS value's type for a message: the name of its prototype's own `constructor`
  * (`Date`, `Map`, `Foo`; not `value.constructor`, which the value can fake), else its
- * `typeof` (`symbol`, `function`, `undefined`), else `object`. A prototype or constructor that
- * is a `Proxy` names `object`, so naming a value runs none of its traps.
+ * `typeof` (`symbol`, `function`, `undefined`), else `object`. A `Proxy` names `Proxy`, and a
+ * prototype or constructor that is a `Proxy` names `object`, so naming a value runs none of
+ * its traps.
  */
 export function jsTypeName(value: unknown): string {
+  if (types.isProxy(value)) return "Proxy";
   if (typeof value !== "object" || value === null) return typeof value;
   const proto: unknown = Object.getPrototypeOf(value);
   if (proto === null || types.isProxy(proto)) return "object";

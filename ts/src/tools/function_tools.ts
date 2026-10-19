@@ -197,9 +197,10 @@ export function isFunctionTool(value: unknown): value is FunctionTool {
  * Schema interface (`~standard.jsonSchema.input`) gives for draft 2020-12. The tool keeps the
  * validators as `parametersValidator` and `outputValidator`.
  *
- * @throws {TypeError} a validator has no Standard JSON Schema and no JSON Schema was passed beside
- *   it, its converter throws (the error is the `cause`), or `parametersJsonSchema`
- *   (`outputJsonSchema`) is given beside a raw JSON Schema; and as `FunctionTool` throws.
+ * @throws {TypeError} `parameters` (a given `output`) is neither a plain object nor a validator, a
+ *   validator has no Standard JSON Schema and no JSON Schema was passed beside it, its converter
+ *   throws (the error is the `cause`), `parametersJsonSchema` (`outputJsonSchema`) is given beside
+ *   a raw JSON Schema, or `outputJsonSchema` is given without `output`; and as `FunctionTool` throws.
  * @throws {RangeError} as `FunctionTool` throws, for example when the arguments' schema is not of
  *   type `"object"`.
  *
@@ -252,7 +253,8 @@ export function tool<
 
 /**
  * Return the JSON Schema and the validator `value` gives for `role`: a raw JSON Schema is its own
- * schema with no validator; a validator's schema is `given`, else its Standard JSON Schema.
+ * schema with no validator; a validator's schema is `given`, else its Standard JSON Schema; an
+ * absent output is neither.
  */
 function schemaOf(
   prefix: string,
@@ -264,6 +266,13 @@ function schemaOf(
   const isValidator =
     ((typeof value === "object" && value !== null) || typeof value === "function") && "~standard" in value;
   if (!isValidator) {
+    if (role === "output" && value === undefined) {
+      if (given !== undefined) throw new TypeError(`${prefix} ${option} needs an output validator`);
+      return [undefined, null];
+    }
+    if (!isRecord(value)) {
+      throw new TypeError(`${prefix} ${role} must be a JSON Schema object or a Standard Schema v1 validator`);
+    }
     if (given !== undefined) throw new TypeError(`${prefix} ${option} is only for a validator`);
     return [value, null];
   }

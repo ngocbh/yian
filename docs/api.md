@@ -622,13 +622,15 @@ retries. The validator's issues raise `ToolCheckError`
 For a tool that declares an output, `invoke` checks the result: host value intake, yian's
 check against `outputJsonSchema`, which looks inside an object only when its schema sets
 `additionalProperties: false`, then, when there is an output validator, the validator, which
-checks the rest, and intake of its output. It returns the checked value in host form, and a failure raises `ToolCheckError`
-(`tool 'x' result at <path>: ...`, `tool 'x' result failed its output validator: ...`). A tool
-without an output returns its raw result. `execute`'s return type is the output validator's
-input form, so declare a transforming output as a raw JSON Schema of what is recorded, or
-leave `output` out. An `output` with no JSON Schema (none from the validator and no
-`outputJsonSchema`) makes `tool()` throw `TypeError`; Python left such a return type
-unchecked.
+checks the rest, and intake of its output. It returns the checked value in host form. A
+failure raises `ToolCheckError` (`tool 'x' result at <path>: ...`, `tool 'x' result failed
+its output validator: ...`), and so does an output validator that throws (`tool 'x' result:
+the output validator threw: <message>`, the error as its `cause`) or returns no Standard
+Schema result, since `execute` has already run. A tool without an output returns its raw
+result. `execute`'s return type is the output validator's input form, so declare a
+transforming output as a raw JSON Schema of what is recorded, or leave `output` out. An
+`output` with no JSON Schema (none from the validator and no `outputJsonSchema`) makes
+`tool()` throw `TypeError`; Python left such a return type unchecked.
 
 ### TOOL retries
 
@@ -652,9 +654,9 @@ Every exception from the tool is retried, except:
 
 Changed (TS yian): the check on the returned value refuses NaN but not `Infinity`:
 a host tool may return `Infinity`, which is a float value. A `tool()` validator's issues
-and the checks on a declared result (see [Tool context](#tool-context)) raise
-`ToolCheckError`, which is never retried; the result checks run inside the call, not after
-the node returns.
+and the checks on a declared result (see [Tool context](#tool-context)), a throw from the
+output validator included, raise `ToolCheckError`, which is never retried; the result
+checks run inside the call, not after the node returns.
 
 A `ReportedToolError` is retried like any other failure, unless it is also a
 `PermanentToolError`.
@@ -1064,7 +1066,10 @@ number) and as a float otherwise. The model sees the schema, so one that isn't J
 (holding `Infinity` or a `Date`) or nests deeper than `YIAN_MAX_VALUE_NESTING` throws
 `TypeError` when the tool is built; Python left a too-deep input unchecked. An integral
 float within ±(2^53−1) passes for an `integer` as in Python, but one beyond it (`1e20`)
-reads as a float and is refused.
+reads as a float and is refused. The run-start return type is read closed, but the runtime
+check of a raw JSON Schema output looks inside an object only when it sets
+`additionalProperties: false`; the TOOL node's `output:` contract checks the recorded value
+at its boundary.
 
 Changed: a limit on only one end (pydantic `Field(ge=0)`, JSON Schema `minimum`
 alone) and an exclusive `number` limit used to be dropped. They are now kept, so a

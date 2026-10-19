@@ -423,11 +423,11 @@ describe("FunctionTool in a ToolSet and the registry", () => {
     );
     expect(isFunctionTool(hostile)).toBe(false);
     expect(() => new ToolSet({ x: hostile as never })).toThrow(
-      new TypeError('tools["x"] must be a FunctionTool, an MCP server, or an array of FunctionTools, got Object'),
+      new TypeError('tools["x"] must be a FunctionTool, an MCP server, or an array of FunctionTools, got Proxy'),
     );
     expect(() => registerTool("x", hostile as never)).toThrow(
       new TypeError(
-        "registerTool('x') got a Object; it accepts a FunctionTool. " +
+        "registerTool('x') got a Proxy; it accepts a FunctionTool. " +
           "Pass anything else in the run's tools mapping instead",
       ),
     );
@@ -1000,6 +1000,24 @@ describe("tool()", () => {
     ).toThrow(new TypeError("tool 'x' outputJsonSchema is only for a validator"));
   });
 
+  test.each<[string, "parameters" | "output", unknown]>([
+    ["parameters missing", "parameters", undefined],
+    ["parameters as a string", "parameters", "object"],
+    ["parameters as an array", "parameters", []],
+    ["output as a string", "output", "string"],
+  ])("%s: neither a JSON Schema object nor a validator", (_label, role, value) => {
+    const options = { name: "x", description: "", parameters: ECHO_SCHEMA, execute: () => null, [role]: value };
+    expect(() => tool(options as Parameters<typeof tool>[0])).toThrow(
+      new TypeError(`tool 'x' ${role} must be a JSON Schema object or a Standard Schema v1 validator`),
+    );
+  });
+
+  test("outputJsonSchema needs an output validator", () => {
+    expect(() =>
+      tool({ name: "x", description: "", parameters: ECHO_SCHEMA, outputJsonSchema: ECHO_SCHEMA, execute: () => null }),
+    ).toThrow(new TypeError("tool 'x' outputJsonSchema needs an output validator"));
+  });
+
   test("parametersJsonSchema given with a zod validator replaces zod's schema", () => {
     const built = tool({
       name: "x",
@@ -1127,6 +1145,16 @@ describe("tool() checking order", () => {
       throw boom;
     });
     expect(await rejection(new ToolSet({ x: throwing }).validate("x", { text: "hi" }), Error)).toBe(boom);
+  });
+
+  test.each<[string, unknown, string]>([
+    ["undefined", undefined, "undefined"],
+    ["an object with neither issues nor value", {}, "Object"],
+  ])("a validator that returns %s is a TypeError", async (_label, result, name) => {
+    const tools = new ToolSet({ x: handTool(() => result as never) });
+
+    const error = await rejection(tools.validate("x", { text: "hi" }), TypeError);
+    expect(error.message).toBe(`tool 'x' arguments: the validator returned ${name}, not a Standard Schema result`);
   });
 
   test("an already-aborted signal stops validate before the validator runs", async () => {
@@ -1287,6 +1315,42 @@ describe("tool() results", () => {
     expect(dated.message).toBe("tool 'x' result: Date is not a yian value");
     expect(dated.cause).toBeInstanceOf(TypeCheckError);
     expect(await returning(z.string().transform((s) => s.trim()), " a ")).toBe("a");
+  });
+
+  test("a throw from the output validator is a ToolCheckError, its cause the original", async () => {
+    const boom = new Error("boom");
+    const output = z.string().transform(() => {
+      throw boom;
+    });
+
+    const error = await checkFailure(returning(output, "a"));
+    expect(error.message).toBe("tool 'x' result: the output validator threw: boom");
+    expect(error.cause).toBe(boom);
+  });
+
+  test("an output validator that throws a non-Error or returns no result fails as a ToolCheckError", async () => {
+    /** Call a tool whose output validator is `validate`. */
+    const handReturning = (validate: () => unknown): Promise<unknown> => {
+      const made = tool({
+        name: "x",
+        description: "",
+        parameters: { type: "object", properties: {} },
+        output: { "~standard": { version: 1, vendor: "hand", validate: validate as never } },
+        outputJsonSchema: { type: "string" },
+        execute: () => "a",
+      });
+      return new ToolSet({ x: made }).invoke("x", {});
+    };
+
+    const thrown = await checkFailure(
+      handReturning(() => {
+        throw "bad";
+      }),
+    );
+    expect(thrown.message).toBe("tool 'x' result: the output validator threw: bad");
+    expect(thrown.cause).toBe("bad");
+    const none = await checkFailure(handReturning(() => undefined));
+    expect(none.message).toBe("tool 'x' result: the output validator returned undefined, not a Standard Schema result");
   });
 
   test("an untranslatable output schema still runs intake", async () => {

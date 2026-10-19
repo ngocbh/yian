@@ -378,11 +378,16 @@ function valueProblems(top: BlockSchema, field: Field, value: unknown, path: str
     const part = nestedSchema(field, value);
     if (part !== null) keyProblems(top, part, value, `${path}.`, problems);
   } else if (isList(value)) {
-    const items = members(field).flatMap((member) => (member.kind === "list" ? [member.item] : []));
-    if (items.length === 0) return;
-    const item = items.length === 1 ? items[0]! : union(...items);
-    value.forEach((entry, index) => valueProblems(top, item, entry, `${path}[${index}]`, problems));
+    const item = listItem(field);
+    if (item !== null) value.forEach((entry, index) => valueProblems(top, item, entry, `${path}[${index}]`, problems));
   }
+}
+
+/** Return what an item of a list `field` may be (a union for several list members), if it is a list. */
+function listItem(field: Field): Field | null {
+  const items = members(field).flatMap((member) => (member.kind === "list" ? [member.item] : []));
+  if (items.length === 0) return null;
+  return items.length === 1 ? items[0]! : union(...items);
 }
 
 /** Return the fields a union allows, flattening nested unions. */
@@ -1206,4 +1211,277 @@ export function blockSchema(provider: string, connection?: unknown, apiKey?: unk
     throw new RangeError(`no provider block named ${valueRepr(provider)}`);
   }
   return PROVIDER_BLOCKS[provider]!;
+}
+
+// --------------------------------------------------------------------------------------- //
+// Blocks that hold values
+// --------------------------------------------------------------------------------------- //
+
+/** One problem `locatedBlockProblems` finds in a provider block. */
+export class BlockProblem {
+  /**
+   * The deepest written key path inside the block the problem names, with list indices as
+   * numbers; empty for the block itself.
+   */
+  readonly keys: readonly (string | number)[];
+  /** The message, starting with the backticked key path. */
+  readonly message: string;
+
+  constructor(keys: readonly (string | number)[], message: string) {
+    this.keys = Object.freeze([...keys]);
+    this.message = message;
+    Object.freeze(this);
+  }
+}
+
+/** The type of a provider-block field simple enough to check a value's source against. */
+export interface BlockFieldType {
+  readonly base: "str" | "int" | "float" | "bool";
+  /** The values a literal field allows; empty for any other. */
+  readonly literals: readonly string[];
+  /** The inclusive lower bound, if any; a `bigint` for an int field. */
+  readonly ge: bigint | number | null;
+  /** The inclusive upper bound, if any; a `bigint` for an int field. */
+  readonly le: bigint | number | null;
+}
+
+/** What a walk of a block holding values shares at every level. */
+interface PartialWalk {
+  readonly top: BlockSchema;
+  readonly isValue: (leaf: unknown) => boolean;
+  readonly problems: BlockProblem[];
+}
+
+/**
+ * Check a provider block whose leaves may be values that resolve later.
+ *
+ * Reserved and unknown key paths are reported as `blockSchema`'s block reports them. A value
+ * is opaque: it is never checked, a required field given as one counts as present, and a
+ * nested object whose `type` (the variant tag) is one is not walked. Every other leaf is
+ * checked against its field's type and constraints. A list holding a value has its object
+ * entries walked for key paths and its other entries left for when it resolves; a mapping
+ * field holding one has its value-free items checked and its item count left for then.
+ * Messages name the key path and never echo a value.
+ *
+ * @param block A key of `PROVIDER_BLOCKS`, e.g. `"anthropic"`.
+ * @param tree The block as written, with values in place of some leaves or subtrees.
+ * @param isValue Whether a leaf or subtree is a value.
+ * @returns One message per problem, in the order written; empty when none.
+ * @throws {RangeError} If `block` has no block.
+ */
+export function partialBlockProblems(block: string, tree: unknown, isValue: (leaf: unknown) => boolean): string[] {
+  return locatedBlockProblems(block, tree, isValue).map((problem) => problem.message);
+}
+
+/**
+ * Check a block as `partialBlockProblems` does; give each problem's key path too.
+ *
+ * @param block A key of `PROVIDER_BLOCKS`, e.g. `"anthropic"`.
+ * @param tree The block as written, with values in place of some leaves or subtrees.
+ * @param isValue Whether a leaf or subtree is a value.
+ * @returns One problem each, in the order written; empty when none.
+ * @throws {RangeError} If `block` has no block.
+ */
+export function locatedBlockProblems(
+  block: string,
+  tree: unknown,
+  isValue: (leaf: unknown) => boolean,
+): BlockProblem[] {
+  const top = blockSchema(block);
+  if (isValue(tree)) return [];
+  if (!isRecord(tree)) return [new BlockProblem([], `\`${top.name}\` must be a mapping`)];
+  const walk: PartialWalk = { top, isValue, problems: [] };
+  partialProblems(walk, top, tree, "", []);
+  return walk.problems;
+}
+
+/**
+ * Append the problems of the partial object `data` checked against `model`.
+ *
+ * `prefix` is the written key path of `data` as messages show it, and `keys` the same path as parts.
+ */
+function partialProblems(
+  walk: PartialWalk,
+  model: ObjectSchema,
+  data: Readonly<Record<string, unknown>>,
+  prefix: string,
+  keys: Loc,
+): void {
+  for (const [key, value] of Object.entries(data)) {
+    if (value === undefined) continue;
+    const path = `${prefix}${key}`;
+    const problem = badKey(walk.top, path, key, model.fields);
+    if (problem !== null) walk.problems.push(new BlockProblem([...keys, key], problem));
+    else partialField(walk, model, key, value, path, [...keys, key]);
+  }
+  for (const key of Object.keys(model.fields)) {
+    const given = Object.hasOwn(data, key) ? data[key] : undefined;
+    if (given === undefined && model.required.includes(key)) {
+      walk.problems.push(new BlockProblem([...keys, key], `\`${walk.top.name}.${prefix}${key}\` is required`));
+    }
+  }
+}
+
+/** Append the problems of field `name`'s partial `value`; values are never checked. */
+function partialField(
+  walk: PartialWalk,
+  model: ObjectSchema,
+  name: string,
+  value: unknown,
+  path: string,
+  keys: Loc,
+): void {
+  const { isValue } = walk;
+  if (isValue(value)) return;
+  const field = model.fields[name]!;
+  if (isRecord(value)) {
+    const part = nestedSchema(field, value);
+    if (part !== null) {
+      partialProblems(walk, part, value, `${path}.`, keys);
+      return;
+    }
+    if (holdsValue(value, isValue)) {
+      if (members(field).some((member) => member.kind === "map")) {
+        // Only the value-free items can be checked; the item count waits for the rest.
+        const written = Object.fromEntries(Object.entries(value).filter(([, item]) => !holdsValue(item, isValue)));
+        checkLiteral(walk, model, name, written, path, keys);
+      } else if (field.kind === "tagged") {
+        // Several variants and no literal tag: only the tag itself can be checked.
+        const tag = Object.hasOwn(value, "type") ? value["type"] : undefined;
+        if (!isValue(tag)) checkLiteral(walk, model, name, tag === undefined ? {} : { type: tag }, path, keys);
+      }
+      return;
+    }
+  } else if (isList(value) && holdsValue(value, isValue)) {
+    const item = listItem(field);
+    if (item === null) return;
+    value.forEach((entry, index) => {
+      if (!isRecord(entry) || isValue(entry)) return;
+      const part = nestedSchema(item, entry);
+      if (part !== null) partialProblems(walk, part, entry, `${path}[${index}].`, [...keys, index]);
+    });
+    return;
+  }
+  checkLiteral(walk, model, name, value, path, keys);
+}
+
+/**
+ * Append why the value-free `value` is not valid for field `name` of `model`.
+ *
+ * Each message is located at the deepest key path of `value` its issue names; union labels
+ * and variant tags in an issue's location are dropped.
+ */
+function checkLiteral(
+  walk: PartialWalk,
+  model: ObjectSchema,
+  name: string,
+  value: unknown,
+  path: string,
+  keys: Loc,
+): void {
+  const { top, problems } = walk;
+  const add = (parts: Loc, message: string): void => {
+    const same = (problem: BlockProblem) =>
+      problem.message === message &&
+      problem.keys.length === parts.length &&
+      problem.keys.every((part, i) => part === parts[i]);
+    if (!problems.some(same)) problems.push(new BlockProblem(parts, message));
+  };
+  if (model === top) {
+    // Python assigns the field to the block, whose key walk runs first and stops on a problem.
+    const found: string[] = [];
+    keyProblems(top, top, { [name]: value }, "", found);
+    if (found.length > 0) {
+      add(keys, `\`${top.name}.${path}\`: Value error, ${found.join("; ")}`);
+      return;
+    }
+  }
+  // An optional field given null is unset, as in the object pass.
+  if (value === null && !model.required.includes(name)) return;
+  for (const issue of checkField(model.fields[name]!, value, []).issues) {
+    const [written, parts] = writtenPath(path, keys, value, issue.loc);
+    add(parts, `\`${top.name}.${written}\`: ${issue.msg}`);
+  }
+}
+
+/** Extend `path` and its parts `keys` by the parts of `loc` written in `value`. */
+function writtenPath(path: string, keys: Loc, value: unknown, loc: Loc): [string, Loc] {
+  const parts = [...keys];
+  let node = value;
+  for (const part of loc) {
+    if (typeof part === "number" && isList(node) && part < node.length) {
+      path += `[${part}]`;
+      node = node[part];
+    } else if (typeof part === "string" && isRecord(node) && Object.hasOwn(node, part)) {
+      path += `.${part}`;
+      node = node[part];
+    } else {
+      continue;
+    }
+    parts.push(part);
+  }
+  return [path, parts];
+}
+
+/** Return whether `tree` is, or anywhere holds, a value. */
+function holdsValue(tree: unknown, isValue: (leaf: unknown) => boolean): boolean {
+  if (isValue(tree)) return true;
+  if (isRecord(tree)) return Object.values(tree).some((item) => holdsValue(item, isValue));
+  if (isList(tree)) return tree.some((item) => holdsValue(item, isValue));
+  return false;
+}
+
+/**
+ * Return the simple type of the block field at `path`, if it has one.
+ *
+ * A nested object with several variants is told apart by the literal `type` written at its
+ * place in `tree`.
+ *
+ * @param block A key of `PROVIDER_BLOCKS`, e.g. `"anthropic"`.
+ * @param path The field's key path inside the block, e.g. `["thinking", "budget_tokens"]`.
+ * @param tree The block as written, which may hold values.
+ * @returns The field's type when it is a `str`, `int`, `float` or `bool` (with any inclusive
+ *   bounds) or a literal; `null` for any other field (an object, list, mapping or union), an
+ *   unknown path, or a variant that `tree` does not name.
+ * @throws {RangeError} If `block` has no block.
+ */
+export function blockFieldAnnotation(block: string, path: readonly string[], tree: unknown): BlockFieldType | null {
+  let model: ObjectSchema = blockSchema(block);
+  let node = tree;
+  for (const [index, key] of path.entries()) {
+    if (!Object.hasOwn(model.fields, key)) return null;
+    const field = model.fields[key]!;
+    if (index === path.length - 1) return simpleType(field);
+    node = isRecord(node) && Object.hasOwn(node, key) ? node[key] : undefined;
+    const part = nestedSchema(field, isRecord(node) ? node : {});
+    if (part === null) return null;
+    model = part;
+  }
+  return null;
+}
+
+/**
+ * Return the `BlockFieldType` of a field, if it is simple.
+ *
+ * Only inclusive bounds (`ge`, `le`) are carried; exclusive bounds and string length and
+ * pattern constraints are checked only when the whole block is validated after its values resolve.
+ */
+function simpleType(field: Field): BlockFieldType | null {
+  switch (field.kind) {
+    case "str":
+    case "bool":
+      return Object.freeze({ base: field.kind, literals: Object.freeze([]), ge: null, le: null });
+    case "int":
+    case "float":
+      return Object.freeze({
+        base: field.kind,
+        literals: Object.freeze([]),
+        ge: field.ge ?? null,
+        le: field.le ?? null,
+      });
+    case "literal":
+      return Object.freeze({ base: "str", literals: field.values, ge: null, le: null });
+    default:
+      return null;
+  }
 }

@@ -1,0 +1,20 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input: {v: !str }
+  nodes:
+    x: {kind: code, code: "return inputs['n']", input: {n: '${upper(input.nosuch, 1)}'}, output: str}
+  output: ${x.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'x' input 'n' from: reference ${input.nosuch} points to unknown flow input 'nosuch'
+          node 'x' input 'n' from: expression function 'upper' takes (s): too many positional arguments
+      frames:
+      - label: flow.yaml
+        range: [6, 58, 6, 85]

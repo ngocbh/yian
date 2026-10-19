@@ -1,0 +1,30 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+
+  defs:
+    child:
+      input:
+        y: !int
+      nodes:
+        x:
+          kind: code
+          code: "return inputs['y']"
+          input:
+            y: ${input.y}
+          output: int
+      output: ${x.output}
+
+  nodes:
+    v: !int call(child, z=1, y=1)
+  output: ${v.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: value entry 'v' call(child) argument 'z' is not a declared input of callable 'child'
+      frames:
+      - label: flow.yaml
+        range: [19, 6, 19, 32]

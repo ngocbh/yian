@@ -1,0 +1,50 @@
+# TS reads the unquoted date as text (rules: dates); Python's "read it as a date" in python_expect.
+kind: load
+rules: [dates]
+flow: |
+  id: f
+  name: f
+  defs:
+    child:
+      input:
+        x: !Any
+      nodes:
+        echo:
+          kind: code
+          input:
+            x: ${input.x}
+          code: |
+            return inputs["x"]
+      output: ${echo.output}
+    items:
+      nodes:
+        c:
+          kind: code
+          output: list(str)
+          code: |
+            return ["a", "b"]
+      output: ${c.output}
+  nodes:
+    m:
+      kind: map
+      over: 2026-01-01
+      call: child
+      input:
+        x: 1
+  output: ${m.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''m'' (kind=map): `over:` must be a list, but YAML read it as text; write a list, or a reference such as `over: ${input.items}`'
+      frames:
+      - label: flow.yaml
+        range: [26, 11, 26, 21]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''m'' (kind=map): `over:` must be a list, but YAML read it as a date; write a list, or a reference such as `over: ${input.items}`'
+      frames:
+      - label: flow.yaml
+        range: [26, 11, 26, 21]

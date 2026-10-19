@@ -1,0 +1,53 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Mode: Literal(ok, no)
+  input:
+    a: !int
+  defs:
+    child:
+      input:
+        x: !Any
+      nodes:
+        echo:
+          kind: code
+          input:
+            x: ${input.x}
+          code: |
+            return inputs["x"]
+      output: ${echo.output}
+    words:
+      nodes:
+        c:
+          kind: code
+          output: str
+          code: |
+            return "a"
+      output: ${c.output}
+  nodes:
+    c:
+      kind: code
+      output: int
+      code: |
+        return 1
+    u:
+      kind: code
+      code: |
+        return [1]
+    m:
+      kind: map
+      over: ${input.a}
+      call: child
+      input:
+        x: 1
+  output: ${m.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''m'' (kind=map): `over:` must be a list, but the value is int; write a reference to a list'
+      frames:
+      - label: flow.yaml
+        range: [39, 11, 39, 21]

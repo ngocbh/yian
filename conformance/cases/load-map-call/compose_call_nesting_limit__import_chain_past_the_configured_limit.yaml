@@ -1,0 +1,235 @@
+kind: load
+flow: |
+  id: root
+  name: root
+  input:
+    x: !str
+  uses:
+    first: u0
+  nodes:
+    step:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: ${input.x}
+      output: str
+  output: ${step.output}
+python_flow: |
+  id: root
+  name: root
+  input:
+    x: !str
+  uses:
+    first: u0
+  nodes:
+    step:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: ${input.x}
+      output: str
+  output: ${step.output}
+files:
+  u0.yaml: |
+    id: u0
+    name: u0
+    input:
+      x: !str
+    uses:
+      nxt: u1
+    nodes:
+      step:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input:
+          topic: ${input.x}
+        output: str
+    output: ${step.output}
+  u1.yaml: |
+    id: u1
+    name: u1
+    input:
+      x: !str
+    uses:
+      nxt: u2
+    nodes:
+      step:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input:
+          topic: ${input.x}
+        output: str
+    output: ${step.output}
+  u2.yaml: |
+    id: u2
+    name: u2
+    input:
+      x: !str
+    uses:
+      nxt: u3
+    nodes:
+      step:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input:
+          topic: ${input.x}
+        output: str
+    output: ${step.output}
+  u3.yaml: |
+    id: u3
+    name: u3
+    input:
+      x: !str
+    uses:
+      nxt: u4
+    nodes:
+      step:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input:
+          topic: ${input.x}
+        output: str
+    output: ${step.output}
+  u4.yaml: |
+    id: u4
+    name: u4
+    input:
+      x: !str
+    uses:
+      nxt: u5
+    nodes:
+      step:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input:
+          topic: ${input.x}
+        output: str
+    output: ${step.output}
+  u5.yaml: |
+    id: u5
+    name: u5
+    input:
+      x: !str
+    nodes:
+      step:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input:
+          topic: ${input.x}
+        output: str
+    output: ${step.output}
+python_files:
+  u0.yaml: |
+    id: u0
+    name: u0
+    input:
+      x: !str
+    uses:
+      nxt: u1
+    nodes:
+      step:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input:
+          topic: ${input.x}
+        output: str
+    output: ${step.output}
+  u1.yaml: |
+    id: u1
+    name: u1
+    input:
+      x: !str
+    uses:
+      nxt: u2
+    nodes:
+      step:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input:
+          topic: ${input.x}
+        output: str
+    output: ${step.output}
+  u2.yaml: |
+    id: u2
+    name: u2
+    input:
+      x: !str
+    uses:
+      nxt: u3
+    nodes:
+      step:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input:
+          topic: ${input.x}
+        output: str
+    output: ${step.output}
+  u3.yaml: |
+    id: u3
+    name: u3
+    input:
+      x: !str
+    uses:
+      nxt: u4
+    nodes:
+      step:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input:
+          topic: ${input.x}
+        output: str
+    output: ${step.output}
+  u4.yaml: |
+    id: u4
+    name: u4
+    input:
+      x: !str
+    uses:
+      nxt: u5
+    nodes:
+      step:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input:
+          topic: ${input.x}
+        output: str
+    output: ${step.output}
+  u5.yaml: |
+    id: u5
+    name: u5
+    input:
+      x: !str
+    nodes:
+      step:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input:
+          topic: ${input.x}
+        output: str
+    output: ${step.output}
+env:
+  YIAN_MAX_CALL_NESTING: '5'
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'callable ''nxt'' (uses: ''u5''): importing it makes a chain of uses: files 6 deep, past the call nesting limit of 5 (a chain of uses: imports is held to the same limit as nested call, map, and loop bodies); flatten the chain'
+      frames:
+      - label: flow.yaml
+        range: [6, 10, 6, 12]
+        note: uses alias 'first'
+      - label: u0.yaml
+        range: [6, 8, 6, 10]
+        note: uses alias 'nxt'
+      - label: u1.yaml
+        range: [6, 8, 6, 10]
+        note: uses alias 'nxt'
+      - label: u2.yaml
+        range: [6, 8, 6, 10]
+        note: uses alias 'nxt'
+      - label: u3.yaml
+        range: [6, 8, 6, 10]
+        note: uses alias 'nxt'
+      - label: u4.yaml
+        range: [6, 8, 6, 10]
+        note: uses alias 'nxt'

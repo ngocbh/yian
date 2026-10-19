@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: m
+  name: m
+  nodes:
+    many:
+      kind: map
+      call: f
+      over: call(g
+      input:
+        topic: ${item}
+  output: ${many.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'many: `call(` is never closed (check its parentheses and quotes). If you meant the text, quote the whole value: `"call(g"`'
+      frames:
+      - label: flow.yaml
+        range: [7, 11, 7, 17]

@@ -1,0 +1,17 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input: {v: !str }
+  defs:
+    body:
+      input: {item: !str }
+      nodes:
+        s: {kind: code, code: "return inputs['n']", input: {n: '${input.item}'}, output: str}
+      output: ${s.output}
+  nodes:
+    m: {kind: map, over: '${[upper(input.v)]}', call: body, input: {item: '${lower(item)}'}}
+  output: ${m.output}
+expect:
+  load: ok

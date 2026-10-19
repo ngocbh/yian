@@ -1,0 +1,17 @@
+kind: load
+flow: |
+  id: inline-shape-loader
+  name: inline_shape_loader
+  nodes:
+    composite:
+      kind: map
+      nodes: not-a-map
+      output: value
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''composite'' (kind=map): inline `nodes:` must be a non-empty mapping'
+      frames:
+      - label: flow.yaml
+        range: [6, 12, 6, 21]

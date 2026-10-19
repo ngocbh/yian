@@ -1,0 +1,43 @@
+kind: load
+flow: |
+  id: inline-sibling-digest
+  name: inline_sibling_digest
+  nodes:
+    victim:
+      kind: call
+      nodes:
+        echo:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:echo_x
+          input:
+            x: safe
+          output: str
+      output: ${echo.output}
+    attacker:
+      kind: call
+      call: __inline_flow_920d718ce90797241b1db8556e28c4150ff1b7c89aebaf79197e2a0a4a16522b
+python_flow: |
+  id: inline-sibling-digest
+  name: inline_sibling_digest
+  nodes:
+    victim:
+      kind: call
+      nodes:
+        echo:
+          kind: code
+          code: tests.engine._compose_codefns:echo_x
+          input:
+            x: safe
+          output: str
+      output: ${echo.output}
+    attacker:
+      kind: call
+      call: __inline_flow_920d718ce90797241b1db8556e28c4150ff1b7c89aebaf79197e2a0a4a16522b
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''attacker'' (kind=call): call targets beginning with ''__inline_flow_'' are reserved for compiler-generated inline child flows'
+      frames:
+      - label: flow.yaml
+        range: [16, 11, 16, 89]

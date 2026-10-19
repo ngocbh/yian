@@ -1,0 +1,20 @@
+kind: load
+flow: |2
+
+  id: null-to-nullable-call
+  name: null_to_nullable_call
+  defs:
+    echo:
+      input:
+        maybe: !Optional(str)
+      nodes: {}
+      output: ${input.maybe}
+  nodes:
+    invoke:
+      kind: call
+      call: echo
+      input:
+        maybe: ${null}
+  output: ${invoke.output}
+expect:
+  load: ok

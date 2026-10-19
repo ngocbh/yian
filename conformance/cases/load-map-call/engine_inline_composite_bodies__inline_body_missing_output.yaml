@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: inline-shape-loader
+  name: inline_shape_loader
+  nodes:
+    composite:
+      kind: loop
+      nodes:
+        echo:
+          kind: code
+          run: tests.engine._compose_codefns:echo
+          input:
+            value: hello
+          output: str
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''composite'' (kind=loop): inline `nodes:` requires `output:`'
+      frames:
+      - label: flow.yaml
+        range: [5, 5, 13, 1]

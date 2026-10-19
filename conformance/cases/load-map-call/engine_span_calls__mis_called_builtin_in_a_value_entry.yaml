@@ -1,0 +1,19 @@
+kind: load
+flow: |2
+
+  id: f
+  name: f
+  input: {v: !str }
+  nodes:
+    e: !str "${upper(input.v, 1)}"
+  output: ${e.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          value entry 'e' from: expression function 'upper' takes (s): too many positional arguments
+      frames:
+      - label: flow.yaml
+        range: [6, 6, 6, 33]

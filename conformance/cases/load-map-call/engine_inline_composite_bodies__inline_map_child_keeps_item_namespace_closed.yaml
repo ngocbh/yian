@@ -1,0 +1,51 @@
+kind: load
+flow: |
+  id: inline-map-closed-child
+  name: inline_map_closed_child
+  input:
+    items: !list(str)
+  nodes:
+    each:
+      kind: map
+      over: ${input.items}
+      input:
+        value: ${item}
+      nodes:
+        leak:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:echo_x
+          input:
+            x: ${item}
+          output: str
+      output: ${leak.output}
+  output: ${each.output}
+python_flow: |
+  id: inline-map-closed-child
+  name: inline_map_closed_child
+  input:
+    items: !list(str)
+  nodes:
+    each:
+      kind: map
+      over: ${input.items}
+      input:
+        value: ${item}
+      nodes:
+        leak:
+          kind: code
+          code: tests.engine._compose_codefns:echo_x
+          input:
+            x: ${item}
+          output: str
+      output: ${leak.output}
+  output: ${each.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'leak' input 'x' from: reference ${item} uses unknown namespace 'item'
+      frames:
+      - label: flow.yaml
+        range: [16, 14, 16, 21]

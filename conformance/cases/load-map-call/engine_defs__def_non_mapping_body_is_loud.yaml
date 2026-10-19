@@ -1,0 +1,24 @@
+kind: load
+flow: |2
+
+  id: nm
+  name: nm
+  input:
+    topic: !str
+  defs:
+    d: just a string
+  nodes:
+    go:
+      kind: call
+      call: d
+      input:
+        topic: ${input.topic}
+  output: ${go.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''d'': body must be a mapping, got str'
+      frames:
+      - label: flow.yaml
+        range: [7, 6, 7, 19]

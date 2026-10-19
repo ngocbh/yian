@@ -1,0 +1,37 @@
+kind: load
+flow: |2
+
+  id: ic_unk
+  name: ic_unk
+  input:
+    topic: !str
+  nodes:
+    use:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: call(nope, x=${input.topic})
+      output: str
+  output: ${use.output}
+python_flow: |2
+
+  id: ic_unk
+  name: ic_unk
+  input:
+    topic: !str
+  nodes:
+    use:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: call(nope, x=${input.topic})
+      output: str
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'callable ''nope'' is neither an in-file defs: callable nor a uses: alias — external flows are reachable only through a uses: alias (declare `uses: {nope: <ref>}`)'
+      frames:
+      - label: flow.yaml
+        range: [11, 14, 11, 42]

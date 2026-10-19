@@ -1,0 +1,16 @@
+kind: load
+flow: |
+  id: inline-shape-loader
+  name: inline_shape_loader
+  nodes:
+    composite:
+      kind: call
+      input: {}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''composite'' (kind=call): exactly one of `call:` or inline `nodes:` is required'
+      frames:
+      - label: flow.yaml
+        range: [5, 5, 7, 1]

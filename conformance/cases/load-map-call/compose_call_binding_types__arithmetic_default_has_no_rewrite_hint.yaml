@@ -1,0 +1,11 @@
+kind: load
+flow: "id: p\nname: p\ninput:\n  m: !Optional(str)\n  n: !Optional(int)\n  s: !str\n  xs: !list(int)\n  ds: !list(str)\n  rs: !list(R)\n  os: !list(Optional(str))\n  d: !Optional(date)\ntypedefs:\n  R:\n    a: int\n  AB: Literal(a, b)\ndefs:\n  child:\n    input:\n      t: !str\n    nodes:\n      n:\n        kind: code\n        input:\n          t: ${input.t}\n        output: str\n        code: \"return String(inputs[\\\"t\\\"])\"\n    output: ${n.output}\nnodes:\n  c:\n    kind: call\n    \n    call: child\n    input:\n      t: ${input.m:-2026-01-01}\noutput: ${c.output}\n"
+python_flow: "id: p\nname: p\ninput:\n  m: !Optional(str)\n  n: !Optional(int)\n  s: !str\n  xs: !list(int)\n  ds: !list(str)\n  rs: !list(R)\n  os: !list(Optional(str))\n  d: !Optional(date)\ntypedefs:\n  R:\n    a: int\n  AB: Literal(a, b)\ndefs:\n  child:\n    input:\n      t: !str\n    nodes:\n      n:\n        kind: code\n        input:\n          t: ${input.t}\n        output: str\n        code: return repr(inputs[\"t\"])\n    output: ${n.output}\nnodes:\n  c:\n    kind: call\n    \n    call: child\n    input:\n      t: ${input.m:-2026-01-01}\noutput: ${c.output}\n"
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'call node ''c'': binding ''t'' — child expects ''str'', but the default 2024 does not fit'
+      frames:
+      - label: flow.yaml
+        range: [34, 7, 35, 1]

@@ -1,0 +1,31 @@
+kind: load
+flow: |
+  id: echo
+  name: echo
+  nodes:
+    use:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: call(f) tail
+      output: str
+  output: ${use.output}
+python_flow: |
+  id: echo
+  name: echo
+  nodes:
+    use:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: call(f) tail
+      output: str
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'use: text follows the closing `)`: ''tail''; a call(...) must be the whole value. If you meant the text, quote the whole value: `"call(f) tail"`'
+      frames:
+      - label: flow.yaml
+        range: [8, 14, 8, 26]

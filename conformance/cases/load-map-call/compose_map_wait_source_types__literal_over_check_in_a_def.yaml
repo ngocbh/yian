@@ -1,0 +1,41 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    child:
+      input:
+        x: !Any
+      nodes:
+        echo:
+          kind: code
+          input:
+            x: ${input.x}
+          code: |
+            return inputs["x"]
+      output: ${echo.output}
+    outer:
+      nodes:
+        inner:
+          kind: map
+          over: 5
+          call: child
+          input:
+            x: 1
+      output: ${inner.output}
+  nodes:
+    a:
+      kind: call
+      call: outer
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''outer'': node ''inner'' (kind=map): `over:` must be a list, but YAML read it as an integer; write a list, or a reference such as `over: ${input.items}`'
+      frames:
+      - label: flow.yaml
+        range: [16, 5, 24, 1]
+        note: definition 'outer'
+      - label: flow.yaml
+        range: [19, 15, 19, 16]

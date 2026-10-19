@@ -2,8 +2,8 @@
  * `ToolSet` takes an open MCP server as a tool group, a port of `tests/engine/test_mcp_toolset.py`
  * (construction, `expand` and invoke rows) with a fake open server, and
  * `test_a_dead_server_is_rejected` with both a fake and a real server. The import-without-the-SDK
- * row lands with the Node built scenarios; the exports row is the `tools/index.ts` exports row in
- * `tool_errors.test.ts`.
+ * row is among the Node rows of `mcp_server.test.ts`; the exports row is the `tools/index.ts`
+ * exports row in `tool_errors.test.ts`.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";

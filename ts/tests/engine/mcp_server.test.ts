@@ -16,14 +16,17 @@
  * `test_http_server_that_is_down_fails_without_leaking_the_url` (each HTTP row in the `auto` and
  * `legacy` modes), and the refusal of a redirect at open; the MCP error classes; and yian's stdio
  * transport driven by a bare SDK client, as `tests/engine/test_mcp_fake_server.py` drives the fake
- * server. Tool calls are in `mcp_calls.test.ts`, call errors in `mcp_errors.test.ts`.
+ * server. With `YIAN_TEST_NODE` set to a Node binary, the built code on Node: the stdio and redirect
+ * scenarios, the close in a host with nothing else to do, and `test_yian_tools_imports_without_the_sdk`
+ * and `test_open_without_the_sdk_names_the_extra` (the SDK hidden by a resolve hook). Tool calls are
+ * in `mcp_calls.test.ts`, call errors in `mcp_errors.test.ts`.
  */
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { Client } from "@modelcontextprotocol/client";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/client/stdio";
@@ -71,6 +74,7 @@ import {
   childAlive,
   freePort,
   killMarkers,
+  NODE,
   pids,
   stdioOptions,
   strayProcesses,
@@ -81,6 +85,19 @@ import {
 /** How an HTTP server negotiates the protocol era: `auto`, the default, or the private `legacy`. */
 type Mode = "auto" | "legacy";
 const MODES: readonly Mode[] = ["auto", "legacy"];
+
+/** The `ts/` directory. */
+const ROOT = fileURLToPath(new URL("../../", import.meta.url));
+
+/** Node rows get 90 s: Node starts the built code and the fixture from cold. */
+const ON_NODE = 90_000;
+
+/** The `file:` URL of `file` under `ts/`, as a JavaScript string literal for an inline script. */
+const builtUrl = (file: string): string => JSON.stringify(pathToFileURL(join(ROOT, file)).href);
+
+/** Run the module `script` on the Node from `YIAN_TEST_NODE`, with `flags` before it. */
+const runNode = (script: string, flags: string[] = []) =>
+  spawnSync(NODE!, [...flags, "--input-type=module", "-e", script], { cwd: ROOT, encoding: "utf8", timeout: 60_000 });
 
 /** Call `mcpServer` with `options`, which may be ill-typed on purpose. */
 function build(options: Record<string, unknown>): McpServer {
@@ -399,6 +416,35 @@ describe("StdioTransport", () => {
       expect(childAlive(sleeper!)).toBe(false);
     },
     SLOW,
+  );
+
+  test.skipIf(!NODE)(
+    "on Node, built: close in a host with nothing else to do still SIGKILLs a grandchild that ignores SIGTERM",
+    () => {
+      // Under `bun test` the host above is Bun, which finishes the close anyway; Node exits once
+      // nothing keeps it alive, so this row is the one that guards close's timers.
+      const grandchild = marker("grandchild-ignores-term-node");
+      const script = `
+        import { StdioTransport } from ${builtUrl("dist/src/tools/mcp.js")};
+        import { pids, stdioOptions, waitFor } from ${builtUrl("dist/tests/engine/mcp_helpers.js")};
+        const file = ${JSON.stringify(grandchild)};
+        const t = new StdioTransport({
+          ...stdioOptions("--grandchild-ignores-term", file),
+          maxMessageBytes: 1024,
+          defaultEnv: { ...process.env },
+        });
+        await t.start();
+        if (!(await waitFor(() => pids(file).length === 1, 5000))) throw new Error("no grandchild");
+        await t.close();
+      `;
+      const host = runNode(script);
+      expect(host.stderr).toBe("");
+      expect(host.status).toBe(0);
+      const [sleeper] = pids(grandchild);
+      expect(sleeper).toBeNumber();
+      expect(childAlive(sleeper!)).toBe(false);
+    },
+    ON_NODE,
   );
 
   test(
@@ -1045,4 +1091,157 @@ describe("McpServer open and close", () => {
     // The `auto` probe's `EraNegotiationFailed` wrapper is unwrapped, so both modes say the same.
     expect(messages).toEqual(["MCP server 'localhost' didn't start: TypeError", messages[0]!]);
   }, SLOW);
+});
+
+describe("McpServer on Node, built", () => {
+  const dir = mkdtempSync(join(tmpdir(), "yian-mcp-node-"));
+  const markers: string[] = [];
+
+  /** A path in the test directory, remembered so `afterAll` kills the pids it lists. */
+  const marker = (name: string): string => {
+    const file = join(dir, name);
+    markers.push(file);
+    return file;
+  };
+
+  /**
+   * Node flags that make every `@modelcontextprotocol/*` import fail as a missing package, through
+   * a resolve hook that a `data:` URL registers.
+   */
+  const withoutSdk = (): string[] => {
+    const hook =
+      'export async function resolve(specifier, context, next) { if (specifier.startsWith("@modelcontextprotocol/"))' +
+      ' throw Object.assign(new Error("Cannot find package " + specifier), { code: "ERR_MODULE_NOT_FOUND" });' +
+      " return next(specifier, context); }";
+    const register = `import { register } from "node:module"; register(${JSON.stringify(
+      `data:text/javascript,${encodeURIComponent(hook)}`,
+    )});`;
+    return ["--import", `data:text/javascript,${encodeURIComponent(register)}`];
+  };
+
+  afterAll(() => {
+    killMarkers(markers);
+    rmSync(dir, { recursive: true, force: true });
+    expect(strayProcesses()).toEqual([]);
+  });
+
+  test.skipIf(!NODE)(
+    "the built fixture over stdio: echo, a lossless big integer, and the grandchild ended at close",
+    () => {
+      const grandchild = marker("grandchild");
+      const script = `
+        import assert from "node:assert/strict";
+        import { mcpServer, ToolSet } from ${builtUrl("dist/src/tools/index.js")};
+        import { childAlive, pids, stdioOptions, waitFor } from ${builtUrl("dist/tests/engine/mcp_helpers.js")};
+        const file = ${JSON.stringify(grandchild)};
+        const server = mcpServer({ ...stdioOptions("--grandchild", file), label: "fake" });
+        try {
+          await server.open();
+          const tools = new ToolSet({ fake: [...server.tools] });
+          assert.equal(await tools.invoke("echo", { text: "hi" }), "hi");
+          assert.deepEqual(await tools.invoke("big", {}), { n: 18446744073709552000n });
+          assert.ok(await waitFor(() => pids(file).length === 1, 5000), "no grandchild");
+          const [sleeper] = pids(file);
+          assert.ok(childAlive(sleeper));
+          await server.close();
+          assert.ok(!childAlive(sleeper), "the grandchild outlived close");
+        } finally {
+          await server.close();
+        }
+        console.log("ok");
+      `;
+      const node = runNode(script);
+      expect(node.stderr).toBe("");
+      expect(node.stdout).toBe("ok\n");
+      expect(node.status).toBe(0);
+    },
+    ON_NODE,
+  );
+
+  test.skipIf(!NODE)(
+    "the built HTTP fixture behind a redirect fails to open with RedirectError, the target untouched",
+    () => {
+      const script = `
+        import assert from "node:assert/strict";
+        import { McpConnectError, mcpServer } from ${builtUrl("dist/src/tools/index.js")};
+        import { RedirectError } from ${builtUrl("dist/src/platform.js")};
+        import { startHttpServer, startRedirectServer } from ${builtUrl("dist/tests/fixtures/mcp/fake_server.js")};
+        const real = await startHttpServer();
+        const redirect = await startRedirectServer(real.url);
+        const summary = {};
+        try {
+          for (const mode of ["auto", "legacy"]) {
+            const server = mcpServer({ url: redirect.url, label: "moved" });
+            server.mode = mode;
+            try {
+              await assert.rejects(server.open(), (error) => {
+                assert.ok(error instanceof McpConnectError);
+                assert.equal(error.message, "MCP server 'moved' didn't start: RedirectError (HTTP 307)");
+                assert.ok(error.cause instanceof RedirectError);
+                return true;
+              });
+              assert.equal(server.isOpen, false);
+            } finally {
+              await server.close();
+            }
+          }
+          summary.hits = redirect.hits;
+          summary.targetRequests = real.recordedHeaders.length;
+        } finally {
+          await redirect.stop();
+          await real.stop();
+        }
+        console.log(JSON.stringify(summary));
+      `;
+      const node = runNode(script);
+      expect(node.stderr).toBe("");
+      expect(node.status).toBe(0);
+      const summary = JSON.parse(node.stdout) as { hits: number; targetRequests: number };
+      expect(summary.hits).toBeGreaterThan(0);
+      expect(summary.targetRequests).toBe(0);
+    },
+    ON_NODE,
+  );
+
+  test.skipIf(!NODE)(
+    "test_yian_tools_imports_without_the_sdk",
+    () => {
+      const script = `
+        import assert from "node:assert/strict";
+        const tools = await import(${builtUrl("dist/src/tools/index.js")});
+        assert.equal(tools.McpServer.name, "McpServer");
+        await assert.rejects(tools.mcpServer({ command: "x" }).open(), {
+          message: "MCP servers need the MCP SDK; install @modelcontextprotocol/client 2.3.1",
+        });
+        console.log("ok");
+      `;
+      const node = runNode(script, withoutSdk());
+      expect(node.stderr).toBe("");
+      expect(node.stdout).toBe("ok\n");
+      expect(node.status).toBe(0);
+    },
+    ON_NODE,
+  );
+
+  test.skipIf(!NODE)(
+    "test_open_without_the_sdk_names_the_extra",
+    () => {
+      const script = `
+        import assert from "node:assert/strict";
+        const { mcpServer } = await import(${builtUrl("dist/src/tools/mcp.js")});
+        await assert.rejects(mcpServer({ command: "x" }).open(), (error) => {
+          assert.equal(error.message, "MCP servers need the MCP SDK; install @modelcontextprotocol/client 2.3.1");
+          assert.equal(error.cause.code, "ERR_MODULE_NOT_FOUND");
+          assert.match(error.cause.message, /@modelcontextprotocol\\/client/);
+          return true;
+        });
+        console.log("ok");
+      `;
+      const node = runNode(script, withoutSdk());
+      expect(node.stderr).toBe("");
+      expect(node.stdout).toBe("ok\n");
+      expect(node.status).toBe(0);
+    },
+    ON_NODE,
+  );
 });

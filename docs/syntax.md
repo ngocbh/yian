@@ -2104,7 +2104,10 @@ A few providers need a note:
     it, retried when its kind allows (an unknown code counts as a server error). A
     content-filter stop is `provider.refused`; DeepSeek's `insufficient_system_resource`
     and the `error` and `aborted` finish reasons are retried. Reasoning goes back only to
-    DeepSeek, and only to the model that wrote it.
+    DeepSeek, and only to the model that wrote it. DeepSeek refuses a request with tools
+    unless every earlier assistant turn carries `reasoning_content`, so on such a request a
+    turn with no reasoning to send back (from another provider or model, or a
+    `deepseek-chat` turn) gets `reasoning_content: ""`.
 
 - `google` uses the REST names and enum spellings: camelCase keys and upper-case
   levels, such as `google: {generationConfig: {thinkingConfig: {thinkingLevel: HIGH}}}`.

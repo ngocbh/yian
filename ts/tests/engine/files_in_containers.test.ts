@@ -3,8 +3,9 @@
  * normalization (`normalizeFiles`), the overlap tests, the two typed `bindParams` reads, the
  * `field_of` table, the two traced item reads and
  * `test_a_partial_loop_keeps_an_omitted_file_as_a_file` of
- * `tests/engine/test_files_in_containers.py`, with `FileRef` constructor refusals (`RangeError`,
- * as pydantic's `ValidationError` is a `ValueError`). Where Python checks that a value is kept with
+ * `tests/engine/test_files_in_containers.py`, and the inequality half of
+ * `test_a_source_entry_with_a_record_reading_type_is_hashable` (through `sameSourceEntry`), with
+ * `FileRef` constructor refusals (`RangeError`, as pydantic's `ValidationError` is a `ValueError`). Where Python checks that a value is kept with
  * `is`, these tests use `toBe`.
  *
  * Changed: in `test_a_partial_loop_keeps_an_omitted_file_as_a_file` the child is a stub object in
@@ -16,8 +17,10 @@
  *
  * Later: flow runs (with the runner).
  *
- * Not ported: the `field_of` rows on dict subclasses, `defaultdict` and a `FileRef` subclass; a
- * record is a plain object and a dotted read gives its own keys. The tuple in
+ * Not ported: the hash half of `test_a_source_entry_with_a_record_reading_type_is_hashable`, since
+ * a `SourceEntry` has no hash (maps key sources by `sourceKey`); the `field_of` rows on dict
+ * subclasses, `defaultdict` and a `FileRef` subclass; a record is a plain object and a dotted read
+ * gives its own keys. The tuple in
  * `test_an_object_without_files_is_stored_as_given` is a list here, and
  * `test_normalize_files_reads_a_tuple_as_a_list_only_when_it_changes` is not ported (no tuples
  * in TS).
@@ -31,6 +34,7 @@ import { ResolvedValue, SourceRef } from "../../src/expr/lineage.ts";
 import { bindParams } from "../../src/nodes/binding.ts";
 import { Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
+import { SourceEntry, sameSourceEntry } from "../../src/runtime/trace.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import {
@@ -449,4 +453,12 @@ test("a partial loop keeps an omitted file as a file", () => {
   expect(byName.get("f")!.default).toEqual(REF);
   expect(Object.getPrototypeOf(byName.get("f")!.default)).toBe(FileRef.prototype);
   expect(byName.get("n")!.hasDefault).toBe(false);
+});
+
+test("a source entry with a record reading type differs from one without it", () => {
+  const files = new Type({ kind: ValueKind.OBJECT, fields: new Map([["f", FILE]]), required: new Set() });
+  const entry = new SourceEntry(null, 0, "null", files);
+
+  expect(sameSourceEntry(entry, new SourceEntry(null, 0, "null", files))).toBe(true);
+  expect(sameSourceEntry(entry, new SourceEntry(null, 0, "null"))).toBe(false);
 });

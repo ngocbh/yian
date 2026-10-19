@@ -51,27 +51,52 @@
  * `${-2 * a}`) of `test_codec_preserves_evaluated_route_variants`, since repetition is a type
  * error in TS.
  *
+ * TS-only (trace), with entries installed by setting the trace's internal maps: `captureBindings`
+ * over a hand-built `BindingCapture` with one item and its two type errors; `SourceEntry.value`
+ * restoring files through `files` where `storedValue` doesn't, each read fresh; one row per
+ * `TraceTerminal` message and its `output`; `checkMemoryScope`; a `TraceOccurrence` keeping a decoded
+ * copy of its envelope; `selectSeedRoute`; `RetainedTrace`'s defaults, `lookupSource`, `resolve`,
+ * `occurrence` and `backwardContext`.
+ *
  * Later (T4-3): the trace tests, which run flows.
  */
 
 import { afterEach, expect, test } from "bun:test";
 
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
-import { ResolvedValue, routeFeedback, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
+import { Failure } from "../../src/diagnostics.ts";
+import { ExpressionError } from "../../src/expr/expressions.ts";
+import { ResolvedValue, routeFeedback, SourceRef, sourceKey, ValueRoute } from "../../src/expr/lineage.ts";
 import { evalBinding } from "../../src/expr/template.ts";
-import { EvaluationEvidence, MemorySection } from "../../src/memory/contracts.ts";
-import { ExecutionPosition, ExecutionScope } from "../../src/nodes/contracts.ts";
+import { EvaluationEvidence, MemoryScope, MemorySection } from "../../src/memory/contracts.ts";
+import { BindingCapture } from "../../src/nodes/binding.ts";
+import { ExecutionPosition, ExecutionScope, SeedConnection } from "../../src/nodes/contracts.ts";
 import { BackwardCapture, ForwardCapture } from "../../src/runtime/contracts.ts";
 import {
   canonicalSeed,
   canonicalTyped,
   decodeRecord,
+  encodePool,
   encodeRecord,
+  evidencePayload,
+  NodeRoutedRecord,
+  NodeStartedRecord,
   NodeSucceededRecord,
   RecordEnvelope,
+  type RunRecord,
+  RunStartedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
-import { FileRef, type Value } from "../../src/typesys/index.ts";
+import {
+  captureBindings,
+  checkMemoryScope,
+  RetainedTrace,
+  SourceEntry,
+  selectSeedRoute,
+  TraceOccurrence,
+  TraceTerminal,
+} from "../../src/runtime/trace.ts";
+import { FileRef, Type, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { JSONDecodeError, logJson, parseJson } from "../../src/typesys/json.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError;
@@ -785,4 +810,393 @@ test.each<[unknown[], string]>([
   const wire = wireOf(capturedEnvelope(new ForwardCapture({ x: 3n }, ValueRoute.record([["x", route]]))));
   wire.payload.forward_capture.route.children[0].names = names;
   expectError(() => decodeWire(wire), RangeError, message);
+});
+
+// TS-only (trace): the trace entries and `RetainedTrace`'s reads. Entries are installed by setting
+// the trace's internal maps directly.
+
+const RUN = "run";
+
+/** A source route reading `path` of execution `seq`. */
+function sourceRoute(seq: number, path: (string | number)[] = []): ValueRoute {
+  return new ValueRoute("source", { source: new SourceRef(RUN, seq, path), expression: `\${source_${seq}}` });
+}
+
+/** The canonical typed wire text of `value`, as a source entry holds it. */
+function typedJson(value: unknown): string {
+  return logJson(canonicalTyped(value, null)[0]);
+}
+
+/**
+ * The envelopes of a learnable run: RunStarted, whose pool holds START's `{x: 1n}` (source 0),
+ * `NodeStarted("a")` (seq 1) and `NodeSucceeded("a")` with `2n` (seq 2), whose capture routes input
+ * `v` to source 0 path `["x"]`.
+ */
+function learnableRun(): RecordEnvelope[] {
+  const pool = new VariablePool("__start__");
+  pool.set("__start__", { x: 1n });
+  const started = new RunStartedRecord({
+    flowFingerprint: "a".repeat(64),
+    initialPool: encodePool(pool),
+    startWiringOverride: {},
+    effectiveLlmByStaticPath: {},
+    numWorkers: 0,
+    learnable: true,
+  });
+  const forwardCapture = new ForwardCapture({ v: 1n }, ValueRoute.record([["v", sourceRoute(0, ["x"])]]), {
+    inputNames: ["v"],
+  });
+  return [
+    new RecordEnvelope(SCHEMA_VERSION, RUN, 0, started),
+    new RecordEnvelope(SCHEMA_VERSION, RUN, 1, new NodeStartedRecord("a")),
+    new RecordEnvelope(
+      SCHEMA_VERSION,
+      RUN,
+      2,
+      new NodeSucceededRecord("a", "a", { kind: "int", value: 2n }, { forwardCapture }),
+    ),
+  ];
+}
+
+/** Install `entry` as an accepted source and as `target`'s current writer. */
+function install(trace: RetainedTrace, target: string, entry: SourceEntry): void {
+  trace._sources.set(sourceKey(entry.source!), entry);
+  trace._currentWriters.set(target, entry);
+}
+
+/** Install the occurrence of `a` started at seq 1, accepted with `record` at seq 2. */
+function installOccurrence(trace: RetainedTrace, record: RunRecord): TraceOccurrence {
+  const capture = (record as NodeSucceededRecord).forwardCapture!;
+  const envelope = new RecordEnvelope(SCHEMA_VERSION, RUN, 2, record);
+  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route);
+  trace._occurrences.push(occurrence);
+  trace.occurrenceBySource.set(sourceKey(occurrence.source), occurrence);
+  return occurrence;
+}
+
+/**
+ * A trace of `learnableRun()`: START's source 0, `a`'s output (source 1) and its occurrence, accepted
+ * with `record` (by default the run's `NodeSucceeded`).
+ */
+function chainTrace(record: RunRecord = learnableRun()[2]!.record): RetainedTrace {
+  const trace = new RetainedTrace(RUN, "__start__", "end", ["x"]);
+  install(trace, "__start__", new SourceEntry(new SourceRef(RUN, 0), 0, typedJson({ x: 1n })));
+  install(trace, "a", new SourceEntry(new SourceRef(RUN, 1), 2, typedJson(2n)));
+  installOccurrence(trace, record);
+  return trace;
+}
+
+test("captureBindings joins a binding capture and its backward capture", () => {
+  const file = new FileRef({ uri: "file:///tmp/x" });
+  const fileForm = { uri: "file:///tmp/x", mime: null, name: null };
+  const item = new BindingCapture({ f: file }, ValueRoute.record([["f", sourceRoute(0, ["f"])]]), new Set());
+  const bindings = new BindingCapture(
+    { x: 1n, f: file },
+    ValueRoute.record([
+      ["x", sourceRoute(0, ["x"])],
+      ["f", sourceRoute(0, ["f"])],
+    ]),
+    new Set(["x"]),
+    [[0, item]],
+  );
+  const scope = new ExecutionScope(["a"]);
+  const backward = new BackwardCapture({
+    inputNames: ["x", "f"],
+    variableNames: ["v"],
+    scope,
+    nodeData: { k: 1n },
+  });
+
+  const capture = captureBindings(bindings, backward);
+
+  expect(capture.boundInputs).toEqual({ f: fileForm, x: 1n });
+  expect(capture.route).toBe(bindings.route);
+  expect([...capture.evaluatedKeys]).toEqual(["x"]);
+  expect(capture.scope).toBe(scope);
+  expect(capture.nodeData).toEqual({ k: 1n });
+  expect(capture.inputNames).toEqual(["x", "f"]);
+  expect(capture.variableNames).toEqual(["v"]);
+  expect(capture.items).toHaveLength(1);
+  const [index, itemCapture] = capture.items[0]!;
+  expect(index).toBe(0);
+  expect(itemCapture.boundInputs).toEqual({ f: fileForm });
+  expect(itemCapture.inputNames).toEqual([]);
+  expect(itemCapture.variableNames).toEqual([]);
+  expect(itemCapture.scope).toBeNull();
+  expect(itemCapture.nodeData).toEqual({});
+});
+
+test("captureBindings requires exact carriers", () => {
+  const bindings = new BindingCapture({ x: 1n }, ROUTE_X, new Set());
+  expectError(
+    () => captureBindings({ ...bindings } as BindingCapture, new BackwardCapture()),
+    TypeError,
+    "retained evaluation requires a BindingCapture",
+  );
+  expectError(
+    () => captureBindings(bindings, { inputNames: [] } as unknown as BackwardCapture),
+    TypeError,
+    "retained evaluation requires a BackwardCapture",
+  );
+});
+
+test("a source entry's value restores files through its type, its stored value doesn't", () => {
+  const fileForm = { uri: "f", mime: null, name: null };
+  const files = new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map([["f", Type.scalar(ValueKind.FILE)]]),
+    required: new Set(),
+  });
+  const entry = new SourceEntry(null, 0, typedJson({ f: new FileRef({ uri: "f" }) }), files);
+
+  const value = entry.value as { f: FileRef };
+  expect(FileRef.isFileRef(value.f)).toBe(true);
+  expect(value.f.uri).toBe("f");
+  expect(entry.storedValue).toEqual({ f: fileForm });
+  expect(new SourceEntry(null, 0, entry.valueJson).value).toEqual({ f: fileForm });
+  expect(entry.value).not.toBe(entry.value);
+  expect(entry.storedValue).not.toBe(entry.storedValue);
+  expect(Object.isFrozen(entry)).toBe(true);
+});
+
+const TERMINAL_FAILURE = new Failure({ code: "node.execute", message: "Failed.", nodeId: "a" });
+
+test.each<[string, () => unknown, ErrorClass, string]>([
+  [
+    "succeeded not a boolean",
+    () => new TraceTerminal(1 as unknown as boolean, null, null, TERMINAL_FAILURE),
+    TypeError,
+    "terminal succeeded must be a bool",
+  ],
+  [
+    "a source of another class",
+    () => new TraceTerminal(false, {} as SourceRef, null, TERMINAL_FAILURE),
+    TypeError,
+    "source must be an exact SourceRef",
+  ],
+  [
+    "a source with a path",
+    () => new TraceTerminal(false, new SourceRef(RUN, 1, ["x"]), null, TERMINAL_FAILURE),
+    RangeError,
+    "terminal source must identify a root value",
+  ],
+  [
+    "a success without output",
+    () => new TraceTerminal(true, null, null, null),
+    RangeError,
+    "successful terminal requires output text and no failure",
+  ],
+  [
+    "a success with a failure",
+    () => new TraceTerminal(true, null, typedJson(1n), TERMINAL_FAILURE),
+    RangeError,
+    "successful terminal requires output text and no failure",
+  ],
+  [
+    "a failure without a failure",
+    () => new TraceTerminal(false, null, null, null),
+    RangeError,
+    "failed terminal requires a failure and no output",
+  ],
+  [
+    "a failure with output",
+    () => new TraceTerminal(false, null, typedJson(1n), TERMINAL_FAILURE),
+    RangeError,
+    "failed terminal requires a failure and no output",
+  ],
+  [
+    "a failure of another class",
+    () => new TraceTerminal(false, null, null, { ...TERMINAL_FAILURE } as Failure),
+    RangeError,
+    "failed terminal requires a failure and no output",
+  ],
+  [
+    "output that isn't a typed wire",
+    () => new TraceTerminal(true, null, "1", null),
+    RangeError,
+    "typed-value wire must be a JSON object",
+  ],
+])("a trace terminal refuses %s", (_name, build, cls, message) => {
+  expectError(build, cls, message);
+});
+
+test("a trace terminal's output is fresh canonical JSON, or null when it failed", () => {
+  const output = typedJson({ f: new FileRef({ uri: "f" }) });
+  const succeeded = new TraceTerminal(true, new SourceRef(RUN, 3), output, null);
+  expect(succeeded.output).toEqual({ f: { uri: "f", mime: null, name: null } });
+  expect(succeeded.output).not.toBe(succeeded.output);
+  const failed = new TraceTerminal(false, new SourceRef(RUN, 1), null, TERMINAL_FAILURE);
+  expect(failed.output).toBeNull();
+  expect(failed.failure).not.toBe(TERMINAL_FAILURE);
+  expect(failed.failure).toEqual(TERMINAL_FAILURE);
+  expect(Object.isFrozen(failed)).toBe(true);
+});
+
+test("checkMemoryScope returns null or an exact MemoryScope", () => {
+  const scope = new MemoryScope(["a"], { memories: ["notes"] });
+  expect(checkMemoryScope(null)).toBeNull();
+  expect(checkMemoryScope(scope)).toBe(scope);
+  expectError(
+    () => checkMemoryScope({ ...scope } as MemoryScope),
+    TypeError,
+    "historical memory scope must be a MemoryScope or null",
+  );
+});
+
+test("a trace occurrence keeps a decoded copy of its envelope", () => {
+  const keys = new Set<string>();
+  const capture = new ForwardCapture({ v: 1n }, ValueRoute.record([["v", sourceRoute(0, ["x"])]]), {
+    evaluatedKeys: keys,
+  });
+  const record = new NodeSucceededRecord("a", "a", { kind: "int", value: 2n }, { forwardCapture: capture });
+  const envelope = new RecordEnvelope(SCHEMA_VERSION, RUN, 2, record);
+  const hidden = new Set(["v"]);
+  const scope = new MemoryScope(["a"], { memories: ["notes"] });
+
+  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, scope, hidden);
+  const recordJson = encodeRecord(envelope);
+  (capture.evaluatedKeys as Set<string>).add("v");
+  hidden.add("w");
+
+  expect(occurrence.recordJson).toBe(recordJson);
+  expect(occurrence.envelope).not.toBe(envelope);
+  expect(occurrence.envelope.record).toBe(occurrence.record);
+  expect([...(occurrence.record as NodeSucceededRecord).forwardCapture!.evaluatedKeys]).toEqual([]);
+  expect(occurrence.memoryScope).toBe(scope);
+  expect([...occurrence.hiddenInputs]).toEqual(["v"]);
+  expect(Object.isFrozen(occurrence)).toBe(true);
+  expectError(
+    () => new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, {} as MemoryScope),
+    TypeError,
+    "historical memory scope must be a MemoryScope or null",
+  );
+});
+
+test("selectSeedRoute selects a seed field by name, or by item index and name", () => {
+  const field = sourceRoute(0, ["x"]);
+  const joined = sourceRoute(0, ["y"]);
+  const itemField = sourceRoute(0, ["z"]);
+  const item = new ForwardCapture({ n: 1n }, ValueRoute.record([["n", itemField]]));
+  const capture = new ForwardCapture({ v: 1n }, ValueRoute.record([["v", field]]), { items: [[2, item]] });
+
+  expect(selectSeedRoute(capture, new SeedConnection("child", "v", ["v"]))).toBe(field);
+  const inputRoute = ValueRoute.record([["v", joined]]);
+  expect(selectSeedRoute(capture, new SeedConnection("child", "v", ["v"]), inputRoute)).toBe(joined);
+  expect(selectSeedRoute(capture, new SeedConnection("child", "n", [2, "n"]), inputRoute)).toBe(itemField);
+  expect(selectSeedRoute(capture, new SeedConnection("child", "n", [3, "n"]))).toBeNull();
+  expect(selectSeedRoute(capture, new SeedConnection("child", "w", ["w"]))).toBeNull();
+});
+
+test("a retained trace starts empty and checks its root input names", () => {
+  const trace = new RetainedTrace(RUN, "__start__");
+  expect(trace.endId).toBeNull();
+  expect(trace.rootInputNames).toEqual([]);
+  expect(trace.rootStartSource).toBeNull();
+  expect(trace.terminal).toBeNull();
+  expect(trace.nextSequence).toBe(0);
+  expect(trace.occurrences).toEqual([]);
+  expect(trace.boundaries).toEqual([]);
+  expect(trace.sources.size).toBe(0);
+  expectError(
+    () => new RetainedTrace(RUN, "__start__", null, ["x", "x"]),
+    RangeError,
+    "root_input_names must contain unique names",
+  );
+});
+
+test("lookupSource reads a root value or a path inside it as fresh canonical JSON", () => {
+  const trace = new RetainedTrace(RUN, "__start__");
+  const file = new FileRef({ uri: "f" });
+  install(trace, "b", new SourceEntry(new SourceRef(RUN, 3), 4, typedJson({ items: [10n, { f: file }] })));
+
+  expect(trace.lookupSource(new SourceRef(RUN, 3))).toEqual({
+    items: [10n, { f: { uri: "f", mime: null, name: null } }],
+  });
+  expect(trace.lookupSource(new SourceRef(RUN, 3))).not.toBe(trace.lookupSource(new SourceRef(RUN, 3)));
+  expect(trace.lookupSource(new SourceRef(RUN, 3, ["items", 1, "f", "uri"]))).toBe("f");
+  expect(trace.lookupSource(new SourceRef(RUN, 3, ["items", 0]))).toBe(10n);
+  const absent = "source path is absent from its accepted value";
+  expectError(() => trace.lookupSource(new SourceRef(RUN, 3, ["missing"])), RangeError, absent);
+  expectError(() => trace.lookupSource(new SourceRef(RUN, 3, ["items", 2])), RangeError, absent);
+  expectError(() => trace.lookupSource(new SourceRef(RUN, 3, ["items", -1])), RangeError, absent);
+  expectError(() => trace.lookupSource(new SourceRef(RUN, 3, ["items", "0"])), RangeError, absent);
+  expectError(() => trace.lookupSource(new SourceRef(RUN, 3, [0])), RangeError, absent);
+  expectError(() => trace.lookupSource(new SourceRef(RUN, 3, ["items", 0, "x"])), RangeError, absent);
+  expectError(
+    () => trace.lookupSource(new SourceRef(RUN, 5, ["x"])),
+    RangeError,
+    `no accepted source for ${sourceKey(new SourceRef(RUN, 5))}`,
+  );
+});
+
+test("resolve pairs each read's value, presence and producer", () => {
+  const trace = chainTrace();
+  install(trace, "b", new SourceEntry(new SourceRef(RUN, 3), 4, typedJson({ f: "text" })));
+  trace.system.set("k", typedJson("ambient"));
+
+  expect(trace.resolve("input.x")).toEqual(new ResolvedValue(1n, true, new SourceRef(RUN, 0, ["x"])));
+  expect(trace.resolve(" b.output.f ")).toEqual(new ResolvedValue("text", true, new SourceRef(RUN, 3, ["f"])));
+  expect(trace.resolve("b.output")).toEqual(new ResolvedValue({ f: "text" }, true, new SourceRef(RUN, 3)));
+  expect(trace.resolve("system.k")).toEqual(new ResolvedValue("ambient", true));
+  expect(trace.resolve("system.absent")).toEqual(new ResolvedValue(null, false));
+  expect(trace.resolve("unknown.output")).toEqual(new ResolvedValue(null, false));
+  expect(trace.resolve("input.y")).toEqual(new ResolvedValue(null, false));
+  expect(trace.resolve("b.output.g")).toEqual(new ResolvedValue(null, false));
+  expectError(() => trace.resolve("input..x"), ExpressionError, "invalid variable path: '${input..x}'");
+});
+
+test("occurrence finds an accepted occurrence by its start", () => {
+  const trace = chainTrace();
+  expect(trace.occurrence(new SourceRef(RUN, 1)).nodeId).toBe("a");
+  expect(trace.occurrences.map((item) => item.nodeId)).toEqual(["a"]);
+  expectError(
+    () => trace.occurrence(new SourceRef(RUN, 0)),
+    RangeError,
+    `no accepted occurrence for ${sourceKey(new SourceRef(RUN, 0))}`,
+  );
+});
+
+test("backwardContext adds the evaluation evidence and reads a success's output", () => {
+  const evidence = new EvaluationEvidence(null, { v: 1n }, "System.", "Prompt.");
+  const { value, forwardCapture } = learnableRun()[2]!.record as NodeSucceededRecord;
+  const trace = chainTrace(new NodeSucceededRecord("a", "a", value, { evidence, forwardCapture }));
+  const context = trace.backwardContext(new SourceRef(RUN, 1), { downstreamContext: [{ index: 0n }] });
+
+  expect(context.inputs).toEqual({ v: 1n });
+  expect(context.inputNames).toEqual(["v"]);
+  expect(context.output).toBe(2n);
+  expect(context.failure).toBeNull();
+  expect(context.runId).toBe(RUN);
+  expect(context.nodeId).toBe("a");
+  expect(context.nodeStartedSeq).toBe(1);
+  expect(context.nodeData).toEqual({ _evaluation_evidence: evidencePayload(evidence) });
+  expect((context.nodeData["_evaluation_evidence"] as { prompt: string }).prompt).toBe("Prompt.");
+  expect(context.downstreamContext).toEqual([{ index: 0n }]);
+});
+
+test("backwardContext refuses captured node data using the reserved evidence key", () => {
+  const capture = new ForwardCapture({ v: 1n }, ValueRoute.record([["v", ValueRoute.literal(1n)]]), {
+    nodeData: { _evaluation_evidence: "forged" },
+  });
+  const trace = chainTrace(new NodeRoutedRecord("a", "next", { forwardCapture: capture }));
+  expectError(
+    () => trace.backwardContext(new SourceRef(RUN, 1)),
+    RangeError,
+    "captured node data uses reserved _evaluation_evidence",
+  );
+});
+
+test("backwardContext takes a routed terminal failure and reads output only for a success", () => {
+  const capture = new ForwardCapture({ v: 1n }, ValueRoute.record([["v", ValueRoute.literal(1n)]]), {
+    nodeData: { k: "kept" },
+  });
+  const failure = new Failure({ code: "graph.terminal_unreachable", message: "Unreachable.", nodeId: "a" });
+  // Source 1 holds a value, so the null output comes from the record's class.
+  const trace = chainTrace(new NodeRoutedRecord("a", "next", { terminalFailure: failure, forwardCapture: capture }));
+
+  const context = trace.backwardContext(new SourceRef(RUN, 1));
+
+  expect(context.failure).toEqual(failure);
+  expect(context.output).toBeNull();
+  expect(context.nodeData).toEqual({ k: "kept", _evaluation_evidence: null });
 });

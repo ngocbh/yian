@@ -305,19 +305,20 @@ function readTypeOnly(
  * A source-free declaration has no default: defaults are written in YAML after a tag. This
  * entry point deliberately emits no origins.
  *
+ * @param mapping The `input:` section, or `null`/`undefined` for none.
  * @param ranges Each declaration's range, given to an error the declaration raises without
  *   one.
  * @throws LoadError when a declaration is not type text or holds a default.
  */
 export function readFlowInputs(
-  mapping: unknown,
+  mapping: Readonly<Record<string, unknown>> | null | undefined,
   registry: TypeRegistry,
   ranges: ReadonlyMap<string, SourceRange | null> | null = null,
   options: { diagnostics?: LoadDiagnostics | null } = {},
 ): Parameter[] {
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const parameters: Parameter[] = [];
-  for (const [name, value] of Object.entries((mapping || {}) as Record<string, unknown>)) {
+  for (const [name, value] of Object.entries(mapping ?? {})) {
     const sourceRange = ranges?.get(name) ?? null;
     try {
       parameters.push(readTypeOnly(name, value, registry, { diagnostics }));
@@ -352,6 +353,7 @@ export function readVariables(
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   if (!isRecord(mapping)) throw diagnostics.error("variables must be a mapping");
   for (const name of Object.keys(mapping)) {
+    // A record's keys are always text, so only the empty name is checked.
     if (name === "") throw diagnostics.error("variable names must be non-empty strings");
     throw diagnostics.error(`variable ${reprText(name)}: a variable needs a default; ${SOURCE_FREE_DEFAULT}`);
   }
@@ -582,6 +584,7 @@ export function readSourceParameters(
   try {
     for (const [name, value] of Object.entries(mapping)) {
       const declarationCursor = cursor.child(name);
+      // Keys are text here; the loader refuses a non-text key (`document.nonTextKey`).
       if (name === "") {
         throw diagnostics.error(`${sectionLabel} names must be non-empty strings`, {
           range: declarationCursor.keyRange ?? declarationCursor.range,

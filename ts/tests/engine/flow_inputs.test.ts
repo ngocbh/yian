@@ -18,8 +18,10 @@
  * `test_reader_returns_only_exact_parameter_carriers`, the three bool spelling tests and
  * `test_bad_number_passes_through_unchanged`.
  *
- * TS-only: a default holding a lone surrogate, refused before its tag is read. The text rules
- * for `float` and `int` inputs (the rules `int-in-float` and `text`). Text for a `float` input
+ * Changed (TS yian): a default holding a lone surrogate (a double-quoted `\ud800` escape) is
+ * refused before its tag is read, where Python accepts it.
+ *
+ * TS-only: the text rules for `float` and `int` inputs (the rules `int-in-float` and `text`). Text for a `float` input
  * reads an int spelling as that int at any size (`"2"` is `2n`, kept an int in the float slot),
  * a float spelling as a float, `inf`/`-inf` as infinity, and refuses a spelling beyond the
  * float range; Python's `float()` reads `"2"` as `2.0` and also takes `nan`, `Infinity` and
@@ -33,35 +35,27 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
-import { readFlowInputs, readSourceFlowInputs } from "../../src/compose/helpers/types.ts";
-import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
-import type { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
+import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
+import { readFlowInputs } from "../../src/compose/helpers/types.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { applyDefaults, checkInputNames, coerceInputs } from "../../src/nodes/binding.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { buildValueAs, Type, TypeCheckError, ValueKind } from "../../src/typesys/index.ts";
-import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
-import { caseDocument, parametersFromYaml } from "../compose/declarations.ts";
-import type { Case } from "../conformance.ts";
+import type { TypeRegistry } from "../../src/typesys/types.ts";
+import {
+  type CaseRow,
+  inputsAt,
+  loadError,
+  parametersFromYaml,
+  runCase,
+} from "../compose/declarations.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));
 afterEach(forget);
 
 const EMPTY: TypeRegistry = new Map();
-
-/** Return the `LoadError` `run` throws. */
-function loadError(run: () => unknown): LoadError {
-  try {
-    run();
-  } catch (error) {
-    if (error instanceof LoadError) return error;
-    throw error;
-  }
-  throw new Error("expected a LoadError");
-}
 
 /** Return the parameters keyed by name. */
 function byName(parameters: Parameter[]): Map<string, Parameter> {
@@ -345,68 +339,11 @@ test("applyDefaults accepts a long int default", () => {
 
 // ---------- harvested conformance cases ----------
 
-/** The call the loader makes on a case's document. */
-type Call = (document: SourceDocument, registry: TypeRegistry, diagnostics: LoadDiagnostics) => unknown;
-
-interface Row {
-  /** The case, `group/name`. */
-  id: string;
-  call: Call;
-  /** The loader's prefix on the expected message. */
-  prefix?: string;
-}
-
-/** Return the cursor at `path` from the document root. */
-function at(document: SourceDocument, path: string[]): SourceCursor {
-  return path.reduce((cursor: SourceCursor, step) => cursor.child(step), document.root);
-}
-
-/** Read the `input:` declarations at `path` as the loader reads `owner`'s (the root's: `[]`). */
-const declared =
-  (path: string[], owner: string[] = []): Call =>
-  (document, registry, diagnostics) =>
-    readSourceFlowInputs(at(document, path), registry, {
-      sitePath: owner,
-      catalogBuilder: new SourceCatalogBuilder(),
-      diagnostics,
-    });
-
-const rootInput = declared(["input"]);
-const childInput = declared(["defs", "child", "input"], ["def", "child"]);
-
-/** Make the row's call on its case and compare the result with the case's `expect`. */
-function runRow(row: Row): void {
-  const { case_, document } = caseDocument(row.id);
-  const root = document.root;
-  const registry = root.has("typedefs") ? readTypedefs(root.mapping("typedefs")) : new Map();
-  const diagnostics = LoadDiagnostics.fromDocument(document);
-  const expected = (case_["expect"] as Case)["load"];
-  if (expected === "ok") {
-    row.call(document, registry, diagnostics);
-    return;
-  }
-  const error = loadError(() => row.call(document, registry, diagnostics));
-  const frame = error.diagnostic.frames.at(-1)!;
-  const range = frame.range;
-  const diagnostic = ((expected as Case)["diagnostics"] as Case[])[0]!;
-  const expectedFrame = (diagnostic["frames"] as Case[]).at(-1)!;
-  const message = diagnostic["message"] as string;
-  const prefix = row.prefix ?? "";
-  expect(message.startsWith(prefix)).toBe(true);
-  expect([
-    error.message,
-    frame.label,
-    [range.startLine, range.startCol, range.endLine, range.endCol],
-  ]).toEqual([
-    message.slice(prefix.length),
-    expectedFrame["label"] as string,
-    (expectedFrame["range"] as bigint[]).map(Number),
-  ]);
-}
-
+const rootInput = inputsAt(["input"]);
+const childInput = inputsAt(["defs", "child", "input"], ["def", "child"]);
 const CHILD = "defs entry 'child': ";
 
-test.each<Row>([
+test.each<CaseRow>([
   { id: "load-core/engine_errors__invalid_authored_default_carries_input_range", call: rootInput },
   { id: "load-core/compose_source_ownership__recursive_root_alias", call: rootInput },
   { id: "load-core/engine_value_nesting_boundaries__input_default_over_the_limit", call: rootInput },
@@ -420,4 +357,4 @@ test.each<Row>([
     call: childInput,
     prefix: CHILD,
   },
-])("readSourceFlowInputs: $id", runRow);
+])("readSourceFlowInputs: $id", runCase);

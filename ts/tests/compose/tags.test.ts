@@ -47,13 +47,12 @@ import {
   yamlQuoted,
 } from "../../src/compose/helpers/tags.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
-import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
+import { SourceDocument } from "../../src/compose/source/index.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import { type Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
-import type { Case } from "../conformance.ts";
-import { caseDocument } from "./declarations.ts";
+import { type CaseCall, type CaseRow, cursorAt, loadError, runCase } from "./declarations.ts";
 
 // Pinned before `REG` is read too, so neither depends on the shell's `YIAN_*` limits.
 install(BUILTIN);
@@ -338,17 +337,6 @@ function read(
     ledger: options.ledger ?? new Set(),
     literalOnly: options.literalOnly,
   });
-}
-
-/** Return the `LoadError` `run` throws, failing if it throws none. */
-function loadError(run: () => unknown): LoadError {
-  try {
-    run();
-  } catch (error) {
-    if (error instanceof LoadError) return error;
-    throw error;
-  }
-  throw new Error("expected a LoadError");
 }
 
 /** Assert reading `text` fails with a message holding `fragment`. */
@@ -661,40 +649,15 @@ describe("tag positions", () => {
 
 // ---------- Harvested cases ----------
 
-/** The call the loader makes on a case's document; `builder` holds the ledger reads. */
-type Call = (
-  document: SourceDocument,
-  registry: TypeRegistry,
-  diagnostics: LoadDiagnostics,
-  builder: SourceCatalogBuilder,
-) => void;
-
 /**
  * A slot `readTaggedValue` reads: its path from the root and its options. Its label is the
  * path's last step, as the loader's labels are for every harvested slot.
  */
 type Slot = [path: string[], options?: { literalOnly?: boolean; nestedCallFix?: string }];
 
-interface Row {
-  /** The case, `group/name`. */
-  id: string;
-  call: Call;
-  /** Slots read first, so the ledger holds every legitimately read tag. */
-  ledger?: Slot[];
-  /** A file of the case other than its flow. */
-  file?: string;
-  /** The loader's prefix on the expected message. */
-  prefix?: string;
-}
-
 const LLM_CONFIG_CALL_FIX =
   "compute it in a node and read that node's output with `${...}`, or reword the text";
 const LITERAL = { literalOnly: true };
-
-/** Return the cursor at `path` from the document root. */
-function at(document: SourceDocument, path: string[]): SourceCursor {
-  return path.reduce((cursor: SourceCursor, step) => cursor.child(step), document.root);
-}
 
 /** Read `slot` as the loader does, with the file's consumed-tag ledger. */
 function readSlot(
@@ -704,7 +667,7 @@ function readSlot(
   diagnostics: LoadDiagnostics,
   builder: SourceCatalogBuilder,
 ): void {
-  readTaggedValue(at(document, path), registry, {
+  readTaggedValue(cursorAt(document, path), registry, {
     label: path.at(-1)!,
     sitePath: path,
     catalogBuilder: builder,
@@ -715,56 +678,28 @@ function readSlot(
 }
 
 const slot =
-  (...read: Slot): Call =>
+  (...read: Slot): CaseCall =>
   (document, registry, diagnostics, builder) =>
     readSlot(read, document, registry, diagnostics, builder);
 
 const output =
-  (path: string[]): Call =>
+  (path: string[]): CaseCall =>
   (document, _registry, diagnostics) =>
-    rejectTaggedOutput(at(document, path), diagnostics);
+    rejectTaggedOutput(cursorAt(document, path), diagnostics);
 
+/**
+ * Check for unread tags as the loader does, after reading the `ledger` slots, so the ledger
+ * holds every legitimately read tag.
+ */
 const unread =
-  (options: { typedefsOnly?: boolean } = {}): Call =>
-  (document, _registry, diagnostics, builder) =>
-    rejectUnreadTags(document, builder.consumedTags, diagnostics, options);
-
-/** Make the row's call on its case and compare the result with the case's `expect`. */
-function runRow(row: Row): void {
-  const { case_, document } = caseDocument(row.id, { file: row.file });
-  const root = document.root;
-  const registry: TypeRegistry = root.has("typedefs")
-    ? readTypedefs(root.mapping("typedefs"))
-    : new Map();
-  const diagnostics = LoadDiagnostics.fromDocument(document);
-  const builder = new SourceCatalogBuilder();
-  for (const read of row.ledger ?? []) readSlot(read, document, registry, diagnostics, builder);
-  const expected = (case_["expect"] as Case)["load"];
-  if (expected === "ok") {
-    row.call(document, registry, diagnostics, builder);
-    return;
-  }
-  const error = loadError(() => row.call(document, registry, diagnostics, builder));
-  const frame = error.diagnostic.frames.at(-1)!;
-  const range = frame.range;
-  const diagnostic = ((expected as Case)["diagnostics"] as Case[])[0]!;
-  const expectedFrame = (diagnostic["frames"] as Case[]).at(-1)!;
-  const message = diagnostic["message"] as string;
-  const prefix = row.prefix ?? "";
-  expect(message.startsWith(prefix)).toBe(true);
-  expect([
-    error.message,
-    frame.label,
-    [range.startLine, range.startCol, range.endLine, range.endCol],
-  ]).toEqual([
-    message.slice(prefix.length),
-    expectedFrame["label"] as string,
-    (expectedFrame["range"] as bigint[]).map(Number),
-  ]);
-}
+  (options: { typedefsOnly?: boolean; ledger?: Slot[] } = {}): CaseCall =>
+  (document, registry, diagnostics, builder) => {
+    for (const read of options.ledger ?? []) readSlot(read, document, registry, diagnostics, builder);
+    rejectUnreadTags(document, builder.consumedTags, diagnostics, { typedefsOnly: options.typedefsOnly });
+  };
 
 describe("harvested cases", () => {
-  test.each<Row>([
+  test.each<CaseRow>([
     {
       id: "types/compose_open_range_flows__no_ends_in_a_tag",
       call: slot(["nodes", "use", "input", "x"]),
@@ -861,9 +796,9 @@ describe("harvested cases", () => {
       id: "load-types/compose_typed_bindings_check__str_into_literal_loads",
       call: slot(["nodes", "use", "input", "x"]),
     },
-  ])("readTaggedValue: $id", runRow);
+  ])("readTaggedValue: $id", runCase);
 
-  test.each<Row>([
+  test.each<CaseRow>([
     {
       id: "load-types/compose_tag_positions__tagged_agent_output_is_rejected",
       call: output(["nodes", "n", "output"]),
@@ -885,9 +820,9 @@ describe("harvested cases", () => {
       call: output(["defs", "echo", "output"]),
       prefix: "defs entry 'echo': ",
     },
-  ])("rejectTaggedOutput: $id", runRow);
+  ])("rejectTaggedOutput: $id", runCase);
 
-  test.each<Row>([
+  test.each<CaseRow>([
     {
       id: "load-types/compose_tag_positions__tag_on_kind_is_rejected_at_its_line",
       call: unread(),
@@ -898,14 +833,12 @@ describe("harvested cases", () => {
     },
     {
       id: "load-types/compose_tag_positions__tag_outside_a_slot_in_a_def_is_rejected",
-      call: unread(),
-      ledger: [[["defs", "sub", "input", "x"], LITERAL]],
+      call: unread({ ledger: [[["defs", "sub", "input", "x"], LITERAL]] }),
     },
     {
       id: "load-types/compose_tag_positions__tag_outside_a_slot_in_a_uses_child_is_rejected",
-      call: unread(),
+      call: unread({ ledger: [[["input", "x"], LITERAL]] }),
       file: "child.yaml",
-      ledger: [[["input", "x"], LITERAL]],
     },
     {
       id: "load-types/compose_tag_positions__tag_outside_a_slot_in_an_inline_body_is_rejected",
@@ -921,24 +854,25 @@ describe("harvested cases", () => {
     },
     {
       id: "load-types/compose_tag_positions__tags_in_flow_inputs_load",
-      call: unread(),
-      ledger: [
-        [["input", "n"], LITERAL],
-        [["input", "m"], LITERAL],
-      ],
+      call: unread({
+        ledger: [
+          [["input", "n"], LITERAL],
+          [["input", "m"], LITERAL],
+        ],
+      }),
     },
     {
       id: "load-types/compose_tag_positions__tags_in_a_def_slot_load",
-      call: unread(),
-      ledger: [
-        [["defs", "sub", "input", "x"], LITERAL],
-        [["defs", "sub", "nodes", "echo", "input", "value"]],
-      ],
+      call: unread({
+        ledger: [
+          [["defs", "sub", "input", "x"], LITERAL],
+          [["defs", "sub", "nodes", "echo", "input", "value"]],
+        ],
+      }),
     },
     {
       id: "load-types/compose_tag_positions__tag_under_an_extension_key_aliased_into_a_slot_loads",
-      call: unread(),
-      ledger: [[["nodes", "n", "input", "qty"]]],
+      call: unread({ ledger: [[["nodes", "n", "input", "qty"]]] }),
     },
-  ])("rejectUnreadTags: $id", runRow);
+  ])("rejectUnreadTags: $id", runCase);
 });

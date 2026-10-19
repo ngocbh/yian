@@ -11,7 +11,8 @@
  * the loader reads it (a flow input with `readSourceFlowInputs`, a node output with
  * `readValueContract`, a tagged binding with `readTaggedValue`) and found, labelled with
  * `canonicalTypeLabel`, in the expected message; the messages themselves are T3-19's
- * `call_types` and `typed_bindings` and T3-20's `case_exhaustive`.
+ * `call_types` and `typed_bindings` and T3-20's `case_exhaustive`. And one `ok` case whose
+ * union typedef reads and whose `input:` declarations then read through `readSourceFlowInputs`.
  *
  * Changed: an empty or surrogate field name is refused without a source too, as an unranged
  * `LoadError`, where Python's `read_type({"": "int"}, {})` returns a type.
@@ -19,17 +20,26 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
+import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import { readTaggedValue } from "../../src/compose/helpers/tags.ts";
 import { readSourceFlowInputs, readType, readValueContract } from "../../src/compose/helpers/types.ts";
 import { encodeSitePath, SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
-import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
+import { SourceDocument } from "../../src/compose/source/index.ts";
 import { BUILTIN, forget, install, reload } from "../../src/defaults.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import type { ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, type Type, ValueKind } from "../../src/typesys/values.ts";
-import { caseDocument } from "../compose/declarations.ts";
+import {
+  type CaseCall,
+  caseDocument,
+  caseRegistry,
+  type CaseRow,
+  cursorAt,
+  inputsAt,
+  loadError,
+  runCase,
+} from "../compose/declarations.ts";
 import type { Case } from "../conformance.ts";
 
 const EMPTY: TypeRegistry = new Map();
@@ -38,17 +48,6 @@ const LIMIT_TEXT = "the limit for a type (each record and list is a level)";
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));
 afterEach(forget);
-
-/** Return the `LoadError` `call` throws. */
-function loadError(call: () => unknown): LoadError {
-  try {
-    call();
-  } catch (error) {
-    expect(error).toBeInstanceOf(LoadError);
-    return error as LoadError;
-  }
-  throw new Error("expected a LoadError");
-}
 
 /** Return the field `name` of record type `typ`. */
 function field(typ: Type, name: string): Type {
@@ -214,30 +213,15 @@ test("readValueContract registers the root and each authored field in canonical 
 
 // ---------- harvested conformance cases ----------
 
-type Call = (document: SourceDocument, registry: TypeRegistry, diagnostics: LoadDiagnostics) => unknown;
-
-/** Return the cursor at `path` below `cursor`. */
-function cursorAt(cursor: SourceCursor, path: readonly string[]): SourceCursor {
-  return path.reduce((at, key) => at.child(key), cursor);
-}
-
 /** Read the `output:` declaration at `path` as the loader reads node `nodeId`'s output. */
-function output(path: readonly string[], nodeId: string): Call {
-  return (document, registry, diagnostics) =>
-    readValueContract(cursorAt(document.root, path), registry, {
+function output(path: readonly string[], nodeId: string): CaseCall {
+  return (document, registry, diagnostics, builder) =>
+    readValueContract(cursorAt(document, path), registry, {
       sitePath: ["node", nodeId, "output", "contract"],
-      catalogBuilder: new SourceCatalogBuilder(),
+      catalogBuilder: builder,
       diagnostics,
     });
 }
-
-/** Read the flow's `input:` declarations as the loader does. */
-const flowInputs: Call = (document, registry, diagnostics) =>
-  readSourceFlowInputs(document.root.child("input"), registry, {
-    sitePath: [],
-    catalogBuilder: new SourceCatalogBuilder(),
-    diagnostics,
-  });
 
 const RECORD_NESTING = "types/compose_record_type_nesting__";
 const UNION_TYPEDEFS = "types/engine_union_typedefs__";
@@ -246,7 +230,7 @@ const compact = output(["output"], "compact");
 const use = output(["nodes", "use", "output"], "use");
 const emit = output(["nodes", "emit", "output"], "emit");
 
-test.each([
+test.each<CaseRow>([
   { id: `${RECORD_NESTING}a_typedef_name_counts_as_deep_as_its_definition`, call: use },
   { id: `${RECORD_NESTING}record_past_a_configured_limit`, call: use },
   { id: `${RECORD_NESTING}record_at_a_configured_limit_loads`, call: use },
@@ -263,32 +247,12 @@ test.each([
   { id: `${OUTPUT_ORIGINS}invalid_output_list_item`, call: emit },
   { id: `${OUTPUT_ORIGINS}non_text_nested_output_type`, call: emit },
   { id: `${OUTPUT_ORIGINS}unknown_nested_output_type`, call: emit },
-  { id: `${UNION_TYPEDEFS}load_flow_accepts_union_typedef`, call: flowInputs },
-])("$id", ({ id, call }) => {
-  const { case_, document } = caseDocument(id);
-  const flow = document.root.value as Record<string, unknown>;
-  const typedefs = flow["typedefs"] as Record<string, unknown> | undefined;
-  const registry = typedefs !== undefined ? readTypedefs(typedefs) : new Map();
-  const diagnostics = LoadDiagnostics.fromDocument(document);
-  const expected = (case_["expect"] as Case)["load"];
-  if (expected === "ok") {
-    call(document, registry, diagnostics);
-    return;
-  }
-  const wanted = ((expected as Case)["diagnostics"] as Case[])[0]!;
-  const frame = (wanted["frames"] as Case[]).at(-1)!;
-  const error = loadError(() => call(document, registry, diagnostics));
-  const last = error.diagnostic.frames.at(-1);
-  expect([error.message, last?.label, last?.range]).toEqual([
-    wanted["message"] as string,
-    frame["label"] as string,
-    new SourceRange(...((frame["range"] as bigint[]).map(Number) as [number, number, number, number])),
-  ]);
-});
+  { id: `${UNION_TYPEDEFS}load_flow_accepts_union_typedef`, call: inputsAt(["input"]) },
+])("$id", runCase);
 
 /** Return the label of input `name`'s type in the `input:` declarations at `path`. */
 function inputLabel(document: SourceDocument, registry: TypeRegistry, path: string[], name: string): string {
-  const parameters = readSourceFlowInputs(cursorAt(document.root, path), registry, {
+  const parameters = readSourceFlowInputs(cursorAt(document, path), registry, {
     sitePath: [],
     catalogBuilder: new SourceCatalogBuilder(),
   });
@@ -298,14 +262,15 @@ function inputLabel(document: SourceDocument, registry: TypeRegistry, path: stri
 /** Return the label of node `nodeId`'s declared `output:` type. */
 function outputLabel(document: SourceDocument, registry: TypeRegistry, nodeId: string): string {
   const read = output(["nodes", nodeId, "output"], nodeId);
-  const contract = read(document, registry, LoadDiagnostics.fromDocument(document)) as ValueContract;
+  const diagnostics = LoadDiagnostics.fromDocument(document);
+  const contract = read(document, registry, diagnostics, new SourceCatalogBuilder()) as ValueContract;
   return canonicalTypeLabel(contract.type);
 }
 
 /** Return the label of the type tagged on the slot at `path`. */
 function taggedLabel(document: SourceDocument, registry: TypeRegistry, path: string[]): string {
   const catalogBuilder = new SourceCatalogBuilder();
-  const slot = readTaggedValue(cursorAt(document.root, path), registry, {
+  const slot = readTaggedValue(cursorAt(document, path), registry, {
     label: path.at(-1)!,
     sitePath: path,
     catalogBuilder,
@@ -336,8 +301,7 @@ test.each<{ id: string; fragment: (document: SourceDocument, registry: TypeRegis
   },
 ])("the compared types of $id", ({ id, fragment }) => {
   const { case_, document } = caseDocument(id);
-  const root = document.root;
-  const registry = root.has("typedefs") ? readTypedefs(root.mapping("typedefs")) : new Map();
+  const registry = caseRegistry(document);
   const wanted = (((case_["expect"] as Case)["load"] as Case)["diagnostics"] as Case[])[0]!;
   expect(wanted["message"] as string).toContain(fragment(document, registry));
 });

@@ -1,16 +1,19 @@
 /**
  * Input-size caps come from `defaults`; mirrors `tests/test_input_caps_defaults.py`.
  *
- * Holds the base URL, skill and question option rows; the other rows come with their modules.
+ * Holds the base URL, skill, question option and auth store rows; the other rows come with their
+ * modules.
  */
 
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadSkillDir } from "../src/compose/skills.ts";
 import { BUILTIN, install } from "../src/defaults.ts";
+import { AuthError } from "../src/llm_clients/auth/common.ts";
+import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import { validateBaseUrl } from "../src/llm_clients/config.ts";
 import { checkSkillName } from "../src/skills/catalog.ts";
 import { Skill, SkillError } from "../src/skills/index.ts";
@@ -68,4 +71,27 @@ test("skill description cap", () => {
 test("question option caps", () => {
   install({ ...BUILTIN, maxQuestionOptions: 2, maxQuestionOptionChars: 5 });
   expect(normalizeOptions(["abcdefg", "b", "c"])).toEqual(["abcd…", "b"]);
+});
+
+test("auth store cap", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "yian-auth-"));
+  try {
+    const directory = join(tmp, "auth");
+    mkdirSync(directory, { mode: 0o700 });
+    const file = join(directory, "auth.json");
+    const entry = {
+      method: "api_key",
+      model: "claude-x",
+      credential_id: "c".repeat(32),
+      credentials: { api_key: "sk-saved" },
+    };
+    writeFileSync(file, JSON.stringify({ version: 1, default_provider: "anthropic", providers: { anthropic: entry } }));
+    chmodSync(file, 0o600);
+    expect(new AuthStore(file).read().selections).not.toEqual([]);
+    install({ ...BUILTIN, maxAuthStoreBytes: 10 });
+    expect(() => new AuthStore(file).read()).toThrow(AuthError);
+    expect(() => new AuthStore(file).read()).toThrow("Credential storage exceeds its size limit");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });

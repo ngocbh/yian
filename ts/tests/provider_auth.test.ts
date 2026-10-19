@@ -4,9 +4,13 @@
  * `auth/http.ts`, as does `test_refresh_is_serialized_across_processes`.
  */
 
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { inspect } from "node:util";
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import { ProviderError } from "../src/llm/errors.ts";
 import {
@@ -16,6 +20,7 @@ import {
   OAuthCredentials,
   ProviderSelection,
 } from "../src/llm_clients/auth/common.ts";
+import { AuthStore } from "../src/llm_clients/auth/store.ts";
 
 /** Return the error `run` throws, failing the test if it throws none. */
 function thrown(run: () => unknown): Error {
@@ -358,4 +363,255 @@ describe("isAuthFailure", () => {
       expect(isAuthFailure(error)).toBe(expected);
     });
   }
+});
+
+describe("AuthStore", () => {
+  let tmp: string;
+  let file: string;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(join(tmpdir(), "yian-auth-"));
+    file = join(tmp, "auth", "auth.json");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  /** Write `value` as the store at `path`: its directory 0700, the file 0600. */
+  function writeStore(path: string, value: unknown): void {
+    writeRaw(path, JSON.stringify(value));
+  }
+
+  /** Write `contents` as the store at `path`: its directory 0700, the file 0600. */
+  function writeRaw(path: string, contents: string | Uint8Array): void {
+    const directory = join(path, "..");
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    fs.chmodSync(directory, 0o700);
+    fs.writeFileSync(path, contents);
+    fs.chmodSync(path, 0o600);
+  }
+
+  /** Return a one-provider store's text, the entry overridden by `entry`. */
+  function entryStore(provider = "p", entry: Record<string, unknown> = {}): string {
+    const value = {
+      method: "api_key",
+      model: "m",
+      credential_id: "c".repeat(32),
+      credentials: { api_key: "do-not-echo" },
+      ...entry,
+    };
+    return JSON.stringify({ version: 1, default_provider: null, providers: { [provider]: value } });
+  }
+
+  /** A saved openai API-key login. */
+  const savedStore = {
+    version: 1,
+    default_provider: "openai",
+    providers: {
+      openai: { method: "api_key", model: "model", credential_id: "c".repeat(32), credentials: { api_key: "secret" } },
+    },
+  };
+
+  test("a v1 store without the new fields still loads", () => {
+    writeRaw(
+      file,
+      '{"default_provider": "openai", "providers": {"openai": {"credential_id": ' +
+        '"0123456789abcdef0123456789abcdef", "credentials": {"api_key": "sk-old"}, ' +
+        '"method": "api_key", "model": "gpt-4o"}}, "version": 1}\n',
+    );
+    const selection = new AuthStore(file).selection();
+    expect(selection?.provider).toBe("openai");
+    expect(selection?.method).toBe("api_key");
+    expect(selection?.endpoint).toBeNull();
+  });
+
+  const subscription = {
+    access_token: "a",
+    refresh_token: "r",
+    expires_at: 9000,
+    account_id: "acct",
+    residency: null,
+  };
+  const malformed: string[] = [
+    "{",
+    "[]",
+    '{"version":99}',
+    '{"secret":"do-not-echo"}',
+    entryStore("p", { method: "none" }),
+    entryStore("p", { credentials: null }),
+    entryStore("p", { endpoint: ["do-not-echo"] }),
+    entryStore("p", { secret: "do-not-echo" }),
+    entryStore("p", { header_names: ["X-Gateway"] }),
+    entryStore("openai", { organization: ["do-not-echo"] }),
+    entryStore("openai", { organization: "" }),
+    entryStore("openai", { project: "do not echo" }),
+    entryStore("p", { organization: "do-not-echo" }),
+    entryStore("openai", { organization: null }),
+    entryStore("openai", { project: null }),
+    entryStore("ollama", { credentials: { api_key: "k", headers: { X: "do-not-echo" } } }),
+    entryStore("openai", { method: "subscription", project: "do-not-echo", credentials: subscription }),
+    entryStore("p", { credentials: { api_key: "k", headers: [["X", "do-not-echo"]] } }),
+    entryStore("p", { credentials: { api_key: "k", headers: {} } }),
+    entryStore("p", { credentials: { api_key: "k", headers: { X: 1 } } }),
+    entryStore("p", { credentials: { api_key: "k", headers: { Authorization: "do-not-echo" } } }),
+    entryStore("p", { credentials: { api_key: "k", headers: { X: "do-not-echo\n" } } }),
+    entryStore("p", { credentials: { api_key: "k", headers: { X: "do-not-echo", x: "v" } } }),
+    entryStore("p", { credentials: { api_key: "k", secret: "do-not-echo" } }),
+    entryStore("openai", { credentials: { api_key: "k", headers: { "OpenAI-Project": "do-not-echo" } } }),
+    entryStore("p").replace('"version":1', '"version":1.0'),
+    entryStore("p").replace('"version":1', '"version":1,"version":1'),
+    entryStore("openai", { method: "subscription", credentials: { ...subscription, extra: "do-not-echo" } }),
+    entryStore("openai", { method: "subscription", credentials: { ...subscription, account_id: undefined } }),
+  ];
+  for (const [index, contents] of malformed.entries()) {
+    test(`a malformed store fails without echoing its payload: ${index} ${contents.slice(0, 50)}`, () => {
+      writeRaw(file, contents);
+      const error = thrown(() => new AuthStore(file).read());
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("Credential storage is malformed; reconnect after repairing it");
+      expect(error.message).not.toContain("do-not-echo");
+      expect(error.cause).toBeUndefined();
+    });
+  }
+
+  test("a store that isn't UTF-8 is malformed", () => {
+    const text = new TextEncoder().encode(entryStore("p"));
+    const at = text.indexOf("m".charCodeAt(0));
+    text[at] = 0xff;
+    writeRaw(file, text);
+    expect(thrown(() => new AuthStore(file).read()).message).toBe(
+      "Credential storage is malformed; reconnect after repairing it",
+    );
+  });
+
+  test("a store reads a null endpoint", () => {
+    writeRaw(file, entryStore("p", { endpoint: null }));
+    expect(new AuthStore(file).selection("p")?.endpoint).toBeNull();
+  });
+
+  for (const target of ["directory", "file", "symlink"]) {
+    test(`a store rejects an insecure path: ${target}`, () => {
+      writeStore(file, savedStore);
+      if (target === "directory") {
+        fs.chmodSync(join(tmp, "auth"), 0o755);
+      } else if (target === "file") {
+        fs.chmodSync(file, 0o644);
+      } else {
+        const other = join(tmp, "auth", "other.json");
+        fs.renameSync(file, other);
+        fs.symlinkSync(other, file);
+      }
+      const error = thrown(() => new AuthStore(file).read());
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toMatch(/private|regular|symbolic/);
+    });
+  }
+
+  test("a store whose directory is a symlink is refused", () => {
+    writeStore(join(tmp, "real", "auth.json"), savedStore);
+    fs.symlinkSync(join(tmp, "real"), join(tmp, "auth"));
+    const error = thrown(() => new AuthStore(file).read());
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toBe("Could not access private credential storage");
+    expect(error.cause).toBeUndefined();
+  });
+
+  test("a store rejects a hard-linked file", () => {
+    writeStore(file, savedStore);
+    fs.linkSync(file, join(tmp, "auth", "alias"));
+    expect(thrown(() => new AuthStore(file).read()).message).toBe(
+      "Credential storage must use a regular private path",
+    );
+  });
+
+  test("a store rejects a FIFO", () => {
+    writeStore(file, savedStore);
+    fs.unlinkSync(file);
+    execFileSync("mkfifo", [file]);
+    fs.chmodSync(file, 0o600);
+    expect(thrown(() => new AuthStore(file).read()).message).toBe(
+      "Credential storage must use a regular private path",
+    );
+  });
+
+  test("a directory swapped during the file open is refused", () => {
+    writeStore(file, savedStore);
+    const directory = join(tmp, "auth");
+    const real = fs.openSync;
+    let swapped = false;
+    const spy = spyOn(fs, "openSync").mockImplementation(((target: fs.PathLike, ...rest: unknown[]) => {
+      if (target === file && !swapped) {
+        swapped = true;
+        fs.renameSync(directory, join(tmp, "moved"));
+        writeStore(file, savedStore);
+      }
+      return Reflect.apply(real, fs, [target, ...rest]);
+    }) as typeof fs.openSync);
+    try {
+      const error = thrown(() => new AuthStore(file).read());
+      expect(swapped).toBe(true);
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("Credential storage must use a regular private path");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(new AuthStore(file).selection()?.provider).toBe("openai");
+  });
+
+  const timings: [string, Record<string, number>][] = [
+    ["NaN lock timeout", { lockTimeoutMs: Number.NaN }],
+    ["infinite lock timeout", { lockTimeoutMs: Number.POSITIVE_INFINITY }],
+    ["zero lock timeout", { lockTimeoutMs: 0 }],
+    ["NaN refresh margin", { refreshMarginMs: Number.NaN }],
+    ["infinite refresh margin", { refreshMarginMs: Number.POSITIVE_INFINITY }],
+    ["negative refresh margin", { refreshMarginMs: -1 }],
+  ];
+  for (const [label, options] of timings) {
+    test(`a store rejects bad timings: ${label}`, () => {
+      const error = thrown(() => new AuthStore(join(tmp, "auth.json"), options));
+      expect(error).toBeInstanceOf(RangeError);
+      expect(error.message).toBe("Invalid credential-store timing");
+    });
+  }
+
+  test("the default path uses the composer environment only", () => {
+    const env = (values: Record<string, string>) => (name: string) => values[name];
+    const config = { XDG_CONFIG_HOME: join(tmp, "config"), CODEX_HOME: join(tmp, "native") };
+    expect(new AuthStore(null, { env: env(config) }).path).toBe(join(tmp, "config", "yian", "auth.json"));
+    expect(new AuthStore(undefined, { env: env({ ...config, YIAN_AUTH_FILE: "" }) }).path).toBe(
+      join(tmp, "config", "yian", "auth.json"),
+    );
+    const override = join(tmp, "specific", "tokens.json");
+    expect(new AuthStore(null, { env: env({ ...config, YIAN_AUTH_FILE: override }) }).path).toBe(override);
+    const home = join(tmp, "home");
+    expect(new AuthStore(null, { env: env({ HOME: home, XDG_CONFIG_HOME: "" }) }).path).toBe(
+      join(home, ".config", "yian", "auth.json"),
+    );
+    expect(new AuthStore(null, { env: env({ HOME: home, YIAN_AUTH_FILE: "~/x/../tokens.json" }) }).path).toBe(
+      join(home, "tokens.json"),
+    );
+    expect(new AuthStore("~", { env: env({ HOME: home }) }).path).toBe(home);
+    expect(new AuthStore("~x", { env: env({ HOME: home }) }).path).toBe(join(process.cwd(), "~x"));
+    expect(fs.readdirSync(tmp)).toEqual([]);
+  });
+
+  test("savedSecrets on a missing store is empty and creates nothing", () => {
+    const missing = new AuthStore(join(tmp, "missing", "auth.json"));
+    expect(missing.savedSecrets("anthropic")).toEqual([]);
+    expect(missing.read()).toEqual({ defaultProvider: null, selections: [] });
+    expect(missing.selection()).toBeNull();
+    expect(fs.existsSync(join(tmp, "missing"))).toBe(false);
+  });
+
+  test("an aborted signal stops each read first", () => {
+    writeStore(file, savedStore);
+    const controller = new AbortController();
+    const reason = new Error("stopped");
+    controller.abort(reason);
+    const store = new AuthStore(file, { signal: controller.signal });
+    expect(thrown(() => store.read())).toBe(reason);
+    expect(thrown(() => store.selection())).toBe(reason);
+    expect(thrown(() => store.savedSecrets("openai"))).toBe(reason);
+  });
 });

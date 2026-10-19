@@ -1,35 +1,33 @@
 /**
- * The `case` kind's parse side: a port of `tests/compose/test_kind_case_parse.py`.
+ * The `case` kind's parse and build rows: a port of `tests/compose/test_kind_case_parse.py`.
  *
- * Ported: `test_case_parse_matches_descriptor_and_records_ranges`,
- * `test_case_parse_requires_cases`, `test_case_with_both_on_spellings_is_a_located_error`,
- * `test_case_rejects_boolean_key_at_its_location`,
+ * Ported: `test_case_parse_matches_descriptor_and_records_ranges`, `test_case_parse_requires_cases`,
+ * `test_case_with_both_on_spellings_is_a_located_error`, `test_case_rejects_boolean_key_at_its_location`,
  * `test_case_build_lowers_to_case_node_with_edges`,
  * `test_case_descriptor_rejects_misaligned_or_nonopaque_origins`,
  * `test_on_case_preserves_predicate_and_generated_binding_origins`,
  * `test_case_parse_keeps_then_styles_aligned_with_cases`, `test_case_parse_keeps_else_style`,
- * `test_case_parse_tells_else_null_from_no_else`,
- * `test_case_descriptor_constructed_with_else_has_else`, `test_case_parse_keeps_then_null_key`,
- * `test_case_parse_on_form_keeps_styles`, `test_case_rejects_malformed_cases_at_their_location`,
- * the origin half of `test_searched_case_origins_are_positional_and_select_the_failing_entry`
- * (on the parsed descriptor), and the `thenRanges[0]`
- * assertion of `tests/compose/test_desugar.py`'s
+ * `test_case_parse_tells_else_null_from_no_else`, `test_case_descriptor_constructed_with_else_has_else`,
+ * `test_case_parse_keeps_then_null_key`, `test_case_parse_on_form_keeps_styles`,
+ * `test_case_rejects_malformed_cases_at_their_location`, the origin half of
+ * `test_searched_case_origins_are_positional_and_select_the_failing_entry` (on the parsed
+ * descriptor), and the `thenRanges[0]` assertion of `tests/compose/test_desugar.py`'s
  * `test_desugar_case_call_targets_locate_at_their_target_line`.
  *
  * Changed: Python compares the descriptor to a `CaseDescriptor` with the parse metadata excluded;
  * TS compares its class and fields. The duplicate-key and boolean-key rows parse the flow with
  * `parseSourceDocument`, which raises both, where Python loads it. The malformed-`cases:` rows
- * parse the flow's nodes, where Python loads it, and spell values in the text form
- * (`(got "done")`, `(got null)`). The origin rows call `withSourceOrigins` on the parsed
- * descriptor and resolve its origins through `builder.resolveRegistered`, where Python loads the
- * flow and reads the built `CaseNode`; the `on:` row also assembles the flow (`assembleText`, with
- * the stand-in `code` kind) and reads the built node and its `__on` wiring. The misaligned
- * origins are a `RangeError` where Python's are a `ValueError`, and the message says "or null"
- * where Python's says "or None".
+ * parse the flow's nodes, where Python loads it, and spell values in the text form (`(got "done")`,
+ * `(got null)`). The origin rows call `withSourceOrigins` on the parsed descriptor and resolve its
+ * origins through `builder.resolveRegistered`, where Python loads the flow and reads the built
+ * `CaseNode`; the `on:` row also assembles the flow (`assembleText`) and reads the built node and
+ * its `__on` wiring. The misaligned origins are a `RangeError` where Python's are a `ValueError`,
+ * and the message says "or null" where Python's says "or None".
  *
- * TS-only: a lone surrogate in `on:` or in a searched `when:` is refused at that value; a
- * non-`OriginRef` `onOrigin` is a `TypeError` (the misaligned-origins row; no Python test checks
- * Python's matching `on_origin` check).
+ * TS-only: the lowering row also checks the `__on` input's range and label; an `on:` case entry
+ * with a null `when:` is refused at that `when:`; a lone surrogate in `on:` or in a searched
+ * `when:` is refused at that value; a non-`OriginRef` `onOrigin` is a `TypeError` (the
+ * misaligned-origins row; no Python test checks Python's matching `on_origin` check).
  *
  * Dropped: `test_case_keeps_no_key_normalization` (Python class-dict introspection).
  *
@@ -53,6 +51,7 @@
 
 import { expect, test } from "bun:test";
 
+import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import { BuildContext, siteKey } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { parseSourceDocument } from "../../src/compose/parse/file.ts";
@@ -64,7 +63,6 @@ import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import { CaseNode } from "../../src/nodes/case/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 import { assembleText, type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "./declarations.ts";
-import { StandInCode, withKinds } from "./stand_ins.ts";
 
 const FLOW = `nodes:
   route:
@@ -193,6 +191,22 @@ test("case build lowers to a case node with edges", () => {
   expect(ctl).toContainEqual(["route", "cold", ELSE_HANDLE]);
   // The YAML coordinates stay on the Compose-only build result.
   expect(result.nodeRange).toBeInstanceOf(SourceRange);
+  // The generated `__on` input locates at the `on:` value and is labelled `on:`.
+  expect(result.fieldRanges.get(siteKey("input", "__on"))).toEqual(readerFor(FLOW, "route").rangeOf("on")!);
+  expect(result.node.wiringLabels.get("__on")).toBe("on:");
+});
+
+test("an on case entry with a null when is refused at that when", () => {
+  const text =
+    "nodes:\n  route:\n    kind: case\n    on: ${score.output}\n    cases:\n      - when: null\n        then: hot\n";
+
+  const cursor = readerFor(text, "route");
+  const ctx = new BuildContext({ registry: new Map(), diagnostics: LoadDiagnostics.fromCursor(cursor) });
+
+  const error = loadError(() => CaseDescriptor.parse("route", cursor).build(ctx));
+
+  expect(error.message).toBe("case node 'route': each on:-form case needs a `when:` value and a `then:`");
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(cursor.child("cases").child(0).child("when").range!);
 });
 
 test("case parse requires cases", () => {
@@ -367,7 +381,7 @@ test.each([
   ["    cases: [done]\n", '`cases[0]` must be a {when:, then:} mapping (got "done")', firstItem],
 ])("case rejects malformed cases at their location: %s", (body, message, rangeIn) => {
   const text = SHAPE_HEAD + body + SHAPE_TAIL;
-  const error = loadError(() => nodesOf(text, [StandInCode]));
+  const error = loadError(() => nodesOf(text));
 
   expect(error.message).toBe(`case node 'gate': ${message}`);
   const range = rangeIn(readerFor(text, "gate"))!;
@@ -422,7 +436,7 @@ test("on case build keeps the predicate and generated binding origins", () => {
   // The generated `__on` binding belongs to `on:`, not to a case predicate.
   const label = "on-case.yaml";
   const cursor = SourceDocument.parse(ON_ORIGIN_FLOW, label).root.child("nodes").child("route");
-  const { flow, builder } = withKinds([StandInCode], () => assembleText(ON_ORIGIN_FLOW, label));
+  const { flow, builder } = assembleText(ON_ORIGIN_FLOW, label);
   const node = flow.compiled.nodes.get("route") as CaseNode;
 
   const predicateOrigins = node.cases.map((branch) => branch.origin);

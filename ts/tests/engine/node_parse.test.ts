@@ -269,7 +269,8 @@ gate:
 `;
 
     expect(loadError(() => nodes(text)).message).toBe(
-      "node 'gate' (kind=case): field 'inputs' is not allowed (allowed: cases, depends_on, else, env, kind, node_name, on, output, runs_after)",
+      "node 'gate' (kind=case): field 'inputs' is not allowed " +
+        "(allowed: cases, depends_on, else, env, kind, node_name, on, output, runs_after)",
     );
   });
 });
@@ -310,7 +311,8 @@ gate:
 `;
 
     expect(loadError(() => nodes(text)).message).toBe(
-      "node 'gate' (kind=case): field 'asserts' is not allowed (allowed: cases, depends_on, else, env, kind, node_name, on, output, runs_after)",
+      "node 'gate' (kind=case): field 'asserts' is not allowed " +
+        "(allowed: cases, depends_on, else, env, kind, node_name, on, output, runs_after)",
     );
   });
 

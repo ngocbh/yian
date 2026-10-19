@@ -330,7 +330,8 @@ export class CaseDescriptor extends NodeDescriptor {
    */
   override build(ctx: BuildContext): BuildResult {
     this._validateOriginAlignment();
-    const lowered = this.on !== null ? desugarOn(this, ctx.diagnostics) : desugarSearched(this, ctx.diagnostics);
+    const lowered =
+      this.on !== null ? desugarOn(this, this.on, ctx.diagnostics) : desugarSearched(this, ctx.diagnostics);
     const result = this._finish(lowered.node, lowered.wiring, [...lowered.dataEdges, ...lowered.controlEdges]);
     result.node.wiringLabels = lowered.paramLabels;
     return new BuildResult({ ...result, fieldRanges: new Map([...result.fieldRanges, ...lowered.paramRanges]) });
@@ -499,23 +500,26 @@ function controlEdges(nodeId: string, handleTargets: readonly (readonly [string,
  *
  * The `__on` input is located at the `on:` value and labelled `on:`.
  *
+ * @param on The `on:` reference text (`desc.on`, narrowed by the caller).
  * @throws LoadError when a case lacks its `when:` value or `then:` (at the missing value, else at
  *   `cases:`), or a `when:` value can't be compared (at that `when:`).
  */
-function desugarOn(desc: CaseDescriptor, diagnostics: LoadDiagnostics): Lowering {
+function desugarOn(desc: CaseDescriptor, on: string, diagnostics: LoadDiagnostics): Lowering {
   const cases: Case[] = [];
   const handleTargets: [string, string][] = [];
   desc.cases.forEach((spec, index) => {
     const value = spec["when"] ?? null;
     const then = spec["then"] ?? null;
     if (value === null || then === null) {
-      const missingRange = value === null ? desc.whenRanges[index] : desc.thenRanges[index];
+      const missingRange =
+        value === null && index < desc.whenRanges.length ? desc.whenRanges[index] : desc.thenRanges[index];
       throw diagnostics.error(
         `case node ${reprText(desc.id)}: each on:-form case needs a \`when:\` value and a \`then:\``,
         { range: missingRange ?? desc.fieldRanges.get(siteKey("field", "cases")) ?? desc.range },
       );
     }
-    // The branch check, which runs before the build, has made each `then:` a node name.
+    // The branch check runs before the build in the pipeline (as in Python) and has made each
+    // `then:` and the `else:` a node name, so this cast and the `else_` one below hold.
     const handle = then as string;
     cases.push(
       new Case(handle, {
@@ -528,7 +532,6 @@ function desugarOn(desc: CaseDescriptor, diagnostics: LoadDiagnostics): Lowering
   if (desc.else_ !== null) handleTargets.push([ELSE_HANDLE, desc.else_ as string]);
   const node = new CaseNode(desc.id, cases, { title: desc.nodeName });
   node.params = [new Parameter("__on")];
-  const on = desc.on!;
   const wiring = new Map<string, unknown>([
     ["__on", desc.onOrigin === null ? on : new Binding(on, { origin: desc.onOrigin })],
   ]);

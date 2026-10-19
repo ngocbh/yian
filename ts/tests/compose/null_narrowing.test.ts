@@ -25,9 +25,11 @@
  * (Python's `_declared_impossible` and `_never_value`). The pinned `compose_null_narrowing__*`
  * cases sit in `narrowing_core.test.ts`'s table, except
  * `compose_null_narrowing__a_null_when_is_no_on_value_even_on_a_narrowed_field`, whose error the
- * CASE build raises: it is pinned at the end (`assemble`, with the stand-in `code` kind), for
- * `test_a_null_when_is_no_on_value_even_on_a_narrowed_field`, as a todo until the searched
- * lowering lands (Later (T3-16)), since the flow's searched case builds first.
+ * CASE build raises: it is pinned at the end (`assemble`), for
+ * `test_a_null_when_is_no_on_value_even_on_a_narrowed_field`.
+ *
+ * Later (T3-16, the searched lowering): that pin runs; it is a todo until then, since the flow's
+ * searched case builds first.
  *
  * Later (T3-20): `test_a_non_null_field_is_present_in_every_record_around_it`,
  * `test_a_nullable_field_leaves_the_records_around_it_alone` and
@@ -77,7 +79,6 @@ import { parseCondition } from "../../src/expr/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { assembled, runCase } from "./declarations.ts";
-import { StandInCode, withKinds } from "./stand_ins.ts";
 
 const REGISTRY = readTypedefs({
   A: { kind: "Literal(a)", n: "int" },
@@ -353,10 +354,8 @@ test("a null check the routing proves null is reported", () => {
 // searched lowering.
 test.todo("assembled: load-types/compose_null_narrowing__a_null_when_is_no_on_value_even_on_a_narrowed_field", () => {
   // YAML `null` is no `when:` value at all; the build rejects it before any typing.
-  withKinds([StandInCode], () =>
-    runCase({
-      id: "load-types/compose_null_narrowing__a_null_when_is_no_on_value_even_on_a_narrowed_field",
-      call: assembled,
-    }),
-  );
+  runCase({
+    id: "load-types/compose_null_narrowing__a_null_when_is_no_on_value_even_on_a_narrowed_field",
+    call: assembled,
+  });
 });

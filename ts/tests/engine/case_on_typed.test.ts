@@ -8,10 +8,10 @@
  * `test_non_finite_when_is_a_load_error` (flipped), `test_list_or_record_when_is_a_load_error`
  * and `test_on_match_key` (adapted).
  *
- * Changed: the flow rows assemble the flow (`assembleText`, with the stand-in `code` kind), where
- * Python loads it. `test_large_and_small_floats_lower_exactly` builds an `on:` case holding the
- * value, where Python calls `_match_condition`, which stays module-private; its values are those
- * TS YAML can read too, but YAML reads `-0.0` as `0` (yian has no negative zero), so the `-0.0`
+ * Changed: the flow rows assemble the flow (`assembleText`), where Python loads it.
+ * `test_large_and_small_floats_lower_exactly` builds an `on:` case holding the value, where Python
+ * calls `_match_condition`, which stays module-private; its values are those TS YAML can read too,
+ * but YAML reads `-0.0` as the float `0` (lowered `0.0`; yian has no negative zero), so the `-0.0`
  * value is a constructed one. `.inf` and `-.inf` are float values (decision 34): a `when: .inf`
  * lowers to `__on == inf ...` and routes, where Python refuses it; `.nan` is refused by the YAML
  * layer ("NaN is not a yian value"), not by the CASE build. `onMatchKey` returns a string, and
@@ -71,14 +71,13 @@
 
 import { expect, test } from "bun:test";
 
+import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor, onMatchKey } from "../../src/compose/nodes/case.ts";
-import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { evaluateWhenRecord } from "../../src/expr/expressions.ts";
 import type { CaseNode } from "../../src/nodes/case/node.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { assembled, assembleText, loadError, nodesOf, runCase } from "../compose/declarations.ts";
-import { StandInCode, withKinds } from "../compose/stand_ins.ts";
 
 /** A build context with no typedefs; a CASE build reads none. */
 const CTX = new BuildContext({ registry: new Map() });
@@ -134,7 +133,7 @@ function flow(
 
 /** Return the `when:` conditions of the built `route` of flow `text`, assembled. */
 function loweredWhens(text: string): (string | null)[] {
-  const { flow: composed } = withKinds([StandInCode], () => assembleText(text));
+  const { flow: composed } = assembleText(text);
   return (composed.compiled.nodes.get("route") as CaseNode).cases.map((branch) => branch.when);
 }
 
@@ -229,9 +228,7 @@ test.each([
 
   const error = loadError(() => loweredWhens(text));
 
-  expect(error.message).toContain(
-    `case node 'route': an on: case's when: takes text, a number, or a bool, got ${kind}`,
-  );
+  expect(error.message).toBe(`case node 'route': an on: case's when: takes text, a number, or a bool, got ${kind}`);
   expect(errorLine(error)).toBe(lineOf(text, `when: ${authored}`));
 });
 
@@ -244,7 +241,6 @@ test("an unquoted datetime when lowers to its text", () => {
 
 test("onMatchKey", () => {
   expect(onMatchKey(1n)).toBe(onMatchKey(1.0));
-  expect(onMatchKey(1)).toBe(onMatchKey(1n));
   expect(onMatchKey(true)).not.toBe(onMatchKey(1n));
   expect(onMatchKey("1")).not.toBe(onMatchKey(1n));
   expect(onMatchKey(false)).not.toBe(onMatchKey(0n));
@@ -258,7 +254,5 @@ test("onMatchKey", () => {
 // ---------- harvested conformance cases ----------
 
 test("assembled: load-case/engine_case_on_typed__infinite_when_on_a_float", () => {
-  withKinds([StandInCode], () =>
-    runCase({ id: "load-case/engine_case_on_typed__infinite_when_on_a_float", call: assembled }),
-  );
+  runCase({ id: "load-case/engine_case_on_typed__infinite_when_on_a_float", call: assembled });
 });

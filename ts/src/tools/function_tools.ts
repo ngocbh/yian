@@ -42,7 +42,9 @@ export interface StandardIssue {
 }
 
 // any: the inferred input and output types are the validator's own; only their use here is typed.
+/** The arguments `execute` gets: the validator's output type, else a plain record. */
 type ArgsOf<P> = P extends StandardSchemaV1<any, infer O> ? O : Record<string, unknown>;
+/** What `execute` returns: the output validator's input type, since it parses the result, else `unknown`. */
 type ResultOf<O> = O extends StandardSchemaV1<infer I, any> ? I : unknown;
 
 /**
@@ -126,13 +128,13 @@ export class FunctionTool {
       throw new RangeError(`${prefix} parametersJsonSchema must have type 'object'`);
     }
     // The model sees the schema, so it must be JSON: no Infinity, Date or runaway nesting.
-    const schema = jsonCopy(prefix, parametersJsonSchema, "parametersJsonSchema");
+    const schema = frozenJsonCopy(prefix, parametersJsonSchema, "parametersJsonSchema");
     let output: JsonObject | null = null;
     if (outputJsonSchema !== undefined && outputJsonSchema !== null) {
       if (!isRecord(outputJsonSchema)) {
         throw new TypeError(`${prefix} outputJsonSchema must be an object, got ${jsTypeName(outputJsonSchema)}`);
       }
-      output = jsonCopy(prefix, outputJsonSchema, "outputJsonSchema");
+      output = frozenJsonCopy(prefix, outputJsonSchema, "outputJsonSchema");
     }
     for (const [option, validator] of [
       ["parametersValidator", parametersValidator],
@@ -152,11 +154,11 @@ export class FunctionTool {
     }
     this.name = name;
     this.description = description;
-    this.parametersJsonSchema = deepFreeze(schema);
+    this.parametersJsonSchema = schema;
     this.execute = execute;
     this.isConcurrencySafe = isConcurrencySafe ?? null;
     this.parametersValidator = parametersValidator ?? null;
-    this.outputJsonSchema = output === null ? null : deepFreeze(output);
+    this.outputJsonSchema = output;
     this.outputValidator = outputValidator ?? null;
     Object.freeze(this);
   }
@@ -220,7 +222,8 @@ export function tool<
   isConcurrencySafe?: ((args: ArgsOf<P>) => boolean) | null;
 }): FunctionTool {
   const { name, description, execute, isConcurrencySafe } = options;
-  // `String`, so a non-string name reaches `FunctionTool`'s own check.
+  // `String`: the prefix must not throw on a non-string name; `FunctionTool` reports a bad name
+  // when nothing fails first.
   const prefix = `tool ${reprText(String(name))}`;
   const [parametersJsonSchema, parametersValidator] = schemaOf(
     prefix,
@@ -260,13 +263,10 @@ function schemaOf(
     if (given !== undefined) throw new TypeError(`${prefix} ${option} is only for a validator`);
     return [value, null];
   }
+  if (!isStandardSchema(value)) throw new TypeError(`${prefix} ${role} must be a Standard Schema v1 validator`);
   const validator = value as StandardSchemaV1;
   if (given !== undefined) return [given, validator];
-  const standard: unknown = validator["~standard"];
-  const { vendor, jsonSchema } = (typeof standard === "object" && standard !== null ? standard : {}) as {
-    vendor?: unknown;
-    jsonSchema?: unknown;
-  };
+  const { vendor, jsonSchema } = validator["~standard"] as { vendor: unknown; jsonSchema?: unknown };
   const input =
     typeof jsonSchema === "object" && jsonSchema !== null ? (jsonSchema as { input?: unknown }).input : undefined;
   if (typeof input !== "function") {
@@ -293,10 +293,10 @@ function isStandardSchema(value: unknown): boolean {
   return props.version === 1 && typeof props.validate === "function";
 }
 
-/** Return a checked JSON copy of `schema`, the option `label`, or throw a `TypeError` naming it. */
-function jsonCopy(prefix: string, schema: JsonObject, label: string): JsonObject {
+/** Return a deep-frozen JSON copy of the `label` option; a non-JSON value is a TypeError naming it. */
+function frozenJsonCopy(prefix: string, schema: JsonObject, label: string): JsonObject {
   try {
-    return checkJsonValue(schema, label) as JsonObject;
+    return deepFreeze(checkJsonValue(schema, label) as JsonObject);
   } catch (error) {
     if (error instanceof MessageFormatError) throw new TypeError(`${prefix} ${error.message}`);
     throw error;

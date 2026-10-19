@@ -159,7 +159,8 @@ describe("FunctionTool construction", () => {
     expect(tool.parametersValidator).toBeNull();
     expect(tool.outputJsonSchema).toBeNull();
     expect(tool.outputValidator).toBeNull();
-    expect(build({ parametersValidator: null, outputJsonSchema: null, outputValidator: null }).outputJsonSchema).toBeNull();
+    const nulls = build({ parametersValidator: null, outputJsonSchema: null, outputValidator: null });
+    expect(nulls.outputJsonSchema).toBeNull();
     expect(Object.isFrozen(tool)).toBe(true);
   });
 
@@ -696,7 +697,9 @@ describe("tool()", () => {
     expect(types.required).toEqual(new Set(["sym", "qty"]));
     const filled = new Type({
       kind: ValueKind.OBJECT,
-      fields: new Map([["filled", new Type({ kind: ValueKind.INTEGER, bounds: [-9007199254740991n, 9007199254740991n] })]]),
+      fields: new Map([
+        ["filled", new Type({ kind: ValueKind.INTEGER, bounds: [-9007199254740991n, 9007199254740991n] })],
+      ]),
       required: new Set(["filled"]),
     });
     expect(types.output).not.toBeNull();
@@ -724,7 +727,9 @@ describe("tool()", () => {
       PLACE_PARAMETERS["~standard"].jsonSchema.input({ target: "draft-2020-12" }) as JsonObject,
     );
     expect(placed.parametersValidator).toBe(PLACE_PARAMETERS);
-    expect(placed.outputJsonSchema).toEqual(FILLED["~standard"].jsonSchema.input({ target: "draft-2020-12" }) as JsonObject);
+    expect(placed.outputJsonSchema).toEqual(
+      FILLED["~standard"].jsonSchema.input({ target: "draft-2020-12" }) as JsonObject,
+    );
     expect(placed.outputValidator).toBe(FILLED);
   });
 
@@ -737,7 +742,7 @@ describe("tool()", () => {
     expectPlaceTypes(place());
   });
 
-  test("test_function_tool_registers_with_register_tool: the registry, a mapping entry and a group item read the same types", () => {
+  test("test_function_tool_registers_with_register_tool: registry, mapping and group read the same types", () => {
     const placed = place();
     registerTool("place", placed);
 
@@ -780,11 +785,18 @@ describe("tool()", () => {
     expect(echoed.outputValidator).toBeNull();
     expect(echoed.outputJsonSchema).toEqual({ type: "string" });
     expect(typeEquals(toolTypes(echoed).output!, Type.scalar(ValueKind.STRING))).toBe(true);
-    expect(tool({ name: "echo", description: "", parameters: ECHO_SCHEMA, execute: () => null }).outputJsonSchema).toBeNull();
+    const plain = tool({ name: "echo", description: "", parameters: ECHO_SCHEMA, execute: () => null });
+    expect(plain.outputJsonSchema).toBeNull();
   });
 
   test("test_explicit_none_return_is_none_kind", () => {
-    const nothing = tool({ name: "echo", description: "", parameters: ECHO_SCHEMA, output: { type: "null" }, execute: () => null });
+    const nothing = tool({
+      name: "echo",
+      description: "",
+      parameters: ECHO_SCHEMA,
+      output: { type: "null" },
+      execute: () => null,
+    });
 
     expect(typeEquals(toolTypes(nothing).output!, Type.scalar(ValueKind.NONE))).toBe(true);
   });
@@ -806,7 +818,13 @@ describe("tool()", () => {
       "tool 'x' parameters: the hand validator has no Standard JSON Schema (~standard.jsonSchema); " +
         "pass parametersJsonSchema too",
     );
-    const built = tool({ name: "x", description: "", parameters: hand, parametersJsonSchema: ECHO_SCHEMA, execute: () => null });
+    const built = tool({
+      name: "x",
+      description: "",
+      parameters: hand,
+      parametersJsonSchema: ECHO_SCHEMA,
+      execute: () => null,
+    });
     expect(built.parametersJsonSchema).toEqual(ECHO_SCHEMA);
     expect(built.parametersValidator).toBe(hand);
 
@@ -815,7 +833,8 @@ describe("tool()", () => {
       TypeError,
     );
     expect(outputError.message).toBe(
-      "tool 'x' output: the hand validator has no Standard JSON Schema (~standard.jsonSchema); pass outputJsonSchema too",
+      "tool 'x' output: the hand validator has no Standard JSON Schema (~standard.jsonSchema); " +
+        "pass outputJsonSchema too",
     );
     const withOutput = tool({
       name: "x",
@@ -827,6 +846,28 @@ describe("tool()", () => {
     });
     expect(withOutput.outputJsonSchema).toEqual({ type: "string" });
     expect(withOutput.outputValidator).toBe(hand);
+  });
+
+  for (const [what, bad] of [
+    ["a non-object ~standard", { "~standard": 5 }],
+    ["a version 2 ~standard", { "~standard": { version: 2, validate() {} } }],
+  ] as unknown as [string, StandardSchemaV1][]) {
+    test(`refuses ${what} as parameters`, () => {
+      expect(() => tool({ name: "x", description: "", parameters: bad, execute: () => null })).toThrow(
+        new TypeError("tool 'x' parameters must be a Standard Schema v1 validator"),
+      );
+      // Refused up front, even with a JSON Schema beside it.
+      expect(() =>
+        tool({ name: "x", description: "", parameters: bad, parametersJsonSchema: ECHO_SCHEMA, execute: () => null }),
+      ).toThrow(new TypeError("tool 'x' parameters must be a Standard Schema v1 validator"));
+    });
+  }
+
+  test("refuses a non-v1 validator as output", () => {
+    const bad = { "~standard": { version: 2, validate() {} } } as unknown as StandardSchemaV1;
+    expect(() =>
+      tool({ name: "x", description: "", parameters: ECHO_SCHEMA, output: bad, execute: () => null }),
+    ).toThrow(new TypeError("tool 'x' output must be a Standard Schema v1 validator"));
   });
 
   test("a plain valibot schema needs parametersJsonSchema", () => {
@@ -842,22 +883,33 @@ describe("tool()", () => {
 
   test("test_function_tool_names_the_tool_when_an_argument_has_no_json_schema", () => {
     const error = thrown(
-      () => tool({ name: "when", description: "", parameters: z.object({ when: z.coerce.date() }), execute: () => null }),
+      () =>
+        tool({ name: "when", description: "", parameters: z.object({ when: z.coerce.date() }), execute: () => null }),
       TypeError,
     );
-    expect(error.message).toBe("tool 'when' has an argument type with no JSON Schema: Date cannot be represented in JSON Schema");
+    expect(error.message).toBe(
+      "tool 'when' has an argument type with no JSON Schema: Date cannot be represented in JSON Schema",
+    );
     expect(error.cause).toBeInstanceOf(Error);
 
     const outputError = thrown(
       () => tool({ name: "x", description: "", parameters: ECHO_SCHEMA, output: z.date(), execute: () => new Date(0) }),
       TypeError,
     );
-    expect(outputError.message).toBe("tool 'x' has an output type with no JSON Schema: Date cannot be represented in JSON Schema");
+    expect(outputError.message).toBe(
+      "tool 'x' has an output type with no JSON Schema: Date cannot be represented in JSON Schema",
+    );
   });
 
   test("parametersJsonSchema and outputJsonSchema are only for a validator", () => {
     expect(() =>
-      tool({ name: "x", description: "", parameters: ECHO_SCHEMA, parametersJsonSchema: ECHO_SCHEMA, execute: () => null }),
+      tool({
+        name: "x",
+        description: "",
+        parameters: ECHO_SCHEMA,
+        parametersJsonSchema: ECHO_SCHEMA,
+        execute: () => null,
+      }),
     ).toThrow(new TypeError("tool 'x' parametersJsonSchema is only for a validator"));
     expect(() =>
       tool({
@@ -872,7 +924,13 @@ describe("tool()", () => {
   });
 
   test("parametersJsonSchema given with a zod validator replaces zod's schema", () => {
-    const built = tool({ name: "x", description: "", parameters: PLACE_PARAMETERS, parametersJsonSchema: ECHO_SCHEMA, execute: () => null });
+    const built = tool({
+      name: "x",
+      description: "",
+      parameters: PLACE_PARAMETERS,
+      parametersJsonSchema: ECHO_SCHEMA,
+      execute: () => null,
+    });
 
     expect(built.parametersJsonSchema).toEqual(ECHO_SCHEMA);
     expect(built.parametersValidator).toBe(PLACE_PARAMETERS);

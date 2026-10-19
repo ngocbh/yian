@@ -21,7 +21,8 @@
  * is real; the resolved parameter boundary
  * (`test_resolved_parameters_preserve_structural_contract_identity`,
  * `test_resolved_parameters_accept_zero_args_and_wire_empty_start`), the seed edge and boundary
- * rows (`test_seed01_*`, `test_seed02_case_targets_not_bare_roots`, `test_seed05_*`,
+ * rows (`test_seed01_*`, `test_seed02_case_targets_not_bare_roots`,
+ * `test_seed02_coalesce_both_producers_terminal`, `test_seed05_*`,
  * `test_seed06_*`, `test_seed18_*`, `test_terminal_edge_ids_unique`,
  * `test_assembled_edges_have_start_and_end`, `test_boundary_end_record_flag_picks_the_mode`).
  * Later (T3-18): the wiring parity rows (`test_wiring_parity_*`).

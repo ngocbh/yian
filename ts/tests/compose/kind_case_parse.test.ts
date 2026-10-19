@@ -1,15 +1,15 @@
 /**
  * The `case` kind's parse and build rows: a port of `tests/compose/test_kind_case_parse.py`.
  *
- * Ported: `test_case_parse_matches_descriptor_and_records_ranges`, `test_case_parse_requires_cases`,
- * `test_case_with_both_on_spellings_is_a_located_error`, `test_case_rejects_boolean_key_at_its_location`,
- * `test_case_build_lowers_to_case_node_with_edges`,
+ * Ported: `test_case_parse_matches_descriptor_and_records_ranges`,
+ * `test_case_parse_requires_cases`, `test_case_with_both_on_spellings_is_a_located_error`,
+ * `test_case_rejects_boolean_key_at_its_location`, `test_case_build_lowers_to_case_node_with_edges`,
  * `test_case_descriptor_rejects_misaligned_or_nonopaque_origins`,
  * `test_on_case_preserves_predicate_and_generated_binding_origins`,
  * `test_case_parse_keeps_then_styles_aligned_with_cases`, `test_case_parse_keeps_else_style`,
- * `test_case_parse_tells_else_null_from_no_else`, `test_case_descriptor_constructed_with_else_has_else`,
- * `test_case_parse_keeps_then_null_key`, `test_case_parse_on_form_keeps_styles`,
- * `test_case_rejects_malformed_cases_at_their_location`,
+ * `test_case_parse_tells_else_null_from_no_else`,
+ * `test_case_descriptor_constructed_with_else_has_else`, `test_case_parse_keeps_then_null_key`,
+ * `test_case_parse_on_form_keeps_styles`, `test_case_rejects_malformed_cases_at_their_location`,
  * `test_source_free_case_build_keeps_predicates_and_wiring_origin_free`, the origin half of
  * `test_searched_case_origins_are_positional_and_select_the_failing_entry` (on the parsed
  * descriptor and on the built node), and the `thenRanges[0]` assertion of

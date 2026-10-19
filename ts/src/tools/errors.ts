@@ -22,6 +22,11 @@ export type ToolErrorKind = "permanent" | "transient" | "reported" | "check";
 
 const KINDS: ReadonlySet<unknown> = new Set<ToolErrorKind>(["permanent", "transient", "reported", "check"]);
 
+/** Return whether `value` is a known tool error kind. */
+function isKind(value: unknown): value is ToolErrorKind {
+  return KINDS.has(value);
+}
+
 const NONE: readonly ToolErrorKind[] = Object.freeze([]);
 const PERMANENT: readonly ToolErrorKind[] = Object.freeze(["permanent"]);
 const TRANSIENT: readonly ToolErrorKind[] = Object.freeze(["transient"]);
@@ -131,7 +136,13 @@ export function toolErrorKinds(error: unknown): readonly ToolErrorKind[] {
   try {
     const kinds: unknown = (error as { [TOOL_ERROR]?: unknown })[TOOL_ERROR];
     if (!Array.isArray(kinds)) return NONE;
-    return Object.freeze(kinds.filter((kind): kind is ToolErrorKind => KINDS.has(kind)));
+    // Read the foreign array by length and index only; its methods, iterator and species run its code.
+    const known: ToolErrorKind[] = [];
+    for (let i = 0; i < kinds.length; i++) {
+      const kind: unknown = kinds[i];
+      if (isKind(kind)) known.push(kind);
+    }
+    return Object.freeze(known);
   } catch {
     return NONE;
   }

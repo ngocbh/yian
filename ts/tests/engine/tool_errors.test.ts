@@ -130,6 +130,23 @@ describe("kinds and guards", () => {
   });
   const revoked = Proxy.revocable({}, {});
   revoked.revoke();
+  // A species constructor makes `filter` return a proxy whose reads throw outside the `try`.
+  const speciesArray = Object.assign([], {
+    constructor: {
+      [Symbol.species]: function () {
+        return new Proxy([], {
+          get() {
+            throw new Error("species");
+          },
+        });
+      },
+    },
+  });
+  const iteratorArray = Object.assign([], {
+    [Symbol.iterator]() {
+      throw new Error("iterator");
+    },
+  });
   const unbranded: [string, unknown][] = [
     ["a plain Error", new Error("x")],
     ["null", null],
@@ -138,6 +155,9 @@ describe("kinds and guards", () => {
     ["a throwing getter", throwing],
     ["a brand array whose proxy traps throw", { [TOOL_ERROR]: trappedArray }],
     ["a revoked proxy", revoked.proxy],
+    ["a brand array with an own filter", { [TOOL_ERROR]: Object.assign([], { filter: () => 1 }) }],
+    ["a brand array with a hostile species constructor", { [TOOL_ERROR]: speciesArray }],
+    ["a brand array with a throwing iterator", { [TOOL_ERROR]: iteratorArray }],
   ];
   for (const [label, value] of unbranded) {
     test(`${label} has no kinds`, () => {

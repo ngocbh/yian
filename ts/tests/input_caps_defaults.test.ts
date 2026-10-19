@@ -12,7 +12,7 @@ import { join } from "node:path";
 
 import { loadSkillDir } from "../src/compose/skills.ts";
 import { BUILTIN, install } from "../src/defaults.ts";
-import { AuthError } from "../src/llm_clients/auth/common.ts";
+import { ApiKeyCredentials, AuthError } from "../src/llm_clients/auth/common.ts";
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import { validateBaseUrl } from "../src/llm_clients/config.ts";
 import { checkSkillName } from "../src/skills/catalog.ts";
@@ -91,6 +91,19 @@ test("auth store cap", () => {
     install({ ...BUILTIN, maxAuthStoreBytes: 10 });
     expect(() => new AuthStore(file).read()).toThrow(AuthError);
     expect(() => new AuthStore(file).read()).toThrow("Credential storage exceeds its size limit");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("auth store cap applies to writes", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "yian-auth-"));
+  try {
+    install({ ...BUILTIN, maxAuthStoreBytes: 10 });
+    const store = new AuthStore(join(tmp, "auth", "auth.json"));
+    const save = store.save("anthropic", new ApiKeyCredentials("sk-saved"), "claude-x");
+    await expect(save).rejects.toThrow(AuthError);
+    await expect(save).rejects.toThrow("Credential storage exceeds its size limit");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

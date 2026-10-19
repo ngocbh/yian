@@ -5,13 +5,17 @@
  * Dropped: the tuple, set, frozenset, date and timezone snapshot cases and the container
  * subclasses other than arrays (a YAML value here is text, a number, a boolean, null, a plain
  * array or a plain record), the `_value_view` set operations, and the hash-call-count test
- * (ropes are cached by identity, with no hashing). The `scalar_style` tests that need Compose
- * come with Compose. Mapping keys are text, so the constructed-key cases read keys as written,
- * and the wide projection refuses occurrence walks rather than counting key comparisons.
+ * (ropes are cached by identity, with no hashing). Mapping keys are text, so the constructed-key
+ * cases read keys as written, and the wide projection refuses occurrence walks rather than
+ * counting key comparisons.
+ *
+ * Later (T3-17): `test_scalar_style_survives_inline_body_masking`.
+ * Later (T3-22): `test_scalar_style_survives_the_single_node_def_projection`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { normalizeNodeSignatureCursor } from "../../src/compose/parse/nodes.ts";
 import {
   type ArcSequence,
   freezeValue,
@@ -1223,6 +1227,41 @@ describe("scalar facts", () => {
     expect(root.child("map").scalarStyle).toBeNull();
     expect(root.child("items").scalarStyle).toBeNull();
     expect(SourceCursor.virtual("x").scalarStyle).toBeNull();
+  });
+
+  test("scalar style survives node signature normalization", () => {
+    const nodes = SourceDocument.parse(
+      "nodes:\n" +
+        "  step:\n" +
+        "    kind: tool\n" +
+        "    input:\n" +
+        "      plain: !int 3\n" +
+        "      quoted: 'int = 3'\n",
+    ).root.child("nodes");
+
+    const inputs = normalizeNodeSignatureCursor(nodes.child("step")).child("inputs");
+
+    expect(inputs.child("plain").scalarStyle).toBe("plain");
+    expect(inputs.child("quoted").scalarStyle).toBe("single");
+  });
+
+  test("scalar style of a def node input", () => {
+    const root = SourceDocument.parse(
+      "defs:\n" +
+        "  helper:\n" +
+        "    nodes:\n" +
+        "      step:\n" +
+        "        kind: tool\n" +
+        "        input:\n" +
+        "          plain: !int 3\n" +
+        "          quoted: 'int = 3'\n",
+    ).root;
+
+    const step = root.child("defs").child("helper").child("nodes").child("step");
+    const inputs = normalizeNodeSignatureCursor(step).child("inputs");
+
+    expect(inputs.child("plain").scalarStyle).toBe("plain");
+    expect(inputs.child("quoted").scalarStyle).toBe("single");
   });
 
   test("scalarText, keyText and sourceKeyValue read the authored source", () => {

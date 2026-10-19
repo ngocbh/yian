@@ -1743,6 +1743,14 @@ one notes section. Only a session memory, whose one owner is the AGENT itself,
 may contribute a transcript. A notes memory beside a session adds context
 without hiding the session.
 
+Changed (TS yian): every host memory method (`Memory.openRun({ snapshot })` and
+`reset()`, the session's `recall`, `learn`, `commit` and `close`,
+`TranscriptSource.openTurn`, and the turn's `request`, `observe`, `close` and
+`prepareHistory`) may return a value or a promise, and yian awaits it. A session
+has no `with` form: call `close()`. `openTurn(request, { signal })` resolves to an
+admitted turn, and the stop is that `AbortSignal` (there is no `check_stopped`).
+`ConversationTurn.close(error?)` replaces the context manager's exit.
+
 The evaluator gives agents one `MemoryContext`, containing labelled text sections
 and an optional transcript turn. This is analogous to using a session transcript
 together with project instructions or saved memories. Both influence the model;

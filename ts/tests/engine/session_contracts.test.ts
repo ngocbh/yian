@@ -23,9 +23,9 @@
  * `test_effect_checkpoints_reject_zero_ordinal_and_list_items`,
  * `test_memory_context_request_detaches_every_value_boundary`,
  * `test_memory_context_request_rejects_invalid_carriers`,
- * `test_memory_content_validates_explicit_transcript_sources`, the `contracts.ts` half of
- * `test_memory_context_carriers_are_contracts_only_exports` and the field-order half of
- * `test_conversation_carriers_have_no_owner_key`; plus JavaScript's own checks: a `-0` payload
+ * `test_memory_content_validates_explicit_transcript_sources`,
+ * `test_memory_context_carriers_are_contracts_only_exports`, `test_conversation_carriers_have_no_owner_key`
+ * and `test_conversation_contracts_are_exported_without_concrete_backend`; plus JavaScript's own checks: a `-0` payload
  * number reads back `0`, counters must be safe integers, every carrier and its arrays are frozen,
  * `sameConversationInvocation`, ledger identities compared by value, a `RecallContext` subclass
  * refused by `MemoryContextRequest`, and `MemoryContext`'s section checks.
@@ -118,16 +118,18 @@
  * `__enter__` and `__exit__` rows of `test_memory_protocol_has_no_frames` (a session has no `with`
  * form; its caller calls `close()`).
  *
- * Left for later: `test_conversation_contracts_are_exported_without_concrete_backend` (`:361`), the
- * `memory.__all__` half of `test_memory_context_carriers_are_contracts_only_exports` (`:1357`) and
- * the export half of `test_conversation_carriers_have_no_owner_key` (`:1367`), with the package
- * exports.
+ * Changed (exports): Python's `memory.__all__` membership and `getattr(memory, name) is
+ * getattr(c, name)` become the same value read from `memory/index.ts` and `contracts.ts`; the
+ * type-only names (`ConversationEffectKind`, `ConversationEffectStatus`, `ConversationCheckpoint`,
+ * `TranscriptSource`, `ConversationTurn`) are pinned by the typecheck. `CheckStopped` is absent
+ * from both modules: a turn's stop is the `AbortSignal` passed to `openTurn`.
  */
 
 import { expect, spyOn, test } from "bun:test";
 import crypto from "node:crypto";
 
 import * as contracts from "../../src/memory/contracts.ts";
+import * as memory from "../../src/memory/index.ts";
 import {
   ConversationAdmitted,
   ConversationApplied,
@@ -1011,19 +1013,64 @@ test("a memory context requires exact sections and keeps its transcript", () => 
   );
 });
 
-// test_memory_context_carriers_are_contracts_only_exports, its contracts.ts half
-test("the memory context carriers are contracts exports", () => {
-  for (const name of ["MemoryContent", "MemoryContext", "MemoryContextRequest"]) expect(name in contracts).toBe(true);
+// test_conversation_contracts_are_exported_without_concrete_backend
+test("the conversation contracts are exported without a concrete backend", () => {
+  for (const name of [
+    "ConversationInvocation",
+    "ConversationRequest",
+    "ConversationItem",
+    "ConversationStamp",
+    "ConversationEffectState",
+    "ConversationCompletion",
+    "ConversationApplied",
+    "ConversationView",
+    "ConversationAdmitted",
+    "ConversationEffectRequested",
+    "ConversationEffectObserved",
+    "ConversationClosed",
+  ] as const) {
+    expect(memory[name]).toBe(contracts[name]);
+  }
+  // The type-only names: the typecheck pins each export.
+  const kind: memory.ConversationEffectKind = "model" satisfies contracts.ConversationEffectKind;
+  const status: memory.ConversationEffectStatus = "pending" satisfies contracts.ConversationEffectStatus;
+  const checkpoint: memory.ConversationCheckpoint | null = null as contracts.ConversationCheckpoint | null;
+  const source: memory.TranscriptSource | null = null as contracts.TranscriptSource | null;
+  const turn: memory.ConversationTurn | null = null as contracts.ConversationTurn | null;
+  // @ts-expect-error the stop check is the turn's AbortSignal, not an export
+  const check: memory.CheckStopped | null = null;
+  expect("CheckStopped" in memory).toBe(false);
+  expect("SessionMemory" in memory).toBe(false);
+  for (const name of [
+    "ConversationAuthority",
+    "CheckpointSink",
+    "PreparedConversationApply",
+    "ConversationAcceptance",
+    "ConversationSession",
+  ]) {
+    expect(name in contracts).toBe(false);
+    expect(name in memory).toBe(false);
+  }
+});
+
+// test_memory_context_carriers_are_contracts_only_exports
+test("the memory context carriers are contracts-only exports", () => {
+  for (const name of ["MemoryContent", "MemoryContext", "MemoryContextRequest"] as const) {
+    expect(memory[name]).toBe(contracts[name]);
+  }
+  expect("ConversationFrame" in memory).toBe(false);
   expect("ConversationFrame" in contracts).toBe(false);
   // `TranscriptSource` is an interface, so the typecheck pins its export.
   const source: contracts.TranscriptSource | null = null;
+  const exported: memory.TranscriptSource | null = source;
   // @ts-expect-error the stop check is the turn's AbortSignal, not an export
   const check: contracts.CheckStopped | null = null;
 });
 
-// test_conversation_carriers_have_no_owner_key, its field-order half
+// test_conversation_carriers_have_no_owner_key
 test("conversation carriers have no owner key", () => {
   expect("ConversationKey" in contracts).toBe(false);
+  expect("ConversationKey" in memory).toBe(false);
   expect(Object.keys(stamp())).toEqual(["invocation", "namespace", "generation", "expectedRevision", "ordinal"]);
   expect(Object.keys(view())).not.toContain("key");
 });

@@ -50,6 +50,8 @@ import {
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isList, isRecord, jsTypeName, type Type, type Value, writeAsText } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
+import { constructorTypeFn } from "../helpers/isinstance_types.ts";
+import type { TypeFn } from "../helpers/output_contracts.ts";
 import {
   oldFormSuggestion,
   oldTypedText,
@@ -71,7 +73,6 @@ import {
 import { normalizeNodeSignatureCursor, parseNodes } from "../parse/nodes.ts";
 import type { SourceCatalogBuilder, SourceSitePath } from "../source/catalog.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
-// T3-13 imports
 // T3-15 imports
 // T3-17 imports
 // T3-18 imports
@@ -1630,15 +1631,13 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // Every placeholder, by owner. Kind 1 is a stub in its owner's sub-block below: the owner deletes
 // the stub and imports the port under its import slot, keeping the sub-block header. A local type
 // alias is replaced by a `type` import of the same name under that slot, never just deleted, since
-// other owners' stubs use the shared ones: `TypeFn` (T3-13), `Narrowing` (T3-20), `LocalInput`
-// (T3-19) and `LoweredAsserts` (T3-20).
+// other owners' stubs use the shared ones: `Narrowing` (T3-20), `LocalInput` (T3-19) and
+// `LoweredAsserts` (T3-20). `TypeFn` is imported from compose/helpers/output_contracts.ts.
 // Kind 2 is a pipeline helper stubbed at its Python position: the owner ports its body in place,
 // adding the private helpers named beside it. Kind 3 is a `const` inside `assemble`: the owner
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
-//   T3-13  constructorTypeFn (1): returns `() => null`. T3-13 swaps it for the import, with
-//          `TypeFn`, if this file exists when it merges; otherwise T3-17 does.
 //   T3-15  splitTypedLlmConfig (2): returns the descriptors.
 //   T3-17  extractInlineBodies (1): returns `[nodesCursor, new Map()]`.
 //          readValueEntry (1): throws.
@@ -1677,16 +1676,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //          exhaustiveCases (1): returns `new Set()`; skipModel (1, Python's `SkipModel` class):
 //            returns `null`; nullSkippedOutputs (1): returns the outputs.
 //          searchedWhens (3, `ReadonlyMap<string, readonly SearchedWhen[]>`): `new Map()`.
-
-// T3-13: compose/helpers/{isinstance_types,output_contracts}.ts
-
-/** Python's `compose.helpers.output_contracts.TypeFn`: the type a constructor name builds. */
-type TypeFn = (name: string) => Type | null;
-
-/** Python's `compose.helpers.isinstance_types.constructor_type_fn`; not ported yet. */
-function constructorTypeFn(registry: TypeRegistry): TypeFn {
-  return () => null;
-}
 
 // T3-15: compose/nodes/{agent,code,tool,human_input,wait}.ts
 

@@ -143,17 +143,19 @@ every other result is the main run's.
 
 ### `resume`
 
-For serial runs (`num_workers: 0`). `host.crash_after_record: k` (required) cuts the first run
-after record `k` (0-based, so records `0`..`k` are kept): every later append is refused without
-writing, the run is abandoned, and the runner checks that the cut happened. The Python runner's
-cut still runs the run's own cleanup (closing the log; later, memory and MCP close calls), which
-a real crash would not. Then the flow is resumed from the log with the `resume` arguments
-`num_workers` (absent: the recorded value), `api_key`, `headers` and `context` (`context` as in
-`run`). The expectations are for the resumed run: its output, the trace of the whole log, the
-events and stream of the resume call, and `tool_calls` over both runs. With `host.memory`, the
-`before` runs come first (their calls are in `tool_calls` too), and the cut run and the resume
-each get the memories built afresh. Memory in a `resume` case (memories for the cut run and for
-the resume) is specified but not yet pinned by a case here; later memory cases pin it.
+For serial runs (`num_workers: 0`). `host.crash_after_record` (required) is a record number or
+`end`. `k` cuts the first run after record `k` (0-based, so records `0`..`k` are kept): every later
+append is refused without writing, the run is abandoned, and the runner checks that the cut
+happened. The Python runner's cut still runs the run's own cleanup (closing the log; later, memory
+and MCP close calls), which a real crash would not. `end` lets the first run run to its end (a first
+run that raises fails the case), so the resume is a finished run's, read-only. Then the flow is
+resumed from the log with the `resume` arguments `num_workers` (absent: the recorded value),
+`api_key`, `headers` and `context` (`context` as in `run`). The expectations are for the resumed
+run: its output, the trace of the whole log, the events and stream of the resume call, and
+`tool_calls` over both runs. With `host.memory`, the `before` runs come first (their calls are in
+`tool_calls` too), and the cut run and the resume each get the memories built afresh. Memory in a
+`resume` case (memories for the cut run and for the resume) is specified but not yet pinned by a
+case here; later memory cases pin it.
 
 ### `backward`
 
@@ -513,8 +515,9 @@ run id gives `run_id`.
 **Pooled runs.** When the run's `num_workers` isn't 0, the trace, events, stream and each tool's
 calls are first grouped: run-level entries first, then each node's entries, nodes in sorted
 order, each group keeping its order. Placeholders are numbered and lists compared after that.
-Expectations are written grouped. A `before` run's trace is grouped when its own `num_workers`
-isn't 0.
+Expectations are written grouped. A `resume` case's results are grouped by the resumed run's
+`num_workers` (`resume.num_workers`, else the recorded one). A `before` run's trace is grouped
+when its own `num_workers` isn't 0.
 An entry's node is its trace `node`; an event's `node_id` (a `NodeFailed`'s failure node; run
 events are run-level); a chunk's `node_id`; a tool call's `node`.
 

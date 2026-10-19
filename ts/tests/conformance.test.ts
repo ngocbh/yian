@@ -224,15 +224,19 @@ describe("checkCase", () => {
     [`${RUN}host: {jitter: [.nan]}`, "`host.jitter` must be a list of numbers in [0, 1)"],
     [
       `${BARE_RESUME}run: {num_workers: 0}`,
-      "a `resume` case needs `host.crash_after_record`, a record number",
+      "a `resume` case needs `host.crash_after_record`, a record number or `end`",
     ],
     [
       `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: -1}`,
-      "a `resume` case needs `host.crash_after_record`, a record number",
+      "a `resume` case needs `host.crash_after_record`, a record number or `end`",
     ],
     [
       `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: 1.0}`,
-      "a `resume` case needs `host.crash_after_record`, a record number",
+      "a `resume` case needs `host.crash_after_record`, a record number or `end`",
+    ],
+    [
+      `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: later}`,
+      "a `resume` case needs `host.crash_after_record`, a record number or `end`",
     ],
     [
       `${BARE_RESUME}host: {crash_after_record: 1}`,
@@ -282,6 +286,7 @@ describe("checkCase", () => {
     RESUME,
     `${BARE_RESUME}run: {num_workers: 0.0}\nhost: {crash_after_record: 1}`,
     `${BARE_RESUME}run: {num_workers: false}\nhost: {crash_after_record: 1}`,
+    `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: end}`,
     BACKWARD,
     `${EXPR}expr: a\nitem: 1`,
     `${EXPR}expr: a\nmode: condition`,

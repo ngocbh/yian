@@ -421,8 +421,8 @@ export function checkCase(case_: Case): Case {
   const run = get(case_, "run", {}) as Case;
   if (kind === "resume") {
     const cut = get(get(case_, "host", {}) as Case, "crash_after_record");
-    if (typeof cut !== "bigint" || cut < 0n) {
-      throw new Error("a `resume` case needs `host.crash_after_record`, a record number");
+    if (cut !== "end" && (typeof cut !== "bigint" || cut < 0n)) {
+      throw new Error("a `resume` case needs `host.crash_after_record`, a record number or `end`");
     }
     // Python's `!= 0`, under which 0.0 and false equal 0 too.
     const workers = get(run, "num_workers");

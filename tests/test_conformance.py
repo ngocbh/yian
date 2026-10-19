@@ -565,8 +565,10 @@ def _check(case: dict, candidate: bool = False) -> dict:
     run = case.get("run", {})
     if kind == "resume":
         cut = case.get("host", {}).get("crash_after_record")
-        if type(cut) is not int or cut < 0:
-            raise ValueError("a `resume` case needs `host.crash_after_record`, a record number")
+        if cut != "end" and (type(cut) is not int or cut < 0):
+            raise ValueError(
+                "a `resume` case needs `host.crash_after_record`, a record number or `end`"
+            )
         if run.get("num_workers") != 0:
             raise ValueError("`host.crash_after_record` needs `run.num_workers: 0`")
     if kind == "backward" and run.get("learnable") is not True:
@@ -1565,11 +1567,12 @@ def _actual_run(case: dict, case_dir: Path) -> dict:
     With `host.memory`, each `before` run runs first (its backward calls included), and every
     run gets the flow's memories built afresh under `<case dir>/memory`, closed after its
     backward calls. A `resume` case's first run is cut after record `host.crash_after_record`
-    and resumed; a `backward` case then calls backward once per `backward` entry. `host.steering`
-    steers the main run (and the cut run and the resume), never a `before` run. The results
-    are `trace`, `events`, `stream`, `tool_calls` (every run's), `backward` for a `backward`
-    case, `memory` when `expect.memory` lists keys, `output` or the host error as `raises` and
-    `error` (as `_catching` gives them), and `left`, a message per script with entries left.
+    (or, for `end`, runs to its end) and resumed; a `backward` case then calls backward once
+    per `backward` entry. `host.steering` steers the main run (and the cut run and the
+    resume), never a `before` run. The results are `trace`, `events`, `stream`, `tool_calls`
+    (every run's), `backward` for a `backward` case, `memory` when `expect.memory` lists keys,
+    `output` or the host error as `raises` and `error` (as `_catching` gives them), and `left`,
+    a message per script with entries left.
     """
     flow = _load(case["flow"], case_dir)
     log = case_dir / "run.jsonl"
@@ -1657,13 +1660,20 @@ def _actual_run(case: dict, case_dir: Path) -> dict:
                 caught = {"raises": _raised(exc), "error": exc}
             else:
                 with pytest.MonkeyPatch.context() as cut, cut_memory as memory:
-                    cut.setattr(JsonlRunLog, "append", refuse)
-                    try:
-                        start(memory)
-                    except _Cut:
-                        pass
+                    if last == "end":
+                        try:
+                            start(memory)
+                        except Exception as exc:
+                            _fail("the run raised before its end\n"
+                                  + "".join(traceback.format_exception(exc)))
                     else:
-                        _fail(f"the run ended before record {last + 1}")
+                        cut.setattr(JsonlRunLog, "append", refuse)
+                        try:
+                            start(memory)
+                        except _Cut:
+                            pass
+                        else:
+                            _fail(f"the run ended before record {last + 1}")
             events.clear()
             chunks.clear()
 
@@ -4082,6 +4092,33 @@ def test_steering_checks() -> None:
     for message, steering in problems:
         with pytest.raises(ValueError, match=re.escape(message)):
             _check(_steering_case(steering, []), candidate=True)
+
+
+def _end_case(inputs: dict) -> dict:
+    """Return a `resume` case of a one-CODE-node flow resumed after its end, with `inputs`."""
+    flow = ("id: hi\nname: hi\nnodes:\n  c:\n    kind: code\n    output: str\n"
+            "    code: return \"hi\"\noutput: ${c.output}\n")
+    return {"kind": "resume", "flow": flow, "inputs": inputs, "run": {"num_workers": 0},
+            "host": {"crash_after_record": "end"}, "resume": {}}
+
+
+def test_resume_after_the_end(tmp_path: Path) -> None:
+    """`crash_after_record: end` runs the first run to its end; the resume reads it, appending
+    nothing and firing no events."""
+    actual = results(_end_case({}), tmp_path, candidate=True)
+    assert actual["output"] == {"status": "succeeded", "output": "hi"}
+    assert actual["trace"][-1] == ["node_succeeded", "__end__", {"value": "hi"}]
+    assert not any(entry[0] == "run_resumed" for entry in actual["trace"])
+    assert actual["events"] == []
+    case = {**_end_case({}), "host": {"crash_after_record": "later"}}
+    with pytest.raises(ValueError, match=re.escape("a record number or `end`")):
+        _check(case, candidate=True)
+
+
+def test_resume_end_first_run_raises(tmp_path: Path) -> None:
+    """A first run that raises (here, an input check before the log) fails the case."""
+    with pytest.raises(pytest.fail.Exception, match="the run raised before its end"):
+        results(_end_case({"nope": 1}), tmp_path, candidate=True)
 
 
 _CODE_TESTS = '''

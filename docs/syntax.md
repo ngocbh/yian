@@ -2121,12 +2121,15 @@ A few providers need a note:
 
     Changed (TS yian): every call streams. A reply that ends without a finish reason fails
     the model call and is retried; an error in the stream fails it, retried when its kind
-    allows. A safety-type stop or a blocked prompt is `provider.refused`;
-    `MALFORMED_RESPONSE` is retried; another early stop fails the call. An invalid key is
-    `provider.auth`, a full context window `provider.context_length`. Every system message
-    goes into `systemInstruction`, and tool schemas go as written (`parametersJsonSchema`).
-    Thought signatures go back only to the provider, model, and account that wrote them; a
-    function call from another provider or model gets Google's placeholder signature
+    allows (an error without a code counts as a server error). A content-policy stop (such
+    as `SAFETY`, `RECITATION`, or `PROHIBITED_CONTENT`) or a blocked prompt is
+    `provider.refused`; `MALFORMED_RESPONSE` is retried; another early stop fails the call.
+    An invalid key is `provider.auth`, a full context window `provider.context_length`.
+    Every system message goes into `systemInstruction`, and tool schemas go as written
+    (`parametersJsonSchema`). Thought signatures go back only to the provider, model, and
+    account that wrote them. When a turn's first function call goes out without one (a
+    turn from another provider, model, or account, a hand-built turn, or one whose
+    signature records can't be used), it gets Google's placeholder signature
     (`skip_thought_signature_validator`). A model that would continue a long reply in
     another request (`CONTINUATION`, when the block's `maxOutputTokens` is above the
     model's per-request cap) fails the call: yian sends one request per attempt.

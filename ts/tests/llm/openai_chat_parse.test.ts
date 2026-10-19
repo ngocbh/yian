@@ -1,14 +1,25 @@
 /**
  * Tests for OpenAI Chat Completions reply parsing in `src/llm/protocols/openai_chat.ts`: SSE
- * chunks into deltas, parts with replay records, dense indexes, usage, finish reasons, error
- * chunks and stream errors.
+ * chunks into deltas, parts with replay records, dense indexes, tool-call assembly, usage, finish
+ * reasons, error chunks and stream errors, and parsed replies sent back.
  */
 
 import { describe, expect, test } from "bun:test";
 
 import { encodeBody } from "../../src/llm/body.ts";
 import { type ErrorKind, ProviderError } from "../../src/llm/errors.ts";
-import { collect, type Event, Finish, PartDone, ReasoningDelta, TextDelta, UsageReport } from "../../src/llm/events.ts";
+import {
+  collect,
+  type Event,
+  Finish,
+  parseArguments,
+  PartDone,
+  ReasoningDelta,
+  ReplyAssembler,
+  TextDelta,
+  ToolCallDelta,
+  UsageReport,
+} from "../../src/llm/events.ts";
 import { SSEEvent } from "../../src/llm/framing.ts";
 import {
   Message,
@@ -16,10 +27,14 @@ import {
   ReasoningPart,
   readReplayRecord,
   RefusalPart,
+  type ReplayDegradedReason,
   type ReplayKey,
   replayRecord,
+  Request,
   Response,
   TextPart,
+  ToolCallPart,
+  ToolResultPart,
   Usage,
 } from "../../src/llm/messages.ts";
 import { OpenAIChat, PROTOCOL } from "../../src/llm/protocols/openai_chat.ts";
@@ -859,5 +874,374 @@ describe("replay records", () => {
       ok: true,
       fields: { response_id: "chatcmpl-9", response_model: "qwen3-max-2025" },
     });
+  });
+});
+
+/** Return a tool-call wire entry; fields given as `undefined` are left out. */
+function wire(
+  index: JsonValue | undefined,
+  id: JsonValue | undefined,
+  name: JsonValue | undefined,
+  args: JsonValue | undefined,
+): JsonObject {
+  const fn: JsonObject = {};
+  if (name !== undefined) fn["name"] = name;
+  if (args !== undefined) fn["arguments"] = args;
+  const entry: JsonObject = { type: "function", function: fn };
+  if (index !== undefined) entry["index"] = index;
+  if (id !== undefined) entry["id"] = id;
+  return entry;
+}
+
+/** Return a chunk whose delta carries `entries` as its `tool_calls`. */
+function calls(...entries: JsonValue[]): JsonObject {
+  return chunk({ tool_calls: entries });
+}
+
+/** Return the call part the parser builds from `raw` arguments text. */
+function callPart(id: string, raw: string, name = "double"): ToolCallPart {
+  const [args, rawArguments] = parseArguments(raw);
+  return new ToolCallPart({ id, name, arguments: args, rawArguments });
+}
+
+function delta(index: number, id: string | null, name: string | null, args: string): ToolCallDelta {
+  return new ToolCallDelta({ index, id, name, arguments: args });
+}
+
+const HEAD = chunk({ role: "assistant", content: "" });
+const CALLS_DONE = chunk({}, { finishReason: "tool_calls" });
+
+describe("tool calls", () => {
+  test("one call over several deltas", async () => {
+    const events = await parse([
+      HEAD,
+      calls(wire(0, "call_1", "double", "")),
+      calls(wire(0, undefined, undefined, '{"value"')),
+      calls(wire(0, undefined, undefined, ":3}")),
+      CALLS_DONE,
+    ]);
+    expect(events).toEqual([
+      delta(0, "call_1", "double", ""),
+      delta(0, null, null, '{"value"'),
+      delta(0, null, null, ":3}"),
+      new PartDone(0, callPart("call_1", '{"value":3}')),
+      finish("tool_calls"),
+    ]);
+  });
+
+  test("two parallel calls after text: the text first, then the calls in order", async () => {
+    const parts = await partsOf([
+      chunk({ content: "Let me." }),
+      calls(wire(0, "call_a", "double", '{"value":'), wire(1, "call_b", "double", '{"value":')),
+      calls(wire(0, undefined, undefined, "3}")),
+      calls(wire(1, undefined, undefined, "4}")),
+      CALLS_DONE,
+    ]);
+    expect(parts).toEqual([
+      new TextPart("Let me."),
+      callPart("call_a", '{"value":3}'),
+      callPart("call_b", '{"value":4}'),
+    ]);
+  });
+
+  test("an id and name repeated on every delta are kept once, and carried once", async () => {
+    const events = await parse([
+      calls(wire(0, "call_1", "double", '{"value"')),
+      calls(wire(0, "call_1", "double", ":3}")),
+      CALLS_DONE,
+    ]);
+    expect(events).toEqual([
+      delta(0, "call_1", "double", '{"value"'),
+      delta(0, null, null, ":3}"),
+      new PartDone(0, callPart("call_1", '{"value":3}')),
+      finish("tool_calls"),
+    ]);
+  });
+
+  test("a delta without an index joins the call with its id, else the last call, else opens one", async () => {
+    const byId = await partsOf([
+      calls(wire(0, "call_a", "double", '{"value":'), wire(1, "call_b", "double", '{"value":')),
+      calls(wire(undefined, "call_a", undefined, "3}")),
+      calls(wire(undefined, undefined, undefined, "4}")),
+      CALLS_DONE,
+    ]);
+    expect(byId).toEqual([callPart("call_a", '{"value":3}'), callPart("call_b", '{"value":4}')]);
+    const opened = await parse([
+      calls(wire(undefined, undefined, "double", '{"value":')),
+      calls(wire(undefined, undefined, undefined, "3}")),
+      CALLS_DONE,
+    ]);
+    expect(opened).toEqual([
+      delta(0, null, "double", '{"value":'),
+      delta(0, null, null, "3}"),
+      new PartDone(0, callPart("yian_call_0", '{"value":3}')),
+      finish("tool_calls"),
+    ]);
+  });
+
+  test("a delta without an index whose id no call has opens a new call", async () => {
+    const parts = await partsOf([
+      calls(wire(0, "call_a", "double", '{"value":3}')),
+      calls(wire(undefined, "call_b", "double", '{"value":4}')),
+      CALLS_DONE,
+    ]);
+    expect(parts).toEqual([callPart("call_a", '{"value":3}'), callPart("call_b", '{"value":4}')]);
+  });
+
+  test("a reused index with a new id opens a second call; a later id-less delta there joins it", async () => {
+    const events = await parse([
+      calls(wire(0, "call_1", "double", '{"value":3}')),
+      calls(wire(0, "call_2", "double", '{"value":')),
+      calls(wire(0, undefined, undefined, "4}")),
+      CALLS_DONE,
+    ]);
+    expect(events).toEqual([
+      delta(0, "call_1", "double", '{"value":3}'),
+      delta(1, "call_2", "double", '{"value":'),
+      delta(1, null, null, "4}"),
+      new PartDone(0, callPart("call_1", '{"value":3}')),
+      new PartDone(1, callPart("call_2", '{"value":4}')),
+      finish("tool_calls"),
+    ]);
+  });
+
+  test("an open call without an id takes a later delta's id", async () => {
+    const events = await parse([
+      calls(wire(0, undefined, "double", '{"value"')),
+      calls(wire(0, "call_1", "other", ":3}")),
+      CALLS_DONE,
+    ]);
+    expect(events).toEqual([
+      delta(0, null, "double", '{"value"'),
+      delta(0, "call_1", null, ":3}"),
+      new PartDone(0, callPart("call_1", '{"value":3}')),
+      finish("tool_calls"),
+    ]);
+  });
+
+  test("a tool-call index given as a float token or a string counts as absent", async () => {
+    for (const token of ["0.0", '"0"']) {
+      const data = encodeBody(calls(wire("INDEX", undefined, undefined, "4}"))).replace('"INDEX"', token);
+      const parts = await partsOf([
+        calls(wire(0, "call_a", "double", '{"value":'), wire(1, "call_b", "double", '{"value":')),
+        // Absent, so it joins the last call opened rather than the call at index 0.
+        new SSEEvent({ data }),
+        calls(wire(0, undefined, undefined, "3}")),
+        CALLS_DONE,
+      ]);
+      expect(parts).toEqual([callPart("call_a", '{"value":3}'), callPart("call_b", '{"value":4}')]);
+    }
+  });
+
+  test("a non-string or empty id or name counts as absent", async () => {
+    const events = await parse([
+      calls(wire(0, 5, 7, "")),
+      calls(wire(0, "", "", '{"value":3}')),
+      calls(wire(0, "call_1", "double", "")),
+      CALLS_DONE,
+    ]);
+    expect(events.filter((event) => event instanceof ToolCallDelta)).toEqual([
+      delta(0, null, null, ""),
+      delta(0, null, null, '{"value":3}'),
+      delta(0, "call_1", "double", ""),
+    ]);
+    expect(partsDone(events)).toEqual([new PartDone(0, callPart("call_1", '{"value":3}'))]);
+  });
+
+  test("tool calls of the wrong shape are protocol errors", async () => {
+    const deltas: JsonObject[] = [
+      { tool_calls: { index: 0 } },
+      { tool_calls: "call" },
+      { tool_calls: ["call"] },
+      { tool_calls: [null] },
+      { tool_calls: [wire(0, "call_1", "double", "{}"), 5] },
+      { tool_calls: [{ index: 0, id: "call_1", function: "double" }] },
+      { tool_calls: [{ index: 0, id: "call_1", function: [] }] },
+      { tool_calls: [wire(0, "call_1", "double", { value: 3 })] },
+      { tool_calls: [wire(0, "call_1", "double", 3)] },
+    ];
+    for (const each of deltas) {
+      const error = await failure([chunk(each), CALLS_DONE]);
+      expect(error.kind).toBe("protocol");
+      expect(error.retryable).toBe(false);
+      expect(error.message).toBe("invalid tool call in xai stream event");
+    }
+  });
+
+  test("null tool_calls, function and arguments add nothing", async () => {
+    const parts = await partsOf([
+      chunk({ tool_calls: null }),
+      calls(wire(0, "call_1", "double", '{"value":3}')),
+      calls(wire(0, undefined, undefined, null)),
+      calls({ index: 0, function: null }),
+      calls({ index: 0 }),
+      CALLS_DONE,
+    ]);
+    expect(parts).toEqual([callPart("call_1", '{"value":3}')]);
+  });
+
+  test("arguments that aren't a JSON object are kept raw, unrepaired; empty arguments are {}", async () => {
+    for (const raw of ['{"value":', "null", "3"]) {
+      const [part] = await partsOf([calls(wire(0, "call_1", "double", raw)), CALLS_DONE]);
+      expect(part).toEqual(new ToolCallPart({ id: "call_1", name: "double", arguments: null, rawArguments: raw }));
+    }
+    const [part] = await partsOf([calls(wire(0, "call_1", "double", "")), CALLS_DONE]);
+    expect(part).toEqual(new ToolCallPart({ id: "call_1", name: "double", arguments: {} }));
+  });
+
+  test("an id-less call gets yian_call_<n> on its PartDone only; reasoning and text don't count", async () => {
+    const events = await parse([
+      chunk({ reasoning_content: "Hm.", content: "Let me." }),
+      calls(wire(0, "call_a", "double", "{}"), wire(1, undefined, "double", "{}")),
+      CALLS_DONE,
+    ]);
+    expect(events.filter((event) => event instanceof ToolCallDelta)).toEqual([
+      delta(2, "call_a", "double", "{}"),
+      delta(3, null, "double", "{}"),
+    ]);
+    expect(partsDone(events).slice(2)).toEqual([
+      new PartDone(2, callPart("call_a", "{}")),
+      new PartDone(3, callPart("yian_call_1", "{}")),
+    ]);
+  });
+
+  test("a generated id differs from every real id in the reply", async () => {
+    const once = await partsOf([
+      calls(wire(0, undefined, "double", "{}"), wire(1, "yian_call_0", "double", "{}")),
+      CALLS_DONE,
+    ]);
+    expect(once).toEqual([callPart("yian_call_0_1", "{}"), callPart("yian_call_0", "{}")]);
+    const twice = await partsOf([
+      calls(wire(0, undefined, "double", "{}"), wire(1, "yian_call_0", "double", "{}")),
+      calls(wire(2, "yian_call_0_1", "double", "{}")),
+      CALLS_DONE,
+    ]);
+    expect(twice).toEqual([
+      callPart("yian_call_0_2", "{}"),
+      callPart("yian_call_0", "{}"),
+      callPart("yian_call_0_1", "{}"),
+    ]);
+  });
+
+  test("two real calls sharing an id keep it", async () => {
+    const parts = await partsOf([
+      calls(wire(0, "call_1", "double", '{"value":3}'), wire(1, "call_1", "double", '{"value":4}')),
+      CALLS_DONE,
+    ]);
+    expect(parts).toEqual([callPart("call_1", '{"value":3}'), callPart("call_1", '{"value":4}')]);
+  });
+
+  test("a call with no name fails before any PartDone, ahead of the id rule", async () => {
+    const [events, error] = await failing([
+      chunk({ content: "Hi" }),
+      calls(wire(0, "call_a", "double", "{}"), wire(1, undefined, undefined, "{}"), wire(2, "call_c", "", "{}")),
+      CALLS_DONE,
+    ]);
+    expect(error.kind).toBe("protocol");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toBe("xai tool call 1 has no name");
+    expect(partsDone(events)).toEqual([]);
+  });
+
+  test("calls make the finish tool_calls, from stop or function_call; length wins", async () => {
+    const call = calls(wire(0, "call_1", "double", "{}"));
+    for (const reason of ["stop", "function_call", "tool_calls"]) {
+      expect((await parse([call, chunk({}, { finishReason: reason })])).at(-1)).toEqual(finish("tool_calls"));
+    }
+    expect((await parse([call, chunk({}, { finishReason: "length" })])).at(-1)).toEqual(finish("length"));
+  });
+
+  test("a stream cut after an id-less call fails incomplete; its partial reply leaves the call out", async () => {
+    const [events, error] = await failing(
+      [chunk({ content: "Hi" }), calls(wire(0, undefined, "double", '{"value":3}'))],
+      xai(),
+      false,
+    );
+    expect(error.kind).toBe("incomplete");
+    expect(error.retryable).toBe(true);
+    expect(events).toEqual([new TextDelta(0, "Hi"), delta(1, null, "double", '{"value":3}')]);
+    const assembler = new ReplyAssembler();
+    for (const event of events) assembler.add(event);
+    expect(assembler.partial()!.parts).toEqual([new TextPart("Hi")]);
+  });
+
+  test("a content_filter finish with a nameless call is refused", async () => {
+    const error = await failure([calls(wire(0, "call_1", undefined, "{}")), chunk({}, { finishReason: "content_filter" })]);
+    expect(error.kind).toBe("refused");
+  });
+
+  test("a tool-only stream gives exactly a call part", async () => {
+    const parts = await partsOf([HEAD, calls(wire(0, "call_1", "double", '{"value":3}')), CALLS_DONE]);
+    expect(parts).toEqual([callPart("call_1", '{"value":3}')]);
+  });
+});
+
+describe("round trips", () => {
+  const ASK = new Message({ role: "user", parts: [new TextPart("Double 3.")] });
+
+  /** Return the reply `protocol` parses from `chunks`. */
+  async function reply(chunks: JsonValue[], protocol: OpenAIChat): Promise<Message> {
+    return (await collect(await parse(chunks, protocol))).message;
+  }
+
+  /** Return the messages `protocol` sends for the question and `answer`. */
+  function sentBack(answer: Message, protocol: OpenAIChat): JsonValue {
+    return protocol.buildBody(new Request({ messages: [ASK, answer] }))["messages"]!;
+  }
+
+  const ASKED: JsonObject = { role: "user", content: "Double 3." };
+
+  test("a DeepSeek reasoner reply echoes its reasoning and replays its call with compact arguments", async () => {
+    const answer = await reply(
+      [
+        chunk({ reasoning_content: "Thinking." }),
+        calls(wire(0, "call_1", "double", '{"value": 3}')),
+        CALLS_DONE,
+      ],
+      deepseek(),
+    );
+    const call = { type: "function", id: "call_1", function: { name: "double", arguments: '{"value":3}' } };
+    expect(sentBack(answer, deepseek())).toEqual([
+      ASKED,
+      { role: "assistant", content: null, tool_calls: [call], reasoning_content: "Thinking." },
+    ]);
+    // The tool result follows as its own message.
+    const result = new Message({
+      role: "tool",
+      parts: [new ToolResultPart({ callId: "call_1", name: "double", content: "6", isError: false })],
+    });
+    const messages = deepseek().buildBody(new Request({ messages: [ASK, answer, result] }))["messages"];
+    expect((messages as JsonValue[]).at(-1)).toEqual({ role: "tool", tool_call_id: "call_1", content: "6" });
+  });
+
+  test("a reply whose only reasoning is an empty reasoning_content echoes it empty", async () => {
+    const answer = await reply([chunk({ reasoning_content: "" }), chunk({ content: "6" }), STOP], deepseek());
+    expect(sentBack(answer, deepseek())).toEqual([ASKED, { role: "assistant", content: "6", reasoning_content: "" }]);
+  });
+
+  test("a reply sent to another DeepSeek model leaves the reasoning out and signals other_model once", async () => {
+    const answer = await reply(
+      [chunk({ reasoning_content: "Think" }), chunk({ reasoning_content: "ing.", content: "6" }), STOP],
+      deepseek(),
+    );
+    const reasons: ReplayDegradedReason[] = [];
+    const protocol = new OpenAIChat({
+      model: "deepseek-v4-pro",
+      provider: "deepseek",
+      onReplayDegraded: (reason) => reasons.push(reason),
+    });
+    expect(sentBack(answer, protocol)).toEqual([ASKED, { role: "assistant", content: "6" }]);
+    expect(reasons).toEqual(["other_model"]);
+  });
+
+  test("an xai reply's reasoning is never sent back", async () => {
+    const answer = await reply([chunk({ reasoning_content: "Thinking.", content: "6" }), STOP], xai());
+    expect(sentBack(answer, xai())).toEqual([ASKED, { role: "assistant", content: "6" }]);
+  });
+
+  test("an id-less call's generated id is sent back as written", async () => {
+    const answer = await reply([calls(wire(0, undefined, "double", '{"value":3}')), CALLS_DONE], xai());
+    const call = { type: "function", id: "yian_call_0", function: { name: "double", arguments: '{"value":3}' } };
+    expect(sentBack(answer, xai())).toEqual([ASKED, { role: "assistant", content: null, tool_calls: [call] }]);
   });
 });

@@ -8,19 +8,29 @@
  * as `reasoning_content`, MiniMax's reasoning models get `reasoning_split`, some models refuse a
  * named tool choice, and most Azure deployments refuse `parallel_tool_calls`.
  *
- * Replies stream text and reasoning as deltas; a refusal is collected into one part. The finish
- * is held until the stream ends, so the usage chunk that follows it is read. Reasoning parts
- * carry replay records naming the wire field they came from, so only reasoning this route parsed
- * from `reasoning_content` is echoed. A reply that failed, was filtered, ran out of capacity or
- * ended early raises `ProviderError`. An error message holds the provider's text uncapped;
- * `RouteModel` scrubs it of the route's credentials and then caps it.
+ * Replies stream text, reasoning and tool calls as deltas; a refusal is collected into one part.
+ * A call without an id gets one (`yian_call_<n>`). The finish is held until the stream ends, so
+ * the usage chunk that follows it is read. Reasoning parts carry replay records naming the wire
+ * field they came from, so only reasoning this route parsed from `reasoning_content` is echoed.
+ * A reply that failed, was filtered, ran out of capacity or ended early raises `ProviderError`.
+ * An error message holds the provider's text uncapped; `RouteModel` scrubs it of the route's
+ * credentials and then caps it.
  */
 
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody } from "../body.ts";
 import { getCapabilities } from "../capabilities.ts";
 import { type ErrorKind, kindForStatus, ProviderError } from "../errors.ts";
-import { type Event, Finish, PartDone, ReasoningDelta, TextDelta, UsageReport } from "../events.ts";
+import {
+  type Event,
+  Finish,
+  parseArguments,
+  PartDone,
+  ReasoningDelta,
+  TextDelta,
+  ToolCallDelta,
+  UsageReport,
+} from "../events.ts";
 import type { SseProtocol } from "../executor.ts";
 import type { SSEEvent } from "../framing.ts";
 import {
@@ -69,11 +79,35 @@ const FAILED_FINISH: ReadonlyMap<string, ErrorKind> = new Map<string, ErrorKind>
 ]);
 
 /** A part being streamed; its index is its position among the reply's parts. */
-interface Assembly {
+type Assembly = TextAssembly | CallAssembly;
+
+/** A reasoning, text or refusal part being streamed. */
+interface TextAssembly {
   kind: "reasoning" | "text" | "refusal";
   text: string;
   /** For reasoning, the wire field of the piece that opened it. */
   field: string | null;
+}
+
+/** A tool call being streamed. */
+interface CallAssembly {
+  kind: "call";
+  /** The first non-empty id sent, or `null`. */
+  id: string | null;
+  /** The first non-empty name sent, or `null`. */
+  name: string | null;
+  /** The arguments pieces so far, joined. */
+  args: string;
+  /** The wire `index` of the entry that opened it, or `null`. */
+  wireIndex: bigint | null;
+}
+
+/** One `tool_calls` entry of a delta; an `id` or `name` that is not a non-empty string is `null`. */
+interface CallPiece {
+  wireIndex: bigint | null;
+  id: string | null;
+  name: string | null;
+  args: string;
 }
 
 /** The request rules that differ between Chat Completions routes. */
@@ -190,9 +224,12 @@ export class OpenAIChat implements SseProtocol {
   /**
    * Turn a streamed reply's chunks into stream events.
    *
-   * Reasoning and text stream as deltas; refusal pieces are collected. Part indexes are dense,
-   * in the order each part gets its first non-empty piece; inside one chunk the order is
-   * reasoning, text, refusal. A chunk's reasoning is its first non-empty source of
+   * Reasoning, text and tool calls stream as deltas; refusal pieces are collected. Part indexes
+   * are dense, in the order each part gets its first non-empty piece (a call, its first entry);
+   * inside one chunk the order is reasoning, text, refusal, calls. A call entry joins the call
+   * opened at its wire `index`, unless it brings a different id; without an index it joins the
+   * call with its id, else the last call. A call's id and name are the first non-empty ones,
+   * carried by the delta that brings them. A chunk's reasoning is its first non-empty source of
    * `reasoning_content`, `reasoning` and the `reasoning.text` items of `reasoning_details`; on
    * a route that echoes reasoning an empty `reasoning_content` opens the part too. A list
    * `content` counts its text items and strings, joined with newlines. The finish reason is
@@ -202,24 +239,43 @@ export class OpenAIChat implements SseProtocol {
    *
    * @param frames The reply's server-sent events, in order.
    * @returns The deltas, then one `PartDone` per part in index order (reasoning with its replay
-   *   record), then `UsageReport` (when any usage came; the last one wins) and `Finish`.
+   *   record; a call without an id named `yian_call_<n>`, `n` its position among the calls),
+   *   then `UsageReport` (when any usage came; the last one wins) and `Finish`, whose reason is
+   *   `tool_calls` when any call came, unless it is `length`.
    * @throws {ProviderError} For an error chunk (kind from its HTTP code, else its code or
    *   type), a failing finish reason (`refused` for a content filter, `overloaded` for
    *   `insufficient_system_resource`, `server` for `error` or `aborted`), a stream that ends
-   *   with no finish reason (`incomplete`, retryable), or an event that is not JSON or holds a
-   *   choice, delta or usage that cannot be read (`protocol`). The message holds the
-   *   provider's text uncapped.
+   *   with no finish reason (`incomplete`, retryable), a call with no name, or an event that is
+   *   not JSON or holds a choice, delta, tool call or usage that cannot be read (`protocol`).
+   *   The message holds the provider's text uncapped.
    */
   async *parse(frames: AsyncIterable<SSEEvent>): AsyncGenerator<Event> {
     const provider = this.provider;
     // The reply's parts by index: dense, in the order each is first seen.
     const parts: Assembly[] = [];
     // A reply has one choice, so at most one reasoning, text and refusal part.
-    const append = (kind: Assembly["kind"], text: string, field: string | null = null): number => {
-      const part = parts.find((each) => each.kind === kind);
+    const append = (kind: TextAssembly["kind"], text: string, field: string | null = null): number => {
+      const part = parts.find((each): each is TextAssembly => each.kind === kind);
       if (part === undefined) return parts.push({ kind, text, field }) - 1;
       part.text += text;
       return parts.indexOf(part);
+    };
+    // Return the call a tool-call entry joins, opening one when none fits.
+    const callFor = (piece: CallPiece): CallAssembly => {
+      const calls = parts.filter(isCall);
+      let call: CallAssembly | undefined;
+      if (piece.wireIndex !== null) {
+        call = calls.findLast((each) => each.wireIndex === piece.wireIndex);
+        // Some vendors send two calls at the same index, told apart by their ids.
+        if (call?.id && piece.id && call.id !== piece.id) call = undefined;
+      } else {
+        call = piece.id === null ? calls.at(-1) : calls.findLast((each) => each.id === piece.id);
+      }
+      if (call === undefined) {
+        call = { kind: "call", id: null, name: null, args: "", wireIndex: piece.wireIndex };
+        parts.push(call);
+      }
+      return call;
     };
     let finishReason: string | null = null;
     let usage: Usage | null = null;
@@ -249,6 +305,7 @@ export class OpenAIChat implements SseProtocol {
       if (typeof reason === "string") finishReason = reason;
       const delta = isPlainObject(choice["delta"]) ? choice["delta"] : {};
       checkDelta(delta, provider);
+      const pieces = callPieces(delta["tool_calls"], provider);
       const reasoning = reasoningPiece(delta, this.options.echoReasoningContent);
       if (reasoning !== null) {
         const [text, field] = reasoning;
@@ -259,6 +316,16 @@ export class OpenAIChat implements SseProtocol {
       if (text) yield new TextDelta(append("text", text), text);
       const refusal = delta["refusal"];
       if (typeof refusal === "string" && refusal) append("refusal", refusal);
+      for (const piece of pieces) {
+        const call = callFor(piece);
+        // A delta carries an id or name only when it is the call's first, which wins.
+        const id = call.id === null ? piece.id : null;
+        const name = call.name === null ? piece.name : null;
+        call.id ??= id;
+        call.name ??= name;
+        call.args += piece.args;
+        yield new ToolCallDelta({ index: parts.indexOf(call), id, name, arguments: piece.args });
+      }
     }
     if (finishReason === null) {
       throw new ProviderError("incomplete", `${provider} stream ended before a complete response`, { retryable: true });
@@ -267,18 +334,25 @@ export class OpenAIChat implements SseProtocol {
     if (failed !== undefined) {
       throw new ProviderError(failed, `${provider} response did not complete (${finishReason})`);
     }
-    for (const [index, part] of parts.entries()) yield new PartDone(index, this.#part(part));
+    // Every part is built before the first PartDone, so a call with no name fails first.
+    const taken = new Set<string>();
+    for (const part of parts) if (isCall(part) && part.id !== null) taken.add(part.id);
+    let callCount = 0;
+    const done = parts.map((part) => (isCall(part) ? callPart(part, callCount++, taken, provider) : this.#part(part)));
+    for (const [index, part] of done.entries()) yield new PartDone(index, part);
     if (usage !== null) yield new UsageReport(usage);
     const fields: JsonObject = {};
     if (responseId !== null) fields["response_id"] = responseId;
     // The model that answered, which may differ from the one asked for (an Azure deployment name).
     if (responseModel !== null) fields["response_model"] = responseModel;
     const providerPayload = replayRecord(this.#key, fields);
-    yield new Finish({ reason: finishReason, responseId, protocol: PROTOCOL, providerPayload });
+    // `length` says the calls may be cut short, so it wins; any other reason with calls is a tool call finish.
+    const reason = finishReason === "length" || callCount === 0 ? finishReason : "tool_calls";
+    yield new Finish({ reason, responseId, protocol: PROTOCOL, providerPayload });
   }
 
   /** Build a streamed part; a reasoning part carries a record naming its wire field. */
-  #part(assembly: Assembly): Part {
+  #part(assembly: TextAssembly): Part {
     if (assembly.kind === "reasoning") {
       return new ReasoningPart(assembly.text, replayRecord(this.#key, { field: assembly.field }));
     }
@@ -426,6 +500,65 @@ function checkDelta(delta: JsonObject, provider: string): void {
   ) {
     throw new ProviderError("protocol", `invalid delta in ${provider} stream event`);
   }
+}
+
+/** Return whether a streamed part is a tool call. */
+function isCall(part: Assembly): part is CallAssembly {
+  return part.kind === "call";
+}
+
+/**
+ * Read a delta's `tool_calls` entries; none when it is absent or `null`.
+ *
+ * A wire `index` that is not an int counts as absent, as does an `id` or `function.name` that is
+ * not a non-empty string; a missing or `null` `arguments` piece is empty.
+ *
+ * @throws {ProviderError} `tool_calls` is not a list, an entry is not an object, its `function`
+ *   is not an object or its `arguments` not a string, when present and not `null` (kind
+ *   `protocol`).
+ */
+function callPieces(toolCalls: JsonValue | undefined, provider: string): CallPiece[] {
+  if (toolCalls === undefined || toolCalls === null) return [];
+  const invalid = () => new ProviderError("protocol", `invalid tool call in ${provider} stream event`);
+  if (!Array.isArray(toolCalls)) throw invalid();
+  return toolCalls.map((entry) => {
+    if (!isPlainObject(entry)) throw invalid();
+    const fn = entry["function"] ?? {};
+    if (!isPlainObject(fn)) throw invalid();
+    const args = fn["arguments"] ?? "";
+    if (typeof args !== "string") throw invalid();
+    const index = entry["index"];
+    const id = entry["id"];
+    const name = fn["name"];
+    return {
+      wireIndex: typeof index === "bigint" ? index : null,
+      id: typeof id === "string" && id ? id : null,
+      name: typeof name === "string" && name ? name : null,
+      args,
+    };
+  });
+}
+
+/**
+ * Build a finished tool call, its arguments read by `parseArguments` (not repaired).
+ *
+ * A call without an id gets `yian_call_<n>`, with `_<k>` appended while that id is in `taken`;
+ * the id it gets is added to `taken`.
+ *
+ * @param n The call's position among the reply's calls.
+ * @param taken The ids in the reply so far: every real id, and those generated.
+ * @throws {ProviderError} The call has no name (kind `protocol`).
+ */
+function callPart(call: CallAssembly, n: number, taken: Set<string>, provider: string): ToolCallPart {
+  if (call.name === null) throw new ProviderError("protocol", `${provider} tool call ${n} has no name`);
+  let id = call.id;
+  if (id === null) {
+    id = `yian_call_${n}`;
+    for (let k = 1; taken.has(id); k++) id = `yian_call_${n}_${k}`;
+    taken.add(id);
+  }
+  const [args, rawArguments] = parseArguments(call.args);
+  return new ToolCallPart({ id, name: call.name, arguments: args, rawArguments });
 }
 
 /**

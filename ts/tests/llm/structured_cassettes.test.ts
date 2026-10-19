@@ -496,10 +496,11 @@ async function runScenario(name: string, scenario: Scenario): Promise<void> {
     // The prompt strategy sends the request as it is; the caller appends the instruction.
     const instruction = new Message({ role: "user", parts: [new TextPart(plan.instruction())] });
     request = new Request({ messages: [...REQUEST.messages, instruction] });
-    expect(plan.apply(request)).toBe(request);
   }
+  const sent = plan.apply(request);
+  if (plan.strategy === "prompt") expect(sent).toBe(request);
   const retried: RetryInfo[] = [];
-  const call = callWithRetries(model, plan.apply(request), {
+  const call = callWithRetries(model, sent, {
     budget: scenario.budget ?? 0,
     scheduler: virtualScheduler(),
     random: () => 0,

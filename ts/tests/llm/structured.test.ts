@@ -3,8 +3,9 @@
  * object from the reply: `structuredTarget`, `planStructured` (one test per row of the selection
  * table, first match wins), `forcesTool` and `sendsJsonSchemaAsTool`; a plan's `apply` to a
  * request, its `instruction` and `correction` texts, and `parse` of tool and text replies; and
- * `StructuredOutputError` and `MissingToolCallError`. Ported from Python yian's Anthropic, Azure,
- * open-schema and structured-node tests.
+ * `StructuredOutputError` and `MissingToolCallError`; and that `typeToSchema` emits the schema
+ * copies used here. Ported from Python yian's Anthropic, Azure, open-schema and structured-node
+ * tests.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -54,7 +55,9 @@ import {
   structuredTarget,
 } from "../../src/llm/structured.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import { typeToSchema } from "../../src/nodes/agent/structured.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
+import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 
 /** Python's `type_to_schema(...).model_json_schema()` for the cases below: ints are `bigint`s. */
 const SCHEMAS: Record<string, JsonObject> = {
@@ -497,6 +500,26 @@ describe("planStructured: the schema", () => {
       expect(first.schema).not.toBe(schema);
       expectSame(first.schema, schema);
     }
+  });
+
+  // The copies above stand in for what an AGENT's `output:` sends; this pins them to the real
+  // `typeToSchema`, so a change on either side shows here.
+  test.each([
+    ["corpus:Rec", "Rec"],
+    ["corpus:Bounded", "Bounded"],
+    ["corpus:Open", "Open"],
+    ["corpus:Union", "Union(Buy, Sell)"],
+  ])("typeToSchema emits %s, and its title names the plan", (key, text) => {
+    const typedefs = readTypedefs({
+      Rec: { answer: "str", score: "int" },
+      Bounded: { answer: "str", score: "int(0..10)" },
+      Open: { answer: "str", data: "object" },
+      Buy: { kind: "Literal(buy)", x: "int" },
+      Sell: { kind: "Literal(sell)", n: "int" },
+    });
+    const schema = typeToSchema(typeFor(text, typedefs))!;
+    expectSame(schema, SCHEMAS[key]);
+    expect(planStructured(target(), schema).name).toBe(schema.title as string);
   });
 });
 

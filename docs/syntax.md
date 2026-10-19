@@ -1718,9 +1718,9 @@ request among them may still be rejected.
 
 Changed (TS yian): structured generation differs from Python yian in these ways:
 
-- Every structured call streams. On every provider the reply's tool call is found by the
-  tool's name; a call to another tool, or one whose arguments aren't a JSON object, counts
-  as no call.
+- Every structured call is sent as a streaming request and read once the reply is
+  complete. On every provider the reply's tool call is found by the tool's name; a call
+  to another tool, or one whose arguments aren't a JSON object, counts as no call.
 - A text reply (the JSON-schema output format or the prompt fallback) is read as strict
   JSON and never repaired. yian drops whitespace and backticks around it, or takes a code
   fence's body (any info string) and ignores prose around the fence. A truncated reply (an
@@ -1733,11 +1733,12 @@ Changed (TS yian): structured generation differs from Python yian in these ways:
 - A provider error that can't be retried, such as a content filter or Anthropic's
   `refusal` stop, fails the AGENT at once instead of being corrected under `retries:`.
 - Corrections no longer end with langchain's troubleshooting link. With Anthropic
-  `thinking` on, keywords its output format can't express move into the description, as
-  on Azure; those notes spell values as JSON (`{const: buy}` is now `{const: "buy"}`,
-  `{default: None}` is now `{default: null}`). Azure's float bounds drop the `.0`
-  (`{minimum: 0.0, maximum: 1.0}` is now `{minimum: 0, maximum: 1}`), and the JSON
-  prompt fallback writes the schema as compact JSON.
+  `thinking` on, the description notes for keywords its output format can't express
+  (Python yian wrote them too, through the Anthropic SDK) now spell values as JSON
+  (`{const: buy}` is now `{const: "buy"}`, `{default: None}` is now `{default: null}`).
+  Azure's float bounds drop the `.0` (`{minimum: 0.0, maximum: 1.0}` is now
+  `{minimum: 0, maximum: 1}`), and the JSON prompt fallback writes the schema as compact
+  JSON.
 - Every schema comes from `output:` and is checked after the reply, so the exceptions above
   (a host's JSON-schema dict, explicit `method` or `strict`, an output class yian can't
   check, a pydantic v1 class) don't exist. An older Azure deployment still gets a function

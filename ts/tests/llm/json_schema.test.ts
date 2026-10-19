@@ -1611,6 +1611,7 @@ describe("moveAzureKeywords", () => {
       "maxItems",
       "uniqueItems",
     ]);
+    expect(Object.isFrozen(AZURE_STRICT_UNSUPPORTED)).toBe(true);
   });
 
   test.each(Object.keys(MOVED))("%s", (name) => {

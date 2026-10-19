@@ -23,12 +23,39 @@
  * `test_nested_memory_carriers_reject_forged_subclass_values` and the subclass row of
  * `test_memory_origins_revalidate_subclass_keys_without_losing_identity`, the memory package,
  * `contracts.ts` and `runtime/contracts.ts` rows of `test_frame_types_are_gone` and
- * `test_importing_memory_contracts_does_not_load_heavy_backends`; plus JavaScript's own
+ * `test_importing_memory_contracts_does_not_load_heavy_backends`; the episode and context halves of
+ * `test_context_episode_and_mutation_keep_json_snapshots`,
+ * `test_episode_status_enforces_output_or_failure_shape`, the rows 0 and 17 of
+ * `test_episode_execution_sequence_is_optional_and_survives_context_copy`,
+ * `test_episode_rejects_nonphysical_execution_sequences`,
+ * `test_learn_context_requires_episodes_of_its_run`, the episode and context rows of
+ * `test_episodes_contexts_mutations_and_failures_name_the_memory_key`,
+ * `test_freeze_still_detects_cycles`, `test_freeze_shares_a_repeated_subtree` and
+ * `test_learn_context_equal_feedback`; plus JavaScript's own
  * values (a `"__proto__"` key, a null-prototype object, a repeated subtree, an array hole), the
  * value nesting limit, the occurrence nesting order, the operation failure's field checks
  * (Python pins those through the learning outcome and backward records), `validateMutations`, a
  * mutation's id and payload checks (a payload deeper than the value nesting limit is kept), and
  * each learning carrier's field checks in Python's order.
+ *
+ * TS-only (episodes and learn contexts): one row per `MemoryEpisode` and `LearnContext`
+ * constructor message with its class, in Python's check order; the episode JSON and the learn
+ * feedback keep `±Infinity`, read `-0` back as `0` and refuse NaN; `LearnContext.fromFrozen` stores
+ * the given feedback (`toBe`) and checks run, memory and episodes; `freezeFeedback` names items from
+ * `firstIndex` and shares a subtree across calls through its memo; each memory `same*` comparison
+ * (`sameMemoryScope`, `sameMemoryOperationFailure`, `sameMemoryMutation`, `sameLearningFailure`,
+ * `samePolicyCommitOutcome`, `sameLearningResult`) is true for separately built equal values and
+ * false for each differing field.
+ *
+ * Changed (episodes and learn contexts): the episode and the context hold deep-frozen JSON, so a
+ * reader's edit of `inputs`, an interaction value or `feedback` throws `TypeError` where Python
+ * edits a private copy. Python's keyword arguments are an options object (`{ output, failure,
+ * interactions, baseSystemPrompt, prompt, memorySections, executionSeq }`); the 11-argument
+ * positional "legacy" row passes `{ output: "answer" }`. The non-physical sequence rows are
+ * `false, true, -1, 1.5, "1", 1n` (`1.0` is `1` in JS), each with its class and message.
+ * `test_freeze_shares_a_repeated_subtree` checks the read feedback (`feedback[0].a` is
+ * `feedback[0].b`), since the stored snapshot is what `feedback` returns. Python's dataclass `==`
+ * of two contexts is `toEqual`; `copy.deepcopy` is `structuredClone`.
  *
  * Changed: the JSON tests build a custom-type `MemoryDecl`, as Python's `_decl` does. The non-exact
  * rows are JavaScript's (a `Map`, a `Date`, an own symbol key, a class instance, an array subclass
@@ -64,10 +91,19 @@
  * the forged rows of
  * `test_learning_result_revalidates_exact_nested_policy_carriers` (Python's `object.__setattr__`
  * on a frozen dataclass; a TS carrier is frozen by its constructor, so none holds an unchecked
- * `commitId` or `retryable`).
+ * `commitId` or `retryable`); `test_freeze_memo_keeps_the_nesting_limit` (TS has no memory nesting
+ * limit); the forged row of `test_episode_execution_sequence_is_optional_and_survives_context_copy`
+ * and the episode and context rows of `test_nested_memory_carriers_reject_forged_subclass_values`
+ * (a frozen TS carrier can't be forged, so a context keeps its checked episodes by reference);
+ * `test_episode_rejects_integer_subclass_execution_sequence` (no integer subclasses in JS);
+ * `test_propose_learning_parity_on_deleted_slots` (`object.__delattr__` and
+ * `LearnContext._revalidated`, which TS doesn't need).
  *
- * Left for later: the recall, learning evidence and conversation tests, with their carriers
- * (`MemoryEpisode`, `LearnContext` and the rest); and the `recall`, `learn` and `commit` rows of
+ * Later (T4-7): `test_propose_learning_rebuild_of_forged_feedback` and
+ * `test_propose_learning_shares_canonical_feedback` (with the memory runtime). Later (T6-3): the
+ * `RecallContext` half of `test_context_episode_and_mutation_keep_json_snapshots`,
+ * `test_session_protocol_recalls_and_learns_without_frames`, the conversation tests with their
+ * carriers, and the `recall`, `learn` and `commit` rows of
  * `test_protocols_accept_narrow_structural_implementations`.
  */
 
@@ -79,22 +115,36 @@ import { OriginRef } from "../../src/diagnostics.ts";
 import * as contracts from "../../src/memory/contracts.ts";
 import {
   DeclSite,
+  freezeFeedback,
   isMemory,
   type JsonObject,
+  type JsonValue,
+  LearnContext,
   LearningFailure,
   LearningResult,
   type Memory,
   MemoryDecl,
+  MemoryEpisode,
+  MemoryEpisodeStatus,
   MemoryMutation,
   MemoryOccurrenceKind,
   MemoryOccurrenceSegment,
   MemoryOperationError,
   MemoryOperationFailure,
   MemoryScope,
+  MemorySection,
   type MemorySession,
   MemorySetupError,
+  ModelTextInteraction,
+  ModelValueInteraction,
   PolicyCommitOutcome,
   type PolicyCommitStatus,
+  sameLearningFailure,
+  sameLearningResult,
+  sameMemoryMutation,
+  sameMemoryOperationFailure,
+  sameMemoryScope,
+  samePolicyCommitOutcome,
   validateMutations,
 } from "../../src/memory/contracts.ts";
 import * as memoryPackage from "../../src/memory/index.ts";
@@ -773,4 +823,587 @@ test("a learning result checks its status and failures in Python's order", () =>
     TypeError,
     "policies items must be PolicyCommitOutcome values",
   );
+});
+
+/** One authored AGENT locator for the episode tests. */
+const AGENT_PATH = ["root", "child", "agent"];
+
+/** Build a succeeded episode of `run` with empty inputs and the given options. */
+function episodeOf(
+  run = "run",
+  options: ConstructorParameters<typeof MemoryEpisode>[5] = { output: "answer" },
+): MemoryEpisode {
+  return new MemoryEpisode(run, [], AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, {}, options);
+}
+
+// test_context_episode_and_mutation_keep_json_snapshots (the episode and context halves)
+test("an episode and a learn context keep frozen JSON snapshots", () => {
+  const inputs = { items: [1n, 2n] };
+  const interactionValue = { text: "answer" };
+  const interaction = new ModelValueInteraction(interactionValue);
+  const output = { answer: ["yes"] };
+  const episode = new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, inputs, {
+    output,
+    interactions: [interaction],
+  });
+  const learn = new LearnContext("run", "notes", [episode], [{ score: 1n }]);
+
+  inputs.items.push(3n);
+  interactionValue.text = "changed";
+  output.answer.push("no");
+  expect(() => {
+    ((episode.interactions[0] as ModelValueInteraction).value as { text: string }).text = "changed again";
+  }).toThrow(TypeError);
+  expect(() => {
+    (episode.inputs as { items: bigint[] }).items.push(4n);
+  }).toThrow(TypeError);
+  expect(() => {
+    (learn.feedback[0] as { score: bigint }).score = 0n;
+  }).toThrow(TypeError);
+
+  expect(episode.inputs).toEqual({ items: [1n, 2n] });
+  expect(episode.output).toEqual({ answer: ["yes"] });
+  expect(episode.failure).toBeNull();
+  expect(episode.interactions).toEqual([new ModelValueInteraction({ text: "answer" })]);
+  expect(learn.episodes).toEqual([episode]);
+  expect(learn.episodes[0]).toBe(episode);
+  expect(learn.feedback).toEqual([{ score: 1n }]);
+  for (const value of [episode, learn, episode.interactions, learn.episodes, learn.feedback]) {
+    expect(Object.isFrozen(value)).toBe(true);
+  }
+});
+
+// test_episode_status_enforces_output_or_failure_shape
+test("an episode's status enforces its output or failure shape", () => {
+  const failed = new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.FAILED, {}, {
+    failure: { code: "node.execute", message: "failed" },
+  });
+  expect(failed.output).toBeNull();
+  expect(failed.failure).toEqual({ code: "node.execute", message: "failed" });
+  expectError(
+    () => new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.FAILED, {}),
+    RangeError,
+    "a failed episode must carry failure data",
+  );
+  expectError(
+    () =>
+      new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.FAILED, {}, {
+        output: "conflict",
+        failure: { code: "node.execute" },
+      }),
+    RangeError,
+    "a failed episode cannot carry output data",
+  );
+  expectError(
+    () =>
+      new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, {}, {
+        output: null,
+        failure: { code: "unexpected" },
+      }),
+    RangeError,
+    "a succeeded episode cannot carry failure data",
+  );
+});
+
+// test_episode_execution_sequence_is_optional_and_survives_context_copy (rows 0 and 17)
+test.each([0, 17])("an episode's execution sequence %p is optional and survives a context", (sequence) => {
+  const legacy = episodeOf();
+  expect(legacy.executionSeq).toBeNull();
+  const inputs = { items: [1n] };
+  const episode = new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, inputs, {
+    output: "answer",
+    executionSeq: sequence,
+  });
+  const context = new LearnContext("run", "notes", [episode]);
+  inputs.items.push(2n);
+  expect(context.episodes[0]!.executionSeq).toBe(sequence);
+  expect(context.episodes[0]!.inputs).toEqual({ items: [1n] });
+});
+
+// test_episode_rejects_nonphysical_execution_sequences
+test.each<[string, unknown, typeof TypeError | typeof RangeError, string]>([
+  ["false", false, TypeError, "execution_seq must be an integer or null"],
+  ["true", true, TypeError, "execution_seq must be an integer or null"],
+  ["-1", -1, RangeError, "execution_seq must be non-negative"],
+  ["1.5", 1.5, TypeError, "execution_seq must be an integer or null"],
+  ['"1"', "1", TypeError, "execution_seq must be an integer or null"],
+  ["1n", 1n, TypeError, "execution_seq must be an integer or null"],
+])("an episode refuses the execution sequence %s", (_name, sequence, cls, message) => {
+  expectError(() => episodeOf("run", { executionSeq: sequence as number }), cls, message);
+});
+
+// test_learn_context_requires_episodes_of_its_run
+test("a learn context requires episodes of its run", () => {
+  expectError(
+    () => new LearnContext("run", "notes", [episodeOf("other-run")]),
+    RangeError,
+    "episode run_id must match the learning context",
+  );
+});
+
+// test_episodes_contexts_mutations_and_failures_name_the_memory_key (the episode and context rows)
+test("episodes and learn contexts name the memory key", () => {
+  const segment = new MemoryOccurrenceSegment(MemoryOccurrenceKind.LOOP_ITERATION, ["loop"], 0);
+  const episode = new MemoryEpisode("run", [segment], ["loop", "agent"], MemoryEpisodeStatus.SUCCEEDED, {}, {
+    output: "answer",
+    memorySections: [new MemorySection("notes", "outer")],
+  });
+  expect(episode.occurrencePath).toEqual([segment]);
+  expect(episode.occurrencePath[0]).toBe(segment);
+  expectError(
+    () => new MemoryEpisode("run", [segment], ["other"], MemoryEpisodeStatus.SUCCEEDED, {}),
+    RangeError,
+    "the innermost occurrence segment must contain the scoped node",
+  );
+  const context = new LearnContext("run", "notes", [episode], ["good"]);
+  expect([context.memory, context.episodes, context.feedback]).toEqual(["notes", [episode], ["good"]]);
+  expectError(() => new LearnContext("run", "", []), RangeError, "memory must be non-empty");
+});
+
+// test_freeze_still_detects_cycles
+test("freezing feedback still detects cycles", () => {
+  const loop: unknown[] = [];
+  loop.push(loop);
+  expectError(
+    () => new LearnContext("run", "notes", [], [loop]),
+    RangeError,
+    "feedback[0][0] contains a circular JSON value",
+  );
+  const node: Record<string, unknown> = {};
+  node.self = node;
+  expectError(
+    () => new LearnContext("run", "notes", [], [{ x: [node] }]),
+    RangeError,
+    "feedback[0].x[0].self contains a circular JSON value",
+  );
+});
+
+// test_freeze_shares_a_repeated_subtree
+test("freezing feedback shares a repeated subtree", () => {
+  const shared = { note: ["kept", 1n] };
+  const context = new LearnContext("run", "notes", [], [{ a: shared, b: shared }]);
+  const item = context.feedback[0] as { a: JsonValue; b: JsonValue };
+  expect(item.a).toBe(item.b);
+  expect(context.feedback).toEqual([{ a: shared, b: shared }]);
+});
+
+// test_learn_context_equal_feedback
+test("learn contexts over aliased and copied feedback are equal", () => {
+  const shared = { note: ["kept", 1n] };
+  const feedback = [{ a: shared, b: [shared] }, shared];
+  const aliased = new LearnContext("run", "notes", [], feedback);
+  const copied = new LearnContext("run", "notes", [], structuredClone(feedback));
+  expect(aliased.feedback).toEqual(copied.feedback);
+  expect(copied.feedback).toEqual(feedback);
+  expect(aliased).toEqual(copied);
+});
+
+class SubSection extends MemorySection {}
+class SubEpisode extends MemoryEpisode {}
+
+test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>([
+  ["an empty run id", () => episodeOf(""), RangeError, "run_id must be non-empty"],
+  ["a run id that isn't a string", () => episodeOf(1 as never), TypeError, "run_id must be a string"],
+  [
+    "a bad run id before a bad sequence",
+    () => episodeOf("", { executionSeq: -1 }),
+    RangeError,
+    "run_id must be non-empty",
+  ],
+  [
+    "a bad sequence before a bad occurrence path",
+    () =>
+      new MemoryEpisode("run", new Set() as never, AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, {}, { executionSeq: -1 }),
+    RangeError,
+    "execution_seq must be non-negative",
+  ],
+  [
+    "an occurrence path that isn't an array",
+    () => new MemoryEpisode("run", new Set() as never, AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, {}),
+    TypeError,
+    "occurrence_path must be an array",
+  ],
+  [
+    "an occurrence item that isn't a segment",
+    () => new MemoryEpisode("run", [{}] as never, AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, {}),
+    TypeError,
+    "occurrence_path items must be MemoryOccurrenceSegment values",
+  ],
+  [
+    "an owner path that isn't an array",
+    () => new MemoryEpisode("run", [], new Set() as never, MemoryEpisodeStatus.SUCCEEDED, {}),
+    TypeError,
+    "owner_static_path must be an array",
+  ],
+  [
+    "an empty owner path",
+    () => new MemoryEpisode("run", [], [], MemoryEpisodeStatus.SUCCEEDED, {}),
+    RangeError,
+    "owner_static_path must be non-empty",
+  ],
+  [
+    "an unknown status",
+    () => new MemoryEpisode("run", [], AGENT_PATH, "SUCCEEDED" as never, []),
+    TypeError,
+    "status must be a MemoryEpisodeStatus",
+  ],
+  [
+    "a shape error before bad inputs",
+    () => new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.FAILED, []),
+    RangeError,
+    "a failed episode must carry failure data",
+  ],
+  [
+    "inputs that are an array",
+    () => new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, [], { output: new Map() }),
+    TypeError,
+    "inputs must be an exact JSON object or null",
+  ],
+  [
+    "inputs that are a Map",
+    () => new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, new Map()),
+    TypeError,
+    "inputs must be an exact JSON object or null",
+  ],
+  [
+    "a bad inputs value before a bad output",
+    () =>
+      new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, { a: new Map() }, { output: new Map() }),
+    TypeError,
+    "inputs.a must contain exact JSON values",
+  ],
+  [
+    "an output that isn't JSON",
+    () => episodeOf("run", { output: new Map() }),
+    TypeError,
+    "output must contain exact JSON values",
+  ],
+  [
+    "a failure that isn't an object",
+    () => new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.FAILED, {}, { failure: "boom" }),
+    TypeError,
+    "failure must be an exact JSON object",
+  ],
+  [
+    "a bad failure before a bad prompt pair",
+    () => new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.FAILED, {}, { failure: [], prompt: "p" }),
+    TypeError,
+    "failure must be an exact JSON object",
+  ],
+  [
+    "a prompt without a base prompt",
+    () => episodeOf("run", { prompt: "p" }),
+    RangeError,
+    "base_system_prompt and prompt must both be present or absent",
+  ],
+  [
+    "a base prompt without a prompt",
+    () => episodeOf("run", { baseSystemPrompt: "b", prompt: null }),
+    RangeError,
+    "base_system_prompt and prompt must both be present or absent",
+  ],
+  [
+    "a base prompt that isn't a string",
+    () => episodeOf("run", { baseSystemPrompt: 1 as never, prompt: "p" }),
+    TypeError,
+    "base_system_prompt must be a string",
+  ],
+  [
+    "a prompt that isn't a string",
+    () => episodeOf("run", { baseSystemPrompt: "b", prompt: 1 as never }),
+    TypeError,
+    "prompt must be a string",
+  ],
+  [
+    "a bad prompt before bad sections",
+    () => episodeOf("run", { baseSystemPrompt: "b", prompt: 1 as never, memorySections: new Set() as never }),
+    TypeError,
+    "prompt must be a string",
+  ],
+  [
+    "sections that aren't an array",
+    () => episodeOf("run", { memorySections: new Set() as never }),
+    TypeError,
+    "memory_sections must be an array",
+  ],
+  [
+    "a section that isn't a MemorySection",
+    () => episodeOf("run", { memorySections: [{ memory: "notes", text: "x" }] as never }),
+    TypeError,
+    "memory_sections items must be MemorySection values",
+  ],
+  [
+    "a section subclass",
+    () => episodeOf("run", { memorySections: [new SubSection("notes", "x")] }),
+    TypeError,
+    "memory_sections items must be MemorySection values",
+  ],
+  [
+    "bad sections before bad interactions",
+    () => episodeOf("run", { memorySections: [{}] as never, interactions: new Set() as never }),
+    TypeError,
+    "memory_sections items must be MemorySection values",
+  ],
+  [
+    "interactions that aren't an array",
+    () => episodeOf("run", { interactions: new Set() as never }),
+    TypeError,
+    "interactions must be an array",
+  ],
+  [
+    "an interaction that isn't a visible interaction",
+    () => episodeOf("run", { interactions: [{ text: "x" }] as never }),
+    TypeError,
+    "interactions items must be VisibleInteraction values",
+  ],
+])("an episode refuses %s", (_name, build, cls, message) => {
+  expectError(build, cls, message);
+});
+
+test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>([
+  ["an empty run id", () => new LearnContext("", "notes", []), RangeError, "run_id must be non-empty"],
+  [
+    "a run id that isn't a string",
+    () => new LearnContext(1 as never, "notes", []),
+    TypeError,
+    "run_id must be a string",
+  ],
+  ["a memory that isn't a string", () => new LearnContext("run", 1 as never, []), TypeError, "memory must be a string"],
+  [
+    "a bad memory before bad episodes",
+    () => new LearnContext("run", "", new Set() as never),
+    RangeError,
+    "memory must be non-empty",
+  ],
+  [
+    "episodes that aren't an array",
+    () => new LearnContext("run", "notes", new Set() as never),
+    TypeError,
+    "episodes must be an array",
+  ],
+  [
+    "an episode that isn't a MemoryEpisode",
+    () => new LearnContext("run", "notes", [{ ...episodeOf() }] as never),
+    TypeError,
+    "episodes items must be MemoryEpisode values",
+  ],
+  [
+    "an episode subclass",
+    () => new LearnContext("run", "notes", [new SubEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, {})]),
+    TypeError,
+    "episodes items must be MemoryEpisode values",
+  ],
+  [
+    "an episode of another run before bad feedback",
+    () => new LearnContext("run", "notes", [episodeOf("other")], new Set() as never),
+    RangeError,
+    "episode run_id must match the learning context",
+  ],
+  [
+    "feedback that isn't an array",
+    () => new LearnContext("run", "notes", [], new Set() as never),
+    TypeError,
+    "feedback must be an array",
+  ],
+  [
+    "a feedback item that isn't JSON",
+    () => new LearnContext("run", "notes", [], [1n, { a: new Map() }]),
+    TypeError,
+    "feedback[1].a must contain exact JSON values",
+  ],
+  [
+    "a NaN feedback item",
+    () => new LearnContext("run", "notes", [], [Number.NaN]),
+    RangeError,
+    "feedback[0] JSON number must not be NaN",
+  ],
+])("a learn context refuses %s", (_name, build, cls, message) => {
+  expectError(build, cls, message);
+});
+
+test("episode JSON and learn feedback keep infinities, read -0 as 0 and refuse NaN", () => {
+  const inf = Number.POSITIVE_INFINITY;
+  const succeeded = new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, { x: inf, z: -0 }, {
+    output: [-inf, -0],
+  });
+  expect(succeeded.inputs).toEqual({ x: inf, z: 0 });
+  expect(Object.is((succeeded.inputs as { z: number }).z, 0)).toBe(true);
+  expect(succeeded.output).toEqual([-inf, 0]);
+  expect(Object.is((succeeded.output as number[])[1], 0)).toBe(true);
+  const failed = new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.FAILED, null, { failure: { y: inf } });
+  expect(failed.inputs).toBeNull();
+  expect(failed.failure).toEqual({ y: inf });
+  expect(new LearnContext("run", "notes", [], [inf, { n: -inf }]).feedback).toEqual([inf, { n: -inf }]);
+  const nan = Number.NaN;
+  expectError(() => episodeOf("run", { output: { v: nan } }), RangeError, "output.v JSON number must not be NaN");
+  expectError(
+    () => new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, { x: nan }),
+    RangeError,
+    "inputs.x JSON number must not be NaN",
+  );
+  expectError(
+    () => new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.FAILED, {}, { failure: { y: [nan] } }),
+    RangeError,
+    "failure.y[0] JSON number must not be NaN",
+  );
+});
+
+test("an episode keeps its fields, copies its arrays and keeps their carriers by reference", () => {
+  const segment = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["root", "child"], 3);
+  const occurrencePath = [segment];
+  const ownerPath = [...AGENT_PATH];
+  const section = new MemorySection("notes", "recalled");
+  const sections = [section];
+  const text = new ModelTextInteraction("visible");
+  const interactions = [text];
+  const episode = new MemoryEpisode("run", occurrencePath, ownerPath, MemoryEpisodeStatus.SUCCEEDED, null, {
+    output: 1n,
+    baseSystemPrompt: "",
+    prompt: "",
+    memorySections: sections,
+    interactions,
+    executionSeq: 4,
+  });
+  occurrencePath.length = 0;
+  ownerPath.length = 0;
+  sections.length = 0;
+  interactions.length = 0;
+  expect(episode.runId).toBe("run");
+  expect(episode.occurrencePath).toEqual([segment]);
+  expect(episode.ownerStaticPath).toEqual(AGENT_PATH);
+  expect(episode.status).toBe("succeeded");
+  expect(episode.inputs).toBeNull();
+  expect(episode.output).toBe(1n);
+  expect([episode.baseSystemPrompt, episode.prompt]).toEqual(["", ""]);
+  expect(episode.memorySections[0]).toBe(section);
+  expect(episode.interactions[0]).toBe(text);
+  expect(episode.executionSeq).toBe(4);
+  for (const value of [episode.occurrencePath, episode.ownerStaticPath, episode.memorySections, episode.interactions]) {
+    expect(Object.isFrozen(value)).toBe(true);
+  }
+  expect(() => {
+    (episode as { runId: string }).runId = "other";
+  }).toThrow(TypeError);
+  expect(Object.values(MemoryEpisodeStatus)).toEqual(["succeeded", "failed"]);
+});
+
+test("fromFrozen stores the given feedback and checks run, memory and episodes", () => {
+  const frozen = freezeFeedback([{ a: 1n }, "two"], new Map());
+  const episode = episodeOf();
+  const context = LearnContext.fromFrozen("run", "notes", [episode], frozen);
+  expect(context.feedback).toBe(frozen);
+  expect(context.feedback[0]).toBe(frozen[0]);
+  expect(context.episodes).toEqual([episode]);
+  expect([context.runId, context.memory]).toEqual(["run", "notes"]);
+  expect(context).toBeInstanceOf(LearnContext);
+  expect(Object.isFrozen(context)).toBe(true);
+  expectError(() => LearnContext.fromFrozen("", "notes", [], frozen), RangeError, "run_id must be non-empty");
+  expectError(() => LearnContext.fromFrozen("run", 1 as never, [], frozen), TypeError, "memory must be a string");
+  expectError(
+    () => LearnContext.fromFrozen("run", "notes", [episodeOf("other")], frozen),
+    RangeError,
+    "episode run_id must match the learning context",
+  );
+});
+
+test("freezeFeedback names items from firstIndex and shares a subtree through its memo", () => {
+  expectError(
+    () => freezeFeedback([1n, new Map()], new Map(), 3),
+    TypeError,
+    "feedback[4] must contain exact JSON values",
+  );
+  const shared = { note: ["kept"] };
+  const memo = new Map<object, JsonValue>();
+  const [first] = freezeFeedback([shared], memo);
+  const [second] = freezeFeedback(new Set([shared]), memo, 1);
+  expect(first).toBe(second);
+  expect(Object.isFrozen(first)).toBe(true);
+  expect(freezeFeedback([shared], new Map())[0]).not.toBe(first);
+  expect(Object.isFrozen(freezeFeedback([], new Map()))).toBe(true);
+});
+
+test("sameMemoryScope compares static path, memories and occurrence segments", () => {
+  const segment = (kind: MemoryOccurrenceKind = "map_item", path = ["flow"], index = 0) =>
+    new MemoryOccurrenceSegment(kind, path, index);
+  const scope = (staticPath = ["flow", "agent"], memories = ["notes"], occurrencePath = [segment()]) =>
+    new MemoryScope(staticPath, { memories, occurrencePath });
+  expect(sameMemoryScope(scope(), scope())).toBe(true);
+  expect(sameMemoryScope(scope(["flow", "other"]), scope())).toBe(false);
+  expect(sameMemoryScope(scope(undefined, ["other"]), scope())).toBe(false);
+  expect(sameMemoryScope(scope(undefined, undefined, []), scope())).toBe(false);
+  expect(sameMemoryScope(scope(undefined, undefined, [segment("loop_iteration")]), scope())).toBe(false);
+  const inner = ["flow", "x", "agent"];
+  expect(sameMemoryScope(scope(inner, undefined, [segment(undefined, ["flow", "x"])]), scope(inner))).toBe(false);
+  expect(sameMemoryScope(scope(undefined, undefined, [segment(undefined, undefined, 1)]), scope())).toBe(false);
+});
+
+test("sameMemoryOperationFailure compares all four fields", () => {
+  const failure = (stage = "learn", code = "c", message = "m", retryable = true) =>
+    new MemoryOperationFailure(stage, code, message, retryable);
+  expect(sameMemoryOperationFailure(failure(), failure())).toBe(true);
+  expect(sameMemoryOperationFailure(failure("commit"), failure())).toBe(false);
+  expect(sameMemoryOperationFailure(failure(undefined, "d"), failure())).toBe(false);
+  expect(sameMemoryOperationFailure(failure(undefined, undefined, "n"), failure())).toBe(false);
+  expect(sameMemoryOperationFailure(failure(undefined, undefined, undefined, false), failure())).toBe(false);
+});
+
+test("sameMemoryMutation compares the id and the payload by JSON value", () => {
+  const payload = { add: [{ id: "lesson", n: 1n, x: 1.5, ok: true, none: null }] };
+  expect(sameMemoryMutation(new MemoryMutation("m", payload), new MemoryMutation("m", structuredClone(payload)))).toBe(
+    true,
+  );
+  expect(sameMemoryMutation(new MemoryMutation("m", payload), new MemoryMutation("n", payload))).toBe(false);
+  for (const [a, b] of [
+    [1n, 1],
+    [{ a: 1n }, { a: 1n, b: 1n }],
+    [{ a: 1n }, { b: 1n }],
+    [[1n], [1n, 2n]],
+    [[1n], { 0: 1n }],
+    [null, {}],
+    ["1", 1n],
+    [true, 1n],
+    [{ a: [1n] }, { a: [2n] }],
+  ] as const) {
+    expect(sameMemoryMutation(new MemoryMutation("m", a), new MemoryMutation("m", b))).toBe(false);
+  }
+});
+
+test("sameLearningFailure compares memory, operation and failure by value", () => {
+  const cause = (code = "c") => new MemoryOperationFailure("learn", code, "m", true);
+  const base = new LearningFailure("notes", "learn", cause());
+  expect(sameLearningFailure(new LearningFailure("notes", "learn", cause()), base)).toBe(true);
+  expect(sameLearningFailure(new LearningFailure("other", "learn", cause()), base)).toBe(false);
+  expect(sameLearningFailure(new LearningFailure("notes", "commit", cause()), base)).toBe(false);
+  expect(sameLearningFailure(new LearningFailure("notes", "learn", cause("d")), base)).toBe(false);
+});
+
+test("samePolicyCommitOutcome compares memory, status, commit id and failure", () => {
+  const cause = (code = "c") => new MemoryOperationFailure("commit", code, "m", false);
+  const failed = (memory = "notes", commitId = "c1", code = "c") =>
+    new PolicyCommitOutcome(memory, "failed", { commitId, failure: cause(code) });
+  expect(samePolicyCommitOutcome(failed(), failed())).toBe(true);
+  expect(samePolicyCommitOutcome(failed("other"), failed())).toBe(false);
+  expect(samePolicyCommitOutcome(failed(undefined, "c2"), failed())).toBe(false);
+  expect(samePolicyCommitOutcome(failed(undefined, undefined, "d"), failed())).toBe(false);
+  const unknown = new PolicyCommitOutcome("notes", "unknown", { commitId: "c1" });
+  expect(samePolicyCommitOutcome(unknown, new PolicyCommitOutcome("notes", "unknown", { commitId: "c1" }))).toBe(true);
+  const succeeded = new PolicyCommitOutcome("notes", "succeeded", { commitId: "c1" });
+  expect(samePolicyCommitOutcome(unknown, succeeded)).toBe(false);
+  expect(samePolicyCommitOutcome(new PolicyCommitOutcome("notes", "unrequested"), unknown)).toBe(false);
+  expect(samePolicyCommitOutcome(unknown, failed())).toBe(false);
+  expect(samePolicyCommitOutcome(failed(), unknown)).toBe(false);
+});
+
+test("sameLearningResult compares status, failures and policies in order", () => {
+  const cause = new MemoryOperationFailure("learn", "c", "m", true);
+  const failure = (memory: string) => new LearningFailure(memory, "learn", cause);
+  const policy = (memory: string) => new PolicyCommitOutcome(memory, "unrequested");
+  const result = (status: "failed" | "incomplete" = "failed", failures = ["a", "b"], policies = ["p", "q"]) =>
+    new LearningResult(status, { failures: failures.map(failure), policies: policies.map(policy) });
+  expect(sameLearningResult(result(), result())).toBe(true);
+  expect(sameLearningResult(result("incomplete"), result())).toBe(false);
+  expect(sameLearningResult(result(undefined, ["b", "a"]), result())).toBe(false);
+  expect(sameLearningResult(result(undefined, ["a"]), result())).toBe(false);
+  expect(sameLearningResult(result(undefined, undefined, ["q", "p"]), result())).toBe(false);
+  expect(sameLearningResult(result(undefined, undefined, ["p"]), result())).toBe(false);
 });

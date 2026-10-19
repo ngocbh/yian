@@ -2,8 +2,9 @@
 # Pins: named memories persist across runs over one root: the earlier run's backward commits episodes
 # to the root flow's `notes` (every occurrence) and to the `uses:` file's own `notes`, the key
 # `lib.notes` (only that file's nodes), read back through fresh memories. The replies are what the
-# test's `_reply` writes for each request. The main run's requests (recalled episodes, stacked outer
-# to local) aren't carried: they would pin the episodes' entry_id formula (a T6-6 hand-off).
+# test's `_reply` writes for each request; the main run's scripted replies aren't checked against
+# what the model saw, since its requests (recalled episodes, stacked outer to local) aren't carried:
+# they would pin the episodes' entry_id formula (a T6-6 hand-off).
 kind: run
 flow: |
   id: e2e-memory

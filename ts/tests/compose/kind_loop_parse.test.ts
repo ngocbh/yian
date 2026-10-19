@@ -18,7 +18,11 @@
  *
  * Pinned at the end (`parsedNodes`): the harvested
  * `load-loop/compose_kind_loop_parse__a_list_until_predicate_is_rejected` and
- * `__a_true_while_predicate_is_rejected`, both from this file's Python source.
+ * `__a_true_while_predicate_is_rejected`, both from this file's Python source. The other harvested
+ * cases whose error the LOOP parse raises are pinned in the TS mirrors of the Python files they
+ * come from: `non_text_fields.test.ts` (`call:`, `while:`, `until:`), `node_input_shape.test.ts`
+ * (`input:`), `node_when_hint.test.ts` (`when:`) and `engine/inline_composite_bodies.test.ts`
+ * (the key check).
  */
 
 import { expect, test } from "bun:test";
@@ -129,8 +133,14 @@ output: \${lp.output}
 `;
 
 test.each([
-  ["while: true", "`while:` must be an expression string over the carried record, such as `while: not done` (got true)"],
-  ["while: false", "`while:` must be an expression string over the carried record, such as `while: not done` (got false)"],
+  [
+    "while: true",
+    "`while:` must be an expression string over the carried record, such as `while: not done` (got true)",
+  ],
+  [
+    "while: false",
+    "`while:` must be an expression string over the carried record, such as `while: not done` (got false)",
+  ],
   ["until: 1", "`until:` must be an expression string over the carried record, such as `until: done` (got 1)"],
   ["until: [x]", '`until:` must be an expression string over the carried record, such as `until: done` (got ["x"])'],
 ])("a non-string predicate is refused at its field: %s", (predicate, message) => {

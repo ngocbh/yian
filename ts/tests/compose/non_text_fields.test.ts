@@ -24,9 +24,8 @@
  * Dropped: the date rows (TS reads an unquoted date as text) and
  * `test_not_text_detail_reads_the_first_string_error` (`not_text_detail` reads a pydantic error).
  *
- * Later (T3-22): the load half of
- * `test_text_call_still_loads`. Later (T3-20): the then and else rows of
- * `test_already_located_fields_are_unchanged`.
+ * Later (T3-22): the load half of `test_text_call_still_loads`. Later (T3-20): the then and else
+ * rows of `test_already_located_fields_are_unchanged`.
  * Later (T3-18, T3-22): the unresolved-reference error of `test_null_case_on_is_absent`. Later
  * (T3-22): the loading of `test_text_case_on_still_loads`.
  * Later (T3-17): the inline-body rows of `test_code_in_def_compact_merge_and_inline_body` and
@@ -43,6 +42,7 @@ import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { notTextError } from "../../src/compose/nodes/base.ts";
 import type { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import type { CaseDescriptor } from "../../src/compose/nodes/case.ts";
+import type { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { parseFile } from "../../src/compose/parse/file.ts";
 import { forget } from "../../src/defaults.ts";
 import {
@@ -452,7 +452,7 @@ describe("parseNodes", () => {
     });
 
     test("text call still parses", () => {
-      expect((nodesOf(callFlow(kind, "body")).get("a") as CallDescriptor).call).toBe("body");
+      expect((nodesOf(callFlow(kind, "body")).get("a") as CallDescriptor | LoopDescriptor).call).toBe("body");
     });
   });
 

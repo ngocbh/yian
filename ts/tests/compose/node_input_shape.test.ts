@@ -5,8 +5,8 @@
  * `inputs` as the parse phase does: the registered `LoopDescriptor`, `CallDescriptor`,
  * `MapDescriptor`, `CodeDescriptor`, `ToolDescriptor`, `AgentDescriptor` and
  * `HumanInputDescriptor`. The harvested `whole_reference_input_{agent,call,code}` and
- * `{empty_list,expression,number,whole_record}_loop_seed` cases are pinned at the end. A text value is spelled by `valueRepr` (`"abc"` and `true` where Python shows `'abc'` and
- * `True`).
+ * `{empty_list,expression,number,whole_record}_loop_seed` cases are pinned at the end. A text
+ * value is spelled by `valueRepr` (`"abc"` and `true` where Python shows `'abc'` and `True`).
  *
  * Dropped: the date row of `test_non_mapping_input_is_a_load_error` (TS reads an unquoted date
  * as text).

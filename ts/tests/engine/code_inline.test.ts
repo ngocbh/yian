@@ -13,7 +13,8 @@
  *
  * TS-only: the constructor compiles nothing, so a body that doesn't parse constructs; the node's
  * `mode`; a non-integer line selects no line; the selector's origin shape checks; `run` rejects as
- * not ported yet.
+ * not ported yet; the built-in identity form a value entry lowers to (its `"builtin"` mode, its
+ * frozen copy, and the shape and type checks on `code`).
  *
  * Not ported: `test_inline_stdlib_import_in_body_works_in_process` (a Python `import`);
  * `test_no_return_body_rejected_at_construction` and `test_return_only_in_nested_def_still_rejected`
@@ -115,5 +116,36 @@ test("the node's mode follows the classification", () => {
 test("a CODE forward is not ported yet", async () => {
   await expect(new CodeNode("c", { code: "return 1" }).run({})).rejects.toThrow(
     "node 'c' (CodeNode) forward is not ported yet (T4-9)",
+  );
+});
+
+test("the built-in identity form has builtin mode and keeps a frozen copy", () => {
+  const form = { builtin: "identity" as const, field: "x" };
+  const node = new CodeNode("x", { code: form });
+
+  expect(node.mode).toBe("builtin");
+  expect(node.code).not.toBe(form);
+  expect(node.code).toEqual(form);
+  expect(Object.isFrozen(node.code)).toBe(true);
+});
+
+test("a CODE built-in of the wrong shape is rejected", () => {
+  const message = new TypeError('CODE built-in must be {builtin: "identity", field: <input name>}');
+  for (const code of [
+    { builtin: "other", field: "x" },
+    { builtin: "identity" },
+    { builtin: "identity", field: "x", extra: 1 },
+    { builtin: "identity", field: 1 },
+  ]) {
+    expect(() => new CodeNode("x", { code: code as never })).toThrow(message);
+  }
+  expect(() => new CodeNode("x", { code: { builtin: "identity", field: "" } })).toThrow(
+    new RangeError("CODE built-in field must be non-empty"),
+  );
+});
+
+test("a CODE code that is neither text nor a built-in is rejected", () => {
+  expect(() => new CodeNode("x", { code: 42 as never })).toThrow(
+    new TypeError("CODE code must be text or a built-in operation, got number"),
   );
 });

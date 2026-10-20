@@ -118,31 +118,39 @@
  * `test_learner_failed_finished_keeps_completed_feedback_and_all_unrequested_policies` (4 rows),
  * `test_known_commit_failure_stops_later_requests_and_admits_a_later_attempt` (4 rows),
  * `test_any_finished_attempt_admits_a_later_start_with_fresh_proposals` (3 rows),
- * `test_every_committing_attempt_uses_its_own_attempt_in_the_commit_id` and
- * `test_first_committing_attempt_uses_its_own_attempt_id_after_precommit_attempts`.
- *
- * Changed (computeBackward): each refusal pins its `RangeError` and message, as above. The run
- * state keeps the log's canonical copy of each accepted record, so accepted records, outcomes and
- * results compare with `toEqual` (Python's `==`). A `topic` of `[1, 2]` is `[1n, 2n]`.
- * `test_attributed_validation_reuses_recorded_transfers_without_callbacks_or_materialization`
- * drops the `_materialize_context` and `_output_context` patches (TS can't patch a module's
- * functions) and shadows the trace's `backwardHandlers` getter on the instance with one that
- * throws.
- *
- * Later (T4-7, with `computeBackward`):
+ * `test_every_committing_attempt_uses_its_own_attempt_in_the_commit_id`,
+ * `test_first_committing_attempt_uses_its_own_attempt_id_after_precommit_attempts`,
  * `test_started_feedback_shape_and_attempt_identity_validate_before_acceptance`,
- * `test_backward_commit_request_rejects_wrong_order_batch_identity_and_attempt`,
- * `test_backward_commit_observation_requires_the_current_pending_request`, the `ready`, `request`
- * and `finished` rows of
+ * `test_backward_commit_request_rejects_wrong_order_batch_identity_and_attempt` (5 rows),
+ * `test_backward_commit_observation_requires_the_current_pending_request` (6 rows), the `ready`,
+ * `request` and `finished` rows of
  * `test_backward_append_failure_does_not_install_attempt_or_irreversible_request`, the `feedback`
  * and `partial_inventory` rows of
  * `test_failed_computation_finished_rejects_foreign_context_or_fabricated_results`,
- * `test_successful_finished_requires_ready_and_every_enabled_policy_confirmation`,
- * `test_finished_must_preserve_ready_results_and_exact_confirmed_policy_inventory`,
- * `test_explicit_interruption_keeps_unknown_request_and_ready_attribution_without_resuming`,
- * `test_interrupted_finished_must_exactly_project_the_prefix`,
- * `test_disabled_memory_ready_and_finished_reject_fabricated_memory_material` and
- * `test_backward_replay_matches_every_accepted_prefix_without_callbacks_or_context_formatting`.
+ * `test_successful_finished_requires_ready_and_every_enabled_policy_confirmation` (4 rows),
+ * `test_explicit_interruption_keeps_unknown_request_and_ready_attribution_without_resuming` and
+ * `test_disabled_memory_ready_and_finished_reject_fabricated_memory_material`.
+ *
+ * Changed (computeBackward): each refusal pins its `RangeError` and message, as above. The run
+ * state keeps the log's canonical copy of each accepted record, so accepted records, outcomes and
+ * results compare with `toEqual` (Python's `==`). A `topic` of `[1, 2]` is `[1n, 2n]`. The log's
+ * `append` is patched on the instance, as above.
+ * - `test_attributed_validation_reuses_recorded_transfers_without_callbacks_or_materialization`
+ *   drops the `_materialize_context` and `_output_context` patches (TS can't patch a module's
+ *   functions) and shadows the trace's `backwardHandlers` getter on the instance with one that
+ *   throws.
+ * - `test_finished_must_preserve_ready_results_and_exact_confirmed_policy_inventory` (6 rows): the
+ *   `commit_id` row rebuilds the first policy outcome with its constructor, where Python uses
+ *   `dataclasses.replace`.
+ * - `test_interrupted_finished_must_exactly_project_the_prefix` (4 rows) rebuilds the outcome and,
+ *   for the `message` row, its failure with their constructors, where Python uses
+ *   `dataclasses.replace`; that failure is no longer the interruption, so the commit-failure rule
+ *   refuses it.
+ * - `test_backward_replay_matches_every_accepted_prefix_without_callbacks_or_context_formatting`
+ *   drops the module patches, as above; `forward`, `backward` and `captureBackwardContext` throw
+ *   on the nodes of a `copyGraph` copy of the run's flow, each prefix replays over a fresh
+ *   `copyGraph` of that copy with `noGrowth`, and `sameRuntimeBackwardState` is Python's `==`.
+ *
  * The reducer's own rules are tested TS-only in `runtime_backward.test.ts`.
  *
  * Later (T4-8): `test_historical_backward_prepares_recorded_schema_bytes` (the recorded backward
@@ -151,7 +159,7 @@
 
 import { expect, test } from "bun:test";
 
-import { END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { copyGraph, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { RunSucceeded } from "../../src/events.ts";
 import { type FeedbackValue, SourceRef } from "../../src/expr/lineage.ts";
@@ -179,7 +187,12 @@ import {
   sameBackwardFailure,
   sameBackwardOutcome,
 } from "../../src/runtime/contracts.ts";
-import { memoryCommitId, RuntimeBackwardState, validateAttributedBackward } from "../../src/runtime/learning.ts";
+import {
+  memoryCommitId,
+  RuntimeBackwardState,
+  sameRuntimeBackwardState,
+  validateAttributedBackward,
+} from "../../src/runtime/learning.ts";
 import {
   BackwardFinishedRecord,
   BackwardReadyRecord,
@@ -204,6 +217,7 @@ import {
   prepareNodeStarted,
   prepareNodeSucceeded,
   prepareRecord,
+  replayRecords,
   RunState,
 } from "../../src/runtime/state.ts";
 import { TraceDelta, type TraceDeltaFields } from "../../src/runtime/trace.ts";
@@ -216,6 +230,7 @@ import {
   graph,
   initializedAndStarted,
   learnableStarted,
+  noGrowth,
   RecordingBackwardNode,
 } from "./run_state_fixtures.ts";
 
@@ -1759,4 +1774,294 @@ test("the first committing attempt uses its own attempt id after pre-commit atte
   const commitId = memoryCommitId(state.runId!, "alpha", batch, 2);
   acceptBackward(state, log, new MemoryCommitRequestedRecord("alpha", commitId, batch, 2));
   expect(state.backwardState.current!.requests[0]!.commitId.startsWith("ac-memory-v3:")).toBe(true);
+});
+
+const COMMIT_BATCH = "backward commit batch and identity must match the ordered Ready proposals";
+const MATCHING_ATTEMPT = "backward record requires its matching unfinished attempt";
+const PENDING_REQUEST = "backward commit result requires a matching pending request";
+const PENDING_MATCH = "backward commit result must match its pending memory and identity";
+const NEXT_START = "backward attempt_id must be the next accepted start";
+const FINISHED_FEEDBACK = "Finished feedback must match accepted Ready";
+const FINISHED_ATTRIBUTION = "Finished attribution must match accepted Ready";
+const FINISHED_LEARNING = "successful Finished learning must match accepted memory confirmations";
+
+test("Started feedback shape and attempt identity validate before acceptance", async () => {
+  const { state, log, root, attributed } = await retainedBackward({ topic: [1n, 2n], feedback: [null, null] });
+  const invalid: [BackwardStartedRecord, string][] = [
+    [new BackwardStartedRecord(1, [null]), "feedback must have exactly 2 items; got 1"],
+    [new BackwardStartedRecord(2, [null, null]), NEXT_START],
+  ];
+  for (const [record, message] of invalid) expectError(() => prepareRecord(state, record), RangeError, message);
+  acceptBackward(state, log, new BackwardStartedRecord(1, [null, null]));
+  acceptBackward(state, log, new BackwardReadyRecord(1, root, attributed, []));
+  expectError(
+    () => prepareRecord(state, new BackwardReadyRecord(1, root, attributed, [])),
+    RangeError,
+    "backward attempt already has a Ready",
+  );
+  acceptBackward(state, log, new BackwardFinishedRecord(1, state.backwardState.outcome!));
+  expectError(() => prepareRecord(state, new BackwardStartedRecord(1, "")), RangeError, NEXT_START);
+  acceptBackward(state, log, new BackwardStartedRecord(2, ""));
+  expect(state.backwardState.started!.feedback).toBe("");
+});
+
+test.each([
+  ["policy", "backward request must name the next recorded memory"],
+  ["batch_order", COMMIT_BATCH],
+  ["batch_content", COMMIT_BATCH],
+  ["identity", COMMIT_BATCH],
+  ["attempt", MATCHING_ATTEMPT],
+] as const)("a backward commit request rejects a wrong order, batch, identity or attempt: %s", async (...row) => {
+  const [change, message] = row;
+  const [keys, proposals] = proposalTable();
+  const { state, log, root, attributed } = await retainedBackward({ keys });
+  acceptBackward(state, log, new BackwardStartedRecord(1, "Review."));
+  acceptBackward(state, log, new BackwardReadyRecord(1, root, attributed, proposals));
+  let batch = proposals[0]!.mutations;
+  let policy = "alpha";
+  let attempt = 1;
+  if (change === "policy") [policy, batch] = ["beta", []];
+  else if (change === "batch_order") batch = [...batch].reverse();
+  else if (change === "batch_content") batch = [new MemoryMutation("second", { changed: true }), ...batch.slice(1)];
+  else if (change === "attempt") attempt = 2;
+  const commitId = change === "identity" ? "commit-1" : memoryCommitId(state.runId!, policy, batch, 1);
+  const record = new MemoryCommitRequestedRecord(policy, commitId, batch, attempt);
+  expectError(() => prepareRecord(state, record), RangeError, message);
+  expect(state.backwardState.everRequested).toBe(false);
+});
+
+test.each([
+  ["no_request", PENDING_REQUEST],
+  ["policy", PENDING_MATCH],
+  ["identity", PENDING_MATCH],
+  ["attempt", MATCHING_ATTEMPT],
+  ["duplicate", PENDING_REQUEST],
+  ["pending_request", "backward commit request requires Ready and no pending or failed memory"],
+] as const)("a backward commit observation requires the current pending request: %s", async (change, message) => {
+  const [keys, proposals] = proposalTable();
+  const { state, log, root, attributed } = await retainedBackward({ keys });
+  acceptBackward(state, log, new BackwardStartedRecord(1, "Review."));
+  acceptBackward(state, log, new BackwardReadyRecord(1, root, attributed, proposals));
+  const batch = proposals[0]!.mutations;
+  const commitId = memoryCommitId(state.runId!, "alpha", batch, 1);
+  const request = new MemoryCommitRequestedRecord("alpha", commitId, batch, 1);
+  if (change !== "no_request") acceptBackward(state, log, request);
+  if (change === "duplicate") acceptBackward(state, log, new MemoryCommitSucceededRecord("alpha", commitId, 1));
+  const record =
+    change === "pending_request"
+      ? request
+      : new MemoryCommitSucceededRecord(
+          change === "policy" ? "beta" : "alpha",
+          change === "identity" ? "other" : commitId,
+          change === "attempt" ? 2 : 1,
+        );
+  expectError(() => prepareRecord(state, record), RangeError, message);
+});
+
+test.each(["ready", "request", "finished"] as const)(
+  "a backward %s append failure installs no attempt or irreversible request",
+  async (phase) => {
+    const [keys, proposals] = phase === "request" ? proposalTable() : [null, []];
+    const { state, log, root, attributed } = await retainedBackward({ keys });
+    acceptBackward(state, log, new BackwardStartedRecord(1, "Review."));
+    if (phase !== "ready") acceptBackward(state, log, new BackwardReadyRecord(1, root, attributed, proposals));
+    let record: RunRecord;
+    if (phase === "ready") record = new BackwardReadyRecord(1, root, attributed, []);
+    else if (phase === "request") {
+      const batch = proposals[0]!.mutations;
+      record = new MemoryCommitRequestedRecord("alpha", memoryCommitId(state.runId!, "alpha", batch, 1), batch, 1);
+    } else record = new BackwardFinishedRecord(1, new BackwardOutcome("succeeded", { feedback: root }));
+    const prepared = prepareRecord(state, record);
+    const prior = state.backwardState;
+    const sequence = state.nextSequence;
+    const result = state.result;
+    log.append = () => {
+      throw new Error("append failed");
+    };
+    expect(() => commitPrepared(log, state, prepared)).toThrow("append failed");
+    expect(state.backwardState).toBe(prior);
+    expect(prior.everRequested).toBe(false);
+    expect(state.result).toBe(result);
+    expect(state.nextSequence).toBe(sequence);
+    expect(state.trace!.nextSequence).toBe(sequence);
+    expect(log.nextSequence).toBe(sequence);
+  },
+);
+
+test.each(["feedback", "partial_inventory"] as const)(
+  "a failed computation's Finished rejects fabricated results: %s",
+  async (change) => {
+    const { state, log, root, attributed } = await retainedBackward();
+    acceptBackward(state, log, new BackwardStartedRecord(1, "Review."));
+    const failure = computationFailure(state);
+    const outcome = new BackwardOutcome("failed", { feedback: change === "feedback" ? root : null, failure });
+    const record = new BackwardFinishedRecord(1, outcome, change === "partial_inventory" ? attributed.slice(0, 1) : []);
+    const message = "incomplete backward computation cannot carry completed or partial results";
+    expectError(() => prepareRecord(state, record), RangeError, message);
+  },
+);
+
+test.each(["before_ready", "before_request", "pending", "one_confirmed"] as const)(
+  "a successful Finished requires Ready and every enabled policy's confirmation: %s",
+  async (phase) => {
+    const [keys, proposals] = proposalTable();
+    const { state, log, root, attributed } = await retainedBackward({ keys });
+    acceptBackward(state, log, new BackwardStartedRecord(1, "Review."));
+    if (phase !== "before_ready") acceptBackward(state, log, new BackwardReadyRecord(1, root, attributed, proposals));
+    if (phase === "pending" || phase === "one_confirmed") {
+      const batch = proposals[0]!.mutations;
+      const identity = memoryCommitId(state.runId!, "alpha", batch, 1);
+      acceptBackward(state, log, new MemoryCommitRequestedRecord("alpha", identity, batch, 1));
+      if (phase === "one_confirmed") acceptBackward(state, log, new MemoryCommitSucceededRecord("alpha", identity, 1));
+    }
+    const outcome = new BackwardOutcome("succeeded", { feedback: root, learning: new LearningResult("succeeded") });
+    expectError(
+      () => prepareRecord(state, new BackwardFinishedRecord(1, outcome)),
+      RangeError,
+      "successful Finished requires Ready and every memory confirmation",
+    );
+  },
+);
+
+test.each([
+  ["root", FINISHED_FEEDBACK],
+  ["attribution", FINISHED_ATTRIBUTION],
+  ["missing_memory", FINISHED_LEARNING],
+  ["memory_order", FINISHED_LEARNING],
+  ["commit_id", FINISHED_LEARNING],
+  ["attempt", MATCHING_ATTEMPT],
+] as const)(
+  "Finished must preserve Ready's results and the exact confirmed policy inventory: %s",
+  async (change, message) => {
+    const [keys, proposals] = proposalTable();
+    const built = await retainedBackward({ keys });
+    const { state, log, attributed } = built;
+    let root = built.root;
+    acceptBackward(state, log, new BackwardStartedRecord(1, "Review."));
+    acceptBackward(state, log, new BackwardReadyRecord(1, root, attributed, proposals));
+    commitEach(state, log, proposals);
+    let policies = state.backwardState.policyOutcomes;
+    if (change === "root") root = new BackwardResult({ inputFeedback: { topic: ["Different."] } });
+    else if (change === "missing_memory") policies = policies.slice(0, 1);
+    else if (change === "memory_order") policies = [...policies].reverse();
+    else if (change === "commit_id") {
+      const [first, ...rest] = policies;
+      const options = { commitId: "other", failure: first!.failure };
+      policies = [new PolicyCommitOutcome(first!.memory, first!.status, options), ...rest];
+    }
+    const learning = new LearningResult("succeeded", { policies });
+    const outcome = new BackwardOutcome("succeeded", { feedback: root, learning });
+    const record = new BackwardFinishedRecord(
+      change === "attempt" ? 2 : 1,
+      outcome,
+      change === "attribution" ? [...attributed].reverse() : [],
+    );
+    expectError(() => prepareRecord(state, record), RangeError, message);
+  },
+);
+
+test("an explicit interruption keeps the unknown request and Ready's attribution without resuming", async () => {
+  const [keys, proposals] = proposalTable();
+  const { state, log, root, attributed } = await retainedBackward({ keys });
+  acceptBackward(state, log, new BackwardStartedRecord(1, "Review."));
+  acceptBackward(state, log, new BackwardReadyRecord(1, root, attributed, proposals));
+  const batch = proposals[0]!.mutations;
+  const identity = memoryCommitId(state.runId!, "alpha", batch, 1);
+  acceptBackward(state, log, new MemoryCommitRequestedRecord("alpha", identity, batch, 1));
+  const projected = state.backwardState.outcome!;
+  acceptBackward(state, log, new BackwardFinishedRecord(1, projected, attributed));
+  expect(state.backwardState.outcome).toEqual(projected);
+  expect(projected.feedback).toEqual(root);
+  expect(projected.learning!.status).toBe("incomplete");
+  expect(projected.learning!.policies.map((item) => item.status)).toEqual(["unknown", "unrequested"]);
+  acceptBackward(state, log, new BackwardStartedRecord(2, "Review again."));
+  expect(state.backwardState.attempts[0]!.finished!.outcome).toEqual(projected);
+  expect(state.backwardState.ready).toBeNull();
+});
+
+test.each([
+  // A changed message is no longer the interruption, so the commit-failure rule refuses it.
+  ["message", "failed Finished after Ready requires a recorded commit failure"],
+  ["feedback", FINISHED_FEEDBACK],
+  ["learning", "interrupted Finished must exactly project the accepted prefix"],
+  ["attribution", FINISHED_ATTRIBUTION],
+] as const)(
+  "an interrupted Finished must exactly project the prefix: %s",
+  async (change, message) => {
+    const [keys, proposals] = proposalTable();
+    const { state, log, root, attributed } = await retainedBackward({ keys });
+    acceptBackward(state, log, new BackwardStartedRecord(1, "Review."));
+    acceptBackward(state, log, new BackwardReadyRecord(1, root, attributed, proposals));
+    const projected = state.backwardState.outcome!;
+    let { feedback, failure, learning } = projected;
+    if (change === "message") {
+      const { stage, code, scope, runId, nodeId, nodeStartedSeq, memory, cause, causeType, traceback } = failure!;
+      const options = { scope, runId, nodeId, nodeStartedSeq, memory, cause, causeType, traceback };
+      failure = new BackwardFailure(stage, code, "different", options);
+    } else if (change === "feedback") feedback = new BackwardResult();
+    else if (change === "learning") learning = new LearningResult("incomplete");
+    const outcome = new BackwardOutcome(projected.status, { feedback, failure, learning });
+    const record = new BackwardFinishedRecord(1, outcome, change === "attribution" ? attributed.slice(0, 1) : []);
+    expectError(() => prepareRecord(state, record), RangeError, message);
+  },
+);
+
+test("disabled memory Ready and Finished reject fabricated memory material", async () => {
+  const { state, log, root, attributed } = await retainedBackward();
+  acceptBackward(state, log, new BackwardStartedRecord(1, "Review."));
+  expectError(
+    () => prepareRecord(state, new BackwardReadyRecord(1, root, attributed, [new MemoryProposal("fake", [])])),
+    RangeError,
+    "memory proposals must cover the complete recorded memory table in order",
+  );
+  acceptBackward(state, log, new BackwardReadyRecord(1, root, attributed, []));
+  const outcome = new BackwardOutcome("succeeded", { feedback: root, learning: new LearningResult("succeeded") });
+  expectError(() => prepareRecord(state, new BackwardFinishedRecord(1, outcome)), RangeError, FINISHED_LEARNING);
+});
+
+test("backward replay matches every accepted prefix without callbacks", async () => {
+  const [keys, proposals] = proposalTable();
+  const { state, log, root, attributed } = await retainedBackward({ keys });
+  const original = copyGraph(state.flow);
+  for (const node of original.nodes.values()) {
+    node.forward = () => {
+      throw new Error("replayed forward");
+    };
+    node.backward = () => {
+      throw new Error("replayed backward callback");
+    };
+    node.captureBackwardContext = () => {
+      throw new Error("recaptured backward context");
+    };
+  }
+  const prefixes: [number, RuntimeBackwardState][] = [[log.records().length, state.backwardState]];
+  const records: RunRecord[] = [
+    new BackwardStartedRecord(1, "Review."),
+    new BackwardReadyRecord(1, root, attributed, proposals),
+  ];
+  for (const { memory, mutations } of proposals) {
+    const commitId = memoryCommitId(state.runId!, memory, mutations, 1);
+    records.push(
+      new MemoryCommitRequestedRecord(memory, commitId, mutations, 1),
+      new MemoryCommitSucceededRecord(memory, commitId, 1),
+    );
+  }
+  for (const record of records) {
+    acceptBackward(state, log, record);
+    prefixes.push([log.records().length, state.backwardState]);
+  }
+  const learning = new LearningResult("succeeded", { policies: state.backwardState.policyOutcomes });
+  const outcome = new BackwardOutcome("succeeded", { feedback: root, learning });
+  acceptBackward(state, log, new BackwardFinishedRecord(1, outcome));
+  prefixes.push([log.records().length, state.backwardState]);
+  const accepted = log.records();
+  for (const [length, expected] of prefixes) {
+    const prefix = accepted.slice(0, length);
+    const replay = replayRecords(new RunState(copyGraph(original)), prefix, { growBuilder: noGrowth });
+    expect(sameRuntimeBackwardState(replay.backwardState, expected)).toBe(true);
+    expect(replay.backwardState.outcome).toEqual(expected.outcome);
+    expect(replay.trace!.nextSequence).toBe(length);
+    expect(replay.nextSequence).toBe(length);
+    expect(replay.result).toEqual(state.result);
+  }
 });

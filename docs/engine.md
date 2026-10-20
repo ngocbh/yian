@@ -339,8 +339,8 @@ faults escape with the accepted prefix and never create a completion record.
 
 Changed (TS yian): stops are signals, so a backend's typed `MemoryOperationError` is a
 learning failure whatever its `cause`, and a drive finishes only its own attempt: one
-overtaken by a later call while it awaits a handler or learner is refused and appends
-nothing.
+overtaken by a later call while it awaits (its opener, a handler, a learner or a commit)
+is refused after that await and appends nothing further.
 
 `resume_flow(flow, log=path)` locks and validates an existing contiguous prefix,
 checks the authored-flow fingerprint, rebuilds a private graph, and folds every record

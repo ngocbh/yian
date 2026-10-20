@@ -14,8 +14,8 @@
  * `MemorySection` values and the visible model and tool interactions), the accepted episodes
  * (`MemoryEpisode`) and one memory's learning batch (`LearnContext`, with its feedback snapshot
  * `freezeFeedback`), whose JSON follows the yian value number rule; and the value comparisons of
- * the scope, operation failure and learning carriers (`sameMemoryScope`,
- * `sameMemoryOperationFailure`, `sameMemoryMutation`, `sameLearningFailure`,
+ * the scope, snapshot, spec, operation failure and learning carriers (`sameMemoryScope`,
+ * `sameMemorySnapshotEnvelope`, `sameMemorySpec`, `sameMemoryOperationFailure`, `sameMemoryMutation`, `sameLearningFailure`,
  * `samePolicyCommitOutcome`, `sameLearningResult`). It also holds the conversation carriers (the
  * invocation, request, item, stamp, effect state, completion, applied entry, view and the four
  * checkpoints), the recall carriers (`RecallContext`, `MemoryContent`, `MemoryContextRequest`,

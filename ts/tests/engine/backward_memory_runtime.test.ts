@@ -71,17 +71,21 @@
  * - `test_commit_batch_is_detached_from_every_accepted_authority`: the `mutation` and
  *   `public_payload` targets × the three completions (6 cells); the mutation and its payload are
  *   frozen, so the backend's edit throws a `TypeError` (asserted), and the `host_failure` commit
- *   throws a plain `Error` (Python's `MemoryError`) that escapes unchanged.
+ *   throws a plain `Error` (Python's `MemoryError`) that escapes unchanged. TS also asserts that
+ *   `commitLearning` receives the accepted request itself and the session its own commit id and
+ *   mutations (`toBe`).
  *
- * TS only: driving with an inexact `RunState` or a non-log refuses before opening; an async opener
- * resolves before the first record; a drive overtaken by another drive while it awaits its opener
- * (fresh and interrupted prior attempt) or its handler (the handler then throws, or its learner
- * fails) is refused by the reducer, appends nothing and closes its runtime; a drive whose handler
- * throws or whose learner fails while a newer drive is mid-attempt can't finish the newer attempt,
- * which then finishes itself (choice 11); an opener result that isn't a `MemoryRuntime` and a
- * runtime whose earlier close failed are refused; a `MemoryOperationError` with an `AbortError` or
- * `CapabilityFault` cause is a learner or commit failure; a thrown `undefined` still closes the
- * runtime and is rethrown.
+ * TS only: driving with an inexact `RunState` or a non-log refuses before opening; feedback that
+ * passes the feedback check but can't be prepared (a lone surrogate) is refused before the opener
+ * runs; an async opener resolves before the first record; a drive overtaken by another drive while
+ * it awaits its opener (fresh and interrupted prior attempt) or its handler (the handler then
+ * throws, or its learner fails) is refused by the reducer, appends nothing and closes its runtime,
+ * and one overtaken while its commit is pending is refused the same way and appends nothing
+ * further; a drive whose handler throws or whose learner fails while a newer drive is mid-attempt
+ * can't finish the newer attempt, which then finishes itself (choice 11); an opener result that
+ * isn't a `MemoryRuntime` and a runtime whose earlier close failed are refused; a
+ * `MemoryOperationError` with an `AbortError` or `CapabilityFault` cause is a learner or commit
+ * failure; a thrown `undefined` still closes the runtime and is rethrown.
  *
  * Not ported:
  * - `test_typed_backend_wrappers_preserve_original_host_error`: it walks the cause chain for the
@@ -1063,6 +1067,26 @@ test("submission gates reject before opening or appending", async () => {
   }
 });
 
+test("feedback the state can't prepare is refused before the opener runs", async () => {
+  // A lone surrogate passes the feedback check but isn't canonical JSON, so only the gate refuses it.
+  const { engine: built, node } = await terminal();
+  const before = records(built);
+  let opened = 0;
+  const error = await rejected(
+    driveBackward(built.state, built.log, "\uD800", {
+      openMemory: () => {
+        opened += 1;
+        return open(built.state.memories!, new Map([["A", new FakeMemory()]]));
+      },
+    }),
+  );
+  expect((error as Error).constructor).toBe(TypeError);
+  expect((error as Error).message).toBe("Unicode surrogate is not valid canonical JSON");
+  expect(opened).toBe(0);
+  expect(records(built)).toEqual(before);
+  expect(node.calls).toEqual([]);
+});
+
 test("a wrapped host error during partial setup closes prior sessions", async () => {
   const { engine: built } = await terminal(["A", "B"]);
   const memory = new Map([
@@ -1143,6 +1167,9 @@ test("a commit batch is detached from every accepted authority", async () => {
         const recorded = records(built).at(-1)!;
         expect(recorded.constructor).toBe(MemoryCommitRequestedRecord);
         expect(accepted).toEqual(recorded as MemoryCommitRequestedRecord);
+        expect(commitLearning.mock.calls.at(-1)![0]).toBe(accepted);
+        expect(commitId).toBe(accepted.commitId);
+        expect(mutations).toBe(accepted.mutations);
         const mutation = mutations[0]!;
         // Python edits the mutation in place with `object.__setattr__`; a frozen carrier refuses both edits.
         if (target === "mutation") {
@@ -1155,6 +1182,7 @@ test("a commit batch is detached from every accepted authority", async () => {
         expect(accepted).toEqual(recorded as MemoryCommitRequestedRecord);
         return originalCommit.call(this, commitId, mutations);
       });
+      const commitLearning = spyOn(MemoryRuntime.prototype, "commitLearning");
       try {
         if (completion === "host_failure") {
           expect(await rejected(drive(built, new Map([["A", memory]])))).toBe(host);
@@ -1165,6 +1193,7 @@ test("a commit batch is detached from every accepted authority", async () => {
         }
       } finally {
         commit.mockRestore();
+        commitLearning.mockRestore();
       }
       const backward = built.state.backwardState;
       const request = backward.current!.requests[0]!;
@@ -1299,6 +1328,42 @@ test("a drive overtaken during its handler is refused by the reducer", async () 
     expect(stale.learnContexts).toHaveLength(failure === "learner" ? 1 : 0);
     expect(stale.commitCalls).toEqual([]);
     expect(stale.closeCount).toBe(1);
+  }
+});
+
+test("a drive overtaken while its commit is pending appends nothing further", async () => {
+  const { engine: built } = await terminal();
+  const stale = new FakeMemory({ learnOutcomes: [() => [new MemoryMutation("stale", { notes: ["one"] })]] });
+  const gate = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  const originalCommit = FakeSession.prototype.commit;
+  const commit = spyOn(FakeSession.prototype, "commit").mockImplementation(async function (
+    this: FakeSession,
+    commitId: string,
+    mutations: readonly MemoryMutation[],
+  ) {
+    if (this.memory === stale) {
+      entered.resolve();
+      await gate.promise;
+    }
+    return originalCommit.call(this, commitId, mutations);
+  });
+  try {
+    const pending = drive(built, new Map([["A", stale]]), "stale");
+    await entered.promise;
+    expect(records(built).at(-1)!.constructor).toBe(MemoryCommitRequestedRecord);
+    // The other drive closes the stale attempt as interrupted and completes its own.
+    expect((await drive(built, new Map([["A", new FakeMemory()]]))).status).toBe("succeeded");
+    const after = records(built);
+    gate.resolve();
+    const error = await rejected(pending);
+    expect((error as Error).constructor).toBe(RangeError);
+    expect((error as Error).message).toBe("backward record requires its matching unfinished attempt");
+    expect(records(built)).toEqual(after);
+    expect(stale.commitCalls).toHaveLength(1);
+    expect(stale.closeCount).toBe(1);
+  } finally {
+    commit.mockRestore();
   }
 });
 

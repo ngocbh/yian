@@ -1346,8 +1346,9 @@ completion record.
 
 Changed (TS yian): a stop is a signal, not an error found in a cause chain, so a
 backend's `MemoryOperationError` from learn or commit is a learning failure whatever its
-`cause`. A drive finishes only its own attempt: one that awaited a handler or learner
-while a later call interrupted its attempt is refused and appends nothing.
+`cause`. A backward call finishes only its own attempt: one overtaken by a later call
+while it awaits (its memory opener, a handler, a learner or a commit) is refused after
+that await and appends nothing further.
 
 ## Skills
 

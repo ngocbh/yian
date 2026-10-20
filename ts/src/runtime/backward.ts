@@ -12,7 +12,14 @@
  * Never imports: compile, compose, the engine, run or the CLI.
  */
 
+import { reprText } from "../diagnostics.ts";
 import { type FeedbackValue, sameSource, sourceKey } from "../expr/lineage.ts";
+import {
+  LearningFailure,
+  MemoryOperationFailure,
+  sameMemorySnapshotEnvelope,
+  sameMemorySpec,
+} from "../memory/contracts.ts";
 import {
   type BackwardContext,
   BackwardResult,
@@ -20,13 +27,6 @@ import {
   markerMessage,
   validateBackwardResult,
 } from "../nodes/base.ts";
-import { reprText } from "../diagnostics.ts";
-import {
-  LearningFailure,
-  MemoryOperationFailure,
-  sameMemorySnapshotEnvelope,
-  sameMemorySpec,
-} from "../memory/contracts.ts";
 import { isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
 import { jsTypeName } from "../typesys/values.ts";
 import { AttributedBackwardResult, BackwardFailure, BackwardOutcome, type MemoryProposal } from "./contracts.ts";
@@ -348,8 +348,10 @@ export async function driveBackward(
   const backward = state.backwardState;
   const interrupted = backward.started !== null && backward.finished === null;
   const first = interrupted ? new BackwardFinishedRecord(backward.started!.attemptId, backward.outcome!) : started;
-  // A gate only: the learn and terminal refusals come before the opener. The record is prepared
-  // again with its commit, since the opener's await lets another drive advance the state.
+  // A gate only: `seedBackward` already refused the learn-disabled and terminal cases; this
+  // refuses a record that passes that check but can't be prepared (e.g. feedback that isn't
+  // canonical JSON) before the opener runs. The record is prepared again with its commit, since
+  // the opener's await lets another drive advance the state.
   prepareRecord(state, first);
   let memory: MemoryRuntime | null = null;
   // Boxed, so a thrown `undefined` still counts as the primary error.

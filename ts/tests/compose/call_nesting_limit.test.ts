@@ -11,24 +11,31 @@
  * `YIAN_MAX_CALL_NESTING`; and a MAP or LOOP build whose child already nests at the limit fails,
  * since a MAP and a LOOP resolve their child through `resolveChild` as a CALL does.
  *
- * Later (they need the loader): `test_chain_at_the_limit_loads_runs_and_resumes`,
+ * Ported through `loadFlow`, over chains of `uses:` files: `test_uses_files_count` (its load
+ * half), `test_long_uses_chain_fails_at_the_import_past_the_limit`,
+ * `test_import_only_chain_counts`, `test_import_depth_does_not_depend_on_load_order`,
+ * `test_import_depth_holds_through_a_memoizing_resolver`,
+ * `test_resolver_that_calls_load_flow_is_bounded`,
+ * `test_resolver_exceptions_become_load_errors_at_the_alias`,
+ * `test_import_chain_follows_the_configured_limit`,
+ * `test_resolved_flow_with_a_bad_import_depth_is_refused`,
+ * `test_loaded_flow_records_its_import_depth` and
+ * `test_long_cross_file_cycle_reports_the_depth_limit`. Changed: CODE references are TS's form;
+ * Python's `KeyError("boom")` prints as `'boom'`, a TS `Error("boom")` as `boom`; the bad import
+ * depths are `-1`, `"1"`, `true`, `1.5` and `null`, since TS's `1.0` is the int `1`; Python's
+ * check that no `RecursionError` is in the cause chain and its stack headroom have no TS
+ * counterpart. TS-only loader rows: a resolver returning a promise, a rejecting resolver, and two
+ * concurrent loads that don't share the import count.
+ *
+ * Later (they need the loader's `defs:`): `test_chain_at_the_limit_loads_runs_and_resumes`,
  * `test_chain_past_the_limit_is_located_at_the_root_call`,
  * `test_long_chain_fails_at_the_first_call_past_the_limit`,
  * `test_chain_written_callee_first_is_caught_from_built_callables`,
  * `test_imports_load_before_defs`, `test_broken_import_is_reported_at_its_alias_before_defs`,
  * `test_alias_collision_wins_over_a_broken_target`,
- * `test_resolver_exceptions_become_load_errors_at_the_alias`, `test_uses_files_count`,
- * `test_long_uses_chain_fails_at_the_import_past_the_limit`, `test_import_only_chain_counts`,
- * `test_import_depth_does_not_depend_on_load_order`,
- * `test_import_depth_holds_through_a_memoizing_resolver`,
- * `test_resolver_that_calls_load_flow_is_bounded`,
- * `test_import_chain_follows_the_configured_limit`,
- * `test_resolved_flow_with_a_bad_import_depth_is_refused`,
- * `test_loaded_flow_records_its_import_depth`,
- * `test_imports_and_a_calling_defs_chain_count_apart`,
- * `test_imports_at_the_limit_over_defs_at_the_limit_load` and
- * `test_long_cross_file_cycle_reports_the_depth_limit` (T3-22); the run half of
- * `test_inline_bodies_count` (T4); `test_call_directive_counts` and
+ * `test_imports_and_a_calling_defs_chain_count_apart` and
+ * `test_imports_at_the_limit_over_defs_at_the_limit_load` (T3-22); the run halves of
+ * `test_inline_bodies_count` and `test_uses_files_count` (T4); `test_call_directive_counts` and
  * `test_map_and_loop_bodies_count` (T3-22 and T4, their chains of `defs:` loaded and run).
  *
  * Ported through `assembleText`: the load half of `test_inline_bodies_count`, pinning the whole
@@ -37,6 +44,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
@@ -50,6 +60,8 @@ import {
   resolveChild,
 } from "../../src/compose/nodes/resolver.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
+import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget, reload } from "../../src/defaults.ts";
 import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
@@ -321,5 +333,339 @@ describe("callNestingScope", () => {
     expect((outcome as LoadError).message).toContain("more than 2 levels deep");
     // Outside every call the count is zero again.
     expect(nestedCalls(2, () => "done")).toBe("done");
+  });
+});
+
+// ---------- chains of uses: files, through the loader ----------
+
+const IMPORT_51 = "makes a chain of uses: files 51 deep, past the call nesting limit of 50";
+
+const ROOT_LEAF =
+  "  step:\n" +
+  "    kind: code\n" +
+  "    code: ./fixtures/compose_codefns.ts:echo\n" +
+  "    input:\n" +
+  "      topic: ${input.x}\n" +
+  "    output: str\n" +
+  "output: ${step.output}\n";
+
+/** Return a flow `name` that imports `uses` without calling them; its node is a CODE leaf. */
+function importing(name: string, uses: Record<string, string>): string {
+  let head = `id: ${name}\nname: ${name}\ninput:\n  x: !str\n`;
+  const entries = Object.entries(uses);
+  if (entries.length > 0) head += "uses:\n" + entries.map(([alias, ref]) => `  ${alias}: ${ref}\n`).join("");
+  return head + "nodes:\n" + ROOT_LEAF;
+}
+
+/**
+ * Return flows `u0`..`u(n-1)` by name, each importing the next as `nxt`. With `calls`, each file
+ * but the last calls `nxt`; otherwise every node is a CODE leaf. The last file is a CODE leaf that
+ * imports `lastImports` as `nxt` when given.
+ */
+function chainTexts(
+  n: number,
+  options: { prefix?: string; calls?: boolean; lastImports?: string | null } = {},
+): Record<string, string> {
+  const { prefix = "u", calls = true, lastImports = null } = options;
+  const texts: Record<string, string> = {};
+  for (let i = 0; i < n; i++) {
+    const name = `${prefix}${i}`;
+    const target = i < n - 1 ? `${prefix}${i + 1}` : lastImports;
+    if (calls && i < n - 1) {
+      texts[name] =
+        `id: ${name}\nname: ${name}\ninput:\n  x: !str\n` +
+        `uses:\n  nxt: ${target}\nnodes:\n` +
+        "  step:\n    kind: call\n    call: nxt\n    input:\n      x: ${input.x}\n" +
+        "output: ${step.output}\n";
+    } else {
+      texts[name] = importing(name, target !== null ? { nxt: target } : {});
+    }
+  }
+  return texts;
+}
+
+/** Write each flow text to `<directory>/<name>.yaml`. */
+function writeFiles(directory: string, texts: Record<string, string>): void {
+  for (const [name, text] of Object.entries(texts)) writeFileSync(join(directory, `${name}.yaml`), text);
+}
+
+/**
+ * Write a chain of `n` flow files and return a root flow importing the first as `first`; with
+ * `calls` (the default) each file and the root call their import.
+ */
+function usesFiles(directory: string, n: number, calls = true): string {
+  writeFiles(directory, chainTexts(n, { calls }));
+  if (!calls) return importing("root", { first: "u0" });
+  return (
+    "id: root\nname: root\ninput:\n  x: !str\nuses:\n  first: u0\nnodes:\n" +
+    "  top:\n    kind: call\n    call: first\n    input:\n      x: ${input.x}\n" +
+    "output: ${top.output}\n"
+  );
+}
+
+/** Return the error for `u(n-2)`'s import of `u(n-1)`, making the chain `n` files deep. */
+function importMessage(n: number, limit = 50): string {
+  return (
+    `callable 'nxt' (uses: 'u${n - 1}'): importing it makes a chain of uses: files ` +
+    `${n} deep, past the call nesting limit of ${limit} (a chain of uses: imports is ` +
+    "held to the same limit as nested call, map, and loop bodies); flatten the chain"
+  );
+}
+
+/** Return the 1-based number of the first line whose trimmed text is `line`. */
+function lineOf(text: string, line: string): number {
+  return text.split("\n").findIndex((authored) => authored.trim() === line) + 1;
+}
+
+/** Expect a load error's innermost frame to be file `label`'s `nxt: <target>` alias. */
+function expectRefusedAtAlias(error: LoadError, label: string, text: string, target: string): void {
+  const frame = error.diagnostic.frames.at(-1)!;
+  expect(frame.label).toBe(label);
+  expect(frame.note).toBe("uses alias 'nxt'");
+  expect(frame.range).toEqual(SourceDocument.parse(text).root.child("uses").child("nxt").range!);
+  expect(frame.range.startLine).toBe(lineOf(text, `nxt: ${target}`));
+}
+
+/** Return the `LoadError` `promise` rejects with. */
+async function rejection(promise: Promise<unknown>): Promise<LoadError> {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof LoadError) return error;
+    throw error;
+  }
+  throw new Error("expected a LoadError");
+}
+
+/** Return a file `x` over an `underX`-file chain, and a 40-file chain ending in `x`. */
+function sharedFileTexts(underX: number): Record<string, string> {
+  return {
+    ...chainTexts(underX, { prefix: "c", calls: false }),
+    x: importing("x", { nxt: "c0" }),
+    ...chainTexts(40, { prefix: "a", calls: false, lastImports: "x" }),
+  };
+}
+
+const ORDERS: [string, Record<string, string>][] = [
+  ["x-first", { x: "x", a: "a0" }],
+  ["chain-first", { a: "a0", x: "x" }],
+];
+
+/** Return a resolver loading each named text once, through itself, and reusing it. */
+function memoizingResolver(texts: Record<string, string>) {
+  const memo = new Map<string, ComposedFlow>();
+  const resolve = async (path: string): Promise<ComposedFlow> => {
+    let flow = memo.get(path);
+    if (flow === undefined) {
+      flow = await loadFlow(texts[path]!, { childResolver: resolve, sourceLabel: `${path}.yaml` });
+      memo.set(path, flow);
+    }
+    return flow;
+  };
+  return resolve;
+}
+
+describe("chains of uses: files", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "yian-uses-chain-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  /** Make and return the directory `<tmp>/<name>`. */
+  const dir = (name: string) => {
+    const path = join(tmp, name);
+    mkdirSync(path);
+    return path;
+  };
+
+  test("uses: files count", async () => {
+    const legal = dir("legal");
+    await loadFlow(usesFiles(legal, 50), { searchPaths: [legal] });
+
+    const deep = dir("deep");
+    const error = await rejection(loadFlow(usesFiles(deep, 51), { searchPaths: [deep] }));
+    // The import is refused before the call check runs on the built chain.
+    expect(error.message).toBe(importMessage(51));
+    expectRefusedAtAlias(error, "u49.yaml", readFileSync(join(deep, "u49.yaml"), "utf8"), "u50");
+  });
+
+  test("a long uses: chain fails at the import past the limit", async () => {
+    const text = usesFiles(tmp, 200);
+    const error = await rejection(loadFlow(text, { searchPaths: [tmp] }));
+
+    expect(error.message).toBe(importMessage(51));
+    const frames = error.diagnostic.frames;
+    expect(frames.length).toBe(51);
+    expectRefusedAtAlias(error, "u49.yaml", readFileSync(join(tmp, "u49.yaml"), "utf8"), "u50");
+    expect(frames[0]!.label).toBe("<flow>");
+    expect(frames[0]!.range.startLine).toBe(lineOf(text, "first: u0"));
+  });
+
+  test("an import-only chain counts", async () => {
+    const legal = dir("legal");
+    await loadFlow(usesFiles(legal, 50, false), { searchPaths: [legal] });
+
+    const deep = dir("deep");
+    const error = await rejection(loadFlow(usesFiles(deep, 60, false), { searchPaths: [deep] }));
+    expect(error.message).toBe(importMessage(51));
+    expectRefusedAtAlias(error, "u49.yaml", readFileSync(join(deep, "u49.yaml"), "utf8"), "u50");
+  });
+
+  test.each(ORDERS)("the import depth doesn't depend on load order (%s)", async (_order, uses) => {
+    // Through the 40-file chain, x's 10-file chain ends 51 files deep; loading x first caches
+    // it, so the chain then reaches x from the cache.
+    const deep = dir("deep");
+    writeFiles(deep, sharedFileTexts(10));
+    const error = await rejection(loadFlow(importing("root", uses), { searchPaths: [deep] }));
+    expect(error.message).toContain(IMPORT_51);
+
+    const legal = dir("legal");
+    writeFiles(legal, sharedFileTexts(9));
+    await loadFlow(importing("root", uses), { searchPaths: [legal] });
+  });
+
+  test("an import chain follows the configured limit", async () => {
+    reload((name) => (name === "YIAN_MAX_CALL_NESTING" ? "5" : undefined));
+    const legal = dir("legal");
+    await loadFlow(usesFiles(legal, 5, false), { searchPaths: [legal] });
+
+    const deep = dir("deep");
+    const error = await rejection(loadFlow(usesFiles(deep, 6, false), { searchPaths: [deep] }));
+    expect(error.message).toBe(importMessage(6, 5));
+    expectRefusedAtAlias(error, "u4.yaml", readFileSync(join(deep, "u4.yaml"), "utf8"), "u5");
+  });
+
+  test("a loaded flow records its import depth", async () => {
+    const flow = await loadFlow(usesFiles(tmp, 3, false), { searchPaths: [tmp] });
+    expect(flow.importDepth).toBe(3);
+    expect((await loadFlow(importing("f", {}))).importDepth).toBe(0);
+  });
+
+  test("a cross-file cycle longer than the limit reports the depth limit", async () => {
+    // The cycle is 51 files deep before it closes, so the author sees the depth error.
+    writeFiles(tmp, chainTexts(60, { calls: false, lastImports: "u0" }));
+    const error = await rejection(loadFlow(importing("root", { first: "u0" }), { searchPaths: [tmp] }));
+    expect(error.message).toBe(importMessage(51));
+  });
+});
+
+describe("custom resolvers", () => {
+  test.each(ORDERS)("the import depth holds through a memoizing resolver (%s)", async (_order, uses) => {
+    const root = importing("root", uses);
+    const error = await rejection(loadFlow(root, { childResolver: memoizingResolver(sharedFileTexts(10)) }));
+    expect(error.message).toContain(IMPORT_51);
+
+    await loadFlow(root, { childResolver: memoizingResolver(sharedFileTexts(9)) });
+  });
+
+  test("a resolver that calls loadFlow is bounded", async () => {
+    const texts = chainTexts(200);
+    const resolve = (path: string): Promise<ComposedFlow> =>
+      loadFlow(texts[path]!, { childResolver: resolve, sourceLabel: `${path}.yaml` });
+
+    const error = await rejection(loadFlow(importing("root", { first: "u0" }), { childResolver: resolve }));
+    expect(error.message).toBe(importMessage(51));
+    expectRefusedAtAlias(error, "u49.yaml", texts["u49"]!, "u50");
+  });
+
+  const CALLING_ROOT =
+    "id: f\nname: f\ninput:\n  x: !str\nuses:\n  ext: child\nnodes:\n" +
+    "  top:\n    kind: call\n    call: ext\n    input:\n      x: ${input.x}\n" +
+    "output: ${top.output}\n";
+
+  test.each([
+    [
+      "def-calls",
+      "id: f\nname: f\ninput:\n  x: !str\nuses:\n  ext: child\n" +
+        "defs:\n  d:\n    input:\n      x: !str\n    nodes:\n      step:\n        kind: call\n" +
+        "        call: ext\n        input:\n          x: ${input.x}\n    output: ${step.output}\n" +
+        "nodes:\n  top:\n    kind: call\n    call: d\n    input:\n      x: ${input.x}\n" +
+        "output: ${top.output}\n",
+    ],
+    ["root-calls", CALLING_ROOT],
+    ["uncalled", importing("f", { ext: "child" })],
+  ])("resolver errors become load errors at the alias (%s)", async (_kind, text) => {
+    const raising = (): ComposedFlow => {
+      throw new Error("boom");
+    };
+    const error = await rejection(loadFlow(text, { childResolver: raising }));
+
+    expect(error.message).toBe("callable 'ext' (uses: 'child'): could not resolve: boom");
+    const frames = error.diagnostic.frames;
+    expect(frames.length).toBe(1);
+    expect(frames[0]!.note).toBe("uses alias 'ext'");
+    expect(frames[0]!.range.startLine).toBe(lineOf(text, "ext: child"));
+  });
+
+  test.each([
+    [-1, "-1"],
+    ["1", '"1"'],
+    [true, "true"],
+    [1.5, "1.5"],
+    [null, "null"],
+  ])("a resolved flow with import depth %p is refused", async (depth, shown) => {
+    const text = importing("f", { ext: "child" });
+    const leaf = await loadFlow(importing("child", {}));
+    const resolve = () =>
+      new ComposedFlow(leaf.compiled, {
+        version: leaf.version,
+        name: leaf.name,
+        description: leaf.description,
+        originResolver: leaf.originResolver,
+        importDepth: depth as number,
+      });
+
+    const error = await rejection(loadFlow(text, { childResolver: resolve }));
+    expect(error.message).toBe(
+      `callable 'ext' (uses: 'child'): resolved flow has import_depth ${shown}; expected a non-negative int`,
+    );
+    const frames = error.diagnostic.frames;
+    expect(frames.length).toBe(1);
+    expect(frames[0]!.note).toBe("uses alias 'ext'");
+    expect(frames[0]!.range.startLine).toBe(lineOf(text, "ext: child"));
+  });
+
+  test("a resolver may return a promise", async () => {
+    const flow = await loadFlow(CALLING_ROOT, {
+      childResolver: async () => loadFlow(importing("child", {})),
+    });
+    expect(flow.importDepth).toBe(1);
+  });
+
+  test("a rejecting resolver fails at the alias as could not resolve", async () => {
+    const error = await rejection(
+      loadFlow(CALLING_ROOT, { childResolver: () => Promise.reject(new Error("offline")) }),
+    );
+    expect(error.message).toBe("callable 'ext' (uses: 'child'): could not resolve: offline");
+    expect(error.diagnostic.frames.map((frame) => frame.note)).toEqual(["uses alias 'ext'"]);
+  });
+
+  test("two concurrent loads don't share the import count", async () => {
+    // Both loads wait inside their import of u0 until the other arrives; a shared count would
+    // then see two imports active and refuse u0's own import at the limit of 2.
+    reload((name) => (name === "YIAN_MAX_CALL_NESTING" ? "2" : undefined));
+    const texts = chainTexts(2, { calls: false });
+    let arrived = 0;
+    let release!: () => void;
+    const bothArrived = new Promise<void>((resolve) => (release = resolve));
+    const resolve = async (path: string): Promise<ComposedFlow> => {
+      if (path === "u0") {
+        arrived += 1;
+        if (arrived === 2) release();
+        await bothArrived;
+      }
+      return loadFlow(texts[path]!, { childResolver: resolve, sourceLabel: `${path}.yaml` });
+    };
+    const root = importing("root", { first: "u0" });
+    const flows = await Promise.all([
+      loadFlow(root, { childResolver: resolve }),
+      loadFlow(root, { childResolver: resolve }),
+    ]);
+    expect(flows.map((flow) => flow.importDepth)).toEqual([2, 2]);
   });
 });

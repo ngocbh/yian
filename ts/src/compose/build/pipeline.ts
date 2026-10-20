@@ -51,7 +51,7 @@ import type { TypeRegistry } from "../../typesys/types.ts";
 import { isList, isListKind, isRecord, jsTypeName, type Type, type Value, writeAsText } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
-import type { TypeFn } from "../helpers/output_contracts.ts";
+import { resolveOutputBindingContract, type TypeFn } from "../helpers/output_contracts.ts";
 import {
   oldFormSuggestion,
   oldTypedText,
@@ -85,6 +85,7 @@ import { extractInlineBodies, type InlineBody } from "../desugar/inline_bodies.t
 import { desugarInlineCalls, synthIdGen } from "../desugar/inline_calls.ts";
 import { isValueEntry, readValueEntry, type ValueEntryDescriptor } from "../desugar/value_entries.ts";
 import { inferDataEdges } from "../edges/data.ts";
+import { bindingProducers } from "../edges/producers.ts";
 import { hostControlEdges } from "../edges/hosts.ts";
 import { inferOrderingEdges } from "../edges/ordering.ts";
 import { CallDescriptor } from "../nodes/call.ts";
@@ -1674,8 +1675,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     diagnostics,
   });
 
-  // The inline-child builder reads it lazily, as the binding-contract reader will once ported;
-  // it is set just before the build.
+  // The inline-child builder and the binding-contract reader read it lazily; it is set just
+  // before the build.
   let descriptorCache: DescriptorBuildCache | null = null;
 
   /** Assemble one retained body lazily in this file's callable scope. */
@@ -1780,8 +1781,18 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     });
   };
 
-  // T3-17: resolves one parent binding's contract, building referenced producers on demand.
-  const readBindingContract: BindingContractReader | null = null;
+  /** Resolve one parent binding's contract, building referenced producers on demand. */
+  const readBindingContract: BindingContractReader = (bindingLabel, binding, bindingRange) => {
+    const cache = descriptorCache;
+    if (cache === null) throw new Error("descriptor cache was not initialized before binding contract resolution");
+    const producers = new Map<string, OutputContract>();
+    for (const producerId of new Set(bindingProducers(binding))) {
+      if (!descriptors.has(producerId)) continue;
+      const contract = cache.buildOne(producerId, bindingLabel, bindingRange).node.outputContract;
+      if (contract !== null) producers.set(producerId, contract);
+    }
+    return resolveOutputBindingContract(binding, producers, flowInputContracts, { typeFn: constructorType });
+  };
 
   descriptors = registerInlineBodies(descriptors, inlineBodies, {
     registrar: scope,
@@ -2107,7 +2118,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
-//   T3-17  readBindingContract (3, `BindingContractReader | null`): `null`.
 //   T3-18  checkWrittenValues, stampToolInputTypes, checkWiringParity, validateReferences,
 //          validateHumanQuestions, checkReservedSources, rejectCycles, checkCaseHandles (1).
 //          fillTypeTables (2, with _site_range).

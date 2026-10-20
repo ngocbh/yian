@@ -46,19 +46,24 @@
  * `test_predicate_read_after_a_value_that_is_no_tag_is_not_checked`,
  * `test_predicate_impossible_on_the_seed_and_the_body_is_rejected` (3) and
  * `test_predicate_isinstance_of_a_partly_shared_union_rejects_a_member_only_field`. Through
- * `assembleText`: `test_inline_loop_body_may_return_a_subset` and
- * `test_inline_body_loop_whose_condition_never_changes_is_a_load_error`.
+ * `assembleText`: `test_inline_loop_body_may_return_a_subset`,
+ * `test_inline_body_loop_whose_condition_never_changes_is_a_load_error`,
+ * `test_loop_seeded_from_partial_loop_sees_merged_type` and
+ * `test_omitted_field_seed_cycle_is_located`.
  *
- * Changed: each row parses the loop node (`nodesOf`) and builds it over a `BuildContext` whose
- * resolver returns the body built by hand (`handChild`: the def's parameters read from its
- * `input:` text, its typed nodes as producers with their output contracts), where Python loads a
- * flow whose def is the body. The merged-contract rows give the context a test-local
- * `bindingContractReader` typing the omitted fields' seeds (the loader's reader is T3-17's);
- * without one an untagged seed stays opaque, as Python's literal seed does, so a `while:` reading
- * it gets no seed type: none of its checks is reported impossible and none narrows a read, and a
- * plain field read is walked on the carried record. The predicate rows whose Python flow has an
- * inline `nodes:` body call a def built by hand that returns what that body returns, and put the
- * flow's typedefs in the context's registry. The typed-seed rows of
+ * Changed: a row whose Python flow calls a `defs:` body parses the loop node (`nodesOf`) and
+ * builds it over a `BuildContext` whose resolver returns the body built by hand (`handChild`: the
+ * def's parameters read from its `input:` text, its typed nodes as producers with their output
+ * contracts), where Python loads the flow (def bodies load in T3-22). Such a context has no
+ * binding-contract reader: the merged-contract rows give it a test-local `bindingContractReader`
+ * typing the omitted fields' seeds and recording what the LOOP asks; without one an untagged seed
+ * stays opaque, as Python's literal seed does, so a `while:` reading it gets no seed type: none of
+ * its checks is reported impossible and none narrows a read, and a plain field read is walked on
+ * the carried record. `test_loop_seeded_from_partial_loop_sees_merged_type` and
+ * `test_omitted_field_seed_cycle_is_located` assemble the flow (`assembleText`, the def built by
+ * hand), so the loader's reader types the omitted seeds, building the seeding loop on demand. The
+ * rows whose Python flow has an inline `nodes:` body assemble that flow, its inline CODE written in
+ * TS as the harvested cases write it. The typed-seed rows of
  * `test_predicate_impossible_on_the_seed_and_the_body_is_rejected` assemble the flow
  * (`assembleText` with the def built by hand), since a tagged seed's declared type comes from
  * `assemble`; parsing alone drops the tag. The error rows pin the whole message, where Python
@@ -83,12 +88,11 @@
  * predicate_negated_isinstance_of_the_declared_type_is_rejected,
  * predicate_read_of_a_field_the_checked_member_lacks,predicate_tag_comparison_with_a_non_tag,
  * predicate_tagged_member_field_error_points_at_isinstance,
- * predicate_unguarded_member_field_read_is_rejected}`.
+ * predicate_unguarded_member_field_read_is_rejected,
+ * predicate_unknown_field_on_omitted_typed_seed_is_rejected}`, and (`assembledWith`, the def built
+ * by hand) `load-loop/engine_loop_build__omitted_field_seed_cycle_is_located`.
  *
- * Later (T3-17): `test_loop_seeded_from_partial_loop_sees_merged_type`,
- * `test_omitted_field_seed_cycle_is_located` and the case
- * `load-loop/engine_loop_build__predicate_unknown_field_on_omitted_typed_seed_is_rejected` (they
- * need the loader's `bindingContractReader`). Later (T3-18):
+ * Later (T3-18):
  * `test_partial_loop_contract_rejects_unknown_downstream_field_at_load`, the downstream half of
  * `test_merged_contract_types_omitted_field_from_its_seed` and
  * `test_predicate_isinstance_check_with_an_unknown_type_reports_the_type`. Later (T3-19):
@@ -604,6 +608,87 @@ test("the merged contract keeps a literal seed opaque", () => {
   expect(fields.get("n")!.type.kind).toBe(ValueKind.INTEGER);
 });
 
+// `second` seeds `person` and `talking_to` from `first`, a partial loop whose `turn` def returns
+// only `exited` and `reply`; `second` is written first, so its seeds build `first` on demand.
+const CHAINED = `id: loop-chained
+name: loop_chained
+typedefs:
+  Person:
+    name: str
+    handle: str
+input:
+  person: !Person
+  talking_to: !str
+nodes:
+  second:
+    kind: loop
+    call: turn
+    input:
+      person: \${first.output.person}
+      talking_to: \${first.output.talking_to}
+      exited: false
+      reply: ""
+    times: 1
+  first:
+    kind: loop
+    call: turn
+    input:
+      person: \${input.person}
+      talking_to: \${input.talking_to}
+      exited: false
+      reply: ""
+    times: 1
+output: \${second.output.person.name}
+`;
+
+test("a loop seeded from a partial loop sees its merged type", () => {
+  const registry = readTypedefs({ Person: { name: "str", handle: "str" } });
+  const turn = handChild({
+    inputs: params("  person: !Person\n  talking_to: !str\n  exited: !bool\n  reply: !str\n", registry),
+    output: { exited: "${input.exited}", reply: "${input.talking_to}" },
+  });
+
+  const { flow } = assembleText(CHAINED, "flow.yaml", { children: { turn } });
+
+  const person = fieldType(flow.compiled.nodes.get("second")!.outputContract, "person");
+  expect(person.kind).toBe(ValueKind.OBJECT);
+  expect(new Set(person.fields!.keys())).toEqual(new Set(["name", "handle"]));
+});
+
+// `first` and `second` each omit `keep` and seed it from the other's output, so resolving either
+// merged contract needs the other built first.
+const SEED_CYCLE = `id: loop-seed-cycle
+name: loop_seed_cycle
+nodes:
+  first:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      exited: false
+      keep: \${second.output.keep}
+    times: 1
+  second:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      exited: false
+      keep: \${first.output.keep}
+    times: 1
+output: \${second.output}
+`;
+
+test("an omitted field's seed cycle is located", () => {
+  const error = loadError(() => assembleText(SEED_CYCLE, "flow.yaml", { children: { bump: goodBody({ n: "int" }) } }));
+
+  expect(error.message).toBe("node build dependency cycle: first.input.keep -> second.input.keep -> first");
+  // The binding that closes the cycle carries the caret, not the coarse `input:` span.
+  const closingLine = SEED_CYCLE.split("\n").indexOf("      keep: ${first.output.keep}") + 1;
+  const range = error.diagnostic.frames.at(-1)!.range;
+  expect([range.startLine, range.endLine]).toEqual([closingLine, closingLine]);
+});
+
 test("a partial body with an opaque returned field", () => {
   // `step` declares no output, so `n` projects an untyped producer value.
   const text = `id: l
@@ -900,36 +985,46 @@ test("unknown returned fields get only the record error", () => {
 
 // ---------- the predicate's field reads and checks ----------
 
-// The typedefs of `NESTED_STATE`'s `bump` def, which reads `state` and returns `{state: State}`.
-const NESTED_TYPEDEFS = { State: { count: "int" } };
-
-// `repeat` carries `{state}`, a record holding `count`. PRED stands for the driver.
+// `repeat` carries `{state}`, a record holding `count`; its inline body returns `{state}`. PRED
+// stands for the driver.
 const NESTED_STATE = `id: loop-nested
 name: loop_nested
 nodes:
   repeat:
     kind: loop
-    call: bump
     PRED
     input:
       state: {count: 0}
+    nodes:
+      bump:
+        kind: code
+        input:
+          s: \${input.state}
+        output:
+          state:
+            count: int
+        code: |
+          return {"state": {"count": inputs["s"]["count"] + 1n}}
+    output: \${bump.output}
+output: \${repeat.output}
 `;
 
-/** Build loop `repeat` of `NESTED_STATE` with driver `pred`. */
-function buildNested(pred: string): BuildResult {
-  const registry = readTypedefs(NESTED_TYPEDEFS);
-  const body = handChild({
-    inputs: params("  state: !State\n", registry),
-    producers: { bump: record({ state: "State" }, NESTED_TYPEDEFS) },
-    output: "${bump.output}",
-  });
-  return build(swap(NESTED_STATE, "PRED", pred), body, { nodeId: "repeat", registry });
+/** Assemble `text` and return its loop `nodeId`. */
+function assembledLoop(text: string, nodeId: string): LoopNode {
+  const node = assembleText(text).flow.compiled.nodes.get(nodeId);
+  expect(node).toBeInstanceOf(LoopNode);
+  return node as LoopNode;
+}
+
+/** Assemble `NESTED_STATE` with driver `pred` and return its loop `repeat`. */
+function buildNested(pred: string): LoopNode {
+  return assembledLoop(swap(NESTED_STATE, "PRED", pred), "repeat");
 }
 
 test.each(["while: state.count < 3", "until: state.count >= 3"])(
   "a predicate's nested field read builds: %s",
   (pred) => {
-    expect(buildNested(pred).node).toBeInstanceOf(LoopNode);
+    expect(buildNested(pred)).toBeInstanceOf(LoopNode);
   },
 );
 
@@ -955,32 +1050,39 @@ test("a predicate's field read on a scalar is rejected", () => {
   );
 });
 
-// `repeat` carries `{n, cfg}`; its `inc_body` def reads `n` and returns only `{n}`, so `cfg`
-// carries over, typed from its seed. PRED stands for the driver and SEED for `cfg`'s seed.
+// `repeat` carries `{n, cfg}`; its inline body reads `n` and returns only `{n}`, so `cfg` carries
+// over, typed from its seed. PRED stands for the driver and SEED for `cfg`'s seed.
 const OMITTED_SEED = `id: loop-omitted
 name: loop_omitted
+typedefs:
+  Cfg: {limit: int}
+input:
+  cfg: !Cfg
 nodes:
   repeat:
     kind: loop
-    call: inc_body
     PRED
     input:
       n: 0
       cfg: SEED
+    nodes:
+      inc:
+        kind: code
+        input:
+          n: \${input.n}
+        output: int
+        code: |
+          return inputs["n"] + 1n
+    output:
+      n: \${inc.output}
+output: \${repeat.output}
 `;
 
-/** The `inc_body` def of `OMITTED_SEED`. */
-function omittedBody(): ComposedFlow {
-  return handChild({ inputs: params("  n: !int\n"), producers: { inc: INT }, output: { n: "${inc.output}" } });
-}
-
 test("a predicate's unknown field on an omitted typed seed is rejected", () => {
-  const cfg = new ValueContract(typeFor("Cfg", readTypedefs({ Cfg: { limit: "int" } })));
-  // The flow's `cfg: !Cfg` input types the seed `${input.cfg}`.
-  const reader: BindingContractReader = (label) => (label === "repeat.input.cfg" ? cfg : null);
+  // The flow's `cfg: !Cfg` input types the seed `${input.cfg}`, read by the loader's reader.
   const text = swap(swap(OMITTED_SEED, "PRED", "while: n < cfg.limt"), "SEED", "${input.cfg}");
 
-  const error = loadError(() => build(text, omittedBody(), { nodeId: "repeat", bindingContractReader: reader }));
+  const error = loadError(() => assembleText(text));
 
   expect(error.message).toBe("loop node 'repeat': `while:` reference ${cfg.limt} reads unknown field 'limt' on record");
 });
@@ -988,85 +1090,77 @@ test("a predicate's unknown field on an omitted typed seed is rejected", () => {
 test("a predicate's field on an omitted literal seed is not checked", () => {
   const text = swap(swap(OMITTED_SEED, "PRED", "while: n < cfg.other\n    max: 3"), "SEED", "{limit: 2}");
 
-  expect(build(text, omittedBody(), { nodeId: "repeat" }).node).toBeInstanceOf(LoopNode);
+  expect(assembledLoop(text, "repeat")).toBeInstanceOf(LoopNode);
 });
 
-/** One variant of the `ask` loop: its flow text, its typedefs, and the type name of `r`. */
-interface AskState {
-  readonly text: string;
-  readonly typedefs: Readonly<Record<string, unknown>>;
-  readonly r: string;
-}
-
-// `ask` carries `{n, r}`, `r` a `Step`: a `Done` or a `More`. PRED stands for the driver.
-const UNION_STATE: AskState = {
-  text: `id: loop-union
+// `ask` carries `{n, r}`, `r` a `Step`: a `Done` or a `More`; its inline body returns both. PRED
+// stands for the driver.
+const UNION_STATE = `id: loop-union
 name: loop_union
+typedefs:
+  Done: {answer: str}
+  More: {hint: str}
+  Step: Union(Done, More)
 nodes:
   ask:
     kind: loop
-    call: body
     PRED
     input:
       n: 0
       r: !Step {"hint":"start"}
-`,
-  typedefs: { Done: { answer: "str" }, More: { hint: "str" }, Step: "Union(Done, More)" },
-  r: "Step",
-};
+    nodes:
+      step:
+        kind: code
+        input:
+          n: \${input.n}
+        output:
+          n: int
+          r: Step
+        code: |
+          const n = inputs["n"] + 1n
+          return {"n": n, "r": n >= 3n ? {"answer": "ok"} : {"hint": "again"}}
+    output: \${step.output}
+output: \${ask.output}
+`;
 
 // The same loop whose union members are tagged by `kind`.
-const TAGGED_STATE: AskState = {
-  text: swap(UNION_STATE.text, '{"hint":"start"}', '{"kind":"more","hint":"start"}'),
-  typedefs: {
-    Done: { kind: "Literal(done)", answer: "str" },
-    More: { kind: "Literal(more)", hint: "str" },
-    Step: "Union(Done, More)",
-  },
-  r: "Step",
-};
+const TAGGED_STATE = swap(
+  UNION_STATE,
+  "  Done: {answer: str}\n  More: {hint: str}\n",
+  "  Done: {kind: 'Literal(done)', answer: str}\n  More: {kind: 'Literal(more)', hint: str}\n",
+)
+  .replace('{"hint":"start"}', '{"kind":"more","hint":"start"}')
+  .replace('{"answer": "ok"}', '{"kind": "done", "answer": "ok"}')
+  .replace('{"hint": "again"}', '{"kind": "more", "hint": "again"}');
 
 // The same loop carrying a `Done` record rather than the union.
-const DONE_STATE: AskState = {
-  text: swap(UNION_STATE.text, 'r: !Step {"hint":"start"}', 'r: !Done {"answer":"x"}'),
-  typedefs: UNION_STATE.typedefs,
-  r: "Done",
-};
+const DONE_STATE = swap(UNION_STATE, 'r: !Step {"hint":"start"}', 'r: !Done {"answer":"x"}').replace(
+  "          r: Step\n",
+  "          r: Done\n",
+);
 
 // The same loop carrying an `object`.
-const OBJECT_STATE: AskState = {
-  text: swap(UNION_STATE.text, 'r: !Step {"hint":"start"}', 'r: !object {"hint":"start"}'),
-  typedefs: UNION_STATE.typedefs,
-  r: "object",
-};
+const OBJECT_STATE = swap(UNION_STATE, 'r: !Step {"hint":"start"}', 'r: !object {"hint":"start"}').replace(
+  "          r: Step\n",
+  "          r: object\n",
+);
 
 // `Step` and `Finished` share `Done` and `Skip`; `Finished` also has `Other`, which no `Step`
 // value can be, so `isinstance(r, Finished)` narrows `r` to `Union(Done, Skip)`.
-const PARTLY_SHARED_STATE: AskState = {
-  text: UNION_STATE.text,
-  typedefs: {
-    Done: { answer: "str" },
-    More: { hint: "str" },
-    Skip: { answer: "str", why: "str" },
-    Other: { x: "int" },
-    Step: "Union(Done, More, Skip)",
-    Finished: "Union(Done, Skip, Other)",
-  },
-  r: "Step",
-};
+const PARTLY_SHARED_STATE = swap(
+  swap(UNION_STATE, "id: loop-union\nname: loop_union\n", "id: loop-partly-shared\nname: loop_partly_shared\n"),
+  "  Step: Union(Done, More)\n",
+  "  Skip: {answer: str, why: str}\n  Other: {x: int}\n  Step: Union(Done, More, Skip)\n" +
+    "  Finished: Union(Done, Skip, Other)\n",
+);
 
-/** Build loop `ask` of `state` with driver `pred`, the state's typedefs in the registry. */
-function buildAsk(state: AskState, pred: string): BuildResult {
-  const body = handChild({
-    inputs: params("  n: !int\n"),
-    producers: { step: record({ n: "int", r: state.r }, state.typedefs) },
-    output: "${step.output}",
-  });
-  return build(swap(state.text, "PRED", pred), body, { nodeId: "ask", registry: readTypedefs(state.typedefs) });
+/** Assemble the `ask` loop `state` with driver `pred` and return the loop. */
+function buildAsk(state: string, pred: string): LoopNode {
+  return assembledLoop(swap(state, "PRED", pred), "ask");
 }
 
 /** The message of `buildAsk`'s load error. */
-function askError(state: AskState, pred: string): string {
+function askError(state: string, pred: string): string {
   return loadError(() => buildAsk(state, pred)).message;
 }
 
@@ -1098,7 +1192,7 @@ test("a predicate's read after a check the type always decides is checked unnarr
   expect(askError(UNION_STATE, "until: isinstance(r, Step) or r.nosuch == 'x'")).toBe(
     "loop node 'ask': `until:` reference ${r.nosuch} reads unknown field 'nosuch' on record",
   );
-  expect(buildAsk(UNION_STATE, "until: isinstance(r, Step) or n > 2").node).toBeInstanceOf(LoopNode);
+  expect(buildAsk(UNION_STATE, "until: isinstance(r, Step) or n > 2")).toBeInstanceOf(LoopNode);
 });
 
 test("a predicate's check that can never be true is rejected", () => {
@@ -1130,7 +1224,7 @@ test("a predicate's tagged member field error points at isinstance", () => {
     "loop node 'ask': `until:` reference ${r.answer} reads field 'answer', which only union members with kind " +
       "done have; check the member first with `isinstance(r, <Type>) and ...`",
   );
-  expect(buildAsk(TAGGED_STATE, "until: isinstance(r, Done) and r.answer == 'ok'").node).toBeInstanceOf(LoopNode);
+  expect(buildAsk(TAGGED_STATE, "until: isinstance(r, Done) and r.answer == 'ok'")).toBeInstanceOf(LoopNode);
 });
 
 /** The message of a tag comparison against `"dnoe"`, which is no tag of `r.kind`. */
@@ -1174,7 +1268,7 @@ test.each([
 test("a predicate's read past a check the checks before it decide is checked under them", () => {
   const pred = "until: isinstance(r, Done) and (isinstance(r, Done) or r.answer == 'ok')";
 
-  expect(buildAsk(UNION_STATE, pred).node).toBeInstanceOf(LoopNode);
+  expect(buildAsk(UNION_STATE, pred)).toBeInstanceOf(LoopNode);
 });
 
 test("a predicate's read after a value that is no tag is not checked", () => {
@@ -1246,7 +1340,7 @@ test("a predicate's isinstance check on an object field checks reads on the type
   ]) {
     expect(askError(OBJECT_STATE, pred)).toBe(message);
   }
-  expect(buildAsk(OBJECT_STATE, "until: isinstance(r, Done) and r.answer == 'ok'").node).toBeInstanceOf(LoopNode);
+  expect(buildAsk(OBJECT_STATE, "until: isinstance(r, Done) and r.answer == 'ok'")).toBeInstanceOf(LoopNode);
 });
 
 test("a predicate's isinstance of a partly shared union rejects a member-only field", () => {
@@ -1305,5 +1399,14 @@ test.each<CaseRow>(
     "predicate_tag_comparison_with_a_non_tag",
     "predicate_tagged_member_field_error_points_at_isinstance",
     "predicate_unguarded_member_field_read_is_rejected",
+    "predicate_unknown_field_on_omitted_typed_seed_is_rejected",
   ].map((name) => ({ id: `load-loop/engine_loop_build__${name}`, call: assembled })),
 )("assemble: $id", runCase);
+
+test.each<CaseRow>([
+  {
+    // Only the reader typing the omitted `keep` field reaches the cycle.
+    id: "load-loop/engine_loop_build__omitted_field_seed_cycle_is_located",
+    call: assembledWith({ bump: goodBody({ n: "int" }) }),
+  },
+])("assemble: $id", runCase);

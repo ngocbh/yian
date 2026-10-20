@@ -31,7 +31,8 @@
  * `test_a_map_over_a_list_of_any_into_a_child_any_input_loads`,
  * `test_any_into_a_loop_carried_int_suggests_a_tag_or_isinstance` (and its case
  * `load-types/engine_any_type__any_into_a_loop_carried_int_suggests_a_tag_or_isinstance`) and
- * `test_a_tagged_loop_seed_over_an_any_output_loads`. The `child` and `bump` defs are built by
+ * `test_a_tagged_loop_seed_over_an_any_output_loads` (and its `ok` case
+ * `load-types/engine_any_type__a_tagged_loop_seed_over_an_any_output_loads`). The `child` and `bump` defs are built by
  * hand (`handChild`), since def bodies load in T3-22; the error rows pin the whole message where
  * Python matches fragments, and CODE bodies are TS.
  *
@@ -840,6 +841,13 @@ output: \${loop.output}
   test("assembledWith: load-types/engine_any_type__any_into_a_loop_carried_int_suggests_a_tag_or_isinstance", () => {
     runCase({
       id: "load-types/engine_any_type__any_into_a_loop_carried_int_suggests_a_tag_or_isinstance",
+      call: assembledWith({ bump: BUMP }),
+    });
+  });
+
+  test("assembledWith: load-types/engine_any_type__a_tagged_loop_seed_over_an_any_output_loads", () => {
+    runCase({
+      id: "load-types/engine_any_type__a_tagged_loop_seed_over_an_any_output_loads",
       call: assembledWith({ bump: BUMP }),
     });
   });

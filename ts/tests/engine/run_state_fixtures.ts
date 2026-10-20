@@ -39,7 +39,6 @@ import {
 import type { RetainedTrace } from "../../src/runtime/trace.ts";
 import {
   commitPrepared,
-  type GrowBuilder,
   prepareNodeStarted,
   prepareNodeSucceeded,
   prepareRecord,
@@ -607,13 +606,12 @@ export function traceSnapshot(trace: RetainedTrace): Record<string, unknown> {
 
 /**
  * Replay `source`'s records over a fresh state of `flow` through `prepareRunStarted` (from the
- * recorded RunStarted fields) and `prepareRecord`, which gets `growBuilder`; return the state, the
- * new log and each transition's observers.
+ * recorded RunStarted fields) and `prepareRecord`; return the state, the new log and each
+ * transition's observers.
  */
 export function replayOutcomeLog(
   flow: CompiledFlow,
   source: MemoryRunLog,
-  options: { growBuilder?: GrowBuilder | null } = {},
 ): { state: RunState; log: MemoryRunLog; observers: (readonly RunEvent[])[] } {
   const records = source.records().map((envelope) => envelope.record);
   const started = records[0];
@@ -634,9 +632,7 @@ export function replayOutcomeLog(
       }),
     ),
   ];
-  for (const record of records.slice(1)) {
-    observers.push(commitPrepared(log, state, prepareRecord(state, record, { growBuilder: options.growBuilder })));
-  }
+  for (const record of records.slice(1)) observers.push(commitPrepared(log, state, prepareRecord(state, record)));
   return { state, log, observers };
 }
 

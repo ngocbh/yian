@@ -50,13 +50,13 @@
  *   stop sequence.
  *
  * TS-only (RunStopped): `prepareRunStopped` lists the in-flight nodes in dispatch order; its
- * commit changes only the sequence and the last stop sequence, and returns no observers; a record whose ids differ in order,
- * miss one or add one is refused; a plan whose stop delta disagrees with its record is refused;
- * nothing in flight records no ids; a terminal state refuses it; after a stop, a step and a resume
- * still commit and the resume puts the stopped nodes first; an in-flight node missing from the
- * flow or not `UNKNOWN` is refused. Also: a frontier plan holding an outcome record is refused;
- * `prepareRecord` refuses a `RunStartedRecord`, hands a backward record to its stub even on a
- * pristine state, and an expansion with a builder to the growth stub.
+ * commit changes only the sequence and the last stop sequence, and returns no observers; a record
+ * whose ids differ in order, miss one or add one is refused; a plan whose stop delta disagrees with
+ * its record is refused; nothing in flight records no ids; a terminal state refuses it; after a
+ * stop, a step and a resume still commit and the resume puts the stopped nodes first; an in-flight
+ * node missing from the flow or not `UNKNOWN` is refused. Also: a frontier plan holding an outcome
+ * record is refused; `prepareRecord` refuses a `RunStartedRecord`, hands a backward record to its
+ * stub even on a pristine state, and an expansion with a builder to the growth stub.
  *
  * TS-only (interrupted-attempt counts, which Python doesn't keep): each resume counts every retried
  * start no stop covered; a stop covers the starts before it but not a later one, and two stops
@@ -778,7 +778,6 @@ test("a RunStopped commit changes only the sequence and the last stop, and retur
 
   expect(observers).toEqual([]);
   expect(state.nextSequence).toBe(4);
-  expect(state.lastStopSequence).toBe(3);
   expectUnchanged(state, { ...before, values: { ...before.values, nextSequence: 4, lastStopSequence: 3 } });
   expect(state.ready).toEqual(["ordinary"]);
   expectCommittedPath(
@@ -1006,7 +1005,5 @@ test("replaying the live log rebuilds the interrupted-attempt counts and the las
 
   const replayed = replayOutcomeLog(fanoutFlow(), log).state;
 
-  expect(replayed.interruptedAttempts).toEqual(state.interruptedAttempts);
-  expect(replayed.lastStopSequence).toBe(10);
   expect(reducerSnapshot(replayed)).toEqual(reducerSnapshot(state));
 });

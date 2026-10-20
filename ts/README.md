@@ -499,6 +499,21 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   (`numWorkers: 0`) awaits each node inline; pooled mode keeps at most `numWorkers` evaluations in
   flight and commits their outcomes in settle order from a FIFO completion queue (a worker never
   rejects); a `RunFailed` is published before the remaining workers are awaited.
+- `src/runtime/memory_runtime.ts` holds `MemoryRuntime`: `open` validates the table, origins,
+  registry and snapshots, opens one session per key in key order and captures the snapshots;
+  `openContext(scope, request, { signal })` recalls each scope key outer to local, keeps non-empty
+  sections, admits at most one transcript from a conversation-eligible key, checks the signal, and
+  resolves to the context whose transcript the caller closes; `proposeLearning`/`commitLearning`;
+  `openContext`, `proposeLearning` and `commitLearning` refuse a closed runtime ("memory runtime is
+  closed"); `close()` closes in reverse key order once, noting close failures on a pending error
+  (`notes`), and a later call waits for the first and never throws.
+- Changed: a backend's `MemoryOperationError` is a learning failure whatever its `cause`: the cause
+  chain isn't searched for host controls (TS has no such error classes; stops are signals), and any
+  other backend error escapes unchanged.
+- Changed: the registry is a `Map` of key to backend (Python accepts any mapping).
+- Changed: a session's `commit` may resolve to `undefined` or `null`.
+- Changed: a restored snapshot must equal the recorded one by value and type (`1` and `1.0` differ,
+  where Python's `==` treats them equal).
 - Value equality: each carrier class has one `same*` helper in the module that owns it
   (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
   `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the

@@ -1,14 +1,17 @@
 /**
  * Ports the terminal checks of `tests/cli/test_terminal_broker.py` and the prompt checks of
  * `tests/engine/test_cli_prompt.py` that drive a real widget: the scenarios of
- * `terminal_both_runtimes.ts`, run here on Bun. Also ports the pure prompt helpers' checks of
- * `tests/engine/test_cli_prompt.py` (`test_input_label_*`, `test_parse_structured_input_*`),
+ * `terminal_both_runtimes.ts`, run here on Bun and, with `YIAN_TEST_NODE`, built on Node. Also
+ * ports the pure prompt helpers' checks of `tests/engine/test_cli_prompt.py`
+ * (`test_input_label_*`, `test_parse_structured_input_*`),
  * `tests/cli/test_run_long_ints.py::test_structured_prompt_rejects_a_long_int`, which TS turns
  * around: an int has no digit limit, and
  * `test_terminal_broker.py::test_terminal_module_imports_only_the_standard_library`.
  */
 
-import { readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
@@ -19,8 +22,55 @@ import type { AskUserHandler } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { SCENARIOS } from "./terminal_both_runtimes.ts";
 
+const BUILT = join(import.meta.dir, "..", "..", "dist", "tests", "cli", "terminal_both_runtimes.js");
+
+/**
+ * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set value that
+ * can't run, a Node older than the `engines` floor, or a missing build fails the whole file, so a
+ * typo can't pass as a run with the Node case skipped. A copy of `provider_auth.test.ts`'s:
+ * importing a test file would run its tests.
+ */
+const NODE = ((): string | undefined => {
+  const node = process.env.YIAN_TEST_NODE;
+  if (!node) return undefined;
+  let version: string;
+  try {
+    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
+  } catch (error) {
+    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
+  }
+  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18)) {
+    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
+  }
+  if (!existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
+  return node;
+})();
+
 describe("the terminal scenarios", () => {
   for (const [name, run] of Object.entries(SCENARIOS)) test(name, run, 30_000);
+
+  test.skipIf(!NODE)(
+    "all pass on Node, built",
+    () => {
+      const result = spawnSync(NODE!, [BUILT], { encoding: "utf8", timeout: 120_000 });
+      const context = `signal: ${result.signal}\nstderr: ${result.stderr}\nstdout: ${result.stdout}`;
+      const lines = result.stdout
+        .trim()
+        .split("\n")
+        .map((line) => {
+          try {
+            return JSON.parse(line) as { name?: unknown; ok?: unknown; error?: string };
+          } catch {
+            throw new Error(`not a JSON line: ${line}\n${context}`);
+          }
+        });
+      expect(lines.map((line) => line.name)).toEqual(Object.keys(SCENARIOS));
+      for (const line of lines) expect(line, line.error).toEqual({ name: line.name, ok: true });
+      expect(result.status, context).toBe(0);
+    },
+    150_000,
+  );
 });
 
 test("askUser is an ask_user handler", () => {

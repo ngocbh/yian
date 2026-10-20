@@ -26,6 +26,11 @@
  * host abort during a `RunFailed`'s drain is ignored and `run()` returns normally; an outcome
  * settling after a callback stop is discarded; a callback throw during a node's synchronous start
  * starts no further node. No test leaves an unhandled rejection or an uncaught exception.
+ *
+ * TS-only, the per-node signals (serial and pooled): over 50 nodes, each node's link to the run
+ * signal is removed when it settles, even for nodes that leave listeners on their own signal; the
+ * host's signal keeps no listener once `run()` settles, whatever the ending (success, `RunFailed`,
+ * a host stop, a host fault, an already-aborted signal).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -538,4 +543,77 @@ describe("the pooled drain", () => {
     expect(logged(built, NodeStartedRecord, "second")).toBe(false);
     expect(stops(built)).toEqual([new RunStoppedRecord("callback", "stream callback failed", ["first"])]);
   });
+});
+
+/**
+ * Track the abort listeners added to `signal` and not removed since; `added` counts every add. A
+ * listener that fired with `{ once: true }` stays counted as live.
+ */
+function spyListeners(signal: AbortSignal): { live: Set<unknown>; added: number } {
+  const spy = { live: new Set<unknown>(), added: 0 };
+  const add = signal.addEventListener.bind(signal);
+  const remove = signal.removeEventListener.bind(signal);
+  signal.addEventListener = (...args: Parameters<AbortSignal["addEventListener"]>): void => {
+    if (args[0] === "abort") {
+      spy.live.add(args[1]);
+      spy.added += 1;
+    }
+    add(...args);
+  };
+  signal.removeEventListener = (...args: Parameters<AbortSignal["removeEventListener"]>): void => {
+    if (args[0] === "abort") spy.live.delete(args[1]);
+    remove(...args);
+  };
+  return spy;
+}
+
+describe.each(MODES)("per-node signals (%s)", (_, numWorkers) => {
+  test("each node's link to the run signal is removed, even when the node leaves listeners on its own", async () => {
+    const nodes = Array.from(
+      { length: 50 },
+      (_, index) =>
+        new ScriptNode(`node-${index}`, (caps) => {
+          caps.signal!.addEventListener("abort", () => {});
+          return "done";
+        }),
+    );
+    const built = fanEngine(nodes, { numWorkers });
+    const spy = spyListeners(built.signal);
+
+    expect((await built.run()).at(-1)).toBeInstanceOf(RunSucceeded);
+    const starts = built.log.records().filter((envelope) => envelope.record instanceof NodeStartedRecord).length;
+    expect(starts).toBe(52);
+    expect(spy.added).toBe(starts);
+    expect(spy.live.size).toBe(0);
+  });
+
+  test.each(["success", "RunFailed", "a host stop", "a host fault", "an already-aborted signal"] as const)(
+    "the host's signal keeps no listener after %s",
+    async (ending) => {
+      const host = new AbortController();
+      const spy = spyListeners(host.signal);
+      if (ending === "an already-aborted signal") host.abort(new Error("stopped before"));
+      const blocked = waiter("work");
+      const node =
+        ending === "RunFailed"
+          ? new FailNode("work")
+          : ending === "a host stop"
+            ? blocked.node
+            : new FuncNode("work", () => "done");
+      const built = fanEngine([node], { numWorkers, signal: host.signal });
+      if (ending === "a host fault") {
+        built.state.flow.nodes.get("work")!.outputContract = Type.scalar(ValueKind.STRING) as unknown as OutputContract;
+      }
+
+      const running = built.run().catch(() => {});
+      if (ending === "a host stop") {
+        await blocked.entered;
+        host.abort(new Error("stop now"));
+      }
+      await running;
+
+      expect(spy.added).toBe(ending === "an already-aborted signal" ? 0 : 1);
+      expect(spy.live.size).toBe(0);
+    },
+  );
 });

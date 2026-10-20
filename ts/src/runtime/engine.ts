@@ -147,9 +147,11 @@ function isRunLog(log: unknown): log is RunLog {
  * outcome is decided.
  * Once the run stops, `record` throws the run signal's reason and appends nothing.
  *
- * A host stop (the `signal` option aborting) or a failing host callback is recorded as one
- * `RunStopped` naming the in-flight nodes, appended when the stop is requested and before the
- * drain; any other host fault, and a `RunFailed`, ends the run with no such record.
+ * Each node runs under its own signal (its `caps.signal`, also the memory opener's), aborted with
+ * the run signal's reason and unlinked from it when the node settles. A host stop (the `signal`
+ * option aborting) or a failing host callback is recorded as one `RunStopped` naming the
+ * in-flight nodes, appended when the stop is requested and before the drain; any other host
+ * fault, and a `RunFailed`, ends the run with no such record.
  *
  * A `RunLog`'s `append` must not call back into the run: the engine appends synchronously, so a
  * callback from inside an append would interleave records.
@@ -440,7 +442,8 @@ export class FlowEngine {
   }
 
   /**
-   * Evaluate one started node; the run state changes only through its recorded steps.
+   * Evaluate one started node under its own signal, aborted with the run's reason when the run
+   * signal aborts; the run state changes only through its recorded steps.
    */
   async #evaluate(
     nodeId: string,
@@ -449,22 +452,33 @@ export class FlowEngine {
   ): Promise<EvaluatedOutcome> {
     const { state, onEvent, onStream } = this;
     const trace = state.trace;
-    return await evalNode(state.flow.nodes.get(nodeId)!, state.flow, state.pool, {
-      wiringOverride: state.wiringOverrides.get(nodeId) ?? null,
-      signal: this.#controller.signal,
-      emitStream: onStream === null ? null : (chunk) => this.#emit(onStream, chunk),
-      emitEvent: onEvent === null ? null : (event) => this.#emit(onEvent, event),
-      captureEvidence: state.learnable,
-      captureBindings: state.learnable,
-      effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
-      sourceResolver: trace === null ? null : (path) => trace.resolve(path),
-      memoryContextOpener: this.memoryContextOpener,
-      memoryInvocation: invocation,
-      tools: this.tools,
-      skills: this.skills,
-      steering: this.#steering,
-      steps,
-    });
+    // A per-node controller, linked while the node runs, so the listeners node code leaves on its
+    // signal die with the node instead of piling up on the long-lived run signal.
+    const runSignal = this.#controller.signal;
+    const node = new AbortController();
+    const relay = (): void => node.abort(runSignal.reason);
+    if (runSignal.aborted) relay();
+    else runSignal.addEventListener("abort", relay, { once: true });
+    try {
+      return await evalNode(state.flow.nodes.get(nodeId)!, state.flow, state.pool, {
+        wiringOverride: state.wiringOverrides.get(nodeId) ?? null,
+        signal: node.signal,
+        emitStream: onStream === null ? null : (chunk) => this.#emit(onStream, chunk),
+        emitEvent: onEvent === null ? null : (event) => this.#emit(onEvent, event),
+        captureEvidence: state.learnable,
+        captureBindings: state.learnable,
+        effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
+        sourceResolver: trace === null ? null : (path) => trace.resolve(path),
+        memoryContextOpener: this.memoryContextOpener,
+        memoryInvocation: invocation,
+        tools: this.tools,
+        skills: this.skills,
+        steering: this.#steering,
+        steps,
+      });
+    } finally {
+      runSignal.removeEventListener("abort", relay);
+    }
   }
 
   /** Pass one transient chunk or in-loop event to its callback unless the run is stopping. */

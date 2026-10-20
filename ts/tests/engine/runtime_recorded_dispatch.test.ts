@@ -44,6 +44,9 @@
  *   spawner waits until the sibling has entered.
  * - `test_event_callback_failure_signals_drains_and_reraises_same_exception`: the blocked sibling
  *   rejects with an error of its own during the drain, which never replaces the callback error.
+ * - `test_primary_host_interruption_is_preserved_after_full_sibling_drain`: the primary stop is the
+ *   host's signal, aborted from inside a node once its blocked sibling has entered; `run()` rejects
+ *   with the signal's reason after the sibling stopped, and a `RunStopped` (`signal`) names both.
  * - `test_positive_worker_count_never_exceeds_the_submission_bound`: the bound is read as the
  *   in-flight count at each start, with no timing.
  * - `test_nonfinite_output_at_the_root_uses_the_contract_default_origin`: the message is the value
@@ -73,8 +76,6 @@
  *
  * Not ported: `test_submit_failure_is_exact_and_leaves_the_started_node_recoverable`: TS has no
  * executor, so nothing can refuse a submission.
- *
- * Later (the engine's stop rule): `test_primary_host_interruption_is_preserved_after_full_sibling_drain`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -1001,6 +1002,23 @@ describe("host callbacks and drains", () => {
     expect(events.at(-1)).toBeInstanceOf(RunFailed);
     expect(inFlight(state)).toEqual(["stream"]);
     expect(hasRecord(log, NodeSucceededRecord, "stream")).toBe(false);
+  });
+
+  test("primary host interruption is preserved after full sibling drain", async () => {
+    const host = new AbortController();
+    const primary = new Error("terminal EOF");
+    const blocked = new BlockingNode("blocked", new Promise(() => {}));
+    const interrupt = new ActionNode("interrupt", async () => {
+      await blocked.entered;
+      host.abort(primary);
+      throw new Error("interrupted");
+    });
+    const { state, log } = initialized(fanFlow([blocked, interrupt]), 2);
+
+    expect(await rejected(dispatcher(state, log, 2, { signal: host.signal }).run())).toBe(primary);
+    expect(blocked.released).toBe(true);
+    expect(state.result).toBeNull();
+    expect(log.records().at(-1)!.record).toEqual(new RunStoppedRecord("signal", "terminal EOF", ["blocked", "interrupt"]));
   });
 
   test.each(MODES)("stream callback failure is host error not durable node failure (%s)", async (_, numWorkers) => {

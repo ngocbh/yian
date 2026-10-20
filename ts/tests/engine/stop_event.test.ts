@@ -42,6 +42,10 @@
  * error with the log's error and no `RunStopped`; a failing rollback rejects with the
  * `AggregateError`; a step refused before reaching the log leaves the log accepting appends.
  *
+ * TS-only, nested runs (serial and pooled): a node running a child `FlowEngine` with
+ * `signal: caps.signal` stops the child when the parent stops, and the child records its own
+ * `RunStopped` (`signal`); a child's `RunFailed` doesn't abort the parent.
+ *
  * TS-only, the per-node signals (serial and pooled): over 50 nodes, each node's link to the run
  * signal is removed when it settles, even for nodes that leave listeners on their own signal; the
  * host's signal keeps no listener once `run()` settles, whatever the ending (success, `RunFailed`,
@@ -840,6 +844,48 @@ test("a settled step and a ToolCallFinished are still recorded after a sibling's
   expect(stops(built)).toEqual([]);
   expect(lastRecord(built)).toEqual(new NodeStepRecord("work", { call: "call-1" }));
   expect(seen.at(-1)).toEqual(new ToolCallFinished({ ...callFields, result: "ok" }));
+});
+
+describe.each(MODES)("nested runs (%s)", (_, numWorkers) => {
+  test("a child run given the node's signal stops when the parent stops and records its own RunStopped", async () => {
+    const host = new AbortController();
+    const reason = new Error("stop now");
+    const child = waiter("child");
+    let inner!: FlowEngine;
+    const parent = new ScriptNode("parent", async (caps) => {
+      inner = fanEngine([child.node], { numWorkers, signal: caps.signal });
+      await inner.run();
+      return "done";
+    });
+    const built = fanEngine([parent], { numWorkers, signal: host.signal });
+
+    const running = built.run();
+    await child.entered;
+    host.abort(reason);
+
+    expect(await rejected(running)).toBe(reason);
+    expect(stops(built)).toEqual([new RunStoppedRecord("signal", "stop now", ["parent"])]);
+    expect(stops(inner)).toEqual([new RunStoppedRecord("signal", "stop now", ["child"])]);
+    expect(inner.signal.reason).toBe(reason);
+  });
+
+  test("a child failure doesn't abort the parent", async () => {
+    let inner!: FlowEngine;
+    let parentSignal!: AbortSignal;
+    const parent = new ScriptNode("parent", async (caps) => {
+      parentSignal = caps.signal!;
+      inner = fanEngine([new FailNode("child")], { numWorkers, signal: caps.signal });
+      return ((await inner.run()).at(-1) as RunFailed).failure.message;
+    });
+    const built = fanEngine([parent], { numWorkers });
+
+    expect((await built.run()).at(-1)).toBeInstanceOf(RunSucceeded);
+    expect(inner.state.result).toBeInstanceOf(RunFailed);
+    // The child's run signal aborted with its `RunFailed`; the parent's node signal didn't.
+    expect(inner.signal.aborted).toBe(true);
+    expect(parentSignal.aborted).toBe(false);
+    expect(built.signal.aborted).toBe(false);
+  });
 });
 
 /**

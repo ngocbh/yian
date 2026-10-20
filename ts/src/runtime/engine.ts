@@ -13,6 +13,8 @@
  * Never imports: the run boundary, compose, or the CLI.
  */
 
+import { AsyncResource } from "node:async_hooks";
+
 import { GrowthRejected } from "../compile/model.ts";
 import { type Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
 import { type RunEvent, RunFailed, type StreamChunk, ToolCallFinished } from "../events.ts";
@@ -157,6 +159,11 @@ function isRunLog(log: unknown): log is RunLog {
  * fault, and a `RunFailed`, ends the run with no such record. A capability fault (a refused step,
  * an opener fault) ends it at once, even when the node catches it.
  *
+ * Each evaluation runs in its own async resource, started in the `run()` caller's async context: an
+ * `AsyncLocalStorage` store a node sets stays with that node. Host callbacks the dispatcher calls
+ * (`onEvent` for durable observers) run in the dispatcher's context, so a store a host sets there
+ * reaches later nodes.
+ *
  * A `RunLog`'s `append` must not call back into the run: the engine appends synchronously, so a
  * callback from inside an append would interleave records.
  */
@@ -288,7 +295,7 @@ export class FlowEngine {
         const invocation = new ConversationInvocation(state.runId!, state.acceptedStarts.get(nodeId)!);
         this.#publish(started, events);
         signal.throwIfAborted();
-        const evaluated = await this.#evaluate(nodeId, invocation);
+        const evaluated = await this.#startEvaluation(nodeId, invocation);
         signal.throwIfAborted();
         const settled = this.#commitOutcome(nodeId, evaluated);
         // The commit may have set the result, which the loop condition narrowed to `null`.
@@ -326,7 +333,7 @@ export class FlowEngine {
           // The start is durable and published before its worker starts.
           this.#publish(started, events);
           signal.throwIfAborted();
-          const worker = this.#evaluate(nodeId, invocation).then(
+          const worker = this.#startEvaluation(nodeId, invocation).then(
             (outcome) => completions.push({ nodeId, outcome }),
             (error: unknown) => completions.push({ nodeId, error }),
           );
@@ -442,6 +449,15 @@ export class FlowEngine {
   ): PreparedTransition {
     const node = this.state.flow.nodes.get(nodeId)!;
     return this.#prepareFailure(nodeId, evaluationFailure(node, code, original, origin).failure, carriers);
+  }
+
+  /**
+   * Start one started node's evaluation in a fresh async resource, so it begins in the `run()`
+   * caller's async context and a store the node sets (`AsyncLocalStorage.enterWith`, even in its
+   * synchronous part) stays in its own chain, never reaching the dispatcher or another node.
+   */
+  #startEvaluation(nodeId: string, invocation: ConversationInvocation): Promise<EvaluatedOutcome> {
+    return new AsyncResource("yian.node").runInAsyncScope(() => this.#evaluate(nodeId, invocation));
   }
 
   /**

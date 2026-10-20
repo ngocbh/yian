@@ -2427,6 +2427,14 @@ retry. Log/cleanup faults preserve the primary exception and accepted records.
     The log makes engine state deterministic, but cannot make an interrupted
     external effect exactly-once.
 
+Changed (TS yian): right after `RunResumed`, a resume publishes one
+`NodeAttemptResumed(node_id, interrupted)` event per node it runs again, in retry order.
+`interrupted` counts that node's interrupted attempts so far, this one included: starts with no
+outcome before a resume, unless a `RunStoppedRecord` covered them. A host stop or a failing host
+callback records that stop before the run winds down, so only a crash (or a host fault that
+isn't a callback) counts. yian sets no limit; a host that resumes on its own decides how many
+interruptions to tolerate.
+
 ## Defaults and limits
 
 Every predefined default and limit is an entry in `yian.defaults`, overridable by a

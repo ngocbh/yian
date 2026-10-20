@@ -207,6 +207,8 @@ including structured attempts and memory summary preparation — is bracketed by
 `ModelCallStarted`/`ModelCallFinished` (the latter with provider `TokenUsage`),
 and every granted tool by `ToolCallStarted`/`ToolCallFinished`. These are live
 callbacks only; the node value, the run log, and retained memory are unchanged.
+Changed (TS yian): consecutive concurrency-safe tool calls run together, and a group's
+`ToolCallFinished` events arrive in finish order (see [Tool context](api.md#tool-context)).
 
 With `on_stream`, each chat request's visible text arrives as `StreamChunk`s
 sharing that request's `exchange_id`. A completed request ends with one empty

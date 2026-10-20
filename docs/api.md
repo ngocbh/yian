@@ -620,7 +620,8 @@ after the calls before it ran, as in Python. The model reads the results in call
 order the calls finish in, but the `ToolCallFinished` events of a group arrive in finish order.
 The first call that fails aborts its siblings' `ctx.signal`, and the node fails once all of them
 have settled; a `ReportedToolError` is a result, not a failure. On a stop, a call that already
-finished keeps its `ToolCallFinished`, and a call not yet started is skipped.
+finished keeps its `ToolCallFinished`, and a call not yet started never starts and gets no
+events.
 
 Changed (TS yian): in place of `function_tool`,
 `tool({ name, description, parameters, output, execute, isConcurrencySafe })` builds a
@@ -779,7 +780,9 @@ which is awaited, so no awaitable raises `ToolCheckError`.
 Changed (TS yian): the model reads a tool's result in the text form, not Python's `str()`: text
 as it is, `null` for `null`, and a record or list in JSON style (`{"a":1}`; see
 [Expressions → the `${...}` scanner](expressions.md#layer-3-the-scanner)).
-`ToolCallFinished.result` in `on_event` holds the same text. A `ReportedToolError` that a tool's
+`ToolCallFinished.result` in `on_event` holds the same text. A result that isn't a yian value
+(a `Date`, a class instance; see [Types → host intake](typing.md#two-constructors-infer-vs-check))
+fails the node, and its `ToolCallFinished.result` is `null`. A `ReportedToolError` that a tool's
 argument validator throws is read by the model like one the tool raised, as in Python, which
 checks the arguments inside the call.
 

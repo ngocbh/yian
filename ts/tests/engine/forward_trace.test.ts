@@ -109,6 +109,12 @@
  * `test_frontier_trace_rejects_inappropriate_fields_before_append` (19 of its 34 rows; the rest
  * below) and `test_frontier_trace_started_identity_is_exact` (`node`, `sequence`).
  *
+ * Ported, the replay tests (through `replayRecords` over a `copyGraph` copy of the flow taken
+ * before the outcome, Python's `deepcopy`; detached copies are rebuilt with their constructors):
+ * `test_outcome_accepts_detached_physical_scope_and_replays_it` (8 rows) and
+ * `test_terminal_trace_uses_the_accepted_route_latch_until_an_explicit_failure` (2 rows; replay of
+ * every prefix), each refusal with its full message.
+ *
  * Changed:
  * - A forged trace delta, occurrence, source entry or terminal is rebuilt with its constructor,
  *   for Python's `dataclasses.replace`; a value its constructor refuses (a terminal whose
@@ -119,7 +125,12 @@
  *   the occurrence constructor refuses the scope, and the commit refuses a forged occurrence that
  *   holds it, each with a `TypeError` naming the historical memory scope.
  * - The trace snapshot keeps the backward handlers by reference, for Python's bound-method
- *   identities.
+ *   identities; a replay compares through the shared `replayTraceSnapshot`, the handlers by key
+ *   (a TS bound handler can't name its node).
+ * - `test_terminal_trace_accepts_detached_authority_without_repreparing` (3 rows): Python's
+ *   monkeypatched "trace was reprepared" and "terminal was rederived" guards are dropped (an ES
+ *   module's functions can't be patched); the test keeps the detached commit and the replay
+ *   equality.
  *
  * Not ported (TS types): every `mutate` row (a TS delta, occurrence and terminal are frozen); the
  * `float_sequence` and `source_float` rows, and the `sequence` row of
@@ -139,10 +150,6 @@
  * prepared `NodeStep` and `RunStopped` of the in-flight `router`.
  *
  * Not ported (thread race): `test_a_lookup_retains_its_entry_when_a_new_writer_commits`.
- *
- * Later (T4-5, replay): `test_terminal_trace_accepts_detached_authority_without_repreparing`,
- * `test_terminal_trace_uses_the_accepted_route_latch_until_an_explicit_failure` and
- * `test_outcome_accepts_detached_physical_scope_and_replays_it`.
  *
  * Later (T4-6, with the engine): `test_accepted_backward_inventories_and_layout_replay_without_recapturing`,
  * `test_static_capture_host_fault_does_not_append_a_node_outcome`,
@@ -177,9 +184,10 @@
 
 import { afterEach, expect, test } from "bun:test";
 
-import { type CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
+import { type CompiledFlow, copyGraph, END_ID, START_ID } from "../../src/compile/model.ts";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import { Failure } from "../../src/diagnostics.ts";
+import type { RunFailed } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import {
   type FeedbackValue,
@@ -192,7 +200,7 @@ import {
 import { evalBinding } from "../../src/expr/template.ts";
 import { EvaluationEvidence, MemoryScope, MemorySection } from "../../src/memory/contracts.ts";
 import { BindingCapture } from "../../src/nodes/binding.ts";
-import { BackwardContext, BackwardResult, Grow, Node, NodeKind } from "../../src/nodes/base.ts";
+import { BackwardContext, BackwardResult, Grow, Node, NodeKind, retainFailure } from "../../src/nodes/base.ts";
 import { ChildFlowBoundary, ExecutionPosition, ExecutionScope, SeedConnection } from "../../src/nodes/contracts.ts";
 import { BackwardCapture, ForwardCapture } from "../../src/runtime/contracts.ts";
 import {
@@ -242,7 +250,8 @@ import {
   prepareNodeSucceeded,
   prepareRunResumed,
   prepareRunStopped,
-  type RunState,
+  replayRecords,
+  RunState,
 } from "../../src/runtime/state.ts";
 import { FileRef, Type, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { JSONDecodeError, logJson, parseJson } from "../../src/typesys/json.ts";
@@ -256,6 +265,7 @@ import {
   graph,
   initializedAndStarted,
   learnableStarted,
+  replayTraceSnapshot,
   RUN_ID,
   snapshot,
   startTraceNode,
@@ -2181,24 +2191,30 @@ class FuncSpawner extends FuncNode {
 }
 
 /**
- * Python's `_prepared_scoped_outcome`: a scoped CODE node `physical`, the sole in-flight node of a
- * learnable run, and its prepared outcome: a success committed to END, which ends the run; a route
- * along its `go` edge into END, which makes END ready; a failure, which ends the run; or (a
- * spawner) a growth into `fragment("physical")`.
+ * Python's `_prepared_scoped_outcome`: a CODE node `physical` (scoped unless `scoped` is false),
+ * the sole in-flight node of a learnable run, and its prepared outcome: a success committed to END,
+ * which ends the run; a route along its `go` edge into END, which makes END ready; a failure, which
+ * ends the run; or (a spawner) a growth into `fragment("physical")`. `original` is a copy of the
+ * flow before the outcome, for a replay.
  */
-function preparedScopedOutcome(kind: OutcomeKind = "success"): {
+function preparedScopedOutcome(
+  kind: OutcomeKind = "success",
+  options: { scoped?: boolean } = {},
+): {
   node: FuncNode;
   state: RunState;
   log: MemoryRunLog;
   prepared: PreparedTransition;
+  original: CompiledFlow;
 } {
   const node = new (kind === "growth" ? FuncSpawner : FuncNode)("physical", () => "done");
-  node.memoryScope = new MemoryScope([node.id], { memories: ["memory"] });
+  node.memoryScope = (options.scoped ?? true) ? new MemoryScope([node.id], { memories: ["memory"] }) : null;
   const { state, log } = startTraceNode(node, {
     keys: ["memory"],
     learnable: true,
     routeHandle: kind === "route" ? "go" : undefined,
   });
+  const original = copyGraph(state.flow);
   const carriers = { forwardCapture: forwardCapture(node, {}) };
   let prepared: PreparedTransition;
   if (kind === "success") {
@@ -2211,22 +2227,47 @@ function preparedScopedOutcome(kind: OutcomeKind = "success"): {
   } else {
     prepared = prepareExpanded(state, node.id, new Grow({}), fragmentBuilder, carriers);
   }
-  return { node, state, log, prepared };
+  return { node, state, log, prepared, original };
 }
 
 /**
- * Python's `_prepared_terminal_route`: a learnable `terminalSkipRouteFlow()` after START's success,
- * with `router` in flight and its prepared `go` route, which skips END and ends the run.
+ * Python's `_prepared_terminal_route`: a learnable `terminalSkipRouteFlow({sibling})` after START's
+ * success, with `router` (and with `sibling`, `unrelated`) in flight and `router`'s prepared `go`
+ * route, which skips END and ends the run. `original` is a copy of the started flow, for a replay.
  */
-function preparedTerminalRoute(): { state: RunState; log: MemoryRunLog; prepared: PreparedTransition } {
-  const { state, log } = learnableStarted(terminalSkipRouteFlow());
+function preparedTerminalRoute(options: { sibling?: boolean } = {}): {
+  state: RunState;
+  log: MemoryRunLog;
+  prepared: PreparedTransition;
+  original: CompiledFlow;
+} {
+  const { state, log } = learnableStarted(terminalSkipRouteFlow({ sibling: options.sibling }));
+  const original = copyGraph(state.flow);
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
   commitStartSuccess(state, log, {});
-  commitPrepared(log, state, prepareNodeStarted(state, "router"));
+  for (const nodeId of options.sibling ? ["router", "unrelated"] : ["router"]) {
+    commitPrepared(log, state, prepareNodeStarted(state, nodeId));
+  }
   const prepared = prepareNodeRouted(state, "router", "go", {
     forwardCapture: forwardCapture(state.flow.nodes.get("router")!, {}),
   });
-  return { state, log, prepared };
+  return { state, log, prepared, original };
+}
+
+/** Return a fresh copy of `source`, for Python's `deepcopy`. */
+function copiedSource(source: SourceRef | null): SourceRef | null {
+  return source === null ? null : new SourceRef(source.runId, source.executionSeq, [...source.path]);
+}
+
+/** Return a fresh copy of `terminal`, for Python's `deepcopy`. */
+function copiedTerminal(terminal: TraceTerminal): TraceTerminal {
+  const failure = terminal.failure === null ? null : retainFailure(terminal.failure);
+  return new TraceTerminal(terminal.succeeded, copiedSource(terminal.source), terminal.outputJson, failure);
+}
+
+/** Replay `log` over a fresh state of `original`. */
+function replayed(original: CompiledFlow, envelopes: readonly RecordEnvelope[]): RunState {
+  return replayRecords(new RunState(original), envelopes, { growBuilder: fragmentBuilder });
 }
 
 /** A START -> END flow for the learnable trace tests, Python's `_graph([], [(START_ID, END_ID)])`. */
@@ -2572,6 +2613,105 @@ test.each(
 
   expectRefused(state, log, withTrace(prepared, deltas[change]), RangeError, message);
 });
+
+test.each(["success", "route", "failure"] as const)(
+  "a terminal trace accepts detached authority and replays it: %s",
+  (kind) => {
+    const { state, log, prepared, original } = kind === "route" ? preparedTerminalRoute() : preparedScopedOutcome(kind);
+    const delta = prepared._plan.traceDelta!;
+    const writer = delta.rootWriter;
+    const detached = changedDelta(delta, {
+      terminal: copiedTerminal(delta.terminal!),
+      rootWriter: writer === null ? null : changedEntry(writer, { source: copiedSource(writer.source) ?? undefined }),
+      rootStartSource: copiedSource(delta.rootStartSource),
+      causalRouteSource: copiedSource(delta.causalRouteSource),
+    });
+
+    commitPrepared(log, state, withTrace(prepared, detached));
+
+    expect(state.trace!.terminal).toEqual(detached.terminal);
+    const replay = replayed(original, log.records());
+    expect(replayTraceSnapshot(replay.trace!)).toEqual(replayTraceSnapshot(state.trace!));
+    expect(replay.result).toEqual(state.result);
+  },
+);
+
+test.each([false, true])(
+  "a terminal trace uses the accepted route latch until an explicit failure (explicit failure: %p)",
+  (explicitFailure) => {
+    const { state, log, prepared: route, original } = preparedTerminalRoute({ sibling: true });
+    const delta = route._plan.traceDelta!;
+    expect(delta.terminal).toBeNull();
+    const causal = delta.causalRouteSource!;
+    const sibling = new SourceRef(state.runId!, state.trace!.started.get("unrelated")!);
+    for (const source of [null, sibling]) {
+      expectRefused(
+        state,
+        log,
+        withTrace(route, changedDelta(delta, { causalRouteSource: source })),
+        RangeError,
+        "terminal trace causal source disagrees with the accepted outcome",
+      );
+    }
+    commitPrepared(log, state, route);
+    const carriers = { forwardCapture: forwardCapture(state.flow.nodes.get("unrelated")!, {}) };
+    const final = explicitFailure
+      ? prepareNodeFailed(
+          state,
+          new Failure({ code: "node.execute", message: "later failure", nodeId: "unrelated" }),
+          carriers,
+        )
+      : prepareNodeSucceeded(state, "unrelated", "done", carriers);
+    const [expectedSource, wrongSource] = explicitFailure ? [sibling, causal] : [causal, sibling];
+    const finalDelta = final._plan.traceDelta!;
+    const terminal = finalDelta.terminal!;
+    const wrong = new TraceTerminal(terminal.succeeded, wrongSource, terminal.outputJson, terminal.failure);
+    expectRefused(
+      state,
+      log,
+      withTrace(final, changedDelta(finalDelta, { terminal: wrong })),
+      RangeError,
+      "terminal trace disagrees with the prepared terminal outcome",
+    );
+
+    commitPrepared(log, state, withTrace(final, changedDelta(finalDelta, { terminal: copiedTerminal(terminal) })));
+
+    expect(state.trace!.terminal!.source).toEqual(expectedSource);
+    expect(state.trace!.terminal!.failure).toEqual((state.result as RunFailed).failure);
+    const records = log.records();
+    for (let length = 1; length <= records.length; length++) {
+      const replay = replayed(copyGraph(original), records.slice(0, length));
+      expect(replay.trace!.terminal).toEqual(length === records.length ? state.trace!.terminal : null);
+    }
+  },
+);
+
+test.each(OUTCOME_KINDS.flatMap((kind) => [true, false].map((scoped) => [kind, scoped] as const)))(
+  "an outcome accepts a detached physical scope and replays it: %s, scoped %p",
+  (kind, scoped) => {
+    const { node, state, log, prepared, original } = preparedScopedOutcome(kind, { scoped });
+    const delta = prepared._plan.traceDelta!;
+    const scope = node.memoryScope;
+    const copied =
+      scope === null
+        ? null
+        : new MemoryScope([...scope.staticPath], {
+            memories: [...scope.memories],
+            occurrencePath: [...scope.occurrencePath],
+          });
+
+    commitPrepared(
+      log,
+      state,
+      withTrace(prepared, changedDelta(delta, { occurrence: changedOccurrence(delta.occurrence!, { memoryScope: copied }) })),
+    );
+
+    const occurrence = state.trace!.occurrences.at(-1)!;
+    expect(occurrence.memoryScope).toEqual(node.memoryScope);
+    const replay = replayed(original, log.records());
+    expect(replay.trace!.occurrence(occurrence.source).memoryScope).toEqual(occurrence.memoryScope);
+  },
+);
 
 test.each<[string, Value, boolean, (string | number)[] | null]>([
   ["input.x", null, true, ["x"]],

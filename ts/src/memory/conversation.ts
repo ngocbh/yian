@@ -69,7 +69,8 @@ function digest(value: unknown): string {
   return crypto.createHash("sha256").update(logJson(value)).digest("hex");
 }
 
-function invocationJson(value: ConversationInvocation): JsonObject {
+/** @internal Encode one invocation as its wire record, `start_sequence` a `bigint`. */
+export function invocationJson(value: ConversationInvocation): JsonObject {
   return { run_id: value.runId, start_sequence: BigInt(value.startSequence) };
 }
 
@@ -176,7 +177,12 @@ function counter(value: unknown, name: string): number {
   return number;
 }
 
-function invocationFromJson(value: unknown): ConversationInvocation {
+/**
+ * @internal Decode one exact invocation wire record.
+ *
+ * @throws TypeError or RangeError when `value` isn't a valid invocation record.
+ */
+export function invocationFromJson(value: unknown): ConversationInvocation {
   const data = object(value, "run_id start_sequence");
   return new ConversationInvocation(data.run_id as string, counter(data.start_sequence, "start_sequence"));
 }

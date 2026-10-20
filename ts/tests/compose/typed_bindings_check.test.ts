@@ -46,10 +46,12 @@
  * Ported from `tests/compose/test_nested_template_types.py` (its mirror doesn't exist yet):
  * `test_nested_typed_binding_is_checked_at_its_own_line`.
  *
- * TS-only: `shownLiteral` rows (compact JSON, ints as digits); and the harvested cases these checks decide (`runCase`,
- * `assembled`), in the "Pinned harvested cases" block, then those from test files whose mirrors
- * don't exist yet (`test_constructor_load.py`, `test_nested_template_types.py`,
- * `test_tagged_bindings.py`) in the "Pinned harvested cases (TS-only placement)" block.
+ * TS-only: `shownLiteral` rows (compact JSON, ints as digits); `localInputContracts` rows over
+ * hand-built maps (Python has no direct test; the reference and assert checks read it); and the
+ * harvested cases these checks decide (`runCase`, `assembled`), in the "Pinned harvested cases"
+ * block, then those from test files whose mirrors don't exist yet (`test_constructor_load.py`,
+ * `test_nested_template_types.py`, `test_tagged_bindings.py`) in the "Pinned harvested cases
+ * (TS-only placement)" block.
  *
  * Later (T3-22): `test_disjoint_binding_inside_a_defs_body_names_the_body` (the `defs entry`
  * prefix comes from the loader's def loading).
@@ -61,9 +63,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
-import { shownLiteral } from "../../src/compose/validate/typed_bindings.ts";
+import { BuildResult } from "../../src/compose/nodes/base.ts";
+import { LocalInput, localInputContracts, shownLiteral } from "../../src/compose/validate/typed_bindings.ts";
 import { forget } from "../../src/defaults.ts";
-import { ValueContract } from "../../src/nodes/contracts.ts";
+import { Binding, type OutputContract, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
+import { LoopNode } from "../../src/nodes/loop/node.ts";
+import { MapNode } from "../../src/nodes/map/node.ts";
+import { WaitNode } from "../../src/nodes/wait/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
@@ -553,6 +559,87 @@ describe("shownLiteral writes a literal as compact JSON", () => {
     { value: [1n, "a", { k: 2n }], shown: '[1,"a",{"k":2}]' },
   ])("$shown", ({ value, shown }) => {
     expect(shownLiteral(value)).toBe(shown);
+  });
+});
+
+// ---------- localInputContracts (TS-only) ----------
+
+describe("localInputContracts", () => {
+  const OPTIONAL_INT = new ValueContract(Type.scalar(ValueKind.INTEGER).replace({ nullable: true }));
+  const FLOAT = new ValueContract(Type.scalar(ValueKind.NUMBER));
+  const PRODUCERS = new Map<string, OutputContract>([
+    ["d", INT],
+    ["o", OPTIONAL_INT],
+    ["t", STR],
+  ]);
+
+  const contracts = (
+    wiring: Record<string, Record<string, unknown>>,
+    buildResults: Map<string, BuildResult> = new Map(),
+  ): Map<string, Map<string, LocalInput>> =>
+    localInputContracts(
+      new Map(Object.entries(wiring).map(([nodeId, names]) => [nodeId, new Map(Object.entries(names))])),
+      PRODUCERS,
+      new Map(),
+      buildResults,
+    );
+
+  const built = (node: MapNode | WaitNode | LoopNode, wiring: Record<string, unknown>): Map<string, BuildResult> =>
+    new Map([[node.id, new BuildResult({ node, wiring: new Map(Object.entries(wiring)) })]]);
+
+  test("a typed binding keeps the declared contract, then the inferred one when it fits", () => {
+    const names = contracts({
+      n: {
+        fits: new Binding("${d.output}", { contract: OPTIONAL_INT }),
+        wider: new Binding("${o.output}", { contract: INT }),
+      },
+    }).get("n");
+    expect(names?.get("fits")).toEqual(new LocalInput([OPTIONAL_INT, INT], "d.output"));
+    expect(names?.get("wider")).toEqual(new LocalInput([INT], "o.output"));
+  });
+
+  test("a literal is widened", () => {
+    expect(contracts({ n: { s: "abc" } }).get("n")?.get("s")).toEqual(new LocalInput([STR], null));
+  });
+
+  test("an unproven binding is left out", () => {
+    expect(contracts({ n: { u: "${nobody.output}", k: "${d.output}" } }).get("n")).toEqual(
+      new Map([["k", new LocalInput([INT], "d.output")]]),
+    );
+    expect(contracts({ n: { u: "${nobody.output}" } })).toEqual(new Map());
+  });
+
+  test("a map node and reserved keys are skipped", () => {
+    const wiring = { over: "${d.output}", x: "${d.output}" };
+    expect(contracts({ m: wiring }, built(new MapNode("m", { flowId: "child" }), wiring))).toEqual(new Map());
+    const waitWiring = { until: "${t.output}", x: "${d.output}" };
+    expect(contracts({ w: waitWiring }, built(new WaitNode("w"), waitWiring))).toEqual(
+      new Map([["w", new Map([["x", new LocalInput([INT], "d.output")]])]]),
+    );
+  });
+
+  test("a loop name adds the carried field contract, and is dropped when the carried field is unproven", () => {
+    const loop = new LoopNode("l", { flowId: "body" });
+    loop.outputContract = new PartialRecordContract([
+      ["n", FLOAT],
+      ["note", null],
+    ]);
+    const wiring = { n: "${d.output}", note: "${t.output}", extra: "${d.output}" };
+    expect(contracts({ l: wiring }, built(loop, wiring))).toEqual(
+      new Map([["l", new Map([["n", new LocalInput([INT, FLOAT], "d.output")]])]]),
+    );
+  });
+
+  test.each<{ source: string; bound: string | null }>([
+    { source: "${d.output}", bound: "d.output" },
+    { source: "${d.output :- null}", bound: "d.output" },
+    { source: "${isinstance(d.output, int)}", bound: null },
+    { source: "n=${d.output}", bound: null },
+    { source: "abc", bound: null },
+  ])("source of $source is $bound", ({ source, bound }) => {
+    const local = contracts({ n: { p: source } }).get("n")?.get("p");
+    expect(local).toBeInstanceOf(LocalInput);
+    expect(local?.source).toBe(bound);
   });
 });
 

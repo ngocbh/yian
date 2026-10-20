@@ -111,7 +111,7 @@ import { validateHumanQuestions } from "../validate/human_questions.ts";
 import { checkWrittenValues } from "../validate/value_nesting.ts";
 import { checkWiringParity } from "../validate/wiring_parity.ts";
 // T3-19 imports
-import { checkTypedInputs, checkTypedOutputs } from "../validate/typed_bindings.ts";
+import { checkTypedInputs, checkTypedOutputs, localInputContracts } from "../validate/typed_bindings.ts";
 // T3-20 imports
 
 // Name for the single output of a bare whole-string `output:` binding. The value-mode EndNode
@@ -2129,7 +2129,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //   T3-19  attachLlmConfigWiring (2, with _llm_value_types): returns `[]`.
 //          checkCallMapTypes, checkLoopTypeContract, checkLlmConfigSources (1).
 //          inlineLoops (3, `ReadonlySet<string>`): `new Set()`.
-//          localInputContracts (1): returns `new Map()`.
 //   T3-20  checkCaseBranches (1); caseOutputCursor (2): returns `null`.
 //          computeNarrowing (1): returns an empty `Narrowing` over the given maps.
 //          checkCaseWhenValues, checkImpossibleWhens, checkCaseExhaustive, validateNodeAsserts,
@@ -2216,17 +2215,6 @@ function checkLoopTypeContract(
     diagnostics?: LoadDiagnostics | null;
   } = {},
 ): void {}
-
-/** Python's `compose.validate.typed_bindings.local_input_contracts`; not ported yet. */
-function localInputContracts(
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-  producers: ReadonlyMap<string, OutputContract>,
-  flowInputs: ReadonlyMap<string, ValueContract>,
-  buildResults: ReadonlyMap<string, BuildResult>,
-  options: { narrowing?: Narrowing | null; typeFn?: TypeFn | null } = {},
-): Map<string, Map<string, LocalInput>> {
-  return new Map();
-}
 
 /** Python's `compose.validate.llm_config_sources.check_llm_config_sources`; not ported yet. */
 function checkLlmConfigSources(

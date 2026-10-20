@@ -25,7 +25,6 @@
  * binding types rather than reject them. `localInputContracts` returns the proven contracts each
  * node-local name may have, for the passes that field-check what a node reads from its own inputs
  * (prompts).
- * Not ported yet: `localInputContracts`.
  *
  * Node inputs are checked as soon as producer contracts exist, before the CALL, MAP, and LOOP
  * checks that compare the declared type with a child's parameters; flow outputs are checked once
@@ -43,6 +42,9 @@
 import type { FlowOutput } from "../../compile/model.ts";
 import { typeRelation } from "../../compile/validation.ts";
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
+import { Tree } from "../../expr/grammar.ts";
+import { ExpressionError, scanTemplate } from "../../expr/index.ts";
+import { Span } from "../../expr/template.ts";
 import { LLM_CONFIG_KEY } from "../../nodes/agent/llm_values.ts";
 import {
   Binding,
@@ -53,6 +55,7 @@ import {
   type ValuePath,
   ValueTemplate,
 } from "../../nodes/contracts.ts";
+import { LoopNode } from "../../nodes/loop/node.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import {
   buildValueAs,
@@ -68,7 +71,9 @@ import {
 } from "../../typesys/values.ts";
 import { LoadDiagnostics, type LoadError } from "../helpers/errors.ts";
 import {
+  directReferenceParts,
   directReferencePath,
+  literalContract,
   literalType,
   literalValue,
   NOT_LITERAL,
@@ -266,6 +271,137 @@ export function inferBindingType(
   if (literal !== NOT_LITERAL) return literalType(literal);
   const inferred = resolveOutputBindingContract(binding, producers, flowInputs, { typeFn });
   return isExactly(inferred, ValueContract) ? inferred.type : null;
+}
+
+/**
+ * Return each node input's alternative contracts, keyed by node id then param name.
+ *
+ * A name's alternatives come from its wiring binding, read under the node's narrowed view of the
+ * producer and flow-input contracts. A typed binding has its declared contract, plus the contract
+ * its raw source is inferred to have when that is exact and fits the declared type (so a branch's
+ * narrowed member is readable); a literal has its widened contract; any other binding has its
+ * inferred exact or partial contract. A LOOP name also has the carried record's field contract,
+ * since a turn may return a compatible wider value than the seed. A name with an unproven binding
+ * contract, or a LOOP name with an unproven carried field, is left out, as are a node's reserved
+ * wiring keys and every input of a per-item node (MAP).
+ *
+ * @param flowWiring Final binding maps keyed by node id and parameter name.
+ * @param producers Exact or partial node output contracts keyed by producer id.
+ * @param flowInputs Exact flow input contracts keyed by input name.
+ * @param buildResults Built nodes, for the node kind and a LOOP's carried record contract.
+ * @param options.narrowing The union narrowing each param reads against; `null` (the default)
+ *   reads every param against the unchanged maps.
+ * @param options.typeFn Resolves a constructor name to its type for inference.
+ * @returns The proven names of each node.
+ */
+export function localInputContracts(
+  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  buildResults: ReadonlyMap<string, BuildResult>,
+  options: { narrowing?: Narrowing | null; typeFn?: TypeFn | null } = {},
+): Map<string, Map<string, LocalInput>> {
+  const { narrowing = null, typeFn = null } = options;
+  const contracts = new Map<string, Map<string, LocalInput>>();
+  for (const [nodeId, wiring] of flowWiring) {
+    const node = buildResults.get(nodeId)?.node ?? null;
+    if (node !== null && node.bindsPerItem) continue;
+    const reserved = node !== null ? node.reservedWiringKeys() : new Set<string>();
+    const names = new Map<string, LocalInput>();
+    for (const [name, binding] of wiring) {
+      if (reserved.has(name)) continue;
+      const [paramProducers, paramInputs] =
+        narrowing !== null ? narrowing.forParam(nodeId, name) : [producers, flowInputs];
+      let alternatives = bindingAlternatives(binding, paramProducers, paramInputs, typeFn);
+      if (alternatives === null) continue;
+      if (node instanceof LoopNode) {
+        const carried = node.outputContract !== null ? projectOutputContract(node.outputContract, [name]) : null;
+        if (carried === null) continue;
+        alternatives = [...alternatives, carried];
+      }
+      names.set(name, new LocalInput(alternatives, boundSource(binding)));
+    }
+    if (names.size > 0) contracts.set(nodeId, names);
+  }
+  return contracts;
+}
+
+/**
+ * Return the reference path a binding passes through unchanged, else `null`.
+ *
+ * @param binding A wiring binding, raw or a `Binding`.
+ * @returns The path for a source that is one `${...}` span holding a bare reference, alone or on
+ *   the left of `:-` or `:?` (`${d.output}`, `${d.output :- null}`), or `null` for a literal, a
+ *   value template, embedded text, malformed text, or any other expression (a call, a coalesce, an
+ *   operator), whose value isn't the referenced one.
+ */
+function boundSource(binding: unknown): string | null {
+  const source = bindingSource(binding);
+  if (typeof source !== "string") return null;
+  let segments;
+  try {
+    segments = scanTemplate(source);
+  } catch (error) {
+    if (error instanceof ExpressionError) return null;
+    throw error;
+  }
+  const only = segments.length === 1 ? segments[0] : undefined;
+  if (!(only instanceof Span)) return null;
+  let tree = only.tree;
+  if (tree instanceof Tree && (tree.data === "default_expr" || tree.data === "required_expr")) tree = tree.children[0]!;
+  const parts = directReferenceParts(tree);
+  return parts !== null ? parts.join(".") : null;
+}
+
+/**
+ * Return the contracts one binding's value is proven to have, else `null`.
+ *
+ * Unlike `inferBindingType`, a partial record is kept, since its closed root names can still be
+ * checked, and a literal is widened, so a message names `str` rather than its one-tag `Literal`. A
+ * typed binding also keeps the type inferred from its raw source when that fits the declared type,
+ * as a narrower view of the same value.
+ *
+ * @param binding A wiring binding, raw or a `Binding`.
+ * @param producers Node output contracts by producer id.
+ * @param flowInputs Flow input contracts by name.
+ * @param typeFn Resolves a constructor name to its type.
+ * @returns The alternatives, the declared contract first for a typed binding, or `null` when the
+ *   value's contract is unproven.
+ */
+function bindingAlternatives(
+  binding: unknown,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  typeFn: TypeFn | null,
+): OutputContract[] | null {
+  const source = bindingSource(binding);
+  const literal = literalValue(source);
+  if (binding instanceof Binding && binding.contract !== null) {
+    const declared = binding.contract;
+    // Infer from the raw source: the Binding itself resolves to its declared contract. Exact
+    // literals, so a literal tag selects its union member.
+    let inferred: OutputContract | null;
+    if (literal !== NOT_LITERAL) {
+      inferred = literalContract(literal, { exactLiterals: true });
+    } else if (source instanceof ValueTemplate) {
+      inferred = templateContract(
+        source,
+        (text) => resolveOutputBindingContract(text, producers, flowInputs, { typeFn }),
+        { exactLiterals: true },
+      );
+    } else {
+      inferred = resolveOutputBindingContract(source, producers, flowInputs, { typeFn });
+    }
+    if (isExactly(inferred, ValueContract) && typeRelation(inferred.type, declared.type) === "fits") {
+      return [declared, inferred];
+    }
+    return [declared];
+  }
+  const contract =
+    literal !== NOT_LITERAL
+      ? literalContract(literal)
+      : resolveOutputBindingContract(binding, producers, flowInputs, { typeFn });
+  return contract === null ? null : [contract];
 }
 
 /**

@@ -14,8 +14,9 @@
  * `test_entry_errors_are_located_at_the_entry`, `test_an_entry_under_a_credential_name_loads`,
  * `test_a_mistyped_literal_under_a_credential_name_gets_the_ordinary_error`,
  * `test_a_nested_binding_loads`, `test_fingerprint_is_stable_and_tracks_the_literal`,
- * `test_an_object_entry_with_an_empty_key_is_rejected` and
- * `test_an_empty_key_outside_a_written_out_record_loads` (the load only).
+ * `test_an_object_entry_with_an_empty_key_is_rejected`,
+ * `test_an_empty_key_outside_a_written_out_record_loads` (the load only) and
+ * `test_a_flow_call_inside_a_span_keeps_its_error`.
  *
  * Changed: the CODE node runs the built-in identity `{builtin: "identity", field: <id>}`, not
  * generated code. A mismatched text value is JSON-quoted (rule `messages`), and a missing-field
@@ -29,9 +30,9 @@
  * `test_a_nested_untagged_mapping_keeps_its_fields`,
  * `test_an_escaped_span_in_an_object_entry_is_text`) check the built node's output contract, the
  * record `literalContract` spells, where Python checks the reader's error;
- * `test_an_object_entry_over_an_outside_value_stays_object` and the span-free rows of
- * `test_an_object_entry_not_over_a_bare_object_mapping_keeps_its_tag` check that the contract is
- * the tag.
+ * `test_an_object_entry_over_an_outside_value_stays_object` and
+ * `test_an_object_entry_not_over_a_bare_object_mapping_keeps_its_tag` (its `call(...)` row with the
+ * `g` def built by hand) check that the contract is the tag.
  *
  * TS-only: the descriptor refusing node-only fields, a `RangeError` (a compiler bug) where Python
  * raises `ValueError`; and the harvested `load-case/compose_value_entries_load__*` cases this
@@ -42,10 +43,10 @@
  * Later (T3-19): the typed bindings: `test_named_type_entry_reads_a_float_producer`,
  * `test_named_type_entry_rejects_a_disjoint_producer_at_the_entry`,
  * `test_a_named_field_read_into_a_disjoint_binding_is_rejected`,
- * `test_a_disjoint_span_names_the_value_entry`.
- * Later (T3-17): inline calls: `test_a_flow_call_of_a_disjoint_type_is_rejected_at_the_entry`,
- * `test_a_flow_call_inside_a_span_keeps_its_error` and the `call(...)` row of
- * `test_an_object_entry_not_over_a_bare_object_mapping_keeps_its_tag`; the build-cache reader,
+ * `test_a_disjoint_span_names_the_value_entry`,
+ * `test_a_flow_call_of_a_disjoint_type_is_rejected_at_the_entry` (its message is the typed-binding
+ * check's).
+ * Later (T3-17): the build-cache reader,
  * which types a span or nested tag in a written-out record:
  * `test_entries_reading_each_other_are_rejected`,
  * `test_an_entry_reading_itself_is_rejected`, `test_a_span_field_takes_its_producer_type`,
@@ -66,12 +67,49 @@ import { forget } from "../../src/defaults.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { type OutputContract, ValueContract, type ValueTemplate } from "../../src/nodes/contracts.ts";
+import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
+import {
+  assembled,
+  assembleText,
+  type CaseRow,
+  handChild,
+  loadError,
+  parametersFromYaml,
+  runCase,
+} from "./declarations.ts";
 
 afterEach(() => forget());
 
 const BUY = "typedefs:\n  Buy:\n    action: Literal(buy)\n    conviction: float\n";
+
+const F_DEF =
+  "defs:\n" +
+  "  f:\n" +
+  "    input:\n" +
+  "      x: !str\n" +
+  "    nodes:\n" +
+  "      up:\n" +
+  "        kind: code\n" +
+  "        input:\n" +
+  "          x: ${input.x}\n" +
+  "        output: str\n" +
+  "        code: |\n" +
+  "          return inputs['x'].toUpperCase()\n" +
+  "    output: ${up.output}\n";
+
+const G_DEF =
+  "defs:\n" +
+  "  g:\n" +
+  "    input:\n" +
+  "      n: !int\n" +
+  "    nodes:\n" +
+  "      v:\n" +
+  "        kind: code\n" +
+  "        output: {q: int}\n" +
+  "        code: |\n" +
+  "          return {'q': 1}\n" +
+  "    output: ${v.output}\n";
 
 /** Return a flow with a `t: str` input, a float producer `s`, and `entries`. */
 function flow(entries: string, options: { output?: string; head?: string } = {}): string {
@@ -260,6 +298,23 @@ describe("the record a written-out object keeps", () => {
     expect(labelOf(contractOf(recordFlow(entries, "${o.output.zz}"), "o"))).toBe("object");
   });
 
+  test("an object entry over a call keeps its tag", () => {
+    // `g` returns the record `{q: int}`; the entry reads it through its `!object` tag.
+    const g = handChild({
+      inputs: parametersFromYaml("input:\n  n: !int\n", new Map()),
+      producers: { v: new ValueContract(typeFor("Q", readTypedefs({ Q: { q: "int" } }))) },
+      output: "${v.output}",
+    });
+    const text = recordFlow("  o: !object call(g, n=${input.n})\n", "${o.output.zz}").replace(
+      "input:\n",
+      G_DEF + "input:\n",
+    );
+
+    const { flow } = assembleText(text, "flow.yaml", { children: { g } });
+
+    expect(labelOf(flow.compiled.nodes.get("o")!.outputContract)).toBe("object");
+  });
+
   test.each(["  o: !Optional(object) {a: 1}\n", "  o: !Optional(object)\n    a: ${input.n}\n"])(
     "an object entry not over a bare object mapping keeps its tag: %j",
     (entry) => {
@@ -336,6 +391,18 @@ test.each([
   expect(make).toThrow(`value entry 'x' can't carry '${name}'`);
 });
 
+test("a flow call inside a span keeps its error", () => {
+  const text = flow("  x: !str ${ f(input.t) }\n", { head: F_DEF });
+
+  const error = loadErrorOf(text);
+
+  expect(error.message).toBe(
+    "x: a flow call 'f' inside ${...} is not supported — write it as the whole " +
+      "value with the call(...) directive: call(f, ...)",
+  );
+  expect(errorLine(error)).toBe(lineOf(text, "  x: !str ${ f("));
+});
+
 describe("harvested cases", () => {
   test.each<CaseRow>(
     [
@@ -344,6 +411,8 @@ describe("harvested cases", () => {
       "an_infinite_float_entry",
       "a_nested_binding_loads",
       "an_entry_under_a_credential_name_loads",
+      // The inline-call desugar raises it before the `f` callee resolves.
+      "a_flow_call_inside_a_span_keeps_its_error",
     ].map((name) => ({ id: `load-case/compose_value_entries_load__${name}`, call: assembled })),
   )("$id", runCase);
 });

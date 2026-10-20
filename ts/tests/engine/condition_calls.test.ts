@@ -10,7 +10,9 @@
  * The harvested `load-case/engine_condition_calls__wrong_builtin_arguments_in_a_case_when` is
  * pinned at the end (`assemble`, whose CASE build raises it), and so is
  * `load-case/engine_condition_calls__wrong_builtin_arguments_in_a_loop_while` (`assembledWith`, the
- * `step` def built by hand; the LOOP build raises it).
+ * `step` def built by hand; the LOOP build raises it), and
+ * `load-case/engine_condition_calls__whole_span_call_in_a_flow_assert` (`assemble`, whose
+ * inline-call desugar raises it).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -214,4 +216,8 @@ test("assembled: load-case/engine_condition_calls__wrong_builtin_arguments_in_a_
     id: "load-case/engine_condition_calls__wrong_builtin_arguments_in_a_loop_while",
     call: assembledWith({ step: stepBody() }),
   });
+});
+
+test("assembled: load-case/engine_condition_calls__whole_span_call_in_a_flow_assert", () => {
+  runCase({ id: "load-case/engine_condition_calls__whole_span_call_in_a_flow_assert", call: assembled });
 });

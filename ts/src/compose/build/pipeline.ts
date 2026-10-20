@@ -78,10 +78,17 @@ import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
 import { siteKey } from "../nodes/base.ts";
 import { HumanInputDescriptor } from "../nodes/human_input.ts";
 // T3-17 imports
+import { desugarAdaptiveQuestions, QPARAM } from "../desugar/adaptive_questions.ts";
+import { caseOutputReads, expandCaseOutputs } from "../desugar/case_outputs.ts";
+import { desugarCaseCallTargets } from "../desugar/case_targets.ts";
+import { desugarInlineCalls, synthIdGen } from "../desugar/inline_calls.ts";
 import { isValueEntry, readValueEntry, type ValueEntryDescriptor } from "../desugar/value_entries.ts";
 import { inferDataEdges } from "../edges/data.ts";
 import { hostControlEdges } from "../edges/hosts.ts";
 import { inferOrderingEdges } from "../edges/ordering.ts";
+import { CallDescriptor } from "../nodes/call.ts";
+import { CaseDescriptor } from "../nodes/case.ts";
+import type { ScalarStyle } from "../source/common.ts";
 import { LoweredAsserts } from "../validate/asserts.ts";
 import { Narrowing } from "../validate/narrowing.ts";
 import type { LocalInput } from "../validate/typed_bindings.ts";
@@ -789,24 +796,72 @@ function attachLlmConfigWiring(
   return [];
 }
 
-/** Python's `compose.build.pipeline._binding_style`; not ported yet. */
+/**
+ * Return the authored YAML scalar style of one node binding.
+ *
+ * A value entry's one binding is the entry itself, so its style is the entry's.
+ *
+ * @param nodesCursor Retained view of the flow's node mapping.
+ * @param nodeId The node that owns the binding.
+ * @param field The binding field (`inputs`, or a scalar field such as `over`).
+ * @param key The binding name in a mapping field; equals `field` for a scalar one.
+ * @param options.valueEntries The ids of the flow's value entries.
+ * @param options.diagnostics Factory for located load errors.
+ * @returns The style, or `null` for a synthesized node or binding.
+ * @throws LoadError when the retained cursor cannot be traversed.
+ */
 function bindingStyle(
   nodesCursor: SourceCursor,
   nodeId: string,
   field: string,
   key: string,
   options: { valueEntries: ReadonlySet<string>; diagnostics: LoadDiagnostics },
-): string | null {
-  return null;
+): ScalarStyle | null {
+  const { valueEntries, diagnostics } = options;
+  try {
+    if (!nodesCursor.has(nodeId)) return null;
+    if (valueEntries.has(nodeId)) {
+      if (field !== "inputs" || key !== nodeId) return null;
+      return nodesCursor.child(nodeId).scalarStyle;
+    }
+    let cursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
+    if (!cursor.has(field)) return null;
+    cursor = cursor.child(field);
+    if (key !== field) {
+      if (!cursor.has(key)) return null;
+      cursor = cursor.child(key);
+    }
+    return cursor.scalarStyle;
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw diagnostics.error(error.message, { range: error.range, cause: error });
+  }
 }
 
-/** Python's `compose.build.pipeline._output_style`; not ported yet. */
+/**
+ * Return the authored YAML scalar style of one flow output binding.
+ *
+ * @param outputsCursor Retained authored `output:` value.
+ * @param key The output's record field name, or `null` for a single output.
+ * @param options.diagnostics Factory for located load errors.
+ * @returns The style, or `null` for a generated section.
+ * @throws LoadError when the retained cursor cannot be traversed.
+ */
 function outputStyle(
   outputsCursor: SourceCursor | null,
-  key: unknown,
+  key: string | null,
   options: { diagnostics: LoadDiagnostics },
-): string | null {
-  return null;
+): ScalarStyle | null {
+  const { diagnostics } = options;
+  if (outputsCursor === null) return null;
+  try {
+    if (key === null) return outputsCursor.scalarStyle;
+    if (!outputsCursor.has(key)) return null;
+    return outputsCursor.child(key).scalarStyle;
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw diagnostics.error(error.message, { range: error.range, cause: error });
+  }
 }
 
 /** Python's `compose.build.pipeline._case_output_cursor`; not ported yet. */
@@ -1003,7 +1058,31 @@ export function stampFlowOutputOrigins(
   });
 }
 
-/** Python's `compose.build.pipeline._stamp_inline_call_origins`; not ported yet. */
+/**
+ * Locate each inline `call(...)` node and its arguments at the binding it was written in.
+ *
+ * A synth call node has no authored entry of its own, so its argument bindings and the node itself
+ * take the origin of the authored binding named by its `callSite`: a failing argument then points
+ * at that binding, and the child flow's failures get it as their outer frame. A node input, MAP
+ * `over:`, flow output, or flow assert already owns an origin, which the call shares rather than
+ * registering a second site, because the argument sits inside that authored scalar. A CASE
+ * `then:`/`else:` target owns no binding origin, so its site is registered once here; a nested
+ * call reuses it. An argument or node that already has an origin keeps it.
+ *
+ * @param descriptors Final descriptors keyed by node id after every graph desugar.
+ * @param nodesCursor Retained source view of the flow's authored node mapping.
+ * @param nodes Built runtime nodes keyed by final descriptor id; a synth call node's `origin` is
+ *   set in place.
+ * @param flowWiring Mutable final binding maps keyed by node id and wiring key, with the authored
+ *   node bindings already originated.
+ * @param flowOutputs Final output carriers, with their authored origins already stamped.
+ * @param flowAsserts The flow's `asserts:` carriers in authored order, or `null`.
+ * @param options.owner Complete lexical owner path used to namespace catalog sites.
+ * @param options.catalogBuilder File-owned origin catalog builder shared by all lexical children.
+ * @param options.diagnostics Factory for located load errors.
+ * @throws LoadError when a retained source cursor cannot be traversed or a catalog site collides
+ *   with another registration.
+ */
 function stampInlineCallOrigins(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
   nodesCursor: SourceCursor,
@@ -1012,7 +1091,79 @@ function stampInlineCallOrigins(
   flowOutputs: readonly FlowOutput[],
   flowAsserts: readonly Assertion[] | null,
   options: { owner: readonly string[]; catalogBuilder: SourceCatalogBuilder; diagnostics: LoadDiagnostics },
-): void {}
+): void {
+  const { owner, catalogBuilder, diagnostics } = options;
+
+  /** Return the origin already stamped on one node binding, if any. */
+  const wiringOrigin = (host: string, key: string): OriginRef | null => {
+    const source = flowWiring.get(host)?.get(key);
+    return source === undefined ? null : asBinding(source).origin;
+  };
+
+  /** Register and return the origin of one CASE `then:` or `else:` branch. */
+  const branchOrigin = (address: readonly (string | number | null)[]): OriginRef | null => {
+    const caseId = address[1] as string;
+    if (!nodesCursor.has(caseId)) return null;
+    let cursor = normalizeNodeSignatureCursor(nodesCursor.child(caseId));
+    let path: SourceSitePath;
+    if (address[0] === "else") {
+      if (!cursor.has("else")) return null;
+      path = [...owner, "node", caseId, "field", "else"];
+      cursor = cursor.child("else");
+    } else {
+      const index = address[2] as number;
+      if (!cursor.has("cases")) return null;
+      const item = cursor.child("cases").child(index);
+      if (!item.has("then")) return null;
+      path = [...owner, "node", caseId, "case", index, "then"];
+      cursor = item.child("then");
+    }
+    return catalogBuilder.register(path, cursor);
+  };
+
+  /** Return the origin of the authored binding at one `callSite` address. */
+  const siteOrigin = (address: readonly (string | number | null)[]): OriginRef | null => {
+    const kind = address[0];
+    if (kind === "input" || kind === "field") return wiringOrigin(address[1] as string, address[2] as string);
+    if (kind === "output") {
+      const name = address[1] ?? SINGLE_OUTPUT_NAME;
+      return flowOutputs.find((flowOutput) => flowOutput.name === name)?.binding.origin ?? null;
+    }
+    if (kind === "assert") {
+      const index = address[1] as number;
+      if (flowAsserts === null || index >= flowAsserts.length) return null;
+      return flowAsserts[index]!.origin;
+    }
+    return branchOrigin(address);
+  };
+
+  // The calls of one branch share its address; registering it twice would collide. Keyed by the
+  // address's JSON, since arrays don't compare by value.
+  const origins = new Map<string, OriginRef | null>();
+  for (const [callId, descriptor] of descriptors) {
+    if (!(descriptor instanceof CallDescriptor) || descriptor.callSite === null) continue;
+    const address = descriptor.callSite;
+    const addressKey = JSON.stringify(address);
+    if (!origins.has(addressKey)) {
+      try {
+        origins.set(addressKey, siteOrigin(address));
+      } catch (error) {
+        if (!(error instanceof SourceAccessError)) throw error;
+        throw diagnostics.error(error.message, { range: error.range, cause: error });
+      }
+    }
+    const origin = origins.get(addressKey)!;
+    if (origin === null) continue;
+    const wiring = flowWiring.get(callId);
+    if (wiring !== undefined) {
+      for (const [key, source] of wiring) {
+        if (asBinding(source).origin === null) wiring.set(key, withOrigin(source, origin));
+      }
+    }
+    const node = nodes.get(callId);
+    if (node !== undefined && node.origin === null) node.origin = origin;
+  }
+}
 
 /** Python's `compose.build.pipeline._fill_type_tables`; not ported yet. */
 function fillTypeTables(
@@ -1028,9 +1179,31 @@ function fillTypeTables(
   diagnostics: LoadDiagnostics,
 ): void {}
 
-/** Python's `compose.build.pipeline._value_cases`; not ported yet. */
+/**
+ * Return the ids of the cases that produce a value.
+ *
+ * A case produces a value when it is in `read`; a case that is a `then:`/`else:` target of a
+ * value-producing case produces one too.
+ *
+ * @param descriptors Node descriptors keyed by node id.
+ * @param read The case ids some binding reads as `${<case>.output}`.
+ * @returns The value-producing case ids.
+ */
 function valueCases(descriptors: ReadonlyMap<string, NodeDescriptor>, read: ReadonlySet<string>): ReadonlySet<string> {
-  return new Set();
+  const cases = new Map<string, CaseDescriptor>();
+  for (const [nodeId, d] of descriptors) if (d instanceof CaseDescriptor) cases.set(nodeId, d);
+  const pending = [...cases.keys()].filter((nodeId) => read.has(nodeId));
+  const found = new Set<string>();
+  while (pending.length > 0) {
+    const nodeId = pending.pop()!;
+    if (found.has(nodeId)) continue;
+    found.add(nodeId);
+    const desc = cases.get(nodeId)!;
+    for (const target of [...desc.cases.map((spec) => spec["then"]), desc.else_]) {
+      if (typeof target === "string" && cases.has(target)) pending.push(target);
+    }
+  }
+  return found;
 }
 
 /** Python's `_assemble` keyword arguments: the parsed sections and the scope one assembly reads. */
@@ -1744,8 +1917,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   for (const [nodeId, descriptor] of descriptors) {
     if (descriptor.host !== null && descriptor.fieldLabels.size > 0) synthHosts.set(nodeId, descriptor.host);
   }
-  // T3-17: the ids of the edges from a synth node into its host's question parameter (`QPARAM`).
-  const synthWires: ReadonlySet<string> = new Set();
+  const synthWires = new Set(
+    edges.filter((edge) => synthHosts.get(edge.from) === edge.to && edge.inputGroup === QPARAM).map((edge) => edge.id),
+  );
   rejectCycles(edges, nodeIds, {
     nodeRanges,
     diagnostics,
@@ -1778,18 +1952,10 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
 //   T3-17  extractInlineBodies (1): returns `[nodesCursor, new Map()]`.
-//          synthIdGen (1): returns a minter that throws.
-//          desugarInlineCalls (1): returns `[descriptors, outputsSection, assertsSection]`;
-//            bindingStyle, outputStyle (2): return `null`.
-//          desugarAdaptiveQuestions, desugarCaseCallTargets (1): return the descriptors.
-//          caseOutputReads (1), valueCases (2): return `new Set()`.
-//          expandCaseOutputs (1): returns `[descriptors, outputsSection]`.
 //          buildInlineChild (3, `(body: InlineBody, descriptor: NodeDescriptor) => ComposedFlow`):
 //            throws.
 //          readBindingContract (3, `BindingContractReader | null`): `null`.
 //          registerInlineBodies (2): returns the descriptors.
-//          stampInlineCallOrigins (2).
-//          synthWires (3, `ReadonlySet<string>`, reads `QPARAM`): `new Set()`.
 //   T3-18  checkWrittenValues, stampToolInputTypes, checkWiringParity, validateReferences,
 //          validateHumanQuestions, checkReservedSources, rejectCycles, checkCaseHandles (1).
 //          fillTypeTables (2, with _site_range).
@@ -1820,73 +1986,6 @@ function extractInlineBodies(
   options: { owner: readonly string[] },
 ): [nodesCursor: SourceCursor, inlineBodies: Map<string, InlineBody>] {
   return [nodesCursor, new Map()];
-}
-
-/** Python's `compose.desugar.inline_calls._synth_id_gen`; not ported yet. */
-function synthIdGen(): () => string {
-  return () => {
-    throw new Error("_synth_id_gen is not ported yet (T3-17)");
-  };
-}
-
-/** Python's `compose.desugar.inline_calls.desugar_inline_calls`; not ported yet. */
-function desugarInlineCalls(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  outputsSection: unknown,
-  options: {
-    assertsSection?: readonly unknown[] | null;
-    outputsRange?: SourceRange | null;
-    assertionRangeAt?: ((index: number) => SourceRange | null) | null;
-    assertionOriginAt?: ((index: number) => OriginRef | null) | null;
-    bindingStyleAt?: ((nodeId: string, field: string, key: string) => string | null) | null;
-    outputStyleAt?: ((key: unknown) => string | null) | null;
-    typedOutputs?: ReadonlySet<string | null>;
-    nextId?: (() => string) | null;
-    typeNames?: ReadonlySet<string>;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown, assertsSection: Assertion[]] {
-  // The raw items stand in for the carriers until the port lands.
-  return [new Map(descriptors), outputsSection, (options.assertsSection ?? []) as Assertion[]];
-}
-
-/** Python's `compose.desugar.adaptive_questions.desugar_adaptive_questions`; not ported yet. */
-function desugarAdaptiveQuestions(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  options: { diagnostics?: LoadDiagnostics | null } = {},
-): Map<string, NodeDescriptor> {
-  return new Map(descriptors);
-}
-
-/** Python's `compose.desugar.case_targets.desugar_case_call_targets`; not ported yet. */
-function desugarCaseCallTargets(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  mint: () => string,
-  options: { diagnostics?: LoadDiagnostics | null } = {},
-): Map<string, NodeDescriptor> {
-  return new Map(descriptors);
-}
-
-/** Python's `compose.desugar.case_outputs.case_output_reads`; not ported yet. */
-function caseOutputReads(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  outputsSection: unknown,
-): ReadonlySet<string> {
-  return new Set();
-}
-
-/** Python's `compose.desugar.case_outputs.expand_case_outputs`; not ported yet. */
-function expandCaseOutputs(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  outputsSection: unknown,
-  assertsSection: readonly Assertion[],
-  options: {
-    outputsRange?: SourceRange | null;
-    assertionRangeAt?: ((index: number) => SourceRange | null) | null;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown] {
-  return [new Map(descriptors), outputsSection];
 }
 
 // T3-18: compose/validate/{value_nesting,tool_inputs,wiring_parity,references,human_questions,

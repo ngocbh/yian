@@ -58,12 +58,12 @@
  * `test_duplicate_through_an_alias_shows_the_spelling`,
  * `test_routing_only_literal_flow_input_missing_a_tag`,
  * `test_routing_only_literal_flow_input_with_else_loads`,
- * `test_routing_only_literal_flow_input_listing_every_tag_loads`. Later (T3-20, T3-17): the inline
- * body rows `test_loop_body_carried_field`, `test_map_child_input`,
- * `test_routing_only_loop_carried_literal_missing_a_tag` and
- * `test_routing_only_map_child_literal_input_missing_a_tag`, and the value-case rows
+ * `test_routing_only_literal_flow_input_listing_every_tag_loads`, and the value-case rows
  * `test_bool_value_case_missing_false_is_not_exhaustive`, `test_optional_bool_is_not_exhaustive`
- * and `test_int_value_case_reason_names_literal_or_bool`. Later (T3-20, T3-22):
+ * and `test_int_value_case_reason_names_literal_or_bool`. Later (T3-20, T3-17): the inline body
+ * rows `test_loop_body_carried_field`, `test_map_child_input`,
+ * `test_routing_only_loop_carried_literal_missing_a_tag` and
+ * `test_routing_only_map_child_literal_input_missing_a_tag`. Later (T3-20, T3-22):
  * `test_routing_only_call_child_literal_input_missing_a_tag`.
  *
  * The harvested case the CASE build decides is pinned at the end.

@@ -15,8 +15,9 @@
  *
  * The `llm_config` rows (`test_non_text_llm_config_field_is_a_load_error`,
  * `test_nested_llm_config_text_field`, `test_other_llm_config_errors_are_unchanged`) load the node
- * site with `assembleText`, as the loader assembles the root flow. So do the searched-when and
- * on-when rows of `test_already_located_fields_are_unchanged`, whose errors the CASE build raises.
+ * and `adaptive_questions.llm_config` sites with `assembleText`, as the loader assembles the root
+ * flow. So do the searched-when and on-when rows of `test_already_located_fields_are_unchanged`,
+ * whose errors the CASE build raises.
  *
  * The harvested `load-core/compose_non_text_fields__*` cases are pinned at the end of each block,
  * by the call that raises their error; the inline-body ones are Later (T3-17).
@@ -29,9 +30,8 @@
  * Later (T3-18, T3-22): the unresolved-reference error of `test_null_case_on_is_absent`. Later
  * (T3-22): the loading of `test_text_case_on_still_loads`.
  * Later (T3-17): the inline-body rows of `test_code_in_def_compact_merge_and_inline_body` and
- * `test_non_text_kind_in_a_def_and_inline_body`, and the `adaptive_questions.llm_config` site of
- * the `llm_config` rows. Later (T3-22): their defs, compact and merge rows, the flow and def sites
- * of the `llm_config` rows, and the def `asserts:` rows
+ * `test_non_text_kind_in_a_def_and_inline_body`. Later (T3-22): their defs, compact and merge
+ * rows, the flow and def sites of the `llm_config` rows, and the def `asserts:` rows
  * (`test_non_text_def_assert_is_a_load_error`, `test_non_list_def_asserts_is_a_load_error`,
  * `test_null_def_asserts_loads`).
  */
@@ -588,32 +588,51 @@ nodes:
     llm_config: ${v}
 output: \${a.output}
 `;
-  const PREFIX = "node 'a': llm_config: ";
+  /** A flow whose adaptive gate `ask` has `adaptive_questions.llm_config: <v>`. */
+  const llmOnGate = (v: string) => `id: f
+name: f
+input:
+  proj: !str
+nodes:
+  ask:
+    kind: human_input
+    input: {proj: '\${input.proj}'}
+    adaptive_questions:
+      prompt: "Q \${proj}"
+      llm_config: ${v}
+output: \${ask.output}
+`;
+  const SITES: [string, (v: string) => string, string][] = [
+    ["node", llmOnNode, "node 'a': llm_config: "],
+    ["adaptive", llmOnGate, "adaptive_questions.llm_config: "],
+  ];
 
-  test("a non-text llm_config field is a load error", () => {
-    const text = llmOnNode("{model: 5}");
+  test.each(SITES)("a non-text llm_config field is a load error: %s", (_site, builder, prefix) => {
+    const text = builder("{model: 5}");
 
     const error = loadError(() => assembleText(text));
 
     expect(error.message).toContain(
-      PREFIX + "`model:` must be text, but YAML read it as an integer; put it in quotes",
+      prefix + "`model:` must be text, but YAML read it as an integer; put it in quotes",
     );
     expect(error.message).not.toContain("validation error for LLMConfig");
     expect(startLine(error)).toBe(lineOf(text, "llm_config: "));
   });
 
-  test("a nested llm_config text field", () => {
-    const error = loadError(() => assembleText(llmOnNode("{provider: openai, openai: {user: 5}}")));
+  test.each(SITES)("a nested llm_config text field: %s", (_site, builder, prefix) => {
+    const error = loadError(() => assembleText(builder("{provider: openai, openai: {user: 5}}")));
 
-    expect(error.message).toContain(PREFIX + "`openai.user:` must be text");
+    expect(error.message).toContain(prefix + "`openai.user:` must be text");
   });
 
-  test.each([
-    ["{provider: 5}", "1 validation error"],
-    ["{provider: azure, azure: {stop: 5}}", "2 validation errors"],
-    ["{provider: azure, azure: {stop: [5]}}", "2 validation errors"],
-  ])("other llm_config errors are unchanged: %s", (value, count) => {
-    expect(loadError(() => assembleText(llmOnNode(value))).message).toContain(PREFIX + count + " for LLMConfig");
+  describe.each(SITES)("other llm_config errors are unchanged: %s", (_site, builder, prefix) => {
+    test.each([
+      ["{provider: 5}", "1 validation error"],
+      ["{provider: azure, azure: {stop: 5}}", "2 validation errors"],
+      ["{provider: azure, azure: {stop: [5]}}", "2 validation errors"],
+    ])("%s", (value, count) => {
+      expect(loadError(() => assembleText(builder(value))).message).toContain(prefix + count + " for LLMConfig");
+    });
   });
 
   test.each(["load-core/compose_non_text_fields__non_text_node_llm_config_field"])("case %s", (id) =>

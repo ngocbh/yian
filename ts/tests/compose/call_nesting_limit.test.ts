@@ -27,9 +27,9 @@
  * `test_loaded_flow_records_its_import_depth`,
  * `test_imports_and_a_calling_defs_chain_count_apart`,
  * `test_imports_at_the_limit_over_defs_at_the_limit_load` and
- * `test_long_cross_file_cycle_reports_the_depth_limit` (T3-22); `test_inline_bodies_count` and
- * `test_call_directive_counts` (T3-17); `test_map_and_loop_bodies_count` (T3-22 and T4, its
- * load and run).
+ * `test_long_cross_file_cycle_reports_the_depth_limit` (T3-22); `test_inline_bodies_count`
+ * (T3-17); `test_call_directive_counts` and `test_map_and_loop_bodies_count` (T3-22 and T4, their
+ * chains of `defs:` loaded and run).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

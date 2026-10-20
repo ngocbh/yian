@@ -3,26 +3,28 @@
  * `tests/compose/test_nested_template_walkers.py`, through `assembleText` where Python loads the
  * flow; the MAP row parses the flow's nodes (`nodesOf`), since the MAP parse raises its error.
  *
- * Later (T3-17): `test_nested_call_directive_is_not_lifted` (inline-call desugaring).
  * Later (T3-18): `test_dangling_nested_reference_fails_at_its_own_line`,
  * `test_dangling_nested_output_reference_fails_at_its_own_line`,
  * `test_nested_reference_field_is_checked` (reference checks), `test_nested_isinstance_name_resolves`
  * and `test_unknown_nested_isinstance_name_fails` (type tables; its case is pinned in
  * `isinstance_load.test.ts`).
- * Later (T3-17): `test_nested_case_output_in_a_default_fails` (CASE output expansion).
- * Later (T3-17, T4): `test_nested_case_output_expands_in_inputs_and_outputs` (a run).
+ * Later (T4): `test_nested_case_output_expands_in_inputs_and_outputs` (a run).
  * Later (T3-22, T4): `test_map_over_literal_list_without_spans_still_loads` and
  * `test_nested_references_in_a_map_child_run_after_growth` (loads and runs).
  * Later (T3-16 for the loop kind, T3-22, T4):
  * `test_nested_references_in_a_loop_body_run_after_growth`.
- * Later (T3-17, T3-22): `test_retired_inline_flow_call_in_a_nested_output_fails` (defs, outputs).
+ *
+ * Changed: `test_retired_inline_flow_call_in_a_nested_output_fails` assembles the flow without its
+ * `defs:` entry, since the inline-call desugar raises before any callee resolves.
  */
 
 import { expect, test } from "bun:test";
 
+import { desugarInlineCalls } from "../../src/compose/desugar/inline_calls.ts";
+import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
-import { assembleText, type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "./declarations.ts";
 
 /** Return a flow whose CODE node `c` binds `x` as `binding`. */
 function codeFlow(binding: string): string {
@@ -133,9 +135,74 @@ output: \${m.output}
   },
 );
 
+const CASE_FLOW = `
+id: nested_case
+name: nested_case
+input:
+  go: !bool
+nodes:
+  route:
+    kind: case
+    cases:
+      - when: \${input.go}
+        then: yes_branch
+    else: no_branch
+  yes_branch:
+    kind: code
+    code: return "yes"
+  no_branch:
+    kind: code
+    code: return "no"
+  c:
+    kind: code
+    input:
+      x:
+        picked: \${route.output}
+        note: took \${route.output}
+    code: return inputs["x"]
+output:
+  c: \${c.output}
+  direct:
+    - \${route.output}
+`;
+
+test("nested case output in a default fails", () => {
+  const text = CASE_FLOW.replace("note: took ${route.output}", "note: ${yes_branch.output :- route.output}");
+
+  const error = loadError(() => assembleText(text));
+
+  expect(error.diagnostic.message).toBe(
+    "node 'c': ${route.output} — a case value can't be read in a coalesce operand, a default, an " +
+      "expression, a condition, or an assert; read it as a whole binding or inside text",
+  );
+});
+
+test("retired inline flow call in a nested output fails", () => {
+  const text = codeFlow("${p.output}").replace("output: ${c.output}", "output:\n  r:\n    a: ${ sub(x=c.output) }");
+
+  const error = loadError(() => assembleText(text));
+
+  expect(error.diagnostic.message).toContain("a flow call 'sub' inside ${...} is not supported");
+});
+
+test("nested call directive is not lifted", () => {
+  const template = new ValueTemplate({ a: "call(sub, x=1)" });
+  const descriptors = new Map([["c", new CodeDescriptor({ id: "c", code: "return 1", inputs: { x: template } })]]);
+
+  expect(() => desugarInlineCalls(descriptors, null)).toThrow(
+    "c: a `call(...)` inside a value isn't supported; bind it at the top level",
+  );
+});
+
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
   { id: "load-core/compose_nested_template_walkers__map_over_container_with_a_span", call: parsedNodes },
   { id: "load-core/compose_nested_template_walkers__wait_until_container_with_a_span", call: parsedNodes },
 ])("parseNodes: $id", runCase);
+
+// The inline-call desugar raises the retired call before the `sub` callee resolves.
+test.each<CaseRow>([
+  { id: "load-core/compose_nested_template_walkers__nested_case_output_in_a_default_fails", call: assembled },
+  { id: "load-core/compose_nested_template_walkers__retired_inline_flow_call_in_an_output", call: assembled },
+])("assembled: $id", runCase);

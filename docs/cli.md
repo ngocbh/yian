@@ -481,8 +481,9 @@ Changed (TS yian): choice and default values are in the text form: `true` / `fal
 `[default: null]`, `Infinity`. The JSON editor reads JSON in yian's codec form: infinity is
 `{"$float": "inf"}` and bare `NaN` or `Infinity` is refused; an object whose literal value has
 that shape, or `{"$record": {…}}`, needs the `$record` escape. Error paths keep non-ASCII keys as
-written (`["é"]`). Prompts draw on stderr, not stdout. Escape doesn't cancel (Ctrl-C does), and
-the end of input cancels.
+written (`["é"]`). Prompts draw on stderr, not stdout, and the end of input cancels.
+
+Escape doesn't cancel a prompt, as in Python; Ctrl-C does.
 
 The text `null` in a string editor and a `Literal` tag named `null` remain ordinary
 strings, distinct from `Set null`. A structured editor still rejects root JSON

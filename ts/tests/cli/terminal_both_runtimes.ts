@@ -30,10 +30,13 @@ export const CTRL_A = "\x01";
 export const CTRL_C = "\x03";
 export const CTRL_D = "\x04";
 export const CTRL_E = "\x05";
+export const CTRL_N = "\x0e";
+export const CTRL_P = "\x10";
 export const CTRL_Q = "\x11";
 export const CTRL_U = "\x15";
 export const BACKSPACE = "\x7f";
 export const SPACE = " ";
+export const ESCAPE = "\x1b";
 export const PASTE_START = "\x1b[200~";
 export const PASTE_END = "\x1b[201~";
 
@@ -93,6 +96,7 @@ export interface Screen {
 /** Display width of one character: 2 for the CJK and fullwidth ranges the scenarios use. */
 function charWidth(char: string): number {
   const code = char.codePointAt(0)!;
+  if (/^[\p{Mn}\p{Me}\u200d\ufe00-\ufe0f]$/u.test(char)) return 0;
   return (code >= 0x3000 && code <= 0x9fff) || (code >= 0xff00 && code <= 0xff60) ? 2 : 1;
 }
 
@@ -118,6 +122,11 @@ export function screen(text: string, columns = 80): Screen {
       else if (char === "\n") row++;
       else {
         const width = charWidth(char);
+        if (width === 0) {
+          // Drawn on the character before it.
+          if (col > 0) line()[col - 1] += char;
+          continue;
+        }
         if (col + width > columns) {
           row++;
           col = 0;
@@ -1874,6 +1883,112 @@ async function concurrentAskUserCallsAreServedInFifoOrder(): Promise<void> {
   assert.deepEqual(view().rows, ["? first 1", "? second 2", "? third 3"]);
 }
 
+const PLAN = "Here is the plan:\n\n1. a\n\nApprove it?";
+
+async function aMultiLineTextLabelIsWrittenOnceAboveTheFrame(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.askText(PLAN);
+  input.write("apx");
+  await tick();
+  input.write(BACKSPACE + LEFT + RIGHT + "p");
+  await tick();
+  assert.deepEqual(view().rows, ["? Here is the plan:", "", "1. a", "", "Approve it? app"]);
+  assert.deepEqual(view().cursor, { row: 4, col: 15 });
+  input.write(ENTER);
+  assert.equal(await answer, "app");
+  assert.deepEqual(view().rows, ["? Here is the plan:", "", "1. a", "", "Approve it? app"]);
+}
+
+async function aMultiLineChoiceLabelIsWrittenOnceAboveTheFrame(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.askChoice(PLAN, ["approve", "reject"]);
+  input.write(DOWN + UP + DOWN);
+  await tick();
+  assert.deepEqual(view().rows, [
+    "? Here is the plan:",
+    "",
+    "1. a",
+    "",
+    "Approve it? (Use arrow keys)",
+    "   approve",
+    " » reject",
+  ]);
+  input.write(ENTER);
+  assert.equal(await answer, "reject");
+  assert.deepEqual(view().rows, ["? Here is the plan:", "", "1. a", "", "Approve it? reject"]);
+}
+
+async function aChoiceTitleWithANewlineRedrawsWithoutStaleRows(): Promise<void> {
+  const { input, output, terminal, view } = setup();
+  output.write("above\r\n");
+  const answer = terminal.askChoice("Pick", ["one\ntwo", "three"]);
+  input.write(DOWN + UP + DOWN);
+  await tick();
+  assert.deepEqual(view().rows, ["above", "? Pick (Use arrow keys)", "   one", "two", " » three"]);
+  input.write(DOWN + ENTER);
+  assert.equal(await answer, "one\ntwo");
+  assert.deepEqual(view().rows, ["above", "? Pick one", "two"]);
+}
+
+async function aPasteIntoASelectChangesNothing(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.askChoice("Approve?", ["approve", "reject"]);
+  input.write(PASTE_START + "just some notes\r" + PASTE_END);
+  await tick();
+  assert.deepEqual(view().rows, ["? Approve? (Use arrow keys)", " » approve", "   reject"]);
+  input.write(ENTER);
+  assert.equal(await answer, "approve");
+}
+
+async function combiningMarksTakeNoColumn(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const nfd = "e\u0301".repeat(3);
+  const answer = terminal.askText("Name:");
+  input.write(nfd);
+  await tick();
+  assert.deepEqual(view().rows, [`? Name: ${nfd}`]);
+  assert.deepEqual(view().cursor, { row: 0, col: 11 });
+  input.write(ENTER);
+  assert.equal(await answer, nfd);
+}
+
+async function aKeyTypedSoonAfterEscapeIsKept(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.askText("Name:");
+  input.write(ESCAPE);
+  await tick();
+  input.write("a");
+  await tick();
+  assert.deepEqual(view().rows, ["? Name: a"]);
+  input.write(ENTER);
+  assert.equal(await answer, "a");
+}
+
+async function ctrlNAndCtrlPMoveInASelectAndACheckbox(): Promise<void> {
+  const { input, terminal } = setup({ columns: 120 });
+  const choice = terminal.askChoice("Pick", ["a", "b", "c"]);
+  input.write(CTRL_N + CTRL_N + CTRL_N + CTRL_P + ENTER);
+  assert.equal(await choice, "c");
+  const question = { question: "Pick", header: "P", options: [{ label: "API" }, { label: "UI" }], multi_select: true };
+  const picked = terminal.askUser(request({ questions: [question] }), toolContext());
+  input.write(CTRL_N + SPACE + CTRL_P + CTRL_P + SPACE + ENTER + "x" + ENTER);
+  assert.deepEqual(await picked, { P: ["UI", "x"] });
+}
+
+async function aNonTtyTurnStillHasTheExitHook(): Promise<void> {
+  const { input, output, terminal, exitHooks } = setup({ tty: false });
+  const before = process.listeners("exit");
+  const answer = terminal.askChoice("Pick", ["a"]);
+  await tick();
+  const added = process.listeners("exit").filter((listener) => !before.includes(listener));
+  assert.equal(added.length, 1);
+  added[0]!(0);
+  assert.deepEqual(screen(output.text).modes.slice(-2).sort(), ["?2004l", "?25h"]);
+  input.write(ENTER);
+  assert.equal(await answer, "a");
+  assert.equal(process.listenerCount("exit"), exitHooks);
+}
+
 /** A spawned child's exit, waited for at most 10 s with its stdin kept open; what it printed. */
 async function runChild(send: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
   // No execArgv forwarded: Node 22.18+ strips types by default, and Bun's execArgv isn't safe to pass on.
@@ -2026,6 +2141,14 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "close ends an active askUser and refuses later ones": closeEndsAnActiveAskUserAndRefusesLaterOnes,
   "throwing hooks still restore and refuse queued calls": throwingHooksStillRestoreAndRefuseQueuedCalls,
   "concurrent askUser calls are served in FIFO order": concurrentAskUserCallsAreServedInFifoOrder,
+  "a multi-line text label is written once above the frame": aMultiLineTextLabelIsWrittenOnceAboveTheFrame,
+  "a multi-line choice label is written once above the frame": aMultiLineChoiceLabelIsWrittenOnceAboveTheFrame,
+  "a choice title with a newline redraws without stale rows": aChoiceTitleWithANewlineRedrawsWithoutStaleRows,
+  "a paste into a select changes nothing": aPasteIntoASelectChangesNothing,
+  "combining marks take no column": combiningMarksTakeNoColumn,
+  "a key typed soon after Escape is kept": aKeyTypedSoonAfterEscapeIsKept,
+  "Ctrl-N and Ctrl-P move in a select and a checkbox": ctrlNAndCtrlPMoveInASelectAndACheckbox,
+  "a non-TTY turn still has the exit hook": aNonTtyTurnStillHasTheExitHook,
   "a child exits on its own after an answer with stdin open": aChildExitsOnItsOwnAfterAnAnswerWithStdinOpen,
   "a child exits on its own after Ctrl-C with stdin open": aChildExitsOnItsOwnAfterCtrlCWithStdinOpen,
 };

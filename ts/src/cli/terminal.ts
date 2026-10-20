@@ -80,7 +80,9 @@ type Outcome<T> = { value: T } | { stop: Ending } | { error: unknown };
 
 /** One prompt's state and drawing; the key loop owns the terminal around it. */
 interface Widget<T> {
-  /** The frame's lines, styled, without newlines. */
+  /** A multi-line label's lines above its last, written once above the frame (`labelPreface`). */
+  preface: string;
+  /** The frame's lines, styled; a `\n` inside one starts a new row. */
   lines(): string[];
   /** The cursor's line in the frame and that line's text before it, or null to hide the cursor. */
   cursor(): { row: number; before: string } | null;
@@ -96,6 +98,11 @@ const HIDE_CURSOR = `${ESC}?25l`;
 const PASTE_ON = `${ESC}?2004h`;
 const PASTE_OFF = `${ESC}?2004l`;
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
+
+/** `text` with each `\n` written as `\r\n`, since raw mode may not translate it. */
+function crlf(text: string): string {
+  return text.replaceAll("\n", "\r\n");
+}
 
 /** Wrap `text` in the SGR `codes`. */
 function style(codes: string, text: string): string {
@@ -124,8 +131,12 @@ function isWide(code: number): boolean {
   );
 }
 
-/** The columns one character takes: 2 for a wide one, else 1. */
+/** A combining mark, a zero-width joiner or a variation selector: drawn on the character before it. */
+const ZERO_WIDTH = /^[\p{Mn}\p{Me}\u200d\ufe00-\ufe0f]$/u;
+
+/** The columns one character takes: 0 for a zero-width one, 2 for a wide one, else 1. */
 function charCells(char: string): number {
+  if (ZERO_WIDTH.test(char)) return 0;
   return isWide(char.codePointAt(0)!) ? 2 : 1;
 }
 
@@ -138,20 +149,27 @@ function cells(text: string): number {
 
 /**
  * Lay `line` out on a `columns`-wide terminal as the terminal wraps it: a character that doesn't
- * fit in the rest of a row (a wide one in the last column) starts the next row. Returns the rows
- * it takes and where the character at code-point offset `at` (ANSI sequences not counted) sits.
+ * fit in the rest of a row (a wide one in the last column) starts the next row, and so does a `\n`.
+ * Returns the rows it takes and where the character at code-point offset `at` (ANSI sequences not
+ * counted) sits.
  */
 function layout(line: string, columns: number, at: number): { rows: number; cursor: { row: number; col: number } } {
   let row = 0;
   let col = 0;
   let cursor: { row: number; col: number } | undefined;
   for (const [i, char] of Array.from(line.replace(ANSI, "")).entries()) {
+    if (i === at) cursor = { row, col: Math.min(col, columns - 1) };
+    if (char === "\n") {
+      row++;
+      col = 0;
+      continue;
+    }
     const width = charCells(char);
     if (col + width > columns) {
       row++;
       col = 0;
+      if (i === at) cursor = { row, col };
     }
-    if (i === at) cursor = { row, col };
     col += width;
   }
   // At the end of a line that fills its last row, the terminal holds the cursor in the last
@@ -159,10 +177,32 @@ function layout(line: string, columns: number, at: number): { rows: number; curs
   return { rows: row + 1, cursor: cursor ?? { row, col: Math.min(col, columns - 1) } };
 }
 
-/** A prompt's head `? <label>`, with the dim `hint` after it when given. */
+/**
+ * A prompt's head `? <label>`, with the dim `hint` after it when given. Of a multi-line label it
+ * holds only the last line: the mark and the lines before are its `labelPreface`.
+ */
 function promptHead(mark: string, label: string, hint?: string): string {
-  const head = `${style("1;36", mark)} ${style("1", label)}`;
+  const lines = label.split("\n");
+  const head = lines.length === 1 ? `${style("1;36", mark)} ${style("1", label)}` : style("1", lines.at(-1)!);
   return hint ? `${head} ${style("2", hint)}` : head;
+}
+
+/**
+ * The lines of a multi-line label before its last, the first after the mark, each ending in
+ * `\r\n`: written once above the frame, so a long label (a plan to approve) is never redrawn, and
+ * the screen ends as Python's does. Empty for a one-line label.
+ */
+function labelPreface(mark: string, label: string): string {
+  const lines = label.split("\n").slice(0, -1);
+  return lines.map((line, i) => `${i === 0 ? `${style("1;36", mark)} ` : ""}${style("1", line)}\r\n`).join("");
+}
+
+/** `index` moved by an up (up, `k`, Ctrl-P) or down (down, `j`, Ctrl-N) key among `count` rows, wrapping. */
+function moved(key: Key, index: number, count: number): number {
+  const up = key.ctrl ? key.name === "p" : !key.meta && (key.name === "up" || key.name === "k");
+  const down = key.ctrl ? key.name === "n" : !key.meta && (key.name === "down" || key.name === "j");
+  if (up) return (index - 1 + count) % count;
+  return down ? (index + 1) % count : index;
 }
 
 /** The collapsed line `? <label> <answer>`, with nothing after the label when `answer` is empty. */
@@ -198,6 +238,7 @@ function textWidget(options: {
     pos += added.length;
   };
   return {
+    preface: labelPreface(mark, options.label),
     lines: () => (error === undefined ? [head() + shown(chars)] : [head() + shown(chars), style("31", error)]),
     cursor: () => ({ row: 0, before: head() + shown(chars.slice(0, pos)) }),
     key(key) {
@@ -245,18 +286,16 @@ function selectWidget(options: {
     return ` ${style("1;36", "»")} ${style("36", `${options.indicator ? "● " : ""}${title}`)}`;
   };
   return {
-    lines: () => [
-      promptHead("?", options.label, "(Use arrow keys)"),
-      ...options.titles.map(row),
-    ],
+    preface: labelPreface("?", options.label),
+    lines: () => [promptHead("?", options.label, "(Use arrow keys)"), ...options.titles.map(row)],
     cursor: () => null,
     key(key) {
+      // A paste reaches questionary's select as one paste event, which it ignores.
+      if (key.paste) return undefined;
       if (key.name === "return" || key.name === "enter") return { value: index };
       // questionary binds Ctrl-Q like Ctrl-C in its pickers.
       if (key.ctrl && key.name === "q") return { stop: "interrupt" };
-      if (key.ctrl || key.meta) return undefined;
-      if (key.name === "up" || key.name === "k") index = (index - 1 + count) % count;
-      else if (key.name === "down" || key.name === "j") index = (index + 1) % count;
+      index = moved(key, index, count);
       return undefined;
     },
     done: (outcome) => collapsed("?", options.label, "value" in outcome ? options.titles[outcome.value]! : ""),
@@ -270,6 +309,7 @@ function selectWidget(options: {
 function confirmWidget(label: string): Widget<boolean> {
   const line = `${promptHead("?", label, "(y/N)")} `;
   return {
+    preface: labelPreface("?", label),
     lines: () => [line],
     cursor: () => ({ row: 0, before: line }),
     key(key) {
@@ -307,6 +347,7 @@ function checkboxWidget(options: { label: string; titles: readonly string[] }): 
     return `done (${picked.length} selections)`;
   };
   return {
+    preface: labelPreface("?", options.label),
     lines: () => [
       promptHead("?", options.label, "(Use arrow keys to move, <space> to select, <a> to toggle, <i> to invert)"),
       ...options.titles.map(row),
@@ -319,16 +360,15 @@ function checkboxWidget(options: { label: string; titles: readonly string[] }): 
         return { value: options.titles.map((_, i) => i).filter((i) => selected.has(i)) };
       }
       if (key.ctrl && key.name === "q") return { stop: "interrupt" };
-      if (key.ctrl || key.meta) return undefined;
-      if (key.name === "space") {
+      const plain = !key.ctrl && !key.meta;
+      if (plain && key.name === "space") {
         if (!selected.delete(index)) selected.add(index);
-      } else if (key.str === "a") {
+      } else if (plain && key.str === "a") {
         if (selected.size === count) selected.clear();
         else for (let i = 0; i < count; i++) selected.add(i);
-      } else if (key.str === "i") {
+      } else if (plain && key.str === "i") {
         for (let i = 0; i < count; i++) if (!selected.delete(i)) selected.add(i);
-      } else if (key.name === "up" || key.name === "k") index = (index - 1 + count) % count;
-      else if (key.name === "down" || key.name === "j") index = (index + 1) % count;
+      } else index = moved(key, index, count);
       return undefined;
     },
     done: (outcome) => collapsed("?", options.label, "value" in outcome ? summary(outcome.value) : ""),
@@ -483,9 +523,12 @@ export class Terminal {
   /** Normalize one keypress and hand it to the active widget, or buffer it for the next one. */
   readonly #onKeypress = (
     str: string | undefined,
-    raw: { name?: string; ctrl?: boolean; meta?: boolean } | undefined,
+    raw: { name?: string; ctrl?: boolean; meta?: boolean; sequence?: string } | undefined,
   ): void => {
     const name = raw?.name;
+    // A key typed soon after a lone Escape arrives as Alt+key. No prompt binds Alt, so the Escape
+    // is dropped and the key stays the one typed.
+    const alt = raw?.meta === true ? /^\x1b([^\x00-\x1f\x7f])$/su.exec(raw.sequence ?? "") : null;
     if (name === "paste-start" || name === "paste-end") {
       this.#pasting = name === "paste-start";
       return;
@@ -495,7 +538,13 @@ export class Terminal {
       return;
     }
     this.#afterReturn = name === "return";
-    const key: Key = { name, ctrl: raw?.ctrl === true, meta: raw?.meta === true, str, paste: this.#pasting };
+    const key: Key = {
+      name,
+      ctrl: raw?.ctrl === true,
+      meta: raw?.meta === true && alt === null,
+      str: alt?.[1] ?? str,
+      paste: this.#pasting,
+    };
     if (this.#active) this.#active.key(key);
     else this.#buffer.push(key);
   };
@@ -564,7 +613,7 @@ export class Terminal {
     let wasRaw = false;
     // A `process.exit()` elsewhere skips the `finally` below.
     const onExit = (): void => {
-      quietly(() => input.setRawMode!(false));
+      if (setsRaw) quietly(() => input.setRawMode!(false));
       quietly(() => output.write(SHOW_CURSOR + PASTE_OFF));
     };
     let started = false;
@@ -578,10 +627,9 @@ export class Terminal {
         quietly(() => this.#onActive?.(true));
         this.#attach();
         wasRaw = input.isRaw === true;
-        if (setsRaw) {
-          process.once("exit", onExit);
-          input.setRawMode!(true);
-        }
+        // Even without raw mode the widgets hide the cursor and turn bracketed paste on.
+        process.once("exit", onExit);
+        if (setsRaw) input.setRawMode!(true);
         input.resume();
         result = { value: await fn((widget) => this.#runWidget(widget, turn)) };
       }
@@ -650,7 +698,7 @@ export class Terminal {
       const at = cursor === null ? -1 : Array.from(cursor.before.replace(ANSI, "")).length;
       const laid = lines.map((line, i) => layout(line, columns, i === cursor?.row ? at : -1));
       const total = laid.reduce((sum, line) => sum + line.rows, 0);
-      let text = erase() + lines.join("\r\n");
+      let text = erase() + crlf(lines.join("\n"));
       cursorRow = total - 1;
       if (cursor !== null) {
         const place = laid[cursor.row]!.cursor;
@@ -672,13 +720,13 @@ export class Terminal {
       }
     };
     try {
-      output.write(PASTE_ON + (widget.cursor() === null ? HIDE_CURSOR : SHOW_CURSOR));
+      output.write(widget.preface + PASTE_ON + (widget.cursor() === null ? HIDE_CURSOR : SHOW_CURSOR));
       draw();
       this.#active = { key: feed, end: () => stop("eof") };
       while (outcome === undefined && this.#buffer.length > 0) feed(this.#buffer.shift()!);
       if (outcome === undefined && this.#ended) stop("eof");
       await settled;
-      output.write(erase() + widget.done(outcome!) + "\r\n");
+      output.write(erase() + crlf(widget.done(outcome!)) + "\r\n");
     } catch (error) {
       finish({ error });
     } finally {

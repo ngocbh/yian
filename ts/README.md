@@ -473,6 +473,17 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - Compare positions and scopes with `sameExecutionPosition`/`sameExecutionScope`, output contracts
   with `sameOutputContract`, and arrays with `sameItems` (`src/nodes/contracts.ts`).
 
+## CLI
+
+- `src/cli/terminal.ts` holds `Terminal`, the host terminal a run prompts on: `askUser` (the
+  run's `ask_user` handler), `askText`, `askChoice`, `promptInputs` (the missing flow inputs) and
+  `close`. Prompts take turns in one FIFO and draw on stderr; `onStop` hears Ctrl-C or the end of
+  input, which close the terminal, and `onActive` hears a turn take and give back the terminal.
+  A call the closed terminal ends throws `TerminalStopped`, or the signal's reason once it
+  aborted (`askUser`), or returns null.
+- It reads keys with raw-mode `node:readline` and has no dependency: it imports only `node:`
+  modules and yian's own.
+
 ## Commands
 
 Run from `ts/`:

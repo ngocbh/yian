@@ -18,6 +18,8 @@
  * `test_node_starts_count_started_records`, `test_resume_keeps_steps_and_a_resumed_start_counts_two`,
  * `test_success_deletes_the_nodes_steps_and_starts`, `test_prepare_node_step_rejects_a_terminal_state`,
  * `test_failure_deletes_the_nodes_steps_and_starts`, `test_route_deletes_the_nodes_steps_and_starts`,
+ * `test_expansion_deletes_the_spawners_steps_and_starts` (on the shared `initializedSpawner` and
+ * `fragment`),
  * `test_learnable_run_accepts_a_step_with_an_empty_trace_delta` and
  * `test_broken_step_state_is_rejected_before_append` (4 rows). Each rejected row names its one
  * class and full message, where Python matches a part of the message or accepts either class.
@@ -44,9 +46,10 @@
  * always text); the `list-steps` row of `test_broken_step_state_is_rejected_before_append` (a tuple
  * and a list are both an array).
  *
- * Later (T4-5): `test_expansion_deletes_the_spawners_steps_and_starts`,
- * `test_replay_reproduces_steps_and_starts`, `test_learnable_replay_reproduces_steps_starts_and_trace`,
- * `test_replay_without_steps_has_no_steps`,
+ * Later (T4-5, replay): `test_replay_reproduces_steps_and_starts`,
+ * `test_learnable_replay_reproduces_steps_starts_and_trace`, `test_replay_without_steps_has_no_steps`.
+ *
+ * Later (T3-22, it needs `build_grow` and `LoopNode.run`):
  * `test_loop_body_steps_go_at_the_outcome_and_stay_gone_after_the_prune`.
  */
 
@@ -54,6 +57,7 @@ import { expect, test } from "bun:test";
 
 import { START_ID } from "../../src/compile/model.ts";
 import { current } from "../../src/defaults.ts";
+import { Grow } from "../../src/nodes/base.ts";
 import {
   decodeRecord,
   encodeRecord,
@@ -65,6 +69,7 @@ import {
 import {
   commitPrepared,
   PreparedTransition,
+  prepareExpanded,
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
@@ -79,7 +84,9 @@ import {
   commitStartSuccess,
   fanoutFlow,
   forwardCapture,
+  fragmentBuilder,
   initializedAndStarted,
+  initializedSpawner,
   nodeFailure,
   routeInFlight,
 } from "./run_state_fixtures.ts";
@@ -384,6 +391,18 @@ test("a route deletes the node's steps and starts", () => {
   expect(state.nodeSteps).toEqual(new Map());
   expect(state.nodeStarts).toEqual(new Map());
   expect(state.ready).toEqual(["chosen"]);
+});
+
+test("an expansion deletes the spawner's steps and starts", () => {
+  const { state, log } = initializedSpawner();
+  commitPrepared(log, state, prepareNodeStep(state, "spawn", FAILED));
+  expect(state.nodeStarts).toEqual(new Map([["spawn", 1]]));
+
+  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder));
+
+  expect(state.nodeSteps).toEqual(new Map());
+  expect(state.nodeStarts).toEqual(new Map());
+  expect(state.ready).toEqual(["spawn/child/start"]);
 });
 
 test("a learnable run accepts a step with an empty trace delta", () => {

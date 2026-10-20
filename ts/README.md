@@ -97,6 +97,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   its defs and its inline bodies alike; a file read through the search path uses its own
   directory. WAIT keeps an `until:` date or datetime as the text written, after checking it
   parses.
+- `src/compose/loader.ts` is the front door: `loadFlow` reads every `uses:` file (through a
+  `ChildResolver`, sync or async) before the flow assembles, and returns a Promise.
+- `src/compose/index.ts` re-exports Python's `__all__` only, with the loader's `ChildResolver`.
 - `src/compose/validate/` holds the validate phase, the cross-node checks over the assembled flow.
   Outside it only `src/compose/build/` imports it: the pipeline runs the passes, and `boundary.ts`
   takes the `LoweredAsserts` type from `asserts.ts`. Inside it, a pass imports another validate
@@ -584,6 +587,13 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   checks; `manifest.ts` `flowManifest`, `flowFingerprint` (SHA-256 hex over the manifest's
   `canonicalJson`, RFC 8785) and `expansionDigest`. `src/compile/index.ts` re-exports Python's
   `__all__` only.
+- `src/compile/memory_layout.ts` resolves the memory key table and every reachable node's
+  `MemoryScope` (`resolveMemoryLayout`) and stamps them all or nothing (`applyMemoryLayout`).
+- `src/compile/expand.ts` holds the pure growth builders: `cloneChild` and `buildGrow`, which
+  turn a CALL, MAP or LOOP seed into a `Flow` fragment.
+- `src/compile/llm_cascade.ts` holds the load-time half of the `llm_config` cascade, the check
+  for a value a child flow's agent would inherit (`findInheritedLlmValue`); run-time resolution
+  is not ported yet.
 - A `Flow`'s `nodes` and `wiring` are `Map`s: they keep insertion order, so node and wiring order
   is Python's (a record would list index-like keys first and could collide with `__proto__`).
 - `copyGraph` is the one graph copier (Python's `copy.deepcopy` of a flow or node). Each call uses

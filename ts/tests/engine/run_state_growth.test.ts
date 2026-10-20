@@ -144,24 +144,23 @@ import {
   type PreparedTransition,
   prepareExpanded,
   prepareNodeStarted,
-  prepareNodeSucceeded,
   prepareRecord,
-  prepareRunStarted,
   RunState,
 } from "../../src/runtime/state.ts";
-import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
-import { expectUnchanged, FailingLog, FuncNode, reducerSnapshot, snapshot } from "./run_state_fixtures.ts";
-
-const FINGERPRINT = "d".repeat(64);
-const RUN_ID = "growth-run";
-
-/** A minimal kind-blind spawner used to isolate reducer behavior. */
-class Spawner extends Node {
-  readonly kind = NodeKind.CALL;
-  override readonly isSpawner = true;
-  override readonly growDepthDelta = 1;
-}
+import {
+  expectUnchanged,
+  FailingLog,
+  FuncNode,
+  fragment,
+  fragmentBuilder,
+  initializedSpawner,
+  parentFlow,
+  reducerSnapshot,
+  RUN_ID,
+  snapshot,
+  Spawner,
+} from "./run_state_fixtures.ts";
 
 /** A `Parameter` subclass, near-canonical, proving growth requires the exact carrier. */
 class ParameterSubclass extends Parameter {}
@@ -169,45 +168,6 @@ class ParameterSubclass extends Parameter {}
 /** An ordinary dynamic-overlay node. */
 class OverlayNode extends Node {
   readonly kind = NodeKind.CODE;
-}
-
-/** Return a complete static graph whose one spawner can be put in flight. */
-function parentFlow(options: { spawner?: Node; sibling?: boolean } = {}): CompiledFlow {
-  const spawner = options.spawner ?? new Spawner("spawn");
-  const nodes = new Map<string, Node>([
-    [START_ID, new StartNode(START_ID, { params: [] })],
-    [spawner.id, spawner],
-    [END_ID, EndNode.value(END_ID, { outputName: null })],
-  ]);
-  if (options.sibling) nodes.set("side", new FuncNode("side", (inputs) => inputs));
-  const edges = [new Edge("start-spawn", START_ID, spawner.id), new Edge("spawn-end", spawner.id, END_ID)];
-  if (options.sibling) edges.push(new Edge("start-side", START_ID, "side"));
-  return CompiledFlow.fromParts(nodes, edges, { wiring: new Map([...nodes.keys()].map((id) => [id, new Map()])) });
-}
-
-/** Return a replay-valid state and log with the static spawner in flight. */
-function initializedSpawner(flow: CompiledFlow = parentFlow()): { state: RunState; log: MemoryRunLog } {
-  const initialPool = new VariablePool(flow.startId);
-  initialPool.set(flow.startId, {});
-  initialPool.addSystem("run_id", RUN_ID);
-  const state = new RunState(flow);
-  const log = new MemoryRunLog(RUN_ID);
-  commitPrepared(
-    log,
-    state,
-    prepareRunStarted(state, {
-      runId: RUN_ID,
-      flowFingerprint: FINGERPRINT,
-      initialPool,
-      startWiringOverride: {},
-      effectiveLlmByStaticPath: {},
-      numWorkers: 0,
-    }),
-  );
-  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
-  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, {}));
-  commitPrepared(log, state, prepareNodeStarted(state, "spawn"));
-  return { state, log };
 }
 
 /** Return a real manifestable child flow, as `build_grow` accepts. */
@@ -222,29 +182,6 @@ function canonicalChild(): CompiledFlow {
       [END_ID, new Map()],
     ]),
   });
-}
-
-/** Return a manifestable two-boundary fragment committing under `spawnerId`. */
-function fragment(spawnerId: string, suffix: string = "child"): Flow {
-  const startId = `${spawnerId}/${suffix}/start`;
-  const endId = `${spawnerId}/${suffix}/end`;
-  const end = EndNode.value(endId, { outputName: null });
-  end.commitAs = spawnerId;
-  return new Flow(
-    new Map<string, Node>([
-      [startId, new StartNode(startId, { params: [] })],
-      [endId, end],
-    ]),
-    [new Edge(`${startId}->${endId}`, startId, endId, { ordering: true })],
-    {
-      wiring: new Map([
-        [startId, new Map()],
-        [endId, new Map()],
-      ]),
-      startId,
-      endId,
-    },
-  );
 }
 
 /**
@@ -349,9 +286,6 @@ function addLiveNode(state: RunState, node: Node): void {
   state.flow.addSubgraph(new Map([[node.id, node]]), [], new Map([[node.id, new Map()]]));
   state.nodeState.set(node.id, NodeState.UNKNOWN);
 }
-
-/** A builder returning `fragment(spawner.id)`. */
-const fragmentBuilder: GrowBuilder = (spawner) => fragment(spawner.id);
 
 /** Return what `fn` throws. */
 function caught(fn: () => unknown): unknown {

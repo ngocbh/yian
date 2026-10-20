@@ -19,7 +19,8 @@
  * and expansion digests. This index re-exports Python's `__all__` and nothing else; callers of
  * any other name import the module that defines it. The LLM configuration map is not ported yet.
  *
- * Knows about: diagnostics, nodes, memory contracts and typesys.
+ * Knows about: diagnostics, expr, nodes (with the LLM-client config the AGENT node reads), memory
+ * contracts and typesys.
  * Never imports: compose, runtime, the package-root run boundary, the CLI, or provider SDKs.
  */
 

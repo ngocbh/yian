@@ -29,7 +29,7 @@ import {
 import { compatibility } from "../nodes/agent/memory.ts";
 import { AgentNode } from "../nodes/agent/node.ts";
 import { Node } from "../nodes/base.ts";
-import { isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
+import { comparePaths, isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
 import { EndNode } from "../nodes/end/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import { logJson } from "../typesys/json.ts";
@@ -38,15 +38,6 @@ import { CompiledFlow, END_ID, Flow, START_ID } from "./model.ts";
 
 /** One reachable declaration and the locator of the AGENT that owns it, `null` for a flow's. */
 type Declared = readonly [MemoryDecl, readonly string[] | null];
-
-/** Order two locators: component by component in code-unit order, then a prefix first. */
-function compareLocators(a: readonly string[], b: readonly string[]): number {
-  for (let i = 0; i < Math.min(a.length, b.length); i++) {
-    const order = compareCodeUnits(a[i]!, b[i]!);
-    if (order !== 0) return order;
-  }
-  return a.length - b.length;
-}
 
 /** Return a key no two distinct locators share; never shown. */
 function locatorKey(locator: readonly string[]): string {
@@ -147,7 +138,7 @@ export class ResolvedMemory {
     ) {
       throw new RangeError("placements must be an array of non-empty string locators");
     }
-    if (placements.some((locator, i) => i > 0 && compareLocators(placements[i - 1]!, locator) >= 0)) {
+    if (placements.some((locator, i) => i > 0 && comparePaths(placements[i - 1]!, locator) >= 0)) {
       throw new RangeError("placements must be sorted and unique");
     }
     if (!isList(origins) || origins.length !== spec.owners.length) {
@@ -600,7 +591,7 @@ export function memoryTable(declared: readonly Declared[]): readonly ResolvedMem
         first.config,
         owners,
         owners.length === 1 && owners[0]!.node !== null,
-        [...placements.values()].sort(compareLocators),
+        [...placements.values()].sort(comparePaths),
         ordered.map((decl) => decl.origin),
       ),
     );
@@ -679,7 +670,7 @@ export function memoryStacks(layout: ResolvedMemoryLayout): readonly MemoryStack
   return Object.freeze(
     layout.targets
       .map((target) => new MemoryStack(target.locator, target.scope!.memories))
-      .sort((a, b) => compareLocators(a.locator, b.locator)),
+      .sort((a, b) => comparePaths(a.locator, b.locator)),
   );
 }
 

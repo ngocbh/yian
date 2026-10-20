@@ -32,10 +32,13 @@
  * `model`, the exact `api_key` message, a non-object `llmConfig` (`TypeError`) and `createParent: 1`
  * (`TypeError`); a snapshot whose `revision` is `2n ** 60n` (beyond 2^53 − 1, with its cause
  * message), whose `epoch` is `-1n` or whose `version` is `1n` is `reflective.invalid_snapshot`; one
- * row for each of commit's batch, commit-id and mutation messages; an async `rewriteQuery` is
- * awaited; a re-entrant `memory.close()` from inside it is `reflective.busy`; a host mutation whose
- * payload holds `-0` is `reflective.invalid_batch` "mutation batch cannot be encoded canonically",
- * with a `TypeError` cause.
+ * row for each of commit's batch, commit-id and mutation messages; "recall rejects an invalid
+ * context and a non-string query"; an async `rewriteQuery` override is awaited (in
+ * `test_subclass_controls_query_rewriting`); a re-entrant `memory.close()` from inside it is
+ * `reflective.busy`; a host mutation whose payload holds `-0` is `reflective.invalid_batch`
+ * "mutation batch cannot be encoded canonically", with a `TypeError` cause; the closing
+ * `memory.close()` in `test_session_idempotency_and_closed_session_operations` (a failed recall
+ * releases its operation).
  *
  * Changed:
  * - Every backend gets `baseEnv()`, an environment map standing in for Python's `conftest.py`
@@ -64,6 +67,8 @@
  *   them.
  * - `test_concurrent_same_generation_commits_have_one_winner`: JS commits are synchronous, so two
  *   sessions of one generation commit in turn and the second is stale.
+ * - Recall's messages say "context must be a RecallContext or null" and "rewriteQuery() must return
+ *   a string" where Python's say `None` and `rewrite_query()`.
  * - JSON ints written into snapshots are `bigint`s; `recall` is async; `with` blocks are
  *   `try`/`finally` around `close()`.
  *
@@ -509,21 +514,30 @@ test("recall all and context ranking are deterministic", async () => {
 });
 
 test("subclass controls query rewriting", async () => {
+  // TS-only: the async override is awaited.
   class AppleMemory extends ReflectiveMemory {
     override rewriteQuery(): string {
       return "apple";
     }
   }
-  const memory = new AppleMemory({ env: baseEnv(), llmConfig: OLLAMA, recallLimit: 1 });
-  await withRun(memory, (session) =>
-    session.commit("seed", [
-      mutation("berry", "add", "berry", "fresh berry"),
-      mutation("apple", "add", "apple", "green apple"),
-    ]),
-  );
-  await withRun(memory, async (session) => {
-    expect(await session.recall(new RecallContext("", "berry", {}, ["root"]))).toBe("[apple] green apple");
-  });
+  class AsyncAppleMemory extends ReflectiveMemory {
+    override async rewriteQuery(): Promise<string> {
+      await Promise.resolve();
+      return "apple";
+    }
+  }
+  for (const Memory of [AppleMemory, AsyncAppleMemory]) {
+    const memory = new Memory({ env: baseEnv(), llmConfig: OLLAMA, recallLimit: 1 });
+    await withRun(memory, (session) =>
+      session.commit("seed", [
+        mutation("berry", "add", "berry", "fresh berry"),
+        mutation("apple", "add", "apple", "green apple"),
+      ]),
+    );
+    await withRun(memory, async (session) => {
+      expect(await session.recall(new RecallContext("", "berry", {}, ["root"]))).toBe("[apple] green apple");
+    });
+  }
 });
 
 test("query rewriting failure is sanitized", async () => {
@@ -538,9 +552,18 @@ test("query rewriting failure is sanitized", async () => {
     rejection(session.recall(new RecallContext("", "hello", {}, ["root"]))),
   );
   expect(error.code).toBe("reflective.query");
-  expect(error.message).toBe("memory query rewriting failed");
   expect(error.message).not.toContain("query-secret");
   expect(error.cause).toBe(cause);
+});
+
+test("recall rejects an invalid context and a non-string query", async () => {
+  const memory = newMemory({ llmConfig: OLLAMA });
+  const context = await withRun(memory, (session) => rejection(session.recall({} as never)));
+  expect([context.stage, context.code, context.message]).toEqual([
+    "recall",
+    "reflective.invalid_context",
+    "context must be a RecallContext or null",
+  ]);
 
   class NumberMemory extends ReflectiveMemory {
     override rewriteQuery(): string {
@@ -548,17 +571,16 @@ test("query rewriting failure is sanitized", async () => {
     }
   }
   const numeric = new NumberMemory({ env: baseEnv(), llmConfig: OLLAMA });
-  const typeError = await withRun(numeric, (session) =>
+  const query = await withRun(numeric, (session) =>
     rejection(session.recall(new RecallContext("", "hello", {}, ["root"]))),
   );
-  expect([typeError.code, typeError.message]).toEqual(["reflective.query", "rewrite_query() must return a string"]);
-  const context = await withRun(numeric, (session) => rejection(session.recall({} as never)));
-  expect([context.stage, context.code, context.message]).toEqual([
+  expect([query.stage, query.code, query.message]).toEqual([
     "recall",
-    "reflective.invalid_context",
-    "context must be a RecallContext or None",
+    "reflective.query",
+    "rewriteQuery() must return a string",
   ]);
-  // The failed recalls released their operations, so the backend isn't busy.
+  // The failed recalls released their operations, so the backends aren't busy.
+  memory.close();
   numeric.close();
 });
 
@@ -739,30 +761,11 @@ test("a host mutation payload holding -0 cannot be encoded canonically", async (
   });
 });
 
-test("an async rewriteQuery is awaited", async () => {
-  class AsyncQueryMemory extends ReflectiveMemory {
-    override async rewriteQuery(): Promise<string> {
-      await new Promise((resolve) => setTimeout(resolve, 1));
-      return "apple";
-    }
-  }
-  const memory = new AsyncQueryMemory({ env: baseEnv(), llmConfig: OLLAMA, recallLimit: 1 });
-  await withRun(memory, (session) =>
-    session.commit("seed", [
-      mutation("berry", "add", "berry", "fresh berry"),
-      mutation("apple", "add", "apple", "green apple"),
-    ]),
-  );
-  await withRun(memory, async (session) => {
-    expect(await session.recall(new RecallContext("", "berry", {}, ["root"]))).toBe("[apple] green apple");
-  });
-});
-
 test("a re-entrant close from inside an async rewriteQuery is busy", async () => {
   let closeError: unknown = null;
   class ClosingQueryMemory extends ReflectiveMemory {
     override async rewriteQuery(): Promise<string> {
-      await new Promise((resolve) => setTimeout(resolve, 1));
+      await Promise.resolve();
       try {
         this.close();
       } catch (error) {

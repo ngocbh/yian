@@ -660,7 +660,7 @@ export class ReflectiveMemory implements Memory {
 
   /**
    * Build the default lexical query from the visible prompt and inputs:
-   * ``Task: <prompt>\nInputs: <inputs as log JSON>``. A subclass may override it, also with an async
+   * `Task: <prompt>\nInputs: <inputs as log JSON>`. A subclass may override it, also with an async
    * method.
    *
    * @throws TypeError when `context` isn't exactly a `RecallContext`.
@@ -903,7 +903,9 @@ export class ReflectiveSession implements MemorySession {
    * @returns The action, lesson id, text (`null` for a removal) and canonical source.
    * @throws MemoryOperationError `reflective.invalid_mutation` for any defect.
    */
-  private validatedAction(mutation: MemoryMutation): [string, string, string | null, JsonObject] {
+  private validatedAction(
+    mutation: MemoryMutation,
+  ): ["add" | "revise" | "remove", string, string | null, JsonObject] {
     const invalid = (message: string, cause?: unknown) =>
       operationError("commit", "reflective.invalid_mutation", message, cause === undefined ? {} : { cause });
     const payload = mutation.payload;
@@ -1021,7 +1023,7 @@ export class ReflectiveSession implements MemorySession {
     });
   }
 
-  /** Render atomic ids and text without an outer section header: one ``[id] text`` line each. */
+  /** Render atomic ids and text without an outer section header: one `[id] text` line each. */
   private static format(lessons: readonly Lesson[]): string {
     return lessons.map((lesson) => `[${lesson.lessonId}] ${lesson.text}`).join("\n");
   }
@@ -1042,7 +1044,7 @@ export class ReflectiveSession implements MemorySession {
       const lessons = this.state.lessons;
       if (context === null) return ReflectiveSession.format(lessons);
       if (!isExactly(context, RecallContext)) {
-        throw operationError("recall", "reflective.invalid_context", "context must be a RecallContext or None");
+        throw operationError("recall", "reflective.invalid_context", "context must be a RecallContext or null");
       }
       let query: unknown;
       try {
@@ -1052,7 +1054,7 @@ export class ReflectiveSession implements MemorySession {
       }
       // No session check after the await: recall reads only this session's pinned state.
       if (typeof query !== "string") {
-        throw operationError("recall", "reflective.query", "rewrite_query() must return a string");
+        throw operationError("recall", "reflective.query", "rewriteQuery() must return a string");
       }
       const queryWords = words(query);
       const selected = lessons

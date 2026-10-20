@@ -2,31 +2,87 @@
  * Raw node evaluation for the append-only dispatcher: a port of
  * `tests/engine/test_eval_node_raw.py`.
  *
- * Ported (adapted): `test_public_evaluation_always_returns_frozen_slotted_wrapper` and the carrier
- * half of `test_raw_failure_is_frozen_slotted_and_preserves_diagnostics`, built directly; the
- * field names are the own keys, and frozen means `Object.isFrozen` and a throwing write.
+ * Ported: `test_raw_evaluation_returns_closed_success_route_and_grow_values`.
+ *
+ * Ported (adapted): `test_public_evaluation_always_returns_frozen_slotted_wrapper` and
+ * `test_raw_failure_is_frozen_slotted_and_preserves_diagnostics`: the field names are the own
+ * keys, frozen means `Object.isFrozen` and a throwing write, and the traceback is the binder
+ * error's stack.
  *
  * Not ported: the `__slots__` (no `__dict__`) checks; a TS class has no slots.
  *
  * TS-only: the `EvaluatedOutcome` constructor checks, `requireSteering`, and the steering
  * capability's checks on what the host inbox returns.
  *
- * Later (T4-6): the rows through `evalNode`.
+ * Changed: `raw` evaluates the node in a one-node `CompiledFlow` wired from a `FuncNode`'s
+ * `reads`, as Python's stub flow derives it.
+ *
+ * Later (T4-6): the other rows.
  */
 
 import { describe, expect, test } from "bun:test";
 
+import { CompiledFlow } from "../../src/compile/model.ts";
 import { Failure } from "../../src/diagnostics.ts";
-import { CapabilityFault, Grow, Output, Route, type Steering } from "../../src/nodes/base.ts";
+import {
+  CapabilityFault,
+  Grow,
+  Node,
+  NodeKind,
+  type NodeResult,
+  Output,
+  Route,
+  type Steering,
+} from "../../src/nodes/base.ts";
 import { BindingCollector } from "../../src/nodes/binding.ts";
+import { Parameter } from "../../src/nodes/contracts.ts";
 import { BackwardCapture } from "../../src/runtime/contracts.ts";
 import { EvaluationEvidence } from "../../src/memory/contracts.ts";
 import {
   EvaluatedOutcome,
   EvaluationFailure,
+  type EvalNodeOptions,
+  evalNode,
   requireSteering,
   SteeringCapability,
+  type WorkerOutcome,
 } from "../../src/runtime/eval_node.ts";
+import { VariablePool } from "../../src/typesys/pool.ts";
+import { FuncNode } from "./run_state_fixtures.ts";
+
+/** Evaluate `node` in a one-node flow wired from a `FuncNode`'s `reads`. */
+function evaluate(node: Node, options: EvalNodeOptions = {}): Promise<EvaluatedOutcome> {
+  const wiring = node instanceof FuncNode ? node.reads : {};
+  const flow = CompiledFlow.fromParts(new Map([[node.id, node]]), [], {
+    wiring: new Map([[node.id, new Map(Object.entries(wiring))]]),
+  });
+  return evalNode(node, flow, new VariablePool(), options);
+}
+
+/** Return the raw outcome of evaluating `node`. */
+async function raw(node: Node, options: EvalNodeOptions = {}): Promise<WorkerOutcome> {
+  return (await evaluate(node, options)).outcome;
+}
+
+/** Return one configured result from its body. */
+class ResultNode extends Node {
+  readonly kind: NodeKind = NodeKind.CODE;
+  readonly result: unknown;
+
+  constructor(nodeId: string, result: unknown) {
+    super(nodeId);
+    this.result = result;
+  }
+
+  override forward(): NodeResult {
+    return this.result as NodeResult;
+  }
+}
+
+/** A minimal spawner for the raw `Grow` result. */
+class Spawner extends ResultNode {
+  override readonly isSpawner = true;
+}
 
 /** Return the value `run` throws, or fail when it returns. */
 function thrown(run: () => unknown): unknown {
@@ -53,10 +109,11 @@ function failure(): Failure {
   return new Failure({ code: "node.execute", message: "boom", nodeId: "work" });
 }
 
-test("public evaluation always returns frozen slotted wrapper", () => {
-  const evaluated = new EvaluatedOutcome(new Output("done"), null);
+test("public evaluation always returns frozen slotted wrapper", async () => {
+  const evaluated = await evaluate(new FuncNode("work", () => "done"));
 
-  expect(evaluated).toEqual(new EvaluatedOutcome(new Output("done"), null, null, null));
+  expect(evaluated).toBeInstanceOf(EvaluatedOutcome);
+  expect(evaluated).toEqual(new EvaluatedOutcome(new Output("done"), null));
   expect(Object.keys(evaluated)).toEqual(["outcome", "evidence", "bindings", "backwardCapture"]);
   expect(Object.isFrozen(evaluated)).toBe(true);
   expect(() => {
@@ -64,14 +121,28 @@ test("public evaluation always returns frozen slotted wrapper", () => {
   }).toThrow(TypeError);
 });
 
-test("raw failure is frozen slotted and preserves diagnostics", () => {
-  const result = new EvaluationFailure(failure());
+test("raw evaluation returns closed success route and grow values", async () => {
+  expect(await raw(new FuncNode("work", () => "done"))).toEqual(new Output("done"));
+  expect(await raw(new ResultNode("branch", new Route("chosen")))).toEqual(new Route("chosen"));
+  expect(await raw(new Spawner("spawn", new Grow({ value: 1n })))).toEqual(new Grow({ value: 1n }));
+});
 
+test("raw failure is frozen slotted and preserves diagnostics", async () => {
+  const node = new FuncNode("work", (inputs) => inputs);
+  node.params = [new Parameter("required", { required: true })];
+
+  const result = await raw(node);
+
+  expect(result).toBeInstanceOf(EvaluationFailure);
+  const retained = (result as EvaluationFailure).failure;
+  expect(retained.nodeId).toBe("work");
+  expect(retained.causeType).toBe("BindingError");
+  expect(retained.traceback).toStartWith("BindingError: required input 'required' is unbound");
   expect(Object.keys(result)).toEqual(["failure"]);
   for (const alias of ["nodeId", "error", "errorType", "traceback"]) expect(alias in result).toBe(false);
   expect(Object.isFrozen(result)).toBe(true);
   expect(() => {
-    (result as { failure: unknown }).failure = failure();
+    (result as { failure: unknown }).failure = retained;
   }).toThrow(TypeError);
 });
 

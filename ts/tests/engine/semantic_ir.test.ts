@@ -80,8 +80,11 @@
  *   `RangeError`, and each error row checks the exact message (a nested binding is refused as an
  *   unsupported non-JSON value of type `Binding`). Python's `repr(manifest)` is `JSON.stringify`.
  *
- * Later (T3-14…T3-22): the compose/load row
- * `test_reference_validation_checks_a_wrapped_flow_output`; inline binding type inference
+ * The reference-validation row `test_reference_validation_checks_a_wrapped_flow_output`: a node
+ * wiring entry or the flow output wrapped in one `Binding` is still checked, and one wrapped twice
+ * holds no source text to check.
+ *
+ * Later (T3-14…T3-22): inline binding type inference
  * (`test_inline_binding_type_inference_reads_one_carrier_layer`).
  */
 
@@ -115,6 +118,7 @@ import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ChildSignature, childSignature } from "../../src/compose/nodes/resolver.ts";
 import { checkCallMapTypes } from "../../src/compose/validate/call_types.ts";
 import { checkLoopTypeContract } from "../../src/compose/validate/loop_types.ts";
+import { validateReferences } from "../../src/compose/validate/references.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { parseExpr } from "../../src/expr/index.ts";
 import { Token, Tree } from "../../src/expr/grammar.ts";
@@ -634,6 +638,27 @@ function exact(contract: OutputContract | null): ValueContract {
   if (!isExactly(contract, ValueContract)) throw new Error("expected an exact ValueContract");
   return contract;
 }
+
+test("reference validation checks a wrapped flow output", () => {
+  // A carrier cannot hide unknown node or output namespaces from validation.
+  const bad = new Binding("${missing.output}", { origin: origin("bad-reference") });
+  const sink = new BuildResult({ node: new BareNode("sink"), wiring: new Map() });
+
+  const nodeError = loadError(() =>
+    validateReferences(new Map([["sink", sink]]), new Set(), new Map(), null, table({ sink: table({ value: bad }) })),
+  );
+  expect(nodeError.message).toContain("unknown namespace");
+  const outputError = loadError(() => validateReferences(new Map(), new Set(), new Map(), bad, new Map()));
+  expect(outputError.message).toContain("unknown namespace");
+
+  validateReferences(
+    new Map([["sink", sink]]),
+    new Set(),
+    new Map(),
+    null,
+    table({ sink: table({ value: new Binding(bad, { origin: origin("outer") }) }) }),
+  );
+});
 
 test("output contract resolution retains whole-value identity", () => {
   // Raw and wrapped references resolve to the producer's exact carrier.

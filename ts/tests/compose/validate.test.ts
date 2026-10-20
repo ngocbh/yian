@@ -36,41 +36,49 @@
  * `written_value_nesting.test.ts` does; its message is pinned (a stack overflow would give another
  * error, so there is no cause-chain check).
  *
- * TS-only: the harvested
- * cases from files with no TS mirror, pinned at the end with `full` (every
- * frame and the notes): `load-map-call/compose_call_argument_labels__a_cycle_through_an_inline_call_names_its_host`
- * (its `defs:` entry built by hand),
- * `load-core/engine_limit_overrides__written_value_over_the_set_value_limit` (its `env:` sets the
- * value limit, restored by the `afterEach`), the type-table pass's
- * `load-core/engine_binding_labels_flows__unknown_type_in_a_single_flow_output`, the node-assert
- * check's `load-core/compose_expression_nesting__too_deep_node_assert`, the flow-assert lowering's
+ * TS-only: the harvested cases from files with no TS mirror, pinned at the end with `full` (every
+ * frame and the notes): `load-core/engine_limit_overrides__written_value_over_the_set_value_limit`
+ * (its `env:` sets the value limit, restored by the `afterEach`), the type-table pass's
+ * `load-core/engine_binding_labels_flows__unknown_type_in_a_single_flow_output`, the reference
+ * check's `load-core/compose_expression_nesting__too_deep_{call_argument,case_on,human_question,prompt_span}`
+ * (the call argument's `g` def a hand-built child),
+ * `yaml/compose_load_error_ranges__mapped_root_output_keeps_the_retained_range`,
+ * `load-case/engine_case_when_escape_e2e__*`, `load-core/unknown_namespace`,
+ * `load-case/engine_value_entries_run__a_routed_entry_reading_an_excluded_field` (the `else`
+ * branch's narrowed view of `d.output` gives its "unknown field" message), the node-assert check's
+ * `load-core/compose_expression_nesting__too_deep_node_assert`, the flow-assert lowering's
  * `load-core/compose_expression_nesting__too_deep_flow_assert`, and the `ok` cases with flow asserts
  * `load-leaves/seed_23_asserts_scopes` (its `score_one` def built by hand, without the def's own
  * asserts, which load in T3-22), `load-core/seed_19_binding_stances` and
  * `load-core/seed_27_expr_ops`.
  *
- * Later (T3-18 PR 3): the reference validator's rows (`test_validate_references_diag_has_range`,
+ * The reference validator's rows: `test_validate_references_diag_has_range` (its leaves built from
+ * `nodesOf`, as Python's `_built_flow` builds them), and
  * `test_validate_references_diag_locates_case_when_via_synth_param`,
  * `test_validate_references_diag_case_on_form_locates_at_on_line`,
- * `test_validate_references_diag_case_when_multi_ref_locates_at_that_when`,
- * `test_validate_references_diag_case_then_call_locates_at_then_line`).
+ * `test_validate_references_diag_case_when_multi_ref_locates_at_that_when` and
+ * `test_validate_references_diag_case_then_call_locates_at_then_line` (its `helper` def a hand-built
+ * child), through `assembleText` where Python calls `load_flow`; and their cases
+ * `load-core/compose_validate__unknown_namespace_in_a_case_{when,on,then_call}`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { Edge } from "../../src/compile/model.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
+import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { BuildContext, BuildResult, siteKey } from "../../src/compose/nodes/base.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { checkCallMapTypes } from "../../src/compose/validate/call_types.ts";
 import { rejectCycles } from "../../src/compose/validate/cycles.ts";
 import { validateHumanQuestions } from "../../src/compose/validate/human_questions.ts";
 import { checkLoopTypeContract } from "../../src/compose/validate/loop_types.ts";
+import { validateReferences } from "../../src/compose/validate/references.ts";
 import { checkWiringParity } from "../../src/compose/validate/wiring_parity.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
-import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { type OutputContract, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { HumanInputNode } from "../../src/nodes/human_input/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
@@ -95,6 +103,37 @@ const rangeDiagnostics = () => new LoadDiagnostics("flow.yaml", ("x".repeat(80) 
 /** Return a data edge `from -> to` feeding input group `group`, with id `from->to`. */
 const dataEdge = (from: string, to: string, group: string | null = null) =>
   new Edge(`${from}->${to}`, from, to, { inputGroup: group });
+
+/**
+ * Build the agent and code leaves of flow `text`'s `nodes:` with their wiring and output contracts,
+ * enough to drive `validateReferences` alone.
+ */
+function builtFlow(text: string): {
+  buildResults: Map<string, BuildResult>;
+  wiring: Map<string, ReadonlyMap<string, unknown>>;
+  producers: Map<string, OutputContract>;
+} {
+  const ctx = new BuildContext({ registry: new Map() });
+  const buildResults = new Map(
+    [...nodesOf(text)]
+      .filter(([, desc]) => desc instanceof AgentDescriptor || desc instanceof CodeDescriptor)
+      .map(([nodeId, desc]) => [nodeId, desc.build(ctx)]),
+  );
+  const wiring = new Map([...buildResults].map(([nodeId, result]) => [nodeId, result.wiring]));
+  const producers = new Map<string, OutputContract>();
+  for (const [nodeId, result] of buildResults) {
+    if (result.node.outputContract !== null) producers.set(nodeId, result.node.outputContract);
+  }
+  return { buildResults, wiring, producers };
+}
+
+/** The `helper` def the CASE `then: call(...)` flows call: `x: !int` into `h`, whose `int` it returns. */
+const helper = () =>
+  handChild({
+    inputs: parametersFromYaml("input:\n  x: !int\n", new Map()),
+    producers: { h: new ValueContract(Type.scalar(ValueKind.INTEGER)) },
+    output: "${h.output}",
+  });
 
 describe("rejectCycles", () => {
   test("a cycle's diagnostic has a frame per node in authored order", () => {
@@ -397,6 +436,115 @@ test("the type validators reject noncanonical contract maps before walking", () 
   );
 });
 
+describe("validateReferences", () => {
+  test("a dangling node input is located at the offending entry", () => {
+    // A node input binding that references an unknown node (`${ghost.output}`) is a dangling ref.
+    // The aggregate error anchors on the OFFENDING ENTRY, the per-binding `input` span the parse
+    // loop stamps for every kind, not the enclosing `input:` mapping, which would also mark every
+    // innocent sibling entry.
+    const text =
+      "id: f\nname: f\nnodes:\n" +
+      "  a:\n    kind: agent\n    prompt: hi\n" +
+      "    input:\n      x: ${ghost.output}\n    output: str\n" +
+      "output: ${a.output}\n";
+    const { buildResults, wiring, producers } = builtFlow(text);
+
+    const error = loadError(() =>
+      validateReferences(buildResults, new Set(), producers, "${a.output}", wiring, {
+        diagnostics: new LoadDiagnostics("flow.yaml", text),
+      }),
+    );
+
+    expect(error.message).toContain("ghost");
+    const range = error.diagnostic.frames[0]!.range;
+    const fieldRanges = buildResults.get("a")!.fieldRanges;
+    expect(range).toEqual(fieldRanges.get(siteKey("input", "x"))!);
+    // The exact `x:` entry is narrower than the `input:` mapping, which runs through line 9.
+    expect(range).not.toEqual(fieldRanges.get(siteKey("field", "inputs"))!);
+    expect([range.startLine, range.endLine]).toEqual([8, 8]);
+  });
+
+  test("a case when is located through its synthetic param", () => {
+    // A desugared CASE binds synthetic params (`__rN`, the hoisted `when:` refs) the author never
+    // wrote. The desugar stamps each with its own `cases[N].when` range and label, so a bad ref
+    // there locates at the `when:` line and names the author's construct, not `__rN`.
+    const text =
+      "id: f\nname: f\nnodes:\n" +
+      "  a:\n    kind: case\n" +
+      '    cases:\n      - when: "ghost.output >= 1"\n        then: b\n' + // `when:` on line 7
+      "    else: b\n" +
+      "  b:\n    kind: code\n    output: int\n    code: \"return {'output': 1}\"\n" +
+      "output: ${b.output}\n";
+
+    const error = loadError(() => assembleText(text));
+
+    expect(error.message).toContain("ghost");
+    expect(error.message).not.toContain("'__r0'"); // the synthetic param does not leak...
+    expect(error.message).toContain("cases[0].when"); // ...it is named by its author-facing site
+    expect(error.diagnostic.frames[0]!.range.startLine).toBe(7);
+  });
+
+  test("a case on: is located at the on: line", () => {
+    // The `on:` form binds one synthetic `__on` param, named `on:` and located at the `on:` line.
+    const text =
+      "id: f\nname: f\nnodes:\n" +
+      "  gate:\n    kind: case\n" +
+      "    on: ${nope.output}\n" + // `on:` on line 6
+      "    cases:\n      - when: hi\n        then: p\n" +
+      "    else: p\n" +
+      "  p:\n    kind: code\n    output: int\n    code: \"return {'output': 1}\"\n" +
+      "output: ${p.output}\n";
+
+    const error = loadError(() => assembleText(text));
+
+    expect(error.message).toContain("nope");
+    expect(error.message).not.toContain("__on");
+    expect(error.message).toContain("on:");
+    expect(error.diagnostic.frames[0]!.range.startLine).toBe(6);
+  });
+
+  test("a when with two refs is located at that when", () => {
+    // A `when:` reading two refs (one valid, one bad) allocates a `__rN` per distinct ref; the bad
+    // ref carets this `when:` line and names `cases[0].when`.
+    const text =
+      "id: f\nname: f\nnodes:\n" +
+      "  s:\n    kind: code\n    output: int\n    code: \"return {'output': 1}\"\n" +
+      "  gate:\n    kind: case\n" +
+      '    cases:\n      - when: "s.output >= 1 and nope.output >= 1"\n        then: p\n' + // line 11
+      "    else: p\n" +
+      "  p:\n    kind: code\n    output: int\n    code: \"return {'output': 1}\"\n" +
+      "output: ${p.output}\n";
+
+    const error = loadError(() => assembleText(text));
+
+    expect(error.message).toContain("nope");
+    expect(error.message).toContain("cases[0].when");
+    expect(error.message).not.toContain("__r");
+    expect(error.diagnostic.frames[0]!.range.startLine).toBe(11);
+  });
+
+  test("a then call is located at the then: line", () => {
+    // A `then: call(...)` lifts a synth call node; a bad ref inside it carets the `then:` line (the
+    // synth node's own provenance), not the case header.
+    const text =
+      "id: f\nname: f\nnodes:\n" +
+      "  s:\n    kind: code\n    output: int\n    code: \"return {'output': 1}\"\n" +
+      "  gate:\n    kind: case\n" +
+      '    cases:\n      - when: "s.output >= 1"\n' +
+      "        then: call(helper, x=${nope.output})\n" + // `then:` on line 12
+      "    else: s\n" +
+      "output: ${gate.output}\n";
+
+    const error = loadError(() => assembleText(text, "flow.yaml", { children: { helper: helper() } }));
+
+    expect(error.message).toContain(
+      "node 'gate' cases[0].then call(helper) argument 'x' from: reference ${nope.output}",
+    );
+    expect(error.message).not.toContain("__call_");
+    expect(error.diagnostic.frames[0]!.range.startLine).toBe(12);
+  });
+});
+
 describe("parse ranges", () => {
   test("node-local asserts carry ranges", () => {
     // Each authored assert maps to its own range by index, never by its (non-unique) text; the
@@ -534,14 +682,6 @@ test("a case output over a 1000-link alias chain is rejected as a case output", 
 
 // ---------- harvested cases from files with no TS mirror ----------
 
-/** The `child` def of the inline-call cycle case: `y: !str` into `x`, whose output it returns. */
-const child = () =>
-  handChild({
-    inputs: parametersFromYaml("input:\n  y: !str\n", new Map()),
-    producers: { x: new ValueContract(Type.scalar(ValueKind.STRING)) },
-    output: "${x.output}",
-  });
-
 /** The `score_one` def of the asserts seed: `topic: !str`, `window: !int` into `raw`, a `float`. */
 const scoreOne = () =>
   handChild({
@@ -552,11 +692,6 @@ const scoreOne = () =>
 
 test.each<CaseRow>([
   {
-    id: "load-map-call/compose_call_argument_labels__a_cycle_through_an_inline_call_names_its_host",
-    call: assembledWith({ child: child() }),
-    full: true,
-  },
-  {
     id: "load-core/engine_limit_overrides__written_value_over_the_set_value_limit",
     call: assembled,
     full: true,
@@ -564,6 +699,28 @@ test.each<CaseRow>([
   {
     id: "load-core/engine_binding_labels_flows__unknown_type_in_a_single_flow_output",
     call: assembled,
+    full: true,
+  },
+  ...[
+    "load-core/compose_expression_nesting__too_deep_case_on",
+    "load-core/compose_expression_nesting__too_deep_human_question",
+    "load-core/compose_expression_nesting__too_deep_prompt_span",
+    "yaml/compose_load_error_ranges__mapped_root_output_keeps_the_retained_range",
+    "load-case/engine_case_when_escape_e2e__an_on_case_with_no_cases_still_checks_its_on_value",
+    "load-case/engine_case_when_escape_e2e__an_unknown_field_inside_an_escape",
+    "load-case/engine_case_when_escape_e2e__an_unknown_namespace_in_an_escape_is_reported_once",
+    "load-core/unknown_namespace",
+    "load-case/engine_value_entries_run__a_routed_entry_reading_an_excluded_field",
+  ].map((id) => ({ id, call: assembled, full: true })),
+  {
+    id: "load-core/compose_expression_nesting__too_deep_call_argument",
+    call: assembledWith({
+      g: handChild({
+        inputs: parametersFromYaml("input:\n  d: !int\n", new Map()),
+        producers: { run: new ValueContract(Type.scalar(ValueKind.STRING)) },
+        output: "${run.output}",
+      }),
+    }),
     full: true,
   },
   {
@@ -579,4 +736,14 @@ test.each<CaseRow>([
   { id: "load-leaves/seed_23_asserts_scopes", call: assembledWith({ score_one: scoreOne() }), full: true },
   { id: "load-core/seed_19_binding_stances", call: assembled, full: true },
   { id: "load-core/seed_27_expr_ops", call: assembled, full: true },
+])("assemble: $id", runCase);
+
+test.each<CaseRow>([
+  { id: "load-core/compose_validate__unknown_namespace_in_a_case_when", call: assembled, full: true },
+  { id: "load-core/compose_validate__unknown_namespace_in_a_case_on", call: assembled, full: true },
+  {
+    id: "load-core/compose_validate__unknown_namespace_in_a_case_then_call",
+    call: assembledWith({ helper: helper() }),
+    full: true,
+  },
 ])("assemble: $id", runCase);

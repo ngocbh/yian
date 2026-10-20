@@ -6,7 +6,8 @@
  *
  * Changed: a flow with no `nodes:` says "missing required top-level key 'nodes'", where Python's
  * text is pydantic's. The null and text `node_name:` rows, the null optional flow field rows and
- * the null and text `on:` rows check the parsed value, where Python loads the flow.
+ * the null and text `on:` rows check the parsed value, where Python loads the flow; the `on:` rows
+ * also assemble it (`assembleText`), the null one failing on its unresolved `when: x`.
  * `test_text_code_and_tool_id_still_load` assembles the root flow with `assembleText`, where
  * Python loads it. `test_non_text_call_is_a_load_error` and `test_null_call_is_empty` parse the
  * flow's nodes, where Python loads it; the parse half of `test_text_call_still_loads` checks the
@@ -30,8 +31,6 @@
  * `test_not_text_detail_reads_the_first_string_error` (`not_text_detail` reads a pydantic error).
  *
  * Later (T3-22): the load half of `test_text_call_still_loads`.
- * Later (T3-18, T3-22): the unresolved-reference error of `test_null_case_on_is_absent`. Later
- * (T3-22): the loading of `test_text_case_on_still_loads`.
  * Later (T3-22): the defs, compact and merge rows of those two tests, the flow and def sites of
  * the `llm_config` rows, and the def `asserts:` rows (`test_non_text_def_assert_is_a_load_error`,
  * `test_non_list_def_asserts_is_a_load_error`, `test_null_def_asserts_loads`).
@@ -473,10 +472,12 @@ describe("parseNodes", () => {
   test("null case on is absent", () => {
     // `on: null` is the searched form.
     expect((nodesOf(caseOn("null"), []).get("a") as CaseDescriptor).on).toBeNull();
+    expect(loadError(() => assembleText(caseOn("null"))).message).toContain("unresolved references");
   });
 
-  test("text case on still parses", () => {
+  test("text case on still loads", () => {
     expect((nodesOf(caseOn("${input.proj}"), []).get("a") as CaseDescriptor).on).toBe("${input.proj}");
+    assembleText(caseOn("${input.proj}"));
   });
 
   test("a node's asserts must be a list of strings, located", () => {

@@ -11,8 +11,8 @@
  * `test_variable_reader_rejects_a_noncanonical_return_value`,
  * `test_variable_input_collision_selects_the_variable_declaration_key`,
  * `test_invalid_variable_default_selects_the_declaration_value`,
- * `test_invalid_variable_name_selects_its_declaration_key`, and the params, variables, wiring and
- * edges of `test_loaded_agent_prompt_can_name_inputs_and_variables_without_default_data_edges`.
+ * `test_invalid_variable_name_selects_its_declaration_key`, and
+ * `test_loaded_agent_prompt_can_name_inputs_and_variables_without_default_data_edges`.
  *
  * Changed: the malformed mappings drop Python's `{1: "int"}` row: a record's keys are always
  * text, so it has no TS counterpart (`{"1": "int"}` would fail for its missing default instead),
@@ -24,9 +24,6 @@
  * authored source; and the harvested-case table, which makes the loader's call on the
  * conformance cases of these declarations, comparing the message and the last frame, or
  * checking that the flow loads.
- *
- * Later (T3-18): the unknown-reference half of
- * `test_loaded_agent_prompt_can_name_inputs_and_variables_without_default_data_edges`.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -227,6 +224,9 @@ output: \${writer.output}
     expect(writer.variables[1]!.default).toBe("${missing.output}");
     expect([...compiled.wiring.get("writer")!.keys()]).toEqual(["topic"]);
     expect(compiled.edges.every((edge) => edge.from !== "missing")).toBe(true);
+    expect(loadError(() => assembleText(text.replace("${tone},", "${unknown},"))).message).toContain(
+      "not a declared input or variable",
+    );
   });
 
   test("a variable-input collision selects the variable declaration key", () => {

@@ -22,6 +22,7 @@
  * `test_a_tagged_literal_azure_allows_a_literal_base_url`, `test_a_tagged_literal_inherit_is_accepted`,
  * `test_a_call_inside_an_llm_config_string_fails`,
  * `test_a_literal_field_error_in_a_value_layer_points_at_the_field`; the node halves of
+ * `test_a_malformed_span_is_a_located_load_error` (the reference check reports it),
  * `test_a_layer_of_only_tagged_literals_is_a_literal_layer` and
  * `test_a_tag_with_no_value_on_the_layer_fails`; the adaptive composer `ask__compose` rows
  * `test_a_composer_value_loads_as_a_template`, `test_a_composer_tag_is_read_and_consumed`,
@@ -37,8 +38,6 @@
  * and a `Binding`; the origin of a whole-record `Binding`; the harvested cases of the node layer
  * and the composer.
  *
- * Later (T3-18): the node half of `test_a_malformed_span_is_a_located_load_error` (the reference
- * check reports it).
  * Later (T3-22), the flow layer the loader reads: `test_a_flow_field_value_loads_as_a_template`,
  * `test_a_flow_whole_record_value_loads_as_a_binding`, `test_a_flow_tag_is_read_and_consumed`,
  * `test_a_tag_on_a_typedef_still_fails_beside_a_flow_value`,
@@ -440,6 +439,13 @@ test("a literal composer layer is unchanged", () => {
   expect(agent.llmConfig).toEqual({ provider: "openai", model: "gpt-x" });
 });
 
+test("a malformed span is a located load error (node)", () => {
+  const text = flow("    llm_config:\n      model: 'a${b'\n");
+  const error = loadFails(text);
+  expect(error.message).toContain("llm_config");
+  expect(lineOf(error)).toBe(lineHolding(text, "a${b"));
+});
+
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
@@ -452,6 +458,7 @@ test.each<CaseRow>([
   { id: "load-agent/compose_llm_config_values_load__api_key_from_a_value_fails", call: assembled },
   { id: "load-agent/compose_llm_config_values_load__base_url_from_a_value_fails_beside_azure", call: assembled },
   { id: "load-agent/compose_llm_config_values_load__inherit_from_a_value_fails", call: assembled },
+  { id: "load-agent/compose_llm_config_values_load__malformed_span", call: assembled },
   { id: "load-agent/compose_llm_config_values_load__node_layer_not_a_mapping", call: assembled },
   { id: "load-agent/compose_llm_config_values_load__tag_with_no_value", call: assembled },
   { id: "load-agent/compose_llm_config_values_load__unknown_key_beside_a_value", call: assembled },

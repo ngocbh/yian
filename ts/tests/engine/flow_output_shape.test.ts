@@ -12,7 +12,9 @@
  * `test_loop_value_body_re_exporting_an_empty_record_is_rejected`; through `assembleText`, the
  * load halves of `test_flow_result_follows_the_output_shape` (the END's mode and names),
  * `test_inline_call_body_with_a_one_field_output_returns_the_record` and
- * `test_loop_body_with_a_one_field_record_output_runs` (the driver's output type); and, on the
+ * `test_loop_body_with_a_one_field_record_output_runs` (the driver's output type), and
+ * `test_reading_a_missing_field_of_a_record_child_is_rejected_at_load` (the `child` def built by
+ * hand); and, on the
  * engine fixtures' `graph`, `engine` and `RecordingBackwardNode`,
  * `test_root_feedback_on_a_one_field_record_reaches_its_producer`.
  *
@@ -26,15 +28,16 @@
  * row's `empty` def is built by hand.
  *
  * Pinned at the end: (`assembledWith`, the def built by hand)
- * `load-core/engine_flow_output_shape__map_over_a_def_without_output` and
- * `load-core/engine_flow_output_shape__loop_body_re_exporting_an_empty_record`; (`assembled`)
+ * `load-core/engine_flow_output_shape__map_over_a_def_without_output`,
+ * `load-core/engine_flow_output_shape__loop_body_re_exporting_an_empty_record` and
+ * `load-core/engine_flow_output_shape__missing_field_of_an_empty_record_child`; (`assembled`)
  * `load-core/engine_flow_output_shape__loop_body_with_an_empty_record_output`.
  *
  * TS-only: `ChildSignature`'s constructor errors, which no Python test reaches: a non-contract
  * output, a non-array `declaredOutputs`, a malformed pair, an empty or duplicate name, a
  * non-contract declared output; and the form with no declared evidence, which skips the check.
  *
- * Later (T3-18, T3-22, T4): `test_call_over_a_one_field_record_def_returns_the_record`,
+ * Later (T3-22, T4): `test_call_over_a_one_field_record_def_returns_the_record`,
  * `test_call_over_a_flat_single_node_def_returns_the_bare_value` and
  * `test_nested_value_re_export_of_a_record_def_keeps_the_record` (T3-22, T4); the run halves of
  * `test_flow_result_follows_the_output_shape`,
@@ -43,8 +46,7 @@
  * `test_map_over_a_one_field_record_def_returns_a_list_of_records`,
  * `test_an_unquoted_yes_flow_output_name_is_text` and
  * `test_a_literal_flow_output_is_returned_as_written` (T4);
- * `test_case_then_call_over_a_one_field_record_def_returns_the_record` (T3-22, T4);
- * `test_reading_a_missing_field_of_a_record_child_is_rejected_at_load` (T3-18, T3-22); and
+ * `test_case_then_call_over_a_one_field_record_def_returns_the_record` (T3-22, T4); and
  * `test_a_non_string_output_name_in_a_def_is_a_load_error` (T3-22).
  *
  * Not ported here: `test_a_non_string_flow_output_name_is_a_load_error_at_its_key` is the source
@@ -401,6 +403,24 @@ test("root feedback on a one-field record reaches its producer", async () => {
   expect(root.inputFeedback).toEqual({ topic: ["Review the order."] });
 });
 
+test.each([
+  ["one-field", { order: "${step.output}" }],
+  ["empty-record", {}],
+])("reading a missing field of a record child is rejected at load: %s", (_id, output) => {
+  const text = `id: parent
+name: parent
+nodes:
+  c:
+    kind: call
+    call: child
+output: \${c.output.missing}
+`;
+
+  const error = loadError(() => assembleText(text, "flow.yaml", { children: { child: shapeChild(output) } }));
+
+  expect(error.message).toContain("reads unknown field 'missing' on record");
+});
+
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
@@ -412,5 +432,9 @@ test.each<CaseRow>([
   {
     id: "load-core/engine_flow_output_shape__loop_body_re_exporting_an_empty_record",
     call: assembledWith({ empty: shapeChild({}) }),
+  },
+  {
+    id: "load-core/engine_flow_output_shape__missing_field_of_an_empty_record_child",
+    call: assembledWith({ child: shapeChild({}) }),
   },
 ])("assemble: $id", runCase);

@@ -27,8 +27,7 @@
  * inf as text) for a `float` input get no hint; the
  * harvested `load-map-call/compose_call_binding_types__*` cases, pinned at the end
  * (`…__date_literal_into_a_str_input` is `ok`, rule `dates`); and, as "Pinned harvested cases
- * (TS-only placement)", the cases this check decides whose Python file has no TS mirror:
- * `load-map-call/compose_call_argument_labels__an_argument_literal_type_mismatch` and
+ * (TS-only placement)", the case this check decides whose Python file has no TS mirror:
  * `types/compose_open_range_flows__call_with_a_wider_open_range_source`.
  * `load-types/compose_union_narrowing__a_nullable_union_defensive_else_sees_none` is pinned in
  * `union_narrowing.test.ts`, its Python file's mirror.
@@ -415,10 +414,6 @@ test.each<[string, string]>([
 // ---------- Pinned harvested cases (TS-only placement) ----------
 
 test.each<CaseRow>([
-  {
-    id: "load-map-call/compose_call_argument_labels__an_argument_literal_type_mismatch",
-    call: assembledWith({ child: def("y", "int", "x", "int") }),
-  },
   {
     id: "types/compose_open_range_flows__call_with_a_wider_open_range_source",
     call: assembledWith({ child: def("t", "int(0..100)", "echo", "int") }),

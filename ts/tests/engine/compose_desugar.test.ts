@@ -1,14 +1,16 @@
 /**
  * The adaptive-questions desugar, end to end: a port of `tests/engine/test_compose_desugar.py`.
  *
+ * Ported: `test_adaptive_questions_lowers_to_agent_plus_gate` and
+ * `test_adaptive_questions_scope_is_validated_like_an_agent` (the reference validator's
+ * prompt-scope check), and its case
+ * `load-core/engine_compose_desugar__adaptive_questions_scope_is_validated_like_an_agent`.
+ *
  * Changed: the flow assembles with `assembleText`, where Python loads it.
  *
  * TS-only: the composer's `retries:` count, the composer id collision error, and the harvested
  * cases the adaptive desugar raises whose Python test file has no TS mirror, each named by its case
  * id, pinned at the end.
- *
- * Later (T3-18): `test_adaptive_questions_scope_is_validated_like_an_agent` (the prompt-scope
- * check of the reference validator).
  */
 
 import { expect, test } from "bun:test";
@@ -46,6 +48,12 @@ test("adaptive questions lowers to agent plus gate", () => {
   expect((gate.outputContract as ValueContract).type.kind).toBe(ValueKind.OBJECT);
 });
 
+test("adaptive questions scope is validated like an agent", () => {
+  // The composer agent inherits the agent prompt-scope check.
+  const bad = AUTO.replace("for: ${ctx}", "for: ${undeclared}");
+  expect(loadError(() => assembleText(bad)).message).toContain("${undeclared} is not a declared input or variable");
+});
+
 test("the block's retries count is the composer's", () => {
   const text = AUTO.replace("for: ${ctx}\"\n", "for: ${ctx}\"\n      retries: 2\n");
   const agent = assembleText(text).flow.compiled.nodes.get("ask__compose") as AgentNode;
@@ -62,6 +70,14 @@ test("a composer id collision is located at the gate", () => {
 });
 
 // ---------- harvested conformance cases ----------
+
+test("assemble: load-core/engine_compose_desugar__adaptive_questions_scope_is_validated_like_an_agent", () => {
+  runCase({
+    id: "load-core/engine_compose_desugar__adaptive_questions_scope_is_validated_like_an_agent",
+    call: assembled,
+    full: true,
+  });
+});
 
 // From `tests/compose/test_node_input_origins.py`.
 test.each<CaseRow>([{ id: "load-core/compose_node_input_origins__adaptive_reserved_input", call: assembled }])(

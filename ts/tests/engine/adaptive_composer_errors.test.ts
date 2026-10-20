@@ -5,8 +5,11 @@
  * Ported: `test_bad_llm_config_is_named_and_located_at_the_llm_config`,
  * `test_block_llm_config_error_is_located_at_its_first_key`, `test_valid_llm_config_loads`,
  * `test_typed_input_mismatch_names_the_gate`, `test_isinstance_unknown_type_names_the_gate`,
- * `test_literal_inputs_still_load`, `test_skipped_operand_arithmetic_names_the_gate`, and the cycle
- * rows
+ * `test_literal_inputs_still_load`, `test_skipped_operand_arithmetic_names_the_gate`, the reference
+ * validator's rows (`test_bad_input_is_reported_once_on_the_gate`,
+ * `test_two_inputs_with_the_same_bad_source_are_both_reported`,
+ * `test_bad_brief_and_bad_input_are_each_reported_once` and
+ * `test_bad_input_is_listed_before_a_bad_gate_prompt`), and the cycle rows
  * (`test_self_reading_gate_cycle_names_only_the_gate`,
  * `test_cycle_through_a_gate_names_only_authored_nodes`,
  * `test_ordering_cycle_through_a_gate_names_only_authored_nodes`,
@@ -14,8 +17,9 @@
  * `test_composer_read_outside_the_cycle_still_names_only_the_gate`,
  * `test_two_self_reading_gates_each_name_only_the_gate` and
  * `test_gate_reading_its_own_composer_keeps_the_id`); the harvested
- * `load-agent/engine_adaptive_composer_errors__*` cases the composer's build or the cycle check
- * raises, pinned at the end, the cycle cases with `full` (every frame and the notes).
+ * `load-agent/engine_adaptive_composer_errors__*` cases the composer's build, the reference
+ * validator or the cycle check raises, pinned at the end, the cycle and reference cases with `full`
+ * (every frame and the notes).
  *
  * Changed: the flows assemble with `assembleText`, where Python loads them. A text value reads
  * `"false"` where Python's repr writes `'false'`, and the unknown-key error carries the issue's
@@ -25,10 +29,6 @@
  * The cycle message writes its node list in the text form (`["ask","b"]`, rule `messages`), and
  * each cycle row pins the whole message where Python checks its start. The inline CODE body is TypeScript.
  *
- * Later (T3-18 PR 3): `test_bad_input_is_reported_once_on_the_gate`,
- * `test_two_inputs_with_the_same_bad_source_are_both_reported`,
- * `test_bad_brief_and_bad_input_are_each_reported_once`,
- * `test_bad_input_is_listed_before_a_bad_gate_prompt` (the reference validator).
  * Later (T3-22): `test_compact_flow_llm_config_error_names_the_flow_node`,
  * `test_defs_body_input_error_names_the_gate` and `test_defs_child_cycle_names_only_the_gate`.
  */
@@ -93,8 +93,11 @@ test("valid llm config loads", () => {
   expect(assembleText(flow("      llm_config: {model: m}\n")).flow.compiled.nodes.has("ask__compose")).toBe(true);
 });
 
-/** Return the flow whose gate `ask` has the `input:` lines `inputs` and the brief `brief`. */
-const inputFlow = (inputs: string, brief: string) => `\
+/**
+ * Return the flow whose gate `ask` has the `input:` lines `inputs`, the brief `brief` and the gate
+ * `prompt:` line `gatePrompt` (default none).
+ */
+const inputFlow = (inputs: string, brief = "Q ${proj}", gatePrompt = "") => `\
 id: f
 name: f
 input: {proj: !str }
@@ -106,10 +109,62 @@ nodes:
   ask:
     kind: human_input
     input:
-${inputs}    adaptive_questions:
+${inputs}${gatePrompt}    adaptive_questions:
       prompt: "${brief}"
 output: \${ask.output}
 `;
+
+/** Return each of the error's site lines (those starting `node `) up to its first `: `. */
+const sites = (error: LoadError) =>
+  error.message
+    .split("\n")
+    .map((ln) => ln.trim())
+    .filter((ln) => ln.startsWith("node "))
+    .map((ln) => ln.split(": ")[0]);
+
+test.each([
+  ["flow-input", "${input.nope}", "points to unknown flow input 'nope'"],
+  ["namespace", "${nope.output}", "uses unknown namespace 'nope'"],
+  ["field", "${up.output.x}", "reads field 'x' on type int"],
+  ["default", "${input.nope :- 'x'}", "points to unknown flow input 'nope'"],
+])("a bad input is reported once on the gate: %s", (_id, source, fragment) => {
+  const error = loadError(() => assembleText(inputFlow(`      proj: "${source}"\n`)));
+  const lines = error.message
+    .split("\n")
+    .filter((ln) => ln.includes("input 'proj'"))
+    .map((ln) => ln.trim());
+
+  expect(lines).toHaveLength(1);
+  expect(lines[0]!.startsWith("node 'ask' input 'proj' from: ")).toBe(true);
+  expect(lines[0]).toContain(fragment);
+  expect(error.message).not.toContain("ask__compose");
+  expect(lineOf(error)).toBe(12);
+});
+
+test("two inputs with the same bad source are both reported", () => {
+  const error = loadError(() =>
+    assembleText(inputFlow("      x: ${input.nope}\n      y: ${input.nope}\n", "Q ${x} ${y}")),
+  );
+
+  expect(sites(error)).toEqual(["node 'ask' input 'x' from", "node 'ask' input 'y' from"]);
+  expect(error.message).not.toContain("ask__compose");
+});
+
+test("a bad brief and a bad input are each reported once", () => {
+  const error = loadError(() => assembleText(inputFlow("      proj: ${input.nope}\n", "Q ${nope}")));
+
+  expect(sites(error)).toEqual(["node 'ask' adaptive_questions.prompt", "node 'ask' input 'proj' from"]);
+  expect(error.message).not.toContain("ask__compose");
+});
+
+test("a bad input is listed before a bad gate prompt", () => {
+  const error = loadError(() =>
+    assembleText(inputFlow("      proj: ${input.nope}\n", "Q ${proj}", '    prompt: "${nope}"\n')),
+  );
+
+  expect(sites(error)).toEqual(["node 'ask' input 'proj' from", "node 'ask' prompt"]);
+  expect(error.message).not.toContain("ask__compose");
+});
 
 test("typed input mismatch names the gate", () => {
   const error = loadError(() => assembleText(inputFlow("      proj: !list(int) ${input.proj}\n", "Q ${proj}")));
@@ -307,6 +362,11 @@ test.each<CaseRow>([
   { id: "load-agent/engine_adaptive_composer_errors__api_key_in_the_composer_llm_config", call: assembled },
   { id: "load-agent/engine_adaptive_composer_errors__unknown_key_in_the_composer_llm_config", call: assembled },
   { id: "load-agent/engine_adaptive_composer_errors__valid_llm_config_loads", call: assembled },
+  {
+    id: "load-agent/engine_adaptive_composer_errors__bad_input_is_reported_once_on_the_gate",
+    call: assembled,
+    full: true,
+  },
   { id: "load-agent/engine_adaptive_composer_errors__composer_reader_cycle_keeps_the_id", call: assembled, full: true },
   {
     id: "load-agent/engine_adaptive_composer_errors__cycle_through_a_gate_names_only_authored_nodes",

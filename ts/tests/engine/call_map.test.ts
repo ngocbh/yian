@@ -1,7 +1,8 @@
 /**
  * CALL and MAP build over a child's signature: a port of `tests/engine/test_call_map.py`.
  *
- * Ported: the signature half of `test_seed03_loads_as_child_flow`; the build halves of
+ * Ported: the signature half of `test_seed03_loads_as_child_flow`;
+ * `test_seed04_downstream_dotted_ref_validates_against_child_record`; the build halves of
  * `test_seed04_call_loads_and_reexports_child_output` and
  * `test_seed05_map_loads_with_list_output_and_parallel`; `test_map_input_named_over_is_reserved`,
  * `test_call_binding_to_undeclared_child_input_is_loud`, `test_map_child_with_no_output_is_loud`
@@ -12,8 +13,8 @@
  * 03's child takes the seed's two parameters (read from its `input:` text) and returns a record
  * over its `synth` producer and `input.as_of`, with `fetch` and `synth` typed as the seed types
  * them. The seed 04 and 05 build halves parse the seed's node (`nodesOf`) and build it over a
- * `BuildContext` whose resolver returns that child; their origin halves assemble the seed
- * (`assembleText` with `children`), where Python loads it with a search path. The seeds come from
+ * `BuildContext` whose resolver returns that child; their origin halves, and the downstream dotted-ref row, assemble
+ * the seed (`assembleText` with `children`), where Python loads it with a search path. The seeds come from
  * the conformance cases `load-map-call/seed_04_call` (with its file `03-research-one.yaml`) and
  * `load-map-call/seed_05_call_map`. The reserved-`over`, undeclared-binding (both joined errors)
  * and no-output rows pin the whole message, where Python matches fragments.
@@ -27,8 +28,7 @@
  * the `echo` def by hand).
  *
  * Later (T3-22): the seed and def loads of the rows above, `test_call_map_without_resolver_is_loud`
- * (the loader's `uses:` error) and `test_flow_without_calls_loads_without_resolver`. Later (T3-18,
- * T3-22): `test_seed04_downstream_dotted_ref_validates_against_child_record`.
+ * (the loader's `uses:` error) and `test_flow_without_calls_loads_without_resolver`.
  */
 
 import { expect, test } from "bun:test";
@@ -139,6 +139,24 @@ test("seed 04's call builds and re-exports the child's output", () => {
   expect(fieldNames(contract.type)).toEqual(["report", "asof"]);
   expect(result.wiring).toEqual(new Map([["topic", "${input.topic}"]]));
   expect(node.params!.map((parameter) => parameter.name)).toEqual(["topic"]);
+});
+
+test("seed 04's downstream dotted ref validates against the child record", () => {
+  // `take` reads `${research.output.report}` and `${research.output.asof}`; the CALL node's output
+  // contract (a checked record) lets the dotted-field walk pass.
+  const { text, label } = caseText("load-map-call/seed_04_call");
+
+  const { compiled } = assembleText(text, label, { children: { "research-one": researchOne() } }).flow;
+
+  const wiring = compiled.wiring.get("take")!;
+  expect(new Map([...wiring].map(([name, binding]) => [name, (binding as Binding).source]))).toEqual(
+    new Map([
+      ["brief", "${research.output.report}"],
+      ["asof", "${research.output.asof}"],
+    ]),
+  );
+  expect([...wiring.values()].every((binding) => (binding as Binding).origin !== null)).toBe(true);
+  expect(compiled.nodes.get("take")!.params!.every((parameter) => parameter.origin !== null)).toBe(true);
 });
 
 test("seed 04's call wiring and parameter carry origins", () => {

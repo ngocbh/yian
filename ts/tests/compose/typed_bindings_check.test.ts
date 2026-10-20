@@ -49,9 +49,8 @@
  * TS-only: `shownLiteral` rows (compact JSON, ints as digits); `localInputContracts` rows over
  * hand-built maps (Python has no direct test; the reference and assert checks read it); and the
  * harvested cases these checks decide (`runCase`, `assembled`), in the "Pinned harvested cases"
- * block, then those from test files whose mirrors don't exist yet (`test_constructor_load.py`,
- * `test_nested_template_types.py`, `test_tagged_bindings.py`) in the "Pinned harvested cases
- * (TS-only placement)" block.
+ * block, then those from test files whose mirrors don't exist yet (`test_nested_template_types.py`,
+ * `test_tagged_bindings.py`) in the "Pinned harvested cases (TS-only placement)" block.
  *
  * Later (T3-22): `test_disjoint_binding_inside_a_defs_body_names_the_body` (the `defs entry`
  * prefix comes from the loader's def loading).
@@ -664,11 +663,10 @@ test.each<CaseRow>([
 
 // ---------- Pinned harvested cases (TS-only placement) ----------
 
-// From `test_constructor_load.py`, `test_nested_template_types.py` and `test_tagged_bindings.py`,
-// whose mirrors don't exist yet; the record and template messages decide them.
+// From `test_nested_template_types.py` and `test_tagged_bindings.py`, whose mirrors don't exist
+// yet; the record and template messages decide them.
 
 test.each<CaseRow>([
-  { id: "load-types/compose_constructor_load__downstream_sees_the_constructed_type", call: assembled },
   {
     id: "load-types/compose_nested_template_types__nested_item_read_is_typed_from_the_map_element",
     call: assembledWith({

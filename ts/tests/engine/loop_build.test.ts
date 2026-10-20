@@ -113,11 +113,15 @@
  * predicate_unknown_field_on_omitted_typed_seed_is_rejected}`, and (`assembledWith`, the def built
  * by hand) `load-loop/engine_loop_build__omitted_field_seed_cycle_is_located` and
  * `load-loop/engine_loop_build__{quoted_number_seed_for_an_int_input,seed_default_null_for_an_int_input,
- * text_seed_for_an_int_input,date_seed_for_a_str_input_loads_as_text}` (the last `ok`, rule `dates`).
+ * text_seed_for_an_int_input,date_seed_for_a_str_input_loads_as_text}` (the last `ok`, rule `dates`),
+ * and the reference check's `load-loop/engine_loop_build__partial_loop_output_rejects_an_unknown_field`.
  *
- * Later (T3-18 PR 3):
- * `test_partial_loop_contract_rejects_unknown_downstream_field_at_load` and the downstream half of
- * `test_merged_contract_types_omitted_field_from_its_seed`. Later (T4): the run halves
+ * The reference rows assemble with `assembleText`, each def built by hand:
+ * `test_partial_loop_contract_rejects_unknown_downstream_field_at_load` (its `body` def's `note`
+ * output an untyped producer's, so the loop's contract is a partial record) and the downstream
+ * half of `test_merged_contract_types_omitted_field_from_its_seed`.
+ *
+ * Later (T4): the run halves
  * of the rows above, `test_predicate_field_on_omitted_typed_seed_builds`,
  * `test_predicate_member_field_read_guarded_by_isinstance_builds`,
  * `test_predicate_while_read_guarded_through_or_and_not_builds`,
@@ -608,6 +612,35 @@ test("the merged contract types an omitted field from its seed", () => {
   expect(fieldType(node.outputContract, "exited").kind).toBe(ValueKind.BOOLEAN);
 });
 
+test("the merged contract types an omitted field from its seed (a downstream read)", () => {
+  const registry = readTypedefs({ Person: { name: "str", handle: "str" } });
+  const turn = handChild({
+    inputs: params("  person: !Person\n  talking_to: !str\n  exited: !bool\n  reply: !str\n", registry),
+    output: { exited: "${input.exited}", reply: "${input.talking_to}" },
+  });
+  const text = `id: loop-chat
+name: loop_chat
+typedefs:
+  Person:
+    name: str
+    handle: str
+input:
+  person: !Person
+  talking_to: !str
+${CHAT.split("\n").slice(2).join("\n")}  sink:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo_x
+    input:
+      x: \${chat.output.person.missing}
+    output: str
+output: \${sink.output}
+`;
+
+  expect(loadError(() => assembleText(text, "flow.yaml", { children: { turn } })).message).toContain(
+    "unknown field 'missing'",
+  );
+});
+
 test("the merged contract keeps a literal seed opaque", () => {
   const text = swap(GOOD, "      exited: false\n    while:", "      exited: false\n      keep: 3\n    while:");
 
@@ -701,6 +734,39 @@ test("an omitted field's seed cycle is located", () => {
   const closingLine = SEED_CYCLE.split("\n").indexOf("      keep: ${first.output.keep}") + 1;
   const range = error.diagnostic.frames.at(-1)!.range;
   expect([range.startLine, range.endLine]).toEqual([closingLine, closingLine]);
+});
+
+/** The `body` def: `n` and `note` in, `{n, note}` out, `note` from a producer with no contract. */
+const partialBody = () =>
+  handChild({
+    inputs: params("  n: !int\n  note: !str\n"),
+    producers: { shout: null },
+    output: { n: "${input.n}", note: "${shout.output}" },
+  });
+
+test("a partial loop contract rejects an unknown downstream field at load", () => {
+  const text = `id: loop-partial-reference
+name: loop_partial_reference
+nodes:
+  loop:
+    kind: loop
+    call: body
+    input:
+      n: 1
+      note: seed
+    times: 1
+  sink:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo_x
+    input:
+      x: \${loop.output.missing}
+    output: str
+output: \${sink.output}
+`;
+
+  expect(loadError(() => assembleText(text, "flow.yaml", { children: { body: partialBody() } })).message).toContain(
+    "unknown field 'missing'",
+  );
 });
 
 test("a partial body with an opaque returned field", () => {
@@ -1810,5 +1876,9 @@ test.each<CaseRow>([
     // Only the reader typing the omitted `keep` field reaches the cycle.
     id: "load-loop/engine_loop_build__omitted_field_seed_cycle_is_located",
     call: assembledWith({ bump: goodBody({ n: "int" }) }),
+  },
+  {
+    id: "load-loop/engine_loop_build__partial_loop_output_rejects_an_unknown_field",
+    call: assembledWith({ body: partialBody() }),
   },
 ])("assemble: $id", runCase);

@@ -3,7 +3,8 @@
  *
  * Ported: `test_agent_node_rejects_a_non_string_system_prompt`, `test_system_prompt_defaults_to_none`,
  * `test_system_prompt_reaches_the_agent_node`, `test_compact_flow_accepts_system_prompt`,
- * `test_system_prompt_sees_the_node_variables`, `test_non_string_system_prompt_points_at_its_line`
+ * `test_system_prompt_sees_the_node_variables`, `test_unknown_ref_points_at_the_system_prompt_line`,
+ * `test_unknown_ref_in_a_compact_flow_is_located`, `test_non_string_system_prompt_points_at_its_line`
  * (loaded with `assembleText` where Python calls `load_flow`), the manifest-key half of
  * `test_flow_without_system_prompt_keeps_its_fingerprint` and `test_system_prompt_is_identity`.
  *
@@ -11,10 +12,9 @@
  * `reply` node by hand where Python loads `_flow`.
  *
  * TS-only: the harvested cases of the `123` row, as `parseNodes` reads it, and of the compact
- * flow, which assembles.
+ * flow and the pool ref, which assemble.
  *
- * Later (T3-18): `test_unknown_ref_points_at_the_system_prompt_line` and
- * `test_unknown_ref_in_a_compact_flow_is_located`. Later (T3-22): the pinned fingerprints of
+ * Later (T3-22): the pinned fingerprints of
  * `test_flow_without_system_prompt_keeps_its_fingerprint` (loaded `_flow` and `_compact`).
  */
 
@@ -99,6 +99,24 @@ test("system prompt sees the node variables", () => {
   expect(replyOf(chatFlow('    system_prompt: "Be ${tone}."')).systemPrompt).toBe("Be ${tone}.");
 });
 
+test.each([
+  ["${nickname}", ""],
+  ["${input.name}", "a pool ref belongs in an input `from:`"],
+])("unknown ref %p points at the system prompt line", (ref, hint) => {
+  const error = loadError(() => assembleText(chatFlow(`    system_prompt: "You are ${ref}."`)));
+
+  expect(error.message).toMatch(/system_prompt: .* is not a declared input or variable/);
+  expect(error.message).toContain(hint);
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(13);
+});
+
+test("unknown ref in a compact flow is located", () => {
+  const error = loadError(() => assembleText(compactFlow('system_prompt: "You are ${nickname}."')));
+
+  expect(error.message).toMatch(/system_prompt: .* is not a declared input/);
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(9);
+});
+
 test.each(["123", "[a, b]", "{a: b}", "null", '""'])("non-string system prompt %p points at its line", (value) => {
   const error = loadError(() => assembleText(chatFlow(`    system_prompt: ${value}`)));
 
@@ -132,4 +150,5 @@ test.each<CaseRow>([
 
 test.each<CaseRow>([
   { id: "load-agent/compose_agent_system_prompt_yaml__compact_flow_accepts_system_prompt", call: assembled },
+  { id: "load-agent/compose_agent_system_prompt_yaml__pool_ref_in_system_prompt", call: assembled },
 ])("assembles: $id", runCase);

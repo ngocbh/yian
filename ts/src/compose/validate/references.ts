@@ -1,0 +1,588 @@
+/**
+ * Graph stage: reference-wiring validation over the built flow.
+ *
+ * A cross-node assembly pass, the analogue of `compile/validation`'s reference collector, walking
+ * the BUILT flow (not a `FlowSpec`): it calls the leaf checker (`classifyPath`) directly,
+ * supplying the valid-target and flow-input sets and the producer contracts, and only
+ * reimplements the per-node walk glue. Every located problem accumulates; one `LoadError` carries
+ * them all. Builtin calls are checked at every binding and prompt site.
+ *
+ * **Prompt scope**: an AGENT `prompt:` or `system_prompt:` may interpolate this node's inputs and
+ * variables as bare `${name}`; a `${<id>.output}`/`${input.X}`/`${system.X}` in either is a located
+ * error. A HUMAN_INPUT `prompt:` and its question text (`question`, option `label`/`description`)
+ * follow the same rule, reading the gate's declared inputs. Each `${name.f}` read is field-checked
+ * against the name's proven contracts (its binding's, under the node's narrowing, or a typed
+ * variable's), and is an error only when all of them reject it.
+ *
+ * **Case node-local refs**: the desugared CASE `when:` strings use `__rN`/`__on`, which resolve
+ * against the bound input record; they are excluded here. Only the `__rN`/`__on` SOURCES are
+ * classified, against the pool (mirrors the strict CASE check).
+ *
+ * Located parse metadata: each error anchors on the referencing field's `SourceRange`, read from
+ * the transient Compose `BuildResult` (the per-binding `input` entry, else the node's `input:`
+ * mapping, else the node header, for an input-binding ref; its `prompt:` or `system_prompt:` for a
+ * template ref). A HUMAN_INPUT question-text error anchors on its own `text` `questions[i]...`
+ * string range, else the `questions:` block. A field or input a desugar authored under another
+ * node is named by its `BuildResult.fieldLabels` entry: an adaptive gate's brief is reported as the
+ * gate's `adaptive_questions.prompt` and anchors on the brief, and a gate input its composer copies
+ * is reported as the gate's input. A plain input binding whose site name, source, and range were
+ * already scanned is skipped, so such a copied binding is reported once.
+ *
+ * Knows about: `compile/validation` (the leaf namespace checker), `expr` (the binding and template
+ * parsers), `nodes` (node behaviour, the AGENT, HUMAN_INPUT and CASE nodes, and the binding
+ * carriers), `typesys` (`Type`, for a list's element type), `compose/helpers` (closed-path
+ * projection, binding-contract resolution, narrowed reads, and errors), and `compose/validate`
+ * (`constructors` for the constructor and builtin checks, `narrowing` for each node's view, and
+ * `typed_bindings` for the node-local contracts).
+ * Never imports: the loader or the compose package facade; they import this back.
+ */
+
+import { classifyPath } from "../../compile/validation.ts";
+import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
+import type { ExprNode } from "../../expr/grammar.ts";
+import {
+  checkTemplateCalls,
+  conditionRefs,
+  ExpressionError,
+  exprRefsOf,
+  promptRefs,
+  scanTemplate,
+} from "../../expr/index.ts";
+import { Span } from "../../expr/template.ts";
+import { AgentNode } from "../../nodes/agent/node.ts";
+import { CaseNode } from "../../nodes/case/node.ts";
+import {
+  bindingSource,
+  isExactly,
+  iterSourceStrings,
+  type OutputContract,
+  outputContractType,
+  PartialRecordContract,
+  ValueContract,
+  ValueTemplate,
+} from "../../nodes/contracts.ts";
+import { HumanInputNode, siteLabel, templateSites } from "../../nodes/human_input/node.ts";
+import type { TypeRegistry } from "../../typesys/types.ts";
+import { isListKind, isRecord, jsTypeName, listElementKind, Type } from "../../typesys/values.ts";
+import { LoadDiagnostics } from "../helpers/errors.ts";
+import { constructorTypeFn } from "../helpers/isinstance_types.ts";
+import { type Env, envReadType, narrowedReadError } from "../helpers/narrowing_facts.ts";
+import {
+  localFieldError,
+  outputContractPathError,
+  projectOutputContract,
+  referenceContract,
+  resolveOutputBindingContract,
+  type TypeFn,
+} from "../helpers/output_contracts.ts";
+import { type BuildResult, siteKey } from "../nodes/base.ts";
+import { builtinFieldErrors, constructorErrors } from "./constructors.ts";
+import type { Narrowing } from "./narrowing.ts";
+import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
+
+/**
+ * Heads forbidden in a strict prompt (always trigger the bespoke hint). `input`/`system`/`item` are
+ * the pool-style heads; a node-id head (e.g. `${other.output}`) is detected separately by
+ * `validTargets.has(head)`.
+ */
+const PROMPT_FORBIDDEN_HEADS: ReadonlySet<string> = new Set(["input", "system", "item"]);
+
+/** The per-site options of one `scan`. */
+interface ScanOptions {
+  /** The producer contracts this site sees (a node's narrowed view, or the unnarrowed map). */
+  siteProducers: ReadonlyMap<string, OutputContract>;
+  /** The flow-input contracts this site sees. */
+  siteInputs: ReadonlyMap<string, ValueContract>;
+  /** The element contract of a MAP per-element input's `${item}`, when known. */
+  itemContract?: ValueContract | null;
+  /** The body-local scopes treated as lenient heads, e.g. `item` in a MAP per-element input. */
+  extraHeads?: readonly string[];
+  /** Lets a field only some union members have be read. */
+  partialUnionFields?: boolean;
+  /**
+   * Checks the site's `${T(...)}` calls; a reserved key, where they are not supported, leaves that
+   * error to the type-table pass.
+   */
+  constructors?: boolean;
+  /** The facts a searched CASE's guarded param is read under. */
+  readFacts?: Env | null;
+  /** The bases whose narrowing a read owes to the routing. */
+  routedBases?: ReadonlySet<string>;
+}
+
+/**
+ * Return the flow `output:` section as a flat list of binding values (the sites to check).
+ *
+ * A whole-string binding (`${a.output | b.output}`) or a tagged single output's `Binding` carrier
+ * is one value; a name to binding map is each mapped value. Mirrors the pipeline's own reading
+ * (kept local: this pass doesn't import the build).
+ */
+function outputBindings(outputs: unknown): unknown[] {
+  if (isRecord(outputs)) return Object.values(outputs);
+  if (outputs === null) return [];
+  return [outputs];
+}
+
+/**
+ * Return the element contract of a MAP's `over:` binding when it is a proven list, else `null`.
+ *
+ * @param over The MAP's raw `over:` binding.
+ * @param producers Exact or partial node output contracts keyed by producer id.
+ * @param inputContracts Exact flow input contracts keyed by input name.
+ * @param typeFn Resolves a constructor name to its type.
+ * @returns The exact contract of one element, or `null` when `over:` is not a list or is an
+ *   unproven one (whose items are unknown, labelled `list(Optional(Any))`).
+ * @throws TypeError when a referenced producer is not an output contract, or a flow-input
+ *   contract is not an exact `ValueContract`.
+ */
+function itemContract(
+  over: unknown,
+  producers: ReadonlyMap<string, OutputContract>,
+  inputContracts: ReadonlyMap<string, ValueContract>,
+  typeFn: TypeFn | null,
+): ValueContract | null {
+  const contract = resolveOutputBindingContract(over, producers, inputContracts, { typeFn });
+  if (!isExactly(contract, ValueContract) || !isListKind(contract.type.kind)) return null;
+  const typ = contract.type;
+  if (typ.element !== undefined) return new ValueContract(typ.element);
+  const elementKind = listElementKind(typ.kind);
+  if (elementKind === null) return null;
+  return new ValueContract(Type.scalar(elementKind));
+}
+
+/**
+ * Validate every `${...}` reference site of a built flow.
+ *
+ * `buildResults` is the transient Compose build map: its nodes include leaf runtime `Node`s and
+ * desugared `CaseNode`s (their wiring carries the `__rN`/`__on` sources), while its range fields
+ * retain YAML locations only for this validation phase. `flowInputs` is the flow's input names
+ * (the `${input.X}` set); `inputContracts` maps those names to their exact contracts, so
+ * `${input.X.f}` is field-checked too (`null` or absent checks names only). `producers` maps node
+ * id to its exact or partial output contract; an absent contract stays lenient. The namespace
+ * checker validates the reference head, then the shared output-contract helper checks exact fields
+ * or the partial arm's closed root name set without inventing a type for opaque fields. A MAP's
+ * per-element `${item.f}` is field-checked against the element type of `over:` when that is a
+ * proven list. `outputs` is the raw flow `output:` section.
+ *
+ * Each error anchors on the referencing site's `SourceRange`, resolved from its
+ * `BuildResult.fieldRanges`: the OFFENDING ENTRY where one exists (`input` `<name>`, stamped per
+ * binding by the parse loop for every kind), else the enclosing block (the `inputs` block, or the
+ * `prompt:` field), else the node header. A HUMAN_INPUT question-text error anchors on its `text`
+ * `questions[i]...` string range, else the `questions:` block. An AGENT prompt site and a plain
+ * input site are named by `BuildResult.siteName`: the `fieldLabels` entry when a desugar authored
+ * the field or binding under another node (an adaptive gate's composer brief reads
+ * `node '<gate>' adaptive_questions.prompt` and anchors on the brief; its copied input reads
+ * `node '<gate>' input '<p>'`), else `node '<id>' <site>`. A plain input binding whose site name,
+ * source text, and range match one already scanned is skipped, so a binding a desugar copied onto
+ * a synth node is reported once. A string nested in a value template is located at its own
+ * authored site instead, resolved through `resolveOrigin`. The aggregate carries the first
+ * retained range.
+ *
+ * With `narrowing`, each node's references (a CASE's own sources included) are checked against
+ * that node's view of the producer and flow-input contracts, so a branch can read the fields of
+ * the union members that reach it. A node a topological order could not reach skips the
+ * member-only field rule, so the later cycle check reports the cycle. The flow outputs are always
+ * checked unnarrowed.
+ *
+ * With `localContracts` (`localInputContracts`, keyed by node id then param), each prompt read
+ * `${name.f}` of an AGENT or HUMAN_INPUT input is field-checked against that name's alternatives,
+ * and an AGENT read of a typed variable against its declared type; a name with no entry is not
+ * field-checked.
+ *
+ * With `registry`, every `${T(...)}` constructor call in a binding is checked too
+ * (`constructorErrors`), with each reference typed by the same contracts.
+ *
+ * Every builtin call in a binding or prompt must pass arguments the builtin takes.
+ *
+ * @param buildResults Built nodes with their transient ranges, keyed by node id.
+ * @param flowInputs The flow's input names.
+ * @param producers Exact or partial node output contracts keyed by producer id.
+ * @param outputs The raw flow `output:` section.
+ * @param flowWiring Final binding maps keyed by node id and wiring key.
+ * @param options.inputContracts Exact flow input contracts keyed by input name.
+ * @param options.outputsRange The authored output value or block range, when retained.
+ * @param options.narrowing The union narrowing each node reads against.
+ * @param options.localContracts The proven contracts of each node-local name, by node id then
+ *   param, for the text sites.
+ * @param options.registry The flow's typedefs, naming a narrowed type and resolving constructors.
+ * @param options.resolveOrigin Resolves a registered origin to its source frame.
+ * @param options.diagnostics Factory for located load errors.
+ * @throws TypeError when a producer contract is not a `ValueContract` or `PartialRecordContract`.
+ * @throws LoadError listing every unresolved reference, else every constructor call that can never
+ *   succeed.
+ */
+export function validateReferences(
+  buildResults: ReadonlyMap<string, BuildResult>,
+  flowInputs: ReadonlySet<string>,
+  producers: ReadonlyMap<string, OutputContract>,
+  outputs: unknown,
+  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+  options: {
+    inputContracts?: ReadonlyMap<string, ValueContract> | null;
+    outputsRange?: SourceRange | null;
+    narrowing?: Narrowing | null;
+    localContracts?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>> | null;
+    registry?: TypeRegistry | null;
+    resolveOrigin?: ResolveOrigin | null;
+    diagnostics?: LoadDiagnostics | null;
+  } = {},
+): void {
+  const { outputsRange = null, narrowing = null, registry = null, resolveOrigin = null } = options;
+  const diagnostics = options.diagnostics ?? new LoadDiagnostics();
+  const inputContracts = options.inputContracts ?? new Map<string, ValueContract>();
+  const validTargets = new Set(buildResults.keys());
+  // Keep exact and partial carriers intact; the Compose projection below checks closed record
+  // paths without inventing a Type for opaque fields.
+  for (const [nodeId, contract] of producers) {
+    if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
+      throw new TypeError(
+        "producer contracts must be ValueContract or PartialRecordContract values, " +
+          `got ${jsTypeName(contract)} for ${reprText(nodeId)}`,
+      );
+    }
+  }
+  const errors: [message: string, range: SourceRange | null][] = [];
+  const constructorProblems: [message: string, range: SourceRange | null][] = [];
+  // The `[site name, source, range]` of each plain input binding already scanned, as JSON.
+  const scanned = new Set<string>();
+  const unordered = narrowing !== null ? narrowing.unordered : new Set<string>();
+  const localContracts = options.localContracts ?? new Map<string, ReadonlyMap<string, LocalInput>>();
+  const typeFn = registry !== null ? constructorTypeFn(registry) : null;
+
+  /**
+   * Name-check every reference a BINDING `from:` reads (coalesce and nested-default split by
+   * `exprRefsOf`); a non-string source or literal yields no refs. Each string nested in a
+   * `ValueTemplate` is scanned on its own and located at its authored site when that resolves.
+   */
+  function scan(fromValue: unknown, where: string, rng: SourceRange | null, site: ScanOptions): void {
+    const source = bindingSource(fromValue);
+    for (const [valuePath, text] of iterSourceStrings(fromValue)) {
+      let textRng = rng;
+      if (source instanceof ValueTemplate && resolveOrigin !== null) {
+        const origin = source.originAt(valuePath);
+        const frame = origin !== null ? resolveOrigin(origin) : null;
+        if (frame !== null) textRng = frame.range;
+      }
+      scanText(text, where, textRng, site);
+    }
+  }
+
+  /**
+   * Name-check every reference one template string reads; see `scan`. A read of a field its
+   * narrowed type lacks, under `readFacts`, names that type, credited to the routing when its
+   * base is in `routedBases`. A call to a builtin with arguments it doesn't take, and each field
+   * read on a builtin's result its type can't have, is one more error at `where`.
+   */
+  function scanText(text: string, where: string, rng: SourceRange | null, site: ScanOptions): void {
+    const {
+      siteProducers,
+      siteInputs,
+      itemContract: elementContract = null,
+      extraHeads = [],
+      partialUnionFields = false,
+      constructors = true,
+      readFacts = null,
+      routedBases = new Set<string>(),
+    } = site;
+    let paths: string[];
+    try {
+      paths = exprRefsOf(text);
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+      errors.push([`${where}: ${error.message}`, rng]);
+      return;
+    }
+    const trees = spanTrees(text);
+    addBuiltinFieldErrors(trees, where, rng);
+    if (registry !== null && constructors) {
+      /** The proven type of one reference this site reads. */
+      const refType = (path: string): Type | null => {
+        const [head, ...fields] = path.split(".");
+        let contract: OutputContract | null;
+        if (head === "item") {
+          contract = elementContract !== null ? projectOutputContract(elementContract, fields) : null;
+        } else {
+          contract = referenceContract(path, siteProducers, siteInputs);
+        }
+        return outputContractType(contract);
+      };
+      for (const tree of trees) {
+        for (const problem of constructorErrors(tree, registry, refType)) {
+          constructorProblems.push([`${where}: ${problem}`, rng]);
+        }
+      }
+    }
+    for (const path of paths) {
+      let err = classifyPath(path, validTargets, flowInputs, extraHeads);
+      const parts = path.split(".");
+      const producer = siteProducers.get(parts[0]!);
+      const input = parts.length >= 3 && parts[0] === "input" ? siteInputs.get(parts[1]!) : undefined;
+      if (err === null && parts.length >= 2 && parts[1] === "output" && producer !== undefined) {
+        err = outputContractPathError(producer, parts.slice(2), path, { partialUnionFields });
+      } else if (err === null && input !== undefined) {
+        err = outputContractPathError(input, parts.slice(2), path, { partialUnionFields });
+      } else if (err === null && parts.length >= 2 && parts[0] === "item" && elementContract !== null) {
+        err = outputContractPathError(elementContract, parts.slice(1), path, { partialUnionFields });
+      }
+      if (err !== null && readFacts !== null && readFacts.size > 0) {
+        const candidate = envReadType(path, readFacts);
+        if (candidate !== null) {
+          err = narrowedReadError(path, candidate, err, registry ?? new Map(), {
+            byRouting: routedBases.has(candidate[2]),
+          });
+        }
+      }
+      if (err !== null) errors.push([`${where}: ${err}`, rng]);
+    }
+    try {
+      checkTemplateCalls(text);
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+      errors.push([`${where}: ${error.message}`, rng]);
+    }
+  }
+
+  /** Add one error at `where` per field read on a builtin's result in `trees`. */
+  function addBuiltinFieldErrors(trees: readonly ExprNode[], where: string, rng: SourceRange | null): void {
+    for (const tree of trees) {
+      for (const problem of builtinFieldErrors(tree)) errors.push([`${where}: ${problem}`, rng]);
+    }
+  }
+
+  /**
+   * Parse one rendered template; check each ref against `declared` and `contracts`.
+   *
+   * A malformed span, unknown builtin, builtin called with arguments it doesn't take, or nested
+   * `${...}` is one error at `where`, and so is each field read on a builtin's result its type
+   * can't have; each ref whose head is not in `declared` is another, with the pool-ref hint (ending
+   * in `hintTail`) when the head is a pool-style head or a node id. Each distinct ref reading a
+   * field of a declared name with an entry in `contracts` is another when every alternative
+   * rejects the read (`partialUnionFields` allows a field only some union members have).
+   */
+  function checkTemplate(
+    where: string,
+    template: string,
+    declared: ReadonlySet<string>,
+    rng: SourceRange | null,
+    site: {
+      noun: string;
+      hintTail: string;
+      contracts: ReadonlyMap<string, LocalInput>;
+      partialUnionFields: boolean;
+    },
+  ): void {
+    let refs: string[];
+    try {
+      refs = promptRefs(template);
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+      errors.push([`${where}: ${error.message}`, rng]);
+      return;
+    }
+    addBuiltinFieldErrors(spanTrees(template), where, rng);
+    const fieldChecked = new Set<string>();
+    for (const ref of refs) {
+      const head = ref.split(".", 1)[0]!.trim();
+      if (!declared.has(head)) {
+        const hint =
+          PROMPT_FORBIDDEN_HEADS.has(head) || validTargets.has(head)
+            ? ` (a pool ref belongs in an input \`from:\`, not ${site.hintTail})`
+            : "";
+        errors.push([`${where}: \${${ref}} is not a declared ${site.noun}${hint}`, rng]);
+        continue;
+      }
+      const path = ref.trim();
+      const parts = path.split(".");
+      const local = site.contracts.get(head);
+      if (local === undefined || parts.length < 2 || fieldChecked.has(path)) continue;
+      fieldChecked.add(path);
+      const err = localFieldError(local.alternatives, parts.slice(1), path, {
+        source: local.source,
+        partialUnionFields: site.partialUnionFields,
+      });
+      if (err !== null) errors.push([`${where}: ${err}`, rng]);
+    }
+  }
+
+  for (const [nodeId, result] of buildResults) {
+    const node = result.node;
+    const franges = result.fieldRanges;
+    const nodeRange = result.nodeRange;
+    const [nodeProducers, nodeInputs] =
+      narrowing !== null ? narrowing.forNode(nodeId) : [producers, inputContracts];
+    const partialUnionFields = unordered.has(nodeId);
+    // Prompt scope: a strict AGENT prompt or system prompt may interpolate ONLY this node's
+    // declared inputs and variables as `${name}` (or a builtin-call argument); a pool ref in either
+    // is loud, and an unknown builtin or malformed span is rejected here (via `promptRefs`, the
+    // renderer's compile-time companion). A HUMAN_INPUT `prompt:` and its question text (`question`,
+    // option `label`/`description`) follow the same rule, reading the gate's declared inputs.
+    const nodeLocals = localContracts.get(nodeId) ?? new Map<string, LocalInput>();
+    if (node instanceof AgentNode) {
+      const declared = new Set((node.params ?? []).map((param) => param.name));
+      for (const variable of node.variables) declared.add(variable.name);
+      const promptContracts = new Map(nodeLocals);
+      for (const variable of node.variables) {
+        if (variable.contract !== null) promptContracts.set(variable.name, new LocalInput([variable.contract]));
+      }
+      for (const [fieldName, template] of [
+        ["prompt", node.prompt],
+        ["system_prompt", node.systemPrompt],
+      ] as const) {
+        if (!template) continue;
+        checkTemplate(
+          result.siteName(nodeId, fieldName),
+          template,
+          declared,
+          franges.get(siteKey("field", fieldName)) ?? nodeRange,
+          {
+            noun: "input or variable",
+            hintTail: "a strict AGENT prompt",
+            contracts: promptContracts,
+            partialUnionFields,
+          },
+        );
+      }
+    } else if (node instanceof HumanInputNode) {
+      const declared = new Set((node.params ?? []).map((param) => param.name));
+      for (const [path, text] of templateSites(node.prompt, node.questions)) {
+        if (!text) continue;
+        const label = siteLabel(path);
+        checkTemplate(
+          `node ${reprText(nodeId)} ${label}`,
+          text,
+          declared,
+          franges.get(siteKey("text", label)) ?? franges.get(siteKey("field", String(path[0]))) ?? nodeRange,
+          { noun: "input", hintTail: "human_input text", contracts: nodeLocals, partialUnionFields },
+        );
+      }
+    }
+    // Node-owned reserved wiring (`over`, `until`, ...) follows the same pool reference grammar as
+    // ordinary inputs. It never receives a body-local scope: in particular, MAP's `${item}` is
+    // valid only in each per-element input, not in `over:`.
+    const nwiring = flowWiring.get(nodeId) ?? new Map<string, unknown>();
+    const reserved = node.reservedWiringKeys();
+    const inputRng = franges.get(siteKey("field", "inputs")) ?? nodeRange;
+    for (const key of [...reserved].sort(compareCodeUnits)) {
+      // A reserved wiring key is a KIND FIELD, so its range is keyed `field` — not the bare key,
+      // which would silently fall back to the whole `input:` block or node header.
+      const reservedRng = franges.get(siteKey("field", key)) ?? inputRng;
+      scan(nwiring.get(key), result.siteName(nodeId, node.reservedKeyLabel(key)), reservedRng, {
+        siteProducers: nodeProducers,
+        siteInputs: nodeInputs,
+        partialUnionFields,
+        constructors: false,
+      });
+    }
+
+    // A per-item binder (MAP) reads its iteration source above, then validates each element
+    // input with the body-local `${item}` scope enabled.
+    if (node.bindsPerItem) {
+      const item = itemContract(nwiring.get("over"), nodeProducers, nodeInputs, typeFn);
+      for (const [param, src] of nwiring) {
+        if (reserved.has(param)) continue;
+        scan(
+          src,
+          `node ${reprText(nodeId)} map input ${reprText(param)} from`,
+          franges.get(siteKey("input", param)) ?? inputRng,
+          {
+            siteProducers: nodeProducers,
+            siteInputs: nodeInputs,
+            itemContract: item,
+            extraHeads: ["item"],
+            partialUnionFields,
+          },
+        );
+      }
+      continue;
+    }
+
+    // Each node input `from:` source, read from the flow-owned wiring. For a desugared CASE these
+    // are the `__rN`/`__on` SOURCES (the original `${<id>.output}` refs), validated against the
+    // pool. The rewritten node-local `__rN`/`__on` live in `node.cases` `when:` and are excluded
+    // here (they resolve against the record).
+    // Anchor each error on the OFFENDING ENTRY, not the whole `input:` mapping: the parse loop
+    // stamps a per-binding `input` range for every kind, and a desugar stamps one for its
+    // synthetic params (a CASE `__rN` -> its `cases[N].when` line); the block range is only the
+    // fallback (a spanless flow has no ranges at all). `wiringRefLabel` gives a synthetic param
+    // the author-facing name it was hoisted from instead of leaking `__rN`.
+    const caseReads =
+      node instanceof CaseNode
+        ? new Set(
+            node.cases.flatMap((branch) =>
+              branch.when ? conditionRefs(branch.when).map((ref) => ref.split(".", 1)[0]!) : [],
+            ),
+          )
+        : null;
+    for (const [param, src] of nwiring) {
+      if (reserved.has(param)) continue;
+      if (caseReads !== null && caseReads.size > 0 && !caseReads.has(param)) {
+        // In a searched case whose `when:`s read something, a param they don't read is a join
+        // input over a co-skipping escape's producers; each of its references is already checked
+        // at the read that introduced it, so scanning it would repeat that error. An `on:` case
+        // with no cases reads nothing, so its `on:` value is still checked.
+        continue;
+      }
+      let label = node.wiringRefLabel(param);
+      let paramRng = franges.get(siteKey("input", param)) ?? inputRng;
+      let [paramProducers, paramInputs] = [nodeProducers, nodeInputs];
+      let readFacts: Env | null = null;
+      let routedBases: ReadonlySet<string> = new Set();
+      if (narrowing !== null) {
+        if (narrowing.paramUnchecked(nodeId, param)) {
+          // Every read follows a check that can never be true, which `checkImpossibleWhens`
+          // reports; no value reaches them.
+          continue;
+        }
+        // A searched CASE's param read only after the checks before it in its `when:` has its
+        // own view; one read guarded first and unguarded later reports at the later read.
+        [paramProducers, paramInputs] = narrowing.forParam(nodeId, param);
+        readFacts = narrowing.paramEnv(nodeId, param);
+        routedBases = narrowing.paramRoutedBases(nodeId, param);
+        const paramSite = narrowing.paramSite(nodeId, param);
+        if (paramSite !== null) {
+          label = paramSite[0];
+          paramRng = paramSite[1] ?? paramRng;
+        }
+      }
+      const where = `${result.siteName(nodeId, label)} from`;
+      const source = bindingSource(src);
+      if (typeof source === "string") {
+        // A desugar may copy an authored binding to a synth node, so check the authored site once.
+        const key = JSON.stringify([where, source, paramRng]);
+        if (scanned.has(key)) continue;
+        scanned.add(key);
+      }
+      scan(src, where, paramRng, {
+        siteProducers: paramProducers,
+        siteInputs: paramInputs,
+        partialUnionFields,
+        readFacts,
+        routedBases,
+      });
+    }
+  }
+
+  // Flow outputs (the codomain): each binding `from:` is checked like a node input and located at
+  // its retained value or block range. No built node owns this source site; source-free callers
+  // deliberately remain unlocated.
+  for (const value of outputBindings(outputs)) {
+    scan(value, "flow output from", outputsRange, { siteProducers: producers, siteInputs: inputContracts });
+  }
+
+  for (const [headline, problems] of [
+    ["flow has unresolved references", errors],
+    ["flow has constructor calls that can never succeed", constructorProblems],
+  ] as const) {
+    if (problems.length > 0) {
+      const firstRange = problems.find(([, range]) => range !== null)?.[1] ?? null;
+      throw diagnostics.error(`${headline}:\n  ${problems.map(([message]) => message).join("\n  ")}`, {
+        range: firstRange,
+      });
+    }
+  }
+}
+
+/** Return the parsed tree of each `${...}` span of `text`. */
+function spanTrees(text: string): ExprNode[] {
+  return scanTemplate(text).flatMap((segment) => (segment instanceof Span ? [segment.tree] : []));
+}

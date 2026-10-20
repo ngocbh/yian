@@ -9,40 +9,34 @@
  * `test_a_span_inside_a_constructor_shows_the_rewrite`,
  * `test_isinstance_with_a_builtin_name_does_not_make_it_a_constructor`,
  * `test_a_flow_call_with_several_arguments_keeps_the_flow_call_message`,
- * `test_a_malformed_constructor_call_is_a_load_error` (the `case when` site),
+ * `test_a_malformed_constructor_call_is_a_load_error`,
  * `test_a_builtin_type_name_in_a_binding_is_not_a_conversion`,
  * `test_a_builtin_type_name_in_a_case_when_is_not_a_conversion`,
  * `test_an_unknown_name_in_a_case_when_is_an_unknown_function`,
  * `test_a_constructor_in_wait_until_is_a_located_load_error`,
+ * `test_a_constructor_in_an_agent_prompt_is_a_located_load_error`,
+ * `test_a_field_read_on_a_constructor_result_type_checks`,
  * `test_a_field_read_on_a_constructor_in_a_case_when_type_checks`,
- * `test_keywords_missing_a_field_in_a_case_when_are_a_load_error` and
+ * `test_a_disjoint_argument_is_a_load_error`, `test_a_narrower_or_unknown_argument_loads`,
+ * `test_keywords_missing_a_required_field_are_a_load_error`,
+ * `test_keywords_missing_a_field_in_a_case_when_are_a_load_error`,
+ * `test_an_unknown_keyword_field_is_a_load_error`, `test_a_disjoint_keyword_field_is_a_load_error`,
+ * `test_keywords_cannot_build_a_union`, `test_keywords_cannot_build_a_scalar_type`,
  * `test_a_constructor_in_a_call_nodes_asserts_is_a_located_load_error` (the node-assert check,
- * pinning the whole message); and the load halves of
+ * pinning the whole message), the typed-binding row `test_downstream_sees_the_constructed_type` and
+ * the call-type row `test_a_call_argument_is_checked_with_the_constructed_type`; and the load halves of
  * `test_a_constructor_in_a_case_when` (its type table), `test_a_constructor_in_node_and_flow_asserts`,
- * `test_a_constructor_in_a_flow_output` and `test_a_constructor_in_a_map_per_item_input` (each
- * loads). The `one` def the map calls and the `check` def the CALL calls are hand-built children
- * (`handChild`) with the def's signature.
+ * `test_a_constructor_in_a_flow_output`, `test_a_constructor_in_a_map_per_item_input`,
+ * `test_a_value_lacking_a_field_fails_with_binding_type_naming_it`,
+ * `test_a_bad_built_field_fails_with_binding_type` and `test_a_nested_constructor_failure_is_binding_type`
+ * (each loads), and of `test_an_inline_body_parameter_takes_the_constructed_type` (the inline
+ * child's START parameter type). The `one` def the map calls, the `sell` def the call calls and the
+ * `check` def the CALL calls are hand-built children (`handChild`) with the def's signature.
  * `engine/inline_calls.test.ts` pins the cases of the binding sites the inline-call desugar raises.
  *
  * TS-only: one row per constructor message the type-table pass reports at a `case when` (a union,
  * a scalar type, an unknown field, a disjoint value, a disjoint field, a builtin field read); Python
  * reports them there too, but its tests pin them only at binding sites.
- *
- * Later (T3-18 PR 3): the reference validator's binding and prompt sites and their cases:
- * `test_a_malformed_constructor_call_is_a_load_error` (the `binding` site),
- * `test_a_constructor_in_an_agent_prompt_is_a_located_load_error`,
- * `test_a_field_read_on_a_constructor_result_type_checks`, `test_a_disjoint_argument_is_a_load_error`,
- * `test_a_narrower_or_unknown_argument_loads`, `test_keywords_missing_a_required_field_are_a_load_error`,
- * `test_an_unknown_keyword_field_is_a_load_error`, `test_a_disjoint_keyword_field_is_a_load_error`,
- * `test_keywords_cannot_build_a_union` and `test_keywords_cannot_build_a_scalar_type`.
- *
- * Later (T3-19): the typed-binding and call-type rows
- * (`test_a_value_lacking_a_field_fails_with_binding_type_naming_it`,
- * `test_a_bad_built_field_fails_with_binding_type`, `test_a_nested_constructor_failure_is_binding_type`,
- * `test_downstream_sees_the_constructed_type`, `test_a_call_argument_is_checked_with_the_constructed_type`,
- * `test_an_inline_body_parameter_takes_the_constructed_type`);
- * `compose/typed_bindings_check.test.ts` pins the case
- * `load-types/compose_constructor_load__downstream_sees_the_constructed_type`.
  *
  * Later (T3-22): `test_a_caller_sees_a_childs_constructed_output_type` (the child's own assembly),
  * `test_a_uses_child_resolves_constructors_against_its_own_typedefs` and
@@ -55,8 +49,10 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
+import type { CompiledFlow } from "../../src/compile/model.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import type { Node } from "../../src/nodes/base.ts";
+import type { CallNode } from "../../src/nodes/call/node.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, typeEquals } from "../../src/typesys/values.ts";
 import {
@@ -241,15 +237,86 @@ output: \${each.output}
   expectTypes(loadedNodes(text, { one }).get("each"), { Buy: BUY });
 });
 
+// ---------- typed bindings and call types over a constructor ----------
+
+test.each([
+  // `test_a_value_lacking_a_field_fails_with_binding_type_naming_it`
+  "${Buy(d.output)}",
+  // `test_a_bad_built_field_fails_with_binding_type`
+  '${Buy(action="buy", conviction=d.output.price)}',
+])("a binding whose run fails with binding.type loads: %s", (binding) => {
+  loadedNodes(consumer(binding));
+});
+
+test("a nested constructor whose run fails with binding.type loads", () => {
+  loadedNodes(
+    flow(`  c:
+    kind: code
+    input:
+      nested:
+        first: \${Buy(d.output)}
+    code: |
+      return inputs["nested"]
+output: \${c.output}
+`),
+  );
+});
+
+test("downstream sees the constructed type", () => {
+  // A typed binding over a constructor compares the declared type with the constructor's.
+  const error = loadError(() => loadedNodes(consumer("!Sell ${Buy(d.output)}")));
+
+  expect(error.message).toContain('declared Sell, but the value is {"action":Literal(buy),"conviction":float}');
+});
+
+test("a call argument is checked with the constructed type", () => {
+  const text = flow(`  run:
+    kind: call
+    call: sell
+    input:
+      order: \${Buy(d.output)}
+output: \${run.output}
+`);
+  const sell = handChild({
+    inputs: parametersFromYaml("input:\n  order: !Sell\n", REG),
+    producers: { e: null },
+    output: "${e.output}",
+  });
+
+  expect(loadError(() => loadedNodes(text, { sell })).message).toContain("call node 'run': binding 'order'");
+});
+
+test("an inline body parameter takes the constructed type (load half)", () => {
+  const text = flow(`  inline:
+    kind: call
+    input:
+      decision: \${Buy(d.output)}
+    nodes:
+      e:
+        kind: code
+        input:
+          c: \${input.decision.conviction}
+        code: |
+          return inputs["c"]
+    output: \${e.output}
+output: \${inline.output}
+`);
+
+  const child = (loadedNodes(text).get("inline") as CallNode).child as CompiledFlow;
+
+  expect(typeEquals(child.nodes.get(child.startId)!.params![0]!.contract!.type, BUY)).toBe(true);
+});
+
 test("a flow call with several arguments keeps the flow call message", () => {
   const error = loadError(() => loadedNodes(consumer("${review(d.output, d.output)}")));
 
   expect(error.message).toContain("a flow call 'review' inside ${...} is not supported");
 });
 
-test("a malformed constructor call is a load error: case when", () => {
-  const text = CASE_FLOW.replace("Buy(d.output)", "Buy(d.output, d.output)");
-
+test.each([
+  ["binding", consumer('${Buy(d.output, action="buy")}')],
+  ["case when", CASE_FLOW.replace("Buy(d.output)", "Buy(d.output, d.output)")],
+])("a malformed constructor call is a load error: %s", (_, text) => {
   expect(loadError(() => loadedNodes(text)).message).toContain(
     "Buy(...) takes keyword fields, as in Buy(name=value, ...), or one value to check, as in Buy(x)",
   );
@@ -350,7 +417,45 @@ output: \${run.output}
   expect(errorLine(error)).toBe(lineOf(text, "Buy(output)"));
 });
 
+test("a constructor in an agent prompt is a located load error", () => {
+  const text =
+    "id: a\nname: a\n" +
+    TYPEDEFS +
+    `input:
+  order: !object
+nodes:
+  ask:
+    kind: agent
+    input:
+      order: \${input.order}
+    prompt: "Is it a buy? \${Buy(order)}"
+    output: str
+output: \${ask.output}
+`;
+
+  const error = loadError(() => loadedNodes(text));
+
+  expect(error.message).toContain("unknown prompt function 'Buy'");
+  expect(error.message).toContain(
+    "build or check a typed value with a `typedefs:` constructor `T(...)` in an input binding",
+  );
+  expect(errorLine(error)).toBe(lineOf(text, "prompt:"));
+});
+
 // ---------- static types ----------
+
+/** Like `HEAD`, with `d` declaring `dOutput`. */
+const typedHead = (dOutput: string) => HEAD.replace("    output: object\n", `    output: ${dOutput}\n`);
+
+test("a field read on a constructor result type checks", () => {
+  loadedNodes(consumer("${Buy(d.output).conviction}"));
+  const text = consumer("${Buy(d.output).size}");
+
+  const error = loadError(() => loadedNodes(text));
+
+  expect(error.message).toContain("reference ${Buy(...).size} reads unknown field 'size' on record");
+  expect(errorLine(error)).toBe(lineOf(text, "x: ${Buy"));
+});
 
 test("a field read on a constructor in a case when type checks", () => {
   const text = CASE_FLOW.replace("Buy(d.output).conviction", "Buy(d.output).size");
@@ -361,10 +466,85 @@ test("a field read on a constructor in a case when type checks", () => {
   expect(errorLine(error)).toBe(lineOf(text, "Buy(d.output).size"));
 });
 
+test("a disjoint argument is a load error", () => {
+  const text =
+    typedHead("Sell") +
+    `  c:
+    kind: code
+    input:
+      x: \${Buy(d.output)}
+    code: |
+      return inputs["x"]
+output: \${c.output}
+`;
+
+  const error = loadError(() => loadedNodes(text));
+
+  expect(error.message).toContain(
+    'Buy(...): the value is {"action":Literal(sell),"price":float}, which can never be a Buy',
+  );
+  expect(errorLine(error)).toBe(lineOf(text, "x: ${Buy"));
+});
+
+test("a narrower or unknown argument loads", () => {
+  loadedNodes(typedHead("Decision") + "output: ${Buy(d.output)}\n");
+  loadedNodes(typedHead("Optional(Buy)") + "output: ${Buy(d.output)}\n");
+});
+
+test("keywords missing a required field are a load error", () => {
+  const text = consumer("${Buy(conviction=d.output.conviction)}");
+
+  const error = loadError(() => loadedNodes(text));
+
+  expect(error.message).toContain("Buy(...) is missing required field `action`");
+  expect(errorLine(error)).toBe(lineOf(text, "x: ${Buy"));
+});
+
 test("keywords missing a field in a case when are a load error", () => {
   const text = CASE_FLOW.replace("Buy(d.output)", "Buy(conviction=d.output.conviction)");
 
   expect(loadError(() => loadedNodes(text)).message).toContain("Buy(...) is missing required field `action`");
+});
+
+test("an unknown keyword field is a load error", () => {
+  const text = consumer('${Buy(action="buy", conviction=1, size="m")}');
+
+  expect(loadError(() => loadedNodes(text)).message).toContain("Buy has no field 'size' (fields: action, conviction)");
+});
+
+test.each([
+  [
+    '${Buy(action="sell", conviction=1)}',
+    "Buy(...) field 'action': declared Literal(buy), but the value is Literal(sell)",
+  ],
+  ['${Buy(action="buy", conviction=d.output)}', "Buy(...) field 'conviction': declared float, but the value is str"],
+])("a disjoint keyword field is a load error: %s", (binding, message) => {
+  const text =
+    typedHead("str") +
+    `  c:
+    kind: code
+    input:
+      x: ${binding}
+    code: |
+      return inputs["x"]
+output: \${c.output}
+`;
+
+  expect(loadError(() => loadedNodes(text)).message).toContain(message);
+});
+
+test("keywords cannot build a union", () => {
+  const error = loadError(() => loadedNodes(consumer("${Decision(conviction=1)}")));
+
+  expect(error.message).toContain(
+    "Decision is a union; construct a member (Buy(...) or Sell(...)), or check a value with Decision(x)",
+  );
+});
+
+test("keywords cannot build a scalar type", () => {
+  const error = loadError(() => loadedNodes(consumer('${Size(name="m")}')));
+
+  expect(error.message).toContain("Size is not a record, so Size(...) takes one value to check, as in Size(x)");
 });
 
 describe("constructor messages at a case when", () => {
@@ -406,13 +586,23 @@ describe("constructor messages at a case when", () => {
 
 test.each<CaseRow>(
   [
-    "load-types/compose_constructor_load__a_builtin_type_name_in_a_case_when_is_not_a_conversion",
-    "load-types/compose_constructor_load__a_constructor_in_wait_until",
-    "load-types/compose_constructor_load__a_field_read_on_a_constructor_in_a_case_when",
-    "load-types/compose_constructor_load__a_malformed_constructor_call_in_a_case_when",
-    "load-types/compose_constructor_load__an_unknown_name_in_a_case_when_is_an_unknown_function",
-    "load-types/compose_constructor_load__keywords_missing_a_field_in_a_case_when",
-  ].map((id) => ({ id, call: assembled })),
+    "a_builtin_type_name_in_a_case_when_is_not_a_conversion",
+    "a_constructor_in_wait_until",
+    "a_field_read_on_a_constructor_in_a_case_when",
+    "a_malformed_constructor_call_in_a_case_when",
+    "an_unknown_name_in_a_case_when_is_an_unknown_function",
+    "keywords_missing_a_field_in_a_case_when",
+    "a_constructor_in_an_agent_prompt",
+    "a_disjoint_argument_is_a_load_error",
+    "a_disjoint_keyword_field_is_a_load_error",
+    "a_field_read_on_a_constructor_result_type_checks",
+    "a_malformed_constructor_call_in_a_binding",
+    "an_unknown_keyword_field_is_a_load_error",
+    "keywords_cannot_build_a_scalar_type",
+    "keywords_cannot_build_a_union",
+    "keywords_missing_a_required_field",
+    "downstream_sees_the_constructed_type",
+  ].map((name) => ({ id: `load-types/compose_constructor_load__${name}`, call: assembled })),
 )("assembled: $id", runCase);
 
 test("assembledWith: load-types/compose_constructor_load__a_constructor_in_a_call_nodes_asserts", () => {

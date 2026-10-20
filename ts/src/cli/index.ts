@@ -274,8 +274,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
         { name: "auth-file", type: "string", help: "Auth file whose openai subscription login is listed." },
         { name: "provider", type: "string", help: "Provider whose host is listed, with the key on stdin." },
         { name: "base-url", type: "string", help: "Host to list instead of the provider's own; --provider only." },
-        // A float, which the parser has no type for; the handler converts it.
-        { name: "timeout", type: "string", metavar: "FLOAT", help: "Seconds for the whole listing." },
+        { name: "timeout", type: "float", metavar: "FLOAT", help: "Seconds for the whole listing." },
         JSON_OPTION,
       ],
     },

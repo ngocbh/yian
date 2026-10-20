@@ -3,8 +3,8 @@
  * and endpoints, and `osReason` (a system error's reason in Python's words).
  *
  * - `parseCommand` reads a command's arguments against its `CommandSpec` with `node:util`'s
- *   `parseArgs`, then converts int options and checks paths with Click's messages; `helpText` and
- *   `usageError` give the text a command prints for `--help` and for a `UsageError`.
+ *   `parseArgs`, then converts int and float options and checks paths with Click's messages;
+ *   `helpText` and `usageError` give the text a command prints for `--help` and for a `UsageError`.
  * - `printJson` writes the one `yian.cli.v1` document a `--json` command prints.
  * - `ensureEnvKey` is the interactive key prompt `llm_clients/api_key_env.ts` points at; `yian run`
  *   calls it pre-flight for agents without a saved login, so a missing key surfaces as an upfront
@@ -145,11 +145,14 @@ export interface PathCheck {
   writable?: boolean;
 }
 
-/** An option: `--name` (and `-short`), a string, a flag or an int, repeatable when `multiple`. */
+/**
+ * An option: `--name` (and `-short`), a string, a flag, an int or a float, repeatable when
+ * `multiple`.
+ */
 export interface OptionSpec {
   name: string;
   short?: string;
-  type: "string" | "boolean" | "int";
+  type: "string" | "boolean" | "int" | "float";
   multiple?: boolean;
   min?: number;
   path?: PathCheck;
@@ -175,7 +178,7 @@ export interface CommandSpec {
   options: OptionSpec[];
 }
 
-/** An option's value: absent, a string, a flag, an int, or a list of them for a repeatable one. */
+/** An option's value: absent, a string, a flag, a number, or a list of them for a repeatable one. */
 export type OptionValue = string | boolean | number | string[] | number[] | undefined;
 
 /**
@@ -239,6 +242,23 @@ function toInt(option: OptionSpec, text: string): number {
   return value;
 }
 
+// Python's float() syntax in ASCII: surrounding whitespace (`str.isspace`), single underscores
+// between digits, an optional fraction and exponent, or inf, infinity or nan in any case.
+const FLOAT_TEXT =
+  /^[\t-\r\x1c-\x20]*([+-]?)(?:(inf|infinity|nan)|((?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:e[+-]?\d(?:_?\d)*)?))[\t-\r\x1c-\x20]*$/i;
+
+/** Return `text` as a float, as Python's `float()` reads it, or throw a `UsageError`. */
+function toFloat(option: OptionSpec, text: string): number {
+  const match = FLOAT_TEXT.exec(text);
+  if (!match) {
+    throw new UsageError(`Invalid value for ${optionHint(option)}: ${reprText(text)} is not a valid float.`);
+  }
+  const [, sign, word, digits] = match;
+  const magnitude =
+    digits === undefined ? (word!.toLowerCase() === "nan" ? NaN : Infinity) : Number(digits.replaceAll("_", ""));
+  return sign === "-" ? -magnitude : magnitude;
+}
+
 /** Return `parseArgs`' error as a `UsageError` worded as Click words it. */
 function parseArgsError(error: Error): UsageError {
   const message = error.message;
@@ -258,12 +278,13 @@ function parseArgsError(error: Error): UsageError {
 /**
  * Parse `argv` (the arguments after the command's name) against `spec`.
  *
- * Options and positionals may mix; `--` ends the options. An int option's value is converted and
- * checked against `min`; each path is checked once parsing is done, positionals then options, in
- * declared order. `--help` anywhere returns `{help: true}` before any of those checks.
+ * Options and positionals may mix; `--` ends the options. An int or float option's value is
+ * converted, an int's checked against `min`; each path is checked once parsing is done,
+ * positionals then options, in declared order. `--help` anywhere returns `{help: true}` before any
+ * of those checks.
  *
  * @throws {UsageError} For an unknown option, a missing or refused value, a missing or extra
- *   positional, an invalid int, or a path that fails its check.
+ *   positional, an invalid int or float, or a path that fails its check.
  */
 export function parseCommand(spec: CommandSpec, argv: readonly string[]): ParsedCommand {
   const options: Record<string, { type: "string" | "boolean"; short?: string; multiple?: boolean }> = {
@@ -312,7 +333,12 @@ export function parseCommand(spec: CommandSpec, argv: readonly string[]): Parsed
     }
     const texts = typeof raw === "string" ? [raw] : (raw as string[]);
     if (option.path) for (const text of texts) checkPath(optionHint(option), text, option.path);
-    const converted = option.type === "int" ? texts.map((text) => toInt(option, text)) : texts;
+    const converted =
+      option.type === "int"
+        ? texts.map((text) => toInt(option, text))
+        : option.type === "float"
+          ? texts.map((text) => toFloat(option, text))
+          : texts;
     result[option.name] = option.multiple ? (converted as string[] | number[]) : converted[0];
   }
 
@@ -331,7 +357,8 @@ function usageLine(spec: CommandSpec): string {
 function optionLabel(option: OptionSpec): string {
   const names = option.short === undefined ? `--${option.name}` : `-${option.short}, --${option.name}`;
   if (option.type === "boolean") return names;
-  const fallback = option.type === "int" ? "INTEGER" : option.path ? (option.path.dir ? "DIRECTORY" : "FILE") : "TEXT";
+  const other = option.path ? (option.path.dir ? "DIRECTORY" : "FILE") : "TEXT";
+  const fallback = option.type === "int" ? "INTEGER" : option.type === "float" ? "FLOAT" : other;
   return `${names} ${option.metavar ?? fallback}`;
 }
 

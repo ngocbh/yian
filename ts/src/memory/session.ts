@@ -1040,7 +1040,7 @@ export class Turn implements ConversationTurn {
    *   non-empty text; may be async.
    * @returns The cached or new summary, or `null`, and the projection of the remaining prior turns;
    *   the current invocation is excluded.
-   * @throws RangeError when the version is empty or the summary is blank.
+   * @throws RangeError when the version isn't a non-empty string or the summary is blank.
    * @throws TypeError when a callback isn't a function or returns a non-string.
    * @throws MemoryOperationError `session.stale` when the lease or session is stale;
    *   `session.conflict` when history changed during the callbacks. Callback failures and the
@@ -1060,9 +1060,12 @@ export class Turn implements ConversationTurn {
     }
     const session = this.session;
     const memory = session["memory"];
-    this.signal.throwIfAborted();
-    memory["guard"]();
-    session["ensureLease"](this.lease);
+    const ready = (): void => {
+      this.signal.throwIfAborted();
+      memory["guard"]();
+      session["ensureLease"](this.lease);
+    };
+    ready();
     const view = this.turnView!;
     const current = this.turnRequest.invocation;
     const prior = admissions(view).filter((invocation) => !sameConversationInvocation(invocation, current));
@@ -1074,11 +1077,6 @@ export class Turn implements ConversationTurn {
       cached = null;
     }
 
-    const ready = (): void => {
-      this.signal.throwIfAborted();
-      memory["guard"]();
-      session["ensureLease"](this.lease);
-    };
     const projectText = async (selected: readonly ConversationInvocation[]): Promise<string> => {
       ready();
       const text: unknown = await project(view, selected);
@@ -1131,9 +1129,7 @@ export class Turn implements ConversationTurn {
       });
       memory["summaries"] = summaries;
     }
-    this.signal.throwIfAborted();
-    memory["guard"]();
-    session["ensureLease"](this.lease);
+    ready();
     return [text, recent];
   }
 

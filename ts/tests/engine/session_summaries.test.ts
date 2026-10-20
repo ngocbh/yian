@@ -372,7 +372,9 @@ test("failed extension keeps previous summary", async () => {
       await prepare(turn, calls, { result: "original summary" });
     });
     await withTurn(opened.frame, request("b"), async (turn) => {
-      expect(await rejected(prepare(turn, calls, { result: "" }))).toBeInstanceOf(RangeError);
+      const error = await rejected(prepare(turn, calls, { result: "" }));
+      expect(Object.getPrototypeOf(error)).toBe(RangeError.prototype);
+      expect((error as Error).message).toBe("summary must contain nonempty text");
       await prepare(turn, calls, { result: "valid extension" });
     });
   }, memory);
@@ -386,10 +388,11 @@ test("empty crashed and failed turns count in recent selection", async () => {
   await seed(memory, 1);
   let crashedPin: Mutable;
   await withHarness(async (opened) => {
+    const thrown = new Error("empty failed turn");
     const failedTurn = withTurn(opened.frame, request("failed"), () => {
-      throw new Error("empty failed turn");
+      throw thrown;
     });
-    expect(await rejected(failedTurn)).toBeInstanceOf(Error);
+    expect(await rejected(failedTurn)).toBe(thrown);
     const turn = await opened.frame.openTurn(request("crashed"), { signal: NEVER });
     crashedPin = snapshot(memory);
     turn.close();
@@ -502,7 +505,7 @@ describe("callback drains before fifo lease release", () => {
       const primary = new Error("host stop");
       const queuedStop = new AbortController();
       const queuedError = new Error("queued cancelled");
-      let ownerSession: Mutable;
+      let ownerSession: { close(): void } | null = null;
       const owner = settle(
         withHarness(async (opened) => {
           ownerSession = opened.session;
@@ -566,7 +569,7 @@ describe("callback drains before fifo lease release", () => {
         expect(await rejected(cancelled.promise)).toBe(queuedError);
         expect(events).not.toContain("cancelled");
         if (action === "stop") stop.abort(primary);
-        else if (action === "close") ownerSession.close();
+        else if (action === "close") ownerSession!.close();
         expect(events).not.toContain("next");
         expect(events).not.toContain("summary returned");
         failure(() => memory.reset(), "session.busy", RESET_BUSY);

@@ -472,12 +472,18 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   seed, fragment or prune from the node throws `GrowthRejected` (`original` holds the underlying
   error), which fails the node; a builder or host fault stays raw. Replaying a `NodeExpandedRecord`
   rebuilds the fragment and requires the recorded digest, and throws the underlying error, never
-  `GrowthRejected`. The recovery fold (`replayRecords`) and the backward records throw `not ported
-  yet (T4-5)`.
+  `GrowthRejected`. `replayRecords(state, envelopes, {growBuilder})` is the recovery fold: it folds
+  a complete historical prefix through the same `prepare*` and `commitPrepared` path against a
+  read-only `HistoricalLogCursor` that matches each record byte for byte instead of writing it, so
+  the replayed state, interrupted counts included, is exactly the live one; a corrupt record throws
+  the underlying `RangeError` or `TypeError`, never `NodeDataError`. After the terminal, the
+  backward and memory-commit records reduce through `reduceBackwardRecord`
+  (`sameRuntimeBackwardState` compares the prepared and recomputed attempt state at commit).
 - Value equality: each carrier class has one `same*` helper in the module that owns it
   (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
   `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the
-  memory carriers' in `memory/contracts.ts`, `sameSourceEntry` in `runtime/trace.ts`). Every
+  memory carriers' in `memory/contracts.ts`, `sameSourceEntry` in `runtime/trace.ts`,
+  `sameRuntimeBackwardState` in `runtime/learning.ts`). Every
   `same*` takes non-null values; compare a nullable pair with `sameOptional(a, b, same)` from
   `nodes/contracts.ts`. `memory/contracts.ts` writes its null checks inline, since it imports
   only `diagnostics` and `defaults`. A `BackwardFailure`'s cause compares by value, never `===`.

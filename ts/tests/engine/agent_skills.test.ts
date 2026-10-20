@@ -5,6 +5,10 @@
  * `test_agent_skill_grants_default_to_none`; the `grantedSkills` halves of
  * `test_missing_grant_fails_the_node` and `test_grant_without_a_skills_mapping_fails_the_node`.
  *
+ * Ported (adapted): `test_only_nodes_with_the_skills_trait_receive_skills`, on a local probe that
+ * records its capabilities where Python's `FuncNode` would refuse an unexpected keyword: a node
+ * without `needsSkills` gets no `skills`, and one with it gets the host's map itself.
+ *
  * Changed: the grant checks are called directly where Python runs the node through `eval_node`;
  * a list of names in a message is written in the text form (`["absent"]`, Python
  * `['absent']`).
@@ -21,15 +25,16 @@
  * `test_skills_with_structured_output_still_run_the_tool_loop`,
  * `test_escape_attempt_fails_the_node` and `test_load_skill_is_not_callable_without_a_grant`
  * (T5-11a, T6-7).
- *
- * Later (T4): `test_only_nodes_with_the_skills_trait_receive_skills` (not an AGENT test).
  */
 
 import { expect, test } from "bun:test";
 
 import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { evalNode } from "../../src/runtime/eval_node.ts";
 import { Skill, SkillError } from "../../src/skills/catalog.ts";
 import { LOAD_SKILL } from "../../src/skills/tool.ts";
+import { VariablePool } from "../../src/typesys/pool.ts";
 
 const SKILLS: ReadonlyMap<string, Skill> = new Map([
   ["review", new Skill({ name: "review", description: "Review code changes.", instructions: "Read first." })],
@@ -75,4 +80,28 @@ test("grantedSkills selects the grants sorted by name", () => {
   expect(names(new AgentNode("agent", { skills: ["review", "deploy"] }))).toEqual(["deploy", "review"]);
   expect(names(new AgentNode("agent", { skills: "all" }))).toEqual(["deploy", "other", "review"]);
   expect(new AgentNode("agent", { skills: ["review"] }).grantedSkills(SKILLS)[0]).toBe(SKILLS.get("review")!);
+});
+
+test("only nodes with the skills trait receive skills", async () => {
+  /** Record the capabilities one evaluation supplies. */
+  class Probe extends Node {
+    readonly kind = NodeKind.CODE;
+    seen: NodeCaps = {};
+
+    override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+      this.seen = caps;
+      return new Output("ok");
+    }
+  }
+  class SkillsProbe extends Probe {
+    override readonly needsSkills = true;
+  }
+  const plain = new Probe("code");
+  const optedIn = new SkillsProbe("skilled");
+
+  expect((await evalNode(plain, null, new VariablePool(), { skills: SKILLS })).outcome).toEqual(new Output("ok"));
+  expect((await evalNode(optedIn, null, new VariablePool(), { skills: SKILLS })).outcome).toEqual(new Output("ok"));
+
+  expect("skills" in plain.seen).toBe(false);
+  expect(optedIn.seen.skills).toBe(SKILLS);
 });

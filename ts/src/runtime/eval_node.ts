@@ -368,7 +368,17 @@ export async function evalNode(
   }
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
-  const outcome = await evaluateNode(node, flow, pool, { wiringOverride, signal, sourceResolver, steps });
+  const outcome = await evaluateNode(node, flow, pool, {
+    wiringOverride,
+    signal,
+    sourceResolver,
+    emitStream,
+    emitEvent,
+    skills,
+    tools,
+    steering,
+    steps,
+  });
   return new EvaluatedOutcome(outcome, null);
 }
 
@@ -381,10 +391,15 @@ async function evaluateNode(
     wiringOverride: JsonObject | null;
     signal: AbortSignal;
     sourceResolver: SourceResolver | null;
+    emitStream: NonNullable<NodeCaps["emitStream"]> | null;
+    emitEvent: NonNullable<NodeCaps["emitEvent"]> | null;
+    skills: ReadonlyMap<string, Skill> | null;
+    tools: ToolSet | null;
+    steering: Steering | null;
     steps: NodeSteps | null;
   },
 ): Promise<WorkerOutcome> {
-  const { wiringOverride, signal, sourceResolver, steps } = context;
+  const { wiringOverride, signal, sourceResolver, emitStream, emitEvent, skills, tools, steering, steps } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
   const nodeWiring: ReadonlyMap<string, unknown> =
@@ -440,6 +455,14 @@ async function evaluateNode(
       }
     };
   }
+  if (node.needsTools === true) caps.tools = tools ?? new ToolSet();
+  if (node.needsLiveEvents === true) {
+    if (emitStream !== null) caps.emitStream = observerSink(emitStream);
+    if (emitEvent !== null) caps.emitEvent = observerSink(emitEvent);
+  }
+  if (skills !== null && node.needsSkills === true) caps.skills = skills;
+  if (steering !== null && node.needsSteering === true) caps.steering = new SteeringCapability(steering);
+  if (steps !== null && node.needsSteps === true) caps.steps = steps;
 
   let result: unknown;
   try {

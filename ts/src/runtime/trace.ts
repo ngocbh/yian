@@ -76,8 +76,8 @@ type BackwardHandler = (
   feedback: readonly FeedbackValue[],
 ) => BackwardResult | Promise<BackwardResult>;
 
-/** Decode a typed value from its canonical log text. */
-function decodeTyped(text: string): TypedValue {
+/** @internal Decode a typed value from its canonical log text, a fresh copy. */
+export function decodeTyped(text: string): TypedValue {
   return TypedValue.fromWire(parseJson(text, "codec"));
 }
 

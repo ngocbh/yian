@@ -50,7 +50,7 @@ import {
   sameOptional,
   validateOutputContract,
 } from "../nodes/contracts.ts";
-import { type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
+import { type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
 import {
   isRecord,
@@ -95,6 +95,7 @@ import {
 } from "./log.ts";
 import {
   checkMemoryScope,
+  decodeTyped,
   type PrepareTraceOptions,
   prepareTrace,
   RetainedTrace,
@@ -108,8 +109,8 @@ import {
 /** The injected kind-aware interpreter from a spawner and its canonical seed to a fragment. */
 export type GrowBuilder = (spawner: Node, seed: JsonValue) => Flow;
 
-/** A typed value's wire object `{kind, value}`, as `canonicalTyped` returns it. */
-type TypedWire = ReturnType<typeof canonicalTyped>[0];
+/** A typed value's wire object `{kind, value}`. */
+type TypedWire = ReturnType<TypedValue["toWire"]>;
 
 /** Project a whole-value type while validating the closed contract sum. */
 function nodeOutputType(node: Node): Type | null {
@@ -2236,11 +2237,6 @@ function materializeSuccess(plan: SuccessPlan): SuccessApply {
   ];
   if (terminal !== null) observers.push(terminal.observer);
   return { value, terminal, observers };
-}
-
-/** Decode a typed value from its canonical log text, a fresh copy. */
-function decodeTyped(text: string): TypedValue {
-  return TypedValue.fromWire(parseJson(text, "codec"));
 }
 
 /**

@@ -25,12 +25,13 @@
  * `test_terminal_success_values_are_mutation_isolated`, and the `success` rows of
  * `test_terminal_derivation_replays_from_causal_records_only` (the record class names, not
  * Python's type names) and `test_terminal_append_failure_leaves_result_frontier_and_pool_unchanged`.
- * Python's `ValueError` is a `RangeError` here, and a type mismatch the value layer's `TypeCheckError`; each rejected row
- * names its one class and full message, where Python matches a part of the message. A rejection
- * Python raises as `_NodeDataError` is a `NodeDataError` whose `original` is the `RangeError` or
- * `TypeCheckError`. `RUN_ID` and `FINGERPRINT` are the shared fixture's; the failing log is the
- * shared `FailingLog` (its error is `disk full`, Python's `append failed`); tuple outputs are arrays
- * and ints `bigint`s. Each test that commits an outcome pins `state.ready` after it.
+ * Python's `ValueError` is a `RangeError` here, and a type mismatch the value layer's
+ * `TypeCheckError`; each rejected row names its one class and full message, where Python matches a
+ * part of the message. A rejection Python raises as `_NodeDataError` is a `NodeDataError` whose
+ * `original` is the `RangeError` or `TypeCheckError`. `RUN_ID` and `FINGERPRINT` are the shared
+ * fixture's; the failing log is the shared `FailingLog` (its error is `disk full`, Python's
+ * `append failed`); tuple outputs are arrays and ints `bigint`s. Each test that commits an outcome
+ * pins `state.ready` after it.
  *
  * Changed:
  * - `test_success_validates_ordinary_target_against_output_contract_type`: a `float` slot keeps
@@ -170,11 +171,11 @@ function expectNodeData(fn: () => unknown, cls: new (...args: never[]) => Error,
   return caught;
 }
 
-/** Return the success delta of `prepared`'s plan; throw unless the plan is a success plan. */
-function successDelta(prepared: PreparedTransition) {
+/** Return `prepared`'s plan narrowed to a success plan; throw unless it is one. */
+function successPlan(prepared: PreparedTransition) {
   const plan = prepared._plan;
   if (plan.kind !== "success") throw new Error(`expected a success plan, found ${plan.kind}`);
-  return plan.delta;
+  return plan;
 }
 
 /** Return the node `nodeId` of `flow`. */
@@ -360,13 +361,6 @@ function endOnlyInFlight(): { state: RunState; log: MemoryRunLog } {
   commitStartSuccess(state, log);
   commitPrepared(log, state, prepareNodeStarted(state, END_ID));
   return { state, log };
-}
-
-/** Return the terminal of `prepared`'s plan; throw unless the plan is a success plan. */
-function successTerminal(prepared: PreparedTransition) {
-  const plan = prepared._plan;
-  if (plan.kind !== "success") throw new Error(`expected a success plan, found ${plan.kind}`);
-  return plan.terminal;
 }
 
 test("a success commits the canonical value before its FIFO successors", () => {
@@ -628,7 +622,7 @@ test("a success scans each distinct affected join once", () => {
   const prepared = prepareNodeSucceeded(state, "target", { done: true });
 
   expect(scanned).toEqual(["after-a", "after-b"]);
-  expect(successDelta(prepared).newlyReadyIds).toEqual(["after-a", "after-b"]);
+  expect(successPlan(prepared).delta.newlyReadyIds).toEqual(["after-a", "after-b"]);
 });
 
 test.each([
@@ -669,7 +663,7 @@ test("a success delta keeps every reducer container's identity", () => {
 
 test("a success plan holds only an immutable sparse delta", () => {
   const { state } = initializedAndStarted(fanoutFlow());
-  const delta = successDelta(prepareNodeSucceeded(state, START_ID, { value: "done" }));
+  const delta = successPlan(prepareNodeSucceeded(state, START_ID, { value: "done" })).delta;
 
   expect(typeof delta.valueJson).toBe("string");
   expect(delta.outgoingEdgeIds).toEqual(["start-first", "start-second"]);
@@ -863,7 +857,7 @@ test("a typed null END membership succeeds at quiescence", () => {
 
   const prepared = prepareNodeSucceeded(state, END_ID, null);
 
-  const terminal = successTerminal(prepared)!;
+  const terminal = successPlan(prepared).terminal!;
   expect(typeof terminal.outputJson).toBe("string");
   expect(() => {
     (terminal as { outputJson: unknown }).outputJson = "changed";

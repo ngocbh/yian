@@ -425,11 +425,11 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   record, checks what the log returned, then applies the plan, with no `await` in between, so
   nothing interleaves between the append and the apply. Frontier order: START is ready after
   `RunStarted`; a success walks its target's outgoing edges in order and appends each successor
-  when its last edge from the target settles and its join is ready; a resume puts the retried nodes first, in dispatch order, ahead of what was
-  ready; a stop changes nothing but the sequence. An output its target's contract refuses throws
-  `NodeDataError` (`original` holds the value layer's error), which fails the node, not the run.
-  Routes and node failures are not ported yet; growth, the recovery fold (`replayRecords`) and the
-  backward records throw `not ported yet (T4-5)`.
+  when its last edge from the target settles and its join is ready; a resume puts the retried nodes
+  first, in dispatch order, ahead of what was ready; a stop changes nothing but the sequence. An
+  output its target's contract refuses throws `NodeDataError` (`original` holds the value layer's
+  error), which fails the node, not the run. Routes and node failures are not ported yet; growth,
+  the recovery fold (`replayRecords`) and the backward records throw `not ported yet (T4-5)`.
 - Value equality: each carrier class has one `same*` helper in the module that owns it
   (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
   `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the

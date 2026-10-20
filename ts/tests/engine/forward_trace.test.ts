@@ -2220,16 +2220,7 @@ test("the trace rejects a forged memory scope before append and when copied: car
 
   expectError(() => changedOccurrence(delta.occurrence!, { memoryScope: malformed }), TypeError, message);
   const occurrence = forged(TraceOccurrence, delta.occurrence!, { memoryScope: malformed });
-  const sequence = state.nextSequence;
-  expectError(
-    () => commitPrepared(log, state, withTrace(prepared, changedDelta(delta, { occurrence }))),
-    TypeError,
-    message,
-  );
-
-  expect(state.nextSequence).toBe(sequence);
-  expect(state.trace!.nextSequence).toBe(sequence);
-  expect(log.nextSequence).toBe(sequence);
+  expectRefused(state, log, withTrace(prepared, changedDelta(delta, { occurrence })), TypeError, message);
 });
 
 test("a terminal trace output must match the prepared outcome before append", () => {
@@ -2290,18 +2281,18 @@ test.each(["initialized", "started", "resumed"] as const)(
   },
 );
 
-test.each<[string, string]>([
+test.each([
   ["target", "physical trace writer disagrees with the accepted output target"],
   ["source", "physical trace writer disagrees with the accepted outcome"],
   ["sequence", "physical trace writer disagrees with the accepted outcome"],
   ["value", "physical trace writer disagrees with the accepted outcome"],
   ["missing", "physical trace writer disagrees with the accepted output target"],
-])("an outcome trace writer must match the same accepted physical output: %s", (change, message) => {
+] as const)("an outcome trace writer must match the same accepted physical output: %s", (change, message) => {
   const { node, state, log } = preparedScopedOutcome();
   const prepared = prepareNodeSucceeded(state, node.id, "done", { forwardCapture: forwardCapture(node, {}) });
   const delta = prepared._plan.traceDelta!;
   const [target, writer] = delta.writer!;
-  const writers: Record<string, readonly [string, SourceEntry] | null> = {
+  const writers: Record<typeof change, readonly [string, SourceEntry] | null> = {
     target: [state.flow.startId, writer],
     source: [target, changedEntry(writer, { source: new SourceRef(state.runId!, 0) })],
     sequence: [target, changedEntry(writer, { outcomeSeq: writer.outcomeSeq + 1 })],
@@ -2309,7 +2300,7 @@ test.each<[string, string]>([
     missing: null,
   };
 
-  const changed = changedDelta(delta, { writer: writers[change] ?? null });
+  const changed = changedDelta(delta, { writer: writers[change] });
   expectRefused(state, log, withTrace(prepared, changed), RangeError, message);
 });
 
@@ -2446,43 +2437,33 @@ test.each(["none", "foreign_path", "foreign_memory"] as const)(
     };
     const delta = prepared._plan.traceDelta!;
     const occurrence = changedOccurrence(delta.occurrence!, { memoryScope: scopes[change] });
-    const accepted = log.records();
-    const pool = encodePool(state.pool);
-    const nodes = state.flow.nodes;
-    const sequence = state.nextSequence;
 
-    expectError(
-      () => commitPrepared(log, state, withTrace(prepared, changedDelta(delta, { occurrence }))),
+    expectRefused(
+      state,
+      log,
+      withTrace(prepared, changedDelta(delta, { occurrence })),
       RangeError,
       "outcome memory scope disagrees with the physical executing node",
     );
-
-    expect(log.records()).toEqual(accepted);
-    expect(encodePool(state.pool)).toEqual(pool);
-    expect(state.flow.nodes).toBe(nodes);
-    expect([state.nextSequence, state.trace!.nextSequence, log.nextSequence]).toEqual([sequence, sequence, sequence]);
   },
 );
 
-test.each<[string, string]>([
+test.each([
   ["display_node", "outcome memory scope disagrees with the physical executing node"],
   ["delta", "a retained outcome requires its physical trace occurrence"],
   ["occurrence", "a retained outcome requires its physical trace occurrence"],
-])("outcome scope authority can't be selected or omitted by the trace delta: success, %s", (change, message) => {
+] as const)("outcome scope authority can't be selected or omitted by the trace delta: success, %s", (change, message) => {
   const { state, log, prepared } = preparedScopedOutcome();
   const delta = prepared._plan.traceDelta!;
-  const deltas: Record<string, TraceDelta | null> = {
+  const deltas: Record<typeof change, TraceDelta | null> = {
     display_node: changedDelta(delta, {
       occurrence: changedOccurrence(delta.occurrence!, { nodeId: START_ID, memoryScope: null }),
     }),
     delta: null,
     occurrence: changedDelta(delta, { occurrence: null }),
   };
-  const sequence = state.nextSequence;
 
-  expectError(() => commitPrepared(log, state, withTrace(prepared, deltas[change] ?? null)), RangeError, message);
-
-  expect([state.nextSequence, state.trace!.nextSequence, log.nextSequence]).toEqual([sequence, sequence, sequence]);
+  expectRefused(state, log, withTrace(prepared, deltas[change]), RangeError, message);
 });
 
 test.each<[string, Value, boolean, (string | number)[] | null]>([

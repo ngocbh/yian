@@ -284,7 +284,6 @@ function bindingMismatch(src: unknown, decl: Parameter, scope: Scope): string | 
     const tree = loneSpan(source);
     if (tree !== null) {
       const path = operandPath(tree);
-      const kind = tree instanceof Tree ? tree.data : null;
       if (
         (path !== null && path.split(".")[0] === "item") ||
         (tree instanceof Tree &&
@@ -293,7 +292,7 @@ function bindingMismatch(src: unknown, decl: Parameter, scope: Scope): string | 
       ) {
         return operandMismatch(tree, decl, scope, { nonNull: false });
       }
-      if (kind === "coalesce") {
+      if (tree instanceof Tree && tree.data === "coalesce") {
         const message = operandMismatch(tree, decl, scope, { nonNull: false });
         if (message !== null) return message;
       }
@@ -495,7 +494,8 @@ function valueMismatch(
  * A YAML 1.1 boolean spelling such as `yes` gets the `true`/`false` to write when a boolean fits.
  * Other text that a run boundary would convert to a finite number or a bool is written unquoted
  * instead. A value YAML read as a non-text scalar, a boolean or a number, is quoted when its text
- * would fit.
+ * would fit. Dates are text in TS, so Python's quote-a-date and quote-each-date hints have no case
+ * here.
  *
  * @param value The literal that failed.
  * @param decl The child input, with a declared contract.

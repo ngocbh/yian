@@ -23,7 +23,8 @@
  * `test_no_rewrite_hint_for_text_spelling_an_int_past_the_digit_limit` gets the hint: TS has no
  * int digit limit, so the text reads as that int. The CODE bodies are TS.
  *
- * TS-only: a float spelling past the double range (`"1e400"`) for a `float` input gets no hint; the
+ * TS-only: a float spelling past the double range (`"1e400"`) and `"inf"` (YAML reads an unquoted
+ * inf as text) for a `float` input get no hint; the
  * harvested `load-map-call/compose_call_binding_types__*` cases, pinned at the end
  * (`…__date_literal_into_a_str_input` is `ok`, rule `dates`); and, as "Pinned harvested cases
  * (TS-only placement)", the cases this check decides whose Python file has no TS mirror:
@@ -235,6 +236,8 @@ test.each<[string, string, string]>([
   ],
   // TS-only: a float spelling past the double range fits no float however it's written.
   ["float", '"1e400"', "child expects 'float', but the value \"1e400\" does not fit"],
+  // TS-only: "inf" reads as infinity, but YAML reads an unquoted inf as text, so writing it doesn't help.
+  ["float", '"inf"', "child expects 'float', but the value \"inf\" does not fit"],
 ])("no rewrite hint when rewriting cannot help: %s from %s", (type, binding, message) => {
   const error = loadError(() => load(flow(type, binding), child(type)));
 

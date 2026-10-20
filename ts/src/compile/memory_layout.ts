@@ -29,7 +29,7 @@ import {
 import { compatibility } from "../nodes/agent/memory.ts";
 import { AgentNode } from "../nodes/agent/node.ts";
 import { Node } from "../nodes/base.ts";
-import { isExactly, sameItems } from "../nodes/contracts.ts";
+import { isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
 import { EndNode } from "../nodes/end/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import { logJson } from "../typesys/json.ts";
@@ -63,7 +63,7 @@ function siteKey(site: DeclSite): string {
  * Log JSON marks a float with `.0` and writes any float, where the JCS writer spells `1n` and `1`
  * alike and refuses a fraction.
  */
-function canonicalConfig(value: JsonObject): string {
+function exactJson(value: JsonObject): string {
   return logJson(value);
 }
 
@@ -294,7 +294,7 @@ function sameLayout(a: ResolvedMemoryLayout, b: ResolvedMemoryLayout): boolean {
       b.targets,
       (x, y) =>
         sameItems(x.locator, y.locator) &&
-        (x.scope === null || y.scope === null ? x.scope === y.scope : sameMemoryScope(x.scope, y.scope)),
+        sameOptional(x.scope, y.scope, sameMemoryScope),
     ) &&
     sameItems(
       a.memories,
@@ -350,13 +350,8 @@ function validateMemoryFlowBoundaries(flow: Flow, decl: MemoryDecl): void {
   if (flow.endId !== END_ID) {
     throw setupError(`a memory-owning flow end_id must be canonical ${reprText(END_ID)}`, { origin });
   }
-  const missing = (
-    [
-      ["START", flow.startId],
-      ["END", flow.endId],
-    ] as const
-  )
-    .filter(([, nodeId]) => !flow.nodes.has(nodeId))
+  const missing = [["START", flow.startId], ["END", flow.endId]]
+    .filter(([, nodeId]) => !flow.nodes.has(nodeId!))
     .map(([label]) => label);
   if (missing.length > 0) {
     throw setupError(`a memory-owning flow is missing direct ${missing.join(" and ")} boundary node(s)`, { origin });
@@ -544,16 +539,16 @@ export function memoryTable(declared: readonly Declared[]): readonly ResolvedMem
     // Stable sort: declarations at one site keep walk order.
     const declarations = entries.map(([decl]) => decl).sort((a, b) => DeclSite.compare(a.site, b.site));
     const first = declarations[0]!;
-    const firstConfig = canonicalConfig(first.config);
+    const firstConfig = exactJson(first.config);
     const conflicts = declarations
       .slice(1)
-      .filter((decl) => decl.type !== first.type || canonicalConfig(decl.config) !== firstConfig);
+      .filter((decl) => decl.type !== first.type || exactJson(decl.config) !== firstConfig);
     if (conflicts.length > 0) {
       // A def called from several nodes repeats its declaration, as one object or as per-call
       // copies; list each other declaration once, compared by site and value, not identity.
       const distinct = new Map<string, MemoryDecl>();
       for (const decl of declarations) {
-        const identity = JSON.stringify([siteKey(decl.site), decl.type, canonicalConfig(decl.config)]);
+        const identity = JSON.stringify([siteKey(decl.site), decl.type, exactJson(decl.config)]);
         if (!distinct.has(identity)) distinct.set(identity, decl);
       }
       const others = [...distinct.values()].slice(1);
@@ -623,7 +618,7 @@ export function memoryTable(declared: readonly Declared[]): readonly ResolvedMem
     if (sessions.length > 1) {
       throw setupError(
         `${siteLabel(site)} declares more than one session memory: ` +
-          sessions.map((memory) => reprText(memory.key)).join(", "),
+          sessions.map((memory) => JSON.stringify(memory.key)).join(", "),
         {
           origin: sessions[0]!.origin,
           related: sessions.slice(1).map((memory) => memory.origin),
@@ -669,7 +664,7 @@ function checkKeyCase(memories: readonly ResolvedMemory[]): void {
     throw setupError(
       `memory keys ${reprText(earlier.key)} and ${reprText(memory.key)} differ only by ` +
         "case; storage paths would collide on case-insensitive filesystems",
-      { origin: earlier.origins[0]!, related: memory.origins },
+      { origin: earlier.origin, related: memory.origins },
     );
   }
 }
@@ -703,29 +698,29 @@ export function memoryStacks(layout: ResolvedMemoryLayout): readonly MemoryStack
  */
 export function checkSessionCompatibility(
   layout: ResolvedMemoryLayout,
-  effectiveLlm: Readonly<Record<string, unknown>>,
+  effectiveLlm: Readonly<Record<string, Readonly<Record<string, unknown>> | null>>,
   options: { callTimeKnown?: Readonly<Record<string, string | null>> | null } = {},
 ): void {
   revalidateResolvedLayout(layout);
   const known = options.callTimeKnown ?? {};
   for (const memory of layout.memories) {
     if (memory.type !== "session" || memory.placements.length < 2) continue;
-    const configs: [string, unknown][] = [];
+    const configs: [string, Readonly<Record<string, unknown>> | null][] = [];
     for (const placement of memory.placements) {
       const path = placement.join("/");
       if (!Object.hasOwn(known, path)) {
         if (!Object.hasOwn(effectiveLlm, path)) throw new RangeError(`no effective LLM config for ${reprText(path)}`);
-        configs.push([path, effectiveLlm[path]]);
+        configs.push([path, effectiveLlm[path]!]);
       } else if (known[path] !== null) {
         configs.push([path, { provider: known[path] }]);
       }
     }
     if (configs.length < 2) continue;
-    const [[firstPath, firstConfig], ...others] = configs as [[string, unknown], ...[string, unknown][]];
-    const first = compatibility(firstConfig as Parameters<typeof compatibility>[0]);
-    for (const [path, config] of others) {
-      const other = compatibility(config as Parameters<typeof compatibility>[0]);
-      if (logJson(other) !== logJson(first)) {
+    const [firstPath, firstConfig] = configs[0]!;
+    const first = compatibility(firstConfig);
+    for (const [path, config] of configs.slice(1)) {
+      const other = compatibility(config);
+      if (exactJson(other) !== exactJson(first)) {
         throw setupError(
           `session memory ${reprText(memory.key)} resolves provider ` +
             `${reprText(first["provider"] as string)} at ${reprText(firstPath)} but ` +

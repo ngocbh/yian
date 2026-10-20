@@ -22,6 +22,8 @@
  *   boundary ids are reassigned with `Object.assign` (they're `readonly` in TS's types only).
  * - `caught.value.__notes__` (Python's `add_note`) is `error.notes`.
  * - Python's `copy.deepcopy` of a declaration is a declaration rebuilt from equal parts.
+ * - The "declares more than one session memory" message lists the keys as JSON strings
+ *   (`"chat", "session"`), not Python's repr.
  *
  * Later (T3-22): `test_flow_start_and_end_scopes_carry_the_enclosing_keys`,
  * `test_composite_drivers_see_only_enclosing_keys`,
@@ -157,17 +159,14 @@ test("recursive static child cycle is rejected", () => {
   expect(cycle.memoryScope).toBeNull();
 });
 
-test.each(
-  [false, true].flatMap((sameSite) =>
-    (
-      [
-        ["true", { limit: true }],
-        ["1.0", { limit: 1 }],
-        ["2", { limit: 2n }],
-      ] as const
-    ).map(([label, other]) => [label, sameSite, other] as const),
-  ),
-)("memory table compares configs as canonical JSON (other limit: %s, same site: %p)", (_label, sameSite, other) => {
+test.each([
+  ["true", false, { limit: true }],
+  ["1.0", false, { limit: 1 }],
+  ["2", false, { limit: 2n }],
+  ["true", true, { limit: true }],
+  ["1.0", true, { limit: 1 }],
+  ["2", true, { limit: 2n }],
+] as const)("memory table compares configs as canonical JSON (other limit: %s, same site: %p)", (_label, sameSite, other) => {
   const root = new DeclSite([], ["root"], null);
   const first = new MemoryDecl("notes", "notes", { limit: 1n }, root);
   const clash = new MemoryDecl("notes", "notes", other, sameSite ? root : new DeclSite([], ["def", "x"], null));
@@ -308,6 +307,6 @@ test("agent with two session memories is a setup error", () => {
 
   setupError(
     () => resolveMemoryLayout(flow),
-    /AGENT 'agent' declares more than one session memory: 'chat', 'session'/,
+    /AGENT 'agent' declares more than one session memory: "chat", "session"/,
   );
 });

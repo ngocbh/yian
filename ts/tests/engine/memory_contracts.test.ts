@@ -1679,7 +1679,7 @@ test("a setup error keeps its notes as a frozen copy", () => {
   expect(error.notes).not.toBe(notes);
   expect(Object.isFrozen(error.notes)).toBe(true);
   expectError(() => new MemorySetupError("m", { notes: "note" as never }), TypeError, "notes must be an array of strings");
-  expectError(() => new MemorySetupError("m", { notes: [1] as never }), TypeError, "notes items must be a string");
+  expectError(() => new MemorySetupError("m", { notes: [1] as never }), TypeError, "note must be a string");
 });
 
 test("a setup error keeps an explicit cause and its origin", () => {

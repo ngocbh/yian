@@ -42,7 +42,9 @@ export class FakeSession implements MemorySession {
     this.memory.learnContexts.push(context);
     const outcome = this.memory.learnOutcomes.length > 0 ? this.memory.learnOutcomes.shift() : [];
     if (outcome instanceof Error) throw outcome;
-    if (typeof outcome === "function") return outcome(context);
+    if (typeof outcome === "function") {
+      return (outcome as (context: LearnContext) => readonly MemoryMutation[])(context);
+    }
     // A test may queue a malformed result on purpose.
     return outcome as readonly MemoryMutation[];
   }

@@ -1395,12 +1395,12 @@ test("an invalid learn result is a memory.invalid_result proposal failure", asyn
     "memory learn returned an invalid result",
     false,
   );
-  const results: unknown[] = [
-    {},
-    [new MemoryMutation("same", 1n), new MemoryMutation("same", 2n)],
-    [new MemoryMutation("m1", 1n), { mutationId: "m2", payload: 2n }],
+  const rows: [unknown, new (...args: never[]) => Error][] = [
+    [{}, TypeError],
+    [[new MemoryMutation("same", 1n), new MemoryMutation("same", 2n)], RangeError],
+    [[new MemoryMutation("m1", 1n), { mutationId: "m2", payload: 2n }], TypeError],
   ];
-  for (const result of results) {
+  for (const [result, cause] of rows) {
     const alpha = new FakeMemory("alpha", [], { learnValue: result as never });
     const runtime = await open(new Map([["alpha", alpha], ["beta", new FakeMemory("beta", [])]]));
     try {
@@ -1411,6 +1411,7 @@ test("an invalid learn result is a memory.invalid_result proposal failure", asyn
       )) as LearningProposalError;
       expect(error.memory).toBe("alpha");
       expect(error.failure).toEqual(invalid);
+      expect(error.cause).toBeInstanceOf(cause);
     } finally {
       await runtime.close();
     }

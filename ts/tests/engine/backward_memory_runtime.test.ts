@@ -24,7 +24,9 @@
  * `test_manual_precommit_retry_reopens_snapshots_and_recomputes_every_memory`,
  * `test_known_precommit_failure_allows_fresh_complete_pass_without_prior_proposals`,
  * `test_failed_resource_setup_does_not_close_an_interrupted_attempt`, the `RuntimeError` and
- * `RecursionError` cells of `test_backend_host_or_unexpected_error_escapes_with_exact_prefix`,
+ * `RecursionError` cells (a plain `Error` and a `RangeError`) of
+ * `test_backend_host_or_unexpected_error_escapes_with_exact_prefix`, the two `with_primary` cells
+ * of `test_cleanup_unwraps_host_failure_after_closing_all_sessions` (plain errors),
  * `test_host_capability_identity_and_cleanup_error_preserve_primary_exception`,
  * `test_later_attempt_follows_or_closes_any_prior_attempt_and_recomputes_everything`,
  * `test_repeated_driven_attempts_request_distinct_commit_ids_for_identical_batches`,
@@ -46,8 +48,8 @@
  * `test_capability_originals_are_checked_for_wrapped_host_controls` and
  * `test_cyclic_capability_fault_is_a_host_error_without_exposing_private_carriers`; the
  * `BaseException`-type cells (`MemoryError`, both `CancelledError`s, `KeyboardInterrupt`,
- * `SystemExit`) of `test_backend_host_or_unexpected_error_escapes_with_exact_prefix` and of
- * `test_cleanup_unwraps_host_failure_after_closing_all_sessions` (all of its cells); and
+ * `SystemExit`) of `test_backend_host_or_unexpected_error_escapes_with_exact_prefix` and the
+ * `error_type` dimension of `test_cleanup_unwraps_host_failure_after_closing_all_sessions`; and
  * `test_each_attempt_checks_only_its_own_records_not_earlier_attempts`, which counts the calls of a
  * module-private function.
  */

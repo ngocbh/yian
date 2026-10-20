@@ -251,9 +251,9 @@ run has a terminal result.
 
 Changed (TS yian): the reducer counts, per node, the attempts a resume retried that no stop
 covered; a stop covers every attempt started before it. The counts are history: they stay after
-the node's outcome and after a prune. A resume reports them as one `NodeAttemptResumed` event per
-retried node (built by `resumedAttemptEvents` in `ts/src/runtime/engine.ts`); `inspectRun` will
-report them once it is ported.
+the node's outcome and after a prune. `resumedAttemptEvents` in `ts/src/runtime/engine.ts` builds
+the `NodeAttemptResumed` event per retried node that a resume will publish, and `inspectRun` will
+report the counts, once `resumeFlow` and `inspectRun` are ported.
 
 Node outcome records require forward capture when the recorded run
 has `learnable=True` and omit it when `learnable=False`. Optional model/tool evaluation
@@ -393,10 +393,11 @@ listing the nodes in flight, before anything winds down; other host faults appen
 attempts count as interrupted on resume, and nothing is appended after a terminal result or a
 second time in one segment. Inside an AGENT turn a tool call that had already settled when the
 stop arrived still records its step (`record(step, { settled: true })`) and publishes its
-`ToolCallFinished`; other events after a stop are dropped. Each node's evaluation runs in a fresh
+`ToolCallFinished`, as long as the run has no terminal result; other events after a stop are
+dropped. Each node's evaluation runs in a fresh
 `AsyncResource` created by the dispatcher, so it starts in the `AsyncLocalStorage` context of the
 `run()` call and a store a node sets stays in that node's async chain; callbacks the dispatcher
-calls (`onEvent` for durable observers) run in its context. A nested run started from a node with
+calls (`onEvent` for durable observers) run in the dispatcher's context. A nested run started from a node with
 `signal: caps.signal` stops when its parent stops, and a child's failure doesn't stop the parent.
 A `RunLog`'s `append` must not call back into the run.
 

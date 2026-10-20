@@ -23,8 +23,9 @@
  * before the first start with the log unchanged; nothing is recorded after a terminal result, after
  * an earlier stop in the segment (also one a previous engine recorded over the same state), for a
  * host fault (an invalid step, a malformed contract, an opener fault), or for a late rejection after
- * `run()` settled; an opener's `MemoryRecallError` is the node's failure, a `RunFailed`. A refused step or an opener fault the node catches ends the run at once, so a
- * host abort after it records nothing and `run()` rejects with the fault. Pooled
+ * `run()` settled; an opener's `MemoryRecallError` is the node's failure, a `RunFailed`. A refused
+ * step or an opener fault the node catches ends the run at once, so a host abort after it records
+ * nothing and `run()` rejects with the fault. Pooled
  * only: a host abort or a late `onEvent` rejection during a host fault's drain changes nothing; a
  * host abort during a `RunFailed`'s drain is ignored and `run()` returns normally; an outcome
  * settling after a callback stop is discarded; a callback throw during a node's synchronous start

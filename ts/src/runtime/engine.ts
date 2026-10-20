@@ -505,8 +505,8 @@ export class FlowEngine {
         steering: this.#steering,
         steps: this.#nodeSteps(nodeId, nodeController.signal),
         // A capability fault ends the run now, not when the node settles, so a node that catches
-        // it can't let a later stop replace it. A failing host callback has stopped the run
-        // already, so this is a no-op for it.
+        // it can't let a later stop replace it. For a failing host callback this is a no-op: the
+        // engine's callback wrapper records the `callback` stop before the fault reaches here.
         onFault: (original) => void this.#fail(original),
       });
     } finally {

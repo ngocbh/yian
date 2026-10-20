@@ -23,7 +23,7 @@
  * a store `onEvent` sets for a durable observer reaches later nodes (serial and pooled); a run of
  * 10,000 ready leaves succeeds and runs every node once, serial (in ready order) and with 8
  * workers.
- * */
+ */
 
 import { expect, test } from "bun:test";
 import { AsyncLocalStorage } from "node:async_hooks";

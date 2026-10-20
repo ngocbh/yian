@@ -42,7 +42,8 @@
  * TS-only: the `EvaluatedOutcome` constructor checks, `requireSteering`, the steering
  * capability's checks on what the host inbox returns, a steering fault the node catches (thrown or
  * rejected) or a `drain` promise it drops still rejecting `evalNode`, the first of two faults
- * the node catches winning (and the only one `onFault` sees, when it is raised), a render capture fault the node catches still rejecting `evalNode`,
+ * the node catches winning (and the only one `onFault` sees, when it is raised), a render capture
+ * fault the node catches still rejecting `evalNode`,
  * and a render write by the node's dropped code, landing while the evaluator waits on a steering
  * `drain`, rejecting it.
  *

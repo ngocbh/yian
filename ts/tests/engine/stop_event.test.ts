@@ -17,11 +17,14 @@
  *
  * TS-only, the engine's stop (serial and pooled): a host abort records one `RunStopped` (`signal`)
  * listing the in-flight nodes in dispatch order before the drain; a synchronous `onEvent` throw, a
- * rejected `onEvent` promise, a throwing `onStream` the node catches and a throwing steering method
- * record a `callback` stop; the message is an `Error`'s message or a non-`Error` reason's text; an
- * already-aborted signal rejects before the first start with the log unchanged; nothing is recorded
- * after a terminal result, after an earlier stop in the segment, for a host fault (an invalid step,
- * a malformed contract, an opener fault), or for a late rejection after `run()` settled. Pooled
+ * rejected `onEvent` promise, a throwing `onStream` the node catches, a rejected `onStream` promise,
+ * a throwing steering method and a rejected steering `drain` promise record a `callback` stop; the
+ * message is an `Error`'s message or a non-`Error` reason's text; an already-aborted signal rejects
+ * before the first start with the log unchanged; nothing is recorded after a terminal result, after
+ * an earlier stop in the segment (also one a previous engine recorded over the same state), for a
+ * host fault (an invalid step, a malformed contract, an opener fault), or for a late rejection after
+ * `run()` settled. A refused step or an opener fault the node catches ends the run at once, so a
+ * host abort after it records nothing and `run()` rejects with the fault. Pooled
  * only: a host abort or a late `onEvent` rejection during a host fault's drain changes nothing; a
  * host abort during a `RunFailed`'s drain is ignored and `run()` returns normally; an outcome
  * settling after a callback stop is discarded; a callback throw during a node's synchronous start
@@ -36,16 +39,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
-import { NodeStarted, RunFailed, type RunEvent, RunSucceeded, StreamChunk } from "../../src/events.ts";
+import { NodeStarted, NodeSucceeded, RunFailed, type RunEvent, RunSucceeded, StreamChunk } from "../../src/events.ts";
 import { MemoryScope } from "../../src/memory/contracts.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import type { OutputContract } from "../../src/nodes/contracts.ts";
-import type { FlowEngine, FlowEngineOptions } from "../../src/runtime/engine.ts";
+import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { evalNode, type MemoryContextOpener } from "../../src/runtime/eval_node.ts";
 import { NodeStartedRecord, NodeSucceededRecord, RunStoppedRecord } from "../../src/runtime/log.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { aborted, engine, FailNode, FuncNode, graph, rejected } from "./run_state_fixtures.ts";
+import { aborted, engine, FailNode, FuncNode, graph, noGrowth, rejected } from "./run_state_fixtures.ts";
 
 /** Record the capabilities supplied to one direct evaluation. */
 class CapNode extends Node {
@@ -395,6 +398,64 @@ describe.each(MODES)("callback stops (%s)", (_, numWorkers) => {
     expect(stops(built)).toEqual([new RunStoppedRecord("callback", "inbox failed", ["work"])]);
   });
 
+  test("a rejected onStream promise records a callback stop", async () => {
+    const error = new Error("stream callback rejected");
+    const node = new ScriptNode("work", (caps) => {
+      caps.emitStream!(new StreamChunk({ nodeId: "work", key: "output", chunk: "a" }));
+      return "done";
+    });
+    const built = fanEngine([node], { numWorkers, onStream: () => Promise.reject(error) });
+
+    expect(await rejected(built.run())).toBe(error);
+    expect(stops(built)).toEqual([new RunStoppedRecord("callback", "stream callback rejected", ["work"])]);
+    expect(logged(built, NodeSucceededRecord, "work")).toBe(false);
+  });
+
+  test("a rejected steering drain promise the node leaves un-awaited records a callback stop", async () => {
+    const error = new Error("inbox rejected");
+    const node = new ScriptNode("work", (caps) => {
+      void caps.steering!.drain("work");
+      return "done";
+    });
+    const steering = {
+      interruptSignal: () => new AbortController().signal,
+      drain: (): Promise<string[]> => Promise.reject(error),
+    };
+    const built = fanEngine([node], { numWorkers, steering });
+
+    expect(await rejected(built.run())).toBe(error);
+    expect(stops(built)).toEqual([new RunStoppedRecord("callback", "inbox rejected", ["work"])]);
+  });
+
+  test("a segment that already has a RunStopped gets no second one", async () => {
+    const error = new Error("observer failed");
+    const first = new FuncNode("first", () => "done");
+    const { node: second, entered } = waiter("second");
+    const flow = graph([first, second], [
+      [START_ID, "first"],
+      ["first", "second"],
+      ["second", END_ID],
+    ]);
+    const onEvent = (event: RunEvent): void => {
+      if (event instanceof NodeSucceeded && event.nodeId === "first") throw error;
+    };
+    const stopped = engine(flow, { numWorkers, onEvent });
+    expect(await rejected(stopped.run())).toBe(error);
+    expect(stops(stopped)).toEqual([new RunStoppedRecord("callback", "observer failed", [])]);
+
+    // A second engine over the same state and log is still in the stopped segment.
+    const host = new AbortController();
+    const reason = new Error("stop now");
+    const again = new FlowEngine(stopped.state, stopped.log, { growBuilder: noGrowth, numWorkers, signal: host.signal });
+    const running = again.run();
+    await entered;
+    host.abort(reason);
+
+    expect(await rejected(running)).toBe(reason);
+    expect(stops(again)).toEqual(stops(stopped));
+    expect(logged(again, NodeStartedRecord, "second")).toBe(true);
+  });
+
   test("a host abort, then a callback failure, records one stop", async () => {
     const host = new AbortController();
     const reason = new Error("stop now");
@@ -436,6 +497,26 @@ describe.each(MODES)("host faults record no stop (%s)", (_, numWorkers) => {
     expect(stops(built)).toEqual([]);
   });
 
+  test("a refused step the node catches ends the run at once: a later host abort records nothing", async () => {
+    const host = new AbortController();
+    let refusal: unknown;
+    const node = new ScriptNode("work", (caps) => {
+      try {
+        caps.steps!.record({ when: new Date() } as never);
+      } catch (error) {
+        refusal = (error as { original?: unknown }).original;
+      }
+      host.abort(new Error("stop now"));
+      return "done";
+    });
+    const built = fanEngine([node], { numWorkers, signal: host.signal });
+
+    expect(await rejected(built.run())).toBe(refusal);
+    expect(refusal).toBeInstanceOf(Error);
+    expect(stops(built)).toEqual([]);
+    expect(built.signal.reason).toBe(refusal);
+  });
+
   test("a malformed contract", async () => {
     const built = fanEngine([new FuncNode("work", () => "done")], { numWorkers });
     built.state.flow.nodes.get("work")!.outputContract = Type.scalar(ValueKind.STRING) as unknown as OutputContract;
@@ -458,6 +539,25 @@ describe.each(MODES)("host faults record no stop (%s)", (_, numWorkers) => {
 
     expect(await rejected(built.run())).toBe(error);
     expect(stops(built)).toEqual([]);
+  });
+
+  test("an opener fault the node catches ends the run at once: a later host abort records nothing", async () => {
+    const host = new AbortController();
+    const error = new Error("opening failed");
+    const node = new MemoryScriptNode("work", async (caps) => {
+      await caps.openMemoryContext!("system", "prompt", {}).catch(() => {});
+      host.abort(new Error("stop now"));
+      return "done";
+    });
+    node.memoryScope = new MemoryScope(["work"], { memories: ["session"] });
+    const opener: MemoryContextOpener = async () => {
+      throw error;
+    };
+    const built = fanEngine([node], { numWorkers, memoryContextOpener: opener, signal: host.signal });
+
+    expect(await rejected(built.run())).toBe(error);
+    expect(stops(built)).toEqual([]);
+    expect(built.signal.reason).toBe(error);
   });
 });
 

@@ -16,7 +16,7 @@
 import { GrowthRejected } from "../compile/model.ts";
 import { type Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
 import { type RunEvent, RunFailed, type StreamChunk } from "../events.ts";
-import { ConversationInvocation } from "../memory/contracts.ts";
+import { ConversationInvocation, MemoryRecallError } from "../memory/contracts.ts";
 import { CapabilityFault, Grow, markerMessage, Output, Route, type Steering } from "../nodes/base.ts";
 import { isExactly, NodeSteps } from "../nodes/contracts.ts";
 import type { Skill } from "../skills/catalog.ts";
@@ -57,7 +57,8 @@ export interface FlowEngineOptions {
   /**
    * Sees each durable observer before `run()` returns it, and each in-loop model and tool event.
    * Called synchronously and never awaited; a throw, or a promise it returns that rejects, stops
-   * the run with that error.
+   * the run with that error; after the terminal result a throw only rejects `run()` and a rejection
+   * is ignored.
    */
   onEvent?: ((event: RunEvent) => unknown) | null;
   /** Sees each transient stream chunk; called as `onEvent` is. */
@@ -151,7 +152,8 @@ function isRunLog(log: unknown): log is RunLog {
  * the run signal's reason and unlinked from it when the node settles. A host stop (the `signal`
  * option aborting) or a failing host callback is recorded as one `RunStopped` naming the
  * in-flight nodes, appended when the stop is requested and before the drain; any other host
- * fault, and a `RunFailed`, ends the run with no such record.
+ * fault, and a `RunFailed`, ends the run with no such record. A refused step and an opener fault
+ * end it at once, even when the node catches them.
  *
  * A `RunLog`'s `append` must not call back into the run: the engine appends synchronously, so a
  * callback from inside an append would interleave records.
@@ -176,6 +178,8 @@ export class FlowEngine {
   readonly #hostSignal: AbortSignal | null;
   /** The steering nodes receive: the host inbox, whose failures stop the run. */
   readonly #steering: Steering | null;
+  /** The opener nodes receive: the host's, whose faults end the run when they happen. */
+  readonly #memoryContextOpener: MemoryContextOpener | null;
   /** The error that ended the run, once one did; the first wins. */
   #failure: { readonly error: unknown } | null = null;
   #ran = false;
@@ -226,6 +230,19 @@ export class FlowEngine {
             interruptSignal: (nodeId) => this.#callHost((id: string) => inbox.interruptSignal(id), nodeId),
             drain: (nodeId) => this.#callHost((id: string) => inbox.drain(id), nodeId),
           };
+    this.#memoryContextOpener =
+      memoryContextOpener === null
+        ? null
+        : async (scope, request, openOptions) => {
+            try {
+              return await memoryContextOpener(scope, request, openOptions);
+            } catch (error) {
+              // A recall error fails the node; any other rejection is a host fault, which ends
+              // the run now, as a refused step does.
+              if (!(error instanceof MemoryRecallError)) this.#fail(error instanceof CapabilityFault ? error.original : error);
+              throw error;
+            }
+          };
   }
 
   /** @internal The run signal: aborted when the run fails, stops, or a host fault ends it. */
@@ -245,7 +262,7 @@ export class FlowEngine {
    *   flight before a terminal result.
    * @throws RangeError when the state is uninitialized, its run id, sequence or worker count
    *   differs from the log's or the engine's, or it has unfinished starts.
-   * @throws The host signal's reason, before any start when it is already aborted.
+   * @throws The host signal's reason when it aborts (before any start when it is already aborted).
    * @throws The error of a failing host callback (`onEvent`, `onStream` or a steering method
    *   throwing, or a promise one returned rejecting), or of a host fault: a log or reducer refusal,
    *   or a fault `evalNode` rejects with.
@@ -370,7 +387,10 @@ export class FlowEngine {
       try {
         commitPrepared(log, state, prepareNodeStep(state, nodeId, step));
       } catch (error) {
-        // A refused or unrecorded step is a host fault, never the node's failure.
+        // A refused or unrecorded step is a host fault, never the node's failure. It ends the run
+        // now, not when the node settles, so a node that catches it can't let a later stop
+        // replace it.
+        this.#fail(error);
         throw new CapabilityFault(error);
       }
     });
@@ -455,21 +475,21 @@ export class FlowEngine {
     // A per-node controller, linked while the node runs, so the listeners node code leaves on its
     // signal die with the node instead of piling up on the long-lived run signal.
     const runSignal = this.#controller.signal;
-    const node = new AbortController();
-    const relay = (): void => node.abort(runSignal.reason);
-    if (runSignal.aborted) relay();
-    else runSignal.addEventListener("abort", relay, { once: true });
+    const nodeController = new AbortController();
+    // Both callers check the run signal right before, so it is not aborted yet.
+    const relay = (): void => nodeController.abort(runSignal.reason);
+    runSignal.addEventListener("abort", relay, { once: true });
     try {
       return await evalNode(state.flow.nodes.get(nodeId)!, state.flow, state.pool, {
         wiringOverride: state.wiringOverrides.get(nodeId) ?? null,
-        signal: node.signal,
+        signal: nodeController.signal,
         emitStream: onStream === null ? null : (chunk) => this.#emit(onStream, chunk),
         emitEvent: onEvent === null ? null : (event) => this.#emit(onEvent, event),
         captureEvidence: state.learnable,
         captureBindings: state.learnable,
         effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
         sourceResolver: trace === null ? null : (path) => trace.resolve(path),
-        memoryContextOpener: this.memoryContextOpener,
+        memoryContextOpener: this.#memoryContextOpener,
         memoryInvocation: invocation,
         tools: this.tools,
         skills: this.skills,
@@ -520,7 +540,7 @@ export class FlowEngine {
   #stop(reason: RunStopReason, error: unknown): void {
     const { state } = this;
     if (this.#failure !== null || this.#controller.signal.aborted || state.result !== null) return;
-    // Kept before anything runs, so a stop re-entering from the abort's listeners is a no-op.
+    // Kept before the append, so the error is first-wins and a call re-entering during it is a no-op.
     this.#failure = { error };
     if (state.lastStopSequence === null) {
       try {

@@ -15,7 +15,8 @@
  * rows are `RangeError`, `RangeError` and `TypeError`), each serial and with two workers.
  * `test_resume_hands_detached_prior_steps` and `test_resume_sees_the_second_start_and_the_prior_steps`
  * (serial and with two workers, each resumed on the live state and on a state replayed with
- * `replayRecords`): the crash is a throwing `onStream`, a host fault that escapes the first run.
+ * `replayRecords`): the crash is a throwing `onStream`, a recorded callback stop that rejects the
+ * first run.
  * `test_serial_skips_a_step_once_stop_is_set`: the stop is an `onEvent` promise for the node's
  * start that rejects, and `record` throws the run signal's reason, the stop's error.
  *
@@ -268,7 +269,7 @@ function crashingNode(later: (steps: NodeSteps) => NodeResult): StepNode {
   });
 }
 
-/** The host fault that crashes the first start. */
+/** The callback error that stops the first start. */
 const CRASH = new Error("crash");
 
 /** Return an engine for `START -> node -> END` whose `onStream` throws `CRASH`. */

@@ -1,0 +1,38 @@
+# The AGENT's model call fails with a 400 reply naming context_length_exceeded.
+# No retry (YIAN_MODEL_RETRIES=0); TS fails provider.context_length and Python node.execute.
+kind: run
+rules: [failure-codes]
+flow: |
+  id: agent-failure-context-length
+  name: agent_failure_context_length
+  nodes:
+    write:
+      kind: agent
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Write a line."
+  output: ${write.output}
+env: {OPENAI_API_KEY: "<key:1>", YIAN_MODEL_RETRIES: '0'}
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    write:
+      agent:
+        - chunks: []
+          raise: {class: BadRequestError, status: 400, message: "This model's maximum context length is 128000 tokens (context_length_exceeded)"}
+expect:
+  output:
+    status: failed
+    failure:
+      code: provider.context_length
+      message: "This model's maximum context length is 128000 tokens (context_length_exceeded)"
+      node: write
+      frames: [{label: flow.yaml, range: [4, 3, 4, 8]}]
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: "This model's maximum context length is 128000 tokens (context_length_exceeded)"
+      node: write
+      frames: [{label: flow.yaml, range: [4, 3, 4, 8]}]

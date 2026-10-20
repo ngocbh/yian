@@ -1,0 +1,38 @@
+# The AGENT's model call fails with a 429 reply naming insufficient_quota.
+# No retry (YIAN_MODEL_RETRIES=0); TS fails provider.quota and Python node.execute.
+kind: run
+rules: [failure-codes]
+flow: |
+  id: agent-failure-quota
+  name: agent_failure_quota
+  nodes:
+    write:
+      kind: agent
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Write a line."
+  output: ${write.output}
+env: {OPENAI_API_KEY: "<key:1>", YIAN_MODEL_RETRIES: '0'}
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    write:
+      agent:
+        - chunks: []
+          raise: {class: RateLimitError, status: 429, message: You exceeded your current quota (insufficient_quota)}
+expect:
+  output:
+    status: failed
+    failure:
+      code: provider.quota
+      message: You exceeded your current quota (insufficient_quota)
+      node: write
+      frames: [{label: flow.yaml, range: [4, 3, 4, 8]}]
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: You exceeded your current quota (insufficient_quota)
+      node: write
+      frames: [{label: flow.yaml, range: [4, 3, 4, 8]}]

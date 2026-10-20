@@ -8,38 +8,49 @@
  * host interruption unwinds the node; no conversation or continuation state is stored in the
  * graph or variable pool.
  *
- * Here: the node's construction and its checks, its load-time hooks (reserved `__llm_config`
- * wiring, prompt and setup checks, origins), the granted tools and skills, the tool-loop bound and
- * the local variable declarations. Not ported yet: `forward`, which brings `exceptionOrigin`
- * and `exceptionCode`, and `backward`.
+ * Here: everything but `backward`, which is not ported yet.
  *
- * Knows about:   nodes/base, nodes/binding, nodes/contracts, nodes/agent/llm_values, memory contracts,
- *                llm_clients config, skills, defaults, diagnostics and typesys.
+ * Knows about:   nodes/base, nodes/binding, nodes/contracts, peer AGENT modules, memory contracts,
+ *                llm_clients (config, connection, factory), expr templates, skills, defaults,
+ *                diagnostics and typesys.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
 import { current } from "../../defaults.ts";
-import { compareCodeUnits, type OriginRef, reprText } from "../../diagnostics.ts";
+import { compareCodeUnits, type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
+import { renderTemplateRecord } from "../../expr/template.ts";
 import type { HostConnection } from "../../llm_clients/config.ts";
-import { iterMemoryDeclOrigins, MemoryDecl, rewriteMemoryDeclOrigins } from "../../memory/contracts.ts";
+import { scrubCallCredentials } from "../../llm_clients/connection.ts";
+import { defaultModelAccess, type ModelAccess } from "../../llm_clients/factory.ts";
+import {
+  iterMemoryDeclOrigins,
+  MemoryContext,
+  MemoryDecl,
+  MemoryRecallError,
+  rewriteMemoryDeclOrigins,
+} from "../../memory/contracts.ts";
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
-import { LOAD_SKILL } from "../../skills/tool.ts";
+import { LOAD_SKILL, systemPromptWithSkills } from "../../skills/tool.ts";
+import { canonicalJson } from "../../typesys/json.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import {
   buildValueAs,
+  canonicalTypeLabel,
   isList,
   isRecord,
   type Type,
   ValueKind,
+  type ValueRecord,
   valueRepr,
   writeAsText,
 } from "../../typesys/values.ts";
-import { checkNamedPrompt, Node, NodeKind } from "../base.ts";
-import { copyValue, type ReservedBinder } from "../binding.ts";
+import { CapabilityFault, checkNamedPrompt, Node, type NodeCaps, NodeKind, type Output } from "../base.ts";
+import { applyDefaults, BindingError, copyValue, type ReservedBinder } from "../binding.ts";
 import {
   Binding,
   isExactly,
   iterOriginCarrier,
+  type NodeSteps,
   type OriginMapper,
   type OutputContract,
   Parameter,
@@ -48,7 +59,19 @@ import {
   type ValuePath,
   ValueTemplate,
 } from "../contracts.ts";
-import { type CallTimeLLM, callTimeConfig, LLM_CONFIG_KEY, type Nullable, typesNullable } from "./llm_values.ts";
+import { type AgentRunContext, checkStopped, DEFAULT_SYSTEM, ToolIterationLimitError } from "./context.ts";
+import { modelFailureCode } from "./live.ts";
+import {
+  type CallTimeLLM,
+  callTimeConfig,
+  invocationConfig,
+  LLM_CONFIG_KEY,
+  type Nullable,
+  typesNullable,
+} from "./llm_values.ts";
+import { runAgent } from "./loop.ts";
+import { compatibility } from "./memory.ts";
+import { OutputInvalidError } from "./structured.ts";
 
 /** The step key under which a call-time agent records the config it resolved. */
 const CONFIG_STEP = "effective_llm_config";
@@ -68,6 +91,15 @@ export function isMaxToolIterations(value: unknown): value is bigint {
   return typeof value === "bigint" && (value >= 1n || value === -1n);
 }
 
+/** Return `make()`; its error is a capability fault, since the render capture is the host's. */
+function captureValue<T>(make: () => T): T {
+  try {
+    return make();
+  } catch (error) {
+    throw error instanceof CapabilityFault ? error : new CapabilityFault(error);
+  }
+}
+
 /**
  * An LLM-backed leaf configured by a prompt and authored tools.
  *
@@ -84,6 +116,7 @@ export class AgentNode extends Node {
   override readonly needsTools: boolean = true;
   override readonly needsLiveEvents: boolean = true;
   override readonly needsSkills: boolean = true;
+  override readonly needsModels: boolean = true;
   /** Receive node steps only when this agent's config resolves when it runs; follows `callTime`. */
   override needsSteps: boolean = false;
   /** The prompt template. */
@@ -493,9 +526,216 @@ export class AgentNode extends Node {
     return Number(raw);
   }
 
-  /** The model call or tool loop; not ported yet. */
-  override forward(): never {
-    throw new Error(`node ${reprText(this.id)} (AgentNode) forward is not ported yet (T5-11a)`);
+  /**
+   * Build the complete process-local context for one invocation.
+   *
+   * @param prompt The rendered prompt.
+   * @param config The config this invocation's model call uses, host secrets included; it lives
+   *   only in the returned context.
+   * @throws RangeError when the authored `env.max_tool_iterations` is invalid.
+   */
+  private runContext(
+    prompt: string,
+    config: Readonly<Record<string, unknown>> | null,
+    caps: NodeCaps,
+    options: {
+      memoryContext: MemoryContext;
+      baseSystemPrompt: string;
+      skills: readonly Skill[];
+      models: ModelAccess;
+    },
+  ): AgentRunContext {
+    return {
+      nodeId: this.id,
+      prompt,
+      tools: [...this.tools],
+      llmConfig: config,
+      outputType: isExactly(this.outputContract, ValueContract) ? this.outputContract.type : null,
+      retries: this.retries,
+      maxToolIterations: this.maxToolIterations(),
+      signal: caps.signal,
+      evaluationTrace: caps.evaluationTrace,
+      memoryContext: options.memoryContext,
+      toolset: caps.tools ?? null,
+      emitStream: caps.emitStream,
+      emitEvent: caps.emitEvent,
+      baseSystemPrompt: options.baseSystemPrompt,
+      skills: options.skills,
+      steering: caps.steering,
+      models: options.models,
+      sent: () => [],
+    };
+  }
+
+  /**
+   * Select a generated structured-output contract origin when proven.
+   *
+   * A memory recall or variable-default binding failure keeps its own origin. A structured reply
+   * that failed the value check maps to its output contract's origin at the error's path (exact
+   * or nearest ancestor). Other failures, and contracts without authored provenance, keep the
+   * common node-origin fallback.
+   */
+  override exceptionOrigin(error: unknown): OriginRef | null {
+    if (error instanceof MemoryRecallError || error instanceof BindingError) {
+      return error.origin ?? super.exceptionOrigin(error);
+    }
+    const contract = this.outputContract;
+    if (error instanceof OutputInvalidError && error.path !== null && isExactly(contract, ValueContract)) {
+      return contract.origins.at(error.path) ?? super.exceptionOrigin(error);
+    }
+    return super.exceptionOrigin(error);
+  }
+
+  /**
+   * Classify the tool-iteration cap, an exhausted structured reply and the agent's own model
+   * failures; defer the rest.
+   *
+   * The cap is `agent.max_tool_iterations` and a structured reply still invalid once `retries:`
+   * are spent is `agent.output_invalid`. An error the agent's own model build or model call
+   * marked takes `modelFailureCode`'s code (`provider.auth` for refused credentials, a
+   * `provider.*` code by provider error kind, else `node.execute`).
+   */
+  override exceptionCode(error: unknown): FailureCode {
+    if (error instanceof ToolIterationLimitError) return "agent.max_tool_iterations";
+    if (error instanceof OutputInvalidError) return "agent.output_invalid";
+    return modelFailureCode(error) ?? super.exceptionCode(error);
+  }
+
+  /**
+   * Render fresh locals once, publish the render capture, and run the loop.
+   *
+   * The authored `systemPrompt` renders against the same inputs and variables as `prompt`;
+   * without one the loop receives `DEFAULT_SYSTEM`. `caps.captureRender` receives the actual
+   * template, the resolved variable values and domains, and the rendered prompt once, with the
+   * parts established so far when preparation fails; unknown variables or an unfinished prompt
+   * stay `null`, and capture faults propagate. No invocation state is stored on the node.
+   *
+   * A call-time agent's model config is its bound `__llm_config` with the run's host key and
+   * header values joined when it is marked for the host key; any other agent uses its run's
+   * `llmConfig`. Before anything renders, a call-time agent checks the bound config against the
+   * one an earlier start recorded in its steps, then records it as a step,
+   * `{effective_llm_config: <config>}`, which holds no key or header value.
+   *
+   * The model is built through `caps.models`, else `defaultModelAccess()`. Every error from the
+   * loop has the credentials the call sent scrubbed before it leaves.
+   *
+   * @param inputs Delivered inputs, kept separate from local variables.
+   * @param caps The node's signal, checked before recall and the model call, and the capabilities
+   *   its traits ask for: evidence, memory context, render capture, tools, live sinks, skills,
+   *   steering, model access, and for a call-time agent its steps.
+   * @returns The model's answer.
+   * @throws RangeError when a variable collides with a declared or delivered input.
+   * @throws ExpressionError when the prompt or system prompt names a missing value or renders a
+   *   null.
+   * @throws SkillError when the node grants skills the host did not supply.
+   * @throws CapabilityFault when capture or conversation access fails, or the bound config
+   *   differs from the one an earlier start recorded; the evaluator rethrows its original host
+   *   error.
+   * @throws The signal's reason once the host stopped the node.
+   */
+  override async forward(inputs: Record<string, unknown>, caps: NodeCaps): Promise<Output> {
+    if (caps.steps !== undefined && this.callTime !== null) {
+      this.recordConfig(inputs[LLM_CONFIG_KEY] as Record<string, unknown>, caps.steps);
+    }
+    const captured: Record<string, unknown> | null =
+      caps.captureRender === undefined
+        ? null
+        : { prompt_template: this.prompt, variables: null, variable_domains: null, rendered_prompt: null };
+    let prompt: string;
+    let systemPrompt: string;
+    try {
+      const inputNames = new Set([...Object.keys(inputs), ...(this.params ?? []).map((parameter) => parameter.name)]);
+      for (const variable of this.variables) {
+        if (inputNames.has(variable.name)) {
+          throw new RangeError(`variable ${reprText(variable.name)} collides with an input name`);
+        }
+      }
+      if (captured !== null) {
+        captured["variable_domains"] = captureValue(() =>
+          Object.fromEntries(
+            this.variables.map((variable) => {
+              const contract = variable.contract as ValueContract;
+              return [variable.name, canonicalTypeLabel(contract.type)];
+            }),
+          ),
+        );
+      }
+      const variables = this.resolveVariables();
+      if (captured !== null) {
+        captured["variables"] = captureValue(() => copyValue(variables));
+      }
+      const record = { ...inputs, ...variables } as ValueRecord;
+      prompt = renderTemplateRecord(this.prompt, record);
+      if (captured !== null) captured["rendered_prompt"] = prompt;
+      systemPrompt = this.systemPrompt === null ? DEFAULT_SYSTEM : renderTemplateRecord(this.systemPrompt, record);
+    } finally {
+      if (captured !== null) caps.captureRender?.(captured);
+    }
+    checkStopped(caps);
+    const granted = this.grantedSkills(caps.skills ?? null);
+    const baseSystemPrompt = systemPromptWithSkills(systemPrompt, granted);
+    const config = this.callConfig(inputs);
+    const models = caps.models ?? defaultModelAccess();
+    const env = models.env;
+    // Recall sees the system prompt without the skill listing, so grants never change recall.
+    const memoryContext =
+      caps.openMemoryContext === undefined
+        ? new MemoryContext()
+        : await caps.openMemoryContext(systemPrompt, prompt, compatibility(config, { env }));
+    checkStopped(caps);
+    const ctx = this.runContext(prompt, config, caps, { memoryContext, baseSystemPrompt, skills: granted, models });
+    try {
+      return await runAgent(ctx);
+    } catch (error) {
+      let sent: readonly string[] = [];
+      try {
+        sent = ctx.sent();
+      } catch {
+        // A failing read must not replace the error being scrubbed.
+      }
+      // Providers may echo any credential the call sent; the failure record must not carry it.
+      throw scrubCallCredentials(error, config, { env, sent });
+    }
+  }
+
+  /**
+   * Check `config` against the config an earlier start recorded, then record it.
+   *
+   * @param config The bound config, with no secrets.
+   * @param steps This start's steps.
+   * @throws CapabilityFault carrying a RangeError when an earlier start recorded another config:
+   *   the code that resolves it has changed since then, which is the host's to fix, not a failure
+   *   of this node.
+   */
+  private recordConfig(config: Readonly<Record<string, unknown>>, steps: NodeSteps): void {
+    const recorded = this.recordedLlmConfig(steps.prior);
+    // By value: a recorded config comes back from the run log as a new record.
+    if (recorded !== null && canonicalJson(recorded) !== canonicalJson(config)) {
+      throw new CapabilityFault(
+        new RangeError(
+          `node ${reprText(this.callTime!.path)} llm_config: recorded config differs from the ` +
+            "recomputed one; resume the run with the flow and yian version that started it",
+        ),
+      );
+    }
+    steps.record({ [CONFIG_STEP]: copyValue(config as ValueRecord) });
+  }
+
+  /**
+   * Return the config this invocation's model call uses; never stored.
+   *
+   * @param inputs The delivered inputs; a call-time agent's hold its resolved `__llm_config`.
+   * @returns For a call-time agent, a new config with the host secrets joined when it is marked;
+   *   otherwise the run's `llmConfig`.
+   */
+  private callConfig(inputs: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> | null {
+    if (this.callTime === null) return this.llmConfig;
+    return invocationConfig(inputs[LLM_CONFIG_KEY] as Record<string, unknown>, this.hostCredentials);
+  }
+
+  /** Resolve the validated literal defaults into one detached invocation record. */
+  private resolveVariables(): ValueRecord {
+    return copyValue(applyDefaults(this.variables, {}) as ValueRecord) as ValueRecord;
   }
 
   /** The tool-free backward call; not ported yet. */

@@ -213,7 +213,7 @@ _USAGE_DETAILS = {
 _RESUME_HOST_KEYS = _HOST_KEYS | {"crash_after_record"}
 _RULES = {
     "numbers", "int-in-float", "arithmetic", "compare", "text-form", "canonical", "columns",
-    "messages", "text", "yaml", "dates", "infinity", "llm", "code",
+    "messages", "text", "yaml", "dates", "infinity", "llm", "code", "failure-codes",
 }
 _RESERVED = [("host", key) for key in _RESERVED_HOST_KEYS]
 # Keys holding text, or plain JSON (`http`), that is not a case value: no codec form, no number

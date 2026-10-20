@@ -149,7 +149,7 @@ const RESERVED: readonly (readonly [string, string])[] = [
 ];
 const RULES: ReadonlySet<string> = new Set([
   "numbers", "int-in-float", "arithmetic", "compare", "text-form", "canonical", "columns",
-  "messages", "text", "yaml", "dates", "infinity", "llm", "code",
+  "messages", "text", "yaml", "dates", "infinity", "llm", "code", "failure-codes",
 ]);
 // Keys holding text, or plain JSON (`http`), that is not a case value: no codec form, no number
 // checks.

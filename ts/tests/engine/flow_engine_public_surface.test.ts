@@ -23,8 +23,11 @@
  * one that rejects after it being ignored, with nothing rejecting unhandled.
  *
  * Later (T4-10, T4-5): `test_direct_engine_executes_real_dynamic_combinators` (CALL, MAP and LOOP
- * growth). Later (T5-11a): `test_direct_agent_uses_its_node_owned_model_factory`. Later (T4-8):
- * `test_flow_engine_is_not_exported_from_the_package_root`.
+ * growth). Later (T4-8): `test_flow_engine_is_not_exported_from_the_package_root`.
+ *
+ * Changed: `test_direct_agent_uses_its_node_owned_model_factory`: the model factory comes from
+ * `FlowEngineOptions.models` (ESM exports can't be patched), and the AGENT is built with the
+ * effective config Python's `resolve_llm_cascade` gives (run start bakes it, T4-8).
  *
  * Not ported: `test_constructor_is_exactly_the_recorded_state_log_surface` (`inspect` and type
  * hints; TS type-checks the options) and `test_checkpoint_era_engine_methods_are_absent` (TS never
@@ -42,6 +45,9 @@ import {
   RunSucceeded,
   StreamChunk,
 } from "../../src/events.ts";
+import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult } from "../../src/nodes/base.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
@@ -152,6 +158,9 @@ test("the constructor checks its arguments", () => {
   expect(build({ skills: {} })).toThrow(new TypeError("skills must be a map or null"));
   expect(build({ steering: {} })).toThrow(
     new TypeError("steering must provide interruptSignal(nodeId) and drain(nodeId), or be null"),
+  );
+  expect(build({ models: { env: () => undefined, createModel: 1 } })).toThrow(
+    new TypeError("models must provide env(name) and createModel(config, options), or be null"),
   );
 });
 
@@ -273,6 +282,30 @@ test("engine borrows and never closes the run log", async () => {
   expect(closes).toBe(0);
   built.log.close();
   expect(closes).toBe(1);
+});
+
+test("direct agent uses the run's model factory", async () => {
+  const configs: Record<string, unknown>[] = [];
+  const message = new Message({ role: "assistant", parts: [new TextPart("direct answer")] });
+  const reply = new Response({ message, finishReason: "stop" });
+  const model = new ScriptedModel([reply], { provider: "openai", model: "fake-direct" });
+  const agent = new AgentNode("agent", { prompt: "hi", llmConfig: { provider: "openai", model: "fake-direct" } });
+  const flow = graph([agent], [
+    [START_ID, "agent"],
+    ["agent", END_ID],
+  ], { outputs: [new FlowOutput("output", "${agent.output}")] });
+  const models = {
+    env: () => undefined,
+    createModel: (config: Readonly<Record<string, unknown>>) => {
+      configs.push({ ...config });
+      return model;
+    },
+  };
+  const events = await engine(flow, { models }).run();
+
+  expect(configs).toEqual([{ provider: "openai", model: "fake-direct" }]);
+  expect(model.requests[0]!.messages).toHaveLength(2);
+  expect(events.at(-1)).toEqual(new RunSucceeded({ output: "direct answer" }));
 });
 
 const unhandled: unknown[] = [];

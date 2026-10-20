@@ -1,5 +1,6 @@
 /**
- * Structured AGENT output: derive the JSON Schema of a declared `output:` Type.
+ * Structured AGENT output: derive the JSON Schema of a declared `output:` Type and generate a
+ * value that conforms to it.
  *
  * An AGENT declares `output:` as a typed `Type`. For a bare `str` the agent stays a text
  * producer: `typeToSchema` returns `null` and the AGENT loop takes the plain-text path. For any
@@ -28,24 +29,45 @@
  * (pydantic keeps the text after the last one), and a clashing key is `<key>__<n>` (pydantic
  * qualifies it with its module, `yian__nodes__agent__structured__a_b__1`).
  *
- * Only the schema is here. Generating a value and checking the reply are not ported yet.
+ * `generateStructured` sends the schema the way `planStructured` picks for the model, and checks
+ * the parsed reply with yian's value check (`checkReply`): the wrapper is stripped, and the value
+ * keeps the shape Python's pydantic model gives it (an open record drops unknown fields, an absent
+ * optional field reads `null`, records follow the declared field order). An invalid reply is
+ * corrected under `retries:`; once they are spent the node fails with `OutputInvalidError`, whose
+ * `path` locates the last error inside the output when it can.
  *
- * Knows about:   diagnostics and typesys.
+ * Knows about:   defaults, diagnostics, llm, memory contracts, nodes/contracts, typesys, peer
+ *                AGENT modules.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
+import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
+import type { ChatModel } from "../../llm/events.ts";
+import { Message, Request, TextPart } from "../../llm/messages.ts";
+import { planStructured, StructuredOutputError, structuredTarget } from "../../llm/structured.ts";
+import type { EvaluationTrace } from "../../memory/contracts.ts";
 import { type JsonObject, type JsonValue, logJson } from "../../typesys/json.ts";
 import {
   type Bounds,
+  buildValueAs,
   IDENTIFIER_PATTERN,
   isListKind,
+  isRecord as isValueRecord,
   listElementKind,
+  rejectDeepNesting,
+  renderValuePath,
   setField,
   type Type,
+  TypeCheckError,
   unionTagFields,
+  type Value,
+  type ValueRecord,
   ValueKind,
 } from "../../typesys/values.ts";
+import type { ValuePath } from "../contracts.ts";
+import { callModel, type LiveSinks, newExchangeId } from "./live.ts";
+import { recordModelText, recordModelValue } from "./text.ts";
 
 // ValueKind -> JSON Schema type of a scalar slot. date and datetime persist as ISO strings.
 const SCALAR_TYPES: ReadonlyMap<ValueKind, string> = new Map([
@@ -322,7 +344,7 @@ export function typeToSchema(typ: Type): JsonObject | null {
   }
   const defs: Defs = [];
   let schema: JsonObject;
-  if (isRecord(typ) && !typ.nullable) {
+  if (isBareRecord(typ)) {
     schema = recordSchema(typ, defs, "");
   } else if (isListKind(typ.kind)) {
     schema = wrapper("ListWrapper", "items", typ, defs);
@@ -367,6 +389,226 @@ function sortValue(value: JsonValue): JsonValue {
   if (Array.isArray(value)) return value.map(sortValue);
   if (typeof value === "object" && value !== null) return sortKeys(value);
   return value;
+}
+
+// --------------------------------------------------------------------------------------- //
+// Generation: the structured call, its corrections and the reply check
+// --------------------------------------------------------------------------------------- //
+
+/**
+ * A structured reply was still invalid once the `retries:` corrections were spent. The message is
+ * the last error's, and that error is the `cause`.
+ */
+export class OutputInvalidError extends Error {
+  override name = "OutputInvalidError";
+  /**
+   * Where inside the output the last error is, relative to the output contract (`[]` is its root);
+   * `null` when the error isn't the value check's or has no place in the contract.
+   */
+  readonly path: ValuePath | null;
+
+  constructor(message: string, options: { cause: unknown; path: ValuePath | null }) {
+    super(message, { cause: options.cause });
+    this.path = options.path === null ? null : Object.freeze([...options.path]);
+  }
+}
+
+/**
+ * A reply's value failed the value check; its `path` is relative to the output type. Distinct from
+ * the nesting check's `TypeCheckError`, so `outputPath` locates only value-check errors.
+ */
+class ReplyCheckError extends TypeCheckError {}
+
+/** Return a user message holding `text`. */
+export function userMessage(text: string): Message {
+  return new Message({ role: "user", parts: [new TextPart(text)] });
+}
+
+/**
+ * Generate a value of `typ` with `model`, correcting an invalid reply up to `retries` times.
+ *
+ * The schema is sent the way `planStructured` picks for the model; the prompt strategy appends its
+ * instruction as a user message. Each call has a fresh exchange id and goes through `callModel`
+ * with purpose `structured_fallback` for the prompt strategy, else `structured_native`. A reply
+ * holding no valid answer (`StructuredOutputError`) or failing `checkReply` is not kept: the next
+ * call gets the earlier messages and a correction naming the error. The prompt strategy records
+ * every reply's text in `evaluationTrace`, the other strategies the returned value.
+ *
+ * @param messages The conversation so far; not changed.
+ * @param typ The declared output type; `typeToSchema` must give it a schema.
+ * @param options `retries` defaults to `YIAN_AGENT_RETRIES`; `live` gets the call events;
+ *   `signal` stops the run before each call and wins over the reply of a call it stopped during.
+ * @returns The checked value, unwrapped.
+ * @throws OutputInvalidError once `retries + 1` replies were invalid.
+ * @throws Whatever a model call throws (a provider error, a stop's reason), unchanged.
+ */
+export async function generateStructured(
+  model: ChatModel,
+  messages: readonly Message[],
+  typ: Type,
+  options: {
+    retries?: number;
+    live?: LiveSinks | null;
+    signal?: AbortSignal;
+    evaluationTrace?: EvaluationTrace | null;
+  } = {},
+): Promise<Value> {
+  const { live = null, signal, evaluationTrace } = options;
+  const retries = options.retries ?? current().agentRetries;
+  const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
+  const prompted = plan.strategy === "prompt";
+  const purpose = prompted ? "structured_fallback" : "structured_native";
+  let conversation = prompted ? [...messages, userMessage(plan.instruction())] : [...messages];
+  for (let call = 0; ; call++) {
+    signal?.throwIfAborted();
+    const request = plan.apply(new Request({ messages: conversation }));
+    const response = await callModel(live, model, request, { purpose, exchangeId: newExchangeId(), signal });
+    // A stop that lands during the call wins over its reply.
+    signal?.throwIfAborted();
+    if (prompted) recordModelText(evaluationTrace, response.message.text());
+    let value: Value;
+    try {
+      value = checkReply(plan.parse(response), typ);
+    } catch (error) {
+      if (!(error instanceof StructuredOutputError || error instanceof TypeCheckError)) throw error;
+      if (call >= retries) {
+        throw new OutputInvalidError(error.message, { cause: error, path: outputPath(error, typ) });
+      }
+      conversation = [...conversation, userMessage(plan.correction(error.message))];
+      continue;
+    }
+    if (!prompted) recordModelValue(evaluationTrace, value);
+    return value;
+  }
+}
+
+/** Whether `typ` is a non-nullable record, whose schema is not wrapped. */
+function isBareRecord(typ: Type): boolean {
+  return isRecord(typ) && !typ.nullable;
+}
+
+/**
+ * Return the value the parsed structured reply `data` carries for `typ`, checked and in the shape
+ * downstream nodes read.
+ *
+ * A bare record (`isBareRecord`) is `data` itself; any other type is `data`'s wrapper field
+ * (`items` for a list, else `value`). The value must not nest past `YIAN_MAX_VALUE_NESTING`; it is
+ * then normalized the way Python's pydantic model dumps it (`normalize`) and checked with
+ * `buildValueAs`.
+ *
+ * @throws TypeCheckError reading `structured output[ at <path>]: <reason>`, `path` inside the
+ *   value; a missing wrapper field is refused at the root.
+ */
+export function checkReply(data: JsonObject, typ: Type): Value {
+  let value: Value = data;
+  if (!isBareRecord(typ)) {
+    const field = isListKind(typ.kind) ? "items" : "value";
+    if (!Object.hasOwn(data, field)) {
+      throw new ReplyCheckError(`structured output: record missing required fields: ["${field}"]`);
+    }
+    value = data[field]!;
+  }
+  rejectDeepNesting(value, "structured output");
+  try {
+    return buildValueAs(typ, normalize(value, typ)).value;
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    const at = error.path.length > 0 ? ` at ${renderValuePath(error.path)}` : "";
+    throw new ReplyCheckError(`structured output${at}: ${error.message}`, { path: error.path });
+  }
+}
+
+/**
+ * Return `value` in the shape Python's pydantic model for `typ` dumps it, for `buildValueAs` to
+ * check.
+ *
+ * A record is rebuilt in its declared field order: an absent nullable field becomes `null`, and
+ * an unknown field is dropped from an open record but kept in a closed one, so the check refuses
+ * it. Union members and everything inside them are closed; a tagged union reads the member its tag
+ * names, an untagged one the first member whose normalized value passes the check. `Any`, a
+ * field-less `object`, a flat list and a value of the wrong shape are kept as given.
+ */
+function normalize(value: Value, typ: Type, closed = false): Value {
+  if (typ.variants !== undefined) return isValueRecord(value) ? normalizeUnion(value, typ) : value;
+  if (isRecord(typ)) {
+    if (!isValueRecord(value)) return value;
+    const fields = typ.fields!;
+    const record: ValueRecord = {};
+    for (const [name, field] of fields) {
+      if (Object.hasOwn(value, name)) {
+        setField(record, name, normalize(value[name]!, field, closed));
+      } else if (field.nullable) {
+        // A field that is only not required stays absent: `null` would break its type.
+        setField(record, name, null);
+      }
+    }
+    if (closed) {
+      for (const name of Object.keys(value)) if (!fields.has(name)) setField(record, name, value[name]!);
+    }
+    return record;
+  }
+  if (isListKind(typ.kind) && typ.element !== undefined && Array.isArray(value)) {
+    return value.map((item) => normalize(item, typ.element!, closed));
+  }
+  return value;
+}
+
+/** `normalize` for a record `value` of the union `typ`; `value` itself when no member fits. */
+function normalizeUnion(value: ValueRecord, typ: Type): Value {
+  const members = typ.variants!;
+  const [tagField] = unionTagFields(typ);
+  if (tagField !== undefined) {
+    const tag = value[tagField];
+    const member =
+      typeof tag === "string" ? members.find((each) => each.fields!.get(tagField)!.tags!.has(tag)) : undefined;
+    return member === undefined ? value : normalize(value, member, true);
+  }
+  for (const member of members) {
+    const normalized = normalize(value, member, true);
+    try {
+      buildValueAs(member, normalized);
+    } catch (error) {
+      if (error instanceof TypeCheckError) continue;
+      throw error;
+    }
+    return normalized;
+  }
+  return value;
+}
+
+/**
+ * Return where inside the output of `typ` the generation error `error` is, relative to the output
+ * contract.
+ *
+ * Only the value check's errors have a place: the error's path when it is a contract path, else
+ * its parent when that is one (in practice an unknown field of a closed union member, which
+ * belongs to the record refusing it), else `null`.
+ */
+function outputPath(error: Error, typ: Type): ValuePath | null {
+  if (!(error instanceof ReplyCheckError)) return null;
+  const path = error.path;
+  if (isContractPath(path, typ)) return path;
+  const parent = path.slice(0, -1);
+  return path.length > 0 && isContractPath(parent, typ) ? parent : null;
+}
+
+/**
+ * Whether `path` names a position of the output contract of `typ`: declared record fields,
+ * non-negative list indices, through any union member.
+ */
+export function isContractPath(path: ValuePath, typ: Type): boolean {
+  if (path.length === 0) return true;
+  if (typ.variants !== undefined) return typ.variants.some((member) => isContractPath(path, member));
+  const [head, ...tail] = path;
+  if (isRecord(typ)) {
+    const field = typeof head === "string" ? typ.fields!.get(head) : undefined;
+    return field !== undefined && isContractPath(tail, field);
+  }
+  if (isListKind(typ.kind)) {
+    if (typeof head !== "number" || !Number.isInteger(head) || head < 0) return false;
+    return typ.element === undefined ? tail.length === 0 : isContractPath(tail, typ.element);
+  }
+  return false;
 }
 
 // --------------------------------------------------------------------------------------- //

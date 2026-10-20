@@ -22,7 +22,8 @@
  * `test_a_tool_node_sees_its_run_stop_event`: the call's signal aborts with the host's reason when
  * the host stops the run, and `run()` rejects with it.
  *
- * Later (T5-11a): `test_an_agent_tool_call_sees_its_run_stop_event` (AGENT node).
+ * Later (T5-11b): `test_an_agent_tool_call_sees_its_run_stop_event` (an AGENT's tool call runs in the
+ * tool loop).
  */
 
 import { expect, test } from "bun:test";

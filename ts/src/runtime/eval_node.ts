@@ -14,14 +14,15 @@
  * node's aborted signal), host capability faults, unexpected binder faults, and malformed compiled
  * or setup state reject `evalNode` instead of becoming an `EvaluationFailure`.
  *
- * Knows about:   compile/model (types), diagnostics, expr lineage, memory contracts, nodes,
- *                runtime contracts and log, skills, tools, typesys.
+ * Knows about:   compile/model (types), diagnostics, expr lineage, llm_clients (types), memory
+ *                contracts, nodes, runtime contracts and log, skills, tools, typesys.
  * Never imports: runtime state or engine, the run boundary, compose, or the CLI.
  */
 
 import type { CompiledFlow } from "../compile/model.ts";
 import { Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
 import { ResolvedValue, ValueRoute } from "../expr/lineage.ts";
+import type { ModelAccess } from "../llm_clients/factory.ts";
 import {
   ConversationInvocation,
   EvaluationEvidence,
@@ -174,6 +175,19 @@ export function requireSteering(steering: unknown): Steering | null {
     throw new TypeError("steering must provide interruptSignal(nodeId) and drain(nodeId), or be null");
   }
   return steering as Steering | null;
+}
+
+/**
+ * Return a host model access after checking its shape, or `null`.
+ *
+ * @throws TypeError when `models` isn't `null` and lacks a function `env` and `createModel`.
+ */
+export function requireModels(models: unknown): ModelAccess | null {
+  const access = models as Partial<ModelAccess> | null | undefined;
+  if (models !== null && !(typeof access?.env === "function" && typeof access.createModel === "function")) {
+    throw new TypeError("models must provide env(name) and createModel(config, options), or be null");
+  }
+  return models as ModelAccess | null;
 }
 
 /**
@@ -636,6 +650,8 @@ export interface EvalNodeOptions {
   tools?: ToolSet | null;
   /** The run's host inbox, delivered only to a node declaring `needsSteering`. */
   steering?: Steering | null;
+  /** The run's environment and model builder, delivered only to a node declaring `needsModels`. */
+  models?: ModelAccess | null;
   /**
    * This start's steps from the engine, delivered only to a node declaring `needsSteps` as a
    * `NodeSteps` over the same `starts` and `prior`; a `CapabilityFault` its `record` throws is a
@@ -702,12 +718,14 @@ export async function evalNode(
     effectiveLlmByStaticPath = null,
     tools = null,
     steering = null,
+    models = null,
     steps = null,
     onFault = null,
     scheduler = null,
     random = null,
   } = options;
   requireSteering(steering);
+  requireModels(models);
   if (typeof captureEvidence !== "boolean") throw new TypeError("capture_evidence must be a bool");
   if (typeof captureBindings !== "boolean") throw new TypeError("capture_bindings must be a bool");
   if (emitStream !== null && typeof emitStream !== "function") {
@@ -857,6 +875,7 @@ export async function evalNode(
       skills,
       tools,
       steering,
+      models,
       steps,
       onFault,
     });
@@ -897,6 +916,7 @@ async function evaluateNode(
     skills: ReadonlyMap<string, Skill> | null;
     tools: ToolSet | null;
     steering: Steering | null;
+    models: ModelAccess | null;
     steps: NodeSteps | null;
     /** Sees the original of the first capability fault when it is raised. */
     onFault: ((original: unknown) => void) | null;
@@ -905,7 +925,7 @@ async function evaluateNode(
   const { wiringOverride, signal, collector, captureInputs, captureRender, closeCaptures, trace, sourceResolver } =
     context;
   const { memoryScope, memoryContextOpener, memoryInvocation } = context;
-  const { emitStream, emitEvent, skills, tools, steering, steps, scheduler, random } = context;
+  const { emitStream, emitEvent, skills, tools, steering, models, steps, scheduler, random } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
   const nodeWiring: ReadonlyMap<string, unknown> =
@@ -1070,6 +1090,7 @@ async function evaluateNode(
     if (emitEvent !== null) caps.emitEvent = observerSink(emitEvent, onFault, isClosed);
   }
   if (skills !== null && node.needsSkills === true) caps.skills = skills;
+  if (models !== null && node.needsModels === true) caps.models = models;
   if (steering !== null && node.needsSteering === true) {
     caps.steering = new SteeringCapability(steering, onFault, pending, isClosed);
   }

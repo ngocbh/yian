@@ -65,7 +65,10 @@
  * its traits, exactly the `scheduler` and `random` it was given as `caps.scheduler` and
  * `caps.random`, and neither key without them, and refuses a malformed one; `FlowEngine` passes its
  * `scheduler` and `random` to every node it evaluates and its constructor refuses malformed ones;
- * a node that records steps and whose reserved key fails to bind after an earlier start recorded
+ * the run's `models` reaching a node declaring `needsModels` (through `evalNode` and `FlowEngine`)
+ * and never a node without the trait, and no `caps.models` when the run has none;
+ * `defaultModelAccess` keeping the given `env` and building through `chatModelFromConfig`; a node
+ * that records steps and whose reserved key fails to bind after an earlier start recorded
  * steps rejects with a `RangeError`, while a node that doesn't read its steps gets the ordinary
  * binding failure.
  *
@@ -76,8 +79,11 @@
 import { describe, expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
+import { processEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { RunSucceeded } from "../../src/events.ts";
+import { RouteModel } from "../../src/llm/executor.ts";
+import { defaultModelAccess, type ModelAccess } from "../../src/llm_clients/factory.ts";
 import { ConversationInvocation } from "../../src/memory/contracts.ts";
 import {
   AssertionStageError,
@@ -425,6 +431,14 @@ test("a reserved binding failure of a node that doesn't read its steps stays a n
   );
 });
 
+/** A model access whose builder is never called. */
+const MODELS: ModelAccess = {
+  env: () => undefined,
+  createModel: () => {
+    throw new Error("unused");
+  },
+};
+
 describe("evalNode checks its arguments", () => {
   const node = new FuncNode("n", () => "unused");
   const pool = new VariablePool();
@@ -460,6 +474,11 @@ describe("evalNode checks its arguments", () => {
       { steering: { drain: () => [] } },
       new TypeError("steering must provide interruptSignal(nodeId) and drain(nodeId), or be null"),
     ],
+    [
+      "models",
+      { models: { env: () => undefined } },
+      new TypeError("models must provide env(name) and createModel(config, options), or be null"),
+    ],
   ] as const) {
     test(label, async () => {
       expect(await rejected(evalNode(node, null, pool, options as unknown as EvalNodeOptions))).toEqual(error);
@@ -479,6 +498,7 @@ describe("evalNode checks its arguments", () => {
       effectiveLlmByStaticPath: {},
       signal: new AbortController().signal,
       steering: { interruptSignal: () => new AbortController().signal, drain: () => [] },
+      models: MODELS,
       onFault: () => {},
     };
 
@@ -591,6 +611,77 @@ describe("FlowEngine gives every node the scheduler and the random draw", () => 
       expect(() => engine(flow, options as never)).toThrow(error);
     });
   }
+});
+
+/** Record the capabilities each evaluation supplies, by node id. */
+class CapsProbe extends Node {
+  readonly kind = NodeKind.CODE;
+  readonly seen: Map<string, NodeCaps>;
+
+  constructor(nodeId: string, seen: Map<string, NodeCaps>) {
+    super(nodeId);
+    this.seen = seen;
+  }
+
+  override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+    this.seen.set(this.id, caps);
+    return new Output("ok");
+  }
+}
+
+/** A probe that declares it calls models. */
+class ModelsProbe extends CapsProbe {
+  override readonly needsModels = true;
+}
+
+describe("the models capability", () => {
+  test("reaches a node declaring needsModels through evalNode, and not a node without it", async () => {
+    const seen = new Map<string, NodeCaps>();
+
+    expect(await drive(new CapsProbe("plain", seen), { models: MODELS })).toEqual(new Output("ok"));
+    expect(await drive(new ModelsProbe("agent", seen), { models: MODELS })).toEqual(new Output("ok"));
+
+    expect("models" in seen.get("plain")!).toBe(false);
+    expect(seen.get("agent")!.models).toBe(MODELS);
+  });
+
+  test("reaches a node declaring needsModels through FlowEngine, and not a node without it", async () => {
+    const seen = new Map<string, NodeCaps>();
+    const flow = graph([new CapsProbe("plain", seen), new ModelsProbe("agent", seen)], [
+      [START_ID, "plain"],
+      [START_ID, "agent"],
+      ["plain", END_ID],
+      ["agent", END_ID],
+    ]);
+
+    await engine(flow, { models: MODELS }).run();
+
+    expect("models" in seen.get("plain")!).toBe(false);
+    expect(seen.get("agent")!.models).toBe(MODELS);
+  });
+
+  test("without models, a node declaring needsModels gets no caps.models", async () => {
+    const seen = new Map<string, NodeCaps>();
+
+    await drive(new ModelsProbe("absent", seen));
+    await drive(new ModelsProbe("null", seen), { models: null });
+
+    expect("models" in seen.get("absent")!).toBe(false);
+    expect("models" in seen.get("null")!).toBe(false);
+  });
+
+  test("defaultModelAccess keeps the given env and builds through chatModelFromConfig", async () => {
+    const env = (name: string): string | undefined => (name === "OPENAI_API_KEY" ? "sk-test" : undefined);
+    const access = defaultModelAccess(env);
+    const signal = new AbortController().signal;
+
+    expect(access.env).toBe(env);
+    expect(defaultModelAccess().env).toBe(processEnv);
+    // The key comes only from `env`, so the build succeeds only when `env` reaches the factory.
+    const model = await access.createModel({ provider: "openai", model: "gpt-5.5" }, { nodeId: "n", signal });
+    expect(model).toBeInstanceOf(RouteModel);
+    expect(await (model as RouteModel).route.auth.headers()).toEqual({ Authorization: "Bearer sk-test" });
+  });
 });
 
 /** Throw `error` from its body, after an `await` when `async`. */

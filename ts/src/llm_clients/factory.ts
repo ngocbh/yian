@@ -24,6 +24,7 @@ import {
   type Secret,
   SubscriptionAuth,
 } from "../llm/auth.ts";
+import type { ChatModel } from "../llm/events.ts";
 import { RouteModel } from "../llm/executor.ts";
 import type { ReplayDegradedReason } from "../llm/messages.ts";
 import { AnthropicMessages } from "../llm/protocols/anthropic_messages.ts";
@@ -624,4 +625,32 @@ export async function chatModelFromConfig(
   if (provider === "google") return googleModel(resolved, wiring);
   if (provider === "ollama") return ollamaModel(resolved, wiring);
   return vendorModel(provider, resolved, wiring);
+}
+
+/**
+ * The run's environment and model builder, supplied to nodes that call models. Tests and the
+ * conformance runner pass a builder that returns a `ScriptedModel`.
+ */
+export interface ModelAccess {
+  /** The environment model defaults and credentials are read from. */
+  readonly env: Env;
+  /**
+   * Build the chat model `config` (a record of host values) selects for node `nodeId`; `signal`
+   * aborts any credential read the build makes.
+   */
+  createModel(
+    config: Readonly<Record<string, unknown>>,
+    options: { nodeId: string; signal: AbortSignal },
+  ): ChatModel | Promise<ChatModel>;
+}
+
+/**
+ * Return the model access that builds through `chatModelFromConfig` with `env` (default
+ * `processEnv`).
+ */
+export function defaultModelAccess(env: Env = processEnv): ModelAccess {
+  return {
+    env,
+    createModel: (config, { signal }) => chatModelFromConfig(config, { env, signal }),
+  };
 }

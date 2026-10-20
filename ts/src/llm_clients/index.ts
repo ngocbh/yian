@@ -22,5 +22,5 @@
 
 export { LLM_CONFIG_KEYS, LLMConfig } from "./config.ts";
 export { callCredentials, scrubCallCredentials } from "./connection.ts";
-export { chatModelFromConfig } from "./factory.ts";
+export { chatModelFromConfig, defaultModelAccess, type ModelAccess } from "./factory.ts";
 export { listModels, ModelListError } from "./model_list.ts";

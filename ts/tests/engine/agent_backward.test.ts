@@ -7,8 +7,12 @@
  * message, where Python matches a part of a `ValueError`) and
  * `test_backward_context_allows_absent_node_data_without_changing_the_record`.
  *
- * Later (T5-11a), through AGENT's forward:
- * `test_backward_context_exposes_only_accepted_evidence_and_replays_without_agent_calls`.
+ * Ported, through AGENT's forward in a learnable `FlowEngine` run with a `ScriptedModel` from
+ * `models`: `test_backward_context_exposes_only_accepted_evidence_and_replays_without_agent_calls`.
+ * The run records the agent's model map by hand (Python's run start derives it). Before the replay
+ * the node's `forward` and `backward` (on the run's node and the replayed copy) are replaced with functions that throw, and the model access
+ * must build no second model, where Python patches the render, variable resolution, backward and
+ * the model factory to fail.
  *
  * Later (T6-6), with AGENT's backward: `test_agent_backward_uses_recorded_model_and_no_tools`,
  * `test_agent_backward_keeps_visible_tool_evidence_inert_and_separate`,
@@ -26,9 +30,22 @@
 
 import { expect, test } from "bun:test";
 
-import { FlowOutput, START_ID } from "../../src/compile/model.ts";
-import { commitPrepared, prepareNodeStarted, prepareNodeSucceeded } from "../../src/runtime/state.ts";
-import { engine, forwardCapture, FuncNode, graph } from "./run_state_fixtures.ts";
+import { copyGraph, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { Parameter } from "../../src/nodes/contracts.ts";
+import { evidencePayload } from "../../src/runtime/log.ts";
+import {
+  commitPrepared,
+  prepareNodeStarted,
+  prepareNodeSucceeded,
+  replayRecords,
+  RunState,
+} from "../../src/runtime/state.ts";
+import { readTypedefs } from "../../src/typesys/types.ts";
+import { parametersFromYaml } from "../compose/declarations.ts";
+import { engine, forwardCapture, FuncNode, graph, noGrowth } from "./run_state_fixtures.ts";
 
 test("the backward context rejects a captured reserved evidence collision", async () => {
   const node = new FuncNode("custom", () => "done");
@@ -62,4 +79,62 @@ test("the backward context allows absent node data without changing the record",
   expect(occurrence.record.forwardCapture!.nodeData).toBeNull();
   expect(trace.backwardContext(occurrence.source).nodeData).toEqual({ _evaluation_evidence: null });
   expect(occurrence.record.forwardCapture!.nodeData).toBeNull();
+});
+
+test("the backward context exposes only accepted evidence and replays without agent calls", async () => {
+  const llmConfig = { provider: "test", model: "recorded" };
+  const registry = readTypedefs({ Tone: "Literal(concise, detailed)" });
+  const variables = parametersFromYaml("variables:\n  tone: !Tone concise\n", registry, {
+    field: "variables",
+    requireDefault: true,
+  });
+  const node = new AgentNode("writer", { prompt: "${topic}: ${tone}", llmConfig, variables });
+  node.params = [new Parameter("topic"), new Parameter("tags")];
+  const flow = graph([node], [[START_ID, "writer"]], {
+    wiring: { writer: { topic: "${input.topic}", tags: "${input.tags}" } },
+    outputs: [new FlowOutput("result", "${writer.output}")],
+  });
+  const reply = new Message({ role: "assistant", parts: [new TextPart("forward answer")] });
+  const model = new ScriptedModel([new Response({ message: reply, finishReason: "stop" })], llmConfig);
+  let built = 0;
+  const run = engine(flow, {
+    inputs: { topic: "reefs", tags: ["a", "b"] },
+    learnable: true,
+    effectiveLlmByStaticPath: { writer: llmConfig },
+    models: {
+      env: () => undefined,
+      createModel: () => {
+        built++;
+        return model;
+      },
+    },
+  });
+  const original = copyGraph(run.state.flow);
+  await run.run();
+
+  const occurrence = run.state.trace!.occurrences.find((item) => item.nodeId === "writer")!;
+  const accepted = occurrence.record.forwardCapture!.nodeData!;
+  const expected = { ...accepted, _evaluation_evidence: evidencePayload(occurrence.record.evidence) };
+  expect(Object.hasOwn(accepted, "_evaluation_evidence")).toBe(false);
+  expect(run.state.trace!.backwardContext(occurrence.source).nodeData).toEqual(expected);
+  node.prompt = "later prompt";
+  node.llmConfig = { ...llmConfig, model: "later model" };
+  const forbidden = (): never => {
+    throw new Error("replay invoked AGENT work");
+  };
+  // On the run's node and on the copy the replay runs over, as Python patches the class.
+  for (const target of [node, original.nodes.get("writer")!]) {
+    target.forward = forbidden;
+    target.backward = forbidden;
+  }
+
+  const replay = replayRecords(new RunState(original), run.log.records(), { growBuilder: noGrowth });
+
+  expect(replay.trace!.backwardContext(occurrence.source).nodeData).toEqual(expected);
+  expect(replay.trace!.occurrence(occurrence.source).record.forwardCapture!.nodeData).toEqual(accepted);
+  expect(built).toBe(1);
+  // Clearing the expected copy leaves the replayed context's evidence whole.
+  (expected._evaluation_evidence as { interactions: unknown[] }).interactions.length = 0;
+  const evidence = replay.trace!.backwardContext(occurrence.source).nodeData!["_evaluation_evidence"];
+  expect((evidence as { interactions: unknown[] }).interactions).not.toEqual([]);
 });

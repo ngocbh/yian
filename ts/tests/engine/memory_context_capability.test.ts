@@ -11,7 +11,11 @@
  *
  * Ported (adapted): `test_invalid_node_result_closes_failed_before_failure_conversion` (6 rows):
  * the cleanup note is in the `notes` of the error the turn closed with, which is a plain `Error`
- * carrying the failure's message, for Python's traceback text.
+ * carrying the failure's message, and ends the failure's traceback, as in Python's traceback text.
+ * The `(host_stop=False, real_backend=False)` cell of
+ * `test_callback_error_retains_conversation_cleanup_notes_without_throwing_into_generator`: a sink
+ * throws inside the node, so there is no generator to close; the turn closes with the sink's error,
+ * which carries the one cleanup note; the opener also receives the node's signal.
  * `test_opener_host_fault_keeps_identity_in_both_execution_shapes` and
  * `test_generator_and_body_errors_close_failed_without_masking_node_failure`: the streaming shape
  * streams through `caps.emitStream` (the node declares `needsLiveEvents`).
@@ -23,24 +27,26 @@
  * TS-only: a node throwing `undefined` closes the turn with an `Error`; a `close` returning a
  * rejected promise rejects a successful evaluation and becomes a note on a failed one; a node that
  * starts `openMemoryContext` and returns without awaiting it still has its turn closed before
- * `evalNode` settles; a node that drops a rejecting opener or steering `drain` promise, or an open
- * after the evaluation, causes no unhandled rejection; invalid recall inputs or request, an opener
- * result that isn't a `MemoryContext`, and sections outside the scope's memories or without text
- * are recall failures.
+ * `evalNode` settles, also when its dropped code starts the open only after a steering `drain`,
+ * while the evaluator waits; a node that drops a rejecting opener or steering `drain` promise, or
+ * an open after the evaluation, causes no unhandled rejection; invalid recall inputs or request, an
+ * opener result that isn't a `MemoryContext`, and sections outside the scope's memories or without
+ * text are recall failures.
  *
  * Later (cycle 6a): `test_dispatch_binds_accepted_identity_before_worker_submission`, through the
  * engine.
  * Later (T4-7), with `MemoryRuntime.openContext`:
  * `test_real_turn_rethrow_is_not_reported_as_secondary_cleanup_failure`,
  * `test_real_backend_cleanup_note_survives_node_error_unwrapping` and
- * `test_fifo_turn_covers_stream_drain_and_shape_check_in_bounded_child`.
+ * `test_fifo_turn_covers_stream_drain_and_shape_check_in_bounded_child`, and the `real_backend=True`
+ * cells of `test_callback_error_retains_conversation_cleanup_notes_without_throwing_into_generator`.
  *
- * Not ported: TS has no `_HostStop` (a stop is the node's aborted signal), no generator to close
- * and no `add_note` hook: `test_callback_primary_stop_marks_signal_before_turn_unwind`,
- * `test_callback_error_retains_conversation_cleanup_notes_without_throwing_into_generator` and
+ * Not ported: TS has no `_HostStop` (a stop is the node's aborted signal) and no `add_note` hook:
+ * `test_callback_primary_stop_marks_signal_before_turn_unwind` and
  * `test_broken_cleanup_note_hook_does_not_replace_primary_host_error`.
- * `test_primary_stop_is_set_before_turn_cleanup_and_keeps_identity` is Later (cycle 7b): the turn
- * closes with the signal's reason after the node's signal aborted.
+ * Later (cycle 7b): `test_primary_stop_is_set_before_turn_cleanup_and_keeps_identity` (the turn
+ * closes with the signal's reason after the node's signal aborted) and the `host_stop=True` cells
+ * of `test_callback_error_retains_conversation_cleanup_notes_without_throwing_into_generator`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -231,6 +237,8 @@ test.each(invalidResults)(
     expect(error.constructor).toBe(Error);
     expect(error.message).toBe(failure.message);
     expect(error.notes).toEqual(fails ? ["Memory context cleanup failed: RangeError: result cleanup failed"] : undefined);
+    const note = "\nMemory context cleanup failed: RangeError: result cleanup failed";
+    expect(failure.traceback!.endsWith(note)).toBe(fails);
   },
 );
 
@@ -297,6 +305,61 @@ test("stream lifetime includes the node's cleanup and callback failure cleanup",
   expect(await rejected(evaluate(node, opener(events), { emitStream: emit }))).toBe(error);
   expect(names(events)).toEqual(["enter", "node finally", "failed"]);
   expect(closedWith(events)).toBe(error);
+});
+
+test("callback error retains conversation cleanup notes", async () => {
+  const events: Event[] = [];
+  const error = new Error("callback failure");
+  const signals: AbortSignal[] = [];
+  const turn = fakeTurn(events, new RangeError("conversation close failed"));
+  const open: MemoryContextOpener = async (scope, request, { signal }) => {
+    signals.push(signal);
+    return opener(events, turn)(scope, request, { signal });
+  };
+  const node = new Consumer(async (begin, caps) => {
+    await begin("system", "prompt", {});
+    caps.emitStream!(new StreamChunk({ nodeId: "work", key: "output", chunk: "one" }));
+    return new Output(7n);
+  });
+  const controller = new AbortController();
+  const emit = (): void => {
+    throw error;
+  };
+  expect(await rejected(evaluate(node, open, { emitStream: emit, signal: controller.signal }))).toBe(error);
+  expect(signals.length).toBe(1);
+  expect(signals[0]).toBe(controller.signal);
+  expect(closedWith(events)).toBe(error);
+  expect((error as Error & { notes?: string[] }).notes).toEqual([
+    "Memory context cleanup failed: RangeError: conversation close failed",
+  ]);
+});
+
+test("an open the node's dropped code starts while the evaluator waits still closes its turn", async () => {
+  const events: Event[] = [];
+  let release!: (messages: readonly string[]) => void;
+  const drained = new Promise<readonly string[]>((resolve) => {
+    release = resolve;
+  });
+  const steering: Steering = { interruptSignal: () => new AbortController().signal, drain: () => drained };
+  const slow: MemoryContextOpener = async (scope, request) => {
+    events.push(["enter", scope, request]);
+    for (let turn = 0; turn < 10; turn++) await null;
+    return new MemoryContext({ transcript: fakeTurn(events) });
+  };
+  const node = new Consumer((open, caps) => {
+    void (async () => {
+      await caps.steering!.drain("work");
+      await open("system", "prompt", {});
+    })().catch(() => {});
+    return new Output(7n);
+  });
+  const evaluation = evaluate(node, slow, { steering }).then((outcome) => {
+    events.push(["settled"]);
+    return outcome;
+  });
+  release([]);
+  expect(await evaluation).toEqual(new Output(7n));
+  expect(names(events)).toEqual(["enter", "completed", "settled"]);
 });
 
 test("scope and invocation are frozen before node execution", async () => {

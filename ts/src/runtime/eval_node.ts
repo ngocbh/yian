@@ -84,8 +84,8 @@ export class EvaluationFailure {
 
 /**
  * @internal Build one failure of `node` from a thrown value: its message, the `Error`'s `name`
- * (else the value's type name) as the cause type, and the `Error`'s stack as the traceback. The
- * engine uses it for its contract failures.
+ * (else the value's type name) as the cause type, and the `Error`'s stack followed by its string
+ * `notes`, one per line, as the traceback. The engine uses it for its contract failures.
  *
  * @param origin The failing operation's authored origin; `null` falls back to the node's origin.
  */
@@ -102,9 +102,20 @@ export function evaluationFailure(
       nodeId: node.id,
       trace: node.failureTrace(origin),
       causeType: error instanceof Error ? error.name : jsTypeName(error),
-      traceback: error instanceof Error ? (error.stack ?? null) : null,
+      traceback: tracebackText(error),
     }),
   );
+}
+
+/**
+ * Return an `Error`'s stack followed by its string `notes`, one per line, else `null`; Python's
+ * traceback text prints `__notes__` the same way, so a cleanup note stays durable.
+ */
+function tracebackText(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  const notes: unknown = (error as { notes?: unknown }).notes;
+  const lines = [error.stack, ...(Array.isArray(notes) ? notes : [])].filter((line) => typeof line === "string");
+  return lines.length > 0 ? lines.join("\n") : null;
 }
 
 /** Return `error` as a capability fault: a `CapabilityFault` as it is, anything else wrapped. */
@@ -113,11 +124,11 @@ function capabilityFault(error: unknown): CapabilityFault {
 }
 
 /**
- * @internal Append the note `text()` to `error`'s own `notes` array, creating it when absent
- * (Python's `add_note`). A failure, such as a frozen error, a non-array `notes`, a primitive or a
- * throwing `text`, is ignored. The engine uses it for its cleanup notes.
+ * Append the note `text()` to `error`'s own `notes` array, creating it when absent (Python's
+ * `add_note`). A failure, such as a frozen error, a non-array `notes`, a primitive or a throwing
+ * `text`, is ignored. Local copy of `memory/session.ts`'s `addNote`.
  */
-export function addNote(error: unknown, text: () => string): void {
+function addNote(error: unknown, text: () => string): void {
   try {
     if (typeof error !== "object" || error === null) return;
     const target = error as { notes?: unknown };
@@ -616,8 +627,9 @@ export interface EvalNodeOptions {
  *   steering inbox, including a `drain` promise the node dropped, a refused or failing render
  *   capture, a repeated memory context open or a failing opener), whatever the node then returned
  *   or threw.
- * @throws TypeError when a node declaring `needsMemoryContext` has a `memoryScope` that isn't
- *   exactly a `MemoryScope`; Error when its scope has memories and no opener was injected.
+ * @throws TypeError when a node declaring `needsMemoryContext`, or `needsEvaluationTrace` while
+ *   capturing evidence, has a `memoryScope` that isn't exactly a `MemoryScope`; Error when a
+ *   memory context node's scope has memories and no opener was injected.
  * @throws The memory transcript's close failure after the node succeeded; after a failure or
  *   host error it is a note on that error.
  * @throws TypeError, RangeError or the value's own error when evidence capture can't canonicalize
@@ -976,7 +988,14 @@ async function evaluateNode(
       }
     };
   }
-  if (trace !== null) caps.evaluationTrace = trace;
+  if (trace !== null) {
+    // A view, so node code can't freeze the collector or replace its inputs snapshot.
+    caps.evaluationTrace = Object.freeze({
+      recordPrompt: (baseSystemPrompt: string, prompt: string, memorySections?: readonly MemorySection[]) =>
+        trace.recordPrompt(baseSystemPrompt, prompt, memorySections),
+      recordInteraction: (interaction: VisibleInteraction) => trace.recordInteraction(interaction),
+    });
+  }
   if (node.needsMemoryContext === true) caps.openMemoryContext = memory.open;
   if (node.needsTools === true) caps.tools = tools ?? new ToolSet();
   if (node.needsLiveEvents === true) {
@@ -996,7 +1015,9 @@ async function evaluateNode(
   } catch (error) {
     rejection = { error };
   }
-  // A node's dropped code may start another capability call while the evaluator waits.
+  // The captures stay open while the evaluator waits, so a node's dropped code may start another
+  // capability call meanwhile; one wait would miss it, and a late open's transcript would be
+  // admitted after `memory.close` and never closed, and its fault never checked.
   for (let settled = 0; settled < pending.length; ) {
     const batch = pending.slice(settled);
     settled = pending.length;

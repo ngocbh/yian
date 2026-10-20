@@ -17,8 +17,8 @@
  * Changed: the replayed record with the mismatched evidence is rebuilt with the
  * `NodeSucceededRecord` constructor, for Python's `dataclasses.replace`.
  * `test_evaluation_trace_protocol_is_runtime_checkable_and_write_only`: TS has no runtime-checkable
- * protocol; in its place the trace a node receives has `recordPrompt` and `recordInteraction` and
- * no `snapshot` or `evidence` read.
+ * protocol; in its place the trace a node receives has `recordPrompt` and `recordInteraction`,
+ * no `snapshot` or `evidence` read, and none of the evaluator's `freeze` or `setBoundInputs`.
  *
  * TS-only: a second `recordPrompt` throws, also after a refused prompt (which is ignored), and a
  * write after the evaluation settled throws.
@@ -231,6 +231,8 @@ test("the trace a node receives is write-only", async () => {
   expect(typeof trace.recordInteraction).toBe("function");
   expect("snapshot" in trace).toBe(false);
   expect("evidence" in trace).toBe(false);
+  expect("freeze" in trace).toBe(false);
+  expect("setBoundInputs" in trace).toBe(false);
 });
 
 test("capture gate requires exact flag and trait", async () => {

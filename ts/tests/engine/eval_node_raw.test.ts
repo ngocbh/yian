@@ -42,8 +42,9 @@
  * TS-only: the `EvaluatedOutcome` constructor checks, `requireSteering`, the steering
  * capability's checks on what the host inbox returns, a steering fault the node catches (thrown or
  * rejected) or a `drain` promise it drops still rejecting `evalNode`, the first of two faults
- * the node catches winning, and a render capture fault the node catches still rejecting
- * `evalNode`.
+ * the node catches winning, a render capture fault the node catches still rejecting `evalNode`,
+ * and a render write by the node's dropped code, landing while the evaluator waits on a steering
+ * `drain`, rejecting it.
  *
  * Later (T5-11a): `test_scoped_render_capture_requires_recorded_model_map_entry` through AGENT.
  */
@@ -240,34 +241,32 @@ describe("render capture", () => {
     closedError(node.retained[0]!);
   });
 
-  test("a dropped write is either decided with the outcome or refused as closed", async () => {
-    // Each delay puts the write at a later microtask turn, so one of them lands after the node
-    // settled and before evalNode does.
-    for (let delay = 0; delay < 40; delay++) {
-      let caught: unknown;
-      const node = new Capturing((captureRender) => {
+  test("a dropped write that lands while the evaluator waits decides the outcome", async () => {
+    let release!: (messages: readonly string[]) => void;
+    const drained = new Promise<readonly string[]>((resolve) => {
+      release = resolve;
+    });
+    const steering: Steering = { interruptSignal: () => new AbortController().signal, drain: () => drained };
+
+    /** A capturing node whose dropped code writes once the test releases its steering drain. */
+    class Steered extends Capturing {
+      override readonly needsSteering = true;
+
+      override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
         void (async () => {
-          for (let turn = 0; turn < delay; turn++) await null;
-          try {
-            captureRender({ static: "changed" });
-          } catch (error) {
-            caught = error;
-          }
-        })();
-      });
-      const settled = await evalNode(node, null, new VariablePool(), { captureBindings: true }).then(
-        (evaluated) => evaluated,
-        (error: unknown) => error,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      if (settled instanceof EvaluatedOutcome) {
-        expect(caught).not.toBeInstanceOf(CapabilityFault);
-        expect((caught as Error).message).toMatch(/closed/);
-      } else {
-        expect(settled).toBeInstanceOf(RangeError);
-        expect((settled as Error).message).toMatch(/replace static/);
+          await caps.steering!.drain("custom");
+          caps.captureRender!({ static: "changed" });
+        })().catch(() => {});
+        return new Output("done");
       }
     }
+
+    const options = { captureBindings: true, steering };
+    const evaluation = rejected(evalNode(new Steered(() => {}), null, new VariablePool(), options));
+    release([]);
+    const error = await evaluation;
+    expect(error).toBeInstanceOf(RangeError);
+    expect((error as Error).message).toMatch(/replace static/);
   });
 
   test("scoped render capture requires the recorded model map entry", async () => {

@@ -1396,20 +1396,32 @@ export class MemorySetupError extends RangeError {
   readonly origin: OriginRef | null;
   /** Other sites of the same failure, in declaration-site order. */
   readonly related: readonly OriginRef[];
+  /**
+   * Extra lines a diagnostic shows after the message, such as the other declaration sites; an own
+   * array only when there are notes, so later `addNote` calls (Python's `add_note`) can append.
+   */
+  declare notes?: string[];
 
   /**
-   * Create one setup failure with optional origins; `related` is copied, and `cause` (Python's
-   * `raise ... from`) is passed to `RangeError` when given.
+   * Create one setup failure with optional origins and notes; `related` is copied, a non-empty
+   * `notes` (Python's `add_note`, given here at construction) becomes the error's own copy, and
+   * `cause` (Python's `raise ... from`) is passed to `RangeError` when given.
    *
    * @throws TypeError when `message` isn't a string, `origin` is neither `null` nor an
-   *   `OriginRef`, or `related` isn't an array of `OriginRef` values.
-   * @throws RangeError when `message` holds a lone surrogate.
+   *   `OriginRef`, `related` isn't an array of `OriginRef` values, or `notes` isn't an array of
+   *   strings.
+   * @throws RangeError when `message` or a note holds a lone surrogate.
    */
   constructor(
     message: string,
-    options: { origin?: OriginRef | null; related?: readonly OriginRef[]; cause?: unknown } = {},
+    options: {
+      origin?: OriginRef | null;
+      related?: readonly OriginRef[];
+      notes?: readonly string[];
+      cause?: unknown;
+    } = {},
   ) {
-    const { origin = null, related = [] } = options;
+    const { origin = null, related = [], notes = [] } = options;
     requireString(message, "message", false);
     const checkedOrigin = requireOrigin(origin, "origin");
     if (!isPlainArray(related)) throw new TypeError("related must be an array of OriginRef values");
@@ -1417,9 +1429,12 @@ export class MemorySetupError extends RangeError {
       if (item === null) throw new TypeError("related must not contain null");
       requireOrigin(item, "related origin");
     }
+    if (!isPlainArray(notes)) throw new TypeError("notes must be an array of strings");
+    for (const note of notes) requireString(note, "note", false);
     super(message, "cause" in options ? { cause: options.cause } : undefined);
     this.origin = checkedOrigin;
     this.related = Object.freeze([...related]);
+    if (notes.length > 0) this.notes = [...notes];
   }
 }
 

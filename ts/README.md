@@ -365,8 +365,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   optional SQLite storage opened at the first operation. Changed: the constructor takes an options
   object (`historyBudgetChars`, `recentTurns`, `storage`, `createParent`); `openTurn` (which waits
   for the FIFO lease) and `prepareHistory` are async, everything else is synchronous; a stop is
-  an `AbortSignal`; `close(error?)` never rethrows `error`, and appends a cleanup failure to
-  `error.notes`; snapshots are deep-frozen; `-0` equals `0` in a compatibility descriptor; there
+  an `AbortSignal`; `close(error?)` never rethrows `error`, and appends a stop or cleanup failure
+  to `error.notes`; snapshots are deep-frozen; `-0` equals `0` in a compatibility descriptor; there
   is no `with` form (call `close()` in `finally`) and no fork check; a waiter sees a poisoned
   store at its next wake-up, not by polling.
 - The reflective and profile backends are not ported yet.

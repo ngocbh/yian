@@ -58,8 +58,8 @@
  * - `test_surfaced_summary_is_saved_before_cooperative_stop`: the stop is an abort from inside
  *   `summarize`.
  * - JSON ints written into inventories are `bigint`s; mutable copies are `structuredClone`s;
- *   `with` blocks are `withMemory`/`withHarness`/`withTurn`; the frame-era fixture is read with
- *   `parseJson`.
+ *   `with` blocks are `withMemory`/`withHarness`/`withTurn`; the frame-era fixture is an inlined
+ *   copy of Python's `tests/fixtures/session_message_snapshot.json`, read with `parseJson`.
  *
  * Not ported: `test_pid_guard_precedes_condition_and_cleanup_locks` and
  * `test_callback_fork_does_not_deadlock_or_replace_primary` (JS can't fork a live process, so there
@@ -85,7 +85,7 @@ import {
   MemoryOperationError,
   RecallContext,
 } from "../../src/memory/contracts.ts";
-import { SessionMemory, type Turn } from "../../src/memory/session.ts";
+import { type Session, SessionMemory, type Turn } from "../../src/memory/session.ts";
 import { SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
 import { openSqlite, type Sqlite } from "../../src/platform.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
@@ -111,6 +111,7 @@ const RESET_BUSY = "cannot reset active or queued conversations";
 const STALE_SESSION = "memory session is closed or belongs to an old generation";
 const INVALID_STORAGE = "stored session state is invalid";
 const STORAGE_BUSY = "Memory storage is already owned or busy.";
+const IO_FAILED = "Memory storage I/O failed.";
 const POISONED = "Memory storage must be closed and reopened after an I/O failure.";
 const UNSUPPORTED = "Native session history is unsupported; use fresh SessionMemory.";
 
@@ -158,12 +159,15 @@ async function seed(memory: SessionMemory, count: number): Promise<void> {
   }, memory);
 }
 
-/** Project the selected invocations as the JSON array of their run ids. */
+/** Project the selected invocations as the JSON array of their run ids (session_summaries.test.ts's). */
 function project(_view: ConversationView, invocations: readonly ConversationInvocation[]): string {
   return JSON.stringify(invocations.map((invocation) => invocation.runId));
 }
 
-/** Prepare history with a summary callback that records its calls and returns `result`. */
+/**
+ * Prepare history with a summary callback that records its calls and returns `result`
+ * (session_summaries.test.ts's `prepare`, with fewer options).
+ */
 function prepare(turn: Turn, calls: [string, number][] = [], result = "summary") {
   return turn.prepareHistory({
     projectionVersion: "test-v1",
@@ -405,17 +409,19 @@ test("owner kind and corrupt store are rejected", async () => {
   await withMemory(new SessionMemory({ storage: file }), () => {
     failure(() => firstOpen(new SessionMemory({ storage: file })), "storage.busy", STORAGE_BUSY);
   });
-  const kind = caught(() => new SQLiteStorage(file, "episodic")) as MemoryOperationError;
-  expect(kind.code).toBe("storage.kind");
+  const kind = "Memory storage belongs to a different backend kind.";
+  failure(() => new SQLiteStorage(file, "episodic"), "storage.kind", kind);
   const connection = openSqlite(file);
   try {
     connection.prepare("UPDATE memory_state SET envelope = ?").run('{"version":1,"version":1}');
   } finally {
     connection.close();
   }
-  const corrupt = caught(() => firstOpen(new SessionMemory({ storage: file }))) as MemoryOperationError;
-  expect(corrupt).toBeInstanceOf(MemoryOperationError);
-  expect(corrupt.code).toBe("storage.corrupt");
+  failure(
+    () => firstOpen(new SessionMemory({ storage: file })),
+    "storage.corrupt",
+    "Memory storage contains an invalid state envelope.",
+  );
 });
 
 describe("invalid inventory never rewrites store and releases owner", () => {
@@ -481,7 +487,7 @@ describe("failed save does not publish candidate or advance ordinal", () => {
     test(operation, async () => {
       const memory = new SessionMemory({ storage: file, historyBudgetChars: 1, recentTurns: 0 });
       firstOpen(memory);
-      let opened: ReturnType<SessionMemory["openRun"]> | null = null;
+      let opened: Session | null = null;
       let turn: Turn | null = null;
       let ordinal = 0;
       if (!["open", "adopt", "reset"].includes(operation)) {
@@ -537,16 +543,13 @@ describe("uncertain write poisoning keeps ram and drains lease", () => {
         const exec = failCommit(memory, error, afterCommit);
         let primary: unknown;
         try {
-          primary = caught(() => turn.request("model", {}));
+          const write = () => turn.request("model", {});
+          primary = cancel ? caught(write) : failure(write, "storage.io", IO_FAILED);
         } finally {
           exec.mockRestore();
         }
-        if (cancel) {
-          expect(primary).toBe(error);
-        } else {
-          expect((primary as MemoryOperationError).code).toBe("storage.io");
-          expect(String(primary)).not.toContain("private-path");
-        }
+        if (cancel) expect(primary).toBe(error);
+        else expect(String(primary)).not.toContain("private-path");
         expectSameRam(memory, before);
         expect(turn["ordinal"]).toBe(beforeOrdinal);
         for (const operation of [
@@ -817,7 +820,7 @@ test("poisoned storage still drains queued and active owners", async () => {
   expect(memory["queue"].length).toBe(1);
   const exec = failCommit(memory, sqliteError());
   try {
-    expect((caught(() => turn.request("model", {})) as MemoryOperationError).code).toBe("storage.io");
+    failure(() => turn.request("model", {}), "storage.io", IO_FAILED);
   } finally {
     exec.mockRestore();
   }
@@ -834,10 +837,114 @@ test("poisoned storage still drains queued and active owners", async () => {
   memory.close();
 });
 
+// An inlined copy of Python's `tests/fixtures/session_message_snapshot.json`, a version 2
+// (frame-era) snapshot; `String.raw` keeps its escaped quotes.
+const MESSAGE_SNAPSHOT = String.raw`{
+  "conversations": [
+    {
+      "applied": [
+        {
+          "after_digest": "340c77d03a14ee4069f5769053b5cdc18c901aadf30b3ce31ab1729707a10292",
+          "before_digest": "ae8ed827e4dd0be75190e7e2d999d4e38f140474b2e9602d0ba9868390b66deb",
+          "event_digest": "bce09040d538b94b4c0ba534257632f25b54697c7b01a9bb6cad8500bf591939",
+          "operation_id": "[\"baseline\",1,0]"
+        },
+        {
+          "after_digest": "7d4b88e03d26cf3c9ddd75a1ada5a2a3143988754ba3b816aa774727f55676a8",
+          "before_digest": "340c77d03a14ee4069f5769053b5cdc18c901aadf30b3ce31ab1729707a10292",
+          "event_digest": "8e509b4b2a02955856af5c709041189ae5cda07cbfa1dd457258c95ff9475248",
+          "operation_id": "[\"baseline\",1,1]"
+        },
+        {
+          "after_digest": "82ee368dce56d902e99070b284d1f2a33d33b18847f909674ca60bf49de470de",
+          "before_digest": "7d4b88e03d26cf3c9ddd75a1ada5a2a3143988754ba3b816aa774727f55676a8",
+          "event_digest": "e18aca61c8efea91373415b6471f494c77e38b2812fcfa2e3f82b62178c00b36",
+          "operation_id": "[\"baseline\",1,2]"
+        },
+        {
+          "after_digest": "00bde4f30b344d1981bed0af147166481cc0a137b4908dda8c62237ff2a11b62",
+          "before_digest": "82ee368dce56d902e99070b284d1f2a33d33b18847f909674ca60bf49de470de",
+          "event_digest": "3b3c81d604372bf8afe8e9681fa10d980d3d4686ff51f665b2ede0846ab5a3ab",
+          "operation_id": "[\"baseline\",1,3]"
+        }
+      ],
+      "closed_invocations": [
+        {
+          "closed_ordinal": 3,
+          "invocation": {
+            "run_id": "baseline",
+            "start_sequence": 1
+          },
+          "status": "completed"
+        }
+      ],
+      "compatibility": {
+        "format": "fake-v1"
+      },
+      "effects": [
+        {
+          "effect_ordinal": 1,
+          "failure": null,
+          "invocation": {
+            "run_id": "baseline",
+            "start_sequence": 1
+          },
+          "kind": "model",
+          "observation_ordinals": [
+            2
+          ],
+          "request": {
+            "prompt": "Hello"
+          },
+          "status": "completed"
+        }
+      ],
+      "generation": 0,
+      "items": [
+        {
+          "format": "fake-v1",
+          "item_id": "input",
+          "payload": {
+            "content": "Hello",
+            "role": "user"
+          }
+        },
+        {
+          "format": "fake-v1",
+          "item_id": "output",
+          "payload": {
+            "content": "Hello back",
+            "role": "assistant"
+          }
+        }
+      ],
+      "key": {
+        "consumer_static_path": [
+          "root",
+          "agent"
+        ],
+        "frame_ref": {
+          "owner": "flow",
+          "root_flow_id": "root",
+          "static_path": [
+            "root"
+          ]
+        }
+      },
+      "namespace": "baseline-message-snapshot",
+      "reference": null,
+      "revision": 4
+    }
+  ],
+  "generation": 0,
+  "namespace": "baseline-message-snapshot",
+  "notes": [],
+  "version": 2
+}`;
+
 /** Python's frame-era snapshot fixture, ints as `bigint`s. */
 function messageSnapshotFixture(): Mutable {
-  const text = fs.readFileSync(path.join(ROOT, "../tests/fixtures/session_message_snapshot.json"), "utf8");
-  return parseJson(text, "plain");
+  return parseJson(MESSAGE_SNAPSHOT, "plain");
 }
 
 test("frame era snapshot is rejected without mutation", async () => {

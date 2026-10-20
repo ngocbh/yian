@@ -408,26 +408,27 @@ function parseInventory(value: unknown): Inventory {
     const commits = new Map<string, string>();
     for (const [commitId, digest] of Object.entries(data.applied_commits)) {
       requireString(commitId, "commit_id");
-      requireString(digest, "digest");
-      if (!/^[0-9a-f]{64}$/.test(digest as string)) throw new RangeError("invalid commit digest");
-      commits.set(commitId, digest as string);
+      const text = requireString(digest, "digest");
+      if (!/^[0-9a-f]{64}$/.test(text)) throw new RangeError("invalid commit digest");
+      commits.set(commitId, text);
     }
     if (!Array.isArray(data.summaries)) throw new RangeError("summaries must be an array");
     const summaries = new Map<string, Summary>();
     const turns = view === null ? [] : admissions(view);
     for (const raw of data.summaries as readonly JsonValue[]) {
       if (!isObject(raw) || !hasFields(raw, SUMMARY_FIELDS)) throw new RangeError("invalid summary fields");
-      requireString(raw.namespace, "namespace");
+      const namespace = requireString(raw.namespace, "namespace");
       const generation = jsonCounter(raw.generation, "generation");
-      requireString(raw.projection_version, "projection_version");
-      requireString(raw.digest, "digest");
+      const projectionVersion = requireString(raw.projection_version, "projection_version");
+      const digest = requireString(raw.digest, "digest");
       if (!Array.isArray(raw.covered)) throw new RangeError("covered invocations must be an array");
       const summary = new Summary(
-        raw.namespace as string,
+        namespace,
         Number(generation),
-        raw.projection_version as string,
+        projectionVersion,
         (raw.covered as readonly JsonValue[]).map(invocationFromJson),
-        raw.digest as string,
+        digest,
+        // `Summary` checks the text.
         raw.text as string,
       );
       const cacheKey = summary.projectionVersion;
@@ -449,12 +450,11 @@ function parseInventory(value: unknown): Inventory {
     }
     return [snapshot, view, notes, used, commits, summaries];
   } catch (cause) {
-    // Python's `raise ... from None`: the stored defect isn't chained.
-    if (cause instanceof MemoryOperationError) {
-      if (cause.code === "session.unsupported_history") throw cause;
-    } else if (!(cause instanceof TypeError || cause instanceof RangeError)) {
+    if (cause instanceof MemoryOperationError && cause.code === "session.unsupported_history") throw cause;
+    if (!(cause instanceof TypeError || cause instanceof RangeError || cause instanceof MemoryOperationError)) {
       throw cause;
     }
+    // Python's `raise ... from None`: the stored defect isn't chained.
     throw error("invalid_storage", "stored session state is invalid", { stage: "storage" });
   }
 }

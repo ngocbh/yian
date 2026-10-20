@@ -36,8 +36,13 @@ import {
   resolveConstructorType,
   resolveIsinstanceType,
 } from "../src/compose/helpers/isinstance_types.ts";
+import { flowFingerprint } from "../src/compile/manifest.ts";
+import type { ComposedFlow } from "../src/compose/build/pipeline.ts";
+import { LoadError } from "../src/compose/helpers/errors.ts";
+import { loadFlow } from "../src/compose/loader.ts";
 import { ENTRIES, forget, nonDefaults, read, reload } from "../src/defaults.ts";
 import type { Env } from "../src/defaults.ts";
+import type { Diagnostic } from "../src/diagnostics.ts";
 import {
   constructorNames,
   evalExpr,
@@ -721,12 +726,13 @@ export async function expectRaises(expected: Case, call: () => unknown): Promise
 }
 
 /**
- * Compare the results `compute()` returns, by name, with `expect`. When `expect` has `raises`,
- * compare the error `compute()` throws instead.
+ * Compare the results `compute()` returns, by name, with `expect`, as `flags` say. When `expect`
+ * has `raises`, compare the error `compute()` throws instead.
  */
 export async function results(
   expect: Case,
   compute: () => Record<string, unknown> | Promise<Record<string, unknown>>,
+  flags: SameFlags = {},
 ): Promise<void> {
   if (Object.hasOwn(expect, "raises")) {
     await expectRaises(expect["raises"] as Case, compute);
@@ -734,7 +740,7 @@ export async function results(
   }
   for (const [name, actual] of Object.entries(await compute())) {
     if (!Object.hasOwn(expect, name)) throw new CaseFailure(`unexpected result ${name}`);
-    compare(name, actual, expect[name]);
+    compare(name, actual, expect[name], flags);
   }
 }
 
@@ -758,14 +764,14 @@ export type KindRunner = (case_: Case, ctx: CaseContext) => void | Promise<void>
  * line with `<kind>: run<Kind>,` and writing `run<Kind>` under the kind's section header below.
  */
 export const KINDS: Partial<Record<Kind, KindRunner>> = {
-  // load: not run yet
+  load: runLoad,
   // run: not run yet
   // resume: not run yet
   // backward: not run yet
   expr: runExpr,
   value: runValue,
   defaults: runDefaults,
-  // fingerprint: not run yet
+  fingerprint: runFingerprint,
   cli: runCli,
   json: runJson,
 };
@@ -976,6 +982,51 @@ export async function main(
 
 // ---- load ----
 
+/**
+ * Load `text` as the case's `flow.yaml` under the defaults `env` sets, resolving `uses:` paths
+ * and CODE references in the case directory.
+ */
+async function loadText(text: string, ctx: CaseContext): Promise<ComposedFlow> {
+  // The defaults stay installed across the load's awaits; safe, since cases run one at a time.
+  try {
+    reload(caseEnv(ctx));
+    const options = { searchPaths: [ctx.dir], sourceLabel: "flow.yaml", baseDir: ctx.dir };
+    return await loadFlow(text, options);
+  } finally {
+    forget();
+  }
+}
+
+/** Return `diagnostic` in the case's diagnostic form. */
+function diagnosticForm(diagnostic: Diagnostic): Case {
+  const frames = diagnostic.frames.map((frame): Case => {
+    const { startLine, startCol, endLine, endCol } = frame.range;
+    return {
+      label: frame.label,
+      range: [startLine, startCol, endLine, endCol].map(BigInt),
+      ...(frame.note ? { note: frame.note } : {}),
+    };
+  });
+  const form: Case = { code: diagnostic.code, message: diagnostic.message };
+  if (frames.length > 0) form["frames"] = frames;
+  if (diagnostic.notes.length > 0) form["notes"] = [...diagnostic.notes];
+  return form;
+}
+
+/** Run a `load` case: load `flow`; the result is `ok` or the `LoadError`'s diagnostic. */
+async function runLoad(case_: Case, ctx: CaseContext): Promise<void> {
+  const compute = async () => {
+    try {
+      await loadText(case_["flow"] as string, ctx);
+    } catch (error) {
+      if (!(error instanceof LoadError)) throw error;
+      return { load: { diagnostics: [diagnosticForm(error.diagnostic)] } };
+    }
+    return { load: "ok" };
+  };
+  await results(case_["expect"] as Case, compute, { optionalMessage: true });
+}
+
 // ---- run ----
 
 // ---- resume ----
@@ -1080,6 +1131,22 @@ async function runDefaults(case_: Case, ctx: CaseContext): Promise<void> {
 }
 
 // ---- fingerprint ----
+
+/**
+ * Run a `fingerprint` case: check that `flow` fingerprints the same twice; the result is whether
+ * `other`'s is the `same` or `different`.
+ */
+async function runFingerprint(case_: Case, ctx: CaseContext): Promise<void> {
+  const fingerprint = async (text: string) => flowFingerprint((await loadText(text, ctx)).compiled);
+  await results(case_["expect"] as Case, async () => {
+    const first = await fingerprint(case_["flow"] as string);
+    if ((await fingerprint(case_["flow"] as string)) !== first) {
+      throw new CaseFailure("two loads of `flow` have different fingerprints");
+    }
+    const matches = (await fingerprint(case_["other"] as string)) === first;
+    return { fingerprint: matches ? "same" : "different" };
+  });
+}
 
 // ---- cli ----
 

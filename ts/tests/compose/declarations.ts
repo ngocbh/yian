@@ -3,9 +3,11 @@
  * `tests/compose/_declarations.py`.
  *
  * TS-only: `nodesOf`, which parses a flow's `nodes:` with stand-in kinds registered, and
- * `fileOf`, which parses its top level; `caseText` and `caseDocument`, which read a conformance
+ * `fileOf`, which parses its top level; `CONFORMANCE_DIR`, the `baseDir` that resolves the
+ * fixture CODE references, with `loadConformanceFlow` and `linkConformanceFixtures` built on it;
+ * `caseText` and `caseDocument`, which read a conformance
  * case's flow as text or as a parsed document; and the harvested-case harness built on them
- * (`loadError`, `cursorAt`, `caseRegistry`, `CaseRow`, `runCase`, `TextCaseRow`, `runTextCase`,
+ * (`loadError`, `loadErrorAsync`, `cursorAt`, `caseRegistry`, `CaseRow`, `runCase`, `TextCaseRow`, `runTextCase`,
  * `inputsAt`, `variablesAt`, `parsedNodes`, `assembled`, `assembledWith`, `assembleText`), which
  * makes the loader's call on a case and compares the result with the case's `expect`; and
  * `handChild`, a child flow built by hand (START, producers with given output contracts, END)
@@ -16,8 +18,8 @@
  * the loader reads a value layer; the loader's checks of a plain record layer are T3-22's.
  */
 
-import { readFileSync } from "node:fs";
-import { basename } from "node:path";
+import { existsSync, readFileSync, symlinkSync } from "node:fs";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expect } from "bun:test";
@@ -30,6 +32,7 @@ import { readSourceFlowInputs, readSourceParameters } from "../../src/compose/he
 import { checkLlmConfigValue, readLlmConfig } from "../../src/compose/nodes/agent.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
@@ -46,6 +49,25 @@ import { type Case, prepare, readCase } from "../conformance.ts";
 import { withKinds } from "./stand_ins.ts";
 
 const CASES = fileURLToPath(new URL("../../../conformance/cases/", import.meta.url));
+
+/**
+ * The repository's `conformance/` directory: the `baseDir` of a flow loaded through `loadFlow`
+ * whose CODE nodes name `./fixtures/compose_codefns.ts:*`.
+ */
+export const CONFORMANCE_DIR = fileURLToPath(new URL("../../../conformance", import.meta.url));
+
+/** Load `text` with `CONFORMANCE_DIR` as its default `baseDir`, so the fixture CODE references resolve. */
+export const loadConformanceFlow = (text: string, options: Parameters<typeof loadFlow>[1] = {}) =>
+  loadFlow(text, { baseDir: CONFORMANCE_DIR, ...options });
+
+/**
+ * Link `<dir>/fixtures` to the conformance fixtures, once: a flow file read from `dir` resolves its
+ * CODE references against `dir`.
+ */
+export function linkConformanceFixtures(dir: string): void {
+  const link = join(dir, "fixtures");
+  if (!existsSync(link)) symlinkSync(join(CONFORMANCE_DIR, "fixtures"), link);
+}
 
 /**
  * Parse `text` and read its `field` section as located parameters.
@@ -188,6 +210,17 @@ export function caseDocument(
 export function loadError(run: () => unknown): LoadError {
   try {
     run();
+  } catch (error) {
+    if (error instanceof LoadError) return error;
+    throw error;
+  }
+  throw new Error("expected a LoadError");
+}
+
+/** Return the `LoadError` `promise` rejects with. */
+export async function loadErrorAsync(promise: Promise<unknown>): Promise<LoadError> {
+  try {
+    await promise;
   } catch (error) {
     if (error instanceof LoadError) return error;
     throw error;

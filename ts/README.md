@@ -88,12 +88,18 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   integers and stored as numbers; LOOP's `times:` and `max:` stay raw on the descriptor and are
   checked and converted when the LOOP builds. An `llm_config:` layer holding `${...}` values is a
   `ValueTemplate` (a `Binding` for one whole-record value), read before the node builds. The CODE
-  reader compiles nothing at build. The awaited load step, `checkFlowCode` (for the loader to
-  await once after assembly), checks every CODE node of the flow and its child flows: an inline body's
-  syntax and a reference's file, refusing a Python-style `module:function`, running no code. A
-  CODE node's `baseDir`, the directory its reference resolves against, comes from
-  `BuildContext.baseDir` (`null` by default). WAIT keeps an `until:` date or datetime as the text
-  written, after checking it parses.
+  reader compiles nothing at build. The awaited load step, `checkFlowCode`, which the loader
+  awaits once after assembly (each def's CODE nodes first, in written order, then the root's),
+  checks every CODE node of the flow and its child flows: an inline body's syntax and a
+  reference's file, refusing a Python-style `module:function`, running no code. A CODE node's
+  `baseDir`, the directory its reference resolves against, comes from `BuildContext.baseDir`:
+  `loadFlow`'s `baseDir`, else its first search path, else the current directory, for the root,
+  its defs and its inline bodies alike; a file read through the search path uses its own
+  directory. WAIT keeps an `until:` date or datetime as the text written, after checking it
+  parses.
+- `src/compose/loader.ts` is the front door: `loadFlow` reads every `uses:` file (through a
+  `ChildResolver`, sync or async) before the flow assembles, and returns a Promise.
+- `src/compose/index.ts` re-exports Python's `__all__` only, with the loader's `ChildResolver`.
 - `src/compose/validate/` holds the validate phase, the cross-node checks over the assembled flow.
   Outside it only `src/compose/build/` imports it: the pipeline runs the passes, and `boundary.ts`
   takes the `LoweredAsserts` type from `asserts.ts`. Inside it, a pass imports another validate
@@ -581,6 +587,13 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   checks; `manifest.ts` `flowManifest`, `flowFingerprint` (SHA-256 hex over the manifest's
   `canonicalJson`, RFC 8785) and `expansionDigest`. `src/compile/index.ts` re-exports Python's
   `__all__` only.
+- `src/compile/memory_layout.ts` resolves the memory key table and every reachable node's
+  `MemoryScope` (`resolveMemoryLayout`) and stamps them all or nothing (`applyMemoryLayout`).
+- `src/compile/expand.ts` holds the pure growth builders: `cloneChild` and `buildGrow`, which
+  turn a CALL, MAP or LOOP seed into a `Flow` fragment.
+- `src/compile/llm_cascade.ts` holds the load-time half of the `llm_config` cascade, the check
+  for a value a child flow's agent would inherit (`findInheritedLlmValue`); run-time resolution
+  is not ported yet.
 - A `Flow`'s `nodes` and `wiring` are `Map`s: they keep insertion order, so node and wiring order
   is Python's (a record would list index-like keys first and could collide with `__proto__`).
 - `copyGraph` is the one graph copier (Python's `copy.deepcopy` of a flow or node). Each call uses

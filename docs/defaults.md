@@ -124,8 +124,8 @@ load, run, and resume with stack to spare:
   shown to fit. A chain of `uses:` imports is held to the same limit, since loading
   each file recurses too; the deepest accepted load measured, 50 imports whose last
   file calls a 50-level chain, peaks near 735 frames on Python 3.10 and 3.12.
-  Changed (TS yian): the loader, run, and resume are not yet ported, so the maximum stays
-  until they are measured.
+  Changed (TS yian): run and resume are not yet ported, so the maximum stays until they are
+  measured.
 - `YIAN_MAX_YAML_NESTING` can only be lowered (maximum 200): composing and walking a
   document 200 levels deep stays within Python's default recursion limit.
   Changed (TS yian): the `yaml` package composes about 500 levels on Node but 5000 on

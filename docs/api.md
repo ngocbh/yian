@@ -107,6 +107,15 @@ reachable source origin. It is `None` only for a source-free graph. External
 files remain canonical in the path cache; each `uses:` alias embeds a rebased
 copy whose routes still resolve to the original file.
 
+Changed (TS yian): `loadFlow(text, { childResolver, searchPaths, sourceLabel, baseDir })`
+returns a Promise of the `ComposedFlow`, and a `LoadError` is its rejection. A
+`childResolver(path, version)` may return the flow or a Promise of it. Every `uses:` file
+is read before the flow assembles. `baseDir` is the directory a CODE node's
+`./file.ts:fn` reference resolves against (default: the first search path, else the
+current directory); a file read through the search path resolves against its own
+directory, so a `childResolver` that loads a child file passes the child's own directory
+as its `baseDir`.
+
 ## `run_flow`
 
 ```python

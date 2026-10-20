@@ -40,8 +40,9 @@
  * statically; `platform.ts` loads the SQLite driver only on first open).
  *
  * TS-only: the parsed storage is a null-prototype record that keeps a `__proto__` key as data; an
- * undeclared key's message names the declared keys, or `none`; `env` reaches the built memories; with `YIAN_TEST_NODE` set, the built `buildCliMemories` runs on Node with a root,
- * opens the episodic memory and closes the registry, and Bun then sees `<root>/<flow id>/notes.sqlite`.
+ * undeclared key's message names the declared keys, or `none`; `env` reaches the built memories;
+ * with `YIAN_TEST_NODE` set, the built `buildCliMemories` runs on Node with a root, opens the
+ * episodic memory and closes the registry, and Bun then sees `<root>/<flow id>/notes.sqlite`.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -93,9 +94,9 @@ function codeFlow(memories: readonly MemoryDecl[], flowId: string | null = "cli-
   );
 }
 
-/** A flow whose AGENT node declares `chat` as session memory with `config` (Python's `_SESSION_FLOW`). */
-function sessionFlow(config: Record<string, unknown> = {}): ComposedFlow {
-  const chat = new MemoryDecl("chat", "session", config, new DeclSite([], ["root"], "work"));
+/** A flow whose AGENT node declares `chat` as session memory (Python's `_SESSION_FLOW`). */
+function sessionFlow(): ComposedFlow {
+  const chat = new MemoryDecl("chat", "session", {}, new DeclSite([], ["root"], "work"));
   const body = new AgentNode("work", { prompt: "hello", memories: [chat] });
   return new ComposedFlow(new CompiledFlow(graph(body), [], { flowId: "cli-memory", memories: [] }));
 }
@@ -183,8 +184,7 @@ test("bad storage path shape is a setup error", async () => {
 
 test("unsafe flow id with memory root names the memory root", async () => {
   const root = join(tmp, "mem");
-  const flow = codeFlow([decl("notes", "episodic")]);
-  Object.assign(flow.compiled, { flowId: "a/b" }); // bypass the constructor's id check
+  const flow = codeFlow([decl("notes", "episodic")], "a/b");
   const message = await setupMessage(() => buildCliMemories(flow, { root, storageOptions: [] }));
   expect(message).toBe("flow id 'a/b' cannot name a directory under the memory root");
   expect(message).not.toContain("root=");

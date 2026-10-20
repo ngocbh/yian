@@ -28,7 +28,13 @@ export const KEYWORDS = new Set([
   "items",
   "oneOf",
   "anyOf",
+  "allOf",
+  "if",
+  "then",
   "minimum",
+  "minItems",
+  "maxItems",
+  "minLength",
 ]);
 /** Annotations the validator ignores. */
 export const ANNOTATIONS = new Set(["$schema", "title", "description", "$defs"]);
@@ -99,6 +105,11 @@ export function validate(
   ) {
     problems.push(`${path}: ${value} is below ${schema.minimum}`);
   }
+  // JSON Schema counts a string's length in code points.
+  const minLength = schema.minLength as number | undefined;
+  if (minLength !== undefined && typeof value === "string" && [...value].length < minLength) {
+    problems.push(`${path}: shorter than ${schema.minLength} characters`);
+  }
   if (types[0] === "object") {
     const object = value as Record<string, unknown>;
     for (const key of (schema.required as string[] | undefined) ?? []) {
@@ -112,6 +123,15 @@ export function validate(
       } else if (closed) {
         problems.push(`${path}: undeclared key ${key}`);
       }
+    }
+  }
+  if (types[0] === "array") {
+    const length = (value as unknown[]).length;
+    if ("minItems" in schema && length < (schema.minItems as number)) {
+      problems.push(`${path}: fewer than ${schema.minItems} items`);
+    }
+    if ("maxItems" in schema && length > (schema.maxItems as number)) {
+      problems.push(`${path}: more than ${schema.maxItems} items`);
     }
   }
   if (types[0] === "array" && "items" in schema) {
@@ -131,12 +151,20 @@ export function validate(
       problems.push(`${path}: no anyOf branch matches`);
     }
   }
+  for (const branch of (schema.allOf as Schema[] | undefined) ?? []) {
+    problems.push(...validate(root, branch, value, options, path));
+  }
+  const passesIf = () => validate(root, schema.if as Schema, value, options, path).length === 0;
+  if ("if" in schema && "then" in schema && passesIf()) {
+    problems.push(...validate(root, schema.then as Schema, value, options, path));
+  }
   return problems;
 }
 
 /**
  * Return `path: problem` strings for keywords outside the validator's list, an
- * `additionalProperties` other than `false`, and `$ref`s that don't resolve in `root`.
+ * `additionalProperties` other than `false`, a length bound that isn't a non-negative integer,
+ * and `$ref`s that don't resolve in `root`.
  */
 export function lintSchema(root: Schema, schema: unknown, path = "$"): string[] {
   if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
@@ -152,8 +180,12 @@ export function lintSchema(root: Schema, schema: unknown, path = "$"): string[] 
       for (const type of types) if (!TYPES.has(type)) problems.push(`${at}: unknown type`);
     }
     if (key === "additionalProperties" && inner !== false) problems.push(`${at}: only false is supported`);
-    if (key === "items") problems.push(...lintSchema(root, inner, at));
-    if (key === "oneOf" || key === "anyOf") {
+    const bound = ["minItems", "maxItems", "minLength"].includes(key);
+    if (bound && !(Number.isInteger(inner) && (inner as number) >= 0)) {
+      problems.push(`${at}: not a non-negative integer`);
+    }
+    if (["items", "if", "then"].includes(key)) problems.push(...lintSchema(root, inner, at));
+    if (key === "oneOf" || key === "anyOf" || key === "allOf") {
       (inner as unknown[]).forEach((branch, index) => {
         problems.push(...lintSchema(root, branch, `${at}[${index}]`));
       });

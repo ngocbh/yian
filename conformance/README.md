@@ -222,8 +222,9 @@ given the path (`--log`).
 
 A `json` document, and each `json_lines` line, is checked as parsed (before the codec decoding)
 against `conformance/schema/cli.schema.json` before it is compared; a document that doesn't
-match fails the case. Runners use a JSON Schema 2020-12 validator (in TS a dev-only dependency,
-shared with the event and message schema tests).
+match fails the case. Runners validate with JSON Schema 2020-12; the TS runner uses
+`ts/tests/schema.ts`, the small validator the event and message schema tests share, which
+implements the keywords these schemas use.
 
 `expect.exists` maps relative paths under the case directory (not absolute, no `..` part) to
 `true` or `false`: whether each exists after the command (a dangling symlink exists).

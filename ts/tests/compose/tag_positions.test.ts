@@ -12,7 +12,9 @@
  * end.
  *
  * Later (T3-22, the loader, whose tag checks and whole-file load these rows exercise; the
- * harvested cases of those checks are pinned in `tags.test.ts`): `test_tags_in_typed_slots_load`,
+ * harvested cases of those checks are pinned in `tags.test.ts`, except
+ * `load-types/compose_tag_positions__tags_in_a_uses_child_slot_load`, which needs `uses:` and is
+ * T3-22's to pin): `test_tags_in_typed_slots_load`,
  * `test_tag_on_kind_is_rejected_at_its_line`, `test_tag_on_prompt_is_rejected_at_its_line`,
  * `test_tag_on_nodes_is_rejected_at_its_line`, `test_tag_on_map_over_is_rejected_at_its_line`,
  * `test_tag_on_wait_until_is_rejected_at_its_line`,

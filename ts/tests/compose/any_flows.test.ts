@@ -25,7 +25,7 @@
  * `test_a_typed_loop_seed_accepts_an_optional_any_body_field` and
  * `test_a_null_from_an_optional_any_body_field_fails_the_next_turn`;
  * `test_a_case_output_any_is_a_load_error_suggesting_the_reader_tag`, which the case-branch check
- * decides; and the harvested cases
+ * decides (its whole message pinned where Python checks two fragments); and the harvested cases
  * `load-types/compose_any_flows__a_map_over_a_mixed_literal_list_checks_each_element` and
  * `load-types/compose_any_flows__an_untyped_seed_rejects_an_optional_any_body_field`.
  *

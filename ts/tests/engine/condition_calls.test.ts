@@ -8,16 +8,13 @@
  * where Python loads the flow (the loop sites' `step` def a hand-built child, `handChild`); and the
  * load halves of `test_a_typedef_constructor_in_a_condition_loads_and_runs` (the CASE's type table)
  * and `test_a_condition_calling_a_builtin_correctly_loads_and_runs`;
- * `test_whole_span_unknown_call_in_an_assert_keeps_the_inline_call_message`; and the node, case and
- * loop sites of `test_builtin_with_the_wrong_arguments_in_a_condition_fails_to_load`.
+ * `test_whole_span_unknown_call_in_an_assert_keeps_the_inline_call_message`; and
+ * `test_builtin_with_the_wrong_arguments_in_a_condition_fails_to_load`.
  * `test_a_builtin_without_a_readable_signature_is_not_arity_checked` has no counterpart: every
  * registered function declares its `params`.
  *
  * Changed: the CODE references and code are TS's (`./fixtures/compose_codefns.ts:double`).
  *
- * Later (T3-20, `lowerFlowAsserts`): the flow site of
- * `test_builtin_with_the_wrong_arguments_in_a_condition_fails_to_load` and its case
- * `load-case/engine_condition_calls__wrong_builtin_arguments_in_a_flow_assert`.
  * Later (T4): `test_python_built_assert_calling_an_unknown_function_fails_before_the_run`,
  * `test_python_built_case_when_with_the_wrong_arguments_fails_before_the_run`, and the run halves
  * of `test_a_condition_calling_a_builtin_correctly_loads_and_runs` and
@@ -28,7 +25,8 @@
  * (`assembledWith`, the `step` def built by hand; the LOOP build raises it),
  * `__whole_span_call_in_a_flow_assert` (`assemble`, whose inline-call desugar raises it),
  * `__whole_span_call_in_a_node_assert` and `__wrong_builtin_arguments_in_a_node_assert` (the
- * node-assert check raises them), and
+ * node-assert check raises them), `__wrong_builtin_arguments_in_a_flow_assert` (the flow-assert
+ * lowering raises it), and
  * `__unknown_function_in_a_node_assert`, `__unknown_function_in_a_flow_assert` and
  * `__unknown_function_in_a_loop_while` (the type-table pass raises them).
  */
@@ -323,6 +321,7 @@ test.each<[string, string]>([
 
 test.each<[string, string]>([
   ["node", NODE_ASSERT.replace("<cond>", "upper(n, n) == 'A'")],
+  ["flow", FLOW_ASSERT.replace("<cond>", "upper(input.v, 1) == 'A'")],
   ["case", CASE.replace("<cond>", "upper('a', 'b') == 'A'")],
   ["loop", LOOP.replace("<keyword>", "while").replace("<cond>", "upper(exited, 1) == 'A'")],
 ])("builtin with the wrong arguments in a condition fails to load: %s", (_site, text) => {
@@ -390,6 +389,7 @@ test("assembled: load-case/engine_condition_calls__whole_span_call_in_a_flow_ass
 test.each<CaseRow>([
   { id: "load-case/engine_condition_calls__whole_span_call_in_a_node_assert", call: assembled },
   { id: "load-case/engine_condition_calls__wrong_builtin_arguments_in_a_node_assert", call: assembled },
+  { id: "load-case/engine_condition_calls__wrong_builtin_arguments_in_a_flow_assert", call: assembled },
   { id: "load-case/engine_condition_calls__unknown_function_in_a_node_assert", call: assembled },
   { id: "load-case/engine_condition_calls__unknown_function_in_a_flow_assert", call: assembled },
   {

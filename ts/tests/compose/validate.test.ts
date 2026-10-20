@@ -42,8 +42,12 @@
  * (its `defs:` entry built by hand),
  * `load-core/engine_limit_overrides__written_value_over_the_set_value_limit` (its `env:` sets the
  * value limit, restored by the `afterEach`), the type-table pass's
- * `load-core/engine_binding_labels_flows__unknown_type_in_a_single_flow_output`, and the node-assert
- * check's `load-core/compose_expression_nesting__too_deep_node_assert`.
+ * `load-core/engine_binding_labels_flows__unknown_type_in_a_single_flow_output`, the node-assert
+ * check's `load-core/compose_expression_nesting__too_deep_node_assert`, the flow-assert lowering's
+ * `load-core/compose_expression_nesting__too_deep_flow_assert`, and the `ok` cases with flow asserts
+ * `load-leaves/seed_23_asserts_scopes` (its `score_one` def built by hand, without the def's own
+ * asserts, which load in T3-22), `load-core/seed_19_binding_stances` and
+ * `load-core/seed_27_expr_ops`.
  *
  * Later (T3-18 PR 3): the reference validator's rows (`test_validate_references_diag_has_range`,
  * `test_validate_references_diag_locates_case_when_via_synth_param`,
@@ -538,6 +542,14 @@ const child = () =>
     output: "${x.output}",
   });
 
+/** The `score_one` def of the asserts seed: `topic: !str`, `window: !int` into `raw`, a `float`. */
+const scoreOne = () =>
+  handChild({
+    inputs: parametersFromYaml("input:\n  topic: !str\n  window: !int\n", new Map()),
+    producers: { raw: new ValueContract(Type.scalar(ValueKind.NUMBER)) },
+    output: "${raw.output}",
+  });
+
 test.each<CaseRow>([
   {
     id: "load-map-call/compose_call_argument_labels__a_cycle_through_an_inline_call_names_its_host",
@@ -559,4 +571,12 @@ test.each<CaseRow>([
     call: assembled,
     full: true,
   },
+  {
+    id: "load-core/compose_expression_nesting__too_deep_flow_assert",
+    call: assembled,
+    full: true,
+  },
+  { id: "load-leaves/seed_23_asserts_scopes", call: assembledWith({ score_one: scoreOne() }), full: true },
+  { id: "load-core/seed_19_binding_stances", call: assembled, full: true },
+  { id: "load-core/seed_27_expr_ops", call: assembled, full: true },
 ])("assemble: $id", runCase);

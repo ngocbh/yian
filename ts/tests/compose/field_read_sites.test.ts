@@ -1,6 +1,6 @@
 /**
- * Load-time field-read checks in node asserts, and the type-table pass's builtin-result reads: a
- * port of the node-assert rows of `tests/compose/test_field_read_sites.py`:
+ * Load-time field-read checks in node and flow asserts, and the type-table pass's builtin-result
+ * reads: a port of the assert rows of `tests/compose/test_field_read_sites.py`:
  * `::test_node_assert_reads_unknown_input_field` (2),
  * `::test_node_assert_field_error_is_reported_once_per_ref`,
  * `::test_call_node_assert_reads_a_field_its_binding_lacks` (2),
@@ -27,11 +27,21 @@
  * `::test_call_node_assert_member_only_hint_on_an_untagged_union_names_a_case`,
  * `::test_node_assert_reads_a_field_on_a_builtin_result`, the `assert` row of
  * `::test_builtin_results_without_a_field_read_load`,
- * `::test_unparsable_condition_keeps_its_located_parse_error` and
+ * `::test_unparsable_condition_keeps_its_located_parse_error`,
+ * `::test_flow_assert_reads_are_narrowed_by_the_checks_before_them` (5),
+ * `::test_flow_post_assert_producer_reads_are_narrowed`, `::test_flow_assert_read_before_its_check_is_rejected`,
+ * `::test_impossible_flow_assert_check_is_located_at_the_assert`,
+ * `::test_flow_assert_check_impossible_even_on_null_is_reported` (2),
+ * `::test_flow_assert_read_error_names_the_declared_type` (6),
+ * `::test_flow_assert_shorthand_check_is_reported_as_written`, `::test_flow_assert_reads_unknown_input_field` (2),
+ * `::test_flow_assert_readable_input_fields_load` (2),
+ * `::test_flow_assert_reads_a_field_on_a_builtin_result` and
  * `::test_loop_while_reads_a_field_on_a_builtin_result` (the type-table pass); and the load halves of
  * `::test_loop_assert_reads_the_carried_field` (2), `::test_node_assert_known_input_field_loads_and_runs`,
- * `::test_loop_node_assert_tag_checks_narrow_its_local` (with its two load errors) and
- * `::test_partial_record_local_root_reads` (with its load error).
+ * `::test_loop_node_assert_tag_checks_narrow_its_local` (with its two load errors),
+ * `::test_partial_record_local_root_reads` (with its load error),
+ * `::test_flow_assert_on_a_skippable_producer_reads_null` (2) and
+ * `::test_flow_assert_known_input_field_loads_and_runs`.
  *
  * The flows assemble with `assembleText` where Python calls `load_flow`. Each `defs:` entry a CALL
  * or LOOP calls is built by hand (`handChild`, since def bodies load in T3-22): `child` with the
@@ -41,21 +51,11 @@
  *
  * Changed: the CODE bodies are TS's, as the harvested cases spell them. A compared tag and its
  * close match are spelled `"byu"` / `did you mean "buy"?` (Python `'byu'` / `did you mean 'buy'?`),
- * and the cycle's nodes `["b","c"]` (Python `['b', 'c']`).
+ * as is the compared `"hold"` (Python `'hold'`), and the cycle's nodes `["b","c"]` (Python
+ * `['b', 'c']`).
  *
- * TS-only: the harvested node-assert cases and the type-table pass's builtin-result case, pinned
- * at the end.
- *
- * Later (T3-20, `lowerFlowAsserts`): the flow-assert rows
- * `test_flow_assert_reads_are_narrowed_by_the_checks_before_them`,
- * `test_flow_post_assert_producer_reads_are_narrowed`, `test_flow_assert_read_before_its_check_is_rejected`,
- * `test_impossible_flow_assert_check_is_located_at_the_assert`,
- * `test_flow_assert_check_impossible_even_on_null_is_reported`,
- * `test_flow_assert_read_error_names_the_declared_type`,
- * `test_flow_assert_shorthand_check_is_reported_as_written`, `test_flow_assert_reads_unknown_input_field`,
- * `test_flow_assert_readable_input_fields_load`, `test_flow_assert_reads_a_field_on_a_builtin_result`,
- * and the load halves of `test_flow_assert_on_a_skippable_producer_reads_null` and
- * `test_flow_assert_known_input_field_loads_and_runs`.
+ * TS-only: the harvested node-assert and flow-assert cases and the type-table pass's
+ * builtin-result case, pinned at the end.
  *
  * Later (T3-18, the reference validator's prompt, binding, `case when`, flow output and scanned
  * sites): `test_agent_prompt_reads_unknown_field`, `test_agent_system_prompt_reads_unknown_field`,
@@ -698,6 +698,147 @@ test("partial record local root reads (load half)", () => {
   load(partialRead("v.a == 'a' and v.b.deep.k == 1"), PARTIAL_CHILD);
 });
 
+// ---------- flow asserts ----------
+
+/** A flow-level `asserts:` section. */
+const asserts = (...items: string[]) => "asserts:\n" + items.map((a) => `  - "${a}"\n`).join("");
+
+const ORDER_INPUT = "  o: !Order\n";
+
+/** A flow with inputs `o: !Order` and `ab: !AB` asserting `assertion`. */
+function flowAssert(assertion: string, nodes = "", output = "${step.output}"): string {
+  return flow(nodes, output, { typedefs: UNION_TYPES, inputs: ORDER_INPUT + "  ab: !AB\n", tail: asserts(assertion) });
+}
+
+test.each([
+  ["and", "isinstance(input.o, Buy) and input.o.qty > 0"],
+  ["not-or", "not isinstance(input.o, Buy) or input.o.qty > 0"],
+  ["tag-or", "input.o.action == 'sell' or input.o.qty > 0"],
+  ["untagged", "not isinstance(input.ab, A) or input.ab.x > 0"],
+  ["shorthand-check", "isinstance(o, Buy) and input.o.qty > 0"],
+])("flow assert reads are narrowed by the checks before them: %s", (_id, assertion) => {
+  load(flowAssert(assertion));
+});
+
+test("flow post-assert producer reads are narrowed", () => {
+  load(flowAssert("isinstance(d.output, Buy) and d.output.qty > 0", producer("d", "Order"), "${d.output}"));
+});
+
+test("a flow assert read before its check is rejected", () => {
+  expect(loadMessage(flowAssert("input.o.qty > 0 and isinstance(input.o, Buy)"))).toContain(
+    "reference ${input.o.qty} reads field 'qty', which only union members with action buy have; " +
+      "check the member first with `isinstance(input.o, <Type>) and ...`",
+  );
+});
+
+test("an impossible flow assert check is located at the assert", () => {
+  const text = flowAssert("input.o.action == 'hold'");
+  const error = loadError(() => load(text));
+  expect(error.message).toContain(
+    "assert \"input.o.action == 'hold'\": `input.o.action == \"hold\"` compares input.o.action with " +
+      '"hold", which is not one of its tags (buy, sell)',
+  );
+  expect(error.diagnostic.frames.at(-1)!.range!.startLine).toBe(lineOf(text, "input.o.action == 'hold'"));
+});
+
+/** A flow whose `case` runs `d` (typed `Order`) only for `s: go`, asserting `assertion`. */
+function skippableAssert(assertion: string): string {
+  const nodes =
+    "  route:\n    kind: case\n    cases:\n" +
+    "      - when: \"input.s == 'go'\"\n        then: d\n" +
+    "    else: e\n" +
+    producer("d", "Order") +
+    "  e:\n    kind: code\n    input:\n      s: ${input.s}\n    code: return 1\n";
+  return flow(nodes, "${step.output}", { tail: asserts(assertion) });
+}
+
+test.each([
+  ["always-on-the-declared-type", "not isinstance(d.output, Order) or d.output.action == 'sell'"],
+  ["every-member-ruled-out", "not isinstance(d.output, Buy) and not isinstance(d.output, Sell)"],
+])("a flow assert on a skippable producer reads null (load half): %s", (_id, assertion) => {
+  // END binds a producer it reads with `:- null`, so a skipped one reads null.
+  load(skippableAssert(assertion));
+});
+
+test.each([
+  [
+    "no-overlap",
+    "isinstance(d.output, Rec)",
+    "`isinstance(d.output, Rec)` can never be true: d.output is declared Order, and no Order value fits Rec",
+  ],
+  [
+    "context",
+    "isinstance(d.output, Buy) and isinstance(d.output, Sell)",
+    "`isinstance(d.output, Sell)` can never be true here: d.output is Buy, by the checks before it",
+  ],
+])("a flow assert check impossible even on null is reported: %s", (_id, assertion, expected) => {
+  expect(loadMessage(skippableAssert(assertion))).toContain(expected);
+});
+
+const DECLARED_TYPE_READS: [string, string, string][] = [
+  [
+    "narrowed-typo",
+    "isinstance(d.output, Sell) or d.output.qtty > 0",
+    "reference ${d.output.qtty} reads field 'qtty', which Buy doesn't have; " +
+      "d.output is Buy here, by the checks before this read; did you mean 'qty'?",
+  ],
+  [
+    "null-ruled-out",
+    "d.output != null and not isinstance(d.output, Buy) and d.output.qty > 0",
+    "reference ${d.output.qty} reads field 'qty', which Sell doesn't have; " +
+      "d.output is Sell here, by the checks before this read",
+  ],
+  [
+    "only-null-left",
+    "d.output.action == 'buy' or d.output.action == 'sell' or d.output.zz > 0",
+    "reference ${d.output.zz} reads unknown field 'zz' on record",
+  ],
+];
+
+test.each(
+  DECLARED_TYPE_READS.flatMap(([id, assertion, expected]) => [
+    [`${id}, skippable`, assertion, expected, true] as const,
+    [`${id}, always-run`, assertion, expected, false] as const,
+  ]),
+)("a flow assert read error names the declared type: %s", (_id, assertion, expected, skippable) => {
+  // A producer read may be null, but its read errors name the declared type.
+  const text = skippable
+    ? skippableAssert(assertion)
+    : flow(producer("d", "Order"), "${step.output}", { tail: asserts(assertion) });
+  const message = loadMessage(text);
+  expect(message).toContain(expected);
+  expect(message).not.toContain("Optional(");
+  expect(message).not.toContain("type None");
+});
+
+test("a flow assert shorthand check is reported as written", () => {
+  const message = loadMessage(flowAssert("isinstance(o, Rec)"));
+  expect(message).toContain("`isinstance(o, Rec)` can never be true: o is declared Order, and no Order value fits Rec");
+  expect(message).not.toContain("input.o");
+});
+
+test.each([
+  [
+    "record",
+    "input.r.b == 'x'",
+    "assert \"input.r.b == 'x'\": reference ${input.r.b} reads unknown field 'b' on record",
+  ],
+  ["scalar", "input.s.x == 'y'", "assert \"input.s.x == 'y'\": reference ${input.s.x} reads field 'x' on type str"],
+])("a flow assert reads an unknown input field: %s", (_id, assertion, expected) => {
+  expect(loadMessage(flow("", "${step.output}", { tail: asserts(assertion) }))).toContain(expected);
+});
+
+test("a flow assert known input field loads (load half)", () => {
+  load(flow("", "${step.output}", { tail: asserts("input.r.a == 'x'") }));
+});
+
+test.each([
+  ["object", "  o: !object\n", "input.o.k == 1"],
+  ["post", "", "step.output.a == 'x' and input.r.a == 'x'"],
+])("flow assert readable input fields load: %s", (_id, inputs, assertion) => {
+  load(flow("", "${step.output}", { inputs, tail: asserts(assertion) }));
+});
+
 // ---------- builtin results ----------
 
 const TEXT_FIELD = (name: string) => `reference \${${name}(...).f} reads field 'f' on type str, which has no fields`;
@@ -705,6 +846,12 @@ const TEXT_FIELD = (name: string) => `reference \${${name}(...).f} reads field '
 test("a node assert reads a field on a builtin result", () => {
   expect(loadMessage(flow(code({ v: "${step.output}" }, ["upper(v.a).f == 'x'"]), "${c.output}"))).toContain(
     `node 'c' assert "upper(v.a).f == 'x'": ${TEXT_FIELD("upper")}`,
+  );
+});
+
+test("a flow assert reads a field on a builtin result", () => {
+  expect(loadMessage(flow("", "${step.output}", { tail: asserts("upper(input.s).f == 'x'") }))).toContain(
+    `flow assert "upper(input.s).f == 'x'": ${TEXT_FIELD("upper")}`,
   );
 });
 
@@ -734,6 +881,14 @@ const CASES = "load-core/compose_field_read_sites__";
 
 test.each<CaseRow>([
   { id: `${CASES}call_node_assert_reads_a_field_its_binding_lacks`, call: assembledWith({ child: childOf("Rec") }) },
+  { id: `${CASES}flow_assert_compares_with_a_non_tag`, call: assembled },
+  { id: `${CASES}flow_assert_read_before_its_check`, call: assembled },
+  { id: `${CASES}flow_assert_read_on_the_other_member`, call: assembled },
+  { id: `${CASES}flow_assert_read_typo_suggests_a_field`, call: assembled },
+  { id: `${CASES}flow_assert_readable_input_fields_load`, call: assembled },
+  { id: `${CASES}flow_assert_reads_unknown_input_field`, call: assembled },
+  { id: `${CASES}flow_assert_shorthand_check_is_reported_as_written`, call: assembled },
+  { id: `${CASES}impossible_flow_assert_check`, call: assembled },
   { id: `${CASES}impossible_node_assert_check`, call: assembled },
   { id: `${CASES}loop_assert_reads_an_unknown_carried_field`, call: assembled },
   { id: `${CASES}member_only_hint_on_an_untagged_union`, call: assembledWith({ child: childOf("AB") }) },

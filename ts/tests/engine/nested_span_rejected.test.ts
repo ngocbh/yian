@@ -11,13 +11,12 @@
  * `step` def built by hand; the LOOP build raises it), and
  * `load-core/engine_nested_span_rejected__binding_shows_the_rewrite` (the load half of
  * `test_binding_with_a_nested_span_fails_to_load_with_the_rewrite`; `assemble`, whose inline-call
- * desugar raises it). `test_node_assert_with_a_nested_span_fails_to_load_with_the_rewrite` is
- * ported through `assembleText`, pinning the whole message, and its case
- * `load-core/engine_nested_span_rejected__node_assert_shows_the_rewrite` (`assemble`, whose
- * node-assert check raises it) is pinned at the end.
- *
- * Later (T3-20, `lowerFlowAsserts`): `test_flow_assert_with_a_nested_span_fails_to_load_with_the_rewrite`
- * and its case.
+ * desugar raises it). `test_node_assert_with_a_nested_span_fails_to_load_with_the_rewrite` and
+ * `test_flow_assert_with_a_nested_span_fails_to_load_with_the_rewrite` are ported through
+ * `assembleText`, pinning the whole message, and their cases
+ * `load-core/engine_nested_span_rejected__node_assert_shows_the_rewrite` and
+ * `load-core/engine_nested_span_rejected__flow_assert_shows_the_rewrite` (`assemble`, whose
+ * node-assert check and flow-assert lowering raise them) are pinned at the end.
  *
  * Left for later: the case, loop and prompt load tests and the run tests land with compose and
  * `run.ts`.
@@ -186,6 +185,13 @@ asserts:
   - <flow_assert>
 `;
 
+test("a flow assert with a nested span fails to load with the rewrite", () => {
+  const text = ASSERTS.replace("<node_assert>", "output >= 0").replace("<flow_assert>", "${input.n} > 0");
+  expect(loadError(() => assembleText(text)).message).toBe(
+    `assert '\${input.n} > 0' is not a valid boolean expression: ${NESTED}; write \`input.n > 0\``,
+  );
+});
+
 test("a node assert with a nested span fails to load with the rewrite", () => {
   const text = ASSERTS.replace("<node_assert>", "${output} < 0").replace("<flow_assert>", "input.n > 0");
   expect(loadError(() => assembleText(text)).message).toBe(
@@ -226,4 +232,8 @@ test("assembled: load-core/engine_nested_span_rejected__binding_shows_the_rewrit
 
 test("assembled: load-core/engine_nested_span_rejected__node_assert_shows_the_rewrite", () => {
   runCase({ id: "load-core/engine_nested_span_rejected__node_assert_shows_the_rewrite", call: assembled });
+});
+
+test("assembled: load-core/engine_nested_span_rejected__flow_assert_shows_the_rewrite", () => {
+  runCase({ id: "load-core/engine_nested_span_rejected__flow_assert_shows_the_rewrite", call: assembled });
 });

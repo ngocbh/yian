@@ -88,8 +88,8 @@
  * narrowing message decides (an impossible check, or a narrowed read's error) and checks that the
  * case's message, or its last line for a multi-line one, is the row's site prefix plus the
  * produced text. The cases `checkImpossibleWhens` raises are pinned whole in
- * `null_narrowing.test.ts` and `union_narrowing.test.ts`, and the node-assert cases in the mirrors
- * of their Python files (`field_read_sites.test.ts`, `null_narrowing.test.ts`,
+ * `null_narrowing.test.ts` and `union_narrowing.test.ts`, and the node-assert and flow-assert cases
+ * in the mirrors of their Python files (`field_read_sites.test.ts`, `null_narrowing.test.ts`,
  * `null_narrowing_case.test.ts`). The sites' locations are not pinned
  * here. Two rows read a `Narrowing` built by hand: an empty one gives the unchanged maps, and a
  * filled one gives each node's and param's results.
@@ -1786,29 +1786,10 @@ function runNarrowingRow(row: NarrowingRow): void {
   expect(message.split("\n").at(-1)).toBe(row.prefix + produced);
 }
 
-const FIELD_READ_SITES = "load-core/compose_field_read_sites__";
 const LOOP_BUILD = "load-loop/engine_loop_build__";
 const UNION_NARROWING = "load-types/compose_union_narrowing__";
 
 test.each<NarrowingRow>([
-  {
-    id: `${FIELD_READ_SITES}flow_assert_compares_with_a_non_tag`,
-    at: ["asserts", 0],
-    prefix: `assert "input.o.action == 'hold'": `,
-    bases: { "input.o": "Order" },
-  },
-  {
-    id: `${FIELD_READ_SITES}flow_assert_shorthand_check_is_reported_as_written`,
-    at: ["asserts", 0],
-    prefix: "assert 'isinstance(o, Rec)': ",
-    bases: { o: "Order" },
-  },
-  {
-    id: `${FIELD_READ_SITES}impossible_flow_assert_check`,
-    at: ["asserts", 0],
-    prefix: "assert 'isinstance(d.output, Buy) and isinstance(d.output, Sell)': ",
-    bases: { "d.output": "Order" },
-  },
   {
     id: `${LOOP_BUILD}predicate_isinstance_of_a_disjoint_type_is_rejected`,
     at: ["nodes", "ask", "until"],

@@ -40,9 +40,6 @@
  * `v != null and v.qty > 0`), and a check that can never be true is a load error
  * (`helpers/condition_guards.ts`, `helpers/narrowing_facts.ts`).
  *
- * Ported so far: `LoweredAsserts`, the condition check and the node half (`validateNodeAsserts`);
- * the flow-level lowering is not ported yet.
- *
  * Knows about: `compile/validation`, `expr`, `typesys`, the `helpers` peers (`condition_guards`,
  * `isinstance_types`, `narrowing_facts`, `output_contracts`, `errors`), `nodes`,
  * `desugar/inline_calls` (inline-call rejection) and `LocalInput` from `typed_bindings`.
@@ -50,16 +47,17 @@
  * edges imports this back.
  */
 
+import { classifyPath } from "../../compile/validation.ts";
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
 import type { ExprNode } from "../../expr/grammar.ts";
-import { ExpressionError, exprRefs, parseCondition } from "../../expr/index.ts";
+import { conditionRefs, ExpressionError, exprRefs, parseCondition, rewriteConditionRefs } from "../../expr/index.ts";
 import { flowCallCalleesInSpans } from "../../expr/template.ts";
 import { type Node, NodeKind } from "../../nodes/base.ts";
 import {
   Assertion,
   isExactly,
   type OutputContract,
-  type Parameter,
+  Parameter,
   PartialRecordContract,
   sameOutputContract,
   ValueContract,
@@ -103,6 +101,10 @@ import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { type NodeDescriptor, siteKey } from "../nodes/base.ts";
 import type { LocalInput } from "./typed_bindings.ts";
 
+// Reserved prefix for the END params synthesized from a lowered post-assert. Authors cannot write
+// `__`-prefixed ids, so a synth name never collides with an author id.
+const SYNTH_PREFIX = "__assert_";
+
 /**
  * A flow's `asserts:` lowered into node-local asserts on the synthesized START/END; frozen.
  *
@@ -145,6 +147,228 @@ export class LoweredAsserts {
     this.synthWiring = options.synthWiring ?? new Map();
     Object.freeze(this);
   }
+}
+
+/**
+ * Lower a flow's `asserts:` into node-local asserts for the START/END boundary nodes.
+ *
+ * Validation parses each assert and walks its `${...}` refs via `classifyPath` (a dangling ref or
+ * bad field is a loud `LoadError`). An exact unqualified name in `flowInputs` is first treated as
+ * `input.<name>` in this scope. The lowering then rewrites each assert so it can fire
+ * node-locally, replacing only each assertion carrier's executable expression:
+ *
+ * - a PRE (boundary) assert rewrites each `${input.X}` ref to `${output.X}`, since START fires
+ *   these from its ordinary `postAsserts` against its own bound output record; and
+ * - a POST assert turns every non-`output` ref into a synthesized END param (`${producer.output}`
+ *   to `${__assert_<pid>}`, `${input.X}` to `${__assert_input_<X>}`), with a matching
+ *   `synthWiring` edge, so the producer value is present in END's record when the assert fires.
+ *   Several refs to the same producer or input share one synth param.
+ *
+ * `${system.X}` is forbidden anywhere in an assert: it is ambient (no producer to draw an edge
+ * from), so a `system` ref raises a located `LoadError` telling the author to move the check into a
+ * body node.
+ *
+ * A `${<id>.output.f}` read is field-checked against the producer's contract, and an
+ * `${input.X.f}` read against `inputContracts[X]` when the flow input has one. The assert's own
+ * checks narrow its reads: `and`, `or` and `not` short-circuit, so an `isinstance` or union tag
+ * comparison before a read (`isinstance(input.o, Buy) and input.o.qty > 0`,
+ * `not isinstance(input.o, Buy) or input.o.qty > 0`) decides which members it sees. A shorthand
+ * check base (`isinstance(o, Buy)`) is qualified like a read, and reported as written. A check
+ * that can never be true is a load error, and the `isinstance` types resolve in `registry` (the
+ * flow's typedefs). A producer read may be null, since END binds it as `${<id>.output :- null}` and
+ * a skipped producer reads null, so checks and reads take each producer's type as nullable; their
+ * errors name the declared type.
+ *
+ * @param assertList The flow's authored assertion carriers, in order.
+ * @param flowInputs The flow's input names.
+ * @param validTargets The flow's node ids.
+ * @param producers Each typed producer's output contract; an opaque producer is absent.
+ * @param assertRanges Each assert's range, aligned 1:1 with `assertList` (`null` where none).
+ * @param options.inputContracts Each typed flow input's contract (default none).
+ * @param options.registry The flow's typedefs (default none).
+ * @param options.diagnostics Factory for located load errors (default an unlocated one).
+ * @returns The lowered START/END asserts with the synth END params and their wiring.
+ * @throws LoadError on the first assert holding a lone surrogate, malformed assert, bad ref,
+ *   impossible check, bad field read, or `${system}` ref.
+ * @throws TypeError when a producer contract is neither an exact `ValueContract` nor a
+ *   `PartialRecordContract`.
+ */
+export function lowerFlowAsserts(
+  assertList: readonly Assertion[],
+  flowInputs: ReadonlySet<string>,
+  validTargets: ReadonlySet<string>,
+  producers: ReadonlyMap<string, OutputContract>,
+  assertRanges: readonly (SourceRange | null)[] | null = null,
+  options: {
+    inputContracts?: ReadonlyMap<string, ValueContract> | null;
+    registry?: TypeRegistry | null;
+    diagnostics?: LoadDiagnostics | null;
+  } = {},
+): LoweredAsserts {
+  const diagnostics = options.diagnostics ?? new LoadDiagnostics();
+  const inputContracts = options.inputContracts ?? new Map<string, ValueContract>();
+  const registry = options.registry ?? new Map();
+  // Retain exact and partial carriers so a closed partial root can reject an unknown field without
+  // inventing a semantic Type for opaque siblings.
+  for (const [nodeId, contract] of producers) {
+    if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
+      throw new TypeError(
+        "producer contracts must be ValueContract or PartialRecordContract values, " +
+          `got ${jsTypeName(contract)} for ${reprText(nodeId)}`,
+      );
+    }
+  }
+  // Indexed by loop position, never keyed by assert text, so two identical flow asserts get
+  // distinct carets.
+  const ranges = assertRanges ?? [];
+
+  const startPre: Assertion[] = [];
+  const endPost: Assertion[] = [];
+  const synthParams: Parameter[] = [];
+  const synthWiring = new Map<string, string>();
+  // The producer id or input name to its synth name, shared across all asserts so repeated refs to
+  // the same source reuse the one END edge.
+  const synthForProducer = new Map<string, string>();
+  const synthForInput = new Map<string, string>();
+  // Names already handed out, to guard the (near-impossible) collision case.
+  const allocated = new Set<string>();
+
+  // A synth name must be a legal ref path (defensive; the prefix and author id components are
+  // always parseable in practice).
+  const parseable = (name: string): boolean => {
+    try {
+      conditionRefs("${" + name + "}");
+      return true;
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+      return false;
+    }
+  };
+
+  /** Allocate a collision-proof synth name from `base`, verified parseable as a ref. */
+  const alloc = (base: string): string => {
+    let name = base;
+    let i = 1;
+    while (flowInputs.has(name) || validTargets.has(name) || allocated.has(name) || !parseable(name)) {
+      name = `${base}_${i}`;
+      i += 1;
+    }
+    allocated.add(name);
+    return name;
+  };
+
+  /** Resolve one unqualified flow-input name into the explicit input namespace. */
+  const qualifyFlowInput = (path: string): string =>
+    !path.includes(".") && flowInputs.has(path) ? `input.${path}` : path;
+
+  /** The qualified path when `qualifyFlowInput` changes it, else `null`. */
+  const qualifiedOrNull = (path: string): string | null => {
+    const qualified = qualifyFlowInput(path);
+    return qualified !== path ? qualified : null;
+  };
+
+  // The values whose field reads are checked, with the one contract each has.
+  const roots = new Map<string, readonly OutputContract[]>([
+    ...[...inputContracts].map(([name, contract]): [string, OutputContract[]] => [`input.${name}`, [contract]]),
+    ...[...producers].map(([nodeId, contract]): [string, OutputContract[]] => [`${nodeId}.output`, [contract]]),
+  ]);
+  const producerRoots = new Set([...producers.keys()].map((nodeId) => `${nodeId}.output`));
+
+  assertList.forEach((assertion, i) => {
+    const expr = assertion.expression;
+    const rng = ranges[i] ?? null;
+    checkWrittenValue(expr, `flow field 'asserts[${i}]'`, rng, diagnostics);
+    // 1. Parse-check and collect refs on the one unified condition walk (any brace spelling).
+    let authored: ExprNode;
+    try {
+      authored = parseCondition(expr);
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+      throw diagnostics.error(
+        `assert ${reprText(assertion.display)} is not a valid boolean expression: ${error.message}`,
+        { range: rng, cause: error },
+      );
+    }
+    const refs = exprRefs(authored).map(qualifyFlowInput);
+
+    // 2. Validate each ref, forbid `${system}`, and detect any producer ref (which makes it POST).
+    let isPost = false;
+    for (const path of new Set(refs)) {
+      const err = classifyPath(path, validTargets, flowInputs);
+      if (err !== null) throw diagnostics.error(`assert ${reprText(assertion.display)}: ${err}`, { range: rng });
+      const head = path.split(".")[0]!;
+      if (head === "system") {
+        throw diagnostics.error(
+          `assert ${reprText(assertion.display)}: the \`system\` namespace is not allowed in asserts ` +
+            "(it is ambient — there is no producer to draw an edge from; move the " +
+            "check into a body node)",
+          { range: rng },
+        );
+      }
+      if (head !== "input") isPost = true;
+    }
+
+    // 3. Impossible checks and field reads, narrowed by the assert's own checks. END binds each
+    // producer it reads as `${<id>.output :- null}`, so a producer the flow's routing skips reads
+    // null.
+    const qualified = parseCondition(rewriteConditionRefs(expr, qualifiedOrNull));
+    const errors = conditionErrors(qualified, roots, registry, { nullableRoots: producerRoots, authored });
+    if (errors.length > 0) {
+      throw diagnostics.error(`assert ${reprText(assertion.display)}: ${errors[0]}`, { range: rng });
+    }
+
+    if (!isPost) {
+      // 4. PRE (boundary): START fires these from its ordinary `postAsserts` against its bound
+      // output record, so `${output.X}` sees the validated, defaulted value START binds.
+      // Unqualified flow-input names first acquire the `input.` prefix, which then maps to
+      // `output.`.
+      const preRename = (ref: string): string | null => {
+        const path = qualifyFlowInput(ref);
+        if (path === "input") return "output"; // defensive; a bare `${input}` head shouldn't appear
+        if (path.startsWith("input.")) return "output." + path.slice("input.".length);
+        return null;
+      };
+      const lowered = rewriteConditionRefs(expr, preRename);
+      startPre.push(new Assertion(lowered, assertion.display, { origin: assertion.origin }));
+      return;
+    }
+
+    // 5. POST: turn each non-`output` ref into a synth END param, wired as an edge.
+    const postRename = (ref: string): string | null => {
+      const segs = qualifyFlowInput(ref).split(".");
+      const head = segs[0]!;
+      if (head === "output") return null; // the node's own output, kept (defensive)
+      if (head === "input" && segs.length >= 2) {
+        const x = segs[1]!;
+        let synth = synthForInput.get(x);
+        if (synth === undefined) {
+          synth = alloc(`${SYNTH_PREFIX}input_${x}`);
+          synthForInput.set(x, synth);
+          synthParams.push(new Parameter(synth));
+          synthWiring.set(synth, `\${input.${x}}`);
+        }
+        return [synth, ...segs.slice(2)].join(".");
+      }
+      // A producer-output ref: `pid.output[.f.g...]`, pid a node id.
+      if (validTargets.has(head) && segs.length >= 2 && segs[1] === "output") {
+        let synth = synthForProducer.get(head);
+        if (synth === undefined) {
+          synth = alloc(`${SYNTH_PREFIX}${head}`);
+          synthForProducer.set(head, synth);
+          synthParams.push(new Parameter(synth));
+          // `:-null` makes the END edge optional: a conditionally skipped producer binds null
+          // instead of co-skipping END to dead.
+          synthWiring.set(synth, `\${${head}.output:-null}`);
+        }
+        return [synth, ...segs.slice(2)].join(".");
+      }
+      return null; // anything else (e.g. an `input` head without a field), kept
+    };
+    const lowered = rewriteConditionRefs(expr, postRename);
+    endPost.push(new Assertion(lowered, assertion.display, { origin: assertion.origin }));
+  });
+
+  return new LoweredAsserts({ startPre, endPost, synthParams, synthWiring });
 }
 
 // Kinds whose node asserts move onto the spawned child flow's END. MAP is absent because every MAP

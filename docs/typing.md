@@ -195,9 +195,9 @@ lone surrogate is not a yian value`, at the value. It refuses an AGENT's `prompt
 HUMAN_INPUT's `prompt:`, `adaptive_questions.prompt:` and literal `questions:` text, the last at
 the text (`node 'ask' field 'questions' at [0].question: ...`), a CASE's `on:` and `when:`
 text, at the field (`node 'g' field 'cases[1].when': ...`), a LOOP's `while:` and `until:`
-text, at the field (`node 'lp' field 'while': ...`), and a node's `asserts:` text, at the assert,
-among the node's other assert errors (`node 'x' field 'asserts[0]': ...`). Python yian loads such
-a value.
+text, at the field (`node 'lp' field 'while': ...`), a node's `asserts:` text, at the assert,
+among the node's other assert errors (`node 'x' field 'asserts[0]': ...`), and a flow's
+`asserts:` text, at the assert (`flow field 'asserts[0]': ...`). Python yian loads such a value.
 
 A type nests at most 100 levels by default (`YIAN_MAX_TYPE_NESTING`). In type text
 every constructor is a level, `Optional(` and `Union(` included, so `list(Optional(int))`

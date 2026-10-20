@@ -1,6 +1,6 @@
 /**
- * Load-time checks for reading a field a value's known type can't have: a port of the node-assert
- * rows of `tests/compose/test_field_reads.py`,
+ * Load-time checks for reading a field a value's known type can't have: a port of the assert rows
+ * of `tests/compose/test_field_reads.py`, `::test_field_on_str_in_a_flow_assert_is_a_load_error`,
  * `::test_node_assert_on_a_partial_record_output_checks_typed_fields` and
  * `::test_node_assert_on_an_exact_record_output_checks_typed_fields`, each pinning the whole
  * message where Python matches a fragment. The flows assemble with `assembleText` where Python
@@ -9,11 +9,8 @@
  *
  * Changed: the CODE bodies are TS's, as the harvested cases spell them.
  *
- * TS-only: the harvested `load-core/compose_field_reads__node_assert_reads_a_field_of_a_str_field`,
- * pinned at the end.
- *
- * Later (T3-20, `lowerFlowAsserts`): `test_field_on_str_in_a_flow_assert_is_a_load_error` and its
- * case.
+ * TS-only: the harvested `load-core/compose_field_reads__field_on_str_in_a_flow_assert` and
+ * `load-core/compose_field_reads__node_assert_reads_a_field_of_a_str_field`, pinned at the end.
  *
  * Later (T3-18, the reference validator): `test_field_on_a_fieldless_output_in_a_flow_output_is_a_load_error`,
  * `test_field_on_str_in_a_node_binding_is_a_load_error`, `test_field_on_str_in_a_case_when_is_a_load_error`,
@@ -37,7 +34,15 @@ import { expect, test } from "bun:test";
 
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembled, assembleText, handChild, loadError, parametersFromYaml, runCase } from "./declarations.ts";
+import {
+  assembled,
+  assembleText,
+  type CaseRow,
+  handChild,
+  loadError,
+  parametersFromYaml,
+  runCase,
+} from "./declarations.ts";
 
 /**
  * A flow with one CODE node `step` typed `stepOutput`, plus `rest` (YAML tail); `preamble` holds
@@ -58,6 +63,14 @@ function flow(stepOutput: string, rest: string, preamble = ""): string {
     rest
   );
 }
+
+test("a field on str in a flow assert is a load error", () => {
+  const text = flow("str", "asserts:\n  - ${step.output.order == 'x'}\noutput: ${step.output}\n");
+  expect(loadError(() => assembleText(text)).message).toBe(
+    "assert \"${step.output.order == 'x'}\": reference ${step.output.order} reads field 'order' on type str, " +
+      "which has no fields",
+  );
+});
 
 // A child whose output is a partial record: `a` is typed, `b` comes from an untyped CODE node.
 const PARTIAL_CHILD_TEXT =
@@ -116,6 +129,7 @@ test("a node assert on an exact record output checks typed fields", () => {
 
 // ---------- harvested conformance cases ----------
 
-test("assembled: load-core/compose_field_reads__node_assert_reads_a_field_of_a_str_field", () => {
-  runCase({ id: "load-core/compose_field_reads__node_assert_reads_a_field_of_a_str_field", call: assembled });
-});
+test.each<CaseRow>([
+  { id: "load-core/compose_field_reads__field_on_str_in_a_flow_assert", call: assembled },
+  { id: "load-core/compose_field_reads__node_assert_reads_a_field_of_a_str_field", call: assembled },
+])("assemble: $id", runCase);

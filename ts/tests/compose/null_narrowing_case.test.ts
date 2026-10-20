@@ -16,8 +16,9 @@
  * `::test_a_null_check_keeps_a_nullable_isinstance_narrowing_of_the_branch` (8),
  * `::test_a_null_check_case_under_an_isinstance_branch_keeps_its_narrowing` (2),
  * `::test_a_null_check_alone_does_not_prove_a_type`,
- * `::test_an_assert_read_after_a_null_check_is_guarded_by_it` and
- * `::test_a_node_assert_read_after_a_null_check_names_the_non_null_type`.
+ * `::test_an_assert_read_after_a_null_check_is_guarded_by_it`,
+ * `::test_a_node_assert_read_after_a_null_check_names_the_non_null_type` and
+ * `::test_a_flow_assert_null_check_narrows_a_skippable_producer_of_a_non_null_type`.
  *
  * Changed: the guard and the facts compare with `toStrictEqual`, which also compares classes, and
  * types with `typeEquals`. The `take` and `take_each` defs are built by hand (`handChild`: the def's
@@ -25,11 +26,9 @@
  * contract), since def bodies load in T3-22; the CODE references are TS's
  * (`./fixtures/compose_codefns.ts:echo`).
  *
- * TS-only: the harvested `load-types/compose_null_narrowing_case__a_node_assert_null_check_narrows_its_read`,
- * pinned at the end.
- *
- * Later (T3-20, `lowerFlowAsserts`):
- * `test_a_flow_assert_null_check_narrows_a_skippable_producer_of_a_non_null_type`.
+ * TS-only: the harvested `load-types/compose_null_narrowing_case__a_node_assert_null_check_narrows_its_read`
+ * and `load-types/compose_null_narrowing_case__a_flow_assert_null_check_narrows_its_read`, pinned at
+ * the end.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -55,6 +54,7 @@ import { typeEquals } from "../../src/typesys/values.ts";
 import {
   assembled,
   assembleText,
+  type CaseRow,
   caseRegistry,
   type ChildFlows,
   handChild,
@@ -423,10 +423,34 @@ test("a node assert read after a null check names the non-null type", () => {
   );
 });
 
+test("a flow assert null check narrows a skippable producer of a non-null type", () => {
+  // `d` declares `Item`, but it may be skipped, so the assert can read it as null.
+  const text =
+    "id: p\nname: p\n" +
+    "typedefs:\n  Item:\n    qty: int\n" +
+    "input:\n  s: !str\n" +
+    "nodes:\n" +
+    "  route:\n    kind: case\n    cases:\n" +
+    "      - when: \"input.s == 'go'\"\n        then: d\n" +
+    "    else: e\n" +
+    `  d:\n    kind: code\n    code: ${ECHO}\n` +
+    "    input:\n      topic: ${input.s}\n    output: Item\n" +
+    `  e:\n    kind: code\n    code: ${ECHO}\n` +
+    "    input:\n      topic: ${input.s}\n    output: str\n" +
+    "output: ${input.s}\n" +
+    'asserts:\n  - "d.output != null and d.output.nosuch > 0"\n';
+  expect(loadMessage(text, {})).toBe(
+    "assert 'd.output != null and d.output.nosuch > 0': reference ${d.output.nosuch} reads " +
+      "field 'nosuch', which Item doesn't have; d.output is Item here, by the checks before " +
+      "this read",
+  );
+});
+
 // --------------------------------------------------------------------------- //
 // Harvested conformance cases
 // --------------------------------------------------------------------------- //
 
-test("assembled: load-types/compose_null_narrowing_case__a_node_assert_null_check_narrows_its_read", () => {
-  runCase({ id: "load-types/compose_null_narrowing_case__a_node_assert_null_check_narrows_its_read", call: assembled });
-});
+test.each<CaseRow>([
+  { id: "load-types/compose_null_narrowing_case__a_flow_assert_null_check_narrows_its_read", call: assembled },
+  { id: "load-types/compose_null_narrowing_case__a_node_assert_null_check_narrows_its_read", call: assembled },
+])("assemble: $id", runCase);

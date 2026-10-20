@@ -12,7 +12,8 @@
  * `test_isinstance_in_a_human_input_question_is_a_located_load_error`; and the load halves (the
  * type tables) of `test_isinstance_in_a_node_input`,
  * `test_isinstance_in_a_searched_case_is_first_true_wins`, `test_isinstance_in_a_node_assert`,
- * `test_isinstance_in_a_flow_output`, `test_isinstance_in_a_loop_while_runs_several_iterations`,
+ * `test_isinstance_in_flow_asserts_fills_start_and_end`, `test_isinstance_in_a_flow_output`,
+ * `test_isinstance_in_a_loop_while_runs_several_iterations`,
  * `test_isinstance_in_defs_and_nested_inline_children` (the inline child),
  * `test_isinstance_in_a_map_per_item_input`, `test_isinstance_in_a_call_directive_argument`,
  * `test_isinstance_in_a_loop_seed_and_until` and `test_isinstance_in_a_case_on`; and
@@ -23,9 +24,6 @@
  * TS-only: `collectConstructorNames`, `expressionTrees`, `resolveIsinstanceType`,
  * `resolveConstructorType`, `constructorTypeFn` and `isinstanceMembers` rows (Python's own
  * `isinstanceMembers` test is ported with the narrowing tests).
- *
- * Later (T3-20): `test_isinstance_in_flow_asserts_fills_start_and_end` (START/END take their
- * tables from the lowered flow asserts).
  *
  * Later (T3-22): the `defs child` site of `test_an_unknown_type_name_is_a_located_load_error` and
  * the `defs:` half of `test_isinstance_in_defs_and_nested_inline_children` (both need the child's
@@ -41,7 +39,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { type CompiledFlow, END_ID } from "../../src/compile/model.ts";
+import { type CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import {
   collectConstructorNames,
@@ -505,6 +503,12 @@ describe("type tables (load halves)", () => {
 
   test("test_isinstance_in_a_node_assert", () => {
     expectTypes(loadedNodes(NODE_ASSERT_FLOW).get("step"), { Buy: BUY, Order: ORDER });
+  });
+
+  test("test_isinstance_in_flow_asserts_fills_start_and_end", () => {
+    const nodes = loadedNodes(FLOW_ASSERT_FLOW);
+    expectTypes(nodes.get(START_ID), { Order: ORDER });
+    expectTypes(nodes.get(END_ID), { Buy: BUY });
   });
 
   test("test_isinstance_in_a_flow_output", () => {

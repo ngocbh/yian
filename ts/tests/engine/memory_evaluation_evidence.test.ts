@@ -83,6 +83,7 @@ import {
 } from "../../src/runtime/state.ts";
 import { Type, TypeCheckError, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import {
+  aborted,
   commitStartSuccess,
   engine,
   forwardCapture,
@@ -90,6 +91,7 @@ import {
   graph,
   learnableStarted,
   nodeFlow,
+  noGrowth,
   rejected,
   stacks,
 } from "./run_state_fixtures.ts";
@@ -361,7 +363,7 @@ test.each(["output", "route", "grow"] as const)("dispatcher contract failures re
   let node: EvidenceOutputNode;
   let nodes: Node[];
   let edges: [string, string, string?][];
-  let growBuilder: GrowBuilder = () => null as never;
+  let growBuilder: GrowBuilder = noGrowth;
   if (arm === "output") {
     node = new EvidenceOutputNode("work", new Output("not-an-int"));
     node.outputContract = new ValueContract(Type.scalar(ValueKind.INTEGER));
@@ -407,9 +409,8 @@ test("pooled dispatch discards late sibling evidence with its outcome", async ()
     readonly entered = Promise.withResolvers<void>();
 
     override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
-      const signal = caps.signal!;
       this.entered.resolve();
-      if (!signal.aborted) await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+      await aborted(caps.signal!).catch(() => {});
       return new Output("late");
     }
   }

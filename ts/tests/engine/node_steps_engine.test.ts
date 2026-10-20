@@ -16,20 +16,18 @@
  * `test_resume_hands_detached_prior_steps` and `test_resume_sees_the_second_start_and_the_prior_steps`
  * (serial and with two workers, each resumed on the live state and on a state replayed with
  * `replayRecords`): the crash is a throwing `onStream`, a host fault that escapes the first run.
+ * `test_serial_skips_a_step_once_stop_is_set`: the stop is an `onEvent` promise for the node's
+ * start that rejects, and `record` throws the run signal's reason, the stop's error.
  *
  * Changed: `ValueError` is `RangeError`; `True` for `starts` is `true`.
  * `test_pooled_workers_never_read_the_step_authority` checks a thread name; in its place `prior` is
  * a snapshot taken at the start: a step the node records doesn't change it.
- *
- * Ported (adapted): `test_serial_skips_a_step_once_stop_is_set`: the stop is an `onEvent` promise
- * for the node's start that rejects, and `record` throws the run signal's reason, the stop's error.
+ * `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step`: no worker waits for its
+ * step, since `record` is synchronous; in its place, after a sibling's failure aborts the run,
+ * `record` throws the run signal's reason and appends nothing.
  *
  * TS-only: a node that catches the recorder's fault and returns still rejects `evalNode`, and the
  * run, with the fault's original. A node's kept `NodeSteps` is closed once `evalNode` resolves.
- *
- * Changed: `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step`: no worker waits
- * for its step, since `record` is synchronous; in its place, after a sibling's failure aborts the
- * run, `record` throws the run signal's reason and appends nothing.
  *
  * Not ported: the `prior=[{}]` row, a list where Python wants a tuple: TS has only arrays.
  * `test_stop_releases_a_pooled_worker_waiting_for_its_step`: no worker waits for its step either;
@@ -54,7 +52,7 @@ import {
 import { commitPrepared, prepareRunResumed, replayRecords, RunState } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
-import { engine, graph, noGrowth, rejected } from "./run_state_fixtures.ts";
+import { aborted, engine, graph, noGrowth, rejected } from "./run_state_fixtures.ts";
 
 /** A node that opts into steps and runs a scripted body over its capabilities; it may stream. */
 class StepNode extends Node {
@@ -402,8 +400,7 @@ test("serial skips a step once stop is set", async () => {
   const stop = new Error("host listener failed");
   const raised: unknown[] = [];
   const node = new StepNode("work", async (caps) => {
-    const signal = caps.signal!;
-    if (!signal.aborted) await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+    await aborted(caps.signal!).catch(() => {});
     try {
       caps.steps!.record({ event: "started", attempt: 2n });
     } catch (error) {
@@ -426,8 +423,7 @@ test("a sibling failure stops a pooled node's steps", async () => {
   const raised: unknown[] = [];
   const work = new StepNode("work", async (caps) => {
     // The sibling's failure aborts the run signal.
-    const signal = caps.signal!;
-    if (!signal.aborted) await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+    await aborted(caps.signal!).catch(() => {});
     try {
       caps.steps!.record({ event: "started", attempt: 2n });
     } catch (error) {
@@ -494,7 +490,8 @@ test("pooled nodes interleave their own steps", async () => {
   const bodyFor = (nodeId: string, other: string) => async (caps: NodeCaps): Promise<NodeResult> => {
     for (const attempt of [1n, 2n]) {
       if (nodeId === "b" || attempt === 2n) {
-        await turns.get(nodeId)!.promise;
+        // A fault elsewhere aborts the run; ending the wait then lets the drain finish.
+        await Promise.race([turns.get(nodeId)!.promise, aborted(caps.signal!)]);
         turns.set(nodeId, Promise.withResolvers<void>());
       }
       caps.steps!.record({ node: nodeId, attempt });

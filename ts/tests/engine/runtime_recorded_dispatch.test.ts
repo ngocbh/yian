@@ -106,7 +106,7 @@ import {
 import { commitPrepared, type GrowBuilder, NodeDataError, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { BlockingNode, fragment, fragmentBuilder, rejected } from "./run_state_fixtures.ts";
+import { aborted, BlockingNode, fragment, fragmentBuilder, rejected } from "./run_state_fixtures.ts";
 
 const RUN_ID = "recorded-dispatch";
 const FINGERPRINT = "d".repeat(64);
@@ -200,11 +200,6 @@ class GrowNode extends Node {
   }
 }
 
-/** Resolve once `signal` aborts. */
-async function aborted(signal: AbortSignal): Promise<void> {
-  if (!signal.aborted) await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
-}
-
 /**
  * Resolves `entered` once it runs, waits for its signal to abort, then rejects with an error of its
  * own rather than the signal's reason.
@@ -226,7 +221,7 @@ class DrainFaultNode extends Node {
 
   override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
     this.#enter();
-    await aborted(caps.signal!);
+    await aborted(caps.signal!).catch(() => {});
     this.released = true;
     throw new Error("sibling failed during the drain");
   }
@@ -246,7 +241,7 @@ class LateStreamNode extends Node {
   override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
     caps.emitStream?.(new StreamChunk({ nodeId: this.id, key: "output", chunk: "early" }));
     this.streamed();
-    await aborted(caps.signal!);
+    await aborted(caps.signal!).catch(() => {});
     caps.emitStream?.(new StreamChunk({ nodeId: this.id, key: "output", chunk: "late" }));
     return new Output("discarded");
   }

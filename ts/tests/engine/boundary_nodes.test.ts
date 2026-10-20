@@ -5,14 +5,14 @@
  * nodes exist and that edges carry real adjacency, never that the strings are absent.
  *
  * Ported: `test_loader_synthesizes_start_and_end_nodes`,
- * `test_inputs_read_mints_producer_edge_from_start` and
- * `test_input_reader_is_not_also_a_bare_root`.
+ * `test_inputs_read_mints_producer_edge_from_start`, `test_input_reader_is_not_also_a_bare_root`
+ * and `test_inputs_resolve_to_start_node`.
  *
  * Changed: the flow assembles through `assembleText`, where Python calls `load_flow`; its CODE
  * reference is TS's (`./fixtures/compose_codefns.ts:echo_x`).
  *
- * Ported: `test_terminal_helpers_retired`, `test_inputs_resolve_to_start_node` and
- * `test_pool_inputs_namespace_retired` (the pool has no `addInputs` and no `inputs` field).
+ * Not ported: `test_terminal_helpers_retired` and `test_pool_inputs_namespace_retired`: they check
+ * that Python-era engine helpers and a pool namespace are gone, and TS never had them.
  *
  * Ported, after rewrite (`graph()` with a `FuncNode` reading `${input.x}`, for the loaded CODE
  * node): the engine half of `test_engine_schedules_start_and_emits_succeeded`.
@@ -27,7 +27,6 @@ import { expect, test } from "bun:test";
 import { Edge, END_ID, START_ID } from "../../src/compile/model.ts";
 import { NodeStarted, NodeSucceeded } from "../../src/events.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
-import { FlowEngine } from "../../src/runtime/engine.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { assembleText } from "../compose/declarations.ts";
 import { engine, FuncNode, graph } from "./run_state_fixtures.ts";
@@ -77,24 +76,11 @@ test("an input reader is not also a bare root", () => {
   expect(startToN[0]!.inputGroup).toBe("x");
 });
 
-test("the terminal helpers are retired", () => {
-  // END commits the run's value; the disposition handles a skip.
-  for (const name of ["terminalOutput", "emitTerminal", "terminalCoskip"]) {
-    expect(name in FlowEngine.prototype).toBe(false);
-  }
-});
-
 test("inputs resolve to the START node", () => {
   const pool = new VariablePool();
   // START commits the bound input record, so `${input.x}` reads START's `x`.
   pool.set(START_ID, { x: "ACME" });
   expect(pool.resolve("input", ["x"])).toBe("ACME");
-});
-
-test("the pool inputs namespace is retired", () => {
-  const pool = new VariablePool();
-  expect("addInputs" in pool).toBe(false);
-  expect("inputs" in pool).toBe(false);
 });
 
 test("the engine schedules START and emits its success", async () => {

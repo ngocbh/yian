@@ -160,6 +160,14 @@ export class StreamNode extends Node {
   }
 }
 
+/** Return a promise that rejects with `signal`'s reason once it aborts, at once if it has. */
+export function aborted(signal: AbortSignal): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    if (signal.aborted) reject(signal.reason);
+    else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+}
+
 /**
  * Blocks on `gate`, a promise the test settles, standing in for a node that waits on a human: its
  * value is what `gate` resolves to, and when its signal aborts first it rejects with the signal's
@@ -184,18 +192,10 @@ export class BlockingNode extends Node {
   }
 
   override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
-    const signal = caps.signal!;
     this.#enter();
-    let onAbort!: () => void;
-    const aborted = new Promise<never>((_resolve, reject) => {
-      onAbort = () => reject(signal.reason);
-    });
-    if (signal.aborted) onAbort();
-    else signal.addEventListener("abort", onAbort, { once: true });
     try {
-      return new Output(await Promise.race([this.gate, aborted]));
+      return new Output(await Promise.race([this.gate, aborted(caps.signal!)]));
     } finally {
-      signal.removeEventListener("abort", onAbort);
       this.released = true;
     }
   }
@@ -520,8 +520,17 @@ export function engine(
     memorySnapshots?: readonly MemorySnapshotEnvelope[] | null;
   } & Partial<FlowEngineOptions> = {},
 ): FlowEngine {
-  const { inputs = {}, learnable = false, numWorkers = 0, growBuilder = noGrowth, ...more } = options;
-  const { effectiveLlmByStaticPath = {}, memories = null, memoryStacks = null, memorySnapshots = null, ...rest } = more;
+  const {
+    inputs = {},
+    learnable = false,
+    numWorkers = 0,
+    growBuilder = noGrowth,
+    effectiveLlmByStaticPath = {},
+    memories = null,
+    memoryStacks = null,
+    memorySnapshots = null,
+    ...rest
+  } = options;
   if (learnable) applyExecutionLayout(flow, resolveExecutionLayout(flow));
   const state = new RunState(flow);
   const initialPool = new VariablePool(flow.startId);

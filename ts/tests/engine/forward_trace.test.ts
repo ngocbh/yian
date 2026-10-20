@@ -3088,7 +3088,7 @@ test.each(["binding", "body", "output", "route", "grow"] as const)(
     const built = engine(graph([node], [
       [START_ID, "work"],
       ["work", END_ID],
-    ], { wiring }), { learnable: true, growBuilder: () => null as never });
+    ], { wiring }), { learnable: true });
 
     await built.run();
 

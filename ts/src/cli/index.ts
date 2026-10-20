@@ -250,7 +250,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     },
     load: async () => {
       const { status } = await import("./run.ts");
-      return ({ args, options }, io) => status(args["log"] as string, { json: options["json"] === true }, io);
+      return ({ args }) => status(args["log"] as string);
     },
   },
   providers: {

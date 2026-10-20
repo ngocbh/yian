@@ -387,17 +387,15 @@ function jsonTypeName(value: JsonValue): string {
  *   other than an object.
  */
 export function readInputsJson(path: string): Record<string, JsonValue> {
-  const bytes = readFileSync(path);
+  // The BOM is kept, so the JSON reader refuses it as Python's does. Universal newlines change only
+  // an error's line and column, which then match Python's: JSON's whitespace includes them all.
   let text: string;
   try {
-    // The BOM is kept, so the JSON reader refuses it as Python's does.
-    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-  } catch {
-    throw new UsageError("Invalid value for --inputs: is not UTF-8 text");
+    text = readFlowText(path);
+  } catch (error) {
+    if (error instanceof NotUtf8Error) throw new UsageError("Invalid value for --inputs: is not UTF-8 text");
+    throw error;
   }
-  // Python reads the file in text mode, which turns `\r\n` and `\r` into `\n`; JSON's whitespace
-  // includes them all, so only an error's line and column change, and they then match.
-  text = text.replace(/\r\n?/g, "\n");
   let parsed: JsonValue;
   try {
     parsed = parseJson(text, "plain");
@@ -542,13 +540,13 @@ export function stopOnSignals(
   return dispose;
 }
 
-/** A flow file holding bytes that aren't UTF-8. */
+/** A flow or inputs file holding bytes that aren't UTF-8. */
 class NotUtf8Error extends Error {
   override name = "NotUtf8Error";
 }
 
 /**
- * Read the flow at `path` as Python's `read_text(encoding="utf-8")` does: strict UTF-8, a BOM
+ * Read the flow or inputs file at `path` as Python's `read_text(encoding="utf-8")` does: strict UTF-8, a BOM
  * kept, `\r\n` and `\r` read as `\n`.
  *
  * @throws {NotUtf8Error} When the file isn't UTF-8 text.
@@ -559,8 +557,9 @@ function readFlowText(path: string): string {
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-  } catch {
-    throw new NotUtf8Error(path);
+  } catch (error) {
+    if (error instanceof TypeError) throw new NotUtf8Error(path);
+    throw error;
   }
   return text.replace(/\r\n?/g, "\n");
 }
@@ -570,7 +569,7 @@ function readFlowText(path: string): string {
  * `CODE: ` prefix and `, <syscall> '<path>'` suffix, first letter capitalised
  * (`No such file or directory`).
  */
-export function osReason(error: NodeJS.ErrnoException): string {
+function osReason(error: NodeJS.ErrnoException): string {
   let reason = error.message;
   const prefix = `${error.code}: `;
   if (reason.startsWith(prefix)) reason = reason.slice(prefix.length);
@@ -580,7 +579,7 @@ export function osReason(error: NodeJS.ErrnoException): string {
 }
 
 /** The options `run` reads; an absent option is `undefined`, no `--input` an empty list. */
-export interface RunOptions {
+interface RunOptions {
   inputValues: readonly string[];
   inputs?: string | undefined;
   log?: string | undefined;
@@ -687,6 +686,7 @@ async function checkFlow(path: string, root: string | undefined): Promise<CheckR
     const diagnostic = new Diagnostic({ code: "compose.load", message: `can't read ${path}: ${reason}` });
     return { path, ok: false, diagnostic };
   }
+  // A loaded flow's id, name, description and inputs are added once flows load in TS.
   return { path, ok: true };
 }
 
@@ -726,7 +726,7 @@ export async function check(
 }
 
 /** Report the run recorded in the run log `log`; returns the exit code. */
-export async function status(log: string, _options: { json: boolean }, _io: CliIo): Promise<number> {
+export async function status(log: string): Promise<number> {
   return inspectRun(log);
 }
 

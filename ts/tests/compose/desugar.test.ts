@@ -13,11 +13,9 @@
  * `test_inline_call_error_uses_binding_range`, `test_inline_output_error_uses_section_range`,
  * `test_inline_assert_error_uses_positional_range`,
  * `test_duplicate_inline_assertions_keep_positional_ranges`,
- * `test_inline_map_scalar_over_does_not_use_input_named_over_range`) and the adaptive-questions
+ * `test_inline_map_scalar_over_does_not_use_input_named_over_range`), the adaptive-questions
  * rows (`test_desugar_adaptive_questions_preserves_ranges`,
- * `test_desugar_adaptive_questions_without_source`).
- *
- * Later (T3-17): the case rows
+ * `test_desugar_adaptive_questions_without_source`) and the case rows
  * (`test_desugar_case_call_targets_locate_at_their_target_line`,
  * `test_case_binding_error_uses_binding_range`, `test_case_output_error_uses_section_range`,
  * `test_case_condition_error_uses_exact_condition_range`,
@@ -28,15 +26,20 @@
 import { expect, test } from "bun:test";
 
 import { desugarAdaptiveQuestions } from "../../src/compose/desugar/adaptive_questions.ts";
+import { expandCaseOutputs } from "../../src/compose/desugar/case_outputs.ts";
+import { desugarCaseCallTargets } from "../../src/compose/desugar/case_targets.ts";
 import { desugarInlineCalls, synthIdGen } from "../../src/compose/desugar/inline_calls.ts";
 import { LoadDiagnostics, type LoadError } from "../../src/compose/helpers/errors.ts";
-import { siteKey } from "../../src/compose/nodes/base.ts";
-import { CallDescriptor } from "../../src/compose/nodes/call.ts";
+import { type NodeDescriptor, siteKey } from "../../src/compose/nodes/base.ts";
+import type { CallDescriptor } from "../../src/compose/nodes/call.ts";
+import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
+import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
-import { SourceRange } from "../../src/diagnostics.ts";
+import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
+import { Assertion } from "../../src/nodes/contracts.ts";
 import { loadError } from "./declarations.ts";
 
 /** Return the physical cursor over a flow document's `nodes:` mapping. */
@@ -217,4 +220,151 @@ test("desugar adaptive questions without source", () => {
     ]),
   );
   expect(newDescriptors.get("ask")!.fieldLabels).toEqual(new Map());
+});
+
+test("desugar case call targets locate at their target line", () => {
+  // A `case` then:/else: that is a whole-value `call(...)` directive lifts a synth `call` node.
+  // That synth node locates at its OWN `then:` line (captured positionally in the case
+  // descriptor's `thenRanges`), NOT the host case header, and carries an empty `fieldRanges`.
+  const text =
+    "id: f\nname: f\nnodes:\n" +
+    "  route:\n    kind: case\n    on: ${score.output}\n" +
+    "    cases:\n      - when: high\n        then: call(helper, n=3)\n" + // `then:` on line 9
+    "    else: cold\n" +
+    "output: ${route.output}\n";
+  const descriptors = parseNodes(nodesReader(text));
+  const predicateOrigin = new OriginRef("case/0/when");
+  const host = (descriptors.get("route") as CaseDescriptor).replace({ whenOrigins: [predicateOrigin] });
+  descriptors.set("route", host);
+  const newDescriptors = desugarCaseCallTargets(descriptors, synthIdGen());
+  const synth = [...newDescriptors].filter(([nodeId]) => nodeId.startsWith("__call_")).map(([, desc]) => desc);
+  expect(synth).toHaveLength(1);
+  const callDesc = synth[0] as CallDescriptor;
+  expect(callDesc.call).toBe("helper");
+  expect(callDesc.range).toBe(host.thenRanges[0]!); // the `then:` line, not the case header
+  expect(callDesc.range).not.toEqual(host.range);
+  expect(callDesc.fieldRanges).toEqual(new Map()); // owns no authored fields
+  expect((newDescriptors.get("route") as CaseDescriptor).whenOrigins).toEqual([predicateOrigin]);
+});
+
+function caseGate(): CaseDescriptor {
+  return new CaseDescriptor({ id: "gate", cases: [{ when: "yes", then: "left" }], else_: "right" });
+}
+
+test("case binding error uses binding range", () => {
+  const hostRange = new SourceRange(30, 3, 35, 1);
+  const bindingRange = new SourceRange(33, 10, 33, 44);
+  const consumer = new CodeDescriptor({
+    id: "consumer",
+    code: "m:f",
+    inputs: { value: "${gate.output | fallback.output}" },
+    range: hostRange,
+    fieldRanges: new Map([[siteKey("input", "value"), bindingRange]]),
+  });
+
+  const error = loadError(() =>
+    expandCaseOutputs(
+      new Map<string, NodeDescriptor>([
+        ["gate", caseGate()],
+        ["consumer", consumer],
+      ]),
+      null,
+      [],
+      { diagnostics: diagnostics() },
+    ),
+  );
+
+  expect(onlyFrame(error).range).toEqual(bindingRange);
+});
+
+test("case output error uses section range", () => {
+  const outputRange = new SourceRange(40, 9, 40, 23);
+  const emptyGate = new CaseDescriptor({ id: "gate", cases: [{ when: "yes" }] });
+
+  const error = loadError(() =>
+    expandCaseOutputs(new Map([["gate", emptyGate]]), "${gate.output}", [], {
+      outputsRange: outputRange,
+      diagnostics: diagnostics(),
+    }),
+  );
+
+  expect(onlyFrame(error).range).toEqual(outputRange);
+});
+
+test.each(["on", "when"])("case condition error uses exact condition range: %s", (conditionKind) => {
+  const conditionRange = new SourceRange(51, 11, 51, 25);
+  const hostRange = new SourceRange(48, 3, 55, 1);
+  const other =
+    conditionKind === "on"
+      ? new CaseDescriptor({
+          id: "other",
+          on: "${gate.output}",
+          cases: [{ when: "yes", then: "done" }],
+          range: hostRange,
+          fieldRanges: new Map([[siteKey("field", "on"), conditionRange]]),
+        })
+      : new CaseDescriptor({
+          id: "other",
+          cases: [{ when: "${gate.output}", then: "done" }],
+          range: hostRange,
+          whenRanges: [conditionRange],
+        });
+
+  const error = loadError(() =>
+    expandCaseOutputs(
+      new Map([
+        ["gate", caseGate()],
+        ["other", other],
+      ]),
+      null,
+      [],
+      { diagnostics: diagnostics() },
+    ),
+  );
+
+  expect(onlyFrame(error).range).toEqual(conditionRange);
+});
+
+test("case assert error uses positional range", () => {
+  const assertionRanges = [new SourceRange(61, 7, 61, 20), new SourceRange(62, 7, 62, 30)];
+
+  const error = loadError(() =>
+    expandCaseOutputs(
+      new Map([["gate", caseGate()]]),
+      null,
+      [new Assertion("true", "true"), new Assertion("gate.output == 1", "gate.output == 1")],
+      { assertionRangeAt: (index) => assertionRanges[index]!, diagnostics: diagnostics() },
+    ),
+  );
+
+  expect(onlyFrame(error).range).toEqual(assertionRanges[1]!);
+});
+
+test("case map scalar over does not use the range of an input named over", () => {
+  const inputRange = new SourceRange(81, 9, 81, 25);
+  const scalarRange = new SourceRange(82, 9, 82, 45);
+  const descriptor = new MapDescriptor({
+    id: "mapped",
+    call: "child",
+    inputs: { over: "${input.seed}" },
+    over: "${gate.output | fallback.output}",
+    fieldRanges: new Map([
+      [siteKey("input", "over"), inputRange],
+      [siteKey("field", "over"), scalarRange],
+    ]),
+  });
+
+  const error = loadError(() =>
+    expandCaseOutputs(
+      new Map<string, NodeDescriptor>([
+        ["gate", caseGate()],
+        ["mapped", descriptor],
+      ]),
+      null,
+      [],
+      { diagnostics: diagnostics() },
+    ),
+  );
+
+  expect(onlyFrame(error).range).toEqual(scalarRange);
 });

@@ -22,8 +22,8 @@
  * (`tests/compose/test_node_input_origins.py`) and
  * `test_boundary_nodes_are_originless_and_an_inline_call_shares_its_binding`
  * (`tests/compose/test_node_origins.py`), neither file having a TS mirror yet, and TS-only rows for
- * nested calls in a node input, a flow output and a flow assert. Origins resolve through the
- * assembly's catalog builder.
+ * nested calls in a node input, a flow output, a flow assert and the `then:`/`else:` targets of a
+ * CASE. Origins resolve through the assembly's catalog builder.
  *
  * TS-only: the harvested cases the inline-call desugar raises whose Python test file has no TS
  * mirror, each named by its case id (from `test_expression_nesting.py`, `test_limit_overrides.py`,
@@ -633,4 +633,38 @@ asserts:
   expect(origin).toBeInstanceOf(OriginRef);
   expect(builder.resolveRegistered(origin!)!.range).toEqual(item.range!);
   expect(bindingOf(compiled, "__call_0", "topic").origin).toBe(origin);
+});
+
+test("a then: call registers its branch site once and a nested call reuses it", () => {
+  const topic = def("  topic: !str\n", "str");
+  const text = `
+id: ic_branch
+name: ic_branch
+input:
+  go: !bool
+  topic: !str
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: \${input.go}
+        then: call(outer, topic=call(inner, topic=\${input.topic}))
+    else: call(take, topic=\${input.topic})
+output: \${gate.output}
+`;
+  const gate = SourceDocument.parse(text).root.child("nodes").child("gate");
+  const { flow, builder } = assembleText(text, "flow.yaml", { children: { outer: topic, inner: topic, take: topic } });
+  const compiled = flow.compiled;
+
+  // __call_0 is the inner call, __call_1 the outer one (inner first), __call_2 the else call.
+  const thenOrigin = compiled.nodes.get("__call_1")!.origin;
+  expect(thenOrigin).toBeInstanceOf(OriginRef);
+  expect(builder.resolveRegistered(thenOrigin!)!.range).toEqual(gate.child("cases").child(0).child("then").range!);
+  for (const callId of ["__call_0", "__call_1"]) {
+    expect(compiled.nodes.get(callId)!.origin).toBe(thenOrigin);
+    expect(bindingOf(compiled, callId, "topic").origin).toBe(thenOrigin);
+  }
+  const elseOrigin = compiled.nodes.get("__call_2")!.origin;
+  expect(builder.resolveRegistered(elseOrigin!)!.range).toEqual(gate.child("else").range!);
+  expect(bindingOf(compiled, "__call_2", "topic").origin).toBe(elseOrigin);
 });

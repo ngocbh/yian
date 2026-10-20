@@ -36,20 +36,22 @@
  * Dropped: `test_case_keeps_no_key_normalization` (Python class-dict introspection).
  *
  * Later (T4): the run half of
- * `test_searched_case_origins_are_positional_and_select_the_failing_entry`. Later (T3-20, T3-17):
- * `test_source_attachment_does_not_preempt_malformed_case_validation` (`case_branches`,
- * `expand_case_outputs`). Later (T3-22, T4):
+ * `test_searched_case_origins_are_positional_and_select_the_failing_entry`. Later (T3-20):
+ * `test_source_attachment_does_not_preempt_malformed_case_validation` (`case_branches`; its
+ * `[{when: 1}]` row is the harvested `a_case_with_no_branch_has_no_value`, pinned). Later (T3-22,
+ * T4):
  * `test_named_definition_case_failure_keeps_child_predicate_origin`. Later (T3-17, T4):
  * `test_inline_definition_case_failure_keeps_child_predicate_origin`. Later (T3-22):
  * `test_external_alias_rebases_case_and_generated_binding_origins`,
  * `test_generated_child_clone_preserves_case_predicate_origins`,
- * `test_formatting_moves_case_ranges_without_changing_keys_or_fingerprint`. Later (T3-17, T3-20):
- * the harvested `load-case/compose_kind_case_parse__a_case_with_no_branch_has_no_value` and
- * `__a_flow_style_case_names_no_node`.
+ * `test_formatting_moves_case_ranges_without_changing_keys_or_fingerprint`. Later (T3-20): the
+ * harvested `load-case/compose_kind_case_parse__a_flow_style_case_names_no_node`.
  *
  * The harvested cases whose error the CASE parse or build raises are pinned at the end, with
  * `load-core/compose_expression_nesting__thousands_of_nested_spans` and `__too_deep_searched_when`
- * from `tests/compose/test_expression_nesting.py`, which has no TS mirror yet.
+ * from `tests/compose/test_expression_nesting.py`, which has no TS mirror yet, and
+ * `load-case/compose_kind_case_parse__a_case_with_no_branch_has_no_value`, which the case-output
+ * expansion raises.
  */
 
 import { expect, test } from "bun:test";
@@ -544,6 +546,8 @@ test.each<CaseRow>([
 ])("parseNodes: $id", runCase);
 
 test.each<CaseRow>([
+  // tests/compose/test_kind_case_parse.py
+  { id: "load-case/compose_kind_case_parse__a_case_with_no_branch_has_no_value", call: assembled },
   // tests/compose/test_expression_nesting.py
   { id: "load-core/compose_expression_nesting__thousands_of_nested_spans", call: assembled },
   { id: "load-core/compose_expression_nesting__too_deep_searched_when", call: assembled },

@@ -9,19 +9,18 @@
  *
  * Changed: `test_host_is_not_an_authored_key` assembles the flow (`assembleText`) where Python
  * loads it.
- *
- * Later (T3-17): `test_nested_branch_call_records_the_outer_call_as_host` (the case-target
- * desugar).
  */
 
 import { expect, test } from "bun:test";
 
 import { desugarAdaptiveQuestions } from "../../src/compose/desugar/adaptive_questions.ts";
+import { desugarCaseCallTargets } from "../../src/compose/desugar/case_targets.ts";
 import { desugarInlineCalls, synthIdGen } from "../../src/compose/desugar/inline_calls.ts";
 import { readValueEntry } from "../../src/compose/desugar/value_entries.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import type { CallDescriptor } from "../../src/compose/nodes/call.ts";
+import type { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
@@ -95,6 +94,22 @@ test("inline calls in flow output and asserts have no host", () => {
   const synth = [...synthOf(newDescriptors).values()];
   expect(synth.map((desc) => desc.call).sort()).toEqual(["f", "g"]);
   expect(synth.map((desc) => desc.host)).toEqual([null, null]);
+});
+
+test("nested branch call records the outer call as host", () => {
+  const descriptors = descriptorsOf(
+    "  gate:\n    kind: case\n    cases:\n" +
+      "      - when: ${input.go}\n" +
+      '        then: call(outer, x=call(inner, y="hi"))\n' +
+      "    else: call(take)\n",
+  );
+  const newDescriptors = desugarCaseCallTargets(descriptors, synthIdGen());
+  const byCallee = new Map([...synthOf(newDescriptors).values()].map((desc) => [desc.call, desc]));
+  const outer = byCallee.get("outer")!;
+  expect(byCallee.get("inner")!.host).toBe(outer.id);
+  expect(outer.host).toBeNull();
+  expect(byCallee.get("take")!.host).toBeNull();
+  expect((newDescriptors.get("gate") as CaseDescriptor).cases[0]!["then"]).toBe(outer.id);
 });
 
 test("adaptive composer records the gate as host", () => {

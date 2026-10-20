@@ -79,12 +79,15 @@ import { siteKey } from "../nodes/base.ts";
 import { HumanInputDescriptor } from "../nodes/human_input.ts";
 // T3-17 imports
 import { desugarAdaptiveQuestions, QPARAM } from "../desugar/adaptive_questions.ts";
+import { caseOutputReads, expandCaseOutputs } from "../desugar/case_outputs.ts";
+import { desugarCaseCallTargets } from "../desugar/case_targets.ts";
 import { desugarInlineCalls, synthIdGen } from "../desugar/inline_calls.ts";
 import { isValueEntry, readValueEntry, type ValueEntryDescriptor } from "../desugar/value_entries.ts";
 import { inferDataEdges } from "../edges/data.ts";
 import { hostControlEdges } from "../edges/hosts.ts";
 import { inferOrderingEdges } from "../edges/ordering.ts";
 import { CallDescriptor } from "../nodes/call.ts";
+import { CaseDescriptor } from "../nodes/case.ts";
 import type { ScalarStyle } from "../source/common.ts";
 import { LoweredAsserts } from "../validate/asserts.ts";
 import { Narrowing } from "../validate/narrowing.ts";
@@ -1176,9 +1179,31 @@ function fillTypeTables(
   diagnostics: LoadDiagnostics,
 ): void {}
 
-/** Python's `compose.build.pipeline._value_cases`; not ported yet. */
+/**
+ * Return the ids of the cases that produce a value.
+ *
+ * A case produces a value when it is in `read`; a case that is a `then:`/`else:` target of a
+ * value-producing case produces one too.
+ *
+ * @param descriptors Node descriptors keyed by node id.
+ * @param read The case ids some binding reads as `${<case>.output}`.
+ * @returns The value-producing case ids.
+ */
 function valueCases(descriptors: ReadonlyMap<string, NodeDescriptor>, read: ReadonlySet<string>): ReadonlySet<string> {
-  return new Set();
+  const cases = new Map<string, CaseDescriptor>();
+  for (const [nodeId, d] of descriptors) if (d instanceof CaseDescriptor) cases.set(nodeId, d);
+  const pending = [...cases.keys()].filter((nodeId) => read.has(nodeId));
+  const found = new Set<string>();
+  while (pending.length > 0) {
+    const nodeId = pending.pop()!;
+    if (found.has(nodeId)) continue;
+    found.add(nodeId);
+    const desc = cases.get(nodeId)!;
+    for (const target of [...desc.cases.map((spec) => spec["then"]), desc.else_]) {
+      if (typeof target === "string" && cases.has(target)) pending.push(target);
+    }
+  }
+  return found;
 }
 
 /** Python's `_assemble` keyword arguments: the parsed sections and the scope one assembly reads. */
@@ -1927,9 +1952,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
 //   T3-17  extractInlineBodies (1): returns `[nodesCursor, new Map()]`.
-//          desugarCaseCallTargets (1): returns the descriptors.
-//          caseOutputReads (1), valueCases (2): return `new Set()`.
-//          expandCaseOutputs (1): returns `[descriptors, outputsSection]`.
 //          buildInlineChild (3, `(body: InlineBody, descriptor: NodeDescriptor) => ComposedFlow`):
 //            throws.
 //          readBindingContract (3, `BindingContractReader | null`): `null`.
@@ -1964,37 +1986,6 @@ function extractInlineBodies(
   options: { owner: readonly string[] },
 ): [nodesCursor: SourceCursor, inlineBodies: Map<string, InlineBody>] {
   return [nodesCursor, new Map()];
-}
-
-/** Python's `compose.desugar.case_targets.desugar_case_call_targets`; not ported yet. */
-function desugarCaseCallTargets(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  mint: () => string,
-  options: { diagnostics?: LoadDiagnostics | null } = {},
-): Map<string, NodeDescriptor> {
-  return new Map(descriptors);
-}
-
-/** Python's `compose.desugar.case_outputs.case_output_reads`; not ported yet. */
-function caseOutputReads(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  outputsSection: unknown,
-): ReadonlySet<string> {
-  return new Set();
-}
-
-/** Python's `compose.desugar.case_outputs.expand_case_outputs`; not ported yet. */
-function expandCaseOutputs(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  outputsSection: unknown,
-  assertsSection: readonly Assertion[],
-  options: {
-    outputsRange?: SourceRange | null;
-    assertionRangeAt?: ((index: number) => SourceRange | null) | null;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown] {
-  return [new Map(descriptors), outputsSection];
 }
 
 // T3-18: compose/validate/{value_nesting,tool_inputs,wiring_parity,references,human_questions,

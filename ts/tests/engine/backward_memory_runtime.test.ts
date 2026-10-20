@@ -75,8 +75,9 @@
  * TS only: driving with an inexact `RunState` or a non-log refuses before opening; an async opener
  * resolves before the first record; a drive overtaken by another drive while it awaits its opener
  * (fresh and interrupted prior attempt) or its handler (the handler then throws, or its learner
- * fails) is refused by the reducer, appends nothing and closes its runtime; an opener result that
- * isn't a `MemoryRuntime` and a runtime whose earlier close failed are refused; a
+ * fails) is refused by the reducer, appends nothing and closes its runtime; a drive whose handler
+ * throws or whose learner fails while a newer drive is mid-attempt can't finish the newer attempt,
+ * which then finishes itself; an opener result that isn't a `MemoryRuntime` and a runtime whose earlier close failed are refused; a
  * `MemoryOperationError` with an `AbortError` or `CapabilityFault` cause is a learner or commit
  * failure; a thrown `undefined` still closes the runtime and is rethrown.
  *
@@ -1292,6 +1293,44 @@ test("a drive overtaken during its handler is refused by the reducer", async () 
     expect(stale.learnContexts).toHaveLength(failure === "learner" ? 1 : 0);
     expect(stale.commitCalls).toEqual([]);
     expect(stale.closeCount).toBe(1);
+  }
+});
+
+test("a stale drive can't finish a newer drive's attempt", async () => {
+  for (const failure of ["handler", "learner"]) {
+    const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    const entered = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    let calls = 0;
+    const callback: BackwardCallback = async (_context, feedback) => {
+      const call = calls++;
+      entered[call]!.resolve();
+      await gates[call]!.promise;
+      if (call === 0 && failure === "handler") throw new Error("Callback failed.");
+      return new BackwardResult({ inputFeedback: { topic: feedback } });
+    };
+    const { engine: built } = await terminal(["A"], { callback });
+    const stale = new FakeMemory({
+      learnOutcomes: failure === "learner" ? [new MemoryOperationError("learn", "rejected", "Rejected.", false)] : [],
+    });
+    const pending = drive(built, new Map([["A", stale]]), "stale");
+    await entered[0]!.promise;
+    // The newer drive closes attempt 1 as interrupted, starts attempt 2 and waits in its handler.
+    const newer = drive(built, new Map([["A", new FakeMemory()]]));
+    await entered[1]!.promise;
+    const after = records(built);
+    expect(built.state.backwardState.started!.attemptId).toBe(2);
+    gates[0]!.resolve();
+    const error = await rejected(pending);
+    expect((error as Error).constructor).toBe(RangeError);
+    expect((error as Error).message).toBe("backward record requires its matching unfinished attempt");
+    expect(records(built)).toEqual(after);
+    expect(stale.learnContexts).toHaveLength(failure === "learner" ? 1 : 0);
+    expect(stale.closeCount).toBe(1);
+    gates[1]!.resolve();
+    expect((await newer).status).toBe("succeeded");
+    const finished = records(built).at(-1)!;
+    expect(finished.constructor).toBe(BackwardFinishedRecord);
+    expect((finished as BackwardFinishedRecord).attemptId).toBe(2);
   }
 });
 

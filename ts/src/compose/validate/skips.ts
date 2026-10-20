@@ -29,7 +29,7 @@
 
 import { type Edge, FlowOutput } from "../../compile/model.ts";
 import { current } from "../../defaults.ts";
-import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
+import { compareCodeUnits, type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
 import { bindingCoSkips, ExpressionError, exprRefs, parseCondition, scanTemplate } from "../../expr/index.ts";
 import { type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
 import { Span } from "../../expr/template.ts";
@@ -560,7 +560,7 @@ function nullGroups(operand: ExprNode, known: ReadonlySet<string>): Set<string>[
       for (const a of combined) {
         for (const b of groups) {
           const union = new Set([...a, ...b]);
-          const key = JSON.stringify([...union].sort());
+          const key = JSON.stringify([...union].sort(compareCodeUnits));
           if (!unique.has(key)) unique.set(key, union);
         }
       }

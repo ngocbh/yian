@@ -2,7 +2,7 @@
  * Strict type inference for parameters of generated inline composite flows: a port of
  * `tests/engine/test_inline_composite_types.py`.
  *
- * Ported: every test, through `inferInlineBindingType`, `requireProvenType`,
+ * Ported: every test but `test_non_string_mapping_key_is_rejected` (see Changed), through `inferInlineBindingType`, `requireProvenType`,
  * `canonicalizeInlineType` and `canonicalTypeLabel`. Where Python checks a message fragment, the
  * row pins the whole message.
  *

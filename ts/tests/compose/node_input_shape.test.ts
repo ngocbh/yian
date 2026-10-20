@@ -13,7 +13,8 @@
  *
  * Ported through `assembleText`: `test_inline_loop_whole_reference_keeps_its_message` (inline
  * body extraction refuses the `input:` before any node parses), with its harvested case
- * `inline_loop_whole_reference_keeps_its_message` (`assembled`).
+ * `inline_loop_whole_reference_keeps_its_message` (`assembled`). Its flow drops Python's unused
+ * `defs:` entry (`defs:` bodies are T3-22).
  *
  * Later (T3-22): `test_non_mapping_input_in_a_defs_body_is_located` (the `defs entry` prefix)
  * and the load half of `test_null_or_empty_mapping_input_still_loads`. Later (T3-22, T4):

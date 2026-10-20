@@ -6,9 +6,8 @@
  * original paths and ranges. A tagged `nodes:` entry is a value, never an inline body, even when
  * its mapping has a `kind:` key.
  *
- * Knows about: diagnostics, the compose error helpers and source cursors.
- * Never imports: compose/parse, edges, validate, build, the loader, or the runtime; only the
- * pipeline imports this back.
+ * Knows about: diagnostics, typesys values, the compose error helpers and source cursors.
+ * Never imports: compose/parse, edges, validate, build, the loader, or the runtime.
  */
 
 import { createHash } from "node:crypto";

@@ -241,7 +241,9 @@ export class FlowEngine {
             } catch (error) {
               // A recall error fails the node; any other rejection is a host fault, which ends
               // the run now, as a refused step does.
-              if (!(error instanceof MemoryRecallError)) this.#fail(error instanceof CapabilityFault ? error.original : error);
+              if (!(error instanceof MemoryRecallError)) {
+                this.#fail(error instanceof CapabilityFault ? error.original : error);
+              }
               throw error;
             }
           };

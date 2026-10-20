@@ -19,7 +19,8 @@
  * `test_stop_during_recall_prevents_transcript_source_acquisition`,
  * `test_context_admits_a_transcript_only_from_an_eligible_memory` and
  * `test_context_rejects_a_second_transcript_for_one_agent`, with the `_Session`, `_Memory`,
- * `_table`, `_origins`, `_open`, `_scope` and `_context` helpers.
+ * `_table`, `_origins`, `_open`, `_scope`, `_context` and `_recall_sections` (`recallSections`)
+ * helpers.
  *
  * Changed: Python's tuples are arrays and its dictionaries are `Map`s; each refusal pins its class
  * and full message (Python's `ValueError` is a `RangeError`, matched in part there); every origin
@@ -30,7 +31,11 @@
  * `check_stopped`; a transcript source is a plain object whose `openTurn` returns a fake turn;
  * Python's `str` subclass is a `String` object; the second-transcript test uses a two-part path to
  * pin the `/` join. The stop test has no `_HostStop`: the recall aborts
- * the controller with a reason object, and `openContext` rejects with that very object.
+ * the controller with a reason object, and `openContext` rejects with that very object. The
+ * context validation test tries four non-signal options (`undefined`, `{}`, `{ signal: null }`, a
+ * fake signal) where Python tries one `check_stopped=None`, and checks nothing was recalled; the
+ * recall context is the very `RecallContext` (`toBe`, where Python uses `==`); an invalid-content
+ * error's `cause` is a `TypeError` (Python checks no cause).
  *
  * TS-only: a plain-object table item; origins as a plain object, with a numeric key, or with a key
  * emptied after construction (`OriginRef`'s own `RangeError`); each registry name message (a

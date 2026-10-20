@@ -674,7 +674,7 @@ test("real backend cleanup note survives node error unwrapping", async () => {
     const outcome = (await evaluate(node, contextOpener(runtime))) as EvaluationFailure;
     expect(outcome.failure.code).toBe("node.execute");
     const note = "Conversation cleanup also failed: Error: close storage failed";
-    expect(outcome.failure.traceback).toContain(note);
+    expect(outcome.failure.traceback!.endsWith(note)).toBe(true);
     expect(error.notes).toEqual([note]);
   } finally {
     spy.mockRestore();

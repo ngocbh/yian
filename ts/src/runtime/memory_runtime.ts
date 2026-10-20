@@ -284,7 +284,10 @@ export class MemoryRuntime {
         recalled = await this.sessions.get(key)!.recall(request.recall);
       } catch (error) {
         if (!(error instanceof MemoryOperationError)) throw error;
-        throw new MemoryRecallError(`memory ${reprText(key)} recall failed: ${error.message}`, { origin, cause: error });
+        throw new MemoryRecallError(`memory ${reprText(key)} recall failed: ${error.message}`, {
+          origin,
+          cause: error,
+        });
       }
       let content: MemoryContent;
       let section: MemorySection;
@@ -296,7 +299,10 @@ export class MemoryRuntime {
       } catch (error) {
         if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
         // The content may be private, so the message leaves it out.
-        throw new MemoryRecallError(`memory ${reprText(key)} returned invalid recall content`, { origin, cause: error });
+        throw new MemoryRecallError(`memory ${reprText(key)} returned invalid recall content`, {
+          origin,
+          cause: error,
+        });
       }
       if (section.text) sections.push(section);
       if (content.transcript === null) continue;

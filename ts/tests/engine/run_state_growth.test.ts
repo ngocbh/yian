@@ -29,7 +29,12 @@
  * `test_growth_accepts_peak_node_count_equal_to_budget`,
  * `test_growth_prunes_only_named_settled_dynamic_overlay_coordinates`,
  * `test_growth_rejects_a_binding_wrapped_dependency_on_a_pruned_node`,
- * `test_growth_rejects_a_template_dependency_on_a_pruned_node`.
+ * `test_growth_rejects_a_template_dependency_on_a_pruned_node`,
+ * `test_pruning_keeps_a_grown_subtree_with_unsettled_work`,
+ * `test_pruning_retires_a_grown_subtree_once_settled`,
+ * `test_growth_keeps_an_unsettled_prune_id_live_and_deferred`,
+ * `test_growth_keeps_a_settled_prune_id_that_kept_work_reads`,
+ * `test_growth_retires_a_settled_prune_id_the_kept_work_does_not_read`.
  *
  * Python's `_snapshot` is `snapshot` plus `topologySnapshot`: `snapshot` holds the flow by
  * reference, so a growth's topology change needs its own detached copy.
@@ -78,7 +83,14 @@
  *   test reaches too), and with it built earlier the prune scan does (`surviving node '__end__'
  *   has invalid wiring`).
  *
- * TS-only: a non-text prune id (`new Grow({}, [1])`) is `Grow.prune must contain only strings`.
+ * TS-only:
+ * - a non-text prune id (`new Grow({}, [1])`) is `Grow.prune must contain only strings`;
+ * - a growth that retires a node keeps its interrupted-attempt count;
+ * - every pruning test that grows also checks the kept growth index against a rebuild
+ *   (`expectIndexMatchesRebuild`, a port of `_require_index_matches_rebuild` from
+ *   `test_growth_index.py`), and the deferral tests check that a replay of the record on an
+ *   identical setup gives equal observers, state and topology, as Python's two grown-subtree
+ *   tests do.
  *
  * Not ported:
  * - `test_growth_seed_rejection_retains_the_original_exception` and
@@ -91,13 +103,6 @@
  *   copies `prune` into a new `Set`.
  * - the `empty-param-tuple` and `param-tuple` rows of
  *   `test_growth_rejects_invalid_fragments_atomically`: a tuple and a list are both a JS array.
- *
- * Later (T4-5, pruning):
- * `test_pruning_keeps_a_grown_subtree_with_unsettled_work`,
- * `test_pruning_retires_a_grown_subtree_once_settled`,
- * `test_growth_keeps_an_unsettled_prune_id_live_and_deferred`,
- * `test_growth_keeps_a_settled_prune_id_that_kept_work_reads`,
- * `test_growth_retires_a_settled_prune_id_the_kept_work_does_not_read`.
  *
  * Later (T3-22, they need `build_grow`):
  * `test_actual_build_grow_splices_call_map_and_loop_with_fifo_and_depth`,
@@ -133,7 +138,9 @@ import { MemoryRunLog, NodeExpandedRecord, type RecordEnvelope, type RunRecord }
 import {
   commitPrepared,
   type GrowBuilder,
+  type GrowthIndex,
   growthIndex,
+  type PreparedTransition,
   prepareExpanded,
   prepareNodeStarted,
   prepareNodeSucceeded,
@@ -1254,6 +1261,7 @@ test("growth accepts a peak node count equal to the budget", () => {
 
   expect(oldIds.filter((nodeId) => state.flow.nodes.has(nodeId))).toEqual([]);
   expect(state.flow.nodes.has("spawn/child/start")).toBe(true);
+  expectIndexMatchesRebuild(state);
 });
 
 test("growth prunes only the named settled dynamic overlay coordinates", () => {
@@ -1283,6 +1291,7 @@ test("growth prunes only the named settled dynamic overlay coordinates", () => {
   expect(state.flow.edges.some((edge) => old.has(edge.from) || old.has(edge.to))).toBe(false);
   expect(state.flow.nodes.has(residueId)).toBe(true);
   expect(state.nodeState.get(residueId)).toBe(NodeState.TAKEN);
+  expectIndexMatchesRebuild(state);
 });
 
 /** Add a LOOP clone `cloneId` of `originId` to `state`, put it in flight and return its id. */
@@ -1457,4 +1466,248 @@ test.each([
   expect(error.constructor).toBe(RangeError);
   expect(error.message).toMatch(message);
   expect(error.cause).toBeInstanceOf(ExpressionError);
+});
+
+/**
+ * Expect `state.growthIndex` to equal one rebuilt from the live state, and every edge and reducer
+ * container to name only live nodes (`_require_index_matches_rebuild` of `test_growth_index.py`).
+ */
+function expectIndexMatchesRebuild(state: RunState): void {
+  const flow = state.flow;
+  const kept = state.growthIndex!;
+  state.growthIndex = null;
+  let fresh: GrowthIndex;
+  try {
+    fresh = growthIndex(state);
+  } finally {
+    state.growthIndex = kept;
+  }
+  const asSets = (map: ReadonlyMap<string, ReadonlySet<string>>) =>
+    Object.fromEntries([...map].filter(([, ids]) => ids.size > 0).map(([key, ids]) => [key, [...ids].sort()]));
+  expect(Object.fromEntries(kept.names)).toEqual(Object.fromEntries(fresh.names));
+  expect(asSets(kept.referrers)).toEqual(asSets(fresh.referrers));
+  expect(asSets(kept.grown)).toEqual(asSets(fresh.grown));
+
+  const outgoing = new Map<string, Edge[]>();
+  const incoming = new Map<string, Edge[]>();
+  for (const edge of flow.edges) {
+    expect([edge.id, flow.nodes.has(edge.from) && flow.nodes.has(edge.to)]).toEqual([edge.id, true]);
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge]);
+    incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), edge]);
+  }
+  expect(Object.fromEntries(flow.outgoingEdges)).toEqual(Object.fromEntries(outgoing));
+  expect(Object.fromEntries(flow.incomingEdges)).toEqual(Object.fromEntries(incoming));
+  expect([...state.edgeState.keys()].sort()).toEqual(flow.edges.map((edge) => edge.id).sort());
+  expect([...state.nodeState.keys()].sort()).toEqual([...flow.nodes.keys()].sort());
+  for (const ids of [
+    flow.wiring.keys(),
+    state.depth.keys(),
+    state.growthOwner.keys(),
+    state.growthOwner.values(),
+    state.deferredPrune,
+    state.ready,
+    state.inFlight,
+  ]) {
+    expect([...ids].filter((nodeId) => !flow.nodes.has(nodeId))).toEqual([]);
+  }
+}
+
+/** Return a state whose prunable `x/child/start` owns settled nodes and `side`. */
+function grownUnderRequested(sideState: NodeState): {
+  state: RunState;
+  log: MemoryRunLog;
+  grown: string[];
+  side: string;
+} {
+  const { state, log } = initializedSpawner();
+  const ids = installSettledOverlay(state, { prefix: "x" });
+  const grown = installSettledOverlay(state, { prefix: "x/child/start" });
+  const side = "x/child/start/side";
+  addLiveNode(state, new OverlayNode(side));
+  state.nodeState.set(side, sideState);
+  state.growthOwner = new Map([
+    ...ids.map((nodeId) => [nodeId, "spawn"] as const),
+    ...[...grown, side].map((nodeId) => [nodeId, "x/child/start"] as const),
+  ]);
+  return { state, log, grown, side };
+}
+
+/** Prepare the growth of `spawn` that requests pruning `x/child/start`. */
+function pruneRequested(state: RunState): PreparedTransition {
+  return prepareExpanded(state, "spawn", new Grow({}, ["x/child/start"]), fragmentBuilder);
+}
+
+/**
+ * Replay `prepared.record` on a fresh identical `setup()` and expect the observers, the state and
+ * the topology to equal the live ones, and the replay's growth index to match a rebuild.
+ */
+function assertReplaysEqual(
+  state: RunState,
+  prepared: PreparedTransition,
+  observers: readonly RunEvent[],
+  setup: () => { state: RunState; log: MemoryRunLog },
+): void {
+  const { state: replay, log: replayLog } = setup();
+  const replayObservers = commitPrepared(
+    replayLog,
+    replay,
+    prepareRecord(replay, prepared.record, { growBuilder: fragmentBuilder }),
+  );
+  expect(replayObservers).toEqual(observers);
+  expect(reducerSnapshot(replay)).toEqual(reducerSnapshot(state));
+  expect(topologySnapshot(replay)).toEqual(topologySnapshot(state));
+  expectIndexMatchesRebuild(replay);
+}
+
+/** Expect `ids` gone from every topology and reducer container. */
+function assertRetired(state: RunState, ids: readonly string[]): void {
+  for (const nodeId of ids) {
+    expect(state.flow.nodes.has(nodeId)).toBe(false);
+    expect(state.flow.wiring.has(nodeId)).toBe(false);
+    expect(state.nodeState.has(nodeId)).toBe(false);
+    expect(state.pool.store.has(nodeId)).toBe(false);
+    expect(state.depth.has(nodeId)).toBe(false);
+    expect(state.wiringOverrides.has(nodeId)).toBe(false);
+    expect(state.growthOwner.has(nodeId)).toBe(false);
+    expect(state.flow.incomingEdges.has(nodeId)).toBe(false);
+    expect(state.flow.outgoingEdges.has(nodeId)).toBe(false);
+  }
+  expect(state.flow.edges.some((edge) => ids.includes(edge.from) || ids.includes(edge.to))).toBe(false);
+  expect([...state.edgeState.keys()].sort()).toEqual(state.flow.edges.map((edge) => edge.id).sort());
+}
+
+test("pruning keeps a grown subtree with unsettled work", () => {
+  const { state, log, grown, side } = grownUnderRequested(NodeState.UNKNOWN);
+
+  const prepared = pruneRequested(state);
+  const observers = commitPrepared(log, state, prepared);
+
+  expect([...state.deferredPrune]).toEqual(["x/child/start"]);
+  expect(state.growthOwner.get("x/child/start")).toBe("spawn");
+  for (const nodeId of [...grown, side]) {
+    expect(state.flow.nodes.has(nodeId)).toBe(true);
+    expect(state.growthOwner.get(nodeId)).toBe("x/child/start");
+  }
+  expectIndexMatchesRebuild(state);
+  assertReplaysEqual(state, prepared, observers, () => grownUnderRequested(NodeState.UNKNOWN));
+});
+
+test("pruning retires a grown subtree once settled", () => {
+  const { state, log, grown, side } = grownUnderRequested(NodeState.TAKEN);
+
+  const prepared = pruneRequested(state);
+  const observers = commitPrepared(log, state, prepared);
+
+  expect((prepared.record as NodeExpandedRecord).pruneIds).toEqual(["x/child/start"]);
+  assertRetired(state, ["x/child/start", ...grown, side]);
+  expect(new Set(state.growthOwner.values())).toEqual(new Set(["spawn"]));
+  expectIndexMatchesRebuild(state);
+  assertReplaysEqual(state, prepared, observers, () => grownUnderRequested(NodeState.TAKEN));
+});
+
+/** Make the settled overlay node `nodeId` waiting, ready, or running. */
+function unsettle(state: RunState, log: MemoryRunLog, nodeId: string, how: string): void {
+  state.nodeState.set(nodeId, NodeState.UNKNOWN);
+  if (how === "ready" || how === "in-flight") state.ready.unshift(nodeId);
+  if (how === "in-flight") commitPrepared(log, state, prepareNodeStarted(state, nodeId));
+}
+
+test.each(["waiting", "ready", "in-flight"])("growth keeps an unsettled prune id live and deferred: %s", (how) => {
+  const setup = () => {
+    const { state, log } = initializedSpawner();
+    const oldId = installSettledOverlay(state)[0]!;
+    unsettle(state, log, oldId, how);
+    return { state, log, oldId };
+  };
+  const { state, log, oldId } = setup();
+
+  const prepared = prepareExpanded(state, "spawn", new Grow({}, [oldId]), fragmentBuilder);
+  const observers = commitPrepared(log, state, prepared);
+
+  expect((prepared.record as NodeExpandedRecord).pruneIds).toEqual([oldId]);
+  expect(state.flow.nodes.has(oldId)).toBe(true);
+  expect([...state.deferredPrune]).toEqual([oldId]);
+  expect(state.inFlight.has(oldId)).toBe(how === "in-flight");
+  expectIndexMatchesRebuild(state);
+  assertReplaysEqual(state, prepared, observers, setup);
+});
+
+/** Install settled overlay nodes `a -> b` whose `b` reads `a` by edge and wiring. */
+function sideChain(state: RunState): [string, string] {
+  const edge = new Edge("a->b", "a", "b", { ordering: true });
+  state.flow.addSubgraph(
+    new Map([
+      ["a", new OverlayNode("a")],
+      ["b", new OverlayNode("b")],
+    ]),
+    [edge],
+    new Map([
+      ["a", new Map()],
+      ["b", new Map([["value", new Binding("${a.output}")]])],
+    ]),
+  );
+  state.nodeState.set("a", NodeState.TAKEN);
+  state.nodeState.set("b", NodeState.TAKEN);
+  state.edgeState.set(edge.id, NodeState.TAKEN);
+  return ["a", "b"];
+}
+
+/** Prepare the growth of `spawn` that requests pruning `a` and `b`. */
+function pruneSideChain(state: RunState): PreparedTransition {
+  return prepareExpanded(state, "spawn", new Grow({}, ["a", "b"]), fragmentBuilder);
+}
+
+test("growth keeps a settled prune id that kept work reads", () => {
+  const setup = () => {
+    const { state, log } = initializedSpawner();
+    const [, b] = sideChain(state);
+    unsettle(state, log, b, "waiting");
+    return { state, log };
+  };
+  const { state, log } = setup();
+
+  const prepared = pruneSideChain(state);
+  const observers = commitPrepared(log, state, prepared);
+
+  expect(state.flow.nodes.has("a") && state.flow.nodes.has("b")).toBe(true);
+  expect([...state.deferredPrune].sort()).toEqual(["a", "b"]);
+  expectIndexMatchesRebuild(state);
+  assertReplaysEqual(state, prepared, observers, setup);
+});
+
+test("growth retires a settled prune id the kept work doesn't read", () => {
+  const setup = () => {
+    const { state, log } = initializedSpawner();
+    const [a, b] = sideChain(state);
+    unsettle(state, log, a, "waiting");
+    state.nodeState.set(b, NodeState.SKIPPED);
+    return { state, log };
+  };
+  const { state, log } = setup();
+
+  const prepared = pruneSideChain(state);
+  const observers = commitPrepared(log, state, prepared);
+
+  assertRetired(state, ["b"]);
+  expect([...state.deferredPrune]).toEqual(["a"]);
+  expectIndexMatchesRebuild(state);
+  assertReplaysEqual(state, prepared, observers, setup);
+});
+
+test("a growth that retires a counted node keeps its interrupted-attempt count", () => {
+  const setup = () => {
+    const { state, log } = initializedSpawner();
+    const oldIds = installSettledOverlay(state);
+    state.interruptedAttempts.set(oldIds[0]!, 2);
+    return { state, log, oldIds };
+  };
+  const { state, log, oldIds } = setup();
+
+  const prepared = prepareExpanded(state, "spawn", new Grow({}, oldIds), fragmentBuilder);
+  const observers = commitPrepared(log, state, prepared);
+
+  assertRetired(state, oldIds);
+  expect(state.interruptedAttempts.get(oldIds[0]!)).toBe(2);
+  expectIndexMatchesRebuild(state);
+  assertReplaysEqual(state, prepared, observers, setup);
 });

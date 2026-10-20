@@ -26,7 +26,9 @@
  * TS-only: nothing ready before a terminal result is nonterminal quiescence. The node failure row
  * also checks that a failed run aborts its signal. `resumedAttemptEvents` (on a live state): a crash
  * before the resume counts one interrupted attempt, a `RunStopped` before it none, two crashes two,
- * and the events follow the record's `retryNodeIds`.
+ * and the events follow the record's `retryNodeIds`. Fixture sanity: `engine` records the memory
+ * table, stacks and snapshots it is given in `RunStarted`, and `ownerEngine` scopes every node of a
+ * flat flow under one root-owned memory.
  *
  * Not ported: `test_parallel_module_and_export_are_gone`; TS never had `ParallelFlowEngine`.
  */
@@ -39,9 +41,10 @@ import { ELSE_HANDLE, type Node } from "../../src/nodes/base.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+import { DeclSite, MemoryScope, MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import { resumedAttemptEvents } from "../../src/runtime/engine.ts";
-import type { RunResumedRecord } from "../../src/runtime/log.ts";
+import { type RunResumedRecord, RunStartedRecord } from "../../src/runtime/log.ts";
 import {
   commitPrepared,
   prepareNodeStarted,
@@ -50,7 +53,17 @@ import {
   prepareRunStopped,
 } from "../../src/runtime/state.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { BranchNode, engine, FailNode, FuncNode, graph, RecordNode, rejected } from "./run_state_fixtures.ts";
+import {
+  BranchNode,
+  engine,
+  FailNode,
+  FuncNode,
+  graph,
+  ownerEngine,
+  POLICY,
+  RecordNode,
+  rejected,
+} from "./run_state_fixtures.ts";
 
 /** Return the last event of a run of `flow`. */
 async function last(flow: CompiledFlow): Promise<unknown> {
@@ -499,4 +512,43 @@ test("resumedAttemptEvents follows the record's retryNodeIds", () => {
     new NodeAttemptResumed({ nodeId: "b", interrupted: 2 }),
     new NodeAttemptResumed({ nodeId: "a", interrupted: 1 }),
   ]);
+});
+
+// --- fixture sanity ---
+
+test("engine records the memory table, stacks and snapshots in RunStarted", () => {
+  const memories = [new MemorySpec("notes", "notes", {}, [new DeclSite([], ["root"])], false)];
+  const memoryStacks = [new MemoryStack(["a"], ["notes"])];
+  const memorySnapshots = [new MemorySnapshotEnvelope("notes", { epoch: 1n })];
+  const built = engine(graph([new RecordNode("a", [])], [
+    [START_ID, "a"],
+    ["a", END_ID],
+  ]), { learnable: true, memories, memoryStacks, memorySnapshots });
+  const started = built.log.records()[0]!.record;
+  expect(started).toBeInstanceOf(RunStartedRecord);
+  expect((started as RunStartedRecord).memories).toEqual(memories);
+  expect((started as RunStartedRecord).memoryStacks).toEqual(memoryStacks);
+  expect((started as RunStartedRecord).memorySnapshots).toEqual(memorySnapshots);
+  expect(built.state.memories).toEqual(memories);
+  expect(built.state.memoryStacks).toEqual(memoryStacks);
+});
+
+test("ownerEngine scopes every node of a flat flow under one root-owned memory", () => {
+  const flow = graph([new FuncNode("a", (inputs) => inputs.x, { reads: { x: "${input.topic}" } }),
+    new FuncNode("b", (inputs) => inputs.x, { reads: { x: "${a.output}" } })], [
+    [START_ID, "a"],
+    ["a", "b"],
+    ["b", END_ID],
+  ]);
+  const { engine: built, memories, stacks } = ownerEngine(flow, { inputs: { topic: "reefs" } });
+  for (const [id, node] of flow.nodes) {
+    expect(node.memoryScope).toEqual(new MemoryScope([id], { memories: [POLICY] }));
+  }
+  expect(memories).toEqual([new MemorySpec(POLICY, POLICY, {}, [new DeclSite([], ["root"])], false)]);
+  expect(stacks).toEqual([END_ID, START_ID, "a", "b"].map((id) => new MemoryStack([id], [POLICY])));
+  const started = built.log.records()[0]!.record as RunStartedRecord;
+  expect(started.learnable).toBe(true);
+  expect(started.memories).toEqual(memories);
+  expect(started.memoryStacks).toEqual(stacks);
+  expect(started.memorySnapshots).toEqual([new MemorySnapshotEnvelope(POLICY, {})]);
 });

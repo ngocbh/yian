@@ -10,6 +10,7 @@ import {
   type EvaluationTrace,
   ModelTextInteraction,
   ModelValueInteraction,
+  ToolCallInteraction,
   ToolResultInteraction,
 } from "../../memory/contracts.ts";
 
@@ -49,6 +50,20 @@ export function recordModelValue(trace: EvaluationTrace | null | undefined, valu
   try {
     interaction = new ModelValueInteraction(value);
   } catch (error) {
+    if (isCarrierError(error)) return;
+    throw error;
+  }
+  trace.recordInteraction(interaction);
+}
+
+/** Record an encodable requested tool call without affecting the loop. */
+export function recordToolCall(trace: EvaluationTrace | null | undefined, name: string, args: unknown): void {
+  if (trace == null) return;
+  let interaction: ToolCallInteraction;
+  try {
+    interaction = new ToolCallInteraction(name, args);
+  } catch (error) {
+    // Evidence stays observational for malformed arguments.
     if (isCarrierError(error)) return;
     throw error;
   }

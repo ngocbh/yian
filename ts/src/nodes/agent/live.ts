@@ -1,5 +1,5 @@
 /**
- * Transient AGENT observers: streamed reply text, model call brackets, usage.
+ * Transient AGENT observers: streamed reply text, model and tool call brackets, usage.
  *
  * Everything here is callback-only: chunks and events go to evaluator-supplied sinks and nowhere
  * else. Nothing is recorded, retained in memory, or replayed on resume, and the reply is the same
@@ -12,21 +12,33 @@
  * follows in the same exchange.
  *
  * Sink errors arrive already wrapped as `CapabilityFault` by the evaluator and propagate
- * unchanged; provider errors are reported by name only, because their text can contain
+ * unchanged; provider and tool errors are reported by name only, because their text can contain
  * credentials, then rethrown.
  *
- * Knows about:   diagnostics, events, llm, llm_clients auth, nodes/base, peer AGENT modules.
+ * Knows about:   diagnostics, events, llm, llm_clients auth, nodes/base, nodes/binding, typesys,
+ *                peer AGENT modules.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
 import type { FailureCode } from "../../diagnostics.ts";
-import { ModelCallFinished, type ModelCallPurpose, ModelCallStarted, StreamChunk, TokenUsage } from "../../events.ts";
+import {
+  ModelCallFinished,
+  type ModelCallPurpose,
+  ModelCallStarted,
+  StreamChunk,
+  TokenUsage,
+  ToolCallFinished,
+  ToolCallStarted,
+} from "../../events.ts";
 import { type ErrorKind, ProviderError } from "../../llm/errors.ts";
 import { type ChatModel, TextDelta } from "../../llm/events.ts";
 import { callWithRetries } from "../../llm/executor.ts";
 import type { Request, Response } from "../../llm/messages.ts";
 import { isAuthFailure } from "../../llm_clients/auth/common.ts";
+import type { JsonObject } from "../../typesys/json.ts";
+import type { Value } from "../../typesys/values.ts";
 import { CapabilityFault, type NodeCaps } from "../base.ts";
+import { copyValue } from "../binding.ts";
 import type { AgentRunContext } from "./context.ts";
 
 /** The stream key of AGENT reply text. */
@@ -157,4 +169,91 @@ export async function callModel(
   }
   emitEvent?.(new ModelCallFinished({ ...identity, usage: usageOf(response), attempt }));
   return response;
+}
+
+/** The `error` of the finished event of a tool call a host interrupt skipped. */
+export const SKIPPED_TOOL_ERROR = "interrupted";
+
+/** One requested tool call, as its brackets name it. */
+export interface ToolCallIdentity {
+  readonly exchangeId: string;
+  readonly callIndex: number;
+  readonly toolCallId: string;
+  readonly name: string;
+  readonly arguments: JsonObject;
+}
+
+/** Return a copy of a call's arguments for its started event; `null` when they can't be copied. */
+function shown(args: JsonObject): Value | null {
+  try {
+    return copyValue(args);
+  } catch {
+    return null;
+  }
+}
+
+/** Return the text a finished event shows for `result`; `null` when `text` throws. */
+function shownResult(result: unknown, text: (result: unknown) => string): string | null {
+  try {
+    return text(result);
+  } catch {
+    // The caller's own representation step owns this error.
+    return null;
+  }
+}
+
+/** Return the events identifying one tool call of `live`'s node. */
+function toolEventIdentity(live: LiveSinks, identity: ToolCallIdentity) {
+  const { exchangeId, callIndex, toolCallId, name } = identity;
+  return { nodeId: live.nodeId, exchangeId, callIndex, toolCallId, name };
+}
+
+/**
+ * Bracket one granted tool call with started/finished observers.
+ *
+ * Emits `ToolCallStarted` with a copy of the arguments, awaits `invoke()`, then emits
+ * `ToolCallFinished` with `result: text(result)` (`null` when `text` throws), or with the
+ * rejection's `name` (`typeof` for a non-`Error`) as `error`. No finished event is emitted once
+ * `signal` has aborted, and a `CapabilityFault` passes through with none. Without an event sink
+ * nothing is emitted.
+ *
+ * @returns What `invoke()` resolves to.
+ * @throws Whatever `invoke()` rejects with, unchanged.
+ */
+export async function observeToolCall(
+  live: LiveSinks | null,
+  invoke: () => Promise<unknown>,
+  identity: ToolCallIdentity,
+  options: { signal?: AbortSignal; text: (result: unknown) => string },
+): Promise<unknown> {
+  const emitEvent = live?.emitEvent ?? null;
+  if (live === null || emitEvent === null) return await invoke();
+  const { signal, text } = options;
+  const ids = toolEventIdentity(live, identity);
+  emitEvent(new ToolCallStarted({ ...ids, arguments: shown(identity.arguments) }));
+  let result: unknown;
+  try {
+    result = await invoke();
+  } catch (error) {
+    if (!(error instanceof CapabilityFault) && !signal?.aborted) {
+      emitEvent(new ToolCallFinished({ ...ids, error: errorName(error) }));
+    }
+    throw error;
+  }
+  if (!signal?.aborted) emitEvent(new ToolCallFinished({ ...ids, result: shownResult(result, text) }));
+  return result;
+}
+
+/**
+ * Report a tool call that a host interrupt skipped as started, then finished `interrupted`.
+ *
+ * The same pair a run call emits, so a host can mark that call's part as interrupted; the tool
+ * itself never runs. Without an event sink nothing is emitted.
+ */
+export function observeSkippedToolCall(live: LiveSinks | null, identity: ToolCallIdentity): void {
+  const emitEvent = live?.emitEvent ?? null;
+  if (live === null || emitEvent === null) return;
+  const ids = toolEventIdentity(live, identity);
+  emitEvent(new ToolCallStarted({ ...ids, arguments: shown(identity.arguments) }));
+  emitEvent(new ToolCallFinished({ ...ids, error: SKIPPED_TOOL_ERROR }));
 }

@@ -232,6 +232,10 @@ describe("checkCase", () => {
       `${RUN}host: {tools: {t: {parameters: {}, results: [], x: 1}}}`,
       "unknown key `host.tools.t.x`",
     ],
+    [
+      `${RUN}host: {tools: {t: {parameters: {}, results: [], concurrency_safe: 1}}}`,
+      "`host.tools.t.concurrency_safe` must be a boolean",
+    ],
     [TOOL("1"), "`host.tools.t.results` must be a list or a mapping of lists"],
     [TOOL("{n: 1}"), "`host.tools.t.results` must be a list or a mapping of lists"],
     [TOOL("[1]"), "`host.tools.t.results[0]` must be a mapping"],

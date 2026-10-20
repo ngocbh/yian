@@ -277,8 +277,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   layouts, LOOP `respawn`); their `forward` throws "not ported yet".
 - AGENT lives in `src/nodes/agent/node.ts`, and its `llm_config` values in
   `src/nodes/agent/llm_values.ts`. The node holds its data, checks and load-time hooks; `forward`
-  runs a tool-free AGENT (below), and `backward` is not ported yet. `callTime` is an accessor over
-  an own field, so setting it also sets `needsSteps`, and a shallow copy carries both.
+  runs an AGENT with its tools and skills (below), and `backward` is not ported yet. `callTime` is
+  an accessor over an own field, so setting it also sets `needsSteps`, and a shallow copy carries
+  both.
   `llmValueTypes` is an array of `[path, type]` entries, not a map keyed by path. AGENT is the node
   the remaining `NodeCaps` fields serve (`skills`, `emitStream`, `emitEvent`, `captureRender`,
   `evaluationTrace`, `openMemoryContext`, and `steering`, a `Steering` inbox given only to an agent
@@ -289,8 +290,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `ScriptedModel`). Every call streams through `callWithRetries` and publishes
   `ModelCallStarted`, chat `StreamChunk`s and `ModelCallFinished` per `attempt`. The AGENT's own
   model errors fail with their `provider.*` code, spent `retries:` corrections with
-  `agent.output_invalid`. A tool, a skill, a steering inbox or a memory transcript still throws
-  "not ported yet".
+  `agent.output_invalid`. With tools or skills it runs the tool loop: consecutive calls whose tool
+  is concurrency-safe (`isConcurrencySafe`, and `load_skill`) run together as a group, and an
+  unsafe call runs alone. A steering inbox or a memory transcript still throws "not ported yet".
 - A CODE `code:` value is a reference (`./file.ts:fn`, also `.js` or `.mjs` and `../` paths,
   resolved against the node's `baseDir`) or an inline TS/JS body. The constructor classifies it
   by shape into `mode` and compiles or imports nothing.

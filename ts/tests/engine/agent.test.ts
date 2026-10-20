@@ -19,7 +19,21 @@
  * `test_a_stop_during_a_refused_structured_call_stops_the_node` and
  * `test_provider_auth_failure_message_is_scrubbed`).
  *
- * Changed: each row pins its error class; ints are `bigint`s; a forged `hasDefault`/`required` is
+ * Ported, the tool loop, through `evalNode` (`drive`) with the tools in the run's `ToolSet` where
+ * Python patches `TOOL_REGISTRY`: `test_tool_loop_round_trip`,
+ * `test_tool_loop_executes_model_calls_in_returned_order`,
+ * `test_agent_rejects_globally_registered_but_ungranted_tool` (registered with `registerTool`),
+ * `test_tool_loop_rejects_model_injected_arguments`,
+ * `test_tool_loop_propagates_tool_exception_as_node_failure`,
+ * `test_tool_validation_error_does_not_claim_scalar_output_origin`, the cap tests
+ * (`test_tool_loop_cap_trips_when_bounded`, `test_default_no_cap_runs_unbounded`,
+ * `test_env_max_tool_iterations_overrides_cap`, `test_tool_loop_cap_does_not_run_the_last_replys_tools`,
+ * `test_ungranted_tool_stays_node_execute`, `test_tool_loop_cap_of_one_still_answers_without_tools`)
+ * and `test_tool_auth_failure_stays_node_execute`.
+ *
+ * Changed: each row pins its error class; a tool's thrown `Error` reads `causeType` `Error`
+ * (Python: `RuntimeError`), and a tool argument of the wrong type is a `TypeCheckError` (Python:
+ * Pydantic's `ValidationError`); ints are `bigint`s; a forged `hasDefault`/`required` is
  * set with `Object.defineProperty` on a copy, since a `Parameter` is frozen. The node rows run
  * through `evalNode` (`drive`) with a `ScriptedModel` served by `caps.models` where Python patches
  * `model_from_config`; Python's SDK error stand-ins are `ProviderError`s, so their `causeType` reads
@@ -31,32 +45,30 @@
  *
  * TS-only: `textOf` of a string, of a message with text, reasoning, tool-call and refusal parts
  * (only the text, joined with `"\n"`), and of a message without text; `ReplyInterrupted`'s message,
- * `reply`, `usage` (default `null`) and that it is an `Error`; `recordModelText`, `recordModelValue`
- * and `recordToolResult` (an interaction recorded, a carrier construction error ignored, a `null`
- * trace does nothing); the `DEFAULT_SYSTEM` text and the loop errors' names; `isTextOutput`;
- * `isMaxToolIterations`; the default `maxToolIterations()`; `grantedTools()`; an `LLMConfig` given
- * as `llmConfig`; `backward` not ported yet; the load-time hooks
- * (`reservedWiringKeys`, `modelHiddenInputs`, `reservedKeyLabel`, `llmNullable`,
- * `recordedLlmConfig`, `boundLlmConfig`, `backwardInputNames`, `bindReserved`, `validatePrompts`,
- * `validateExecutionSetup`) and `needsSteps` following `callTime`, also on a shallow copy;
- * `needsModels`; each `provider.*` code through the node (a `ProviderError` of the kind
- * `kindForStatus` reads from a status and message, the message kept); a call-time agent records
- * a copy of its bound config and calls the model with the host key joined, and a bound config that
+ * `reply`, `usage` (default `null`) and that it is an `Error`; `recordModelText`,
+ * `recordModelValue`, `recordToolCall` and `recordToolResult` (an interaction recorded, a carrier
+ * construction error ignored, a `null` trace does nothing); `toolText` of a string, a record, a
+ * list, `null`, `Infinity`, a big int and a `Date` (a `TypeCheckError` naming the tool's result);
+ * `reportedText` (the message, else the error's `name`; a branded non-`Error` by `String()`, else
+ * its `typeof`); the `SKIPPED_TOOL_RESULT` and `SKIPPED_TOOL_ERROR` texts; the `DEFAULT_SYSTEM`
+ * text and the loop errors' names; `isTextOutput`; `isMaxToolIterations`; the default
+ * `maxToolIterations()`; `grantedTools()`; an `LLMConfig` given as `llmConfig`; `backward` not
+ * ported yet; the load-time hooks (`reservedWiringKeys`, `modelHiddenInputs`, `reservedKeyLabel`,
+ * `llmNullable`, `recordedLlmConfig`, `boundLlmConfig`, `backwardInputNames`, `bindReserved`,
+ * `validatePrompts`, `validateExecutionSetup`) and `needsSteps` following `callTime`, also on a
+ * shallow copy; `needsModels`; each `provider.*` code through the node (a `ProviderError` of the
+ * kind `kindForStatus` reads from a status and message, the message kept); in the tool loop: a call
+ * with invalid arguments gets `ToolCallStarted` then `ToolCallFinished{error: "RangeError"}` before
+ * the node fails, an ungranted call gets no brackets, the request carries the bound `ToolSpec`s in
+ * grant order (`load_skill` last when skills are granted) with no `toolChoice` and
+ * `parallelToolCalls: null`, a call's id is `<run>/<node>/<exchange>/<index>` on a run-bound tool
+ * set and a fresh id on an unbound one, with the node and `attempt: 1` in its `ToolContext`, and a
+ * tool result `fromHost` refuses fails the node after the call ran; a call-time agent records a
+ * copy of its bound config and calls the model with the host key joined, and a bound config that
  * differs from the recorded one is a host fault before any model is built; a reply calling a tool
  * at a cap of one model turn fails with `agent.max_tool_iterations`; without `models` the node
  * builds through `defaultModelAccess` (an unknown provider's `ValidationError`, no network); a
  * failing credentials read doesn't replace the error being scrubbed.
- *
- * Later (T5-11b), the tool loop: `test_tool_loop_round_trip`,
- * `test_tool_loop_executes_model_calls_in_returned_order`,
- * `test_agent_rejects_globally_registered_but_ungranted_tool`,
- * `test_tool_loop_rejects_model_injected_arguments`,
- * `test_tool_loop_propagates_tool_exception_as_node_failure`,
- * `test_tool_validation_error_does_not_claim_scalar_output_origin`, the cap tests
- * (`test_tool_loop_cap_trips_when_bounded`, `test_default_no_cap_runs_unbounded`,
- * `test_env_max_tool_iterations_overrides_cap`, `test_tool_loop_cap_does_not_run_the_last_replys_tools`,
- * `test_ungranted_tool_stays_node_execute`, `test_tool_loop_cap_of_one_still_answers_without_tools`)
- * and `test_tool_auth_failure_stays_node_execute`.
  *
  * Not ported: `test_agent_run_has_no_scratch_kwarg` (signature introspection);
  * `test_agent_ctx_type.py` and `test_agent_runcontext.py` (they introspect a Python dataclass; the
@@ -74,7 +86,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:tes
 import { copyGraph } from "../../src/compile/model.ts";
 import { BUILTIN, current, type Env, forget, install } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
-import { TokenUsage } from "../../src/events.ts";
+import { ModelCallStarted, TokenUsage, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import { AuthError } from "../../src/llm_clients/auth/common.ts";
 import { AuthStore } from "../../src/llm_clients/auth/store.ts";
@@ -85,7 +97,16 @@ import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
 import { kindForStatus, ProviderError } from "../../src/llm/errors.ts";
 import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
 import { RouteModel } from "../../src/llm/executor.ts";
-import { Message, ReasoningPart, RefusalPart, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
+import {
+  Message,
+  ReasoningPart,
+  RefusalPart,
+  Response,
+  TextPart,
+  ToolCallPart,
+  ToolResultPart,
+  ToolSpec,
+} from "../../src/llm/messages.ts";
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
@@ -93,18 +114,34 @@ import {
   type EvaluationTrace,
   ModelTextInteraction,
   ModelValueInteraction,
+  ToolCallInteraction,
   ToolResultInteraction,
   type VisibleInteraction,
 } from "../../src/memory/contracts.ts";
 import { AgentLoopError, DEFAULT_SYSTEM, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
+import { SKIPPED_TOOL_ERROR } from "../../src/nodes/agent/live.ts";
 import { CallTimeLLM, contractNullable, LLM_CONFIG_KEY, splitLayers } from "../../src/nodes/agent/llm_values.ts";
+import { reportedText, SKIPPED_TOOL_RESULT, toolText } from "../../src/nodes/agent/memory.ts";
 import { AgentNode, isMaxToolIterations, isTextOutput } from "../../src/nodes/agent/node.ts";
-import { recordModelText, recordModelValue, recordToolResult, textOf } from "../../src/nodes/agent/text.ts";
+import {
+  recordModelText,
+  recordModelValue,
+  recordToolCall,
+  recordToolResult,
+  textOf,
+} from "../../src/nodes/agent/text.ts";
 import { CapabilityFault, Output } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { Binding, ContractOrigins, NodeSteps, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { type EvalNodeOptions, EvaluationFailure } from "../../src/runtime/eval_node.ts";
+import { Skill } from "../../src/skills/catalog.ts";
+import { loadSkillTool } from "../../src/skills/tool.ts";
+import type { ToolContext } from "../../src/tools/context.ts";
+import { ReportedToolError, TOOL_ERROR } from "../../src/tools/errors.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { drive, rejected } from "./run_state_fixtures.ts";
@@ -162,23 +199,30 @@ function trace() {
   return { sink, interactions };
 }
 
-test("recordModelText and recordToolResult record their interactions", () => {
+test("recordModelText, recordToolCall and recordToolResult record their interactions", () => {
   const { sink, interactions } = trace();
   recordModelText(sink, "answer");
+  recordToolCall(sink, "lookup", { q: "x" });
   recordToolResult(sink, "lookup", "found");
-  expect(interactions).toEqual([new ModelTextInteraction("answer"), new ToolResultInteraction("lookup", "found")]);
+  expect(interactions).toEqual([
+    new ModelTextInteraction("answer"),
+    new ToolCallInteraction("lookup", { q: "x" }),
+    new ToolResultInteraction("lookup", "found"),
+  ]);
 });
 
-test("recordModelText and recordToolResult ignore a carrier construction error", () => {
+test("recordModelText, recordToolCall and recordToolResult ignore a carrier construction error", () => {
   const { sink, interactions } = trace();
   recordModelText(sink, "\ud800");
+  recordToolCall(sink, "lookup", { q: Number.NaN });
   recordToolResult(sink, "", "found");
   recordToolResult(sink, "lookup", 3 as unknown as string);
   expect(interactions).toEqual([]);
 });
 
-test("recordModelText and recordToolResult do nothing without a trace", () => {
+test("recordModelText, recordToolCall and recordToolResult do nothing without a trace", () => {
   expect(recordModelText(null, "answer")).toBeUndefined();
+  expect(recordToolCall(undefined, "lookup", {})).toBeUndefined();
   expect(recordToolResult(undefined, "lookup", "found")).toBeUndefined();
 });
 
@@ -188,6 +232,33 @@ test("recordModelValue records the value, ignores a carrier construction error, 
   recordModelValue(sink, Number.NaN);
   expect(interactions).toEqual([new ModelValueInteraction({ a: 1n })]);
   expect(recordModelValue(null, 1n)).toBeUndefined();
+});
+
+test("toolText writes a tool result in the text form", () => {
+  expect(toolText("x", "plain text")).toBe("plain text");
+  expect(toolText("x", { a: 1, b: [true, null] })).toBe('{"a":1,"b":[true,null]}');
+  expect(toolText("x", ["a", 2.5])).toBe('["a",2.5]');
+  expect(toolText("x", null)).toBe("null");
+  expect(toolText("x", Infinity)).toBe("Infinity");
+  expect(toolText("x", 12345678901234567890123n)).toBe("12345678901234567890123");
+  expect(() => toolText("x", new Date(0))).toThrow(new TypeCheckError("tool 'x' result: Date is not a yian value"));
+});
+
+test("reportedText gives the message, else the error's name", () => {
+  expect(reportedText("x", new ReportedToolError("no such file"))).toBe("no such file");
+  expect(reportedText("x", new ReportedToolError())).toBe("ReportedToolError");
+  class NotFound extends ReportedToolError {
+    override name = "NotFound";
+  }
+  expect(reportedText("x", new NotFound(""))).toBe("NotFound");
+  // A tool error is classified by its brand, so a branded plain object reaches the non-`Error` branch.
+  const branded = { [TOOL_ERROR]: ["reported"], toString: () => "branded" };
+  expect([reportedText("x", branded), reportedText("x", { ...branded, toString: () => "" })]).toEqual(["branded", "object"]);
+});
+
+test("the skipped tool texts keep Python's wording", () => {
+  expect(SKIPPED_TOOL_RESULT).toBe("Not run: interrupted by the user.");
+  expect(SKIPPED_TOOL_ERROR).toBe("interrupted");
 });
 
 test("DEFAULT_SYSTEM keeps Python's text and the loop errors are named", () => {
@@ -763,6 +834,304 @@ describe("forward", () => {
     const model = new RefusedModel({ route, protocol: new OpenAIChat({ model: "gpt-5.5", provider: "openai" }) });
     const failure = failureOf(await evaluate(agent(), model));
     expect([failure.code, failure.message]).toEqual(["provider.auth", "unauthorized"]);
+  });
+
+  // ---------- the tool loop ----------
+
+  /** A reply calling `calls`, finished with `tool_calls`. */
+  function toolReply(...calls: ToolCallPart[]): Response {
+    return new Response({ message: new Message({ role: "assistant", parts: calls }), finishReason: "tool_calls" });
+  }
+
+  /** A model call of tool `name` with `args` and call id `id` (Python's `_ai_tool_call`). */
+  function toolCall(name: string, args: JsonObject, id = "1"): ToolCallPart {
+    return new ToolCallPart({ id, name, arguments: args });
+  }
+
+  /** A tool `name` taking `properties` that records each argument record it runs on in `seen`. */
+  function fakeTool(
+    name: string,
+    execute: (args: Record<string, unknown>, ctx: ToolContext) => unknown,
+    properties: JsonObject = {},
+    seen: Record<string, unknown>[] = [],
+  ): FunctionTool {
+    return new FunctionTool({
+      name,
+      description: `The ${name} tool.`,
+      parametersJsonSchema: { type: "object", properties },
+      execute: (args, ctx) => {
+        seen.push(args);
+        return execute(args, ctx);
+      },
+    });
+  }
+
+  /** An AGENT `n` granted `tools`, prompt `hi`. */
+  function toolAgent(tools: string[]): AgentNode {
+    return new AgentNode("n", { prompt: "hi", llmConfig: NATIVE, tools });
+  }
+
+  const noopReplies = (count: number) => Array.from({ length: count }, (_, i) => toolReply(toolCall("noop", {}, String(i))));
+
+  test("tool loop round trip", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const value = fakeTool("value", (args) => `px:${args.topic}`, { topic: { type: "string" } }, seen);
+    const model = new ScriptedModel([toolReply(toolCall("value", { topic: "ACME" })), reply("done")], NATIVE);
+    const outcome = await evaluate(toolAgent(["value"]), model, { tools: new ToolSet({ value }) });
+    expect((outcome as Output).value).toBe("done");
+    // The tool actually ran: ask, tool, ask.
+    expect(seen).toEqual([{ topic: "ACME" }]);
+    expect(model.requests).toHaveLength(2);
+    const second = model.requests[1]!.messages;
+    expect(second.slice(2)).toEqual([
+      new Message({ role: "assistant", parts: [toolCall("value", { topic: "ACME" })] }),
+      new Message({ role: "tool", parts: [new ToolResultPart({ callId: "1", name: "value", content: "px:ACME" })] }),
+    ]);
+  });
+
+  test("tool loop executes model calls in returned order", async () => {
+    const seen: [string, unknown][] = [];
+    const recorder = (name: string, result: string) => (args: Record<string, unknown>) => {
+      seen.push([name, args.value]);
+      return result;
+    };
+    const first = fakeTool("first", recorder("first", "one"), { value: { type: "integer" } });
+    const second = fakeTool("second", recorder("second", "two"), { value: { type: "integer" } });
+    const model = new ScriptedModel(
+      [toolReply(toolCall("first", { value: 1n }, "1"), toolCall("second", { value: 2n }, "2")), reply("done")],
+      NATIVE,
+    );
+    const outcome = await evaluate(toolAgent(["first", "second"]), model, { tools: new ToolSet({ first, second }) });
+    expect((outcome as Output).value).toBe("done");
+    expect(seen).toEqual([
+      ["first", 1],
+      ["second", 2],
+    ]);
+  });
+
+  test("agent rejects a globally registered but ungranted tool", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const secret = fakeTool("secret", () => "secret", {}, seen);
+    registerTool("secret", secret);
+    try {
+      const model = new ScriptedModel([toolReply(toolCall("secret", {}))], NATIVE);
+      const failure = failureOf(await evaluate(toolAgent([]), model));
+      expect(failure.message).toContain("not granted");
+      expect(seen).toEqual([]);
+    } finally {
+      TOOL_REGISTRY.delete("secret");
+    }
+  });
+
+  test("tool loop rejects model-injected arguments", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const lookup = fakeTool("lookup", (args) => args.question, { question: { type: "string" } }, seen);
+    const model = new ScriptedModel([toolReply(toolCall("lookup", { question: "status?", node_id: "injected" }))], NATIVE);
+    const failure = failureOf(await evaluate(toolAgent(["lookup"]), model, { tools: new ToolSet({ lookup }) }));
+    expect(failure.causeType).toBe("RangeError");
+    expect(failure.message).toContain("unsupported argument");
+    expect(seen).toEqual([]);
+  });
+
+  test("tool loop propagates a tool exception as a node failure", async () => {
+    const explode = fakeTool(
+      "explode",
+      (args) => {
+        throw new Error(`cannot load ${args.topic}`);
+      },
+      { topic: { type: "string" } },
+    );
+    const model = new ScriptedModel([toolReply(toolCall("explode", { topic: "ACME" }))], NATIVE);
+    const failure = failureOf(await evaluate(toolAgent(["explode"]), model, { tools: new ToolSet({ explode }) }));
+    expect(failure.causeType).toBe("Error");
+    expect(failure.message).toContain("cannot load ACME");
+  });
+
+  test("a tool validation error does not claim the scalar output origin", async () => {
+    // The tool's argument is named like the generated scalar output's `value` wrapper.
+    const wrapper = fakeTool("scalar_wrapper", (args) => args.value, { value: { type: "integer" } });
+    const node = toolAgent(["scalar_wrapper"]);
+    node.origin = new OriginRef("node");
+    node.outputContract = new ValueContract(INT, new ContractOrigins({ default: new OriginRef("output") }));
+    const model = new ScriptedModel([toolReply(toolCall("scalar_wrapper", { value: "bad" }))], NATIVE);
+    const failure = failureOf(await evaluate(node, model, { tools: new ToolSet({ scalar_wrapper: wrapper }) }));
+    expect(failure.causeType).toBe("TypeCheckError");
+    expect(failure.trace).toEqual([new OriginRef("node")]);
+  });
+
+  test("the tool loop cap trips when bounded", async () => {
+    const noop = fakeTool("noop", () => "ok");
+    const node = toolAgent(["noop"]);
+    node.env = { max_tool_iterations: 5n };
+    const model = new ScriptedModel(noopReplies(5), NATIVE);
+    const failure = failureOf(await evaluate(node, model, { tools: new ToolSet({ noop }) }));
+    expect([failure.code, failure.causeType]).toEqual(["agent.max_tool_iterations", "ToolIterationLimitError"]);
+    expect(failure.message).toBe(
+      "agent node 'n' hit the tool-iteration cap (5) without a final answer; the last reply's 1 tool call(s) were not run",
+    );
+  });
+
+  test("the default no cap runs unbounded", async () => {
+    // The default is the -1 no-cap sentinel: many tool turns, then an answer, still finish.
+    expect(current().agentMaxToolIterations).toBe(-1);
+    const noop = fakeTool("noop", () => "ok");
+    const model = new ScriptedModel([...noopReplies(150), reply("done")], NATIVE);
+    const outcome = await evaluate(toolAgent(["noop"]), model, { tools: new ToolSet({ noop }) });
+    expect((outcome as Output).value).toBe("done");
+    expect(model.requests).toHaveLength(151);
+  });
+
+  test("env max_tool_iterations overrides the cap", async () => {
+    const noop = fakeTool("noop", () => "ok");
+    const node = toolAgent(["noop"]);
+    node.env = { max_tool_iterations: 2n };
+    const model = new ScriptedModel(noopReplies(2), NATIVE);
+    const failure = failureOf(await evaluate(node, model, { tools: new ToolSet({ noop }) }));
+    expect(failure.code).toBe("agent.max_tool_iterations");
+    expect(failure.message).toContain("(2)");
+    expect(model.requests).toHaveLength(2);
+  });
+
+  test("the tool loop cap does not run the last reply's tools", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const noop = fakeTool("noop", () => "ok", {}, seen);
+    const node = toolAgent(["noop"]);
+    node.env = { max_tool_iterations: 2n };
+    const model = new ScriptedModel(noopReplies(2), NATIVE);
+    const failure = failureOf(await evaluate(node, model, { tools: new ToolSet({ noop }) }));
+    expect(failure.code).toBe("agent.max_tool_iterations");
+    expect(failure.message).toContain("not run");
+    expect(model.requests).toHaveLength(2);
+    // Only the first reply's call ran.
+    expect(seen).toHaveLength(1);
+  });
+
+  test("an ungranted tool stays node.execute", async () => {
+    const noop = fakeTool("noop", () => "ok");
+    const model = new ScriptedModel([toolReply(toolCall("other", {}))], NATIVE);
+    const failure = failureOf(await evaluate(toolAgent(["noop"]), model, { tools: new ToolSet({ noop }) }));
+    expect([failure.code, failure.causeType]).toEqual(["node.execute", "AgentLoopError"]);
+    expect(failure.message).toContain("not granted");
+  });
+
+  test("a tool loop cap of one still answers without tools", async () => {
+    const node = toolAgent(["noop"]);
+    node.env = { max_tool_iterations: 1n };
+    const tools = new ToolSet({ noop: fakeTool("noop", () => "ok") });
+    const outcome = await evaluate(node, new ScriptedModel([reply("done")], NATIVE), { tools });
+    expect((outcome as Output).value).toBe("done");
+  });
+
+  test("a tool auth failure stays node.execute", async () => {
+    // A tool's own refused credentials are the tool's failure, not the agent's provider's.
+    class AuthenticationError extends Error {
+      override name = "AuthenticationError";
+      readonly status = 401;
+    }
+    const fetch = fakeTool("fetch", () => {
+      throw new AuthenticationError("tool service rejected its token");
+    });
+    const model = new ScriptedModel([toolReply(toolCall("fetch", {}))], NATIVE);
+    const failure = failureOf(await evaluate(toolAgent(["fetch"]), model, { tools: new ToolSet({ fetch }) }));
+    expect([failure.code, failure.causeType]).toEqual(["node.execute", "AuthenticationError"]);
+  });
+
+  /** The type and the call or model fields of each observed event. */
+  function brackets(events: unknown[]): unknown[] {
+    return events.map((event) =>
+      event instanceof ToolCallFinished
+        ? ["ToolCallFinished", event.name, event.result, event.error]
+        : event instanceof ToolCallStarted
+          ? ["ToolCallStarted", event.name, event.arguments]
+          : [(event as { type: string }).type],
+    );
+  }
+
+  test("a call with invalid arguments gets Python's brackets, then fails the node", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const lookup = fakeTool("lookup", () => "unused", { q: { type: "string" } }, seen);
+    const events: unknown[] = [];
+    const model = new ScriptedModel([toolReply(toolCall("lookup", { q: "x", extra: 1n }))], NATIVE);
+    const outcome = await evaluate(toolAgent(["lookup"]), model, {
+      tools: new ToolSet({ lookup }),
+      emitEvent: (event) => void events.push(event),
+    });
+    expect(failureOf(outcome).causeType).toBe("RangeError");
+    expect(brackets(events)).toEqual([
+      ["ModelCallStarted"],
+      ["ModelCallFinished"],
+      ["ToolCallStarted", "lookup", { q: "x", extra: 1n }],
+      ["ToolCallFinished", "lookup", null, "RangeError"],
+    ]);
+    expect(seen).toEqual([]);
+  });
+
+  test("an ungranted call gets no brackets", async () => {
+    const events: unknown[] = [];
+    const model = new ScriptedModel([toolReply(toolCall("other", {}))], NATIVE);
+    const outcome = await evaluate(toolAgent([]), model, { emitEvent: (event) => void events.push(event) });
+    expect(failureOf(outcome).causeType).toBe("AgentLoopError");
+    expect(brackets(events)).toEqual([["ModelCallStarted"], ["ModelCallFinished"]]);
+  });
+
+  test("the request binds the granted tools in grant order, load_skill last", async () => {
+    const b = fakeTool("b", () => "B", { x: { type: "string" } });
+    const a = fakeTool("a", () => "A");
+    const node = new AgentNode("n", { prompt: "hi", llmConfig: NATIVE, tools: ["b", "a"], skills: ["review"] });
+    const skills = new Map([["review", new Skill({ name: "review", description: "Review code.", instructions: "" })]]);
+    const model = new ScriptedModel([reply("done")], NATIVE);
+    await evaluate(node, model, { tools: new ToolSet({ a, b }), skills });
+    const request = model.requests[0]!;
+    expect(request.tools).toEqual([
+      new ToolSpec({ name: "b", description: "The b tool.", parameters: { type: "object", properties: { x: { type: "string" } } } }),
+      new ToolSpec({ name: "a", description: "The a tool.", parameters: { type: "object", properties: {} } }),
+      loadSkillTool(),
+    ]);
+    expect([request.toolChoice, request.parallelToolCalls]).toEqual([null, null]);
+  });
+
+  test("a call's id is <run>/<node>/<exchange>/<index> on a run-bound tool set, fresh on an unbound one", async () => {
+    const contexts: ToolContext[] = [];
+    const noop = fakeTool("noop", (_args, ctx) => {
+      contexts.push(ctx);
+      return "ok";
+    });
+    const replies = () => [toolReply(toolCall("noop", {}, "1"), toolCall("noop", {}, "2")), reply("done")];
+    const events: unknown[] = [];
+    const emitEvent = (event: unknown) => void events.push(event);
+    await evaluate(toolAgent(["noop"]), new ScriptedModel(replies(), NATIVE), {
+      tools: new ToolSet({ noop }).forRun("r1"),
+      emitEvent,
+    });
+    const exchange = (events.find((event) => event instanceof ModelCallStarted) as ModelCallStarted).exchangeId;
+    expect(contexts.map((ctx) => [ctx.callId, ctx.node, ctx.attempt, ctx.runId])).toEqual([
+      [`r1/n/${exchange}/0`, "n", 1, "r1"],
+      [`r1/n/${exchange}/1`, "n", 1, "r1"],
+    ]);
+    contexts.length = 0;
+    await evaluate(toolAgent(["noop"]), new ScriptedModel(replies(), NATIVE), { tools: new ToolSet({ noop }) });
+    const [first, second] = contexts.map((ctx) => ctx.callId);
+    expect(first).toMatch(/^[0-9a-f]{32}$/);
+    expect(second).toMatch(/^[0-9a-f]{32}$/);
+    expect(first).not.toBe(second);
+    expect(contexts.map((ctx) => [ctx.node, ctx.attempt, ctx.runId])).toEqual([
+      ["n", 1, ""],
+      ["n", 1, ""],
+    ]);
+  });
+
+  test("a tool result fromHost refuses fails the node after the call ran", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const when = fakeTool("when", () => new Date(0), {}, seen);
+    const model = new ScriptedModel([toolReply(toolCall("when", {})), reply("unused")], NATIVE);
+    const failure = failureOf(await evaluate(toolAgent(["when"]), model, { tools: new ToolSet({ when }) }));
+    expect([failure.code, failure.causeType, failure.message]).toEqual([
+      "node.execute",
+      "TypeCheckError",
+      "tool 'when' result: Date is not a yian value",
+    ]);
+    expect(seen).toHaveLength(1);
+    expect(model.requests).toHaveLength(1);
   });
 
   /** A call-time agent `chat` whose bound config is marked for the host key `sk-host`. */

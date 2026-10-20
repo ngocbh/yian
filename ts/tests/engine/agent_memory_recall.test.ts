@@ -3,8 +3,9 @@
  * `tests/engine/test_agent_memory_recall.py`.
  *
  * Ported through `evalNode` (`drive`) with a hand-made memory context opener and a `ScriptedModel`
- * from `models`: `test_recall_sections_reach_every_agent_path_in_order_with_trace_parity` (the
- * plain and structured rows), `test_invalid_recall_context_becomes_sanitized_typed_node_failure`,
+ * from `models`: `test_no_memory_preserves_the_existing_system_prompt_byte_for_byte` (2 rows),
+ * `test_recall_sections_reach_every_agent_path_in_order_with_trace_parity` (3 rows),
+ * `test_invalid_recall_context_becomes_sanitized_typed_node_failure`,
  * `test_uncanonical_recall_inputs_remain_typed_when_evidence_is_enabled`,
  * `test_stop_observed_during_setup_prevents_recall`,
  * `test_stop_observed_after_recall_prevents_model_construction`,
@@ -16,18 +17,14 @@
  *
  * Changed: the opener is an async function returning a `MemoryContext` (Python: a context
  * manager); a stop is the signal, so a stopped node rejects with its reason; "no model is built"
- * reads as the model access receiving no build.
- * `test_no_memory_preserves_the_existing_system_prompt_byte_for_byte` (its tool-free row) checks
- * the request's system text. `test_uncanonical_recall_inputs_remain_typed_when_evidence_is_enabled`
- * binds a `Set`, which is not a yian value.
+ * reads as the model access receiving no build. The tool rows grant a real `noop` tool in the run's
+ * `ToolSet`, where Python patches `ToolSet.resolve`; the model answers without calling it.
+ * `test_uncanonical_recall_inputs_remain_typed_when_evidence_is_enabled` binds a `Set`, which is
+ * not a yian value.
  * `test_invalid_recall_context_becomes_sanitized_typed_node_failure` binds its lone-surrogate text
  * through `bindReserved`, since the TS pool refuses it.
  * `test_scoped_agent_without_recall_callback_is_a_setup_error` rejects with an `Error` (Python:
  * `RuntimeError`).
- *
- * Later (T5-11b), the tool loop: the tool rows of
- * `test_no_memory_preserves_the_existing_system_prompt_byte_for_byte` and
- * `test_recall_sections_reach_every_agent_path_in_order_with_trace_parity`.
  *
  * TS-only: a typed recall failure with no origin, and a variable-default `BindingError` with and
  * without one, keep their origin or fall back to the node's.
@@ -55,6 +52,8 @@ import type { Output } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { EvaluationFailure, evalNode, type MemoryContextOpener } from "../../src/runtime/eval_node.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { drive, nodeFlow, rejected } from "./run_state_fixtures.ts";
@@ -100,9 +99,19 @@ function scopedAgent(): AgentNode {
   return node;
 }
 
-/** An AGENT whose prompt reads its bound input `topic`, with a pool and flow binding it to `Ada`. */
-function topicAgent(options: { structured?: boolean } = {}) {
-  const node = new AgentNode("agent", { prompt: "Answer ${topic}", llmConfig: CONFIG });
+/** A run tool set holding `noop`, which takes no arguments. */
+function noopTools(): ToolSet {
+  const parametersJsonSchema = { type: "object", properties: {} };
+  return new ToolSet({ noop: new FunctionTool({ name: "noop", description: "Do nothing.", parametersJsonSchema, execute: () => "ok" }) });
+}
+
+/**
+ * An AGENT whose prompt reads its bound input `topic`, granted `noop` with `tools`, with a pool
+ * and flow binding it to `Ada`.
+ */
+function topicAgent(options: { structured?: boolean; tools?: boolean } = {}) {
+  const tools = options.tools === true ? ["noop"] : undefined;
+  const node = new AgentNode("agent", { prompt: "Answer ${topic}", llmConfig: CONFIG, tools });
   node.params = [new Parameter("topic", { required: true })];
   if (options.structured === true) node.outputContract = new ValueContract(Type.scalar(ValueKind.INTEGER));
   const pool = new VariablePool();
@@ -116,11 +125,12 @@ function systemText(model: ScriptedModel, index = 0): string {
   return model.requests[index]!.messages[0]!.text();
 }
 
-test("no memory keeps the existing system prompt byte for byte", async () => {
+test.each([false, true])("no memory keeps the existing system prompt byte for byte (tools: %p)", async (tools) => {
   const model = new ScriptedModel([reply("done")], CONFIG);
-  const { node, pool, flow } = topicAgent();
+  const { node, pool, flow } = topicAgent({ tools });
   const evaluated = await evalNode(node, flow, pool, {
     models: access(model),
+    tools: noopTools(),
   });
   expect((evaluated.outcome as Output).value).toBe("done");
   expect(model.requests).toHaveLength(1);
@@ -128,10 +138,14 @@ test("no memory keeps the existing system prompt byte for byte", async () => {
   expect(evaluated.evidence).toBeNull();
 });
 
-test.each([false, true])("recall sections reach the agent path in order, with trace parity (structured: %p)", async (structured) => {
+test.each([
+  [false, false],
+  [false, true],
+  [true, false],
+])("recall sections reach every agent path in order, with trace parity (tools: %p, structured: %p)", async (tools, structured) => {
   const model = new ScriptedModel([reply(structured ? '{"value": 7}' : "done")], CONFIG);
   const models = access(model);
-  const { node, pool, flow } = topicAgent({ structured });
+  const { node, pool, flow } = topicAgent({ structured, tools });
   node.memoryScope = scope();
   const sections = [new MemorySection("outer", "outer facts"), new MemorySection("local", "local facts")];
   const contexts: [MemoryScope, RecallContext][] = [];
@@ -142,6 +156,7 @@ test.each([false, true])("recall sections reach the agent path in order, with tr
   };
   const evaluated = await evalNode(node, flow, pool, {
     models,
+    tools: noopTools(),
     captureEvidence: true,
     memoryContextOpener: opener(recall),
   });

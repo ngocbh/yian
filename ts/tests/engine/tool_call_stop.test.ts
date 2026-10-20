@@ -21,20 +21,22 @@
  * live signal, serial and with eight workers (no thread names in TS).
  * `test_a_tool_node_sees_its_run_stop_event`: the call's signal aborts with the host's reason when
  * the host stops the run, and `run()` rejects with it.
- *
- * Later (T5-11b): `test_an_agent_tool_call_sees_its_run_stop_event` (an AGENT's tool call runs in the
- * tool loop).
+ * `test_an_agent_tool_call_sees_its_run_stop_event`: the same for a call an AGENT's tool loop
+ * makes, with a `ScriptedModel` from `models`.
  */
 
 import { expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { RunSucceeded } from "../../src/events.ts";
+import { Message, Response, ToolCallPart } from "../../src/llm/messages.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { aborted, engine, graph, rejected } from "./run_state_fixtures.ts";
+import { aborted, engine, graph, rejected, serving, textReply } from "./run_state_fixtures.ts";
 
 /** Calls the `probe` tool once, naming itself as the calling node, and outputs its answer. */
 class ProbeNode extends Node {
@@ -134,3 +136,36 @@ for (const numWorkers of [0, 8]) {
     expect(signal.reason).toBe(reason);
   });
 }
+
+test("an AGENT's tool call signal aborts when its run stops", async () => {
+  const host = new AbortController();
+  const reason = new Error("stop now");
+  const entered = Promise.withResolvers<AbortSignal>();
+  const probe = new FunctionTool({
+    name: "probe",
+    description: "Wait for the call's signal to abort.",
+    parametersJsonSchema: { type: "object", properties: {} },
+    execute: async (_args, ctx) => {
+      entered.resolve(ctx.signal);
+      return await aborted(ctx.signal);
+    },
+  });
+  const config = { provider: "openai", model: "gpt-5.5" };
+  const call = new ToolCallPart({ id: "c0", name: "probe", arguments: {} });
+  const calling = new Response({ message: new Message({ role: "assistant", parts: [call] }), finishReason: "tool_calls" });
+  const model = new ScriptedModel([calling, textReply("done")], config);
+  const flow = graph([new AgentNode("agent", { prompt: "go", llmConfig: config, tools: ["probe"] })], [
+    [START_ID, "agent"],
+    ["agent", END_ID],
+  ]);
+  const running = engine(flow, { tools: new ToolSet({ probe }), models: serving(model), signal: host.signal }).run();
+
+  const signal = await entered.promise;
+  expect(signal.aborted).toBe(false);
+  host.abort(reason);
+
+  expect(await rejected(running)).toBe(reason);
+  expect(signal.aborted).toBe(true);
+  expect(signal.reason).toBe(reason);
+  expect(model.requests).toHaveLength(1);
+});

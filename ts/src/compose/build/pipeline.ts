@@ -130,6 +130,7 @@ import { TypeCheckError } from "../../typesys/values.ts";
 import { ExpressionError } from "../../expr/index.ts";
 import { LLM_CONFIG_KEY, splitLayers, valueLeaves } from "../../nodes/agent/llm_values.ts";
 import { AgentNode } from "../../nodes/agent/node.ts";
+import { checkCallMapTypes } from "../validate/call_types.ts";
 import { checkLlmConfigSources } from "../validate/llm_config_sources.ts";
 import {
   checkTypedInputs,
@@ -2397,7 +2398,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
 //   T3-18  validateReferences (1).
-//   T3-19  checkCallMapTypes, checkLoopTypeContract (1).
+//   T3-19  checkLoopTypeContract (1).
 //          inlineLoops (3, `ReadonlySet<string>`): `new Set()`.
 //   T3-20  checkCaseBranches (1); caseOutputCursor (2): returns `null`.
 //          computeNarrowing (1): returns an empty `Narrowing` over the given maps.
@@ -2434,20 +2435,6 @@ function validateReferences(
 ): void {}
 
 // T3-19: compose/validate/{typed_bindings,call_types,loop_types,llm_config_sources}.ts
-
-/** Python's `compose.validate.call_types.check_call_map_types`; not ported yet. */
-function checkCallMapTypes(
-  buildResults: ReadonlyMap<string, BuildResult>,
-  producers: ReadonlyMap<string, OutputContract>,
-  flowInputs: ReadonlyMap<string, ValueContract>,
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-  options: {
-    narrowing?: Narrowing | null;
-    typeFn?: TypeFn | null;
-    registry?: TypeRegistry | null;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): void {}
 
 /** Python's `compose.validate.loop_types.check_loop_type_contract`; not ported yet. */
 function checkLoopTypeContract(

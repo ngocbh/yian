@@ -1,0 +1,23 @@
+# A `code:` value in Python's `module:function` shape is a Python reference, which TS doesn't
+# run; read as TS it would be a labeled statement, so the TS load step refuses it with a hint.
+kind: load
+# TS refuses the Python reference form at load; Python loads it (the module is imported at run).
+rules: [code]
+flow: |
+  id: python-style-reference
+  name: python_style_reference
+  nodes:
+    helper:
+      kind: code
+      output: str
+      code: pkg.mod:helper
+  output: ${helper.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "node 'helper': `code:` value 'pkg.mod:helper' looks like a Python `module:function` reference; use `./file.ts:fn`"
+        # The `code:` value `pkg.mod:helper` on line 7.
+        frames: [{label: flow.yaml, range: [7, 11, 7, 25]}]
+python_expect:
+  load: ok

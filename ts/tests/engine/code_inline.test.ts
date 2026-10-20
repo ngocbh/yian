@@ -15,7 +15,9 @@
  * `test_reference_failure_uses_code_then_node_fallback` (`./compose_codefns.ts:echo` and `:boom`
  * with `baseDir` the repository's `conformance/fixtures`, and an inline `throw` for the source-free
  * node); `test_inline_exception_selects_deepest_owned_code_line` (JS `1 / 0` doesn't throw, so the lambda
- * and comprehension forms become a throwing arrow and a `map` callback; lines are 1-based).
+ * and comprehension forms become a throwing arrow and a `map` callback; lines are 1-based);
+ * `test_syntax_error_rejected_at_construction` becomes `syntax error rejected by the load check`
+ * (construction succeeds; the awaited `check()` rejects with a `TypeStripError` at line 1).
  *
  * Changed: a reference is a relative path to a `.ts`, `.js` or `.mjs` file plus `:fn`
  * (`./mod.ts:fn`); any other value is an inline body, so there is no reject bucket and
@@ -39,16 +41,17 @@
  * whole `code:` origin, and an intake refusal fails `contract.output` at the contract origin; a
  * reference returning an int commits an int; a reference returning `undefined` rejects with the
  * no-value error; a missing export rejects with a `TypeError`, not a `CodeError`; a module that
- * throws while loading rejects with a `CodeError`; a `../` reference resolves against `baseDir`.
+ * throws while loading rejects with a `CodeError`; a `../` reference resolves against `baseDir`;
+ * the load check refuses a wrapper escape without running it, a body redeclaring `inputs` (the
+ * constructor's `SyntaxError`), a Python-style `module:function` value and a reference to a
+ * missing file, and passes an existing file (`../` included, never imported), a body that would
+ * throw (never called) and a built-in.
  *
  * Not ported: `test_no_return_body_rejected_at_construction` and `test_return_only_in_nested_def_still_rejected`
  * (Python `ast`; TS has no load-time `return` check);
  * `test_structurally_equal_foreign_code_cannot_impersonate_owned_code` (Python code objects);
  * `test_dynamic_same_filename_code_falls_back_to_owned_call_site` (Python `compile` and `exec`);
  * `test_reference_failure_does_not_inspect_origin_truthiness` (Python `__bool__`).
- *
- * Later (T4-9), adapted: `test_syntax_error_rejected_at_construction`; the syntax check moves to
- * the awaited load step.
  *
  * Later (T3-22, T4-8): `test_inline_flow_loads_and_runs` and `test_inline_raise_becomes_failed_run`
  * (they need `loadFlow` and `runFlow`).
@@ -66,6 +69,7 @@ import { NodeFailed, NodeSucceeded, type RunEvent } from "../../src/events.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { classifyCodeSource, CodeError, CodeNode, selectInlineCodeOrigin } from "../../src/nodes/code/node.ts";
+import { TypeStripError } from "../../src/platform.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { drive, engine, graph, rejected } from "./run_state_fixtures.ts";
@@ -164,6 +168,15 @@ test("inline body that logs still returns its value", async () => {
   } finally {
     log.mockRestore();
   }
+});
+
+test("syntax error rejected by the load check", async () => {
+  const node = new CodeNode("n", { code: "return (" });
+
+  const error = await rejected(node.check());
+
+  expect(error).toBeInstanceOf(TypeStripError);
+  expect((error as TypeStripError).line).toBe(1);
 });
 
 // --- source-neutral exception attribution --- //
@@ -552,4 +565,53 @@ test("the runtime's function header is 2 lines", () => {
   const text = new AsyncFunction("inputs", "/*body*/").toString();
 
   expect(text.slice(0, text.indexOf("/*body*/")).split("\n").length - 1).toBe(2);
+});
+
+// --- the awaited load check --- //
+
+test("the load check refuses a wrapper escape and runs none of it", async () => {
+  const node = new CodeNode("n", { code: "}); globalThis.yianEscaped = true; (function () {" });
+
+  expect(await rejected(node.check())).toBeInstanceOf(SyntaxError);
+  expect("yianEscaped" in globalThis).toBe(false);
+});
+
+test("the load check refuses a body redeclaring inputs, by the constructor", async () => {
+  const error = await rejected(new CodeNode("n", { code: "let inputs = 1\nreturn inputs" }).check());
+
+  expect((error as Error).constructor).toBe(SyntaxError);
+});
+
+test("the load check refuses a Python-style reference", async () => {
+  for (const code of ["pkg.mod:fn", "mymod:myfunc"]) {
+    const error = await rejected(new CodeNode("p", { code }).check());
+
+    expect((error as Error).constructor).toBe(RangeError);
+    expect((error as Error).message).toBe(
+      `\`code:\` value '${code}' looks like a Python \`module:function\` reference; use \`./file.ts:fn\``,
+    );
+  }
+});
+
+test("the load check refuses a reference to a missing file", async () => {
+  const error = await rejected(new CodeNode("m", { code: "./missing.ts:fn", baseDir: helpers }).check());
+
+  expect((error as Error).constructor).toBe(RangeError);
+  expect((error as Error).message).toBe(`\`code:\` file './missing.ts' does not exist in '${helpers}'`);
+});
+
+test("the load check passes a reference to an existing file, ../ included, and imports nothing", async () => {
+  await new CodeNode("r", { code: "./compose_codefns.ts:echo", baseDir: FIXTURES }).check();
+  const cases = join(FIXTURES, "..", "cases");
+  await new CodeNode("p", { code: "../fixtures/compose_codefns.ts:echo", baseDir: cases }).check();
+  // The module throws when it loads, so passing shows the check never imports it.
+  await new CodeNode("b", { code: "./broken.mjs:run", baseDir: helpers }).check();
+});
+
+test("the load check never calls the body", async () => {
+  await new CodeNode("t", { code: 'throw new Error("never")' }).check();
+});
+
+test("the load check passes a built-in", async () => {
+  await new CodeNode("v", { code: { builtin: "identity", field: "v" } }).check();
 });

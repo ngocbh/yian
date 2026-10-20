@@ -5,15 +5,19 @@
  * `NodeDescriptor` (which records each field's `SourceRange`, the `code:` body's included),
  * checks its own fields, attaches the source origins of the `code:` scalar and of its exact
  * literal lines without keeping YAML objects, and builds the runtime `CodeNode`. Nothing is
- * compiled at load here: the node takes the body as text, or a value entry's built-in identity
- * form. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
+ * compiled at build: the node takes the body as text, or a value entry's built-in identity
+ * form. The awaited load step runs after assembly: `checkFlowCode` checks every CODE node of a
+ * composed flow and its child flows, and `checkCodeNode` turns a failed check into a located
+ * `LoadError`. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
  *
- * Knows about: diagnostics, compose source and helpers, and nodes (code).
+ * Knows about: diagnostics, platform, compose source and helpers, and nodes (base, code).
  * Never imports: compose/parse, the runtime or the CLI.
  */
 
-import type { OriginRef, SourceRange } from "../../diagnostics.ts";
-import { type BuiltinCode, CodeNode, validateCodeOrigins } from "../../nodes/code/node.ts";
+import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
+import type { Node } from "../../nodes/base.ts";
+import { type BuiltinCode, CodeNode, selectInlineCodeOrigin, validateCodeOrigins } from "../../nodes/code/node.ts";
+import { TypeStripError } from "../../platform.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
 import type { SourceCatalogBuilder } from "../source/catalog.ts";
 import type { SourceCursor } from "../source/index.ts";
@@ -22,6 +26,7 @@ import {
   type BuildResult,
   NodeDescriptor,
   type NodeDescriptorFields,
+  type OriginPresenter,
   rejectNonText,
   siteKey,
 } from "./base.ts";
@@ -160,4 +165,67 @@ export class CodeDescriptor extends NodeDescriptor {
     node.params = this.sinkParams();
     return this._finish(node, this.sinkWiring());
   }
+}
+
+/** What the CODE load check needs: where errors are raised and how an origin is presented. */
+export interface CodeCheckOptions {
+  /** The context the `LoadError` is raised in. */
+  diagnostics: LoadDiagnostics;
+  /** Presents an origin as a frame; `null` leaves the error unframed. */
+  resolveOrigin: OriginPresenter | null;
+}
+
+/**
+ * Run a CODE node's load check (`CodeNode.check`) and turn a failure into a located `LoadError`.
+ *
+ * A body that doesn't strip is located at its authored line when it has an exact line origin;
+ * every other failure at the whole `code:` value, then at the node. The message is
+ * `node '<id>': ` plus the failure's own.
+ *
+ * @throws LoadError when the check fails, its cause the original error.
+ */
+export async function checkCodeNode(node: CodeNode, options: CodeCheckOptions): Promise<void> {
+  const { diagnostics, resolveOrigin } = options;
+  try {
+    await node.check();
+  } catch (error) {
+    const origin = selectInlineCodeOrigin(error instanceof TypeStripError ? error.line : null, {
+      codeOrigin: node.codeOrigin,
+      codeLineOrigins: node.codeLineOrigins,
+      nodeOrigin: node.origin,
+    });
+    const frame = resolveOrigin !== null && origin !== null ? resolveOrigin(origin) : null;
+    const message = error instanceof Error ? error.message : String(error);
+    throw diagnostics.error(`node ${reprText(node.id)}: ${message}`, {
+      frames: frame === null ? [] : [frame],
+      cause: error,
+    });
+  }
+}
+
+/** A composed flow as the CODE load check reads it: its nodes, in order. */
+interface CheckedFlow {
+  readonly nodes: ReadonlyMap<string, Node>;
+}
+
+/**
+ * Check every CODE node of a composed flow and of its child flows, in node order.
+ *
+ * A node's child flows (`originChildren()`) are checked right after it; a flow reached twice is
+ * checked once. `loadFlow` awaits this once after assembly.
+ *
+ * @throws LoadError at the first CODE node whose check fails.
+ */
+export async function checkFlowCode(flow: CheckedFlow, options: CodeCheckOptions): Promise<void> {
+  // Keyed by identity: a shared child flow holds the same nodes.
+  const seen = new Set<object>();
+  const visit = async (current: CheckedFlow): Promise<void> => {
+    if (seen.has(current)) return;
+    seen.add(current);
+    for (const node of current.nodes.values()) {
+      if (node instanceof CodeNode) await checkCodeNode(node, options);
+      for (const child of node.originChildren()) await visit(child as CheckedFlow);
+    }
+  };
+  await visit(flow);
 }

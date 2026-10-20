@@ -15,7 +15,9 @@
  *   form rather than to code text.
  *
  * All modes read the node's bound typed input record (only its declared inputs, not the pool) and
- * return the node's one output value. Nothing is compiled or imported at construction.
+ * return the node's one output value. Nothing is compiled or imported at construction; the
+ * awaited load step's `check()` builds an inline body without calling it, refuses a Python-style
+ * `module:function` value, and requires a reference's file to exist, running no code.
  *
  * A reference's module is imported when the node runs (`import()` caches it) and its named export
  * must be a function. An inline body is stripped of its types and built as a strict async function
@@ -36,6 +38,7 @@
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
+import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -56,6 +59,10 @@ import { mapOrigin, type OriginMapper, outputContractOrigin, validateOptionalOri
 // A reference is a relative path to a TS or JS file, one colon and an ASCII identifier export
 // name. Anchoring plus a whitespace-free path keep multi-token bodies out.
 const REFERENCE_RE = /^\.\.?\/[^\s:]+\.(?:ts|js|mjs):[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+// Python's own reference shape (`pkg.mod:fn`). Read as TS it is a labeled statement, so the load
+// check refuses it rather than run it as a body.
+const PYTHON_REFERENCE_RE = /^[A-Za-z_][\w.]*:[A-Za-z_]\w*$/;
 
 /** The built-in identity operation: return the input named `field` unchanged. */
 export interface BuiltinCode {
@@ -174,6 +181,12 @@ async function compileBody(nodeId: string, body: string): Promise<CodeBody> {
   return new AsyncFunction("inputs", '"use strict"; ' + js + "\n//# sourceURL=yian-code:" + nodeId);
 }
 
+/** Split a `./file.ts:fn` reference into its path and its export name. */
+function splitReference(reference: string): { path: string; name: string } {
+  const colon = reference.lastIndexOf(":");
+  return { path: reference.slice(0, colon), name: reference.slice(colon + 1) };
+}
+
 /**
  * Import a `./file.ts:fn` reference's module, resolved against `baseDir` (the current directory
  * when `null`), and return its export `fn`.
@@ -182,9 +195,7 @@ async function compileBody(nodeId: string, body: string): Promise<CodeBody> {
  * @throws TypeError when the module has no function export by that name.
  */
 async function importReference(reference: string, baseDir: string | null): Promise<CodeBody> {
-  const colon = reference.lastIndexOf(":");
-  const path = reference.slice(0, colon);
-  const name = reference.slice(colon + 1);
+  const { path, name } = splitReference(reference);
   let module: Record<string, unknown>;
   try {
     module = await import(pathToFileURL(resolve(baseDir ?? process.cwd(), path)).href);
@@ -369,6 +380,38 @@ export class CodeNode extends Node {
       codeLineOrigins: this.codeLineOrigins,
       nodeOrigin: this.origin,
     });
+  }
+
+  /**
+   * Check the code without running any of it: the load step's node half.
+   *
+   * A built-in passes. A reference's file, resolved against `baseDir` (the current directory
+   * when `null`), must be a regular file; its module isn't imported, so a missing export is
+   * found when the node runs. An inline body that has Python's `module:function` shape is
+   * refused; otherwise it is stripped of its types and built, never called.
+   *
+   * @throws RangeError when a reference's file isn't a regular file, or an inline body looks
+   *   like a Python reference.
+   * @throws TypeStripError when the body doesn't parse or strip.
+   * @throws SyntaxError when the function constructor refuses the stripped body.
+   */
+  async check(): Promise<void> {
+    const code = this.code;
+    if (typeof code !== "string") return;
+    if (this.mode === "reference") {
+      const { path } = splitReference(code);
+      const dir = this.baseDir ?? process.cwd();
+      if (statSync(resolve(dir, path), { throwIfNoEntry: false })?.isFile() !== true) {
+        throw new RangeError(`\`code:\` file ${reprText(path)} does not exist in ${reprText(dir)}`);
+      }
+      return;
+    }
+    if (PYTHON_REFERENCE_RE.test(code)) {
+      throw new RangeError(
+        `\`code:\` value ${reprText(code)} looks like a Python \`module:function\` reference; use \`./file.ts:fn\``,
+      );
+    }
+    await compileBody(this.id, code);
   }
 
   /**

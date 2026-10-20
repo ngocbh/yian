@@ -1,14 +1,15 @@
 /**
  * Building the effect leaves: a port of `tests/engine/test_build_effects.py`'s HUMAN_INPUT and
- * WAIT rows.
+ * WAIT rows, and `test_wait_until_output_ref_makes_data_edge` (data edges).
  *
- * Later (T3-17): `test_wait_until_output_ref_makes_data_edge` (data edges); its CODE producer
- * then takes a TS-style `code:` value in place of `m:f`.
+ * Changed: the CODE producer takes a TS-style `code:` value (`./m.ts:f`) in place of `m:f`.
  */
 
 import { expect, test } from "bun:test";
 
+import { inferDataEdges } from "../../src/compose/edges/data.ts";
 import { BuildContext, type NodeDescriptor } from "../../src/compose/nodes/base.ts";
+import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import { WaitDescriptor } from "../../src/compose/nodes/wait.ts";
 import type { Node } from "../../src/nodes/base.ts";
@@ -45,4 +46,17 @@ test("build wait node", () => {
   // The `until` source rides the wiring.
   expect(wiring).toEqual(new Map([["until", "${input.settle_at}"]]));
   expect(node.outputContract).toBeNull();
+});
+
+test("a wait until output ref makes a data edge", () => {
+  // A wait whose `until` reads ${X.output} must order after X.
+  const descs = new Map<string, NodeDescriptor>([
+    ["clock", new CodeDescriptor({ id: "clock", code: "./m.ts:f", outputs: "datetime" })],
+    ["settle", new WaitDescriptor({ id: "settle", until: "${clock.output}" })],
+  ]);
+  const flowWiring = new Map([...descs].map(([id, desc]) => [id, build(desc)[1]]));
+
+  const edges = inferDataEdges(descs, flowWiring);
+
+  expect(edges.some((edge) => edge.from === "clock" && edge.to === "settle")).toBe(true);
 });

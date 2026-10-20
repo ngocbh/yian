@@ -25,8 +25,9 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   │                          source-free form: type text only, no defaults)
   ├─ parse_nodes           → one frozen DESCRIPTOR per node (per-kind, source-ordered);
   │                          a tagged entry (a value entry) lowers to a CODE descriptor
-  │                          with the entry's id that returns its one typed input, and
-  │                          an untagged entry without `kind:` is a load error
+  │                          with the entry's id that returns its one typed input (a
+  │                          built-in identity, no generated code), and an untagged
+  │                          entry without `kind:` is a load error
   ├─ stamp authored headers → optional Node origins in one document-local catalog
   ├─ stamp kind-owned sites → descriptor hook; CODE scalar/lines + CASE predicates/`on:`
   ├─ read tagged slots     → each node input and flow output is read through

@@ -5,15 +5,15 @@
  * `NodeDescriptor` (which records each field's `SourceRange`, the `code:` body's included),
  * checks its own fields, attaches the source origins of the `code:` scalar and of its exact
  * literal lines without keeping YAML objects, and builds the runtime `CodeNode`. Nothing is
- * compiled at load here: the node takes the body as text. Registered in `KINDS` and
- * `BINDING_FIELDS` by `compose/nodes/index.ts`.
+ * compiled at load here: the node takes the body as text, or a value entry's built-in identity
+ * form. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
  *
  * Knows about: diagnostics, compose source and helpers, and nodes (code).
  * Never imports: compose/parse, the runtime or the CLI.
  */
 
 import type { OriginRef, SourceRange } from "../../diagnostics.ts";
-import { CodeNode, validateCodeOrigins } from "../../nodes/code/node.ts";
+import { type BuiltinCode, CodeNode, validateCodeOrigins } from "../../nodes/code/node.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
 import type { SourceCatalogBuilder } from "../source/catalog.ts";
 import type { SourceCursor } from "../source/index.ts";
@@ -28,7 +28,8 @@ import {
 
 /** The fields `CodeDescriptor`'s constructor takes: the common ones and the CODE's own. */
 export interface CodeDescriptorFields extends NodeDescriptorFields {
-  code: string;
+  /** Text, or the built-in form only a value entry's reader passes. */
+  code: string | BuiltinCode;
   asserts?: readonly string[] | null;
   codeOrigin?: OriginRef | null;
   codeLineOrigins?: readonly OriginRef[];
@@ -48,8 +49,11 @@ export class CodeDescriptor extends NodeDescriptor {
   static override readonly required = this.require("code");
   static override readonly bindingFields: readonly string[] = ["inputs"];
 
-  /** The `code:` field: a reference or an inline body. */
-  readonly code: string;
+  /**
+   * The `code:` field: a reference or an inline body, or the built-in identity a value entry
+   * lowers to (an authored `code:` is always text).
+   */
+  readonly code: string | BuiltinCode;
   /** The node asserts. */
   readonly asserts: readonly string[];
   /** The authored identity of the whole `code:` scalar, or `null`. */
@@ -136,8 +140,9 @@ export class CodeDescriptor extends NodeDescriptor {
   /**
    * Build the runtime `CodeNode` and its flow-owned wiring.
    *
-   * The node takes the body as text, `ctx.baseDir` as the directory a reference resolves against,
-   * and the descriptor's code origins unchanged; nothing is compiled. Sets the node's `params`
+   * The node takes the body as text, or a value entry's built-in identity form, `ctx.baseDir` as
+   * the directory a reference resolves against, and the descriptor's code origins unchanged;
+   * nothing is compiled. Sets the node's `params`
    * from the authored `input:` and its output contract from `output:`; `_finish` stamps the
    * descriptor origin.
    *

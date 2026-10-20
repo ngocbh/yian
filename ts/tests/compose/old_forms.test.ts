@@ -4,19 +4,20 @@
  * the declarations with `parametersFromYaml` (`readSourceParameters`) where Python loads a flow.
  *
  * Ported: `test_untagged_flow_input_shows_the_tag`, `test_untagged_agent_variable_shows_the_tag`,
- * `test_source_free_declarations_take_a_type_only` and
- * `test_source_free_input_rejects_a_record_map`.
+ * `test_source_free_declarations_take_a_type_only`,
+ * `test_source_free_input_rejects_a_record_map`, and `test_typed_flow_output_text_shows_the_tag`
+ * and `test_typed_single_flow_output_text_shows_the_tag`, which assemble the flow with
+ * `assembleText`.
  *
  * TS-only: an untagged float default's example, spelled as Python's `repr` spells a finite
  * float and as `.inf` for infinity, which YAML reads back as a float (Python writes `inf`,
  * which reads back as text); a type with a default that doesn't parse (`n: int = [`), kept as
  * written where Python reads an unbound name; and the harvested-case table, comparing the
  * message and the last frame: its flow-input rows read the declarations, and its agent-variable
- * rows assemble the flow as the loader calls `assemble`.
+ * and flow-output rows assemble the flow as the loader calls `assemble`.
  *
  * Later (T3-22): the `load_flow` tests: the bracket typedef and node output, the typed binding
- * text, the typed flow output text, text without a type that stays plain text, and the
- * untagged definition input.
+ * text, text without a type that stays plain text, and the untagged definition input.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -24,7 +25,15 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFlowInputs, readVariables } from "../../src/compose/helpers/types.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
-import { assembled, type CaseRow, inputsAt, loadError, parametersFromYaml, runCase } from "./declarations.ts";
+import {
+  assembled,
+  assembleText,
+  type CaseRow,
+  inputsAt,
+  loadError,
+  parametersFromYaml,
+  runCase,
+} from "./declarations.ts";
 
 // Pinned before `MESSAGE_REGISTRY` is read too, so neither depends on the shell's `YIAN_*` limits.
 install(BUILTIN);
@@ -178,6 +187,57 @@ describe("source-free declarations", () => {
   });
 });
 
+// ---------- typed flow outputs ----------
+
+/** A flow whose `use` node binds `v` to `${input.n}`, with the flow `output:` lines `output`. */
+function outputFlow(output: string): string {
+  return `\
+id: old_bindings
+name: old_bindings
+typedefs:
+  Buy: {action: Literal(buy)}
+  Sell: {action: Literal(sell)}
+input:
+  n: !int
+nodes:
+  size:
+    kind: code
+    code: "return {'qty': inputs['n']}"
+    input:
+      n: \${input.n}
+    output: {qty: int}
+  use:
+    kind: code
+    code: return inputs['v']
+    input:
+      v: \${input.n}
+    output: str
+${output}
+`;
+}
+
+describe("typed flow outputs", () => {
+  test("a typed flow output field's text shows the tag", () => {
+    errorAt(
+      outputFlow("output:\n  r: int = ${use.output}"),
+      "binding 'r': write the type as a tag: `r: !int ${use.output}`" +
+        '. If you meant the text, quote it: `r: "int = ${use.output}"`',
+      "  r: int = ${use.output}",
+      assembleText,
+    );
+  });
+
+  test("a typed single flow output's text shows the tag", () => {
+    errorAt(
+      outputFlow("output: Optional[int] = ${use.output}"),
+      "binding 'output': write the type as a tag: `output: !Optional(int) ${use.output}`" +
+        '. If you meant the text, quote it: `output: "Optional[int] = ${use.output}"`',
+      "output: Optional[int] = ${use.output}",
+      assembleText,
+    );
+  });
+});
+
 // ---------- harvested conformance cases ----------
 
 const rootInput = inputsAt(["input"]);
@@ -185,6 +245,7 @@ const childInput = inputsAt(["defs", "child", "input"], ["def", "child"]);
 const OLD_FORMS = "load-core/compose_old_forms__";
 
 test.each<CaseRow>([
+  { id: `${OLD_FORMS}typed_flow_output_text_shows_the_tag`, call: assembled },
   { id: `${OLD_FORMS}untagged_agent_variable`, call: assembled },
   { id: `${OLD_FORMS}untagged_agent_variable_value`, call: assembled },
   { id: `${OLD_FORMS}untagged_bool_input_with_a_yaml11_word`, call: rootInput },

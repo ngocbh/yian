@@ -13,8 +13,8 @@
  * `test_on_data_edge_reconciled`, `test_desugared_searched_routes_via_evaluate_when_record`,
  * `test_desugared_on_routes_via_evaluate_when_record`, `test_handles_align_with_control_edges`,
  * `test_on_value_with_double_quote_uses_single_quote_and_routes`,
- * `test_on_value_with_both_quotes_is_loud_load_error`, the build halves of
- * `test_build_emits_reconciled_edges_no_provisional_group`,
+ * `test_on_value_with_both_quotes_is_loud_load_error`,
+ * `test_build_emits_reconciled_edges_no_provisional_group`, the build halves of
  * `test_exhaustiveness_missing_tag_no_else_raises` and
  * `test_on_non_enum_producer_skips_exhaustiveness`, the build half of
  * `tests/engine/test_validate_refs.py`'s `test_case_node_local_ref_does_not_error`, and the
@@ -39,8 +39,6 @@
  * `cases:`, else at the node; an `on:` entry with a `when:` and no `then:` ("each on:-form case
  * needs a `when:` value and a `then:`") at `cases:`, else at the node.
  *
- * Later (T3-17): the `infer_data_edges` half of
- * `test_build_emits_reconciled_edges_no_provisional_group`.
  * Later (T3-20, `case_exhaustive`): the exhaustiveness halves of
  * `test_exhaustiveness_missing_tag_no_else_raises` and
  * `test_on_non_enum_producer_skips_exhaustiveness`, and
@@ -58,6 +56,7 @@
 import { expect, test } from "bun:test";
 
 import type { Edge } from "../../src/compile/model.ts";
+import { inferDataEdges } from "../../src/compose/edges/data.ts";
 import { BuildContext, type BuildResult, siteKey } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { LoadDiagnostics, type LoadError } from "../../src/compose/helpers/errors.ts";
@@ -358,8 +357,18 @@ test("desugared searched routes via evaluateWhenRecord", () => {
 });
 
 test("the build emits reconciled edges and no provisional group", () => {
-  // The case's own build gives its `__r0` data edge and its control edges.
-  const result = seed02().build(CTX);
+  // `inferDataEdges` emits no edge for the case node (it skips a case); the case's own build gives
+  // its `__r0` data edge and its control edges.
+  const { text, label } = caseText("load-case/seed_02_case");
+  const descriptors = nodesOf(text, [], label);
+  const flowWiring = new Map(
+    [...descriptors]
+      .filter(([, desc]) => !(desc instanceof CaseDescriptor))
+      .map(([id, desc]) => [id, desc.build(CTX).wiring]),
+  );
+  expect(inferDataEdges(descriptors, flowWiring).some((edge) => edge.to === "gate")).toBe(false);
+
+  const result = descriptors.get("gate")!.build(CTX);
 
   expect(result.edges.some((edge) => (edge.inputGroup ?? "").includes(":"))).toBe(false);
   expect(result.edges.map((edge) => [edge.from, edge.to, edge.inputGroup])).toContainEqual(["score", "gate", "__r0"]);

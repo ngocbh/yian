@@ -78,8 +78,14 @@ import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
 import { siteKey } from "../nodes/base.ts";
 import { HumanInputDescriptor } from "../nodes/human_input.ts";
 // T3-17 imports
+import { isValueEntry, readValueEntry, type ValueEntryDescriptor } from "../desugar/value_entries.ts";
+import { inferDataEdges } from "../edges/data.ts";
+import { hostControlEdges } from "../edges/hosts.ts";
+import { inferOrderingEdges } from "../edges/ordering.ts";
+import { LoweredAsserts } from "../validate/asserts.ts";
 import { Narrowing } from "../validate/narrowing.ts";
 import type { LocalInput } from "../validate/typed_bindings.ts";
+import { synthesizeBoundaryGraph } from "./boundary.ts";
 // T3-18 imports
 // T3-19 imports
 // T3-20 imports
@@ -842,7 +848,30 @@ export function attachInputContracts(
   }
 }
 
-/** Python's `compose.build.pipeline._split_typed_outputs`; not ported yet. */
+/**
+ * Split each typed flow output into its value and declared contract.
+ *
+ * A record field written `decision: !Decision ${d.output}` keeps `${d.output}` as its value; a
+ * bare `output: !Size ${size.output}` is the single output named `result`. A tagged whole section
+ * is that single output even when its value is a mapping (`output: !T {a: 1}`), so it comes back
+ * as a `Binding` carrier rather than a record. Recognition and locations follow the retained
+ * cursor exactly as for node inputs.
+ *
+ * Unlike Python's, an untyped output needs no check that its literals are JSON values: the YAML
+ * reader keeps a date as text and refuses `.nan`, a float too large to read, `!!set`, `!!binary`,
+ * `!!omap` and `!!pairs`, and the source layer refuses a non-text record key.
+ *
+ * @param outputsSection The raw `output:` section: a record, a single value, or `null`.
+ * @param outputsCursor Retained authored `output:` value, or `null` for a generated section.
+ * @param options.registry The file's typedefs the type text resolves against.
+ * @param options.owner Complete lexical owner path for catalog sites.
+ * @param options.catalogBuilder File-owned origin catalog builder.
+ * @param options.diagnostics Factory for located load errors.
+ * @returns The section with typed values split (a `Binding` for a tagged whole section), and the
+ *   declared contracts keyed by output name.
+ * @throws LoadError when a typed output's type or value is malformed, an output is in the old
+ *   `Type = value` form, or the retained cursor cannot be traversed.
+ */
 function splitTypedOutputs(
   outputsSection: unknown,
   outputsCursor: SourceCursor | null,
@@ -853,7 +882,48 @@ function splitTypedOutputs(
     diagnostics: LoadDiagnostics;
   },
 ): [outputsSection: unknown, outputTypes: Map<string, ValueContract>] {
-  return [outputsSection, new Map()];
+  const { registry, owner, catalogBuilder, diagnostics } = options;
+  /** Split one output value at its positional catalog site. */
+  const splitOne = (value: unknown, cursor: SourceCursor | null, bindingLabel: string, index: number) =>
+    splitTypedValue(value, cursor, {
+      bindingLabel,
+      sitePath: [...owner, "output", index],
+      registry,
+      catalogBuilder,
+      diagnostics,
+    });
+
+  try {
+    if (outputsCursor?.tag != null) {
+      // A tagged whole section is one typed value, even a mapping: the carrier is not a record,
+      // so every later pass takes it as the single output. A top-level tag always gives the
+      // split its contract.
+      const [value, contract] = splitOne(outputsSection, outputsCursor, "output", 0)!;
+      return [new Binding(value, { contract }), new Map([[SINGLE_OUTPUT_NAME, contract!]])];
+    }
+    if (outputsSection === null) return [null, new Map()];
+    if (!isRecord(outputsSection)) {
+      const typed = splitOne(outputsSection, outputsCursor, "output", 0);
+      if (typed === null) return [outputsSection, new Map()];
+      const [value, contract] = typed;
+      if (contract === null) return [value, new Map()];
+      return [value, new Map([[SINGLE_OUTPUT_NAME, contract]])];
+    }
+    const split: Record<string, unknown> = { ...outputsSection };
+    const outputTypes = new Map<string, ValueContract>();
+    for (const [index, [key, value]] of Object.entries(outputsSection).entries()) {
+      const cursor = outputsCursor !== null && outputsCursor.has(key) ? outputsCursor.child(key) : null;
+      const typed = splitOne(value, cursor, key, index);
+      if (typed === null) continue;
+      const [splitValue, contract] = typed;
+      split[key] = splitValue;
+      if (contract !== null) outputTypes.set(key, contract);
+    }
+    return [split, outputTypes];
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw diagnostics.error(error.message, { range: error.range, cause: error });
+  }
 }
 
 /**
@@ -1700,19 +1770,14 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //
 // Every placeholder, by owner. Kind 1 is a stub in its owner's sub-block below: the owner deletes
 // the stub and imports the port under its import slot, keeping the sub-block header. A local type
-// alias is replaced by a `type` import of the same name under that slot, never just deleted, since
-// other owners' stubs use the shared one: `LoweredAsserts` (T3-20). `TypeFn` is imported from
-// compose/helpers/output_contracts.ts.
+// alias is replaced by a `type` import of the same name under that slot, never just deleted.
+// `TypeFn` is imported from compose/helpers/output_contracts.ts.
 // Kind 2 is a pipeline helper stubbed at its Python position: the owner ports its body in place,
 // adding the private helpers named beside it. Kind 3 is a `const` inside `assemble`: the owner
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
 //   T3-17  extractInlineBodies (1): returns `[nodesCursor, new Map()]`.
-//          readValueEntry (1): throws.
-//          isValueEntry (1): returns `false`.
-//          splitTypedOutputs (2, with _check_output_names, _reject_non_json_literals and
-//            _raise_if_non_json_literal): returns `[outputsSection, new Map()]`.
 //          synthIdGen (1): returns a minter that throws.
 //          desugarInlineCalls (1): returns `[descriptors, outputsSection, assertsSection]`;
 //            bindingStyle, outputStyle (2): return `null`.
@@ -1723,11 +1788,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //            throws.
 //          readBindingContract (3, `BindingContractReader | null`): `null`.
 //          registerInlineBodies (2): returns the descriptors.
-//          inferDataEdges, hostControlEdges, inferOrderingEdges (1): return `[]`.
 //          stampInlineCallOrigins (2).
-//          synthesizeBoundaryGraph (1, `lowered` positional with a default, then `{ record }`):
-//            returns `[new Map(), [], new Map()]`, so `ComposedFlow.input` throws until it is
-//            ported.
 //          synthWires (3, `ReadonlySet<string>`, reads `QPARAM`): `new Set()`.
 //   T3-18  checkWrittenValues, stampToolInputTypes, checkWiringParity, validateReferences,
 //          validateHumanQuestions, checkReservedSources, rejectCycles, checkCaseHandles (1).
@@ -1741,7 +1802,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //          computeNarrowing (1): returns an empty `Narrowing` over the given maps.
 //          checkCaseWhenValues, checkImpossibleWhens, checkCaseExhaustive, validateNodeAsserts,
 //          checkSkippedArithmetic (1).
-//          lowerFlowAsserts (1): returns `null`.
+//          lowerFlowAsserts (1): returns an empty `LoweredAsserts`.
 //          exhaustiveCases (1): returns `new Set()`; skipModel (1, Python's `SkipModel` class):
 //            returns `null`; nullSkippedOutputs (1): returns the outputs.
 //          searchedWhens (3, `ReadonlyMap<string, readonly SearchedWhen[]>`): `new Map()`.
@@ -1752,8 +1813,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 
 /** Python's `compose.desugar.inline_bodies.InlineBody`; not ported yet. */
 type InlineBody = unknown;
-/** Python's `compose.desugar.value_entries.ValueEntryDescriptor`; not ported yet. */
-type ValueEntryDescriptor = NodeDescriptor;
 
 /** Python's `compose.desugar.inline_bodies.extract_inline_bodies`; not ported yet. */
 function extractInlineBodies(
@@ -1761,25 +1820,6 @@ function extractInlineBodies(
   options: { owner: readonly string[] },
 ): [nodesCursor: SourceCursor, inlineBodies: Map<string, InlineBody>] {
   return [nodesCursor, new Map()];
-}
-
-/** Python's `compose.desugar.value_entries.read_value_entry`; not ported yet. */
-function readValueEntry(
-  nodeId: string,
-  cursor: SourceCursor,
-  options: {
-    registry: TypeRegistry;
-    owner: readonly string[];
-    catalogBuilder: SourceCatalogBuilder;
-    diagnostics: LoadDiagnostics;
-  },
-): ValueEntryDescriptor {
-  throw new Error("read_value_entry is not ported yet (T3-17)");
-}
-
-/** Python's `isinstance(descriptor, compose.desugar.value_entries.ValueEntryDescriptor)`; not ported yet. */
-function isValueEntry(descriptor: NodeDescriptor): boolean {
-  return false;
 }
 
 /** Python's `compose.desugar.inline_calls._synth_id_gen`; not ported yet. */
@@ -1847,40 +1887,6 @@ function expandCaseOutputs(
   } = {},
 ): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown] {
   return [new Map(descriptors), outputsSection];
-}
-
-/** Python's `compose.edges.data.infer_data_edges`; not ported yet. */
-function inferDataEdges(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-): Edge[] {
-  return [];
-}
-
-/** Python's `compose.edges.hosts.host_control_edges`; not ported yet. */
-function hostControlEdges(descriptors: ReadonlyMap<string, NodeDescriptor>, edges: readonly Edge[]): Edge[] {
-  return [];
-}
-
-/** Python's `compose.edges.ordering.infer_ordering_edges`; not ported yet. */
-function inferOrderingEdges(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  nodeIds: ReadonlySet<string>,
-  options: { diagnostics?: LoadDiagnostics | null } = {},
-): Edge[] {
-  return [];
-}
-
-/** Python's `compose.build.boundary.synthesize_boundary_graph`; not ported yet. */
-function synthesizeBoundaryGraph(
-  inputParameters: readonly Parameter[],
-  outputs: readonly FlowOutput[],
-  nodeIds: ReadonlySet<string>,
-  bodyEdges: readonly Edge[],
-  lowered: LoweredAsserts | null = null,
-  options: { record: boolean },
-): [nodes: Map<string, Node>, edges: Edge[], wiring: Map<string, Map<string, unknown>>] {
-  return [new Map(), [], new Map()];
 }
 
 // T3-18: compose/validate/{value_nesting,tool_inputs,wiring_parity,references,human_questions,
@@ -2060,8 +2066,6 @@ function checkLlmConfigSources(
 
 // T3-20: compose/validate/{case_branches,narrowing,case_exhaustive,asserts,skips}.ts
 
-/** Python's `compose.validate.asserts.LoweredAsserts`; not ported yet. */
-type LoweredAsserts = unknown;
 /** Python's `compose.validate.skips.SkipModel`; not ported yet. */
 type SkipModel = unknown;
 /** One searched `when:` as authored: its index, text, origin and range. */
@@ -2146,7 +2150,7 @@ function lowerFlowAsserts(
     diagnostics?: LoadDiagnostics | null;
   } = {},
 ): LoweredAsserts {
-  return null;
+  return new LoweredAsserts();
 }
 
 /** Python's `compose.validate.case_exhaustive.exhaustive_cases`; not ported yet. */

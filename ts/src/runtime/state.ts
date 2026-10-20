@@ -915,6 +915,7 @@ function prepareSuccessTransition(state: RunState, record: NodeSucceededRecord, 
   if (!isExactly(canonical, NodeSucceededRecord)) {
     throw new TypeError("node-success envelope decoded to a different record kind");
   }
+  // An exhaustive codec invariant: the record was decoded from this very text.
   if (encodeRecord(envelope) !== envelopeJson) {
     throw new RangeError("NodeSucceededRecord is not in canonical wire form");
   }
@@ -955,7 +956,7 @@ function prepareSuccessTransition(state: RunState, record: NodeSucceededRecord, 
  * Prepare a live expansion: validate `grow` against the expanding node and build its fragment
  * with `growBuilder`, without mutating `state`.
  *
- * Not ported yet (T4-5): it always throws.
+ * Not ported yet: it always throws.
  */
 export function prepareExpanded(
   state: RunState,
@@ -967,7 +968,7 @@ export function prepareExpanded(
   throw new Error("not ported yet (T4-5)");
 }
 
-/** Prepare a recorded expansion by rebuilding its fragment. Not ported yet (T4-5): it always throws. */
+/** Prepare a recorded expansion by rebuilding its fragment. Not ported yet: it always throws. */
 function prepareGrowthRecord(
   state: RunState,
   record: NodeExpandedRecord,
@@ -977,8 +978,8 @@ function prepareGrowthRecord(
 }
 
 /**
- * Prepare one backward or memory-commit record against the accepted terminal. Not ported yet
- * (T4-5): it always throws.
+ * Prepare one backward or memory-commit record against the accepted terminal. Not ported yet:
+ * it always throws.
  */
 function prepareBackwardTransition(state: RunState, record: RunRecord): PreparedTransition {
   throw new Error("not ported yet (T4-5)");
@@ -1224,7 +1225,7 @@ function requireOutcomeTraceTerminal(state: RunState, prepared: PreparedTransiti
  *
  * `state` is pristine around the graph that authored the run; `envelopes` is a non-empty
  * sequence-zero prefix starting with `RunStarted`; `options.growBuilder` rebuilds and verifies
- * growth. Not ported yet (T4-5): it always throws.
+ * growth. Not ported yet: it always throws.
  */
 export function replayRecords(
   state: RunState,
@@ -1359,7 +1360,7 @@ function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransitio
   return apply.observers;
 }
 
-/** Append and apply one prepared expansion. Not ported yet (T4-5): it always throws. */
+/** Append and apply one prepared expansion. Not ported yet: it always throws. */
 function commitGrowth(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   throw new Error("not ported yet (T4-5)");
 }
@@ -1461,7 +1462,7 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
   }
 }
 
-/** Append and apply one post-terminal backward record. Not ported yet (T4-5): it always throws. */
+/** Append and apply one post-terminal backward record. Not ported yet: it always throws. */
 function commitBackward(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   throw new Error("not ported yet (T4-5)");
 }

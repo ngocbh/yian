@@ -246,7 +246,8 @@ yian version from before the record existed.
 
 Changed (TS yian): the reducer also accepts `RunStoppedRecord`, whose `node_ids` must be
 the in-flight nodes in dispatch order; it changes no frontier, start count or step, so a
-resume after a stop retries those nodes first.
+resume after a stop retries those nodes first. Like every frontier record, it is refused once the
+run has a terminal result.
 
 Node outcome records require forward capture when the recorded run
 has `learnable=True` and omit it when `learnable=False`. Optional model/tool evaluation

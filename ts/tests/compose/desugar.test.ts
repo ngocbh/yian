@@ -1,0 +1,157 @@
+/**
+ * The desugar phase: flow-level rewrites that run before the build loop. A port of
+ * `tests/compose/test_desugar.py`.
+ *
+ * Each desugar pass rewrites a flow's parsed descriptors into ordinary descriptors and bindings. A
+ * synth node a pass mints locates at the SITE it desugared from (the `call(...)` directive's own
+ * binding line, not the host node header), so its downstream errors caret the author's actual
+ * source.
+ *
+ * Ported: the inline-call rows (`test_desugar_inline_calls_locate_at_their_binding_site`,
+ * `test_inline_call_error_uses_binding_range`, `test_inline_output_error_uses_section_range`,
+ * `test_inline_assert_error_uses_positional_range`,
+ * `test_duplicate_inline_assertions_keep_positional_ranges`,
+ * `test_inline_map_scalar_over_does_not_use_input_named_over_range`).
+ *
+ * Later (T3-17): the adaptive-questions rows (`test_desugar_adaptive_questions_preserves_ranges`,
+ * `test_desugar_adaptive_questions_without_source`) and the case rows
+ * (`test_desugar_case_call_targets_locate_at_their_target_line`,
+ * `test_case_binding_error_uses_binding_range`, `test_case_output_error_uses_section_range`,
+ * `test_case_condition_error_uses_exact_condition_range`,
+ * `test_case_assert_error_uses_positional_range`,
+ * `test_case_map_scalar_over_does_not_use_input_named_over_range`).
+ */
+
+import { expect, test } from "bun:test";
+
+import { desugarInlineCalls, synthIdGen } from "../../src/compose/desugar/inline_calls.ts";
+import { LoadDiagnostics, type LoadError } from "../../src/compose/helpers/errors.ts";
+import { siteKey } from "../../src/compose/nodes/base.ts";
+import { CallDescriptor } from "../../src/compose/nodes/call.ts";
+import { MapDescriptor } from "../../src/compose/nodes/map.ts";
+import { parseNodes } from "../../src/compose/parse/nodes.ts";
+import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
+import { SourceRange } from "../../src/diagnostics.ts";
+import { loadError } from "./declarations.ts";
+
+/** Return the physical cursor over a flow document's `nodes:` mapping. */
+function nodesReader(text: string): SourceCursor {
+  return SourceDocument.parse(text).root.child("nodes");
+}
+
+/** Return source ownership for direct range-only desugar tests. */
+function diagnostics(): LoadDiagnostics {
+  return new LoadDiagnostics("flow.yaml", (" ".repeat(100) + "\n").repeat(200));
+}
+
+/** Return the error's one frame. */
+function onlyFrame(error: LoadError) {
+  expect(error.diagnostic.frames).toHaveLength(1);
+  return error.diagnostic.frames[0]!;
+}
+
+test("desugar inline calls locate at their binding site", () => {
+  // A whole-value `call(...)` in a node's `input:` binding lifts to a synth `call` node, which
+  // locates at its OWN binding line (the `x:` entry the directive was written on), NOT the host
+  // node header, and carries an empty `fieldRanges` (it owns no authored fields), so a bad ref
+  // inside the directive carets the directive.
+  const text =
+    "id: f\nname: f\nnodes:\n" +
+    "  writer:\n    kind: code\n    code: m:f\n" +
+    "    input:\n      x: call(helper, n=3)\n    output: str\n" +
+    "output: ${writer.output}\n";
+  const descriptors = parseNodes(nodesReader(text));
+  const host = descriptors.get("writer")!;
+  const [newDescriptors] = desugarInlineCalls(descriptors, null, { nextId: synthIdGen() });
+  const synth = [...newDescriptors].filter(([nodeId]) => nodeId.startsWith("__call_")).map(([, desc]) => desc);
+  expect(synth).toHaveLength(1);
+  const callDesc = synth[0] as CallDescriptor;
+  expect(callDesc.call).toBe("helper");
+  expect(callDesc.range).toEqual(host.fieldRanges.get(siteKey("input", "x"))!); // the `x:` binding
+  expect(callDesc.range).not.toEqual(host.range); // ... not the header
+  expect(callDesc.fieldRanges).toEqual(new Map()); // owns no authored fields
+});
+
+test("inline call error uses binding range", () => {
+  const text =
+    "id: f\nname: f\nnodes:\n" +
+    "  writer:\n    kind: code\n    code: m:f\n" +
+    "    input:\n      x: ${helper(topic=input.topic)}\n    output: str\n";
+  const nodesCursor = nodesReader(text);
+  const descriptors = parseNodes(nodesCursor);
+  const bindingRange = descriptors.get("writer")!.fieldRanges.get(siteKey("input", "x"))!;
+
+  const error = loadError(() =>
+    desugarInlineCalls(descriptors, null, {
+      nextId: synthIdGen(),
+      diagnostics: LoadDiagnostics.fromCursor(nodesCursor),
+    }),
+  );
+
+  const frame = onlyFrame(error);
+  expect(frame.range).toEqual(bindingRange);
+  expect(frame.text).toBe(text);
+});
+
+test("inline output error uses section range", () => {
+  const outputRange = new SourceRange(17, 9, 17, 28);
+
+  const error = loadError(() =>
+    desugarInlineCalls(new Map(), "call(helper, topic=${item})", {
+      outputsRange: outputRange,
+      nextId: synthIdGen(),
+      diagnostics: diagnostics(),
+    }),
+  );
+
+  expect(onlyFrame(error).range).toEqual(outputRange);
+});
+
+test("inline assert error uses positional range", () => {
+  const assertionRanges = [new SourceRange(18, 7, 18, 11), new SourceRange(19, 7, 19, 25)];
+
+  const error = loadError(() =>
+    desugarInlineCalls(new Map(), null, {
+      assertsSection: ["true", "${helper(topic=1)}"],
+      assertionRangeAt: (index) => assertionRanges[index]!,
+      nextId: synthIdGen(),
+      diagnostics: diagnostics(),
+    }),
+  );
+
+  expect(onlyFrame(error).range).toEqual(assertionRanges[1]!);
+});
+
+test("duplicate inline assertions keep positional ranges", () => {
+  const assertionRanges = [new SourceRange(21, 7, 21, 19), new SourceRange(22, 7, 22, 19)];
+
+  const [descriptors] = desugarInlineCalls(new Map(), null, {
+    assertsSection: ["call(helper)", "call(helper)"],
+    assertionRangeAt: (index) => assertionRanges[index]!,
+    nextId: synthIdGen(),
+  });
+
+  expect(descriptors.get("__call_0")!.range).toBe(assertionRanges[0]!);
+  expect(descriptors.get("__call_1")!.range).toBe(assertionRanges[1]!);
+});
+
+test("inline map scalar over does not use the range of an input named over", () => {
+  const inputRange = new SourceRange(71, 9, 71, 25);
+  const scalarRange = new SourceRange(72, 9, 72, 36);
+  const descriptor = new MapDescriptor({
+    id: "mapped",
+    call: "child",
+    inputs: { over: "${input.seed}" },
+    over: "${helper(topic=item)}",
+    fieldRanges: new Map([
+      [siteKey("input", "over"), inputRange],
+      [siteKey("field", "over"), scalarRange],
+    ]),
+  });
+
+  const error = loadError(() =>
+    desugarInlineCalls(new Map([["mapped", descriptor]]), null, { diagnostics: diagnostics() }),
+  );
+
+  expect(onlyFrame(error).range).toEqual(scalarRange);
+});

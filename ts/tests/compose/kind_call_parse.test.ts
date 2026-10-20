@@ -19,7 +19,12 @@
  * `load-map-call/compose_call_argument_labels__an_authored_call_node_keeps_its_binding_wording`
  * (`tests/compose/test_call_argument_labels.py`) and
  * `load-core/engine_limit_overrides__call_nesting_follows_the_variable`
- * (`tests/engine/test_limit_overrides.py`), whose `c0` calls `c1`, which calls `c2`.
+ * (`tests/engine/test_limit_overrides.py`), whose `c0` calls `c1`, which calls `c2`; and the
+ * CALL builds of an inline `call(...)`'s synth node,
+ * `load-map-call/compose_call_argument_labels__a_missing_argument_names_the_call`,
+ * `load-map-call/compose_call_argument_labels__an_undeclared_argument_in_a_value_entry_call` and
+ * `load-map-call/compose_call_argument_labels__an_undeclared_argument_names_the_argument`
+ * (`tests/compose/test_call_argument_labels.py`), whose messages name the authored binding.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -125,4 +130,12 @@ test.each<CaseRow>([
     id: "load-core/engine_limit_overrides__call_nesting_follows_the_variable",
     call: assembledWith({ c0: callingDef("c1", callingDef("c2", c2)) }),
   },
+  ...[
+    "a_missing_argument_names_the_call",
+    "an_undeclared_argument_in_a_value_entry_call",
+    "an_undeclared_argument_names_the_argument",
+  ].map((name) => ({
+    id: `load-map-call/compose_call_argument_labels__${name}`,
+    call: assembledWith({ child: def("input:\n  y: !int\n", "x", new ValueContract(Type.scalar(ValueKind.INTEGER))) }),
+  })),
 ])("assemble: $id", runCase);

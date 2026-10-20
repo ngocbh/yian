@@ -8,7 +8,9 @@
  * `test_case_condition_with_a_nested_span_fails_to_load_with_the_rewrite`, is pinned at the end
  * (`assemble`, whose CASE build raises it), and so is
  * `load-core/engine_nested_span_rejected__loop_predicate_shows_the_rewrite` (`assembledWith`, the
- * `step` def built by hand; the LOOP build raises it).
+ * `step` def built by hand; the LOOP build raises it), and
+ * `load-core/engine_nested_span_rejected__binding_shows_the_rewrite` (`assemble`, whose inline-call
+ * desugar raises it).
  *
  * Left for later: the binding, case, assert, loop and prompt load tests and the run tests land
  * with compose and `run.ts`.
@@ -173,4 +175,8 @@ test("assembled: load-core/engine_nested_span_rejected__loop_predicate_shows_the
     id: "load-core/engine_nested_span_rejected__loop_predicate_shows_the_rewrite",
     call: assembledWith({ step: stepBody() }),
   });
+});
+
+test("assembled: load-core/engine_nested_span_rejected__binding_shows_the_rewrite", () => {
+  runCase({ id: "load-core/engine_nested_span_rejected__binding_shows_the_rewrite", call: assembled });
 });

@@ -1,6 +1,4 @@
-# TS reads `2026-13-45` as text, which fills `d: !str` (rules: dates); Python's YAML-date error in python_expect.
 kind: load
-rules: [dates]
 flow: |
   id: f
   name: f
@@ -50,8 +48,6 @@ python_flow: |
       output: str
   output: ${use.output}
 expect:
-  load: ok
-python_expect:
   load:
     diagnostics:
     - code: compose.load

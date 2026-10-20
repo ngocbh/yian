@@ -78,6 +78,7 @@ import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
 import { siteKey } from "../nodes/base.ts";
 import { HumanInputDescriptor } from "../nodes/human_input.ts";
 // T3-17 imports
+import { desugarInlineCalls, synthIdGen } from "../desugar/inline_calls.ts";
 import { isValueEntry, readValueEntry, type ValueEntryDescriptor } from "../desugar/value_entries.ts";
 import { inferDataEdges } from "../edges/data.ts";
 import { hostControlEdges } from "../edges/hosts.ts";
@@ -789,7 +790,20 @@ function attachLlmConfigWiring(
   return [];
 }
 
-/** Python's `compose.build.pipeline._binding_style`; not ported yet. */
+/**
+ * Return the authored YAML scalar style of one node binding.
+ *
+ * A value entry's one binding is the entry itself, so its style is the entry's.
+ *
+ * @param nodesCursor Retained view of the flow's node mapping.
+ * @param nodeId The node that owns the binding.
+ * @param field The binding field (`inputs`, or a scalar field such as `over`).
+ * @param key The binding name in a mapping field; equals `field` for a scalar one.
+ * @param options.valueEntries The ids of the flow's value entries.
+ * @param options.diagnostics Factory for located load errors.
+ * @returns The style, or `null` for a synthesized node or binding.
+ * @throws LoadError when the retained cursor cannot be traversed.
+ */
 function bindingStyle(
   nodesCursor: SourceCursor,
   nodeId: string,
@@ -797,16 +811,51 @@ function bindingStyle(
   key: string,
   options: { valueEntries: ReadonlySet<string>; diagnostics: LoadDiagnostics },
 ): string | null {
-  return null;
+  const { valueEntries, diagnostics } = options;
+  try {
+    if (!nodesCursor.has(nodeId)) return null;
+    if (valueEntries.has(nodeId)) {
+      if (field !== "inputs" || key !== nodeId) return null;
+      return nodesCursor.child(nodeId).scalarStyle;
+    }
+    let cursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
+    if (!cursor.has(field)) return null;
+    cursor = cursor.child(field);
+    if (key !== field) {
+      if (!cursor.has(key)) return null;
+      cursor = cursor.child(key);
+    }
+    return cursor.scalarStyle;
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw diagnostics.error(error.message, { range: error.range, cause: error });
+  }
 }
 
-/** Python's `compose.build.pipeline._output_style`; not ported yet. */
+/**
+ * Return the authored YAML scalar style of one flow output binding.
+ *
+ * @param outputsCursor Retained authored `output:` value.
+ * @param key The output's record field name, or `null` for a single output.
+ * @param options.diagnostics Factory for located load errors.
+ * @returns The style, or `null` for a generated section.
+ * @throws LoadError when the retained cursor cannot be traversed.
+ */
 function outputStyle(
   outputsCursor: SourceCursor | null,
   key: unknown,
   options: { diagnostics: LoadDiagnostics },
 ): string | null {
-  return null;
+  const { diagnostics } = options;
+  if (outputsCursor === null) return null;
+  try {
+    if (key === null) return outputsCursor.scalarStyle;
+    if (!outputsCursor.has(key as string)) return null;
+    return outputsCursor.child(key as string).scalarStyle;
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw diagnostics.error(error.message, { range: error.range, cause: error });
+  }
 }
 
 /** Python's `compose.build.pipeline._case_output_cursor`; not ported yet. */
@@ -1778,9 +1827,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
 //   T3-17  extractInlineBodies (1): returns `[nodesCursor, new Map()]`.
-//          synthIdGen (1): returns a minter that throws.
-//          desugarInlineCalls (1): returns `[descriptors, outputsSection, assertsSection]`;
-//            bindingStyle, outputStyle (2): return `null`.
 //          desugarAdaptiveQuestions, desugarCaseCallTargets (1): return the descriptors.
 //          caseOutputReads (1), valueCases (2): return `new Set()`.
 //          expandCaseOutputs (1): returns `[descriptors, outputsSection]`.
@@ -1820,34 +1866,6 @@ function extractInlineBodies(
   options: { owner: readonly string[] },
 ): [nodesCursor: SourceCursor, inlineBodies: Map<string, InlineBody>] {
   return [nodesCursor, new Map()];
-}
-
-/** Python's `compose.desugar.inline_calls._synth_id_gen`; not ported yet. */
-function synthIdGen(): () => string {
-  return () => {
-    throw new Error("_synth_id_gen is not ported yet (T3-17)");
-  };
-}
-
-/** Python's `compose.desugar.inline_calls.desugar_inline_calls`; not ported yet. */
-function desugarInlineCalls(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  outputsSection: unknown,
-  options: {
-    assertsSection?: readonly unknown[] | null;
-    outputsRange?: SourceRange | null;
-    assertionRangeAt?: ((index: number) => SourceRange | null) | null;
-    assertionOriginAt?: ((index: number) => OriginRef | null) | null;
-    bindingStyleAt?: ((nodeId: string, field: string, key: string) => string | null) | null;
-    outputStyleAt?: ((key: unknown) => string | null) | null;
-    typedOutputs?: ReadonlySet<string | null>;
-    nextId?: (() => string) | null;
-    typeNames?: ReadonlySet<string>;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown, assertsSection: Assertion[]] {
-  // The raw items stand in for the carriers until the port lands.
-  return [new Map(descriptors), outputsSection, (options.assertsSection ?? []) as Assertion[]];
 }
 
 /** Python's `compose.desugar.adaptive_questions.desugar_adaptive_questions`; not ported yet. */

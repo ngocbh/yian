@@ -114,6 +114,7 @@ import { checkWiringParity } from "../validate/wiring_parity.ts";
 import { ExpressionError } from "../../expr/expressions.ts";
 import { LLM_CONFIG_KEY, splitLayers, valueLeaves } from "../../nodes/agent/llm_values.ts";
 import { AgentNode } from "../../nodes/agent/node.ts";
+import { checkLlmConfigSources } from "../validate/llm_config_sources.ts";
 import {
   checkTypedInputs,
   checkTypedOutputs,
@@ -2188,7 +2189,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //
 //   T3-18  stampToolInputTypes, validateReferences, checkReservedSources (1).
 //          fillTypeTables (2, with _site_range).
-//   T3-19  checkCallMapTypes, checkLoopTypeContract, checkLlmConfigSources (1).
+//   T3-19  checkCallMapTypes, checkLoopTypeContract (1).
 //          inlineLoops (3, `ReadonlySet<string>`): `new Set()`.
 //   T3-20  checkCaseBranches (1); caseOutputCursor (2): returns `null`.
 //          computeNarrowing (1): returns an empty `Narrowing` over the given maps.
@@ -2273,21 +2274,6 @@ function checkLoopTypeContract(
   options: {
     inlineLoops?: ReadonlySet<string>;
     registry?: TypeRegistry | null;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): void {}
-
-/** Python's `compose.validate.llm_config_sources.check_llm_config_sources`; not ported yet. */
-function checkLlmConfigSources(
-  buildResults: ReadonlyMap<string, BuildResult>,
-  flowLlmConfig: unknown,
-  flowLabel: string,
-  producers: ReadonlyMap<string, OutputContract>,
-  flowInputs: ReadonlyMap<string, ValueContract>,
-  options: {
-    typeFn?: TypeFn | null;
-    registry?: TypeRegistry | null;
-    resolveOrigin?: OriginPresenter | null;
     diagnostics?: LoadDiagnostics | null;
   } = {},
 ): void {}

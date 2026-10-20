@@ -79,6 +79,7 @@ import { siteKey } from "../nodes/base.ts";
 import { HumanInputDescriptor } from "../nodes/human_input.ts";
 // T3-17 imports
 import { inferDataEdges } from "../edges/data.ts";
+import { hostControlEdges } from "../edges/hosts.ts";
 import { inferOrderingEdges } from "../edges/ordering.ts";
 import { Narrowing } from "../validate/narrowing.ts";
 import type { LocalInput } from "../validate/typed_bindings.ts";
@@ -1725,7 +1726,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //            throws.
 //          readBindingContract (3, `BindingContractReader | null`): `null`.
 //          registerInlineBodies (2): returns the descriptors.
-//          hostControlEdges (1): returns `[]`.
 //          stampInlineCallOrigins (2).
 //          synthesizeBoundaryGraph (1, `lowered` positional with a default, then `{ record }`):
 //            returns `[new Map(), [], new Map()]`, so `ComposedFlow.input` throws until it is
@@ -1849,11 +1849,6 @@ function expandCaseOutputs(
   } = {},
 ): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown] {
   return [new Map(descriptors), outputsSection];
-}
-
-/** Python's `compose.edges.hosts.host_control_edges`; not ported yet. */
-function hostControlEdges(descriptors: ReadonlyMap<string, NodeDescriptor>, edges: readonly Edge[]): Edge[] {
-  return [];
 }
 
 /** Python's `compose.build.boundary.synthesize_boundary_graph`; not ported yet. */

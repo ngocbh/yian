@@ -376,8 +376,9 @@ function operandMismatch(node: ExprNode, decl: Parameter, scope: Scope, options:
   }
   if (value === null && nonNull) return null;
   // Only a single token was written as the value shown; a computed constant such as `2026-01-01`
-  // (arithmetic here) gets no rewrite hint.
-  const text = node instanceof Token && node.type === "NUMBER" ? node.value : null;
+  // (arithmetic here) gets no rewrite hint. A number or `inf` is shown as written (`1.50`, not
+  // `1.5`; `inf`, not `Infinity`).
+  const text = node instanceof Token && (node.type === "NUMBER" || node.type === "INF") ? node.value : null;
   return valueMismatch("default", value, decl, { hint: node instanceof Token, text });
 }
 
@@ -439,7 +440,7 @@ function contractMismatch(
   const { nonNull, registry = null } = options;
   if (contract === null || isExactly(contract, PartialRecordContract)) return null;
   if (!isExactly(contract, ValueContract)) {
-    throw new TypeError("resolved source contract must be ValueContract, PartialRecordContract, or null");
+    throw new TypeError("resolved source contract must be ValueContract, PartialRecordContract, or None");
   }
   const childType = decl.contract!.type;
   let source = contract.type;
@@ -530,7 +531,7 @@ function literalHint(value: unknown, decl: Parameter, text: string | null, optio
       throw error;
     }
     if (typeof candidate === "string" || !fits(childType, candidate)) return null;
-    // YAML reads an unquoted `inf` as text, so writing it doesn't help.
+    // The hint would spell infinity `Infinity`, which YAML reads as text; Python gives none here either.
     if (typeof candidate === "number" && !Number.isFinite(candidate)) return null;
     const written = shownLiteral(buildValueAs(childType, candidate).toObject());
     return `text is not converted between flows, so write ${written} without quotes`;

@@ -292,6 +292,7 @@ describe("located pass errors", () => {
 });
 
 describe("checkCallMapTypes", () => {
+  // Python's test_check_call_map_types_is_owned_by_call_validation.
   test("the call type check is owned by call validation", () => {
     // A `call` binding whose source type mismatches the child input's declared type is loud. The
     // error anchors on the call node's `input:` mapping span (the coarsest binding-site span),

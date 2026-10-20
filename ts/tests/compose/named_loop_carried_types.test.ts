@@ -40,8 +40,9 @@
  * `load-loop/compose_named_loop_carried_types__{a_returned_field_the_body_does_not_take_loads,
  * int_returned_into_a_float_input_loads,typed_seed_with_an_optional_typedef_field_loads}`.
  *
- * Later (T3-22): `test_a_loop_inside_a_called_body_is_rejected` (the `defs entry` prefix comes
- * from the loader). Later (T4): the run halves of the load-half rows above.
+ * Later (T3-22): `test_a_loop_inside_a_called_body_is_rejected` and its case
+ * `load-loop/compose_named_loop_carried_types__a_loop_in_a_def_gets_the_carried_type_check` (the
+ * `defs entry` prefix comes from the loader). Later (T4): the run halves of the load-half rows above.
  */
 
 import { expect, test } from "bun:test";

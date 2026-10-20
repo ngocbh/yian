@@ -13,20 +13,22 @@
  * `test_declared_seed_type_is_checked_against_the_body_input`,
  * `test_declared_seed_type_is_compared_with_the_returned_field`, and the load halves of
  * `test_typed_binding_narrows_a_nullable_source_into_a_strict_child`,
- * `test_typed_binding_rejects_a_null_at_runtime`, `test_declared_seed_type_types_an_opaque_producer`,
+ * `test_typed_binding_rejects_a_null_at_runtime`,
+ * `test_declared_seed_type_types_an_opaque_producer`,
  * `test_declared_seed_type_is_checked_on_the_loop_node` (both flows),
  * `test_typed_inline_loop_seed_types_the_body_parameter` and
  * `test_typed_inline_loop_seed_types_an_opaque_producer` (each reading the inline body's parameters
  * from the LOOP node's `childInputs`, where Python reads the child's START parameters); and the
- * harvested case `load-types/compose_typed_bindings_downstream__seed_type_is_compared_with_the_returned_field`.
+ * harvested case
+ * `load-types/compose_typed_bindings_downstream__seed_type_is_compared_with_the_returned_field`.
  *
  * Changed: the `child` and `bump` defs are built by hand (`handChild`: the def's parameters read
  * from its `input:` text, its typed node as a producer with its output contract), since def bodies
  * load in T3-22. The error rows pin the whole message, where Python matches a fragment. CODE
  * bodies are TS; load doesn't run them.
  *
- * Not ported (decided by T3-17's inline inputs, not T3-19 rows; the run halves of the others are T4's):
- * `test_typed_inline_binding_skips_inference_of_an_opaque_expression`,
+ * Not ported (decided by T3-17's inline inputs, not T3-19 rows; the run halves of the others are
+ * T4's): `test_typed_inline_binding_skips_inference_of_an_opaque_expression`,
  * `test_typed_inline_binding_types_an_empty_list`,
  * `test_untyped_inline_map_item_over_an_opaque_list_fails_to_load` (its case is pinned in
  * `engine/inline_composite_bodies.test.ts`) and `test_typed_inline_map_item_binding_runs`.

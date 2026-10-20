@@ -213,6 +213,13 @@ test.each<[string, string, string | null, string]>([
     null,
     'child expects \'str\', but the default 1.50 does not fit; quote it to keep it as text: "1.50"',
   ],
+  // TS-only: the `inf` constant is shown as written, as a number is.
+  [
+    "str",
+    "${input.m:-inf}",
+    null,
+    'child expects \'str\', but the default inf does not fit; quote it to keep it as text: "inf"',
+  ],
 ])("an unprovable fit is a load error: %s from %s over %p", (type, binding, over, message) => {
   const error = loadError(() => load(flow(type, binding, over), child(type)));
 
@@ -236,7 +243,7 @@ test.each<[string, string, string]>([
   ],
   // TS-only: a float spelling past the double range fits no float however it's written.
   ["float", '"1e400"', "child expects 'float', but the value \"1e400\" does not fit"],
-  // TS-only: "inf" reads as infinity, but YAML reads an unquoted inf as text, so writing it doesn't help.
+  // TS-only: "inf" reads as infinity, but the hint would spell it `Infinity`, which YAML reads as text.
   ["float", '"inf"', "child expects 'float', but the value \"inf\" does not fit"],
 ])("no rewrite hint when rewriting cannot help: %s from %s", (type, binding, message) => {
   const error = loadError(() => load(flow(type, binding), child(type)));

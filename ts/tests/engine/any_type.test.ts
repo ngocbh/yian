@@ -32,9 +32,9 @@
  * `test_any_into_a_loop_carried_int_suggests_a_tag_or_isinstance` (and its case
  * `load-types/engine_any_type__any_into_a_loop_carried_int_suggests_a_tag_or_isinstance`) and
  * `test_a_tagged_loop_seed_over_an_any_output_loads` (and its `ok` case
- * `load-types/engine_any_type__a_tagged_loop_seed_over_an_any_output_loads`). The `child` and `bump` defs are built by
- * hand (`handChild`), since def bodies load in T3-22; the error rows pin the whole message where
- * Python matches fragments, and CODE bodies are TS.
+ * `load-types/engine_any_type__a_tagged_loop_seed_over_an_any_output_loads`). The `child` and
+ * `bump` defs are built by hand (`handChild`), since def bodies load in T3-22; the error rows pin
+ * the whole message where Python matches fragments, and CODE bodies are TS.
  *
  * Later (T3-20): `test_an_assert_reading_a_field_of_an_any_output_loads` and its case
  * `load-types/engine_any_type__an_assert_reading_a_field_of_an_any_output_loads` (node asserts).

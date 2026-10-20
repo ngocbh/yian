@@ -16,7 +16,8 @@
  * `test_prepare_node_step_rejects_an_uninitialized_state`,
  * `test_prepare_node_step_rejects_a_step_past_the_nesting_limit`,
  * `test_node_starts_count_started_records`, `test_resume_keeps_steps_and_a_resumed_start_counts_two`,
- * `test_success_deletes_the_nodes_steps_and_starts`,
+ * `test_success_deletes_the_nodes_steps_and_starts`, `test_prepare_node_step_rejects_a_terminal_state`,
+ * `test_failure_deletes_the_nodes_steps_and_starts`, `test_route_deletes_the_nodes_steps_and_starts`,
  * `test_learnable_run_accepts_a_step_with_an_empty_trace_delta` and
  * `test_broken_step_state_is_rejected_before_append` (4 rows). Each rejected row names its one
  * class and full message, where Python matches a part of the message or accepts either class.
@@ -43,9 +44,6 @@
  * always text); the `list-steps` row of `test_broken_step_state_is_rejected_before_append` (a tuple
  * and a list are both an array).
  *
- * Later (T4-4 PR 2): `test_prepare_node_step_rejects_a_terminal_state`,
- * `test_failure_deletes_the_nodes_steps_and_starts`, `test_route_deletes_the_nodes_steps_and_starts`.
- *
  * Later (T4-5): `test_expansion_deletes_the_spawners_steps_and_starts`,
  * `test_replay_reproduces_steps_and_starts`, `test_learnable_replay_reproduces_steps_starts_and_trace`,
  * `test_replay_without_steps_has_no_steps`,
@@ -67,6 +65,8 @@ import {
 import {
   commitPrepared,
   PreparedTransition,
+  prepareNodeFailed,
+  prepareNodeRouted,
   prepareNodeStarted,
   prepareNodeStep,
   prepareNodeSucceeded,
@@ -75,7 +75,14 @@ import {
 } from "../../src/runtime/state.ts";
 import { FileRef, TypeCheckError } from "../../src/typesys/index.ts";
 import { JSONDecodeError, parseJson } from "../../src/typesys/json.ts";
-import { commitStartSuccess, fanoutFlow, forwardCapture, initializedAndStarted } from "./run_state_fixtures.ts";
+import {
+  commitStartSuccess,
+  fanoutFlow,
+  forwardCapture,
+  initializedAndStarted,
+  nodeFailure,
+  routeInFlight,
+} from "./run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): unknown {
@@ -264,6 +271,20 @@ test.each([
   expect(state.nodeSteps).toEqual(new Map());
 });
 
+test("prepareNodeStep refuses a terminal state", () => {
+  const { state, log } = firstInFlight();
+  commitPrepared(log, state, prepareNodeStarted(state, "second"));
+  commitPrepared(log, state, prepareNodeFailed(state, nodeFailure("first")));
+  expect(state.result).not.toBeNull();
+  expect(state.inFlight.has("second")).toBe(true);
+
+  expectError(
+    () => prepareNodeStep(state, "second", { event: "started" }),
+    RangeError,
+    "terminal run state cannot prepare another graph transition",
+  );
+});
+
 test("prepareNodeStep refuses an uninitialized state", () => {
   expectError(
     () => prepareNodeStep(new RunState(fanoutFlow()), START_ID, { event: "started" }),
@@ -340,6 +361,29 @@ test("a success deletes the node's steps and starts", () => {
 
   expect(state.nodeSteps).toEqual(new Map([["second", [FAILED]]]));
   expect(state.nodeStarts).toEqual(new Map([["second", 1]]));
+});
+
+test("a failure deletes the node's steps and starts", () => {
+  const { state, log } = firstInFlight();
+  commitPrepared(log, state, prepareNodeStep(state, "first", FAILED));
+
+  commitPrepared(log, state, prepareNodeFailed(state, nodeFailure("first")));
+
+  expect(state.nodeSteps.has("first")).toBe(false);
+  expect(state.nodeStarts.has("first")).toBe(false);
+  expect(state.ready).toEqual(["second"]);
+});
+
+test("a route deletes the node's steps and starts", () => {
+  const { state, log } = routeInFlight();
+  commitPrepared(log, state, prepareNodeStep(state, "router", FAILED));
+  expect(state.nodeStarts).toEqual(new Map([["router", 1]]));
+
+  commitPrepared(log, state, prepareNodeRouted(state, "router", "yes"));
+
+  expect(state.nodeSteps).toEqual(new Map());
+  expect(state.nodeStarts).toEqual(new Map());
+  expect(state.ready).toEqual(["chosen"]);
 });
 
 test("a learnable run accepts a step with an empty trace delta", () => {

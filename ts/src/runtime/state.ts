@@ -18,6 +18,9 @@ import { CompiledFlow, Edge, type Flow } from "../compile/model.ts";
 import { BUILTIN, type Defaults, fromRecorded } from "../defaults.ts";
 import { compareCodeUnits, Failure, type OriginRef, reprText, sameFailure } from "../diagnostics.ts";
 import {
+  NodeFailed,
+  NodeRouted,
+  NodeSkipped,
   NodeStarted,
   NodeSucceeded,
   RunFailed,
@@ -35,7 +38,7 @@ import {
   type MemoryStack,
 } from "../memory/index.ts";
 import { sameMemoryScope } from "../memory/contracts.ts";
-import { type Grow, Node } from "../nodes/base.ts";
+import { ELSE_HANDLE, type Grow, Node } from "../nodes/base.ts";
 import {
   type Binding,
   comparePaths,
@@ -748,6 +751,72 @@ export function prepareNodeSucceeded(
 }
 
 /**
+ * Prepare one selected route and its derived recursive skip closure.
+ *
+ * @param state An initialized nonterminal state with `nodeId` in flight.
+ * @param nodeId The exact non-empty id of the executing router.
+ * @param handle The exact non-empty handle the router selected.
+ * @param options.evidence Frozen visible evidence captured during this exact evaluation.
+ * @param options.forwardCapture The canonical binding capture, required exactly when learning.
+ * @returns The canonical `NodeRoutedRecord` and a detached append-before-apply plan.
+ * @throws TypeError when a carrier has the wrong type.
+ * @throws RangeError when the state, the router or the frontier is invalid.
+ * @throws NodeDataError when `handle` isn't a non-empty string or matches no outgoing edge;
+ *   `original` holds the `TypeError` or `RangeError`.
+ */
+export function prepareNodeRouted(
+  state: RunState,
+  nodeId: string,
+  handle: string,
+  options: OutcomeCarriers = {},
+): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeRouted expects a RunState");
+  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  if (!nodeId) throw new RangeError("node_id must be non-empty");
+  if (typeof handle !== "string") throw new NodeDataError(new TypeError("handle must be a string"));
+  if (!handle) throw new NodeDataError(new RangeError("handle must be non-empty"));
+  requireInitializedNonterminal(state);
+  requireRoutingNode(state, nodeId);
+  return prepareRouteTransition(
+    state,
+    new NodeRoutedRecord(nodeId, handle, {
+      evidence: options.evidence ?? null,
+      forwardCapture: options.forwardCapture ?? null,
+    }),
+    true,
+  );
+}
+
+/**
+ * Prepare one terminal node failure with its canonical durable authority.
+ *
+ * @param state An initialized nonterminal state with the failing node in flight.
+ * @param failure The semantic failure whose non-empty `nodeId` names the executing node.
+ * @param options.evidence Frozen visible evidence captured before the evaluation failed.
+ * @param options.forwardCapture The canonical binding capture, including unavailable inputs on an
+ *   early failure.
+ * @returns The canonical `NodeFailedRecord` and a detached append-before-apply plan.
+ * @throws TypeError when `state` or `failure` isn't of its exact class, or a carrier has the wrong
+ *   type.
+ * @throws RangeError when the failure has no node id, or the state or the executing node isn't
+ *   eligible to fail.
+ */
+export function prepareNodeFailed(
+  state: RunState,
+  failure: Failure,
+  options: OutcomeCarriers = {},
+): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeFailed expects a RunState");
+  if (!isExactly(failure, Failure)) throw new TypeError("prepareNodeFailed expects a Failure");
+  const record = new NodeFailedRecord(failure, {
+    evidence: options.evidence ?? null,
+    forwardCapture: options.forwardCapture ?? null,
+  });
+  requireInitializedNonterminal(state);
+  return prepareFailureTransition(state, record);
+}
+
+/**
  * Prepare a recovery segment from the state's ordered unfinished starts.
  *
  * The retry list comes only from the insertion-ordered `state.inFlight`; the caller chooses only
@@ -828,12 +897,17 @@ export function prepareRecord(
     const typed = validateSuccessValue(state, record);
     return prepareSuccessTransition(state, record, typed);
   }
+  if (isExactly(record, NodeRoutedRecord)) {
+    validateRouteRecord(state, record);
+    return prepareRouteTransition(state, record, false);
+  }
   if (isExactly(record, NodeExpandedRecord)) {
     if (typeof options.growBuilder !== "function") {
       throw new TypeError("NodeExpandedRecord replay requires a callable grow_builder");
     }
     return prepareGrowthRecord(state, record, options.growBuilder);
   }
+  if (isExactly(record, NodeFailedRecord)) return prepareFailureTransition(state, record);
   if (isExactly(record, NodeStartedRecord)) {
     validateNodeStarted(state, record);
   } else if (isExactly(record, RunResumedRecord)) {
@@ -953,6 +1027,113 @@ function prepareSuccessTransition(state: RunState, record: NodeSucceededRecord, 
 }
 
 /**
+ * Freeze one fully validated route delta and its canonical public record.
+ *
+ * `deriveTerminalFailure` is set for a live route, which derives the terminal failure its skip
+ * closure first proves; a replayed route checks the one its record carries instead.
+ */
+function prepareRouteTransition(
+  state: RunState,
+  record: NodeRoutedRecord,
+  deriveTerminalFailure: boolean,
+): PreparedTransition {
+  validateNodeEvidence(state, record.nodeId, record.evidence);
+  const route = prepareRouteDelta(state, record, deriveTerminalFailure);
+  const causalFailure = route.causalFailure;
+  let delta = route.delta;
+  // The record keeps its terminal failure through `retainFailure`, which rebuilds each origin as a
+  // plain `OriginRef`: the wire's single-key identity shape.
+  const recordForWire = new NodeRoutedRecord(record.nodeId, record.handle, {
+    terminalFailure: causalFailure,
+    evidence: record.evidence,
+    forwardCapture: record.forwardCapture,
+  });
+  const runId = state.runId;
+  // Established by the initialized-state check.
+  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
+  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, recordForWire));
+  const envelope = decodeRecord(envelopeJson);
+  const canonical = envelope.record;
+  if (!isExactly(canonical, NodeRoutedRecord)) {
+    throw new TypeError("node-route envelope decoded to a different record kind");
+  }
+  // An exhaustive codec invariant: the record was decoded from this very text.
+  if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("NodeRoutedRecord is not in canonical wire form");
+  if (causalFailure !== null) {
+    if (canonical.terminalFailure === null) throw new RangeError("causal route lost its terminal failure");
+    delta = Object.freeze({ ...delta, terminalUnreachableFailure: canonical.terminalFailure });
+  }
+  const terminal = prepareTerminalDelta(state, {
+    completingNodeId: delta.nodeId,
+    newlyReadyIds: delta.newlyReadyIds,
+    pendingCommitTarget: null,
+    pendingValueJson: null,
+    terminalUnreachableFailure: delta.terminalUnreachableFailure,
+  });
+
+  const startId = state.flow.startId;
+  const endId = state.flow.endId;
+  const plan: RoutePlan = Object.freeze({
+    kind: "route",
+    originatingState: state,
+    originatingFlow: state.flow,
+    envelopeJson,
+    startId,
+    startNode: state.flow.nodes.get(startId)!,
+    endId,
+    endNode: state.flow.nodes.get(endId) ?? null,
+    traceDelta: prepareRecordTrace(state, envelope, {
+      terminalSucceeded: terminal?.succeeded ?? null,
+      terminalOutputJson: terminal?.outputJson ?? null,
+      terminalFailure: terminal?.failure ?? null,
+    }),
+    delta,
+    terminal,
+  });
+  const observers: RunEvent[] = [
+    new NodeRouted({ nodeId: delta.nodeId, handle: delta.handle }),
+    ...delta.skippedNodeIds.map((nodeId) => new NodeSkipped({ nodeId })),
+  ];
+  if (terminal !== null) observers.push(terminalObserver(terminal));
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
+}
+
+/** Freeze one validated terminal failure and its canonical public record. */
+function prepareFailureTransition(state: RunState, record: NodeFailedRecord): PreparedTransition {
+  validateFailureRecord(state, record);
+  const runId = state.runId;
+  // Established by the initialized-state check.
+  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
+  // The record already holds its failure through `retainFailure`, which rebuilds each origin as a
+  // plain `OriginRef`: the wire's single-key identity shape.
+  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
+  const envelope = decodeRecord(envelopeJson);
+  const canonical = envelope.record;
+  if (!isExactly(canonical, NodeFailedRecord)) {
+    throw new TypeError("node-failure envelope decoded to a different record kind");
+  }
+  // An exhaustive codec invariant: the record was decoded from this very text.
+  if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("NodeFailedRecord is not in canonical wire form");
+
+  const failure = canonical.failure;
+  const startId = state.flow.startId;
+  const endId = state.flow.endId;
+  const plan: FailurePlan = Object.freeze({
+    kind: "failure",
+    originatingState: state,
+    originatingFlow: state.flow,
+    envelopeJson,
+    startId,
+    startNode: state.flow.nodes.get(startId)!,
+    endId,
+    endNode: state.flow.nodes.get(endId) ?? null,
+    traceDelta: prepareRecordTrace(state, envelope, { terminalSucceeded: false, terminalFailure: failure }),
+    failure,
+  });
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, failureObservers(failure));
+}
+
+/**
  * Prepare a live expansion: validate `grow` against the expanding node and build its fragment
  * with `growBuilder`, without mutating `state`.
  *
@@ -1031,6 +1212,12 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
       break;
     case "success":
       observers = commitSuccess(log, state, prepared);
+      break;
+    case "route":
+      observers = commitRoute(log, state, prepared);
+      break;
+    case "failure":
+      observers = commitFailure(log, state, prepared);
       break;
     case "growth":
       observers = commitGrowth(log, state, prepared);
@@ -1356,6 +1543,72 @@ function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransitio
   forgetNodeSteps(state, delta.nodeId);
   for (const nodeId of delta.newlyReadyIds) state.ready.push(nodeId);
   if (apply.terminal !== null) state.result = apply.terminal.result;
+  state.nextSequence = prepared.expectedSequence + 1;
+  return apply.observers;
+}
+
+/** Validate, append and install one route and its derived skip closure. */
+function commitRoute(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
+  const plan = prepared._plan;
+  if (plan.kind !== "route") throw new TypeError("route commit requires a route plan");
+  const record = prepared.record;
+  if (!isExactly(record, NodeRoutedRecord)) throw new TypeError("route plan requires a NodeRoutedRecord");
+  requirePreparedOrigin(state, plan);
+  requireInitializedNonterminal(state);
+  requireAuthorityCoordinates(log, state, prepared, true);
+  requireUnchangedRecord(prepared, plan.envelopeJson);
+  requireOutcomeTraceScope(state, prepared);
+  requireOutcomeTraceTerminal(state, prepared);
+  const delta = plan.delta;
+  if (!(record.nodeId === delta.nodeId && record.handle === delta.handle)) {
+    throw new RangeError("route record and prevalidated delta disagree");
+  }
+  if (record.terminalFailure !== null) {
+    if (delta.terminalUnreachableFailure !== record.terminalFailure) {
+      throw new RangeError("route record and terminal-failure delta disagree");
+    }
+  } else if (delta.terminalUnreachableFailure !== state.terminalUnreachableFailure) {
+    throw new RangeError("noncausal route changed terminal-failure authority");
+  }
+  const apply = materializeRoute(plan);
+
+  appendAndVerify(log, prepared);
+  state.nodeState.set(delta.nodeId, NodeState.TAKEN);
+  for (const [edgeId, disposition] of delta.edgeUpdates) state.edgeState.set(edgeId, disposition);
+  for (const nodeId of delta.skippedNodeIds) state.nodeState.set(nodeId, NodeState.SKIPPED);
+  state.inFlight.delete(delta.nodeId);
+  state.acceptedStarts.delete(delta.nodeId);
+  forgetNodeSteps(state, delta.nodeId);
+  for (const nodeId of delta.newlyReadyIds) state.ready.push(nodeId);
+  state.terminalUnreachableFailure = delta.terminalUnreachableFailure;
+  if (apply.terminal !== null) state.result = apply.terminal.result;
+  state.nextSequence = prepared.expectedSequence + 1;
+  return apply.observers;
+}
+
+/** Validate, append and install one immediately terminal node failure. */
+function commitFailure(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
+  const plan = prepared._plan;
+  if (plan.kind !== "failure") throw new TypeError("failure commit requires a failure plan");
+  const record = prepared.record;
+  if (!isExactly(record, NodeFailedRecord)) throw new TypeError("failure plan requires a NodeFailedRecord");
+  requirePreparedOrigin(state, plan);
+  requireInitializedNonterminal(state);
+  requireAuthorityCoordinates(log, state, prepared, true);
+  requireUnchangedRecord(prepared, plan.envelopeJson);
+  requireOutcomeTraceScope(state, prepared);
+  requireOutcomeTraceTerminal(state, prepared);
+  if (record.failure !== plan.failure) throw new RangeError("failure record and prevalidated authority disagree");
+  const nodeId: unknown = plan.failure.nodeId;
+  if (typeof nodeId !== "string" || !nodeId) throw new RangeError("failure plan has no executing node");
+  const apply = materializeFailure(plan.failure);
+
+  appendAndVerify(log, prepared);
+  state.nodeState.set(nodeId, NodeState.TAKEN);
+  state.inFlight.delete(nodeId);
+  state.acceptedStarts.delete(nodeId);
+  forgetNodeSteps(state, nodeId);
+  state.result = apply.result;
   state.nextSequence = prepared.expectedSequence + 1;
   return apply.observers;
 }
@@ -1745,6 +1998,44 @@ function requireSucceedingNode(state: RunState, nodeId: string): void {
   if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} is not in-flight`);
 }
 
+/** Require an existing unknown router in the ordered in-flight frontier. */
+function requireRoutingNode(state: RunState, nodeId: string): void {
+  if (!nodeId) throw new RangeError("NodeRouted node_id must be non-empty");
+  if (!state.flow.nodes.has(nodeId)) {
+    throw new RangeError(`NodeRouted node ${reprText(nodeId)} does not exist in the flow`);
+  }
+  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
+    throw new RangeError(`NodeRouted node ${reprText(nodeId)} must have UNKNOWN disposition`);
+  }
+  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeRouted node ${reprText(nodeId)} is not in-flight`);
+}
+
+/** Require an existing unknown node in the ordered in-flight frontier. */
+function requireFailingNode(state: RunState, nodeId: string): void {
+  if (!nodeId) throw new RangeError("NodeFailed node_id must be non-empty");
+  if (!state.flow.nodes.has(nodeId)) {
+    throw new RangeError(`NodeFailed node ${reprText(nodeId)} does not exist in the flow`);
+  }
+  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
+    throw new RangeError(`NodeFailed node ${reprText(nodeId)} must have UNKNOWN disposition`);
+  }
+  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeFailed node ${reprText(nodeId)} is not in-flight`);
+}
+
+/** Validate a replayed route's exact scalar carriers and its executing router. */
+function validateRouteRecord(state: RunState, record: NodeRoutedRecord): void {
+  const nodeId: unknown = record.nodeId;
+  const handle: unknown = record.handle;
+  if (typeof nodeId !== "string") throw new TypeError("NodeRoutedRecord node_id must be a string");
+  if (!nodeId) throw new RangeError("NodeRoutedRecord node_id must be non-empty");
+  if (typeof handle !== "string") throw new TypeError("NodeRoutedRecord handle must be a string");
+  if (!handle) throw new RangeError("NodeRoutedRecord handle must be non-empty");
+  if (record.terminalFailure !== null && !isExactly(record.terminalFailure, Failure)) {
+    throw new TypeError("NodeRoutedRecord terminal failure must be a Failure or null");
+  }
+  requireRoutingNode(state, nodeId);
+}
+
 /** Whether two sets of ids hold the same ids, in any order. */
 function sameIds(a: { readonly size: number; has(id: string): boolean }, b: Iterable<string>): boolean {
   const other = new Set(b);
@@ -1799,6 +2090,19 @@ function validateNodeEvidence(state: RunState, nodeId: string, evidence: Evaluat
   if (!sameOptional(evidence.scope, scope, sameMemoryScope)) {
     throw new RangeError(`node ${reprText(nodeId)} evidence scope does not match its compiled scope`);
   }
+}
+
+/** Validate a failure's exact diagnostic carriers and its executing node. */
+function validateFailureRecord(state: RunState, record: NodeFailedRecord): void {
+  if (!isExactly(record.failure, Failure)) throw new TypeError("NodeFailedRecord failure must be a Failure");
+  if (record.failure.code === "graph.terminal_unreachable") {
+    throw new RangeError("graph.terminal_unreachable must be derived from a route record");
+  }
+  const nodeId: unknown = record.failure.nodeId;
+  if (typeof nodeId !== "string") throw new TypeError("NodeFailedRecord failure node_id must be a string");
+  if (!nodeId) throw new RangeError("NodeFailedRecord failure node_id must be non-empty");
+  requireFailingNode(state, nodeId);
+  validateNodeEvidence(state, nodeId, record.evidence);
 }
 
 /** Validate one replayed value against its explicit commit target exactly once. */
@@ -2003,6 +2307,422 @@ function sparseDisposition(
   }
   if (requiredOrderingSkipped) return "dead";
   if (anyUnknown) return "wait";
+  return "ready";
+}
+
+/** Incremental counts for one data-input group of a touched join. */
+interface DataGroupScratch {
+  readonly optional: boolean;
+  total: number;
+  skipped: number;
+}
+
+/** How one incoming edge counts toward its join's gates, with its data group. */
+type EdgeClass = readonly ["control" | "ordering" | "required_ordering" | "data", string | null];
+
+/** One incoming-adjacency scan reduced to constant-time edge updates. */
+interface JoinScratch {
+  readonly states: Map<string, NodeState>;
+  readonly classes: Map<string, EdgeClass>;
+  unknown: number;
+  controlTotal: number;
+  controlSkipped: number;
+  requiredDataDead: number;
+  requiredOrderingSkipped: number;
+  readonly dataGroups: Map<string | null, DataGroupScratch>;
+}
+
+/**
+ * Validate one route and return its frozen skip closure, plus the terminal failure it first
+ * proves (`causalFailure`), if any.
+ */
+function prepareRouteDelta(
+  state: RunState,
+  record: NodeRoutedRecord,
+  deriveTerminalFailure: boolean,
+): { delta: RouteDelta; causalFailure: Failure | null } {
+  validateRouteRecord(state, record);
+  const edgeUpdates = new Map<string, NodeState>();
+  const skippedNodeIds: string[] = [];
+  const skippedNodes = new Set<string>();
+  const propagatedTargets = new Set<string>([record.nodeId]);
+  let redirectOwners: Map<string, string[]> | null = null;
+  const newlyReadyIds: string[] = [];
+  const newlyReady = new Set<string>();
+  const joins = new Map<string, JoinScratch>();
+
+  const rootEdges = routeOutgoing(state, record.nodeId, edgeUpdates);
+  // Only branch edges carry a handle. A handle-less edge (a `depends_on`/`runs_after` ordering
+  // edge) isn't a branch: the router settled by routing, so it is TAKEN on every route rather than
+  // read as the else branch. The reserved else route may have no authored edge: a CASE without
+  // `else` selects no branch and skip-floods every branch edge. Any other unknown handle is invalid
+  // node-produced data.
+  if (!rootEdges.some((edge) => edge.sourceHandle === record.handle) && record.handle !== ELSE_HANDLE) {
+    throw new NodeDataError(
+      new RangeError(
+        `NodeRouted handle ${reprText(record.handle)} matches no outgoing edge of ${reprText(record.nodeId)}`,
+      ),
+    );
+  }
+
+  // A LIFO stack with reversed pushes reproduces recursive stored-order DFS exactly, without a
+  // recursion limit for deep skip chains.
+  const work: (readonly [Edge, NodeState])[] = [];
+  for (let index = rootEdges.length - 1; index >= 0; index--) {
+    const edge = rootEdges[index]!;
+    const taken = edge.sourceHandle === null || edge.sourceHandle === record.handle;
+    work.push([edge, taken ? NodeState.TAKEN : NodeState.SKIPPED]);
+  }
+  while (work.length > 0) {
+    const [edge, disposition] = work.pop()!;
+    requireRouteEdge(state, edge, edgeUpdates);
+    let scratch = joins.get(edge.to);
+    if (scratch === undefined) {
+      scratch = scanJoin(state, edge.to);
+      joins.set(edge.to, scratch);
+    }
+    settleJoinEdge(scratch, edge.id, disposition, edge.to);
+    edgeUpdates.set(edge.id, disposition);
+
+    const head = edge.to;
+    const headDisposition = state.nodeState.get(head);
+    if (headDisposition !== NodeState.UNKNOWN && headDisposition !== NodeState.SKIPPED) {
+      throw new RangeError(`route successor ${reprText(head)} must have UNKNOWN or SKIPPED disposition`);
+    }
+    if (skippedNodes.has(head) || headDisposition === NodeState.SKIPPED) continue;
+    const joinDisposition = classifyJoin(scratch);
+    if (joinDisposition === "wait") continue;
+    if (joinDisposition === "ready") {
+      if (newlyReady.has(head)) throw new RangeError(`route successor ${reprText(head)} became ready more than once`);
+      newlyReady.add(head);
+      newlyReadyIds.push(head);
+      continue;
+    }
+
+    skippedNodes.add(head);
+    skippedNodeIds.push(head);
+    const target = skippedOutputTarget(state, head);
+    if (target !== head) {
+      redirectOwners ??= skippedOutputOwners(state);
+      requireUnambiguousRedirect({
+        ownerId: head,
+        target,
+        owners: redirectOwners.get(target) ?? [],
+        hasCommittedValue: state.pool.store.has(target),
+        disposition: state.nodeState.get(target),
+        isExecutable: state.ready.includes(target) || state.inFlight.has(target),
+        hasIncoming: state.flow.incoming(target).length > 0,
+      });
+    }
+    if (propagatedTargets.has(target)) continue;
+    propagatedTargets.add(target);
+    const children = routeOutgoing(state, target, edgeUpdates);
+    for (let index = children.length - 1; index >= 0; index--) work.push([children[index]!, NodeState.SKIPPED]);
+  }
+
+  let causalFailure: Failure | null = null;
+  let terminalUnreachableFailure = state.terminalUnreachableFailure;
+  if (terminalUnreachableFailure === null && skippedNodes.has(state.flow.endId)) {
+    if (deriveTerminalFailure) {
+      if (record.terminalFailure !== null) {
+        throw new RangeError("live route preparation cannot supply a terminal failure");
+      }
+      causalFailure = makeTerminalUnreachableFailure(state, record.nodeId, edgeUpdates);
+    } else {
+      causalFailure = validateRecordedTerminalFailure(state, record, edgeUpdates);
+    }
+    terminalUnreachableFailure = causalFailure;
+  } else if (record.terminalFailure !== null) {
+    throw new RangeError("NodeRoutedRecord terminal failure is present on a noncausal route");
+  }
+
+  const delta: RouteDelta = Object.freeze({
+    nodeId: record.nodeId,
+    handle: record.handle,
+    edgeUpdates: Object.freeze([...edgeUpdates].map((entry) => Object.freeze(entry))),
+    skippedNodeIds: Object.freeze(skippedNodeIds),
+    newlyReadyIds: Object.freeze(newlyReadyIds),
+    terminalUnreachableFailure,
+  });
+  return { delta, causalFailure };
+}
+
+/** Build the source-neutral failure of one causal terminal skip. */
+function makeTerminalUnreachableFailure(
+  state: RunState,
+  causalNodeId: string,
+  edgeUpdates: ReadonlyMap<string, NodeState>,
+): Failure {
+  return new Failure({
+    code: "graph.terminal_unreachable",
+    message: terminalUnreachableMessage(state, edgeUpdates),
+    nodeId: causalNodeId,
+    trace: state.flow.nodes.get(causalNodeId)!.failureTrace(),
+  });
+}
+
+/** Validate the persisted authority of one structurally causal route, field by field. */
+function validateRecordedTerminalFailure(
+  state: RunState,
+  record: NodeRoutedRecord,
+  edgeUpdates: ReadonlyMap<string, NodeState>,
+): Failure {
+  const failure = record.terminalFailure;
+  if (failure === null) throw new RangeError("causal NodeRoutedRecord requires a persisted terminal failure");
+  if (!isExactly(failure, Failure)) throw new TypeError("NodeRoutedRecord terminal failure must be a Failure");
+  const expectedMessage = terminalUnreachableMessage(state, edgeUpdates);
+  if (failure.code !== "graph.terminal_unreachable") {
+    throw new RangeError("route terminal failure has the wrong failure code");
+  }
+  if (failure.nodeId !== record.nodeId) throw new RangeError("route terminal failure has the wrong causal node ID");
+  if (failure.message !== expectedMessage) throw new RangeError("route terminal failure has the wrong message");
+  if (failure.causeType !== null || failure.traceback !== null) {
+    throw new RangeError("route terminal failure cannot carry exception diagnostics");
+  }
+  return failure;
+}
+
+/** The diagnosis of a skipped END group, naming it quoted, or `null`. */
+function terminalUnreachableMessage(state: RunState, edgeUpdates: ReadonlyMap<string, NodeState>): string {
+  const name = terminalSkippedOutputName(state, edgeUpdates);
+  return `terminal output ${name === null ? writeAsText(null) : reprText(name)} skipped`;
+}
+
+/**
+ * Return the first required END group, in stored order, that is fully skipped.
+ *
+ * `edgeUpdates` is the pending route overlay; an edge absent from it reads its live disposition.
+ * Group insertion order keeps the first-occurrence rule, including `null` when that is the
+ * diagnosed input group's name.
+ */
+function terminalSkippedOutputName(state: RunState, edgeUpdates: ReadonlyMap<string, NodeState>): string | null {
+  const groups = new Map<string | null, readonly [boolean, boolean]>();
+  for (const edge of state.flow.incoming(state.flow.endId)) {
+    if (edge.sourceHandle !== null || edge.ordering) continue;
+    const skipped = (edgeUpdates.get(edge.id) ?? state.edgeState.get(edge.id)) === NodeState.SKIPPED;
+    const [optional, allSkipped] = groups.get(edge.inputGroup) ?? [edge.optional, true];
+    groups.set(edge.inputGroup, [optional, allSkipped && skipped]);
+  }
+  for (const [name, [optional, allSkipped]] of groups) {
+    if (!optional && allSkipped) return name;
+  }
+  return null;
+}
+
+/**
+ * Return one skipped node's validated logical output target.
+ *
+ * The hook is node-owned, so CALL/MAP's baked completion redirect and LOOP's origin redirect stay
+ * outside the kind-blind reducer. Its result is topology authority, not node-produced data, so a
+ * malformed setup escapes as a plain host or graph error.
+ */
+function skippedOutputTarget(state: RunState, nodeId: string): string {
+  const target: unknown = state.flow.nodes.get(nodeId)!.skippedOutputTarget();
+  return validateSkippedOutputTarget(state.flow.nodes, nodeId, target);
+}
+
+/** Validate one hook result against an exact topology node lookup. */
+function validateSkippedOutputTarget(nodes: { has(id: string): boolean }, nodeId: string, target: unknown): string {
+  if (typeof target !== "string") {
+    throw new TypeError(`node ${reprText(nodeId)} skipped output target must be a string`);
+  }
+  if (!target) throw new RangeError(`node ${reprText(nodeId)} skipped output target must be non-empty`);
+  if (!nodes.has(target)) {
+    throw new RangeError(`node ${reprText(nodeId)} skipped output target ${reprText(target)} does not exist`);
+  }
+  return target;
+}
+
+/**
+ * Index the unfinished logical-output redirects in stable node order.
+ *
+ * Settled dynamic residue can't produce another value and is ignored. Ordinary nodes target
+ * themselves and aren't redirect owners. The scan is paid only when a route skips a redirected
+ * completion; it keeps the common sparse skip path unchanged while refusing ambiguous
+ * multi-writer topology before any edge settles.
+ */
+function skippedOutputOwners(state: RunState): Map<string, string[]> {
+  const owners = new Map<string, string[]>();
+  for (const nodeId of state.flow.nodes.keys()) {
+    if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) continue;
+    const target = skippedOutputTarget(state, nodeId);
+    if (target === nodeId) continue;
+    const ids = owners.get(target);
+    if (ids === undefined) owners.set(target, [nodeId]);
+    else ids.push(nodeId);
+  }
+  return owners;
+}
+
+/**
+ * Require one inert logical anchor to have one unfinished redirect owner.
+ *
+ * A skip means the logical output is absent. That conclusion is sound only when no sibling
+ * physical completion or executable anchor can still produce the same value. Supporting several
+ * producers would need a distinct OR join and a multi-writer contract; `commitAs` stays a
+ * single-owner redirect instead.
+ */
+function requireUnambiguousRedirect(options: {
+  ownerId: string;
+  target: string;
+  owners: readonly string[];
+  hasCommittedValue: boolean;
+  disposition: unknown;
+  isExecutable: boolean;
+  hasIncoming: boolean;
+}): void {
+  const { ownerId, target, owners, hasCommittedValue, disposition, isExecutable, hasIncoming } = options;
+  if (owners.length !== 1 || owners[0] !== ownerId) {
+    throw new RangeError(
+      `logical output target ${reprText(target)} has multiple skipped output owners: ${writeAsText([...owners])}`,
+    );
+  }
+  if (hasCommittedValue) {
+    throw new RangeError(`logical output target ${reprText(target)} already has a committed value`);
+  }
+  if (!NODE_STATES.has(disposition)) {
+    throw new RangeError(`logical output target ${reprText(target)} has an invalid disposition`);
+  }
+  if (isExecutable) throw new RangeError(`logical output target ${reprText(target)} is also executable`);
+  if (disposition === NodeState.UNKNOWN) {
+    if (hasIncoming) throw new RangeError(`logical output target ${reprText(target)} is also executable`);
+    return;
+  }
+  if (disposition !== NodeState.EXPANDED) {
+    throw new RangeError(
+      `logical output target ${reprText(target)} must be an expanded spawner or inert placeholder`,
+    );
+  }
+}
+
+/**
+ * Return one node's validated outgoing adjacency in stored order.
+ *
+ * The adjacency index is the authority here; compile builds it and only growth commits change it,
+ * so a route reads its own edges, not every edge in the flow.
+ */
+function routeOutgoing(state: RunState, nodeId: string, edgeUpdates: ReadonlyMap<string, NodeState>): readonly Edge[] {
+  const outgoing: unknown = state.flow.outgoing(nodeId);
+  if (!Array.isArray(outgoing)) throw new TypeError("compiled flow adjacency must be lists");
+  const seen = new Set<string>();
+  for (const edge of outgoing as unknown[]) {
+    if (!(edge instanceof Edge) || edge.from !== nodeId) {
+      throw new RangeError(`route node ${reprText(nodeId)} has an invalid outgoing adjacency`);
+    }
+    const sourceHandle: unknown = edge.sourceHandle;
+    if (sourceHandle !== null && typeof sourceHandle !== "string") {
+      throw new TypeError(`route edge ${reprText(edge.id)} source_handle must be a string or null`);
+    }
+    if (sourceHandle === "") throw new RangeError(`route edge ${reprText(edge.id)} source_handle must be non-empty`);
+    const edgeId: unknown = edge.id;
+    if (typeof edgeId !== "string" || !edgeId || seen.has(edgeId)) {
+      throw new RangeError(`route node ${reprText(nodeId)} has invalid outgoing edge IDs`);
+    }
+    seen.add(edgeId);
+    requireRouteEdge(state, edge, edgeUpdates);
+    if (!state.flow.nodes.has(edge.to) || !state.nodeState.has(edge.to)) {
+      throw new RangeError(`route edge ${reprText(edgeId)} has unknown successor ${reprText(edge.to)}`);
+    }
+  }
+  return outgoing as readonly Edge[];
+}
+
+/** Recheck a queued edge without scanning any adjacency or the global frontier. */
+function requireRouteEdge(state: RunState, edge: Edge, edgeUpdates: ReadonlyMap<string, NodeState>): void {
+  if (edgeUpdates.has(edge.id)) throw new RangeError(`route edge ${reprText(edge.id)} is reached more than once`);
+  if (!state.edgeState.has(edge.id)) throw new RangeError(`route edge ${reprText(edge.id)} has no disposition`);
+  if (state.edgeState.get(edge.id) !== NodeState.UNKNOWN) {
+    throw new RangeError(`route edge ${reprText(edge.id)} must be UNKNOWN`);
+  }
+}
+
+/** Scan one touched head's incoming adjacency into incremental gate counts. */
+function scanJoin(state: RunState, nodeId: string): JoinScratch {
+  const incoming = state.flow.incoming(nodeId);
+  if (incoming.length === 0) throw new RangeError(`route successor ${reprText(nodeId)} has no incoming adjacency`);
+  const scratch: JoinScratch = {
+    states: new Map(),
+    classes: new Map(),
+    unknown: 0,
+    controlTotal: 0,
+    controlSkipped: 0,
+    requiredDataDead: 0,
+    requiredOrderingSkipped: 0,
+    dataGroups: new Map(),
+  };
+  for (const edge of incoming) {
+    if (!(edge instanceof Edge) || edge.to !== nodeId) {
+      throw new RangeError(`route successor ${reprText(nodeId)} has invalid incoming adjacency`);
+    }
+    const edgeId: unknown = edge.id;
+    if (typeof edgeId !== "string" || !edgeId || scratch.states.has(edgeId)) {
+      throw new RangeError(`route successor ${reprText(nodeId)} has invalid incoming edge IDs`);
+    }
+    if (!state.edgeState.has(edgeId)) {
+      throw new RangeError(`route incoming edge ${reprText(edgeId)} has no disposition`);
+    }
+    const disposition = state.edgeState.get(edgeId)!;
+    if (!NODE_STATES.has(disposition)) {
+      throw new RangeError(`route incoming edge ${reprText(edgeId)} has invalid disposition`);
+    }
+    scratch.states.set(edgeId, disposition);
+    if (disposition === NodeState.UNKNOWN) scratch.unknown += 1;
+    const skipped = disposition === NodeState.SKIPPED;
+    if (edge.sourceHandle !== null) {
+      scratch.classes.set(edgeId, ["control", null]);
+      scratch.controlTotal += 1;
+      if (skipped) scratch.controlSkipped += 1;
+    } else if (edge.ordering) {
+      scratch.classes.set(edgeId, [edge.optional ? "ordering" : "required_ordering", null]);
+      if (!edge.optional && skipped) scratch.requiredOrderingSkipped += 1;
+    } else {
+      let group = scratch.dataGroups.get(edge.inputGroup);
+      if (group === undefined) {
+        group = { optional: edge.optional, total: 0, skipped: 0 };
+        scratch.dataGroups.set(edge.inputGroup, group);
+      }
+      group.total += 1;
+      if (skipped) group.skipped += 1;
+      scratch.classes.set(edgeId, ["data", edge.inputGroup]);
+    }
+  }
+  for (const group of scratch.dataGroups.values()) {
+    if (!group.optional && group.skipped === group.total) scratch.requiredDataDead += 1;
+  }
+  return scratch;
+}
+
+/** Apply one UNKNOWN-to-settled update to a cached join in constant time. */
+function settleJoinEdge(scratch: JoinScratch, edgeId: string, disposition: NodeState, nodeId: string): void {
+  if (!scratch.states.has(edgeId)) {
+    throw new RangeError(
+      `route edge ${reprText(edgeId)} is absent from successor ${reprText(nodeId)} incoming adjacency`,
+    );
+  }
+  if (scratch.states.get(edgeId) !== NodeState.UNKNOWN) {
+    throw new RangeError(`route edge ${reprText(edgeId)} must be UNKNOWN in its incoming join`);
+  }
+  scratch.states.set(edgeId, disposition);
+  scratch.unknown -= 1;
+  if (disposition !== NodeState.SKIPPED) return;
+  const [edgeClass, groupName] = scratch.classes.get(edgeId)!;
+  if (edgeClass === "control") {
+    scratch.controlSkipped += 1;
+  } else if (edgeClass === "required_ordering") {
+    scratch.requiredOrderingSkipped += 1;
+  } else if (edgeClass === "data") {
+    const group = scratch.dataGroups.get(groupName)!;
+    group.skipped += 1;
+    if (!group.optional && group.skipped === group.total) scratch.requiredDataDead += 1;
+  }
+}
+
+/** Classify cached gate counts, an eager "dead" before an unresolved "wait". */
+function classifyJoin(scratch: JoinScratch): "ready" | "wait" | "dead" {
+  if (scratch.controlTotal && scratch.controlSkipped === scratch.controlTotal) return "dead";
+  if (scratch.requiredDataDead) return "dead";
+  if (scratch.requiredOrderingSkipped) return "dead";
+  if (scratch.unknown) return "wait";
   return "ready";
 }
 
@@ -2240,6 +2960,23 @@ function materializeSuccess(plan: SuccessPlan): SuccessApply {
   return { value, terminal, observers };
 }
 
+/** The detached values one route commit installs, all built before the durable append. */
+interface RouteApply {
+  terminal: TerminalApply | null;
+  observers: readonly RunEvent[];
+}
+
+/** Materialize the route observers and independent terminal copies before append. */
+function materializeRoute(plan: RoutePlan): RouteApply {
+  const terminal = plan.terminal !== null ? materializeTerminal(plan.terminal) : null;
+  const observers: RunEvent[] = [
+    new NodeRouted({ nodeId: plan.delta.nodeId, handle: plan.delta.handle }),
+    ...plan.delta.skippedNodeIds.map((nodeId) => new NodeSkipped({ nodeId })),
+  ];
+  if (terminal !== null) observers.push(terminal.observer);
+  return { terminal, observers };
+}
+
 /**
  * Materialize one detached terminal event from immutable plan authority.
  *
@@ -2268,4 +3005,20 @@ interface TerminalApply {
 /** Build independent state and callback terminal values before the durable append. */
 function materializeTerminal(delta: TerminalDelta): TerminalApply {
   return { result: terminalObserver(delta), observer: terminalObserver(delta) };
+}
+
+/** Build the ordered observers, sharing one immutable failure. */
+function failureObservers(failure: Failure): RunEvent[] {
+  return [new NodeFailed({ failure }), new RunFailed({ failure })];
+}
+
+/** The detached values one failure commit installs, all built before the durable append. */
+interface FailureApply {
+  result: RunFailed;
+  observers: readonly RunEvent[];
+}
+
+/** Build independent state and callback values before the durable append. */
+function materializeFailure(failure: Failure): FailureApply {
+  return { result: new RunFailed({ failure }), observers: failureObservers(failure) };
 }

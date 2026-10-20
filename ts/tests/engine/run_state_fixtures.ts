@@ -10,9 +10,11 @@ import { expect } from "bun:test";
 
 import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { Failure, type OriginRef } from "../../src/diagnostics.ts";
 import { ValueRoute } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { CallNode } from "../../src/nodes/call/node.ts";
 import { comparePaths, Parameter } from "../../src/nodes/contracts.ts";
 import {
   DeclSite,
@@ -104,6 +106,86 @@ export function fanoutFlow(): CompiledFlow {
     new Edge("start-first", START_ID, "first"),
     new Edge("start-second", START_ID, "second"),
   ]);
+}
+
+/** Return a route whose unselected `no` sibling has a two-node skip chain and `yes` leads to `chosen`. */
+export function routeFlow(): CompiledFlow {
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID)],
+    ...["router", "chosen", "dead-parent", "dead-child"].map(
+      (id) => [id, new FuncNode(id, (inputs) => inputs)] as const,
+    ),
+    [END_ID, EndNode.value(END_ID, { outputName: null })],
+  ]);
+  return CompiledFlow.fromParts(nodes, [
+    new Edge("start-router", START_ID, "router"),
+    new Edge("route-dead", "router", "dead-parent", { sourceHandle: "no" }),
+    new Edge("route-chosen", "router", "chosen", { sourceHandle: "yes" }),
+    new Edge("dead-child", "dead-parent", "dead-child"),
+  ]);
+}
+
+/**
+ * Return a route whose selected `go` control into END still co-skips two of END's groups: `zeta`
+ * (through `dead-z`) and then `alpha` (through `dead-a`), after an optional group. END is a record
+ * of `zeta` and `alpha`. `routerOrigin` is the router's origin; `sibling` adds a START successor
+ * `unrelated`.
+ */
+export function terminalSkipRouteFlow(
+  options: { routerOrigin?: OriginRef | null; sibling?: boolean } = {},
+): CompiledFlow {
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID)],
+    ["router", new FuncNode("router", (inputs) => inputs, { origin: options.routerOrigin ?? null })],
+    ...["dead-optional", "dead-z", "dead-a"].map((id) => [id, new FuncNode(id, (inputs) => inputs)] as const),
+    [END_ID, EndNode.record(END_ID, { outputNames: ["zeta", "alpha"] })],
+  ]);
+  const edges = [
+    new Edge("start-router", START_ID, "router"),
+    new Edge("router-end", "router", END_ID, { sourceHandle: "go" }),
+    new Edge("router-dead-optional", "router", "dead-optional", { sourceHandle: "skip-optional" }),
+    new Edge("dead-optional-end", "dead-optional", END_ID, { inputGroup: "optional-first", optional: true }),
+    new Edge("router-dead-z", "router", "dead-z", { sourceHandle: "skip-z" }),
+    new Edge("dead-z-end", "dead-z", END_ID, { inputGroup: "zeta" }),
+    new Edge("router-dead-a", "router", "dead-a", { sourceHandle: "skip-a" }),
+    new Edge("dead-a-end", "dead-a", END_ID, { inputGroup: "alpha" }),
+  ];
+  if (options.sibling) {
+    nodes.set("unrelated", new FuncNode("unrelated", (inputs) => inputs));
+    edges.push(new Edge("start-unrelated", START_ID, "unrelated"));
+  }
+  return CompiledFlow.fromParts(nodes, edges);
+}
+
+/** The id of `callRedirectFlow`'s child END. */
+export const CHILD_END = "call/__end__";
+
+/**
+ * Return a CALL-shaped graph: the router's `child` branch reaches the child END, which redirects
+ * its output to the logical parent `call`, whose value END requires. With `fallback`, a START
+ * successor `fallback` also feeds END's `result` group.
+ */
+export function callRedirectFlow(options: { fallback?: boolean } = {}): CompiledFlow {
+  const childEnd = EndNode.value(CHILD_END, { outputName: null });
+  childEnd.commitAs = "call";
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID)],
+    ["router", new FuncNode("router", (inputs) => inputs)],
+    [CHILD_END, childEnd],
+    ["call", new CallNode("call", { flowId: "child" })],
+    [END_ID, EndNode.value(END_ID, { outputName: null })],
+  ]);
+  const edges = [
+    new Edge("start-router", START_ID, "router"),
+    new Edge("router-child-end", "router", CHILD_END, { sourceHandle: "child" }),
+    new Edge("call-end", "call", END_ID, { inputGroup: "result" }),
+  ];
+  if (options.fallback) {
+    nodes.set("fallback", new FuncNode("fallback", (inputs) => inputs));
+    edges.splice(1, 0, new Edge("start-fallback", START_ID, "fallback"));
+    edges.push(new Edge("fallback-end", "fallback", END_ID, { inputGroup: "result" }));
+  }
+  return CompiledFlow.fromParts(nodes, edges);
 }
 
 /** Return the complete pool a fresh run of `flow` records under `runId`. */
@@ -383,6 +465,26 @@ export function commitStartSuccess(state: RunState, log: MemoryRunLog, output?: 
   );
 }
 
+/** Return one canonical node-execution failure of `nodeId`. */
+export function nodeFailure(
+  nodeId: string,
+  message = "boom",
+  options: { causeType?: string | null; traceback?: string | null } = {},
+): Failure {
+  return new Failure({ code: "node.execute", message, nodeId, ...options });
+}
+
+/**
+ * Return a state and log of `flow` (by default `routeFlow()`) with START succeeded and its
+ * `router` in flight.
+ */
+export function routeInFlight(flow: CompiledFlow = routeFlow()): { state: RunState; log: MemoryRunLog } {
+  const { state, log } = initializedAndStarted(flow);
+  commitStartSuccess(state, log);
+  commitPrepared(log, state, prepareNodeStarted(state, "router"));
+  return { state, log };
+}
+
 /**
  * Return a binding capture of `inputs` for `node`: each input a literal route, under the node's
  * execution scope (Python's `_graph_builder._forward_capture`).
@@ -410,18 +512,24 @@ export function stacks(...scopes: readonly MemoryScope[]): MemoryStack[] {
     .map((scope) => new MemoryStack(scope.staticPath, scope.memories));
 }
 
+/** The options of `newState` and `startTraceNode`. */
+interface TraceNodeOptions {
+  keys: readonly string[] | null;
+  learnable: boolean;
+  routeHandle?: string;
+  stacks?: readonly MemoryStack[];
+}
+
 /**
  * Return a state of `START -> node -> END` after its committed RunStarted, with START ready, and
  * its log. `keys: null` disables memory; otherwise the table holds `keys`, each snapshot is
- * `{epoch: 4}`, and the stacks default to the node's own scope (none without one).
+ * `{epoch: 4}`, and the stacks default to the node's own scope (none without one). `routeHandle`
+ * is the handle of the edge into END.
  */
-function newState(
-  node: Node,
-  options: { keys: readonly string[] | null; learnable: boolean; stacks?: readonly MemoryStack[] },
-): { state: RunState; log: MemoryRunLog } {
+function newState(node: Node, options: TraceNodeOptions): { state: RunState; log: MemoryRunLog } {
   const built = graph([node], [
     [START_ID, node.id],
-    [node.id, END_ID],
+    [node.id, END_ID, options.routeHandle],
   ]);
   const state = new RunState(built);
   const initialPool = new VariablePool(built.startId);
@@ -459,10 +567,7 @@ function newState(
  * Return a state of `START -> node -> END` (as `newState` builds it) with START succeeded and
  * `node` the sole in-flight node, and its log.
  */
-export function startTraceNode(
-  node: Node,
-  options: { keys: readonly string[] | null; learnable: boolean; stacks?: readonly MemoryStack[] },
-): { state: RunState; log: MemoryRunLog } {
+export function startTraceNode(node: Node, options: TraceNodeOptions): { state: RunState; log: MemoryRunLog } {
   const { state, log } = newState(node, options);
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
   commitStartSuccess(state, log, {});

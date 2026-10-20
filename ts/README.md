@@ -423,19 +423,25 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   is a float there.
 - Changed: `memoryCommitId` digests the `logJson` text of its input, not Python's sorted compact
   `json.dumps`; see `docs/api.md` for where the two differ.
-- `src/runtime/state.ts` holds the run state (`RunState`) and its reducer. Each `prepare*`
-  function (`prepareRunStarted`, `prepareNodeStarted`, `prepareNodeStep`, `prepareNodeSucceeded`,
-  `prepareRunResumed`, `prepareRunStopped`, `prepareRecord`) validates one transition without
-  mutating the state and returns a frozen `PreparedTransition`: the canonical record, the run id
-  and sequence it expects, and a frozen plan. `commitPrepared(log, state, prepared)` appends the
-  record, checks what the log returned, then applies the plan, with no `await` in between, so
-  nothing interleaves between the append and the apply. Frontier order: START is ready after
-  `RunStarted`; a success walks its target's outgoing edges in order and appends each successor
-  when its last edge from the target settles and its join is ready; a resume puts the retried nodes
-  first, in dispatch order, ahead of what was ready; a stop changes nothing but the sequence. An
-  output its target's contract refuses throws `NodeDataError` (`original` holds the value layer's
-  error), which fails the node, not the run. Routes and node failures are not ported yet; growth,
-  the recovery fold (`replayRecords`) and the backward records throw `not ported yet (T4-5)`.
+- `src/runtime/state.ts` holds the run state (`RunState`) and its reducer. Each `prepare*` function
+  (`prepareRunStarted`, `prepareNodeStarted`, `prepareNodeStep`, `prepareNodeSucceeded`,
+  `prepareNodeRouted`, `prepareNodeFailed`, `prepareRunResumed`, `prepareRunStopped`,
+  `prepareRecord`) validates one transition without mutating the state and returns a frozen
+  `PreparedTransition`: the canonical record, the run id and sequence it expects, and a frozen plan.
+  `commitPrepared(log, state, prepared)` appends the record, checks what the log returned, then
+  applies the plan, with no `await` in between, so nothing interleaves between the append and the
+  apply. Frontier order: START is ready after `RunStarted`; a success walks its target's outgoing
+  edges in order and appends each successor when its last edge from the target settles and its join
+  is ready; a route settles its edges depth first in stored order, skips the heads whose joins are
+  dead (following each skipped node's output redirect) and appends the heads that become ready in
+  that order; a resume puts the retried nodes first, in dispatch order, ahead of what was ready; a
+  stop changes nothing but the sequence. The first route whose skips reach END derives the
+  `graph.terminal_unreachable` failure (naming the first required END input it skipped); it ends the
+  run once nothing is ready or in flight, unless a node failure ends it first; a node failure ends
+  the run at once. A bad output, an unknown handle or a bad commit target from a node throws
+  `NodeDataError` (`original` holds the underlying error), which fails the node, not the run.
+  Growth, the recovery fold (`replayRecords`) and the backward records throw `not ported yet
+  (T4-5)`.
 - Value equality: each carrier class has one `same*` helper in the module that owns it
   (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
   `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the

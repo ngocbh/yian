@@ -26,7 +26,6 @@
  * `test_a_call_target_under_buy_passes_a_buy_order`,
  * `test_a_call_target_under_sell_fails_the_call_type_check`,
  * `test_an_unrouted_call_of_the_whole_union_still_fails`,
- * `test_a_nested_inline_call_in_a_branch_target_is_narrowed`,
  * `test_an_inline_call_in_a_routed_node_input_is_narrowed`,
  * `test_else_passes_the_remaining_union_to_a_call`,
  * `test_a_nullable_union_else_target_sees_an_optional_union`,
@@ -46,6 +45,8 @@
  *
  * Later (T3-18): the rows whose error the reference validator raises, or that load only once it
  * reads the narrowed views: `test_a_buy_branch_reads_a_member_field`,
+ * `test_a_nested_inline_call_in_a_branch_target_is_narrowed` (its flow loads unrouted too until the
+ * reference validator checks `${d.output.qty}`),
  * `test_a_hold_branch_reading_qty_reads_an_unknown_field_on_hold`,
  * `test_a_plain_reference_chain_is_narrowed`, `test_a_join_of_buy_and_sell_branches_narrows_to_both`,
  * `test_depends_on_propagates_the_branch`, `test_runs_after_does_not_propagate_the_branch`,
@@ -402,11 +403,6 @@ test("a call target under sell fails the call type check", () => {
 test("an unrouted call of the whole union still fails", () => {
   const message = assembleError(flow(code("c", { r: "call(place, order=${d.output})" })));
   expect(message).toBe(`node 'c' input 'r' ${PLACE_EXPECTS}, source is 'Union(${BUY},${HOLD},${SELL})'`);
-});
-
-test("a nested inline call in a branch target is narrowed", () => {
-  // `inner` is lifted out of the routed `outer`, so it carries the same route.
-  load(flow(caseNode("route", ON, [["buy", "call(outer, x=call(inner, y=${d.output.qty}))"]], "e"), code("e")));
 });
 
 test("an inline call in a routed node input is narrowed", () => {

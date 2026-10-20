@@ -1344,6 +1344,11 @@ Host errors, cancellation, setup errors, and log faults propagate while leaving
 the accepted prefix inspectable. They do not manufacture a successful or failed
 completion record.
 
+Changed (TS yian): a stop is a signal, not an error found in a cause chain, so a
+backend's `MemoryOperationError` from learn or commit is a learning failure whatever its
+`cause`. A drive finishes only its own attempt: one that awaited a handler or learner
+while a later call interrupted its attempt is refused and appends nothing.
+
 ## Skills
 
 An AGENT granted `skills:` in YAML lists each skill's name and description in its

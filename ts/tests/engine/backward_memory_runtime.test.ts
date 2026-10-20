@@ -9,8 +9,7 @@
  * `test_policy_failure_preserves_prior_success_and_stops_later_policies` (2 rows; `{}` for Python's
  * `object()`), `test_empty_feedback_still_learns_empty_memories_and_commits_empty_batches`,
  * `test_no_policy_backward_still_records_ready_and_finished_without_opening_resources`,
- * `test_computation_failure_finishes_without_partial_feedback_or_learning` (2 rows; the callback
- * throws a plain `Error`, Python's `ValueError`),
+ * `test_computation_failure_finishes_without_partial_feedback_or_learning` (2 rows),
  * `test_append_fault_preserves_exact_prefix_and_closes_resources` (8 rows; the log's `append`
  * instance-patched to throw an `Error`, Python's `OSError`),
  * `test_manual_precommit_retry_reopens_snapshots_and_recomputes_every_memory` (2 rows),
@@ -43,6 +42,8 @@
  *   failure through the `BackwardFailure` and `MemoryOperationFailure` constructors (Python's
  *   `dataclasses.replace`), and each refusal pins its `RangeError` and full message (Python's
  *   `ValueError`).
+ * - `test_computation_failure_finishes_without_partial_feedback_or_learning`: the callback throws a
+ *   plain `Error` (Python's `ValueError`).
  * - `test_backend_host_or_unexpected_error_escapes_with_exact_prefix`: the `RuntimeError` and
  *   `RecursionError` cells, × learn and commit, throw a plain `Error` and a `RangeError`.
  * - `test_host_capability_identity_and_cleanup_error_preserve_primary_exception`: the learner's
@@ -77,23 +78,28 @@
  * (fresh and interrupted prior attempt) or its handler (the handler then throws, or its learner
  * fails) is refused by the reducer, appends nothing and closes its runtime; a drive whose handler
  * throws or whose learner fails while a newer drive is mid-attempt can't finish the newer attempt,
- * which then finishes itself; an opener result that isn't a `MemoryRuntime` and a runtime whose earlier close failed are refused; a
- * `MemoryOperationError` with an `AbortError` or `CapabilityFault` cause is a learner or commit
- * failure; a thrown `undefined` still closes the runtime and is rethrown.
+ * which then finishes itself (choice 11); an opener result that isn't a `MemoryRuntime` and a
+ * runtime whose earlier close failed are refused; a `MemoryOperationError` with an `AbortError` or
+ * `CapabilityFault` cause is a learner or commit failure; a thrown `undefined` still closes the
+ * runtime and is rethrown.
  *
- * Not ported: TS unwraps no host control from a `MemoryOperationError`'s cause chain, so a
- * `MemoryOperationError` from learn or commit is a learning failure whatever its `cause`, and any
- * other thrown value escapes unchanged. So the cause-walk tests
- * `test_typed_backend_wrappers_preserve_original_host_error`,
- * `test_nested_capability_faults_never_escape_private_wrappers`,
- * `test_capability_originals_are_checked_for_wrapped_host_controls` and
- * `test_cyclic_capability_fault_is_a_host_error_without_exposing_private_carriers`; the
- * `BaseException`-type cells (`MemoryError`, both `CancelledError`s, `KeyboardInterrupt`,
- * `SystemExit`) of `test_backend_host_or_unexpected_error_escapes_with_exact_prefix` and the
- * `error_type` dimension of `test_cleanup_unwraps_host_failure_after_closing_all_sessions`; and
- * `test_each_attempt_checks_only_its_own_records_not_earlier_attempts`, which counts the calls of a
- * module-private function; and the `inner_payload` cells of
- * `test_commit_batch_is_detached_from_every_accepted_authority` (TS has no private payload tree).
+ * Not ported:
+ * - `test_typed_backend_wrappers_preserve_original_host_error`: it walks the cause chain for the
+ *   original host error, and TS unwraps no host control (choice 1): a `MemoryOperationError` from
+ *   learn or commit is a learning failure whatever its `cause`, and any other thrown value escapes
+ *   unchanged.
+ * - `test_each_attempt_checks_only_its_own_records_not_earlier_attempts`: it counts the calls of a
+ *   module-private function, which TS can't patch.
+ * - `test_nested_capability_faults_never_escape_private_wrappers`,
+ *   `test_capability_originals_are_checked_for_wrapped_host_controls` and
+ *   `test_cyclic_capability_fault_is_a_host_error_without_exposing_private_carriers`: they unwrap
+ *   capability faults (choice 1).
+ * - The `BaseException`-type cells (`MemoryError`, both `CancelledError`s, `KeyboardInterrupt`,
+ *   `SystemExit`) of `test_backend_host_or_unexpected_error_escapes_with_exact_prefix` and the
+ *   `error_type` dimension (the same classes) of
+ *   `test_cleanup_unwraps_host_failure_after_closing_all_sessions`: TS has no such classes.
+ * - The `inner_payload` cells of `test_commit_batch_is_detached_from_every_accepted_authority`: TS
+ *   has no private payload tree.
  */
 
 import { expect, spyOn, test } from "bun:test";

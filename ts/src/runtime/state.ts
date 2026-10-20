@@ -2225,6 +2225,7 @@ function prepareRouteDelta(
   const skippedNodeIds: string[] = [];
   const skippedNodes = new Set<string>();
   const propagatedTargets = new Set<string>([record.nodeId]);
+  let redirectOwners: Map<string, string[]> | null = null;
   const newlyReadyIds: string[] = [];
   const newlyReady = new Set<string>();
   const joins = new Map<string, JoinScratch>();
@@ -2280,6 +2281,18 @@ function prepareRouteDelta(
     skippedNodes.add(head);
     skippedNodeIds.push(head);
     const target = skippedOutputTarget(state, head);
+    if (target !== head) {
+      redirectOwners ??= skippedOutputOwners(state);
+      requireUnambiguousRedirect({
+        ownerId: head,
+        target,
+        owners: redirectOwners.get(target) ?? [],
+        hasCommittedValue: state.pool.store.has(target),
+        disposition: state.nodeState.get(target),
+        isExecutable: state.ready.includes(target) || state.inFlight.has(target),
+        hasIncoming: state.flow.incoming(target).length > 0,
+      });
+    }
     if (propagatedTargets.has(target)) continue;
     propagatedTargets.add(target);
     const children = routeOutgoing(state, target, edgeUpdates);
@@ -2389,12 +2402,76 @@ function skippedOutputTarget(state: RunState, nodeId: string): string {
 
 /** Validate one hook result against an exact topology node lookup. */
 function validateSkippedOutputTarget(nodes: { has(id: string): boolean }, nodeId: string, target: unknown): string {
-  if (typeof target !== "string") throw new TypeError(`node ${reprText(nodeId)} skipped output target must be a string`);
+  if (typeof target !== "string") {
+    throw new TypeError(`node ${reprText(nodeId)} skipped output target must be a string`);
+  }
   if (!target) throw new RangeError(`node ${reprText(nodeId)} skipped output target must be non-empty`);
   if (!nodes.has(target)) {
     throw new RangeError(`node ${reprText(nodeId)} skipped output target ${reprText(target)} does not exist`);
   }
   return target;
+}
+
+/**
+ * Index the unfinished logical-output redirects in stable node order.
+ *
+ * Settled dynamic residue can't produce another value and is ignored. Ordinary nodes target
+ * themselves and aren't redirect owners. The scan is paid only when a route skips a redirected
+ * completion; it keeps the common sparse skip path unchanged while refusing ambiguous
+ * multi-writer topology before any edge settles.
+ */
+function skippedOutputOwners(state: RunState): Map<string, string[]> {
+  const owners = new Map<string, string[]>();
+  for (const nodeId of state.flow.nodes.keys()) {
+    if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) continue;
+    const target = skippedOutputTarget(state, nodeId);
+    if (target === nodeId) continue;
+    const ids = owners.get(target);
+    if (ids === undefined) owners.set(target, [nodeId]);
+    else ids.push(nodeId);
+  }
+  return owners;
+}
+
+/**
+ * Require one inert logical anchor to have one unfinished redirect owner.
+ *
+ * A skip means the logical output is absent. That conclusion is sound only when no sibling
+ * physical completion or executable anchor can still produce the same value. Supporting several
+ * producers would need a distinct OR join and a multi-writer contract; `commitAs` stays a
+ * single-owner redirect instead.
+ */
+function requireUnambiguousRedirect(options: {
+  ownerId: string;
+  target: string;
+  owners: readonly string[];
+  hasCommittedValue: boolean;
+  disposition: unknown;
+  isExecutable: boolean;
+  hasIncoming: boolean;
+}): void {
+  const { ownerId, target, owners, disposition } = options;
+  if (owners.length !== 1 || owners[0] !== ownerId) {
+    throw new RangeError(
+      `logical output target ${reprText(target)} has multiple skipped output owners: ${writeAsText([...owners])}`,
+    );
+  }
+  if (options.hasCommittedValue) {
+    throw new RangeError(`logical output target ${reprText(target)} already has a committed value`);
+  }
+  if (!NODE_STATES.has(disposition)) {
+    throw new RangeError(`logical output target ${reprText(target)} has an invalid disposition`);
+  }
+  if (options.isExecutable) throw new RangeError(`logical output target ${reprText(target)} is also executable`);
+  if (disposition === NodeState.UNKNOWN) {
+    if (options.hasIncoming) throw new RangeError(`logical output target ${reprText(target)} is also executable`);
+    return;
+  }
+  if (disposition !== NodeState.EXPANDED) {
+    throw new RangeError(
+      `logical output target ${reprText(target)} must be an expanded spawner or inert placeholder`,
+    );
+  }
 }
 
 /**
@@ -2460,7 +2537,9 @@ function scanJoin(state: RunState, nodeId: string): JoinScratch {
     if (typeof edgeId !== "string" || !edgeId || scratch.states.has(edgeId)) {
       throw new RangeError(`route successor ${reprText(nodeId)} has invalid incoming edge IDs`);
     }
-    if (!state.edgeState.has(edgeId)) throw new RangeError(`route incoming edge ${reprText(edgeId)} has no disposition`);
+    if (!state.edgeState.has(edgeId)) {
+      throw new RangeError(`route incoming edge ${reprText(edgeId)} has no disposition`);
+    }
     const disposition = state.edgeState.get(edgeId)!;
     if (!NODE_STATES.has(disposition)) {
       throw new RangeError(`route incoming edge ${reprText(edgeId)} has invalid disposition`);

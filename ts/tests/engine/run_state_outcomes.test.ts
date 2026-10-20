@@ -1173,7 +1173,11 @@ test("a route requires an exact non-empty handle, as node data", () => {
   const { state } = routeInFlight();
 
   expectNodeData(() => prepareNodeRouted(state, "router", ""), RangeError, "handle must be non-empty");
-  expectNodeData(() => prepareNodeRouted(state, "router", 1 as unknown as string), TypeError, "handle must be a string");
+  expectNodeData(
+    () => prepareNodeRouted(state, "router", 1 as unknown as string),
+    TypeError,
+    "handle must be a string",
+  );
 });
 
 test("a route append failure leaves every state coordinate unchanged", () => {

@@ -3,7 +3,8 @@
  * `tests/engine/test_case_else_handle.py`.
  *
  * Ported: `test_a_case_may_not_take_the_else_handle_as_a_branch`,
- * `test_a_route_to_an_unknown_handle_named_default_is_rejected`.
+ * `test_a_route_to_an_unknown_handle_named_default_is_rejected`,
+ * `test_the_else_handle_without_an_edge_skips_every_branch`.
  *
  * Changed: `Case` is frozen, so the node-level half can't set `handle` after construction as
  * Python does; it builds the `Case` holding `#else` without the constructor. `RangeError` stands
@@ -18,8 +19,7 @@
  * `test_a_then_target_named_default_runs_only_on_its_own_branch`,
  * `test_a_then_target_named_default_does_not_run_on_no_match_without_else`,
  * `test_an_on_case_target_named_default_runs_only_on_its_own_branch`,
- * `test_the_else_handle_is_no_possible_node_id`,
- * `test_the_else_handle_without_an_edge_skips_every_branch` and
+ * `test_the_else_handle_is_no_possible_node_id` and
  * `test_a_log_routed_to_the_old_default_handle_does_not_resume`.
  */
 
@@ -27,7 +27,8 @@ import { expect, test } from "bun:test";
 
 import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import { Case, CaseNode } from "../../src/nodes/case/node.ts";
-import { NodeDataError, prepareNodeRouted } from "../../src/runtime/state.ts";
+import { NodeState } from "../../src/runtime/common.ts";
+import { commitPrepared, NodeDataError, prepareNodeRouted } from "../../src/runtime/state.ts";
 import { callRedirectFlow, routerInFlight } from "./run_state_fixtures.ts";
 
 test("a case may not take the else handle as a branch", () => {
@@ -58,4 +59,13 @@ test("a route to an unknown handle named default is rejected", () => {
   const original = (caught as NodeDataError).original;
   expect((original as Error).constructor).toBe(RangeError);
   expect((original as Error).message).toBe("NodeRouted handle 'default' matches no outgoing edge of 'router'");
+});
+
+test("the else handle without an edge skips every branch", () => {
+  const { state, log } = routerInFlight(callRedirectFlow());
+
+  commitPrepared(log, state, prepareNodeRouted(state, "router", ELSE_HANDLE));
+
+  expect(state.edgeState.get("router-child-end")).toBe(NodeState.SKIPPED);
+  expect(state.ready).toEqual([]);
 });

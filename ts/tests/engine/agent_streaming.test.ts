@@ -21,7 +21,7 @@
  * rather than `run_flow` with session memory (which only rides along), for the before-any-text and
  * mid-stream refusals (a `ProviderError` of kind `auth`, reported as `ProviderError`); its
  * client-without-stream row is not ported (every `ChatModel` streams); the `run_flow` half Later
- * (T4-8/T3-22).
+ * (T4-8).
  *
  * Ported through the node's tool loop, the tool in the run's `ToolSet` and each call streamed as two
  * `ToolCallDelta`s sharing its index, as Python's scripted chat streams it:

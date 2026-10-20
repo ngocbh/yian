@@ -15,7 +15,7 @@
  * grant a real `noop` tool in the run's `ToolSet`, where Python patches `ToolSet.resolve`; the
  * model answers without calling it, then (structured) gives the value in a second request.
  *
- * Later (T4-8, T3-22), through `loadFlow`, `runFlow` and `resumeFlow`:
+ * Later (T4-8), through `loadFlow`, `runFlow` and `resumeFlow`:
  * `test_run_flow_sends_the_rendered_persona`,
  * `test_resume_replays_a_finished_node_with_its_recorded_system_prompt`,
  * `test_retry_after_a_mid_node_crash_renders_the_same_system_prompt` and

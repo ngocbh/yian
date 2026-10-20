@@ -198,8 +198,11 @@
  * `test_learning_retains_noncanonical_partial_temporary_comparisons` (a lone-surrogate key is not
  * a yian value).
  *
- * Later (T3-22, T4-8), with a loaded CODE node:
- * `test_accepted_backward_inventories_and_layout_replay_without_recapturing`.
+ * Ported through `loadFlow` and the engine (`engine` with `learnable`), then `replayRecords`:
+ * `test_accepted_backward_inventories_and_layout_replay_without_recapturing` (the forbidden
+ * methods are `spyOn` replacements on the class prototypes, restored afterward; the END handler
+ * is the replayed END's bound `backward`, so its node's `names` and `params` are changed through
+ * the replayed flow, for Python's `handler.__self__`).
  *
  * Later (T4-10), through CALL, MAP and LOOP growth:
  * `test_nested_growth_preserves_authored_paths_and_local_driver_zero`,
@@ -215,13 +218,14 @@
  * `test_loop_carried_routes_survive_live_pruning` and the `call`, `map`, `loop`, `nested-call` and
  * `nested-map` rows of `test_trace_replay_matches_live_accepted_prefixes`.
  *
- * Later (T3-22, T4-10): `test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution`
+ * Later (T4-10): `test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution`
  * (it loads a flow with `defs` and runs AGENTs under CALL, MAP and LOOP growth).
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 
 import { type CompiledFlow, copyGraph, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import { NodeSucceeded, RunFailed, RunSucceeded } from "../../src/events.ts";
@@ -253,7 +257,10 @@ import {
   Route,
   retainFailure,
 } from "../../src/nodes/base.ts";
+import { CodeNode } from "../../src/nodes/code/node.ts";
 import { ChildFlowBoundary, ExecutionPosition, ExecutionScope, Parameter, SeedConnection } from "../../src/nodes/contracts.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
+import { StartNode } from "../../src/nodes/start/node.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
 import { computeBackward } from "../../src/runtime/backward.ts";
 import { BackwardCapture, BackwardOutcome, ForwardCapture } from "../../src/runtime/contracts.ts";
@@ -2992,6 +2999,74 @@ function successEnvelope(built: FlowEngine, nodeId: string): RecordEnvelope {
 function routesByName(route: ValueRoute): Map<string, ValueRoute> {
   return new Map(route.names.map((name, index) => [name, route.children[index]!]));
 }
+
+test("accepted backward inventories and layout replay without recapturing", async () => {
+  const loaded = (
+    await loadFlow(`id: captured_layout
+name: captured_layout
+input:
+  topic: !str reefs
+nodes:
+  work:
+    kind: code
+    input: {topic: '\${input.topic}'}
+    code: return inputs['topic']
+    output: str
+output: \${work.output}
+asserts: ["work.output != null"]
+`)
+  ).compiled;
+  const built = engine(loaded, { learnable: true });
+  const original = copyGraph(built.state.flow);
+  await built.run();
+  const occurrences = new Map(built.state.trace!.occurrences.map((item) => [item.nodeId, item]));
+  const start = (occurrences.get(START_ID)!.record as NodeSucceededRecord).forwardCapture!;
+  const terminal = (occurrences.get(END_ID)!.record as NodeSucceededRecord).forwardCapture!;
+  expect(start.inputNames).toEqual(["topic"]);
+  expect(start.boundInputs).toEqual({ topic: "reefs" });
+  expect(terminal.inputNames).toEqual(["result"]);
+  expect(Object.keys(terminal.boundInputs!).length).toBeGreaterThan(1);
+  expect(terminal.nodeData).toEqual({ input_output_paths: { result: [] } });
+
+  const forbidden = () => {
+    throw new Error("replay executed or recaptured a node");
+  };
+  const inputNames = Node.prototype.backwardInputNames;
+  const initializedRoots: string[] = [];
+  const spies = [
+    spyOn(CodeNode.prototype, "forward").mockImplementation(forbidden),
+    spyOn(Node.prototype, "backwardInputNames").mockImplementation(function (this: Node) {
+      expect(this.id).toBe(START_ID);
+      initializedRoots.push(this.id);
+      return inputNames.call(this);
+    }),
+    spyOn(Node.prototype, "declaredVariables").mockImplementation(forbidden),
+    ...[Node.prototype, StartNode.prototype, EndNode.prototype].map((proto) =>
+      spyOn(proto, "captureBackwardContext").mockImplementation(forbidden),
+    ),
+  ];
+  let replay: RunState;
+  try {
+    replay = replayRecords(new RunState(original), built.log.records(), { growBuilder: fragmentBuilder });
+  } finally {
+    for (const spy of spies) spy.mockRestore();
+  }
+  expect(initializedRoots).toEqual([START_ID]);
+  expect(replayTraceSnapshot(replay.trace!)).toEqual(replayTraceSnapshot(built.state.trace!));
+  const occurrence = replay.trace!.occurrences.find((item) => item.nodeId === END_ID)!;
+  const handler = replay.trace!.backwardHandlers.get(sourceKey(occurrence.source))!;
+  const end = original.nodes.get(END_ID) as EndNode;
+  end.names = ["changed", "afterward"];
+  end.params = [];
+  const capture = (occurrence.record as NodeSucceededRecord).forwardCapture!;
+  const context = new BackwardContext(capture.boundInputs, {
+    inputNames: capture.inputNames,
+    variableNames: capture.variableNames,
+    output: replay.trace!.sources.get(sourceKey(occurrence.source))!.value,
+    nodeData: capture.nodeData,
+  });
+  expect((await handler(context, ["Review the answer."])).inputFeedback).toEqual({ result: ["Review the answer."] });
+});
 
 test("a static capture host fault does not append a node outcome", async () => {
   const expected = new RangeError("capture failed");

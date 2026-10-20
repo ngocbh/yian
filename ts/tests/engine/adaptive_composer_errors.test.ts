@@ -29,14 +29,22 @@
  * The cycle message writes its node list in the text form (`["ask","b"]`, rule `messages`), and
  * each cycle row pins the whole message where Python checks its start. The inline CODE body is TypeScript.
  *
- * Later (T3-22): `test_compact_flow_llm_config_error_names_the_flow_node`,
+ * Ported through `loadFlow`: `test_compact_flow_llm_config_error_names_the_flow_node`,
  * `test_defs_body_input_error_names_the_gate` and `test_defs_child_cycle_names_only_the_gate`.
  */
 
 import { expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "../compose/declarations.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import {
+  assembled,
+  assembleText,
+  type CaseRow,
+  loadError,
+  loadErrorAsync,
+  runCase,
+} from "../compose/declarations.ts";
 
 const LLM_SITE = "node 'ask' adaptive_questions.llm_config";
 
@@ -91,6 +99,23 @@ test("block llm config error is located at its first key", () => {
 
 test("valid llm config loads", () => {
   expect(assembleText(flow("      llm_config: {model: m}\n")).flow.compiled.nodes.has("ask__compose")).toBe(true);
+});
+
+test("a compact flow's llm config error names the flow node", async () => {
+  const error = await loadErrorAsync(
+    loadFlow(`\
+id: f
+name: f
+input: {proj: !str }
+kind: human_input
+adaptive_questions:
+  prompt: "Q \${proj}"
+  llm_config: {temparature: 1}
+`),
+  );
+  expect(error.message.startsWith("node 'f' adaptive_questions.llm_config")).toBe(true);
+  expect(error.message).not.toContain("f__compose");
+  expect(lineOf(error)).toBe(7);
 });
 
 /**
@@ -232,6 +257,42 @@ output: \${ask.output}
   expect(lineOf(error)).toBe(19);
 });
 
+test("a defs body's input error names the gate", async () => {
+  const error = await loadErrorAsync(
+    loadFlow(`\
+id: f
+name: f
+input:
+  topic: !str
+defs:
+  pick:
+    input:
+      topic: !str
+    nodes:
+      ask:
+        kind: human_input
+        input:
+          proj: \${input.nope}
+        adaptive_questions:
+          prompt: "Q \${proj}"
+    output: \${ask.output}
+nodes:
+  run:
+    kind: call
+    call: pick
+    input:
+      topic: \${input.topic}
+output: \${run.output}
+`),
+  );
+  expect(error.message.startsWith("defs entry 'pick': ")).toBe(true);
+  const lines = error.message.split("\n").filter((ln) => ln.includes("input 'proj'"));
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).toContain("node 'ask' input 'proj' from: ");
+  expect(error.message).not.toContain("ask__compose");
+  expect(lineOf(error)).toBe(13);
+});
+
 // ---------- cycles: the gate is named, not its composer, unless an author reads the composer ----------
 
 /** Return the cycle message naming `names`. */
@@ -354,6 +415,39 @@ output: \${ask.output}
   const error = loadError(() => assembleText(text));
   expect(error.message).toBe(cycleMessage(["ask__compose"]));
   expect(error.diagnostic.notes).toEqual(["ask__compose depends on ask__compose (ask__compose.input.x)", GENERATED]);
+});
+
+test("a defs child's cycle names only the gate", async () => {
+  const text = `\
+id: f
+name: f
+input:
+  topic: !str
+defs:
+  pick:
+    input:
+      topic: !str
+    nodes:
+      ask:
+        kind: human_input
+        input:
+          proj: \${ask.output}
+        adaptive_questions:
+          prompt: "Q \${proj}"
+    output: \${ask.output}
+nodes:
+  run:
+    kind: call
+    call: pick
+    input:
+      topic: \${input.topic}
+output: \${run.output}
+`;
+  const error = await loadErrorAsync(loadFlow(text));
+  expect(error.message.startsWith("defs entry 'pick': " + cycleMessage(["ask"]))).toBe(true);
+  expect(error.message).not.toContain("ask__compose");
+  // The defs entry's frame is its body, which starts on the line after `pick:`.
+  expect(frameLines(error)).toEqual([lineStarting(text, "  pick:") + 1, lineStarting(text, "      ask:")]);
 });
 
 // ---------- harvested conformance cases ----------

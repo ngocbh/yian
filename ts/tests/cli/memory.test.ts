@@ -27,8 +27,9 @@
  * - Flows are built by hand (`CompiledFlow` with START, a CODE or AGENT node and END) instead of
  *   loaded from YAML; the YAML config's ints are `bigint`s, as the loader gives them.
  *
- * Later (T3-22, need `loadFlow`): `test_yaml_config_outside_the_allowlist_fails_at_load`,
- * `test_rejected_yaml_config_is_a_load_error_naming_the_key`.
+ * Ported through `loadFlow` (Python's `_configured` text): `test_yaml_config_outside_the_allowlist_fails_at_load`,
+ * `test_rejected_yaml_config_is_a_load_error_naming_the_key` (the cause's class is TS's: `RangeError`
+ * for Python's `ValueError`).
  *
  * Later (T7-1 PR 2, need `yian run`): every other row (exit codes, ordering before
  * inputs/provider/log, resume, cleanup reporting, controller drain, pooled cancellation, help text,
@@ -55,6 +56,8 @@ import { pathToFileURL } from "node:url";
 import { buildCliMemories, MemoryOptionError, parseMemoryStorage } from "../../src/cli/memory.ts";
 import { CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { LoadError } from "../../src/compose/helpers/errors.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
 import { DeclSite, MemoryDecl, MemorySetupError } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
@@ -246,6 +249,53 @@ test.each([
   } finally {
     await session.close();
   }
+});
+
+/** Return a flow declaring memory `policy` of type `policy` with YAML `config` (Python's `_configured`). */
+function configured(policy: string, config: string): string {
+  if (policy === "session") {
+    return `id: cli-memory
+name: cli_memory
+nodes:
+  work:
+    kind: agent
+    long_term_memory: {session: {type: session, config: ${config}}}
+    prompt: hello
+    output: str
+output: \${work.output}
+`;
+  }
+  return `id: cli-memory
+name: cli_memory
+long_term_memory: {${policy}: {type: ${policy}, config: ${config}}}
+nodes:
+  work:
+    kind: code
+    code: return 7
+    output: int
+output: \${work.output}
+`;
+}
+
+test.each([
+  ["episodic", "{bogus: 1}", 'episodic memory config has unknown key(s) ["bogus"]'],
+  ["reflective", "{llm_config: {model: x}}", 'unknown key(s) ["llm_config"]'],
+  ["session", "{storage: x.sqlite}", "config key 'storage' is not allowed"],
+] as const)("YAML config outside the allowlist fails at load (%s)", async (policy, config, detail) => {
+  const error = await caught(() => loadFlow(configured(policy, config)));
+  expect(error).toBeInstanceOf(LoadError);
+  expect((error as LoadError).message).toContain(detail);
+});
+
+test.each([
+  ["reflective", "{max_items: 0}", "max_items", RangeError],
+  ["episodic", "{recall_limit: two}", "recall_limit", TypeError],
+  ["session", "{recent_turns: -1}", "recent_turns", RangeError],
+] as const)("rejected YAML config is a load error naming the key (%s)", async (policy, config, detail, cause) => {
+  const error = await caught(() => loadFlow(configured(policy, config)));
+  expect(error).toBeInstanceOf(LoadError);
+  expect((error as LoadError).message).toMatch(new RegExp(`long_term_memory '${policy}'.*${detail}`));
+  expect(((error as LoadError).cause as Error).constructor).toBe(cause);
 });
 
 describe.each(["episodic", "reflective", "session"] as const)("CLI builds %s memory", (type) => {

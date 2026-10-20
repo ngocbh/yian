@@ -41,7 +41,7 @@
  * `OutputInvalidError` coded `agent.output_invalid` (Python: a `ValidationError`,
  * `node.execute`). `test_rate_limit_stays_node_execute`: a marked rate limit is
  * `provider.rate_limit` (with `modelRetries: 0`). `test_provider_auth_failure_message_is_scrubbed`
- * runs the node with the key in its `llmConfig` rather than `run_flow` (T4-8/T3-22).
+ * runs the node with the key in its `llmConfig` rather than `run_flow` (T4-8).
  *
  * TS-only: `textOf` of a string, of a message with text, reasoning, tool-call and refusal parts
  * (only the text, joined with `"\n"`), and of a message without text; `ReplyInterrupted`'s message,

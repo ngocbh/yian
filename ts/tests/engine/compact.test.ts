@@ -7,10 +7,11 @@
  * re-exported as the flow output, and every other top-level key is the node body.
  *
  * Python reaches `test_compact_digit_id_rejected_without_parser_dump` and the full-form half of
- * `test_full_form_flow_id_may_keep_hyphens` through `load_flow`; TS calls `parseFile`.
+ * `test_full_form_flow_id_may_keep_hyphens` through `load_flow`; TS calls `parseFile`. The
+ * compiled-nodes check of `test_full_form_flow_id_may_keep_hyphens` loads the flow
+ * (`loadConformanceFlow`, its CODE reference TS's `./fixtures/compose_codefns.ts:echo`).
  *
- * Later (T3-22): `test_compact_code_runs`, `test_compact_record_output_runs`, which run flows,
- * and the compiled-nodes check of `test_full_form_flow_id_may_keep_hyphens`.
+ * Later (T4-8): `test_compact_code_runs`, `test_compact_record_output_runs`, which run flows.
  *
  * The harvested cases whose error `parseFile` raises are pinned at the end, with
  * `load-types/compose_tagged_inputs__compact_input_list_shows_the_tagged_spelling` (from
@@ -24,7 +25,7 @@ import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compo
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
-import { fileOf, loadError, runTextCase } from "../compose/declarations.ts";
+import { fileOf, loadConformanceFlow, loadError, runTextCase } from "../compose/declarations.ts";
 
 afterEach(() => forget());
 
@@ -181,8 +182,8 @@ test("a compact flow's digit id is rejected without a parser dump", () => {
   expect(error.message).not.toContain("Unexpected token");
 });
 
-test("a full-form flow id may keep hyphens", () => {
-  const f = parseFile(`
+test("a full-form flow id may keep hyphens", async () => {
+  const text = `
 id: hello-agent
 name: hello
 input:
@@ -190,14 +191,16 @@ input:
 nodes:
   greet:
     kind: code
-    code: tests.engine._compose_codefns:echo
+    code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: \${input.topic}
 output: \${greet.output}
-`);
+`;
+  const f = parseFile(text);
 
   expect(f.id).toBe("hello-agent");
   expect(Object.keys(f.nodes)).toEqual(["greet"]);
+  expect((await loadConformanceFlow(text)).compiled.nodes.has("greet")).toBe(true);
 });
 
 test.each([

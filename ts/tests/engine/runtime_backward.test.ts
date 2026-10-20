@@ -20,8 +20,10 @@
  *
  * TS-only, backward attempt state: one refusal per `BackwardAttempt` and `RuntimeBackwardState`
  * rule; the getters on empty, unfinished and finished histories; the interrupted outcome an
- * unfinished attempt derives, with `prefixLearning`'s statuses and failure order; and
- * `proposalBatches`' table order.
+ * unfinished attempt derives, with `prefixLearning`'s statuses and failure order;
+ * `proposalBatches`' table order; and `sameRuntimeBackwardState`, true for separately built equal
+ * states and false for a different memory order, a different last record and a `null` versus
+ * non-`null` `ready`.
  *
  * TS-only, the reducer over `chainTrace()` with memory key `notes` and ids from `memoryCommitId`:
  * a full attempt Started → Ready → Requested → Succeeded → Finished, then a second start; the
@@ -55,8 +57,8 @@
  * `test_explicitly_synthetic_source_free_failure_keeps_direct_root_text` and the file's other 24
  * tests, from `test_diamond_calls_shared_producer_once_with_two_ordered_messages` to
  * `test_loop_passthrough_field_routes_feedback_to_its_seed` (among them
- * `test_terminal_trace_latches_causal_route_and_later_failure_wins`, which also needs
- * `replayRecords` (T4-5) and the engine (T4-6)).
+ * `test_terminal_trace_latches_causal_route_and_later_failure_wins`, which also needs the engine
+ * (T4-6)).
  */
 
 import { expect, test } from "bun:test";
@@ -103,6 +105,7 @@ import {
   proposalBatches,
   reduceBackwardRecord,
   RuntimeBackwardState,
+  sameRuntimeBackwardState,
   seedBackward,
   takeMessages,
   validateAttributedBackward,
@@ -1079,6 +1082,34 @@ test("a finished history admits a start and keeps the accepted outcome", () => {
   expect(state.canStart).toBe(true);
   expect(state.outcome).toBe(second.finished!.outcome);
   expect(state.policyOutcomes.map((policy) => policy.status)).toEqual(["unrequested", "unrequested"]);
+});
+
+/**
+ * A finished attempt 1 and an unfinished attempt 2 with `last` (by default `started(2)`) and
+ * `options`.
+ */
+function twoAttempts(
+  memories: string[] = ["a", "b"],
+  last: BackwardStartedRecord = started(2),
+  options: { ready?: BackwardReadyRecord | null } = { ready: ready(2) },
+): RuntimeBackwardState {
+  const first = new BackwardAttempt(started(1), { finished: interruptedFinish(1) });
+  return new RuntimeBackwardState(memories, [first, new BackwardAttempt(last, options)]);
+}
+
+test("sameRuntimeBackwardState is true for separately built equal states", () => {
+  const state = twoAttempts();
+  expect(sameRuntimeBackwardState(state, twoAttempts())).toBe(true);
+  expect(sameRuntimeBackwardState(state, new RuntimeBackwardState(["a", "b"], state.attempts))).toBe(true);
+});
+
+test.each<[string, () => RuntimeBackwardState]>([
+  ["a different memory order", () => twoAttempts(["a"])],
+  ["a different last record", () => twoAttempts(["a", "b"], new BackwardStartedRecord(2, "Other."))],
+  ["a null ready", () => twoAttempts(["a", "b"], started(2), {})],
+])("sameRuntimeBackwardState is false for %s", (_label, other) => {
+  expect(sameRuntimeBackwardState(twoAttempts(), other())).toBe(false);
+  expect(sameRuntimeBackwardState(other(), twoAttempts())).toBe(false);
 });
 
 test("proposalBatches returns each memory's batch in table order and refuses another order", () => {

@@ -606,6 +606,14 @@ export function traceSnapshot(trace: RetainedTrace): Record<string, unknown> {
 }
 
 /**
+ * Return `traceSnapshot` for comparing a replay with its live run: the backward handlers by key,
+ * since each run binds its own nodes' handlers and a bound function can't name its node.
+ */
+export function replayTraceSnapshot(trace: RetainedTrace): Record<string, unknown> {
+  return { ...traceSnapshot(trace), backwardHandlers: [...trace.backwardHandlers.keys()] };
+}
+
+/**
  * Replay `source`'s records over a fresh state of `flow` through `prepareRunStarted` (from the
  * recorded RunStarted fields) and `prepareRecord`; return the state, the new log and each
  * transition's observers.

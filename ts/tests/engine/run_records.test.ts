@@ -113,13 +113,24 @@
  * Not ported: `test_historical_record_requires_an_exact_supported_schema` (`prepareRecord` has no
  * schema parameter, since schema 10 is the only one).
  *
- * Later (T4-5): `test_historical_frontier_prepares_recorded_schema_bytes` (`replayRecords`).
- * Later (T4-5, T4-8): `test_historical_outcomes_keep_schema_in_trace_bytes` (the replay fold and
- * `run.ts`'s log replay).
+ * Changed, through the run state (Python reads recorded schema-9 bytes of flows from `load_flow`;
+ * schema 10 is the only TS schema and the TS compiler has no `load_flow` yet, so each test records
+ * its own live log of a TS flow, replays it through `replayRecords` and compares
+ * `_plan.envelopeJson` with the live line):
+ * - `test_historical_frontier_prepares_recorded_schema_bytes` (2 rows): the one-record prefix is
+ *   the RunStarted of `flow()` with `startData`.
+ * - The `route` row of `test_historical_outcomes_keep_schema_in_trace_bytes`: the live learnable
+ *   `terminalSkipRouteFlow()` route, committed through the internal `HistoricalLogCursor`; the
+ *   occurrence keeps the live line as its `recordJson`.
+ *
+ * Later (T4-8, they replay through `run.ts`'s log replay): the `success`, `failure` and `growth`
+ * rows of `test_historical_outcomes_keep_schema_in_trace_bytes` (`growth` also waits for T3-22's
+ * `build_grow`).
  */
 
 import { expect, test } from "bun:test";
 
+import { copyGraph, START_ID } from "../../src/compile/model.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
 import {
@@ -172,8 +183,13 @@ import {
 import * as runLog from "../../src/runtime/log.ts";
 import {
   commitPrepared,
+  HistoricalLogCursor,
   PreparedTransition,
+  prepareNodeRouted,
+  prepareNodeStarted,
+  prepareRecord,
   prepareRunStarted,
+  replayRecords,
   requireUnchangedRecord,
   RunState,
 } from "../../src/runtime/state.ts";
@@ -187,7 +203,16 @@ import {
   VariablePool,
 } from "../../src/typesys/index.ts";
 import { JSONDecodeError, type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
-import { flow, startData, stateSnapshot } from "./run_state_fixtures.ts";
+import {
+  commitStartSuccess,
+  flow,
+  forwardCapture,
+  fragmentBuilder,
+  learnableStarted,
+  startData,
+  stateSnapshot,
+  terminalSkipRouteFlow,
+} from "./run_state_fixtures.ts";
 
 /** Assert `fn` throws a `TypeCheckError` with exactly `message` at `path`. */
 function expectTypeCheck(fn: () => unknown, message: string, path: readonly (string | number)[]): void {
@@ -1861,4 +1886,50 @@ test("an append result of the wrong schema is a protocol fault", () => {
   expect(state.trace).toBeNull();
   expect(log.nextSequence).toBe(1);
   expect(encodeRecord(log.records()[0]!)).toBe(prepared._plan.envelopeJson);
+});
+
+test.each(["started", "resumed"])("a historical frontier prepares the recorded schema's line: %s", (kind) => {
+  const live = new RunState(flow());
+  const data = startData(live.flow);
+  const log = new MemoryRunLog(data.runId);
+  commitPrepared(log, live, prepareRunStarted(live, data));
+
+  const state = replayRecords(new RunState(flow()), log.records().slice(0, 1), { growBuilder: fragmentBuilder });
+  const record = kind === "resumed" ? new RunResumedRecord([], 0) : new NodeStartedRecord(state.flow.startId);
+  const prepared = prepareRecord(state, record);
+
+  expect(prepared._plan.envelopeJson).toBe(encodeRecord(new RecordEnvelope(SCHEMA_VERSION, state.runId!, 1, record)));
+  expect(state.nextSequence).toBe(1);
+});
+
+test("a historical route keeps the schema in its trace line", () => {
+  const live = learnableStarted(terminalSkipRouteFlow());
+  const original = copyGraph(live.state.flow);
+  commitPrepared(live.log, live.state, prepareNodeStarted(live.state, START_ID));
+  commitStartSuccess(live.state, live.log, {});
+  commitPrepared(live.log, live.state, prepareNodeStarted(live.state, "router"));
+  const router = live.state.flow.nodes.get("router")!;
+  commitPrepared(
+    live.log,
+    live.state,
+    prepareNodeRouted(live.state, "router", "go", { forwardCapture: forwardCapture(router, {}) }),
+  );
+  const wires = live.log.records().map(encodeRecord);
+  const last = wires.at(-1)!;
+
+  const state = replayRecords(new RunState(original), live.log.records().slice(0, -1), {
+    growBuilder: fragmentBuilder,
+  });
+  const before = [...state.trace!.occurrences];
+  const prepared = prepareRecord(state, decodeRecord(last).record, { growBuilder: fragmentBuilder });
+  expect(prepared._plan.envelopeJson).toBe(last);
+  expect(state.trace!.occurrences).toEqual(before);
+  const cursor = new HistoricalLogCursor(wires);
+  for (const wire of wires.slice(0, -1)) cursor.append(decodeRecord(wire).record);
+  commitPrepared(cursor, state, prepared);
+
+  expect(state.trace!.occurrences.slice(0, -1)).toEqual(before);
+  const occurrence = state.trace!.occurrences.at(-1)!;
+  expect(occurrence.recordJson).toBe(last);
+  expect(decodeRecord(occurrence.recordJson).schema).toBe(SCHEMA_VERSION);
 });

@@ -24,6 +24,11 @@
  * `test_broken_step_state_is_rejected_before_append` (4 rows). Each rejected row names its one
  * class and full message, where Python matches a part of the message or accepts either class.
  *
+ * Ported, the replay tests (through `replayRecords` on a fresh `fanoutFlow()`; the log never
+ * grows, so the builder is never called): `test_replay_reproduces_steps_and_starts`,
+ * `test_learnable_replay_reproduces_steps_starts_and_trace`,
+ * `test_replay_without_steps_has_no_steps`.
+ *
  * TS-only: a step writes `-0` as `0`; a `FileRef` in a step is refused; a wire step keeps
  * yian's infinity tag as `Infinity`.
  *
@@ -45,10 +50,6 @@
  * and the `{1: "x"}` row of `test_prepare_node_step_rejects_invalid_steps` (JS object keys are
  * always text); the `list-steps` row of `test_broken_step_state_is_rejected_before_append` (a tuple
  * and a list are both an array).
- *
- * Later (T4-5, replay): `test_replay_reproduces_steps_and_starts`,
- * `test_learnable_replay_reproduces_steps_starts_and_trace`,
- * `test_replay_without_steps_has_no_steps`.
  *
  * Later (T3-22, it needs `build_grow` and `LoopNode.run`):
  * `test_loop_body_steps_go_at_the_outcome_and_stay_gone_after_the_prune`.
@@ -77,6 +78,7 @@ import {
   prepareNodeStep,
   prepareNodeSucceeded,
   prepareRunResumed,
+  replayRecords,
   RunState,
 } from "../../src/runtime/state.ts";
 import { FileRef, TypeCheckError } from "../../src/typesys/index.ts";
@@ -404,6 +406,49 @@ test("an expansion deletes the spawner's steps and starts", () => {
   expect(state.nodeSteps).toEqual(new Map());
   expect(state.nodeStarts).toEqual(new Map());
   expect(state.ready).toEqual(["spawn/child/start"]);
+});
+
+/** Return `firstInFlight`'s state after a step, a resume, a second start and a second step. */
+function resumedWithSteps(options: { learnable?: boolean } = {}): { state: RunState; log: MemoryRunLog } {
+  const { state, log } = firstInFlight(options);
+  commitPrepared(log, state, prepareNodeStep(state, "first", FAILED));
+  commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+  commitPrepared(log, state, prepareNodeStarted(state, "first"));
+  commitPrepared(log, state, prepareNodeStep(state, "first", { event: "started", attempt: 3n }));
+  return { state, log };
+}
+
+test("a replay reproduces the steps and starts", () => {
+  const { state, log } = resumedWithSteps();
+
+  const replayed = replayRecords(new RunState(fanoutFlow()), log.records(), { growBuilder: fragmentBuilder });
+
+  expect(replayed.nodeSteps).toEqual(state.nodeSteps);
+  expect(replayed.nodeStarts).toEqual(state.nodeStarts);
+  expect(state.nodeStarts).toEqual(new Map([["first", 2]]));
+  expect(replayed.nextSequence).toBe(state.nextSequence);
+});
+
+test("a learnable replay reproduces the steps, starts and trace", () => {
+  const { state, log } = resumedWithSteps({ learnable: true });
+
+  const replayed = replayRecords(new RunState(fanoutFlow()), log.records(), { growBuilder: fragmentBuilder });
+
+  expect(replayed.nodeSteps).toEqual(state.nodeSteps);
+  expect(replayed.nodeStarts).toEqual(state.nodeStarts);
+  expect(state.nodeStarts).toEqual(new Map([["first", 2]]));
+  expect(replayed.trace).not.toBeNull();
+  expect(replayed.trace!.nextSequence).toBe(state.trace!.nextSequence);
+  expect(state.trace!.nextSequence).toBe(state.nextSequence);
+});
+
+test("a replay without steps has no steps", () => {
+  const { log } = firstInFlight();
+
+  const replayed = replayRecords(new RunState(fanoutFlow()), log.records(), { growBuilder: fragmentBuilder });
+
+  expect(replayed.nodeSteps).toEqual(new Map());
+  expect(replayed.nodeStarts).toEqual(new Map([["first", 1]]));
 });
 
 test("a learnable run accepts a step with an empty trace delta", () => {

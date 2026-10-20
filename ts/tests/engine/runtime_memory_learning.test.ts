@@ -13,7 +13,9 @@
  * `test_learning_rejects_trace_scope_that_omits_a_recorded_memory` (2 rows), and the `success`,
  * `route` and `growth` rows of
  * `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome` (the growth into the
- * shared `fragment`).
+ * shared `fragment`), and
+ * `test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_stack` (through
+ * `replayRecords` over `copyGraph` copies of the flow taken before the outcome).
  *
  * Ported, after rewrite: `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow`
  * and `test_root_fallback_reaches_only_keys_owned_by_the_root_flow_site`, with the root result
@@ -44,10 +46,6 @@
  * `episodeOutcome` projects a success's canonical value and a failed record's failure JSON, and
  * refuses a record of another class and a forged success without a canonical typed value.
  *
- * Later (T4-5, replay):
- * `test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_stack` (it replays
- * through `replayRecords`).
- *
  * Later (T4-7, with `computeBackward` and the engine): the owner-context and episode tests
  * (`test_owner_contexts_include_general_occurrences_and_empty_memories` through
  * `test_owner_variable_batches_follow_captured_inventory_across_wire_round_trip`, except
@@ -64,7 +62,7 @@ import { createHash } from "node:crypto";
 
 import { expect, test } from "bun:test";
 
-import { END_ID, START_ID } from "../../src/compile/model.ts";
+import { copyGraph, END_ID, START_ID } from "../../src/compile/model.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import {
   DeclSite,
@@ -92,6 +90,8 @@ import {
   prepareExpanded,
   prepareNodeRouted,
   prepareNodeSucceeded,
+  replayRecords,
+  RunState,
 } from "../../src/runtime/state.ts";
 import { type OutcomeRecord, RetainedTrace, TraceTerminal } from "../../src/runtime/trace.ts";
 import { FuncNode, forwardCapture, fragmentBuilder, stacks, startTraceNode } from "./run_state_fixtures.ts";
@@ -502,6 +502,30 @@ test.each(["outer", "local"])("learning rejects a trace scope that omits a recor
 
   expectError(
     () => prepareNodeSucceeded(state, node.id, "done", { forwardCapture: forwardCapture(node, {}) }),
+    RangeError,
+    "node 'agent' memory scope must carry its exact recorded memory stack",
+  );
+});
+
+test("a replay rejects an eligible node scope that differs from its recorded stack", () => {
+  const node = new TraceNode("agent");
+  node.memoryScope = scope(node.id);
+  const { state, log } = startTraceNode(node, { keys: keys(), learnable: true });
+  const original = copyGraph(state.flow);
+  commitPrepared(
+    log,
+    state,
+    prepareNodeSucceeded(state, node.id, "done", {
+      evidence: evidence(node.memoryScope),
+      forwardCapture: forwardCapture(node, { question: "q" }),
+    }),
+  );
+  const replayed = replayRecords(new RunState(copyGraph(original)), log.records(), { growBuilder: fragmentBuilder });
+  expect(replayed.nextSequence).toBe(state.nextSequence);
+
+  original.nodes.get("agent")!.memoryScope = scope(node.id, { memories: ["outer"] });
+  expectError(
+    () => replayRecords(new RunState(original), log.records(), { growBuilder: fragmentBuilder }),
     RangeError,
     "node 'agent' memory scope must carry its exact recorded memory stack",
   );

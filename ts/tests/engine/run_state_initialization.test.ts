@@ -37,10 +37,13 @@
  *   is deep-frozen, so each change to its payload is a `TypeError`.
  *
  * TS-only, for the part-2 entry points: `prepareExpanded` refuses an uninitialized state and a
- * node that isn't a graph spawner, and `replayRecords` throws `not ported yet (T4-5)`; a hand-built
+ * node that isn't a graph spawner; `replayRecords` refuses a state that isn't a `RunState`,
+ * envelopes that aren't an array of `RecordEnvelope`s and a builder that isn't a function before
+ * it checks that the state is pristine, and that before it refuses an empty prefix; a hand-built
  * backward plan with no trace change is refused by the post-terminal trace check before anything
- * else, and one with a sequence-only trace change reaches its commit stub; a hand-built growth plan
- * holding a RunStarted record fails the growth commit's record check. The log stays empty.
+ * else, and one with a sequence-only trace change reaches its commit, whose initialized-state check
+ * refuses the pristine state; a hand-built growth plan holding a RunStarted record fails the growth
+ * commit's record check. The log stays empty.
  *
  * TS-only, for the interrupted-attempt counts Python doesn't keep: `prepareRunStarted` refuses a
  * count or a last stop sequence on the fresh state, and an initialized state refuses a wrong
@@ -613,7 +616,7 @@ test("a mismatched append return leaves the advanced log as recovery authority",
   expect(retained[0]!.record).toBeInstanceOf(RunStartedRecord);
 });
 
-test("growth refuses an uninitialized state and a non-spawner; the replay entry point isn't ported yet", () => {
+test("growth refuses an uninitialized state and a non-spawner", () => {
   const owned = flow();
   const state = new RunState(owned);
   const builder = () => owned;
@@ -622,13 +625,44 @@ test("growth refuses an uninitialized state and a non-spawner; the replay entry 
     RangeError,
     /^run state is not initialized$/,
   );
-  expectError(() => replayRecords(state, [], { growBuilder: builder }), Error, /^not ported yet \(T4-5\)$/);
 
   const { state: started } = initializedAndStarted(flow());
   expectError(
     () => prepareExpanded(started, START_ID, new Grow({}), builder),
     RangeError,
     /^NodeExpanded node '__start__' is not a graph spawner$/,
+  );
+});
+
+test("replay checks its arguments' types before the state is pristine", () => {
+  const owned = flow();
+  const state = new RunState(owned);
+  state.ready.push(START_ID);
+  const builder = () => owned;
+  const { log } = initializedAndStarted(flow());
+  const envelopes = log.records();
+
+  expectError(
+    () => replayRecords({} as RunState, envelopes, { growBuilder: builder }),
+    TypeError,
+    /^replayRecords expects a RunState$/,
+  );
+  for (const bad of [new Set(envelopes), [...envelopes, envelopes[0]!.record]]) {
+    expectError(
+      () => replayRecords(state, bad as never, { growBuilder: builder }),
+      TypeError,
+      /^replay envelopes must be an array of RecordEnvelope values$/,
+    );
+  }
+  expectError(
+    () => replayRecords(state, envelopes, { growBuilder: null as never }),
+    TypeError,
+    /^grow_builder must be callable$/,
+  );
+  expectError(
+    () => replayRecords(state, [], { growBuilder: builder }),
+    RangeError,
+    /^RunStarted requires a pristine RunState at sequence 0$/,
   );
 });
 
@@ -656,10 +690,10 @@ test("a backward plan needs a sequence-only trace change before anything else", 
   expect(log.nextSequence).toBe(0);
 });
 
-test("a backward plan reaches its commit, not ported yet", () => {
+test("a backward plan reaches its commit, which requires an initialized state", () => {
   const [state, prepared] = handBuilt("backward", new TraceDelta(null, 0));
   const log = new MemoryRunLog(RUN_ID);
-  expectError(() => commitPrepared(log, state, prepared), Error, /^not ported yet \(T4-5\)$/);
+  expectError(() => commitPrepared(log, state, prepared), RangeError, /^run state is not initialized$/);
   expect(log.nextSequence).toBe(0);
 });
 

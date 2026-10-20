@@ -75,7 +75,12 @@ import {
 } from "../typesys/values.ts";
 import { NodeState } from "./common.ts";
 import { ForwardCapture, validateSource } from "./contracts.ts";
-import { RuntimeBackwardState } from "./learning.ts";
+import {
+  type BackwardRecord,
+  reduceBackwardRecord,
+  RuntimeBackwardState,
+  sameRuntimeBackwardState,
+} from "./learning.ts";
 import {
   BackwardFinishedRecord,
   BackwardReadyRecord,
@@ -595,6 +600,66 @@ export class PreparedTransition {
     this.observers = Object.freeze([...observers]);
     Object.freeze(this);
   }
+}
+
+/**
+ * @internal The read-only historical authority presented to the live commit reducer.
+ *
+ * The cursor owns canonical envelope texts. Its `append` advances only when the reducer's exact
+ * next envelope matches that text; it never writes to or closes the log the prefix came from.
+ */
+export class HistoricalLogCursor implements RunLog {
+  /** The sole historical run id this cursor accepts. */
+  readonly runId: string;
+  /** Always `null`: the cursor borrows already-read authority. */
+  readonly path = null;
+  readonly #envelopeJsons: readonly string[];
+  readonly #consumed: RecordEnvelope[] = [];
+
+  /** Adopt one validated non-empty canonical prefix at sequence zero. */
+  constructor(envelopeJsons: readonly string[]) {
+    this.#envelopeJsons = envelopeJsons;
+    this.runId = decodeRecord(envelopeJsons[0]!).runId;
+  }
+
+  /** The sequence of the historical envelope the next reducer commit must match. */
+  get nextSequence(): number {
+    return this.#consumed.length;
+  }
+
+  /** Iterate the envelopes consumed so far. */
+  [Symbol.iterator](): Iterator<RecordEnvelope> {
+    return this.records()[Symbol.iterator]();
+  }
+
+  /** Return the envelopes consumed so far, as a fresh frozen array. */
+  records(): readonly RecordEnvelope[] {
+    return Object.freeze([...this.#consumed]);
+  }
+
+  /**
+   * Match and consume one historical envelope without writing it again.
+   *
+   * @throws RangeError when the prefix is exhausted, or `record` isn't the next historical record.
+   */
+  append(record: RunRecord): RecordEnvelope {
+    const sequence = this.nextSequence;
+    if (sequence >= this.#envelopeJsons.length) {
+      throw new RangeError("replay attempted to append beyond the historical prefix");
+    }
+    const expected = this.#envelopeJsons[sequence]!;
+    const envelope = decodeRecord(expected);
+    const candidate = encodeRecord(new RecordEnvelope(envelope.schema, this.runId, sequence, record));
+    if (candidate !== expected) throw new RangeError("prepared transition does not match the historical run record");
+    this.#consumed.push(envelope);
+    return envelope;
+  }
+
+  /** Do nothing: the cursor owns no resource. */
+  close(): void {}
+
+  /** Do nothing: the cursor owns no resource. */
+  [Symbol.dispose](): void {}
 }
 
 /**
@@ -1307,12 +1372,30 @@ function prepareGrowthTransition(
   return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, [growthObserver(canonical)]);
 }
 
-/**
- * Prepare one backward or memory-commit record against the accepted terminal. Not ported yet:
- * it always throws.
- */
+/** Validate all backward data and prepare its detached state before append. */
 function prepareBackwardTransition(state: RunState, record: RunRecord): PreparedTransition {
-  throw new Error("not ported yet (T4-5)");
+  requireInitializedTerminalBackward(state);
+  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, state.runId!, state.nextSequence, record));
+  const envelope = decodeRecord(envelopeJson);
+  if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("backward record is not in canonical wire form");
+  // `prepareRecord` routes only the exact backward record classes here.
+  const nextBackwardState = reduceBackwardRecord(state.trace!, state.backwardState, envelope.record as BackwardRecord);
+  const startId = state.flow.startId;
+  const endId = state.flow.endId;
+  const plan: BackwardPlan = Object.freeze({
+    kind: "backward",
+    originatingState: state,
+    originatingFlow: state.flow,
+    envelopeJson,
+    startId,
+    startNode: state.flow.nodes.get(startId)!,
+    endId,
+    endNode: state.flow.nodes.get(endId) ?? null,
+    traceDelta: prepareRecordTrace(state, envelope),
+    originatingBackwardState: state.backwardState,
+    nextBackwardState,
+  });
+  return new PreparedTransition(envelope.record, envelope.runId, envelope.seq, plan, []);
 }
 
 /** Every plan kind `commitPrepared` dispatches. */
@@ -1557,18 +1640,89 @@ function requireOutcomeTraceTerminal(state: RunState, prepared: PreparedTransiti
 }
 
 /**
- * Silently fold one complete historical prefix through the live reducer path and return `state`.
+ * Silently fold one complete historical prefix through the live reducer path.
  *
- * `state` is pristine around the graph that authored the run; `envelopes` is a non-empty
- * sequence-zero prefix starting with `RunStarted`; `options.growBuilder` rebuilds and verifies
- * growth. Not ported yet: it always throws.
+ * Every envelope is canonicalized and checked for one contiguous run before any transition is
+ * reduced. `commitPrepared` then receives a read-only cursor, so replay runs the same apply
+ * functions as live dispatch without appending to historical authority or exposing observers.
+ *
+ * @param state A pristine state around the graph that authored the run.
+ * @param envelopes A non-empty sequence-zero historical prefix beginning with `RunStarted`.
+ * @param options.growBuilder The injected builder that rebuilds and verifies growth.
+ * @returns `state`, after every historical record has been applied.
+ * @throws TypeError when an argument has the wrong type.
+ * @throws RangeError when the state isn't pristine, the prefix is empty, not contiguous, not one
+ *   run, doesn't start with `RunStarted`, or a record isn't the exact next transition; a node-data
+ *   rejection throws its original error.
  */
 export function replayRecords(
   state: RunState,
   envelopes: readonly RecordEnvelope[],
   options: { growBuilder: GrowBuilder },
 ): RunState {
-  throw new Error("not ported yet (T4-5)");
+  if (!isExactly(state, RunState)) throw new TypeError("replayRecords expects a RunState");
+  if (!Array.isArray(envelopes) || !envelopes.every((envelope) => envelope instanceof RecordEnvelope)) {
+    throw new TypeError("replay envelopes must be an array of RecordEnvelope values");
+  }
+  const growBuilder = options.growBuilder;
+  if (typeof growBuilder !== "function") throw new TypeError("grow_builder must be callable");
+  requirePristine(state);
+  if (envelopes.length === 0) throw new RangeError("cannot replay an empty run-record prefix");
+
+  const canonical: string[] = [];
+  let runId: string | null = null;
+  for (const [expectedSequence, supplied] of envelopes.entries()) {
+    const encoded = encodeRecord(supplied);
+    const envelope = decodeRecord(encoded);
+    if (envelope.seq !== expectedSequence) {
+      throw new RangeError(`replay sequence mismatch: expected ${expectedSequence}, found ${envelope.seq}`);
+    }
+    if (runId === null) {
+      runId = envelope.runId;
+    } else if (envelope.runId !== runId) {
+      throw new RangeError(`replay run_id mismatch: expected ${reprText(runId)}, found ${reprText(envelope.runId)}`);
+    }
+    canonical.push(encoded);
+  }
+
+  const first = decodeRecord(canonical[0]!);
+  const start = first.record;
+  if (!(start instanceof RunStartedRecord)) throw new RangeError("the first historical run record must be RunStarted");
+  const cursor = new HistoricalLogCursor(canonical);
+  const prepared = prepareRunStarted(state, {
+    runId: first.runId,
+    flowFingerprint: start.flowFingerprint,
+    initialPool: decodePool(start.initialPool),
+    startWiringOverride: start.startWiringOverride,
+    effectiveLlmByStaticPath: start.effectiveLlmByStaticPath,
+    numWorkers: start.numWorkers,
+    memorySnapshots: start.memorySnapshots,
+    learnable: start.learnable,
+    memories: start.memories,
+    memoryStacks: start.memoryStacks,
+    defaults: start.defaults,
+    callTimeLlm: start.callTimeLlm,
+  });
+  commitPrepared(cursor, state, prepared);
+
+  for (const encoded of canonical.slice(1)) {
+    const envelope = decodeRecord(encoded);
+    let next: PreparedTransition;
+    try {
+      next = prepareRecord(state, envelope.record, { growBuilder });
+    } catch (error) {
+      // Python's node-data marker subclasses the original error's class, so a corrupt log reads
+      // as that error there; replay reports the original here too.
+      if (error instanceof NodeDataError) throw error.original;
+      throw error;
+    }
+    commitPrepared(cursor, state, next);
+  }
+
+  if (cursor.nextSequence !== canonical.length) {
+    throw new RangeError("replay did not consume the complete historical prefix");
+  }
+  return state;
 }
 
 /** Validate, append and install one initialization transition. */
@@ -1899,9 +2053,32 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
   }
 }
 
-/** Append and apply one post-terminal backward record. Not ported yet: it always throws. */
+/** Verify the complete prepared authority, append, then replace the attempt state. */
 function commitBackward(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
-  throw new Error("not ported yet (T4-5)");
+  const plan = prepared._plan;
+  if (plan.kind !== "backward") throw new TypeError("backward commit requires its exact plan");
+  requirePreparedOrigin(state, plan);
+  if (state.backwardState !== plan.originatingBackwardState) {
+    throw new RangeError("prepared backward transition has stale attempt authority");
+  }
+  requireInitializedTerminalBackward(state);
+  requireAuthorityCoordinates(log, state, prepared, true);
+  requireUnchangedRecord(prepared, plan.envelopeJson);
+  const envelope = decodeRecord(plan.envelopeJson);
+  // The text is the plan's own backward record, and the reducer refuses any other class.
+  const expected = reduceBackwardRecord(state.trace!, state.backwardState, envelope.record as BackwardRecord);
+  if (!isExactly(plan.nextBackwardState, RuntimeBackwardState)) {
+    throw new TypeError("backward plan requires an exact next state");
+  }
+  // The reducer just validated `expected`, and only `expected` is kept, so equality is enough;
+  // checking all history here would cost O(N) per record.
+  if (!sameRuntimeBackwardState(expected, plan.nextBackwardState)) {
+    throw new RangeError("backward plan state disagrees with its canonical record");
+  }
+  appendAndVerify(log, prepared);
+  state.backwardState = expected;
+  state.nextSequence = prepared.expectedSequence + 1;
+  return [];
 }
 
 /** Require the exact state, adopted flow and boundary nodes of the preparation. */
@@ -2075,6 +2252,17 @@ function requireInitialized(state: RunState): void {
 function requireInitializedNonterminal(state: RunState): void {
   requireInitialized(state);
   if (state.result !== null) throw new RangeError("terminal run state cannot prepare another graph transition");
+}
+
+/** Require the accepted retained terminal, independently from memory declarations. */
+function requireInitializedTerminalBackward(state: RunState): void {
+  requireInitialized(state);
+  if (!(state.result instanceof RunSucceeded || state.result instanceof RunFailed)) {
+    throw new RangeError("backward records require an accepted terminal result");
+  }
+  if (state.learnable !== true || state.trace === null || state.trace.terminal === null) {
+    throw new RangeError("backward records require recorded learning and terminal trace authority");
+  }
 }
 
 /** Require the identity roots of canonical RunStarted decoding. */

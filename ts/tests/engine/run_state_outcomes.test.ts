@@ -44,6 +44,8 @@
  * `test_causal_route_replay_rejects_mismatched_terminal_failure` (5 rows),
  * `test_quiescence_without_retained_causal_failure_is_a_graph_fault`,
  * `test_terminal_unreachable_latch_replays_before_and_at_quiescence`,
+ * `test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause` (2 rows; the learnable row
+ * up to its `compute_backward` tail),
  * `test_terminal_skip_diagnosis_scans_only_end_beyond_touched_route_joins` (an instance patch of
  * `flow.incoming`), `test_terminal_success_values_are_mutation_isolated`, and both rows of
  * `test_terminal_derivation_replays_from_causal_records_only` (the record class names, not
@@ -124,12 +126,13 @@
  * `test_failure_commit_uses_only_materialized_data_after_append` (`_validate_failure_record`, and
  * `NodeFailed` and `RunFailed` after the append).
  *
- * Later (T4-5): `test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause` (growth).
+ * Later (T4-7, with `computeBackward`): the `compute_backward` tail of the learnable row of
+ * `test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause`.
  */
 
 import { expect, test } from "bun:test";
 
-import { CompiledFlow, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
+import { CompiledFlow, Edge, END_ID, Flow, START_ID } from "../../src/compile/model.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import {
   NodeFailed,
@@ -140,8 +143,9 @@ import {
   RunFailed,
   RunSucceeded,
 } from "../../src/events.ts";
-import { ELSE_HANDLE, type Node } from "../../src/nodes/base.ts";
+import { ELSE_HANDLE, Grow, Node, NodeKind } from "../../src/nodes/base.ts";
 import { type OutputContract, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
+import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
@@ -158,8 +162,10 @@ import {
 } from "../../src/runtime/log.ts";
 import {
   commitPrepared,
+  type GrowBuilder,
   NodeDataError,
   type PreparedTransition,
+  prepareExpanded,
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
@@ -173,6 +179,7 @@ import {
   expectUnchanged,
   FailingLog,
   fanoutFlow,
+  forwardCapture,
   FuncNode,
   initializedAndStarted,
   nodeFailure,
@@ -1663,6 +1670,138 @@ test("the terminal-unreachable latch replays before and at quiescence", () => {
   expect(failure.nodeId).toBe("router");
   expect(failure.trace).toEqual([new OriginRef("outer-site"), new OriginRef("router-site")]);
   expect(final.state.ready).toEqual([]);
+});
+
+/** A minimal spawner for the terminal-latch pruning test. */
+class OutcomeSpawner extends Node {
+  readonly kind = NodeKind.CALL;
+  override readonly isSpawner = true;
+  override readonly growDepthDelta = 0;
+}
+
+/** Return static `creator` and `pruner` spawners after START, and END's one required `result`. */
+function terminalPruneParentFlow(): CompiledFlow {
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID)],
+    ["creator", new OutcomeSpawner("creator")],
+    ["pruner", new OutcomeSpawner("pruner")],
+    [END_ID, EndNode.value(END_ID, { outputName: "result" })],
+  ]);
+  const edges = [
+    new Edge("start-creator", START_ID, "creator"),
+    new Edge("start-pruner", START_ID, "pruner"),
+    new Edge("creator-end", "creator", END_ID, { inputGroup: "result" }),
+  ];
+  return CompiledFlow.fromParts(nodes, edges, { wiring: new Map([...nodes.keys()].map((id) => [id, new Map()])) });
+}
+
+/** Return `nodes` and `edges` as a fragment from `startId` to `endId`, with empty wiring. */
+function fragmentOf(nodes: Map<string, Node>, edges: Edge[], startId: string, endId: string): Flow {
+  return new Flow(nodes, edges, { wiring: new Map([...nodes.keys()].map((id) => [id, new Map()])), startId, endId });
+}
+
+/** Return a dynamic router whose `go` route skips `dead`, so its END's `zeta` and global END's `result`. */
+function terminalRouterFragment(spawnerId: string): Flow {
+  const startId = `${spawnerId}/child/start`;
+  const routerId = `${spawnerId}/child/router`;
+  const deadId = `${spawnerId}/child/dead`;
+  const endId = `${spawnerId}/child/end`;
+  const end = EndNode.value(endId, { outputName: "zeta" });
+  end.commitAs = spawnerId;
+  const router = new CodeNode(routerId, { code: "return inputs" });
+  router.origin = new OriginRef("dynamic-router-site");
+  const nodes = new Map<string, Node>([
+    [startId, new StartNode(startId)],
+    [routerId, router],
+    [deadId, new CodeNode(deadId, { code: "return inputs" })],
+    [endId, end],
+  ]);
+  const edges = [
+    new Edge(`${startId}-router`, startId, routerId),
+    new Edge(`${routerId}-end`, routerId, endId, { sourceHandle: "go" }),
+    new Edge(`${routerId}-dead`, routerId, deadId, { sourceHandle: "skip" }),
+    new Edge(`${deadId}-end`, deadId, endId, { inputGroup: "zeta" }),
+  ];
+  return fragmentOf(nodes, edges, startId, endId);
+}
+
+/** Return a minimal START -> END fragment for the unrelated pruner. */
+function terminalPrunerFragment(spawnerId: string): Flow {
+  const startId = `${spawnerId}/child/start`;
+  const endId = `${spawnerId}/child/end`;
+  const end = EndNode.value(endId, { outputName: null });
+  end.commitAs = spawnerId;
+  const nodes = new Map<string, Node>([
+    [startId, new StartNode(startId)],
+    [endId, end],
+  ]);
+  return fragmentOf(nodes, [new Edge(`${startId}-end`, startId, endId, { ordering: true })], startId, endId);
+}
+
+test.each([false, true])("the terminal-unreachable latch survives pruning its dynamic cause: learnable %p", (
+  learnable,
+) => {
+  const { state, log } = initializedAndStarted(terminalPruneParentFlow(), { learnable });
+  const capture = (nodeId: string) => ({
+    forwardCapture: learnable ? forwardCapture(state.flow.nodes.get(nodeId)!, {}) : null,
+  });
+  commitStartSuccess(state, log);
+  commitPrepared(log, state, prepareNodeStarted(state, "creator"));
+  commitPrepared(log, state, prepareNodeStarted(state, "pruner"));
+  const routerBuilder: GrowBuilder = (spawner) => terminalRouterFragment(spawner.id);
+  commitPrepared(log, state, prepareExpanded(state, "creator", new Grow({}), routerBuilder, capture("creator")));
+  const routerId = "creator/child/router";
+  commitPrepared(log, state, prepareNodeStarted(state, "creator/child/start"));
+  commitPrepared(log, state, prepareNodeSucceeded(state, "creator/child/start", {}, capture("creator/child/start")));
+  commitPrepared(log, state, prepareNodeStarted(state, routerId));
+
+  const route = prepareNodeRouted(state, routerId, "go", capture(routerId));
+  const failure = routePlan(route).delta.terminalUnreachableFailure!;
+  commitPrepared(log, state, route);
+
+  expect(failure).toStrictEqual(
+    new Failure({
+      code: "graph.terminal_unreachable",
+      message: "terminal output 'result' skipped",
+      nodeId: routerId,
+      trace: [new OriginRef("dynamic-router-site")],
+    }),
+  );
+  expect(state.result).toBeNull();
+  expect(state.terminalUnreachableFailure).toBe(failure);
+  expect(state.initialStaticIds.has(routerId)).toBe(false);
+  expect(state.ready).toEqual([]);
+
+  const prunerBuilder: GrowBuilder = (spawner) => terminalPrunerFragment(spawner.id);
+  commitPrepared(
+    log,
+    state,
+    prepareExpanded(state, "pruner", new Grow({}, [routerId]), prunerBuilder, capture("pruner")),
+  );
+
+  expect(state.flow.nodes.has(routerId)).toBe(false);
+  expect(state.terminalUnreachableFailure).toBe(failure);
+  expect(state.result).toBeNull();
+  expect(state.ready).toEqual(["pruner/child/start"]);
+
+  commitPrepared(log, state, prepareNodeStarted(state, "pruner/child/start"));
+  commitPrepared(log, state, prepareNodeSucceeded(state, "pruner/child/start", {}, capture("pruner/child/start")));
+  commitPrepared(log, state, prepareNodeStarted(state, "pruner/child/end"));
+  const observers = commitPrepared(
+    log,
+    state,
+    prepareNodeSucceeded(state, "pruner/child/end", {}, capture("pruner/child/end")),
+  );
+
+  expect(observers.at(-1)).toStrictEqual(new RunFailed({ failure }));
+  expect((observers.at(-1) as RunFailed).failure).toBe(failure);
+  expect((state.result as RunFailed).failure).toBe(failure);
+  expect(state.terminalUnreachableFailure).toBe(failure);
+  expect(state.ready).toEqual([]);
+  if (learnable) {
+    const causal = state.trace!.occurrences.find((item) => item.nodeId === routerId)!;
+    expect(state.trace!.terminal!.source).toEqual(causal.source);
+  }
 });
 
 test("a terminal-skip diagnosis scans only END beyond the touched route joins", () => {

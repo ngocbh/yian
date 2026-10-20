@@ -4,7 +4,18 @@
  * live rejection is a `GrowthRejected` whose `original` has the exact class and message.
  *
  * Ported: `test_growth_rejects_a_nonfinite_seed_before_builder`,
- * `test_growth_builder_non_flow_return_is_a_raw_host_fault`.
+ * `test_growth_builder_non_flow_return_is_a_raw_host_fault`,
+ * `test_growth_rejects_duplicate_redirect_owner_in_final_topology`,
+ * `test_growth_rejects_executable_redirect_target_in_final_topology`,
+ * `test_growth_accepts_disconnected_inert_redirect_placeholder`,
+ * `test_growth_live_and_record_replay_produce_equal_state`,
+ * `test_growth_record_replay_requires_the_injected_builder`,
+ * `test_growth_stamps_positive_reference_depth_on_the_boundary`,
+ * `test_growth_preserves_unrelated_in_flight_siblings_and_fifo_order`,
+ * `test_growth_records_the_spawner_as_owner_of_its_fragment`.
+ *
+ * Python's `_snapshot` is `snapshot` plus `topologySnapshot`: `snapshot` holds the flow by
+ * reference, so a growth's topology change needs its own detached copy.
  *
  * Changed:
  * - `test_growth_rejects_a_cyclic_seed_before_builder`: the original is a `TypeCheckError`
@@ -19,6 +30,14 @@
  * - `test_growth_requires_exact_live_carriers`: the `{1, 2}` seed row is a JS `Set` in the seed (a
  *   `TypeCheckError`, `<Set object> is not a JSON value`); the empty prune id and the missing
  *   builder rows are as Python's.
+ * - `test_growth_canonicalizes_seed_and_isolates_builder_record_and_observers`: the record seed is
+ *   deep-frozen, so the after-prepare mutations go to the observer's seed and the caller's seed.
+ * - `test_growth_append_failure_leaves_topology_and_every_state_coordinate_unchanged`: the failing
+ *   log's error is `disk full` (`FailingLog`), not `OSError: durability unavailable`.
+ * - `test_growth_commit_performs_no_builder_codec_graph_or_event_work_after_append`: it keeps the
+ *   after-prepare mutations, the builder call count and the `addSubgraph`/`removeSubgraph` spies;
+ *   the guards on `copy.deepcopy`, `canonical_seed`, `expansion_digest` and `NodeExpanded` go,
+ *   since they monkeypatch module functions.
  *
  * TS-only: a non-text prune id (`new Grow({}, [1])`) is `Grow.prune must contain only strings`.
  *
@@ -33,18 +52,11 @@
  *   copies `prune` into a new `Set`.
  *
  * Later (next commits of this PR; update this list as they land):
- * `test_growth_canonicalizes_seed_and_isolates_builder_record_and_observers`,
  * `test_growth_rejects_invalid_node_owned_topology_targets`,
  * `test_growth_rejects_invalid_skipped_output_hook_target`,
- * `test_growth_rejects_duplicate_redirect_owner_in_final_topology`,
- * `test_growth_rejects_executable_redirect_target_in_final_topology`,
- * `test_growth_accepts_disconnected_inert_redirect_placeholder`,
  * `test_growth_rejects_invalid_edge_field_types`,
- * `test_growth_append_failure_leaves_topology_and_every_state_coordinate_unchanged`,
  * `test_growth_replay_rejects_a_changed_but_valid_builder_digest`,
  * `test_growth_replay_unwraps_shared_growth_rejection_identity`,
- * `test_growth_live_and_record_replay_produce_equal_state`,
- * `test_growth_record_replay_requires_the_injected_builder`,
  * `test_growth_accepts_the_closed_system_ambients`,
  * `test_growth_accepts_typed_fields_and_nested_map_item_scope`,
  * `test_growth_rejects_invalid_fragments_atomically`,
@@ -57,17 +69,13 @@
  * `test_growth_accepts_peak_node_count_equal_to_budget`,
  * `test_growth_rejects_invalid_exact_depth_deltas`,
  * `test_growth_treats_corrupt_stored_depth_as_a_host_invariant_error`,
- * `test_growth_stamps_positive_reference_depth_on_the_boundary`,
  * `test_growth_prunes_only_named_settled_dynamic_overlay_coordinates`,
- * `test_growth_preserves_unrelated_in_flight_siblings_and_fifo_order`,
  * `test_growth_rejects_live_node_collision_even_when_the_id_is_pruned`,
  * `test_growth_rejects_unsafe_pruning_matrix_atomically`,
  * `test_growth_rejects_a_binding_wrapped_dependency_on_a_pruned_node`,
  * `test_growth_rejects_a_template_dependency_on_a_pruned_node`,
  * `test_read_ids_include_references_nested_in_a_template`,
  * `test_growth_prune_scan_rejects_malformed_surviving_wiring_as_raw_invariant`,
- * `test_growth_commit_performs_no_builder_codec_graph_or_event_work_after_append`,
- * `test_growth_records_the_spawner_as_owner_of_its_fragment`,
  * `test_pruning_keeps_a_grown_subtree_with_unsettled_work`,
  * `test_pruning_retires_a_grown_subtree_once_settled`,
  * `test_growth_keeps_an_unsettled_prune_id_live_and_deferred`,
@@ -81,26 +89,30 @@
  * `test_loop_clone_record_uses_actual_id_self_prunes_and_inherits_depth_zero`.
  */
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
+import { expansionDigest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, Edge, END_ID, Flow, GrowthRejected, START_ID } from "../../src/compile/model.ts";
 import { current } from "../../src/defaults.ts";
+import { NodeExpanded, type RunEvent } from "../../src/events.ts";
 import { Grow, Node, NodeKind } from "../../src/nodes/base.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { MemoryRunLog } from "../../src/runtime/log.ts";
+import { NodeState } from "../../src/runtime/common.ts";
+import { MemoryRunLog, NodeExpandedRecord, type RecordEnvelope, type RunRecord } from "../../src/runtime/log.ts";
 import {
   commitPrepared,
   type GrowBuilder,
   prepareExpanded,
   prepareNodeStarted,
   prepareNodeSucceeded,
+  prepareRecord,
   prepareRunStarted,
   RunState,
 } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
-import { expectUnchanged, FuncNode, snapshot } from "./run_state_fixtures.ts";
+import { expectUnchanged, FailingLog, FuncNode, reducerSnapshot, snapshot } from "./run_state_fixtures.ts";
 
 const FINGERPRINT = "d".repeat(64);
 const RUN_ID = "growth-run";
@@ -110,6 +122,11 @@ class Spawner extends Node {
   readonly kind = NodeKind.CALL;
   override readonly isSpawner = true;
   override readonly growDepthDelta = 1;
+}
+
+/** An ordinary dynamic-overlay node. */
+class OverlayNode extends Node {
+  readonly kind = NodeKind.CODE;
 }
 
 /** Return a complete static graph whose one spawner can be put in flight. */
@@ -172,6 +189,29 @@ function fragment(spawnerId: string, suffix: string = "child"): Flow {
       endId,
     },
   );
+}
+
+/**
+ * Return the topology coordinates `snapshot` holds by reference (Python's `_snapshot` topology
+ * half): each node's class, id, `commitAs` and `originId`, the edges, the wiring, the adjacency
+ * and the initial static ids, as detached copies.
+ */
+function topologySnapshot(state: RunState): Record<string, unknown> {
+  const flow = state.flow;
+  return {
+    nodes: [...flow.nodes].map(([nodeId, node]) => [nodeId, node.constructor, node.id, node.commitAs, node.originId]),
+    edges: [...flow.edges],
+    wiring: [...flow.wiring].map(([nodeId, wiring]) => [nodeId, [...wiring]]),
+    incoming: [...flow.incomingEdges].map(([nodeId, edges]) => [nodeId, [...edges]]),
+    outgoing: [...flow.outgoingEdges].map(([nodeId, edges]) => [nodeId, [...edges]]),
+    initialStaticIds: [...state.initialStaticIds],
+  };
+}
+
+/** Add one live node of `state`'s flow with no edges and no wiring, as an `UNKNOWN` node. */
+function addLiveNode(state: RunState, node: Node): void {
+  state.flow.addSubgraph(new Map([[node.id, node]]), [], new Map([[node.id, new Map()]]));
+  state.nodeState.set(node.id, NodeState.UNKNOWN);
 }
 
 /** A builder returning `fragment(spawner.id)`. */
@@ -322,4 +362,239 @@ test("growth requires a callable builder, a raw host fault", () => {
     TypeError,
     /^grow_builder must be callable$/,
   );
+});
+
+test("growth canonicalizes the seed and isolates the builder, record and observers", () => {
+  const { state, log } = initializedSpawner();
+  const originalSeed = { items: [{ label: "stable" }], nested: { values: [1, 2] } };
+  const builderInputs: unknown[] = [];
+  const mutatingBuilder: GrowBuilder = (spawner, seed) => {
+    builderInputs.push(structuredClone(seed));
+    (seed as { nested: { values: number[] } }).nested.values.push(99);
+    return fragment(spawner.id);
+  };
+  const before = snapshot(state);
+  const beforeTopology = topologySnapshot(state);
+
+  const prepared = prepareExpanded(state, "spawn", new Grow(originalSeed), mutatingBuilder);
+
+  expectUnchanged(state, before);
+  expect(topologySnapshot(state)).toEqual(beforeTopology);
+  expect(builderInputs).toEqual([{ items: [{ label: "stable" }], nested: { values: [1, 2] } }]);
+  expect(prepared.record).toEqual(
+    new NodeExpandedRecord(
+      "spawn",
+      { items: [{ label: "stable" }], nested: { values: [1, 2] } },
+      [],
+      expansionDigest(fragment("spawn")),
+    ),
+  );
+  // The record seed is deep-frozen; the observer's seed and the caller's seed are not.
+  ((prepared.observers[0] as NodeExpanded).grow.seed as { nested: { values: number[] } }).nested.values.push(88);
+  originalSeed.nested.values.push(77);
+  expect((prepared.record as NodeExpandedRecord).seed).toEqual({
+    items: [{ label: "stable" }],
+    nested: { values: [1, 2] },
+  });
+
+  const observers = commitPrepared(log, state, prepared);
+
+  expect(observers).toEqual([
+    new NodeExpanded({
+      nodeId: "spawn",
+      grow: new Grow({ items: [{ label: "stable" }], nested: { values: [1, 2] } }),
+    }),
+  ]);
+  expect(observers[0]).not.toBe(prepared.observers[0]);
+  expect(state.nodeState.get("spawn")).toBe(NodeState.EXPANDED);
+  expect(state.inFlight.has("spawn")).toBe(false);
+  expect(state.ready).toEqual(["spawn/child/start"]);
+  expect(state.depth.get("spawn/child/end")).toBe(1);
+  expect(state.nextSequence).toBe(5);
+});
+
+test("growth rejects a duplicate redirect owner in the final topology", () => {
+  const { state, log } = initializedSpawner();
+  const existing = new OverlayNode("existing-owner");
+  existing.commitAs = "spawn";
+  addLiveNode(state, existing);
+  const before = snapshot(state);
+  const beforeTopology = topologySnapshot(state);
+
+  expectRejected(
+    () => prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder),
+    RangeError,
+    /^logical output target 'spawn' has multiple skipped output owners: \["existing-owner","spawn\/child\/end"\]$/,
+  );
+
+  expectUnchanged(state, before);
+  expect(topologySnapshot(state)).toEqual(beforeTopology);
+  expect(log.nextSequence).toBe(4);
+});
+
+test("growth rejects an executable redirect target in the final topology", () => {
+  const { state, log } = initializedSpawner();
+  const before = snapshot(state);
+  const beforeTopology = topologySnapshot(state);
+  const executableTargetBuilder: GrowBuilder = (spawner) => {
+    const built = fragment(spawner.id);
+    built.nodes.get(built.endId)!.commitAs = END_ID;
+    return built;
+  };
+
+  expectRejected(
+    () => prepareExpanded(state, "spawn", new Grow({}), executableTargetBuilder),
+    RangeError,
+    /^logical output target '__end__' is also executable$/,
+  );
+
+  expectUnchanged(state, before);
+  expect(topologySnapshot(state)).toEqual(beforeTopology);
+  expect(log.nextSequence).toBe(4);
+});
+
+test("growth accepts a disconnected inert redirect placeholder", () => {
+  const { state, log } = initializedSpawner();
+  const anchor = new OverlayNode("anchor");
+  addLiveNode(state, anchor);
+  const before = snapshot(state);
+  const beforeTopology = topologySnapshot(state);
+  const inertTargetBuilder: GrowBuilder = (spawner) => {
+    const built = fragment(spawner.id);
+    built.nodes.get(built.endId)!.commitAs = anchor.id;
+    return built;
+  };
+
+  const prepared = prepareExpanded(state, "spawn", new Grow({}), inertTargetBuilder);
+
+  expect(prepared.record).toBeInstanceOf(NodeExpandedRecord);
+  expectUnchanged(state, before);
+  expect(topologySnapshot(state)).toEqual(beforeTopology);
+  expect(log.nextSequence).toBe(4);
+});
+
+test("a growth append failure leaves the topology and every state coordinate unchanged", () => {
+  const { state, log: prior } = initializedSpawner();
+  const log = new FailingLog(RUN_ID, prior.records());
+  const prepared = prepareExpanded(state, "spawn", new Grow({ value: "stable" }), fragmentBuilder);
+  const before = snapshot(state);
+  const beforeTopology = topologySnapshot(state);
+
+  expectError(() => commitPrepared(log, state, prepared), Error, /^disk full$/);
+
+  expectUnchanged(state, before);
+  expect(topologySnapshot(state)).toEqual(beforeTopology);
+  expect(log.nextSequence).toBe(prior.nextSequence);
+});
+
+test("live growth and its record replay produce equal state", () => {
+  const { state: live, log: liveLog } = initializedSpawner();
+  const { state: replay, log: replayLog } = initializedSpawner();
+
+  const livePrepared = prepareExpanded(live, "spawn", new Grow({ labels: ["a", "b"] }), fragmentBuilder);
+  const liveObservers = commitPrepared(liveLog, live, livePrepared);
+  const replayPrepared = prepareRecord(replay, livePrepared.record, { growBuilder: fragmentBuilder });
+  const replayObservers = commitPrepared(replayLog, replay, replayPrepared);
+
+  expect(replayObservers).toEqual(liveObservers);
+  expect(reducerSnapshot(replay)).toEqual(reducerSnapshot(live));
+  expect(topologySnapshot(replay)).toEqual(topologySnapshot(live));
+  expect(replayLog.records()).toEqual(liveLog.records());
+});
+
+test("growth record replay requires the injected builder", () => {
+  const { state } = initializedSpawner();
+  const record = new NodeExpandedRecord("spawn", {}, [], "a".repeat(64));
+
+  expectError(() => prepareRecord(state, record), TypeError, /grow_builder/);
+});
+
+test("growth stamps a positive reference depth on the boundary", () => {
+  // Depth is bookkeeping, not a cap: a spawner already 7 levels deep grows an 8th level.
+  const { state, log } = initializedSpawner();
+  state.depth.set("spawn", 7);
+
+  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder));
+
+  expect(state.depth.get("spawn/child/end")).toBe(8);
+});
+
+test("growth preserves unrelated in-flight siblings and FIFO order", () => {
+  const { state, log } = initializedSpawner(parentFlow({ sibling: true }));
+  expect(state.ready).toEqual(["side"]);
+  commitPrepared(log, state, prepareNodeStarted(state, "side"));
+  const sideStart = state.acceptedStarts.get("side");
+
+  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder));
+
+  expect([...state.inFlight]).toEqual(["side"]);
+  expect(state.acceptedStarts).toEqual(new Map([["side", sideStart!]]));
+  expect(state.ready).toEqual(["spawn/child/start"]);
+  expect(state.nodeState.get("side")).toBe(NodeState.UNKNOWN);
+});
+
+test("a growth commit does no builder or graph work after append", () => {
+  const { state, log: prior } = initializedSpawner();
+  const built = fragment("spawn");
+  const builderSeeds: unknown[] = [];
+  let builderCalls = 0;
+  const builder: GrowBuilder = (_spawner, seed) => {
+    builderCalls += 1;
+    builderSeeds.push(seed);
+    return built;
+  };
+  const rawSeed = { nested: { items: ["stable"] } };
+  const prepared = prepareExpanded(state, "spawn", new Grow(rawSeed), builder);
+  const expectedStart = (prepared._plan as { delta: { fragmentStartId: string } }).delta.fragmentStartId;
+
+  // Every object the caller or the builder still owns may change after preparation.
+  rawSeed.nested.items.push("raw-mutated");
+  (builderSeeds[0] as { nested: { items: string[] } }).nested.items.push("builder-mutated");
+  built.nodes.clear();
+  built.edges.length = 0;
+  built.wiring.clear();
+  ((prepared.observers[0] as NodeExpanded).grow.seed as { nested: { items: string[] } }).nested.items.push(
+    "observer-mutated",
+  );
+
+  let appended = false;
+  class GuardedLog extends MemoryRunLog {
+    override append(record: RunRecord): RecordEnvelope {
+      const envelope = super.append(record);
+      if (record instanceof NodeExpandedRecord) appended = true;
+      return envelope;
+    }
+  }
+  const log = new GuardedLog(RUN_ID);
+  for (const envelope of prior.records()) log.append(envelope.record);
+  const addSubgraph = spyOn(CompiledFlow.prototype, "addSubgraph").mockImplementation(() => {
+    throw new Error("addSubgraph ran during commit");
+  });
+  const removeSubgraph = spyOn(CompiledFlow.prototype, "removeSubgraph").mockImplementation(() => {
+    throw new Error("removeSubgraph ran during commit");
+  });
+  let observers: readonly RunEvent[];
+  try {
+    observers = commitPrepared(log, state, prepared);
+  } finally {
+    addSubgraph.mockRestore();
+    removeSubgraph.mockRestore();
+  }
+
+  expect(appended).toBe(true);
+  expect(builderCalls).toBe(1);
+  expect(state.flow.nodes.has(expectedStart)).toBe(true);
+  expect(state.ready.at(-1)).toBe(expectedStart);
+  expect((observers[0] as NodeExpanded).grow.seed).toEqual({ nested: { items: ["stable"] } });
+});
+
+test("growth records the spawner as the owner of its fragment", () => {
+  const { state, log } = initializedSpawner();
+  const staticIds = new Set(state.flow.nodes.keys());
+
+  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder));
+
+  const newIds = [...state.flow.nodes.keys()].filter((nodeId) => !staticIds.has(nodeId));
+  expect(newIds.length).toBeGreaterThan(0);
+  expect(state.growthOwner).toEqual(new Map(newIds.map((nodeId) => [nodeId, "spawn"])));
 });

@@ -89,9 +89,9 @@
  * - a growth that retires a node keeps its interrupted-attempt count;
  * - every pruning test that grows also checks the kept growth index against a rebuild
  *   (`expectIndexMatchesRebuild`, a port of `_require_index_matches_rebuild` from
- *   `test_growth_index.py`), and the deferral tests check that a replay of the record on an
- *   identical setup gives equal observers, state and topology, as Python's two grown-subtree
- *   tests do.
+ *   `test_growth_index.py`); the deferral and retirement tests and the interrupted-attempt test
+ *   all replay the record on an identical setup and expect equal observers, state and topology,
+ *   as Python's two grown-subtree tests do.
  *
  * Not ported:
  * - `test_growth_seed_rejection_retains_the_original_exception` and
@@ -313,12 +313,12 @@ function expectIndexMatchesRebuild(state: RunState): void {
   } finally {
     state.growthIndex = kept;
   }
-  const asSets = (entries: Iterable<readonly [string, ReadonlySet<string>]>) =>
+  const sortedIds = (entries: Iterable<readonly [string, ReadonlySet<string>]>) =>
     Object.fromEntries([...entries].map(([key, ids]) => [key, [...ids].sort()]));
   expect(Object.fromEntries(kept.names)).toEqual(Object.fromEntries(fresh.names));
-  expect(asSets(kept.referrers)).toEqual(asSets(fresh.referrers));
+  expect(sortedIds(kept.referrers)).toEqual(sortedIds(fresh.referrers));
   // The kept index leaves an empty entry for an owner whose grown nodes all moved or retired.
-  expect(asSets([...kept.grown].filter(([, ids]) => ids.size > 0))).toEqual(asSets(fresh.grown));
+  expect(sortedIds([...kept.grown].filter(([, ids]) => ids.size > 0))).toEqual(sortedIds(fresh.grown));
 
   const outgoing = new Map<string, Edge[]>();
   const incoming = new Map<string, Edge[]>();
@@ -1615,31 +1615,39 @@ test("pruning retires a grown subtree once settled", () => {
 });
 
 /** Make the settled overlay node `nodeId` waiting, ready, or running. */
-function unsettle(state: RunState, log: MemoryRunLog, nodeId: string, how: string): void {
+function unsettle(
+  state: RunState,
+  log: MemoryRunLog,
+  nodeId: string,
+  how: "waiting" | "ready" | "in-flight",
+): void {
   state.nodeState.set(nodeId, NodeState.UNKNOWN);
   if (how === "ready" || how === "in-flight") state.ready.unshift(nodeId);
   if (how === "in-flight") commitPrepared(log, state, prepareNodeStarted(state, nodeId));
 }
 
-test.each(["waiting", "ready", "in-flight"])("growth keeps an unsettled prune id live and deferred: %s", (how) => {
-  const setup = () => {
-    const { state, log } = initializedSpawner();
-    const oldId = installSettledOverlay(state)[0]!;
-    unsettle(state, log, oldId, how);
-    return { state, log, oldId };
-  };
-  const { state, log, oldId } = setup();
+test.each(["waiting", "ready", "in-flight"] as const)(
+  "growth keeps an unsettled prune id live and deferred: %s",
+  (how) => {
+    const setup = () => {
+      const { state, log } = initializedSpawner();
+      const oldId = installSettledOverlay(state)[0]!;
+      unsettle(state, log, oldId, how);
+      return { state, log, oldId };
+    };
+    const { state, log, oldId } = setup();
 
-  const prepared = prepareExpanded(state, "spawn", new Grow({}, [oldId]), fragmentBuilder);
-  const observers = commitPrepared(log, state, prepared);
+    const prepared = prepareExpanded(state, "spawn", new Grow({}, [oldId]), fragmentBuilder);
+    const observers = commitPrepared(log, state, prepared);
 
-  expect((prepared.record as NodeExpandedRecord).pruneIds).toEqual([oldId]);
-  expect(state.flow.nodes.has(oldId)).toBe(true);
-  expect([...state.deferredPrune]).toEqual([oldId]);
-  expect(state.inFlight.has(oldId)).toBe(how === "in-flight");
-  expectIndexMatchesRebuild(state);
-  assertReplaysEqual(state, prepared, observers, setup);
-});
+    expect((prepared.record as NodeExpandedRecord).pruneIds).toEqual([oldId]);
+    expect(state.flow.nodes.has(oldId)).toBe(true);
+    expect([...state.deferredPrune]).toEqual([oldId]);
+    expect(state.inFlight.has(oldId)).toBe(how === "in-flight");
+    expectIndexMatchesRebuild(state);
+    assertReplaysEqual(state, prepared, observers, setup);
+  },
+);
 
 /** Install settled overlay nodes `a -> b` whose `b` reads `a` by edge and wiring. */
 function sideChain(state: RunState): [string, string] {
@@ -1678,7 +1686,7 @@ test("growth keeps a settled prune id that kept work reads", () => {
   const prepared = pruneSideChain(state);
   const observers = commitPrepared(log, state, prepared);
 
-  expect(state.flow.nodes.has("a") && state.flow.nodes.has("b")).toBe(true);
+  expect(["a", "b"].filter((nodeId) => !state.flow.nodes.has(nodeId))).toEqual([]);
   expect([...state.deferredPrune].sort()).toEqual(["a", "b"]);
   expectIndexMatchesRebuild(state);
   assertReplaysEqual(state, prepared, observers, setup);

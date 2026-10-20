@@ -130,7 +130,7 @@ import { Binding, ExecutionPosition, ExecutionScope, Parameter } from "../../src
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { computeBackward, driveBackward } from "../../src/runtime/backward.ts";
-import type { AttributedBackwardResult } from "../../src/runtime/contracts.ts";
+import type { AttributedBackwardResult, BackwardOutcome } from "../../src/runtime/contracts.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import {
   BackwardReadyRecord,
@@ -1063,7 +1063,7 @@ test("a root fallback context failure names no node", async () => {
     if (calls === 2) throw original;
     return fromFrozen.apply(LearnContext, args);
   });
-  let outcome;
+  let outcome: BackwardOutcome;
   try {
     outcome = await driveBackward(state, log, "review", {
       openMemory: () =>

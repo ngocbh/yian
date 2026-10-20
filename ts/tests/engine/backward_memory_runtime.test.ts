@@ -49,6 +49,12 @@
  *   `CapabilityFault` escapes as that same object (TS unwraps no capability fault), with both
  *   sessions' close failures noted on it; the close is wrapped with
  *   `spyOn(FakeSession.prototype, "close")` and throws an `Error` (Python's `OSError`).
+ * - `test_cleanup_error_after_finished_preserves_success_and_admits_a_later_attempt`: the close is
+ *   wrapped with `spyOn(FakeSession.prototype, "close")` and throws an `Error` (Python's `OSError`).
+ * - `test_backward_and_memory_replay_calls_no_callbacks_or_materialization`: the module-private
+ *   `materializeContext` can't be patched, so only the node hooks and
+ *   `spyOn(MemoryRuntime.prototype, "proposeLearning"/"commitLearning")` fail if called, and the
+ *   replayed backward state is compared with `sameRuntimeBackwardState`.
  * - `test_prepare_failure_is_not_sanitized_as_a_learner_failure`: `prepareRecord` is a module
  *   function that can't be patched, so the log's `append` throws the `MemoryOperationError` for the
  *   Ready record instead.
@@ -58,12 +64,21 @@
  * - `test_wrapped_host_error_during_partial_setup_closes_prior_sessions`: TS unwraps no cause, so
  *   B's `openRun` throwing a `MemoryOperationError` rejects the drive with the `MemorySetupError`
  *   whose `cause` is that error.
+ * - `test_cleanup_unwraps_host_failure_after_closing_all_sessions`: the two `with_primary` cells,
+ *   with plain errors: the learner throws an `Error` and B's close a `MemoryOperationError`, which
+ *   escapes itself without a primary and is noted on the primary with one.
+ * - `test_commit_batch_is_detached_from_every_accepted_authority`: the `mutation` and
+ *   `public_payload` targets × the three completions (6 cells); the mutation and its payload are
+ *   frozen, so the backend's edit throws a `TypeError` (asserted), and the `host_failure` commit
+ *   throws a plain `Error` (Python's `MemoryError`) that escapes unchanged.
  *
- * Later (PR 3 of T4-7): the two `with_primary` cells of
- * `test_cleanup_unwraps_host_failure_after_closing_all_sessions` (plain errors),
- * `test_cleanup_error_after_finished_preserves_success_and_admits_a_later_attempt`,
- * `test_backward_and_memory_replay_calls_no_callbacks_or_materialization` and
- * `test_commit_batch_is_detached_from_every_accepted_authority`.
+ * TS only: driving with an inexact `RunState` or a non-log refuses before opening; an async opener
+ * resolves before the first record; a drive overtaken by another drive while it awaits its opener
+ * (fresh and interrupted prior attempt) or its handler (the handler then throws, or its learner
+ * fails) is refused by the reducer, appends nothing and closes its runtime; an opener result that
+ * isn't a `MemoryRuntime` and a runtime whose earlier close failed are refused; a
+ * `MemoryOperationError` with an `AbortError` or `CapabilityFault` cause is a learner or commit
+ * failure; a thrown `undefined` still closes the runtime and is rethrown.
  *
  * Not ported: TS unwraps no host control from a `MemoryOperationError`'s cause chain, so a
  * `MemoryOperationError` from learn or commit is a learning failure whatever its `cause`, and any
@@ -76,12 +91,13 @@
  * `SystemExit`) of `test_backend_host_or_unexpected_error_escapes_with_exact_prefix` and the
  * `error_type` dimension of `test_cleanup_unwraps_host_failure_after_closing_all_sessions`; and
  * `test_each_attempt_checks_only_its_own_records_not_earlier_attempts`, which counts the calls of a
- * module-private function.
+ * module-private function; and the `inner_payload` cells of
+ * `test_commit_batch_is_detached_from_every_accepted_authority` (TS has no private payload tree).
  */
 
 import { expect, spyOn, test } from "bun:test";
 
-import { FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { copyGraph, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { type FeedbackValue, SourceRef } from "../../src/expr/lineage.ts";
 import {
   DeclSite,
@@ -99,7 +115,7 @@ import { BackwardResult, CapabilityFault } from "../../src/nodes/base.ts";
 import { computeBackward, driveBackward } from "../../src/runtime/backward.ts";
 import { BackwardFailure, BackwardOutcome, MemoryProposal } from "../../src/runtime/contracts.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
-import { memoryCommitId, prefixLearning } from "../../src/runtime/learning.ts";
+import { memoryCommitId, prefixLearning, sameRuntimeBackwardState } from "../../src/runtime/learning.ts";
 import {
   BackwardFinishedRecord,
   BackwardReadyRecord,
@@ -108,11 +124,20 @@ import {
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
+  type RunLog,
   type RunRecord,
 } from "../../src/runtime/log.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
-import { commitPrepared, prepareRecord } from "../../src/runtime/state.ts";
-import { type BackwardCallback, engine, graph, RecordingBackwardNode, rejected, stacks } from "./run_state_fixtures.ts";
+import { commitPrepared, prepareRecord, replayRecords, RunState } from "../../src/runtime/state.ts";
+import {
+  type BackwardCallback,
+  engine,
+  graph,
+  noGrowth,
+  RecordingBackwardNode,
+  rejected,
+  stacks,
+} from "./run_state_fixtures.ts";
 import { FakeMemory, FakeSession } from "./memory_fakes.ts";
 
 const ROOT = new DeclSite([], ["root"]);
@@ -443,7 +468,7 @@ test("a context failure keeps the completed backward without calling learners", 
   const { engine: built, node } = await terminal();
   const memory = new FakeMemory();
   const spy = failFirstContext();
-  let outcome;
+  let outcome: BackwardOutcome;
   try {
     outcome = await drive(built, new Map([["A", memory]]));
   } finally {
@@ -883,6 +908,62 @@ test("repeated driven attempts request distinct commit ids for identical batches
   expect(requests[0]!.commitId.startsWith("ac-memory-v3:")).toBe(true);
 });
 
+test("a cleanup error after Finished preserves success and admits a later attempt", async () => {
+  const { engine: built } = await terminal();
+  const memory = new FakeMemory();
+  const originalClose = FakeSession.prototype.close;
+  const close = spyOn(FakeSession.prototype, "close").mockImplementation(function (this: FakeSession) {
+    originalClose.call(this);
+    throw new Error("close failed");
+  });
+  let caught: unknown;
+  try {
+    caught = await rejected(drive(built, new Map([["A", memory]])));
+  } finally {
+    close.mockRestore();
+  }
+  expect((caught as Error).message).toBe("close failed");
+  expect(built.state.backwardState.finished!.outcome.status).toBe("succeeded");
+  expect(built.state.backwardState.canStart).toBe(true);
+  expect(memory.closeCount).toBe(1);
+});
+
+test("backward and memory replay call no callbacks or materialization", async () => {
+  const { engine: built } = await terminal(["A", "B"]);
+  const original = copyGraph(built.state.flow);
+  const memory = new Map([
+    ["A", new FakeMemory()],
+    [
+      "B",
+      new FakeMemory({ commitOutcomes: [new MemoryOperationError("commit", "not.available", "Unavailable.", false)] }),
+    ],
+  ]);
+  await drive(built, memory);
+  const fail = (what: string) => () => {
+    throw new Error(`replayed ${what}`);
+  };
+  for (const node of original.nodes.values()) {
+    Object.assign(node, {
+      forward: fail("forward"),
+      backward: fail("backward"),
+      captureBackwardContext: fail("capture"),
+    });
+  }
+  const propose = spyOn(MemoryRuntime.prototype, "proposeLearning").mockImplementation(fail("learner"));
+  const commit = spyOn(MemoryRuntime.prototype, "commitLearning").mockImplementation(fail("commit"));
+  let replayed: RunState;
+  try {
+    replayed = replayRecords(new RunState(original), built.log.records(), { growBuilder: noGrowth });
+  } finally {
+    propose.mockRestore();
+    commit.mockRestore();
+  }
+  expect(sameRuntimeBackwardState(replayed.backwardState, built.state.backwardState)).toBe(true);
+  expect(replayed.trace!.occurrences).toEqual(built.state.trace!.occurrences);
+  expect(replayed.nextSequence).toBe(replayed.trace!.nextSequence);
+  expect(replayed.nextSequence).toBe(built.state.nextSequence);
+});
+
 test("a prepare failure is not sanitized as a learner failure", async () => {
   const { engine: built } = await terminal();
   const memory = new FakeMemory();
@@ -993,4 +1074,306 @@ test("a wrapped host error during partial setup closes prior sessions", async ()
   expect(records(built)).toEqual(before);
   expect(memory.get("A")!.closeCount).toBe(1);
   expect(memory.get("B")!.closeCount).toBe(0);
+});
+
+test("cleanup closes every session and keeps the primary error or the close failure", async () => {
+  for (const withPrimary of [false, true]) {
+    const { engine: built } = await terminal(["A", "B", "C"]);
+    const primary = new Error("learner failed unexpectedly");
+    const memory = new Map([
+      ["A", new FakeMemory({ learnOutcomes: withPrimary ? [primary] : [] })],
+      ["B", new FakeMemory()],
+      ["C", new FakeMemory()],
+    ]);
+    const failure = new MemoryOperationError("close", "wrapped", "Close failed.", false);
+    const closed: string[] = [];
+    const originalClose = FakeSession.prototype.close;
+    const close = spyOn(FakeSession.prototype, "close").mockImplementation(function (this: FakeSession) {
+      originalClose.call(this);
+      const name = [...memory].find(([, backend]) => backend === this.memory)![0];
+      closed.push(name);
+      if (name === "B") throw failure;
+    });
+    let caught: unknown;
+    try {
+      caught = await rejected(drive(built, memory));
+    } finally {
+      close.mockRestore();
+    }
+    expect(caught).toBe(withPrimary ? primary : failure);
+    expect(closed).toEqual(["C", "B", "A"]);
+    for (const backend of memory.values()) expect(backend.closeCount).toBe(1);
+    if (withPrimary) {
+      expect((caught as { notes?: unknown }).notes).toEqual([
+        "memory 'B' session close also raised MemoryOperationError: Close failed.",
+      ]);
+      expect(built.state.backwardState.finished).toBeNull();
+      expect(built.state.backwardState.everRequested).toBe(false);
+    } else {
+      expect(built.state.backwardState.finished!.outcome.status).toBe("succeeded");
+      expect(built.state.backwardState.canStart).toBe(true);
+    }
+  }
+});
+
+test("a commit batch is detached from every accepted authority", async () => {
+  for (const target of ["mutation", "public_payload"]) {
+    for (const completion of ["success", "known_failure", "host_failure"]) {
+      const { engine: built } = await terminal();
+      const known = new MemoryOperationError("commit", "refused", "Commit refused.", false);
+      const host = new Error("commit interrupted");
+      const memory = new FakeMemory({
+        learnOutcomes: [() => [new MemoryMutation("proposal", { notes: ["saved"] })]],
+        commitOutcomes: completion === "known_failure" ? [known] : completion === "host_failure" ? [host] : [],
+      });
+      const originalCommit = FakeSession.prototype.commit;
+      const commit = spyOn(FakeSession.prototype, "commit").mockImplementation(function (
+        this: FakeSession,
+        commitId: string,
+        mutations: readonly MemoryMutation[],
+      ) {
+        const accepted = built.state.backwardState.current!.requests.at(-1)!;
+        const recorded = records(built).at(-1)!;
+        expect(recorded.constructor).toBe(MemoryCommitRequestedRecord);
+        expect(accepted).toEqual(recorded as MemoryCommitRequestedRecord);
+        const mutation = mutations[0]!;
+        // Python edits the mutation in place with `object.__setattr__`; a frozen carrier refuses both edits.
+        if (target === "mutation") {
+          expect(() => {
+            (mutation as { mutationId: string }).mutationId = "backend-changed";
+          }).toThrow(TypeError);
+        } else {
+          expect(() => (mutation.payload as { notes: unknown[] }).notes.push("backend-copy")).toThrow(TypeError);
+        }
+        expect(accepted).toEqual(recorded as MemoryCommitRequestedRecord);
+        return originalCommit.call(this, commitId, mutations);
+      });
+      try {
+        if (completion === "host_failure") {
+          expect(await rejected(drive(built, new Map([["A", memory]])))).toBe(host);
+          expect(built.state.backwardState.finished).toBeNull();
+        } else {
+          const outcome = await drive(built, new Map([["A", memory]]));
+          expect(outcome.status).toBe(completion === "success" ? "succeeded" : "failed");
+        }
+      } finally {
+        commit.mockRestore();
+      }
+      const backward = built.state.backwardState;
+      const request = backward.current!.requests[0]!;
+      const recorded = records(built);
+      const requested = recorded.find((record) => record.constructor === MemoryCommitRequestedRecord);
+      const ready = recorded.find((record) => record.constructor === BackwardReadyRecord);
+      expect(request).toEqual(requested as MemoryCommitRequestedRecord);
+      expect(backward.ready).toEqual(ready as BackwardReadyRecord);
+      expect(request.mutations[0]!.mutationId).toBe("proposal");
+      expect(request.mutations[0]!.payload).toEqual({ notes: ["saved"] });
+      const statuses: Record<string, "succeeded" | "failed" | "unknown"> = {
+        success: "succeeded",
+        known_failure: "failed",
+        host_failure: "unknown",
+      };
+      expect(backward.policyOutcomes[0]!.status).toBe(statuses[completion]!);
+      expect(built.state.trace!.nextSequence).toBe(built.state.nextSequence);
+      expect(built.state.nextSequence).toBe(built.log.nextSequence);
+      expect(memory.commitCalls).toHaveLength(1);
+      expect(memory.closeCount).toBe(1);
+    }
+  }
+});
+
+/** Let pending promise callbacks and timers run. */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+test("driving requires a RunState and a RunLog", async () => {
+  const { engine: built } = await terminal();
+  const before = records(built);
+  let opened = 0;
+  const openMemory = () => {
+    opened += 1;
+    return open(built.state.memories!, new Map([["A", new FakeMemory()]]));
+  };
+  // A RunState-derived object isn't exactly a RunState.
+  for (const [state, log] of [
+    [Object.create(built.state), built.log],
+    [built.state, {}],
+  ]) {
+    const error = await rejected(driveBackward(state as RunState, log as RunLog, "review", { openMemory }));
+    expect((error as Error).constructor).toBe(TypeError);
+    expect((error as Error).message).toBe("backward driving requires a RunState and RunLog");
+  }
+  expect(opened).toBe(0);
+  expect(records(built)).toEqual(before);
+});
+
+test("an async opener resolves before the first record is appended", async () => {
+  const { engine: built, node } = await terminal();
+  const memory = new FakeMemory();
+  const gate = Promise.withResolvers<void>();
+  const before = records(built);
+  const pending = driveBackward(built.state, built.log, "review", {
+    openMemory: async () => {
+      await gate.promise;
+      return open(built.state.memories!, new Map([["A", memory]]));
+    },
+  });
+  await settle();
+  expect(records(built)).toEqual(before);
+  expect(node.calls).toEqual([]);
+  gate.resolve();
+  expect((await pending).status).toBe("succeeded");
+  expect(memory.closeCount).toBe(1);
+});
+
+test("a drive overtaken during its opener appends nothing and closes its runtime", async () => {
+  const rows: [boolean, string][] = [
+    [false, "backward attempt_id must be the next accepted start"],
+    [true, "backward record requires its matching unfinished attempt"],
+  ];
+  for (const [interrupted, message] of rows) {
+    const { engine: built } = await terminal();
+    if (interrupted) {
+      commitPrepared(built.log, built.state, prepareRecord(built.state, new BackwardStartedRecord(1, "first")));
+    }
+    const stale = new FakeMemory();
+    const gate = Promise.withResolvers<void>();
+    const pending = driveBackward(built.state, built.log, "stale", {
+      openMemory: async () => {
+        await gate.promise;
+        return open(built.state.memories!, new Map([["A", stale]]));
+      },
+    });
+    // The other drive completes the next attempt while the first awaits its opener.
+    expect((await drive(built, new Map([["A", new FakeMemory()]]))).status).toBe("succeeded");
+    const after = records(built);
+    gate.resolve();
+    const error = await rejected(pending);
+    expect((error as Error).constructor).toBe(RangeError);
+    expect((error as Error).message).toBe(message);
+    expect(records(built)).toEqual(after);
+    expect(stale.learnContexts).toEqual([]);
+    expect(stale.closeCount).toBe(1);
+  }
+});
+
+test("a drive overtaken during its handler is refused by the reducer", async () => {
+  for (const failure of ["handler", "learner"]) {
+    const gate = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    let calls = 0;
+    const callback: BackwardCallback = async (_context, feedback) => {
+      calls += 1;
+      if (calls === 1) {
+        entered.resolve();
+        await gate.promise;
+        if (failure === "handler") throw new Error("Callback failed.");
+      }
+      return new BackwardResult({ inputFeedback: { topic: feedback } });
+    };
+    const { engine: built } = await terminal(["A"], { callback });
+    const stale = new FakeMemory({
+      learnOutcomes: failure === "learner" ? [new MemoryOperationError("learn", "rejected", "Rejected.", false)] : [],
+    });
+    const pending = drive(built, new Map([["A", stale]]), "stale");
+    await entered.promise;
+    // The other drive closes the stale attempt as interrupted and completes its own.
+    expect((await drive(built, new Map([["A", new FakeMemory()]]))).status).toBe("succeeded");
+    const after = records(built);
+    const finished = built.state.backwardState.finished!;
+    gate.resolve();
+    const error = await rejected(pending);
+    expect((error as Error).constructor).toBe(RangeError);
+    expect((error as Error).message).toBe("backward record requires its matching unfinished attempt");
+    expect(records(built)).toEqual(after);
+    expect(built.state.backwardState.finished).toBe(finished);
+    expect(built.state.backwardState.finished!.outcome.status).toBe("succeeded");
+    expect(stale.learnContexts).toHaveLength(failure === "learner" ? 1 : 0);
+    expect(stale.commitCalls).toEqual([]);
+    expect(stale.closeCount).toBe(1);
+  }
+});
+
+test("an opener result that isn't a MemoryRuntime is refused before any record", async () => {
+  const { engine: built, node } = await terminal();
+  const before = records(built);
+  const error = await rejected(
+    driveBackward(built.state, built.log, "review", { openMemory: () => ({}) as MemoryRuntime }),
+  );
+  expect((error as Error).constructor).toBe(TypeError);
+  expect((error as Error).message).toBe("backward memory opener must return a MemoryRuntime");
+  expect(records(built)).toEqual(before);
+  expect(node.calls).toEqual([]);
+});
+
+test("an opened runtime whose earlier close failed is refused as a mismatch", async () => {
+  const { engine: built, node } = await terminal();
+  const memory = new FakeMemory();
+  const runtime = await open(built.state.memories!, new Map([["A", memory]]));
+  const closeFailure = new Error("close failed");
+  const close = spyOn(FakeSession.prototype, "close").mockImplementation(() => {
+    throw closeFailure;
+  });
+  try {
+    expect(await rejected(runtime.close())).toBe(closeFailure);
+  } finally {
+    close.mockRestore();
+  }
+  const before = records(built);
+  const error = await rejected(driveBackward(built.state, built.log, "review", { openMemory: () => runtime }));
+  expect((error as Error).constructor).toBe(RangeError);
+  expect((error as Error).message).toBe(
+    "opened memory runtime does not match the recorded memory table and snapshots",
+  );
+  expect(records(built)).toEqual(before);
+  expect(node.calls).toEqual([]);
+  expect(memory.learnContexts).toEqual([]);
+});
+
+test("a MemoryOperationError from learn or commit is a learning failure whatever its cause", async () => {
+  for (const operation of ["learn", "commit"]) {
+    const causes = [new DOMException("Aborted.", "AbortError"), new CapabilityFault(new Error("capability failed"))];
+    for (const cause of causes) {
+      const { engine: built } = await terminal();
+      const error = new MemoryOperationError(operation, "wrapped", "Wrapped.", false);
+      error.cause = cause;
+      const memory = new FakeMemory({
+        learnOutcomes: operation === "learn" ? [error] : [],
+        commitOutcomes: operation === "commit" ? [error] : [],
+      });
+      const outcome = await drive(built, new Map([["A", memory]]));
+      expect(outcome.status).toBe("failed");
+      expect(outcome.failure!.stage).toBe(operation);
+      expect(outcome.failure!.code).toBe("wrapped");
+      expect(outcome.failure!.memory).toBe("A");
+      expect(memory.closeCount).toBe(1);
+    }
+  }
+});
+
+test("a thrown undefined still closes the runtime and is rethrown", async () => {
+  const { engine: built } = await terminal();
+  const memory = new FakeMemory({
+    learnOutcomes: [
+      () => {
+        throw undefined;
+      },
+    ],
+  });
+  // A close failure would escape in place of a lost primary.
+  const originalClose = FakeSession.prototype.close;
+  const close = spyOn(FakeSession.prototype, "close").mockImplementation(function (this: FakeSession) {
+    originalClose.call(this);
+    throw new Error("close failed");
+  });
+  let caught: unknown = null;
+  try {
+    caught = await rejected(drive(built, new Map([["A", memory]])));
+  } finally {
+    close.mockRestore();
+  }
+  expect(caught).toBeUndefined();
+  expect(memory.closeCount).toBe(1);
+  expect(built.state.backwardState.finished).toBeNull();
 });

@@ -1658,7 +1658,7 @@ test("sameMemorySpec compares key, type, config, owners and eligibility by value
   expect(sameMemorySpec(spec("other"), spec())).toBe(false);
   expect(sameMemorySpec(spec(undefined, "episodic"), spec())).toBe(false);
   expect(sameMemorySpec(spec(undefined, undefined, { limit: 4, tags: ["a"] }), spec())).toBe(false);
-  expect(sameMemorySpec(spec(undefined, undefined, { limit: true, tags: ["a"] }), spec())).toBe(false);
+  expect(sameMemorySpec(spec(undefined, undefined, { limit: 3n, tags: ["a"] }), spec())).toBe(false);
   expect(sameMemorySpec(spec(undefined, undefined, undefined, [site()]), spec())).toBe(false);
   expect(sameMemorySpec(spec(undefined, undefined, undefined, [site(), site("zeta")]), spec())).toBe(false);
   // Eligibility follows the owners, so it differs only with them: one AGENT site against one flow site.

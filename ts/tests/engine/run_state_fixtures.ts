@@ -26,6 +26,7 @@ import {
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { ForwardCapture } from "../../src/runtime/contracts.ts";
+import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { type EvalNodeOptions, evalNode, type WorkerOutcome } from "../../src/runtime/eval_node.ts";
 import { type RunEvent, StreamChunk } from "../../src/events.ts";
 import {
@@ -452,6 +453,42 @@ export function learnableStarted(
   });
   commitPrepared(log, state, prepared);
   return { state, log };
+}
+
+/** A growth builder for flows that never grow; a call fails the test. */
+export const noGrowth: GrowBuilder = () => {
+  throw new Error("this flow does not grow");
+};
+
+/**
+ * Return a direct engine over a fresh in-memory authority for `flow` (Python's
+ * `_graph_builder._engine`): `RunStarted` is prepared and committed on a `MemoryRunLog`, so START
+ * is ready. The pool primes START with `inputs`, START's wiring reads each as
+ * `${input.<name>}`, and the run records no agent configuration. A learnable flow gets its
+ * execution layout first. The other options go to `FlowEngine`.
+ */
+export function engine(
+  flow: CompiledFlow,
+  options: { inputs?: Readonly<Record<string, unknown>>; learnable?: boolean } & Partial<FlowEngineOptions> = {},
+): FlowEngine {
+  const { inputs = {}, learnable = false, numWorkers = 0, growBuilder = noGrowth, ...rest } = options;
+  if (learnable) applyExecutionLayout(flow, resolveExecutionLayout(flow));
+  const state = new RunState(flow);
+  const initialPool = new VariablePool(flow.startId);
+  initialPool.set(flow.startId, { ...inputs });
+  initialPool.addSystem("run_id", RUN_ID);
+  const log = new MemoryRunLog(RUN_ID);
+  const prepared = prepareRunStarted(state, {
+    runId: RUN_ID,
+    flowFingerprint: FINGERPRINT,
+    initialPool,
+    startWiringOverride: Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
+    effectiveLlmByStaticPath: {},
+    numWorkers,
+    learnable,
+  });
+  commitPrepared(log, state, prepared);
+  return new FlowEngine(state, log, { growBuilder, numWorkers, ...rest });
 }
 
 /**

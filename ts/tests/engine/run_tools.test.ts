@@ -1,7 +1,7 @@
 /**
  * Per-run tools through the evaluator: the `evalNode` rows of `tests/engine/test_run_tools.py`.
  *
- * Ported: `test_eval_node_rejects_a_raw_tools_mapping`.
+ * Ported: `test_eval_node_rejects_a_raw_tools_mapping` and `test_flow_engine_rejects_a_raw_tools_mapping`.
  *
  * Ported (adapted): `test_only_nodes_that_declare_needs_tools_receive_the_toolset`: every node also
  * receives `signal`, and the opted-in node's `tools` is the run's tool set itself.
@@ -29,8 +29,6 @@
  * `test_trusted_ask_user_call_passes_all_fields_to_the_handler` and
  * `test_ask_user_options_are_normalized_leniently`.
  *
- * Later (cycle 4a): `test_flow_engine_rejects_a_raw_tools_mapping`.
- *
  * Later (T4-11), they run the TOOL or HUMAN_INPUT body:
  * `test_eval_node_passes_the_run_toolset_to_a_tool_node`,
  * `test_flow_engine_passes_its_toolset_to_every_tool_node`,
@@ -47,13 +45,14 @@
 
 import { expect, test } from "bun:test";
 
+import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { evalNode } from "../../src/runtime/eval_node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { rejected } from "./run_state_fixtures.ts";
+import { engine, graph, rejected } from "./run_state_fixtures.ts";
 
 /** A tool that returns a fixed reply. */
 const PING = new FunctionTool({
@@ -105,4 +104,13 @@ test("eval node rejects a raw tools mapping", async () => {
   );
 
   expect(error).toEqual(new TypeError("tools must be a ToolSet or null"));
+});
+
+test("flow engine rejects a raw tools mapping", () => {
+  const flow = graph([new ToolNode("ping", { toolId: "ping" })], [
+    [START_ID, "ping"],
+    ["ping", END_ID],
+  ]);
+
+  expect(() => engine(flow, { tools: { ping: PING } as never })).toThrow(new TypeError("tools must be a ToolSet or null"));
 });

@@ -369,9 +369,9 @@ function bindingError(
       ? templateLabel(binding.source.value, stringContract)
       : canonicalTypeLabel(inferred.type);
   let message = `declared ${label}, but the value is ${shown}`;
-  const found =
-    (binding.source instanceof ValueTemplate ? missingInTree(binding.source.value, declared, [], stringContract) : null) ??
-    missingInType(inferred.type, declared, []);
+  const inTree =
+    binding.source instanceof ValueTemplate ? missingInTree(binding.source.value, declared, [], stringContract) : null;
+  const found = inTree ?? missingInType(inferred.type, declared, []);
   if (found !== null) {
     const [path, missing] = found;
     message += ` (missing required ${missing.map((name) => `\`${name}\``).join(", ")}`;

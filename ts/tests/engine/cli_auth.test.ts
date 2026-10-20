@@ -14,8 +14,11 @@
 // `test_failed_or_cancelled_setup_preserves_previous_connection`,
 // `test_noninteractive_setup_requires_explicit_choices`, `test_setup_keeps_existing_default`,
 // `test_openai_api_key_setup_saves_connection_settings`,
-// `test_subscription_chosen_at_the_prompt_refuses_settings` and
-// `test_openai_listing_failure_is_scrubbed_of_header_values`.
+// `test_subscription_chosen_at_the_prompt_refuses_settings`,
+// `test_openai_listing_failure_is_scrubbed_of_header_values`, `test_model_answers_builds_and_invokes_once`,
+// `test_model_answers_mutes_the_unknown_model_warning`, `test_model_answers_scrubs_the_azure_ad_token` and
+// `test_model_answers_sends_and_scrubs_connection_headers`.
+// Dropped: `test_model_answers_reports_a_missing_extra` (TS yian has no extras to install).
 // Added here, since Python left them to the `cli` conformance cases or didn't test them: `yian
 // providers`, `yian config check` (including `_config_errors`'s rows), the rest of `yian models`
 // (usage errors, the provider and subscription forms, the deadline), `--default` with `--remove`,
@@ -23,11 +26,12 @@
 // the removal documents under `--json`, SIGINT during a removal, no signal listener left behind, and
 // the JSON device sign-in's error lines (a `--model` not offered, a malformed store) and default rule,
 // the OpenAI sign-in picker's SSH initial, OpenAI's hidden key and header prompts and their
-// refusals, a listing with no text model, SIGINT during a picker, and `openBrowser`'s opener
-// commands.
-// Python's monkeypatched `list_models`, `OpenAIAuth`, `_choose`, questionary and `webbrowser` are
-// `deps` fakes here (a fake terminal, a recording opener and `launch`), so no test reaches a real
-// host or opens a browser.
+// refusals, a listing with no text model, SIGINT during a picker, `openBrowser`'s opener
+// commands, and the reply check's failure text (whitespace folded, cut at 200 characters, a thrown
+// non-`Error`), its 30 s deadline and a stop during it.
+// Python's monkeypatched `list_models`, `OpenAIAuth`, `create_llm_client`, `_choose`, questionary and
+// `webbrowser` are `deps` fakes here (a fake terminal, a fake chat model, a recording opener and
+// `launch`), so no test reaches a real host or opens a browser.
 // The handlers are called directly with the `ParsedArgs` the parser would give, so parsing stays
 // covered by cli_utils.test.ts and the `cli` cases.
 
@@ -44,6 +48,7 @@ import {
   configCheck,
   configErrors,
   EXTRA_FIELD,
+  modelAnswers,
   models,
   openBrowser,
   providers,
@@ -51,6 +56,7 @@ import {
 import { type CliIo, type OptionValue, type ParsedArgs, UsageError, type Writer } from "../../src/cli/utils.ts";
 import { ApiKeyCredentials, AuthError, AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
 import { LLM_CONFIG_KEYS, SUPPORTED_LLM_PROVIDERS, validateBaseUrl } from "../../src/llm_clients/config.ts";
+import { ConnectionSnapshot } from "../../src/llm_clients/connection.ts";
 import {
   OPENAI_REFUSED_HEADER_NAMES,
   REFUSED_HEADER_NAMES,
@@ -58,7 +64,10 @@ import {
   validateHeaderValue,
   validateOrganization,
 } from "../../src/llm_clients/connection_settings.ts";
+import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
 import { ModelListError } from "../../src/llm_clients/model_list.ts";
+import { type Event, Finish, PartDone, TextDelta } from "../../src/llm/events.ts";
+import { Message, Request, TextPart } from "../../src/llm/messages.ts";
 import { lockFile, virtualScheduler } from "../../src/platform.ts";
 
 let tmp: string;
@@ -1450,6 +1459,188 @@ describe("auth OpenAI setup", () => {
     expect(signals.listenerCount("SIGINT")).toBe(0);
     expect(setup.service.calls).toEqual([]);
     expect(existsSync(setup.path)).toBe(false);
+  });
+});
+
+/** An error named `name`, as Python's tests raised an exception of a named class. */
+function named(name: string, message: string): Error {
+  return Object.assign(new Error(message), { name });
+}
+
+/**
+ * A fake `chatModel` recording each config and options. Its model's `stream` records each request
+ * and the signal it got, then throws `failure` when set, waits for its signal when `hang` is set
+ * (rejecting with the signal's reason), or replies "OK". `build` runs with the options before the
+ * model is returned.
+ */
+function fakeChatModel() {
+  const fake = {
+    built: [] as { config: Record<string, unknown>; options: Parameters<typeof chatModelFromConfig>[1] & {} }[],
+    requests: [] as Request[],
+    signals: [] as (AbortSignal | undefined)[],
+    failure: undefined as unknown,
+    hang: false,
+    build: async (_config: Record<string, unknown>, _options: Parameters<typeof chatModelFromConfig>[1] & {}) => {},
+    chatModel: undefined as unknown as NonNullable<AuthDeps["chatModel"]>,
+  };
+  async function* reply(signal: AbortSignal | undefined): AsyncGenerator<Event> {
+    if (fake.failure !== undefined) throw fake.failure;
+    if (fake.hang) {
+      await new Promise((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    }
+    yield new TextDelta(0, "OK");
+    yield new PartDone(0, new TextPart("OK"));
+    yield new Finish({ reason: "stop" });
+  }
+  const model = {
+    provider: "fake",
+    model: "fake",
+    stream: (request: Request, options: { signal?: AbortSignal } = {}) => {
+      fake.requests.push(request);
+      fake.signals.push(options.signal);
+      return reply(options.signal);
+    },
+  };
+  fake.chatModel = (async (config: Record<string, unknown>, options = {}) => {
+    fake.built.push({ config: { ...config }, options });
+    await fake.build(config, options);
+    return model;
+  }) as unknown as NonNullable<AuthDeps["chatModel"]>;
+  return fake;
+}
+
+describe("modelAnswers", () => {
+  const never = new AbortController().signal;
+  const io = (env: Record<string, string> = {}) => fakeIo({ env }).io;
+
+  // Python: test_model_answers_builds_and_invokes_once.
+  test("builds the model from what it is given and sends it one prompt", async () => {
+    const fake = fakeChatModel();
+    const deps = { chatModel: fake.chatModel };
+    const azureIo = io();
+    expect(await modelAnswers("azure", "dep", "private-key", "https://r/", {}, azureIo, deps, never)).toBeNull();
+    const [{ config, options }] = fake.built as [(typeof fake.built)[0]];
+    expect(config).toEqual({ provider: "azure", model: "dep", api_key: "private-key", base_url: "https://r/" });
+    expect(options.env).toBe(azureIo.env);
+    expect(options.snapshot).toBeInstanceOf(ConnectionSnapshot);
+    expect([options.snapshot!.defaults, options.snapshot!.providerModels, options.snapshot!.connections]).toEqual([
+      {},
+      {},
+      {},
+    ]);
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(options.onWarning).toBeInstanceOf(Function);
+    expect(fake.requests).toEqual([
+      new Request({ messages: [new Message({ role: "user", parts: [new TextPart("Reply with OK.")] })] }),
+    ]);
+    expect(fake.signals).toEqual([options.signal]);
+
+    fake.failure = named("RuntimeError", "bad key private-key");
+    expect(await modelAnswers("anthropic", "claude-x", "private-key", null, {}, io(), deps, never)).toBe(
+      "RuntimeError: bad key [REDACTED]",
+    );
+    fake.failure = named("Echo", "rejected\n  input private-key");
+    expect(await modelAnswers("anthropic", "claude-x", "private-key", null, {}, io(), deps, never)).toBe(
+      "Echo: rejected input [REDACTED]",
+    );
+
+    fake.failure = undefined;
+    // A keyless vLLM login is checked with the client's dummy key, not VLLM_API_KEY.
+    const ambient = io({ VLLM_API_KEY: "private-ambient" });
+    expect(await modelAnswers("vllm", "m1", null, null, {}, ambient, deps, never)).toBeNull();
+    expect(fake.built.at(-1)!.config).toEqual({ provider: "vllm", model: "m1", api_key: "EMPTY" });
+    expect(await modelAnswers("ollama", "m1", null, null, {}, ambient, deps, never)).toBeNull();
+    expect(fake.built.at(-1)!.config).toEqual({ provider: "ollama", model: "m1" });
+  });
+
+  // Python: test_model_answers_mutes_the_unknown_model_warning.
+  test("mutes only the unknown-model warning", async () => {
+    const emitted = spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      const fake = fakeChatModel();
+      const other = `Another warning ${Math.random()}`;
+      fake.build = async (config, options) => {
+        // The real factory, for its warning text; the build sends nothing.
+        await chatModelFromConfig(config, options);
+        options.onWarning!(other);
+      };
+      const deps = { chatModel: fake.chatModel };
+      expect(await modelAnswers("anthropic", "claude-x", "private-key", null, {}, io(), deps, never)).toBeNull();
+      expect(emitted.mock.calls as unknown[][]).toEqual([[other, "RuntimeWarning"]]);
+    } finally {
+      emitted.mockRestore();
+    }
+  });
+
+  // Python: test_model_answers_scrubs_the_azure_ad_token.
+  test("scrubs the Azure AD token", async () => {
+    const [token, key] = ["private-ad-token-k7qz", "private-azure-key-m2vd"];
+    const fake = fakeChatModel();
+    fake.failure = named("RuntimeError", `bad token ${token} key ${key}`);
+    const env = { YIAN_AUTH_FILE: join(tmp, "auth.json"), AZURE_OPENAI_AD_TOKEN: token };
+    const deps = { chatModel: fake.chatModel };
+    const problem = await modelAnswers("azure", "dep", key, "https://r.openai.azure.com/", {}, io(env), deps, never);
+    expect(problem).toBe("RuntimeError: bad token [REDACTED] key [REDACTED]");
+  });
+
+  // Python: test_model_answers_sends_and_scrubs_connection_headers.
+  test("sends the connection headers and scrubs their values", async () => {
+    const fake = fakeChatModel();
+    fake.failure = named("RuntimeError", "gateway rejected gwvalue7");
+    const deps = { chatModel: fake.chatModel };
+    const problem = await modelAnswers("anthropic", "claude-x", "private-key", null, { "X-G": "gwvalue7" }, io(), deps, never);
+    expect(fake.built[0]!.config["headers"]).toEqual({ "X-G": "gwvalue7" });
+    expect(problem).toBe("RuntimeError: gateway rejected [REDACTED]");
+
+    fake.failure = undefined;
+    expect(await modelAnswers("anthropic", "claude-x", "private-key", null, {}, io(), deps, never)).toBeNull();
+    expect(fake.built.at(-1)!.config).not.toHaveProperty("headers");
+  });
+
+  test("a failure folds whitespace and is cut at 200 characters after the name", async () => {
+    const fake = fakeChatModel();
+    fake.failure = named("ProviderError", `${"a".repeat(150)}\n\t  ${"b".repeat(100)} `);
+    const problem = await modelAnswers("anthropic", "claude-x", "private-key", null, {}, io(), { chatModel: fake.chatModel }, never);
+    expect(problem).toBe(`ProviderError: ${`${"a".repeat(150)} ${"b".repeat(100)}`.slice(0, 200)}`);
+  });
+
+  test("a thrown non-Error shows as itself, redacted and folded", async () => {
+    const fake = fakeChatModel();
+    fake.failure = "refused  private-key\n";
+    const problem = await modelAnswers("anthropic", "claude-x", "private-key", null, {}, io(), { chatModel: fake.chatModel }, never);
+    expect(problem).toBe("refused [REDACTED]");
+  });
+
+  test("a model that doesn't reply within 30 seconds times out", async () => {
+    const fake = fakeChatModel();
+    fake.hang = true;
+    const scheduler = virtualScheduler();
+    const deps = { chatModel: fake.chatModel, scheduler };
+    const problem = await modelAnswers("anthropic", "claude-x", "private-key", null, {}, io(), deps, never);
+    expect(problem).toBe("TimeoutError: The model didn't reply within 30 seconds");
+    expect(scheduler.now()).toBe(30_000);
+  });
+
+  test("no deadline sleeper outlives a check", async () => {
+    const fake = fakeChatModel();
+    const scheduler = virtualScheduler();
+    const deps = { chatModel: fake.chatModel, scheduler };
+    expect(await modelAnswers("anthropic", "claude-x", "private-key", null, {}, io(), deps, never)).toBeNull();
+    // A sleeper left behind would move the virtual clock to the 30 s deadline meanwhile.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await scheduler.sleep(1);
+    expect(scheduler.now()).toBe(1);
+  });
+
+  test("a stop during the check rejects with the stop's reason", async () => {
+    const fake = fakeChatModel();
+    fake.hang = true;
+    const stop = new AbortController();
+    const reason = new Error("stopped");
+    const checking = modelAnswers("anthropic", "claude-x", "private-key", null, {}, io(), { chatModel: fake.chatModel }, stop.signal);
+    while (fake.requests.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+    stop.abort(reason);
+    await expect(checking).rejects.toBe(reason);
   });
 });
 

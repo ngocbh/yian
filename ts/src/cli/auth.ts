@@ -13,6 +13,8 @@ import { spawn } from "node:child_process";
 import type { EventEmitter } from "node:events";
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import { collect } from "../llm/events.ts";
+import { Message, Request, TextPart } from "../llm/messages.ts";
 import { OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../llm_clients/api_key_env.ts";
 import { ApiKeyCredentials, AuthError, AuthStore, type OAuthCredentials, OpenAIAuth } from "../llm_clients/auth/index.ts";
 import {
@@ -28,6 +30,8 @@ import {
   validateHeaderValue,
   validateOrganization,
 } from "../llm_clients/connection_settings.ts";
+import { callCredentials, ConnectionSnapshot } from "../llm_clients/connection.ts";
+import { chatModelFromConfig, warnOnce } from "../llm_clients/factory.ts";
 import { listModels, ModelListError } from "../llm_clients/model_list.ts";
 import { ValidationError } from "../llm_clients/provider_blocks.ts";
 import { redactKeys } from "../llm_clients/redact.ts";
@@ -64,6 +68,8 @@ export interface AuthDeps {
   }) => Pick<OpenAIAuth, "apiModels" | "browserLogin" | "deviceLogin" | "refresh" | "subscriptionModels">;
   /** List a provider's models; defaults to `listModels`. */
   listModels?: typeof listModels;
+  /** Build the model the reply check prompts; defaults to `chatModelFromConfig`. */
+  chatModel?: typeof chatModelFromConfig;
   /**
    * The terminal `auth` prompts on, which it closes when done; `null` for none. Defaults to a
    * `Terminal` over stdin when stdin is a TTY, else none.
@@ -577,6 +583,78 @@ async function signInLines(
   }
   await store.save("openai", credentials, chosen, { makeDefault });
   await printJson({ event: "done", models: [...models], model: chosen }, io.stdout);
+}
+
+// The texts the reply check's other warnings have emitted, so each shows once per process.
+const WARNED = new Set<string>();
+
+/**
+ * Send the model one short prompt and say why it failed, if it did.
+ *
+ * The model is built from the given key, endpoint and headers only, over an empty snapshot, so no
+ * saved login or default selection takes part. Without a key, vLLM gets the dummy key its client
+ * sends to a keyless server, and Ollama sends none. The build and the call get 30 seconds together
+ * on `deps.scheduler`.
+ *
+ * @param provider Provider name.
+ * @param model Model id, or the Azure deployment name.
+ * @param key API key to send, or `null` for none.
+ * @param endpoint Azure resource endpoint, or `null`.
+ * @param headers Connection headers sent beside the key.
+ * @param stop The command's stop.
+ * @returns `null` when the model replied; otherwise the error's name and a short message without
+ *   any credential the call sent.
+ * @throws The stop's reason when `stop` aborts during the check.
+ */
+export async function modelAnswers(
+  provider: string,
+  model: string,
+  key: string | null,
+  endpoint: string | null,
+  headers: Readonly<Record<string, string>>,
+  io: CliIo,
+  deps: AuthDeps,
+  stop: AbortSignal,
+): Promise<string | null> {
+  const config: Record<string, unknown> = { provider, model };
+  if (key !== null) {
+    config["api_key"] = key;
+  } else if (OPTIONAL_API_KEY_PROVIDERS.has(provider)) {
+    // Passed explicitly so an ambient VLLM_API_KEY doesn't stand in for the keyless login being
+    // saved.
+    config["api_key"] = "EMPTY";
+  }
+  if (endpoint !== null) config["base_url"] = endpoint;
+  if (Object.keys(headers).length > 0) config["headers"] = { ...headers };
+  const timedOut = new TimeoutError("The model didn't reply within 30 seconds");
+  try {
+    await withDeadline(30_000, timedOut, deps.scheduler ?? realScheduler, async (deadline) => {
+      const signal = AbortSignal.any([stop, deadline]);
+      const chat = await (deps.chatModel ?? chatModelFromConfig)(config, {
+        env: io.env,
+        snapshot: new ConnectionSnapshot({ defaults: {}, providerModels: {}, connections: {} }),
+        signal,
+        onWarning: (message) => {
+          // The reply decides whether the model is usable, not yian's catalog.
+          if (!/^Model .* is not in the known model list/s.test(message)) warnOnce(WARNED, message);
+        },
+      });
+      const prompt = new Message({ role: "user", parts: [new TextPart("Reply with OK.")] });
+      await collect(chat.stream(new Request({ messages: [prompt] }), { signal }));
+    });
+  } catch (error) {
+    if (stop.aborted) throw error;
+    // callCredentials also lists a set token variable (AZURE_OPENAI_AD_TOKEN, ANTHROPIC_AUTH_TOKEN),
+    // though a call given a key doesn't send it. A keyless check sends no saved or ambient key, so
+    // none is looked up.
+    const sent = { provider, api_key: key, headers: { ...headers } };
+    const secrets = key === null ? Object.values(headers) : callCredentials(sent, { env: io.env });
+    // A stopped call throws the signal's reason, so a passed deadline shows as `timedOut`.
+    const message = error instanceof Error ? error.message : String(error);
+    const text = redactKeys(message, secrets).split(/\s+/).filter(Boolean).join(" ").slice(0, 200);
+    return error instanceof Error ? `${error.name}: ${text}` : text;
+  }
+  return null;
 }
 
 /** Read a provider's key, endpoint, and model, check the model, and save the login. Not ported yet. */

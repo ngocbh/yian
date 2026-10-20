@@ -1659,8 +1659,7 @@ return a promise; a call made while a close is in flight returns that close's pr
 JS throws a `SuppressedError` whose `error` is the close failure and whose `suppressed` is the
 body's error, where Python notes the cleanup failure on the primary. Messages show lists and
 quoted keys in the text form (`memory key(s) ["other"]`, `storage["notes"]`) and drop Python's
-`=` from keyword names (`use supplied to replace one built-in instance`). A `root` of `""` is the
-current directory.
+`=` from keyword names (`use supplied to replace one built-in instance`).
 
 Changed (TS yian): `new ReflectiveMemory({ llmConfig, maxItems, recallLimit, storage,
 createParent, env, createModel, onRetry })` takes an options object. `env` is where

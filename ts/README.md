@@ -88,10 +88,12 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   integers and stored as numbers; LOOP's `times:` and `max:` stay raw on the descriptor and are
   checked and converted when the LOOP builds. An `llm_config:` layer holding `${...}` values is a
   `ValueTemplate` (a `Binding` for one whole-record value), read before the node builds. The CODE
-  reader compiles nothing at load yet: checking an inline body's syntax and `return`, and a
-  reference's file, waits for an awaited load step. A CODE node's `baseDir`, the directory its
-  reference resolves against, comes from `BuildContext.baseDir` (`null` by default). WAIT keeps an
-  `until:` date or datetime as the text written, after checking it parses.
+  reader compiles nothing at build. The awaited load step, `checkFlowCode` (called by `loadFlow`
+  once after assembly), checks every CODE node of the flow and its child flows: an inline body's
+  syntax and a reference's file, refusing a Python-style `module:function`, running no code. A
+  CODE node's `baseDir`, the directory its reference resolves against, comes from
+  `BuildContext.baseDir` (`null` by default). WAIT keeps an `until:` date or datetime as the text
+  written, after checking it parses.
 - `src/compose/validate/` holds the validate phase, the cross-node checks over the assembled flow.
   Outside it only `src/compose/build/` imports it: the pipeline runs the passes, and `boundary.ts`
   takes the `LoweredAsserts` type from `asserts.ts`. Inside it, a pass imports another validate
@@ -263,10 +265,10 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   bound to the original); use TS `private` and prototype methods.
 - Each kind lives in `src/nodes/<kind>/node.ts` (start, end, case, call, map, loop, code, tool,
   human_input, wait) as a `Node` subclass; import it from that file. There is no per-kind index,
-  and, as Python's `yian.nodes`, `src/nodes/index.ts` exports no kind. START's, END's, TOOL's,
-  HUMAN_INPUT's and WAIT's bodies run. The other kinds hold their data, checks and load-time
-  hooks (origins, setup and condition checks, MAP's `over` binding, backward layouts, LOOP
-  `respawn`); their `forward` throws "not ported yet".
+  and, as Python's `yian.nodes`, `src/nodes/index.ts` exports no kind. START's, END's, CASE's,
+  CODE's, TOOL's, HUMAN_INPUT's and WAIT's bodies run. The other kinds hold their data, checks
+  and load-time hooks (origins, setup and condition checks, MAP's `over` binding, backward
+  layouts, LOOP `respawn`); their `forward` throws "not ported yet".
 - AGENT lives in `src/nodes/agent/node.ts`, and its `llm_config` values in
   `src/nodes/agent/llm_values.ts`. The node holds its data, checks and load-time hooks; `forward`
   and `backward` are not ported yet. `callTime` is an accessor over an own field, so setting it

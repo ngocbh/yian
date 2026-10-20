@@ -2667,8 +2667,33 @@ verdict:
 Changed (TS yian): a reference is a relative path to a `.ts`, `.js`, or `.mjs` file plus
 `:fn` (`./helpers.ts:fn`, `../lib/x.ts:fn`), resolved against the flow's base directory.
 An inline body is TypeScript or JavaScript that reads `inputs`. Any other `code:` value
-is read as an inline body, so `./helpers.ts` (no `:fn`) is a body, not a reference. The
-rest of this section (running, `return`, imports) describes Python yian.
+is read as an inline body, so `./helpers.ts` (no `:fn`) is a body, not a reference.
+
+Changed (TS yian): these rules replace the Python-only inline notes below (a body must
+`return`, arbitrary Python, `sys.path` imports, the dotted-token hint); the trust note
+holds for TS and JS code. An inline body runs as a strict async function of `inputs`
+(`return inputs.n * 2`). Its types are stripped, not checked, so use erasable TypeScript
+only (no `enum`, `namespace`, or parameter properties). A body can't use a static
+`import`; a dynamic `import()` of a package or an absolute path works, and local helpers
+go in a reference. `inputs` holds the declared inputs, frozen, with ints up to 2^53 as
+numbers (larger ones as `bigint`s); reading an undeclared name throws. `inputs` is a
+Proxy: only a top-level `return inputs` returns the record, while `return {all: inputs}`
+fails `contract.output` (`Proxy is not a yian value`) and `structuredClone(inputs)`
+throws, so copy it with `{...inputs}`. A whole-number float such as `2.0` reaches the
+body as `2`, and a returned `2` is the int `2`. A body or a referenced function that
+returns `undefined` fails (`CODE body returned no value; return null for no value`). The
+result is checked like a host tool's: a `Date`, a `Map`, or a class instance, even
+nested, fails `contract.output` naming the path (`output at when: Date is not a yian
+value`). A thrown error fails with `node.execute` and the message `<name>: <message>`
+(`TypeError: ...`), located at the throwing line when the runtime reports it, else at
+the `code:` value (a reference's always is, and so is a thrown non-`Error`, a native
+error thrown after an `await` on Bun, or a throw deep in a library's stack). A
+referenced module is imported when the node first runs and cached for the process, so an
+edited file takes effect in a new process. Loading checks an inline body's syntax and
+that a reference's file exists, refuses a Python-style `module:function` value such as
+`pkg.mod:fn` ("use `./file.ts:fn`"), and runs no code. A CODE syntax error is reported
+after the flow's other load errors, such as an invalid `output:` type, because the check
+runs after the flow is assembled.
 
 Inline notes:
 

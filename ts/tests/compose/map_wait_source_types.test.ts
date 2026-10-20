@@ -19,12 +19,12 @@
  * `test_the_issue_flow_is_a_load_error_at_until`, `test_fitting_or_unproven_sources_load` (13),
  * `test_call_directive_over_with_a_str_output_is_a_load_error`, `test_isinstance_keeps_its_own_error`,
  * the first half of `test_tagged_wrong_reference_reports_the_type_first`,
- * `test_record_typedef_is_named`,
- * `test_none_typed_source_is_a_load_error` and `test_type_error_comes_before_the_cycle_error`.
+ * `test_record_typedef_is_named`, `test_none_typed_source_is_a_load_error` and
+ * `test_type_error_comes_before_the_cycle_error`.
  *
- * Changed: TS YAML reads an unquoted date or timestamp as text, so `over: 2026-01-01` and `over: 2026-01-01T10:00:00` are
- * read as text (Python: "a date", "a date and time"), and the unquoted `until:` dates load as text
- * that parses as a date.
+ * Changed: TS YAML reads an unquoted date or timestamp as text, so `over: 2026-01-01` and
+ * `over: 2026-01-01T10:00:00` are read as text (Python: "a date", "a date and time"), and the
+ * unquoted `until:` dates load as text that parses as a date.
  *
  * Pinned elsewhere: `kind_map_parse.test.ts` and `kind_wait_parse.test.ts` pin this file's nine
  * parse-stage cases (`compose_map_wait_source_types__{date_over_literal,int_over_literal,

@@ -37,7 +37,7 @@ import {
 } from "../expr/index.ts";
 import { evaluateWhenRecord } from "../expr/expressions.ts";
 import { sameFeedback } from "../expr/lineage.ts";
-import type { EvaluationTrace, MemoryScope } from "../memory/contracts.ts";
+import type { EvaluationTrace, JsonObject, MemoryContext, MemoryScope } from "../memory/contracts.ts";
 import type { Skill } from "../skills/catalog.ts";
 import type { ToolSet } from "../tools/registry.ts";
 import type { VariablePool } from "../typesys/pool.ts";
@@ -763,6 +763,16 @@ export interface NodeCaps {
    * `needsEvaluationTrace` while evidence capture is on.
    */
   readonly evaluationTrace?: EvaluationTrace;
+  /**
+   * Opens the invocation's memory context once, from the visible base system prompt, the rendered
+   * prompt and the transcript compatibility descriptor; supplied to a node that declares
+   * `needsMemoryContext`. The evaluator closes the context's transcript when the evaluation ends.
+   */
+  readonly openMemoryContext?: (
+    baseSystemPrompt: string,
+    renderedPrompt: string,
+    compatibility: JsonObject,
+  ) => Promise<MemoryContext>;
   /** Receives the node's render capture once; supplied to a node that declares `needsRenderCapture`. */
   readonly captureRender?: (captured: Readonly<Record<string, unknown>>) => void;
   /** The host inbox; supplied to a node that declares `needsSteering`. */

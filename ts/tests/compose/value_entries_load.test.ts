@@ -341,6 +341,19 @@ describe("the record a written-out object keeps", () => {
     expect(canonicalTypeLabel((contract as ValueContract).type.fields!.get("b")!)).toBe(label);
   });
 
+  // Python's `test_a_literal_field_takes_its_literal_type` asserts it through a typed reader.
+  test.each([
+    ["[1, 2]", "list(int)"],
+    ["true", "bool"],
+  ])("a literal field's type reaches a typed reader: %s", (field, label) => {
+    const text = recordFlow(`  r: !object\n    b: ${field}\n`, "!str ${r.output.b}");
+
+    const error = loadErrorOf(text);
+
+    expect(error.message).toBe(`node 'use' input 'c': declared str, but the value is ${label}`);
+    expect(errorLine(error)).toBe(lineOf(text, "c: !str"));
+  });
+
   test("a nested untagged mapping keeps its fields", () => {
     const contract = contractOf(recordFlow("  r: !object\n    p: {q: 1}\n", "${r.output.p}"), "r");
 
@@ -351,6 +364,16 @@ describe("the record a written-out object keeps", () => {
     const contract = contractOf(recordFlow('  r: !object {a: "$${input.n}"}\n', "${r.output.a}"), "r");
 
     expect(contract).toStrictEqual(literalContract({ a: "${input.n}" }));
+  });
+
+  // Python's `test_an_escaped_span_in_an_object_entry_is_text` asserts it through a typed reader.
+  test("an escaped span in an object entry is text to a typed reader", () => {
+    const text = recordFlow('  r: !object {a: "$${input.n}"}\n', "!int ${r.output.a}");
+
+    const error = loadErrorOf(text);
+
+    expect(error.message).toBe("node 'use' input 'c': declared int, but the value is str");
+    expect(errorLine(error)).toBe(lineOf(text, "c: !int"));
   });
 
   test("an object entry over an outside value stays object", () => {

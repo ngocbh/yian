@@ -7,6 +7,7 @@ import { emitKeypressEvents } from "node:readline";
 
 import { reprText } from "../diagnostics.ts";
 import type { Parameter } from "../nodes/contracts.ts";
+import type { QuestionSpec } from "../nodes/human_input/questions.ts";
 import type { ToolContext } from "../tools/context.ts";
 import type { AskUserRequest } from "../tools/registry.ts";
 import { type JsonValue, JSONDecodeError, parseJson } from "../typesys/json.ts";
@@ -486,8 +487,9 @@ export class Terminal {
 
   /**
    * The run's ask_user handler (an `AskUserHandler` from tools/registry.ts): asks `request` in one
-   * turn and returns the answer. A question set answers a record keyed by header; `options` a
-   * single choice; otherwise a free-text prompt. `answerSchema` isn't used.
+   * turn and returns the answer. A question set (`questions`, the HUMAN_INPUT node's
+   * `QuestionSpec`s) answers a record keyed by header; `options` a single choice; otherwise a
+   * free-text prompt. `answerSchema` isn't used.
    *
    * @throws `ctx.signal.reason` when the signal aborts first, or when Ctrl-C or a closed terminal
    *   ends the call after the signal aborted (an `onStop` that aborts it, say).
@@ -963,14 +965,6 @@ async function promptInput(run: RunWidget, decl: Parameter): Promise<unknown> {
   return promptOpenValue(run, decl, type, label);
 }
 
-/** One human_input question, as the HUMAN_INPUT node sends it. */
-interface Question {
-  question: string;
-  header: string;
-  options?: { label: string; description?: string }[] | null;
-  multi_select?: boolean;
-}
-
 const OTHER = "✎ Other (write your own)";
 
 /**
@@ -1005,18 +999,18 @@ function writeRule(output: Output, index: number, total: number, header: string)
 
 /**
  * Ask one question: free text without options; else a choice over `label  —  description` rows
- * and an Other row (a checkbox for `multi_select`), answering the bare labels. Other asks for the
+ * and an Other row (a checkbox for `multiSelect`), answering the bare labels. Other asks for the
  * text that takes its place.
  */
-async function askQuestion(run: RunWidget, question: Omit<Question, "header">): Promise<unknown> {
-  const options = question.options ?? [];
+async function askQuestion(run: RunWidget, question: Omit<QuestionSpec, "header">): Promise<unknown> {
+  const options = question.options;
   if (options.length === 0) return run(textWidget({ label: question.question }));
   const titles = options.map((option) =>
     option.description ? `${option.label}  —  ${option.description}` : option.label,
   );
   titles.push(OTHER);
   const other = (): Promise<string> => run(textWidget({ label: "Your answer", mark: "✎" }));
-  if (question.multi_select) {
+  if (question.multiSelect) {
     const labels: string[] = [];
     for (const i of await run(checkboxWidget({ label: question.question, titles }))) {
       labels.push(i === options.length ? await other() : options[i]!.label);
@@ -1028,12 +1022,12 @@ async function askQuestion(run: RunWidget, question: Omit<Question, "header">): 
 }
 
 /**
- * Answer one ask_user request inside a turn: a question set opens with the panel and asks each
- * question under its rule, answering a record keyed by header; `options` are one choice; otherwise
- * a text prompt labelled with the question.
+ * Answer one ask_user request inside a turn: a question set (the HUMAN_INPUT node's `QuestionSpec`s)
+ * opens with the panel and asks each question under its rule, answering a record keyed by header;
+ * `options` are one choice; otherwise a text prompt labelled with the question.
  */
 async function promptRequest(run: RunWidget, output: Output, request: AskUserRequest): Promise<unknown> {
-  const questions = (request.questions ?? []) as Question[];
+  const questions = (request.questions ?? []) as QuestionSpec[];
   if (questions.length > 0) {
     writePanel(output, request.title || request.nodeId || "this step", request.question, questions.length);
     const answers: [string, unknown][] = [];
@@ -1045,7 +1039,8 @@ async function promptRequest(run: RunWidget, output: Output, request: AskUserReq
     return Object.fromEntries(answers);
   }
   if (request.options && request.options.length > 0) {
-    return askQuestion(run, { question: request.question, options: request.options.map((label) => ({ label })) });
+    const options = request.options.map((label) => ({ label, description: "" }));
+    return askQuestion(run, { question: request.question, options, multiSelect: false });
   }
   return run(textWidget({ label: request.question || `input for ${request.nodeId}` }));
 }

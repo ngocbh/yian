@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 
 import { Terminal, type TerminalOptions, TerminalStopped } from "../../src/cli/terminal.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { parseQuestions } from "../../src/nodes/human_input/questions.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import type { AskUserRequest } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
@@ -1427,10 +1428,10 @@ async function aQuestionSetShowsThePanelAndARulePerQuestion(): Promise<void> {
   const answer = terminal.askUser(
     request({
       question: "Complete the review",
-      questions: [
+      questions: parseQuestions([
         { question: "Choose areas", header: "Areas", options: [{ label: "API" }, { label: "UI" }], multi_select: true },
-        { question: "Notes?", header: "Notes", options: [], multi_select: false },
-      ],
+        { question: "Notes?", header: "Notes" },
+      ]),
       answerSchema: [
         { name: "Areas", type: "list[str]" },
         { name: "Notes", type: "str" },
@@ -1483,14 +1484,13 @@ async function aSingleSelectShowsDescriptionsAndReturnsTheBareLabel(): Promise<v
   const { input, terminal, view } = setup();
   const answer = terminal.askUser(
     request({
-      questions: [
+      questions: parseQuestions([
         {
           question: "Which framework?",
           header: "Framework",
-          options: [{ label: "React", description: "A UI library" }, { label: "Vue", description: "" }],
-          multi_select: false,
+          options: [{ label: "React", description: "A UI library" }, { label: "Vue" }],
         },
-      ],
+      ]),
       nodeId: "pick/framework",
     }),
     toolContext(),
@@ -1519,9 +1519,9 @@ async function otherAndTextQuestionsFillARecordKeyedByHeader(): Promise<void> {
   const answer = terminal.askUser(
     request({
       questions: [
-        { question: "Why?", header: "__proto__", options: [], multi_select: false },
-        { question: "Pick", header: "", options: [{ label: "A" }], multi_select: false },
-        { question: "Anything else?", header: "Extra" },
+        { question: "Why?", header: "__proto__", options: [], multiSelect: false },
+        { question: "Pick", header: "", options: [{ label: "A", description: "" }], multiSelect: false },
+        { question: "Anything else?", header: "Extra", options: [], multiSelect: false },
       ],
     }),
     toolContext(),
@@ -1575,7 +1575,12 @@ async function aCheckboxTogglesInvertsAndReturnsChoiceOrder(): Promise<void> {
     terminal.askUser(
       request({
         questions: [
-          { question: "Pick", header: "P", options: [{ label: "API" }, { label: "UI" }], multi_select: true },
+          {
+            question: "Pick",
+            header: "P",
+            options: [{ label: "API", description: "" }, { label: "UI", description: "" }],
+            multiSelect: true,
+          },
         ],
       }),
       toolContext(),
@@ -1629,7 +1634,9 @@ async function ctrlQInterruptsACheckbox(): Promise<void> {
   const { input, output, terminal, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
   const answer = thrown(
     terminal.askUser(
-      request({ questions: [{ question: "Pick", header: "P", options: [{ label: "A" }], multi_select: true }] }),
+      request({
+        questions: [{ question: "Pick", header: "P", options: [{ label: "A", description: "" }], multiSelect: true }],
+      }),
       toolContext(),
     ),
   );
@@ -1719,8 +1726,8 @@ async function aQuestionSetAbortedMidwayDiscardsThePartialRecord(): Promise<void
     terminal.askUser(
       request({
         questions: [
-          { question: "A?", header: "a", options: [] },
-          { question: "B?", header: "b", options: [] },
+          { question: "A?", header: "a", options: [], multiSelect: false },
+          { question: "B?", header: "b", options: [], multiSelect: false },
         ],
       }),
       toolContext(controller.signal),
@@ -1754,7 +1761,7 @@ async function aFailingWriteAfterAnAbortStillThrowsTheReason(): Promise<void> {
 async function aFailingOutputFailsAQuestionSet(): Promise<void> {
   const { input, output, terminal, exitHooks } = setup({ throwOn: 1 });
   const answer = terminal.askUser(
-    request({ questions: [{ question: "A?", header: "a", options: [] }] }),
+    request({ questions: [{ question: "A?", header: "a", options: [], multiSelect: false }] }),
     toolContext(),
   );
   await assert.rejects(answer, (error) => error === output.failure);
@@ -1969,7 +1976,8 @@ async function ctrlNAndCtrlPMoveInASelectAndACheckbox(): Promise<void> {
   const choice = terminal.askChoice("Pick", ["a", "b", "c"]);
   input.write(CTRL_N + CTRL_N + CTRL_N + CTRL_P + ENTER);
   assert.equal(await choice, "c");
-  const question = { question: "Pick", header: "P", options: [{ label: "API" }, { label: "UI" }], multi_select: true };
+  const options = [{ label: "API", description: "" }, { label: "UI", description: "" }];
+  const question = { question: "Pick", header: "P", options, multiSelect: true };
   const picked = terminal.askUser(request({ questions: [question] }), toolContext());
   input.write(CTRL_N + SPACE + CTRL_P + CTRL_P + SPACE + ENTER + "x" + ENTER);
   assert.deepEqual(await picked, { P: ["UI", "x"] });

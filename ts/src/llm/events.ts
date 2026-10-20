@@ -158,17 +158,23 @@ function escapeControls(text: string): string {
  * levels. Raw control characters such as tabs and newlines are accepted inside strings.
  *
  * @param text The arguments text as the model sent it.
+ * @param options `anyDepth` drops the nesting limit, for a caller that checks the depth of the
+ *   value it reads out of the object.
  * @returns `[object, null]` on success, `[null, text]` on any failure, so the caller can
  *   apply its own checks to the raw text.
  */
-export function parseArguments(text: string): [JsonObject | null, string | null] {
+export function parseArguments(
+  text: string,
+  options: { anyDepth?: boolean } = {},
+): [JsonObject | null, string | null] {
   if (text === "") return [{}, null];
   try {
     // Models send raw tabs and newlines inside string values, which the provider SDKs
     // accept; a strict parse would reject working calls.
     const value = parseJson(escapeControls(text), "plain");
     if (typeof value !== "object" || value === null || Array.isArray(value)) return [null, text];
-    checkJsonValue(value, "");
+    // `parseJson` already refuses everything else `checkJsonValue` does, at any depth.
+    if (!options.anyDepth) checkJsonValue(value, "");
     return [value, null];
   } catch (error) {
     if (error instanceof JSONDecodeError || error instanceof MessageFormatError) return [null, text];

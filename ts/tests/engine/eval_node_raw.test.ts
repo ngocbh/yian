@@ -5,8 +5,10 @@
  * Ported: `test_raw_evaluation_returns_closed_success_route_and_grow_values`,
  * `test_raw_node_raise_and_invalid_grow_are_failures_not_observers` (cause type `Error` for
  * Python's `RuntimeError`), `test_raw_streaming_uses_only_the_injected_transient_callback`,
- * `test_raw_stream_callback_failure_propagates_unchanged` and
- * `test_render_capture_is_opt_in_single_write_and_detached_until_close`.
+ * `test_raw_stream_callback_failure_propagates_unchanged`,
+ * `test_render_capture_is_opt_in_single_write_and_detached_until_close` and
+ * `test_scoped_render_capture_requires_recorded_model_map_entry` (a `ScriptedModel` from `models`
+ * replies, for Python's patched `run_agent`; "not run" reads as the model receiving no request).
  *
  * Ported (adapted): `test_public_evaluation_always_returns_frozen_slotted_wrapper` and
  * `test_raw_failure_is_frozen_slotted_and_preserves_diagnostics`: the field names are the own
@@ -20,8 +22,6 @@
  * which is a value here. `test_render_capture_preserves_original_host_exception_and_closes`
  * monkeypatches `canonical_seed`; in its place a payload with a throwing getter rejects `evalNode`
  * with the getter's error, and the capture closes.
- * `test_scoped_render_capture_requires_recorded_model_map_entry` uses a local scoped node that
- * publishes its render before its model call, for Python's AGENT.
  * The shared `drive` evaluates the node in a one-node `CompiledFlow` wired from a
  * `FuncNode`'s `reads`, as Python's stub flow derives it.
  * `test_raw_stream_callback_failure_closes_the_node_generator_before_returning` and
@@ -46,14 +46,15 @@
  * fault the node catches still rejecting `evalNode`,
  * and a render write by the node's dropped code, landing while the evaluator waits on a steering
  * `drain`, rejecting it.
- *
- * Later (T5-11a): `test_scoped_render_capture_requires_recorded_model_map_entry` through AGENT.
  */
 
 import { describe, expect, test } from "bun:test";
 
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { StreamChunk } from "../../src/events.ts";
+import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
 import {
   CapabilityFault,
   Grow,
@@ -271,37 +272,29 @@ describe("render capture", () => {
   });
 
   test("scoped render capture requires the recorded model map entry", async () => {
-    const calls: string[] = [];
-
-    /** A scoped node publishing its render before its model call. */
-    class Scoped extends Node {
-      readonly kind = NodeKind.AGENT;
-      override readonly needsRenderCapture = true;
-
-      override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
-        caps.captureRender?.({ prompt: "hello" });
-        calls.push("hello");
-        return new Output("hello");
-      }
-    }
-
-    const node = new Scoped("a/runtime/id");
+    const config = { provider: "openai", model: "ambient" };
+    const node = new AgentNode("a/runtime/id", { prompt: "hello", llmConfig: config });
     node.executionScope = new ExecutionScope(["authored", "agent"]);
+    const reply = () =>
+      new Response({ message: new Message({ role: "assistant", parts: [new TextPart("hello")] }), finishReason: "stop" });
+    const model = new ScriptedModel([reply(), reply()], config);
+    const models = { env: () => undefined, createModel: () => model };
     const error = await rejected(
-      evalNode(node, null, new VariablePool(), { captureBindings: true, effectiveLlmByStaticPath: {} }),
+      evalNode(node, null, new VariablePool(), { captureBindings: true, effectiveLlmByStaticPath: {}, models }),
     );
     expect(error).toBeInstanceOf(RangeError);
     expect((error as Error).message).toMatch(/missing static path 'authored\/agent'/);
-    expect(calls).toEqual([]);
-    const config = { provider: "openai", model: "recorded", openai: { temperature: 0.5 } };
+    expect(model.requests).toEqual([]);
+    const recorded = { provider: "openai", model: "recorded", openai: { temperature: 0.5 } };
     const evaluated = await evalNode(node, null, new VariablePool(), {
       captureBindings: true,
-      effectiveLlmByStaticPath: { "authored/agent": config },
+      effectiveLlmByStaticPath: { "authored/agent": recorded },
+      models,
     });
-    config.model = "later mutation";
-    const recorded = evaluated.backwardCapture!.nodeData["effective_llm_config"] as Record<string, unknown>;
-    expect(recorded["model"]).toBe("recorded");
-    const ordinary = await evalNode(node, null, new VariablePool(), { effectiveLlmByStaticPath: {} });
+    recorded.model = "later mutation";
+    const captured = evaluated.backwardCapture!.nodeData["effective_llm_config"] as Record<string, unknown>;
+    expect(captured["model"]).toBe("recorded");
+    const ordinary = await evalNode(node, null, new VariablePool(), { effectiveLlmByStaticPath: {}, models });
     expect(ordinary.outcome).toEqual(evaluated.outcome);
     expect(ordinary.backwardCapture).toBeNull();
   });

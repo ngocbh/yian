@@ -26,22 +26,25 @@
  * `test_static_capture_exception_escapes_unchanged_and_capture_off_calls_no_hook` (the hook throws
  * a `RangeError` for Python's `ValueError`),
  * `test_static_layout_is_captured_before_a_preassert_failure_after_defaults` (it empties END's
- * public `names` for Python's `_names.clear()`) and
- * `test_custom_run_uses_its_existing_pre_run_capture_boundary`.
+ * public `names` for Python's `_names.clear()`),
+ * `test_custom_run_uses_its_existing_pre_run_capture_boundary` and
+ * `test_agent_capture_keeps_variable_inventory_separate_from_delivered_inputs` (a `ScriptedModel`
+ * from `models` replies the rendered prompt, for Python's patched `run_agent`).
  *
  * Ported (adapted): `test_static_backward_capture_and_names_are_detached_for_the_actual_invocation`:
  * the captured node data is deep-frozen, so the caller's write throws instead of changing a copy.
  *
  * Changed: `test_static_capture_serialization_faults_are_host_faults_before_the_body` refuses NaN
  * for Python's infinity, which is a value here, and a class instance for Python's `object()`.
- *
- * Later (T5-11a): `test_agent_capture_keeps_variable_inventory_separate_from_delivered_inputs`.
  */
 
 import { expect, test } from "bun:test";
 
 import { Failure } from "../../src/diagnostics.ts";
 import type { FeedbackValue } from "../../src/expr/index.ts";
+import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
 import {
   BackwardContext,
   BackwardResult,
@@ -61,6 +64,7 @@ import { StartNode } from "../../src/nodes/start/node.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { captureBindings } from "../../src/runtime/trace.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
+import { parametersFromYaml } from "../compose/declarations.ts";
 import { rejected } from "./run_state_fixtures.ts";
 
 /** A backward context over the node's declared inputs and captured layout. */
@@ -477,4 +481,29 @@ test("custom run uses its existing pre-run capture boundary", async () => {
   expect(evaluated.backwardCapture!.inputNames).toEqual(["topic", "limit"]);
   expect(evaluated.backwardCapture!.nodeData).toEqual({ settings: { active: true } });
   expect(node.captures).toBe(1);
+});
+
+test("an agent capture keeps the variable inventory separate from the delivered inputs", async () => {
+  const config = { provider: "openai", model: "gpt-5.5" };
+  const variables = parametersFromYaml("variables:\n  instruction: !str Summarize clearly\n", new Map(), {
+    field: "variables",
+    requireDefault: true,
+  });
+  const node = new AgentNode("writer", { prompt: "${topic}: ${instruction}", llmConfig: config, variables });
+  node.params = [new Parameter("topic")];
+  const reply = new Message({ role: "assistant", parts: [new TextPart("reefs: Summarize clearly")] });
+  const model = new ScriptedModel([new Response({ message: reply, finishReason: "stop" })], config);
+
+  const evaluated = await evalNode(node, null, new VariablePool(), {
+    wiringOverride: { topic: "reefs" },
+    captureBindings: true,
+    models: { env: () => undefined, createModel: () => model },
+  });
+
+  expect((evaluated.outcome as Output).value).toBe("reefs: Summarize clearly");
+  expect(model.requests[0]!.messages.at(-1)!.text()).toBe("reefs: Summarize clearly");
+  expect(evaluated.backwardCapture!.variableNames).toEqual(["instruction"]);
+  expect(evaluated.backwardCapture!.nodeData["variables"]).toEqual({ instruction: "Summarize clearly" });
+  expect(evaluated.backwardCapture!.nodeData["rendered_prompt"]).toBe("reefs: Summarize clearly");
+  expect(evaluated.bindings!.boundInputs).toEqual({ topic: "reefs" });
 });

@@ -7,7 +7,11 @@
  * `loaded.origin_resolver`.
  * `test_formatting_only_relocation_preserves_output_origins_and_fingerprint` keeps its origin half.
  * `test_nested_inline_child_output_contract_uses_its_physical_site` reads the CODE node of the
- * CALL's baked child.
+ * CALL's baked child. `test_agent_structured_failure_selects_exact_authored_output_field` runs
+ * the assembled AGENT through `evalNode` (`drive`) with a `ScriptedModel` from `models` where
+ * Python runs the loaded flow, and checks the failure's origin site through the builder (Python:
+ * `loaded.diagnose`); the exhausted reply is an `OutputInvalidError` coded `agent.output_invalid`
+ * (Python: a `ValidationError`, `node.execute`).
  *
  * Pinned in `engine/read_type.test.ts` (the cases of the reader that raises):
  * `test_compact_invalid_output_type_reports_the_top_level_output_site`,
@@ -22,8 +26,7 @@
  * Later (T3-22, T4-8):
  * `test_nested_output_failure_selects_the_exact_contract_field`,
  * `test_root_output_failure_selects_the_contract_root` and
- * `test_scalar_list_output_failure_falls_back_to_the_contract_root`. Later (T5-11a):
- * `test_agent_structured_failure_selects_exact_authored_output_field`.
+ * `test_scalar_list_output_failure_falls_back_to_the_contract_root`.
  * Later (T3-22): `test_multi_node_def_output_contract_uses_the_nested_node_site`,
  * `test_flat_def_output_contract_uses_the_projected_def_output_site`,
  * `test_external_alias_rebases_every_output_contract_origin` and the fingerprint half of the
@@ -40,10 +43,14 @@ import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import type { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
+import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { ContractOrigins, ValueContract } from "../../src/nodes/contracts.ts";
 import { ValueKind } from "../../src/typesys/values.ts";
+import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
+import { drive } from "../engine/run_state_fixtures.ts";
 import { assembleText, loadError } from "./declarations.ts";
 
 const NESTED_OUTPUT_FLOW = `id: nested-output-contract
@@ -338,4 +345,42 @@ output: \${code_leaf.output}
     expect(contract.origins.entries).toEqual([]);
     expectSite(builder, contract.origins.default, nodes.child(nodeId).child("output"));
   }
+});
+
+test("an agent structured failure selects the exact authored output field", async () => {
+  const text = `id: agent-output-origin
+name: agent-output-origin
+nodes:
+  writer:
+    kind: agent
+    prompt: write a profile
+    retries: 0
+    llm_config:
+      provider: openai
+      model: gpt-4o
+    output:
+      profile:
+        age: int
+output: \${writer.output}
+`;
+  const { flow, builder } = assembleText(text, "agent-output.yaml");
+  const writer = flow.compiled.nodes.get("writer")!;
+  const ageOrigin = entriesOf(writer.outputContract as ValueContract).get("profile.age")!;
+  const config = { provider: "openai", model: "gpt-4o" };
+  const reply = new Message({ role: "assistant", parts: [new TextPart('{"profile": {"age": "not-an-integer"}}')] });
+  const model = new ScriptedModel([new Response({ message: reply, finishReason: "stop" })], config);
+
+  const outcome = await drive(writer, { models: { env: () => undefined, createModel: () => model } });
+
+  expect(outcome).toBeInstanceOf(EvaluationFailure);
+  const { failure } = outcome as EvaluationFailure;
+  expect([failure.code, failure.causeType]).toEqual(["agent.output_invalid", "OutputInvalidError"]);
+  expect(failure.trace.at(-1)).toBe(ageOrigin);
+  const age = SourceDocument.parse(text, "agent-output.yaml")
+    .root.child("nodes")
+    .child("writer")
+    .child("output")
+    .child("profile")
+    .child("age");
+  expectSite(builder, failure.trace.at(-1), age);
 });

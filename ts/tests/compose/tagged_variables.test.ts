@@ -11,8 +11,13 @@
  * TS-only: the harvested-case table, which assembles the conformance case's flow as the loader
  * calls `assemble`, comparing the message and the last frame.
  *
- * Later (T4-8, T5-11a): `test_tagged_variables_render_their_defaults` (needs
- * `AgentNode.forward`; its definition placements also need T3-22).
+ * Ported: `test_tagged_variables_render_their_defaults`, its compact placement: the assembled AGENT
+ * runs through `forward` with a `ScriptedModel` (its environment sets the default model, as
+ * Python's test configuration does), the request's prompt checked where Python's patched
+ * `run_agent` returns it as the run's output.
+ *
+ * Later (T4-8, T3-22): the definition, flat-definition and inline placements of
+ * `test_tagged_variables_render_their_defaults` (a loaded flow run through CALL).
  * Later (T3-22): the definition and flat-definition placements of
  * `test_a_tagged_variable_needs_a_default_that_fits`.
  */
@@ -20,6 +25,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
+import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 import { assembled, assembleText, type CaseRow, loadError, parametersFromYaml, runCase } from "./declarations.ts";
 
@@ -27,6 +34,9 @@ import { assembled, assembleText, type CaseRow, loadError, parametersFromYaml, r
 install(BUILTIN);
 beforeEach(() => install(BUILTIN));
 afterEach(forget);
+
+/** The default model Python's test configuration sets; the compact flow has no `llm_config`. */
+const DEFAULT_MODEL = { provider: "openai", model: "gpt-5.5" };
 
 const REG = readTypedefs({ Tone: "Literal(concise, detailed)" });
 
@@ -112,6 +122,21 @@ describe("tagged variables", () => {
     expect(variables.every((variable) => variable.hasDefault && !variable.required)).toBe(true);
     expect(variables[0]!.contract!.type.bounds).toEqual([1n, 12n]);
     expect(variables[1]!.contract!.type.tags).toEqual(new Set(["concise", "detailed"]));
+  });
+
+  test("tagged variables render their defaults", async () => {
+    const reply = new Message({ role: "assistant", parts: [new TextPart("done")] });
+    const model = new ScriptedModel([new Response({ message: reply, finishReason: "stop" })], DEFAULT_MODEL);
+    const node = assembleText(compactFlow(VARIABLES)).flow.compiled.nodes.get("tagged_variables")!;
+    const defaults: Readonly<Record<string, string>> = {
+      YIAN_DEFAULT_PROVIDER: DEFAULT_MODEL.provider,
+      YIAN_DEFAULT_MODEL: DEFAULT_MODEL.model,
+    };
+    const env = (name: string) => defaults[name];
+
+    await node.forward({}, { models: { env, createModel: () => model } });
+
+    expect(model.requests[0]!.messages.at(-1)!.text()).toBe("Summarize clearly in 4 sentences, concise.");
   });
 });
 

@@ -15,8 +15,8 @@
  * Invariant: a node never writes the pool. It describes its one output value as
  * `new Output(value)`; the engine performs the write under the node's id. This keeps nodes pure.
  *
- * Knows about:   diagnostics, events, expr, memory contracts, platform (the `Scheduler` type),
- *                skills, tools, typesys, nodes/binding, nodes/contracts.
+ * Knows about:   diagnostics, events, expr, llm_clients (types), memory contracts, platform (the
+ *                `Scheduler` type), skills, tools, typesys, nodes/binding, nodes/contracts.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -38,6 +38,7 @@ import {
 } from "../expr/index.ts";
 import { evaluateWhenRecord } from "../expr/expressions.ts";
 import { sameFeedback } from "../expr/lineage.ts";
+import type { ModelAccess } from "../llm_clients/factory.ts";
 import type { EvaluationTrace, JsonObject, MemoryContext, MemoryScope } from "../memory/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
@@ -807,6 +808,8 @@ export interface NodeCaps {
   readonly captureRender?: (captured: Readonly<Record<string, unknown>>) => void;
   /** The host inbox; supplied to a node that declares `needsSteering`. */
   readonly steering?: Steering;
+  /** The run's environment and model builder; supplied to a node that declares `needsModels`. */
+  readonly models?: ModelAccess;
 }
 
 /**
@@ -905,6 +908,12 @@ export abstract class Node {
    * run boundary injected it and this is set. Writable: AGENT sets it from its `steerable:` flag.
    */
   needsSteering: boolean = false;
+  /**
+   * Declares "I call models": the evaluator supplies the run's model access only when the run
+   * boundary injected it and this is set, so a run's environment and model builder never leak
+   * into another run.
+   */
+  readonly needsModels: boolean = false;
 
   /** The node's unique id within its (possibly namespaced) flow. */
   id: string;

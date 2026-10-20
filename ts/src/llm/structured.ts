@@ -196,10 +196,11 @@ export class StructuredPlan {
   /**
    * Return the JSON object `response` answers with, unvalidated (ints as `bigint`).
    *
-   * The tool strategies read the first call of the schema's tool whose arguments parsed. The
-   * text strategies read the message's text, stripped of whitespace and backticks, or else the
-   * text inside its first code fence up to the last one; either must be one JSON object, with no
-   * repair.
+   * The tool strategies read the first call of the schema's tool whose arguments parsed, or else
+   * whose raw arguments text is a JSON object. The text strategies read the message's text,
+   * stripped of whitespace and backticks, or else the text inside its first code fence up to the
+   * last one; either must be one JSON object, with no repair. The object may nest past
+   * `YIAN_MAX_VALUE_NESTING`: the caller checks the value it holds.
    *
    * @throws {MissingToolCallError} A tool strategy's reply has no valid call of the schema's tool.
    * @throws {StructuredOutputError} A text strategy's reply holds no JSON object; the message
@@ -209,7 +210,10 @@ export class StructuredPlan {
     const parts = response.message.parts;
     if (this.strategy === "forced_tool" || this.strategy === "unforced_tool") {
       for (const part of parts) {
-        if (part instanceof ToolCallPart && part.name === this.name && part.arguments !== null) return part.arguments;
+        if (!(part instanceof ToolCallPart) || part.name !== this.name) continue;
+        // The adapter's parse refuses arguments nesting past the limit and keeps their raw text.
+        const args = part.arguments ?? (part.rawArguments === null ? null : parseObject(part.rawArguments));
+        if (args !== null) return args;
       }
       throw new MissingToolCallError(`the reply did not call the ${this.name} tool; call it with the answer`);
     }
@@ -252,11 +256,11 @@ function fenced(text: string): string {
 }
 
 /**
- * Return the JSON object `text` holds, or `null`; an empty text holds none (checked here because
- * `parseArguments` reads `""` as `{}`).
+ * Return the JSON object `text` holds, at any depth, or `null`; an empty text holds none (checked
+ * here because `parseArguments` reads `""` as `{}`).
  */
 function parseObject(text: string): JsonObject | null {
-  return text === "" ? null : parseArguments(text)[0];
+  return text === "" ? null : parseArguments(text, { anyDepth: true })[0];
 }
 
 /**

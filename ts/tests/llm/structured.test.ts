@@ -729,6 +729,18 @@ describe("StructuredPlan: parse a tool reply", () => {
     });
   });
 
+  test.each(toolPlans)("%s: arguments nesting past maxValueNesting parse from their raw text", (_strategy, plan) => {
+    install({ ...BUILTIN, maxValueNesting: 3 });
+    // The adapter's parse refused them, so the call holds only the raw text.
+    const raw = '{"answer": {"b": [[1]]}}';
+    const deep = new ToolCallPart({ id: "c1", name: "Record", arguments: null, rawArguments: raw });
+    try {
+      expect(plan.parse(reply([deep]))).toEqual({ answer: { b: [[1n]] } });
+    } finally {
+      install(BUILTIN);
+    }
+  });
+
   const missing: [string, Part[]][] = [
     ["text only", [new TextPart('{"answer": "x", "score": 1}')]],
     ["only another tool's call", [call("search", { q: "x" })]],
@@ -819,11 +831,9 @@ describe("StructuredPlan: parse a text reply", () => {
     expect(error.message).toBe("Invalid json output: `not json`");
   });
 
-  test.each(textPlans)("%s: nesting past maxValueNesting is invalid", (_strategy, plan) => {
+  test.each(textPlans)("%s: a reply nesting past maxValueNesting parses; the caller checks its depth", (_strategy, plan) => {
     install({ ...BUILTIN, maxValueNesting: 3 });
-    expect(plan.parse(reply([new TextPart('{"a": {"b": [1]}}')]))).toEqual({ a: { b: [1n] } });
-    const error = thrown(() => plan.parse(reply([new TextPart('{"a": {"b": [[1]]}}')])));
-    expect(error.message).toBe('Invalid json output: {"a": {"b": [[1]]}}');
+    expect(plan.parse(reply([new TextPart('{"a": {"b": [[1]]}}')]))).toEqual({ a: { b: [[1n]] } });
   });
 
   test.each(textPlans)("%s: a refusal with no text names the refusal", (_strategy, plan) => {

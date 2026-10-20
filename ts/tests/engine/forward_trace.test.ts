@@ -179,6 +179,10 @@
  *   is in flight and `late` after `peer` committed, each read's value and producer agreeing.
  * - `test_discarded_pooled_outcomes_are_not_trace_occurrences`: the sibling is a `BlockingNode`
  *   drained by the failure, for Python's stop event.
+ * - `test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace`: the AGENT's model
+ *   blocks until the failure aborts its signal (for Python's patched `run_agent` waiting on the stop
+ *   event), and the failing sibling waits for that model call; the run records the agent's model
+ *   map by hand.
  * - `test_trace_memory_scope_is_detached_and_replayed_without_evidence`: a `MemoryScope` is frozen
  *   by its constructor, so the occurrence may hold the node's scope itself; replacing the node's
  *   scope afterward doesn't change it, and the replay keeps it.
@@ -211,9 +215,8 @@
  * `test_loop_carried_routes_survive_live_pruning` and the `call`, `map`, `loop`, `nested-call` and
  * `nested-map` rows of `test_trace_replay_matches_live_accepted_prefixes`.
  *
- * Later (T5-11a), through AGENT:
- * `test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution` and
- * `test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace`.
+ * Later (T3-22, T4-10): `test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution`
+ * (it loads a flow with `defs` and runs AGENTs under CALL, MAP and LOOP growth).
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -222,6 +225,7 @@ import { type CompiledFlow, copyGraph, END_ID, FlowOutput, START_ID } from "../.
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import { NodeSucceeded, RunFailed, RunSucceeded } from "../../src/events.ts";
+import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import {
   type FeedbackValue,
@@ -233,6 +237,7 @@ import {
 } from "../../src/expr/lineage.ts";
 import { evalBinding } from "../../src/expr/template.ts";
 import { EvaluationEvidence, MemoryScope, MemorySection } from "../../src/memory/contracts.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { DeclSite, MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
 import { BindingCapture } from "../../src/nodes/binding.ts";
 import {
@@ -309,6 +314,7 @@ import {
 import { FileRef, Type, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { JSONDecodeError, logJson, parseJson } from "../../src/typesys/json.ts";
 import {
+  aborted,
   BlockingNode,
   BranchNode,
   commitStartSuccess,
@@ -3409,4 +3415,57 @@ test.each(["output", "route", "failure"] as const)("trace replay matches live ac
   for (const [length, expected] of [...snapshots].sort(([a], [b]) => a - b)) {
     expect(replayTraceSnapshot(replayed(copyGraph(original), records.slice(0, length)).trace!)).toEqual(expected);
   }
+});
+
+test("a discarded agent worker keeps its render capture out of the accepted trace", async () => {
+  const config = { provider: "openai", model: "gpt-5.5" };
+  const entered = Promise.withResolvers<void>();
+  const prompts: string[] = [];
+  const blocking: ChatModel = {
+    ...config,
+    stream: (request, options) => {
+      prompts.push(request.messages.at(-1)!.text());
+      entered.resolve();
+      return new EventStream(
+        (async function* (): AsyncGenerator<Event> {
+          await aborted(options!.signal!);
+        })(),
+      );
+    },
+  };
+
+  /** Fails once the agent's model call is in flight. */
+  class FailAfterEntry extends Node {
+    readonly kind = NodeKind.CODE;
+
+    override async forward(): Promise<NodeResult> {
+      await entered.promise;
+      throw new Error("sibling failed");
+    }
+  }
+
+  const slow = new AgentNode("slow", { prompt: "captured but discarded", llmConfig: config });
+  const built = engine(
+    graph([slow, new FailAfterEntry("bad")], [
+      [START_ID, "slow"],
+      [START_ID, "bad"],
+      ["slow", END_ID],
+      ["bad", END_ID],
+    ]),
+    {
+      learnable: true,
+      numWorkers: 2,
+      effectiveLlmByStaticPath: { slow: config },
+      models: { env: () => undefined, createModel: () => blocking },
+    },
+  );
+
+  await built.run();
+
+  expect(built.state.result).toBeInstanceOf(RunFailed);
+  expect(prompts).toEqual(["captured but discarded"]);
+  const trace = built.state.trace!;
+  expect(trace.started.has("slow")).toBe(true);
+  expect(trace.occurrences.map((item) => item.nodeId)).toEqual([START_ID, "bad"]);
+  expect(trace.currentWriters.has("slow")).toBe(false);
 });

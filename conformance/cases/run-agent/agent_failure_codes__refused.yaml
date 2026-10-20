@@ -1,0 +1,38 @@
+# The AGENT's model call fails with a 400 reply whose body names content_filter.
+# No retry (YIAN_MODEL_RETRIES=0); TS fails provider.refused and Python node.execute.
+kind: run
+rules: [failure-codes]
+flow: |
+  id: agent-failure-refused
+  name: agent_failure_refused
+  nodes:
+    write:
+      kind: agent
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Write a line."
+  output: ${write.output}
+env: {OPENAI_API_KEY: "<key:1>", YIAN_MODEL_RETRIES: '0'}
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    write:
+      agent:
+        - chunks: []
+          raise: {class: BadRequestError, status: 400, message: '{"error": {"code": "content_filter", "message": "The response was filtered"}}'}
+expect:
+  output:
+    status: failed
+    failure:
+      code: provider.refused
+      message: '{"error": {"code": "content_filter", "message": "The response was filtered"}}'
+      node: write
+      frames: [{label: flow.yaml, range: [4, 3, 4, 8]}]
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: '{"error": {"code": "content_filter", "message": "The response was filtered"}}'
+      node: write
+      frames: [{label: flow.yaml, range: [4, 3, 4, 8]}]

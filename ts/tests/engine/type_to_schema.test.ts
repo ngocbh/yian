@@ -1,6 +1,7 @@
 /**
- * `typeToSchema`: the JSON Schema an AGENT asks the model to fill for its declared `output:`, a
- * port of the schema halves of `tests/engine/test_type_to_schema.py` and of the schema half of
+ * `typeToSchema`: the JSON Schema an AGENT asks the model to fill for its declared `output:`, and
+ * `checkReply`, the check of a reply against it; a port of `tests/engine/test_type_to_schema.py`
+ * and of the schema half of
  * `test_flow_fingerprint_preserves_structural_field_order_used_by_agent_schema`
  * (`tests/engine/test_flow_identity.py`). Python reads a pydantic model's `__name__` and
  * `model_json_schema()`; TS reads the schema and its `title`.
@@ -22,18 +23,33 @@
  * named `properties`; bounds on a non-numeric scalar; `file` and `None` throwing; `$defs` keys and
  * clashes.
  *
- * Later (T5-11a): the validate and unwrap halves (`model_validate`, `_unwrap`, the
- * `model_validate` half of `test_large_numeric_schema_bounds_match_resolved_type`),
- * `test_union_members_reject_unknown_fields_and_unwrap_to_the_member_dict`,
- * `test_null_at_an_any_position_is_reported_at_that_position` and
- * `test_absent_optional_any_record_field_reads_none`. Later (T5-11a, T3-22):
- * `test_agent_with_any_output_loads_and_returns_the_value`.
+ * The validate and unwrap halves (`model_validate`, `_unwrap`) go through `checkReply`, yian's
+ * value check of a parsed reply: each "(validate half)" row, the `model_validate` half of
+ * `test_large_numeric_schema_bounds_match_resolved_type`,
+ * `test_union_members_reject_unknown_fields_and_unwrap_to_the_member_dict` (members closed and
+ * unwrapped to the member record), `test_records_nested_in_union_members_reject_unknown_fields`,
+ * and, through `generateStructured`, `test_null_at_an_any_position_is_reported_at_that_position`
+ * (the `OutputInvalidError`'s path) and `test_absent_optional_any_record_field_reads_none` (also in
+ * declared field order). Changed: an int in a `float` slot stays an int (`float(-0.5..1)`'s
+ * `1`); the error locations Python reads off
+ * pydantic (`("items", 0, "scores", 0, 1)`) are the value check's paths, relative to the output
+ * (`[0, "scores", 0, 1]`). TS-only: an open record drops unknown fields and comes back in declared
+ * field order.
+ *
+ * Later (T4-8/T3-22), it loads and runs a flow: `test_agent_with_any_output_loads_and_returns_the_value`.
  */
 
 import { describe, expect, test } from "bun:test";
 
 import { compareCodeUnits } from "../../src/diagnostics.ts";
-import { typeToSchema } from "../../src/nodes/agent/structured.ts";
+import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import {
+  checkReply,
+  generateStructured,
+  OutputInvalidError,
+  typeToSchema,
+} from "../../src/nodes/agent/structured.ts";
 import { questionListType } from "../../src/nodes/human_input/questions.ts";
 import { type JsonObject, type JsonValue, parseJson } from "../../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
@@ -900,6 +916,215 @@ test("test_flow_fingerprint_preserves_structural_field_order_used_by_agent_schem
   );
   expect(Object.keys(obj(schemaOf(first).properties))).toEqual(["first", "second"]);
   expect(Object.keys(obj(schemaOf(second).properties))).toEqual(["second", "first"]);
+});
+
+/** The `TypeCheckError` `checkReply` throws for `data` against `typ`. */
+function refused(typ: Type, data: JsonObject): TypeCheckError {
+  try {
+    checkReply(data, typ);
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    return error as TypeCheckError;
+  }
+  throw new Error("checkReply accepted the reply");
+}
+
+/** A native model whose every reply's text is `payload` (JSON). */
+function native(payload: string, calls = 1): ScriptedModel {
+  const text = new Response({ message: new Message({ role: "assistant", parts: [new TextPart(payload)] }) });
+  return new ScriptedModel(Array.from({ length: calls }, () => text), { provider: "openai", model: "gpt-5.5" });
+}
+
+describe("validate and unwrap halves, through checkReply", () => {
+  test("test_variant_str_gets_scalar_schema (validate half)", () => {
+    const typ = new Type({ kind: ValueKind.STRING, tags: new Set(["a", "b"]) });
+    expect(checkReply({ value: "a" }, typ)).toBe("a");
+    refused(typ, { value: "not-a-tag" });
+  });
+
+  test("test_scalar_int_gets_schema (validate half)", () => {
+    expect(checkReply({ value: 7n }, Type.scalar(ValueKind.INTEGER))).toBe(7n);
+  });
+
+  test.each([
+    ["int(1..12)", [1n, 4n, 12n], 13n],
+    ["float(-0.5..1)", [-0.5, 0.4, 1n], 1.1],
+    ["int(4..4)", [4n], 3n],
+  ] as [string, (bigint | number)[], bigint | number][])(
+    "test_bounded_scalar_schema_exposes_and_enforces_inclusive_limits (validate half) %s",
+    (expression, inside, outside) => {
+      for (const value of inside) expect(checkReply({ value }, t(expression))).toBe(value);
+      refused(t(expression), { value: outside });
+    },
+  );
+
+  test("test_bounded_numeric_schemas_preserve_nested_lists_records_and_nullable_fields (validate half)", () => {
+    const typ = t(
+      "list(Rating)",
+      readTypedefs({
+        Rating: {
+          count: "int(1..12)",
+          scores: "list(list(float(0..1)))",
+          confidence: "Optional(float(0..1))",
+        },
+      }),
+    );
+    const items = [{ count: 4n, scores: [[0n, 1n]], confidence: null }];
+    expect(checkReply({ items }, typ)).toEqual(items);
+    expect(refused(typ, { items: [{ count: 4n, scores: [[0n, 1.1]] }] }).path).toEqual([0, "scores", 0, 1]);
+  });
+
+  test("test_nullable_bounded_scalars_keep_explicit_null_in_schema (validate half)", () => {
+    expect(checkReply({ items: [null, 4n] }, t("list(Optional(int(1..12)))"))).toEqual([null, 4n]);
+  });
+
+  test.each([
+    ["int", 10n ** 400n, 10n ** 400n + 2n, 10n ** 400n + 3n],
+    ["float", 2n ** 53n, 2n ** 53n + 2n, 2n ** 53n + 4n],
+    ["float", -(2n ** 53n + 2n), -(2n ** 53n), -(2n ** 53n + 4n)],
+  ])("test_large_numeric_schema_bounds_match_resolved_type (validate half) %s(%p..%p)", (kind, lower, upper, outside) => {
+    const typ = t(`${kind}(${lower}..${upper})`);
+    for (const bound of [lower, upper]) expect(checkReply({ value: bound }, typ)).toBe(bound);
+    refused(typ, { value: outside });
+  });
+
+  test.each([
+    ["int(0..)", 10n ** 30n, -1n],
+    ["int(..100)", -(10n ** 30n), 101n],
+    ["float(0.0..)", 1e300, -0.5],
+    ["float(..1)", -2.5, 1.5],
+  ] as [string, bigint | number, bigint | number][])(
+    "test_one_sided_schema_has_only_that_limit (validate half) %s",
+    (expression, inside, outside) => {
+      expect(checkReply({ value: inside }, t(expression))).toBe(inside);
+      refused(t(expression), { value: outside });
+    },
+  );
+
+  test("test_one_sided_limit_survives_nested_records_and_lists (validate half)", () => {
+    const typ = t("Order", readTypedefs({ Line: { qty: "int(1..)" }, Order: { lines: "Optional(list(Line))" } }));
+    refused(typ, { lines: [{ qty: 0n }] });
+    expect(checkReply({ lines: [{ qty: 10n ** 30n }] }, typ)).toEqual({ lines: [{ qty: 10n ** 30n }] });
+    expect(checkReply({ lines: null }, typ)).toEqual({ lines: null });
+  });
+
+  test("test_generic_list_schema_honors_existing_unbounded_element_refinements (validate half)", () => {
+    const nested = t("list(list(int))");
+    expect(checkReply({ items: [[1n], [2n]] }, nested)).toEqual([[1n], [2n]]);
+    expect(refused(nested, { items: [[1n], ["not-an-int"]] }).path).toEqual([1, 0]);
+    const bare = Type.scalar(ValueKind.LIST_ANY);
+    expect(checkReply({ items: [1n, "free", {}] }, bare)).toEqual([1n, "free", {}]);
+  });
+
+  test("test_record_type (validate half)", () => {
+    const typ = record({ name: Type.scalar(ValueKind.STRING), score: Type.scalar(ValueKind.NUMBER) }, ["name"]);
+    expect(checkReply({ name: "a", score: 1.5 }, typ)).toEqual({ name: "a", score: 1.5 });
+  });
+
+  test("test_list_of_records (validate half)", () => {
+    const typ = new Type({ kind: ValueKind.LIST_OBJECT, element: record({ x: Type.scalar(ValueKind.INTEGER) }, ["x"]) });
+    expect(checkReply({ items: [{ x: 1n }, { x: 2n }] }, typ)).toEqual([{ x: 1n }, { x: 2n }]);
+  });
+
+  test("test_union_members_reject_unknown_fields_and_unwrap_to_the_member_dict", () => {
+    const union = t("Union(Buy, Sell)", TRADES);
+    expect(checkReply({ value: { action: "sell", price: 1.5 } }, union)).toEqual({ action: "sell", price: 1.5 });
+    refused(union, { value: { action: "buy", qty: 2n, zzz: 1n } });
+  });
+
+  test("test_records_nested_in_union_members_reject_unknown_fields (validate half)", () => {
+    refused(t("Union(Buy, Sell)", LIMITED), { value: { action: "buy", limit: { px: 1.0, zzz: 1n } } });
+  });
+
+  test.each([
+    ["Optional(int)", 4n],
+    ["Optional(bool)", true],
+    ["Optional(Literal(a, b))", "a"],
+    ["Optional(object)", { k: 1n }],
+    ["Optional(list(int))", [1n]],
+  ] as [string, JsonValue][])("test_nullable_root_schema_accepts_null (validate half) %s", (expression, value) => {
+    const typ = t(expression);
+    const field = isListKind(typ.kind) ? "items" : "value";
+    expect(checkReply({ [field]: null }, typ)).toBeNull();
+    expect(checkReply({ [field]: value }, typ)).toEqual(value);
+  });
+
+  test("test_non_nullable_root_schema_rejects_null (validate half)", () => {
+    for (const expression of ["int", "Literal(a, b)", "list(int)"]) {
+      const typ = t(expression);
+      refused(typ, { [isListKind(typ.kind) ? "items" : "value"]: null });
+    }
+  });
+
+  test("test_nullable_list_elements_accept_null_items (validate half)", () => {
+    for (const [expression, items] of [
+      ["list(Optional(int))", [1n, null]],
+      ["list(Optional(Literal(a, b)))", ["a", null]],
+      ["list(Optional(Point))", [{ x: 1n }, null]],
+    ] as [string, JsonValue[]][]) {
+      expect(checkReply({ items }, t(expression, POINT))).toEqual(items);
+    }
+    refused(t("list(int)"), { items: [1n, null] });
+  });
+
+  test("test_nullable_record_root_is_wrapped_so_it_can_be_null (validate half)", () => {
+    const typ = t("Optional(Point)", POINT);
+    expect(checkReply({ value: null }, typ)).toBeNull();
+    expect(checkReply({ value: { x: 1n } }, typ)).toEqual({ x: 1n });
+    expect(checkReply({ x: 1n }, t("Point", POINT))).toEqual({ x: 1n });
+  });
+
+  test("test_any_schema_accepts_every_non_null_json_value_unchanged (validate half)", () => {
+    const typ = Type.scalar(ValueKind.ANY);
+    for (const value of ["x", 3n, 2n ** 80n, 2.5, 1.0, true, "3", { a: 1n }, [1n, "a"], { a: 1.0, b: true }] as JsonValue[]) {
+      expect(checkReply({ value }, typ)).toStrictEqual(value);
+    }
+    refused(typ, { value: null });
+  });
+
+  test("test_any_schema_lists_the_json_types_and_optional_any_adds_null (unwrap half)", () => {
+    expect(checkReply({ value: null }, t("Optional(Any)"))).toBeNull();
+  });
+
+  test("test_list_of_any_items_reject_null_and_list_of_optional_any_items_accept_it (validate half)", () => {
+    const items = [1n, "a", { k: [null] }];
+    expect(checkReply({ items }, t("list(Any)"))).toEqual(items);
+    refused(t("list(Any)"), { items: [1n, null] });
+    expect(checkReply({ items: [1n, null] }, t("list(Optional(Any))"))).toEqual([1n, null]);
+  });
+
+  test.each([
+    ["Box", '{"v": null}', ["v"]],
+    ["Any", '{"value": null}', []],
+    ["list(Any)", '{"items": [1, null]}', [1]],
+  ] as [string, string, (string | number)[]][])(
+    "test_null_at_an_any_position_is_reported_at_that_position %s",
+    async (expression, payload, path) => {
+      const typ = t(expression, readTypedefs({ Box: { v: "Any" } }));
+      const error = await generateStructured(native(payload), [], typ, { retries: 0 }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(OutputInvalidError);
+      expect((error as OutputInvalidError).path).toEqual(path);
+    },
+  );
+
+  test("test_absent_optional_any_record_field_reads_none", async () => {
+    const typ = t("Box", readTypedefs({ Box: { v: "Optional(Any)", n: "int" } }));
+    const value = await generateStructured(native('{"n": 1}'), [], typ, { retries: 0 });
+    expect(value).toEqual({ v: null, n: 1n });
+    expect(Object.keys(value as JsonObject)).toEqual(["v", "n"]);
+  });
+
+  test("an open record drops unknown fields and comes back in declared field order", () => {
+    const typ = record({ a: Type.scalar(ValueKind.INTEGER), b: Type.scalar(ValueKind.STRING) }, ["a", "b"]);
+    const value = checkReply({ zz: 1n, b: "x", a: 1n }, typ);
+    expect(value).toEqual({ a: 1n, b: "x" });
+    expect(Object.keys(value as JsonObject)).toEqual(["a", "b"]);
+  });
+
+  test("an absent field that is not required but not nullable stays absent", () => {
+    const typ = record({ a: Type.scalar(ValueKind.INTEGER), b: Type.scalar(ValueKind.NUMBER) }, ["a"]);
+    expect(checkReply({ a: 1n }, typ)).toEqual({ a: 1n });
+  });
 });
 
 describe("TS-only", () => {

@@ -187,6 +187,13 @@ run before appending any record.
   The node value is authoritative: streamed text can differ from it in the
   whitespace between content blocks. Without `on_stream`, AGENT calls `invoke`
   exactly as before.
+  Changed (TS yian): every AGENT call streams on the wire; structured replies
+  still send no chunks. `ModelCallStarted`, `ModelCallFinished` and `StreamChunk`
+  carry `attempt`, starting at 1. A retried call ends the failed attempt with
+  `ModelCallFinished` holding its `error` and no final chunk, then starts
+  `attempt + 1` in the same exchange. A structured reply that fails the output
+  check finishes its call without `error`; the correction is sent as a new
+  exchange.
 - `llm_config` — the outer authored layer of the configuration cascade for AGENT nodes.
   The resolved map and process defaults (`YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL`,
   then the logins saved by `yian auth`) are captured at initialization. There is no

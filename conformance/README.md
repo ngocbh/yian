@@ -320,6 +320,10 @@ A case can't hold code, so its host is declared under `host`.
   fails with an error of class `class` and message `message`: as for a stub tool, `TimeoutError`
   and `ConnectionError` are those classes, and any other name is a plain error with that class
   name.
+  In TS, a `raise` with `status` is the provider error an HTTP reply with that status and body
+  would give (its kind read from the status and the message, as `kindForStatus` reads a body);
+  its class name is TS's own, so a case with such a raise doesn't pin `ModelCallFinished.error`.
+  Without `status`, it is a plain error named `class`, never retried.
   Any entry may add `request: {messages: [<message>, ...], tools: [<tool spec>, ...], schema:
   <JSON Schema>}` (Python's schema:
   `convert_to_openai_tool(schema)["function"]["parameters"]`), which the runner compares
@@ -466,6 +470,8 @@ snake_case names, at every depth of yian's own structures (never inside a value 
 produced, such as an output or an answer); fields that are null are left out at the top level
 only; lists and tuples as lists, sets as sorted lists, a failure in failure form, a file as
 `{uri, mime, name}`.
+The `attempt` of `ModelCallStarted`, `ModelCallFinished` and `StreamChunk` is left out when it
+is 1 (a null one already is); cases never write `attempt: 1`.
 
 - An **event** is `[<EventName>]` or `[<EventName>, <data form>]`, for example
   `[NodeSucceeded, {node_id: hello, output: hi Ada}]` and `[RunStarted]`.
@@ -587,6 +593,7 @@ A case lists in `rules` the TS-era rules its expectation depends on (design #736
 | `infinity` | infinity is a float value |
 | `llm` | how the TS LLM layer builds requests |
 | `code` | TS CODE bodies and their failures |
+| `failure-codes` | decision 36's TS-only failure codes |
 
 ## Groups
 

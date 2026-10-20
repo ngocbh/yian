@@ -80,6 +80,8 @@ describe("parseArguments", () => {
     install({ ...BUILTIN, maxValueNesting: 3 });
     expect(parseArguments('{"a": {"b": [1]}}')).toEqual([{ a: { b: [1n] } }, null]);
     expect(parseArguments('{"a": {"b": [[1]]}}')).toEqual([null, '{"a": {"b": [[1]]}}']);
+    expect(parseArguments('{"a": {"b": [[1]]}}', { anyDepth: true })).toEqual([{ a: { b: [[1n]] } }, null]);
+    expect(parseArguments('{"a": NaN}', { anyDepth: true })).toEqual([null, '{"a": NaN}']);
   });
 
   test.each(['{"a": "\\ud800"}', '{"\\udfff": 1}', '{"a": "\ud800"}'])("unpaired surrogate %p is a failure", (text) => {

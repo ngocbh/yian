@@ -1768,6 +1768,11 @@ Changed (TS yian): structured generation differs from Python yian in these ways:
   correction.
 - A provider error that can't be retried, such as a content filter or Anthropic's
   `refusal` stop, fails the AGENT at once instead of being corrected under `retries:`.
+- A reply is checked by yian's value check, with no lax coercions. Its nesting is checked
+  before its type on every route; Python's native route checked the schema first. Provider
+  errors aren't corrected under `retries:`: they retry under `YIAN_MODEL_RETRIES` and fail
+  with their `provider.*` code. Once the corrections are spent, the AGENT fails as
+  `agent.output_invalid`, not `node.execute`.
 - Corrections no longer end with langchain's troubleshooting link. With Anthropic
   `thinking` on, the description notes for keywords its output format can't express
   (Python yian wrote them too, through the Anthropic SDK) now spell values as JSON

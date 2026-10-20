@@ -1,26 +1,51 @@
 /**
- * The AGENT node's helpers: mirrors `tests/engine/test_agent.py`.
+ * The AGENT node and its helpers: mirrors `tests/engine/test_agent.py`.
  *
  * Ported: `test_direct_agent_rejects_invalid_variable_declarations` (9 of its 10 rows; the tuple
  * row is not ported, an array is the only list),
  * `test_direct_agent_rejects_duplicate_variables_and_preserves_valid_default_payloads`,
  * `test_direct_agent_rejects_forged_variable_default_presence`,
  * `test_direct_agent_requires_an_exact_variable_contract`,
- * `test_env_max_tool_iterations_minus_one_accepted`, and the `maxToolIterations()` half of
- * `test_env_max_tool_iterations_rejects_bad_value` (its `eval_node` half comes with `forward`,
- * T4/T5-11a).
+ * `test_env_max_tool_iterations_minus_one_accepted`, `test_env_max_tool_iterations_rejects_bad_value`
+ * (the `maxToolIterations()` half and the `evalNode` half), `test_no_tools_returns_plain_text`,
+ * the structured-origin tests (`test_structured_failure_selects_exact_or_ancestor_output_origin`,
+ * `test_structured_scalar_failure_selects_contract_root`,
+ * `test_non_validation_structured_failure_keeps_node_origin`,
+ * `test_source_free_structured_failure_keeps_empty_trace`), and the `provider.auth` tests
+ * (`test_model_auth_failure_is_provider_auth`, `test_permission_denied_is_provider_auth`,
+ * `test_credential_resolution_auth_error_is_provider_auth`,
+ * `test_structured_call_auth_failure_is_provider_auth`,
+ * `test_fallback_structured_auth_failure_is_not_retried`,
+ * `test_a_stop_during_a_refused_structured_call_stops_the_node` and
+ * `test_provider_auth_failure_message_is_scrubbed`).
  *
  * Changed: each row pins its error class; ints are `bigint`s; a forged `hasDefault`/`required` is
- * set with `Object.defineProperty` on a copy, since a `Parameter` is frozen.
+ * set with `Object.defineProperty` on a copy, since a `Parameter` is frozen. The node rows run
+ * through `evalNode` (`drive`) with a `ScriptedModel` served by `caps.models` where Python patches
+ * `model_from_config`; Python's SDK error stand-ins are `ProviderError`s, so their `causeType` reads
+ * `ProviderError`. A structured reply that fails the value check once `retries:` are spent is an
+ * `OutputInvalidError` coded `agent.output_invalid` (Python: a `ValidationError`,
+ * `node.execute`). `test_rate_limit_stays_node_execute`: a marked rate limit is
+ * `provider.rate_limit` (with `modelRetries: 0`). `test_provider_auth_failure_message_is_scrubbed`
+ * runs the node with the key in its `llmConfig` rather than `run_flow` (T4-8/T3-22).
  *
  * TS-only: `textOf` of a string, of a message with text, reasoning, tool-call and refusal parts
  * (only the text, joined with `"\n"`), and of a message without text; `ReplyInterrupted`'s message,
- * `reply`, `usage` (default `null`) and that it is an `Error`; `isTextOutput`;
+ * `reply`, `usage` (default `null`) and that it is an `Error`; `recordModelText`, `recordModelValue`
+ * and `recordToolResult` (an interaction recorded, a carrier construction error ignored, a `null`
+ * trace does nothing); the `DEFAULT_SYSTEM` text and the loop errors' names; `isTextOutput`;
  * `isMaxToolIterations`; the default `maxToolIterations()`; `grantedTools()`; an `LLMConfig` given
- * as `llmConfig`; `forward` and `backward` not ported yet; the load-time hooks
+ * as `llmConfig`; `backward` not ported yet; the load-time hooks
  * (`reservedWiringKeys`, `modelHiddenInputs`, `reservedKeyLabel`, `llmNullable`,
  * `recordedLlmConfig`, `boundLlmConfig`, `backwardInputNames`, `bindReserved`, `validatePrompts`,
- * `validateExecutionSetup`) and `needsSteps` following `callTime`, also on a shallow copy.
+ * `validateExecutionSetup`) and `needsSteps` following `callTime`, also on a shallow copy;
+ * `needsModels`; each `provider.*` code through the node (a `ProviderError` of the kind
+ * `kindForStatus` reads from a status and message, the message kept); a call-time agent records
+ * a copy of its bound config and calls the model with the host key joined, and a bound config that
+ * differs from the recorded one is a host fault before any model is built; a reply calling a tool
+ * at a cap of one model turn fails with `agent.max_tool_iterations`; without `models` the node
+ * builds through `defaultModelAccess` (an unknown provider's `ValidationError`, no network); a
+ * failing credentials read doesn't replace the error being scrubbed.
  *
  * Later (T5-11b), the tool loop: `test_tool_loop_round_trip`,
  * `test_tool_loop_executes_model_calls_in_returned_order`,
@@ -33,19 +58,9 @@
  * `test_ungranted_tool_stays_node_execute`, `test_tool_loop_cap_of_one_still_answers_without_tools`)
  * and `test_tool_auth_failure_stays_node_execute`.
  *
- * Later (T5-11a): `test_no_tools_returns_plain_text`; the structured-origin tests
- * (`test_structured_failure_selects_exact_or_ancestor_output_origin`,
- * `test_structured_scalar_failure_selects_contract_root`,
- * `test_non_validation_structured_failure_keeps_node_origin`,
- * `test_source_free_structured_failure_keeps_empty_trace`); the `provider.auth` tests
- * (`test_model_auth_failure_is_provider_auth`, `test_permission_denied_is_provider_auth`,
- * `test_rate_limit_stays_node_execute`, `test_credential_resolution_auth_error_is_provider_auth`,
- * `test_structured_call_auth_failure_is_provider_auth`,
- * `test_fallback_structured_auth_failure_is_not_retried`,
- * `test_a_stop_during_a_refused_structured_call_stops_the_node`,
- * `test_provider_auth_failure_message_is_scrubbed`).
- *
- * Not ported: `test_agent_run_has_no_scratch_kwarg` (signature introspection), and
+ * Not ported: `test_agent_run_has_no_scratch_kwarg` (signature introspection);
+ * `test_agent_ctx_type.py` and `test_agent_runcontext.py` (they introspect a Python dataclass; the
+ * TS `AgentRunContext` is an interface checked statically); and
  * `compose/test_agent_mode_removed.py`'s `test_python_agent_node_has_no_mode` (Python's `MODES`,
  * `register_mode` and `mode=` keyword have no TS counterpart).
  */
@@ -54,24 +69,45 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { copyGraph } from "../../src/compile/model.ts";
-import { current, type Env } from "../../src/defaults.ts";
+import { BUILTIN, current, type Env, forget, install } from "../../src/defaults.ts";
+import { OriginRef } from "../../src/diagnostics.ts";
 import { TokenUsage } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
+import { AuthError } from "../../src/llm_clients/auth/common.ts";
 import { AuthStore } from "../../src/llm_clients/auth/store.ts";
 import { HostConnection, LLMConfig } from "../../src/llm_clients/config.ts";
 import { ConnectionSelection, connectionSnapshot, HOST_KEY_MARKER } from "../../src/llm_clients/connection.ts";
-import { Message, ReasoningPart, RefusalPart, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
+import type { ModelAccess } from "../../src/llm_clients/factory.ts";
+import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
+import { kindForStatus, ProviderError } from "../../src/llm/errors.ts";
+import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
+import { RouteModel } from "../../src/llm/executor.ts";
+import { Message, ReasoningPart, RefusalPart, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
+import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
+import { Route } from "../../src/llm/route.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import {
+  type EvaluationTrace,
+  ModelTextInteraction,
+  ModelValueInteraction,
+  ToolResultInteraction,
+  type VisibleInteraction,
+} from "../../src/memory/contracts.ts";
+import { AgentLoopError, DEFAULT_SYSTEM, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { CallTimeLLM, contractNullable, LLM_CONFIG_KEY, splitLayers } from "../../src/nodes/agent/llm_values.ts";
 import { AgentNode, isMaxToolIterations, isTextOutput } from "../../src/nodes/agent/node.ts";
-import { textOf } from "../../src/nodes/agent/text.ts";
+import { recordModelText, recordModelValue, recordToolResult, textOf } from "../../src/nodes/agent/text.ts";
+import { CapabilityFault, Output } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
-import { Binding, ContractOrigins, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
+import { Binding, ContractOrigins, NodeSteps, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
+import { type EvalNodeOptions, EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
+import { drive, rejected } from "./run_state_fixtures.ts";
 
 test("textOf returns a string as it is", () => {
   expect(textOf("hello\nworld")).toBe("hello\nworld");
@@ -114,6 +150,56 @@ test("ReplyInterrupted carries the partial reply and the usage so far", () => {
 test("ReplyInterrupted's usage defaults to null", () => {
   const reply = new Message({ role: "assistant", parts: [] });
   expect(new ReplyInterrupted(reply).usage).toBeNull();
+});
+
+/** A trace that keeps the interactions it is given. */
+function trace() {
+  const interactions: VisibleInteraction[] = [];
+  const sink: EvaluationTrace = {
+    recordPrompt: () => {},
+    recordInteraction: (interaction) => void interactions.push(interaction),
+  };
+  return { sink, interactions };
+}
+
+test("recordModelText and recordToolResult record their interactions", () => {
+  const { sink, interactions } = trace();
+  recordModelText(sink, "answer");
+  recordToolResult(sink, "lookup", "found");
+  expect(interactions).toEqual([new ModelTextInteraction("answer"), new ToolResultInteraction("lookup", "found")]);
+});
+
+test("recordModelText and recordToolResult ignore a carrier construction error", () => {
+  const { sink, interactions } = trace();
+  recordModelText(sink, "\ud800");
+  recordToolResult(sink, "", "found");
+  recordToolResult(sink, "lookup", 3 as unknown as string);
+  expect(interactions).toEqual([]);
+});
+
+test("recordModelText and recordToolResult do nothing without a trace", () => {
+  expect(recordModelText(null, "answer")).toBeUndefined();
+  expect(recordToolResult(undefined, "lookup", "found")).toBeUndefined();
+});
+
+test("recordModelValue records the value, ignores a carrier construction error, and does nothing without a trace", () => {
+  const { sink, interactions } = trace();
+  recordModelValue(sink, { a: 1n });
+  recordModelValue(sink, Number.NaN);
+  expect(interactions).toEqual([new ModelValueInteraction({ a: 1n })]);
+  expect(recordModelValue(null, 1n)).toBeUndefined();
+});
+
+test("DEFAULT_SYSTEM keeps Python's text and the loop errors are named", () => {
+  expect(DEFAULT_SYSTEM).toBe(
+    "You are an analysis agent inside a larger workflow. Follow the instructions " +
+      "precisely, use the available tools to gather any facts you need, and return " +
+      "a clear, self-contained answer. Ask the user only through an explicitly granted tool.",
+  );
+  const limit = new ToolIterationLimitError("cap");
+  expect(limit).toBeInstanceOf(AgentLoopError);
+  expect(limit).toBeInstanceOf(Error);
+  expect([limit.name, new AgentLoopError("x").name]).toEqual(["ToolIterationLimitError", "AgentLoopError"]);
 });
 
 /** Return what `fn` throws; fails the test when it returns. */
@@ -260,9 +346,8 @@ test("an LLMConfig given as llmConfig is refused", () => {
   );
 });
 
-test("forward and backward are not ported yet", () => {
+test("backward is not ported yet", () => {
   const node = new AgentNode("n");
-  expect(() => node.forward()).toThrow(new Error("node 'n' (AgentNode) forward is not ported yet (T5-11a)"));
   expect(() => node.backward()).toThrow(new Error("node 'n' (AgentNode) backward is not ported yet (T6-6)"));
 });
 
@@ -430,4 +515,296 @@ test("validateExecutionSetup lets a steerable agent with plain text output pass"
   expect(node.validateExecutionSetup()).toBeUndefined();
   node.outputContract = new ValueContract(STR);
   expect(node.validateExecutionSetup()).toBeUndefined();
+});
+
+// ---------- forward ----------
+
+describe("forward", () => {
+  beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
+  afterEach(forget);
+
+  const NATIVE = { provider: "openai", model: "gpt-5.5" };
+  const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
+  const INT = Type.scalar(ValueKind.INTEGER);
+
+  function reply(text: string): Response {
+    return new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }), finishReason: "stop" });
+  }
+
+  /** A model access over an empty environment that serves `model` and keeps each config it is given. */
+  function access(model: ChatModel | (() => ChatModel)): ModelAccess & { configs: Record<string, unknown>[] } {
+    const configs: Record<string, unknown>[] = [];
+    return {
+      configs,
+      env: () => undefined,
+      createModel: (config) => {
+        configs.push({ ...config });
+        return typeof model === "function" ? model() : model;
+      },
+    };
+  }
+
+  /** Evaluate `node` with `model`; return its raw outcome. */
+  function evaluate(node: AgentNode, model: ChatModel | (() => ChatModel), options: EvalNodeOptions = {}) {
+    return drive(node, { models: access(model), ...options });
+  }
+
+  /** The failure `outcome` carries; fails the test when it isn't one. */
+  function failureOf(outcome: unknown) {
+    expect(outcome).toBeInstanceOf(EvaluationFailure);
+    return (outcome as EvaluationFailure).failure;
+  }
+
+  /** An AGENT `n` with prompt `hi` over `config`. */
+  function agent(config: Record<string, unknown> = NATIVE, options: { retries?: number } = {}): AgentNode {
+    return new AgentNode("n", { prompt: "hi", llmConfig: config, ...options });
+  }
+
+  /** An AGENT with an integer `output:` and no tools, over `config` (Python's `_structured_node`). */
+  function structuredAgent(config: Record<string, unknown>): AgentNode {
+    const node = agent(config, { retries: 2 });
+    node.outputContract = new ValueContract(INT);
+    return node;
+  }
+
+  /** A model whose call aborts `stop`, then throws `error`, as a provider failing while a stop is pending. */
+  function stopThenThrow(stop: AbortController, error: unknown, config: Record<string, unknown>): ChatModel {
+    return {
+      ...(config as { provider: string; model: string }),
+      stream: () =>
+        new EventStream(
+          (async function* (): AsyncGenerator<Event> {
+            stop.abort(new Error("stopped"));
+            throw error;
+          })(),
+        ),
+    };
+  }
+
+  test("an AGENT declares needsModels", () => {
+    expect(new AgentNode("n").needsModels).toBe(true);
+  });
+
+  test("no tools returns plain text", async () => {
+    const model = new ScriptedModel([reply("answer")], NATIVE);
+    const outcome = await evaluate(agent(), model);
+    expect((outcome as Output).value).toBe("answer");
+    expect(model.requests).toHaveLength(1);
+  });
+
+  test("env max_tool_iterations rejects a bad value as a node failure", async () => {
+    const node = agent();
+    node.env = { max_tool_iterations: 0n };
+    const failure = failureOf(await evaluate(node, new ScriptedModel([reply("unused")], NATIVE)));
+    expect(failure.message).toContain("max_tool_iterations");
+  });
+
+  const PROFILE = new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map([
+      ["profile", new Type({ kind: ValueKind.OBJECT, fields: new Map([["age", INT]]), required: new Set(["age"]) })],
+    ]),
+    required: new Set(["profile"]),
+  });
+
+  test.each([
+    [["profile", "age"], "output/profile/age"],
+    [["profile"], "output/profile"],
+  ])("structured failure selects the exact or ancestor output origin (%p)", async (path, key) => {
+    const node = agent(NATIVE, { retries: 0 });
+    node.origin = new OriginRef("node");
+    node.outputContract = new ValueContract(
+      PROFILE,
+      new ContractOrigins({ default: new OriginRef("output"), entries: [[path, new OriginRef(key)]] }),
+    );
+    const model = new ScriptedModel([reply('{"profile": {"age": "bad"}}')], NATIVE);
+    const failure = failureOf(await evaluate(node, model));
+    expect([failure.code, failure.causeType]).toEqual(["agent.output_invalid", "OutputInvalidError"]);
+    expect(failure.trace).toEqual([new OriginRef(key)]);
+  });
+
+  test.each([
+    ["an int", INT, '{"value": "bad"}'],
+    ["a tagged str", new Type({ kind: ValueKind.STRING, tags: new Set(["positive", "negative"]) }), '{"value": "not-a-tag"}'],
+  ])("structured scalar failure selects the contract root (%s)", async (_name, typ, payload) => {
+    const node = agent(NATIVE, { retries: 0 });
+    node.origin = new OriginRef("node");
+    node.outputContract = new ValueContract(typ, new ContractOrigins({ default: new OriginRef("output") }));
+    const failure = failureOf(await evaluate(node, new ScriptedModel([reply(payload)], NATIVE)));
+    expect(failure.trace).toEqual([new OriginRef("output")]);
+  });
+
+  test("a non-validation structured failure keeps the node origin", async () => {
+    const node = agent(NATIVE, { retries: 0 });
+    node.origin = new OriginRef("node");
+    node.outputContract = new ValueContract(INT, new ContractOrigins({ default: new OriginRef("output") }));
+    const failure = failureOf(await evaluate(node, new ScriptedModel([new Error("provider failed")], NATIVE)));
+    expect([failure.code, failure.causeType]).toEqual(["node.execute", "Error"]);
+    expect(failure.trace).toEqual([new OriginRef("node")]);
+  });
+
+  test("a source-free structured failure keeps an empty trace", async () => {
+    const node = agent(NATIVE, { retries: 0 });
+    node.outputContract = new ValueContract(INT);
+    const failure = failureOf(await evaluate(node, new ScriptedModel([reply('{"value": "bad"}')], NATIVE)));
+    expect(failure.trace).toEqual([]);
+  });
+
+  test("a model auth failure is provider.auth", async () => {
+    const error = new ProviderError("auth", "Incorrect API key provided", { status: 401 });
+    const failure = failureOf(await evaluate(agent(), new ScriptedModel([error], NATIVE)));
+    expect([failure.code, failure.causeType, failure.message]).toEqual([
+      "provider.auth",
+      "ProviderError",
+      "Incorrect API key provided",
+    ]);
+  });
+
+  test("a permission denial is provider.auth", async () => {
+    const error = new ProviderError("permission", "forbidden", { status: 403 });
+    expect(failureOf(await evaluate(agent(), new ScriptedModel([error], NATIVE))).code).toBe("provider.auth");
+  });
+
+  test("a rate limit is provider.rate_limit (Changed)", async () => {
+    const error = new ProviderError("rate_limit", "slow down", { status: 429 });
+    expect(failureOf(await evaluate(agent(), new ScriptedModel([error], NATIVE))).code).toBe("provider.rate_limit");
+  });
+
+  test.each([
+    ["provider.rate_limit", 429, "Rate limit reached for gpt-5.5"],
+    ["provider.quota", 429, "You exceeded your current quota (insufficient_quota)"],
+    ["provider.unavailable", 503, "The server is temporarily unavailable"],
+    ["provider.context_length", 400, "This model's maximum context length is 128000 tokens (context_length_exceeded)"],
+    ["provider.refused", 400, '{"error": {"code": "content_filter", "message": "The response was filtered"}}'],
+  ])("%s through the node", async (code, status, message) => {
+    const error = new ProviderError(kindForStatus(status, message), message, { status });
+    const failure = failureOf(await evaluate(agent(), new ScriptedModel([error], NATIVE)));
+    expect([failure.code, failure.message]).toEqual([code, message]);
+  });
+
+  test("a credential resolution AuthError is provider.auth", async () => {
+    const message = "Subscription credentials expired; sign in again. Run 'yian auth openai' and start a new run";
+    const failure = failureOf(
+      await evaluate(agent(), () => {
+        throw new AuthError(message);
+      }),
+    );
+    expect([failure.code, failure.message]).toEqual(["provider.auth", message]);
+  });
+
+  test("a structured call auth failure is provider.auth and not retried", async () => {
+    const model = new ScriptedModel([new ProviderError("auth", "unauthorized", { status: 401 })], NATIVE);
+    expect(failureOf(await evaluate(structuredAgent(NATIVE), model)).code).toBe("provider.auth");
+    // Refused credentials are not corrected and retried.
+    expect(model.requests).toHaveLength(1);
+  });
+
+  test("a fallback structured auth failure is not retried", async () => {
+    const model = new ScriptedModel([new ProviderError("auth", "unauthorized", { status: 401 })], PROMPTED);
+    expect(failureOf(await evaluate(structuredAgent(PROMPTED), model)).code).toBe("provider.auth");
+    expect(model.requests).toHaveLength(1);
+  });
+
+  test.each([
+    ["native", NATIVE],
+    ["fallback", PROMPTED],
+  ])("a stop during a refused structured call stops the node (%s)", async (_name, config) => {
+    // A pending stop wins over refused credentials, as it does over any provider error.
+    const stop = new AbortController();
+    const model = stopThenThrow(stop, new ProviderError("auth", "unauthorized", { status: 401 }), config);
+    const error = await rejected(evaluate(structuredAgent(config), model, { signal: stop.signal }));
+    expect(error).toBe(stop.signal.reason);
+  });
+
+  test("a provider auth failure message is scrubbed", async () => {
+    const key = "sk-sentinel-401-zqxw";
+    const config = { provider: "vllm", model: "m", api_key: key };
+    const model = new ScriptedModel([new ProviderError("auth", `Incorrect API key: ${key}`, { status: 401 })], config);
+    const failure = failureOf(await evaluate(agent(config), model));
+    expect(failure.code).toBe("provider.auth");
+    expect(failure.message).toBe("Incorrect API key: [REDACTED]");
+  });
+
+  test("a reply calling a tool at a cap of one model turn is agent.max_tool_iterations", async () => {
+    const node = agent();
+    node.env = { max_tool_iterations: 1n };
+    const call = new ToolCallPart({ id: "c1", name: "lookup", arguments: { q: "x" } });
+    const message = new Message({ role: "assistant", parts: [call] });
+    const model = new ScriptedModel([new Response({ message, finishReason: "tool_calls" })], NATIVE);
+    const failure = failureOf(await evaluate(node, model));
+    expect([failure.code, failure.causeType]).toEqual(["agent.max_tool_iterations", "ToolIterationLimitError"]);
+  });
+
+  test("without models the node builds through defaultModelAccess", async () => {
+    // An unknown provider fails in the factory's config check, before any network.
+    const node = new AgentNode("n", { prompt: "hi", llmConfig: { provider: "no-such-provider", model: "m" } });
+    const error = await rejected(node.run({}, {}));
+    expect(error).toBeInstanceOf(ValidationError);
+    expect((error as Error).message).toStartWith("1 validation error for LLMConfig");
+  });
+
+  test("a failing credentials read doesn't replace the error being scrubbed", async () => {
+    const auth = {
+      headers: async () => ({}),
+      credentials: (): string[] => {
+        throw new Error("read");
+      },
+    };
+    const route = new Route({ provider: "openai", baseUrl: "https://api.example", path: "x", auth });
+    class RefusedModel extends RouteModel {
+      override stream(): EventStream {
+        return new EventStream(
+          (async function* (): AsyncGenerator<Event> {
+            throw new ProviderError("auth", "unauthorized", { status: 401 });
+          })(),
+        );
+      }
+    }
+    const model = new RefusedModel({ route, protocol: new OpenAIChat({ model: "gpt-5.5", provider: "openai" }) });
+    const failure = failureOf(await evaluate(agent(), model));
+    expect([failure.code, failure.message]).toEqual(["provider.auth", "unauthorized"]);
+  });
+
+  /** A call-time agent `chat` whose bound config is marked for the host key `sk-host`. */
+  function callTimeAgent(): AgentNode {
+    const node = new AgentNode("chat", { prompt: "hi" });
+    node.callTime = callTime({}, "openai");
+    node.hostCredentials = new HostConnection({ apiKey: "sk-host" });
+    return node;
+  }
+
+  const BOUND = { provider: "openai", model: "gpt-5.5", [HOST_KEY_MARKER]: true };
+
+  test("a call-time agent records a copy of its bound config and calls with the host key", async () => {
+    const recorded: unknown[] = [];
+    const steps = new NodeSteps(1, [], (step) => void recorded.push(step));
+    const models = access(new ScriptedModel([reply("ok")], NATIVE));
+    const bound = structuredClone(BOUND);
+    const result = await callTimeAgent().run({ [LLM_CONFIG_KEY]: bound }, { steps, models });
+    expect((result as Output).value).toBe("ok");
+    expect(recorded).toEqual([{ effective_llm_config: BOUND }]);
+    expect((recorded[0] as Record<string, unknown>)["effective_llm_config"]).not.toBe(bound);
+    expect(models.configs).toEqual([{ ...BOUND, api_key: "sk-host" }]);
+  });
+
+  test("a call-time agent's config differing from the recorded one is a host fault before any model is built", async () => {
+    const recorded: unknown[] = [];
+    const prior = [{ effective_llm_config: { ...BOUND, model: "gpt-older" } }];
+    const steps = new NodeSteps(2, prior, (step) => void recorded.push(step));
+    const models = access(new ScriptedModel([reply("ok")], NATIVE));
+    const error = await rejected(callTimeAgent().run({ [LLM_CONFIG_KEY]: { ...BOUND } }, { steps, models }));
+    expect(error).toBeInstanceOf(CapabilityFault);
+    expect((error as CapabilityFault).original).toEqual(
+      new RangeError(
+        "node 'chat' llm_config: recorded config differs from the recomputed one; resume the run with the flow " +
+          "and yian version that started it",
+      ),
+    );
+    expect(recorded).toEqual([]);
+    expect(models.configs).toEqual([]);
+    // An equal config, even one with its keys in another order, records again.
+    const same = { model: "gpt-older", [HOST_KEY_MARKER]: true, provider: "openai" };
+    await callTimeAgent().run({ [LLM_CONFIG_KEY]: same }, { steps, models });
+    expect(recorded).toEqual([{ effective_llm_config: same }]);
+  });
 });

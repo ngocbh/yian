@@ -40,6 +40,9 @@ import { ForwardCapture } from "../../src/runtime/contracts.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { type EvalNodeOptions, evalNode, type WorkerOutcome } from "../../src/runtime/eval_node.ts";
 import { type RunEvent, StreamChunk } from "../../src/events.ts";
+import type { ChatModel } from "../../src/llm/events.ts";
+import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import {
   decodePool,
   encodePool,
@@ -413,6 +416,24 @@ export async function drive(
 ): Promise<WorkerOutcome> {
   const { pool = new VariablePool(), flow = nodeFlow(node), ...rest } = options;
   return (await evalNode(node, flow, pool, rest)).outcome;
+}
+
+/** Return an assistant reply holding only `text`, finished with `stop`. */
+export function textReply(text: string): Response {
+  return new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }), finishReason: "stop" });
+}
+
+/** Return a model access over an empty environment that serves `model`; `built` counts the builds. */
+export function serving(model: ChatModel): ModelAccess & { built: number } {
+  const access = {
+    built: 0,
+    env: () => undefined,
+    createModel: () => {
+      access.built++;
+      return model;
+    },
+  };
+  return access;
 }
 
 /** Return the value `promise` rejects with, or fail when it resolves. */

@@ -105,6 +105,11 @@ import {
   type ProducerType,
 } from "./inline_inputs.ts";
 // T3-18 imports
+import { rejectCycles } from "../validate/cycles.ts";
+import { checkCaseHandles } from "../validate/handles.ts";
+import { validateHumanQuestions } from "../validate/human_questions.ts";
+import { checkWrittenValues } from "../validate/value_nesting.ts";
+import { checkWiringParity } from "../validate/wiring_parity.ts";
 // T3-19 imports
 // T3-20 imports
 
@@ -2118,8 +2123,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
-//   T3-18  checkWrittenValues, stampToolInputTypes, checkWiringParity, validateReferences,
-//          validateHumanQuestions, checkReservedSources, rejectCycles, checkCaseHandles (1).
+//   T3-18  stampToolInputTypes, validateReferences, checkReservedSources (1).
 //          fillTypeTables (2, with _site_range).
 //   T3-19  attachLlmConfigWiring (2, with _llm_value_types): returns `[]`.
 //          checkTypedInputs, checkCallMapTypes, checkLoopTypeContract, checkTypedOutputs,
@@ -2142,18 +2146,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // T3-18: compose/validate/{value_nesting,tool_inputs,wiring_parity,references,human_questions,
 // reserved_sources,cycles,handles}.ts
 
-/** Python's `compose.validate.value_nesting.check_written_values`; not ported yet. */
-function checkWrittenValues(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  outputsSection: unknown,
-  options: {
-    outputsTagged: boolean;
-    outputRange: (name: unknown) => SourceRange | null;
-    outputsRange: SourceRange | null;
-    diagnostics: LoadDiagnostics;
-  },
-): void {}
-
 /** Python's `compose.validate.tool_inputs.stamp_tool_input_types`; not ported yet. */
 function stampToolInputTypes(
   flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
@@ -2161,13 +2153,6 @@ function stampToolInputTypes(
   flowInputs: ReadonlyMap<string, ValueContract>,
   buildResults: ReadonlyMap<string, BuildResult>,
   options: { narrowing?: Narrowing | null; typeFn?: TypeFn | null } = {},
-): void {}
-
-/** Python's `compose.validate.wiring_parity.check_wiring_parity`; not ported yet. */
-function checkWiringParity(
-  buildResults: ReadonlyMap<string, BuildResult>,
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-  options: { diagnostics?: LoadDiagnostics | null } = {},
 ): void {}
 
 /** Python's `compose.validate.references.validate_references`; not ported yet. */
@@ -2188,12 +2173,6 @@ function validateReferences(
   } = {},
 ): void {}
 
-/** Python's `compose.validate.human_questions.validate_human_questions`; not ported yet. */
-function validateHumanQuestions(
-  buildResults: ReadonlyMap<string, BuildResult>,
-  options: { diagnostics?: LoadDiagnostics | null } = {},
-): void {}
-
 /** Python's `compose.validate.reserved_sources.check_reserved_sources`; not ported yet. */
 function checkReservedSources(
   buildResults: ReadonlyMap<string, BuildResult>,
@@ -2207,26 +2186,6 @@ function checkReservedSources(
     resolveOrigin?: OriginPresenter | null;
     diagnostics?: LoadDiagnostics | null;
   } = {},
-): void {}
-
-/** Python's `compose.validate.cycles.reject_cycles`; not ported yet. */
-function rejectCycles(
-  edges: readonly Edge[],
-  nodeIds: ReadonlySet<string>,
-  options: {
-    nodeRanges?: ReadonlyMap<string, SourceRange> | null;
-    diagnostics?: LoadDiagnostics | null;
-    gateIds?: ReadonlySet<string>;
-    synthHosts?: ReadonlyMap<string, string> | null;
-    synthWires?: ReadonlySet<string>;
-  } = {},
-): void {}
-
-/** Python's `compose.validate.handles.check_case_handles`; not ported yet. */
-function checkCaseHandles(
-  nodes: ReadonlyMap<string, Node>,
-  edges: readonly Edge[],
-  options: { diagnostics?: LoadDiagnostics | null } = {},
 ): void {}
 
 // T3-19: compose/validate/{typed_bindings,call_types,loop_types,llm_config_sources}.ts

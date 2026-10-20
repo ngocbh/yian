@@ -1,6 +1,15 @@
 /**
- * Recursive type compatibility, the cycle check and reference head checks: a port of the pure
- * `types_compatible` tests of `tests/engine/test_validate_graph.py`
+ * Recursive type compatibility, the cycle check, CASE handle alignment and reference head checks:
+ * a port of `tests/engine/test_validate_graph.py`.
+ *
+ * Ported: the cycle and CASE handle rows on seeds built node by node as the loader's build loop
+ * builds them (`test_e02_cycle_is_loud`, `test_e02_cycle_carries_dependency_legend`,
+ * `test_acyclic_seed_passes_cycle_check`, `test_case_seed_passes_cycle_check`,
+ * `test_seed02_handles_align`, `test_seed06_handles_align`,
+ * `test_handle_with_no_matching_case_rejected`, `test_case_without_outgoing_edge_rejected`,
+ * `test_else_handle_always_allowed`), reading the seeds from conformance cases
+ * `load-core/seed_e02_cycle`, `load-agent/seed_01_structured_agent`, `load-case/seed_02_case` and
+ * `load-case/seed_06_case_on`; and the pure `types_compatible` tests
  * (`test_numeric_domain_compatibility_requires_interval_containment`,
  * `test_enum_compatibility_requires_tag_subset`,
  * `test_numeric_domain_compatibility_recurses_through_records_and_lists`,
@@ -9,26 +18,86 @@
  * `test_bare_list_compatibility_uses_its_storage_element_contract`,
  * `test_list_element_compatibility_recurses_before_storage_kind_rejection`).
  *
- * TS-only: `rejectCycles` on bare edges (the cycle message and `errors` for a two-node cycle,
+ * TS-only: the compile check `rejectCycles` on bare edges (the cycle message and `errors` for a two-node cycle,
  * as conformance `load-core/seed_e02_cycle`; the stuck nodes sorted; edges touching START and
  * END ignored; an acyclic graph passes; an edge naming an unknown node throws, as Python's
  * `KeyError`), `FlowValidationError`'s `errors`, and `classifyPath`'s
  * messages and its `null` for good paths.
- *
- * Later (T3-18): the cycle and CASE handle tests, which build seeds through compose.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
-import { END_ID, START_ID } from "../../src/compile/model.ts";
+import { Edge, END_ID, START_ID } from "../../src/compile/model.ts";
 import {
   classifyPath,
   FlowValidationError,
   rejectCycles,
   typesCompatible,
 } from "../../src/compile/validation.ts";
+import { inferDataEdges } from "../../src/compose/edges/data.ts";
+import { BuildContext } from "../../src/compose/nodes/base.ts";
+import { rejectCycles as rejectInferredCycles } from "../../src/compose/validate/cycles.ts";
+import { checkCaseHandles } from "../../src/compose/validate/handles.ts";
+import { forget } from "../../src/defaults.ts";
+import { ELSE_HANDLE, type Node } from "../../src/nodes/base.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { caseText, loadError, nodesOf } from "../compose/declarations.ts";
+
+afterEach(() => forget());
+
+/** A build context with no typedefs. */
+const CTX = new BuildContext({ registry: new Map() });
+
+/**
+ * Build conformance case `id`'s seed node by node as the loader's build loop does, returning the
+ * node ids, the edges (`inferDataEdges` over the leaves' wiring, then each build's own edges: a
+ * CASE's data and control edges) and the built nodes.
+ */
+function build(id: string): { nodeIds: Set<string>; edges: Edge[]; nodes: Map<string, Node> } {
+  const { text, label } = caseText(id);
+  const descriptors = nodesOf(text, [], label);
+  const nodes = new Map<string, Node>();
+  const flowWiring = new Map<string, ReadonlyMap<string, unknown>>();
+  const caseEdges: Edge[] = [];
+  for (const [nodeId, desc] of descriptors) {
+    const result = desc.build(CTX);
+    nodes.set(nodeId, result.node);
+    flowWiring.set(nodeId, result.wiring);
+    caseEdges.push(...result.edges);
+  }
+  const edges = [...inferDataEdges(descriptors, flowWiring), ...caseEdges];
+  return { nodeIds: new Set(descriptors.keys()), edges, nodes };
+}
+
+const E02 = "load-core/seed_e02_cycle";
+const SEED02 = "load-case/seed_02_case";
+
+describe("cycle detection on the inferred graph", () => {
+  test("e02's cycle is loud", () => {
+    const { nodeIds, edges } = build(E02);
+    const error = loadError(() => rejectInferredCycles(edges, nodeIds));
+    expect(error.message).toBe('flow has a cycle involving ["a","b"]; flows must be acyclic');
+  });
+
+  test("e02's cycle carries a dependency legend", () => {
+    // Each note reads "<consumer> depends on <producer> (...)", both nodes on both sides.
+    const { nodeIds, edges } = build(E02);
+    const error = loadError(() => rejectInferredCycles(edges, nodeIds));
+    expect(error.diagnostic.notes).toEqual(["a depends on b (a.input.x)", "b depends on a (b.input.x)"]);
+  });
+
+  test("an acyclic seed passes the cycle check", () => {
+    const { nodeIds, edges } = build("load-agent/seed_01_structured_agent");
+    expect(() => rejectInferredCycles(edges, nodeIds)).not.toThrow();
+  });
+
+  test("a CASE seed passes the cycle check", () => {
+    // Control edges don't introduce a cycle.
+    const { nodeIds, edges } = build(SEED02);
+    expect(() => rejectInferredCycles(edges, nodeIds)).not.toThrow();
+  });
+});
 
 /** Resolve a type expression with no typedefs. */
 const t = (text: string): Type => typeFor(text, new Map());
@@ -162,6 +231,38 @@ describe("recursive type compatibility", () => {
       element: new Type({ kind: ValueKind.STRING, nullable: true }),
     });
     expect(typesCompatible(source, sink)).toBe(true);
+  });
+});
+
+describe("CASE handle alignment over the desugared cases and control edges", () => {
+  test("seed 02's handles align", () => {
+    const { edges, nodes } = build(SEED02);
+    expect(() => checkCaseHandles(nodes, edges)).not.toThrow();
+  });
+
+  test("seed 06's handles align", () => {
+    const { edges, nodes } = build("load-case/seed_06_case_on");
+    expect(() => checkCaseHandles(nodes, edges)).not.toThrow();
+  });
+
+  test("a handle with no matching case is rejected", () => {
+    const { edges, nodes } = build(SEED02);
+    const stray = new Edge("gate->positive#9", "gate", "positive", { sourceHandle: "ghost" });
+    const error = loadError(() => checkCaseHandles(nodes, [...edges, stray]));
+    expect(error.message).toBe("case node 'gate' has edge handle 'ghost' with no matching case");
+  });
+
+  test("a case without an outgoing edge is rejected", () => {
+    const { edges, nodes } = build(SEED02);
+    const kept = edges.filter((edge) => !(edge.from === "gate" && edge.sourceHandle === "positive"));
+    const error = loadError(() => checkCaseHandles(nodes, kept));
+    expect(error.message).toBe("case node 'gate' case 'positive' has no outgoing edge");
+  });
+
+  test("the else handle is always allowed", () => {
+    const { edges, nodes } = build(SEED02);
+    expect(edges.some((edge) => edge.from === "gate" && edge.sourceHandle === ELSE_HANDLE)).toBe(true);
+    expect(() => checkCaseHandles(nodes, edges)).not.toThrow();
   });
 });
 

@@ -951,6 +951,9 @@ flow has a cycle involving ['a', 'b']; flows must be acyclic
   ↳ b depends on a (b.input.x)
 ```
 
+Changed (TS yian): the message writes the node list in the text form:
+`flow has a cycle involving ["a","b"]; flows must be acyclic`.
+
 ## Runtime errors
 
 A failure that happens **while the flow runs** — a node raises, a `code` node

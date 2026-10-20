@@ -214,6 +214,7 @@ import { logJson } from "../../src/typesys/json.ts";
 import {
   commitStartSuccess,
   engine,
+  feedbackEntries,
   forwardCapture,
   FuncNode,
   graph,
@@ -2471,11 +2472,6 @@ afterEach(() => {
   }
   saved.length = 0;
 });
-
-/** Return `context`'s feedback entries as records. */
-function feedbackEntries(context: LearnContext): readonly Readonly<Record<string, unknown>>[] {
-  return context.feedback as readonly Readonly<Record<string, unknown>>[];
-}
 
 /** Return the result of `results` at `source`. */
 function resultAt(results: readonly AttributedBackwardResult[], source: SourceRef): AttributedBackwardResult {

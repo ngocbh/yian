@@ -81,7 +81,7 @@ function computeFailure(context: BackwardContext, code: string, error: unknown):
  *   reuse it; `null` or omitted starts a new one.
  * @returns Root input feedback and results in accepted-outcome order, including unreached
  *   occurrences whose callbacks were not invoked.
- * @throws TypeError for malformed feedback or trace carriers.
+ * @throws TypeError (as a rejection, as are all below) for malformed feedback or trace carriers.
  * @throws RangeError for an unfinished trace, invalid feedback shape, or broken retained
  *   route/source authority.
  * @throws Error when an occurrence that receives feedback has no retained handler.

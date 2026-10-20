@@ -28,6 +28,7 @@ import { CallNode } from "../../src/nodes/call/node.ts";
 import { comparePaths, Parameter } from "../../src/nodes/contracts.ts";
 import {
   DeclSite,
+  type LearnContext,
   MemoryScope,
   MemorySnapshotEnvelope,
   MemorySpec,
@@ -633,6 +634,11 @@ export function ownerEngine(
   const memorySnapshots = memories.map((spec) => new MemorySnapshotEnvelope(spec.key, {}));
   const built = engine(flow, { ...options, learnable: true, memories, memoryStacks, memorySnapshots });
   return { engine: built, memories, stacks: memoryStacks };
+}
+
+/** Return `context`'s feedback entries as records. */
+export function feedbackEntries(context: LearnContext): readonly Readonly<Record<string, unknown>>[] {
+  return context.feedback as readonly Readonly<Record<string, unknown>>[];
 }
 
 /**

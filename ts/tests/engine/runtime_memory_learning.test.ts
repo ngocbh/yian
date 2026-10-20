@@ -20,12 +20,12 @@
  * `test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_stack` (through
  * `replayRecords` over `copyGraph` copies of the flow taken before the outcome).
  *
- * Ported, after rewrite: `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow`
- * and `test_root_fallback_reaches_only_keys_owned_by_the_root_flow_site`, with the root result
- * (`BackwardResult(self_feedback=("original text",))`) and the empty results built by hand instead
- * of computed; `test_owner_contexts_are_the_only_episode_projection` (the removed names stay absent
- * from `runtime/learning.ts`, and `learningState` from the state), on a local `successfulTerminal`,
- * Python's `_successful_terminal`.
+ * Ported: `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow` and
+ * `test_root_fallback_reaches_only_keys_owned_by_the_root_flow_site` (both on `computeBackward`).
+ *
+ * Ported, after rewrite: `test_owner_contexts_are_the_only_episode_projection` (the removed names
+ * stay absent from `runtime/learning.ts`, and `learningState` from the state), on a local
+ * `successfulTerminal`, Python's `_successful_terminal`.
  *
  * Changed:
  * - `test_commit_id_requires_a_positive_attempt_and_separates_attempts`: the invalid attempt ids
@@ -158,6 +158,7 @@ import { type OutcomeRecord, RetainedTrace, TraceTerminal } from "../../src/runt
 import { type Value, VariablePool } from "../../src/typesys/index.ts";
 import {
   engine,
+  feedbackEntries,
   FINGERPRINT,
   FuncNode,
   forwardCapture,
@@ -242,9 +243,6 @@ function syntheticTrace(): RetainedTrace {
   );
   return trace;
 }
-
-/** The root result a source-free failed terminal keeps for text feedback: the text as self feedback. */
-const ORIGINAL_ROOT = new BackwardResult({ selfFeedback: ["original text"] });
 
 /** One mutation whose payload holds text, null and an int. */
 const MUTATIONS = [new MemoryMutation("m", { z: 1n, a: ["é", null] })];
@@ -388,13 +386,14 @@ test("an episode refuses a success without a canonical typed value", () => {
   expectError(() => learning.episodeOutcome(forged), RangeError, "successful record has no canonical typed value");
 });
 
-test("owner context projects a synthetic source-free failure only to the root flow", () => {
+test("owner context projects a synthetic source-free failure only to the root flow", async () => {
   const trace = syntheticTrace();
   const memories = [
     new MemorySpec("inner", "inner", {}, [new DeclSite([], ["def", "child"])], false),
     new MemorySpec("outer", "outer", {}, [ROOT], false),
   ];
-  const [inner, outer] = learning.projectOwnerContexts(trace, memories, [], "original text", ORIGINAL_ROOT, []);
+  const [root, results] = await computeBackward(trace, "original text");
+  const [inner, outer] = learning.projectOwnerContexts(trace, memories, [], "original text", root, results);
   expect(outer!.episodes).toEqual([]);
   expect(inner!.episodes).toEqual([]);
   expect(inner!.feedback).toEqual([]);
@@ -414,7 +413,7 @@ test("owner context projects a synthetic source-free failure only to the root fl
   ]);
 });
 
-test("root fallback reaches only keys owned by the root flow site", () => {
+test("root fallback reaches only keys owned by the root flow site", async () => {
   const trace = syntheticTrace();
   const memories = [
     new MemorySpec("agent_notes", "agent_notes", {}, [new DeclSite([], ["root"], "agent")], true),
@@ -423,13 +422,15 @@ test("root fallback reaches only keys owned by the root flow site", () => {
     new MemorySpec("lib.notes", "lib.notes", {}, [new DeclSite(["lib"], ["root"])], false),
     new MemorySpec("shared", "shared", {}, [new DeclSite([], ["def", "child"]), ROOT], false),
   ];
+  const [root, results] = await computeBackward(trace, "original text");
+
   const [agentNotes, defNotes, imported, shared] = learning.projectOwnerContexts(
     trace,
     memories,
     [],
     "original text",
-    ORIGINAL_ROOT,
-    [],
+    root,
+    results,
   );
   expect(agentNotes!.feedback).toEqual([]);
   expect(defNotes!.feedback).toEqual([]);
@@ -745,11 +746,6 @@ test("a graph outcome uses constant memory roots and an indexed scope", () => {
 
 // Owner contexts over engine runs.
 
-/** Return `context`'s feedback entries as records. */
-function feedbackEntries(context: LearnContext): readonly Readonly<Record<string, unknown>>[] {
-  return context.feedback as readonly Readonly<Record<string, unknown>>[];
-}
-
 const saved: [string, TemplateFn | undefined][] = [];
 
 /** Register a stand-in builtin `name` running `call` for this test only. */
@@ -811,10 +807,10 @@ test("owner contexts include general occurrences and empty memories", async () =
     throw new Error("projection invoked backward");
   };
 
-  const contexts = learning.projectOwnerContexts(trace, memories, recorded, "review", root, results);
+  const projected = learning.projectOwnerContexts(trace, memories, recorded, "review", root, results);
 
-  expect(contexts.map((context) => context.memory)).toEqual(["empty", "local", "outer"]);
-  const byKey = new Map(contexts.map((context) => [context.memory, context]));
+  expect(projected.map((context) => context.memory)).toEqual(["empty", "local", "outer"]);
+  const byKey = new Map(projected.map((context) => [context.memory, context]));
   expect(byKey.get("outer")!.episodes).toHaveLength(3);
   expect(trace.occurrences).toHaveLength(3);
   expect(byKey.get("empty")!.episodes).toEqual([]);
@@ -873,8 +869,8 @@ test.each([false, true])("owner feedback retains literals and opaque local stops
   await built.run();
   const trace = built.state.trace!;
   const [root, results] = await computeBackward(trace, "unchanged");
-  const contexts = learning.projectOwnerContexts(trace, memories, recorded, "unchanged", root, results);
-  const work = feedbackEntries(contexts[0]!).filter(
+  const projected = learning.projectOwnerContexts(trace, memories, recorded, "unchanged", root, results);
+  const work = feedbackEntries(projected[0]!).filter(
     (entry) => JSON.stringify(entry.owner_static_path) === JSON.stringify(["work"]),
   );
   const expected = [["output", "unchanged"], ["input", "unchanged"]];
@@ -898,12 +894,12 @@ test.each([false, true])("owner feedback retains literals and opaque local stops
 test.each(["binding", "body", "route"] as const)(
   "owner contexts keep unavailable inputs and causal failures: %s",
   async (failureKind) => {
-    // A binding failure stops before the body runs.
     let node: Node = new FuncNode("work", () => {
       throw new Error("expected body failure");
     }, { reads: { x: [1n] } });
     let flow = workFlow(node);
     if (failureKind === "binding") {
+      // A binding failure stops before the body runs.
       node.params = [new Parameter("x", { required: true })];
       flow.wiring.set("work", new Map());
     } else if (failureKind === "route") {
@@ -1019,6 +1015,7 @@ test("an owner context error identifies the receiver without changing forward ac
   expect(trace.terminal!.succeeded).toBe(true);
   expect(trace.terminal!.output).toBe("leaf");
   const [root, results] = await computeBackward(trace, "review");
+  expect(learning.projectOwnerContexts(trace, memories, recorded, "review", root, results)).toHaveLength(1);
   const accepted = built.log.records();
   // TS has no memory JSON nesting bound, so the context check of `work`'s occurrence (the second
   // call, after START's) refuses instead.
@@ -1208,8 +1205,8 @@ test.each([false, true])(
     node.declaredVariables = () => {
       throw new Error("read mutable declarations");
     };
-    const contexts = learning.projectOwnerContexts(trace, memories, recorded, "review", root, results);
-    const entries = feedbackEntries(contexts[0]!);
+    const projected = learning.projectOwnerContexts(trace, memories, recorded, "review", root, results);
+    const entries = feedbackEntries(projected[0]!);
     expect(
       entries.filter((entry) => entry.channel === "variable").map((entry) => [
         entry.target_name,
@@ -1227,6 +1224,6 @@ test.each([false, true])(
       .record as BackwardReadyRecord;
     expect(
       learning.projectOwnerContexts(trace, memories, recorded, "review", decoded.rootResult, decoded.attributedResults),
-    ).toEqual(contexts);
+    ).toEqual(projected);
   },
 );

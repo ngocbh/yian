@@ -6,7 +6,7 @@
  * `test_code_build_stamps_descriptor_origin_without_affecting_equality` drops its `==` half (TS
  * has no dataclass `==`), and its message ends "or null" where Python's ends "or None".
  *
- * Changed: decision 6, the CODE check runs after assembly, so a valid output type keeps the
+ * Changed: the CODE check runs after assembly, so a valid output type keeps the
  * syntax error reachable: `test_code_build_frames_inline_syntax_error_at_yaml_line` and
  * `test_nonliteral_syntax_error_uses_whole_code_scalar` write `outputs: str` where Python writes
  * the invalid `outputs: string`/`output: string`, and go through `parse`, `withSourceOrigins`,

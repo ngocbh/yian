@@ -41,9 +41,9 @@
  * and `load-case/seed_e38_case_when_ref_locates_node_header`. Changed: the invalid-default row's
  * CODE body is inline JavaScript, where Python names a fixture function.
  *
- * Later (T4-9): the e30, e31 and e32 rows of `test_compile_error_gallery` and
- * `test_inline_code_construction_errors_carry_ranges` (compiling the CODE body; the TS case
- * `load-leaves/seed_e31_inline_no_return` loads).
+ * Later (T3-22), as they need the loader's awaited CODE check (`checkFlowCode`): the e30, e31 and
+ * e32 rows of `test_compile_error_gallery` and `test_inline_code_construction_errors_carry_ranges`
+ * (in TS, `load-leaves/seed_e31_inline_no_return` loads and fails when it runs).
  * Later (T3-22), as they need the loader itself: `test_single_node_def_model_kind_is_removed`
  * (the loader parses the `defs:` entry) and the e16 row of `test_compile_error_gallery` (the loader
  * reports the typedef error as `bad typedefs: ...`).

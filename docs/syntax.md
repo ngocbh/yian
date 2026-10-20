@@ -2675,8 +2675,8 @@ holds for TS and JS code. An inline body runs as a strict async function of `inp
 (`return inputs.n * 2`). Its types are stripped, not checked, so use erasable TypeScript
 only (no `enum`, `namespace`, or parameter properties). A body can't use a static
 `import`; a dynamic `import()` of a package or an absolute path works, and local helpers
-go in a reference. `inputs` holds the declared inputs, frozen, with ints up to 2^53 as
-numbers (larger ones as `bigint`s); reading an undeclared name throws. `inputs` is a
+go in a reference. `inputs` holds the declared inputs (its top level frozen), with ints
+up to 2^53 as numbers (larger ones as `bigint`s); reading an undeclared name throws. `inputs` is a
 Proxy: only a top-level `return inputs` returns the record, while `return {all: inputs}`
 fails `contract.output` (`Proxy is not a yian value`) and `structuredClone(inputs)`
 throws, so copy it with `{...inputs}`. A whole-number float such as `2.0` reaches the

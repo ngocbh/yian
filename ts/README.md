@@ -88,8 +88,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   integers and stored as numbers; LOOP's `times:` and `max:` stay raw on the descriptor and are
   checked and converted when the LOOP builds. An `llm_config:` layer holding `${...}` values is a
   `ValueTemplate` (a `Binding` for one whole-record value), read before the node builds. The CODE
-  reader compiles nothing at build. The awaited load step, `checkFlowCode` (called by `loadFlow`
-  once after assembly), checks every CODE node of the flow and its child flows: an inline body's
+  reader compiles nothing at build. The awaited load step, `checkFlowCode` (for the loader to
+  await once after assembly), checks every CODE node of the flow and its child flows: an inline body's
   syntax and a reference's file, refusing a Python-style `module:function`, running no code. A
   CODE node's `baseDir`, the directory its reference resolves against, comes from
   `BuildContext.baseDir` (`null` by default). WAIT keeps an `until:` date or datetime as the text

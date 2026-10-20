@@ -16,7 +16,7 @@
  * `test_invalid_output_list_item_reports_the_exact_item_site`.
  *
  * Changed: `test_code_syntax_error_precedes_an_invalid_output_type` becomes `an invalid output
- * type precedes a CODE syntax error` (decision 6): the CODE check runs after assembly, so `build`
+ * type precedes a CODE syntax error`: the CODE check runs after assembly, so `build`
  * throws the output-type error and compiles nothing.
  *
  * Later (T3-22, T4-8):

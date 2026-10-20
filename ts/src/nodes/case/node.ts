@@ -181,7 +181,8 @@ export class CaseNode extends Node {
    * to evaluate, else the base's.
    */
   override exceptionCode(error: unknown): FailureCode {
-    return isObject(error) && failedCases.has(error) ? "condition.evaluate" : super.exceptionCode(error);
+    const failed = isObject(error) ? failedCases.get(error) : undefined;
+    return failed !== undefined && this.cases.includes(failed) ? "condition.evaluate" : super.exceptionCode(error);
   }
 
   /**

@@ -17,7 +17,7 @@ import { AsyncResource } from "node:async_hooks";
 
 import { GrowthRejected } from "../compile/model.ts";
 import { type Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
-import { type RunEvent, RunFailed, type StreamChunk, ToolCallFinished } from "../events.ts";
+import { NodeAttemptResumed, type RunEvent, RunFailed, type StreamChunk, ToolCallFinished } from "../events.ts";
 import { ConversationInvocation } from "../memory/contracts.ts";
 import { CapabilityFault, Grow, markerMessage, Output, Route, type Steering } from "../nodes/base.ts";
 import { isExactly, NodeSteps } from "../nodes/contracts.ts";
@@ -33,7 +33,7 @@ import {
   type MemoryContextOpener,
   requireSteering,
 } from "./eval_node.ts";
-import type { OutcomeCarriers, RunLog, RunStopReason } from "./log.ts";
+import type { OutcomeCarriers, RunLog, RunResumedRecord, RunStopReason } from "./log.ts";
 import {
   commitPrepared,
   type GrowBuilder,
@@ -136,6 +136,20 @@ function isRunLog(log: unknown): log is RunLog {
     typeof candidate.append === "function" &&
     typeof candidate.runId === "string" &&
     typeof candidate.nextSequence === "number"
+  );
+}
+
+/**
+ * Return one `NodeAttemptResumed` per retried node of a committed `RunResumed`, in the record's
+ * `retryNodeIds` order, each counting the node's attempts interrupted with no `RunStopped`. The run
+ * boundary publishes them right after the `RunResumed` observers.
+ *
+ * @param state The state `record` was committed to.
+ * @param record The committed `RunResumed` record.
+ */
+export function resumedAttemptEvents(state: RunState, record: RunResumedRecord): NodeAttemptResumed[] {
+  return record.retryNodeIds.map(
+    (nodeId) => new NodeAttemptResumed({ nodeId, interrupted: state.interruptedAttempts.get(nodeId) ?? 0 }),
   );
 }
 

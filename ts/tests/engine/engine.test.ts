@@ -24,7 +24,9 @@
  * the float 3.0.
  *
  * TS-only: nothing ready before a terminal result is nonterminal quiescence. The node failure row
- * also checks that a failed run aborts its signal.
+ * also checks that a failed run aborts its signal. `resumedAttemptEvents` (on a live state): a crash
+ * before the resume counts one interrupted attempt, a `RunStopped` before it none, two crashes two,
+ * and the events follow the record's `retryNodeIds`.
  *
  * Not ported: `test_parallel_module_and_export_are_gone`; TS never had `ParallelFlowEngine`.
  */
@@ -32,12 +34,21 @@
 import { expect, test } from "bun:test";
 
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
-import { RunFailed, RunSucceeded } from "../../src/events.ts";
+import { NodeAttemptResumed, RunFailed, RunSucceeded } from "../../src/events.ts";
 import { ELSE_HANDLE, type Node } from "../../src/nodes/base.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
+import { resumedAttemptEvents } from "../../src/runtime/engine.ts";
+import type { RunResumedRecord } from "../../src/runtime/log.ts";
+import {
+  commitPrepared,
+  prepareNodeStarted,
+  prepareNodeSucceeded,
+  prepareRunResumed,
+  prepareRunStopped,
+} from "../../src/runtime/state.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { BranchNode, engine, FailNode, FuncNode, graph, RecordNode, rejected } from "./run_state_fixtures.ts";
 
@@ -422,4 +433,70 @@ test("nothing ready before a terminal result is nonterminal quiescence", async (
   expect(error).toEqual(new Error("FlowEngine reached nonterminal quiescence"));
   expect(built.signal.aborted).toBe(true);
   expect(built.log.nextSequence).toBe(1);
+});
+
+// --- NodeAttemptResumed ---
+
+/** Return a live engine over START fanning out to `b` then `a`, with START not yet started. */
+function resumable() {
+  return engine(graph([new FuncNode("b", () => "b"), new FuncNode("a", () => "a")], [
+    [START_ID, "b"],
+    [START_ID, "a"],
+    ["b", END_ID],
+    ["a", END_ID],
+  ]));
+}
+
+test("resumedAttemptEvents counts a crash as one interrupted attempt", () => {
+  const { state, log } = resumable();
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  const resumed = prepareRunResumed(state, { numWorkers: 0 });
+  commitPrepared(log, state, resumed);
+
+  expect(resumedAttemptEvents(state, resumed.record as RunResumedRecord)).toEqual([
+    new NodeAttemptResumed({ nodeId: START_ID, interrupted: 1 }),
+  ]);
+});
+
+test("resumedAttemptEvents counts no interrupted attempt after a RunStopped", () => {
+  const { state, log } = resumable();
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  commitPrepared(log, state, prepareRunStopped(state, "signal", "stop now"));
+  const resumed = prepareRunResumed(state, { numWorkers: 0 });
+  commitPrepared(log, state, resumed);
+
+  expect(resumedAttemptEvents(state, resumed.record as RunResumedRecord)).toEqual([
+    new NodeAttemptResumed({ nodeId: START_ID, interrupted: 0 }),
+  ]);
+});
+
+test("resumedAttemptEvents counts two crashes as two interrupted attempts", () => {
+  const { state, log } = resumable();
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  const resumed = prepareRunResumed(state, { numWorkers: 0 });
+  commitPrepared(log, state, resumed);
+
+  expect(resumedAttemptEvents(state, resumed.record as RunResumedRecord)).toEqual([
+    new NodeAttemptResumed({ nodeId: START_ID, interrupted: 2 }),
+  ]);
+});
+
+test("resumedAttemptEvents follows the record's retryNodeIds", () => {
+  const { state, log } = resumable();
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, {}));
+  commitPrepared(log, state, prepareNodeStarted(state, "b"));
+  commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+  commitPrepared(log, state, prepareNodeStarted(state, "b"));
+  commitPrepared(log, state, prepareNodeStarted(state, "a"));
+  const resumed = prepareRunResumed(state, { numWorkers: 0 });
+  commitPrepared(log, state, resumed);
+
+  expect((resumed.record as RunResumedRecord).retryNodeIds).toEqual(["b", "a"]);
+  expect(resumedAttemptEvents(state, resumed.record as RunResumedRecord)).toEqual([
+    new NodeAttemptResumed({ nodeId: "b", interrupted: 2 }),
+    new NodeAttemptResumed({ nodeId: "a", interrupted: 1 }),
+  ]);
 });

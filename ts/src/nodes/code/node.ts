@@ -349,6 +349,9 @@ export class CodeNode extends Node {
    * intake (a top-level `return inputs` returns the record).
    *
    * @throws ReferenceError when the built-in's field isn't in the record.
+   * @throws TypeStripError when the body doesn't parse or strip.
+   * @throws SyntaxError when the function constructor refuses the stripped body.
+   * @throws CodeError when the body throws.
    * @throws Error when a body returns `undefined`.
    * @throws TypeCheckError when host intake refuses the result.
    */

@@ -4,18 +4,23 @@
  *
  * Ported: `test_inline_reads_inputs_dict_and_returns`,
  * `test_inline_calling_convention_matches_reference` (`Object.keys(inputs).sort()`),
- * `test_inline_multi_statement_body_with_helpers` and `test_inline_body_that_prints_still_returns_value`
- * (a spy on `console.log`).
+ * `test_inline_multi_statement_body_with_helpers`, `test_inline_body_that_prints_still_returns_value`
+ * (a spy on `console.log`) and `test_inline_non_owned_failure_uses_whole_code_origin` (also with a
+ * `CodeError`-wrapped outside error).
  *
  * Ported (adapted): `test_classify_reference_inline_reject` and
  * `test_wrapped_line_selector_uses_exact_whole_then_node_fallback` (its `True` line is `true`);
- * `test_inline_stdlib_import_in_body_works_in_process` (a dynamic `import("node:path")`).
+ * `test_inline_stdlib_import_in_body_works_in_process` (a dynamic `import("node:path")`);
+ * `test_inline_exception_selects_deepest_owned_code_line` (JS `1 / 0` doesn't throw, so the lambda
+ * and comprehension forms become a throwing arrow and a `map` callback; lines are 1-based).
  *
  * Changed: a reference is a relative path to a `.ts`, `.js` or `.mjs` file plus `:fn`
  * (`./mod.ts:fn`); any other value is an inline body, so there is no reject bucket and
  * `./helpers.ts`, `pkg.mod:fn` and `./x.py:fn` classify as inline. The selector takes the line of
  * the authored body (line 1 is the body's first line), not the line of Python's
- * `def main(inputs):` wrapper.
+ * `def main(inputs):` wrapper. `test_inline_return_comes_back_unchecked` becomes `inline return is
+ * checked by intake`: a CODE result goes through host intake (design 3.2.1), so a `Date` fails
+ * `contract.output` at the contract origin.
  *
  * TS-only: the constructor compiles nothing, so a body that doesn't parse constructs; the node's
  * `mode`; a non-integer line selects no line; the selector's origin shape checks; the built-in
@@ -23,8 +28,12 @@
  * type checks on `code`); TypeScript annotations and `await` run; ints arrive as `number` (big
  * ones as `bigint`) and an integral result becomes an int; the `inputs` proxy (an undeclared
  * input rejects, `in`, `JSON.stringify`, `return inputs`, strict assignment); a body returning
- * `undefined` rejects; a thrown string's and a thrown record's text; the built-in identity runs
- * on the bound record; the runtime's function header is 2 lines.
+ * `undefined` rejects; a thrown string's and a thrown record's text; a thrown string falls back to
+ * the whole code origin; a body error's code is `node.execute`; a built-in's origin is the node's;
+ * the built-in identity runs on the bound record; the runtime's function header is 2 lines; through
+ * the evaluator and the engine, a success commits its int, a throwing body fails `node.execute`
+ * with `Error: boom` and `causeType` `CodeError` at the line origin, a no-value body fails at the
+ * whole `code:` origin, and an intake refusal fails `contract.output` at the contract origin.
  *
  * Not ported: `test_no_return_body_rejected_at_construction` and `test_return_only_in_nested_def_still_rejected`
  * (Python `ast`; TS has no load-time `return` check);
@@ -32,9 +41,7 @@
  * `test_dynamic_same_filename_code_falls_back_to_owned_call_site` (Python `compile` and `exec`);
  * `test_reference_failure_does_not_inspect_origin_truthiness` (Python `__bool__`).
  *
- * Later (T4-9): `test_inline_exception_selects_deepest_owned_code_line`,
- * `test_inline_non_owned_failure_uses_whole_code_origin`,
- * `test_reference_failure_uses_code_then_node_fallback`, `test_inline_return_comes_back_unchecked` and
+ * Later (T4-9): `test_reference_failure_uses_code_then_node_fallback` and
  * `test_reference_mode_still_dispatches_in_process`.
  *
  * Later (T4-9), adapted: `test_syntax_error_rejected_at_construction`; the syntax check moves to
@@ -123,7 +130,7 @@ test("wrapped line selector uses exact, whole, then node fallback", () => {
 // --- the in-process entrypoint (one-record `inputs`) --- //
 
 test("inline reads inputs and returns", async () => {
-  expect(await run("return `${inputs.label}: ${inputs.rating.toFixed(1)}`", { label: "BUY", rating: 4.25 })).toBe(
+  expect(await run("return `${inputs.label}: ${inputs.rating.toFixed(1)}`", { label: "BUY", rating: 4.26 })).toBe(
     "BUY: 4.3",
   );
 });
@@ -359,12 +366,16 @@ test("a thrown string falls back to the whole code origin", async () => {
   expect(await failureOrigin(node)).toBe(node.codeOrigin);
 });
 
-test("a body error's code is node.execute and a built-in's origin the node's", async () => {
+test("a body error's code is node.execute", async () => {
   const node = locatedNode('throw new Error("boom")');
+
+  expect(node.exceptionCode(await rejected(node.run({})))).toBe("node.execute");
+});
+
+test("a built-in's failure origin is the node's", async () => {
   const builtin = new CodeNode("v", { code: { builtin: "identity", field: "v" }, codeOrigin: new OriginRef("code") });
   builtin.origin = new OriginRef("node");
 
-  expect(node.exceptionCode(await rejected(node.run({})))).toBe("node.execute");
   expect(await failureOrigin(builtin)).toBe(builtin.origin);
 });
 
@@ -438,7 +449,7 @@ test("the built-in identity returns the bound field unchanged", async () => {
   expect(await node.run({ v: 2n ** 70n })).toEqual(new Output(2n ** 70n));
   // No host round trip: a float 2 stays the number 2, not the int 2n.
   expect(await node.run({ v: 2 })).toEqual(new Output(2));
-  expect(((await node.run({ v: record })) as Output).value).toEqual(record);
+  expect(((await node.run({ v: record })) as Output).value).toBe(record);
 });
 
 test("the built-in identity rejects a missing field", async () => {

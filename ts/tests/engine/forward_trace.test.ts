@@ -135,7 +135,7 @@
  * `tuple_subclass` row (the delta copies the pair by index).
  *
  * TS-only (frontier trace): the same history-field rows, with `started` and `resumed`, on a
- * prepared `NodeStep` and `RunStopped` of the in-flight `work`.
+ * prepared `NodeStep` and `RunStopped` of the in-flight `router`.
  *
  * Not ported (thread race): `test_a_lookup_retains_its_entry_when_a_new_writer_commits`.
  *
@@ -2189,12 +2189,15 @@ function preparedScopedOutcome(kind: OutcomeKind = "success"): {
     routeHandle: kind === "route" ? "go" : undefined,
   });
   const carriers = { forwardCapture: forwardCapture(node, {}) };
-  const prepared =
-    kind === "success"
-      ? prepareNodeSucceeded(state, node.id, "done", { commitAs: END_ID, ...carriers })
-      : kind === "route"
-        ? prepareNodeRouted(state, node.id, "go", carriers)
-        : prepareNodeFailed(state, new Failure({ code: "node.execute", message: "failed", nodeId: node.id }), carriers);
+  let prepared: PreparedTransition;
+  if (kind === "success") {
+    prepared = prepareNodeSucceeded(state, node.id, "done", { commitAs: END_ID, ...carriers });
+  } else if (kind === "route") {
+    prepared = prepareNodeRouted(state, node.id, "go", carriers);
+  } else {
+    const failure = new Failure({ code: "node.execute", message: "failed", nodeId: node.id });
+    prepared = prepareNodeFailed(state, failure, carriers);
+  }
   return { node, state, log, prepared };
 }
 

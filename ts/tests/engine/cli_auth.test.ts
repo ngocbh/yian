@@ -419,7 +419,11 @@ describe("models --auth-file", () => {
   test("a listing past --timeout is models.timeout", async () => {
     const path = await savedLogin();
     const fake = fakeServices(
-      (_, signal) => new Promise((_, reject) => signal!.addEventListener("abort", () => reject(signal!.reason))),
+      // A request cut short rejects with a plain AuthError, not the deadline's reason.
+      (_, signal) =>
+        new Promise((_, reject) =>
+          signal!.addEventListener("abort", () => reject(new AuthError("OpenAI authentication request failed"))),
+        ),
     );
     const { code, document } = await listJson(path, fake, { timeout: 0.05 });
     expect(code).toBe(1);

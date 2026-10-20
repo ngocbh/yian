@@ -105,7 +105,7 @@ export function auth(_command: ParsedArgs, io: CliIo): Promise<number> {
 }
 
 /** One problem in an `llm_config` layer: the field it is at (`null` for none) and what is wrong. */
-export interface ConfigError {
+export interface ConfigProblem {
   field: string | null;
   message: string;
 }
@@ -122,14 +122,14 @@ export interface ConfigError {
  *   for an unknown top-level key, a plain `RangeError` or a model-level error; empty when the
  *   layer is valid.
  */
-export function configErrors(layer: Readonly<Record<string, unknown>>): ConfigError[] {
+export function configErrors(layer: Readonly<Record<string, unknown>>): ConfigProblem[] {
   const rest = { ...layer };
   try {
     popHostCredentials(rest);
     new LLMConfig(rest);
   } catch (error) {
     if (error instanceof ValidationError) {
-      const errors: ConfigError[] = [];
+      const errors: ConfigProblem[] = [];
       for (const issue of error.issues) {
         const entry =
           issue.type === "extra_forbidden" && issue.loc.length === 1

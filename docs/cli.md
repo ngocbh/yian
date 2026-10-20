@@ -244,6 +244,10 @@ yian run flow.yaml --resume ./run.jsonl --memory-root ./mem
   Build such a flow from Python with `build_memories(..., factories=...)` or
   `supplied=...`.
 
+Changed (TS yian): the custom-type error points to the TS API, `buildMemories(flow, { factories })`
+or `{ supplied }`, then `runFlow(flow, inputs, { memory })`, and writes the custom keys in the text
+form (`["vec"]`).
+
 Nothing is opened before the run starts. Each `.sqlite` file has one owner at
 a time: a second `yian run` on the same file fails with `storage.busy`
 until the first exits. A profile's `.md` file has no single owner; writers take

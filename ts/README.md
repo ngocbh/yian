@@ -630,7 +630,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   diagnostic boxes, the banner, progress on stderr and `stopOnSignals` (SIGINT, SIGTERM and SIGHUP
   stop a run; exit 130). `run`, `check` and `status` stop at the loader and run inspection until
   those are ported. `src/cli/mcp_config.ts` reads `mcpServers` files into unopened MCP servers
-  (`userMcpConfig`, `loadMcpConfig`). `src/cli/{auth,memory}.ts` are stubs with their final exports.
+  (`userMcpConfig`, `loadMcpConfig`). `src/cli/memory.ts` builds the memory registry from
+  `--memory-root` and `--memory-storage` (`parseMemoryStorage`, `buildCliMemories`).
+  `src/cli/auth.ts` is a stub with its final exports.
 - The conformance runner runs `cli` cases by spawning `src/cli/index.ts` (built: `dist/src/cli/
   index.js`) with a preloaded hook that routes `fetch` to a stub server.
 

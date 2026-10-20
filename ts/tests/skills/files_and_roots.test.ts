@@ -2,8 +2,6 @@
  * Bundled-file confinement and default Claude/Codex skill roots, a port of
  * `tests/skills/test_files_and_roots.py`; with `YIAN_TEST_NODE` set to a Node binary, the built
  * skills code on Node.
- *
- * Later: the compose facade test (with the compose loaders).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -13,7 +11,8 @@ import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { defaultSkillRoots } from "../../src/compose/skills.ts";
+import * as compose from "../../src/compose/index.ts";
+import { defaultSkillRoots, loadSkills } from "../../src/compose/skills.ts";
 import { current } from "../../src/defaults.ts";
 import { readSkillFile, readSkillText, resolvedPath } from "../../src/skills/catalog.ts";
 import { Skill, SkillError } from "../../src/skills/index.ts";
@@ -128,6 +127,11 @@ test("default roots put user before project and stop at git root", () => {
 test("default roots outside git use only cwd", () => {
   const roots = defaultSkillRoots({ cwd: tmp, home: join(tmp, "home") });
   expect(roots.slice(2)).toEqual([join(tmp, ".claude", "skills"), join(tmp, ".agents", "skills")]);
+});
+
+test("compose facade exports the skill loaders", () => {
+  expect(compose.defaultSkillRoots).toBe(defaultSkillRoots);
+  expect(compose.loadSkills).toBe(loadSkills);
 });
 
 // TS-only: the rows below pin behavior Python gets from pathlib.

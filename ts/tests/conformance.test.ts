@@ -950,6 +950,94 @@ describe("main", () => {
     });
   });
 
+  /** Return `lines` as a YAML literal block, the value of a key at the top of a case file. */
+  const block = (...lines: string[]) => `|\n${lines.map((line) => `  ${line}`).join("\n")}\n`;
+  const lookup = (tool: string, ...comment: string[]) =>
+    block(
+      "id: t",
+      "name: t",
+      "input:",
+      "  q: !str",
+      "nodes:",
+      ...comment,
+      `  find: {kind: tool, tool_id: ${tool}, input: {q: "\${input.q}"}}`,
+      "output: ${find.output}",
+    );
+  const CYCLE = block(
+    "id: p",
+    "name: p",
+    "defs:",
+    "  child:",
+    "    input:",
+    "      x: !str",
+    "    nodes:",
+    '      a: {kind: agent, input: {x: "${b.output}"}, output: str, prompt: "Echo ${x}."}',
+    '      b: {kind: agent, input: {x: "${a.output}"}, output: str, prompt: "Echo ${x}."}',
+    "    output: ${a.output}",
+    "input:",
+    "  s: !str",
+    "nodes:",
+    '  c: {kind: call, call: child, input: {x: "${input.s}"}}',
+    "output: ${c.output}",
+  );
+  const CYCLE_DIAGNOSTIC =
+    "{code: compose.load, frames: [" +
+    "{label: flow.yaml, range: [5, 5, 11, 1], note: definition 'child'}, " +
+    "{label: flow.yaml, range: [8, 7, 8, 8]}, {label: flow.yaml, range: [9, 7, 9, 8]}], " +
+    "notes: [a depends on b (a.input.x), b depends on a (b.input.x)]";
+
+  test("runs `load` cases with the runner's own kind table", async () => {
+    const files = {
+      "l/ok.yaml": `kind: load\nflow: ${lookup("lookup")}expect: {load: ok}\n`,
+      "l/cycle.yaml":
+        `kind: load\nflow: ${CYCLE}expect: {load: {diagnostics: [${CYCLE_DIAGNOSTIC}, ` +
+        `message: 'defs entry ''child'': flow has a cycle involving ["a","b"]; flows must be ` +
+        "acyclic'}]}}\n",
+      // An expected diagnostic without `message` doesn't compare it.
+      "l/no_message.yaml":
+        `kind: load\nflow: ${CYCLE}expect: {load: {diagnostics: [${CYCLE_DIAGNOSTIC}}]}}\n`,
+      "l/wrong.yaml":
+        `kind: load\nflow: ${lookup("lookup")}` +
+        "expect: {load: {diagnostics: [{code: compose.load}]}}\n",
+    };
+    expect(await run([], files, {}, RUNNERS)).toEqual({
+      code: 1,
+      out: [
+        "FAIL l/wrong: load differs",
+        "  --- actual",
+        "  ok",
+        "  --- expected",
+        "  diagnostics:",
+        "    - code: compose.load",
+        "4 cases: 3 passed, 1 failed, 0 pending",
+      ],
+      err: [],
+    });
+  });
+
+  test("runs `fingerprint` cases with the runner's own kind table", async () => {
+    const pair = (other: string, fingerprint: string) =>
+      `kind: fingerprint\nflow: ${lookup("lookup")}other: ${other}` +
+      `expect: {fingerprint: ${fingerprint}}\n`;
+    const files = {
+      "f/same.yaml": pair(lookup("lookup", "  # A comment changes the text, not the flow"), "same"),
+      "f/different.yaml": pair(lookup("search"), "different"),
+      "f/wrong.yaml": pair(lookup("search"), "same"),
+    };
+    expect(await run([], files, {}, RUNNERS)).toEqual({
+      code: 1,
+      out: [
+        "FAIL f/wrong: fingerprint differs",
+        "  --- actual",
+        "  different",
+        "  --- expected",
+        "  same",
+        "3 cases: 2 passed, 1 failed, 0 pending",
+      ],
+      err: [],
+    });
+  });
+
   test.each([[["--bogus"]], [["--group"]], [["a/ok"]]])("exits 2 on %p", async (argv) => {
     const { code, out, err } = await run(argv);
     expect(code).toBe(2);

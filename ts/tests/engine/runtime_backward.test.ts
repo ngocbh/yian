@@ -78,23 +78,49 @@
  * own `Error`, not `backward.execute`; an error from result validation that is neither a
  * `TypeError` nor a `RangeError` (a forged result's throwing getter) escapes unchanged.
  *
- * Later (T4-7):
- * `test_terminal_trace_latches_causal_route_and_later_failure_wins`,
- * `test_structural_ancestry_requires_exact_metadata_prescribed_transfer`,
- * `test_preseeded_root_output_does_not_invent_an_executed_producer`,
- * `test_opaque_expression_stops_are_recoverable_without_rerunning_functions`,
- * `test_backward_context_is_trace_owned_detached_and_survives_replay` and
- * `test_canonical_file_input_feedback_keeps_literal_and_opaque_stops`. Later, with MAP, CASE,
- * CALL, LOOP, AGENT, pooled mode or `buildGrow`: the file's other 10 tests, from
+ * Ported, through the engine, with routes, replay and template stops:
+ * `test_terminal_trace_latches_causal_route_and_later_failure_wins` (2 rows; `router` and
+ * `unrelated` patched on the instance, every prefix replayed over a fresh `copyGraph` of the
+ * started flow with `noGrowth`) and
+ * `test_opaque_expression_stops_are_recoverable_without_rerunning_functions` (the template function
+ * registered with `registerTemplateFn` and restored in `afterEach`).
+ *
+ * Changed:
+ * - `test_structural_ancestry_requires_exact_metadata_prescribed_transfer` (2 rows) and
+ *   `test_canonical_file_input_feedback_keeps_literal_and_opaque_stops` (2 rows) run on
+ *   `ownerEngine`'s hand-built root-only memory layout, not Python's resolved one; `middle`'s
+ *   `captureBackwardContext` is patched on the instance.
+ * - `test_preseeded_root_output_does_not_invent_an_executed_producer` (2 rows): the flow's
+ *   readonly `endId` is assigned through a cast, and the engine grows with `noGrowth`.
+ * - `test_backward_context_is_trace_owned_detached_and_survives_replay`: the context is frozen, so
+ *   writing to its inputs throws a `TypeError` (asserted) where Python's write lands on a detached
+ *   copy; the replay's recapture guard spies on `Node.prototype.captureBackwardContext`.
+ *
+ * TS-only: a backward context the trace can't build rejects with its own error before the callback
+ * runs.
+ *
+ * Later: `test_pooled_reverse_walk_uses_outcomes_instead_of_start_sequence`. T4-6's pooled engine
+ * is merged, but the Python test blocks a template function on a thread event until the peer
+ * commits, which a synchronous TS template function can't do. Later, with MAP, CASE, CALL, LOOP,
+ * AGENT or `buildGrow`: the file's other 9 tests, from
  * `test_map_whole_list_context_and_item_order_survive_reversed_completion` to
  * `test_loop_passthrough_field_routes_feedback_to_its_seed`.
  */
 
-import { expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 
-import { END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { CompiledFlow, copyGraph, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import { Failure } from "../../src/diagnostics.ts";
-import { type FeedbackValue, RouteContext, SourceRef, sourceKey, ValueRoute } from "../../src/expr/lineage.ts";
+import {
+  type FeedbackValue,
+  RouteContext,
+  routeFeedback,
+  SourceRef,
+  sameSource,
+  sourceKey,
+  ValueRoute,
+} from "../../src/expr/lineage.ts";
 import {
   DeclSite,
   LearnContext,
@@ -109,11 +135,21 @@ import {
   MemoryStack,
   PolicyCommitOutcome,
 } from "../../src/memory/contracts.ts";
-import { BackwardContext, BackwardResult, CapabilityFault, Node, NodeKind } from "../../src/nodes/base.ts";
+import {
+  BackwardContext,
+  BackwardResult,
+  CapabilityFault,
+  ELSE_HANDLE,
+  Node,
+  NodeKind,
+  Output,
+  Route,
+} from "../../src/nodes/base.ts";
 import { Assertion, ExecutionPosition, ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { BackwardComputeError, computeBackward } from "../../src/runtime/backward.ts";
+import { FlowEngine } from "../../src/runtime/engine.ts";
 import {
   AttributedBackwardResult,
   BackwardAttribution,
@@ -150,6 +186,7 @@ import {
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
+  MemoryRunLog,
   NodeStartedRecord,
   NodeSucceededRecord,
   RecordEnvelope,
@@ -164,9 +201,12 @@ import {
   prepareNodeRouted,
   prepareNodeStarted,
   prepareNodeSucceeded,
+  prepareRunStarted,
+  replayRecords,
+  RunState,
 } from "../../src/runtime/state.ts";
 import { type PrepareTraceOptions, prepareTrace, RetainedTrace, TraceTerminal } from "../../src/runtime/trace.ts";
-import { VariablePool } from "../../src/typesys/index.ts";
+import { FileRef, type Value, VariablePool } from "../../src/typesys/index.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import {
   commitStartSuccess,
@@ -175,6 +215,8 @@ import {
   FuncNode,
   graph,
   learnableStarted,
+  noGrowth,
+  ownerEngine,
   RecordingBackwardNode,
   rejected,
   RUN_ID,
@@ -2111,6 +2153,7 @@ test("a diamond calls the shared producer once with two ordered messages", async
   validateAttributedBackward(trace, { left: "L", right: "R" }, root, results);
   expect([producer.calls.length, left.calls.length, right.calls.length]).toEqual([1, 1, 1]);
   expect(producer.calls[0]![1]).toEqual(["L", "R"]);
+  expect(Object.isFrozen(producer.calls[0]![1])).toBe(true);
   expect(root.inputFeedback).toEqual({ topic: ["L", "R"] });
   expect(root.selfFeedback).toEqual([]);
   expect(root.variableFeedback).toEqual({});
@@ -2406,4 +2449,271 @@ test("an error from result validation that isn't a TypeError or RangeError escap
   await built.run();
 
   expect(await rejected(computeBackward(built.state.trace!, "review"))).toBe(original);
+});
+
+// computeBackward over routes, growth replay and template stops.
+
+const saved: [string, TemplateFn | undefined][] = [];
+
+/** Register a stand-in builtin `name` running `call` for this test only. */
+function standIn(name: string, call: (...args: Value[]) => unknown, params: TemplateParam[] = []): void {
+  saved.push([name, TEMPLATE_FNS.get(name)]);
+  registerTemplateFn(name, { params, call });
+}
+
+afterEach(() => {
+  for (const [name, fn] of saved.reverse()) {
+    if (fn === undefined) TEMPLATE_FNS.delete(name);
+    else TEMPLATE_FNS.set(name, fn);
+  }
+  saved.length = 0;
+});
+
+/** Return `context`'s feedback entries as records. */
+function feedbackEntries(context: LearnContext): readonly Readonly<Record<string, unknown>>[] {
+  return context.feedback as readonly Readonly<Record<string, unknown>>[];
+}
+
+/** Return the result of `results` at `source`. */
+function resultAt(results: readonly AttributedBackwardResult[], source: SourceRef): AttributedBackwardResult {
+  return results.find((item) => sameSource(item.source, source))!;
+}
+
+test.each([false, true])(
+  "a terminal trace latches the causal route and a later failure wins (explicit failure: %p)",
+  async (explicit) => {
+    const flow = terminalSkipRouteFlow({ sibling: true });
+    const router = flow.nodes.get("router")!;
+    router.forward = () => new Route("go");
+    const calls: BackwardContext[] = [];
+    router.backward = (context) => {
+      calls.push(context);
+      return new BackwardResult({ selfFeedback: ["route"] });
+    };
+    const observed: (TraceTerminal | null)[] = [];
+    flow.nodes.get("unrelated")!.forward = () => {
+      observed.push(built.state.trace!.terminal);
+      if (explicit) throw new Error("later failure");
+      return new Output("done");
+    };
+    const built = engine(flow, { learnable: true });
+    const original = copyGraph(built.state.flow);
+    await built.run();
+    const trace = built.state.trace!;
+    const chosen = trace.occurrences.find((item) => item.nodeId === (explicit ? "unrelated" : "router"))!;
+
+    expect(observed).toEqual([null]);
+    expect(trace.terminal!.source).toEqual(chosen.source);
+    expect(trace.terminal!.succeeded).toBe(false);
+    const [root, results] = await computeBackward(trace, "explain failure");
+    validateAttributedBackward(trace, "explain failure", root, results);
+    expect(root).toEqual(new BackwardResult());
+    expect(calls.length).toBe(explicit ? 0 : 1);
+    if (calls.length > 0) expect(calls[0]!.failure).toEqual(trace.terminal!.failure);
+    const records = built.log.records();
+    for (let length = 1; length <= records.length; length++) {
+      const replay = replayRecords(new RunState(copyGraph(original)), records.slice(0, length), {
+        growBuilder: noGrowth,
+      });
+      expect(replay.trace!.terminal).toEqual(length === records.length ? trace.terminal : null);
+    }
+  },
+);
+
+test.each([false, true])(
+  "structural ancestry requires the exact metadata-prescribed transfer (transform: %p)",
+  async (transform) => {
+    const producer = new RecordingBackwardNode("producer", () => "value", () => new BackwardResult());
+    const middle = new RecordingBackwardNode(
+      "middle",
+      (inputs) => inputs.x,
+      (_context, feedback) =>
+        new BackwardResult({ inputFeedback: { x: transform ? feedback.map((message) => `${message}!`) : feedback } }),
+      { reads: { x: "${producer.output}" } },
+    );
+    middle.captureBackwardContext = () => ({ input_output_paths: { x: [] } });
+    const left = new RecordingBackwardNode("left", (inputs) => inputs.x, passthrough, {
+      reads: { x: "${middle.output}" },
+    });
+    const right = new RecordingBackwardNode("right", (inputs) => inputs.x, passthrough, {
+      reads: { x: "${middle.output}" },
+    });
+    const { engine: built, memories, stacks } = ownerEngine(graph([producer, middle, left, right], [
+      [START_ID, "producer"],
+      ["producer", "middle"],
+      ["middle", "left"],
+      ["middle", "right"],
+    ], { outputs: [new FlowOutput("left", "${left.output}"), new FlowOutput("right", "${right.output}")] }));
+    await built.run();
+    const trace = built.state.trace!;
+    const feedback = { left: "same", right: "same" };
+
+    const [root, results] = await computeBackward(trace, feedback);
+
+    validateAttributedBackward(trace, feedback, root, results);
+    const occurrence = trace.occurrences.find((item) => item.nodeId === "producer")!;
+    const result = resultAt(results, occurrence.source);
+    expect(result.feedback).toEqual(transform ? ["same!", "same!"] : ["same", "same"]);
+    expect(result.attribution.map((item) => item.parents)).toEqual(transform ? [[0, 1], [0, 1]] : [[0], [1]]);
+    const [context] = projectOwnerContexts(trace, memories, stacks, feedback, root, results);
+    const received = feedbackEntries(context!).filter(
+      (entry) => entry.channel === "output" && entry.execution_seq === BigInt(occurrence.source.executionSeq),
+    );
+    expect(received.map((entry) => entry.value)).toEqual([...result.feedback]);
+    expect(received.map((entry) => (entry.contribution_context as { parents: unknown }).parents)).toEqual(
+      result.attribution.map((item) => item.parents.map(BigInt)),
+    );
+    expect(received.map((entry) => entry.contribution_context)).toEqual([...producer.calls[0]![0].downstreamContext]);
+  },
+);
+
+test.each([false, true])(
+  "a preseeded root output doesn't invent an executed producer (same boundary: %p)",
+  async (sameBoundary) => {
+    const start = new StartNode(START_ID, {
+      params: [new Parameter("topic"), new Parameter("omitted", { hasDefault: true, default: "unused" })],
+    });
+    (start as Node).forward = () => new Route(ELSE_HANDLE);
+    const flow = CompiledFlow.fromParts(new Map([[START_ID, start]]), []);
+    // `endId` is readonly and fixed by the constructor.
+    (flow as { endId: string }).endId = sameBoundary ? START_ID : END_ID;
+    const initialPool = new VariablePool(START_ID);
+    initialPool.set(START_ID, { topic: "reefs", undeclared: "extra" });
+    if (!sameBoundary) initialPool.set(END_ID, "preseeded result");
+    initialPool.addSystem("run_id", "preseed");
+    const state = new RunState(flow);
+    const log = new MemoryRunLog("preseed");
+    commitPrepared(log, state, prepareRunStarted(state, {
+      runId: "preseed",
+      flowFingerprint: "f".repeat(64),
+      initialPool,
+      startWiringOverride: {},
+      effectiveLlmByStaticPath: {},
+      numWorkers: 0,
+      learnable: true,
+    }));
+    await new FlowEngine(state, log, { growBuilder: noGrowth, numWorkers: 0 }).run();
+    const trace = state.trace!;
+
+    const [root, results] = await computeBackward(trace, "review");
+
+    validateAttributedBackward(trace, "review", root, results);
+    expect(root.inputFeedback).toEqual(sameBoundary ? { topic: ["review"] } : {});
+    expect(root.selfFeedback).toEqual([]);
+    expect(results.every((result) => !result.invoked)).toBe(true);
+    if (sameBoundary) expect(trace.terminal!.source!.executionSeq).toBe(0);
+    else expect(trace.terminal!.source).toBeNull();
+  },
+);
+
+test("opaque expression stops are recoverable without rerunning functions", async () => {
+  const calls: unknown[] = [];
+  standIn("backward_opaque", (value) => {
+    calls.push(value);
+    return value;
+  }, [{ name: "value" }]);
+  const node = new RecordingBackwardNode("work", (inputs) => inputs.x, passthrough, {
+    reads: { x: "${backward_opaque(input.topic)}" },
+  });
+  const built = workEngine(node, { topic: "reefs" });
+  await built.run();
+  const trace = built.state.trace!;
+
+  const [root, results] = await computeBackward(trace, "review opaque");
+
+  validateAttributedBackward(trace, "review opaque", root, results);
+  const occurrence = trace.occurrences.find((item) => item.nodeId === "work")!;
+  const result = resultAt(results, occurrence.source).result;
+  const route = occurrence.inputRoute.children[occurrence.inputRoute.names.indexOf("x")]!;
+  const recovered = routeFeedback(route, result.inputFeedback.x![0]!, (source) => trace.lookupSource(source));
+  expect(recovered.contributions).toEqual([]);
+  expect(recovered.stopped[0]!.feedback).toBe("review opaque");
+  expect(recovered.stopped[0]!.context.at(-1)!.result).toBe("reefs");
+  expect(root.inputFeedback).toEqual({});
+  expect(calls).toEqual(["reefs"]);
+});
+
+test("a backward context is trace-owned, detached and survives replay", async () => {
+  const node = new RecordingBackwardNode("work", (inputs) => inputs.x, passthrough, { reads: { x: "${input.topic}" } });
+  const built = workEngine(node, { topic: [1n, 2n] });
+  const original = copyGraph(built.state.flow);
+  await built.run();
+  const trace = built.state.trace!;
+  const occurrence = trace.occurrences.find((item) => item.nodeId === "work")!;
+  const context = trace.backwardContext(occurrence.source);
+
+  // The context is frozen, so the write throws where Python's lands on a detached copy.
+  expect(() => (context.inputs!.x as unknown[]).push(3n)).toThrow(TypeError);
+  expect(trace.backwardContext(occurrence.source).inputs).toEqual({ x: [1n, 2n] });
+  const before = built.log.records();
+  const live = await computeBackward(trace, ["one", null]);
+  const recapture = spyOn(Node.prototype, "captureBackwardContext").mockImplementation(() => {
+    throw new Error("replay recaptured");
+  });
+  try {
+    const replay = replayRecords(new RunState(copyGraph(original)), built.log.records(), { growBuilder: noGrowth });
+    expect(replay.trace!.backwardContext(occurrence.source)).toEqual(context);
+    expect(await computeBackward(replay.trace!, ["one", null])).toEqual(live);
+  } finally {
+    recapture.mockRestore();
+  }
+  expect(built.log.records()).toEqual(before);
+});
+
+test.each([false, true])(
+  "canonical file input feedback keeps literal and opaque stops (opaque: %p)",
+  async (opaque) => {
+    const value = { files: [new FileRef({ uri: "file:///tmp/example.txt" })] };
+    const calls: null[] = [];
+    standIn("backward_file", () => {
+      calls.push(null);
+      return value;
+    });
+    const feedback = { files: [{ uri: "Check the URI." }] };
+    const node = new RecordingBackwardNode("work", () => "done", () => new BackwardResult({
+      inputFeedback: { file: [feedback] },
+    }), { reads: { file: opaque ? "${backward_file()}" : value } });
+    const { engine: built, memories, stacks } = ownerEngine(graph([node], [[START_ID, "work"]], {
+      outputs: [new FlowOutput("result", "${work.output}")],
+    }));
+    await built.run();
+    const trace = built.state.trace!;
+
+    const [root, results] = await computeBackward(trace, "review");
+
+    const occurrence = trace.occurrences.find((item) => item.nodeId === "work")!;
+    const result = resultAt(results, occurrence.source).result;
+    const capture = occurrence.record.forwardCapture!;
+    const recovered = routeFeedback(
+      occurrence.inputRoute.children[0]!,
+      result.inputFeedback.file![0]!,
+      (source) => trace.lookupSource(source),
+      { recordedValue: capture.boundInputs!.file },
+    );
+    expect(root).toEqual(new BackwardResult());
+    expect(recovered.contributions).toEqual([]);
+    expect(recovered.stopped.map((stop) => stop.feedback)).toEqual(opaque ? [feedback] : []);
+    const [context] = projectOwnerContexts(trace, memories, stacks, "review", root, results);
+    const entries = feedbackEntries(context!);
+    const returned = entries.filter((entry) => entry.target_name === "file" && entry.channel === "input");
+    expect(returned.map((entry) => entry.value)).toEqual([feedback]);
+    const stopped = entries.filter((entry) => entry.channel === "stopped").map((entry) => entry.value);
+    expect(stopped).toEqual(opaque ? [feedback] : []);
+    expect(calls).toEqual(opaque ? [null] : []);
+  },
+);
+
+test("a backward context the trace can't build escapes unchanged before the callback (TS-only)", async () => {
+  // Context building sits outside the callback's `try`, so its fault isn't the callback's.
+  const original = new Error("context broke");
+  const node = new RecordingBackwardNode("work", () => "value", unreachable("callback"));
+  const built = workEngine(node);
+  await built.run();
+  const trace = built.state.trace!;
+  trace.backwardContext = () => {
+    throw original;
+  };
+
+  expect(await rejected(computeBackward(trace, "review"))).toBe(original);
+  expect(node.calls).toEqual([]);
 });

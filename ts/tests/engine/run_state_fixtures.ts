@@ -609,7 +609,8 @@ export const POLICY = "reflective";
  * `test_runtime_memory_learning._owner_engine`), with the recorded table and stacks. Every node
  * gets `new MemoryScope([id], { memories: [POLICY] })`, the table is one root-owned spec, the stacks
  * are `stacks(...scopes)` and each snapshot is `{}`. It stands in for T3-22's
- * `resolveMemoryLayout` on graphs without children.
+ * `resolveMemoryLayout` on graphs without children. Unlike Python's, it leaves `flow.flowId` and
+ * `flow.memories` at their defaults (`null`, `[]`), which the runtime never reads.
  *
  * Python's `_owner_engine`, run on the flat flow `START -> a -> b -> END`, prints the same layout:
  * table `(MemorySpec(key='reflective', type='reflective', owners=(DeclSite(scope=(),

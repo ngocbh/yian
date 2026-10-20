@@ -131,6 +131,10 @@
  *   monkeypatched "trace was reprepared" and "terminal was rederived" guards are dropped (an ES
  *   module's functions can't be patched); the test keeps the detached commit and the replay
  *   equality.
+ * - `test_frontier_trace_and_terminal_source_match_live_replay_without_repreparing` (`started`,
+ *   `resumed`), on the local `preparedTraceFrontier`: the "trace was reprepared" guard is dropped
+ *   the same way; the detached delta is `changedDelta(delta, {})`; the replay compares through
+ *   `replayTraceSnapshot`, and both `computeBackward` results are equal.
  *
  * Not ported (TS types): every `mutate` row (a TS delta, occurrence and terminal are frozen); the
  * `float_sequence` and `source_float` rows, and the `sequence` row of
@@ -174,7 +178,8 @@
  *   so no commit can land between two reads of one binding; instead `consumer` binds while `peer`
  *   is in flight and `late` after `peer` committed, each read's value and producer agreeing.
  * - `test_discarded_pooled_outcomes_are_not_trace_occurrences`, its engine half: the sibling is a
- *   `BlockingNode` drained by the failure; its `computeBackward` half is Later (T4-7).
+ *   `BlockingNode` drained by the failure; its `computeBackward` half is Later (T4-6 PR 3): it
+ *   needs a stop event.
  * - `test_trace_memory_scope_is_detached_and_replayed_without_evidence`: a `MemoryScope` is frozen
  *   by its constructor, so the occurrence may hold the node's scope itself; replacing the node's
  *   scope afterward doesn't change it, and the replay keeps it.
@@ -209,10 +214,6 @@
  * Later (T5-11a), through AGENT:
  * `test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution` and
  * `test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace`.
- *
- * Later (T4-7, with `computeBackward`): the backward half of
- * `test_discarded_pooled_outcomes_are_not_trace_occurrences` and
- * `test_frontier_trace_and_terminal_source_match_live_replay_without_repreparing`.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -249,6 +250,7 @@ import {
 } from "../../src/nodes/base.ts";
 import { ChildFlowBoundary, ExecutionPosition, ExecutionScope, Parameter, SeedConnection } from "../../src/nodes/contracts.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
+import { computeBackward } from "../../src/runtime/backward.ts";
 import { BackwardCapture, ForwardCapture } from "../../src/runtime/contracts.ts";
 import {
   canonicalSeed,
@@ -316,6 +318,7 @@ import {
   graph,
   initializedAndStarted,
   learnableStarted,
+  noGrowth,
   rejected,
   replayTraceSnapshot,
   RUN_ID,
@@ -2810,14 +2813,16 @@ type FrontierKind = "started" | "resumed" | "step" | "stopped";
 /**
  * Python's `_prepared_trace_frontier`: a learnable `terminalSkipRouteFlow()` after START's success,
  * with `router`'s prepared dispatch or, once `router` is in flight, a prepared resume, step or
- * stop.
+ * stop. `original` is a copy of the started flow, for a replay.
  */
 function preparedTraceFrontier(kind: FrontierKind): {
   state: RunState;
   log: MemoryRunLog;
   prepared: PreparedTransition;
+  original: CompiledFlow;
 } {
   const { state, log } = learnableStarted(terminalSkipRouteFlow());
+  const original = copyGraph(state.flow);
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
   commitStartSuccess(state, log, {});
   let prepared = prepareNodeStarted(state, "router");
@@ -2827,7 +2832,7 @@ function preparedTraceFrontier(kind: FrontierKind): {
     else if (kind === "step") prepared = prepareNodeStep(state, "router", { event: "progress" });
     else prepared = prepareRunStopped(state, "signal", "SIGTERM");
   }
-  return { state, log, prepared };
+  return { state, log, prepared, original };
 }
 
 test("a frontier trace can't inject a causal terminal source before append", () => {
@@ -2929,6 +2934,27 @@ test.each(["node", "sequence"] as const)("a frontier trace start's identity is e
     "frontier trace start disagrees with its canonical record",
   );
 });
+
+test.each(["started", "resumed"] as const)(
+  "a frontier trace and terminal source match a live replay without repreparing: %s",
+  async (kind) => {
+    const { state, log, prepared, original } = preparedTraceFrontier(kind);
+    commitPrepared(log, state, withTrace(prepared, changedDelta(prepared._plan.traceDelta!, {})));
+    if (kind === "resumed") commitPrepared(log, state, prepareNodeStarted(state, "router"));
+    const physical = new SourceRef(state.runId!, state.trace!.started.get("router")!);
+    commitPrepared(log, state, prepareNodeRouted(state, "router", "go", {
+      forwardCapture: forwardCapture(state.flow.nodes.get("router")!, {}),
+    }));
+
+    expect(state.trace!.terminal!.source).toEqual(physical);
+    expect(physical.executionSeq).toBeGreaterThan(0);
+    const [root, results] = await computeBackward(state.trace!, "Review.");
+    expect(results.find((item) => sourceKey(item.source) === sourceKey(physical))!.invoked).toBe(true);
+    const replay = replayRecords(new RunState(copyGraph(original)), log.records(), { growBuilder: noGrowth });
+    expect(replayTraceSnapshot(replay.trace!)).toEqual(replayTraceSnapshot(state.trace!));
+    expect(await computeBackward(replay.trace!, "Review.")).toEqual([root, results]);
+  },
+);
 
 // The engine rows: captures and trace entries a run through `FlowEngine` accepts.
 

@@ -44,8 +44,8 @@
  * `test_causal_route_replay_rejects_mismatched_terminal_failure` (5 rows),
  * `test_quiescence_without_retained_causal_failure_is_a_graph_fault`,
  * `test_terminal_unreachable_latch_replays_before_and_at_quiescence`,
- * `test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause` (2 rows; the learnable row
- * up to its `compute_backward` tail),
+ * `test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause` (2 rows; the learnable row's
+ * `compute_backward` tail through `computeBackward`),
  * `test_terminal_skip_diagnosis_scans_only_end_beyond_touched_route_joins` (an instance patch of
  * `flow.incoming`), `test_terminal_success_values_are_mutation_isolated`, and both rows of
  * `test_terminal_derivation_replays_from_causal_records_only` (the record class names, not
@@ -125,15 +125,13 @@
  * (`RunSucceeded`, `RunFailed`, `_materialize_terminal`) and of
  * `test_failure_commit_uses_only_materialized_data_after_append` (`_validate_failure_record`, and
  * `NodeFailed` and `RunFailed` after the append).
- *
- * Later (T4-7, with `computeBackward`): the `compute_backward` tail of the learnable row of
- * `test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause`.
  */
 
 import { expect, test } from "bun:test";
 
 import { CompiledFlow, Edge, END_ID, Flow, START_ID } from "../../src/compile/model.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
+import { sameSource } from "../../src/expr/lineage.ts";
 import {
   NodeFailed,
   NodeRouted,
@@ -148,6 +146,7 @@ import { type OutputContract, PartialRecordContract, ValueContract } from "../..
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+import { computeBackward } from "../../src/runtime/backward.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import {
   encodePool,
@@ -1741,7 +1740,7 @@ function terminalPrunerFragment(spawnerId: string): Flow {
   return fragmentOf(nodes, [new Edge(`${startId}-end`, startId, endId, { ordering: true })], startId, endId);
 }
 
-test.each([false, true])("the terminal-unreachable latch survives pruning its dynamic cause: learnable %p", (
+test.each([false, true])("the terminal-unreachable latch survives pruning its dynamic cause: learnable %p", async (
   learnable,
 ) => {
   const { state, log } = initializedAndStarted(terminalPruneParentFlow(), { learnable });
@@ -1804,6 +1803,9 @@ test.each([false, true])("the terminal-unreachable latch survives pruning its dy
   if (learnable) {
     const causal = state.trace!.occurrences.find((item) => item.nodeId === routerId)!;
     expect(state.trace!.terminal!.source).toEqual(causal.source);
+    const [root, results] = await computeBackward(state.trace!, "review pruned failure");
+    expect(root.inputFeedback).toEqual({});
+    expect(results.find((item) => sameSource(item.source, causal.source))!.invoked).toBe(true);
   }
 });
 

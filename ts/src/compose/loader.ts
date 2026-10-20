@@ -24,6 +24,11 @@
  * reachable keys, and installs `ComposedFlow.originResolver`. Source-free graphs carry `null`;
  * private `assemble` products keep the resolver unset.
  *
+ * After a file assembles, its CODE nodes are checked (each built def's, then the root's) against
+ * the file's base directory. Only the root load sees the fully assembled graph, so `loadFlow` then
+ * resolves its memory layout and refuses an `llm_config` value a child flow's agent would inherit
+ * before it is known.
+ *
  * A flow's chain of `uses:` imports is at most `current().maxCallNesting` files deep, the call
  * nesting limit, counted apart from call depth; each loaded flow records its own `importDepth`.
  *
@@ -35,7 +40,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fsp from "node:fs/promises";
 import { basename, dirname, isAbsolute, resolve as resolvePath } from "node:path";
 
-import { scopeMemoryDeclarations } from "../compile/memory_layout.ts";
+import { fieldLabel, findInheritedLlmValue, inheritedValueFix } from "../compile/llm_cascade.ts";
+import { resolveMemoryLayout, scopeMemoryDeclarations } from "../compile/memory_layout.ts";
 import type { CompiledFlow } from "../compile/model.ts";
 import { iterFlowOrigins, rebaseFlowOrigins } from "../compile/origins.ts";
 import { current } from "../defaults.ts";
@@ -50,8 +56,9 @@ import {
 } from "../diagnostics.ts";
 import { hostOnlyFieldError, LLMConfig } from "../llm_clients/config.ts";
 import { ValidationError } from "../llm_clients/provider_blocks.ts";
-import { DeclSite } from "../memory/contracts.ts";
+import { DeclSite, MemorySetupError } from "../memory/contracts.ts";
 import { isMaxToolIterations } from "../nodes/agent/node.ts";
+import type { Node } from "../nodes/base.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
 import { pythonTypeName, readTypedefs, type TypeRegistry } from "../typesys/types.ts";
 import {
@@ -74,6 +81,7 @@ import { parseUsesRef } from "./helpers/uses.ts";
 import { checkEnvValues } from "./helpers/value_nesting.ts";
 import { checkLlmConfigValue, readLlmConfig } from "./nodes/agent.ts";
 import { notTextDetail, notTextError, rejectInfinityName } from "./nodes/base.ts";
+import { checkFlowCode, type CodeCheckOptions } from "./nodes/code.ts";
 import { callNestingScope } from "./nodes/resolver.ts";
 import { flowNodesCursor, isEmptyValue, parseFile, parseSourceDocument } from "./parse/file.ts";
 import { scopeOrigin, SourceCatalog, SourceCatalogBuilder } from "./source/catalog.ts";
@@ -540,7 +548,8 @@ export function makeFileResolver(searchPaths: readonly string[], ctx: LoadCtx): 
       let child: ComposedFlow;
       try {
         const text = UTF8.decode(await fsp.readFile(real)).replace(/\r\n?/g, "\n");
-        child = await loadFlowFile(parseSourceDocument(text, basename(real)), null, [dirname(real)], ctx);
+        const own = dirname(real);
+        child = await loadFlowFile(parseSourceDocument(text, basename(real)), null, [own], ctx, own);
       } finally {
         ctx.loading.delete(real);
       }
@@ -570,22 +579,126 @@ export function makeFileResolver(searchPaths: readonly string[], ctx: LoadCtx): 
  *   targets (`<dir>/<path>.yaml`). Pass the flow file's own directory first; the list is extended
  *   by the flow's `system: paths:`.
  * @param options.sourceLabel The name load diagnostics give this text (default `<flow>`).
+ * @param options.baseDir The directory a CODE node's `./file.ts:fn` reference resolves against
+ *   (default: the first search path, else the current directory). A file read through the search
+ *   path resolves its own references against its own directory.
  * @returns The compiled, validated flow.
  * @throws LoadError (as a rejection) for any malformed or inconsistent flow, located at the
- *   offending line when source provenance is available.
+ *   offending line when source provenance is available: among them a memory layout that breaks a
+ *   rule, and an `llm_config` value a child flow's agent would inherit before it is known.
  * @throws DefaultsError when a `YIAN_<NAME>` variable holds a value its entry doesn't accept.
  * @throws TypeError when `sourceLabel` isn't text.
  */
 export async function loadFlow(
   text: string,
-  options: { childResolver?: ChildResolver | null; searchPaths?: readonly string[] | null; sourceLabel?: string } = {},
+  options: {
+    childResolver?: ChildResolver | null;
+    searchPaths?: readonly string[] | null;
+    sourceLabel?: string;
+    baseDir?: string | null;
+  } = {},
 ): Promise<ComposedFlow> {
-  const { childResolver = null, searchPaths = null, sourceLabel = "<flow>" } = options;
+  const { childResolver = null, searchPaths = null, sourceLabel = "<flow>", baseDir = null } = options;
   // A bad YIAN_<NAME> value fails here, before any parsing.
   current();
   if (typeof sourceLabel !== "string") throw new TypeError("source_label must be a string");
   const document = parseSourceDocument(text, sourceLabel);
-  return loadFlowFile(document, childResolver, searchPaths, new LoadCtx());
+  const ownDir = baseDir ?? searchPaths?.[0] ?? process.cwd();
+  const flow = await loadFlowFile(document, childResolver, searchPaths, new LoadCtx(), ownDir);
+  // Only the root load sees the fully assembled graph, imports included; children loaded for
+  // uses: are checked as part of their importer.
+  try {
+    resolveMemoryLayout(flow.compiled);
+  } catch (error) {
+    if (!(error instanceof MemorySetupError)) throw error;
+    throw memorySetupLoadError(flow, error);
+  }
+  // Which flow is the run's root, and so which inputs are known at run start, is decided only
+  // here.
+  refuseInheritedLlmValues(flow);
+  return flow;
+}
+
+/**
+ * Locate one memory layout failure at its first declaration site.
+ *
+ * @param flow The loaded root, whose resolver maps origins to source.
+ * @param error The layout failure with its origins and notes.
+ * @returns A `LoadError` framed at `error.origin`. Its notes are the failure's own notes, then
+ *   one located note per related origin whose location differs from the primary frame and from
+ *   every earlier note.
+ */
+export function memorySetupLoadError(
+  flow: { readonly originResolver: OriginResolver | null },
+  error: MemorySetupError,
+): LoadError {
+  const resolver = flow.originResolver;
+  const frame = (origin: OriginRef | null): DiagnosticFrame | null =>
+    origin === null || resolver === null ? null : resolver.resolve(origin);
+
+  const primary = frame(error.origin);
+  const notes = [...(error.notes ?? [])];
+  // Aliases of one file map distinct origins to one source location.
+  const seen = new Set<string>();
+  const locationOf = (other: DiagnosticFrame): string =>
+    `${other.label}:${other.range.startLine}:${other.range.startCol}`;
+  if (primary !== null) seen.add(locationOf(primary));
+  for (const origin of error.related) {
+    const other = frame(origin);
+    if (other === null) continue;
+    const location = locationOf(other);
+    if (seen.has(location)) continue;
+    seen.add(location);
+    notes.push(`related declaration at ${location}`);
+  }
+  return UNLOCATED_DIAGNOSTICS.error(error.message, {
+    frames: primary === null ? [] : [primary],
+    notes,
+    cause: error,
+  });
+}
+
+/**
+ * Refuse an `llm_config` value a child flow's agent would inherit before it is known.
+ *
+ * Only the root flow's values that read just its inputs are known when the run starts; any other
+ * value in a flow's layer is read when that flow runs, so a child flow's agent can't inherit it
+ * (`findInheritedLlmValue`). The error is located at the value and names the agent and the fix; a
+ * value in an imported file names the `uses:` alias and the node that calls it. A value or
+ * callsite with no source location names the callee as the callsite does, without saying whether
+ * it is an import or a `defs:` entry.
+ *
+ * @param flow The loaded root flow, imports included.
+ * @throws LoadError when a child flow's agent would inherit such a value.
+ */
+function refuseInheritedLlmValues(flow: ComposedFlow): void {
+  const found = findInheritedLlmValue(flow.compiled);
+  if (found === null) return;
+  const resolver = flow.originResolver;
+  const frame = (origin: OriginRef | null): DiagnosticFrame | null =>
+    origin === null || resolver === null ? null : resolver.resolve(origin);
+
+  const valueFrame = frame(found.origin);
+  const field = fieldLabel(found.field);
+  let subject: string;
+  if (found.callsite === null) {
+    subject = `flow ${field}`;
+  } else {
+    // A CALL, MAP or LOOP callsite names its child flow.
+    const name = reprText((found.callsite as Node & { flowId: string }).flowId);
+    const called = `called by node ${reprText(found.owner.join("/"))}`;
+    const callsiteFrame = frame(found.callsite.origin);
+    if (valueFrame === null || callsiteFrame === null) subject = `${field} of the flow ${name} (${called})`;
+    else if (valueFrame.label !== callsiteFrame.label) {
+      subject = `${field} of the flow imported through uses: ${name} (${called})`;
+    } else subject = `defs entry ${name} ${field} (${called})`;
+  }
+  const agent = found.gate ?? `agent ${reprText(found.agent.join("/"))} in a child flow`;
+  throw UNLOCATED_DIAGNOSTICS.error(
+    `${subject}: ${agent} would inherit this value, which is read only when the flow ` +
+      `runs; ${inheritedValueFix(found.field)}`,
+    { frames: valueFrame === null ? [] : [valueFrame] },
+  );
 }
 
 /**
@@ -708,19 +821,22 @@ function typedefErrorRange(root: SourceCursor, path: ValuePath): SourceRange | n
  * Load one parsed flow file: its checks, its `uses:` imports, its `defs:`, then its assembly.
  *
  * Every step before the imports is synchronous; each alias then resolves, in source order, and
- * the rest runs inside one synchronous call nesting scope, so the file counts its own calls.
+ * the assembly runs inside one synchronous call nesting scope, so the file counts its own calls.
+ * The CODE nodes are checked after assembly: each built def's, then the root's.
  *
  * @param document The file's parsed document.
  * @param childResolver The explicit external resolver, or `null` for the local file resolver.
  * @param searchPaths The file's own directory first, then other search directories; `null` makes
  *   `system.paths` inert.
  * @param ctx The load context shared by the whole import graph.
+ * @param baseDir The directory the file's CODE references resolve against.
  */
 async function loadFlowFile(
   document: SourceDocument,
   childResolver: ChildResolver | null,
   searchPaths: readonly string[] | null,
   ctx: LoadCtx,
+  baseDir: string,
 ): Promise<ComposedFlow> {
   const root = document.root;
   const diagnostics = LoadDiagnostics.fromDocument(document);
@@ -758,6 +874,7 @@ async function loadFlowFile(
     defsCursor: root.has("defs") ? root.child("defs") : null,
     usesCursor: root.has("uses") ? root.child("uses") : null,
     diagnostics,
+    baseDir,
   });
   // Read after the typedefs, which its tags resolve against.
   const flowLlmConfig = readAuthoredLlmConfig(f.llmConfig, "flow", {
@@ -767,6 +884,14 @@ async function loadFlowFile(
     diagnostics,
     cursor: root,
   });
+  const rootMemories =
+    root.has("nodes") && f.longTermMemory !== null
+      ? parseMemoryDeclarations(f.longTermMemory, {
+          diagnostics,
+          sourceRange: root.rangeOf("long_term_memory"),
+          site: new DeclSite([], ["root"], null),
+        })
+      : [];
   // A collision is reported before a colliding alias's broken target.
   const collide = Object.keys(f.uses)
     .filter((alias) => Object.hasOwn(f.nodes, alias))
@@ -775,9 +900,9 @@ async function loadFlowFile(
   // Imports load before anything assembles, so assembly reads every alias from the memo.
   for (const alias of Object.keys(f.uses)) await scope.resolveAlias(alias);
 
-  return callNestingScope(() => {
+  const staged = callNestingScope(() => {
     scope.eagerLoadDefs();
-    const staged = assemble({
+    return assemble({
       inputsSection: f.inputs,
       inputsCursor: sourceChild(root, "input"),
       nodesCursor: flowNodesCursor(document, f.nodes),
@@ -796,12 +921,21 @@ async function loadFlowFile(
       assertsCursor: root.has("nodes") && root.has("asserts") ? root.child("asserts") : null,
       outputsCursor: root.has("nodes") && root.has("output") ? root.child("output") : null,
       flowId: f.id,
+      memories: rootMemories,
+      memoriesCursor: root.has("nodes") && root.has("long_term_memory") ? root.child("long_term_memory") : null,
+      baseDir,
     });
-    // The root and its inline bodies are assembled now, so every slot has read its tags; a
-    // `uses:` child checks its own document in its own load.
-    rejectUnreadTags(document, scope.catalogBuilder.consumedTags, diagnostics);
-    return replaceFlow(scope.finalize(staged), { importDepth: scope.importDepth });
   });
+  const code: CodeCheckOptions = {
+    diagnostics,
+    resolveOrigin: (origin) => scope.catalogBuilder.resolveRegistered(origin),
+  };
+  await scope.checkDefsCode(code);
+  await checkFlowCode(staged.compiled, code);
+  // Defs, inline bodies and the root are assembled now, so every slot has read its tags; a
+  // `uses:` child checks its own document in its own load.
+  rejectUnreadTags(document, scope.catalogBuilder.consumedTags, diagnostics);
+  return replaceFlow(scope.finalize(staged), { importDepth: scope.importDepth });
 }
 
 /**
@@ -847,6 +981,7 @@ export class CallableScope implements AssemblyScope {
   readonly #usesCursor: SourceCursor | null;
   readonly #diagnostics: LoadDiagnostics;
   readonly #catalogBuilder: SourceCatalogBuilder;
+  readonly #baseDir: string | null;
   readonly #private = new Map<string, PrivateCallable>();
   readonly #built = new Map<string, ComposedFlow>();
   readonly #inProgress = new Set<string>();
@@ -866,6 +1001,8 @@ export class CallableScope implements AssemblyScope {
    *   bodies (default: a new one).
    * @param options.diagnostics The document's load-diagnostic authority (default: from the first
    *   retained declaration cursor, or source-free).
+   * @param options.baseDir The directory the file's CODE references resolve against (default
+   *   `null`, the current directory).
    * @throws LoadError when a name is declared in both `defs:` and `uses:`.
    */
   constructor(
@@ -878,9 +1015,10 @@ export class CallableScope implements AssemblyScope {
       usesCursor?: SourceCursor | null;
       catalogBuilder?: SourceCatalogBuilder | null;
       diagnostics?: LoadDiagnostics | null;
+      baseDir?: string | null;
     } = {},
   ) {
-    const { defsCursor = null, usesCursor = null, catalogBuilder = null, diagnostics = null } = options;
+    const { defsCursor = null, usesCursor = null, catalogBuilder = null, diagnostics = null, baseDir = null } = options;
     const ownedDiagnostics = diagnostics ?? LoadDiagnostics.fromCursor(defsCursor ?? usesCursor);
     const both = Object.keys(defsSection)
       .filter((name) => Object.hasOwn(uses, name))
@@ -900,6 +1038,7 @@ export class CallableScope implements AssemblyScope {
     this.#usesCursor = usesCursor;
     this.#diagnostics = ownedDiagnostics;
     this.#catalogBuilder = catalogBuilder ?? new SourceCatalogBuilder();
+    this.#baseDir = baseDir;
   }
 
   /** The longest chain of `uses:` imports among the aliases resolved so far. */
@@ -915,6 +1054,11 @@ export class CallableScope implements AssemblyScope {
   /** This physical file's load-diagnostic authority. */
   get diagnostics(): LoadDiagnostics {
     return this.#diagnostics;
+  }
+
+  /** The directory this file's CODE references resolve against; `null` is the current directory. */
+  get baseDir(): string | null {
+    return this.#baseDir;
   }
 
   /** Return the range of alias `alias`'s ref, or `null`. */
@@ -1168,6 +1312,32 @@ export class CallableScope implements AssemblyScope {
   eagerLoadDefs(): void {
     for (const name of Object.keys(this.#defsSection)) this.resolve(name);
   }
+
+  /**
+   * Check the CODE nodes of every built def, in build order.
+   *
+   * A def no node calls isn't reachable from the root graph, so each def is checked here. A
+   * failure is framed as a failure building the def is.
+   *
+   * @throws LoadError (as a rejection), prefixed `defs entry '<name>': ` and located at the def,
+   *   at the first CODE node whose check fails.
+   */
+  async checkDefsCode(options: CodeCheckOptions): Promise<void> {
+    for (const [name, flow] of this.#built) {
+      if (!Object.hasOwn(this.#defsSection, name)) continue;
+      try {
+        await checkFlowCode(flow.compiled, options);
+      } catch (error) {
+        if (!(error instanceof LoadError)) throw error;
+        throw this.#diagnostics.prepend(error, {
+          range: sourceChild(this.#defsCursor, name)?.range ?? null,
+          message: `defs entry ${reprText(name)}: ${error.message}`,
+          note: `definition ${reprText(name)}`,
+          cause: error,
+        });
+      }
+    }
+  }
 }
 
 /**
@@ -1312,6 +1482,7 @@ function loadDef(
       flowId: name,
       memories,
       memoriesCursor: sourceChild(defCursor, "long_term_memory"),
+      baseDir: scope.baseDir,
     });
   } catch (error) {
     if (!(error instanceof LoadError)) throw error;
@@ -1380,6 +1551,7 @@ function loadSingleNodeDef(
       boundaryFieldRanges: defCursor !== null ? boundaryFieldRanges(defCursor) : null,
       outputsRange: sourceChild(defCursor, "output")?.range ?? null,
       flowId: name,
+      baseDir: scope.baseDir,
     });
   } catch (error) {
     if (!(error instanceof LoadError)) throw error;

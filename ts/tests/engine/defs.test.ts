@@ -3,7 +3,8 @@
  * `tests/engine/test_defs.py`.
  *
  * Ported: every row that only loads. Changed: CODE references are TS's form
- * (`./fixtures/compose_codefns.ts:echo`), which nothing checks at load.
+ * (`./fixtures/compose_codefns.ts:echo`), loaded with the conformance directory as `baseDir`
+ * (`load`).
  * `test_callable_scope_eagerly_builds_defs_and_memoizes_resolution` builds a real def where
  * Python patches `_load_def` (a module-internal call a Bun test can't replace), and resolves the
  * alias through `resolveAlias`, since the synchronous `resolve` only reads the alias memo.
@@ -39,7 +40,11 @@ import type { CodeNode } from "../../src/nodes/code/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/index.ts";
 
-import { loadErrorAsync } from "../compose/declarations.ts";
+import { CONFORMANCE_DIR, loadErrorAsync } from "../compose/declarations.ts";
+
+/** Load `text` with the conformance directory as its base, so the fixture CODE references resolve. */
+const load = (text: string, options: Parameters<typeof loadFlow>[1] = {}) =>
+  loadFlow(text, { baseDir: CONFORMANCE_DIR, ...options });
 
 /** The baked child of `flow`'s CALL node `nodeId`. */
 const childOf = (flow: CompiledFlow, nodeId: string) => (flow.nodes.get(nodeId) as CallNode).child as CompiledFlow;
@@ -89,7 +94,7 @@ test("the defs: section parses", () => {
 test("the callable scope eagerly builds defs and memoizes resolution", async () => {
   // One scope eagerly builds local defs and resolves each external alias once.
   const seen: [string, string | null][] = [];
-  const externalChild = await loadFlow("id: external\nname: external\nnodes: {}\n");
+  const externalChild = await load("id: external\nname: external\nnodes: {}\n");
   const document = SourceDocument.parse("defs:\n  local:\n    nodes: {}\n");
   const external = (path: string, version: string | null) => {
     seen.push([path, version]);
@@ -119,7 +124,7 @@ test("the callable scope eagerly builds defs and memoizes resolution", async () 
 test("several defs share one parse of the parent document", async () => {
   const parse = spyOn(SourceDocument, "parse");
   try {
-    await loadFlow(`id: two-defs
+    await load(`id: two-defs
 name: two_defs
 defs:
   first:
@@ -214,13 +219,13 @@ output: \${go.output}
 `;
 
 test("a self-recursive def is loud", async () => {
-  const error = await loadErrorAsync(loadFlow(SELF_RECURSIVE));
+  const error = await loadErrorAsync(load(SELF_RECURSIVE));
   expect(error.message.toLowerCase()).toContain("recursive");
   expect(error.message).toContain("'a'");
 });
 
 test("mutually recursive defs are loud", async () => {
-  const error = await loadErrorAsync(loadFlow(MUTUAL_RECURSIVE));
+  const error = await loadErrorAsync(load(MUTUAL_RECURSIVE));
   expect(error.message.toLowerCase()).toContain("recursive");
 });
 
@@ -247,7 +252,7 @@ output: \${go.output}
 `;
 
 test("a single-node def's projected header and logic keep their origins", async () => {
-  const loaded = await loadFlow(SINGLE_NODE_DEF);
+  const loaded = await load(SINGLE_NODE_DEF);
   const node = childOf(loaded.compiled, "go").nodes.get("passthru") as CodeNode;
   const resolver = loaded.originResolver!;
 
@@ -258,7 +263,7 @@ test("a single-node def's projected header and logic keep their origins", async 
 });
 
 test("a single-node def's generated inputs keep the binding origin", async () => {
-  const loaded = await loadFlow(SINGLE_NODE_DEF);
+  const loaded = await load(SINGLE_NODE_DEF);
   const binding = childOf(loaded.compiled, "go").wiring.get("passthru")!.get("topic")!;
   const resolver = loaded.originResolver!;
 
@@ -267,7 +272,7 @@ test("a single-node def's generated inputs keep the binding origin", async () =>
 });
 
 test("a single-node def's generated output keeps the contract origin", async () => {
-  const loaded = await loadFlow(SINGLE_NODE_DEF);
+  const loaded = await load(SINGLE_NODE_DEF);
   const node = childOf(loaded.compiled, "go").nodes.get("passthru")!;
   const origin = (node.outputContract as ValueContract).origins.default;
   const resolver = loaded.originResolver!;
@@ -298,7 +303,7 @@ nodes:
       topic: \${input.t}
 output: \${go.output}
 `;
-  await loadErrorAsync(loadFlow(text));
+  await loadErrorAsync(load(text));
 });
 
 test("a call to an unknown callable is loud", async () => {
@@ -327,7 +332,7 @@ nodes:
       topic: \${input.topic}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(loadFlow(text));
+  const error = await loadErrorAsync(load(text));
   expect(error.message).toContain("missing");
   // A bare call to a non-def, non-alias callable is loud: external flows only through uses:.
   expect(error.message).toContain("uses:");
@@ -352,7 +357,7 @@ nodes:
       topic: \${input.topic}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(loadFlow(text));
+  const error = await loadErrorAsync(load(text));
   expect(error.message).toContain("nodes");
 });
 
@@ -382,7 +387,7 @@ nodes:
       topic: \${input.topic}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(loadFlow(text));
+  const error = await loadErrorAsync(load(text));
   expect(error.message).toContain("defs entry 'enrich'");
   expect(error.message).toContain("nonexistent");
 });
@@ -403,7 +408,7 @@ nodes:
       topic: \${input.topic}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(loadFlow(text));
+  const error = await loadErrorAsync(load(text));
   expect(error.message).toContain("must be a mapping");
   expect(error.message).toContain("'d'");
 });
@@ -435,7 +440,7 @@ nodes:
       topic: \${input.topic}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(loadFlow(text));
+  const error = await loadErrorAsync(load(text));
   expect(error.message).toContain("unknown field");
   expect(error.message).toContain("bogus");
 });
@@ -477,7 +482,7 @@ nodes:
       topic: \${input.topic}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(loadFlow(text));
+  const error = await loadErrorAsync(load(text));
   expect(error.message).toContain("defs entry 'unused_broken'");
 });
 
@@ -505,7 +510,7 @@ nodes:
       mode: \${input.s}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(loadFlow(text));
+  const error = await loadErrorAsync(load(text));
   expect(error.message).toContain("call node 'go': binding 'mode'");
   expect(error.message).toContain("child expects 'Literal(a, b)', source is 'str'");
 });
@@ -533,7 +538,7 @@ nodes:
       topic: \${input.x}
 output: \${go.output}
 `;
-  await loadErrorAsync(loadFlow(text));
+  await loadErrorAsync(load(text));
 });
 
 test("a nullable list element bound to a strict child is refused", async () => {
@@ -559,13 +564,13 @@ nodes:
       items: \${input.items}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(loadFlow(text));
+  const error = await loadErrorAsync(load(text));
   expect(error.message).toContain("call node 'go': binding 'items'");
   expect(error.message).toContain("child expects 'list(int)', source is 'list(Optional(int))'");
 });
 
 test("an omitted child input takes its explicit null default", async () => {
-  const loaded = await loadFlow(`id: omitted-null-default
+  const loaded = await load(`id: omitted-null-default
 name: omitted_null_default
 defs:
   child:
@@ -608,7 +613,7 @@ nodes:
     call: child
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(loadFlow(text));
+  const error = await loadErrorAsync(load(text));
   expect(error.message).toContain("defs entry 'child'");
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(9);
 });
@@ -631,7 +636,7 @@ nodes:
       inf: x
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(loadFlow(text));
+  const error = await loadErrorAsync(load(text));
   expect(error.message).toBe(
     "defs entry 'd': input 'inf': `inf` is infinity in an expression, so ${inf} can't read it; rename it",
   );

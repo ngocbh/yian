@@ -5,18 +5,30 @@
  * Ported: every row but the seed run. The read-once rows count `fsp.readFile` calls with
  * `spyOn`. Changed: Python also counts source-document parses; a Bun test can't spy on a call
  * inside the loader's own module, so that half is dropped (the loader parses each text it reads
- * once). CODE references are TS's form (`./fixtures/compose_codefns.ts:echo`); nothing checks
- * them at load. The malformed child's message is TS's YAML error, so only its frames are
- * compared.
+ * once). CODE references are TS's form (`./fixtures/compose_codefns.ts:echo`): a file read
+ * through the search path resolves them against its own directory, so each directory a row writes
+ * a flow into links `fixtures` to the conformance fixtures. The malformed child's message is TS's
+ * YAML error, so only its frames are compared.
  *
- * TS-only: a child file that isn't UTF-8 fails at its alias as `could not resolve`.
+ * TS-only: a child file that isn't UTF-8 fails at its alias as `could not resolve`; a CODE node's
+ * `baseDir` is `loadFlow`'s option, else the first search path, else the current directory, for
+ * the root, its defs and its inline bodies alike, and a child file's own directory.
  *
  * Later (T4-8): `test_seed_24_runs_via_search_path`, which runs the loaded flow.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fsp from "node:fs/promises";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,15 +40,23 @@ import { LoadError } from "../../src/compose/helpers/errors.ts";
 import { LoadCtx, loadFlow, makeFileResolver } from "../../src/compose/loader.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
+import type { CodeNode } from "../../src/nodes/code/node.ts";
 
-import { loadErrorAsync } from "../compose/declarations.ts";
+import { CONFORMANCE_DIR, loadErrorAsync } from "../compose/declarations.ts";
 
 const CODE = "./fixtures/compose_codefns.ts:echo";
 
 let tmp: string;
 
+/** Link `<dir>/fixtures` to the conformance fixtures, once, so the CODE references resolve there. */
+function linkFixtures(dir: string): void {
+  const link = join(dir, "fixtures");
+  if (!existsSync(link)) symlinkSync(join(CONFORMANCE_DIR, "fixtures"), link);
+}
+
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "yian-uses-files-"));
+  linkFixtures(tmp);
 });
 
 afterEach(() => {
@@ -64,9 +84,13 @@ function flowText(
   return lines.join("\n") + "\n";
 }
 
-/** Write `flowText(flowId, options)` to `<dir>/<filename>.yaml` and return the path. */
+/**
+ * Write `flowText(flowId, options)` to `<dir>/<filename>.yaml`, linking the directory's
+ * `fixtures`, and return the path.
+ */
 function write(dir: string, filename: string, flowId: string, options: Parameters<typeof flowText>[1] = {}): string {
   const path = join(dir, `${filename}.yaml`);
+  linkFixtures(dir);
   writeFileSync(path, flowText(flowId, options));
   return path;
 }
@@ -380,4 +404,38 @@ test("a child file that isn't UTF-8 fails at its alias", async () => {
   const error = await loadErrorAsync(loadFlow(readFileSync(parent, "utf8"), { searchPaths: [tmp] }));
   expect(error.message).toStartWith("callable 'ch' (uses: 'child'): could not resolve: ");
   expect(error.diagnostic.frames.map((frame) => frame.note)).toEqual(["uses alias 'ch'"]);
+});
+
+test("a CODE node's baseDir is loadFlow's, else the first search path; a child file's is its directory", async () => {
+  const sub = join(tmp, "lib");
+  mkdirSync(sub);
+  write(sub, "child", "child");
+  const text =
+    "id: p\nname: p\ninput:\n  x: !str\n" +
+    "defs:\n  d:\n    input: {x: !str}\n    nodes:\n" +
+    `      c: {kind: code, code: ${CODE}, input: {x: "\${input.x}"}}\n` +
+    "    output: ${c.output}\n" +
+    "nodes:\n" +
+    `  a: {kind: code, code: ${CODE}, input: {x: "\${input.x}"}}\n` +
+    '  b: {kind: call, call: d, input: {x: "${input.x}"}}\n' +
+    '  e: {kind: call, call: ch, input: {x: "${input.x}"}}\n' +
+    '  f: {kind: call, input: {x: "${input.x}"}, nodes: ' +
+    `{g: {kind: code, code: ${CODE}, input: {x: "\${input.x}"}}}, output: "\${g.output}"}\n` +
+    'output: {y: "${a.output}"}\nuses:\n  ch: lib/child\n';
+  /** Return the `baseDir` of the root's, the def's, the inline body's and the child's CODE node. */
+  const baseDirs = (flow: CompiledFlow) =>
+    [
+      flow.nodes.get("a"),
+      childOf(flow, "b").nodes.get("c"),
+      childOf(flow, "f").nodes.get("g"),
+      childOf(flow, "e").nodes.get("a"),
+    ].map((node) => (node as CodeNode).baseDir);
+  const child = realpathSync(sub);
+
+  expect(baseDirs((await loadFlow(text, { searchPaths: [tmp] })).compiled)).toEqual([tmp, tmp, tmp, child]);
+  const loaded = await loadFlow(text, { searchPaths: [tmp], baseDir: CONFORMANCE_DIR });
+  expect(baseDirs(loaded.compiled)).toEqual([CONFORMANCE_DIR, CONFORMANCE_DIR, CONFORMANCE_DIR, child]);
+  // With neither, the current directory: an inline body checks without reading a file.
+  const inline = await loadFlow("id: q\nname: q\nnodes:\n  a: {kind: code, code: return 1}\n");
+  expect((inline.compiled.nodes.get("a") as CodeNode).baseDir).toBe(process.cwd());
 });

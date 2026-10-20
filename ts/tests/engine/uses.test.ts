@@ -8,8 +8,8 @@
  * `load-core/engine_uses__malformed_ref_{empty,without_a_flow_path,with_an_empty_version}`; the
  * `parse_file` section tests, the `system:` shape tests and the `load_flow` rows. A resolver
  * returns a promise or a flow. Changed: CODE references are TS's form
- * (`./fixtures/compose_codefns.ts:echo`), which nothing checks at load; a list in a message is
- * in the text form (`["a"]`), where Python prints `['a']`.
+ * (`./fixtures/compose_codefns.ts:echo`), loaded with the conformance directory as `baseDir`
+ * (`load`); a list in a message is in the text form (`["a"]`), where Python prints `['a']`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -21,7 +21,11 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { parseFile } from "../../src/compose/parse/file.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 
-import { loadErrorAsync } from "../compose/declarations.ts";
+import { CONFORMANCE_DIR, loadErrorAsync } from "../compose/declarations.ts";
+
+/** Load `text` with the conformance directory as its base, so the fixture CODE references resolve. */
+const load = (text: string, options: Parameters<typeof loadFlow>[1] = {}) =>
+  loadFlow(text, { baseDir: CONFORMANCE_DIR, ...options });
 
 /** Return the `LoadError` parsing `value` throws. */
 function loadError(value: string): LoadError {
@@ -115,23 +119,23 @@ describe("the uses: and system: sections", () => {
   });
 
   test("system: refuses an unknown key", async () => {
-    const error = await loadErrorAsync(loadFlow(BASE + "system:\n  bogus: 1\n"));
+    const error = await loadErrorAsync(load(BASE + "system:\n  bogus: 1\n"));
     expect(error.message).toBe('system: unknown key(s) ["bogus"] (allowed: paths)');
   });
 
   test("system: paths must be a list of strings", async () => {
-    const error = await loadErrorAsync(loadFlow(BASE + "system:\n  paths: 5\n"));
+    const error = await loadErrorAsync(load(BASE + "system:\n  paths: 5\n"));
     expect(error.message).toBe("system: paths must be a list of strings");
   });
 
   test("system: paths as a list of strings loads", async () => {
     // Inert without searchPaths; only its shape is checked.
-    await loadFlow(BASE + "system:\n  paths: [a, b]\n");
+    await load(BASE + "system:\n  paths: [a, b]\n");
   });
 
   test("${system.paths} is not a reference", async () => {
     const text = BASE.replace('"${input.x}"', '"${system.paths}"') + "system:\n  paths: [.]\n";
-    const error = await loadErrorAsync(loadFlow(text));
+    const error = await loadErrorAsync(load(text));
     expect(error.message).toContain("reference ${system.paths} uses unknown system ambient 'paths'");
   });
 });
@@ -157,7 +161,7 @@ const fakeResolver =
   (seen: [string, string | null][]) =>
   (path: string, version: string | null): Promise<ComposedFlow> => {
     seen.push([path, version]);
-    return loadFlow(CHILD);
+    return load(CHILD);
   };
 
 /** A resolver refusing every path. */
@@ -170,25 +174,25 @@ const EIGHT = ["p8", "p7", "p6", "p5", "p4", "p3", "p2", "p1"];
 describe("resolving a uses: alias", () => {
   test("an alias resolves through the resolver with its version", async () => {
     const seen: [string, string | null][] = [];
-    await loadFlow(withCall("mom") + "uses:\n  mom: library/relevance@v1\n", { childResolver: fakeResolver(seen) });
+    await load(withCall("mom") + "uses:\n  mom: library/relevance@v1\n", { childResolver: fakeResolver(seen) });
     expect(seen).toEqual([["library/relevance", "v1"]]);
   });
 
   test("an alias without a version", async () => {
     const seen: [string, string | null][] = [];
-    await loadFlow(withCall("mom") + "uses:\n  mom: helper\n", { childResolver: fakeResolver(seen) });
+    await load(withCall("mom") + "uses:\n  mom: helper\n", { childResolver: fakeResolver(seen) });
     expect(seen).toEqual([["helper", null]]);
   });
 
   test("the hub: scheme is deferred", async () => {
     const text = withCall("m") + "uses:\n  m: hub:q/f@1\n";
-    const error = await loadErrorAsync(loadFlow(text, { childResolver: fakeResolver([]) }));
+    const error = await loadErrorAsync(load(text, { childResolver: fakeResolver([]) }));
     expect(error.message).toBe("callable 'm' (uses: 'hub:q/f@1'): marketplace not supported yet (hub: scheme)");
   });
 
   test("an unknown scheme is refused when resolving", async () => {
     const text = withCall("m") + "uses:\n  m: git:q/f@1\n";
-    const error = await loadErrorAsync(loadFlow(text, { childResolver: fakeResolver([]) }));
+    const error = await loadErrorAsync(load(text, { childResolver: fakeResolver([]) }));
     expect(error.message).toBe(
       "callable 'm' (uses: 'git:q/f@1'): unknown scheme 'git': (recognized: a local ref, or hub:)",
     );
@@ -201,19 +205,19 @@ describe("resolving a uses: alias", () => {
       "defs:\n  dup:\n    input:\n      x: !str\n" +
       '    nodes:\n      c: {kind: code, code: ./fixtures/compose_codefns.ts:echo, input: {x: "${x}"}}\n' +
       '    output: {y: "${c.output}"}\n';
-    const error = await loadErrorAsync(loadFlow(text, { childResolver: fakeResolver([]) }));
+    const error = await loadErrorAsync(load(text, { childResolver: fakeResolver([]) }));
     expect(error.message).toBe('name(s) ["dup"] declared in both defs: and uses: (a callable has one namespace)');
   });
 
   test("an alias colliding with a node id is refused", async () => {
     const text = withCall("a") + "uses:\n  a: child\n";
-    const error = await loadErrorAsync(loadFlow(text, { childResolver: fakeResolver([]) }));
+    const error = await loadErrorAsync(load(text, { childResolver: fakeResolver([]) }));
     expect(error.message).toBe('uses: alias ["a"] collides with a node id');
   });
 
   test("an uncalled broken alias is loud", async () => {
     const error = await loadErrorAsync(
-      loadFlow(BASE + "uses:\n  dead: hub:x/y@1\n", { childResolver: fakeResolver([]) }),
+      load(BASE + "uses:\n  dead: hub:x/y@1\n", { childResolver: fakeResolver([]) }),
     );
     expect(error.message).toContain("marketplace not supported yet");
   });
@@ -221,21 +225,21 @@ describe("resolving a uses: alias", () => {
   test("an uncalled missing alias is loud, at its alias", async () => {
     const text = BASE + "uses:\n  dead: nope\n";
     const expected = SourceDocument.parse(text).root.child("uses").child("dead").range;
-    const error = await loadErrorAsync(loadFlow(text, { childResolver: reject }));
+    const error = await loadErrorAsync(load(text, { childResolver: reject }));
     expect(error.diagnostic.frames.map((frame) => frame.range)).toEqual([expected!]);
   });
 
   test("aliases resolve in source order", async () => {
     const seen: [string, string | null][] = [];
     const text = BASE + "uses:\n" + EIGHT.map((alias) => `  ${alias}: lib_${alias}\n`).join("");
-    await loadFlow(text, { childResolver: fakeResolver(seen) });
+    await load(text, { childResolver: fakeResolver(seen) });
     expect(seen).toEqual(EIGHT.map((alias) => [`lib_${alias}`, null]));
   });
 
   test("the first broken alias in source order is reported", async () => {
     const text = BASE + "uses:\n" + EIGHT.map((alias) => `  ${alias}: lib_${alias}\n`).join("");
     const expected = SourceDocument.parse(text).root.child("uses").child("p8").range;
-    const error = await loadErrorAsync(loadFlow(text, { childResolver: reject }));
+    const error = await loadErrorAsync(load(text, { childResolver: reject }));
     expect(error.message).toBe("no such flow 'lib_p8'");
     expect(error.diagnostic.frames[0]!.range).toEqual(expected!);
   });
@@ -247,7 +251,7 @@ describe("resolving a uses: alias", () => {
       "  a: {kind: code, code: ./fixtures/compose_codefns.ts:echo, " +
       'input: {x: "call(mom, x=inputs.x)"}}\n' +
       'output: {y: "${a.output}"}\nuses:\n  mom: library/relevance@v1\n';
-    await loadFlow(text, { childResolver: fakeResolver(seen) });
+    await load(text, { childResolver: fakeResolver(seen) });
     expect(seen).toContainEqual(["library/relevance", "v1"]);
   });
 
@@ -261,13 +265,13 @@ describe("resolving a uses: alias", () => {
       "id: f\nname: f\ninput:\n  s: !str\n" +
       'nodes:\n  a: {kind: call, call: mom, input: {x: "${input.s}"}}\n' +
       'output: {y: "${a.output}"}\nuses:\n  mom: c@1\n';
-    const error = await loadErrorAsync(loadFlow(text, { childResolver: () => loadFlow(childInt) }));
+    const error = await loadErrorAsync(load(text, { childResolver: () => load(childInt) }));
     expect(error.message).toBe("call node 'a': binding 'x' — child expects 'int', source is 'str'");
   });
 
   test("a bare call without uses: or defs: is a located error that never asks the resolver", async () => {
     const seen: [string, string | null][] = [];
-    const error = await loadErrorAsync(loadFlow(withCall("ghost"), { childResolver: fakeResolver(seen) }));
+    const error = await loadErrorAsync(load(withCall("ghost"), { childResolver: fakeResolver(seen) }));
     expect(error.message).toBe(
       "callable 'ghost' is neither an in-file defs: callable nor a uses: alias — external flows " +
         "are reachable only through a uses: alias (declare `uses: {ghost: <ref>}`)",

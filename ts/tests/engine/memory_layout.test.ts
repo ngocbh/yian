@@ -25,7 +25,7 @@
  * - The "declares more than one session memory" message lists the keys as JSON strings
  *   (`"chat", "session"`), not Python's repr.
  *
- * Later (T3-22): `test_flow_start_and_end_scopes_carry_the_enclosing_keys`,
+ * Ported too, the rows that load flows: `test_flow_start_and_end_scopes_carry_the_enclosing_keys`,
  * `test_composite_drivers_see_only_enclosing_keys`,
  * `test_repeated_definition_shares_one_owner_and_inline_children_own_their_keys`,
  * `test_apply_is_idempotent_and_does_not_change_authored_identity`,
@@ -45,27 +45,36 @@
  * `test_session_placements_must_resolve_one_compatibility`,
  * `test_session_compatibility_ignores_other_types_and_disabled_layouts`,
  * `test_scopes_are_root_relative_and_carry_outermost_first_keys` and
- * `test_one_def_under_two_parents_has_one_stack_per_placement_and_one_owner` (they load flows).
+ * `test_one_def_under_two_parents_has_one_stack_per_placement_and_one_owner`. Their CODE references
+ * are TS's form (`./fixtures/compose_codefns.ts:echo`), resolved against the conformance directory.
+ * Frozen values can't be changed in place, so Python's `object.__setattr__` forgeries are
+ * unfrozen objects of the same class carrying the forged field (`forged`), and its
+ * `copy.deepcopy` of a node is `copyGraph`.
  */
 
 import { expect, test } from "bun:test";
 
+import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import {
   applyMemoryLayout,
+  checkSessionCompatibility,
   memoryStacks,
   memoryTable,
   type ResolvedMemoryLayout,
   resolveMemoryLayout,
 } from "../../src/compile/memory_layout.ts";
-import { CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
+import { CompiledFlow, copyGraph, END_ID, START_ID } from "../../src/compile/model.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
-import { DeclSite, MemoryDecl, MemoryScope, MemorySetupError } from "../../src/memory/contracts.ts";
+import { DeclSite, MemoryDecl, MemoryScope, MemorySetupError, MemoryStack } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+
+import { CONFORMANCE_DIR, loadErrorAsync } from "../compose/declarations.ts";
 
 /** Return the error `fn` throws, failing when it returns. */
 function caught(fn: () => unknown): unknown {
@@ -309,4 +318,482 @@ test("agent with two session memories is a setup error", () => {
     () => resolveMemoryLayout(flow),
     /AGENT 'agent' declares more than one session memory: "chat", "session"/,
   );
+});
+
+// ---------- loaded flows ----------
+
+const NESTED = `id: root
+name: root
+long_term_memory: outer
+defs:
+  child:
+    long_term_memory:
+      inner: {type: inner, config: {limit: 3}}
+    nodes:
+      answer:
+        kind: agent
+        long_term_memory: local
+        prompt: answer
+        output: str
+      normalize:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input: {topic: child}
+        output: str
+    output: \${answer.output}
+nodes:
+  invoke:
+    kind: call
+    call: child
+output: \${invoke.output}
+`;
+
+/** Load `text` with the conformance directory as its base and return its compiled graph. */
+async function compiled(text: string, sourceLabel?: string): Promise<CompiledFlow> {
+  return (await loadFlow(text, { baseDir: CONFORMANCE_DIR, ...(sourceLabel === undefined ? {} : { sourceLabel }) }))
+    .compiled;
+}
+
+/** Return an unfrozen object of `value`'s class carrying its fields with `changes` applied. */
+function forged<T extends object>(value: T, changes: Record<string, unknown>): T {
+  return Object.assign(Object.create(Object.getPrototypeOf(value)) as T, value, changes);
+}
+
+/** Return each key wrapped as a `String` object: equal as text, but not a string. */
+function boxed(keys: readonly string[]): string[] {
+  return keys.map((key) => new String(key) as unknown as string);
+}
+
+test("flow START and END scopes carry the enclosing keys", async () => {
+  const withoutChildPolicy = await compiled(
+    NESTED.replace("    long_term_memory:\n      inner: {type: inner, config: {limit: 3}}\n", ""),
+  );
+  const inherited = resolveMemoryLayout(withoutChildPolicy);
+
+  for (const nodeId of [START_ID, END_ID]) {
+    expect(target(inherited, "invoke", nodeId).scope).toEqual(
+      new MemoryScope(["invoke", nodeId], { memories: ["outer"] }),
+    );
+  }
+  expect(target(inherited, "invoke", "answer").scope!.memories).toEqual(["outer", "local"]);
+  expect(inherited.memories.map((memory) => memory.key)).toEqual(["local", "outer"]);
+});
+
+test("composite drivers see only enclosing keys", async () => {
+  const layout = resolveMemoryLayout(await compiled(NESTED));
+
+  // The CALL sees only its enclosing flow's keys; the child flow's keys begin inside the called
+  // child.
+  expect(target(layout, "invoke").scope!.memories).toEqual(["outer"]);
+  expect(layout.memories.map((memory) => [memory.key, memory.placements])).toEqual([
+    ["inner", []],
+    ["local", [["invoke", "answer"]]],
+    ["outer", []],
+  ]);
+});
+
+test("repeated definition shares one owner and inline children own their keys", async () => {
+  const repeatedDef = await compiled(`id: root
+name: root
+defs:
+  child:
+    long_term_memory: reflective
+    nodes:
+      answer:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input: {topic: child}
+        output: str
+    output: \${answer.output}
+nodes:
+  left: {kind: call, call: child}
+  right: {kind: call, call: child}
+output: \${right.output}
+`);
+  const definitionLayout = resolveMemoryLayout(repeatedDef);
+  expect(definitionLayout.memories).toHaveLength(1);
+  expect(definitionLayout.memories[0]!.owners).toEqual([new DeclSite([], ["def", "child"], null)]);
+  const stacks = new Map(memoryStacks(definitionLayout).map((stack) => [stack.locator.join("/"), stack.memories]));
+  expect(stacks.get("left")).toEqual([]);
+  expect(stacks.get("left/answer")).toEqual(["reflective"]);
+  expect(stacks.get("right/answer")).toEqual(["reflective"]);
+
+  const inline = await compiled(`id: root
+name: root
+nodes:
+  left:
+    kind: call
+    nodes:
+      answer:
+        kind: agent
+        long_term_memory: reflective
+        prompt: left
+        output: str
+    output: \${answer.output}
+  right:
+    kind: call
+    nodes:
+      answer:
+        kind: agent
+        long_term_memory: reflective
+        prompt: right
+        output: str
+    output: \${answer.output}
+output: \${right.output}
+`);
+  const memories = resolveMemoryLayout(inline).memories;
+  expect(memories).toHaveLength(1);
+  const memory = memories[0]!;
+  expect(memory.owners).toEqual([
+    new DeclSite([], ["root", "node", "left", "inline"], "answer"),
+    new DeclSite([], ["root", "node", "right", "inline"], "answer"),
+  ]);
+  expect(memory.placements).toEqual([
+    ["left", "answer"],
+    ["right", "answer"],
+  ]);
+  expect(memory.conversationEligible).toBe(false);
+});
+
+test("apply is idempotent and does not change authored identity", async () => {
+  const flow = await compiled(NESTED);
+  const manifest = flowManifest(flow);
+  const fingerprint = flowFingerprint(flow);
+  const layout = resolveMemoryLayout(flow);
+
+  expect(resolveMemoryLayout(flow)).toEqual(layout);
+  applyMemoryLayout(flow, layout);
+  expect(resolveMemoryLayout(flow)).toEqual(layout);
+  const firstScopes = layout.targets.map((item) => item.node.memoryScope);
+  applyMemoryLayout(flow, layout);
+
+  expect(layout.targets.map((item) => item.node.memoryScope)).toEqual(firstScopes);
+  expect(flowManifest(flow)).toEqual(manifest);
+  expect(flowFingerprint(flow)).toBe(fingerprint);
+});
+
+test("apply scope mismatch is atomic", async () => {
+  const flow = await compiled(NESTED);
+  const layout = resolveMemoryLayout(flow);
+  const final = layout.targets.at(-1)!;
+  final.node.memoryScope = new MemoryScope(["different"]);
+
+  setupError(() => applyMemoryLayout(flow, layout), /different memory scope/);
+
+  expect(layout.targets.slice(0, -1).every((item) => item.node.memoryScope === null)).toBe(true);
+  expect(final.node.memoryScope).toEqual(new MemoryScope(["different"]));
+});
+
+test("apply revalidates a forged nested layout scope before stamping", async () => {
+  const flow = await compiled(NESTED);
+  const layout = resolveMemoryLayout(flow);
+  const final = layout.targets.at(-1)!;
+  const scope = forged(final.scope!, { memories: boxed(final.scope!.memories) });
+  const forgedLayout = forged(layout, { targets: [...layout.targets.slice(0, -1), forged(final, { scope })] });
+
+  const error = caught(() => applyMemoryLayout(flow, forgedLayout));
+  expect(error).toBeInstanceOf(TypeError);
+  expect((error as Error).message).toMatch(/memories.*must be a string/);
+
+  expect(layout.targets.every((item) => item.node.memoryScope === null)).toBe(true);
+});
+
+test("apply revalidates a forged key table before stamping", async () => {
+  const flow = await compiled(NESTED);
+  const layout = resolveMemoryLayout(flow);
+  const memory = forged(layout.memories[0]!, { key: new String("inner") });
+  const forgedLayout = forged(layout, { memories: [memory, ...layout.memories.slice(1)] });
+
+  const error = caught(() => applyMemoryLayout(flow, forgedLayout));
+  expect(error).toBeInstanceOf(TypeError);
+  expect((error as Error).message).toMatch(/key must be a string/);
+
+  expect(layout.targets.every((item) => item.node.memoryScope === null)).toBe(true);
+});
+
+test("apply revalidates a forged equal existing scope atomically", async () => {
+  const flow = await compiled(NESTED);
+  const layout = resolveMemoryLayout(flow);
+  const final = layout.targets.at(-1)!;
+  const scope = forged(final.scope!, { memories: boxed(final.scope!.memories) });
+  final.node.memoryScope = scope;
+
+  setupError(() => applyMemoryLayout(flow, layout), /noncanonical memory scope/);
+
+  expect(layout.targets.slice(0, -1).every((item) => item.node.memoryScope === null)).toBe(true);
+  expect(final.node.memoryScope).toBe(scope);
+});
+
+test("apply stale object target is atomic", async () => {
+  const flow = await compiled(NESTED);
+  const layout = resolveMemoryLayout(flow);
+  const replacement = copyGraph(flow.nodes.get("invoke")!);
+  flow.nodes.set("invoke", replacement);
+
+  setupError(() => applyMemoryLayout(flow, layout), /same node/);
+
+  expect(replacement.memoryScope).toBeNull();
+  expect(layout.targets.every((item) => item.node.memoryScope === null)).toBe(true);
+});
+
+test("apply rejects shared child targets before stamping", async () => {
+  const child = await compiled(`id: child
+name: child
+long_term_memory: reflective
+nodes:
+  answer:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input: {topic: child}
+    output: str
+output: \${answer.output}
+`);
+  const flow = new CompiledFlow(
+    new Map<string, Node>([
+      ["left", new CallNode("left", { flowId: "child", child })],
+      ["right", new CallNode("right", { flowId: "child", child })],
+    ]),
+    [],
+    { flowId: "root" },
+  );
+  const layout = resolveMemoryLayout(flow);
+
+  setupError(() => applyMemoryLayout(flow, layout), /multiple static paths/);
+
+  expect(layout.targets.every((item) => item.node.memoryScope === null)).toBe(true);
+});
+
+test("key table retains config and origin outside node scopes", async () => {
+  const flow = await compiled(NESTED, "memory.yaml");
+  const layout = resolveMemoryLayout(flow);
+  const inner = layout.memories.find((memory) => memory.key === "inner")!;
+
+  expect(inner.config).toEqual({ limit: 3n });
+  expect(inner.owners).toEqual([new DeclSite([], ["def", "child"], null)]);
+  expect(inner.origin).toEqual(((flow.nodes.get("invoke") as CallNode).child as CompiledFlow).memories[0]!.origin);
+  expect(inner.origin).not.toBeNull();
+  expect("origin" in target(layout, "invoke", "answer").scope!).toBe(false);
+});
+
+test("layout records the key table with sorted owners and placements", async () => {
+  const source = NESTED.replace("long_term_memory: local", "long_term_memory: outer");
+  const layout = resolveMemoryLayout(await compiled(source));
+
+  expect(
+    layout.memories.map((m) => [m.key, m.type, m.config, m.owners, m.conversationEligible, m.placements]),
+  ).toEqual([
+    ["inner", "inner", { limit: 3n }, [new DeclSite([], ["def", "child"], null)], false, []],
+    [
+      "outer",
+      "outer",
+      {},
+      [new DeclSite([], ["def", "child"], "answer"), new DeclSite([], ["root"], null)],
+      false,
+      [["invoke", "answer"]],
+    ],
+  ]);
+  expect(layout.memories[1]!.spec.owners).toEqual(layout.memories[1]!.owners);
+});
+
+test("memory stacks dedupe a repeated key at its outermost position", async () => {
+  const source = NESTED.replace("long_term_memory: local", "long_term_memory: outer");
+  const layout = resolveMemoryLayout(await compiled(source));
+
+  const stacks = memoryStacks(layout);
+  const byLocator = new Map(stacks.map((stack) => [stack.locator.join("\0"), stack.memories]));
+  const locators = stacks.map((stack) => stack.locator.join("\0"));
+  expect(locators).toEqual([...byLocator.keys()].sort());
+  expect(new Set(byLocator.keys())).toEqual(new Set(layout.targets.map((item) => item.locator.join("\0"))));
+  expect(byLocator.get("invoke")).toEqual(["outer"]);
+  expect(byLocator.get("invoke\0normalize")).toEqual(["outer", "inner"]);
+  expect(byLocator.get("invoke\0answer")).toEqual(["outer", "inner"]);
+});
+
+test("a single agent owner is conversation eligible", async () => {
+  const flow = await compiled(
+    "id: one\nname: one\nnodes:\n  ask:\n    kind: agent\n" +
+      "    long_term_memory: chat\n    prompt: hi\n    output: str\n" +
+      "output: ${ask.output}\n",
+  );
+  const memories = resolveMemoryLayout(flow).memories;
+  expect(memories).toHaveLength(1);
+  expect(memories[0]!.owners).toEqual([new DeclSite([], ["root"], "ask")]);
+  expect(memories[0]!.conversationEligible).toBe(true);
+  expect(memories[0]!.placements).toEqual([["ask"]]);
+});
+
+test("one key with two configs is a load error at the first site", async () => {
+  const source = NESTED.replace(
+    "long_term_memory: local",
+    "long_term_memory: {inner: {type: inner, config: {limit: 4}}}",
+  );
+  const error = await loadErrorAsync(loadFlow(source, { baseDir: CONFORMANCE_DIR }));
+  expect(error.message).toMatch(/memory 'inner'.*different type or config/);
+  const notes = error.diagnostic.notes;
+  expect(notes[0]).toBe("also declared at def/child AGENT 'answer'");
+  expect(notes).toHaveLength(2);
+  expect(notes[1]!).toStartWith("related declaration at <flow>:");
+});
+
+const SESSION_CALLS = `id: calls
+name: calls
+defs:
+  body:
+    nodes:
+      ask:
+        kind: agent
+        long_term_memory: session
+        prompt: answer
+        output: str
+    output: \${ask.output}
+nodes:
+  a: {kind: call, call: body}
+  b: {kind: call, call: body}
+output: \${[a.output, b.output]}
+`;
+
+test("a session def called twice has one owner and two placements", async () => {
+  const memories = resolveMemoryLayout(await compiled(SESSION_CALLS)).memories;
+  expect(memories).toHaveLength(1);
+  expect(memories[0]!.owners).toEqual([new DeclSite([], ["def", "body"], "ask")]);
+  expect(memories[0]!.conversationEligible).toBe(true);
+  expect(memories[0]!.placements).toEqual([
+    ["a", "ask"],
+    ["b", "ask"],
+  ]);
+});
+
+test("a flow-level session is a load error", async () => {
+  const source =
+    "id: flat\nname: flat\nlong_term_memory: session\nnodes:\n" +
+    "  ask:\n    kind: agent\n    prompt: hi\n    output: str\n" +
+    "output: ${ask.output}\n";
+  const error = await loadErrorAsync(loadFlow(source));
+  expect(error.message).toContain("session memory 'session' cannot be declared on a flow");
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(3);
+});
+
+test("a session key with two agent owners is a load error", async () => {
+  const source =
+    "id: pair\nname: pair\nnodes:\n" +
+    "  left:\n    kind: agent\n    long_term_memory: session\n" +
+    "    prompt: hi\n    output: str\n" +
+    "  right:\n    kind: agent\n    long_term_memory: session\n" +
+    "    prompt: hi\n    output: str\n" +
+    "output: ${[left.output, right.output]}\n";
+  const error = await loadErrorAsync(loadFlow(source));
+  const { diagnostic } = error;
+  expect(diagnostic.message).toContain("session memory 'session' has more than one owner");
+  expect(diagnostic.message).toContain("AGENT 'left'");
+  expect(diagnostic.message).toContain("AGENT 'right'");
+  expect(diagnostic.frames.at(-1)!.range.startLine).toBe(6);
+  expect(diagnostic.notes[0]).toBe("also owned at root AGENT 'right'");
+  expect(diagnostic.notes).toHaveLength(2);
+  expect(diagnostic.notes[1]!).toStartWith("related declaration at <flow>:11:");
+});
+
+test("a flow-level session in an uncalled def is not an error", async () => {
+  const source =
+    "id: spare\nname: spare\ndefs:\n" +
+    "  unused:\n    long_term_memory: session\n    nodes:\n" +
+    "      ask:\n        kind: agent\n        prompt: hi\n        output: str\n" +
+    "    output: ${ask.output}\n" +
+    "nodes:\n  ask:\n    kind: agent\n    long_term_memory: episodic\n" +
+    "    prompt: hi\n    output: str\n" +
+    "output: ${ask.output}\n";
+  const layout = resolveMemoryLayout(await compiled(source));
+  expect(layout.memories.map((memory) => memory.key)).toEqual(["episodic"]);
+});
+
+test("session placements must resolve one compatibility", async () => {
+  const layout = resolveMemoryLayout(await compiled(SESSION_CALLS));
+  checkSessionCompatibility(layout, {
+    "a/ask": { provider: "openai", model: "one" },
+    "b/ask": { provider: "OpenAI", model: "two" },
+  });
+  setupError(
+    () =>
+      checkSessionCompatibility(layout, {
+        "a/ask": { provider: "openai", model: "m" },
+        "b/ask": { provider: "anthropic", model: "m" },
+      }),
+    new RegExp(
+      "session memory 'session' resolves provider 'openai' at 'a/ask' but 'anthropic' at 'b/ask'; " +
+        "pin a provider on the AGENT",
+    ),
+  );
+});
+
+test("session compatibility ignores other types and disabled layouts", async () => {
+  const episodic = SESSION_CALLS.replace("long_term_memory: session", "long_term_memory: episodic");
+  const layout = resolveMemoryLayout(await compiled(episodic));
+  checkSessionCompatibility(layout, { "a/ask": { provider: "openai" }, "b/ask": { provider: "anthropic" } });
+  const plain = new CompiledFlow(new Map<string, Node>([["plain", code("plain")]]), []);
+  checkSessionCompatibility(resolveMemoryLayout(plain), {});
+});
+
+test("scopes are root-relative and carry outermost-first keys", async () => {
+  const layout = resolveMemoryLayout(await compiled(NESTED));
+
+  expect(layout.enabled).toBe(true);
+  expect("frames" in layout).toBe(false);
+  expect("rootFlowId" in layout).toBe(false);
+  expect(target(layout, START_ID).scope).toEqual(new MemoryScope([START_ID], { memories: ["outer"] }));
+  expect(target(layout, "invoke").scope).toEqual(new MemoryScope(["invoke"], { memories: ["outer"] }));
+  expect(target(layout, "invoke", "normalize").scope).toEqual(
+    new MemoryScope(["invoke", "normalize"], { memories: ["outer", "inner"] }),
+  );
+  expect(target(layout, "invoke", "answer").scope).toEqual(
+    new MemoryScope(["invoke", "answer"], { memories: ["outer", "inner", "local"] }),
+  );
+  for (const nodeId of [START_ID, END_ID]) {
+    expect(target(layout, "invoke", nodeId).scope).toEqual(
+      new MemoryScope(["invoke", nodeId], { memories: ["outer", "inner"] }),
+    );
+  }
+  const sorted = [...layout.targets].sort((a, b) => (a.locator.join("\0") < b.locator.join("\0") ? -1 : 1));
+  expect(memoryStacks(layout)).toEqual(sorted.map((item) => new MemoryStack(item.locator, item.scope!.memories)));
+});
+
+test("one def under two parents has one stack per placement and one owner", async () => {
+  const flow = await compiled(`id: root
+name: root
+long_term_memory: outer
+defs:
+  leaf:
+    long_term_memory: leaf_notes
+    nodes:
+      work:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input: {topic: leaf}
+        output: str
+    output: \${work.output}
+  left_parent:
+    long_term_memory: left_notes
+    nodes:
+      leaf_call: {kind: call, call: leaf}
+    output: \${leaf_call.output}
+  right_parent:
+    long_term_memory: right_notes
+    nodes:
+      leaf_call: {kind: call, call: leaf}
+    output: \${leaf_call.output}
+nodes:
+  left: {kind: call, call: left_parent}
+  right: {kind: call, call: right_parent}
+output: \${right.output}
+`);
+
+  const layout = resolveMemoryLayout(flow);
+  const stacks = new Map(memoryStacks(layout).map((stack) => [stack.locator.join("/"), stack.memories]));
+
+  expect(stacks.get("left/leaf_call/work")).toEqual(["outer", "left_notes", "leaf_notes"]);
+  expect(stacks.get("right/leaf_call/work")).toEqual(["outer", "right_notes", "leaf_notes"]);
+  expect(stacks.get("left")).toEqual(["outer"]);
+  expect(stacks.get("right")).toEqual(["outer"]);
+  const byKey = new Map(layout.memories.map((memory) => [memory.key, memory.spec]));
+  expect([...byKey.keys()]).toEqual(["leaf_notes", "left_notes", "outer", "right_notes"]);
+  expect(byKey.get("leaf_notes")!.owners).toEqual([new DeclSite([], ["def", "leaf"], null)]);
+  expect(byKey.get("outer")!.owners).toEqual([new DeclSite([], ["root"], null)]);
 });

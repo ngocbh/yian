@@ -1611,6 +1611,11 @@ export interface AssembleOptions {
   memories?: readonly MemoryDecl[];
   /** Retained occurrence of the `memories:` declarations, or `null`. */
   memoriesCursor?: SourceCursor | null;
+  /**
+   * The directory the flow's CODE references resolve against, its inline bodies' too; `null` is
+   * the current directory.
+   */
+  baseDir?: string | null;
 }
 
 /**
@@ -1658,6 +1663,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   const { registry, scope, owner, usesAliases = [], flowLlmConfig = null, flowEnv = null } = options;
   const { boundaryFieldRanges = null, assertsCursor = null, outputsCursor = null } = options;
   const { version = null, name = null, description = null, flowId = null, memoriesCursor = null } = options;
+  const { baseDir = null } = options;
   let { nodesCursor, outputsSection, outputsRange = null, memories = [] } = options;
 
   if ((inputsSection === null) === (inputParameters === null)) {
@@ -2077,6 +2083,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
       outputsRange: body.outputRange,
       outputsCursor: body.outputCursor,
       flowId: body.flowId,
+      baseDir,
     });
   };
 
@@ -2114,6 +2121,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     variableDeclarationReader: readAuthoredNodeVariables,
     bindingContractReader: readBindingContract,
     owner,
+    baseDir,
   });
   descriptorCache = new DescriptorBuildCache(descriptors, ctxBase);
   const buildResults = descriptorCache.buildInSourceOrder();

@@ -1,5 +1,5 @@
 /**
- * The `long_term_memory:` declaration parser: a port of the parser half of
+ * The `long_term_memory:` surface, the declaration parser and its loader wiring: a port of
  * `tests/engine/test_memory_surface.py`.
  *
  * Ported: `test_sugar_is_one_memory_named_after_its_type`,
@@ -15,23 +15,28 @@
  *
  * Not ported: the `{3: "episodic"}` row (a record key is always text).
  *
- * Later (T3-22): `test_root_flow_declarations_are_parsed_and_stamped`,
+ * Ported too, the loader rows: `test_root_flow_declarations_are_parsed_and_stamped`,
  * `test_null_flow_declaration_is_the_same_as_absent`,
  * `test_flow_shape_errors_point_at_the_value`, `test_def_flow_declarations_carry_the_def_owner`,
- * `test_agent_declarations_are_parsed_and_stamped_with_the_node`,
- * the `null` half of `test_agent_null_declaration_is_absent_and_empty_mapping_fails` and
- * `test_resolver_errors_become_located_load_errors` need the loader.
+ * `test_agent_declarations_are_parsed_and_stamped_with_the_node`, the `null` half of
+ * `test_agent_null_declaration_is_absent_and_empty_mapping_fails` and
+ * `test_resolver_errors_become_located_load_errors`. Their CODE references are TS's form
+ * (`./fixtures/compose_codefns.ts:echo`), resolved against the conformance directory.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import type { CompiledFlow } from "../../src/compile/model.ts";
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import { parseMemoryDeclarations } from "../../src/compose/helpers/memory.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { DeclSite, type MemoryDecl } from "../../src/memory/contracts.ts";
+import type { AgentNode } from "../../src/nodes/agent/node.ts";
+import type { CallNode } from "../../src/nodes/call/node.ts";
 import type { Value } from "../../src/typesys/values.ts";
-import { type CaseRow, parsedNodes, runCase } from "../compose/declarations.ts";
+import { type CaseRow, CONFORMANCE_DIR, loadErrorAsync, parsedNodes, runCase } from "../compose/declarations.ts";
 
 afterEach(() => forget());
 
@@ -170,3 +175,134 @@ describe("parseMemoryDeclarations", () => {
 test.each<CaseRow>([
   { id: "load-agent/engine_memory_surface__empty_agent_declaration", call: parsedNodes },
 ])("parseNodes: $id", runCase);
+
+/** Return a one-CODE-node flow with `memoryBlock` written before its `nodes:`. */
+function flow(memoryBlock: string): string {
+  return (
+    "id: surface\n" +
+    "name: surface\n" +
+    memoryBlock +
+    "nodes:\n" +
+    "  echo:\n" +
+    "    kind: code\n" +
+    "    code: ./fixtures/compose_codefns.ts:echo\n" +
+    "    input: {topic: hello}\n" +
+    "    output: str\n" +
+    "output: ${echo.output}\n"
+  );
+}
+
+describe("loadFlow", () => {
+  test("root flow declarations are parsed and stamped", async () => {
+    const loaded = await loadFlow(
+      flow(
+        "long_term_memory:\n" +
+          "  lessons: reflective\n" +
+          "  notes:\n" +
+          "    type: episodic\n" +
+          "    config: {max_episodes: 50}\n",
+      ),
+      { baseDir: CONFORMANCE_DIR },
+    );
+    expect(shape(loaded.compiled.memories)).toEqual([
+      ["lessons", "reflective", {}, SITE],
+      ["notes", "episodic", { max_episodes: 50n }, SITE],
+    ]);
+    const resolver = loaded.originResolver!;
+    expect(loaded.compiled.memories.map((decl) => resolver.resolve(decl.origin!)!.range.startLine)).toEqual([4, 5]);
+  });
+
+  test("null flow declaration is the same as absent", async () => {
+    const loaded = await loadFlow(flow("long_term_memory: null\n"), { baseDir: CONFORMANCE_DIR });
+    expect(loaded.compiled.memories).toEqual([]);
+  });
+
+  test.each([
+    ["long_term_memory: {}\n", "declares no memory"],
+    ["long_term_memory: {name: reflective, config: {}}\n", "reserved"],
+  ])("flow shape error %# points at the value", async (block, message) => {
+    const error = await loadErrorAsync(loadFlow(flow(block), { baseDir: CONFORMANCE_DIR }));
+    expect(error.message).toContain(message);
+    expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(3);
+  });
+
+  test("def flow declarations carry the def owner", async () => {
+    const loaded = await loadFlow(
+      "id: outer\n" +
+        "name: outer\n" +
+        "defs:\n" +
+        "  child:\n" +
+        "    long_term_memory: {notes: episodic}\n" +
+        "    nodes:\n" +
+        "      echo:\n" +
+        "        kind: code\n" +
+        "        code: ./fixtures/compose_codefns.ts:echo\n" +
+        "        input: {topic: child}\n" +
+        "        output: str\n" +
+        "    output: ${echo.output}\n" +
+        "nodes:\n" +
+        "  invoke: {kind: call, call: child}\n" +
+        "output: ${invoke.output}\n",
+      { baseDir: CONFORMANCE_DIR },
+    );
+    const child = (loaded.compiled.nodes.get("invoke") as CallNode).child as CompiledFlow;
+    expect(shape(child.memories)).toEqual([["notes", "episodic", {}, new DeclSite([], ["def", "child"], null)]]);
+  });
+
+  test("agent declarations are parsed and stamped with the node", async () => {
+    const loaded = await loadFlow(
+      "id: agents\n" +
+        "name: agents\n" +
+        "llm_config: {provider: openai, model: fake-model}\n" +
+        "nodes:\n" +
+        "  ask:\n" +
+        "    kind: agent\n" +
+        "    long_term_memory:\n" +
+        "      chat: session\n" +
+        "      facts: {type: episodic, config: {recall_limit: 2}}\n" +
+        "    prompt: hi\n" +
+        "    output: str\n" +
+        "output: ${ask.output}\n",
+    );
+    const site = new DeclSite([], ["root"], "ask");
+    const memories = (loaded.compiled.nodes.get("ask") as AgentNode).memories;
+    expect(shape(memories)).toEqual([
+      ["chat", "session", {}, site],
+      ["facts", "episodic", { recall_limit: 2n }, site],
+    ]);
+    const resolver = loaded.originResolver!;
+    expect(memories.map((decl) => resolver.resolve(decl.origin!)!.range.startLine)).toEqual([8, 9]);
+  });
+
+  test("agent null declaration is absent", async () => {
+    const text =
+      "id: agents\nname: agents\n" +
+      "llm_config: {provider: openai, model: fake-model}\n" +
+      "nodes:\n  ask:\n    kind: agent\n    long_term_memory: null\n" +
+      "    prompt: hi\n    output: str\noutput: ${ask.output}\n";
+    const loaded = await loadFlow(text);
+    expect((loaded.compiled.nodes.get("ask") as AgentNode).memories).toEqual([]);
+  });
+
+  test("resolver errors become located load errors", async () => {
+    const twoSites =
+      "id: clash\n" +
+      "name: clash\n" +
+      "long_term_memory: {notes: episodic}\n" +
+      "llm_config: {provider: openai, model: fake-model}\n" +
+      "nodes:\n" +
+      "  ask:\n" +
+      "    kind: agent\n" +
+      "    long_term_memory: {notes: reflective}\n" +
+      "    prompt: hi\n" +
+      "    output: str\n" +
+      "output: ${ask.output}\n";
+    const { diagnostic } = await loadErrorAsync(loadFlow(twoSites, { sourceLabel: "clash.yaml" }));
+    expect(diagnostic.message).toContain("memory 'notes' is declared with different type or config");
+    expect(diagnostic.frames.at(-1)!.range.startLine).toBe(3);
+    const notes = [...diagnostic.notes];
+    expect(notes[0]).toBe("also declared at root AGENT 'ask'");
+    expect(notes).toHaveLength(2);
+    expect(notes[1]!).toStartWith("related declaration at clash.yaml:8:");
+  });
+});

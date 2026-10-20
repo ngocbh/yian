@@ -3,7 +3,8 @@
  * `tests/compose/_declarations.py`.
  *
  * TS-only: `nodesOf`, which parses a flow's `nodes:` with stand-in kinds registered, and
- * `fileOf`, which parses its top level; `caseText` and `caseDocument`, which read a conformance
+ * `fileOf`, which parses its top level; `CONFORMANCE_DIR`, the `baseDir` that resolves the
+ * fixture CODE references; `caseText` and `caseDocument`, which read a conformance
  * case's flow as text or as a parsed document; and the harvested-case harness built on them
  * (`loadError`, `loadErrorAsync`, `cursorAt`, `caseRegistry`, `CaseRow`, `runCase`, `TextCaseRow`, `runTextCase`,
  * `inputsAt`, `variablesAt`, `parsedNodes`, `assembled`, `assembledWith`, `assembleText`), which
@@ -46,6 +47,12 @@ import { type Case, prepare, readCase } from "../conformance.ts";
 import { withKinds } from "./stand_ins.ts";
 
 const CASES = fileURLToPath(new URL("../../../conformance/cases/", import.meta.url));
+
+/**
+ * The repository's `conformance/` directory: the `baseDir` of a flow loaded through `loadFlow`
+ * whose CODE nodes name `./fixtures/compose_codefns.ts:*`.
+ */
+export const CONFORMANCE_DIR = fileURLToPath(new URL("../../../conformance", import.meta.url));
 
 /**
  * Parse `text` and read its `field` section as located parameters.

@@ -8,16 +8,19 @@
  * and relinquishes direct mutation of its execution fields; chronological reducer transitions are
  * the only topology writers. Everything here is synchronous.
  *
- * Knows about:   compile/model, defaults, diagnostics, events, expr/lineage, memory, nodes,
- *                runtime/common, runtime/contracts, runtime/learning, runtime/log, runtime/trace,
- *                typesys.
+ * Knows about:   compile/manifest, compile/model, compile/validation, defaults, diagnostics,
+ *                events, expr, memory, nodes, runtime/common, runtime/contracts, runtime/learning,
+ *                runtime/log, runtime/trace, typesys.
  * Never imports: engine, run, backward, compose, or the CLI.
  */
 
-import { CompiledFlow, Edge, type Flow } from "../compile/model.ts";
+import { expansionDigest } from "../compile/manifest.ts";
+import { CompiledFlow, copyGraph, Edge, Flow, GrowthRejected, validateGrowthMetadata } from "../compile/model.ts";
+import { classifyPath } from "../compile/validation.ts";
 import { BUILTIN, type Defaults, fromRecorded } from "../defaults.ts";
 import { compareCodeUnits, Failure, type OriginRef, reprText, sameFailure } from "../diagnostics.ts";
 import {
+  NodeExpanded,
   NodeFailed,
   NodeRouted,
   NodeSkipped,
@@ -29,7 +32,9 @@ import {
   type RunEvent,
   RunSucceeded,
 } from "../events.ts";
+import { ExpressionError } from "../expr/expressions.ts";
 import { SourceRef, sameSource } from "../expr/lineage.ts";
+import { exprRefsOf } from "../expr/template.ts";
 import {
   EvaluationEvidence,
   MemoryScope,
@@ -38,16 +43,19 @@ import {
   type MemoryStack,
 } from "../memory/index.ts";
 import { sameMemoryScope } from "../memory/contracts.ts";
-import { ELSE_HANDLE, type Grow, Node } from "../nodes/base.ts";
+import { ELSE_HANDLE, Grow, Node } from "../nodes/base.ts";
 import {
   type Binding,
   comparePaths,
   fileFieldsType,
   isExactly,
+  iterSourceStrings,
   type OutputContract,
+  outputContractFieldError,
   outputContractFileType,
   outputContractOrigin,
   outputContractType,
+  Parameter,
   PartialRecordContract,
   sameItems,
   sameOptional,
@@ -57,6 +65,7 @@ import { type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
 import {
   isRecord,
+  jsTypeName,
   normalizeTypedFiles,
   rejectDeepNesting,
   type Type,
@@ -65,7 +74,7 @@ import {
   writeAsText,
 } from "../typesys/values.ts";
 import { NodeState } from "./common.ts";
-import { validateSource } from "./contracts.ts";
+import { ForwardCapture, validateSource } from "./contracts.ts";
 import { RuntimeBackwardState } from "./learning.ts";
 import {
   BackwardFinishedRecord,
@@ -102,6 +111,7 @@ import {
   type PrepareTraceOptions,
   prepareTrace,
   RetainedTrace,
+  selectSeedRoute,
   SourceEntry,
   sameSourceEntry,
   TraceDelta,
@@ -204,6 +214,11 @@ export class NodeDataError extends Error {
     this.original = original;
     this.origin = origin;
   }
+}
+
+/** Mark one explicit live node-produced growth rejection. */
+function raiseGrowthRejected(original: TypeError | RangeError): never {
+  throw new GrowthRejected(original);
 }
 
 /**
@@ -1142,10 +1157,22 @@ function prepareFailureTransition(state: RunState, record: NodeFailedRecord): Pr
 }
 
 /**
- * Prepare a live expansion: validate `grow` against the expanding node and build its fragment
- * with `growBuilder`, without mutating `state`.
+ * Prepare one canonical flat graph expansion without mutating live state.
  *
- * Not ported yet: it always throws.
+ * @param state An initialized nonterminal state with `nodeId` in flight.
+ * @param nodeId The exact executing spawner id, including a dynamic LOOP driver clone id.
+ * @param grow The seed-first expansion description and its dynamic-overlay prune set.
+ * @param growBuilder The injected compile-owned interpreter from a copy of the spawner and the
+ *   canonical seed to one self-contained `Flow` fragment.
+ * @param options.evidence Frozen visible evidence captured during this exact evaluation.
+ * @param options.forwardCapture The canonical binding capture, required exactly when learning.
+ * @returns The canonical `NodeExpandedRecord` and its detached append-before-apply plan.
+ * @throws GrowthRejected when the node-produced prune set or seed, the returned fragment, the
+ *   growth budget or the requested prune policy is invalid; `original` holds the exact error.
+ * @throws TypeError when a carrier or the builder has the wrong type, or the builder doesn't
+ *   return a `Flow`.
+ * @throws RangeError when the live state, the spawner, the topology or another host invariant is
+ *   invalid.
  */
 export function prepareExpanded(
   state: RunState,
@@ -1154,16 +1181,130 @@ export function prepareExpanded(
   growBuilder: GrowBuilder,
   options: OutcomeCarriers = {},
 ): PreparedTransition {
-  throw new Error("not ported yet (T4-5)");
+  if (!isExactly(state, RunState)) throw new TypeError("prepareExpanded expects a RunState");
+  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  if (!nodeId) throw new RangeError("node_id must be non-empty");
+  if (!isExactly(grow, Grow)) throw new TypeError("grow must be a Grow");
+  if (typeof growBuilder !== "function") throw new TypeError("grow_builder must be callable");
+  // Python's frozenset check has no counterpart: `Grow` always copies `prune` into a new `Set`.
+  for (const pruneId of grow.prune as ReadonlySet<unknown>) {
+    if (typeof pruneId !== "string") raiseGrowthRejected(new TypeError("Grow.prune must contain only strings"));
+  }
+  for (const pruneId of grow.prune) {
+    if (!pruneId) raiseGrowthRejected(new RangeError("Grow.prune node IDs must be non-empty"));
+  }
+  requireInitializedNonterminal(state);
+  requireExpandingNode(state, nodeId);
+
+  let seedWire: JsonValue;
+  let builderSeed: JsonValue;
+  try {
+    // Live seeds only, like steps: replay folds a recorded seed without the process limit.
+    rejectDeepNesting(grow.seed, "growth seed");
+    [seedWire, builderSeed] = canonicalSeed(grow.seed);
+  } catch (error) {
+    if (error instanceof TypeError || error instanceof RangeError) raiseGrowthRejected(error);
+    throw error;
+  }
+  const fragment = buildGrowthFragment(state.flow.nodes.get(nodeId)!, builderSeed, growBuilder);
+  const validatedFragment = validateGrowthFragment(state, fragment);
+  const digest = expansionDigest(fragment);
+  return prepareGrowthTransition(
+    state,
+    new NodeExpandedRecord(nodeId, seedWire, [...grow.prune].sort(compareCodeUnits), digest, {
+      evidence: options.evidence ?? null,
+      forwardCapture: options.forwardCapture ?? null,
+    }),
+    fragment,
+    { actualDigest: digest, validatedFragment },
+  );
 }
 
-/** Prepare a recorded expansion by rebuilding its fragment. Not ported yet: it always throws. */
+/** The new node ids and the new edge ids of a validated fragment, in fragment order. */
+type ValidatedFragment = readonly [readonly string[], readonly string[]];
+
+/** Rebuild and verify one historical expansion through the live builder path. */
 function prepareGrowthRecord(
   state: RunState,
   record: NodeExpandedRecord,
   growBuilder: GrowBuilder,
 ): PreparedTransition {
-  throw new Error("not ported yet (T4-5)");
+  validateGrowthRecord(state, record);
+  try {
+    const [seedWire, builderSeed] = canonicalSeed(record.seed);
+    if (logJson(seedWire) !== logJson(record.seed)) {
+      throw new RangeError("NodeExpandedRecord seed is not in canonical wire form");
+    }
+    const fragment = buildGrowthFragment(state.flow.nodes.get(record.spawnerId)!, builderSeed, growBuilder);
+    const validatedFragment = validateGrowthFragment(state, fragment);
+    const actualDigest = expansionDigest(fragment);
+    if (actualDigest !== record.topologyDigest) {
+      throw new RangeError(
+        "NodeExpandedRecord topology digest mismatch: " +
+          `recorded ${reprText(record.topologyDigest)}, rebuilt ${reprText(actualDigest)}`,
+      );
+    }
+    return prepareGrowthTransition(state, record, fragment, { actualDigest, validatedFragment });
+  } catch (error) {
+    // A historical record is not a live node outcome: its rejection is a plain corrupt-log error.
+    if (error instanceof GrowthRejected) throw error.original;
+    throw error;
+  }
+}
+
+/** Freeze one validated fragment, its final topology and the canonical public record. */
+function prepareGrowthTransition(
+  state: RunState,
+  record: NodeExpandedRecord,
+  fragment: Flow,
+  options: { actualDigest: string; validatedFragment: ValidatedFragment },
+): PreparedTransition {
+  validateGrowthRecord(state, record);
+  const { actualDigest: digest, validatedFragment: validated } = options;
+  if (digest !== record.topologyDigest) {
+    throw new RangeError("NodeExpandedRecord topology digest disagrees with its fragment");
+  }
+  const { delta, topology } = prepareGrowthTopology(state, record, fragment, validated);
+
+  const runId = state.runId;
+  // Established by the initialized-state check.
+  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
+  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
+  const envelope = decodeRecord(envelopeJson);
+  const canonical = envelope.record;
+  if (!isExactly(canonical, NodeExpandedRecord)) {
+    throw new TypeError("node-expansion envelope decoded to a different record kind");
+  }
+  if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("NodeExpandedRecord is not in canonical wire form");
+  if (state.learnable && isExactly(canonical.forwardCapture, ForwardCapture)) {
+    for (const connection of fragment.inputConnections) {
+      if (selectSeedRoute(canonical.forwardCapture, connection) === null) {
+        raiseGrowthRejected(
+          new RangeError(`seed connection ${writeAsText([...connection.seedPath])} was not captured`),
+        );
+      }
+    }
+  }
+  const startId = state.flow.startId;
+  const endId = state.flow.endId;
+  const plan: GrowthPlan = Object.freeze({
+    kind: "growth",
+    originatingState: state,
+    originatingFlow: state.flow,
+    envelopeJson,
+    startId,
+    startNode: state.flow.nodes.get(startId)!,
+    endId,
+    endNode: state.flow.nodes.get(endId) ?? null,
+    traceDelta: prepareRecordTrace(state, envelope, {
+      inputConnections: fragment.inputConnections,
+      childBoundaries: fragment.childBoundaries,
+      retiredIds: delta.retiredIds,
+    }),
+    delta,
+    topology,
+  });
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, [growthObserver(canonical)]);
 }
 
 /**
@@ -1631,9 +1772,34 @@ function commitFailure(log: RunLog, state: RunState, prepared: PreparedTransitio
   return apply.observers;
 }
 
-/** Append and apply one prepared expansion. Not ported yet: it always throws. */
+/** Validate, append and install one fully materialized flat expansion. */
 function commitGrowth(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
-  throw new Error("not ported yet (T4-5)");
+  const plan = prepared._plan;
+  if (plan.kind !== "growth") throw new TypeError("growth commit requires a growth plan");
+  const record = prepared.record;
+  if (!isExactly(record, NodeExpandedRecord)) throw new TypeError("growth plan requires a NodeExpandedRecord");
+  requirePreparedOrigin(state, plan);
+  requireInitializedNonterminal(state);
+  requireAuthorityCoordinates(log, state, prepared, true);
+  requireUnchangedRecord(prepared, plan.envelopeJson);
+  requireOutcomeTraceScope(state, prepared);
+  requireOutcomeTraceTerminal(state, prepared);
+  const delta = plan.delta;
+  if (
+    !(
+      record.spawnerId === delta.spawnerId &&
+      sameItems(record.pruneIds, delta.pruneIds) &&
+      record.topologyDigest === delta.topologyDigest
+    )
+  ) {
+    throw new RangeError("growth record and prevalidated delta disagree");
+  }
+  const apply = materializeGrowth(plan);
+
+  appendAndVerify(log, prepared);
+  applyGrowth(state, delta, plan.topology, apply.wiring);
+  state.nextSequence = prepared.expectedSequence + 1;
+  return apply.observers;
 }
 
 /** Require the exact sequence-only trace change before accepting a post-terminal record. */
@@ -2050,6 +2216,760 @@ function requireFailingNode(state: RunState, nodeId: string): void {
     throw new RangeError(`NodeFailed node ${reprText(nodeId)} must have UNKNOWN disposition`);
   }
   if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeFailed node ${reprText(nodeId)} is not in-flight`);
+}
+
+/** Require an existing unknown spawner in the ordered in-flight frontier. */
+function requireExpandingNode(state: RunState, nodeId: string): void {
+  if (!nodeId) throw new RangeError("NodeExpanded node_id must be non-empty");
+  const node = state.flow.nodes.get(nodeId);
+  if (node === undefined) throw new RangeError(`NodeExpanded node ${reprText(nodeId)} does not exist in the flow`);
+  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
+    throw new RangeError(`NodeExpanded node ${reprText(nodeId)} must have UNKNOWN disposition`);
+  }
+  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeExpanded node ${reprText(nodeId)} is not in-flight`);
+  if (node.isSpawner !== true) throw new RangeError(`NodeExpanded node ${reprText(nodeId)} is not a graph spawner`);
+}
+
+/** Validate a durable expansion's exact carriers and its executing spawner. */
+function validateGrowthRecord(state: RunState, record: NodeExpandedRecord): void {
+  const spawnerId: unknown = record.spawnerId;
+  const pruneIds: unknown = record.pruneIds;
+  const digest: unknown = record.topologyDigest;
+  if (typeof spawnerId !== "string") throw new TypeError("NodeExpandedRecord spawner_id must be a string");
+  if (!spawnerId) throw new RangeError("NodeExpandedRecord spawner_id must be non-empty");
+  if (!Array.isArray(pruneIds) || pruneIds.some((nodeId) => typeof nodeId !== "string")) {
+    throw new TypeError("NodeExpandedRecord prune_ids must be an array of strings");
+  }
+  const ids = pruneIds as string[];
+  if (ids.some((nodeId) => !nodeId)) throw new RangeError("NodeExpandedRecord prune IDs must be non-empty");
+  if (!sameItems(ids, [...new Set(ids)].sort(compareCodeUnits))) {
+    throw new RangeError("NodeExpandedRecord prune IDs must be sorted and unique");
+  }
+  if (typeof digest !== "string") throw new TypeError("NodeExpandedRecord topology_digest must be a string");
+  if (!/^[0-9a-f]{64}$/.test(digest)) {
+    throw new RangeError("NodeExpandedRecord topology_digest must be lowercase SHA-256");
+  }
+  requireExpandingNode(state, spawnerId);
+  validateNodeEvidence(state, spawnerId, record.evidence);
+}
+
+/** Call the injected builder with a copy of the spawner and return a copy of its fragment. */
+function buildGrowthFragment(spawner: Node, builderSeed: JsonValue, growBuilder: GrowBuilder): Flow {
+  const built: unknown = growBuilder(copyGraph(spawner), builderSeed);
+  if (!(built instanceof Flow)) throw new TypeError("grow_builder must return a Flow");
+  return copyGraph(built);
+}
+
+/** Validate one growth and build the detached change commit applies in place. */
+function prepareGrowthTopology(
+  state: RunState,
+  record: NodeExpandedRecord,
+  fragment: Flow,
+  validatedFragment: ValidatedFragment,
+): { delta: GrowthDelta; topology: GrowthTopology } {
+  const [newNodeIds, newEdgeIds] = validatedFragment;
+  const budget = state.runDefaults.maxTotalNodes;
+  if (state.flow.nodes.size + newNodeIds.length > budget) {
+    raiseGrowthRejected(
+      new RangeError(`expansion exceeded node budget (${budget}) at spawner ${reprText(record.spawnerId)}`),
+    );
+  }
+  const derivedDepth = validatedGrowthDepth(state, record.spawnerId);
+  const index = growthIndex(state);
+  validateGrowthPrune(state, record.spawnerId, record.pruneIds, new Set(newNodeIds));
+  const [retired, deferredPrune] = retiredIds(state, record.spawnerId, record.pruneIds, index.grown);
+  validatePruneDependencies(state, fragment, retired, index);
+
+  const sortedRetiredIds = [...retired].sort(compareCodeUnits);
+  const retiredEdges = new Map<string, Edge>();
+  for (const nodeId of sortedRetiredIds) {
+    for (const edge of [...state.flow.outgoing(nodeId), ...state.flow.incoming(nodeId)]) {
+      if (!retiredEdges.has(edge.id)) retiredEdges.set(edge.id, edge);
+    }
+  }
+  validateGrowthRedirects(state, fragment, record.spawnerId, retired, new Set(retiredEdges.keys()), index);
+
+  /** Return the nearest owner at or above `owner` that this growth keeps. */
+  const survivingOwner = (owner: string | null): string | null => {
+    while (owner !== null && retired.has(owner)) owner = state.growthOwner.get(owner) ?? null;
+    return owner;
+  };
+
+  // A kept subtree under a retired node, and a self-pruning spawner's new nodes, move to the
+  // nearest owner that survives this transition.
+  const ownerChanges: (readonly [string, string | null])[] = [];
+  for (const retiredId of sortedRetiredIds) {
+    for (const nodeId of index.grown.get(retiredId) ?? []) {
+      if (!retired.has(nodeId)) ownerChanges.push([nodeId, survivingOwner(retiredId)]);
+    }
+  }
+  const newOwner = survivingOwner(record.spawnerId);
+  for (const nodeId of newNodeIds) ownerChanges.push([nodeId, newOwner]);
+
+  const depth: (readonly [string, number])[] = [];
+  if (derivedDepth !== null) {
+    for (const [nodeId, node] of fragment.nodes) {
+      if (node.isSpawner === true || node.commitAs === record.spawnerId) depth.push([nodeId, derivedDepth]);
+    }
+  }
+
+  const delta: GrowthDelta = Object.freeze({
+    spawnerId: record.spawnerId,
+    pruneIds: record.pruneIds,
+    retiredIds: Object.freeze(sortedRetiredIds),
+    topologyDigest: record.topologyDigest,
+    fragmentStartId: fragment.startId,
+    fragmentEndId: fragment.endId,
+    newNodeIds,
+    newEdgeIds,
+    derivedDepth,
+  });
+  const topology: GrowthTopology = Object.freeze({
+    nodes: Object.freeze([...fragment.nodes]),
+    edges: Object.freeze([...fragment.edges]),
+    wiring: Object.freeze([...fragment.wiring].map(([nodeId, wiring]) => [nodeId, new Map(wiring)] as const)),
+    retiredEdges: Object.freeze([...retiredEdges.values()]),
+    depth: Object.freeze(depth),
+    growthOwner: Object.freeze(ownerChanges),
+    deferredPrune,
+    names: Object.freeze(
+      [...fragment.nodes].map(
+        ([nodeId, node]) => [nodeId, nodeNames(nodeId, node, fragment.wiring.get(nodeId)!)] as const,
+      ),
+    ),
+  });
+  return { delta, topology };
+}
+
+/**
+ * Require a collision-free, self-contained, acyclic fragment; return its new node and edge ids.
+ *
+ * The work is proportional to the fragment: live nodes are looked up, not rescanned, and only the
+ * live producers the fragment's wiring reads have their output contracts checked. A malformed live
+ * contract stays a host invariant error outside `GrowthRejected`.
+ */
+function validateGrowthFragment(state: RunState, fragment: Flow): ValidatedFragment {
+  if (!isExactly(fragment.nodes, Map)) raiseGrowthRejected(new TypeError("growth fragment nodes must be a Map"));
+  if (!Array.isArray(fragment.edges)) raiseGrowthRejected(new TypeError("growth fragment edges must be an array"));
+  if (!isExactly(fragment.wiring, Map)) raiseGrowthRejected(new TypeError("growth fragment wiring must be a Map"));
+  const fragmentStartId: unknown = fragment.startId;
+  const fragmentEndId: unknown = fragment.endId;
+  if (typeof fragmentStartId !== "string" || !fragmentStartId) {
+    raiseGrowthRejected(new RangeError("growth fragment start_id must be a non-empty string"));
+  }
+  if (typeof fragmentEndId !== "string" || !fragmentEndId) {
+    raiseGrowthRejected(new RangeError("growth fragment end_id must be a non-empty string"));
+  }
+  if (!fragment.nodes.has(fragmentStartId)) {
+    raiseGrowthRejected(new RangeError("growth fragment start_id is missing from its nodes"));
+  }
+  if (!fragment.nodes.has(fragmentEndId)) {
+    raiseGrowthRejected(new RangeError("growth fragment end_id is missing from its nodes"));
+  }
+
+  const newNodeIds: string[] = [];
+  for (const [nodeId, node] of fragment.nodes as Map<unknown, unknown>) {
+    if (typeof nodeId !== "string") raiseGrowthRejected(new TypeError("growth fragment node IDs must be strings"));
+    if (!nodeId) raiseGrowthRejected(new RangeError("growth fragment node IDs must be non-empty"));
+    if (!(node instanceof Node)) {
+      raiseGrowthRejected(new TypeError(`growth fragment node ${reprText(nodeId)} must be a Node`));
+    }
+    if (node.id !== nodeId) {
+      raiseGrowthRejected(
+        new RangeError(`growth fragment node key ${reprText(nodeId)} does not equal node.id ${reprValue(node.id)}`),
+      );
+    }
+    if (state.flow.nodes.has(nodeId)) {
+      raiseGrowthRejected(new RangeError(`growth fragment node ${reprText(nodeId)} collides with live topology`));
+    }
+    newNodeIds.push(nodeId);
+  }
+
+  if (!sameIds(fragment.nodes, fragment.wiring.keys())) {
+    raiseGrowthRejected(new RangeError("growth fragment wiring keys must exactly equal fragment nodes"));
+  }
+  try {
+    validateGrowthMetadata(fragment);
+  } catch (error) {
+    if (error instanceof TypeError || error instanceof RangeError) raiseGrowthRejected(error);
+    throw error;
+  }
+  // Python's `ChainMap(fragment.nodes, state.flow.nodes)`: a lookup, not a merged copy.
+  const combinedNodeIds = { has: (id: string): boolean => fragment.nodes.has(id) || state.flow.nodes.has(id) };
+  const fragmentProducerContracts = new Map<string, OutputContract>();
+  for (const [nodeId, node] of fragment.nodes) {
+    const contract = node.outputContract;
+    if (contract === null) continue;
+    try {
+      outputContractType(contract);
+    } catch (error) {
+      if (error instanceof TypeError || error instanceof RangeError) raiseGrowthRejected(error);
+      throw error;
+    }
+    fragmentProducerContracts.set(nodeId, contract);
+  }
+  const liveProducerContracts = new Map<string, OutputContract | null>();
+
+  /** Return a producer's output contract, checking a live one on first read. */
+  const producerContract = (nodeId: string): OutputContract | null => {
+    const fragmentContract = fragmentProducerContracts.get(nodeId);
+    if (fragmentContract !== undefined) return fragmentContract;
+    const live = state.flow.nodes.get(nodeId);
+    if (live === undefined) return null;
+    if (!liveProducerContracts.has(nodeId)) {
+      const contract = live.outputContract;
+      outputContractType(contract);
+      liveProducerContracts.set(nodeId, contract);
+    }
+    return liveProducerContracts.get(nodeId)!;
+  };
+
+  for (const [nodeId, node] of fragment.nodes) {
+    for (const [attribute, target] of [
+      ["commit_as", node.commitAs],
+      ["origin_id", node.originId],
+    ] as [string, unknown][]) {
+      if (target !== null && typeof target !== "string") {
+        raiseGrowthRejected(
+          new TypeError(`growth fragment node ${reprText(nodeId)} ${attribute} must be a string or null`),
+        );
+      }
+      if (target === "") {
+        raiseGrowthRejected(new RangeError(`growth fragment node ${reprText(nodeId)} ${attribute} must be non-empty`));
+      }
+      if (target !== null && !combinedNodeIds.has(target)) {
+        raiseGrowthRejected(
+          new RangeError(
+            `growth fragment node ${reprText(nodeId)} ${attribute} target ${reprText(target)} does not exist`,
+          ),
+        );
+      }
+    }
+    const skippedTarget: unknown = node.skippedOutputTarget();
+    try {
+      validateSkippedOutputTarget(combinedNodeIds, nodeId, skippedTarget);
+    } catch (error) {
+      if (error instanceof TypeError || error instanceof RangeError) raiseGrowthRejected(error);
+      throw error;
+    }
+    const wiring: unknown = fragment.wiring.get(nodeId);
+    if (!isExactly(wiring, Map) || [...wiring.keys()].some((key) => typeof key !== "string")) {
+      raiseGrowthRejected(new TypeError(`growth fragment wiring for ${reprText(nodeId)} must be a string-keyed Map`));
+    }
+    const params: unknown = node.params ?? [];
+    if (!Array.isArray(params)) {
+      raiseGrowthRejected(new TypeError(`growth fragment node ${reprText(nodeId)} params must be an array`));
+    }
+    const declared = new Map<string, boolean>();
+    for (const param of params as unknown[]) {
+      if (!isExactly(param, Parameter)) {
+        raiseGrowthRejected(
+          new TypeError(
+            `growth fragment node ${reprText(nodeId)} params must contain Parameter values, got ${jsTypeName(param)}`,
+          ),
+        );
+      }
+      const name: unknown = param.name;
+      if (typeof name !== "string" || !name) {
+        raiseGrowthRejected(new RangeError(`growth fragment node ${reprText(nodeId)} has an invalid param name`));
+      }
+      if (declared.has(name)) {
+        raiseGrowthRejected(
+          new RangeError(`growth fragment node ${reprText(nodeId)} has duplicate param ${reprText(name)}`),
+        );
+      }
+      declared.set(name, Boolean(param.required));
+    }
+    const reserved: unknown = node.reservedWiringKeys();
+    if (!isExactly(reserved, Set) || [...reserved].some((key) => typeof key !== "string" || !key)) {
+      raiseGrowthRejected(new TypeError(`growth fragment node ${reprText(nodeId)} reserved wiring keys are invalid`));
+    }
+    const reservedKeys = reserved as Set<string>;
+    const actual = new Set((wiring as Map<string, unknown>).keys());
+    const extras = [...actual].filter((key) => !declared.has(key) && !reservedKeys.has(key));
+    const missingReserved = [...reservedKeys].filter((key) => !actual.has(key));
+    const missingRequired = [...declared]
+      .filter(([name, required]) => required && !actual.has(name))
+      .map(([name]) => name);
+    if (extras.length > 0 || missingReserved.length > 0 || missingRequired.length > 0) {
+      raiseGrowthRejected(
+        new RangeError(
+          `growth fragment node ${reprText(nodeId)} wiring parity failed: ` +
+            `extra=${writeAsText(extras.sort(compareCodeUnits))}, ` +
+            `missing_reserved=${writeAsText(missingReserved.sort(compareCodeUnits))}, ` +
+            `missing_required=${writeAsText(missingRequired.sort(compareCodeUnits))}`,
+        ),
+      );
+    }
+    validateGrowthWiringRefs(
+      nodeId,
+      node,
+      wiring as Map<string, unknown>,
+      combinedNodeIds,
+      producerContract,
+      reservedKeys,
+    );
+  }
+
+  // Every live edge has a disposition, so the edge-state keys are the live edge ids.
+  const newEdgeIds: string[] = [];
+  const seenEdgeIds = new Set<string>();
+  for (const edge of fragment.edges as unknown[]) {
+    if (!isExactly(edge, Edge)) {
+      raiseGrowthRejected(new TypeError("growth fragment edges must contain only Edge values"));
+    }
+    const edgeId: unknown = edge.id;
+    if (typeof edgeId !== "string" || !edgeId) {
+      raiseGrowthRejected(new RangeError("growth fragment edge IDs must be non-empty strings"));
+    }
+    if (seenEdgeIds.has(edgeId)) {
+      raiseGrowthRejected(new RangeError(`growth fragment edge ID ${reprText(edgeId)} is duplicated`));
+    }
+    if (state.edgeState.has(edgeId)) {
+      raiseGrowthRejected(new RangeError(`growth fragment edge ${reprText(edgeId)} collides with live topology`));
+    }
+    for (const [attribute, value] of [
+      ["source_handle", edge.sourceHandle],
+      ["input_group", edge.inputGroup],
+    ] as [string, unknown][]) {
+      if (value !== null && typeof value !== "string") {
+        raiseGrowthRejected(
+          new TypeError(`growth fragment edge ${reprText(edgeId)} ${attribute} must be a string or null`),
+        );
+      }
+      if (value === "") {
+        raiseGrowthRejected(new RangeError(`growth fragment edge ${reprText(edgeId)} ${attribute} must be non-empty`));
+      }
+    }
+    for (const [attribute, value] of [
+      ["optional", edge.optional],
+      ["ordering", edge.ordering],
+    ] as [string, unknown][]) {
+      if (typeof value !== "boolean") {
+        raiseGrowthRejected(new TypeError(`growth fragment edge ${reprText(edgeId)} ${attribute} must be a bool`));
+      }
+    }
+    const from: unknown = edge.from;
+    const to: unknown = edge.to;
+    if (typeof from !== "string" || !combinedNodeIds.has(from)) {
+      raiseGrowthRejected(
+        new RangeError(`growth fragment edge ${reprText(edgeId)} has unknown source ${reprValue(from)}`),
+      );
+    }
+    if (typeof to !== "string" || !fragment.nodes.has(to)) {
+      raiseGrowthRejected(
+        new RangeError(`growth fragment edge ${reprText(edgeId)} must target a fragment node, found ${reprValue(to)}`),
+      );
+    }
+    seenEdgeIds.add(edgeId);
+    newEdgeIds.push(edgeId);
+  }
+
+  validateGrowthReachability(fragment);
+  // Fragment edges target only fresh fragment nodes and live edges can't reach them, so any new
+  // cycle lies wholly inside the fragment.
+  rejectGrowthCycle(new Set(fragment.nodes.keys()), fragment.edges.filter((edge) => fragment.nodes.has(edge.from)));
+  return Object.freeze([Object.freeze(newNodeIds), Object.freeze(newEdgeIds)] as const);
+}
+
+/** Python's `repr` of a value a message names: quoted text, else the value's string form. */
+function reprValue(value: unknown): string {
+  return typeof value === "string" ? reprText(value) : String(value);
+}
+
+/** Require every fragment node to be driven from its sole scheduled entry. */
+function validateGrowthReachability(fragment: Flow): void {
+  const adjacency = new Map<string, string[]>([...fragment.nodes.keys()].map((nodeId) => [nodeId, []]));
+  for (const edge of fragment.edges) adjacency.get(edge.from)?.push(edge.to);
+  const reachable = new Set<string>();
+  const pending = [fragment.startId];
+  while (pending.length > 0) {
+    const nodeId = pending.pop()!;
+    if (reachable.has(nodeId)) continue;
+    reachable.add(nodeId);
+    for (const next of adjacency.get(nodeId)!) pending.push(next);
+  }
+  const unreachable = [...fragment.nodes.keys()].filter((nodeId) => !reachable.has(nodeId)).sort(compareCodeUnits);
+  if (unreachable.length > 0) {
+    raiseGrowthRejected(
+      new RangeError(`growth fragment nodes are unreachable from its start: ${writeAsText(unreachable)}`),
+    );
+  }
+}
+
+/** Apply the closed reference rules to raw or carrier-wrapped fragment wiring. */
+function validateGrowthWiringRefs(
+  nodeId: string,
+  node: Node,
+  wiring: ReadonlyMap<string, unknown>,
+  combinedNodeIds: { has(id: string): boolean },
+  producerContract: (nodeId: string) => OutputContract | null,
+  reserved: ReadonlySet<string>,
+): void {
+  for (const [param, source] of wiring) {
+    const paths: string[] = [];
+    for (const [, text] of iterSourceStrings(source)) {
+      try {
+        for (const path of exprRefsOf(text)) paths.push(path);
+      } catch (error) {
+        if (!(error instanceof ExpressionError)) throw error;
+        raiseGrowthRejected(
+          new RangeError(
+            `growth fragment node ${reprText(nodeId)} wiring ${reprText(param)} is invalid: ${error.message}`,
+            { cause: error },
+          ),
+        );
+      }
+    }
+    for (const path of paths) {
+      const extraHeads = node.bindsPerItem === true && !reserved.has(param) ? ["item"] : [];
+      let error = classifyPath(path, combinedNodeIds, new Set(), extraHeads);
+      const parts = path.split(".");
+      const contract =
+        error === null && parts.length >= 2 && parts[1] === "output" ? producerContract(parts[0]!) : null;
+      if (contract !== null) {
+        // Fragments come from flows the loader already checked, where a CASE branch may narrow a
+        // union so that a member-only field read is valid. That narrowing isn't recorded here, so
+        // such reads are allowed.
+        error = outputContractFieldError(contract, parts.slice(2), path, { partialUnionFields: true });
+      }
+      if (error !== null) {
+        raiseGrowthRejected(
+          new RangeError(`growth fragment node ${reprText(nodeId)} wiring ${reprText(param)}: ${error}`),
+        );
+      }
+    }
+  }
+}
+
+/** Reject a cycle among `nodeIds` as node-produced fragment data. */
+function rejectGrowthCycle(nodeIds: ReadonlySet<string>, edges: readonly Edge[]): void {
+  const adjacency = new Map<string, string[]>([...nodeIds].map((nodeId) => [nodeId, []]));
+  const inDegree = new Map<string, number>([...nodeIds].map((nodeId) => [nodeId, 0]));
+  for (const edge of edges) {
+    if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) {
+      throw new RangeError(`growth edge ${reprText(edge.id)} has an unknown endpoint`);
+    }
+    adjacency.get(edge.from)!.push(edge.to);
+    inDegree.set(edge.to, inDegree.get(edge.to)! + 1);
+  }
+  const ready = [...inDegree].filter(([, degree]) => degree === 0).map(([nodeId]) => nodeId);
+  let visited = 0;
+  while (ready.length > 0) {
+    const nodeId = ready.pop()!;
+    visited += 1;
+    for (const successor of adjacency.get(nodeId)!) {
+      const degree = inDegree.get(successor)! - 1;
+      inDegree.set(successor, degree);
+      if (degree === 0) ready.push(successor);
+    }
+  }
+  if (visited !== nodeIds.size) {
+    const stuck = [...inDegree].filter(([, degree]) => degree !== 0).map(([nodeId]) => nodeId).sort(compareCodeUnits);
+    raiseGrowthRejected(new RangeError(`growth fragment creates a cycle involving ${writeAsText(stuck)}`));
+  }
+}
+
+/** Derive the exact trait-driven growth depth for one expansion. */
+function validatedGrowthDepth(state: RunState, spawnerId: string): number | null {
+  const delta: unknown = state.flow.nodes.get(spawnerId)!.growDepthDelta;
+  if (delta === null) return null;
+  if (typeof delta !== "number" || !Number.isSafeInteger(delta) || delta < 0) {
+    throw new RangeError(`spawner ${reprText(spawnerId)} grow_depth_delta must be null, 0, or a positive integer`);
+  }
+  const parentDepth: unknown = state.depth.has(spawnerId) ? state.depth.get(spawnerId) : 0;
+  if (typeof parentDepth !== "number" || !Number.isSafeInteger(parentDepth) || parentDepth < 0) {
+    throw new RangeError(`spawner ${reprText(spawnerId)} has an invalid parent depth`);
+  }
+  return parentDepth + delta;
+}
+
+/** Return the node ids one node names through its wiring and redirect fields. */
+function nodeNames(nodeId: string, node: Node, wiring: ReadonlyMap<string, unknown>): readonly string[] {
+  const names = new Set<string>();
+  for (const target of [node.commitAs, node.originId, node.skippedOutputTarget()] as unknown[]) {
+    if (typeof target === "string" && target !== nodeId) names.add(target);
+  }
+  for (const source of wiring.values()) {
+    for (const [, text] of iterSourceStrings(source)) {
+      let paths: string[];
+      try {
+        paths = exprRefsOf(text);
+      } catch (error) {
+        if (!(error instanceof ExpressionError)) throw error;
+        throw new RangeError(`node ${reprText(nodeId)} has invalid wiring: ${error.message}`, { cause: error });
+      }
+      for (const path of paths) names.add(path.split(".", 1)[0]!);
+    }
+  }
+  return Object.freeze([...names]);
+}
+
+/**
+ * Return `state.growthIndex`, building it from the live graph on first use.
+ *
+ * @internal Exported so tests can compare the kept index with a rebuild.
+ */
+export function growthIndex(state: RunState): GrowthIndex {
+  if (state.growthIndex === null) {
+    const names = new Map<string, readonly string[]>();
+    for (const [nodeId, node] of state.flow.nodes) {
+      names.set(nodeId, nodeNames(nodeId, node, state.flow.wiring.get(nodeId) ?? new Map()));
+    }
+    const referrers = new Map<string, Set<string>>();
+    for (const [nodeId, named] of names) {
+      for (const name of named) setDefault(referrers, name, () => new Set()).add(nodeId);
+    }
+    const grown = new Map<string, Set<string>>();
+    for (const [nodeId, owner] of state.growthOwner) setDefault(grown, owner, () => new Set()).add(nodeId);
+    state.growthIndex = { names, referrers, grown };
+  }
+  return state.growthIndex;
+}
+
+/** Python's `dict.setdefault`: return `map`'s value at `key`, first storing `make()` when absent. */
+function setDefault<V>(map: Map<string, V>, key: string, make: () => V): V {
+  let value = map.get(key);
+  if (value === undefined) {
+    value = make();
+    map.set(key, value);
+  }
+  return value;
+}
+
+/**
+ * Split the requested and deferred prune ids into those retired now and those kept.
+ *
+ * Each candidate is a requested prune id or one an earlier growth deferred. It is retired with its
+ * whole grown subtree when every node in it is settled (taken, skipped, or expanded; none ready or
+ * running). Otherwise it stays live with that subtree and is deferred, so a later growth retires it
+ * once settled; a kept node also keeps every candidate it reads. A spawner that asks to prune
+ * itself is always retired; its grown nodes go with it only if all are settled, else they move to
+ * the nearest surviving owner.
+ *
+ * The candidates are `pruneIds`, then `state.deferredPrune`, without repeats; the deferred ids keep
+ * the order they were found to be kept in.
+ *
+ * @param state The pre-transition state whose `deferredPrune` names earlier deferred ids.
+ * @param spawnerId The spawner whose growth record asks for `pruneIds`.
+ * @param pruneIds The node ids the growth record asks to prune.
+ * @param grown Each owner's directly grown live nodes.
+ * @returns The node ids retired by this growth, and the candidates kept live and deferred to a
+ *   later growth.
+ */
+function retiredIds(
+  state: RunState,
+  spawnerId: string,
+  pruneIds: readonly string[],
+  grown: ReadonlyMap<string, ReadonlySet<string>>,
+): readonly [ReadonlySet<string>, ReadonlySet<string>] {
+  if (pruneIds.length === 0 && state.deferredPrune.size === 0) return [new Set(), new Set()];
+  const settled: ReadonlySet<NodeState | undefined> = new Set([
+    NodeState.TAKEN,
+    NodeState.SKIPPED,
+    NodeState.EXPANDED,
+  ]);
+  const readyIds = new Set(state.ready);
+  const isSettled = (nodeId: string): boolean =>
+    settled.has(state.nodeState.get(nodeId)) && !state.inFlight.has(nodeId) && !readyIds.has(nodeId);
+
+  const units = new Map<string, string[]>();
+  for (const candidate of new Set([...pruneIds, ...state.deferredPrune])) {
+    const unit = [candidate];
+    const pending = [candidate];
+    while (pending.length > 0) {
+      for (const nodeId of grown.get(pending.pop()!) ?? []) {
+        unit.push(nodeId);
+        pending.push(nodeId);
+      }
+    }
+    units.set(candidate, unit);
+  }
+
+  const retired = new Set<string>();
+  // A deferred spawner growing now is unsettled and kept like any other candidate.
+  if (pruneIds.includes(spawnerId)) {
+    const spawnerUnit = units.get(spawnerId)!;
+    units.delete(spawnerId);
+    retired.add(spawnerId);
+    const grownIds = spawnerUnit.slice(1);
+    if (grownIds.every(isSettled)) for (const nodeId of grownIds) retired.add(nodeId);
+  }
+  const kept = new Set<string>();
+  for (const [candidate, unit] of units) if (!unit.every(isSettled)) kept.add(candidate);
+  // A settled node that kept work still reads must stay with it. Units overlap when a deferred id
+  // lies under another candidate, so a node can be in several.
+  const unitsOf = new Map<string, string[]>();
+  for (const [candidate, unit] of units) {
+    for (const nodeId of unit) setDefault(unitsOf, nodeId, () => []).push(candidate);
+  }
+  const pending: string[] = [];
+  for (const candidate of kept) for (const nodeId of units.get(candidate)!) pending.push(nodeId);
+  while (pending.length > 0) {
+    for (const read of readIds(state, pending.pop()!)) {
+      for (const candidate of unitsOf.get(read) ?? []) {
+        if (!kept.has(candidate)) {
+          kept.add(candidate);
+          for (const nodeId of units.get(candidate)!) pending.push(nodeId);
+        }
+      }
+    }
+  }
+  for (const [candidate, unit] of units) {
+    if (!kept.has(candidate)) for (const nodeId of unit) retired.add(nodeId);
+  }
+  return [retired, new Set([...kept].filter((candidate) => !retired.has(candidate)))];
+}
+
+/** Return the node ids a live node reads through edges, wiring, or output targets. */
+function readIds(state: RunState, nodeId: string): Set<string> {
+  const node = state.flow.nodes.get(nodeId)!;
+  const reads = new Set(state.flow.incoming(nodeId).map((edge) => edge.from));
+  for (const target of [node.commitAs, node.originId, node.skippedOutputTarget()] as unknown[]) {
+    if (typeof target === "string") reads.add(target);
+  }
+  for (const source of (state.flow.wiring.get(nodeId) ?? new Map<string, unknown>()).values()) {
+    for (const [, text] of iterSourceStrings(source)) {
+      let paths: string[];
+      try {
+        paths = exprRefsOf(text);
+      } catch (error) {
+        if (!(error instanceof ExpressionError)) throw error;
+        continue; // the prune dependency check reports invalid wiring
+      }
+      for (const path of paths) reads.add(path.split(".", 1)[0]!);
+    }
+  }
+  return reads;
+}
+
+/**
+ * Reject requested prune ids that are not dynamic overlay or a self-prunable LOOP clone.
+ *
+ * Unsettled requested ids are not errors: `retiredIds` keeps them live.
+ */
+function validateGrowthPrune(
+  state: RunState,
+  spawnerId: string,
+  pruneIds: readonly string[],
+  newNodeIds: ReadonlySet<string>,
+): void {
+  const spawner = state.flow.nodes.get(spawnerId)!;
+  for (const nodeId of pruneIds) {
+    if (!state.flow.nodes.has(nodeId)) {
+      raiseGrowthRejected(new RangeError(`growth prune node ${reprText(nodeId)} does not exist`));
+    }
+    if (nodeId === state.flow.startId || nodeId === state.flow.endId) {
+      raiseGrowthRejected(new RangeError(`growth cannot prune top-level boundary ${reprText(nodeId)}`));
+    }
+    if (newNodeIds.has(nodeId)) {
+      raiseGrowthRejected(new RangeError(`growth cannot prune new fragment node ${reprText(nodeId)}`));
+    }
+    if (state.initialStaticIds.has(nodeId)) {
+      raiseGrowthRejected(new RangeError(`growth cannot prune initial static node ${reprText(nodeId)}`));
+    }
+    if (nodeId === spawnerId) {
+      const originId: unknown = spawner.originId;
+      if (
+        !(
+          spawner.isLoop === true &&
+          typeof originId === "string" &&
+          originId &&
+          originId !== spawnerId &&
+          state.flow.nodes.has(originId) &&
+          !pruneIds.includes(originId)
+        )
+      ) {
+        raiseGrowthRejected(new RangeError(`growth spawner ${reprText(spawnerId)} is not a self-prunable LOOP clone`));
+      }
+    }
+  }
+}
+
+/**
+ * Reject future work whose edge, wiring, commit, or origin reads a pruned id.
+ *
+ * The future work checked is every fragment node plus each unfinished live node that names a
+ * pruned id or has an edge from one, found through the growth index and adjacency rather than a
+ * scan of every node.
+ */
+function validatePruneDependencies(
+  state: RunState,
+  fragment: Flow,
+  pruneIds: ReadonlySet<string>,
+  index: GrowthIndex,
+): void {
+  if (pruneIds.size === 0) return;
+  const sortedPruneIds = [...pruneIds].sort(compareCodeUnits);
+  const candidates = new Set(fragment.nodes.keys());
+  for (const nodeId of sortedPruneIds) {
+    for (const referrer of index.referrers.get(nodeId) ?? []) candidates.add(referrer);
+    for (const edge of state.flow.outgoing(nodeId)) candidates.add(edge.to);
+  }
+  const dependentIds = [...candidates].filter(
+    (nodeId) =>
+      fragment.nodes.has(nodeId) || (!pruneIds.has(nodeId) && state.nodeState.get(nodeId) === NodeState.UNKNOWN),
+  );
+  const dependents = new Set(dependentIds);
+  const combinedNode = (nodeId: string): Node => fragment.nodes.get(nodeId) ?? state.flow.nodes.get(nodeId)!;
+  const combinedNodeIds = { has: (nodeId: string) => fragment.nodes.has(nodeId) || state.flow.nodes.has(nodeId) };
+  const prunedEdges: Edge[] = [];
+  for (const nodeId of sortedPruneIds) for (const edge of state.flow.outgoing(nodeId)) prunedEdges.push(edge);
+  for (const edge of fragment.edges) if (pruneIds.has(edge.from)) prunedEdges.push(edge);
+  for (const edge of prunedEdges) {
+    if (dependents.has(edge.to)) {
+      raiseGrowthRejected(
+        new RangeError(`surviving node ${reprText(edge.to)} depends on pruned edge source ${reprText(edge.from)}`),
+      );
+    }
+  }
+  for (const nodeId of dependentIds) {
+    const node = combinedNode(nodeId);
+    if (node.commitAs !== null && pruneIds.has(node.commitAs)) {
+      raiseGrowthRejected(
+        new RangeError(`surviving node ${reprText(nodeId)} commits to pruned node ${reprText(node.commitAs)}`),
+      );
+    }
+    if (node.originId !== null && pruneIds.has(node.originId)) {
+      raiseGrowthRejected(
+        new RangeError(`surviving node ${reprText(nodeId)} has pruned origin ${reprText(node.originId)}`),
+      );
+    }
+    const target: unknown = node.skippedOutputTarget();
+    let skippedTarget: string;
+    try {
+      skippedTarget = validateSkippedOutputTarget(combinedNodeIds, nodeId, target);
+    } catch (error) {
+      if (error instanceof TypeError || error instanceof RangeError) raiseGrowthRejected(error);
+      throw error;
+    }
+    if (pruneIds.has(skippedTarget)) {
+      raiseGrowthRejected(
+        new RangeError(
+          `surviving node ${reprText(nodeId)} has pruned skipped output target ${reprText(skippedTarget)}`,
+        ),
+      );
+    }
+    const wiring = fragment.wiring.get(nodeId) ?? state.flow.wiring.get(nodeId) ?? new Map<string, unknown>();
+    for (const source of wiring.values()) {
+      for (const [, text] of iterSourceStrings(source)) {
+        let paths: string[];
+        try {
+          paths = exprRefsOf(text);
+        } catch (error) {
+          if (!(error instanceof ExpressionError)) throw error;
+          throw new RangeError(`surviving node ${reprText(nodeId)} has invalid wiring: ${error.message}`, {
+            cause: error,
+          });
+        }
+        for (const path of paths) {
+          if (pruneIds.has(path.split(".", 1)[0]!)) {
+            raiseGrowthRejected(new RangeError(`surviving node ${reprText(nodeId)} wiring depends on pruned node`));
+          }
+        }
+      }
+    }
+  }
 }
 
 /** Validate a replayed route's exact scalar carriers and its executing router. */
@@ -2564,6 +3484,93 @@ function validateSkippedOutputTarget(nodes: { has(id: string): boolean }, nodeId
 }
 
 /**
+ * Require every redirect a growth adds to have one inert logical anchor.
+ *
+ * Only targets of fragment nodes gain an owner, and the growth only relaxes every other target,
+ * so those are the targets checked. Other targets aren't rechecked here: success and route
+ * commits only settle nodes and edges, and a route checks each redirect again when it skips
+ * through it. Each target is read in the post-growth topology: the live state plus the fragment
+ * minus the retired nodes and edges.
+ */
+function validateGrowthRedirects(
+  state: RunState,
+  fragment: Flow,
+  spawnerId: string,
+  retiredIds: ReadonlySet<string>,
+  retiredEdgeIds: ReadonlySet<string>,
+  index: GrowthIndex,
+): void {
+  // Python's `_GrowthNodeIds`: membership after the growth, without copying the ids.
+  const finalIds = {
+    has: (id: string): boolean => fragment.nodes.has(id) || (state.flow.nodes.has(id) && !retiredIds.has(id)),
+  };
+  const newOwners = new Map<string, string[]>();
+  for (const [nodeId, node] of fragment.nodes) {
+    let target: string;
+    try {
+      target = validateSkippedOutputTarget(finalIds, nodeId, node.skippedOutputTarget());
+    } catch (error) {
+      if (error instanceof TypeError || error instanceof RangeError) raiseGrowthRejected(error);
+      throw error;
+    }
+    if (target === nodeId) continue;
+    setDefault(newOwners, target, () => []).push(nodeId);
+  }
+  if (newOwners.size === 0) return;
+  const readyIds = new Set(state.ready);
+  const fragmentHeads = new Set(fragment.edges.map((edge) => edge.to));
+  for (const [target, fragmentOwnerIds] of newOwners) {
+    const ownerIds: string[] = [];
+    for (const nodeId of index.referrers.get(target) ?? []) {
+      if (
+        nodeId !== spawnerId &&
+        !retiredIds.has(nodeId) &&
+        state.nodeState.get(nodeId) === NodeState.UNKNOWN &&
+        state.flow.nodes.get(nodeId)!.skippedOutputTarget() === target
+      ) {
+        ownerIds.push(nodeId);
+      }
+    }
+    for (const nodeId of fragmentOwnerIds) ownerIds.push(nodeId);
+    let disposition: unknown;
+    let isExecutable: boolean;
+    let hasIncoming: boolean;
+    if (fragment.nodes.has(target)) {
+      disposition = NodeState.UNKNOWN;
+      isExecutable = target === fragment.startId;
+      hasIncoming = fragmentHeads.has(target);
+    } else {
+      disposition = target === spawnerId ? NodeState.EXPANDED : state.nodeState.get(target);
+      isExecutable = readyIds.has(target) || (state.inFlight.has(target) && target !== spawnerId);
+      hasIncoming = state.flow.incoming(target).some((edge) => !retiredEdgeIds.has(edge.id));
+    }
+    try {
+      requireUnambiguousRedirect({
+        ownerId: ownerIds[0]!,
+        target,
+        owners: ownerIds,
+        hasCommittedValue: state.pool.store.has(target),
+        disposition,
+        isExecutable,
+        hasIncoming,
+      });
+    } catch (error) {
+      if (error instanceof RangeError) raiseGrowthRejected(error);
+      throw error;
+    }
+    // New fragment edges start UNKNOWN; only kept live edges can be settled.
+    for (const edge of state.flow.outgoing(target)) {
+      if (retiredEdgeIds.has(edge.id)) continue;
+      if (state.edgeState.get(edge.id) !== NodeState.UNKNOWN) {
+        raiseGrowthRejected(
+          new RangeError(`logical output target ${reprText(target)} has a settled outgoing edge ${reprText(edge.id)}`),
+        );
+      }
+    }
+  }
+}
+
+/**
  * Index the unfinished logical-output redirects in stable node order.
  *
  * Settled dynamic residue can't produce another value and is ignored. Ordinary nodes target
@@ -3054,4 +4061,144 @@ interface FailureApply {
 /** Build independent state and callback values before the durable append. */
 function materializeFailure(failure: Failure): FailureApply {
   return { result: new RunFailed({ failure }), observers: failureObservers(failure) };
+}
+
+/** Build one independent canonical expansion observer. */
+function growthObserver(record: NodeExpandedRecord): NodeExpanded {
+  const [, seed] = canonicalSeed(record.seed);
+  return new NodeExpanded({ nodeId: record.spawnerId, grow: new Grow(seed, record.pruneIds) });
+}
+
+/** The detached values one growth commit installs, all built before the durable append. */
+interface GrowthApply {
+  wiring: Map<string, ReadonlyMap<string, Binding>>;
+  observers: readonly RunEvent[];
+}
+
+/** Build fresh fragment wiring and the observer before the durable append. */
+function materializeGrowth(plan: GrowthPlan): GrowthApply {
+  const record = decodeRecord(plan.envelopeJson).record;
+  if (!isExactly(record, NodeExpandedRecord)) {
+    throw new TypeError("immutable growth plan does not contain a NodeExpandedRecord");
+  }
+  if (
+    !(
+      record.spawnerId === plan.delta.spawnerId &&
+      sameItems(record.pruneIds, plan.delta.pruneIds) &&
+      record.topologyDigest === plan.delta.topologyDigest
+    )
+  ) {
+    throw new RangeError("immutable growth plan record and delta disagree");
+  }
+  return {
+    wiring: new Map(plan.topology.wiring.map(([nodeId, wiring]) => [nodeId, new Map(wiring)])),
+    observers: [growthObserver(record)],
+  };
+}
+
+/** Carry one growth into `state.growthIndex` before ownership changes. */
+function applyGrowthIndex(state: RunState, delta: GrowthDelta, topology: GrowthTopology): void {
+  const index = state.growthIndex;
+  // Preparation builds it; there is nothing to keep current otherwise.
+  if (index === null) return;
+  for (const nodeId of delta.retiredIds) {
+    const named = index.names.get(nodeId) ?? [];
+    index.names.delete(nodeId);
+    for (const name of named) {
+      const referrers = index.referrers.get(name);
+      if (referrers !== undefined) {
+        referrers.delete(nodeId);
+        if (referrers.size === 0) index.referrers.delete(name);
+      }
+    }
+    const owner = state.growthOwner.get(nodeId);
+    if (owner !== undefined) index.grown.get(owner)?.delete(nodeId);
+    index.grown.delete(nodeId);
+  }
+  for (const [nodeId, named] of topology.names) {
+    index.names.set(nodeId, named);
+    for (const name of named) setDefault(index.referrers, name, () => new Set()).add(nodeId);
+  }
+  for (const [nodeId, owner] of topology.growthOwner) {
+    const previous = state.growthOwner.get(nodeId);
+    if (previous !== undefined) index.grown.get(previous)?.delete(nodeId);
+    if (owner !== null) setDefault(index.grown, owner, () => new Set()).add(nodeId);
+  }
+}
+
+/**
+ * Install one prevalidated growth into the live containers in place.
+ *
+ * Runs after append, so it only does the map and array updates the preparation already proved
+ * valid.
+ */
+function applyGrowth(
+  state: RunState,
+  delta: GrowthDelta,
+  topology: GrowthTopology,
+  wiring: ReadonlyMap<string, ReadonlyMap<string, Binding>>,
+): void {
+  const flow = state.flow;
+  const retired = new Set(delta.retiredIds);
+  applyGrowthIndex(state, delta, topology);
+  if (retired.size > 0) {
+    // Edges are appended in growth order and a prune usually retires recent growth, so scan back
+    // from the end and stop once every retired edge is found. Sibling growth (other MAP items,
+    // say) can sit in between, so the scan may still pass edges the growth doesn't retire.
+    const pending = new Set(topology.retiredEdges.map((edge) => edge.id));
+    let position = flow.edges.length;
+    while (pending.size > 0 && position > 0) {
+      position -= 1;
+      const edgeId = flow.edges[position]!.id;
+      if (pending.has(edgeId)) {
+        pending.delete(edgeId);
+        flow.edges.splice(position, 1);
+      }
+    }
+    for (const edge of topology.retiredEdges) {
+      state.edgeState.delete(edge.id);
+      for (const [adjacency, nodeId] of [
+        [flow.outgoingEdges, edge.from],
+        [flow.incomingEdges, edge.to],
+      ] as const) {
+        const edges = adjacency.get(nodeId);
+        if (retired.has(nodeId) || edges === undefined) continue;
+        const kept = edges.filter((other) => other !== edge);
+        if (kept.length > 0) adjacency.set(nodeId, kept);
+        else adjacency.delete(nodeId);
+      }
+    }
+    for (const nodeId of delta.retiredIds) {
+      flow.nodes.delete(nodeId);
+      flow.wiring.delete(nodeId);
+      flow.incomingEdges.delete(nodeId);
+      flow.outgoingEdges.delete(nodeId);
+      state.nodeState.delete(nodeId);
+      state.pool.store.delete(nodeId);
+      state.depth.delete(nodeId);
+      state.wiringOverrides.delete(nodeId);
+      state.growthOwner.delete(nodeId);
+    }
+  }
+
+  for (const [nodeId, node] of topology.nodes) flow.nodes.set(nodeId, node);
+  for (const edge of topology.edges) flow.edges.push(edge);
+  for (const [nodeId, nodeWiring] of wiring) flow.wiring.set(nodeId, nodeWiring);
+  for (const edge of topology.edges) {
+    setDefault(flow.outgoingEdges, edge.from, () => []).push(edge);
+    setDefault(flow.incomingEdges, edge.to, () => []).push(edge);
+  }
+  for (const nodeId of delta.newNodeIds) state.nodeState.set(nodeId, NodeState.UNKNOWN);
+  if (!retired.has(delta.spawnerId)) state.nodeState.set(delta.spawnerId, NodeState.EXPANDED);
+  for (const edgeId of delta.newEdgeIds) state.edgeState.set(edgeId, NodeState.UNKNOWN);
+  state.inFlight.delete(delta.spawnerId);
+  state.acceptedStarts.delete(delta.spawnerId);
+  forgetNodeSteps(state, delta.spawnerId);
+  state.ready.push(delta.fragmentStartId);
+  for (const [nodeId, depth] of topology.depth) state.depth.set(nodeId, depth);
+  state.deferredPrune = topology.deferredPrune;
+  for (const [nodeId, owner] of topology.growthOwner) {
+    if (owner === null) state.growthOwner.delete(nodeId);
+    else state.growthOwner.set(nodeId, owner);
+  }
 }

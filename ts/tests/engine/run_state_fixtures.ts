@@ -1,6 +1,6 @@
 /**
  * Builders shared by the run-state tests (Python's `_fakes.py`, `_graph_builder.py` and the
- * helpers `test_run_state_initialization.py` lends to other files).
+ * helpers `test_run_state_initialization.py` and `test_run_state_growth.py` lend to other files).
  *
  * A `*.test.ts` imported by another test file registers its tests twice, so a helper that two or
  * more run-state test files use lives here.
@@ -9,7 +9,7 @@
 import { expect } from "bun:test";
 
 import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
-import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { Failure, type OriginRef } from "../../src/diagnostics.ts";
 import { ValueRoute } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
@@ -39,6 +39,7 @@ import {
 import type { RetainedTrace } from "../../src/runtime/trace.ts";
 import {
   commitPrepared,
+  type GrowBuilder,
   prepareNodeStarted,
   prepareNodeSucceeded,
   prepareRecord,
@@ -635,6 +636,80 @@ export function replayOutcomeLog(
   for (const record of records.slice(1)) observers.push(commitPrepared(log, state, prepareRecord(state, record)));
   return { state, log, observers };
 }
+
+// The growth builders (Python's `test_run_state_growth.py` helpers).
+
+/** A minimal kind-blind spawner used to isolate reducer behavior. */
+export class Spawner extends Node {
+  readonly kind = NodeKind.CALL;
+  override readonly isSpawner = true;
+  override readonly growDepthDelta = 1;
+}
+
+/** Return a complete static graph whose one spawner can be put in flight. */
+export function parentFlow(options: { spawner?: Node; sibling?: boolean } = {}): CompiledFlow {
+  const spawner = options.spawner ?? new Spawner("spawn");
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID, { params: [] })],
+    [spawner.id, spawner],
+    [END_ID, EndNode.value(END_ID, { outputName: null })],
+  ]);
+  if (options.sibling) nodes.set("side", new FuncNode("side", (inputs) => inputs));
+  const edges = [new Edge("start-spawn", START_ID, spawner.id), new Edge("spawn-end", spawner.id, END_ID)];
+  if (options.sibling) edges.push(new Edge("start-side", START_ID, "side"));
+  return CompiledFlow.fromParts(nodes, edges, { wiring: new Map([...nodes.keys()].map((id) => [id, new Map()])) });
+}
+
+/** Return a replay-valid state and log with the static spawner in flight. */
+export function initializedSpawner(flow: CompiledFlow = parentFlow()): { state: RunState; log: MemoryRunLog } {
+  const initialPool = new VariablePool(flow.startId);
+  initialPool.set(flow.startId, {});
+  initialPool.addSystem("run_id", RUN_ID);
+  const state = new RunState(flow);
+  const log = new MemoryRunLog(RUN_ID);
+  commitPrepared(
+    log,
+    state,
+    prepareRunStarted(state, {
+      runId: RUN_ID,
+      flowFingerprint: FINGERPRINT,
+      initialPool,
+      startWiringOverride: {},
+      effectiveLlmByStaticPath: {},
+      numWorkers: 0,
+    }),
+  );
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, {}));
+  commitPrepared(log, state, prepareNodeStarted(state, "spawn"));
+  return { state, log };
+}
+
+/** Return a manifestable two-boundary fragment committing under `spawnerId`. */
+export function fragment(spawnerId: string, suffix: string = "child"): Flow {
+  const startId = `${spawnerId}/${suffix}/start`;
+  const endId = `${spawnerId}/${suffix}/end`;
+  const end = EndNode.value(endId, { outputName: null });
+  end.commitAs = spawnerId;
+  return new Flow(
+    new Map<string, Node>([
+      [startId, new StartNode(startId, { params: [] })],
+      [endId, end],
+    ]),
+    [new Edge(`${startId}->${endId}`, startId, endId, { ordering: true })],
+    {
+      wiring: new Map([
+        [startId, new Map()],
+        [endId, new Map()],
+      ]),
+      startId,
+      endId,
+    },
+  );
+}
+
+/** A builder returning `fragment(spawner.id)`. */
+export const fragmentBuilder: GrowBuilder = (spawner) => fragment(spawner.id);
 
 /** A memory log, holding `prior`'s records, whose append fails before it retains the record. */
 export class FailingLog extends MemoryRunLog {

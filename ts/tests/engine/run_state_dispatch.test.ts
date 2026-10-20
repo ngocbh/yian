@@ -56,7 +56,8 @@
  * stop, a step and a resume still commit and the resume puts the stopped nodes first; an in-flight
  * node missing from the flow or not `UNKNOWN` is refused. Also: a frontier plan holding an outcome
  * record is refused; `prepareRecord` refuses a `RunStartedRecord`, hands a backward record to its
- * stub even on a pristine state, and an expansion with a builder to the growth stub.
+ * stub even on a pristine state, and an expansion with a builder to the growth reducer, which
+ * checks the record's spawner before anything else.
  *
  * TS-only (interrupted-attempt counts, which Python doesn't keep): each resume counts every retried
  * start no stop covered; a stop covers the starts before it but not a later one, and two stops
@@ -540,8 +541,8 @@ test("prepareRecord hands an expansion with a builder to the growth reducer", ()
 
   expectError(
     () => prepareRecord(state, record, { growBuilder: () => state.flow }),
-    Error,
-    "not ported yet (T4-5)",
+    RangeError,
+    /^NodeExpanded node 'first' is not in-flight$/,
   );
 });
 

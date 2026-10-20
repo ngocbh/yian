@@ -449,7 +449,7 @@ function relateFields(inferred: Type, declared: Type): TypeRelation {
  */
 export function classifyPath(
   path: string,
-  validTargets: ReadonlySet<string>,
+  validTargets: { has(id: string): boolean },
   flowInputs: ReadonlySet<string>,
   extraHeads: readonly string[] = [],
 ): string | null {

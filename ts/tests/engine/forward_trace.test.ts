@@ -77,22 +77,23 @@
  *
  * Ported, the run-state trace checks, on the shared `startTraceNode` (Python's
  * `_start_trace_node`, with its route handle) and a local `preparedScopedOutcome` (Python's
- * `_prepared_scoped_outcome`, its `success`, `route` and `failure` kinds):
+ * `_prepared_scoped_outcome`; its `growth` kind grows a `FuncNode` spawner into the shared
+ * `fragment`):
  * `test_outcome_trace_writer_matches_the_same_accepted_physical_output` (`target`, `source`,
  * `sequence`, `value`, `missing`), `test_terminal_trace_root_writer_must_be_the_physical_accepted_output`
  * (`none`, `source`, `sequence`, `value`),
  * `test_terminal_trace_output_must_match_the_prepared_outcome_before_append`,
  * `test_outcome_trace_source_must_match_the_physical_accepted_start_before_append` (a failure),
- * the `success`, `route` and `failure` rows of
+ * the `success`, `route`, `failure` and `growth` rows of
  * `test_outcome_trace_occurrence_identity_matches_the_canonical_record` (`replace`: `source`,
- * `node`, `sequence`, `record`), `test_outcome_trace_cannot_override_dispatch_authority`
+ * `node`, `sequence`, `record`) and of `test_outcome_trace_cannot_override_dispatch_authority`
  * (`initialized`, `started`, `resumed`), `test_terminal_trace_rejects_forged_fields_before_append`
  * (`replace`: every change but `source_float`; its `route` rows, after rewrite, on a local
  * `preparedTerminalRoute`, Python's `_prepared_terminal_route`, built on `learnableStarted`),
- * `test_outcome_rejects_valid_scope_substitution_before_append` (`replace`: 3 rows) and
- * `test_outcome_scope_authority_cannot_be_selected_or_omitted_by_trace_delta` (3 rows), and the
- * `success` and `route` rows of `test_nonterminal_outcome_rejects_fabricated_terminal_trace_authority`
- * (4 rows each). Each
+ * `test_outcome_rejects_valid_scope_substitution_before_append` (`replace`: 3 rows per kind) and
+ * `test_outcome_scope_authority_cannot_be_selected_or_omitted_by_trace_delta` (3 rows per kind),
+ * and the `success`, `route` and `growth` rows of
+ * `test_nonterminal_outcome_rejects_fabricated_terminal_trace_authority` (4 rows each). Each
  * rejected row names its one class and full message (all `RangeError`s, where Python matches a
  * part of a `ValueError` or accepts either class); a refused commit leaves the log, the state
  * (the shared `snapshot`) and the trace (the shared `traceSnapshot`) unchanged.
@@ -139,8 +140,7 @@
  *
  * Not ported (thread race): `test_a_lookup_retains_its_entry_when_a_new_writer_commits`.
  *
- * Later (T4-5), growth and replay: the `growth` rows of the outcome trace tests above,
- * `test_terminal_trace_accepts_detached_authority_without_repreparing`,
+ * Later (T4-5, replay): `test_terminal_trace_accepts_detached_authority_without_repreparing`,
  * `test_terminal_trace_uses_the_accepted_route_latch_until_an_explicit_failure` and
  * `test_outcome_accepts_detached_physical_scope_and_replays_it`.
  *
@@ -192,7 +192,7 @@ import {
 import { evalBinding } from "../../src/expr/template.ts";
 import { EvaluationEvidence, MemoryScope, MemorySection } from "../../src/memory/contracts.ts";
 import { BindingCapture } from "../../src/nodes/binding.ts";
-import { BackwardContext, BackwardResult, Node, NodeKind } from "../../src/nodes/base.ts";
+import { BackwardContext, BackwardResult, Grow, Node, NodeKind } from "../../src/nodes/base.ts";
 import { ChildFlowBoundary, ExecutionPosition, ExecutionScope, SeedConnection } from "../../src/nodes/contracts.ts";
 import { BackwardCapture, ForwardCapture } from "../../src/runtime/contracts.ts";
 import {
@@ -234,6 +234,7 @@ import {
 import {
   commitPrepared,
   PreparedTransition,
+  prepareExpanded,
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
@@ -250,6 +251,7 @@ import {
   expectUnchanged,
   flow,
   forwardCapture,
+  fragmentBuilder,
   FuncNode,
   graph,
   initializedAndStarted,
@@ -2167,13 +2169,22 @@ function expectRefused(
   expect(state.trace!.nextSequence).toBe(log.nextSequence);
 }
 
+/** The outcome kinds `preparedScopedOutcome` prepares. */
+const OUTCOME_KINDS = ["success", "route", "failure", "growth"] as const;
+
 /** An outcome kind `preparedScopedOutcome` prepares. */
-type OutcomeKind = "success" | "route" | "failure";
+type OutcomeKind = (typeof OUTCOME_KINDS)[number];
+
+/** A CODE node that may grow the graph, Python's `FuncNode` subclass `Spawner`. */
+class FuncSpawner extends FuncNode {
+  override readonly isSpawner = true;
+}
 
 /**
  * Python's `_prepared_scoped_outcome`: a scoped CODE node `physical`, the sole in-flight node of a
  * learnable run, and its prepared outcome: a success committed to END, which ends the run; a route
- * along its `go` edge into END, which makes END ready; or a failure, which ends the run.
+ * along its `go` edge into END, which makes END ready; a failure, which ends the run; or (a
+ * spawner) a growth into `fragment("physical")`.
  */
 function preparedScopedOutcome(kind: OutcomeKind = "success"): {
   node: FuncNode;
@@ -2181,7 +2192,7 @@ function preparedScopedOutcome(kind: OutcomeKind = "success"): {
   log: MemoryRunLog;
   prepared: PreparedTransition;
 } {
-  const node = new FuncNode("physical", () => "done");
+  const node = new (kind === "growth" ? FuncSpawner : FuncNode)("physical", () => "done");
   node.memoryScope = new MemoryScope([node.id], { memories: ["memory"] });
   const { state, log } = startTraceNode(node, {
     keys: ["memory"],
@@ -2194,9 +2205,11 @@ function preparedScopedOutcome(kind: OutcomeKind = "success"): {
     prepared = prepareNodeSucceeded(state, node.id, "done", { commitAs: END_ID, ...carriers });
   } else if (kind === "route") {
     prepared = prepareNodeRouted(state, node.id, "go", carriers);
-  } else {
+  } else if (kind === "failure") {
     const failure = new Failure({ code: "node.execute", message: "failed", nodeId: node.id });
     prepared = prepareNodeFailed(state, failure, carriers);
+  } else {
+    prepared = prepareExpanded(state, node.id, new Grow({}), fragmentBuilder, carriers);
   }
   return { node, state, log, prepared };
 }
@@ -2288,7 +2301,7 @@ test("an outcome trace source must match the physical accepted start before appe
 });
 
 test.each(
-  (["success", "route", "failure"] as const).flatMap((kind) =>
+  OUTCOME_KINDS.flatMap((kind) =>
     (["source", "node", "sequence", "record"] as const).map((change) => [kind, change] as const),
   ),
 )(
@@ -2315,7 +2328,7 @@ test.each(
 );
 
 test.each(
-  (["success", "route", "failure"] as const).flatMap((kind) =>
+  OUTCOME_KINDS.flatMap((kind) =>
     (["initialized", "started", "resumed"] as const).map((field) => [kind, field] as const),
   ),
 )(
@@ -2427,7 +2440,7 @@ const NONTERMINAL_FIELDS = [
 ] as const;
 
 test.each(
-  (["success", "route"] as const).flatMap((kind) =>
+  (["success", "route", "growth"] as const).flatMap((kind) =>
     NONTERMINAL_FIELDS.map(([field, message]) => [kind, field, message] as const),
   ),
 )("a nonterminal outcome rejects fabricated terminal trace authority: %s, %s", (kind, field, message) => {
@@ -2509,7 +2522,7 @@ test.each(["none", "sequence", "run"] as const)(
 );
 
 test.each(
-  (["success", "route", "failure"] as const).flatMap((kind) =>
+  OUTCOME_KINDS.flatMap((kind) =>
     (["none", "foreign_path", "foreign_memory"] as const).map((change) => [kind, change] as const),
   ),
 )(
@@ -2543,7 +2556,7 @@ const SCOPE_AUTHORITY_CHANGES = [
 ] as const;
 
 test.each(
-  (["success", "route", "failure"] as const).flatMap((kind) =>
+  OUTCOME_KINDS.flatMap((kind) =>
     SCOPE_AUTHORITY_CHANGES.map(([change, message]) => [kind, change, message] as const),
   ),
 )("outcome scope authority can't be selected or omitted by the trace delta: %s, %s", (kind, change, message) => {

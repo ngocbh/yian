@@ -10,18 +10,22 @@
  * `test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope`,
  * `test_learning_rejects_a_scope_without_a_recorded_stack`,
  * `test_empty_enabled_table_retains_scope_free_evidence_without_episodes`,
- * `test_learning_rejects_trace_scope_that_omits_a_recorded_memory` (2 rows), and the `success`,
- * `route` and `growth` rows of
- * `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome` (the growth into the
- * shared `fragment`), and
+ * `test_learning_rejects_trace_scope_that_omits_a_recorded_memory` (2 rows),
+ * `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome` (4 rows; the growth
+ * into the shared `fragment`; the `failure` row reads the owner contexts through a local
+ * `contexts`, Python's `_contexts`), `test_failure_episode_uses_full_canonical_durable_failure_json`,
+ * `test_owner_feedback_uses_recorded_execution_coordinates_independently_of_memory` (2 rows;
+ * `backward` and `executionScope` assigned on the node; the run's recorded table and stacks stand
+ * in for Python's equal `_table` and `_stacks`) and
  * `test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_stack` (through
  * `replayRecords` over `copyGraph` copies of the flow taken before the outcome).
  *
  * Ported, after rewrite: `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow`
  * and `test_root_fallback_reaches_only_keys_owned_by_the_root_flow_site`, with the root result
  * (`BackwardResult(self_feedback=("original text",))`) and the empty results built by hand instead
- * of computed; the export half of `test_owner_contexts_are_the_only_episode_projection` (the
- * removed names stay absent from `runtime/learning.ts`).
+ * of computed; `test_owner_contexts_are_the_only_episode_projection` (the removed names stay absent
+ * from `runtime/learning.ts`, and `learningState` from the state), on a local `successfulTerminal`,
+ * Python's `_successful_terminal`.
  *
  * Changed:
  * - `test_commit_id_requires_a_positive_attempt_and_separates_attempts`: the invalid attempt ids
@@ -32,8 +36,11 @@
  * - `_episode_outcome` is the module export `episodeOutcome`; its `is` on the status becomes
  *   `toBe` on the status string.
  * - The root entry's `message_index` is `0n`; Python's tuples are arrays.
- * - The export half checks the removed names in camelCase (`projectOutcomeEpisodes`,
- *   `occurrenceKey`); the half that runs a flow comes with the engine (below).
+ * - `test_owner_contexts_are_the_only_episode_projection` checks the removed names in camelCase
+ *   (`projectOutcomeEpisodes`, `occurrenceKey`, `learningState`).
+ * - `test_runstarted_retains_defensive_memory_authority_and_projects_episodes`: the table's config
+ *   and the snapshot are frozen, so their edits throw a `TypeError` (asserted) where Python's land
+ *   on copies; `3` and `4` are `3n` and `4n`.
  * - `test_graph_outcome_uses_constant_memory_roots_and_indexed_scope`: Python counts the calls of
  *   the patched `_recorded_stack`, which an ES module can't patch; the test commits the outcome over
  *   1024 keys and stacks and asserts the memory roots and the occurrence's scope keep their
@@ -76,16 +83,12 @@
  *   `cause`) and `work`'s backward context, and the log and the terminal output stay unchanged. The
  *   spy is restored in `finally`.
  *
- * Later (T4-7, with `computeBackward` and the engine):
- * `test_root_feedback_context_failure_names_no_node`,
- * `test_root_fallback_failure_names_no_node_end_to_end`,
- * `test_owner_context_empty_map_retains_growth_and_unexecuted_child_memory`,
- * `test_owner_feedback_uses_recorded_execution_coordinates_independently_of_memory`,
- * `test_runstarted_retains_defensive_memory_authority_and_projects_episodes`, the `failure` row of
- * `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome` (it reads the owner
- * contexts), `test_failure_episode_uses_full_canonical_durable_failure_json`,
- * `test_expanded_map_occurrence_projects_and_replays_from_live_node_scope` and the rest of
- * `test_owner_contexts_are_the_only_episode_projection`.
+ * PR 3 of T4-7 (they drive backward): `test_root_feedback_context_failure_names_no_node` and
+ * `test_root_fallback_failure_names_no_node_end_to_end`.
+ *
+ * Later: `test_owner_context_empty_map_retains_growth_and_unexecuted_child_memory` (T4-10's MAP,
+ * T3-22's `buildGrow` and child memory layout) and
+ * `test_expanded_map_occurrence_projects_and_replays_from_live_node_scope` (T3-22's `buildGrow`).
  */
 
 import { createHash } from "node:crypto";
@@ -95,6 +98,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { CompiledFlow, copyGraph, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
+import { RunFailed, RunSucceeded } from "../../src/events.ts";
 import {
   DeclSite,
   EvaluationEvidence,
@@ -119,7 +123,7 @@ import {
   Output,
   Route,
 } from "../../src/nodes/base.ts";
-import { Binding, Parameter } from "../../src/nodes/contracts.ts";
+import { Binding, ExecutionPosition, ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { computeBackward } from "../../src/runtime/backward.ts";
@@ -142,7 +146,9 @@ import * as learning from "../../src/runtime/learning.ts";
 import {
   commitPrepared,
   prepareExpanded,
+  prepareNodeFailed,
   prepareNodeRouted,
+  prepareNodeStarted,
   prepareNodeSucceeded,
   prepareRunStarted,
   replayRecords,
@@ -432,20 +438,96 @@ test("root fallback reaches only keys owned by the root flow site", () => {
   expect(shared!.feedback.every((entry) => (entry as { root: unknown }).root === true)).toBe(true);
 });
 
-test("owner contexts are the only episode projection", () => {
+test("owner contexts are the only episode projection", async () => {
+  const { state, table } = successfulTerminal();
+
+  expect("learningState" in state).toBe(false);
   for (const name of ["RuntimeLearningState", "projectOutcomeEpisodes", "occurrenceKey"]) {
     expect(Object.hasOwn(learning, name)).toBe(false);
   }
-  expect(typeof learning.projectOwnerContexts).toBe("function");
+  const episodes = (await contexts(state)).get("outer")!.episodes;
+  expect(episodes).toHaveLength(1);
+  expect(episodes[0]!.ownerStaticPath).toEqual(["flow", "agent"]);
+  expect(state.backwardState.memoryOrder).toEqual(table.map((spec) => spec.key));
 });
 
 // The run-state reducer's learning authority, on `startTraceNode`.
 
+/**
+ * Return a terminal-success run of `START -> agent -> END` with one accepted trace episode, and
+ * its expected table: `keys()`, sorted, each owned by the root flow with config `{limit: 3}`.
+ */
+function successfulTerminal(): { state: RunState; log: MemoryRunLog; table: MemorySpec[] } {
+  const node = new TraceNode("agent");
+  const memoryScope = scope(node.id);
+  node.memoryScope = memoryScope;
+  const { state, log } = startTraceNode(node, { keys: memoryScope.memories, learnable: true });
+  commitPrepared(
+    log,
+    state,
+    prepareNodeSucceeded(state, node.id, { answer: 7n }, {
+      evidence: evidence(memoryScope),
+      forwardCapture: forwardCapture(node, { question: "q" }),
+    }),
+  );
+  commitPrepared(log, state, prepareNodeStarted(state, END_ID));
+  commitPrepared(
+    log,
+    state,
+    prepareNodeSucceeded(state, END_ID, null, { forwardCapture: forwardCapture(state.flow.nodes.get(END_ID)!, {}) }),
+  );
+  expect(state.result).toBeInstanceOf(RunSucceeded);
+  const table = [...memoryScope.memories].sort().map((key) => new MemorySpec(key, key, { limit: 3n }, [ROOT], false));
+  return { state, log, table };
+}
+
+/** Return the learner contexts of a terminal run's retained trace, keyed by memory. */
+async function contexts(state: RunState): Promise<Map<string, LearnContext>> {
+  const [root, results] = await computeBackward(state.trace!, null);
+  const projected = learning.projectOwnerContexts(state.trace!, state.memories!, state.memoryStacks!, null, root, results);
+  return new Map(projected.map((context) => [context.memory, context]));
+}
+
+test("RunStarted retains a defensive memory authority and projects episodes", async () => {
+  const { state, table } = successfulTerminal();
+
+  expect(state.memories).toEqual(table);
+  expect(state.memorySnapshots).toEqual([
+    new MemorySnapshotEnvelope("local", { epoch: 4n }),
+    new MemorySnapshotEnvelope("outer", { epoch: 4n }),
+  ]);
+  expect(state.learnable).toBe(true);
+  expect(state.backwardState.memoryOrder).toEqual(["local", "outer"]);
+
+  const byKey = await contexts(state);
+  const outerEpisode = byKey.get("outer")!.episodes;
+  const localEpisode = byKey.get("local")!.episodes;
+  expect(outerEpisode).toHaveLength(1);
+  expect(localEpisode).toHaveLength(1);
+  expect(outerEpisode[0]!.ownerStaticPath).toEqual(["flow", "agent"]);
+  expect(outerEpisode[0]!.occurrencePath).toEqual(occurrence());
+  expect(localEpisode[0]!.occurrencePath).toEqual(occurrence());
+  expect(outerEpisode[0]!.output).toEqual({ answer: 7n });
+  expect(outerEpisode[0]!.inputs).toEqual({ question: "q" });
+  expect(outerEpisode[0]!.interactions).toEqual([new ModelTextInteraction("answer")]);
+
+  // The config and snapshot are frozen, so the edits throw where Python's land on copies.
+  expect(() => {
+    (state.memories![0]!.config as Record<string, unknown>).limit = 999n;
+  }).toThrow(TypeError);
+  expect(() => {
+    (state.memorySnapshots![0]!.snapshot as Record<string, unknown>).epoch = 999n;
+  }).toThrow(TypeError);
+  expect(state.memories![0]!.config).toEqual({ limit: 3n });
+  expect(state.memorySnapshots![0]!.snapshot).toEqual({ epoch: 4n });
+});
+
 test.each([
   ["success", [END_ID]],
   ["route", [END_ID]],
+  ["failure", []],
   ["growth", ["agent/child/start"]],
-] as const)("an engine episode uses the physical start sequence: %s", (kind, ready) => {
+] as const)("an engine episode uses the physical start sequence: %s", async (kind, ready) => {
   const node = new (kind === "growth" ? TraceSpawner : TraceNode)("agent");
   node.memoryScope = scope(node.id);
   const { state, log } = startTraceNode(node, {
@@ -459,6 +541,8 @@ test.each([
   const prepared = {
     success: () => prepareNodeSucceeded(state, node.id, { answer: 7n }, carriers),
     route: () => prepareNodeRouted(state, node.id, "go", carriers),
+    failure: () =>
+      prepareNodeFailed(state, new Failure({ code: "node.execute", message: "Failed.", nodeId: node.id }), carriers),
     growth: () => prepareExpanded(state, node.id, new Grow({}), fragmentBuilder, carriers),
   }[kind]();
 
@@ -467,6 +551,44 @@ test.each([
   expect(physicalSequence).not.toBe(outcomeSequence);
   expect(state.trace!.occurrences.at(-1)!.source.executionSeq).toBe(physicalSequence!);
   expect(state.ready).toEqual([...ready]);
+  if (kind === "failure") {
+    for (const context of (await contexts(state)).values()) {
+      expect(context.episodes.at(-1)!.executionSeq).toBe(physicalSequence!);
+    }
+  }
+});
+
+test("a failure episode uses the full canonical durable failure JSON", async () => {
+  const node = new TraceNode("agent");
+  const memoryScope = scope(node.id, { memories: ["local"] });
+  node.memoryScope = memoryScope;
+  const { state, log } = startTraceNode(node, { keys: ["local"], learnable: true });
+  const failure = new Failure({
+    code: "node.execute",
+    message: "visible",
+    nodeId: node.id,
+    trace: [new OriginRef("outer"), new OriginRef("inner")],
+    causeType: "ValueError",
+    traceback: "debug trace",
+  });
+  const prepared = prepareNodeFailed(state, failure, {
+    evidence: evidence(memoryScope),
+    forwardCapture: forwardCapture(node, { question: "q" }),
+  });
+  commitPrepared(log, state, prepared);
+
+  expect(state.result).toBeInstanceOf(RunFailed);
+  const episodes = (await contexts(state)).get("local")!.episodes;
+  expect(episodes).toHaveLength(1);
+  expect(episodes[0]!.failure).toEqual({
+    code: "node.execute",
+    message: "visible",
+    node_id: "agent",
+    trace: [{ key: "outer" }, { key: "inner" }],
+    cause_type: "ValueError",
+    traceback: "debug trace",
+  });
+  expect(episodes[0]!.output).toBeNull();
 });
 
 test.each([
@@ -1007,6 +1129,67 @@ test("owner context projection from replay doesn't reinvoke handlers", async () 
   });
   expect(learning.projectOwnerContexts(replayed.trace!, memories, recorded, "review", root, results)).toEqual(expected);
 });
+
+test.each([false, true])(
+  "owner feedback uses recorded execution coordinates independently of memory (scope available: %p)",
+  async (scopeAvailable) => {
+    const node = new TraceNode("agent");
+    node.memoryScope = scope(node.id);
+    node.executionScope = scopeAvailable
+      ? new ExecutionScope(["authored", "worker"], {
+        flowPath: ["authored"],
+        occurrencePath: [new ExecutionPosition("map_item", ["authored"], 3)],
+      })
+      : null;
+    node.backward = () => new BackwardResult({ selfFeedback: ["local"] });
+    const { state, log } = startTraceNode(node, { keys: node.memoryScope.memories, learnable: true });
+    commitPrepared(
+      log,
+      state,
+      prepareNodeFailed(state, new Failure({ code: "node.execute", message: "failed", nodeId: node.id }), {
+        evidence: evidence(node.memoryScope),
+        forwardCapture: forwardCapture(node, { question: "q" }),
+      }),
+    );
+    const occurrenceOf = state.trace!.occurrences.find((item) => item.nodeId === "agent")!;
+    expect(occurrenceOf.record.forwardCapture!.scope).toEqual(node.executionScope);
+    node.executionScope = new ExecutionScope(["changed"]);
+    const [root, results] = await computeBackward(state.trace!, "review");
+    const projected = learning.projectOwnerContexts(
+      state.trace!,
+      state.memories!,
+      state.memoryStacks!,
+      "review",
+      root,
+      results,
+    );
+    for (const context of projected) {
+      for (const entry of feedbackEntries(context)) {
+        expect(entry.owner_static_path).toEqual(scopeAvailable ? ["authored", "worker"] : null);
+        expect(entry.occurrence_path).toEqual(
+          scopeAvailable ? [{ kind: "map_item", static_path: ["authored"], index: 3n }] : null,
+        );
+        if (scopeAvailable) {
+          const executionScope = entry.execution_scope as Record<string, unknown>;
+          expect(entry.owner_static_path).toEqual(executionScope.static_path);
+          expect(entry.occurrence_path).toEqual(executionScope.occurrence_path);
+        } else {
+          expect(entry.execution_scope).toBeNull();
+        }
+      }
+    }
+    for (const context of projected) {
+      expect(context.episodes).toHaveLength(1);
+      const episode = context.episodes[0]!;
+      expect(episode.inputs).toEqual({ question: "q" });
+      expect(episode.ownerStaticPath).toEqual(["flow", "agent"]);
+      expect(episode.occurrencePath).toEqual(occurrence());
+      expect(episode.interactions).toEqual([new ModelTextInteraction("answer")]);
+      expect(episode.baseSystemPrompt).toBe("system");
+      expect(episode.prompt).toBe("prompt");
+    }
+  },
+);
 
 test.each([false, true])(
   "owner variable batches follow the captured inventory across a wire round trip (reverse targets: %p)",

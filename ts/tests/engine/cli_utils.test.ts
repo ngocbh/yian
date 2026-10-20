@@ -27,6 +27,7 @@ import {
   type Writer,
 } from "../../src/cli/utils.ts";
 import type { Env } from "../../src/defaults.ts";
+import { reprText } from "../../src/diagnostics.ts";
 import { ApiKeyCredentials, AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
 
 // Each test's environment: a private home and auth store, so no real login is read.
@@ -376,8 +377,8 @@ describe("parseCommand", () => {
     for (const [text, expected] of accepted) expect(value(text)).toBe(expected);
     expect(parseCommand(spec, ["--timeout", "8"])).toEqual({ help: false, args: {}, options: { timeout: 8 } });
     expect(parseCommand(spec, [])).toEqual({ help: false, args: {}, options: {} });
-    for (const text of ["x", "", "1__0", "_1", "1_", "1_.5", "1._5", "1e", "0x10", "infinit"]) {
-      expect(usage(spec, [`--timeout=${text}`])).toBe(`Invalid value for '--timeout': '${text}' is not a valid float.`);
+    for (const text of ["x", "", "1__0", "_1", "1_", "1_.5", "1._5", "1e", "0x10", "infinit", "\x1c1"]) {
+      expect(usage(spec, [`--timeout=${text}`])).toBe(`Invalid value for '--timeout': ${reprText(text)} is not a valid float.`);
     }
     expect(usage(spec, ["--timeout", "x"])).toBe("Invalid value for '--timeout': 'x' is not a valid float.");
     expect(helpText(spec)).toContain("  --timeout FLOAT  Seconds.\n");

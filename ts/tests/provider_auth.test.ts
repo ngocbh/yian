@@ -1237,7 +1237,7 @@ describe("AuthStore", () => {
     fs.renameSync(file, other);
     fs.symlinkSync(other, file);
     await new AuthStore(file).delete();
-    expect(() => fs.lstatSync(file)).toThrow();
+    expect(() => fs.lstatSync(file)).toThrow(expect.objectContaining({ code: "ENOENT" }));
     expect(fs.existsSync(other)).toBe(true);
   });
 

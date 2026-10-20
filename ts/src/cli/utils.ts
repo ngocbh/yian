@@ -242,10 +242,11 @@ function toInt(option: OptionSpec, text: string): number {
   return value;
 }
 
-// Python's float() syntax in ASCII: surrounding whitespace (`str.isspace`), single underscores
-// between digits, an optional fraction and exponent, or inf, infinity or nan in any case.
+// Python's float() syntax in ASCII: surrounding ASCII whitespace (float() refuses U+001C to
+// U+001F, though `str.isspace` counts them), single underscores between digits, an optional
+// fraction and exponent, or inf, infinity or nan in any case.
 const FLOAT_TEXT =
-  /^[\t-\r\x1c-\x20]*([+-]?)(?:(inf|infinity|nan)|((?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:e[+-]?\d(?:_?\d)*)?))[\t-\r\x1c-\x20]*$/i;
+  /^[\t-\r ]*([+-]?)(?:(inf|infinity|nan)|((?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:e[+-]?\d(?:_?\d)*)?))[\t-\r ]*$/i;
 
 /** Return `text` as a float, as Python's `float()` reads it, or throw a `UsageError`. */
 function toFloat(option: OptionSpec, text: string): number {
@@ -357,8 +358,8 @@ function usageLine(spec: CommandSpec): string {
 function optionLabel(option: OptionSpec): string {
   const names = option.short === undefined ? `--${option.name}` : `-${option.short}, --${option.name}`;
   if (option.type === "boolean") return names;
-  const other = option.path ? (option.path.dir ? "DIRECTORY" : "FILE") : "TEXT";
-  const fallback = option.type === "int" ? "INTEGER" : option.type === "float" ? "FLOAT" : other;
+  const text = option.path ? (option.path.dir ? "DIRECTORY" : "FILE") : "TEXT";
+  const fallback = option.type === "int" ? "INTEGER" : option.type === "float" ? "FLOAT" : text;
   return `${names} ${option.metavar ?? fallback}`;
 }
 

@@ -606,7 +606,11 @@ export class AuthStore {
           throw accessError();
         }
       };
-      if (!exists(this.path) && !exists(`${this.path}.lock`)) return;
+      if (!exists(this.path) && !exists(`${this.path}.lock`)) {
+        // Missing files in a swapped-in directory say nothing about the checked one.
+        this.#checkSameDirectory(directory);
+        return;
+      }
       // Unlinking the lock file would let a waiter and a newcomer lock different files, so only
       // the store goes.
       await this.#locked(() => {

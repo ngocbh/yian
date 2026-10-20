@@ -12,8 +12,8 @@
  * calls finish in. Python runs them one at a time, which is what a reply without safe tools gets.
  *
  * A steerable agent reads the host's steers at the top of each iteration and stops at a host
- * interrupt between effects, returning its latest reply's text; an interrupt never aborts a
- * running tool call.
+ * interrupt between effects or before a later chunk of a streamed reply, returning its latest
+ * reply's text (a cut reply's text so far); an interrupt never aborts a running tool call.
  *
  * Here: memory transcripts are not ported yet.
  *
@@ -24,7 +24,15 @@
 import { reprText } from "../../diagnostics.ts";
 import { type ChatModel, parseArguments } from "../../llm/events.ts";
 import { RouteModel } from "../../llm/executor.ts";
-import { Message, Request, TextPart, ToolCallPart, ToolResultPart, ToolSpec } from "../../llm/messages.ts";
+import {
+  Message,
+  Request,
+  type Response,
+  TextPart,
+  ToolCallPart,
+  ToolResultPart,
+  ToolSpec,
+} from "../../llm/messages.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
 import { isReportedToolError } from "../../tools/errors.ts";
@@ -39,6 +47,7 @@ import {
   interruptSignal,
   ToolIterationLimitError,
 } from "./context.ts";
+import { ReplyInterrupted } from "./interrupts.ts";
 import {
   callModel,
   type LiveSinks,
@@ -126,11 +135,19 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     checkStopped(ctx);
     for (const steer of steers) messages.push(userMessage(steer));
     const exchangeId = newExchangeId();
-    const response = await callModel(live, model, new Request({ messages, tools: bound }), {
-      purpose: "chat",
-      exchangeId,
-      signal: ctx.signal,
-    });
+    let response: Response;
+    try {
+      response = await callModel(live, model, new Request({ messages, tools: bound }), {
+        purpose: "chat",
+        exchangeId,
+        signal: ctx.signal,
+        interrupt: interrupt ?? undefined,
+      });
+    } catch (error) {
+      // The cut reply's text is kept; its calls, partial or not, never run.
+      if (error instanceof ReplyInterrupted) return interrupted(error.reply);
+      throw error;
+    }
     // A stop that lands during the call wins over its reply.
     checkStopped(ctx);
     reply = response.message;

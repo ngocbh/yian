@@ -31,15 +31,17 @@ import {
   ToolCallStarted,
 } from "../../events.ts";
 import { type ErrorKind, ProviderError } from "../../llm/errors.ts";
-import { type ChatModel, TextDelta } from "../../llm/events.ts";
+import { type ChatModel, TextDelta, UsageReport } from "../../llm/events.ts";
 import { callWithRetries } from "../../llm/executor.ts";
-import type { Request, Response } from "../../llm/messages.ts";
+import { Message, type Request, type Response, TextPart } from "../../llm/messages.ts";
 import { isAuthFailure } from "../../llm_clients/auth/common.ts";
+import { realScheduler, type Scheduler } from "../../platform.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import type { Value } from "../../typesys/values.ts";
 import { CapabilityFault, type NodeCaps } from "../base.ts";
 import { copyValue } from "../binding.ts";
 import type { AgentRunContext } from "./context.ts";
+import { ReplyInterrupted } from "./interrupts.ts";
 
 /** The stream key of AGENT reply text. */
 export const STREAM_KEY = "text";
@@ -128,33 +130,69 @@ function errorName(error: unknown): string {
  * or any error once `signal` aborted, passes through untouched with nothing more emitted. Sinks
  * throw `CapabilityFault` (the evaluator wraps them); any other sink error counts as a model failure.
  *
+ * With `interrupt`, a host interrupt cuts the call. During an attempt it is checked right before
+ * each non-empty `TextDelta` that isn't the attempt's first event (a later chunk, as a host sees
+ * it); a cut closes the stream, sends the final chunk when streaming and `ModelCallFinished` with
+ * the usage of the last `UsageReport` before the cut (else `null`) and no error. A reply whose
+ * text had all arrived is never cut. During a retry wait the interrupt ends the wait at once with
+ * nothing more emitted. A stop wins over an interrupt.
+ *
  * @param live The sinks, or `null` when there are none.
- * @param options `purpose` and `exchangeId` go on every event; `signal` stops the call.
+ * @param options `purpose` and `exchangeId` go on every event; `signal` stops the call;
+ *   `interrupt` is the host's interrupt signal; `scheduler` and `random` run the retry waits.
  * @returns The successful attempt's reply.
+ * @throws ReplyInterrupted carrying the text shown before the cut and its usage, or an empty
+ *   reply and `null` usage for a cut wait; it is never marked.
  */
 export async function callModel(
   live: LiveSinks | null,
   model: ChatModel,
   request: Request,
-  options: { purpose: ModelCallPurpose; exchangeId: string; signal?: AbortSignal },
+  options: {
+    purpose: ModelCallPurpose;
+    exchangeId: string;
+    signal?: AbortSignal;
+    interrupt?: AbortSignal;
+    scheduler?: Scheduler;
+    random?: () => number;
+  },
 ): Promise<Response> {
-  const { purpose, exchangeId, signal } = options;
+  const { purpose, exchangeId, signal, interrupt, scheduler = realScheduler, random } = options;
   const emitEvent = live?.emitEvent ?? null;
   const emitStream = purpose === "chat" ? (live?.emitStream ?? null) : null;
   const identity = { nodeId: live?.nodeId ?? "", exchangeId, purpose, provider: live?.provider, model: live?.model };
   const chunk = (text: string, attempt: number, final = false) =>
     new StreamChunk({ nodeId: identity.nodeId, key: STREAM_KEY, chunk: text, final, exchangeId, attempt });
   let attempt = 0;
+  // The current attempt so far: whether no event arrived yet, the text shown, the latest usage.
+  let first = true;
+  let shown = "";
+  let usage: TokenUsage | null = null;
+  let waiting = false;
   let response: Response;
   try {
     response = await callWithRetries(model, request, {
       signal,
+      random,
+      scheduler: interrupt === undefined ? scheduler : interruptible(scheduler, interrupt, () => (waiting = true)),
       onAttempt: (k) => {
         attempt = k;
+        waiting = false;
+        first = true;
+        shown = "";
+        usage = null;
         emitEvent?.(new ModelCallStarted({ ...identity, attempt: k }));
       },
       onEvent: (event, k) => {
-        if (emitStream !== null && event instanceof TextDelta && event.text !== "") emitStream(chunk(event.text, k));
+        const text = event instanceof TextDelta ? event.text : "";
+        if (text !== "" && !first && interrupt?.aborted) {
+          throw new ReplyInterrupted(new Message({ role: "assistant", parts: shown ? [new TextPart(shown)] : [] }), usage);
+        }
+        first = false;
+        if (event instanceof UsageReport) usage = new TokenUsage(event.usage);
+        if (text === "") return;
+        shown += text;
+        emitStream?.(chunk(text, k));
       },
       onRetry: (retry) => {
         emitEvent?.(new ModelCallFinished({ ...identity, error: errorName(retry.error), attempt: retry.attempt }));
@@ -163,12 +201,50 @@ export async function callModel(
     emitStream?.(chunk("", attempt, true));
   } catch (error) {
     if (error instanceof CapabilityFault || signal?.aborted) throw error;
+    if (error instanceof ReplyInterrupted) {
+      // A cut wait already reported its attempt's end, with the error it was retrying.
+      if (!waiting) {
+        emitStream?.(chunk("", attempt, true));
+        emitEvent?.(new ModelCallFinished({ ...identity, usage: error.usage, attempt }));
+      }
+      throw error;
+    }
     markModelFailure(error);
     emitEvent?.(new ModelCallFinished({ ...identity, error: errorName(error), attempt }));
     throw error;
   }
   emitEvent?.(new ModelCallFinished({ ...identity, usage: usageOf(response), attempt }));
   return response;
+}
+
+/**
+ * Return `scheduler` with its `sleep` also ended by `interrupt`: the inner sleep waits on a child
+ * signal that the stop and the interrupt both abort, so its timer is cancelled either way. An
+ * interrupt ends the wait with `ReplyInterrupted` (an empty reply, `null` usage) unless the stop
+ * aborted too. `onWait` runs as each sleep starts.
+ */
+function interruptible(scheduler: Scheduler, interrupt: AbortSignal, onWait: () => void): Scheduler {
+  return {
+    now: () => scheduler.now(),
+    async sleep(ms, stop) {
+      const child = new AbortController();
+      const abort = () => child.abort();
+      stop?.addEventListener("abort", abort, { once: true });
+      interrupt.addEventListener("abort", abort, { once: true });
+      if (stop?.aborted || interrupt.aborted) child.abort();
+      onWait();
+      try {
+        await scheduler.sleep(ms, child.signal);
+      } catch (error) {
+        if (stop?.aborted) throw stop.reason;
+        if (interrupt.aborted) throw new ReplyInterrupted(new Message({ role: "assistant", parts: [] }), null);
+        throw error;
+      } finally {
+        stop?.removeEventListener("abort", abort);
+        interrupt.removeEventListener("abort", abort);
+      }
+    },
+  };
 }
 
 /** The `error` of the finished event of a tool call a host interrupt skipped. */

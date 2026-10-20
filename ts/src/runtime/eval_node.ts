@@ -97,14 +97,20 @@ function capabilityFault(error: unknown): CapabilityFault {
 
 /**
  * Carry a host observer fault out of a node body as a capability fault, so a failing
- * `onStream`/`onEvent` stays a host fault, never a node failure.
+ * `onStream`/`onEvent` stays a host fault, never a node failure. `onFault` sees each fault before
+ * it is thrown.
  */
-function observerSink<T>(sink: (item: T) => unknown): (item: T) => void {
+function observerSink<T>(
+  sink: (item: T) => unknown,
+  onFault: (fault: CapabilityFault) => void,
+): (item: T) => void {
   return (item) => {
     try {
       sink(item);
     } catch (error) {
-      throw capabilityFault(error);
+      const fault = capabilityFault(error);
+      onFault(fault);
+      throw fault;
     }
   };
 }
@@ -130,9 +136,12 @@ export function requireSteering(steering: unknown): Steering | null {
  */
 export class SteeringCapability implements Steering {
   readonly #inbox: Steering;
+  readonly #onFault: (fault: CapabilityFault) => void;
 
-  constructor(inbox: Steering) {
+  /** @param onFault Sees each capability fault before it is thrown or rejected with. */
+  constructor(inbox: Steering, onFault: (fault: CapabilityFault) => void = () => {}) {
     this.#inbox = inbox;
+    this.#onFault = onFault;
   }
 
   /**
@@ -146,10 +155,10 @@ export class SteeringCapability implements Steering {
     try {
       signal = this.#inbox.interruptSignal(nodeId);
     } catch (error) {
-      throw capabilityFault(error);
+      throw this.#fault(error);
     }
     if (!(signal instanceof AbortSignal)) {
-      throw new CapabilityFault(new TypeError("steering.interruptSignal must return an AbortSignal"));
+      throw this.#fault(new TypeError("steering.interruptSignal must return an AbortSignal"));
     }
     return signal;
   }
@@ -166,24 +175,34 @@ export class SteeringCapability implements Steering {
     try {
       messages = this.#inbox.drain(nodeId);
     } catch (error) {
-      throw capabilityFault(error);
+      throw this.#fault(error);
     }
-    if (!(messages instanceof Promise)) return checkedMessages(messages);
-    const checked = messages.then(checkedMessages, (error: unknown) => {
-      throw capabilityFault(error);
-    });
+    if (!(messages instanceof Promise)) return this.#checked(messages);
+    const checked = messages.then(
+      (answer: unknown) => this.#checked(answer),
+      (error: unknown) => {
+        throw this.#fault(error);
+      },
+    );
     // A node may drop the promise; its fault must not become an unhandled rejection.
     checked.catch(() => {});
     return checked;
   }
-}
 
-/** Return a fresh copy of drained steer messages after checking they are strings. */
-function checkedMessages(messages: unknown): string[] {
-  if (!isList(messages) || messages.some((message) => typeof message !== "string")) {
-    throw new CapabilityFault(new TypeError("steering.drain must return an array of strings"));
+  /** Return a fresh copy of drained steer messages after checking they are strings. */
+  #checked(messages: unknown): string[] {
+    if (!isList(messages) || messages.some((message) => typeof message !== "string")) {
+      throw this.#fault(new TypeError("steering.drain must return an array of strings"));
+    }
+    return [...(messages as string[])];
   }
-  return [...(messages as string[])];
+
+  /** Return `error` as a capability fault after reporting it. */
+  #fault(error: unknown): CapabilityFault {
+    const fault = capabilityFault(error);
+    this.#onFault(fault);
+    return fault;
+  }
 }
 
 /** The closed raw worker result the append-only dispatcher consumes. */
@@ -311,12 +330,14 @@ export interface EvalNodeOptions {
  * @param options The capabilities and captures; see `EvalNodeOptions`.
  * @returns The outcome, with evidence and captures when asked for.
  * @throws TypeError (as a rejection) for a malformed option.
+ * @throws The original error of the first capability fault (a failing stream or event sink, or
+ *   steering inbox), whatever the node then returned or threw.
  * @throws The signal's reason when the signal is already aborted, before binding, or when the node
  *   rejects after it aborted.
  * @throws RangeError when a node reading its steps fails to bind its reserved keys after an earlier
  *   start recorded steps.
- * @throws The original error of a capability fault, an unexpected per-item binder fault, or
- *   malformed node setup (a missing reserved wiring key, malformed `params`, no `forward`).
+ * @throws The original error of an unexpected per-item binder fault, or malformed node setup (a
+ *   missing reserved wiring key, malformed `params`, no `forward`).
  */
 export async function evalNode(
   node: Node,
@@ -436,6 +457,13 @@ async function evaluateNode(
     return evaluationFailure(node, error.failureCode, error, error.origin);
   }
 
+  // The first fault any capability raised. A node can catch the fault it was thrown, so the
+  // evaluator keeps it to throw when the node settles.
+  const faults: { first: CapabilityFault | null } = { first: null };
+  const onFault = (fault: CapabilityFault): void => {
+    faults.first ??= fault;
+  };
+
   // Build only the node-owned, trait-gated capabilities. The deferred per-item binder throws the
   // same binder-owned marker from inside the body, and the classification below keeps it.
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = { signal };
@@ -457,21 +485,24 @@ async function evaluateNode(
   }
   if (node.needsTools === true) caps.tools = tools ?? new ToolSet();
   if (node.needsLiveEvents === true) {
-    if (emitStream !== null) caps.emitStream = observerSink(emitStream);
-    if (emitEvent !== null) caps.emitEvent = observerSink(emitEvent);
+    if (emitStream !== null) caps.emitStream = observerSink(emitStream, onFault);
+    if (emitEvent !== null) caps.emitEvent = observerSink(emitEvent, onFault);
   }
   if (skills !== null && node.needsSkills === true) caps.skills = skills;
-  if (steering !== null && node.needsSteering === true) caps.steering = new SteeringCapability(steering);
+  if (steering !== null && node.needsSteering === true) caps.steering = new SteeringCapability(steering, onFault);
   if (steps !== null && node.needsSteps === true) caps.steps = steps;
 
   let result: unknown;
   try {
     result = usesBaseTemplate ? await node.runForEvaluator(record, caps) : await node.run(record, caps);
   } catch (error) {
-    // A stop is control flow outside the node-result sum, whatever the node rejected with.
+    // A host capability fault, then a stop, is control flow outside the node-result sum, whatever
+    // the node rejected with.
+    if (faults.first !== null) throw faults.first.original;
     if (signal.aborted) throw signal.reason;
     return stageFailure(node, error, usesBaseTemplate);
   }
+  if (faults.first !== null) throw faults.first.original;
   if (!(result instanceof Output || result instanceof Route || result instanceof Grow)) {
     return evaluationFailure(
       node,

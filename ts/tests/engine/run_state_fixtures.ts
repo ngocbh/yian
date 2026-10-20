@@ -13,7 +13,7 @@ import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../sr
 import { Failure, type OriginRef } from "../../src/diagnostics.ts";
 import { ValueRoute } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
-import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { comparePaths, Parameter } from "../../src/nodes/contracts.ts";
 import {
@@ -26,7 +26,7 @@ import {
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { ForwardCapture } from "../../src/runtime/contracts.ts";
-import type { RunEvent } from "../../src/events.ts";
+import { type RunEvent, StreamChunk } from "../../src/events.ts";
 import {
   decodePool,
   encodePool,
@@ -79,6 +79,31 @@ export class FuncNode extends Node {
 
   override forward(inputs: Record<string, unknown>): NodeResult {
     return new Output(this.fn(inputs));
+  }
+}
+
+/**
+ * Streams its chunks through `caps.emitStream` under key `output`, then returns
+ * `{output: <the chunks joined>}` (the AGENT streaming shape).
+ */
+export class StreamNode extends Node {
+  readonly kind = NodeKind.AGENT;
+  override readonly needsLiveEvents = true;
+  /** The chunks to stream, in order. */
+  readonly chunks: readonly string[];
+
+  constructor(nodeId: string, chunks: readonly string[], options: ConstructorParameters<typeof Node>[1] = {}) {
+    super(nodeId, options);
+    this.chunks = [...chunks];
+  }
+
+  override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+    let text = "";
+    for (const chunk of this.chunks) {
+      text += chunk;
+      caps.emitStream?.(new StreamChunk({ nodeId: this.id, key: "output", chunk }));
+    }
+    return new Output({ output: text });
   }
 }
 

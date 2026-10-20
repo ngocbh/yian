@@ -2,35 +2,52 @@
  * Raw node evaluation for the append-only dispatcher: a port of
  * `tests/engine/test_eval_node_raw.py`.
  *
- * Ported: `test_raw_evaluation_returns_closed_success_route_and_grow_values` and
+ * Ported: `test_raw_evaluation_returns_closed_success_route_and_grow_values`,
  * `test_raw_node_raise_and_invalid_grow_are_failures_not_observers` (cause type `Error` for
- * Python's `RuntimeError`).
+ * Python's `RuntimeError`), `test_raw_streaming_uses_only_the_injected_transient_callback` and
+ * `test_raw_stream_callback_failure_propagates_unchanged`.
  *
  * Ported (adapted): `test_public_evaluation_always_returns_frozen_slotted_wrapper` and
  * `test_raw_failure_is_frozen_slotted_and_preserves_diagnostics`: the field names are the own
  * keys, frozen means `Object.isFrozen` and a throwing write, and the traceback is the binder
- * error's stack.
+ * error's stack. `test_stream_body_exception_and_invalid_return_use_distinct_stages`: a node
+ * streams through `caps.emitStream` (it declares `needsLiveEvents`), so the stream body is the
+ * node's `forward`; the body's `ValueError` is a `RangeError`, and the invalid return gets the
+ * ordinary non-NodeResult message (TS has no generator to name).
+ *
+ * Changed: `test_raw_stream_callback_failure_closes_the_node_generator_before_returning` and
+ * `test_raw_stream_cleanup_failure_does_not_replace_callback_failure`: a sink throws inside the
+ * node, so there is no generator to close. In their place: the node's (async) `finally` has run
+ * before `evalNode` settles, and a node that throws its own error from `finally`, or catches the
+ * fault and returns, still rejects `evalNode` with the sink's error: the first capability fault
+ * wins over whatever the node then did, a stop rejection included.
  *
  * Not ported: the `__slots__` (no `__dict__`) checks; a TS class has no slots.
  * `test_raw_host_stop_propagates_from_node_and_preset_event` and
  * `test_raw_generator_host_stop_propagates_by_identity`: TS has no `_HostStop`, since a stop is the
  * node's aborted signal. In their place: an aborted signal rejects with its reason before binding;
- * a node that rejects after its signal aborted (with its own error or the reason) rejects
- * `evalNode` with the reason, not a failure; a node that returns after the abort still resolves.
+ * a node that rejects after its signal aborted (with its own error or the reason, from `forward`
+ * or a custom `run`) rejects `evalNode` with the reason, not a failure; a node that returns after
+ * the abort still resolves.
  *
- * TS-only: the `EvaluatedOutcome` constructor checks, `requireSteering`, and the steering
- * capability's checks on what the host inbox returns.
+ * TS-only: the `EvaluatedOutcome` constructor checks, `requireSteering`, the steering
+ * capability's checks on what the host inbox returns, and a steering fault the node catches still
+ * rejecting `evalNode`.
  *
  * Changed: `raw` evaluates the node in a one-node `CompiledFlow` wired from a `FuncNode`'s
  * `reads`, as Python's stub flow derives it.
  *
- * Later (T4-6): the other rows.
+ * Later (cycle 2b): `test_render_capture_is_opt_in_single_write_and_detached_until_close`,
+ * `test_invalid_render_capture_is_a_host_fault`,
+ * `test_render_capture_preserves_original_host_exception_and_closes` and
+ * `test_scoped_render_capture_requires_recorded_model_map_entry`.
  */
 
 import { describe, expect, test } from "bun:test";
 
 import { CompiledFlow } from "../../src/compile/model.ts";
-import { Failure } from "../../src/diagnostics.ts";
+import { Failure, OriginRef } from "../../src/diagnostics.ts";
+import { StreamChunk } from "../../src/events.ts";
 import {
   CapabilityFault,
   Grow,
@@ -56,7 +73,7 @@ import {
   type WorkerOutcome,
 } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { FuncNode } from "./run_state_fixtures.ts";
+import { FuncNode, StreamNode } from "./run_state_fixtures.ts";
 
 /** Evaluate `node` in a one-node flow wired from a `FuncNode`'s `reads`. */
 function evaluate(node: Node, options: EvalNodeOptions = {}): Promise<EvaluatedOutcome> {
@@ -209,17 +226,35 @@ describe("a stop is the node's aborted signal", () => {
     expect(node.ran).toBe(false);
   });
 
-  for (const [label, settle] of [
+  /** The same node with a custom `run` that awaits the gate itself, outside the template. */
+  class GatedRunNode extends GatedNode {
+    override async run(_inputs: Readonly<Record<string, unknown>>, caps: NodeCaps = {}): Promise<NodeResult> {
+      this.ran = true;
+      await this.gate;
+      return this.settle(caps);
+    }
+  }
+
+  for (const [label, Gated, settle] of [
     [
       "its own error",
+      GatedNode,
       () => {
         throw new Error("interrupted");
       },
     ],
     [
       "the reason",
+      GatedNode,
       (caps: NodeCaps) => {
         throw caps.signal!.reason;
+      },
+    ],
+    [
+      "its own error from a custom run",
+      GatedRunNode,
+      () => {
+        throw new Error("interrupted");
       },
     ],
   ] as const) {
@@ -227,7 +262,7 @@ describe("a stop is the node's aborted signal", () => {
       const controller = new AbortController();
       const reason = new Error("stopped");
       const gate = Promise.withResolvers<void>();
-      const evaluation = raw(new GatedNode("work", gate.promise, settle), { signal: controller.signal });
+      const evaluation = raw(new Gated("work", gate.promise, settle), { signal: controller.signal });
 
       controller.abort(reason);
       gate.resolve();
@@ -249,6 +284,199 @@ describe("a stop is the node's aborted signal", () => {
 
     expect(await evaluation).toEqual(new Output("late"));
   });
+});
+
+describe("streaming", () => {
+  /** A sink that throws `error` for every chunk. */
+  function reject(error: unknown): (chunk: StreamChunk) => void {
+    return () => {
+      throw error;
+    };
+  }
+
+  /** Stream `chunks` through `caps.emitStream`, then settle with `settle`. */
+  class ScriptedStreamNode extends Node {
+    readonly kind = NodeKind.CODE;
+    override readonly needsLiveEvents = true;
+    readonly chunks: readonly string[];
+    readonly settle: () => unknown;
+
+    constructor(nodeId: string, chunks: readonly string[], settle: () => unknown, origin: OriginRef | null = null) {
+      super(nodeId, { origin });
+      this.chunks = chunks;
+      this.settle = settle;
+    }
+
+    override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+      for (const chunk of this.chunks) caps.emitStream?.(new StreamChunk({ nodeId: this.id, key: "output", chunk }));
+      return this.settle() as NodeResult;
+    }
+  }
+
+  test("raw streaming uses only the injected transient callback", async () => {
+    const chunks: StreamChunk[] = [];
+
+    const result = await raw(new StreamNode("agent", ["a", "b"]), { emitStream: (chunk) => chunks.push(chunk) });
+
+    expect(result).toEqual(new Output({ output: "ab" }));
+    expect(chunks.map((chunk) => chunk.chunk)).toEqual(["a", "b"]);
+    expect(chunks.every((chunk) => chunk instanceof StreamChunk)).toBe(true);
+  });
+
+  test("stream body exception and invalid return use distinct stages", async () => {
+    // Streaming execution is node code; its terminal value is a result contract.
+    const body = new ScriptedStreamNode(
+      "body",
+      ["first"],
+      () => {
+        throw new RangeError("stream body failed");
+      },
+      new OriginRef("node:body"),
+    );
+    const invalid = new ScriptedStreamNode(
+      "invalid",
+      ["before-invalid-return"],
+      () => "invalid",
+      new OriginRef("node:invalid"),
+    );
+    const chunks: StreamChunk[] = [];
+    const invalidChunks: StreamChunk[] = [];
+
+    const bodyFailure = await raw(body, { emitStream: (chunk) => chunks.push(chunk) });
+    const resultFailure = await raw(invalid, { emitStream: (chunk) => invalidChunks.push(chunk) });
+
+    expect(chunks.map((chunk) => chunk.chunk)).toEqual(["first"]);
+    expect(bodyFailure).toBeInstanceOf(EvaluationFailure);
+    const executed = (bodyFailure as EvaluationFailure).failure;
+    expect(executed.code).toBe("node.execute");
+    expect(executed.trace).toEqual([body.origin!]);
+    expect(executed.causeType).toBe("RangeError");
+    expect(executed.traceback).toContain("RangeError: stream body failed");
+    expect(resultFailure).toBeInstanceOf(EvaluationFailure);
+    expect(invalidChunks.map((chunk) => chunk.chunk)).toEqual(["before-invalid-return"]);
+    const contract = (resultFailure as EvaluationFailure).failure;
+    expect(contract.code).toBe("contract.node_result");
+    expect(contract.trace).toEqual([invalid.origin!]);
+    expect(contract.causeType).toBe("Error");
+    expect(contract.message).toBe("node 'invalid' run() returned string, not a NodeResult");
+  });
+
+  test("raw stream callback failure propagates unchanged", async () => {
+    const expected = new Error("callback failed");
+
+    expect(await rejected(raw(new StreamNode("agent", ["a"]), { emitStream: reject(expected) }))).toBe(expected);
+  });
+
+  test("the node's finally has run before evalNode settles", async () => {
+    const closed: string[] = [];
+    const sent: string[] = [];
+
+    class ResourceStreamNode extends Node {
+      readonly kind = NodeKind.CODE;
+      override readonly needsLiveEvents = true;
+
+      override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
+        try {
+          for (const chunk of ["first", "second"]) {
+            sent.push(chunk);
+            caps.emitStream!(new StreamChunk({ nodeId: this.id, key: "output", chunk }));
+          }
+          return new Output("done");
+        } finally {
+          // An asynchronous cleanup step, which evalNode must wait for.
+          await Promise.resolve();
+          closed.push(this.id);
+        }
+      }
+    }
+    const expected = new Error("callback failed");
+
+    expect(await rejected(raw(new ResourceStreamNode("resource"), { emitStream: reject(expected) }))).toBe(expected);
+    expect([sent, closed]).toEqual([["first"], ["resource"]]);
+  });
+
+  for (const [label, forward] of [
+    [
+      "throws its own error from finally",
+      (emit: () => void): NodeResult => {
+        try {
+          emit();
+          return new Output("unreachable");
+        } finally {
+          throw new RangeError("cleanup failed");
+        }
+      },
+    ],
+    [
+      "catches the fault and returns",
+      (emit: () => void): NodeResult => {
+        try {
+          emit();
+        } catch {
+          // A node that swallows the fault still can't hide the host's failure.
+        }
+        return new Output("swallowed");
+      },
+    ],
+    [
+      "catches the fault and throws its own error",
+      (emit: () => void): NodeResult => {
+        try {
+          emit();
+        } catch {
+          throw new Error("replaced");
+        }
+        return new Output("unreachable");
+      },
+    ],
+  ] as const) {
+    test(`a node that ${label} still yields the sink's error`, async () => {
+      class CleanupNode extends Node {
+        readonly kind = NodeKind.CODE;
+        override readonly needsLiveEvents = true;
+
+        override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+          return forward(() => caps.emitStream!(new StreamChunk({ nodeId: this.id, key: "output", chunk: "first" })));
+        }
+      }
+      const expected = new Error("callback failed");
+
+      expect(await rejected(raw(new CleanupNode("resource"), { emitStream: reject(expected) }))).toBe(expected);
+    });
+  }
+
+  for (const settle of ["rejects", "returns"] as const) {
+    test(`a capability fault beats a stop (the node ${settle} after the abort)`, async () => {
+      const controller = new AbortController();
+      const gate = Promise.withResolvers<void>();
+
+      class CatchThenWaitNode extends Node {
+        readonly kind = NodeKind.CODE;
+        override readonly needsLiveEvents = true;
+
+        override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
+          try {
+            caps.emitStream!(new StreamChunk({ nodeId: this.id, key: "output", chunk: "first" }));
+          } catch {
+            // Swallowed here; evalNode still reports it.
+          }
+          await gate.promise;
+          if (settle === "rejects") throw caps.signal!.reason;
+          return new Output("late");
+        }
+      }
+      const expected = new Error("callback failed");
+      const evaluation = raw(new CatchThenWaitNode("work"), {
+        emitStream: reject(expected),
+        signal: controller.signal,
+      });
+
+      controller.abort(new Error("stopped"));
+      gate.resolve();
+
+      expect(await rejected(evaluation)).toBe(expected);
+    });
+  }
 });
 
 describe("EvaluatedOutcome checks its fields", () => {
@@ -409,6 +637,32 @@ describe("the steering capability", () => {
       expect(fault).toBeInstanceOf(CapabilityFault);
       expect((fault as CapabilityFault).original).toBe(expected);
     }
+  });
+
+  test("a node catching an inbox fault still rejects evalNode with the host's error", async () => {
+    const expected = new Error("inbox failed");
+
+    class SteeredNode extends Node {
+      readonly kind = NodeKind.CODE;
+      override needsSteering = true;
+
+      override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+        try {
+          caps.steering!.drain(this.id);
+        } catch {
+          // Swallowed here; evalNode still reports it.
+        }
+        return new Output("swallowed");
+      }
+    }
+    const steering: Steering = {
+      interruptSignal: () => new AbortController().signal,
+      drain: () => {
+        throw expected;
+      },
+    };
+
+    expect(await rejected(raw(new SteeredNode("work"), { steering }))).toBe(expected);
   });
 
   test("a capability fault from the host passes through", async () => {

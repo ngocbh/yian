@@ -2910,12 +2910,20 @@ list of mixed items gets `!list(Any)` (`!list(Optional(Any))` when an item is nu
 and a date in it is shown quoted, as text. A lone span of another type shows `!<type>`
 for you to fill in.
 
+Changed (TS yian): a date is text, so it is shown as plain YAML reads it back:
+`then: [1, 2024-01-01]` gives `!list(Any) [1, 2024-01-01]` and `then: [2026-01-02]` gives
+`!list(str) [2026-01-02]`. An unquoted `then: 2026-01-02` is a word, so it names a node.
+
 A value no entry can hold is its own error at the branch: a number that is not finite, a
 value that contains itself through a YAML alias, a mapping with an empty key that would
 be a written-out `!object`, a `call(...)` nested in a mapping or list, a flow call inside
 `${...}` (call the flow as the branch instead: `then: call(take, ...)`), a malformed
 span, and a span reading the case itself. A quoted `call(...)` holding `${...}` gets its
 own error too: drop the quotes to call the flow.
+
+Changed (TS yian): infinity is a float value, so an infinite branch is a value branch with
+the usual rewrite (`then: .inf` gives `route_then_0: !float .inf`); `.nan` is refused when
+YAML reads it.
 
 An untagged unquoted word always names a node. A word that names no node is a load error
 that suggests the nearest node and a value entry for the text:

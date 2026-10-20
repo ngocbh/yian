@@ -5,26 +5,25 @@
  * A branch target may be an inline call (a fresh owned call) instead of a placed node id; it
  * desugars to a synth `__call_<n>` node and the then:/else: is rewritten to that synth id, so the
  * case veto skip-floods it when the branch is not taken (a nested call's inner calls follow it).
- * Accepted grammar: a whole-value `call(...)` directive (a route target is one node id).
+ * Accepted grammar: a whole-value `call(...)` directive (a route target is one node id). A quoted
+ * branch, or one holding `${...}`, is a value, a LoadError that shows the value entry to write; a
+ * flow call inside its `${...}` is a LoadError that says to call the flow as the branch
+ * (`then: call(take, ...)`).
  *
  * Changed: the flows assemble with `assembleText`, each `defs:` callee built by hand (`handChild`)
  * with the signature the row reads, where Python loads them.
  * `test_private_callee_in_case_target_is_rejected_at_branch_before_resolution` pins the whole
  * message; the scope's resolver throws a plain `Error` for any callee, so a private callee that
  * reached resolution would fail the row without a monkeypatch.
+ * `test_non_bare_then_call_directive_is_rejected` pins the whole message where Python matches its
+ * start.
  *
  * Merged: `test_inline_binding_and_then_call_directive_share_minter_no_collision` into
  * `test_inline_binding_and_then_call_share_minter_no_collision`; both assemble the same flow.
  *
- * TS-only: the harvested `load-case/engine_case_call__a_private_callee_branch_is_rejected`,
- * pinned at the end.
+ * TS-only: the harvested `load-case/engine_case_call__*` cases, pinned at the end (their `take`
+ * def built by hand).
  *
- * Later (T3-20, `case_branches`, which runs before this desugar):
- * `test_non_bare_then_call_is_rejected`, `test_non_bare_then_call_directive_is_rejected`,
- * `test_malformed_branch_call_directive_is_a_located_load_error`,
- * `test_quoted_malformed_branch_call_is_a_value_branch`,
- * `test_then_span_flow_call_target_is_rejected` and
- * `test_malformed_branch_call_holding_a_span_offers_no_text_rewrite`.
  * Later (T4): `test_then_call_directive_branch_runs_taken_value`,
  * `test_else_call_directive_branch_runs_taken_value`,
  * `test_case_output_over_call_directive_then_taken`,
@@ -38,10 +37,12 @@ import { expect, test } from "bun:test";
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { INLINE_FLOW_PREFIX } from "../../src/compose/desugar/inline_bodies.ts";
+import { yamlQuoted } from "../../src/compose/helpers/tags.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import {
   assembled,
+  assembledWith,
   assembleText,
   type CaseRow,
   handChild,
@@ -81,9 +82,43 @@ defs:
 const load = (text: string, children: Record<string, ComposedFlow> = { take: TAKE }) =>
   assembleText(text, "flow.yaml", { children }).flow.compiled;
 
+/** Return the full message for a value branch of `gate`. */
+const valueBranch = (label: string, entry: string, shown: string) =>
+  `case node 'gate' ${label}: a branch names a node or calls a flow; put the value in ` +
+  `its own entry in \`nodes:\` and name it: \`${entry}: ${shown}\` and \`${label}: ${entry}\``;
+
+/** Return the full message for a `take` call inside a `${...}` branch of `gate`. */
+const spanFlowCall = (label: string) =>
+  `case node 'gate' ${label}: a flow call 'take' inside \`\${...}\` is not supported; ` +
+  `call the flow as the branch: \`${label}: call(take, ...)\``;
+
+/** Return the 1-based line number of the first line containing `needle`. */
+const lineOf = (text: string, needle: string) => text.split("\n").findIndex((line) => line.includes(needle)) + 1;
+
 /** The ids of the synth call nodes of a compiled flow. */
 const synthIds = (compiled: CompiledFlow) =>
   [...compiled.nodes.keys()].filter((nodeId) => nodeId.startsWith("__call_"));
+
+test("non bare then call is rejected", () => {
+  // A flow call inside a `${...}` branch is the retired inline `${flow(args)}` form, which a value
+  // entry can't hold either: the error points at the call directive.
+  const text = `
+id: bad
+name: bad
+input:
+  score: !float
+${TAKE_DEF}
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "input.score >= 0.5"
+        then: \${ take(stance="a") | take(stance="b") }
+    else: call(take, stance="c")
+output: \${gate.output}
+`;
+  expect(loadError(() => load(text)).message).toBe(spanFlowCall("then"));
+});
 
 // An inline-binding call(...) AND a then: call(...) in one flow: the two share one minter.
 const BOTH = `
@@ -166,6 +201,99 @@ test("then else call directive desugars to synth branch nodes", () => {
   expect(controlTargets).toEqual(["__call_0", "__call_1"]);
 });
 
+test("non bare then call directive is rejected", () => {
+  // A route target must resolve to ONE node id: a coalesce of call(...) directives is loud.
+  const text = `
+id: bad
+name: bad
+input:
+  score: !float
+${TAKE_DEF}
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "input.score >= 0.5"
+        then: call(take, stance="a") | call(take, stance="b")
+    else: call(take, stance="c")
+output: \${gate.output}
+`;
+  expect(loadError(() => load(text)).message).toBe(
+    "case node 'gate' then: a branch target must be a node id or a single call: text follows the " +
+      "closing `)`: '| call(take, stance=\"b\")'; a call(...) must be the whole value. For the text, " +
+      "add a value entry and name it: " +
+      "`gate_then_0: !str 'call(take, stance=\"a\") | call(take, stance=\"b\")'`",
+  );
+});
+
+test.each(
+  ["then", "else"].flatMap((label) =>
+    [
+      ['call(take, stance="a", stance="b")', "call(take, ...) passes keyword 'stance' more than once"],
+      [
+        "call(take, 30)",
+        "call(take, ...) passes a positional argument '30'; every argument after the " +
+          "flow id must be a keyword (name=value)",
+      ],
+      ["call(take", "`call(` is never closed (check its parentheses and quotes)"],
+      ['call(take, stance="a") tail', "text follows the closing `)`: 'tail'; a call(...) must be the whole value"],
+      [
+        'call(take stance="a")',
+        "a call(...) must start with a flow id (a bare name) and a comma, got 'take stance=\"a\"'",
+      ],
+    ].map(([target, problem]) => [label, target!, problem!]),
+  ),
+)("malformed branch call directive is a located load error: %s %s", (label, target, problem) => {
+  // An unquoted then:/else: starting with `call(` must be exactly one directive.
+  const [thenTarget, elseTarget] = label === "then" ? [target, "nope"] : ["nope", target];
+  const text = `
+id: bad
+name: bad
+input:
+  score: !float
+${TAKE_DEF}
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "input.score >= 0.5"
+        then: ${thenTarget}
+    else: ${elseTarget}
+  nope:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:took
+    input:
+      stance: x
+    output: str
+output: \${gate.output}
+`;
+  const error = loadError(() => load(text));
+  const entry = label === "then" ? "gate_then_0" : "gate_else";
+  expect(error.message).toBe(
+    `case node 'gate' ${label}: a branch target must be a node id or a single call: ` +
+      `${problem}. For the text, add a value entry and name it: \`${entry}: !str ${yamlQuoted(target)}\``,
+  );
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, `${label}: call(`));
+});
+
+test("quoted malformed branch call is a value branch", () => {
+  const text = `
+id: bad
+name: bad
+input:
+  score: !float
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "input.score >= 0.5"
+        then: 'call(take'
+    else: "call(take) tail"
+output: \${gate.output}
+`;
+  expect(loadError(() => load(text, {})).message).toBe(valueBranch("then", "gate_then_0", '!str "call(take"'));
+});
+
 test("nested then call directive lifts two synth nodes", () => {
   // The nested then: target lifts BOTH the inner and outer call as synth nodes; the else: lifts one
   // more: three synth call nodes in all, the gate's then-edge on the outer.
@@ -206,9 +334,69 @@ output: \${gate.output}
   );
 });
 
+const SPAN_CALL_FLOW = `
+id: bad
+name: bad
+input:
+  score: !float
+${TAKE_DEF}
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "input.score >= 0.5"
+        then: THEN
+    else: ELSE
+output: \${gate.output}
+`;
+
+test.each([
+  ["then", '${ take(stance="pro") }'],
+  ["else", '"${ take(stance=\'con\') }"'],
+  ["then", '{a: "${ take(stance=\'pro\') }"}'],
+])("then span flow call target is rejected: %s %s", (label, branch) => {
+  // The retired inline `${flow(args)}` case branch is a LoadError pointing at call(...).
+  const [then, else_] =
+    label === "else" ? ['call(take, stance="pro")', branch] : [branch, 'call(take, stance="con")'];
+  const text = SPAN_CALL_FLOW.replace("THEN", then).replace("ELSE", else_);
+  const error = loadError(() => load(text));
+  expect(error.message).toBe(spanFlowCall(label));
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, `${label}: ${branch}`));
+});
+
+test("malformed branch call holding a span offers no text rewrite", () => {
+  // Quoted call text holding a span is its own load error, so no value entry is shown.
+  const text = `
+id: bad
+name: bad
+input:
+  score: !float
+${TAKE_DEF}
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "input.score >= 0.5"
+        then: call(take, stance=\${input.score}
+    else: call(take, stance="c")
+output: \${gate.output}
+`;
+  expect(loadError(() => load(text)).message).toBe(
+    "case node 'gate' then: a branch target must be a node id or a single call: " +
+      "`call(` is never closed (check its parentheses and quotes)",
+  );
+});
+
 // ---------- harvested conformance cases ----------
 
-test.each<CaseRow>([{ id: "load-case/engine_case_call__a_private_callee_branch_is_rejected", call: assembled }])(
-  "assemble: $id",
-  runCase,
-);
+test.each<CaseRow>([
+  { id: "load-case/engine_case_call__a_private_callee_branch_is_rejected", call: assembled },
+  ...[
+    "a_branch_call_never_closed",
+    "a_branch_call_repeating_a_keyword",
+    "a_branch_call_with_a_positional_argument",
+    "a_branch_call_without_a_flow_id_and_comma",
+    "a_malformed_call_holding_a_span_offers_no_text_entry",
+    "a_span_flow_call_branch_is_rejected",
+  ].map((name) => ({ id: `load-case/engine_case_call__${name}`, call: assembledWith({ take: TAKE }) })),
+])("assemble: $id", runCase);

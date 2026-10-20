@@ -30,7 +30,14 @@
  * (`["a"]`, rule `messages`). The CODE references are TS's
  * (`./fixtures/compose_codefns.ts:pick_pro`).
  *
- * TS-only: the harvested cases from files with no TS mirror, pinned at the end with `full` (every
+ * Also ported here: `test_a_case_output_over_a_1000_link_alias_chain_is_rejected_as_a_case_output`
+ * from `tests/compose/test_record_type_nesting.py`, which has no TS mirror yet. Changed: it raises
+ * `maxYamlNodes` (the anchors hit the YAML node limit first at the default), as
+ * `written_value_nesting.test.ts` does; its message is pinned (a stack overflow would give another
+ * error, so there is no cause-chain check).
+ *
+ * TS-only: the harvested
+ * cases from files with no TS mirror, pinned at the end with `full` (every
  * frame and the notes): `load-map-call/compose_call_argument_labels__a_cycle_through_an_inline_call_names_its_host`
  * (its `defs:` entry built by hand),
  * `load-core/engine_limit_overrides__written_value_over_the_set_value_limit` (its `env:` sets the
@@ -57,7 +64,7 @@ import { rejectCycles } from "../../src/compose/validate/cycles.ts";
 import { validateHumanQuestions } from "../../src/compose/validate/human_questions.ts";
 import { checkLoopTypeContract } from "../../src/compose/validate/loop_types.ts";
 import { checkWiringParity } from "../../src/compose/validate/wiring_parity.ts";
-import { forget } from "../../src/defaults.ts";
+import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
@@ -68,6 +75,7 @@ import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
   assembledWith,
+  assembleText,
   type CaseRow,
   fileOf,
   handChild,
@@ -498,6 +506,28 @@ output: \${calc.output}
     expect(allowed).not.toContain("inputs");
     expect(allowed).not.toContain("outputs");
   });
+});
+
+// ---------- rows from files with no TS mirror ----------
+
+test("a case output over a 1000-link alias chain is rejected as a case output", () => {
+  // From tests/compose/test_record_type_nesting.py. A listed chain's anchors cost quadratically
+  // many nodes, past the default node limit, so the limit is raised to reach the case check.
+  install({ ...BUILTIN, maxYamlNodes: 10_000_000 });
+  const items = ['&m0 {k: "str"}', ...Array.from({ length: 998 }, (_, i) => `&m${i + 1} {k: *m${i}}`)];
+  const text =
+    `x-anchors: [${items.join(", ")}]\n` +
+    "id: f\nname: f\ninput:\n  cmd: !str\nnodes:\n  route:\n    kind: case\n" +
+    "    on: ${input.cmd}\n    output: {k: *m998}\n    cases:\n      - when: a\n" +
+    "        then: reply\n    else: reply\n  reply:\n" +
+    "    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n" +
+    "    input:\n      topic: replied\n    output: str\n" +
+    "output: ${route.output}\n";
+
+  expect(loadError(() => assembleText(text)).message).toBe(
+    "case node 'route': a `case` routes and has no `output:`; tag its result where " +
+      "you read it, e.g. `x: !<type> ${route.output}`",
+  );
 });
 
 // ---------- harvested cases from files with no TS mirror ----------

@@ -12,8 +12,10 @@
  * `test_two_loads_of_the_same_text_have_the_same_fingerprint`,
  * `test_changing_which_lower_value_is_dropped_changes_the_wiring_identity`,
  * `test_a_flow_value_read_from_an_agent_that_always_sets_the_field_is_not_a_cycle` (3),
- * `test_a_flow_value_read_from_an_agent_whose_own_value_may_be_null_is_a_cycle`; the edge
- * half of `test_a_shielded_flow_value_reading_a_skippable_node_does_not`; the `bindingLabels`
+ * `test_a_flow_value_read_from_an_agent_whose_own_value_may_be_null_is_a_cycle`,
+ * `test_an_llm_config_value_reading_a_skippable_node_lets_the_agent_skip`,
+ * `test_a_shielded_flow_value_reading_a_skippable_node_does_not`,
+ * `test_skipped_arithmetic_in_a_value_names_the_llm_config_field`; the `bindingLabels`
  * halves of `test_an_unknown_node_in_a_value_is_named_at_the_llm_config_field` and
  * `test_a_composer_value_error_names_the_gate_field`; the node and flow-layer halves of
  * `test_a_layer_of_only_tagged_literals_is_wired_as_a_literal_layer`.
@@ -22,14 +24,14 @@
  *
  * The harvested `load-agent/compose_llm_config_values_wiring__flow_value_read_from_its_own_reader`
  * is pinned at the end with `full` (every frame and the notes); its cycle message writes the node
- * list in the text form (`["pick"]`, rule `messages`).
+ * list in the text form (`["pick"]`, rule `messages`). The harvested
+ * `load-agent/compose_llm_config_values_wiring__skipped_arithmetic_in_a_value` is pinned after it.
+ *
+ * Changed: the skipped-arithmetic row pins the whole message where Python checks its start.
  *
  * Later (T3-18 PR 3): the error halves of `test_an_unknown_node_in_a_value_is_named_at_the_llm_config_field`
  * and `test_a_composer_value_error_names_the_gate_field`, and
  * `test_an_unknown_input_in_a_flow_value_is_located_at_the_flow_field` (references).
- * Later (T3-20): `test_an_llm_config_value_reading_a_skippable_node_lets_the_agent_skip`, the
- * `SkipModel` half of `test_a_shielded_flow_value_reading_a_skippable_node_does_not`, and
- * `test_skipped_arithmetic_in_a_value_names_the_llm_config_field`.
  * Later (T3-22): `test_clone_child_renamespaces_the_reserved_key` (a loaded `defs:` child;
  * `compile/expand.ts`), and the `resolve_llm_cascade` half of
  * `test_a_layer_of_only_tagged_literals_is_wired_as_a_literal_layer`.
@@ -40,6 +42,7 @@ import { expect, test } from "bun:test";
 
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
+import { SkipModel } from "../../src/compose/validate/skips.ts";
 import { LLM_CONFIG_KEY } from "../../src/nodes/agent/llm_values.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { assembled, assembleText, loadError, runCase } from "./declarations.ts";
@@ -227,11 +230,31 @@ nodes:
 output: \${chat.output}
 `;
 
-test("a shielded flow value reading a skippable node does not (the edges)", () => {
+/** A skip model over the whole compiled flow, no CASE exhaustive. */
+const skipModel = (flow: CompiledFlow) => new SkipModel(new Set(flow.nodes.keys()), flow.edges, new Set());
+
+test("an llm_config value reading a skippable node lets the agent skip", () => {
+  const flow = compiled(CASE.replace("LAYER", "").replace("CHAT", "llm_config: {model: '${pick.output}'}"));
+  expect(skipModel(flow).mayAllSkip(["chat"])).toBe(true);
+});
+
+test("a shielded flow value reading a skippable node does not", () => {
   const flow = compiled(
     CASE.replace("LAYER", "llm_config: {model: '${pick.output}'}").replace("CHAT", "llm_config: {model: m1}"),
   );
   expect(llmEdges(flow, "chat")).toEqual(new Set());
+  expect(skipModel(flow).mayAllSkip(["chat"])).toBe(false);
+});
+
+test("skipped arithmetic in a value names the llm_config field", () => {
+  const text = CASE.replace("LAYER", "").replace("CHAT", `llm_config: {model: '\${pick.output + "x"}'}`);
+  const error = loadError(() => compiled(text));
+  expect(error.message).toBe(
+    "node 'chat' llm_config: ${pick.output + \"x\"} does arithmetic on pick.output, which is null when node " +
+      "'pick' is skipped; give it a default with :-, e.g. (pick.output :- <default>)",
+  );
+  const line = text.split("\n").findIndex((each) => each.includes("pick.output + ")) + 1;
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(line);
 });
 
 test("an unknown node in a value is named at the llm_config field (the binding label)", () => {
@@ -283,4 +306,8 @@ test("assembled: load-agent/compose_llm_config_values_wiring__flow_value_read_fr
     call: assembled,
     full: true,
   });
+});
+
+test("assembled: load-agent/compose_llm_config_values_wiring__skipped_arithmetic_in_a_value", () => {
+  runCase({ id: "load-agent/compose_llm_config_values_wiring__skipped_arithmetic_in_a_value", call: assembled });
 });

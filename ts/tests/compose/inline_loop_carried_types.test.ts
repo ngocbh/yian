@@ -25,8 +25,9 @@
  * `load-loop/compose_inline_loop_carried_types__{literal_seed_with_a_str_body_field_is_rejected,
  * typed_str_seed_rejects_an_int_body_field}`.
  *
- * Later (T3-20): `load-case/engine_skipped_flow_outputs__inline_loop_over_an_untyped_seed_asks_for_its_type`
- * (its `Optional(str)` comes from skipping the CASE-gated body node; no TS mirror of its file).
+ * Pinned in skipped_flow_outputs.test.ts, its file's mirror:
+ * `load-case/engine_skipped_flow_outputs__inline_loop_over_an_untyped_seed_asks_for_its_type` (its
+ * `Optional(str)` comes from skipping the CASE-gated body node).
  * Later (T4): the run halves of the load-half rows above.
  */
 

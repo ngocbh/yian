@@ -140,8 +140,10 @@ import {
   localInputContracts,
 } from "../validate/typed_bindings.ts";
 // T3-20 imports
+import { checkCaseBranches } from "../validate/case_branches.ts";
 import { checkCaseExhaustive, checkCaseWhenValues, exhaustiveCases } from "../validate/case_exhaustive.ts";
 import { checkImpossibleWhens, computeNarrowing } from "../validate/narrowing.ts";
+import { checkSkippedArithmetic, nullSkippedOutputs, type SearchedWhen, SkipModel } from "../validate/skips.ts";
 
 // Name for the single output of a bare whole-string `output:` binding. The value-mode EndNode
 // returns the bare resolved value, so the name only labels the carrier.
@@ -1013,13 +1015,29 @@ function outputStyle(
   }
 }
 
-/** Python's `compose.build.pipeline._case_output_cursor`; not ported yet. */
+/**
+ * Return the authored `output:` of one node, or `null` when it has none.
+ *
+ * @param nodesCursor Retained view of the flow's node mapping.
+ * @param nodeId The case node's id.
+ * @param options.diagnostics Factory for located load errors.
+ * @returns The `output:` value, or `null` for a synthesized node or a node without `output:`.
+ * @throws LoadError when the retained cursor cannot be traversed.
+ */
 function caseOutputCursor(
   nodesCursor: SourceCursor,
   nodeId: string,
   options: { diagnostics: LoadDiagnostics },
 ): SourceCursor | null {
-  return null;
+  const { diagnostics } = options;
+  try {
+    if (!nodesCursor.has(nodeId)) return null;
+    const cursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
+    return cursor.has("outputs") ? cursor.child("outputs") : null;
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw diagnostics.error(error.message, { range: error.range, cause: error });
+  }
 }
 
 /**
@@ -2283,7 +2301,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   // An output that reads only nodes CASE routing may skip would leave END unreachable; the
   // explicit null default makes its END edge optional, so the run returns null.
   const structural = [...reconciled, ...orderingEdges];
-  const skips = skipModel(
+  const skips = new SkipModel(
     new Set(descriptors.keys()),
     structural,
     exhaustiveCases(descriptors, producers, flowInputContracts, { narrowing }),
@@ -2292,8 +2310,19 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   const valueMode = outputsSection !== null && !isRecord(outputsSection);
   // Arithmetic on such a value would fail at runtime with null; ask for a `:-` default. A
   // searched `when:` is checked as authored: its wiring holds only its `__rN` reads.
-  // T3-20: each searched case's `[index, when, origin, range]` per authored case.
-  const searchedWhens: ReadonlyMap<string, readonly SearchedWhen[]> = new Map();
+  const searchedWhens = new Map<string, SearchedWhen[]>();
+  for (const [nodeId, desc] of descriptors) {
+    if (!(desc instanceof CaseDescriptor) || desc.on !== null) continue;
+    searchedWhens.set(
+      nodeId,
+      desc.cases.map((case_, index) => [
+        index,
+        case_["when"] ?? null,
+        desc.whenOrigins[index] ?? null,
+        desc.whenRanges[index] ?? null,
+      ]),
+    );
+  }
   checkSkippedArithmetic(flowWiring, outputs, skips, buildResults, {
     valueMode,
     outputsRange,
@@ -2402,12 +2431,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
 //   T3-18  validateReferences (1).
-//   T3-20  checkCaseBranches (1); caseOutputCursor (2): returns `null`.
-//          validateNodeAsserts, checkSkippedArithmetic (1).
+//   T3-20  validateNodeAsserts (1).
 //          lowerFlowAsserts (1): returns an empty `LoweredAsserts`.
-//          skipModel (1, Python's `SkipModel` class): returns `null`; nullSkippedOutputs (1):
-//            returns the outputs.
-//          searchedWhens (3, `ReadonlyMap<string, readonly SearchedWhen[]>`): `new Map()`.
 
 // T3-15: compose/nodes/{agent,code,tool,human_input,wait}.ts
 
@@ -2437,22 +2462,6 @@ function validateReferences(
 // T3-19: compose/validate/{typed_bindings,call_types,loop_types,llm_config_sources}.ts
 
 // T3-20: compose/validate/{case_branches,narrowing,case_exhaustive,asserts,skips}.ts
-
-/** Python's `compose.validate.skips.SkipModel`; not ported yet. */
-type SkipModel = unknown;
-/** One searched `when:` as authored: its index, text, origin and range. */
-type SearchedWhen = readonly [index: number, when: unknown, origin: OriginRef | null, range: SourceRange | null];
-
-/** Python's `compose.validate.case_branches.check_case_branches`; not ported yet. */
-function checkCaseBranches(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  options: {
-    registry: TypeRegistry;
-    inputTypes: ReadonlyMap<string, Type>;
-    outputAt: (nodeId: string) => SourceCursor | null;
-    diagnostics: LoadDiagnostics;
-  },
-): void {}
 
 /** Python's `compose.validate.asserts.validate_node_asserts`; not ported yet. */
 function validateNodeAsserts(
@@ -2485,33 +2494,3 @@ function lowerFlowAsserts(
 ): LoweredAsserts {
   return new LoweredAsserts();
 }
-
-/** Python's `compose.validate.skips.SkipModel` constructor; not ported yet. */
-function skipModel(
-  nodeIds: Iterable<string>,
-  edges: Iterable<Edge>,
-  exhaustive: ReadonlySet<string>,
-  options: { limit?: number | null } = {},
-): SkipModel {
-  return null;
-}
-
-/** Python's `compose.validate.skips.null_skipped_outputs`; not ported yet. */
-function nullSkippedOutputs(flowOutputs: FlowOutput[], model: SkipModel): FlowOutput[] {
-  return flowOutputs;
-}
-
-/** Python's `compose.validate.skips.check_skipped_arithmetic`; not ported yet. */
-function checkSkippedArithmetic(
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-  flowOutputs: readonly FlowOutput[],
-  model: SkipModel,
-  buildResults: ReadonlyMap<string, BuildResult>,
-  options: {
-    valueMode?: boolean;
-    outputsRange?: SourceRange | null;
-    resolveOrigin?: OriginPresenter | null;
-    diagnostics?: LoadDiagnostics | null;
-    searchedWhens?: ReadonlyMap<string, readonly SearchedWhen[]> | null;
-  } = {},
-): void {}

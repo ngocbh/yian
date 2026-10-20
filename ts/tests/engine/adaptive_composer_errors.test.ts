@@ -5,7 +5,8 @@
  * Ported: `test_bad_llm_config_is_named_and_located_at_the_llm_config`,
  * `test_block_llm_config_error_is_located_at_its_first_key`, `test_valid_llm_config_loads`,
  * `test_typed_input_mismatch_names_the_gate`, `test_isinstance_unknown_type_names_the_gate`,
- * `test_literal_inputs_still_load`, and the cycle rows
+ * `test_literal_inputs_still_load`, `test_skipped_operand_arithmetic_names_the_gate`, and the cycle
+ * rows
  * (`test_self_reading_gate_cycle_names_only_the_gate`,
  * `test_cycle_through_a_gate_names_only_authored_nodes`,
  * `test_ordering_cycle_through_a_gate_names_only_authored_nodes`,
@@ -19,8 +20,8 @@
  * Changed: the flows assemble with `assembleText`, where Python loads them. A text value reads
  * `"false"` where Python's repr writes `'false'`, and the unknown-key error carries the issue's
  * message ("Extra inputs are not permitted") where pydantic adds its `extra_forbidden` type. Each
- * bad-config row, the typed-input row and the unknown-type row pin the whole message where Python
- * matches fragments.
+ * bad-config row, the typed-input row, the unknown-type row and the skipped-arithmetic row pin the
+ * whole message where Python matches fragments.
  * The cycle message writes its node list in the text form (`["ask","b"]`, rule `messages`), and
  * each cycle row pins the whole message where Python checks its start. The inline CODE body is TypeScript.
  *
@@ -28,7 +29,6 @@
  * `test_two_inputs_with_the_same_bad_source_are_both_reported`,
  * `test_bad_brief_and_bad_input_are_each_reported_once`,
  * `test_bad_input_is_listed_before_a_bad_gate_prompt` (the reference validator).
- * Later (T3-20): `test_skipped_operand_arithmetic_names_the_gate`.
  * Later (T3-22): `test_compact_flow_llm_config_error_names_the_flow_node`,
  * `test_defs_body_input_error_names_the_gate` and `test_defs_child_cycle_names_only_the_gate`.
  */
@@ -141,6 +141,40 @@ ${inputs}    prompt: "Q \${cfg} \${ls} \${n}"
 output: \${a.output}
 `;
   expect(assembleText(agentFlow).flow.compiled.nodes.has("a")).toBe(true);
+});
+
+test("skipped operand arithmetic names the gate", () => {
+  const error = loadError(() =>
+    assembleText(`\
+id: f
+name: f
+input:
+  approve: !bool
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: \${input.approve}
+        then: order
+  order:
+    kind: code
+    output: {qty: int}
+    code: |
+      return {"qty": 1}
+  ask:
+    kind: human_input
+    input:
+      q: \${order.output.qty * 2}
+    adaptive_questions:
+      prompt: "Q \${q}"
+output: \${ask.output}
+`),
+  );
+  expect(error.message).toBe(
+    "node 'ask' input 'q': ${order.output.qty * 2} does arithmetic on order.output.qty, which is null when " +
+      "node 'order' is skipped; give it a default with :-, e.g. (order.output.qty :- <default>)",
+  );
+  expect(lineOf(error)).toBe(19);
 });
 
 // ---------- cycles: the gate is named, not its composer, unless an author reads the composer ----------

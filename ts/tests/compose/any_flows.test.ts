@@ -22,8 +22,12 @@
  * `test_a_reader_tagging_a_case_result_any_gets_the_taken_branch_value` and
  * `test_a_child_any_output_into_a_parent_any_consumer_runs`,
  * `test_a_loop_carrying_an_any_seed_with_an_any_body_field_runs`,
- * `test_a_typed_loop_seed_accepts_an_optional_any_body_field` and
- * `test_a_null_from_an_optional_any_body_field_fails_the_next_turn`; and the harvested cases
+ * `test_a_typed_loop_seed_accepts_an_optional_any_body_field`,
+ * `test_a_null_from_an_optional_any_body_field_fails_the_next_turn`,
+ * `test_an_int_when_on_an_any_value_loads_and_matches` and
+ * `test_a_text_when_on_an_any_value_loads_and_matches`;
+ * `test_a_case_output_any_is_a_load_error_suggesting_the_reader_tag`, which the case-branch check
+ * decides (its whole message pinned where Python checks two fragments); and the harvested cases
  * `load-types/compose_any_flows__a_map_over_a_mixed_literal_list_checks_each_element` and
  * `load-types/compose_any_flows__an_untyped_seed_rejects_an_optional_any_body_field`.
  *
@@ -50,10 +54,7 @@
  * `test_a_field_read_on_an_any_output_loads_in_a_case_condition`,
  * `test_a_field_read_on_an_any_value_entry_is_not_checked` and
  * `test_a_field_read_on_an_object_value_entry_is_still_checked`. Later (T3-20):
- * `test_a_field_read_on_an_any_output_loads_in_an_assert`,
- * `test_an_int_when_on_an_any_value_loads_and_matches`,
- * `test_a_text_when_on_an_any_value_loads_and_matches` and
- * `test_a_case_output_any_is_a_load_error_suggesting_the_reader_tag`. Later (T4):
+ * `test_a_field_read_on_an_any_output_loads_in_an_assert`. Later (T4):
  * `test_a_list_of_any_output_returns_mixed_items`, `test_an_any_output_returns_any_json_value` (4),
  * `test_an_any_output_rejects_null`, `test_an_optional_any_output_returns_null`,
  * `test_an_any_flow_input_rejects_null_naming_the_input`,
@@ -259,18 +260,51 @@ test("an untyped seed into an Any body input rejects an optional Any body field"
 
 // ---------- CASE output Any over branches of different types ----------
 
+/** Return a flow whose `route` case picks the value entry `one` or `a`, read by `use`. */
+const routed = (caseOutput = "", reader = "!Any ${route.output}") =>
+  "id: p\nname: p\ninput:\n  s: !str\nnodes:\n" +
+  `  route:\n    kind: case\n${caseOutput}    cases:\n` +
+  "      - when: ${input.s == 'i'}\n        then: one\n" +
+  "    else: a\n" +
+  "  one: !int 1\n" +
+  '  a: !str "a"\n' +
+  `  use:\n    kind: code\n    input:\n      v: ${reader}\n` +
+  "    code: return inputs['v']\n" +
+  "output: ${use.output}\n";
+
 test("a reader tagging a case result Any gets the taken branch value (loads)", () => {
-  assembleText(
-    "id: p\nname: p\ninput:\n  s: !str\nnodes:\n" +
-      "  route:\n    kind: case\n    cases:\n" +
-      "      - when: ${input.s == 'i'}\n        then: one\n" +
-      "    else: a\n" +
-      "  one: !int 1\n" +
-      '  a: !str "a"\n' +
-      "  use:\n    kind: code\n    input:\n      v: !Any ${route.output}\n" +
-      "    code: return inputs['v']\n" +
-      "output: ${use.output}\n",
+  assembleText(routed());
+});
+
+test("a case output Any is a load error suggesting the reader tag", () => {
+  const error = loadError(() => assembleText(routed("    output: Any\n", "${route.output}")));
+
+  expect(error.message).toBe(
+    "case node 'route': a `case` routes and has no `output:`; tag its result where you read it, " +
+      "e.g. `x: !Any ${route.output}`",
   );
+});
+
+// ---------- CASE on an Any value ----------
+
+/** Return a flow whose `route` matches `on: ${mk.output}` (`Any`) against `when`. */
+function onAny(when: string, code = "1"): string {
+  const rest =
+    "  route:\n    kind: case\n    on: ${mk.output}\n    cases:\n" +
+    `      - when: ${when}\n        then: hit\n` +
+    "    else: miss\n" +
+    "  hit:\n    kind: code\n    output: str\n    code: return 'hit'\n" +
+    "  miss:\n    kind: code\n    output: str\n    code: return 'miss'\n";
+  return flow("Any", rest, { code, out: "${hit.output | miss.output}" });
+}
+
+test("an int when on an Any value loads and matches (loads)", () => {
+  assembleText(onAny("1", "1n"));
+  assembleText(onAny("1", '"1"'));
+});
+
+test("a text when on an Any value loads and matches (loads)", () => {
+  assembleText(onAny("a", '"a"'));
 });
 
 // ---------- child flow output Any ----------

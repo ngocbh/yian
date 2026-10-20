@@ -22,8 +22,6 @@
  * `parseYamlLiteral`. The private-callee rows check that the scope's resolver is never reached (it
  * throws) instead of monkeypatching `_resolve_child`.
  *
- * Later (T3-20): the `case` half of `test_an_unreadable_keyword_value_is_a_located_load_error`
- * (`case_branches`, which runs before the case-target desugar).
  * Later (T4): `test_quoted_binding_runs_as_text`, `test_quoted_flow_output_runs_as_text` (runs),
  * and the run half of `test_unquoted_directive_holding_a_separator_is_a_call_not_a_typed_binding`.
  *
@@ -549,13 +547,30 @@ const gChild = (dType = "str") =>
     output: "${run.output}",
   });
 
-test("an unreadable keyword value is a located load error", () => {
-  const error = loadError(() => assembleText(gFlow(bindingNode("call(g, d=2026-13-45)"))));
+/** A `route` case node whose `then:` targets `target`, an `other` node, and the output. */
+function caseNode(target: string): string {
+  return (
+    "  route:\n    kind: case\n    on: ${input.cmd}\n" +
+    `    cases:\n      - when: a\n        then: ${target}\n` +
+    "    else: other\n" +
+    "  other:\n    kind: code\n    output: str\n    code: |\n      return 'other'\n" +
+    "output: ${route.output}\n"
+  );
+}
+
+test.each([
+  ["binding", bindingNode, "use:", "topic: call("],
+  ["case", caseNode, "case node 'route' then:", "then: call("],
+])("an unreadable keyword value is a located load error: %s", (_, node, host, needle) => {
+  const text = gFlow(node("call(g, d=2026-13-45)"));
+  const error = loadError(() => assembleText(text));
   expect(error.message).toBe(
-    "use: call(g, ...) keyword 'd' value can't be read as YAML (not a valid date: month must be in 1..12); " +
+    `${host} call(g, ...) keyword 'd' value can't be read as YAML (not a valid date: month must be in 1..12); ` +
       "quote it to keep it as text",
   );
-  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(21);
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(
+    text.split("\n").findIndex((line) => line.includes(needle)) + 1,
+  );
 });
 
 test("an out of range offset keyword value is a located load error", () => {

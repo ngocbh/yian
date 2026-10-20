@@ -12,7 +12,10 @@
  * `test_searched_case_default_to_another_reference_also_joins`,
  * `test_searched_case_plain_and_default_reads_of_one_output`,
  * `test_searched_case_unparenthesized_default_covers_the_whole_condition`),
- * `test_searched_case_condition_with_a_nested_span_shows_the_rewrite`,
+ * `test_searched_case_condition_with_a_nested_span_shows_the_rewrite`, the branch gate rows the
+ * narrowing and the skipped-arithmetic check decide (the `${a.output + 1}` case of
+ * `test_a_plain_read_of_a_branch_keeps_the_gate_in_the_branch`,
+ * `test_a_default_read_of_a_branch_rejects_arithmetic_on_it_downstream`),
  * `test_item_head_ref_yields_no_edge_but_producer_ref_does` and
  * `test_binding_coskip_sets_edge_optional_per_stance`.
  *
@@ -34,12 +37,17 @@
  * fragment passes, and one row per refusal message; `compile/index.ts` exports exactly Python's
  * `yian.compile.__all__`.
  *
- * Later (T3-20): the branch gate rows, which need the narrowing and the skipped-output checks
- * (`test_a_plain_read_of_a_branch_keeps_the_gate_in_the_branch`,
- * `test_a_default_read_of_a_branch_lets_the_gate_run_outside_it`,
- * `test_a_default_read_of_a_branch_rejects_arithmetic_on_it_downstream`,
- * `test_a_guarded_read_inside_a_default_loads`,
- * `test_a_co_skipping_default_keeps_the_gate_in_the_branch`).
+ * The harvested `load-core/engine_graph__a_default_read_of_a_branch_rejects_arithmetic_on_it_downstream`
+ * is pinned at the end, with the `ok` case `load-core/engine_graph__a_guarded_read_inside_a_default_loads`,
+ * which only checks for now that no ported pass rejects its guarded `when:`.
+ *
+ * Later (T3-18 PR 3), decided by the reference check reading a union field under the gate: the
+ * `${d.output.limit}` case of `test_a_plain_read_of_a_branch_keeps_the_gate_in_the_branch`,
+ * `test_a_default_read_of_a_branch_lets_the_gate_run_outside_it` (and its harvested case) and
+ * `test_a_co_skipping_default_keeps_the_gate_in_the_branch` and
+ * `test_a_guarded_read_inside_a_default_loads` (its `when:` reads a union field under an
+ * `isinstance` guard; no ported pass can reject it yet); until then they load whatever the
+ * narrowing gives.
  */
 
 import { expect, test } from "bun:test";
@@ -76,7 +84,7 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { assembleText, loadError } from "../compose/declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "../compose/declarations.ts";
 
 /** A minimal concrete node standing in for Python's `FuncNode`. */
 class FuncNode extends Node {
@@ -303,6 +311,70 @@ test("a searched case's unparenthesized default covers the whole condition", () 
   // around the whole condition, whose literal default does not co-skip.
   const edges = aToGateEdges(searchedGate('"input.seed > 0 and a.output :- false"'));
   expect(edges.map((edge) => edge.optional)).toEqual([true]);
+});
+
+// `router` sends a Buy decision to `a`; `gate` reads `a.output`, then routes to `hot`.
+const BRANCH_GATE_FLOW = `
+id: bg
+name: bg
+typedefs:
+  Buy: {action: 'Literal(buy)', limit: float}
+  Sell: {action: 'Literal(sell)'}
+  Decision: Union(Buy, Sell)
+input:
+  s: !str
+nodes:
+  d:
+    kind: code
+    input:
+      s: \${input.s}
+    output: Decision
+    code: return null
+  router:
+    kind: case
+    on: \${d.output.action}
+    cases:
+      - when: buy
+        then: a
+    else: e
+  a:
+    kind: code
+    input:
+      s: \${input.s}
+    output: int
+    code: return 1
+  e:
+    kind: code
+    code: return 1
+  gate:
+    kind: case
+    cases:
+      - when: <when>
+        then: hot
+    else: cold
+  hot:
+    kind: code
+    input:
+      v: <hot>
+    code: return 1
+  cold:
+    kind: code
+    code: return 1
+output: \${hot.output | cold.output | e.output}
+`;
+
+const branchGate = (when: string, hot: string) => BRANCH_GATE_FLOW.replace("<when>", when).replace("<hot>", hot);
+
+test("a plain read of a branch keeps the gate in the branch (arithmetic on the branch)", () => {
+  assembleText(branchGate('"a.output >= 1"', "${a.output + 1}"));
+});
+
+test("a default read of a branch rejects arithmetic on it downstream", () => {
+  const error = loadError(() => assembleText(branchGate('"(a.output :- 0) >= 1"', "${a.output + 1}")));
+  expect(error.message).toBe(
+    "node 'hot' input 'v': ${a.output + 1} does arithmetic on a.output, which is null when node 'a' is skipped; " +
+      "give it a default with :-, e.g. (a.output :- <default>)",
+  );
 });
 
 test("a searched case condition with a nested span shows the rewrite", () => {
@@ -859,3 +931,10 @@ test("compile/index.ts exports exactly Python's yian.compile.__all__", () => {
   const exported: Record<string, unknown> = compilePackage;
   for (const [name, source] of Object.entries(sources)) expect(exported[name]).toBe(source[name]);
 });
+
+// ---------- harvested conformance cases ----------
+
+test.each<CaseRow>([
+  { id: "load-core/engine_graph__a_default_read_of_a_branch_rejects_arithmetic_on_it_downstream", call: assembled },
+  { id: "load-core/engine_graph__a_guarded_read_inside_a_default_loads", call: assembled },
+])("assembled: $id", runCase);

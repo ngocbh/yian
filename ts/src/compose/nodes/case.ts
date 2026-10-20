@@ -413,9 +413,10 @@ export function onMatchKey(value: string | boolean | bigint | number): string {
 
 /**
  * Return a number as condition-literal digits: positional (the grammar's numbers have no
- * exponent), a float keeping a `.` and the sign of `-0`, and infinity as `inf` / `-inf`.
+ * exponent), a float keeping a `.` and the sign of `-0`, and infinity as `inf` / `-inf`. Also spells
+ * the floats of a case branch's suggested value entry (`validate/case_branches.ts`).
  */
-function numberText(value: bigint | number): string {
+export function numberText(value: bigint | number): string {
   if (typeof value === "bigint") return String(value);
   if (value === Infinity) return "inf";
   if (value === -Infinity) return "-inf";

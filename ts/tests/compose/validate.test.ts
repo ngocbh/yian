@@ -36,7 +36,7 @@
  * `load-core/compose_field_read_sites__loop_while_reads_a_field_on_a_builtin_result` (its `body`
  * def built by hand).
  *
- * Later (T3-18): the reference validator's rows (`test_validate_references_diag_has_range`,
+ * Later (T3-18 PR 3): the reference validator's rows (`test_validate_references_diag_has_range`,
  * `test_validate_references_diag_locates_case_when_via_synth_param`,
  * `test_validate_references_diag_case_on_form_locates_at_on_line`,
  * `test_validate_references_diag_case_when_multi_ref_locates_at_that_when`,

@@ -5,7 +5,9 @@
  *
  * Ported: the `parseCondition` tests; `test_unknown_function_in_a_condition_fails_to_load` and
  * `test_a_constructor_naming_no_typedef_in_a_condition_fails_to_load`, through `assembleText`
- * where Python loads the flow (the loop sites' `step` def a hand-built child, `handChild`).
+ * where Python loads the flow (the loop sites' `step` def a hand-built child, `handChild`); and the
+ * load halves of `test_a_typedef_constructor_in_a_condition_loads_and_runs` (the CASE's type table)
+ * and `test_a_condition_calling_a_builtin_correctly_loads_and_runs`.
  * `test_a_builtin_without_a_readable_signature_is_not_arity_checked` has no counterpart: every
  * registered function declares its `params`.
  *
@@ -13,10 +15,10 @@
  *
  * Later (T3-20): `test_builtin_with_the_wrong_arguments_in_a_condition_fails_to_load` and
  * `test_whole_span_unknown_call_in_an_assert_keeps_the_inline_call_message`.
- * Later (T4): `test_a_condition_calling_a_builtin_correctly_loads_and_runs`,
- * `test_python_built_assert_calling_an_unknown_function_fails_before_the_run`,
- * `test_python_built_case_when_with_the_wrong_arguments_fails_before_the_run` and
- * `test_a_typedef_constructor_in_a_condition_loads_and_runs` (runs).
+ * Later (T4): `test_python_built_assert_calling_an_unknown_function_fails_before_the_run`,
+ * `test_python_built_case_when_with_the_wrong_arguments_fails_before_the_run`, and the run halves
+ * of `test_a_condition_calling_a_builtin_correctly_loads_and_runs` and
+ * `test_a_typedef_constructor_in_a_condition_loads_and_runs`.
  *
  * The harvested cases are pinned at the end: `load-case/engine_condition_calls__wrong_builtin_arguments_in_a_case_when`
  * (`assemble`, whose CASE build raises it), `__wrong_builtin_arguments_in_a_loop_while`
@@ -40,6 +42,7 @@ import { ExpressionError, parseCondition } from "../../src/expr/expressions.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { typeFor } from "../../src/typesys/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
+import { typeEquals } from "../../src/typesys/values.ts";
 import {
   assembled,
   assembledWith,
@@ -313,11 +316,22 @@ test.each<[string, string]>([
   expect(loadErrorOf(text).message).toContain("unknown expression function 'nosuchfn'");
 });
 
+test("a condition calling a builtin correctly loads", () => {
+  expect(() => assembleText(CASE.replace("<cond>", "upper(render_as_json(input.v, indent=0)) == '2'"))).not.toThrow();
+});
+
+const TYPEDEF_CASE = CASE.replace("name: f\n", "name: f\ntypedefs:\n  Small: int(0..9)\n");
+
+test("a typedef constructor in a condition loads into the type table", () => {
+  const { flow } = assembleText(TYPEDEF_CASE.replace("<cond>", "Small(input.v) > 4"));
+
+  const types = flow.compiled.nodes.get("gate")!.types;
+  expect([...types.keys()]).toEqual(["Small"]);
+  expect(typeEquals(types.get("Small")!, typeFor("int(0..9)", new Map()))).toBe(true);
+});
+
 test("a constructor naming no typedef in a condition fails to load", () => {
-  const text = CASE.replace("name: f\n", "name: f\ntypedefs:\n  Small: int(0..9)\n").replace(
-    "<cond>",
-    "Nope(input.v) > 4",
-  );
+  const text = TYPEDEF_CASE.replace("<cond>", "Nope(input.v) > 4");
   expect(loadErrorOf(text).message).toContain("unknown expression function 'Nope'");
 });
 

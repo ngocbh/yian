@@ -108,6 +108,8 @@ import {
 import { rejectCycles } from "../validate/cycles.ts";
 import { checkCaseHandles } from "../validate/handles.ts";
 import { validateHumanQuestions } from "../validate/human_questions.ts";
+import { checkReservedSources } from "../validate/reserved_sources.ts";
+import { stampToolInputTypes } from "../validate/tool_inputs.ts";
 import { checkWrittenValues } from "../validate/value_nesting.ts";
 import { checkWiringParity } from "../validate/wiring_parity.ts";
 import { builtinFieldErrors, constructorErrors } from "../validate/constructors.ts";
@@ -2393,7 +2395,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
-//   T3-18  stampToolInputTypes, validateReferences, checkReservedSources (1).
+//   T3-18  validateReferences (1).
 //   T3-19  checkCallMapTypes, checkLoopTypeContract (1).
 //          inlineLoops (3, `ReadonlySet<string>`): `new Set()`.
 //   T3-20  checkCaseBranches (1); caseOutputCursor (2): returns `null`.
@@ -2412,15 +2414,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // T3-18: compose/validate/{value_nesting,tool_inputs,wiring_parity,references,human_questions,
 // reserved_sources,cycles,handles}.ts
 
-/** Python's `compose.validate.tool_inputs.stamp_tool_input_types`; not ported yet. */
-function stampToolInputTypes(
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-  producers: ReadonlyMap<string, OutputContract>,
-  flowInputs: ReadonlyMap<string, ValueContract>,
-  buildResults: ReadonlyMap<string, BuildResult>,
-  options: { narrowing?: Narrowing | null; typeFn?: TypeFn | null } = {},
-): void {}
-
 /** Python's `compose.validate.references.validate_references`; not ported yet. */
 function validateReferences(
   buildResults: ReadonlyMap<string, BuildResult>,
@@ -2433,21 +2426,6 @@ function validateReferences(
     outputsRange?: SourceRange | null;
     narrowing?: Narrowing | null;
     localContracts?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>> | null;
-    registry?: TypeRegistry | null;
-    resolveOrigin?: OriginPresenter | null;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): void {}
-
-/** Python's `compose.validate.reserved_sources.check_reserved_sources`; not ported yet. */
-function checkReservedSources(
-  buildResults: ReadonlyMap<string, BuildResult>,
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-  producers: ReadonlyMap<string, OutputContract>,
-  flowInputs: ReadonlyMap<string, ValueContract>,
-  options: {
-    narrowing?: Narrowing | null;
-    typeFn?: TypeFn | null;
     registry?: TypeRegistry | null;
     resolveOrigin?: OriginPresenter | null;
     diagnostics?: LoadDiagnostics | null;

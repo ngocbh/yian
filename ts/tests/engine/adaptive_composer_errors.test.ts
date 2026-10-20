@@ -24,7 +24,7 @@
  * The cycle message writes its node list in the text form (`["ask","b"]`, rule `messages`), and
  * each cycle row pins the whole message where Python checks its start. The inline CODE body is TypeScript.
  *
- * Later (T3-18): `test_bad_input_is_reported_once_on_the_gate`,
+ * Later (T3-18 PR 3): `test_bad_input_is_reported_once_on_the_gate`,
  * `test_two_inputs_with_the_same_bad_source_are_both_reported`,
  * `test_bad_brief_and_bad_input_are_each_reported_once`,
  * `test_bad_input_is_listed_before_a_bad_gate_prompt` (the reference validator).

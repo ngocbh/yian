@@ -94,7 +94,7 @@
  * predicate_unknown_field_on_omitted_typed_seed_is_rejected}`, and (`assembledWith`, the def built
  * by hand) `load-loop/engine_loop_build__omitted_field_seed_cycle_is_located`.
  *
- * Later (T3-18):
+ * Later (T3-18 PR 3):
  * `test_partial_loop_contract_rejects_unknown_downstream_field_at_load` and the downstream half of
  * `test_merged_contract_types_omitted_field_from_its_seed`. Later (T3-19):
  * `test_returned_field_type_mismatch_still_rejected_in_partial_body`,

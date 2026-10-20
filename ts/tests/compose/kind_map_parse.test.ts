@@ -14,7 +14,7 @@
  * the `over:` value.
  *
  * Pinned at the end (`parsedNodes`): the harvested `over:` literal cases of
- * `tests/compose/test_map_wait_source_types.py`, which has no TS mirror;
+ * `tests/compose/test_map_wait_source_types.py` (mirror `map_wait_source_types.test.ts`);
  * `load-map-call/compose_map_wait_source_types__date_over_literal` reads the date as text (rule
  * `dates`).
  */

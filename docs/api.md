@@ -1566,6 +1566,14 @@ new generation. A session snapshot is detached JSON suitable for the engine's
 recorded recovery boundary or for restoring a pristine `EpisodicMemory`.
 Use `storage=path` to retain complete backend state across restarts.
 
+Changed (TS yian): `new EpisodicMemory({ maxEpisodes, recallLimit, storage,
+createParent })` takes an options object whose limits are integral `number`s or
+`bigint`s; snapshots are deep-frozen rather than detached copies; `recall` is
+async and awaits `rewriteQuery`, which may return a promise; recall text and
+entry ids use yian's run-log canonical JSON (`logJson`: ints as digits, floats
+marked `.0`); an episode holding `±Infinity` fails `learn`
+as `episodic.invalid_context`.
+
 ### Building memories with `build_memories`
 
 `build_memories(flow, *, root=None, storage=None, supplied=None, factories=None)`
@@ -1667,6 +1675,11 @@ directory then; `build_memories` passes it only for paths derived from
 rejects every later `open_run()` with `<type>.closed`. A backend checks its
 process at every operation once a path is configured, so a forked child
 cannot use it even if the parent never opened it.
+
+Changed (TS yian): `EpisodicMemory` takes `{ storage, createParent }` in its
+options object; the file opens at the first operation (`openRun()`, `reset()`
+or `rewriteQuery()`). There is no `with` form (call `close()` in `finally`) and no fork
+check.
 
 ```python
 from yian.memory.session import SessionMemory

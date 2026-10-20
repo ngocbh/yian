@@ -57,10 +57,13 @@ function revalidateOrigin(value: unknown): OriginRef | null {
 
 /** Require exact specs in sorted unique key order; return the keys. */
 function validateMemories(memories: unknown): readonly string[] {
-  if (!isList(memories) || !memories.every((spec) => isExactly(spec, MemorySpec))) {
+  if (!isList(memories)) throw new TypeError("memories must be an array of MemorySpec values");
+  // Spread, so a hole of a sparse array reads as `undefined` and is refused.
+  const copy = [...memories];
+  if (!copy.every((spec) => isExactly(spec, MemorySpec))) {
     throw new TypeError("memories must be an array of MemorySpec values");
   }
-  const keys = (memories as MemorySpec[]).map((spec) => spec.key);
+  const keys = (copy as MemorySpec[]).map((spec) => spec.key);
   if (keys.some((key, i) => i > 0 && compareCodeUnits(keys[i - 1]!, key) >= 0)) {
     throw new RangeError("memories must be sorted by key and unique");
   }
@@ -395,19 +398,22 @@ export class MemoryRuntime {
    */
   async proposeLearning(contexts: readonly LearnContext[]): Promise<readonly MemoryProposal[]> {
     if (this.closed) throw new Error("memory runtime is closed");
-    if (!isList(contexts) || !contexts.every((context) => isExactly(context, LearnContext))) {
-      throw new TypeError("learning contexts must be an array of exact LearnContext values");
-    }
+    const message = "learning contexts must be an array of exact LearnContext values";
+    if (!isList(contexts)) throw new TypeError(message);
+    // Spread, so a hole of a sparse array reads as `undefined` and is refused, and later edits to
+    // the caller's array across the awaits below change nothing.
+    const copy = [...contexts];
+    if (!copy.every((context) => isExactly(context, LearnContext))) throw new TypeError(message);
     const keys = this.memories.map((spec) => spec.key);
-    if (!sameItems(contexts.map((context) => context.memory), keys)) {
+    if (!sameItems(copy.map((context) => context.memory), keys)) {
       throw new RangeError("learning contexts must cover the complete recorded memory table in order");
     }
-    if (new Set(contexts.map((context) => context.runId)).size > 1) {
+    if (new Set(copy.map((context) => context.runId)).size > 1) {
       throw new RangeError("learning contexts must belong to one run");
     }
 
     const proposals: MemoryProposal[] = [];
-    for (const context of contexts) {
+    for (const context of copy) {
       const key = context.memory;
       let raw: unknown;
       try {

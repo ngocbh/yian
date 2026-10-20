@@ -44,32 +44,33 @@
  * `frame_ref` is a missing `frameRef` property; the commit receives the record's own frozen batch
  * (`toBe`); the local fake's `commit` returns its `commitValue`, as Python's does.
  *
- * TS-only: a plain-object table item; origins as a plain object, with a numeric key, or with a key
- * emptied after construction (`OriginRef`'s own `RangeError`); each registry name message (a
- * numeric key, `""`, a lone surrogate); a value without the `Memory` methods; a registry that
- * isn't a `Map` (a plain object, `null`, an array); each snapshot message (a plain object, an item
- * that isn't an envelope, a repeated key, and a repeated key before a non-envelope item); every
- * refusal opens nothing; async `openRun` and `close` are awaited; a snapshot getter throwing a
- * `MemoryOperationError`; a snapshot that is a `Promise` or holds a `Map`; a session lacking
- * `close` isn't closed; close failures without a primary (the first is thrown, later ones noted on
- * it), with an error primary (all noted on it) and with a primitive primary (notes lost); a
- * concurrent or later `close()` waits for the first, never throws and adds no notes; a reentrant
+ * TS-only: a plain-object table item; a sparse table; origins as a plain object, with a numeric
+ * key, or with a key emptied after construction (`OriginRef`'s own `RangeError`); each registry
+ * name message (a numeric key, `""`, a lone surrogate); a value without the `Memory` methods; a
+ * registry that isn't a `Map` (a plain object, `null`, an array); each snapshot message (a plain
+ * object, an item that isn't an envelope, a repeated key, and a repeated key before a non-envelope
+ * item); every refusal opens nothing; async `openRun` and `close` are awaited; a snapshot getter
+ * throwing a `MemoryOperationError`; a snapshot that is a `Promise` or holds a `Map`; a session
+ * lacking `close` isn't closed; close failures without a primary (the first is thrown, later ones
+ * noted on it), with an error primary (all noted on it) and with a primitive primary (notes lost);
+ * a concurrent or later `close()` waits for the first, never throws and adds no notes; a reentrant
  * close from inside a session's close doesn't close again; the caller's array and `Map`s edited
  * during `open` change nothing; a subclass's `open` returns the subclass; `openContext` is a
  * `MemoryContextOpener`; an async `recall` is awaited; `openTurn` receives the same signal and a
  * `ConversationRequest` with the scope's path, the invocation and the compatibility; an `openTurn`
  * rejection rejects `openContext` with it unchanged; a number from `recall` is invalid content; an
  * already-aborted signal with text-only memories still recalls, then rejects with the reason;
- * `proposeLearning` and `commitLearning` refuse on a closed runtime; a `Set` of contexts and a
- * plain object shaped like a `LearnContext` are refused before any learner; a learn result of
- * `{}`, two mutations with one id, or a non-mutation item is `memory.invalid_result`; a
- * `MemoryOperationError` whose `code` was redefined to a number is `memory.unexpected`; a learn
- * throwing a plain `Error`, a `RangeError` or a `CapabilityFault` rejects with that very error and
- * no later key learns; a `MemoryOperationError` whose `cause` is an `AbortError` `DOMException` or
- * a `CapabilityFault` is still a `LearningProposalError` (no host control is unwrapped); a commit
- * returning `null` succeeds, one returning `"ok"` is `memory.invalid_result`, and a
- * `MemoryOperationError` (also one with a `CapabilityFault` cause) returns its failure; a plain
- * object request is refused before any commit; async `learn` and `commit` are awaited.
+ * `proposeLearning` and `commitLearning` refuse on a closed runtime; a `Set` of contexts, a plain
+ * object shaped like a `LearnContext` and sparse contexts (`[alpha, <hole>]`, `[<hole>]`) are
+ * refused before any learner; a learn result of `{}`, two mutations with one id, or a non-mutation
+ * item is `memory.invalid_result`; a `MemoryOperationError` whose `code` was redefined to a number
+ * is `memory.unexpected`; a learn throwing a plain `Error`, a `RangeError` or a `CapabilityFault`
+ * rejects with that very error and no later key learns; a `MemoryOperationError` whose `cause` is
+ * an `AbortError` `DOMException` or a `CapabilityFault` is still a `LearningProposalError` (no host
+ * control is unwrapped); a commit returning `null` succeeds, one returning `"ok"` is
+ * `memory.invalid_result`, and a `MemoryOperationError` (also one with a `CapabilityFault` cause)
+ * returns its failure; a plain object request is refused before any commit; async `learn` and
+ * `commit` are awaited.
  */
 
 import { expect, test } from "bun:test";
@@ -424,6 +425,18 @@ test("a plain-object table item is not a MemorySpec", async () => {
   const [alpha, beta] = table() as [MemorySpec, MemorySpec];
   await expectError(
     () => MemoryRuntime.open({ memories: [{ ...alpha }, beta] as never, origins: origins(), memory: pair(events) }),
+    TypeError,
+    "memories must be an array of MemorySpec values",
+  );
+  expect(events).toEqual([]);
+});
+
+test("a sparse table is not an array of MemorySpec values", async () => {
+  const events: Events = [];
+  const sparse = [table()[0]!];
+  sparse.length = 2;
+  await expectError(
+    () => MemoryRuntime.open({ memories: sparse, origins: origins(), memory: pair(events) }),
     TypeError,
     "memories must be an array of MemorySpec values",
   );
@@ -1382,6 +1395,12 @@ test("learning contexts must be an array of exact LearnContext values", async ()
     await expectError(() => runtime.proposeLearning(new Set([alpha, beta]) as never), TypeError, message);
     const shaped = { runId: "run", memory: "beta", episodes: [], feedback: [] };
     await expectError(() => runtime.proposeLearning([alpha, shaped as never]), TypeError, message);
+    const sparse = [alpha];
+    sparse.length = 2;
+    await expectError(() => runtime.proposeLearning(sparse), TypeError, message);
+    const hole: LearnContext[] = [];
+    hole.length = 1;
+    await expectError(() => runtime.proposeLearning(hole), TypeError, message);
     for (const backend of memory.values()) expect((backend as FakeMemory).session.learnCalls).toEqual([]);
   } finally {
     await runtime.close();

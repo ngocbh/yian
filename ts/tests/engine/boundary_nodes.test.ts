@@ -11,8 +11,9 @@
  * reference is TS's (`./fixtures/compose_codefns.ts:echo_x`).
  *
  * Later (T4): the run rows (`test_run_result_is_end_node_value`, `test_terminal_helpers_retired`,
- * `test_terminal_output_of_a_skipped_producer_is_null`, `test_inputs_resolve_to_start_node`,
- * `test_pool_inputs_namespace_retired`, `test_engine_schedules_start_and_emits_succeeded`).
+ * `test_inputs_resolve_to_start_node`, `test_pool_inputs_namespace_retired`,
+ * `test_engine_schedules_start_and_emits_succeeded`). Later (T3-20, T4):
+ * `test_terminal_output_of_a_skipped_producer_is_null` (its load half needs `nullSkippedOutputs`).
  */
 
 import { expect, test } from "bun:test";

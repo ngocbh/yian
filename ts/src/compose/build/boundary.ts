@@ -19,7 +19,7 @@
  * Never imports: `build/pipeline`, the loader, or the runtime.
  */
 
-import { compareCodeUnits } from "../../diagnostics.ts";
+import { compareCodeUnits, reprText } from "../../diagnostics.ts";
 import { Edge, END_ID, type FlowOutput, START_ID } from "../../compile/model.ts";
 import { bindingCoSkips } from "../../expr/index.ts";
 import type { Node } from "../../nodes/base.ts";
@@ -84,7 +84,7 @@ export function synthesizeBoundaryGraph(
   // A single output's param name (`result`) is generated, so its errors say just `flow output`; a
   // record field keeps its authored name.
   end.bindingLabels = new Map(
-    outputs.map((output) => [output.name, record ? `flow output '${output.name}'` : "flow output"]),
+    outputs.map((output) => [output.name, record ? `flow output ${reprText(output.name)}` : "flow output"]),
   );
   const boundaryNodes = new Map<string, Node>([
     [START_ID, start],

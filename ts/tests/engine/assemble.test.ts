@@ -17,10 +17,10 @@
  * `test_resolved_parameters_accept_zero_args_and_wire_empty_start`). TS-only conductor rows: a
  * cursor with resolved parameters, the memory declaration check, the errors `parseNodes`, the
  * `uses:` alias check and the value-entry reader raise through `assemble`, and one happy path over
- * stand-in nodes (its data and boundary edges). Later (T3-17): the value-entry rows of
- * `stampNodeWiringOrigins` (a value entry's input owns its parameter and binding at the entry
- * itself) and `splitTypedInputs`
- * (a value entry is returned unchanged), once `isValueEntry` is real.
+ * stand-in nodes (its data and boundary edges), and END's binding labels. Later (T3-17): the
+ * value-entry rows of `stampNodeWiringOrigins` (a value entry's input owns its parameter and
+ * binding at the entry itself) and `splitTypedInputs` (a value entry is returned unchanged), once
+ * `isValueEntry` is real.
  * Later (T3-18): the wiring parity rows (`test_wiring_parity_*`).
  *
  * The seed edge and boundary rows: `test_seed01_*`, `test_seed02_case_targets_not_bare_roots`,
@@ -1075,4 +1075,17 @@ test("the boundary's record flag picks END's mode", () => {
   expect(endOf([], false).returnsRecord).toBe(false);
   const two = [new FlowOutput("a", "${x.output}"), new FlowOutput("b", "${x.output}")];
   expect(() => endOf(two, false)).toThrow(new RangeError("EndNode value mode takes at most one output name"));
+});
+
+test("END's binding labels name a record field by its quoted name, a single output as the flow output", () => {
+  // TS-only: Python checks the labels only through a binding failure at run time.
+  const endOf = (outputs: FlowOutput[], record: boolean) =>
+    synthesizeBoundaryGraph([], outputs, new Set(["x"]), [], null, { record })[0].get(END_ID) as EndNode;
+
+  expect(endOf([new FlowOutput("it's", "${x.output}")], true).bindingLabels).toStrictEqual(
+    new Map([["it's", `flow output "it's"`]]),
+  );
+  expect(endOf([new FlowOutput("result", "${x.output}")], false).bindingLabels).toStrictEqual(
+    new Map([["result", "flow output"]]),
+  );
 });

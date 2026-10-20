@@ -20,7 +20,9 @@
  * with promises, not timing: each branch blocks until all four have entered.
  *
  * TS-only: nothing ready and nothing in flight before a terminal result is nonterminal quiescence;
- * a store `onEvent` sets for a durable observer reaches later nodes (serial and pooled).
+ * a store `onEvent` sets for a durable observer reaches later nodes (serial and pooled); a run of
+ * 10,000 ready leaves succeeds and runs every node once, serial (in ready order) and with 8
+ * workers.
  * */
 
 import { expect, test } from "bun:test";
@@ -330,4 +332,19 @@ test("nothing ready and nothing in flight before a terminal result is nontermina
   expect(error).toEqual(new Error("FlowEngine reached nonterminal quiescence"));
   expect(built.signal.aborted).toBe(true);
   expect(built.log.nextSequence).toBe(1);
+});
+
+test.each([0, 8])("10,000 ready leaves each run once (%i workers)", async (numWorkers) => {
+  // Leaves with no join: a 10,000-wide join at END makes the reducer's join check, not dispatch,
+  // the cost. END reads only START and its edge comes last, so it is ready last.
+  const ids = Array.from({ length: 10_000 }, (_, index) => `n${index}`);
+  const ran: string[] = [];
+  const nodes = ids.map((id) => new RecordNode(id, ran));
+  const flow = graph(nodes, [...ids.map((id) => [START_ID, id] as [string, string]), [START_ID, END_ID]]);
+
+  const events = await engine(flow, { numWorkers }).run();
+
+  expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
+  if (numWorkers === 0) expect(ran).toEqual(ids);
+  else expect([...ran].sort()).toEqual([...ids].sort());
 });

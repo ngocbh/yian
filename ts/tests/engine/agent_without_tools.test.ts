@@ -142,7 +142,10 @@ test("a steer joins the single request after the prompt", async () => {
 });
 
 test("an interrupt while streaming keeps the partial text", async () => {
-  const model = new ScriptedModel([[new TextDelta(0, "hello"), new TextDelta(0, " big"), new TextDelta(0, " world"), new Finish({ reason: "stop" })]], CONFIG);
+  const model = new ScriptedModel(
+    [[new TextDelta(0, "hello"), new TextDelta(0, " big"), new TextDelta(0, " world"), new Finish({ reason: "stop" })]],
+    CONFIG,
+  );
   const interrupt = new AbortController();
   const steering = { interruptSignal: () => interrupt.signal, drain: () => [] };
   const chunks: StreamChunk[] = [];

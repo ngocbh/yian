@@ -166,7 +166,7 @@ export async function callModel(
   let attempt = 0;
   // The current attempt so far: whether no event arrived yet, the text shown, the latest usage.
   let first = true;
-  let shown = "";
+  let shownText = "";
   let usage: TokenUsage | null = null;
   let waiting = false;
   let response: Response;
@@ -179,19 +179,20 @@ export async function callModel(
         attempt = k;
         waiting = false;
         first = true;
-        shown = "";
+        shownText = "";
         usage = null;
         emitEvent?.(new ModelCallStarted({ ...identity, attempt: k }));
       },
       onEvent: (event, k) => {
         const text = event instanceof TextDelta ? event.text : "";
         if (text !== "" && !first && interrupt?.aborted) {
-          throw new ReplyInterrupted(new Message({ role: "assistant", parts: shown ? [new TextPart(shown)] : [] }), usage);
+          const parts = shownText ? [new TextPart(shownText)] : [];
+          throw new ReplyInterrupted(new Message({ role: "assistant", parts }), usage);
         }
         first = false;
         if (event instanceof UsageReport) usage = new TokenUsage(event.usage);
         if (text === "") return;
-        shown += text;
+        shownText += text;
         emitStream?.(chunk(text, k));
       },
       onRetry: (retry) => {

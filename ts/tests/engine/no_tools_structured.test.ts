@@ -16,11 +16,12 @@
  * sections appends Python's text and canonical JSON; a memory transcript is refused before the
  * model is built; a steering inbox's steers join the loop's request after the prompt; a granted
  * tool runs in the loop; a grant without a tool set reads the registry (`new ToolSet()`), so an
- * unregistered grant fails with `resolve`'s `RangeError` before the model call; a granted skill binds `load_skill`; a reply with a parsed
- * tool call and no grant fails at a cap of 1 with `ToolIterationLimitError`, else with the
- * ungranted `AgentLoopError`; an unparsed tool call is ignored; a stop during the call wins over
- * its text or tool-call reply, before any tool call is recorded; `ctx.sent()` returns the built
- * `RouteModel`'s route credentials; the prompt is recorded in the evaluation trace.
+ * unregistered grant fails with `resolve`'s `RangeError` before the model call; a granted skill
+ * binds `load_skill`; a reply with a parsed tool call and no grant fails at a cap of 1 with
+ * `ToolIterationLimitError`, else with the ungranted `AgentLoopError`; an unparsed tool call is
+ * ignored; a stop during the call wins over its text or tool-call reply, before any tool call is
+ * recorded; `ctx.sent()` returns the built `RouteModel`'s route credentials; the prompt is
+ * recorded in the evaluation trace.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";

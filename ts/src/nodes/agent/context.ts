@@ -79,7 +79,7 @@ export async function drainSteers(ctx: Pick<AgentRunContext, "nodeId" | "steerin
   return ctx.steering === undefined ? [] : [...(await ctx.steering.drain(ctx.nodeId))];
 }
 
-/** Return the signal the host aborts to interrupt this node; `null` without an inbox. */
-export function interruptSignal(ctx: Pick<AgentRunContext, "nodeId" | "steering">): AbortSignal | null {
-  return ctx.steering === undefined ? null : ctx.steering.interruptSignal(ctx.nodeId);
+/** Return the signal the host aborts to interrupt this node; `undefined` without an inbox. */
+export function interruptSignal(ctx: Pick<AgentRunContext, "nodeId" | "steering">): AbortSignal | undefined {
+  return ctx.steering?.interruptSignal(ctx.nodeId);
 }

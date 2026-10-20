@@ -54,10 +54,11 @@
  * the node even with the interrupt set, since the argument check runs first; a cut with no stream
  * sink keeps the text received, and closes the stream; a cut reply's tool call never runs; a
  * non-text event (an empty text delta, usage, a tool-call delta, reasoning, the finish) after the
- * interrupt cuts nothing; at the `callModel` level, an interrupt during a model-retry wait ends
- * the wait at once with an empty `ReplyInterrupted` and no second attempt, leaving no sleep
- * pending, and a stop during the wait still rejects with the stop. Interrupts around
- * concurrent tool groups are in `agent_tool_groups.test.ts`.
+ * interrupt cuts nothing; a stop that lands after a reply was cut, before the loop sees the cut,
+ * wins over its text; at the `callModel` level, an interrupt during a model-retry wait, or already
+ * set when it begins, ends the wait at once with an empty `ReplyInterrupted` and no second
+ * attempt, leaving no sleep pending, and a stop during the wait still rejects with the stop.
+ * Interrupts around concurrent tool groups are in `agent_tool_groups.test.ts`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -148,7 +149,8 @@ function reply(text: string, ...calls: (readonly [string, JsonObject, string])[]
     ...(text ? [new TextPart(text)] : []),
     ...calls.map(([name, args, id]) => new ToolCallPart({ id, name, arguments: args })),
   ];
-  return new Response({ message: new Message({ role: "assistant", parts }), finishReason: calls.length > 0 ? "tool_calls" : "stop" });
+  const finishReason = calls.length > 0 ? "tool_calls" : "stop";
+  return new Response({ message: new Message({ role: "assistant", parts }), finishReason });
 }
 
 /** Python's `_two_calls`: text and two `lookup` calls. */
@@ -201,6 +203,26 @@ async function run(
   return (last as RunSucceeded).output;
 }
 
+/** A direct loop context: agent `chat` prompted "go" with no tools, calling `model`; `extra` overrides. */
+function agentContext(model: ChatModel, extra: Partial<AgentRunContext>): AgentRunContext {
+  return {
+    nodeId: "chat",
+    prompt: "go",
+    tools: [],
+    llmConfig: CONFIG,
+    outputType: null,
+    retries: 0,
+    maxToolIterations: -1,
+    memoryContext: new MemoryContext(),
+    toolset: null,
+    baseSystemPrompt: DEFAULT_SYSTEM,
+    skills: [],
+    models: serving(model),
+    sent: () => [],
+    ...extra,
+  };
+}
+
 /** The `[role, text]` of each message. */
 function shown(messages: readonly Message[]): [string, string][] {
   return messages.map((message) => [message.role, message.text()]);
@@ -210,7 +232,9 @@ function shown(messages: readonly Message[]): [string, string][] {
 function toolEvents(events: readonly unknown[]): unknown[][] {
   return events.flatMap((event) => {
     if (event instanceof ToolCallStarted) return [["started", event.callIndex, event.toolCallId]];
-    if (event instanceof ToolCallFinished) return [["finished", event.callIndex, event.toolCallId, event.error ?? event.result]];
+    if (event instanceof ToolCallFinished) {
+      return [["finished", event.callIndex, event.toolCallId, event.error ?? event.result]];
+    }
     return [];
   });
 }
@@ -289,7 +313,8 @@ test("a steer an async drain promises is awaited before the model call", async (
   const steering = new Inbox();
   steering.drain = (nodeId) => {
     steering.calls.push(["drain", nodeId]);
-    return new Promise((resolve) => setTimeout(() => resolve(["late steer"]), 5));
+    // Settles a few microtasks later, so the loop must await it.
+    return Promise.resolve().then(() => Promise.resolve(["late steer"]));
   };
   const model = new ScriptedModel([reply("done")], CONFIG);
   expect(await run(chatFlow(), model, { steering })).toBe("done");
@@ -309,24 +334,7 @@ test("a drain that resolves after the run stopped rejects with the stop and send
     },
   };
   const model = new ScriptedModel([reply("done")], CONFIG);
-  const ctx: AgentRunContext = {
-    nodeId: "chat",
-    prompt: "go",
-    tools: [],
-    llmConfig: CONFIG,
-    outputType: null,
-    retries: 0,
-    maxToolIterations: -1,
-    signal: stop.signal,
-    memoryContext: new MemoryContext(),
-    toolset: null,
-    baseSystemPrompt: DEFAULT_SYSTEM,
-    skills: [],
-    steering,
-    models: serving(model),
-    sent: () => [],
-  };
-  const running = runAgent(ctx);
+  const running = runAgent(agentContext(model, { signal: stop.signal, steering }));
   await draining.promise;
   stop.abort(reason);
   drained.resolve(["too late"]);
@@ -343,7 +351,8 @@ test("a steer queued between two calls of a reply joins after both results", asy
   });
   const model = new ScriptedModel([twoCalls(), reply("done")], CONFIG);
   expect(await run(chatFlow({ tools: ["lookup"] }), model, { steering, tools: new ToolSet({ lookup }) })).toBe("done");
-  expect(model.requests[1]!.messages.slice(-4).map((message) => message.role)).toEqual(["assistant", "tool", "tool", "user"]);
+  const roles = model.requests[1]!.messages.slice(-4).map((message) => message.role);
+  expect(roles).toEqual(["assistant", "tool", "tool", "user"]);
   expect(model.requests[1]!.messages.at(-1)!.text()).toBe("mid-turn steer");
 });
 
@@ -452,7 +461,13 @@ test("skipped tool calls reach the host as interrupted tool events", async () =>
   });
   const brackets = events.filter((event) => event instanceof ToolCallStarted || event instanceof ToolCallFinished);
   const exchangeId = (brackets[0] as ToolCallStarted).exchangeId;
-  const ids = (callIndex: number) => ({ nodeId: "chat", exchangeId, callIndex, toolCallId: `call-${callIndex + 1}`, name: "lookup" });
+  const ids = (callIndex: number) => ({
+    nodeId: "chat",
+    exchangeId,
+    callIndex,
+    toolCallId: `call-${callIndex + 1}`,
+    name: "lookup",
+  });
   expect(brackets).toEqual([
     new ToolCallStarted({ ...ids(0), arguments: { topic: "a" } }),
     new ToolCallFinished({ ...ids(0), result: "found a" }),
@@ -470,7 +485,8 @@ test("an interrupt at the top of a later iteration returns the latest reply", as
   });
   // The interrupt lands after the only call, so the next top-of-loop check ends it.
   const model = new ScriptedModel([reply("Looking.", ["lookup", { topic: "a" }, "call-1"])], CONFIG);
-  expect(await run(chatFlow({ tools: ["lookup"] }), model, { steering, tools: new ToolSet({ lookup }) })).toBe("Looking.");
+  const output = await run(chatFlow({ tools: ["lookup"] }), model, { steering, tools: new ToolSet({ lookup }) });
+  expect(output).toBe("Looking.");
   expect(model.requests).toHaveLength(1);
   expect(steering.queued).toEqual(new Map([["chat", ["too late"]]]));
 });
@@ -618,13 +634,15 @@ test("an interrupt mid-stream keeps the partial text and ends the stream", async
 
 test("an interrupted stream reports the usage received so far", async () => {
   const usage = new Usage({ inputTokens: 1000, outputTokens: 1, totalTokens: 1001 });
-  const model = new ScriptedModel([[new UsageReport(usage), ...words("hello", " big", " world", new Finish({ reason: "stop" }))]], CONFIG);
+  const streamed = [new UsageReport(usage), ...words("hello", " big", " world", new Finish({ reason: "stop" }))];
+  const model = new ScriptedModel([streamed], CONFIG);
   const steering = new Inbox();
   const events: unknown[] = [];
   const onStream = (chunk: StreamChunk) => {
     if (chunk.chunk === " big") steering.interrupt("chat");
   };
-  expect(await run(chatFlow(), model, { steering, onStream, onEvent: (event) => void events.push(event) })).toBe("hello big");
+  const output = await run(chatFlow(), model, { steering, onStream, onEvent: (event) => void events.push(event) });
+  expect(output).toBe("hello big");
   const finished = events.filter((event) => event instanceof ModelCallFinished);
   expect(finished.map((event) => [event.usage, event.error])).toEqual([
     [new TokenUsage({ inputTokens: 1000, outputTokens: 1, totalTokens: 1001 }), null],
@@ -635,7 +653,9 @@ test("an interrupt mid-stream in a pooled run keeps partial text", async () => {
   const all = ["hello", " big", " wide", " world"];
   const shown = Promise.withResolvers<void>();
   // Pause after the second word until the host has seen it.
-  const model = new Paced(words(...all, new Finish({ reason: "stop" })), (index) => (index === 1 ? shown.promise : undefined));
+  const model = new Paced(words(...all, new Finish({ reason: "stop" })), (index) => {
+    return index === 1 ? shown.promise : undefined;
+  });
   const steering = new Inbox();
   const onStream = (chunk: StreamChunk) => {
     if (chunk.chunk === " big") {
@@ -731,6 +751,19 @@ test("a cut with no stream sink still keeps the text received", async () => {
   expect(model.closed).toBe(1);
 });
 
+test("a stop that lands after a cut, before the loop sees it, wins over the cut text", async () => {
+  const stop = new AbortController();
+  const reason = new Error("stopped");
+  const steering = new Inbox();
+  // The cut's `ModelCallFinished` is emitted after the reply was cut and before the loop sees it.
+  const emitEvent = (event: unknown) => {
+    if (event instanceof ModelCallStarted) steering.interrupt("chat");
+    if (event instanceof ModelCallFinished) stop.abort(reason);
+  };
+  const model = new ScriptedModel([words("hello", " world", new Finish({ reason: "stop" }))], CONFIG);
+  expect(await rejected(runAgent(agentContext(model, { signal: stop.signal, steering, emitEvent })))).toBe(reason);
+});
+
 test("a partial reply's tool call never runs", async () => {
   const steering = new Inbox();
   const ran: string[] = [];
@@ -793,7 +826,10 @@ test("a non-text event after the interrupt doesn't cut the reply", async () => {
   ]);
 });
 
-/** A scheduler whose sleeps wait only on their signal; `pending` counts the sleeps not settled. */
+/**
+ * A scheduler whose sleeps wait only on their signal (one already aborted rejects at once);
+ * `pending` counts the sleeps not settled.
+ */
 function waitingScheduler(): Scheduler & { pending: number; slept: Promise<void> } {
   const slept = Promise.withResolvers<void>();
   const scheduler = {
@@ -802,6 +838,7 @@ function waitingScheduler(): Scheduler & { pending: number; slept: Promise<void>
     now: () => 0,
     sleep: (_ms: number, signal?: AbortSignal) =>
       new Promise<void>((_resolve, reject) => {
+        if (signal?.aborted) return reject(signal.reason);
         scheduler.pending++;
         signal?.addEventListener(
           "abort",
@@ -817,6 +854,11 @@ function waitingScheduler(): Scheduler & { pending: number; slept: Promise<void>
   return scheduler;
 }
 
+/** The `[type, error]` of each model call event. */
+function typesAndErrors(events: readonly unknown[]): [string, string | null][] {
+  return events.map((event) => [(event as { type: string }).type, (event as ModelCallFinished).error ?? null]);
+}
+
 const REQUEST = new Request({ messages: [new Message({ role: "user", parts: [new TextPart("hi")] })] });
 
 test("an interrupt during a model-retry wait ends the wait at once with an empty reply", async () => {
@@ -826,7 +868,8 @@ test("an interrupt during a model-retry wait ends the wait at once with an empty
   const model = new ScriptedModel([new ProviderError("server", "boom", { retryAfter: 60 }), reply("never")], CONFIG);
   const scheduler = waitingScheduler();
   const interrupt = new AbortController();
-  const call = callModel(live, model, REQUEST, { purpose: "chat", exchangeId: "x1", interrupt: interrupt.signal, scheduler });
+  const options = { purpose: "chat", exchangeId: "x1", interrupt: interrupt.signal, scheduler } as const;
+  const call = callModel(live, model, REQUEST, options);
   await scheduler.slept;
   interrupt.abort(new Error("interrupted"));
   const cut = await rejected(call);
@@ -834,7 +877,32 @@ test("an interrupt during a model-retry wait ends the wait at once with an empty
   expect((cut as ReplyInterrupted).reply.text()).toBe("");
   expect((cut as ReplyInterrupted).reply.parts).toEqual([]);
   expect((cut as ReplyInterrupted).usage).toBeNull();
-  expect(events.map((event) => [(event as { type: string }).type, (event as ModelCallFinished).error ?? null])).toEqual([
+  expect(typesAndErrors(events)).toEqual([
+    ["ModelCallStarted", null],
+    ["ModelCallFinished", "ProviderError"],
+  ]);
+  expect(model.requests).toHaveLength(1);
+  expect(scheduler.pending).toBe(0);
+});
+
+test("an interrupt already set when a model-retry wait begins ends it with an empty reply", async () => {
+  install({ ...BUILTIN, modelRetries: 1 });
+  const events: unknown[] = [];
+  const interrupt = new AbortController();
+  // Set during the failing attempt, so it is already aborted when the wait starts.
+  const emitEvent = (event: unknown) => {
+    events.push(event);
+    if (event instanceof ModelCallStarted) interrupt.abort(new Error("interrupted"));
+  };
+  const live = liveSinks({ nodeId: "chat", llmConfig: CONFIG, emitEvent });
+  const model = new ScriptedModel([new ProviderError("server", "boom", { retryAfter: 60 }), reply("never")], CONFIG);
+  const scheduler = waitingScheduler();
+  const options = { purpose: "chat", exchangeId: "x1", interrupt: interrupt.signal, scheduler } as const;
+  const cut = await rejected(callModel(live, model, REQUEST, options));
+  expect(cut).toBeInstanceOf(ReplyInterrupted);
+  expect((cut as ReplyInterrupted).reply.parts).toEqual([]);
+  expect((cut as ReplyInterrupted).usage).toBeNull();
+  expect(typesAndErrors(events)).toEqual([
     ["ModelCallStarted", null],
     ["ModelCallFinished", "ProviderError"],
   ]);

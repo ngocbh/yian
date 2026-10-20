@@ -141,11 +141,15 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
         purpose: "chat",
         exchangeId,
         signal: ctx.signal,
-        interrupt: interrupt ?? undefined,
+        interrupt,
       });
     } catch (error) {
       // The cut reply's text is kept; its calls, partial or not, never run.
-      if (error instanceof ReplyInterrupted) return interrupted(error.reply);
+      if (error instanceof ReplyInterrupted) {
+        // A stop that lands after the cut, before this catch runs, still wins.
+        checkStopped(ctx);
+        return interrupted(error.reply);
+      }
       throw error;
     }
     // A stop that lands during the call wins over its reply.
@@ -198,8 +202,8 @@ interface ToolTurn {
   readonly messages: Message[];
   /** The reply's runnable tool calls, in call order. */
   readonly calls: readonly ToolCallPart[];
-  /** The host's interrupt signal, or `null` for an agent that isn't steerable. */
-  readonly interrupt: AbortSignal | null;
+  /** The host's interrupt signal, or `undefined` for an agent that isn't steerable. */
+  readonly interrupt: AbortSignal | undefined;
 }
 
 /** One call whose check passed, ready to start. */

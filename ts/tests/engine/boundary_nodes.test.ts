@@ -5,8 +5,9 @@
  * nodes exist and that edges carry real adjacency, never that the strings are absent.
  *
  * Ported: `test_loader_synthesizes_start_and_end_nodes`,
- * `test_inputs_read_mints_producer_edge_from_start`, `test_input_reader_is_not_also_a_bare_root`
- * and `test_inputs_resolve_to_start_node`.
+ * `test_inputs_read_mints_producer_edge_from_start`, `test_input_reader_is_not_also_a_bare_root`,
+ * `test_inputs_resolve_to_start_node`, and the load half of
+ * `test_terminal_output_of_a_skipped_producer_is_null`.
  *
  * Changed: the flow assembles through `assembleText`, where Python calls `load_flow`; its CODE
  * reference is TS's (`./fixtures/compose_codefns.ts:echo_x`).
@@ -17,9 +18,9 @@
  * Ported, after rewrite (`graph()` with a `FuncNode` reading `${input.x}`, for the loaded CODE
  * node): the engine half of `test_engine_schedules_start_and_emits_succeeded`.
  *
- * Later (T4-8), through `run_flow`: `test_run_result_is_end_node_value` and the `run_flow` half of
- * `test_engine_schedules_start_and_emits_succeeded`. Later (T3-20, T4-8):
- * `test_terminal_output_of_a_skipped_producer_is_null` (its load half needs `nullSkippedOutputs`).
+ * Later (T4-8), through `run_flow`: `test_run_result_is_end_node_value`, the `run_flow` half of
+ * `test_engine_schedules_start_and_emits_succeeded` and the run half of
+ * `test_terminal_output_of_a_skipped_producer_is_null`.
  */
 
 import { expect, test } from "bun:test";
@@ -74,6 +75,46 @@ test("an input reader is not also a bare root", () => {
   const startToN = flow.edges.filter((edge) => edge.from === START_ID && edge.to === "n");
   expect(startToN).toHaveLength(1);
   expect(startToN[0]!.inputGroup).toBe("x");
+});
+
+const SKIPPED_TERMINAL = `
+id: e7
+name: e7
+input:
+  seed: !float
+nodes:
+  score:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:score
+    input:
+      seed: \${input.seed}
+    output: float
+  gate:
+    kind: case
+    cases:
+      - when: "score.output >= 1"
+        then: kept
+    else: cold
+  kept:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:cautious
+    input:
+      topic: \${input.seed}
+    output: str
+  cold:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:cautious
+    input:
+      topic: \${input.seed}
+    output: str
+output: \${kept.output}
+`;
+
+test("the terminal output of a skipped producer is null (loads)", () => {
+  // END's group for an output the loader null-defaults is optional, so a skipped producer commits
+  // null.
+  const flow = assembleText(SKIPPED_TERMINAL).flow.compiled;
+  expect(flow.outputs[0]!.binding.source).toBe("${kept.output:-null}");
 });
 
 test("inputs resolve to the START node", () => {

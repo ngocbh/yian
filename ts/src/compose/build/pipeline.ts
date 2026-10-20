@@ -143,6 +143,7 @@ import {
 import { checkCaseBranches } from "../validate/case_branches.ts";
 import { checkCaseExhaustive, checkCaseWhenValues, exhaustiveCases } from "../validate/case_exhaustive.ts";
 import { checkImpossibleWhens, computeNarrowing } from "../validate/narrowing.ts";
+import { nullSkippedOutputs, type SearchedWhen, SkipModel } from "../validate/skips.ts";
 
 // Name for the single output of a bare whole-string `output:` binding. The value-mode EndNode
 // returns the bare resolved value, so the name only labels the carrier.
@@ -2300,7 +2301,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   // An output that reads only nodes CASE routing may skip would leave END unreachable; the
   // explicit null default makes its END edge optional, so the run returns null.
   const structural = [...reconciled, ...orderingEdges];
-  const skips = skipModel(
+  const skips = new SkipModel(
     new Set(descriptors.keys()),
     structural,
     exhaustiveCases(descriptors, producers, flowInputContracts, { narrowing }),
@@ -2421,8 +2422,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //   T3-18  validateReferences (1).
 //   T3-20  validateNodeAsserts, checkSkippedArithmetic (1).
 //          lowerFlowAsserts (1): returns an empty `LoweredAsserts`.
-//          skipModel (1, Python's `SkipModel` class): returns `null`; nullSkippedOutputs (1):
-//            returns the outputs.
 //          searchedWhens (3, `ReadonlyMap<string, readonly SearchedWhen[]>`): `new Map()`.
 
 // T3-15: compose/nodes/{agent,code,tool,human_input,wait}.ts
@@ -2454,11 +2453,6 @@ function validateReferences(
 
 // T3-20: compose/validate/{case_branches,narrowing,case_exhaustive,asserts,skips}.ts
 
-/** Python's `compose.validate.skips.SkipModel`; not ported yet. */
-type SkipModel = unknown;
-/** One searched `when:` as authored: its index, text, origin and range. */
-type SearchedWhen = readonly [index: number, when: unknown, origin: OriginRef | null, range: SourceRange | null];
-
 /** Python's `compose.validate.asserts.validate_node_asserts`; not ported yet. */
 function validateNodeAsserts(
   nodes: ReadonlyMap<string, Node>,
@@ -2489,21 +2483,6 @@ function lowerFlowAsserts(
   } = {},
 ): LoweredAsserts {
   return new LoweredAsserts();
-}
-
-/** Python's `compose.validate.skips.SkipModel` constructor; not ported yet. */
-function skipModel(
-  nodeIds: Iterable<string>,
-  edges: Iterable<Edge>,
-  exhaustive: ReadonlySet<string>,
-  options: { limit?: number | null } = {},
-): SkipModel {
-  return null;
-}
-
-/** Python's `compose.validate.skips.null_skipped_outputs`; not ported yet. */
-function nullSkippedOutputs(flowOutputs: FlowOutput[], model: SkipModel): FlowOutput[] {
-  return flowOutputs;
 }
 
 /** Python's `compose.validate.skips.check_skipped_arithmetic`; not ported yet. */

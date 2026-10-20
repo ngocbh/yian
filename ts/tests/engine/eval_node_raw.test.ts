@@ -2,7 +2,9 @@
  * Raw node evaluation for the append-only dispatcher: a port of
  * `tests/engine/test_eval_node_raw.py`.
  *
- * Ported: `test_raw_evaluation_returns_closed_success_route_and_grow_values`.
+ * Ported: `test_raw_evaluation_returns_closed_success_route_and_grow_values` and
+ * `test_raw_node_raise_and_invalid_grow_are_failures_not_observers` (cause type `Error` for
+ * Python's `RuntimeError`).
  *
  * Ported (adapted): `test_public_evaluation_always_returns_frozen_slotted_wrapper` and
  * `test_raw_failure_is_frozen_slotted_and_preserves_diagnostics`: the field names are the own
@@ -10,6 +12,11 @@
  * error's stack.
  *
  * Not ported: the `__slots__` (no `__dict__`) checks; a TS class has no slots.
+ * `test_raw_host_stop_propagates_from_node_and_preset_event` and
+ * `test_raw_generator_host_stop_propagates_by_identity`: TS has no `_HostStop`, since a stop is the
+ * node's aborted signal. In their place: an aborted signal rejects with its reason before binding;
+ * a node that rejects after its signal aborted (with its own error or the reason) rejects
+ * `evalNode` with the reason, not a failure; a node that returns after the abort still resolves.
  *
  * TS-only: the `EvaluatedOutcome` constructor checks, `requireSteering`, and the steering
  * capability's checks on what the host inbox returns.
@@ -28,6 +35,7 @@ import {
   CapabilityFault,
   Grow,
   Node,
+  type NodeCaps,
   NodeKind,
   type NodeResult,
   Output,
@@ -76,6 +84,15 @@ class ResultNode extends Node {
 
   override forward(): NodeResult {
     return this.result as NodeResult;
+  }
+}
+
+/** Throw a plain `Error` from its body. */
+class FailNode extends Node {
+  readonly kind = NodeKind.CODE;
+
+  override forward(): NodeResult {
+    throw new Error("boom");
   }
 }
 
@@ -144,6 +161,94 @@ test("raw failure is frozen slotted and preserves diagnostics", async () => {
   expect(() => {
     (result as { failure: unknown }).failure = retained;
   }).toThrow(TypeError);
+});
+
+test("raw node raise and invalid grow are failures not observers", async () => {
+  const raised = await raw(new FailNode("raise"));
+  const invalidGrow = await raw(new ResultNode("leaf", new Grow({})));
+
+  expect(raised).toBeInstanceOf(EvaluationFailure);
+  const failure = (raised as EvaluationFailure).failure;
+  expect(failure.code).toBe("node.execute");
+  expect([failure.message, failure.causeType]).toEqual(["boom", "Error"]);
+  expect(invalidGrow).toBeInstanceOf(EvaluationFailure);
+  expect((invalidGrow as EvaluationFailure).failure.code).toBe("contract.node_result");
+  expect((invalidGrow as EvaluationFailure).failure.message).toContain("not a spawner");
+});
+
+describe("a stop is the node's aborted signal", () => {
+  /** Await `gate`, then settle with `settle`, recording that `forward` ran. */
+  class GatedNode extends Node {
+    readonly kind = NodeKind.CODE;
+    readonly gate: Promise<void>;
+    readonly settle: (caps: NodeCaps) => NodeResult;
+    ran = false;
+
+    constructor(nodeId: string, gate: Promise<void>, settle: (caps: NodeCaps) => NodeResult) {
+      super(nodeId);
+      this.gate = gate;
+      this.settle = settle;
+    }
+
+    override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
+      this.ran = true;
+      await this.gate;
+      return this.settle(caps);
+    }
+  }
+
+  test("an aborted signal rejects with its reason before binding", async () => {
+    const controller = new AbortController();
+    const reason = new Error("stopped");
+    controller.abort(reason);
+    const node = new GatedNode("never", Promise.resolve(), () => new Output("unexpected"));
+    // Binding this parameter would fail, so a rejection proves binding never ran.
+    node.params = [new Parameter("required", { required: true })];
+
+    expect(await rejected(raw(node, { signal: controller.signal }))).toBe(reason);
+    expect(node.ran).toBe(false);
+  });
+
+  for (const [label, settle] of [
+    [
+      "its own error",
+      () => {
+        throw new Error("interrupted");
+      },
+    ],
+    [
+      "the reason",
+      (caps: NodeCaps) => {
+        throw caps.signal!.reason;
+      },
+    ],
+  ] as const) {
+    test(`a node rejecting after its signal aborted rejects with the reason (${label})`, async () => {
+      const controller = new AbortController();
+      const reason = new Error("stopped");
+      const gate = Promise.withResolvers<void>();
+      const evaluation = raw(new GatedNode("work", gate.promise, settle), { signal: controller.signal });
+
+      controller.abort(reason);
+      gate.resolve();
+
+      expect(await rejected(evaluation)).toBe(reason);
+    });
+  }
+
+  test("a node returning after its signal aborted still resolves", async () => {
+    // The engine discards it; the evaluator only reports what the node did.
+    const controller = new AbortController();
+    const gate = Promise.withResolvers<void>();
+    const evaluation = raw(new GatedNode("work", gate.promise, () => new Output("late")), {
+      signal: controller.signal,
+    });
+
+    controller.abort(new Error("stopped"));
+    gate.resolve();
+
+    expect(await evaluation).toEqual(new Output("late"));
+  });
 });
 
 describe("EvaluatedOutcome checks its fields", () => {

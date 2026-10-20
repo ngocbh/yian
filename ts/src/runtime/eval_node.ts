@@ -30,10 +30,14 @@ import {
   type MemoryScope,
 } from "../memory/contracts.ts";
 import {
+  AssertionStageError,
+  BindingStageError,
   CapabilityFault,
+  DeferredBindingFault,
   Grow,
   markerMessage,
   Node,
+  NodeBodyError,
   type NodeCaps,
   Output,
   Route,
@@ -311,6 +315,8 @@ export interface EvalNodeOptions {
  *   rejects after it aborted.
  * @throws RangeError when a node reading its steps fails to bind its reserved keys after an earlier
  *   start recorded steps.
+ * @throws The original error of a capability fault, an unexpected per-item binder fault, or
+ *   malformed node setup (a missing reserved wiring key, malformed `params`, no `forward`).
  */
 export async function evalNode(
   node: Node,
@@ -339,7 +345,9 @@ export async function evalNode(
   if (emitStream !== null && typeof emitStream !== "function") {
     throw new TypeError("emit_stream must be callable or null");
   }
-  if (emitEvent !== null && typeof emitEvent !== "function") throw new TypeError("emit_event must be callable or null");
+  if (emitEvent !== null && typeof emitEvent !== "function") {
+    throw new TypeError("emit_event must be callable or null");
+  }
   if (sourceResolver !== null && typeof sourceResolver !== "function") {
     throw new TypeError("source_resolver must be callable or null");
   }
@@ -413,8 +421,34 @@ async function evaluateNode(
     return evaluationFailure(node, error.failureCode, error, error.origin);
   }
 
+  // Build only the node-owned, trait-gated capabilities. The deferred per-item binder throws the
+  // same binder-owned marker from inside the body, and the classification below keeps it.
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = { signal };
-  const result: unknown = usesBaseTemplate ? await node.runForEvaluator(record, caps) : await node.run(record, caps);
+  if (node.bindsPerItem) {
+    const params = node.params ?? [];
+    caps.bindItem = (element) => {
+      try {
+        return bindParams(params, nodeWiring, pool, {
+          item: element,
+          sourceResolver,
+          types: node.types,
+          labels: node.bindingLabels,
+        });
+      } catch (error) {
+        if (error instanceof BindingError) throw new BindingStageError(error);
+        throw new DeferredBindingFault(error);
+      }
+    };
+  }
+
+  let result: unknown;
+  try {
+    result = usesBaseTemplate ? await node.runForEvaluator(record, caps) : await node.run(record, caps);
+  } catch (error) {
+    // A stop is control flow outside the node-result sum, whatever the node rejected with.
+    if (signal.aborted) throw signal.reason;
+    return stageFailure(node, error, usesBaseTemplate);
+  }
   if (!(result instanceof Output || result instanceof Route || result instanceof Grow)) {
     return evaluationFailure(
       node,
@@ -434,4 +468,31 @@ async function evaluateNode(
     );
   }
   return result;
+}
+
+/**
+ * Classify one rejection of a node's run by the stage that threw it.
+ *
+ * @throws The original of a capability or deferred binder fault, and, for the base template, any
+ *   error outside its stages (malformed setup).
+ */
+function stageFailure(node: Node, error: unknown, usesBaseTemplate: boolean): EvaluationFailure {
+  if (error instanceof DeferredBindingFault || error instanceof CapabilityFault) throw error.original;
+  if (error instanceof BindingStageError) {
+    const { original } = error;
+    // A custom run is one undivided node-body stage.
+    if (!usesBaseTemplate) return evaluationFailure(node, "node.execute", original, node.exceptionOrigin(original));
+    return evaluationFailure(node, original.failureCode, original, original.origin);
+  }
+  if (error instanceof AssertionStageError) {
+    const { original } = error;
+    if (!usesBaseTemplate) return evaluationFailure(node, "node.execute", original, node.exceptionOrigin(original));
+    return evaluationFailure(node, original.failureCode, original, original.assertion?.origin ?? null);
+  }
+  if (error instanceof NodeBodyError) {
+    const { original } = error;
+    return evaluationFailure(node, node.exceptionCode(original), original, node.exceptionOrigin(original));
+  }
+  if (usesBaseTemplate) throw error;
+  return evaluationFailure(node, node.exceptionCode(error), error, node.exceptionOrigin(error));
 }

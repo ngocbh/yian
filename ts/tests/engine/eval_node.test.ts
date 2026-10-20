@@ -12,8 +12,15 @@
  * `test_routing_returns_route_without_output_value`,
  * `test_non_spawner_grow_returns_clear_evaluation_failure`,
  * `test_bad_return_type_returns_clear_evaluation_failure`,
- * `test_reserved_input_rejection_is_an_input_contract_failure` (2 rows) and
- * `test_case_rejects_a_non_origin_predicate_carrier`.
+ * `test_reserved_input_rejection_is_an_input_contract_failure` (2 rows),
+ * `test_case_rejects_a_non_origin_predicate_carrier`, `test_node_raise_returns_evaluation_failure`,
+ * `test_post_assert_isolated_from_node_input_mutation`,
+ * `test_wrapper_post_assertion_uses_assertion_stage_and_origin`,
+ * `test_body_raised_assertion_exception_remains_node_execution`,
+ * `test_node_execution_prefers_operation_origin_then_node_fallback` (2 rows),
+ * `test_node_execution_uses_the_node_exception_code` (2 rows),
+ * `test_exception_code_is_asked_only_for_the_body` (3 rows) and
+ * `test_per_item_wrapper_default_keeps_binding_stage`.
  *
  * Ported (adapted): `test_map_over_accepts_a_binding_carrier`,
  * `test_wait_until_accepts_a_binding_carrier`,
@@ -22,8 +29,21 @@
  * `test_case_with_non_string_predicate_is_a_setup_fault`,
  * `test_map_over_not_a_list_message_is_byte_identical` (on the node and through the evaluator),
  * `test_missing_reserved_wiring_is_an_ir_fault` (2 rows; the node's plain `Error`, where Python
- * raises `KeyError`) and `test_malformed_parameter_carrier_is_an_ir_fault` (`params` that isn't
- * an array, where Python uses a tuple).
+ * raises `KeyError`), `test_malformed_parameter_carrier_is_an_ir_fault` (`params` that isn't an
+ * array, where Python uses a tuple), `test_wrapper_assertion_failure_uses_assertion_stage_and_origin`
+ * (the traceback is the assertion error's stack, with no marker name),
+ * `test_body_raised_binding_exception_remains_node_execution` (Python's generator row is an async
+ * `forward` that rejects), `test_base_exception_code_is_node_execution` (on a minimal subclass:
+ * `Node` is abstract), `test_run_override_exception_is_node_execution` (5 rows; the override is
+ * `async`), `test_missing_node_implementation_is_a_setup_fault` (a subclass without `forward`),
+ * `test_malformed_assertion_carrier_is_an_ir_fault` (a `TypeError`, where Python raises
+ * `AttributeError`), `test_map_deferred_item_binding_keeps_input_contract_stage` and
+ * `test_map_deferred_expression_keeps_binding_stage` (on a local node that binds per item, since
+ * MAP's body is ported later), and `test_map_deferred_unexpected_binder_fault_escapes` (on the same
+ * node; a getter on the item throws the host fault Python's `__deepcopy__` bomb raises).
+ *
+ * Not ported: `test_malformed_result_context_is_an_ir_fault`: a template string can't fail on a
+ * malformed `kind`.
  *
  * Changed: `drive` evaluates the node in a one-node `CompiledFlow` whose wiring is a `FuncNode`'s
  * `reads` or the given sources, as Python's stub flow derives it. Python's `RuntimeError` is a
@@ -45,8 +65,6 @@
  * Later (T4-10): the run-result half of `test_map_over_accepts_a_binding_carrier` (the `Grow`
  * through the evaluator). Later (T4-11): the run-result half of
  * `test_wait_until_accepts_a_binding_carrier` (the `Output` through the evaluator).
- *
- * Later (T4-6): the stage classification rows.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -54,11 +72,29 @@ import { describe, expect, test } from "bun:test";
 import { CompiledFlow, START_ID } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { ConversationInvocation } from "../../src/memory/contracts.ts";
-import { Grow, Node, NodeKind, type NodeResult, Output, Route } from "../../src/nodes/base.ts";
+import {
+  AssertionStageError,
+  BindingStageError,
+  Grow,
+  Node,
+  NodeAssertFailed,
+  type NodeCaps,
+  NodeKind,
+  type NodeResult,
+  Output,
+  Route,
+} from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { Case, CaseNode } from "../../src/nodes/case/node.ts";
-import { Assertion, Binding, NodeSteps, Parameter } from "../../src/nodes/contracts.ts";
+import {
+  Assertion,
+  Binding,
+  ContractOrigins,
+  NodeSteps,
+  Parameter,
+  ValueContract,
+} from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { WaitNode } from "../../src/nodes/wait/node.ts";
@@ -70,6 +106,7 @@ import {
 } from "../../src/runtime/eval_node.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
+import { Type, type Value, ValueKind } from "../../src/typesys/values.ts";
 import { FuncNode } from "./run_state_fixtures.ts";
 
 /**
@@ -423,4 +460,369 @@ describe("evalNode checks its arguments", () => {
 
     expect((await evalNode(node, null, pool, options)).outcome).toEqual(new Output("unused"));
   });
+});
+
+/** Throw `error` from its body, after an `await` when `async`. */
+class RaiseNode extends Node {
+  readonly kind = NodeKind.CODE;
+  readonly error: unknown;
+  readonly async: boolean;
+
+  constructor(nodeId: string, error: unknown, options: { origin?: OriginRef | null; async?: boolean } = {}) {
+    const { async = false, ...rest } = options;
+    super(nodeId, rest);
+    this.error = error;
+    this.async = async;
+  }
+
+  override forward(): NodeResult | Promise<NodeResult> {
+    if (!this.async) throw this.error;
+    return Promise.resolve().then(() => {
+      throw this.error;
+    });
+  }
+}
+
+test("node raise returns evaluation failure", async () => {
+  const node = new RaiseNode("n", new Error("boom"), { origin: new OriginRef("node:n") });
+
+  const failure = await driveFailure(node);
+
+  expect(failure.code).toBe("node.execute");
+  expect(failure.trace).toEqual([node.origin!]);
+  expect([failure.message, failure.causeType]).toEqual(["boom", "Error"]);
+});
+
+/** Change its input record, to test the template's post-assert snapshot. */
+class MutatingNode extends Node {
+  readonly kind = NodeKind.CODE;
+
+  constructor(nodeId: string) {
+    super(nodeId);
+    this.params = [new Parameter("x")];
+  }
+
+  override forward(inputs: Record<string, unknown>): NodeResult {
+    inputs.x = 999n;
+    return new Output("done");
+  }
+}
+
+test("post assert isolated from node input mutation", async () => {
+  const pool = new VariablePool();
+  pool.set(START_ID, { x: 1n });
+  const node = new MutatingNode("n");
+  node.postAsserts = [new Assertion("x == 1", "x == 1")];
+
+  expect(await drive(node, { pool, wiring: { x: "${input.x}" } })).toEqual(new Output("done"));
+});
+
+test("wrapper assertion failure uses assertion stage and origin", async () => {
+  // Only the template's own authored assertion gets `assertion.failed`.
+  const assertionOrigin = new OriginRef("assert:n:0");
+  const node = new FuncNode("n", () => "never", { origin: new OriginRef("node:n") });
+  node.preAsserts = [new Assertion("1 == 2", "must hold", { origin: assertionOrigin })];
+
+  const failure = await driveFailure(node);
+
+  expect(failure.code).toBe("assertion.failed");
+  expect(failure.trace).toEqual([assertionOrigin]);
+  expect(failure.causeType).toBe("NodeAssertFailed");
+  expect(failure.traceback).toStartWith("NodeAssertFailed: node 'n' pre-assert failed: must hold\n");
+  expect(failure.traceback).not.toContain("AssertionStageError");
+});
+
+test("wrapper post assertion uses assertion stage and origin", async () => {
+  // Post-asserts keep the same template-owned classification as pre-asserts.
+  const assertionOrigin = new OriginRef("assert:n:post:0");
+  const node = new FuncNode("n", () => "value", { origin: new OriginRef("node:n") });
+  node.postAsserts = [new Assertion("output == 'other'", "output must match", { origin: assertionOrigin })];
+
+  const failure = await driveFailure(node);
+
+  expect(failure.code).toBe("assertion.failed");
+  expect(failure.trace).toEqual([assertionOrigin]);
+  expect(failure.causeType).toBe("NodeAssertFailed");
+});
+
+test("body raised assertion exception remains node execution", async () => {
+  // The classification follows the body stage, not the error's class.
+  const node = new RaiseNode("n", new NodeAssertFailed("body chose this exception type"), {
+    origin: new OriginRef("node:n"),
+  });
+
+  const failure = await driveFailure(node);
+
+  expect(failure.code).toBe("node.execute");
+  expect(failure.trace).toEqual([node.origin!]);
+  expect(failure.causeType).toBe("NodeAssertFailed");
+});
+
+for (const async of [false, true]) {
+  test(`body raised binding exception remains node execution (${async ? "async" : "body"})`, async () => {
+    // Only evaluator-owned binding operations may keep the binder's classification.
+    const error = new BindingError("body chose this exception type", {
+      failureCode: "contract.input",
+      origin: new OriginRef("spoofed-binding-origin"),
+    });
+    const node = new RaiseNode("n", error, { origin: new OriginRef("node:n"), async });
+
+    const failure = await driveFailure(node);
+
+    expect(failure.code).toBe("node.execute");
+    expect(failure.trace).toEqual([node.origin!]);
+    expect(failure.causeType).toBe("BindingError");
+  });
+}
+
+/** Throw from the body while naming a finer operation origin. */
+class OperationOriginNode extends RaiseNode {
+  readonly operationOrigin: OriginRef | null;
+
+  constructor(nodeId: string, operationOrigin: OriginRef | null) {
+    super(nodeId, new Error("operation failed"), { origin: new OriginRef(`node:${nodeId}`) });
+    this.operationOrigin = operationOrigin;
+  }
+
+  override exceptionOrigin(): OriginRef | null {
+    return this.operationOrigin;
+  }
+}
+
+for (const [operationOrigin, expectedKey] of [
+  [new OriginRef("operation:n"), "operation:n"],
+  [null, "node:n"],
+] as const) {
+  test(`node execution prefers operation origin then node fallback (${expectedKey})`, async () => {
+    // A body failure appends the selected local origin after the outer ancestry.
+    const outer = new OriginRef("outer:call");
+    const node = new OperationOriginNode("n", operationOrigin);
+    node.originContext = [outer];
+
+    expect((await driveFailure(node)).trace).toEqual([outer, new OriginRef(expectedKey)]);
+  });
+}
+
+/** Return or throw a configured body outcome while classifying every body error as `provider.auth`. */
+class ExceptionCodeNode extends ResultNode {
+  constructor(nodeId: string, result: unknown) {
+    super(nodeId, result, { origin: new OriginRef(`node:${nodeId}`) });
+  }
+
+  override forward(): NodeResult {
+    if (this.result instanceof Error) throw this.result;
+    return this.result as NodeResult;
+  }
+
+  override exceptionCode(): "provider.auth" {
+    return "provider.auth";
+  }
+}
+
+/** Bypass the base template with an `async` `run` that rejects with `error`. */
+class OverrideRaisesNode extends Node {
+  readonly kind = NodeKind.CODE;
+  readonly error: unknown;
+
+  constructor(nodeId: string, error: unknown) {
+    super(nodeId, { origin: new OriginRef(`node:${nodeId}`) });
+    this.error = error;
+  }
+
+  override forward(): NodeResult {
+    return new Output("unused");
+  }
+
+  override async run(): Promise<NodeResult> {
+    throw this.error;
+  }
+}
+
+/** Bypass the base template while classifying every body error as `provider.auth`. */
+class OverrideRaisesWithCode extends OverrideRaisesNode {
+  override exceptionCode(): "provider.auth" {
+    return "provider.auth";
+  }
+}
+
+for (const [label, make] of [
+  ["body", () => new ExceptionCodeNode("n", new Error("unauthorized"))],
+  ["run override", () => new OverrideRaisesWithCode("n", new Error("unauthorized"))],
+] as const) {
+  test(`node execution uses the node exception code (${label})`, async () => {
+    // A body error takes the code the node's hook selects.
+    const node: Node = make();
+
+    const failure = await driveFailure(node);
+
+    expect(failure.code).toBe("provider.auth");
+    expect(failure.trace).toEqual([node.origin!]);
+    expect(failure.causeType).toBe("Error");
+  });
+}
+
+test("base exception code is node execution", () => {
+  // A node without a finer classification reports `node.execute`.
+  expect(new ResultNode("n", null).exceptionCode(new Error("boom"))).toBe("node.execute");
+});
+
+for (const [label, result, configure, expectedCode] of [
+  [
+    "unbound parameter",
+    new Output("unused"),
+    (node: Node) => {
+      node.params = [new Parameter("x", { required: true })];
+    },
+    "binding.evaluate",
+  ],
+  [
+    "failing pre-assert",
+    new Output("unused"),
+    (node: Node) => {
+      node.preAsserts = [new Assertion("1 == 2", "must hold")];
+    },
+    "assertion.failed",
+  ],
+  ["bad result", { not: "a NodeResult" }, () => {}, "contract.node_result"],
+] as const) {
+  test(`exception code is asked only for the body (${label})`, async () => {
+    // The binding, assertion and result-contract stages keep their own codes.
+    const node = new ExceptionCodeNode("n", result);
+    configure(node);
+
+    expect((await driveFailure(node)).code).toBe(expectedCode);
+  });
+}
+
+for (const [label, error, expectedCauseType] of [
+  ["ordinary", new Error("ordinary override failure"), "Error"],
+  ["binding error", new BindingError("spoofed", { failureCode: "binding.evaluate" }), "BindingError"],
+  [
+    "assertion error",
+    new NodeAssertFailed("spoofed", { assertion: new Assertion("true", "true", { origin: new OriginRef("spoofed") }) }),
+    "NodeAssertFailed",
+  ],
+  [
+    "binding stage marker",
+    new BindingStageError(new BindingError("wrapped", { failureCode: "binding.evaluate" })),
+    "BindingError",
+  ],
+  [
+    "assertion stage marker",
+    new AssertionStageError(new NodeAssertFailed("wrapped", { assertion: new Assertion("true", "true") })),
+    "NodeAssertFailed",
+  ],
+] as const) {
+  test(`run override exception is node execution (${label})`, async () => {
+    // A custom run is one undivided node-body stage.
+    const node = new OverrideRaisesNode("n", error);
+
+    const failure = await driveFailure(node);
+
+    expect(failure.code).toBe("node.execute");
+    expect(failure.trace).toEqual([node.origin!]);
+    expect(failure.causeType).toBe(expectedCauseType);
+    expect(failure.traceback).not.toContain("BindingStageError");
+    expect(failure.traceback).not.toContain("AssertionStageError");
+  });
+}
+
+/** A node class that defines no `forward`. */
+class NoForwardNode extends Node {
+  readonly kind = NodeKind.CODE;
+}
+
+test("missing node implementation is a setup fault", async () => {
+  // The base placeholder body is malformed executable setup.
+  expect(await rejected(drive(new NoForwardNode("n")))).toEqual(new Error("node 'n' (NoForwardNode) defines no forward"));
+});
+
+test("malformed assertion carrier is an ir fault", async () => {
+  // An unexpected template-state fault is outside expected flow failure.
+  const node = new FuncNode("n", () => "never");
+  node.preAsserts = [{} as Assertion];
+
+  expect(await rejected(drive(node))).toBeInstanceOf(TypeError);
+});
+
+/** Bind one record per item through `caps.bindItem`, as MAP does, and return them. */
+class PerItemNode extends Node {
+  readonly kind = NodeKind.MAP;
+  override readonly bindsPerItem = true;
+  readonly items: readonly Value[];
+
+  constructor(nodeId: string, items: readonly Value[]) {
+    super(nodeId);
+    this.items = items;
+  }
+
+  override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+    return new Output(this.items.map((item, index) => caps.bindItem!(item, index)));
+  }
+}
+
+test("map deferred item binding keeps input contract stage", async () => {
+  // The per-item binder capability doesn't become a node-body failure.
+  const contractOrigin = new OriginRef("map:x:contract");
+  const node = new PerItemNode("m", ["bad"]);
+  node.params = [
+    new Parameter("x", {
+      contract: new ValueContract(Type.scalar(ValueKind.INTEGER), new ContractOrigins({ default: contractOrigin })),
+    }),
+  ];
+
+  const failure = await driveFailure(node, {
+    wiring: { x: new Binding("${item}", { origin: new OriginRef("map:x:binding") }) },
+  });
+
+  expect(failure.code).toBe("contract.input");
+  expect(failure.trace).toEqual([contractOrigin]);
+});
+
+test("map deferred expression keeps binding stage", async () => {
+  // A per-item expression failure stays evaluator-owned binding work.
+  const bindingOrigin = new OriginRef("map:x:binding");
+  const node = new PerItemNode("m", [{}]);
+  node.params = [new Parameter("x")];
+
+  const failure = await driveFailure(node, {
+    wiring: { x: new Binding('${item.missing :? "x is required"}', { origin: bindingOrigin }) },
+  });
+
+  expect(failure.code).toBe("binding.evaluate");
+  expect(failure.trace).toEqual([bindingOrigin]);
+});
+
+test("map deferred unexpected binder fault escapes", async () => {
+  // Deferred binding keeps the ordinary binder's host and setup boundary.
+  const expected = new Error("item read failed");
+  const item = Object.defineProperty({}, "x", {
+    enumerable: true,
+    get() {
+      throw expected;
+    },
+  }) as Value;
+  const node = new PerItemNode("m", [item]);
+  node.params = [new Parameter("x")];
+
+  expect(await rejected(drive(node, { wiring: { x: "${item}" } }))).toBe(expected);
+});
+
+test("per item wrapper default keeps binding stage", async () => {
+  // The template's per-item default backstop keeps the default's origin.
+  const defaultOrigin = new OriginRef("map:x:default");
+  const node = new MapNode("m", { flowId: "child", child: {} });
+  node.params = [
+    new Parameter("x", {
+      contract: new ValueContract(Type.scalar(ValueKind.INTEGER)),
+      hasDefault: true,
+      default: "bad",
+      defaultOrigin,
+    }),
+  ];
+
+  const failure = await driveFailure(node, { wiring: { over: [] } });
+
+  expect(failure.code).toBe("binding.evaluate");
+  expect(failure.trace).toEqual([defaultOrigin]);
 });

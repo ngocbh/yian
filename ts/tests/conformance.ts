@@ -1139,7 +1139,8 @@ function mismatch(
   } catch {
     // A body that doesn't read is a mismatch.
   }
-  return `body: expected ${key} ${spell(expected[key])}, got ${JSON.stringify(text.slice(0, 500))}`;
+  const sent = JSON.stringify(text.slice(0, 500));
+  return `body: expected ${key} ${jsonText(expected[key]!)}, got ${sent}`;
 }
 
 /**
@@ -1167,7 +1168,7 @@ class Stub {
   /** Start serving `http`. */
   static async start(http: Case[]): Promise<Stub> {
     // A connection the command left half-open can't keep `close` waiting for its handler.
-    const server = createServer({ requestTimeout: 10_000 });
+    const server = createServer({ requestTimeout: 10_000, connectionsCheckingInterval: 1_000 });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const stub = new Stub(http, server);
     server.on("request", (request: IncomingMessage, response: ServerResponse) => {

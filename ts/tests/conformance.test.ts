@@ -1174,9 +1174,9 @@ describe("runCli", () => {
     ],
     [
       EXCHANGE(", json: {client_id: x}"),
-      'body: expected json {"client_id":"x"}, got "{\\"client_id\\": \\"y\\"}"',
+      'body: expected json {"client_id": "x"}, got "{\\"client_id\\": \\"y\\"}"',
     ],
-    [EXCHANGE(", form: {client_id: x}"), 'body: expected form {"client_id":"x"}'],
+    [EXCHANGE(", form: {client_id: x}"), 'body: expected form {"client_id": "x"}'],
   ])(
     "fails a request that doesn't match %s, naming the difference",
     async (exchange, difference) => {

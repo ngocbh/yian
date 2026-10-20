@@ -130,7 +130,9 @@ import { TypeCheckError } from "../../typesys/values.ts";
 import { ExpressionError } from "../../expr/index.ts";
 import { LLM_CONFIG_KEY, splitLayers, valueLeaves } from "../../nodes/agent/llm_values.ts";
 import { AgentNode } from "../../nodes/agent/node.ts";
+import { checkCallMapTypes } from "../validate/call_types.ts";
 import { checkLlmConfigSources } from "../validate/llm_config_sources.ts";
+import { checkLoopTypeContract } from "../validate/loop_types.ts";
 import {
   checkTypedInputs,
   checkTypedOutputs,
@@ -2183,8 +2185,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   // check above). Each returned field must also fit the body parameter it is bound to on the
   // next turn: a named body's declared input, or the parameter an inline body generates from its
   // seed (`inlineLoops` only selects the wording).
-  // T3-19: the loops with an inline body (`childLabel` set).
-  const inlineLoops: ReadonlySet<string> = new Set();
+  const inlineLoops = new Set(
+    [...descriptors].filter(([, d]) => d instanceof LoopDescriptor && d.childLabel !== null).map(([id]) => id),
+  );
   checkLoopTypeContract(buildResults, producers, flowInputContracts, flowWiring, {
     inlineLoops,
     registry,
@@ -2397,8 +2400,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
 //   T3-18  validateReferences (1).
-//   T3-19  checkCallMapTypes, checkLoopTypeContract (1).
-//          inlineLoops (3, `ReadonlySet<string>`): `new Set()`.
 //   T3-20  checkCaseBranches (1); caseOutputCursor (2): returns `null`.
 //          computeNarrowing (1): returns an empty `Narrowing` over the given maps.
 //          checkCaseWhenValues, checkImpossibleWhens, checkCaseExhaustive, validateNodeAsserts,
@@ -2434,33 +2435,6 @@ function validateReferences(
 ): void {}
 
 // T3-19: compose/validate/{typed_bindings,call_types,loop_types,llm_config_sources}.ts
-
-/** Python's `compose.validate.call_types.check_call_map_types`; not ported yet. */
-function checkCallMapTypes(
-  buildResults: ReadonlyMap<string, BuildResult>,
-  producers: ReadonlyMap<string, OutputContract>,
-  flowInputs: ReadonlyMap<string, ValueContract>,
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-  options: {
-    narrowing?: Narrowing | null;
-    typeFn?: TypeFn | null;
-    registry?: TypeRegistry | null;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): void {}
-
-/** Python's `compose.validate.loop_types.check_loop_type_contract`; not ported yet. */
-function checkLoopTypeContract(
-  buildResults: ReadonlyMap<string, BuildResult>,
-  producers: ReadonlyMap<string, OutputContract>,
-  flowInputs: ReadonlyMap<string, ValueContract>,
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-  options: {
-    inlineLoops?: ReadonlySet<string>;
-    registry?: TypeRegistry | null;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): void {}
 
 // T3-20: compose/validate/{case_branches,narrowing,case_exhaustive,asserts,skips}.ts
 

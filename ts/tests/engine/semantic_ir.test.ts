@@ -32,7 +32,11 @@
  * `test_child_signature_keeps_nested_partial_output_opaque_at_record_field` and
  * `test_child_signature_rejects_contradictory_declared_output_evidence`;
  * `test_composite_builders_preserve_or_deliberately_wrap_child_contract` (the LOOP count is `1n`,
- * as YAML reads it); the CASE edge row `test_case_edge_inference_reads_wrapped_lowered_wiring`; and
+ * as YAML reads it); the CALL type-check rows
+ * `test_call_type_error_is_identical_for_raw_and_wrapped_sources` and
+ * `test_call_type_check_projects_known_partial_producer_field`; the LOOP type-check row
+ * `test_loop_type_check_projects_known_partial_seed_field`; the CASE edge row
+ * `test_case_edge_inference_reads_wrapped_lowered_wiring`; and
  * the edge inference rows `test_data_edge_inference_is_identical_for_raw_and_wrapped_sources` and
  * `test_producer_scan_unwraps_exactly_one_carrier_layer`; the compose rows
  * `test_loaded_compose_flow_has_only_canonical_binding_storage` and
@@ -64,6 +68,8 @@
  *   `SimpleNamespace` over bare nodes.
  * - The CASE edge row builds an `on:` `CaseDescriptor` whose `onOrigin` wraps the `__on` wiring
  *   in a `Binding`, where Python calls `_data_edges`, which stays module-private.
+ * - The CALL and LOOP type-check rows build a `CallNode` and a `LoopNode`, where Python passes
+ *   `SimpleNamespace` nodes.
  * - The data-edge row's sink is a base `NodeDescriptor`, where Python passes a bare `object()`.
  * - The canonical-storage row assembles its flow through `assembleText`, where Python calls
  *   `load_flow`, and also checks that START and END have wiring; its CODE reference is TS's
@@ -75,8 +81,7 @@
  *   unsupported non-JSON value of type `Binding`). Python's `repr(manifest)` is `JSON.stringify`.
  *
  * Later (T3-14…T3-22): the compose/load row
- * `test_reference_validation_checks_a_wrapped_flow_output`; the CALL/LOOP type-check rows
- * (`test_call_type_*` and `test_loop_type_check_*`); inline binding type inference
+ * `test_reference_validation_checks_a_wrapped_flow_output`; inline binding type inference
  * (`test_inline_binding_type_inference_reads_one_carrier_layer`).
  */
 
@@ -102,32 +107,37 @@ import {
 import { synthesizeBoundaryGraph } from "../../src/compose/build/boundary.ts";
 import { inferDataEdges } from "../../src/compose/edges/data.ts";
 import { bindingProducers } from "../../src/compose/edges/producers.ts";
-import { BuildContext, NodeDescriptor } from "../../src/compose/nodes/base.ts";
+import { BuildContext, BuildResult, NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ChildSignature, childSignature } from "../../src/compose/nodes/resolver.ts";
+import { checkCallMapTypes } from "../../src/compose/validate/call_types.ts";
+import { checkLoopTypeContract } from "../../src/compose/validate/loop_types.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { parseExpr } from "../../src/expr/index.ts";
 import { Token, Tree } from "../../src/expr/grammar.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { CallNode } from "../../src/nodes/call/node.ts";
 import {
   Assertion,
   Binding,
   ContractOrigins,
   isExactly,
   type OutputContract,
+  Parameter,
   PartialRecordContract,
   ValueContract,
   ValueTemplate,
 } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
+import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { Type, ValueKind } from "../../src/typesys/index.ts";
 import { typeEquals } from "../../src/typesys/values.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { assembleText, handChild } from "../compose/declarations.ts";
+import { assembleText, handChild, loadError } from "../compose/declarations.ts";
 
 /** A minimal concrete node; the base fields are the subject. */
 class BareNode extends Node {
@@ -1096,6 +1106,91 @@ test("composite builders preserve or deliberately wrap the child contract", () =
   expect(listed).not.toBe(contract);
   expect(listed.type.element).toBe(contract.type);
   expect(listed.origins).toStrictEqual(new ContractOrigins({ default: origin("child-root") }));
+});
+
+/** A CALL node `call` over one required child input `topic: str`, built with no wiring. */
+function topicCall(): BuildResult {
+  const childInput = new Parameter("topic", {
+    contract: new ValueContract(STR),
+    required: true,
+    coerceStrings: true,
+  });
+  const node = new CallNode("call", { flowId: "child", childInputs: [childInput] });
+  return new BuildResult({ node, wiring: new Map() });
+}
+
+test("the call type error is identical for raw and wrapped sources", () => {
+  // Nullable-call compatibility reads the source expression, not the carrier.
+  const nullableParent = new Type({ kind: ValueKind.STRING, nullable: true });
+  const source = "${input.x}";
+
+  const errors = [source, new Binding(source, { origin: origin("call-topic") })].map(
+    (value) =>
+      loadError(() =>
+        checkCallMapTypes(
+          new Map([["call", topicCall()]]),
+          new Map(),
+          new Map([["x", new ValueContract(nullableParent)]]),
+          new Map([["call", new Map([["topic", value]])]]),
+        ),
+      ).message,
+  );
+
+  expect(errors[0]).toBe(errors[1]!);
+  expect(errors[0]).toContain("child expects 'str', source is 'Optional(str)'");
+});
+
+test("the call type check projects a known partial producer field", () => {
+  // A partial sibling cannot hide a proven source mismatch from a child call.
+  const partial = new PartialRecordContract([
+    ["n", new ValueContract(INT)],
+    ["note", null],
+  ]);
+
+  const error = loadError(() =>
+    checkCallMapTypes(
+      new Map([["call", topicCall()]]),
+      new Map([["producer", partial]]),
+      new Map(),
+      new Map([["call", new Map([["topic", "${producer.output.n}"]])]]),
+    ),
+  );
+
+  expect(error.message).toContain("child expects 'str', source is 'int'");
+});
+
+test("the loop type check projects a known partial seed field", () => {
+  // A partial sibling cannot hide a proven carried-field mismatch.
+  const loopContract = new PartialRecordContract([
+    ["n", new ValueContract(STR)],
+    ["note", null],
+  ]);
+  const producerContract = new PartialRecordContract([
+    ["n", new ValueContract(INT)],
+    ["note", null],
+  ]);
+  const node = new LoopNode("loop", { flowId: "body" });
+  node.outputContract = loopContract;
+  const result = new BuildResult({ node, wiring: new Map() });
+
+  const error = loadError(() =>
+    checkLoopTypeContract(
+      new Map([["loop", result]]),
+      new Map([["producer", producerContract]]),
+      new Map(),
+      new Map([
+        [
+          "loop",
+          new Map([
+            ["n", "${producer.output.n}"],
+            ["note", "opaque literal"],
+          ]),
+        ],
+      ]),
+    ),
+  );
+
+  expect(error.message).toMatch(/body output is 'str'.*source is 'int'/);
 });
 
 test("a loaded compose flow has only canonical binding storage", () => {

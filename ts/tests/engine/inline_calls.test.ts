@@ -8,12 +8,14 @@
  *
  * Changed: Python loads and runs each flow; these rows check the load: the synth node, its edges,
  * and the argument binding a run would read. `test_inline_call_seed_21_loads` is the harvested
- * `load-map-call/seed_21_inline_call`, pinned at the end.
+ * `load-map-call/seed_21_inline_call`, pinned at the end. `test_inline_call_e06_type_mismatch_is_loud`
+ * pins the whole message, where Python matches fragments; its harvested case
+ * `load-map-call/engine_inline_calls__inline_call_argument_source_type_mismatch_is_rejected` is
+ * pinned at the end too.
  *
  * Later (T3-22): `test_inline_call_resolves_through_external_resolver` (`uses:` and a child
  * resolver), `test_inline_call_inside_defs_body_runs` (a `defs:` body) and
  * `test_inline_call_unknown_callee_is_loud` (`defs:` resolution of an unknown callee).
- * Later (T3-19): `test_inline_call_e06_type_mismatch_is_loud` (the typed-binding check).
  * Later (T4): the run half of every load-and-run row.
  *
  * The origin rows locate each synth call node and its argument bindings at the authored binding
@@ -446,6 +448,38 @@ output:
   expect(callees(compiled)).toEqual({ __call_0: "enrich", __call_1: "enrich" }); // distinct, no collision
 });
 
+test("inline call e06 type mismatch is loud", () => {
+  // A synth call binding goes through the same cross-flow type check as a named call, which names
+  // the authored argument, not the synth node.
+  const error = loadError(() =>
+    load(`
+id: ic_e06
+name: ic_e06
+input:
+  topic: !str
+${ENRICH_DEF}
+nodes:
+  num:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: \${input.topic}
+    output: int
+  use:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: call(enrich, topic=\${num.output})
+    output: str
+output: \${use.output}
+`),
+  );
+
+  expect(error.message).toBe(
+    "node 'use' input 'topic' call(enrich) argument 'topic' — child expects 'str', source is 'int'",
+  );
+});
+
 // ---------- harvested conformance cases ----------
 
 // The inline-call desugar raises each of these before any callee resolves.
@@ -470,6 +504,13 @@ test("assembled: load-map-call/seed_21_inline_call", () => {
   runCase({
     id: "load-map-call/seed_21_inline_call",
     call: assembledWith({ enrich: def("  topic: !str\n", "list(str)") }),
+  });
+});
+
+test("assembled: load-map-call/engine_inline_calls__inline_call_argument_source_type_mismatch_is_rejected", () => {
+  runCase({
+    id: "load-map-call/engine_inline_calls__inline_call_argument_source_type_mismatch_is_rejected",
+    call: assembledWith(ENRICH),
   });
 });
 

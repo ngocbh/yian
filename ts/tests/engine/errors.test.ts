@@ -13,11 +13,16 @@
  * (`assemble` as the loader calls it), with `full` (every frame and the notes). Changed: its
  * message writes the node list in the text form (`["a","b"]`, rule `messages`).
  *
+ * `test_e06_cross_flow_type_mismatch_is_loud` assembles conformance case
+ * `load-core/seed_e06_type_mismatch_ref` (`assembledWith`), its callee `research-one` (seed 03)
+ * built by hand (`handChild`) where Python loads the seed with a child resolver; it pins the
+ * whole message, where Python matches fragments.
+ *
  * Later (T3-22): `test_e01_dangling_ref_located`, `test_e03_unknown_field_located`,
  * `test_negative_fixtures_are_located`, `test_e04_exhaustiveness_mechanism_loud`,
- * `test_e04_else_satisfies_coverage`, `test_e06_cross_flow_type_mismatch_is_loud`,
- * `test_single_node_def_model_kind_is_removed`, the e13, e14, e15, e16, e17, e30, e31 and e32 rows
- * of `test_compile_error_gallery`, `test_inline_code_construction_errors_carry_ranges`,
+ * `test_e04_else_satisfies_coverage`, `test_single_node_def_model_kind_is_removed`, the e13, e14,
+ * e15, e16, e17, e30, e31 and e32 rows of `test_compile_error_gallery`,
+ * `test_inline_code_construction_errors_carry_ranges`,
  * `test_invalid_authored_default_carries_input_range`,
  * `test_bad_input_ref_locates_the_offending_entry`,
  * `test_bad_map_per_element_input_ref_locates_the_offending_entry`,
@@ -35,11 +40,26 @@
 
 import { afterEach, expect, test } from "bun:test";
 
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { siteKey } from "../../src/compose/nodes/base.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
-import { assembled, type CaseRow, caseText, loadError, nodesOf, runCase } from "../compose/declarations.ts";
+import { ValueContract } from "../../src/nodes/contracts.ts";
+import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
+import {
+  assembled,
+  assembledWith,
+  assembleText,
+  type CaseRow,
+  caseText,
+  handChild,
+  loadError,
+  nodesOf,
+  parametersFromYaml,
+  runCase,
+} from "../compose/declarations.ts";
 
 afterEach(() => forget());
 
@@ -75,3 +95,30 @@ test("input named like a field does not collide", () => {
 });
 
 test.each<CaseRow>([{ id: "load-core/seed_e02_cycle", call: assembled, full: true }])("assemble: $id", runCase);
+
+// ---------- e06: a cross-flow type mismatch at a `call` boundary ----------
+
+const E06 = "load-core/seed_e06_type_mismatch_ref";
+
+/** Seed 03 (`research-one`, the e06 case's file), built by hand: its parameters, producers and output. */
+function researchOne(): ComposedFlow {
+  const { text } = caseText(E06, { file: "research-one.yaml" });
+  const facts = typeFor("Facts", readTypedefs({ Facts: { values: "list(float)", news: "list(str)" } }));
+  return handChild({
+    inputs: parametersFromYaml(text, new Map()),
+    producers: { fetch: new ValueContract(facts), synth: new ValueContract(Type.scalar(ValueKind.STRING)) },
+    output: { report: "${synth.output}", asof: "${input.as_of}" },
+  });
+}
+
+test("e06 cross-flow type mismatch is loud", () => {
+  // A float output bound to the callee's str input names the binding and both types.
+  const { text, label } = caseText(E06);
+  const error = loadError(() => assembleText(text, label, { children: { "research-one": researchOne() } }));
+
+  expect(error.message).toBe("call node 'call': binding 'topic' — child expects 'str', source is 'float'");
+});
+
+test(`assemble: ${E06}`, () => {
+  runCase({ id: E06, call: assembledWith({ "research-one": researchOne() }) });
+});

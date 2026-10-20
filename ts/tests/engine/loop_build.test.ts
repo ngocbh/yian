@@ -50,7 +50,22 @@
  * `assembleText`: `test_inline_loop_body_may_return_a_subset`,
  * `test_inline_body_loop_whose_condition_never_changes_is_a_load_error`,
  * `test_loop_seeded_from_partial_loop_sees_merged_type` and
- * `test_omitted_field_seed_cycle_is_located`.
+ * `test_omitted_field_seed_cycle_is_located`. The carried types and the seed check (the loop type
+ * contract and the cross-flow binding check on a LOOP seed), through `assembleText` with each def
+ * built by hand: `test_returned_field_type_mismatch_still_rejected_in_partial_body`,
+ * `test_body_output_types_must_equal_carried`,
+ * `test_opaque_body_field_does_not_erase_proven_sibling_type_mismatch`,
+ * `test_constant_seed_that_cannot_fill_the_body_input_is_a_load_error` (7, and the date row below),
+ * `test_seed_is_checked_even_when_a_while_loop_never_runs`,
+ * `test_text_seed_into_int_input_of_a_full_loop_is_a_load_error`,
+ * `test_reference_or_typed_seed_that_cannot_fill_the_body_input_is_a_load_error` (6),
+ * `test_reference_seed_is_checked_even_when_a_while_loop_never_runs`, and the load halves of
+ * `test_constant_seed_that_fits_the_body_input_loads_and_runs` (6),
+ * `test_reference_or_typed_seed_that_fits_the_body_input_loads_and_runs` (8),
+ * `test_carried_field_the_body_does_not_read_is_not_checked`,
+ * `test_inline_body_constant_seed_fits_its_generated_parameter`,
+ * `test_inline_body_reference_seed_fits_its_generated_parameter` and
+ * `test_while_null_check_lets_an_optional_seed_fill_a_strict_body_input` (2).
  *
  * Changed: a row whose Python flow calls a `defs:` body parses the loop node (`nodesOf`) and
  * builds it over a `BuildContext` whose resolver returns the body built by hand (`handChild`: the
@@ -69,7 +84,10 @@
  * (`assembleText` with the def built by hand), since a tagged seed's declared type comes from
  * `assemble`; parsing alone drops the tag. The error rows pin the whole message, where Python
  * matches fragments; lists of names are JSON text (`["exited","n"]`) and values the text form
- * (`(got "5")`, `(got true)`, a tag comparison's `with "dnoe"` and `did you mean "done"?`).
+ * (`(got "5")`, `(got true)`, a tag comparison's `with "dnoe"` and `did you mean "done"?`). The
+ * `("str", "2026-01-01")` row of `test_constant_seed_that_cannot_fill_the_body_input_is_a_load_error`
+ * loads (rule `dates`): an unquoted date is text in TS, so it fits a `str` input, where Python reads
+ * a date and asks to quote it.
  *
  * TS-only: the counts are YAML ints (`bigint`) converted to numbers: `times: 3` gives `3`, a
  * `max:` or `times:` past `Number.MAX_SAFE_INTEGER` is refused with the at-most message (the
@@ -92,31 +110,26 @@
  * predicate_tagged_member_field_error_points_at_isinstance,
  * predicate_unguarded_member_field_read_is_rejected,
  * predicate_unknown_field_on_omitted_typed_seed_is_rejected}`, and (`assembledWith`, the def built
- * by hand) `load-loop/engine_loop_build__omitted_field_seed_cycle_is_located`.
+ * by hand) `load-loop/engine_loop_build__omitted_field_seed_cycle_is_located` and
+ * `load-loop/engine_loop_build__{quoted_number_seed_for_an_int_input,seed_default_null_for_an_int_input,
+ * text_seed_for_an_int_input,date_seed_for_a_str_input_loads_as_text}` (the last `ok`, rule `dates`).
  *
  * Later (T3-18 PR 3):
  * `test_partial_loop_contract_rejects_unknown_downstream_field_at_load` and the downstream half of
- * `test_merged_contract_types_omitted_field_from_its_seed`. Later (T3-19):
- * `test_returned_field_type_mismatch_still_rejected_in_partial_body`,
- * `test_body_output_types_must_equal_carried`,
- * `test_opaque_body_field_does_not_erase_proven_sibling_type_mismatch`,
- * `test_constant_seed_that_cannot_fill_the_body_input_is_a_load_error`,
- * `test_seed_is_checked_even_when_a_while_loop_never_runs`,
- * `test_text_seed_into_int_input_of_a_full_loop_is_a_load_error`,
- * `test_reference_or_typed_seed_that_cannot_fill_the_body_input_is_a_load_error` and
- * `test_reference_seed_is_checked_even_when_a_while_loop_never_runs`. Later (T4): the run halves
+ * `test_merged_contract_types_omitted_field_from_its_seed`. Later (T4): the run halves
  * of the rows above, `test_predicate_field_on_omitted_typed_seed_builds`,
  * `test_predicate_member_field_read_guarded_by_isinstance_builds`,
  * `test_predicate_while_read_guarded_through_or_and_not_builds`,
  * `test_predicate_tag_comparison_narrows_a_read`, `test_predicate_while_is_checked_against_the_seed_too`,
- * `test_predicate_isinstance_of_a_partly_shared_union_reads_the_shared_fields`,
+ * `test_predicate_isinstance_of_a_partly_shared_union_reads_the_shared_fields`, the run halves of
  * `test_constant_seed_that_fits_the_body_input_loads_and_runs`,
  * `test_inline_body_constant_seed_fits_its_generated_parameter`,
  * `test_reference_or_typed_seed_that_fits_the_body_input_loads_and_runs`,
  * `test_carried_field_the_body_does_not_read_is_not_checked`,
- * `test_inline_body_reference_seed_fits_its_generated_parameter`,
- * `test_while_null_check_lets_an_optional_seed_fill_a_strict_body_input` and
- * `test_loop_seed_reads_the_case_narrowed_type`.
+ * `test_inline_body_reference_seed_fits_its_generated_parameter` and
+ * `test_while_null_check_lets_an_optional_seed_fill_a_strict_body_input`, and the run half of
+ * `test_loop_seed_reads_the_case_narrowed_type`. Later (T3-20): both loads of
+ * `test_loop_seed_reads_the_case_narrowed_type` (CASE narrowing).
  */
 
 import { expect, test } from "bun:test";
@@ -1364,6 +1377,305 @@ test("a predicate's isinstance check with an unknown type reports the type", () 
   );
 });
 
+// ---------- the carried types and the seed check ----------
+
+// `chat_loop` of `GOOD`, its carried `n` seeded from the int flow input `n0`, so the carried-type
+// check has a seed type to compare (a literal seed stays lenient there).
+const BAD_TYPES = swap(
+  swap(GOOD, "name: l\n", "name: l\ninput:\n  n0: !int\n"),
+  "      n: 0\n",
+  "      n: ${input.n0}\n",
+);
+
+const CARRIED_N =
+  "loop node 'chat_loop': carried field 'n' — body output is 'str', carried source is 'int' " +
+  "(a returned field must keep its carried type)";
+
+test("a returned field's type mismatch is still rejected in a partial body", () => {
+  const error = loadError(() => assembleText(BAD_TYPES, "flow.yaml", { children: { bump: goodBody({ n: "str" }) } }));
+
+  expect(error.message).toBe(CARRIED_N);
+});
+
+test("body output types must equal the carried types", () => {
+  const error = loadError(() =>
+    assembleText(BAD_TYPES, "flow.yaml", { children: { bump: goodBody({ n: "str", exited: "bool" }) } }),
+  );
+
+  expect(error.message).toBe(CARRIED_N);
+  // Located at the loop's `input:` mapping, which starts at its first key.
+  const inputStart = BAD_TYPES.split("\n").indexOf("      n: ${input.n0}") + 1;
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(inputStart);
+});
+
+test("an opaque body field does not erase a proven sibling's type mismatch", () => {
+  // `note + "!"` is outside static inference, while `input.note` proves the body returns `str`
+  // for the carried `n`, seeded as `int`.
+  const text = `id: l
+name: l
+input:
+  n0: !int
+  note0: !str
+nodes:
+  chat_loop:
+    kind: loop
+    call: bump
+    input:
+      n: \${input.n0}
+      note: \${input.note0}
+    times: 1
+output: \${chat_loop.output}
+`;
+  const bump = handChild({
+    inputs: params("  n: !int\n  note: !str\n"),
+    output: { n: "${input.note}", note: '${input.note + "!"}' },
+  });
+
+  const error = loadError(() => assembleText(text, "flow.yaml", { children: { bump } }));
+
+  expect(error.message).toBe(CARRIED_N);
+});
+
+/**
+ * A loop over the `body` def (`seededBody`), seeding `n` with `seed`, `k` with 0 and `extra` (no
+ * body input, so never checked) with `extra`, driven by `driver`; with `inputs`, the flow takes
+ * `s: str`, `m: Optional(int)` and `i: int` for reference seeds.
+ */
+function seeded(seed: string, options: { driver?: string; inputs?: boolean; extra?: string } = {}): string {
+  const { driver = "times: 1", inputs = false, extra = '"abc"' } = options;
+  return `id: p
+name: p
+${inputs ? "input:\n  s: !str\n  m: !Optional(int)\n  i: !int\n" : ""}nodes:
+  loop:
+    kind: loop
+    ${driver}
+    input:
+      n: ${seed}
+      k: 0
+      extra: ${extra}
+    call: body
+output: \${loop.output}
+`;
+}
+
+/** The `body` def: `n: <nType>` and `k: int` in, its `step` node's `{k: int}` out, so `n` carries over. */
+function seededBody(nType: string): ComposedFlow {
+  return handChild({
+    inputs: params(`  n: !${nType}\n  k: !int\n`),
+    producers: { step: record({ k: "int" }) },
+    output: "${step.output}",
+  });
+}
+
+/** Assemble `text` with `body` as the `body` def. */
+function loadSeeded(text: string, body: ComposedFlow): ComposedFlow {
+  return assembleText(text, "flow.yaml", { children: { body } }).flow;
+}
+
+/**
+ * Expect `text` (seeding `n` with `seed`) to fail with the seed error `message`, located like a
+ * CALL argument: at the loop's whole `input:` mapping, which starts at its first key.
+ */
+function expectSeedError(text: string, seed: string, nType: string, message: string): void {
+  const error = loadError(() => loadSeeded(text, seededBody(nType)));
+
+  expect(error.message).toBe(`loop node 'loop': binding 'n' — ${message}`);
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(text.split("\n").indexOf(`      n: ${seed}`) + 1);
+}
+
+test.each([
+  ["int", '"abc"', 'child expects \'int\', but the value "abc" does not fit'],
+  [
+    "int",
+    '"1"',
+    'child expects \'int\', but the value "1" does not fit; ' +
+      "text is not converted between flows, so write 1 without quotes",
+  ],
+  ["int", "null", "child expects 'int', but the value null does not fit"],
+  ["int 5", "null", "child expects 'int', but the value null does not fit"],
+  ["int", "${null}", "child expects 'int', source is 'None'"],
+  ["int", "${'1'}", "child expects 'int', source is 'str'"],
+  ["int", '"x${1}"', "child expects 'int', source is 'str'"],
+])("a constant seed that cannot fill the body input is a load error: %s %s", (nType, seed, message) => {
+  expectSeedError(seeded(seed), seed, nType, message);
+});
+
+test("a date seed for a str input loads as text", () => {
+  // Changed: Python reads `2026-01-01` as a date and asks to quote it; TS reads it as text.
+  expect(loadSeeded(seeded("2026-01-01"), seededBody("str")).compiled.nodes.get("loop")).toBeInstanceOf(LoopNode);
+});
+
+test("a seed is checked even when a while loop never runs", () => {
+  // `k: 0` fails `while:` at once, so the body never binds `n`; like a CALL on an untaken branch,
+  // the provable mismatch still fails at load.
+  const error = loadError(() => loadSeeded(seeded('"abc"', { driver: "while: k > 5" }), seededBody("int")));
+
+  expect(error.message).toBe(
+    'loop node \'loop\': binding \'n\' — child expects \'int\', but the value "abc" does not fit',
+  );
+});
+
+test.each([
+  ["int", "1"],
+  ["float", "5"],
+  ["Optional(int)", "null"],
+  ["Optional(int)", "${null}"],
+  ["str", '"2026-01-01"'],
+  ["int", "${1 + 2}"],
+])("a constant seed that fits the body input loads: %s %s", (nType, seed) => {
+  expect(loadSeeded(seeded(seed), seededBody(nType)).compiled.nodes.get("loop")).toBeInstanceOf(LoopNode);
+});
+
+test("an inline body's constant seed fits its generated parameter", () => {
+  const { flow } = assembleText(`id: p
+name: p
+nodes:
+  loop:
+    kind: loop
+    times: 1
+    input:
+      n: "abc"
+    nodes:
+      step:
+        kind: code
+        input:
+          n: \${input.n}
+        output:
+          n: str
+        code: 'return {n: inputs["n"]}'
+    output: \${step.output}
+output: \${loop.output}
+`);
+
+  expect(flow.compiled.nodes.get("loop")).toBeInstanceOf(LoopNode);
+});
+
+test("a text seed into the int input of a full loop is a load error", () => {
+  const text = `id: p
+name: p
+nodes:
+  loop:
+    kind: loop
+    times: 2
+    input:
+      n: "abc"
+    call: bump
+output: \${loop.output}
+`;
+  const bump = handChild({
+    inputs: params("  n: !int\n"),
+    producers: { step: record({ n: "int" }) },
+    output: "${step.output}",
+  });
+
+  const error = loadError(() => assembleText(text, "flow.yaml", { children: { bump } }));
+
+  expect(error.message).toBe(
+    'loop node \'loop\': binding \'n\' — child expects \'int\', but the value "abc" does not fit',
+  );
+});
+
+test.each([
+  ["int", "${input.s}", "child expects 'int', source is 'str'"],
+  ["int", '!str "abc"', "child expects 'int', source is 'str'"],
+  // An `Optional` source does not fit a strict input, as for a CALL argument.
+  ["int", "${input.m}", "child expects 'int', source is 'Optional(int)'"],
+  ["int", "!Optional(int) ${input.m}", "child expects 'int', source is 'Optional(int)'"],
+  ["int", "${input.s :- 0}", "child expects 'int', source is 'str'"],
+  ["int", "${input.m :- null}", "child expects 'int', but the default null does not fit"],
+])("a reference or typed seed that cannot fill the body input is a load error: %s %s", (nType, seed, message) => {
+  expectSeedError(seeded(seed, { inputs: true }), seed, nType, message);
+});
+
+test("a reference seed is checked even when a while loop never runs", () => {
+  const error = loadError(() =>
+    loadSeeded(seeded("${input.s}", { inputs: true, driver: "while: k > 5" }), seededBody("int")),
+  );
+
+  expect(error.message).toBe("loop node 'loop': binding 'n' — child expects 'int', source is 'str'");
+});
+
+test.each([
+  ["int", "${input.i}"],
+  ["float", "${input.i}"],
+  ["Optional(int)", "${input.m}"],
+  // A typed binding accepts the narrowing and checks it when the body starts.
+  ["int", "!int ${input.m}"],
+  ["int", "${input.m :- 0}"],
+  ["int", "${input.m | 0}"],
+  ["str", '"x${input.i}"'],
+  // A non-null literal fills a strict input whatever its tag, as for a CALL argument.
+  ["int", "!Optional(int) 5"],
+])("a reference or typed seed that fits the body input loads: %s %s", (nType, seed) => {
+  expect(loadSeeded(seeded(seed, { inputs: true }), seededBody(nType)).compiled.nodes.get("loop")).toBeInstanceOf(
+    LoopNode,
+  );
+});
+
+test("a carried field the body does not read is not checked", () => {
+  const flow = loadSeeded(seeded("1", { inputs: true, extra: "${input.m}" }), seededBody("int"));
+
+  expect(flow.compiled.nodes.get("loop")).toBeInstanceOf(LoopNode);
+});
+
+test("an inline body's reference seed fits its generated parameter", () => {
+  const { flow } = assembleText(`id: p
+name: p
+input:
+  m: !Optional(int)
+nodes:
+  loop:
+    kind: loop
+    times: 1
+    input:
+      n: \${input.m}
+    nodes:
+      step:
+        kind: code
+        input:
+          n: \${input.n}
+        output:
+          n: Optional(int)
+        code: 'return {n: inputs["n"]}'
+    output: \${step.output}
+output: \${loop.output}
+`);
+
+  expect(flow.compiled.nodes.get("loop")).toBeInstanceOf(LoopNode);
+});
+
+test.each(["str", "Optional(str)"])(
+  "a while null check lets an optional seed fill a strict body input: cursor %s",
+  (cursor) => {
+    // `while:` keeps a null cursor out of the body, so the `Optional` seed fills a strict input, and
+    // an `Optional` body input works as before.
+    const text = `id: p
+name: p
+input:
+  start: !Optional(str)
+nodes:
+  loop:
+    kind: loop
+    while: cursor != null
+    max: 10
+    input:
+      cursor: \${input.start}
+      seen: 0
+    call: page
+output: \${loop.output}
+`;
+    const page = handChild({
+      inputs: params(`  cursor: !${cursor}\n  seen: !int\n`),
+      producers: { step: record({ cursor: "Optional(str)", seen: "int" }) },
+      output: "${step.output}",
+    });
+
+    const { flow } = assembleText(text, "flow.yaml", { children: { page } });
+
+    expect(flow.compiled.nodes.get("loop")).toBeInstanceOf(LoopNode);
+  },
+);
+
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
@@ -1417,6 +1729,24 @@ test.each<CaseRow>(
     "predicate_unknown_field_on_omitted_typed_seed_is_rejected",
   ].map((name) => ({ id: `load-loop/engine_loop_build__${name}`, call: assembled })),
 )("assemble: $id", runCase);
+
+// Each `body` def takes `n` and `k`, returning only `k`.
+test.each<CaseRow>([
+  {
+    id: "load-loop/engine_loop_build__quoted_number_seed_for_an_int_input",
+    call: assembledWith({ body: seededBody("int") }),
+  },
+  {
+    id: "load-loop/engine_loop_build__seed_default_null_for_an_int_input",
+    call: assembledWith({ body: seededBody("int") }),
+  },
+  { id: "load-loop/engine_loop_build__text_seed_for_an_int_input", call: assembledWith({ body: seededBody("int") }) },
+  {
+    // Changed (rule `dates`): Python reads the seed as a date and errors; TS reads it as text.
+    id: "load-loop/engine_loop_build__date_seed_for_a_str_input_loads_as_text",
+    call: assembledWith({ body: seededBody("str") }),
+  },
+])("assemble: $id", runCase);
 
 test.each<CaseRow>([
   {

@@ -1,0 +1,38 @@
+# A literal node input holding a lone surrogate ("\ud800", a YAML escape) is not a yian value: it
+# has no UTF-8 form.
+kind: load
+# TS refuses the text at load; Python accepts lone surrogates in text.
+rules: [numbers]
+flow: |
+  id: f
+  name: f
+  nodes:
+    use:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: "a\ud800b"
+      output: str
+  output: ${use.output}
+python_flow: |
+  id: f
+  name: f
+  nodes:
+    use:
+      kind: code
+      code: tests.engine._compose_codefns:echo
+      input:
+        topic: "a\ud800b"
+      output: str
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'use' input 'topic': text holding a lone surrogate is not a yian value"
+      # The quoted scalar on line 8.
+      frames:
+      - label: flow.yaml
+        range: [8, 14, 8, 24]
+python_expect:
+  load: ok

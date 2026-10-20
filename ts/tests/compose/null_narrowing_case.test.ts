@@ -377,7 +377,7 @@ test("a case param read after a null check sees the value as not null", () => {
 });
 
 // --------------------------------------------------------------------------- //
-// Node asserts
+// Asserts
 // --------------------------------------------------------------------------- //
 
 test("an assert read after a null check is guarded by it", () => {

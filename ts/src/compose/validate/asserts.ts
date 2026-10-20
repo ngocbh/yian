@@ -41,7 +41,8 @@
  * (`helpers/condition_guards.ts`, `helpers/narrowing_facts.ts`).
  *
  * Knows about: `compile/validation`, `expr`, `typesys`, the `helpers` peers (`condition_guards`,
- * `isinstance_types`, `narrowing_facts`, `output_contracts`, `errors`), `nodes`,
+ * `isinstance_types`, `narrowing_facts`, `output_contracts`, `errors`, `tags`, `value_nesting`),
+ * `nodes`, `compose/nodes/base`,
  * `desugar/inline_calls` (inline-call rejection) and `LocalInput` from `typed_bindings`.
  * Never imports: build, the loader, or the runtime; nothing in helpers, nodes, parse, desugar or
  * edges imports this back.

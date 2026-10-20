@@ -5,9 +5,11 @@
  * assert for the synthesized START/END, plus the synth END params and wiring that make cross-node
  * post-asserts structural. These rows pin the exact rewritten forms and the synth naming scheme.
  *
- * Changed: the synth params compare with `toEqual`, as Python's `==` compares them, and the
- * wiring is a `Map`. A flow assert's text holding a lone surrogate is a located load error (Python
- * yian loads it); the TS-only row pins the message.
+ * The synth params compare with `toEqual`, as Python's `==` compares them, and the wiring is a
+ * `Map`.
+ *
+ * Changed: a flow assert's text holding a lone surrogate is a located load error (Python yian
+ * loads it); the TS-only row pins the message.
  */
 
 import { expect, test } from "bun:test";

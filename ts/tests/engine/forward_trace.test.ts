@@ -99,7 +99,10 @@
  * `test_terminal_trace_root_start_latch_must_match_the_accepted_start` (`none`, `sequence`, `run`),
  * `test_paired_resolver_preserves_pool_namespaces` (10 rows; the system value is the fixture's run
  * id) and `test_reducer_requires_capture_exactly_when_learning` (its run that doesn't learn on
- * `initializedAndStarted`).
+ * `initializedAndStarted`); the frontier trace checks, on a local `preparedTraceFrontier` (Python's
+ * `_prepared_trace_frontier`): `test_frontier_trace_cannot_inject_a_causal_terminal_source_before_append`,
+ * `test_frontier_trace_rejects_inappropriate_fields_before_append` (19 of its 34 rows; the rest
+ * below) and `test_frontier_trace_started_identity_is_exact` (`node`, `sequence`).
  *
  * Changed:
  * - A forged trace delta, occurrence, source entry or terminal is rebuilt with its constructor,
@@ -111,6 +114,9 @@
  *   holds it, each with a `TypeError` naming the historical memory scope.
  * - The trace snapshot keeps the backward handlers by reference, for Python's bound-method
  *   identities.
+ * - `preparedTraceFrontier` dispatches `work` of the shared `flow()`, for Python's `router` of
+ *   `_terminal_skip_route_flow()`: the frontier checks read only the dispatched node, and routes
+ *   come in PR 2.
  *
  * Not ported (TS types): every `mutate` row (a TS delta, occurrence and terminal are frozen); the
  * `float_sequence` and `source_float` rows, and the `sequence` row of
@@ -118,7 +124,16 @@
  * `tuple` row of `test_outcome_trace_writer_matches_the_same_accepted_physical_output` (a list
  * and a tuple are both an array); the `nested` row of
  * `test_trace_rejects_forged_memory_scope_before_append_and_when_copied` (a `MemoryScope` is
- * frozen by its constructor).
+ * frozen by its constructor); of `test_frontier_trace_rejects_inappropriate_fields_before_append`,
+ * the `sequence` rows (`float(n)`), the `resumed` rows (`int(bool)`), the `prune_ids`,
+ * `connections` and `boundaries` rows (`EmptyChanges`; a `TraceDelta` holds frozen array copies)
+ * and the `consumed_connection` and `boundary_update` rows (`UnavailableChange`; it holds frozen
+ * pair copies), and the `started` row of a dispatch (a list and a tuple are both an array); of
+ * `test_frontier_trace_started_identity_is_exact`, the `float_sequence` row and the
+ * `tuple_subclass` row (the delta copies the pair by index).
+ *
+ * TS-only (frontier trace): the same history-field rows, with `started` and `resumed`, on a
+ * prepared `NodeStep` and `RunStopped` of the in-flight `work`.
  *
  * Not ported (thread race): `test_a_lookup_retains_its_entry_when_a_new_writer_commits`.
  *
@@ -160,11 +175,6 @@
  *
  * Later (T4-7, with `computeBackward`): `test_discarded_pooled_outcomes_are_not_trace_occurrences`
  * and `test_frontier_trace_and_terminal_source_match_live_replay_without_repreparing`.
- *
- * Later (T4-4 task 3d), the frontier trace checks:
- * `test_frontier_trace_cannot_inject_a_causal_terminal_source_before_append`,
- * `test_frontier_trace_rejects_inappropriate_fields_before_append` and
- * `test_frontier_trace_started_identity_is_exact`.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -227,13 +237,16 @@ import {
   commitPrepared,
   PreparedTransition,
   prepareNodeStarted,
+  prepareNodeStep,
   prepareNodeSucceeded,
+  prepareRunResumed,
   prepareRunStopped,
   type RunState,
 } from "../../src/runtime/state.ts";
 import { FileRef, Type, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { JSONDecodeError, logJson, parseJson } from "../../src/typesys/json.ts";
 import {
+  commitStartSuccess,
   expectUnchanged,
   flow,
   forwardCapture,
@@ -2509,5 +2522,132 @@ test("the reducer requires a capture exactly when learning", () => {
     () => prepareNodeSucceeded(state, START_ID, {}),
     RangeError,
     "accepted outcome requires forward capture while learning",
+  );
+});
+
+// The frontier trace checks on a learnable run.
+
+/** A frontier record a learnable run prepares after START's success. */
+type FrontierKind = "started" | "resumed" | "step" | "stopped";
+
+/**
+ * Python's `_prepared_trace_frontier`: a learnable `flow()` after START's success, with `work`'s
+ * prepared dispatch or, once `work` is in flight, a prepared resume, step or stop.
+ */
+function preparedTraceFrontier(kind: FrontierKind): {
+  state: RunState;
+  log: MemoryRunLog;
+  prepared: PreparedTransition;
+} {
+  const { state, log } = learnableStarted(flow());
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  commitStartSuccess(state, log, {});
+  let prepared = prepareNodeStarted(state, "work");
+  if (kind !== "started") {
+    commitPrepared(log, state, prepared);
+    if (kind === "resumed") prepared = prepareRunResumed(state, { numWorkers: 0 });
+    else if (kind === "step") prepared = prepareNodeStep(state, "work", { event: "progress" });
+    else prepared = prepareRunStopped(state, "signal", "SIGTERM");
+  }
+  return { state, log, prepared };
+}
+
+test("a frontier trace can't inject a causal terminal source before append", () => {
+  const { state, log, prepared } = preparedTraceFrontier("started");
+  const delta = changedDelta(prepared._plan.traceDelta!, { causalRouteSource: new SourceRef(state.runId!, 0) });
+
+  expectRefused(
+    state,
+    log,
+    withTrace(prepared, delta),
+    RangeError,
+    "frontier trace cannot change outcome or terminal history",
+  );
+});
+
+/** The message each frontier kind's record check gives a forged `started` or `resumed`. */
+const FRONTIER_RECORD_MESSAGES: Record<FrontierKind, string> = {
+  started: "frontier trace start disagrees with its canonical record",
+  resumed: "frontier trace resume disagrees with its canonical record",
+  step: "frontier trace step must only advance the accepted sequence",
+  stopped: "frontier trace stop must only advance the accepted sequence",
+};
+
+/** The fields that would change outcome or terminal history, plus the missing delta. */
+const HISTORY_FIELDS = [
+  "missing",
+  "initialized",
+  "occurrence",
+  "handler",
+  "writer",
+  "rootStartSource",
+  "rootWriter",
+  "causalRouteSource",
+  "terminal",
+] as const;
+
+/** A forged field of a frontier trace delta. */
+type FrontierField = (typeof HISTORY_FIELDS)[number] | "started" | "resumed";
+
+/**
+ * Each kind's forged fields: a dispatch's history fields (its `started` and `resumed` rows aren't
+ * portable), a resume's `started` too, and a step's and a stop's `started` and `resumed` too.
+ */
+const FRONTIER_ROWS: (readonly [FrontierKind, FrontierField])[] = [
+  ...HISTORY_FIELDS.map((field) => ["started", field] as const),
+  ...(["started", ...HISTORY_FIELDS] as const).map((field) => ["resumed", field] as const),
+  ...(["step", "stopped"] as const).flatMap((kind) =>
+    (["started", "resumed", ...HISTORY_FIELDS] as const).map((field) => [kind, field] as const),
+  ),
+];
+
+test.each(FRONTIER_ROWS)("a frontier trace rejects an inappropriate field before append: %s, %s", (kind, field) => {
+  const { state, log, prepared } = preparedTraceFrontier(kind);
+  const trace = state.trace!;
+  const delta = prepared._plan.traceDelta!;
+  const writer = [...trace.currentWriters][0]!;
+  const changes: Record<Exclude<FrontierField, "missing">, TraceDeltaFields> = {
+    initialized: { initialized: trace },
+    started: { started: ["work", delta.sequence] },
+    resumed: { resumed: true },
+    occurrence: { occurrence: trace.occurrences.at(-1)! },
+    handler: {
+      handler: () => {
+        throw new Error("invoked a forged frontier handler");
+      },
+    },
+    writer: { writer },
+    rootStartSource: { rootStartSource: new SourceRef(state.runId!, 0) },
+    rootWriter: { rootWriter: writer[1] },
+    causalRouteSource: { causalRouteSource: new SourceRef(state.runId!, 0) },
+    terminal: { terminal: new TraceTerminal(true, writer[1].source, writer[1].valueJson, null) },
+  };
+  const message =
+    field === "missing"
+      ? "frontier trace delta requires its exact accepted sequence"
+      : field === "started" || field === "resumed"
+        ? FRONTIER_RECORD_MESSAGES[kind]
+        : "frontier trace cannot change outcome or terminal history";
+
+  expectRefused(
+    state,
+    log,
+    withTrace(prepared, field === "missing" ? null : changedDelta(delta, changes[field])),
+    RangeError,
+    message,
+  );
+});
+
+test.each(["node", "sequence"] as const)("a frontier trace start's identity is exact: %s", (change) => {
+  const { state, log, prepared } = preparedTraceFrontier("started");
+  const delta = prepared._plan.traceDelta!;
+  const started = { node: [START_ID, delta.sequence] as const, sequence: ["work", 0] as const }[change];
+
+  expectRefused(
+    state,
+    log,
+    withTrace(prepared, changedDelta(delta, { started })),
+    RangeError,
+    "frontier trace start disagrees with its canonical record",
   );
 });

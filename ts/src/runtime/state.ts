@@ -2553,7 +2553,7 @@ function validateGrowthFragment(state: RunState, fragment: Flow): ValidatedFragm
       ["ordering", edge.ordering],
     ] as [string, unknown][]) {
       if (typeof value !== "boolean") {
-        raiseGrowthRejected(new TypeError(`growth fragment edge ${reprText(edgeId)} ${attribute} must be a boolean`));
+        raiseGrowthRejected(new TypeError(`growth fragment edge ${reprText(edgeId)} ${attribute} must be a bool`));
       }
     }
     const from: unknown = edge.from;

@@ -12,6 +12,19 @@
  * `test_a_resumed_start_continues_the_numbering_and_rewaits` and
  * `test_validate_checks_arguments_without_calling_the_tool`.
  *
+ * Ported (adapted), through `FlowEngine` (the `engine()` fixture, run id `run-123`) on START ->
+ * TOOL `call` -> END in place of `run_flow`, reading the events and the log's `node_step` records:
+ * `test_retries_zero_fails_as_before_and_records_no_step`,
+ * `test_two_failures_then_success_records_each_attempt` (serial and two workers; Python's third
+ * row, the run's default worker count, has no engine counterpart),
+ * `test_jitter_draws_from_half_to_the_full_delay`,
+ * `test_backoff_stops_at_the_cap`, `test_retry_after_replaces_the_backoff_up_to_the_cap` (the
+ * draw throws, so none is taken), `test_an_output_contract_failure_is_not_retried` and
+ * `test_a_stop_during_the_backoff_wait_stops_the_run` (the scheduler's `sleep` aborts the host's
+ * controller, then delegates, so the sleep rejects at once; `run()` rejects with the host's reason,
+ * the steps are exactly one `failed`, and no `NodeFailed` is emitted). TS-only through the engine:
+ * a `Date` result fails `contract.output`, and an invalid argument fails `node.execute` with no call.
+ *
  * Ported (adapted), each through `node.run` with recorded steps in place of `run_flow`:
  * `test_permanent_error_on_the_first_attempt_fails_unchanged` (the error is the same object),
  * `test_permanent_error_on_the_second_attempt_stops_the_retries`,
@@ -45,22 +58,19 @@
  * `test_the_real_sleep_waits_without_an_event`, `test_a_wait_longer_than_timeout_max_waits_in_chunks`
  * and `test_a_stop_between_timeout_max_chunks_ends_the_wait`: TS has no `_sleep`; the node sleeps on
  * its scheduler, whose abort and chunks `platform.test.ts` covers for `realScheduler`.
- *
- * Later (T4-11): `test_retries_zero_fails_as_before_and_records_no_step`,
- * `test_two_failures_then_success_records_each_attempt`,
- * `test_jitter_draws_from_half_to_the_full_delay`, `test_backoff_stops_at_the_cap`,
- * `test_retry_after_replaces_the_backoff_up_to_the_cap`,
- * `test_an_output_contract_failure_is_not_retried` and
- * `test_a_stop_during_the_backoff_wait_stops_the_run` (through the engine).
  */
 
 import { expect, test } from "bun:test";
 
+import { END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { current, forget, install } from "../../src/defaults.ts";
+import type { Failure } from "../../src/diagnostics.ts";
+import { NodeFailed, type RunEvent, RunFailed, RunSucceeded } from "../../src/events.ts";
 import { CapabilityFault, HostOutputError, NodeKind, Output } from "../../src/nodes/base.ts";
 import { NodeSteps, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { backoff, ToolAttemptsFailed, ToolNode } from "../../src/nodes/tool/node.ts";
 import { type Scheduler, virtualScheduler } from "../../src/platform.ts";
+import { NodeStepRecord } from "../../src/runtime/log.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import {
   PermanentToolError,
@@ -73,6 +83,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { typeFor } from "../../src/typesys/index.ts";
 import { TypeCheckError, type ValueRecord } from "../../src/typesys/values.ts";
+import { engine, graph, rejected } from "./run_state_fixtures.ts";
 
 /** JS has no built-in `TimeoutError`; the rows throw this one, as Python's throw its own. */
 class TimeoutError extends Error {
@@ -152,14 +163,83 @@ function noDraw(): number {
   throw new Error("drew a jitter");
 }
 
-/** Run `body` with the retry base and cap set, restoring the defaults after. */
-function withDelays<T>(base: number, cap: number, body: () => T): T {
+/** Run `body` with the retry base and cap set, restoring the defaults once it settles. */
+async function withDelays<T>(base: number, cap: number, body: () => T | Promise<T>): Promise<T> {
   install({ ...current(), toolRetryDelaySeconds: base, toolRetryMaxDelaySeconds: cap });
   try {
-    return body();
+    return await body();
   } finally {
     forget();
   }
+}
+
+/** The steps, failure and sleeps of one engine run, and the error `run()` rejected with. */
+interface EngineRun {
+  events: readonly RunEvent[];
+  steps: ValueRecord[];
+  sleeps: number[];
+  error: unknown;
+}
+
+/**
+ * Run START -> TOOL `call` -> END through the engine, the tool set holding `tool`, on a recording
+ * scheduler (or `options.scheduler`) with a draw of 1 unless given; END outputs `${call.output}`.
+ */
+async function runEngine(
+  node: ToolNode,
+  tool: FunctionTool,
+  options: {
+    numWorkers?: number;
+    random?: () => number;
+    signal?: AbortSignal;
+    scheduler?: Scheduler;
+    wiring?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  } = {},
+): Promise<EngineRun> {
+  const { numWorkers = 0, random = () => 1, signal, wiring } = options;
+  const recording = recordingScheduler();
+  const scheduler = options.scheduler ?? recording.scheduler;
+  const flow = graph([node], [[START_ID, node.id], [node.id, END_ID]], {
+    outputs: [new FlowOutput("result", `\${${node.id}.output}`)],
+    ...(wiring === undefined ? {} : { wiring }),
+  });
+  const events: RunEvent[] = [];
+  const built = engine(flow, {
+    tools: new ToolSet({ [tool.name]: tool }),
+    scheduler,
+    random,
+    numWorkers,
+    ...(signal === undefined ? {} : { signal }),
+    onEvent: (event) => {
+      events.push(event);
+    },
+  });
+  let error: unknown;
+  try {
+    await built.run();
+  } catch (caught) {
+    error = caught;
+  }
+  const steps = built.log
+    .records()
+    .map((envelope) => envelope.record)
+    .filter((record) => record instanceof NodeStepRecord)
+    .map((record) => (record as NodeStepRecord).step);
+  return { events, steps, sleeps: recording.sleeps, error };
+}
+
+/** The run's failure: the `RunFailed` event's. */
+function runFailure(events: readonly RunEvent[]): Failure {
+  const last = events.at(-1);
+  expect(last).toBeInstanceOf(RunFailed);
+  return (last as RunFailed).failure;
+}
+
+/** The run's output: the `RunSucceeded` event's. */
+function runOutput(events: readonly RunEvent[]): unknown {
+  const last = events.at(-1);
+  expect(last).toBeInstanceOf(RunSucceeded);
+  return (last as RunSucceeded).output;
 }
 
 test("tool node rejects a bad retries count", () => {
@@ -209,8 +289,10 @@ test("the backoff doubles from the base and draws from its upper half", () => {
   expect([1, 2].map((failure) => backoff(failure, error, () => 0))).toEqual([0.5, 1.0]);
 });
 
-test("the backoff stops at the cap", () => {
-  const delays = withDelays(10, 15, () => [1, 2, 3].map((failure) => backoff(failure, new TimeoutError(), () => 1)));
+test("the backoff stops at the cap", async () => {
+  const delays = await withDelays(10, 15, () =>
+    [1, 2, 3].map((failure) => backoff(failure, new TimeoutError(), () => 1)),
+  );
   expect(delays).toEqual([10, 15, 15]);
 });
 
@@ -224,8 +306,10 @@ test("a huge failure count gets the cap", () => {
   expect(backoff(10 ** 6, new TimeoutError(), () => 1)).toBe(30);
 });
 
-test("a zero base gives a zero backoff, never NaN", () => {
-  const delays = withDelays(0, 30, () => [1, 10 ** 6].map((failure) => backoff(failure, new TimeoutError(), () => 1)));
+test("a zero base gives a zero backoff, never NaN", async () => {
+  const delays = await withDelays(0, 30, () =>
+    [1, 10 ** 6].map((failure) => backoff(failure, new TimeoutError(), () => 1)),
+  );
   expect(delays).toEqual([0, 0]);
 });
 
@@ -261,11 +345,9 @@ test("a resumed start continues the numbering and re-waits", async () => {
   const flaky = new FlakyTool([timeout]);
   const { scheduler, sleeps } = recordingScheduler();
   const node = new ToolNode("call", { toolId: "flaky", retries: 2 });
+  const tools = new ToolSet({ flaky: flaky.tool });
 
-  const error = await node.run({}, { tools: new ToolSet({ flaky: flaky.tool }), scheduler, random: () => 1, steps }).then(
-    () => null,
-    (caught: unknown) => caught,
-  );
+  const error = await rejected(node.run({}, { tools, scheduler, random: () => 1, steps }));
 
   expect(flaky.seen.map((ctx) => ctx.attempt)).toEqual([4]);
   expect(sleeps).toEqual([2000]);
@@ -509,3 +591,152 @@ test("a result that isn't a yian value is refused after one call, never retried"
   expect(flaky.seen).toHaveLength(1);
   expect(sleeps).toEqual([]);
 });
+
+test("retries zero fails as before and records no step", async () => {
+  const flaky = new FlakyTool([new TimeoutError("a")]);
+
+  const { events, steps, sleeps } = await runEngine(new ToolNode("call", { toolId: "flaky" }), flaky.tool);
+
+  const failure = runFailure(events);
+  expect(failure.code).toBe("node.execute");
+  expect(failure.message).toBe("a");
+  expect(failure.causeType).toBe("TimeoutError");
+  expect(flaky.seen).toHaveLength(1);
+  expect(steps).toEqual([]);
+  expect(sleeps).toEqual([]);
+});
+
+for (const numWorkers of [0, 2]) {
+  test(`two failures then success records each attempt (numWorkers ${numWorkers})`, async () => {
+    const flaky = new FlakyTool([new TimeoutError("a"), new TimeoutError("b")]);
+    const node = new ToolNode("call", { toolId: "flaky", retries: 2 });
+
+    const { events, steps, sleeps } = await runEngine(node, flaky.tool, { numWorkers });
+
+    expect(runOutput(events)).toBe("ok");
+    expect(flaky.seen.map((ctx) => ctx.attempt)).toEqual([1, 2, 3]);
+    expect(new Set(flaky.seen.map((ctx) => ctx.callId))).toEqual(new Set(["run-123/call"]));
+    expect(sleeps).toEqual([1000, 2000]);
+    expect(steps).toEqual([
+      { event: "failed", attempt: 1n, error: { type: "TimeoutError", message: "a" }, retry_in: 1 },
+      { event: "started", attempt: 2n },
+      { event: "failed", attempt: 2n, error: { type: "TimeoutError", message: "b" }, retry_in: 2 },
+      { event: "started", attempt: 3n },
+    ]);
+  });
+}
+
+test("jitter draws from half to the full delay", async () => {
+  const flaky = new FlakyTool([new TimeoutError("a"), new TimeoutError("b")]);
+  const node = new ToolNode("call", { toolId: "flaky", retries: 2 });
+
+  const { events, steps, sleeps } = await runEngine(node, flaky.tool, { random: () => 0 });
+
+  expect(runOutput(events)).toBe("ok");
+  expect(steps.filter((step) => step.event === "failed").map((step) => step.retry_in)).toEqual([0.5, 1.0]);
+  expect(sleeps).toEqual([500, 1000]);
+});
+
+test("the backoff stops at the cap, through the engine", async () => {
+  const flaky = new FlakyTool([new TimeoutError("a"), new TimeoutError("b"), new TimeoutError("c")]);
+
+  const { events, steps, sleeps } = await withDelays(10, 15, () =>
+    runEngine(new ToolNode("call", { toolId: "flaky", retries: 3 }), flaky.tool),
+  );
+
+  expect(runOutput(events)).toBe("ok");
+  expect(steps.filter((step) => step.event === "failed").map((step) => step.retry_in)).toEqual([10, 15, 15]);
+  expect(sleeps).toEqual([10_000, 15_000, 15_000]);
+});
+
+for (const [retryAfter, waited] of [
+  [7, 7],
+  [100, 30],
+] as const) {
+  test(`retryAfter replaces the backoff up to the cap (${retryAfter})`, async () => {
+    const flaky = new FlakyTool([new TransientToolError("busy", { retryAfter })]);
+    const node = new ToolNode("call", { toolId: "flaky", retries: 1 });
+
+    const { events, steps, sleeps } = await runEngine(node, flaky.tool, { random: noDraw });
+
+    expect(runOutput(events)).toBe("ok");
+    expect(steps[0]!.retry_in).toBe(waited);
+    expect(sleeps).toEqual([waited * 1000]);
+  });
+}
+
+test("an output contract failure is not retried", async () => {
+  const flaky = new FlakyTool([], "bad");
+  const node = new ToolNode("call", { toolId: "flaky", retries: 3 });
+  node.outputContract = new ValueContract(typeFor("int", new Map()));
+
+  const { events, sleeps } = await runEngine(node, flaky.tool);
+
+  expect(runFailure(events).code).toBe("contract.output");
+  expect(flaky.seen).toHaveLength(1);
+  expect(sleeps).toEqual([]);
+});
+
+test("a result that isn't a yian value fails contract.output, through the engine", async () => {
+  const flaky = new FlakyTool([], { a: new Date(0) });
+
+  const { events } = await runEngine(new ToolNode("call", { toolId: "flaky", retries: 2 }), flaky.tool);
+
+  const failure = runFailure(events);
+  expect(failure.code).toBe("contract.output");
+  expect(failure.message).toBe("output at a: Date is not a yian value");
+  expect(flaky.seen).toHaveLength(1);
+});
+
+test("an invalid argument fails node.execute with no call, through the engine", async () => {
+  const calls: unknown[] = [];
+  const counted = new FunctionTool({
+    name: "flaky",
+    description: "Count one call.",
+    parametersJsonSchema: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] },
+    execute: (args) => {
+      calls.push(args.n);
+      return "ok";
+    },
+  });
+  const node = new ToolNode("call", { toolId: "flaky", retries: 3 });
+  node.params = [new Parameter("n")];
+
+  const { events, sleeps } = await runEngine(node, counted, { wiring: { call: { n: "x" } } });
+
+  const failure = runFailure(events);
+  expect(failure.code).toBe("node.execute");
+  expect(failure.causeType).toBe("TypeCheckError");
+  expect(calls).toEqual([]);
+  expect(sleeps).toEqual([]);
+});
+
+for (const numWorkers of [0, 2]) {
+  test(`a stop during the backoff wait stops the run (numWorkers ${numWorkers})`, async () => {
+    const host = new AbortController();
+    const reason = new Error("stop now");
+    const inner = virtualScheduler();
+    // The stop lands as the wait begins, so the delegated sleep rejects at once.
+    const scheduler: Scheduler = {
+      now: () => inner.now(),
+      sleep(ms, signal) {
+        host.abort(reason);
+        return inner.sleep(ms, signal);
+      },
+    };
+    const flaky = new FlakyTool([new TimeoutError("a")]);
+    const node = new ToolNode("call", { toolId: "flaky", retries: 2 });
+
+    const { events, steps, error } = await runEngine(node, flaky.tool, {
+      numWorkers,
+      scheduler,
+      signal: host.signal,
+    });
+
+    expect(error).toBe(reason);
+    expect(host.signal.aborted).toBe(true);
+    expect(flaky.seen).toHaveLength(1);
+    expect(steps.map((step) => step.event)).toEqual(["failed"]);
+    expect(events.some((event) => event instanceof NodeFailed)).toBe(false);
+  });
+}

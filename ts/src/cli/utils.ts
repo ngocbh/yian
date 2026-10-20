@@ -15,10 +15,7 @@
  * The key and endpoint helpers prompt only when given a terminal; without one they return the
  * ambient value, or throw for a required key that is missing, so non-interactive runs stay
  * scriptable. They read the environment through a `CommandEnv`, and record a prompted value there
- * rather than in the process environment: `HOME`, `YIAN_AUTH_FILE` and `XDG_CONFIG_HOME` (the
- * saved logins), `YIAN_DEFAULT_PROVIDER`, `YIAN_DEFAULT_MODEL` and `OPENAI_BASE_URL` (the
- * connection snapshot), each provider's key variable (`PROVIDER_API_KEY_ENV`) and
- * `OLLAMA_BASE_URL`. An empty value counts as unset.
+ * rather than in the process environment.
  */
 
 import { accessSync, constants, statSync } from "node:fs";
@@ -138,12 +135,12 @@ export class UsageError extends Error {
 }
 
 /**
- * What a path must be: `exists`; a directory (`dir: true`), a file (`dir: false`), or either;
- * `readable`; `writable`. A path that doesn't exist passes unless `exists` is set.
+ * What a path must be: `exists`; a directory (`dir: true`) or a file (`dir: false`); `readable`;
+ * `writable`. A path that doesn't exist passes unless `exists` is set.
  */
 export interface PathCheck {
   exists?: boolean;
-  dir?: boolean;
+  dir: boolean;
   readable?: boolean;
   writable?: boolean;
 }
@@ -199,7 +196,7 @@ function optionHint(option: OptionSpec): string {
 
 /** Throw a `UsageError` if `value` doesn't pass `check`, in Click's order and words. */
 function checkPath(hint: string, value: string, check: PathCheck): void {
-  const kind = check.dir === true ? "Directory" : check.dir === false ? "File" : "Path";
+  const kind = check.dir ? "Directory" : "File";
   const fail = (what: string): never => {
     throw new UsageError(`Invalid value for ${hint}: ${kind} ${reprText(value)} ${what}.`);
   };
@@ -218,8 +215,8 @@ function checkPath(hint: string, value: string, check: PathCheck): void {
     if (check.exists) fail("does not exist");
     return;
   }
-  if (check.dir === true && stats.isFile()) fail("is a file");
-  if (check.dir === false && stats.isDirectory()) fail("is a directory");
+  if (check.dir && stats.isFile()) fail("is a file");
+  if (!check.dir && stats.isDirectory()) fail("is a directory");
   if (check.readable && !can(constants.R_OK)) fail("is not readable");
   if (check.writable && !can(constants.W_OK)) fail("is not writable");
 }
@@ -243,6 +240,9 @@ function parseArgsError(error: Error): UsageError {
   if (match) return new UsageError(`No such option: ${match[1]}`);
   match = /--(\S+) <value>' argument missing/.exec(message);
   if (match) return new UsageError(`Option '--${match[1]}' requires an argument.`);
+  // `-w -1`: parseArgs refuses a separate value starting with `-`, as Click finds none.
+  match = /^Option '([^']*)' argument is ambiguous/.exec(message);
+  if (match) return new UsageError(`Option '${match[1]}' requires an argument.`);
   match = /^Option '([^']*)' does not take an argument/.exec(message);
   if (match) return new UsageError(`Option '${match[1]}' does not take a value.`);
   return new UsageError(message);
@@ -307,8 +307,7 @@ export function parseCommand(spec: CommandSpec, argv: readonly string[]): Parsed
   }
 
   if (rest.length > 0) {
-    const noun = rest.length === 1 ? "argument" : "arguments";
-    throw new UsageError(`Got unexpected extra ${noun} (${rest.join(" ")})`);
+    throw new UsageError(`Got unexpected extra argument(s) (${rest.join(" ")})`);
   }
   return { help: false, args, options: result };
 }
@@ -322,16 +321,7 @@ function usageLine(spec: CommandSpec): string {
 function optionLabel(option: OptionSpec): string {
   const names = option.short === undefined ? `--${option.name}` : `-${option.short}, --${option.name}`;
   if (option.type === "boolean") return names;
-  const fallback =
-    option.type === "int"
-      ? "INTEGER"
-      : option.path?.dir === true
-        ? "DIRECTORY"
-        : option.path?.dir === false
-          ? "FILE"
-          : option.path
-            ? "PATH"
-            : "TEXT";
+  const fallback = option.type === "int" ? "INTEGER" : option.path ? (option.path.dir ? "DIRECTORY" : "FILE") : "TEXT";
   return `${names} ${option.metavar ?? fallback}`;
 }
 

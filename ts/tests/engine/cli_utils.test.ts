@@ -346,7 +346,7 @@ describe("parseCommand", () => {
       expect(usage(RUN, [flow, ...argv])).toBe("Invalid value for '--num-workers' / '-w': -1 is not in the range x>=0.");
     }
     // parseArgs refuses a value starting with `-` written as a separate word.
-    usage(RUN, [flow, "-w", "-1"]);
+    expect(usage(RUN, [flow, "-w", "-1"])).toBe("Option '-w' requires an argument.");
   });
 
   test("variadic positionals, and -- ends the options", () => {
@@ -363,8 +363,8 @@ describe("parseCommand", () => {
   });
 
   test("an extra positional", () => {
-    expect(usage(RUN, [flow, "x"])).toBe("Got unexpected extra argument (x)");
-    expect(usage(RUN, [flow, "x", "y"])).toBe("Got unexpected extra arguments (x y)");
+    expect(usage(RUN, [flow, "x"])).toBe("Got unexpected extra argument(s) (x)");
+    expect(usage(RUN, [flow, "x", "y"])).toBe("Got unexpected extra argument(s) (x y)");
   });
 
   test("an unknown option, a missing value, a value on a boolean", () => {

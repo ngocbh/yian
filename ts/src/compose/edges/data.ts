@@ -11,12 +11,13 @@
  * Boundary assembly owns the `END_ID` producer edges and the `START_ID` root edges, and runs after
  * the `case` control edges are built; this pass emits only the edges of the flow wiring.
  *
- * Knows about: the compile model (`Edge`), `expr` co-skip analysis, binding input groups, the
- * `case` and `wait` descriptors, and `edges/producers.ts`.
+ * Knows about: the compile model (`Edge`), diagnostics, `expr` co-skip analysis, binding input
+ * groups, the `case` and `wait` descriptors, and `edges/producers.ts`.
  * Never imports: validate, build, the loader, or the runtime.
  */
 
 import { Edge } from "../../compile/model.ts";
+import { reprText } from "../../diagnostics.ts";
 import { bindingCoSkips } from "../../expr/index.ts";
 import { bindingInputGroups } from "../../nodes/contracts.ts";
 import type { NodeDescriptor } from "../nodes/base.ts";
@@ -69,7 +70,10 @@ export function inferDataEdges(
     if (desc instanceof WaitDescriptor) {
       // WAIT orders after any node its required `until:` reads, relocated to the flow wiring under
       // the reserved key; `${input.X}`/`${system.X}` yield no producer edge.
-      emitFor(flowWiring.get(nodeId)?.get("until"), nodeId, "until");
+      const until = flowWiring.get(nodeId)?.get("until");
+      // `until:` is required and the WAIT build always wires it, so a gap is a compiler bug.
+      if (until === undefined) throw new Error(`WAIT node ${reprText(nodeId)} has no until wiring`);
+      emitFor(until, nodeId, "until");
       continue;
     }
     // Leaf and call/map: a map's reserved `over` source rides the `"over"` key (over-then-inputs

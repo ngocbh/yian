@@ -38,13 +38,22 @@
  * An unknown `depends_on`/`runs_after` source is skipped here; `inferOrderingEdges` reports it at
  * the host, which is the authored node. An unknown data producer gives no gate either.
  *
- * Knows about: the compile model (`Edge`) and descriptors.
+ * Knows about: the compile model (`Edge`), diagnostics (`reprText`), and descriptors.
  * Never imports: validate, build, the loader, or the runtime.
  */
 
 import { Edge } from "../../compile/model.ts";
 import { reprText } from "../../diagnostics.ts";
 import type { NodeDescriptor } from "../nodes/base.ts";
+
+/** One inherited edge before it gets a target and an id. */
+interface Gate {
+  source: string;
+  handle: string | null;
+  ordering: boolean;
+  optional: boolean;
+  group: string | null;
+}
 
 /**
  * Return the route, ordering, and data-gate edges each lifted node inherits from its host.
@@ -74,15 +83,6 @@ import type { NodeDescriptor } from "../nodes/base.ts";
  *   compiler bug.
  */
 export function hostControlEdges(descriptors: ReadonlyMap<string, NodeDescriptor>, edges: readonly Edge[]): Edge[] {
-  /** One inherited edge before it gets a target and an id. */
-  interface Gate {
-    source: string;
-    handle: string | null;
-    ordering: boolean;
-    optional: boolean;
-    group: string | null;
-  }
-
   /** Append `edge` to `map`'s list under `key`. */
   const append = <K>(map: Map<K, Edge[]>, key: K, edge: Edge): void => {
     const list = map.get(key);

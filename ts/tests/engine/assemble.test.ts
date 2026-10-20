@@ -15,8 +15,9 @@
  * `test_resolved_parameters_reject_missing_input_representation`). TS-only conductor rows: a cursor
  * with resolved parameters, the memory declaration check, the errors `parseNodes`, the `uses:`
  * alias check and the value-entry reader raise through `assemble`, and one happy path over stand-in
- * nodes (its data edges, no boundary until T3-17). Later (T3-17): the value-entry rows of `stampNodeWiringOrigins`
- * (a value entry's input owns its parameter and binding at the entry itself) and `splitTypedInputs`
+ * nodes (its data edges; no boundary edges until T3-17). Later (T3-17): the value-entry rows of
+ * `stampNodeWiringOrigins` (a value entry's input owns its parameter and binding at the entry
+ * itself) and `splitTypedInputs`
  * (a value entry is returned unchanged), once `isValueEntry` is real; the resolved parameter
  * boundary (`test_resolved_parameters_preserve_structural_contract_identity`,
  * `test_resolved_parameters_accept_zero_args_and_wire_empty_start`), the seed edge and boundary

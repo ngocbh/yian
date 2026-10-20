@@ -11,6 +11,8 @@
 
 import { expect, test } from "bun:test";
 
+import { Edge } from "../../src/compile/model.ts";
+
 import { inferOrderingEdges } from "../../src/compose/edges/ordering.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
@@ -55,6 +57,5 @@ test("ordering edges are built", () => {
 
   const edges = inferOrderingEdges(descriptors, new Set(descriptors.keys()));
 
-  expect(edges.length).toBe(1);
-  expect([edges[0]!.from, edges[0]!.to, edges[0]!.ordering, edges[0]!.optional]).toEqual(["warm", "a", true, false]);
+  expect(edges).toStrictEqual([new Edge("warm~>a#0", "warm", "a", { ordering: true, optional: false })]);
 });

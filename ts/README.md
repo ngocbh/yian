@@ -89,13 +89,14 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   checked and converted when the LOOP builds. An `llm_config:` layer holding `${...}` values is a
   `ValueTemplate` (a `Binding` for one whole-record value), read before the node builds. The CODE
   reader compiles nothing at build. The awaited load step, `checkFlowCode`, which the loader
-  awaits once after assembly (each built def's CODE nodes first, then the root's), checks every
-  CODE node of the flow and its child flows: an inline body's syntax and a reference's file,
-  refusing a Python-style `module:function`, running no code. A CODE node's `baseDir`, the
-  directory its reference resolves against, comes from `BuildContext.baseDir`: `loadFlow`'s
-  `baseDir`, else its first search path, else the current directory, for the root, its defs and
-  its inline bodies alike; a file read through the search path uses its own directory. WAIT keeps an `until:` date or datetime as the text
-  written, after checking it parses.
+  awaits once after assembly (each def's CODE nodes first, in written order, then the root's),
+  checks every CODE node of the flow and its child flows: an inline body's syntax and a
+  reference's file, refusing a Python-style `module:function`, running no code. A CODE node's
+  `baseDir`, the directory its reference resolves against, comes from `BuildContext.baseDir`:
+  `loadFlow`'s `baseDir`, else its first search path, else the current directory, for the root,
+  its defs and its inline bodies alike; a file read through the search path uses its own
+  directory. WAIT keeps an `until:` date or datetime as the text written, after checking it
+  parses.
 - `src/compose/validate/` holds the validate phase, the cross-node checks over the assembled flow.
   Outside it only `src/compose/build/` imports it: the pipeline runs the passes, and `boundary.ts`
   takes the `LoweredAsserts` type from `asserts.ts`. Inside it, a pass imports another validate

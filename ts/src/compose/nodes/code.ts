@@ -173,6 +173,8 @@ export interface CodeCheckOptions {
   diagnostics: LoadDiagnostics;
   /** Presents an origin as a frame; `null` leaves the error unframed. */
   resolveOrigin: OriginPresenter | null;
+  /** Flows already checked, shared across checks of one load; a fresh set when absent. */
+  seen?: Set<object>;
 }
 
 /**
@@ -204,7 +206,7 @@ export async function checkCodeNode(node: CodeNode, options: CodeCheckOptions): 
 }
 
 /** A composed flow as the CODE load check reads it: its nodes, in order. */
-interface CheckedFlow {
+export interface CheckedFlow {
   readonly nodes: ReadonlyMap<string, Node>;
 }
 
@@ -213,12 +215,13 @@ interface CheckedFlow {
  *
  * A node's child flows (`originChildren()`) are checked right after it; a flow reached twice is
  * checked once. The loader awaits this once after assembly.
+ * A flow in `options.seen` was checked already and is skipped.
  *
  * @throws LoadError at the first CODE node whose check fails.
  */
 export async function checkFlowCode(flow: CheckedFlow, options: CodeCheckOptions): Promise<void> {
   // Keyed by identity: a shared child flow holds the same nodes.
-  const seen = new Set<object>();
+  const seen = options.seen ?? new Set<object>();
   const visit = async (current: CheckedFlow): Promise<void> => {
     if (seen.has(current)) return;
     seen.add(current);

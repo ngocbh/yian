@@ -5,8 +5,8 @@
  * Static paths join local author node ids with `/`. The Compose parser reserves that separator in
  * node ids, so paths such as `review/summarize` are unambiguous.
  *
- * Knows about: diagnostics and nodes (base, contracts, the AGENT node and its `llm_config`
- * values).
+ * Knows about: diagnostics, typesys and nodes (base, contracts, the AGENT node and its
+ * `llm_config` values).
  * Never imports: compose, runtime, the package-root run boundary, or the CLI.
  */
 

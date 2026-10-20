@@ -22,7 +22,7 @@
  * `test_loaded_flow_records_its_import_depth` and
  * `test_long_cross_file_cycle_reports_the_depth_limit`. Changed: CODE references are TS's form,
  * resolved against the conformance directory: a flow loaded from text names it as `baseDir`
- * (`load`), and `writeFiles` links `fixtures` in each directory it writes to;
+ * (`loadConformanceFlow`), and `writeFiles` links `fixtures` in each directory it writes to;
  * Python's `KeyError("boom")` prints as `'boom'`, a TS `Error("boom")` as `boom`; the bad import
  * depths are `-1`, `"1"`, `true`, `1.5` and `null`, since TS's `1.0` is the int `1`; Python's
  * check that no `RecursionError` is in the cause chain and its stack headroom have no TS
@@ -50,7 +50,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -67,22 +67,18 @@ import {
 } from "../../src/compose/nodes/resolver.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
-import { loadFlow } from "../../src/compose/loader.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget, reload } from "../../src/defaults.ts";
 import {
   assembled,
   assembleText,
   type CaseRow,
-  CONFORMANCE_DIR,
+  linkConformanceFixtures,
   loadError,
+  loadConformanceFlow,
   loadErrorAsync,
   runCase,
 } from "./declarations.ts";
-
-/** Load `text` with the conformance directory as its base, so the fixture CODE references resolve. */
-const load = (text: string, options: Parameters<typeof loadFlow>[1] = {}) =>
-  loadFlow(text, { baseDir: CONFORMANCE_DIR, ...options });
 
 /** A node whose only static child is `child`, counting how often it is asked. */
 class FakeNode {
@@ -408,8 +404,7 @@ function chainTexts(
  * its own directory.
  */
 function writeFiles(directory: string, texts: Record<string, string>): void {
-  const fixtures = join(directory, "fixtures");
-  if (!existsSync(fixtures)) symlinkSync(join(CONFORMANCE_DIR, "fixtures"), fixtures);
+  linkConformanceFixtures(directory);
   for (const [name, text] of Object.entries(texts)) writeFileSync(join(directory, `${name}.yaml`), text);
 }
 
@@ -470,7 +465,7 @@ function memoizingResolver(texts: Record<string, string>) {
   const resolve = async (path: string): Promise<ComposedFlow> => {
     let flow = memo.get(path);
     if (flow === undefined) {
-      flow = await load(texts[path]!, { childResolver: resolve, sourceLabel: `${path}.yaml` });
+      flow = await loadConformanceFlow(texts[path]!, { childResolver: resolve, sourceLabel: `${path}.yaml` });
       memo.set(path, flow);
     }
     return flow;
@@ -498,10 +493,10 @@ describe("chains of uses: files", () => {
 
   test("uses: files count", async () => {
     const legal = dir("legal");
-    await load(usesFiles(legal, 50), { searchPaths: [legal] });
+    await loadConformanceFlow(usesFiles(legal, 50), { searchPaths: [legal] });
 
     const deep = dir("deep");
-    const error = await loadErrorAsync(load(usesFiles(deep, 51), { searchPaths: [deep] }));
+    const error = await loadErrorAsync(loadConformanceFlow(usesFiles(deep, 51), { searchPaths: [deep] }));
     // The import is refused before the call check runs on the built chain.
     expect(error.message).toBe(importMessage(51));
     expectRefusedAtAlias(error, "u49.yaml", readFileSync(join(deep, "u49.yaml"), "utf8"), "u50");
@@ -509,7 +504,7 @@ describe("chains of uses: files", () => {
 
   test("a long uses: chain fails at the import past the limit", async () => {
     const text = usesFiles(tmp, 200);
-    const error = await loadErrorAsync(load(text, { searchPaths: [tmp] }));
+    const error = await loadErrorAsync(loadConformanceFlow(text, { searchPaths: [tmp] }));
 
     expect(error.message).toBe(importMessage(51));
     const frames = error.diagnostic.frames;
@@ -521,10 +516,10 @@ describe("chains of uses: files", () => {
 
   test("an import-only chain counts", async () => {
     const legal = dir("legal");
-    await load(usesFiles(legal, 50, false), { searchPaths: [legal] });
+    await loadConformanceFlow(usesFiles(legal, 50, false), { searchPaths: [legal] });
 
     const deep = dir("deep");
-    const error = await loadErrorAsync(load(usesFiles(deep, 60, false), { searchPaths: [deep] }));
+    const error = await loadErrorAsync(loadConformanceFlow(usesFiles(deep, 60, false), { searchPaths: [deep] }));
     expect(error.message).toBe(importMessage(51));
     expectRefusedAtAlias(error, "u49.yaml", readFileSync(join(deep, "u49.yaml"), "utf8"), "u50");
   });
@@ -534,35 +529,35 @@ describe("chains of uses: files", () => {
     // it, so the chain then reaches x from the cache.
     const deep = dir("deep");
     writeFiles(deep, sharedFileTexts(10));
-    const error = await loadErrorAsync(load(importing("root", uses), { searchPaths: [deep] }));
+    const error = await loadErrorAsync(loadConformanceFlow(importing("root", uses), { searchPaths: [deep] }));
     expect(error.message).toContain(IMPORT_51);
 
     const legal = dir("legal");
     writeFiles(legal, sharedFileTexts(9));
-    await load(importing("root", uses), { searchPaths: [legal] });
+    await loadConformanceFlow(importing("root", uses), { searchPaths: [legal] });
   });
 
   test("an import chain follows the configured limit", async () => {
     reload((name) => (name === "YIAN_MAX_CALL_NESTING" ? "5" : undefined));
     const legal = dir("legal");
-    await load(usesFiles(legal, 5, false), { searchPaths: [legal] });
+    await loadConformanceFlow(usesFiles(legal, 5, false), { searchPaths: [legal] });
 
     const deep = dir("deep");
-    const error = await loadErrorAsync(load(usesFiles(deep, 6, false), { searchPaths: [deep] }));
+    const error = await loadErrorAsync(loadConformanceFlow(usesFiles(deep, 6, false), { searchPaths: [deep] }));
     expect(error.message).toBe(importMessage(6, 5));
     expectRefusedAtAlias(error, "u4.yaml", readFileSync(join(deep, "u4.yaml"), "utf8"), "u5");
   });
 
   test("a loaded flow records its import depth", async () => {
-    const flow = await load(usesFiles(tmp, 3, false), { searchPaths: [tmp] });
+    const flow = await loadConformanceFlow(usesFiles(tmp, 3, false), { searchPaths: [tmp] });
     expect(flow.importDepth).toBe(3);
-    expect((await load(importing("f", {}))).importDepth).toBe(0);
+    expect((await loadConformanceFlow(importing("f", {}))).importDepth).toBe(0);
   });
 
   test("a cross-file cycle longer than the limit reports the depth limit", async () => {
     // The cycle is 51 files deep before it closes, so the author sees the depth error.
     writeFiles(tmp, chainTexts(60, { calls: false, lastImports: "u0" }));
-    const error = await loadErrorAsync(load(importing("root", { first: "u0" }), { searchPaths: [tmp] }));
+    const error = await loadErrorAsync(loadConformanceFlow(importing("root", { first: "u0" }), { searchPaths: [tmp] }));
     expect(error.message).toBe(importMessage(51));
   });
 });
@@ -570,18 +565,22 @@ describe("chains of uses: files", () => {
 describe("custom resolvers", () => {
   test.each(ORDERS)("the import depth holds through a memoizing resolver (%s)", async (_order, uses) => {
     const root = importing("root", uses);
-    const error = await loadErrorAsync(load(root, { childResolver: memoizingResolver(sharedFileTexts(10)) }));
+    const error = await loadErrorAsync(
+      loadConformanceFlow(root, { childResolver: memoizingResolver(sharedFileTexts(10)) }),
+    );
     expect(error.message).toContain(IMPORT_51);
 
-    await load(root, { childResolver: memoizingResolver(sharedFileTexts(9)) });
+    await loadConformanceFlow(root, { childResolver: memoizingResolver(sharedFileTexts(9)) });
   });
 
   test("a resolver that calls loadFlow is bounded", async () => {
     const texts = chainTexts(200);
     const resolve = (path: string): Promise<ComposedFlow> =>
-      load(texts[path]!, { childResolver: resolve, sourceLabel: `${path}.yaml` });
+      loadConformanceFlow(texts[path]!, { childResolver: resolve, sourceLabel: `${path}.yaml` });
 
-    const error = await loadErrorAsync(load(importing("root", { first: "u0" }), { childResolver: resolve }));
+    const error = await loadErrorAsync(
+      loadConformanceFlow(importing("root", { first: "u0" }), { childResolver: resolve }),
+    );
     expect(error.message).toBe(importMessage(51));
     expectRefusedAtAlias(error, "u49.yaml", texts["u49"]!, "u50");
   });
@@ -606,7 +605,7 @@ describe("custom resolvers", () => {
     const raising = (): ComposedFlow => {
       throw new Error("boom");
     };
-    const error = await loadErrorAsync(load(text, { childResolver: raising }));
+    const error = await loadErrorAsync(loadConformanceFlow(text, { childResolver: raising }));
 
     expect(error.message).toBe("callable 'ext' (uses: 'child'): could not resolve: boom");
     const frames = error.diagnostic.frames;
@@ -623,7 +622,7 @@ describe("custom resolvers", () => {
     [null, "null"],
   ])("a resolved flow with import depth %p is refused", async (depth, shown) => {
     const text = importing("f", { ext: "child" });
-    const leaf = await load(importing("child", {}));
+    const leaf = await loadConformanceFlow(importing("child", {}));
     const resolve = () =>
       new ComposedFlow(leaf.compiled, {
         version: leaf.version,
@@ -633,7 +632,7 @@ describe("custom resolvers", () => {
         importDepth: depth as number,
       });
 
-    const error = await loadErrorAsync(load(text, { childResolver: resolve }));
+    const error = await loadErrorAsync(loadConformanceFlow(text, { childResolver: resolve }));
     expect(error.message).toBe(
       `callable 'ext' (uses: 'child'): resolved flow has import_depth ${shown}; expected a non-negative int`,
     );
@@ -644,15 +643,15 @@ describe("custom resolvers", () => {
   });
 
   test("a resolver may return a promise", async () => {
-    const flow = await load(CALLING_ROOT, {
-      childResolver: async () => load(importing("child", {})),
+    const flow = await loadConformanceFlow(CALLING_ROOT, {
+      childResolver: async () => loadConformanceFlow(importing("child", {})),
     });
     expect(flow.importDepth).toBe(1);
   });
 
   test("a rejecting resolver fails at the alias as could not resolve", async () => {
     const error = await loadErrorAsync(
-      load(CALLING_ROOT, { childResolver: () => Promise.reject(new Error("offline")) }),
+      loadConformanceFlow(CALLING_ROOT, { childResolver: () => Promise.reject(new Error("offline")) }),
     );
     expect(error.message).toBe("callable 'ext' (uses: 'child'): could not resolve: offline");
     expect(error.diagnostic.frames.map((frame) => frame.note)).toEqual(["uses alias 'ext'"]);
@@ -672,12 +671,12 @@ describe("custom resolvers", () => {
         if (arrived === 2) release();
         await bothArrived;
       }
-      return load(texts[path]!, { childResolver: resolve, sourceLabel: `${path}.yaml` });
+      return loadConformanceFlow(texts[path]!, { childResolver: resolve, sourceLabel: `${path}.yaml` });
     };
     const root = importing("root", { first: "u0" });
     const flows = await Promise.all([
-      load(root, { childResolver: resolve }),
-      load(root, { childResolver: resolve }),
+      loadConformanceFlow(root, { childResolver: resolve }),
+      loadConformanceFlow(root, { childResolver: resolve }),
     ]);
     expect(flows.map((flow) => flow.importDepth)).toEqual([2, 2]);
   });
@@ -809,12 +808,12 @@ const UNCALLED_DEFS = defsChain(51, { prefix: "k" }).split("nodes:\n  top:\n")[0
 
 describe("chains of defs: entries", () => {
   test("a chain at the limit loads", async () => {
-    await load(defsChain(50));
+    await loadConformanceFlow(defsChain(50));
   });
 
   test("a chain past the limit is located at the root call", async () => {
     const text = defsChain(51);
-    const error = await loadErrorAsync(load(text));
+    const error = await loadErrorAsync(loadConformanceFlow(text));
 
     expect(error.message).toContain(PAST_51);
     expect(error.message).toContain("call node 'top': calling callable 'c0'");
@@ -824,7 +823,7 @@ describe("chains of defs: entries", () => {
 
   test.each([97, 1000])("a long chain of %p fails at the first call past the limit", async (n) => {
     const text = defsChain(n);
-    const error = await loadErrorAsync(load(text));
+    const error = await loadErrorAsync(loadConformanceFlow(text));
 
     expect(error.message).toContain(PAST_DEEP);
     expect(error.message).toContain("call node 'step': calling callable 'c51'");
@@ -833,26 +832,26 @@ describe("chains of defs: entries", () => {
 
   test("a chain written callee first is caught from the built callables", async () => {
     const text = defsChain(51, { reverse: true });
-    const error = await loadErrorAsync(load(text));
+    const error = await loadErrorAsync(loadConformanceFlow(text));
 
     expect(error.message).toContain(PAST_51);
     expect(errorLine(error)).toBe(lineOf(text, "call: c0"));
-    await load(defsChain(50, { reverse: true }));
+    await loadConformanceFlow(defsChain(50, { reverse: true }));
   });
 
   test("map and loop bodies count", async () => {
-    await load(mixedChain(50));
+    await loadConformanceFlow(mixedChain(50));
 
     const text = mixedChain(51);
-    const error = await loadErrorAsync(load(text));
+    const error = await loadErrorAsync(loadConformanceFlow(text));
     expect(error.message).toContain(PAST_51);
     expect(errorLine(error)).toBe(lineOf(text, "call: c0"));
   });
 
   test("call directives count", async () => {
-    await load(directiveChain(50));
+    await loadConformanceFlow(directiveChain(50));
 
-    const error = await loadErrorAsync(load(directiveChain(51)));
+    const error = await loadErrorAsync(loadConformanceFlow(directiveChain(51)));
     expect(error.message).toContain("past the call nesting limit of 50");
   });
 
@@ -871,7 +870,7 @@ describe("chains of defs: entries", () => {
       throw new LoadDiagnostics().error("external failure");
     };
 
-    const error = await loadErrorAsync(load(text, { childResolver: failResolver }));
+    const error = await loadErrorAsync(loadConformanceFlow(text, { childResolver: failResolver }));
 
     expect(error.message).toBe("external failure");
     const frames = error.diagnostic.frames;
@@ -882,7 +881,7 @@ describe("chains of defs: entries", () => {
 
   test("an alias colliding with a node id wins over its broken target", async () => {
     const text = "id: f\nname: f\ninput:\n  x: !str\nuses:\n  step: hub:x/y@1\nnodes:\n" + ROOT_LEAF;
-    const error = await loadErrorAsync(load(text));
+    const error = await loadErrorAsync(loadConformanceFlow(text));
     expect(error.message).toBe('uses: alias ["step"] collides with a node id');
   });
 });
@@ -910,20 +909,20 @@ describe("chains of uses: files over defs: entries", () => {
     const deep = dir("deep");
     writeFiles(deep, { lib: defsChain(50, { prefix: "k" }) });
     const text = defsChain(49, { lastCalls: "lib", uses: { lib: "lib" } });
-    const error = await loadErrorAsync(load(text, { searchPaths: [deep] }));
+    const error = await loadErrorAsync(loadConformanceFlow(text, { searchPaths: [deep] }));
     expect(error.message).toContain("nests calls 99 levels deep, past the call nesting limit of 50");
     expect(errorLine(error)).toBe(lineOf(text, "call: lib"));
 
     // A one-level file's uncalled defs nest 50 on their own, not under the importer.
     const legal = dir("legal");
     writeFiles(legal, { lib: UNCALLED_DEFS });
-    await load(defsChain(49, { lastCalls: "lib", uses: { lib: "lib" } }), { searchPaths: [legal] });
+    await loadConformanceFlow(defsChain(49, { lastCalls: "lib", uses: { lib: "lib" } }), { searchPaths: [legal] });
   });
 
   test("imports and a calling defs chain count apart", async () => {
     // The import chain and the call chain in its last file are each 30 deep, 60 together.
     writeFiles(tmp, { ...chainTexts(30, { calls: false }), u29: defsChain(30) });
-    await load(importing("root", { first: "u0" }), { searchPaths: [tmp] });
+    await loadConformanceFlow(importing("root", { first: "u0" }), { searchPaths: [tmp] });
   });
 
   // A last file that calls its chain is the deepest accepted load, since importing it rebases a
@@ -933,6 +932,6 @@ describe("chains of uses: files over defs: entries", () => {
     ["uncalled", UNCALLED_DEFS],
   ])("imports at the limit over defs at the limit load (%s)", async (_kind, last) => {
     writeFiles(tmp, { ...chainTexts(50, { calls: false }), u49: last });
-    await load(importing("root", { first: "u0" }), { searchPaths: [tmp] });
+    await loadConformanceFlow(importing("root", { first: "u0" }), { searchPaths: [tmp] });
   });
 });

@@ -12,7 +12,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,7 +25,7 @@ import { DeclSite, MemoryDecl, MemorySetupError } from "../../src/memory/contrac
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 
-import { CONFORMANCE_DIR, loadErrorAsync } from "../compose/declarations.ts";
+import { CONFORMANCE_DIR, linkConformanceFixtures, loadErrorAsync } from "../compose/declarations.ts";
 
 const CODE = "./fixtures/compose_codefns.ts:echo_x";
 
@@ -33,7 +33,7 @@ let tmp: string;
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "yian-memory-import-"));
-  symlinkSync(join(CONFORMANCE_DIR, "fixtures"), join(tmp, "fixtures"));
+  linkConformanceFixtures(tmp);
 });
 
 afterEach(() => {

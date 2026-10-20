@@ -4,7 +4,7 @@
  *
  * Ported: every row that only loads. Changed: CODE references are TS's form
  * (`./fixtures/compose_codefns.ts:echo`), loaded with the conformance directory as `baseDir`
- * (`load`).
+ * (`loadConformanceFlow`).
  * `test_callable_scope_eagerly_builds_defs_and_memoizes_resolution` builds a real def where
  * Python patches `_load_def` (a module-internal call a Bun test can't replace), and resolves the
  * alias through `resolveAlias`, since the synchronous `resolve` only reads the alias memo.
@@ -13,7 +13,9 @@
  * keeps its load half.
  *
  * TS-only: a single-node def's parameter named `inf` is refused at its key, as a compact flow's
- * is; defs built without a source cursor, from their normalized bodies.
+ * is; defs built without a source cursor, from their normalized bodies; the awaited CODE check of
+ * defs (an uncalled def, a def calling a bad def, written order), whose messages and frames match
+ * Python's, which checks CODE while building each def.
  *
  * Later (T4-8): the rows that run the loaded flow:
  * `test_defs_callable_runs_end_to_end_without_external_resolver`,
@@ -31,7 +33,8 @@
 import { expect, spyOn, test } from "bun:test";
 
 import type { CompiledFlow } from "../../src/compile/model.ts";
-import { CallableScope, loadFlow } from "../../src/compose/loader.ts";
+import type { LoadError } from "../../src/compose/helpers/errors.ts";
+import { CallableScope } from "../../src/compose/loader.ts";
 import { parseFile } from "../../src/compose/parse/file.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
@@ -40,11 +43,7 @@ import type { CodeNode } from "../../src/nodes/code/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/index.ts";
 
-import { CONFORMANCE_DIR, loadErrorAsync } from "../compose/declarations.ts";
-
-/** Load `text` with the conformance directory as its base, so the fixture CODE references resolve. */
-const load = (text: string, options: Parameters<typeof loadFlow>[1] = {}) =>
-  loadFlow(text, { baseDir: CONFORMANCE_DIR, ...options });
+import { loadConformanceFlow, loadErrorAsync } from "../compose/declarations.ts";
 
 /** The baked child of `flow`'s CALL node `nodeId`. */
 const childOf = (flow: CompiledFlow, nodeId: string) => (flow.nodes.get(nodeId) as CallNode).child as CompiledFlow;
@@ -94,7 +93,7 @@ test("the defs: section parses", () => {
 test("the callable scope eagerly builds defs and memoizes resolution", async () => {
   // One scope eagerly builds local defs and resolves each external alias once.
   const seen: [string, string | null][] = [];
-  const externalChild = await load("id: external\nname: external\nnodes: {}\n");
+  const externalChild = await loadConformanceFlow("id: external\nname: external\nnodes: {}\n");
   const document = SourceDocument.parse("defs:\n  local:\n    nodes: {}\n");
   const external = (path: string, version: string | null) => {
     seen.push([path, version]);
@@ -124,7 +123,7 @@ test("the callable scope eagerly builds defs and memoizes resolution", async () 
 test("several defs share one parse of the parent document", async () => {
   const parse = spyOn(SourceDocument, "parse");
   try {
-    await load(`id: two-defs
+    await loadConformanceFlow(`id: two-defs
 name: two_defs
 defs:
   first:
@@ -219,13 +218,13 @@ output: \${go.output}
 `;
 
 test("a self-recursive def is loud", async () => {
-  const error = await loadErrorAsync(load(SELF_RECURSIVE));
+  const error = await loadErrorAsync(loadConformanceFlow(SELF_RECURSIVE));
   expect(error.message.toLowerCase()).toContain("recursive");
   expect(error.message).toContain("'a'");
 });
 
 test("mutually recursive defs are loud", async () => {
-  const error = await loadErrorAsync(load(MUTUAL_RECURSIVE));
+  const error = await loadErrorAsync(loadConformanceFlow(MUTUAL_RECURSIVE));
   expect(error.message.toLowerCase()).toContain("recursive");
 });
 
@@ -252,7 +251,7 @@ output: \${go.output}
 `;
 
 test("a single-node def's projected header and logic keep their origins", async () => {
-  const loaded = await load(SINGLE_NODE_DEF);
+  const loaded = await loadConformanceFlow(SINGLE_NODE_DEF);
   const node = childOf(loaded.compiled, "go").nodes.get("passthru") as CodeNode;
   const resolver = loaded.originResolver!;
 
@@ -263,7 +262,7 @@ test("a single-node def's projected header and logic keep their origins", async 
 });
 
 test("a single-node def's generated inputs keep the binding origin", async () => {
-  const loaded = await load(SINGLE_NODE_DEF);
+  const loaded = await loadConformanceFlow(SINGLE_NODE_DEF);
   const binding = childOf(loaded.compiled, "go").wiring.get("passthru")!.get("topic")!;
   const resolver = loaded.originResolver!;
 
@@ -272,7 +271,7 @@ test("a single-node def's generated inputs keep the binding origin", async () =>
 });
 
 test("a single-node def's generated output keeps the contract origin", async () => {
-  const loaded = await load(SINGLE_NODE_DEF);
+  const loaded = await loadConformanceFlow(SINGLE_NODE_DEF);
   const node = childOf(loaded.compiled, "go").nodes.get("passthru")!;
   const origin = (node.outputContract as ValueContract).origins.default;
   const resolver = loaded.originResolver!;
@@ -303,7 +302,7 @@ nodes:
       topic: \${input.t}
 output: \${go.output}
 `;
-  await loadErrorAsync(load(text));
+  await loadErrorAsync(loadConformanceFlow(text));
 });
 
 test("a call to an unknown callable is loud", async () => {
@@ -332,7 +331,7 @@ nodes:
       topic: \${input.topic}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(load(text));
+  const error = await loadErrorAsync(loadConformanceFlow(text));
   expect(error.message).toContain("missing");
   // A bare call to a non-def, non-alias callable is loud: external flows only through uses:.
   expect(error.message).toContain("uses:");
@@ -357,7 +356,7 @@ nodes:
       topic: \${input.topic}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(load(text));
+  const error = await loadErrorAsync(loadConformanceFlow(text));
   expect(error.message).toContain("nodes");
 });
 
@@ -387,7 +386,7 @@ nodes:
       topic: \${input.topic}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(load(text));
+  const error = await loadErrorAsync(loadConformanceFlow(text));
   expect(error.message).toContain("defs entry 'enrich'");
   expect(error.message).toContain("nonexistent");
 });
@@ -408,7 +407,7 @@ nodes:
       topic: \${input.topic}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(load(text));
+  const error = await loadErrorAsync(loadConformanceFlow(text));
   expect(error.message).toContain("must be a mapping");
   expect(error.message).toContain("'d'");
 });
@@ -440,7 +439,7 @@ nodes:
       topic: \${input.topic}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(load(text));
+  const error = await loadErrorAsync(loadConformanceFlow(text));
   expect(error.message).toContain("unknown field");
   expect(error.message).toContain("bogus");
 });
@@ -482,7 +481,7 @@ nodes:
       topic: \${input.topic}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(load(text));
+  const error = await loadErrorAsync(loadConformanceFlow(text));
   expect(error.message).toContain("defs entry 'unused_broken'");
 });
 
@@ -510,7 +509,7 @@ nodes:
       mode: \${input.s}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(load(text));
+  const error = await loadErrorAsync(loadConformanceFlow(text));
   expect(error.message).toContain("call node 'go': binding 'mode'");
   expect(error.message).toContain("child expects 'Literal(a, b)', source is 'str'");
 });
@@ -538,7 +537,7 @@ nodes:
       topic: \${input.x}
 output: \${go.output}
 `;
-  await loadErrorAsync(load(text));
+  await loadErrorAsync(loadConformanceFlow(text));
 });
 
 test("a nullable list element bound to a strict child is refused", async () => {
@@ -564,13 +563,13 @@ nodes:
       items: \${input.items}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(load(text));
+  const error = await loadErrorAsync(loadConformanceFlow(text));
   expect(error.message).toContain("call node 'go': binding 'items'");
   expect(error.message).toContain("child expects 'list(int)', source is 'list(Optional(int))'");
 });
 
 test("an omitted child input takes its explicit null default", async () => {
-  const loaded = await load(`id: omitted-null-default
+  const loaded = await loadConformanceFlow(`id: omitted-null-default
 name: omitted_null_default
 defs:
   child:
@@ -613,7 +612,7 @@ nodes:
     call: child
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(load(text));
+  const error = await loadErrorAsync(loadConformanceFlow(text));
   expect(error.message).toContain("defs entry 'child'");
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(9);
 });
@@ -636,7 +635,7 @@ nodes:
       inf: x
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(load(text));
+  const error = await loadErrorAsync(loadConformanceFlow(text));
   expect(error.message).toBe(
     "defs entry 'd': input 'inf': `inf` is infinity in an expression, so ${inf} can't read it; rename it",
   );
@@ -667,4 +666,80 @@ test("defs without a source cursor build from their normalized bodies", () => {
   expect(single.compiled.wiring.get("single")!.get("x")!.source).toBe("${input.x}");
   expect(multi.originResolver).toBeNull();
   expect(single.originResolver).toBeNull();
+});
+
+/** A multi-node def `name` over `x`, its nodes written as given (each indented six spaces). */
+const defText = (name: string, nodes: string, output: string) => `  ${name}:
+    input:
+      x: !str
+    nodes:
+${nodes}    output: \${${output}.output}
+`;
+
+/** A CODE node `id` whose inline body fails the syntax check. */
+const badCode = (id: string) => `      ${id}:
+        kind: code
+        code: "return ("
+        input:
+          x: \${input.x}
+        output: str
+`;
+
+/** A CALL node `id` of `call`. */
+const callOf = (id: string, call: string) => `      ${id}:
+        kind: call
+        call: ${call}
+        input:
+          x: \${input.x}
+`;
+
+/** A flow over `x` with `defs` and one root CODE node no def is called from. */
+const flowWithDefs = (defs: string) => `id: f
+name: f
+input:
+  x: !str
+defs:
+${defs}nodes:
+  r:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      x: \${input.x}
+    output: str
+output: \${r.output}
+`;
+
+/** Assert `error`'s frames: the given defs' bodies in order, then node `nodeId`'s `code:` value. */
+function expectDefFrames(error: LoadError, text: string, defs: string[], [def, nodeId]: [string, string]): void {
+  const defsCursor = SourceDocument.parse(text).root.child("defs");
+  const frames = error.diagnostic.frames;
+  expect(frames.map((frame) => frame.note)).toEqual([...defs.map((name) => `definition '${name}'`), null]);
+  const ranges = frames.map((frame): SourceRange | null => frame.range);
+  expect(ranges).toEqual([
+    ...defs.map((name) => defsCursor.child(name).range),
+    defsCursor.child(def).child("nodes").child(nodeId).child("code").range,
+  ]);
+}
+
+test("an uncalled def's bad CODE body is reported in the def's frame", async () => {
+  const text = flowWithDefs(defText("d", badCode("k"), "k"));
+  const error = await loadErrorAsync(loadConformanceFlow(text));
+  expect(error.message.startsWith("defs entry 'd': node 'k': ")).toBe(true);
+  expectDefFrames(error, text, ["d"], ["d", "k"]);
+});
+
+test("a called def's bad CODE body is reported in the caller's frame, then its own", async () => {
+  const text = flowWithDefs(defText("b2", callOf("c", "b1"), "c") + defText("b1", badCode("k"), "k"));
+  const error = await loadErrorAsync(loadConformanceFlow(text));
+  expect(error.message.startsWith("defs entry 'b2': defs entry 'b1': node 'k': ")).toBe(true);
+  expectDefFrames(error, text, ["b2", "b1"], ["b1", "k"]);
+});
+
+test("defs' CODE bodies are checked in written order, each def's nodes in order", async () => {
+  const text = flowWithDefs(
+    defText("b2", badCode("own") + callOf("c", "b1"), "own") + defText("b1", badCode("k"), "k"),
+  );
+  const error = await loadErrorAsync(loadConformanceFlow(text));
+  expect(error.message.startsWith("defs entry 'b2': node 'own': ")).toBe(true);
+  expectDefFrames(error, text, ["b2"], ["b2", "own"]);
 });

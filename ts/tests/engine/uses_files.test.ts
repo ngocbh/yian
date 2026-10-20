@@ -19,16 +19,7 @@
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fsp from "node:fs/promises";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -42,21 +33,15 @@ import { SourceDocument } from "../../src/compose/source/index.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import type { CodeNode } from "../../src/nodes/code/node.ts";
 
-import { CONFORMANCE_DIR, loadErrorAsync } from "../compose/declarations.ts";
+import { CONFORMANCE_DIR, linkConformanceFixtures, loadErrorAsync } from "../compose/declarations.ts";
 
 const CODE = "./fixtures/compose_codefns.ts:echo";
 
 let tmp: string;
 
-/** Link `<dir>/fixtures` to the conformance fixtures, once, so the CODE references resolve there. */
-function linkFixtures(dir: string): void {
-  const link = join(dir, "fixtures");
-  if (!existsSync(link)) symlinkSync(join(CONFORMANCE_DIR, "fixtures"), link);
-}
-
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "yian-uses-files-"));
-  linkFixtures(tmp);
+  linkConformanceFixtures(tmp);
 });
 
 afterEach(() => {
@@ -90,7 +75,7 @@ function flowText(
  */
 function write(dir: string, filename: string, flowId: string, options: Parameters<typeof flowText>[1] = {}): string {
   const path = join(dir, `${filename}.yaml`);
-  linkFixtures(dir);
+  linkConformanceFixtures(dir);
   writeFileSync(path, flowText(flowId, options));
   return path;
 }

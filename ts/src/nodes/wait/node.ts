@@ -4,20 +4,19 @@
  * WAIT accepts one resolved date or datetime string (the grammar in `typesys/temporal`) through
  * its reserved `until` wiring. A date and a datetime without an offset are read in UTC; a
  * datetime with an offset is normalized to UTC. The author source stays in flow wiring, and the
- * node owns no run-log or scheduler state.
+ * node owns no run-log or scheduler state. The node sleeps on its scheduler with its signal, so a
+ * run stop (engine failure or host shutdown) wakes it.
  *
- * Only the node's shell and its deadline binding are here. Its body (waiting out the remaining
- * duration, woken early by the run's stop signal) is not ported yet and comes with `forward`.
- *
- * Knows about:   nodes/base, nodes/binding, nodes/contracts, diagnostics and typesys.
+ * Knows about:   nodes/base, nodes/binding, nodes/contracts, diagnostics, platform and typesys.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
 import { reprText } from "../../diagnostics.ts";
+import { realScheduler, SLEEP_CHUNK_MS } from "../../platform.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import { parseDateOrDatetime } from "../../typesys/temporal.ts";
 import { valueRepr } from "../../typesys/values.ts";
-import { Node, NodeKind } from "../base.ts";
+import { Node, type NodeCaps, NodeKind, Output } from "../base.ts";
 import { BindingError, type ReservedBinder, resolveSource, sourceOrigin } from "../binding.ts";
 import { bindingSource } from "../contracts.ts";
 
@@ -94,7 +93,9 @@ function deadlineUtc(text: string): number {
  * Block until the resolved absolute `until` deadline.
  *
  * The `until` source lives in the flow wiring under `until` and is pre-resolved by
- * `bindReserved`; `forward` receives that concrete date/datetime string.
+ * `bindReserved`; `forward` receives that concrete date/datetime string and returns `Output(null)`
+ * once the deadline is reached. A stop rejects with `caps.signal.reason`, so the engine discards
+ * the outcome while draining.
  */
 export class WaitNode extends Node {
   readonly kind = NodeKind.WAIT;
@@ -131,8 +132,20 @@ export class WaitNode extends Node {
     return new Set(["until"]);
   }
 
-  /** The wait body; not ported yet. */
-  override forward(): never {
-    throw new Error(`node ${reprText(this.id)} (WaitNode) forward is not ported yet (T4-11)`);
+  /**
+   * Wait for the remaining absolute duration on `caps.scheduler` (`realScheduler` when absent).
+   *
+   * A deadline at or before now returns at once, without checking the signal.
+   *
+   * @throws The reason of `caps.signal` once it aborts during the wait.
+   */
+  override async forward(inputs: Record<string, unknown>, caps: NodeCaps): Promise<Output> {
+    const scheduler = caps.scheduler ?? realScheduler;
+    const deadline = deadlineUtc(inputs.until as string);
+    // Re-read the wall clock after each chunk, so the deadline survives a sleeping laptop.
+    for (let remaining = deadline - scheduler.now(); remaining > 0; remaining = deadline - scheduler.now()) {
+      await scheduler.sleep(Math.min(remaining, SLEEP_CHUNK_MS), caps.signal);
+    }
+    return new Output(null);
   }
 }

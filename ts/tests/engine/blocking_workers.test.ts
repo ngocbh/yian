@@ -12,7 +12,7 @@
  *   signal, which stands in for the host withdrawing the prompt; `NodeFailed` and `RunFailed` reach
  *   `onEvent` while the sibling still blocks, and `run()` returns only after it stopped.
  *
- * Later (T4-11): `test_blocking_wait.py`, which needs WAIT.
+ * The WAIT rows are `blocking_wait.test.ts`, the port of `test_blocking_wait.py`.
  */
 
 import { expect, test } from "bun:test";

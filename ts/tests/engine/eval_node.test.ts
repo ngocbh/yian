@@ -50,8 +50,9 @@
  * plain `Error` (cause type `Error`) and its `ValueError` a `RangeError`. The non-NodeResult
  * message names the JS type (`Object`). In `test_binding_carrier_unwraps_exactly_one_layer` the
  * inner carrier isn't a yian value, so binding refuses it (`binding.evaluate`) where Python passes
- * it through as data. The MAP and WAIT carrier rows check the resolved `over` and `until` through
- * `bindReserved`, not the `Grow` or `Output` the bodies build from them, and the setup faults go
+ * it through as data. The MAP carrier row checks the resolved `over` through `bindReserved`, not
+ * the `Grow` the body builds from it; the WAIT carrier row checks the resolved `until` through
+ * `bindReserved` and the `Output` through the evaluator. The setup faults go
  * through `run`, which rejects with the node's own error; the non-string `when` is a cast. The
  * not-a-list message is pinned as the golden format's text.
  *
@@ -68,8 +69,7 @@
  * `test_source_free_case_predicate_failure_falls_back_to_the_node_origin`.
  *
  * Later (T4-10): the run-result half of `test_map_over_accepts_a_binding_carrier` (the `Grow`
- * through the evaluator). Later (T4-11): the run-result half of
- * `test_wait_until_accepts_a_binding_carrier` (the `Output` through the evaluator).
+ * through the evaluator).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -149,13 +149,14 @@ test("map over accepts a binding carrier", () => {
   expect(node.bindReserved(wiring, new VariablePool())).toEqual({ over: ["first", "second"] });
 });
 
-test("wait until accepts a binding carrier", () => {
+test("wait until accepts a binding carrier", async () => {
   // WAIT's dedicated resolver accepts the carrier shape it bypasses elsewhere.
   const node = new WaitNode("wait");
   const source = new Binding("2000-01-01T00:00:00+00:00", { origin: new OriginRef("wait-until") });
   const wiring = new Map([["until", source]]);
 
   expect(node.bindReserved(wiring, new VariablePool())).toEqual({ until: "2000-01-01T00:00:00+00:00" });
+  expect(await drive(node, { flow: nodeFlow(node, { until: source }) })).toEqual(new Output(null));
 });
 
 for (const [label, make, inputs] of [

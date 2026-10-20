@@ -43,7 +43,16 @@ import {
   Route,
   type Steering,
 } from "../nodes/base.ts";
-import { BindingCapture, BindingError, bindParams, type SourceResolver } from "../nodes/binding.ts";
+import { ResolvedValue, ValueRoute } from "../expr/lineage.ts";
+import {
+  BindingCapture,
+  BindingCollector,
+  BindingError,
+  bindParams,
+  type ReservedBinder,
+  resolveSource,
+  type SourceResolver,
+} from "../nodes/binding.ts";
 import { isExactly, NodeSteps } from "../nodes/contracts.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
@@ -397,9 +406,25 @@ export async function evalNode(
   }
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
+  const collector = captureBindings ? new BindingCollector() : null;
+  const backwardCapture = captureBindings
+    ? new BackwardCapture({
+        inputNames: node.backwardInputNames(),
+        variableNames: node.declaredVariables().map((parameter) => parameter.name),
+        scope: node.executionScope,
+      })
+    : null;
+
+  /** Snapshot the completed inputs before the body can change them. */
+  const captureInputs = (inputs: Record<string, unknown>): void => {
+    collector!.finish(inputs as ValueRecord);
+  };
+
   const outcome = await evaluateNode(node, flow, pool, {
     wiringOverride,
     signal,
+    collector,
+    captureInputs: captureBindings ? captureInputs : null,
     sourceResolver,
     emitStream,
     emitEvent,
@@ -408,7 +433,7 @@ export async function evalNode(
     steering,
     steps,
   });
-  return new EvaluatedOutcome(outcome, null);
+  return new EvaluatedOutcome(outcome, null, collector?.freeze() ?? null, backwardCapture);
 }
 
 /** Bind and run one node, resolving to one normalized result. */
@@ -419,6 +444,10 @@ async function evaluateNode(
   context: {
     wiringOverride: JsonObject | null;
     signal: AbortSignal;
+    /** Retains the bound values and routes, when capturing bindings. */
+    collector: BindingCollector | null;
+    /** Receives the completed input record before the body runs, when capturing bindings. */
+    captureInputs: ((inputs: Record<string, unknown>) => void) | null;
     sourceResolver: SourceResolver | null;
     emitStream: NonNullable<NodeCaps["emitStream"]> | null;
     emitEvent: NonNullable<NodeCaps["emitEvent"]> | null;
@@ -428,18 +457,30 @@ async function evaluateNode(
     steps: NodeSteps | null;
   },
 ): Promise<WorkerOutcome> {
-  const { wiringOverride, signal, sourceResolver, emitStream, emitEvent, skills, tools, steering, steps } = context;
+  const { wiringOverride, signal, collector, captureInputs, sourceResolver } = context;
+  const { emitStream, emitEvent, skills, tools, steering, steps } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
   const nodeWiring: ReadonlyMap<string, unknown> =
     wiringOverride !== null ? new Map(Object.entries(wiringOverride)) : (flow?.wiring.get(node.id) ?? new Map());
   const usesBaseTemplate = node.run === Node.prototype.run;
+  const reservedSources = new Set<string>();
+  const reservedBinder: ReservedBinder | null =
+    collector === null
+      ? null
+      : (name, source, normalize) => {
+          // Retain the route of the value the node delivers, after its normalization.
+          const value = normalize(resolveSource(source, pool, { collector, name, sourceResolver }));
+          reservedSources.add(name);
+          return value;
+        };
 
   let record: ValueRecord;
   try {
     record = node.bindsPerItem
       ? {}
       : bindParams(node.params ?? [], nodeWiring, pool, {
+          collector,
           sourceResolver,
           types: node.types,
           labels: node.bindingLabels,
@@ -447,7 +488,7 @@ async function evaluateNode(
         });
     let reserved: Record<string, unknown>;
     try {
-      reserved = node.bindReserved(nodeWiring, pool, { bind: null });
+      reserved = node.bindReserved(nodeWiring, pool, { bind: reservedBinder });
     } catch (error) {
       if (error instanceof BindingError && steps !== null && node.needsSteps === true && steps.prior.length > 0) {
         // A start records steps only after binding, and resume restores the pool, so the code
@@ -459,11 +500,21 @@ async function evaluateNode(
       }
       throw error;
     }
-    for (const name of Object.keys(reserved)) setField(record, name, reserved[name] as Value);
+    for (const name of Object.keys(reserved)) {
+      const value = reserved[name] as Value;
+      setField(record, name, value);
+      // A hook that materialized its value without the binder has no evaluated source.
+      if (collector !== null && !reservedSources.has(name)) {
+        collector.recordSource(name, ValueRoute.literal(value), false);
+      }
+    }
   } catch (error) {
     if (!(error instanceof BindingError)) throw error;
+    collector?.invalidate();
     return evaluationFailure(node, error.failureCode, error, error.origin);
   }
+
+  if (captureInputs !== null && !usesBaseTemplate) captureInputs(record);
 
   // The first fault any capability raised. A node can catch the fault it was thrown, so the
   // evaluator keeps it to throw when the node settles.
@@ -480,16 +531,27 @@ async function evaluateNode(
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = { signal };
   if (node.bindsPerItem) {
     const params = node.params ?? [];
-    caps.bindItem = (element) => {
+    caps.bindItem = (element, index) => {
       try {
+        let item: Value | ResolvedValue = element;
+        let itemCollector: BindingCollector | null = null;
+        if (collector !== null) {
+          itemCollector = collector.forItem(index);
+          const key = node.itemSourceKey;
+          item = new ResolvedValue(element, true, key !== null ? collector.routeFor(key).project([index]) : null);
+        }
         return bindParams(params, nodeWiring, pool, {
-          item: element,
+          item,
+          collector: itemCollector,
           sourceResolver,
           types: node.types,
           labels: node.bindingLabels,
         });
       } catch (error) {
-        if (error instanceof BindingError) throw new BindingStageError(error);
+        if (error instanceof BindingError) {
+          collector?.invalidate();
+          throw new BindingStageError(error);
+        }
         throw new DeferredBindingFault(error);
       }
     };
@@ -505,13 +567,17 @@ async function evaluateNode(
 
   let result: unknown;
   try {
-    result = usesBaseTemplate ? await node.runForEvaluator(record, caps) : await node.run(record, caps);
+    result = usesBaseTemplate
+      ? await node.runForEvaluator(record, caps, captureInputs)
+      : await node.run(record, caps);
   } catch (error) {
     await Promise.allSettled(pending);
     // A host capability fault, then a stop, is control flow outside the node-result sum, whatever
     // the node rejected with.
     if (faults.first !== null) throw faults.first.original;
     if (signal.aborted) throw signal.reason;
+    // A template default that fails to bind leaves no usable input record.
+    if (usesBaseTemplate && error instanceof BindingStageError) collector?.invalidate();
     return stageFailure(node, error, usesBaseTemplate);
   }
   await Promise.allSettled(pending);

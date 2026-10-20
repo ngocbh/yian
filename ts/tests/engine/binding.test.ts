@@ -21,24 +21,30 @@
  * `boundInputs` and `evaluatedKeys` give a fresh copy on each read; a capture built directly
  * freezes its item pairs and copies its evaluated keys.
  *
- * Later: the 5 node and evaluator capture tests
- * (`test_binding_failure_keeps_partial_context_without_usable_inputs`,
- * `test_evaluator_capture_preserves_typed_values_before_node_mutation`,
- * `test_capture_includes_materialized_reserved_values_from_node_hooks`,
- * `test_per_item_wrapper_capture_includes_defaults_before_body_and_asserts`,
- * `test_map_wrapper_capture_includes_valid_defaults_and_item_routes`) wait for the runtime's
- * `evalNode`; the first also waits for the WAIT and MAP nodes, and the last for the MAP node.
+ * Ported (adapted): the evaluator capture tests
+ * `test_binding_failure_keeps_partial_context_without_usable_inputs` (its `ordinary`, `reserved`
+ * and `wrapper_default` rows), `test_capture_includes_materialized_reserved_values_from_node_hooks`
+ * and `test_per_item_wrapper_capture_includes_defaults_before_body_and_asserts` pass Python's
+ * `wiring_override` as the wiring of a one-node flow (`nodeFlow`), since an override is a JSON
+ * record and these sources hold a `Binding`; Python's bare `Node` is a minimal subclass.
+ * `test_evaluator_capture_preserves_typed_values_before_node_mutation` binds a list where Python
+ * binds a tuple, so it doesn't check the tuple type.
+ *
+ * Later (T4-10): the `deferred` row of
+ * `test_binding_failure_keeps_partial_context_without_usable_inputs` (its MAP item captures) and
+ * `test_map_wrapper_capture_includes_valid_defaults_and_item_routes` wait for MAP's `forward`.
  *
  * Not ported: `test_bind_params_rejects_noncanonical_containers` has no counterpart: both of
  * its rows are tuples, and TS has only arrays.
  */
 
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
 import { TEMPLATE_FNS, registerTemplateFn } from "../../src/expr/builtins.ts";
 import { RequiredError } from "../../src/expr/index.ts";
 import { ResolvedValue, routeFeedback, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
+import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import {
   applyDefaults,
   BindingCapture,
@@ -46,8 +52,12 @@ import {
   BindingError,
   bindParams,
 } from "../../src/nodes/binding.ts";
-import { Binding, ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { Assertion, Binding, ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { MapNode } from "../../src/nodes/map/node.ts";
+import { WaitNode } from "../../src/nodes/wait/node.ts";
+import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { FileRef, Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
+import { nodeFlow } from "./run_state_fixtures.ts";
 
 const START_ID = "__start__";
 
@@ -197,6 +207,132 @@ test("an omitted default has no upstream source", () => {
   expect(routed.contributions.map((c) => [c.source, c.feedback])).toEqual([
     [new SourceRef("run", 3), "Supply a value."],
   ]);
+});
+
+/** A minimal concrete node; it fails before its body in these tests. */
+class CodeNode extends Node {
+  readonly kind: NodeKind = NodeKind.CODE;
+}
+
+describe("binding failure keeps partial context without usable inputs", () => {
+  const origin = new OriginRef("bad-input");
+  const rows: [string, () => [Node, Record<string, unknown>, string[]]][] = [
+    [
+      "ordinary",
+      () => {
+        const node = new CodeNode("node");
+        node.params = [new Parameter("ok"), new Parameter("bad", { contract: INTEGER, origin })];
+        return [node, { ok: { safe: [1n] }, bad: "wrong" }, ["ok", "bad"]];
+      },
+    ],
+    [
+      "reserved",
+      () => {
+        const node = new WaitNode("node");
+        node.params = [new Parameter("ok")];
+        return [node, { ok: { safe: [1n] }, until: new Binding("wrong", { origin }) }, ["ok", "until"]];
+      },
+    ],
+    [
+      "wrapper_default",
+      () => {
+        // The default fails before the child flow is read.
+        const node = new MapNode("node", { flowId: "child", child: {} });
+        node.params = [
+          new Parameter("bad", { contract: INTEGER, hasDefault: true, default: "wrong", defaultOrigin: origin }),
+        ];
+        return [node, { over: [] }, ["over"]];
+      },
+    ],
+  ];
+  for (const [stage, build] of rows) {
+    test(stage, async () => {
+      const [node, wiring, expectedNames] = build();
+      const evaluated = await evalNode(node, nodeFlow(node, wiring), poolOf(), { captureBindings: true });
+      expect(evaluated.outcome).toBeInstanceOf(EvaluationFailure);
+      const { failure } = evaluated.outcome as EvaluationFailure;
+      expect(failure.code).toBe(stage === "wrapper_default" ? "binding.evaluate" : "contract.input");
+      expect(failure.trace).toEqual([origin]);
+      expect(evaluated.bindings!.boundInputs).toBeNull();
+      expect(evaluated.bindings!.route.names).toEqual(expectedNames);
+    });
+  }
+});
+
+test("evaluator capture preserves typed values before node mutation", async () => {
+  class MutatingNode extends Node {
+    readonly kind = NodeKind.CODE;
+
+    override forward(inputs: Record<string, unknown>): NodeResult {
+      ((inputs["payload"] as ValueRecord[])[0]!["items"] as Value[]).push("after");
+      return new Output(inputs);
+    }
+  }
+
+  const file = new FileRef({ uri: "file:///input.txt", name: "input.txt" });
+  const node = new MutatingNode("mutate");
+  node.params = [new Parameter("payload")];
+  const flow = nodeFlow(node, { payload: [{ items: [file] }] });
+  const evaluated = await evalNode(node, flow, poolOf(), { captureBindings: true });
+  expect(evaluated.evidence).toBeNull();
+  expect(evaluated.bindings!.boundInputs).toEqual({ payload: [{ items: [file] }] });
+  const captured = evaluated.bindings!.boundInputs!["payload"] as ValueRecord[];
+  expect((captured[0]!["items"] as Value[])[0]).toBe(file);
+  const delivered = (evaluated.outcome as Output).value as ValueRecord;
+  expect((delivered["payload"] as ValueRecord[])[0]!["items"]).toEqual([file, "after"]);
+  expect((await evalNode(node, flow, poolOf())).bindings).toBeNull();
+});
+
+test("capture includes materialized reserved values from node hooks", async () => {
+  class ReservedNode extends Node {
+    readonly kind = NodeKind.CODE;
+
+    override bindReserved(): Record<string, unknown> {
+      return { payload: { items: [1n] } };
+    }
+
+    override forward(inputs: Record<string, unknown>): NodeResult {
+      ((inputs["payload"] as ValueRecord)["items"] as Value[]).push(2n);
+      return new Output(inputs);
+    }
+  }
+
+  const evaluated = await evalNode(new ReservedNode("node"), null, poolOf(), { captureBindings: true });
+  expect(evaluated.bindings!.boundInputs).toEqual({ payload: { items: [1n] } });
+  expect(evaluated.bindings!.route.names).toEqual(["payload"]);
+  expect(evaluated.bindings!.route.children[0]!.kind).toBe("literal");
+});
+
+describe("per-item wrapper capture includes defaults before body and asserts", () => {
+  for (const mode of ["return", "mutate", "preassert"]) {
+    test(mode, async () => {
+      class PerItemNode extends Node {
+        readonly kind = NodeKind.CODE;
+        override readonly bindsPerItem = true;
+
+        override forward(inputs: Record<string, unknown>): NodeResult {
+          if (mode === "mutate") ((inputs["fallback"] as ValueRecord)["items"] as Value[]).push(2n);
+          return new Output(inputs);
+        }
+      }
+
+      const node = new PerItemNode("node");
+      node.params = [new Parameter("fallback", { hasDefault: true, default: { items: [1n] } })];
+      if (mode === "preassert") node.preAsserts = [new Assertion("false", "must hold")];
+      const evaluated = await evalNode(node, null, poolOf(), { captureBindings: true });
+      expect(evaluated.bindings!.boundInputs).toEqual({ fallback: { items: [1n] } });
+      expect(evaluated.bindings!.route.names).toEqual(["fallback"]);
+      expect(evaluated.bindings!.route.children[0]!.kind).toBe("literal");
+      expect(evaluated.bindings!.evaluatedKeys).toEqual(new Set());
+      if (mode === "preassert") {
+        expect(evaluated.outcome).toBeInstanceOf(EvaluationFailure);
+        expect((evaluated.outcome as EvaluationFailure).failure.code).toBe("assertion.failed");
+      } else {
+        const expected = mode === "mutate" ? [1n, 2n] : [1n];
+        expect((evaluated.outcome as Output).value).toEqual({ fallback: { items: expected } });
+      }
+    });
+  }
 });
 
 test("bind a reference and a literal", () => {

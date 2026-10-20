@@ -14,9 +14,10 @@
  * `read_type`. The child-signature rows build the child with `handChild` (a producer `d` of the
  * given type and a record output), where Python loads a flow; the MAP row builds a
  * `MapDescriptor` over a hand-built child returning its `Decision` producer, where Python loads a
- * flow whose def is that child. The LOOP row builds a `LoopDescriptor` labelled as an inline body
- * over a hand-built body returning its `Decision` producer, where Python loads a flow with an
- * inline body, and pins the whole message (its harvested case is T3-17's).
+ * flow whose def is that child. The LOOP row loads Python's flow with `assembleText` (without the
+ * unused `Text`, `Num` and `Reply` typedefs) and pins the whole message; its harvested case
+ * `load-types/compose_union_field_access__loop_carrying_a_union_keeps_the_non_record_error` is
+ * pinned at the end.
  *
  * TS-only: the member-only fix hints, which Python checks only through flows the loader builds
  * (a tag comparison hint read from the local path, through a union root and below a shared
@@ -32,7 +33,6 @@ import { expect, test } from "bun:test";
 import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { answerSchema } from "../../src/compose/nodes/human_input.ts";
-import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { childSignature } from "../../src/compose/nodes/resolver.ts";
 import {
@@ -43,7 +43,15 @@ import {
 } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
-import { handChild, loadError, parametersFromYaml } from "./declarations.ts";
+import {
+  assembled,
+  assembleText,
+  type CaseRow,
+  handChild,
+  loadError,
+  parametersFromYaml,
+  runCase,
+} from "./declarations.ts";
 
 const DECISION_TYPEDEFS = {
   Buy: { action: "Literal(buy)", qty: "int" },
@@ -269,20 +277,29 @@ test("a map over a union output gives a list of objects", () => {
 });
 
 test("a loop carrying a union keeps the non-record error", () => {
-  const body = handChild({
-    inputs: parametersFromYaml("input:\n  action: !str\n", new Map()),
-    producers: { step: new ValueContract(typeFor("Decision", readTypedefs(TRADE_TYPEDEFS))) },
-    output: "${step.output}",
-  });
-  const desc = new LoopDescriptor({
-    id: "drive",
-    call: "inline-body",
-    inputs: { action: "buy" },
-    times: 2n,
-    childLabel: "inline body of node 'drive'",
-  });
+  const text =
+    "id: p\nname: p\n" +
+    "typedefs:\n" +
+    "  Buy: {action: 'Literal(buy)', qty: int, note: str}\n" +
+    "  Hold: {action: 'Literal(hold)', note: str}\n" +
+    "  Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}\n" +
+    "  Decision: Union(Buy, Hold, Sell)\n" +
+    "input:\n  s: !str\n" +
+    "nodes:\n" +
+    "  drive:\n" +
+    "    kind: loop\n" +
+    "    times: 2\n" +
+    "    input:\n      action: buy\n" +
+    "    nodes:\n" +
+    "      step:\n" +
+    "        kind: code\n" +
+    "        input:\n          action: ${input.action}\n" +
+    "        output: Decision\n" +
+    "        code: return null\n" +
+    "    output: ${step.output}\n" +
+    "output: ${drive.output}\n";
 
-  const error = loadError(() => desc.build(new BuildContext({ registry: new Map(), resolver: () => body })));
+  const error = loadError(() => assembleText(text));
 
   expect(error.message).toBe(
     "loop node 'drive': body inline body of node 'drive' must return a record with at least one carried " +
@@ -290,3 +307,9 @@ test("a loop carrying a union keeps the non-record error", () => {
       "to a node with a record output",
   );
 });
+
+// ---------- harvested conformance cases ----------
+
+test.each<CaseRow>([
+  { id: "load-types/compose_union_field_access__loop_carrying_a_union_keeps_the_non_record_error", call: assembled },
+])("assemble: $id", runCase);

@@ -10,7 +10,9 @@
  * makes the loader's call on a case and compares the result with the case's `expect`; and
  * `handChild`, a child flow built by hand (START, producers with given output contracts, END)
  * where a case's `defs:` entry would be loaded, for the rows that read a child's signature or
- * build a CALL or MAP over one (`assembledWith` and `assembleText`'s `children`).
+ * build a CALL or MAP over one (`assembledWith` and `assembleText`'s `children`). The harness
+ * scope registers and resolves inline body children itself; the loader's callable scope, with
+ * its collision and recursion checks, is T3-22's.
  */
 
 import { readFileSync } from "node:fs";
@@ -259,9 +261,35 @@ function resolveFrom(children: ChildFlows = {}): CallableScope["resolve"] {
 }
 
 /**
+ * Return a scope whose catalog is `builder` and which registers private (inline body) children:
+ * `resolve` builds a registered child and memoizes only a successful build; any other callable
+ * goes to `resolve`. A repeated registration keeps the first builder.
+ */
+function scopeOf(builder: SourceCatalogBuilder, resolve: CallableScope["resolve"]): CallableScope {
+  const builders = new Map<string, () => ComposedFlow>();
+  const built = new Map<string, ComposedFlow>();
+  return {
+    catalogBuilder: builder,
+    registerPrivate: (flowId, _owner, _label, build) => {
+      if (!builders.has(flowId)) builders.set(flowId, build);
+    },
+    resolve: (flowId, version) => {
+      const flow = built.get(flowId);
+      if (flow !== undefined) return flow;
+      const build = builders.get(flowId);
+      if (build === undefined) return resolve(flowId, version);
+      const child = build();
+      built.set(flowId, child);
+      return child;
+    },
+  };
+}
+
+/**
  * Assemble the root flow of `document` as the loader calls `assemble` on it, with a scope whose
- * catalog is `builder` and which resolves a callable through `resolve` (default: none resolves);
- * the loader's `uses:` aliases, flow `llm_config:` and root memories are left out.
+ * catalog is `builder`, which registers and resolves inline body children, and which resolves
+ * any other callable through `resolve` (default: none resolves); the loader's `uses:` aliases,
+ * flow `llm_config:` and root memories are left out.
  */
 function assembleRoot(
   document: SourceDocument,
@@ -271,7 +299,7 @@ function assembleRoot(
 ): ComposedFlow {
   const file = parseFile(document);
   const root = document.root;
-  const scope: CallableScope = { catalogBuilder: builder, resolve, registerPrivate: () => {} };
+  const scope = scopeOf(builder, resolve);
   // A compact flow (no `nodes:`) lends its top-level `output:` to its one synthesized node, so the
   // loader locates the flow's `asserts:` and `output:` only in a full flow.
   const childOf = (key: string, flowOnly = false) =>

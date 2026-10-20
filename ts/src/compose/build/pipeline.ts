@@ -48,7 +48,7 @@ import {
   type ValueTemplate,
 } from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { isList, isRecord, jsTypeName, type Type, type Value, writeAsText } from "../../typesys/values.ts";
+import { isList, isListKind, isRecord, jsTypeName, type Type, type Value, writeAsText } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import type { TypeFn } from "../helpers/output_contracts.ts";
@@ -90,11 +90,19 @@ import { inferOrderingEdges } from "../edges/ordering.ts";
 import { CallDescriptor } from "../nodes/call.ts";
 import { CaseDescriptor } from "../nodes/case.ts";
 import { LoopDescriptor } from "../nodes/loop.ts";
+import { MapDescriptor } from "../nodes/map.ts";
 import type { ScalarStyle } from "../source/common.ts";
 import { LoweredAsserts } from "../validate/asserts.ts";
 import { Narrowing } from "../validate/narrowing.ts";
 import type { LocalInput } from "../validate/typed_bindings.ts";
 import { synthesizeBoundaryGraph } from "./boundary.ts";
+import {
+  canonicalizeInlineType,
+  explicitTypeHint,
+  inferInlineBindingType,
+  type ItemType,
+  type ProducerType,
+} from "./inline_inputs.ts";
 // T3-18 imports
 // T3-19 imports
 // T3-20 imports
@@ -1666,13 +1674,110 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     diagnostics,
   });
 
-  // The inline-child and binding-contract readers read it lazily once ported; it is set just
-  // before the build.
+  // The inline-child builder reads it lazily, as the binding-contract reader will once ported;
+  // it is set just before the build.
   let descriptorCache: DescriptorBuildCache | null = null;
 
-  // T3-17: assembles one retained body lazily in this file's callable scope.
-  const buildInlineChild = (body: InlineBody, descriptor: NodeDescriptor): ComposedFlow => {
-    throw new Error("build_inline_child is not ported yet (T3-17)");
+  /** Assemble one retained body lazily in this file's callable scope. */
+  const buildInlineChild = (body: InlineBody, descriptor: CallDescriptor | LoopDescriptor): ComposedFlow => {
+    /** Resolve one parent producer through this assembly's build cache. */
+    const producerType: ProducerType = (producerId, bindingLabel, bindingRange) => {
+      const unavailableType = (): LoadError =>
+        diagnostics.error(
+          `cannot infer type for inline binding ${reprText(bindingLabel)}: ` +
+            `producer ${reprText(producerId)} has no available static type; ` +
+            explicitTypeHint(bindingLabel),
+          { range: bindingRange },
+        );
+
+      if (!descriptors.has(producerId)) throw unavailableType();
+
+      const cache = descriptorCache;
+      if (cache === null) throw new Error("descriptor cache was not initialized before inline child resolution");
+      const outputContract = cache.buildOne(producerId, bindingLabel, bindingRange).node.outputContract;
+      if (outputContract === null) throw unavailableType();
+      if (!isExactly(outputContract, ValueContract) && !isExactly(outputContract, PartialRecordContract)) {
+        throw new TypeError(
+          "output producer contracts must be ValueContract or PartialRecordContract values, " +
+            `got ${jsTypeName(outputContract)} for ${reprText(producerId)}`,
+        );
+      }
+      return outputContract;
+    };
+
+    let itemType: ItemType | null = null;
+    if (descriptor instanceof MapDescriptor) {
+      let cachedItemType: Type | null = null;
+
+      /** Prove the MAP element type once, only when an item walk requests it. */
+      itemType = (bindingLabel, bindingRange) => {
+        if (cachedItemType !== null) return cachedItemType;
+
+        const overType = inferInlineBindingType(descriptor.over, {
+          parentInputTypes: flowInputTypes,
+          producerType,
+          typeFn: constructorType,
+          bindingLabel,
+          bindingRange,
+          diagnostics,
+        });
+        if (!isListKind(overType.kind) || overType.element === undefined) {
+          throw diagnostics.error(
+            `cannot infer type for inline binding ${reprText(bindingLabel)}: ` +
+              "MAP `over:` must have a proven list element type; " +
+              explicitTypeHint(bindingLabel),
+            { range: bindingRange },
+          );
+        }
+        cachedItemType = overType.element;
+        return cachedItemType;
+      };
+    }
+
+    const childInputs: Parameter[] = [];
+    for (const [key, value] of Object.entries(descriptor.inputs)) {
+      const bindingLabel = `${descriptor.id}.input.${key}`;
+      const bindingRange = body.inputRanges.get(key) ?? null;
+      const declared = descriptor.inputTypes.get(key);
+      // A typed binding states the parameter's type, and the binder checks the value against it at
+      // runtime, so its value need not be inferable.
+      const parameterType =
+        declared !== undefined
+          ? declared.type
+          : inferInlineBindingType(value, {
+              parentInputTypes: flowInputTypes,
+              producerType,
+              typeFn: constructorType,
+              itemType,
+              bindingLabel,
+              bindingRange,
+              diagnostics,
+            });
+      const canonical = canonicalizeInlineType(parameterType);
+      childInputs.push(
+        new Parameter(key, {
+          contract: new ValueContract(canonical),
+          required: !canonical.nullable,
+          coerceStrings: true,
+        }),
+      );
+    }
+
+    return assemble({
+      inputParameters: childInputs,
+      nodesCursor: body.nodesCursor,
+      outputsSection: body.output,
+      assertsSection: [],
+      registry,
+      scope,
+      owner: body.owner,
+      flowLlmConfig: {},
+      flowEnv: {},
+      boundaryFieldRanges: new Map(body.inputRanges),
+      outputsRange: body.outputRange,
+      outputsCursor: body.outputCursor,
+      flowId: body.flowId,
+    });
   };
 
   // T3-17: resolves one parent binding's contract, building referenced producers on demand.
@@ -2002,9 +2107,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
-//   T3-17  buildInlineChild (3, `(body: InlineBody, descriptor: NodeDescriptor) => ComposedFlow`):
-//            throws.
-//          readBindingContract (3, `BindingContractReader | null`): `null`.
+//   T3-17  readBindingContract (3, `BindingContractReader | null`): `null`.
 //   T3-18  checkWrittenValues, stampToolInputTypes, checkWiringParity, validateReferences,
 //          validateHumanQuestions, checkReservedSources, rejectCycles, checkCaseHandles (1).
 //          fillTypeTables (2, with _site_range).

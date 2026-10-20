@@ -20,7 +20,10 @@
  * whose errors the CASE build raises.
  *
  * The harvested `load-core/compose_non_text_fields__*` cases are pinned at the end of each block,
- * by the call that raises their error; the inline-body ones are Later (T3-17).
+ * by the call that raises their error. The inline-body rows of
+ * `test_code_in_def_compact_merge_and_inline_body` and
+ * `test_non_text_kind_in_a_def_and_inline_body` load with `assembleText` (the error comes from the
+ * child's assembly) and pin the whole message.
  *
  * Dropped: the date rows (TS reads an unquoted date as text) and
  * `test_not_text_detail_reads_the_first_string_error` (`not_text_detail` reads a pydantic error).
@@ -29,11 +32,9 @@
  * rows of `test_already_located_fields_are_unchanged`.
  * Later (T3-18, T3-22): the unresolved-reference error of `test_null_case_on_is_absent`. Later
  * (T3-22): the loading of `test_text_case_on_still_loads`.
- * Later (T3-17): the inline-body rows of `test_code_in_def_compact_merge_and_inline_body` and
- * `test_non_text_kind_in_a_def_and_inline_body`. Later (T3-22): their defs, compact and merge
- * rows, the flow and def sites of the `llm_config` rows, and the def `asserts:` rows
- * (`test_non_text_def_assert_is_a_load_error`, `test_non_list_def_asserts_is_a_load_error`,
- * `test_null_def_asserts_loads`).
+ * Later (T3-22): the defs, compact and merge rows of those two tests, the flow and def sites of
+ * the `llm_config` rows, and the def `asserts:` rows (`test_non_text_def_assert_is_a_load_error`,
+ * `test_non_list_def_asserts_is_a_load_error`, `test_null_def_asserts_loads`).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -575,6 +576,58 @@ describe("the CASE build", () => {
     "load-core/compose_non_text_fields__list_on_when",
     "load-core/compose_non_text_fields__non_text_searched_when",
   ])("case %s", (id) => runCase({ id, call: assembled }));
+});
+
+describe("an inline body", () => {
+  const codeInInlineBody = `id: f
+name: f
+nodes:
+  a:
+    kind: call
+    nodes:
+      echo:
+        kind: code
+        output: str
+        code: 5
+    output: \${echo.output}
+output: \${a.output}
+`;
+  const kindInInlineBody = `id: f
+name: f
+nodes:
+  a:
+    kind: call
+    nodes:
+      echo:
+        kind: [a]
+        output: str
+        code: "return 'x'"
+    output: \${echo.output}
+output: \${a.output}
+`;
+
+  test("non-text code in an inline body is a load error", () => {
+    const error = loadError(() => assembleText(codeInInlineBody));
+
+    expect(error.message).toBe(
+      "node 'echo' (kind=code): `code:` must be text, but YAML read it as an integer; put it in quotes",
+    );
+    expect(startLine(error)).toBe(lineOf(codeInInlineBody, "code: 5"));
+  });
+
+  test("non-text kind in an inline body is a load error", () => {
+    const error = loadError(() => assembleText(kindInInlineBody));
+
+    expect(error.message).toBe(
+      "node 'echo': `kind:` must be text, but YAML read it as a list; " +
+        "write one of agent, call, case, code, human_input, loop, map, tool, wait",
+    );
+    expect(startLine(error)).toBe(lineOf(kindInInlineBody, "kind: [a]"));
+  });
+
+  test.each(["load-core/compose_non_text_fields__non_text_kind_in_an_inline_body"])("case %s", (id) =>
+    runCase({ id, call: assembled }),
+  );
 });
 
 describe("llm_config", () => {

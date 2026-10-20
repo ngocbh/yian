@@ -38,6 +38,7 @@ import {
   typeEquals,
   unionField,
   ValueKind,
+  writeAsJson,
   writeAsText,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics, type LoadError } from "../helpers/errors.ts";
@@ -408,7 +409,7 @@ function inferTemplate(node: unknown, path: string, walk: Walk): Type {
     const fields = new Map(
       Object.keys(node)
         .sort(compareCodeUnits)
-        .map((key) => [key, inferTemplate(node[key], `${path}[${reprText(key)}]`, walk)]),
+        .map((key) => [key, inferTemplate(node[key], `${path}[${writeAsJson(key)}]`, walk)]),
     );
     return new Type({ kind: ValueKind.OBJECT, fields, required: new Set(fields.keys()) });
   }
@@ -466,7 +467,7 @@ function inferMapping(
     const fields = new Map(
       Object.keys(value)
         .sort(compareCodeUnits)
-        .map((key) => [key, inferLiteral(value[key], `${path}[${reprText(key)}]`, activeContainers, walk)]),
+        .map((key) => [key, inferLiteral(value[key], `${path}[${writeAsJson(key)}]`, activeContainers, walk)]),
     );
     return new Type({ kind: ValueKind.OBJECT, fields, required: new Set(fields.keys()) });
   } finally {

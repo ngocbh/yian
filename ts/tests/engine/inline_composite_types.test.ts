@@ -13,8 +13,14 @@
  * no tuples or arbitrary objects, so `test_unproven_or_unsupported_literal_is_rejected` replaces
  * its `(1, 2)` and `object()` params with one `undefined` param, whose message names the type with
  * `pythonTypeName`; `test_non_string_mapping_key_is_rejected` is dropped, as a record key is
- * always text. Lists print as JSON (`["absent"]`). The no-mutation checks compare a type with a
+ * always text. Lists print as JSON (`["absent"]`), and so does a record key in a literal's path
+ * (`c.input.payload["items"]`, rule `messages`). The no-mutation checks compare a type with a
  * second one built the same way, where Python compares with a pickled copy.
+ *
+ * Pinned at the end (`assembled`, the inference errors of inline bodies):
+ * `load-types/compose_nested_template_types__{an_empty_list_in_an_inline_call_template,
+ * inline_call_template_list_of_mixed_types_fails}` and
+ * `load-types/compose_union_narrowing__an_inline_body_target_cannot_infer_a_member_field`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -37,7 +43,7 @@ import {
   TypeCheckError,
   ValueKind,
 } from "../../src/typesys/values.ts";
-import { loadError } from "../compose/declarations.ts";
+import { assembled, type CaseRow, loadError, runCase } from "../compose/declarations.ts";
 
 const LIST_VALUE_KINDS = Object.values(ValueKind).filter(isListKind);
 
@@ -250,7 +256,7 @@ describe("inline input inference", () => {
     if (containerKind === "mapping") {
       const mapping: Record<string, unknown> = {};
       mapping["self"] = mapping;
-      [value, at] = [mapping, "each.input.value['self']"];
+      [value, at] = [mapping, 'each.input.value["self"]'];
     } else {
       const list: unknown[] = [];
       list.push(list);
@@ -831,3 +837,11 @@ describe("canonical type labels", () => {
     expect(canonicalTypeLabel(typ)).toBe('Optional({"value":str})');
   });
 });
+
+// ---------- harvested conformance cases ----------
+
+test.each<CaseRow>([
+  { id: "load-types/compose_nested_template_types__an_empty_list_in_an_inline_call_template", call: assembled },
+  { id: "load-types/compose_nested_template_types__inline_call_template_list_of_mixed_types_fails", call: assembled },
+  { id: "load-types/compose_union_narrowing__an_inline_body_target_cannot_infer_a_member_field", call: assembled },
+])("assemble: $id", runCase);

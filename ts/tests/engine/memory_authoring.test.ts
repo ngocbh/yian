@@ -26,7 +26,8 @@
  *
  * The harvested `load-agent/engine_memory_authoring__retired_memory_policy_on_an_agent` (the
  * `ordinary-agent` row of `test_retired_memory_policy_is_a_located_migration_error`) is pinned,
- * as `parseNodes` reads it.
+ * as `parseNodes` reads it; so is the ok case
+ * `load-agent/engine_memory_authoring__inline_body_agent_memory_loads`, through `assembled`.
  *
  * Later (T3-22): `test_full_root_retains_flow_owned_policy_with_one_origin`,
  * `test_full_nested_definition_retains_flow_owned_policy_and_semantic_id`,
@@ -50,7 +51,7 @@ import { OriginRef } from "../../src/diagnostics.ts";
 import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { type CaseRow, parsedNodes, runCase } from "../compose/declarations.ts";
+import { assembled, type CaseRow, parsedNodes, runCase } from "../compose/declarations.ts";
 
 afterEach(() => forget());
 
@@ -292,3 +293,8 @@ test("the AGENT constructor defaults and validates authored memory fields", () =
 test.each<CaseRow>([
   { id: "load-agent/engine_memory_authoring__retired_memory_policy_on_an_agent", call: parsedNodes },
 ])("parseNodes: $id", runCase);
+
+test.each<CaseRow>([{ id: "load-agent/engine_memory_authoring__inline_body_agent_memory_loads", call: assembled }])(
+  "assemble: $id",
+  runCase,
+);

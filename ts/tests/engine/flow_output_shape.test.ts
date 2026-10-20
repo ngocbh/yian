@@ -9,31 +9,33 @@
  * `test_map_over_a_one_field_record_def_returns_a_list_of_records`,
  * `test_map_over_a_def_without_fields_is_rejected` (absent, empty record),
  * `test_loop_body_with_an_empty_record_output_is_rejected` and
- * `test_loop_value_body_re_exporting_an_empty_record_is_rejected`.
+ * `test_loop_value_body_re_exporting_an_empty_record_is_rejected`; through `assembleText`, the
+ * load halves of `test_flow_result_follows_the_output_shape` (the END's mode and names),
+ * `test_inline_call_body_with_a_one_field_output_returns_the_record` and
+ * `test_loop_body_with_a_one_field_record_output_runs` (the driver's output type).
  *
  * Changed: the child-signature rows build the child with `handChild` (a `step` producer typed
  * `str`), where Python loads a flow; the empty-record row compares with `sameOutputContract`
  * (Python's dataclass `==`). Python's `ValueError` is a `RangeError`. The MAP rows build a
  * `MapDescriptor` over that hand-built child, where Python loads a flow whose def is the child,
- * and pin the whole message, where Python matches a fragment. The LOOP rows build a
- * `LoopDescriptor` labelled `inline body of node 'lp'` over a hand-built body (an empty record
- * output; a value output re-exporting a producer typed as the empty record), where Python loads a
- * flow with an inline body, and pin the whole message the harvested
- * `load-core/engine_flow_output_shape__loop_body_*` cases expect (pinning the cases is T3-17's).
+ * and pin the whole message, where Python matches a fragment. The LOOP rows load Python's flows
+ * and pin the whole message; the re-export row's `empty` def is built by hand.
  *
- * Pinned at the end (`assembledWith`, the def built by hand):
- * `load-core/engine_flow_output_shape__map_over_a_def_without_output`.
+ * Pinned at the end: (`assembledWith`, the def built by hand)
+ * `load-core/engine_flow_output_shape__map_over_a_def_without_output` and
+ * `load-core/engine_flow_output_shape__loop_body_re_exporting_an_empty_record`; (`assembled`)
+ * `load-core/engine_flow_output_shape__loop_body_with_an_empty_record_output`.
  *
  * TS-only: `ChildSignature`'s constructor errors, which no Python test reaches: a non-contract
  * output, a non-array `declaredOutputs`, a malformed pair, an empty or duplicate name, a
  * non-contract declared output; and the form with no declared evidence, which skips the check.
  *
- * Later (T3-17, T3-18, T3-22, T4): `test_flow_result_follows_the_output_shape` (T3-17, T4);
- * `test_call_over_a_one_field_record_def_returns_the_record`,
+ * Later (T3-18, T3-22, T4): `test_call_over_a_one_field_record_def_returns_the_record`,
  * `test_call_over_a_flat_single_node_def_returns_the_bare_value` and
- * `test_nested_value_re_export_of_a_record_def_keeps_the_record` (T3-22, T4);
- * `test_inline_call_body_with_a_one_field_output_returns_the_record` and
- * `test_loop_body_with_a_one_field_record_output_runs` (T3-17, T4); the run half of
+ * `test_nested_value_re_export_of_a_record_def_keeps_the_record` (T3-22, T4); the run halves of
+ * `test_flow_result_follows_the_output_shape`,
+ * `test_inline_call_body_with_a_one_field_output_returns_the_record`,
+ * `test_loop_body_with_a_one_field_record_output_runs` and
  * `test_map_over_a_one_field_record_def_returns_a_list_of_records`,
  * `test_root_feedback_on_a_one_field_record_reaches_its_producer`,
  * `test_an_unquoted_yes_flow_output_name_is_text` and
@@ -48,14 +50,23 @@
 
 import { expect, test } from "bun:test";
 
+import { END_ID } from "../../src/compile/model.ts";
 import { combineOutputContracts } from "../../src/compose/helpers/output_contracts.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
-import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ChildSignature, childSignature } from "../../src/compose/nodes/resolver.ts";
 import { isExactly, type OutputContract, sameOutputContract, ValueContract } from "../../src/nodes/contracts.ts";
+import type { EndNode } from "../../src/nodes/end/node.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
-import { assembledWith, type CaseRow, handChild, loadError, runCase } from "../compose/declarations.ts";
+import {
+  assembled,
+  assembledWith,
+  assembleText,
+  type CaseRow,
+  handChild,
+  loadError,
+  runCase,
+} from "../compose/declarations.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const INT = Type.scalar(ValueKind.INTEGER);
@@ -225,35 +236,136 @@ test.each([
   );
 });
 
-/** Build the inline-labelled LOOP `lp`, carrying `count`, over `body` (built by hand). */
-function buildLoop(body: ReturnType<typeof handChild>) {
-  const desc = new LoopDescriptor({
-    id: "lp",
-    call: "inline-body",
-    inputs: { count: 0n },
-    times: 2n,
-    childLabel: "inline body of node 'lp'",
-  });
-  return desc.build(new BuildContext({ registry: new Map(), resolver: () => body }));
-}
-
 const NO_CARRIED_FIELD =
   "loop node 'lp': body inline body of node 'lp' must return a record with at least one carried field " +
   '(a subset of the carried record ["count"]); write `output: {field: ...}` or a whole reference to a node ' +
   "with a record output";
 
 test("a loop body with an empty record output is rejected", () => {
-  const error = loadError(() => buildLoop(handChild({ producers: { bump: new ValueContract(INT) }, output: {} })));
+  const error = loadError(() =>
+    assembleText(`
+id: l
+name: l
+nodes:
+  lp:
+    kind: loop
+    times: 2
+    input:
+      count: 0
+    nodes:
+      bump:
+        kind: code
+        output: int
+        code: |
+          return 1
+    output: {}
+output: \${lp.output}
+`),
+  );
 
   expect(error.message).toBe(NO_CARRIED_FIELD);
 });
 
 test("a loop value body re-exporting an empty record is rejected", () => {
-  const body = handChild({ producers: { inner: combineOutputContracts(new Map()) }, output: "${inner.output}" });
+  const empty = handChild({ producers: { step: new ValueContract(INT) }, output: {} });
 
-  const error = loadError(() => buildLoop(body));
+  const error = loadError(() =>
+    assembleText(
+      `
+id: l
+name: l
+nodes:
+  lp:
+    kind: loop
+    times: 2
+    input:
+      count: 0
+    nodes:
+      inner:
+        kind: call
+        call: empty
+    output: \${inner.output}
+output: \${lp.output}
+`,
+      "flow.yaml",
+      { children: { empty } },
+    ),
+  );
 
   expect(error.message).toBe(NO_CARRIED_FIELD);
+});
+
+// ---------- inline bodies, loaded ----------
+
+/** A record of `fields`, each required. */
+function record(fields: Record<string, Type>): Type {
+  return new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map(Object.entries(fields)),
+    required: new Set(Object.keys(fields)),
+  });
+}
+
+const STEP = `
+  step:
+    kind: code
+    output: str
+    code: |
+      return "filled"
+`;
+
+test.each<[string, string, EndNode["mode"], string[]]>([
+  ["one-field", "output:\n  order: ${step.output}\n", "record", ["order"]],
+  ["two-fields", "output:\n  order: ${step.output}\n  note: ${step.output}\n", "record", ["order", "note"]],
+  ["value", "output: ${step.output}\n", "value", ["result"]],
+  ["absent", "", "value", []],
+  ["empty-record", "output: {}\n", "record", []],
+])("the flow's END follows the output shape: %s", (_name, section, mode, names) => {
+  const { flow } = assembleText(`id: shape\nname: shape\nnodes:${STEP}${section}`);
+
+  const end = flow.compiled.nodes.get(END_ID) as EndNode;
+  expect([end.mode, end.names]).toEqual([mode, names]);
+});
+
+test("an inline call body with a one-field output returns the record", () => {
+  const { flow } = assembleText(`
+id: parent
+name: parent
+nodes:
+  c:
+    kind: call
+    nodes:${STEP.replaceAll("\n  ", "\n      ")}    output:
+      order: \${step.output}
+output: \${c.output}
+`);
+
+  expect((flow.compiled.nodes.get("c")!.outputContract as ValueContract).type).toEqual(record({ order: STR }));
+});
+
+test("a loop body with a one-field record output loads", () => {
+  const { flow } = assembleText(`
+id: l
+name: l
+nodes:
+  lp:
+    kind: loop
+    times: 3
+    input:
+      count: 0
+    nodes:
+      bump:
+        kind: code
+        input:
+          n: \${input.count}
+        output: int
+        code: |
+          return inputs["n"] + 1
+    output:
+      count: \${bump.output}
+output: \${lp.output}
+`);
+
+  expect((flow.compiled.nodes.get("lp")!.outputContract as ValueContract).type).toEqual(record({ count: INT }));
 });
 
 // ---------- harvested conformance cases ----------
@@ -262,5 +374,10 @@ test.each<CaseRow>([
   {
     id: "load-core/engine_flow_output_shape__map_over_a_def_without_output",
     call: assembledWith({ child: shapeChild(null) }),
+  },
+  { id: "load-core/engine_flow_output_shape__loop_body_with_an_empty_record_output", call: assembled },
+  {
+    id: "load-core/engine_flow_output_shape__loop_body_re_exporting_an_empty_record",
+    call: assembledWith({ empty: handChild({ producers: { step: new ValueContract(INT) }, output: {} }) }),
   },
 ])("assemble: $id", runCase);

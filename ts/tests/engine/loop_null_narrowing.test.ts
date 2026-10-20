@@ -3,12 +3,17 @@
  * `compose/nodes/loop.ts`, a port of rows of `tests/engine/test_loop_null_narrowing.py`.
  *
  * Ported: `test_while_proves_the_null_checked_paths` (9), `test_until_and_times_prove_nothing` (3)
- * and `test_body_inputs_keep_their_declared_types_after_load`.
+ * and `test_body_inputs_keep_their_declared_types_after_load`; through `assembleText`, the load
+ * halves of `test_a_tag_in_the_inline_body_admits_the_while_null_checked_seed`,
+ * `test_inline_body_returns_null_into_a_literal_seed_under_a_while_null_check` and
+ * `test_inline_body_returning_a_while_null_checked_field_unchanged_runs`, each checking the
+ * inline body's generated parameters (a record seed's type is canonical, its typedef name gone).
  *
  * Changed: `whileNonNullPaths` returns the proven paths as distinct field-name lists in path order,
  * where Python returns a `frozenset` of tuples. The declared-types row parses the loop node
  * (`nodesOf`) and builds it over the body built by hand (`handChild`), where Python loads the
- * flow whose def is the body.
+ * flow whose def is the body. The inline rows' `fetch_page` def is built by hand too, the scope
+ * resolving it by name.
  *
  * TS-only: `nullableAt` on a record field, a path through a union, a missing field or a scalar,
  * and the null type; `loopEntryInputs` relaxing only the parameters under a `while:` path, keeping
@@ -22,14 +27,14 @@
  * `test_nested_null_check_keeps_the_carried_type_of_the_returned_record`,
  * `test_while_null_check_rejects_a_record_seed_the_zero_iteration_output_cannot_carry`,
  * `test_while_null_check_rejects_a_null_seed_the_zero_iteration_output_cannot_carry`,
- * `test_seed_of_the_wrong_type_names_the_declared_input_under_a_while_null_check` and
- * `test_returned_field_of_the_wrong_type_names_the_declared_input_under_a_while_check`.
- * Later (T3-17, T3-19): `test_inline_body_reads_a_while_null_checked_seed_as_its_seed_types_it`,
+ * `test_seed_of_the_wrong_type_names_the_declared_input_under_a_while_null_check`,
+ * `test_returned_field_of_the_wrong_type_names_the_declared_input_under_a_while_check`,
+ * `test_inline_body_reads_a_while_null_checked_seed_as_its_seed_types_it`,
  * `test_inline_returned_field_of_the_wrong_type_names_the_seed_type` and
- * `test_inline_body_under_until_reads_the_seed_as_optional`. Later (T3-17, T4):
+ * `test_inline_body_under_until_reads_the_seed_as_optional`. Later (T4): the run halves of
  * `test_a_tag_in_the_inline_body_admits_the_while_null_checked_seed`,
  * `test_inline_body_returns_null_into_a_literal_seed_under_a_while_null_check` and
- * `test_inline_body_returning_a_while_null_checked_field_unchanged_runs`. Later (T4):
+ * `test_inline_body_returning_a_while_null_checked_field_unchanged_runs`, and
  * `test_optional_seed_fills_a_strict_body_input_under_a_while_null_check`,
  * `test_optional_seed_pagination_resumes_after_its_first_expansion`,
  * `test_every_seed_shape_is_narrowed_by_a_while_null_check`,
@@ -43,13 +48,14 @@
 
 import { expect, test } from "bun:test";
 
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { carriedFieldTypes, loopEntryInputs, nullableAt, whileNonNullPaths } from "../../src/compose/nodes/loop.ts";
 import { PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, Type, ValueKind } from "../../src/typesys/values.ts";
-import { handChild, nodesOf, parametersFromYaml } from "../compose/declarations.ts";
+import { assembleText, handChild, nodesOf, parametersFromYaml } from "../compose/declarations.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const INT = Type.scalar(ValueKind.INTEGER);
@@ -129,6 +135,137 @@ test("body inputs keep their declared types after load", () => {
   expect(cursor!.required).toBe(true);
   // The entry checks read it as nullable.
   expect(canonicalTypeLabel(loopEntryInputs(node)[0]!.contract!.type)).toBe("Optional(str)");
+});
+
+// ---------- inline bodies ----------
+
+/**
+ * Pagination over an inline body whose CALL node passes `cursor` to the `fetch_page` def's strict
+ * `str` input, with the given seed and argument.
+ */
+function inlinePages(seed: string, argument: string): string {
+  return `id: pages
+name: pages
+input:
+  start: !Optional(str)
+nodes:
+  pages:
+    kind: loop
+    while: cursor != null
+    input:
+      cursor: ${seed}
+    nodes:
+      fetch:
+        kind: call
+        call: fetch_page
+        input:
+          cursor: ${argument}
+    output:
+      cursor: \${fetch.output}
+output: \${pages.output}
+`;
+}
+
+/** The `fetch_page` def: `cursor: str` in, its `get` node's `Optional(str)` out. */
+function fetchPage() {
+  return handChild({
+    inputs: params("  cursor: !str\n"),
+    producers: { get: new ValueContract(STR.replace({ nullable: true })) },
+    output: "${get.output}",
+  });
+}
+
+/** The parameters of the inline body of LOOP `pages` in `flow`. */
+function inlineInputs(flow: ComposedFlow): [string, string, boolean][] {
+  const node = flow.compiled.nodes.get("pages") as LoopNode;
+  return node.childInputs.map((param) => [param.name, canonicalTypeLabel(param.contract!.type), param.required]);
+}
+
+test("a tag in the inline body admits the while-null-checked seed", () => {
+  const { flow } = assembleText(inlinePages("${input.start}", "!str ${input.cursor}"), "flow.yaml", {
+    children: { fetch_page: fetchPage() },
+  });
+
+  expect(inlineInputs(flow)).toEqual([["cursor", "Optional(str)", false]]);
+});
+
+test("an inline body may return null into a literal seed under a while null check", () => {
+  const { flow } = assembleText(inlinePages("p1", "${input.cursor}"), "flow.yaml", {
+    children: { fetch_page: fetchPage() },
+  });
+
+  expect(inlineInputs(flow)).toEqual([["cursor", "str", true]]);
+});
+
+test.each<[string, string, [string, string, boolean][]]>([
+  [
+    "flat",
+    `id: p
+name: p
+input:
+  tok: !Optional(str)
+nodes:
+  pages:
+    kind: loop
+    while: token != null and n < 2
+    max: 5
+    input:
+      token: \${input.tok}
+      n: 0
+    nodes:
+      step:
+        kind: code
+        input:
+          n: \${input.n}
+        output: int
+        code: return inputs["n"] + 1
+    output:
+      token: \${input.token}
+      n: \${step.output}
+output: \${pages.output}
+`,
+    [
+      ["token", "Optional(str)", false],
+      ["n", "int", true],
+    ],
+  ],
+  [
+    "nested",
+    `id: p
+name: p
+typedefs:
+  Page:
+    next: Optional(str)
+    n: int
+input:
+  start: !Optional(Page)
+nodes:
+  pages:
+    kind: loop
+    while: page.next != null and k < 2
+    max: 5
+    input:
+      page: \${input.start}
+      k: 0
+    nodes:
+      step:
+        kind: code
+        input:
+          k: \${input.k}
+        output: int
+        code: return inputs["k"] + 1
+    output:
+      page: \${input.page}
+      k: \${step.output}
+output: \${pages.output}
+`,
+    [
+      ["page", 'Optional({"n":int,"next":Optional(str)})', false],
+      ["k", "int", true],
+    ],
+  ],
+])("an inline body returning a while-null-checked field unchanged loads: %s", (_name, source, inputs) => {
+  expect(inlineInputs(assembleText(source).flow)).toEqual(inputs);
 });
 
 // ---------- nullableAt ----------

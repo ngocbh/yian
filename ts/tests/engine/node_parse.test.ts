@@ -17,15 +17,17 @@
  * `test_map_without_over_is_loud` and `test_over_on_kind_call_is_loud` pin the whole message,
  * where Python checks that it names the field.
  *
- * Later (T3-17): `test_hyphenated_node_in_inline_body_rejected`.
  * Later (T3-22): `test_hyphenated_single_node_def_rejected_but_multi_node_def_name_loads`.
  *
  * Changed: `test_referenced_hyphenated_node_names_the_id_not_split_refs` reads its flow through
- * `parseFile`, `flowNodesCursor` and `parseNodes`, where Python loads it.
+ * `parseFile`, `flowNodesCursor` and `parseNodes`, where Python loads it;
+ * `test_hyphenated_node_in_inline_body_rejected` loads through `assembleText` and pins the whole
+ * message.
  *
  * The harvested cases whose error `parseNodes` raises are pinned at the end, with
  * `load-core/engine_author_id_ban__author_id_with_hash_is_loud` (from
- * `tests/engine/test_author_id_ban.py`) and the e10 and e42 seeds.
+ * `tests/engine/test_author_id_ban.py`) and the e10 and e42 seeds; then (`assembled`)
+ * `load-core/engine_node_parse__hyphenated_node_id_in_an_inline_body`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -40,7 +42,16 @@ import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { reprText } from "../../src/diagnostics.ts";
-import { caseText, loadError, nodesOf, runTextCase } from "../compose/declarations.ts";
+import {
+  assembled,
+  assembleText,
+  type CaseRow,
+  caseText,
+  loadError,
+  nodesOf,
+  runCase,
+  runTextCase,
+} from "../compose/declarations.ts";
 import { withKinds } from "../compose/stand_ins.ts";
 
 afterEach(() => forget());
@@ -147,6 +158,32 @@ output: \${fetch-data.output}
 
     expect(error.message).toMatch(/node id 'fetch-data' must be an identifier.*try 'fetch_data'/);
     expect(error.message).not.toContain("unknown namespace");
+  });
+
+  test.each(["call", "map"])("hyphenated node in an inline %s body is rejected", (kind) => {
+    const over = kind === "map" ? "    over: [1, 2]\n" : "";
+    const flow = `
+id: f
+name: f
+input: {}
+nodes:
+  outer:
+    kind: ${kind}
+${over}    input: {}
+    nodes:
+      inner-step:
+        kind: code
+        code: "return 1"
+    output: \${inner-step.output}
+output: \${outer.output}
+`;
+
+    const error = loadError(() => assembleText(flow));
+
+    expect(error.message).toBe(
+      "node id 'inner-step' must be an identifier (ASCII letters, digits, and _, not starting with a " +
+        "digit) so ${inner-step.output} can reference it; try 'inner_step'",
+    );
   });
 });
 
@@ -487,3 +524,8 @@ test.each([
   "load-core/seed_e10_unknown_node_kind",
   "load-core/seed_e42_removed_model_kind",
 ])("parseNodes: %s", (id) => runTextCase({ id, call: (text, label) => nodesOf(text, [], label) }));
+
+test.each<CaseRow>([{ id: "load-core/engine_node_parse__hyphenated_node_id_in_an_inline_body", call: assembled }])(
+  "assemble: $id",
+  runCase,
+);

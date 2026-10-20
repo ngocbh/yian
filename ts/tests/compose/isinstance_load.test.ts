@@ -2,7 +2,10 @@
  * The type names `isinstance(x, T)` and `T(...)` constructors name, and their resolution: a port
  * of the name-collecting test of `tests/compose/test_isinstance_load.py`.
  *
- * Ported: `test_collect_isinstance_names`.
+ * Ported: `test_collect_isinstance_names`; through `assembleText`,
+ * `test_an_inline_body_cannot_take_a_whole_value_isinstance_argument` (pinning the whole message)
+ * and its case
+ * `load-types/compose_isinstance_load__an_inline_body_cannot_take_a_whole_value_isinstance`.
  *
  * TS-only: `collectConstructorNames`, `expressionTrees`, `resolveIsinstanceType`,
  * `resolveConstructorType`, `constructorTypeFn` and `isinstanceMembers` rows (Python's own
@@ -14,7 +17,6 @@
  * `test_a_flow_assert_error_is_located_by_its_own_assert`,
  * `test_list_is_not_an_isinstance_type_name`,
  * `test_a_parent_cannot_use_a_childs_typedef`,
- * `test_an_inline_body_cannot_take_a_whole_value_isinstance_argument`,
  * `test_isinstance_in_wait_until_is_a_located_load_error`,
  * `test_isinstance_in_map_over_is_a_located_load_error`,
  * `test_isinstance_in_a_call_nodes_asserts_is_a_located_load_error`,
@@ -50,7 +52,16 @@ import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { TypeCheckError, typeEquals } from "../../src/typesys/values.ts";
 import type { Case } from "../conformance.ts";
-import { caseDocument, caseRegistry, cursorAt } from "./declarations.ts";
+import {
+  assembled,
+  assembleText,
+  type CaseRow,
+  caseDocument,
+  caseRegistry,
+  cursorAt,
+  loadError,
+  runCase,
+} from "./declarations.ts";
 
 // Pinned before `REG` is read too, so neither depends on the shell's `YIAN_*` limits.
 install(BUILTIN);
@@ -283,3 +294,56 @@ test.each<NameRow>([
     kind: "constructor",
   },
 ])("resolve names: $id", runNameRow);
+
+// ---------- an inline body ----------
+
+test("an inline body cannot take a whole-value isinstance argument", () => {
+  // Inline bodies infer each argument's type while the parent builds, and a whole-value
+  // expression has no static type there; a named `defs:` body declares it instead.
+  const text = `id: p
+name: p
+typedefs:
+  Buy: {action: 'Literal(buy)', qty: int}
+  Sell: {action: 'Literal(sell)', price: float}
+  Order: Union(Buy, Sell)
+  Running: Literal(running)
+input:
+  order: !object
+nodes:
+  d:
+    kind: code
+    input:
+      order: \${input.order}
+    output: Order
+    code: |
+      return inputs["order"]
+  c:
+    kind: call
+    input:
+      is_buy: \${isinstance(d.output, Buy)}
+    nodes:
+      e:
+        kind: code
+        input:
+          is_buy: \${input.is_buy}
+        code: |
+          return inputs["is_buy"]
+    output: \${e.output}
+output: \${c.output}
+`;
+
+  const error = loadError(() => assembleText(text));
+
+  expect(error.message).toBe(
+    "cannot infer type for inline binding 'c.input.is_buy': a whole-value expression has no supported " +
+      "static scalar type; declare its type with a tag (`is_buy: !<type> ...`) or use an explicitly typed " +
+      "named `defs:` body",
+  );
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(
+    text.split("\n").findIndex((line) => line.includes("is_buy: ${isinstance")) + 1,
+  );
+});
+
+test.each<CaseRow>([
+  { id: "load-types/compose_isinstance_load__an_inline_body_cannot_take_a_whole_value_isinstance", call: assembled },
+])("assemble: $id", runCase);

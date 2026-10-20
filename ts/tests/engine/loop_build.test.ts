@@ -45,7 +45,9 @@
  * `test_predicate_read_past_a_check_the_checks_before_it_decide_is_checked_under_them`,
  * `test_predicate_read_after_a_value_that_is_no_tag_is_not_checked`,
  * `test_predicate_impossible_on_the_seed_and_the_body_is_rejected` (3) and
- * `test_predicate_isinstance_of_a_partly_shared_union_rejects_a_member_only_field`.
+ * `test_predicate_isinstance_of_a_partly_shared_union_rejects_a_member_only_field`. Through
+ * `assembleText`: `test_inline_loop_body_may_return_a_subset` and
+ * `test_inline_body_loop_whose_condition_never_changes_is_a_load_error`.
  *
  * Changed: each row parses the loop node (`nodesOf`) and builds it over a `BuildContext` whose
  * resolver returns the body built by hand (`handChild`: the def's parameters read from its
@@ -73,11 +75,20 @@
  *
  * Pinned at the end (`assembledWith`, each def built by hand): the
  * `load-loop/engine_loop_build__*` cases whose error is a driver, count, field-name, predicate-name,
- * predicate field-read or never-ending error.
+ * predicate field-read or never-ending error; then (`assembled`, the body inline)
+ * `load-loop/engine_loop_build__{inline_body_condition_that_never_changes_is_rejected,
+ * predicate_isinstance_of_a_disjoint_type_is_rejected,
+ * predicate_isinstance_on_an_object_checks_reads,
+ * predicate_isinstance_ruled_out_by_an_earlier_check,
+ * predicate_negated_isinstance_of_the_declared_type_is_rejected,
+ * predicate_read_of_a_field_the_checked_member_lacks,predicate_tag_comparison_with_a_non_tag,
+ * predicate_tagged_member_field_error_points_at_isinstance,
+ * predicate_unguarded_member_field_read_is_rejected}`.
  *
  * Later (T3-17): `test_loop_seeded_from_partial_loop_sees_merged_type`,
- * `test_omitted_field_seed_cycle_is_located`, `test_inline_loop_body_may_return_a_subset` and
- * `test_inline_body_loop_whose_condition_never_changes_is_a_load_error`. Later (T3-18):
+ * `test_omitted_field_seed_cycle_is_located` and the case
+ * `load-loop/engine_loop_build__predicate_unknown_field_on_omitted_typed_seed_is_rejected` (they
+ * need the loader's `bindingContractReader`). Later (T3-18):
  * `test_partial_loop_contract_rejects_unknown_downstream_field_at_load`, the downstream half of
  * `test_merged_contract_types_omitted_field_from_its_seed` and
  * `test_predicate_isinstance_check_with_an_unknown_type_reports_the_type`. Later (T3-19):
@@ -114,6 +125,7 @@ import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { readTypedefs, type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
+  assembled,
   assembledWith,
   assembleText,
   type CaseRow,
@@ -365,6 +377,37 @@ test("a total loop keeps the body contract and no returned fields", () => {
 test("a body may return a subset of the carried fields", () => {
   // The body omits `exited`, which carries over.
   const node = loopOf(GOOD, goodBody({ n: "int" }));
+
+  expect(node.returnedFields).toEqual(["n"]);
+  expect(fieldNames(node.outputContract)).toEqual(["n", "exited"]);
+});
+
+// An inline body returning only `n` of the carried `{n, exited}`.
+const INLINE_SUBSET = `
+id: loop-inline-subset
+name: loop_inline_subset
+nodes:
+  repeat:
+    kind: loop
+    times: 2
+    input:
+      n: 0
+      exited: false
+    nodes:
+      bump:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:loop_bump
+        input:
+          n: \${input.n}
+          exited: \${input.exited}
+        output:
+          n: int
+    output: \${bump.output}
+output: \${repeat.output}
+`;
+
+test("an inline loop body may return a subset", () => {
+  const node = assembleText(INLINE_SUBSET).flow.compiled.nodes.get("repeat") as LoopNode;
 
   expect(node.returnedFields).toEqual(["n"]);
   expect(fieldNames(node.outputContract)).toEqual(["n", "exited"]);
@@ -726,6 +769,13 @@ test("a while loop whose condition reads only unreturned fields is a load error"
   const error = loadError(() => build(NO_MAX, goodBody({ n: "int" })));
 
   expect(error.message).toBe(neverEnds("chat_loop", "while: not exited", ["exited"]));
+});
+
+test("an inline body loop whose condition never changes is a load error", () => {
+  // INLINE_SUBSET's body returns only `n`; `until: exited` reads only `exited`.
+  const error = loadError(() => assembleText(swap(INLINE_SUBSET, "    times: 2\n", "    until: exited\n")));
+
+  expect(error.message).toBe(neverEnds("repeat", "until: exited", ["exited"]));
 });
 
 test("the never-ending error names every unreturned field read", () => {
@@ -1242,3 +1292,18 @@ test.each<CaseRow>([
   { id: "load-loop/engine_loop_build__times_with_max_is_rejected", call: assembledWith({ bump: goodBody() }) },
   { id: "load-loop/engine_loop_build__two_drivers_are_rejected", call: assembledWith({ body: neverEndsBody() }) },
 ])("assemble: $id", runCase);
+
+// Each body is inline, so the child build types its seeds.
+test.each<CaseRow>(
+  [
+    "inline_body_condition_that_never_changes_is_rejected",
+    "predicate_isinstance_of_a_disjoint_type_is_rejected",
+    "predicate_isinstance_on_an_object_checks_reads",
+    "predicate_isinstance_ruled_out_by_an_earlier_check",
+    "predicate_negated_isinstance_of_the_declared_type_is_rejected",
+    "predicate_read_of_a_field_the_checked_member_lacks",
+    "predicate_tag_comparison_with_a_non_tag",
+    "predicate_tagged_member_field_error_points_at_isinstance",
+    "predicate_unguarded_member_field_read_is_rejected",
+  ].map((name) => ({ id: `load-loop/engine_loop_build__${name}`, call: assembled })),
+)("assemble: $id", runCase);

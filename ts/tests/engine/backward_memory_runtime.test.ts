@@ -11,7 +11,12 @@
  * `test_no_policy_backward_still_records_ready_and_finished_without_opening_resources`,
  * `test_computation_failure_finishes_without_partial_feedback_or_learning` (2 rows; the callback
  * throws a plain `Error`, Python's `ValueError`),
+ * `test_append_fault_preserves_exact_prefix_and_closes_resources` (8 rows; the log's `append`
+ * instance-patched to throw an `Error`, Python's `OSError`),
+ * `test_manual_precommit_retry_reopens_snapshots_and_recomputes_every_memory` (2 rows),
  * `test_known_precommit_failure_allows_fresh_complete_pass_without_prior_proposals`,
+ * `test_failed_resource_setup_does_not_close_an_interrupted_attempt` (3 rows; the opener throws an
+ * `Error`, Python's `OSError`),
  * `test_later_attempt_follows_or_closes_any_prior_attempt_and_recomputes_everything` (3 rows),
  * `test_repeated_driven_attempts_request_distinct_commit_ids_for_identical_batches`,
  * `test_opened_memory_runtime_subclass_is_closed_by_the_driver` and
@@ -44,18 +49,20 @@
  *   `CapabilityFault` escapes as that same object (TS unwraps no capability fault), with both
  *   sessions' close failures noted on it; the close is wrapped with
  *   `spyOn(FakeSession.prototype, "close")` and throws an `Error` (Python's `OSError`).
+ * - `test_prepare_failure_is_not_sanitized_as_a_learner_failure`: `prepareRecord` is a module
+ *   function that can't be patched, so the log's `append` throws the `MemoryOperationError` for the
+ *   Ready record instead.
  * - `test_learner_mutation_of_its_arguments_and_returned_values_cannot_change_authority`: the
  *   context and the mutation are frozen, so each learner's edit throws a `TypeError` (asserted)
  *   before the same authority checks.
+ * - `test_wrapped_host_error_during_partial_setup_closes_prior_sessions`: TS unwraps no cause, so
+ *   B's `openRun` throwing a `MemoryOperationError` rejects the drive with the `MemorySetupError`
+ *   whose `cause` is that error.
  *
- * Later (PR 3 of T4-7): `test_append_fault_preserves_exact_prefix_and_closes_resources`,
- * `test_manual_precommit_retry_reopens_snapshots_and_recomputes_every_memory`,
- * `test_failed_resource_setup_does_not_close_an_interrupted_attempt`, the two `with_primary` cells
- * of `test_cleanup_unwraps_host_failure_after_closing_all_sessions` (plain errors),
+ * Later (PR 3 of T4-7): the two `with_primary` cells of
+ * `test_cleanup_unwraps_host_failure_after_closing_all_sessions` (plain errors),
  * `test_cleanup_error_after_finished_preserves_success_and_admits_a_later_attempt`,
- * `test_backward_and_memory_replay_calls_no_callbacks_or_materialization`,
- * `test_prepare_failure_is_not_sanitized_as_a_learner_failure`,
- * `test_wrapped_host_error_during_partial_setup_closes_prior_sessions` and
+ * `test_backward_and_memory_replay_calls_no_callbacks_or_materialization` and
  * `test_commit_batch_is_detached_from_every_accepted_authority`.
  *
  * Not ported: TS unwraps no host control from a `MemoryOperationError`'s cause chain, so a
@@ -84,6 +91,7 @@ import {
   MemoryOperationError,
   MemoryOperationFailure,
   MemoryScope,
+  MemorySetupError,
   MemorySnapshotEnvelope,
   MemorySpec,
 } from "../../src/memory/contracts.ts";
@@ -97,7 +105,9 @@ import {
   BackwardReadyRecord,
   BackwardStartedRecord,
   encodePool,
+  MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
+  MemoryCommitSucceededRecord,
   type RunRecord,
 } from "../../src/runtime/log.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
@@ -558,6 +568,134 @@ test("a computation failure finishes without partial feedback or learning", asyn
   }
 });
 
+test("an append fault preserves the exact prefix and closes resources", async () => {
+  const phases: [unknown, string | null][] = [
+    [BackwardStartedRecord, null],
+    [BackwardReadyRecord, null],
+    [MemoryCommitRequestedRecord, null],
+    [MemoryCommitSucceededRecord, null],
+    [MemoryCommitFailedRecord, "commit"],
+    [BackwardFinishedRecord, null],
+    [BackwardFinishedRecord, "learn"],
+    [BackwardFinishedRecord, "commit"],
+  ];
+  for (const [recordType, knownFailure] of phases) {
+    const { engine: built, node } = await terminal(["A", "B"]);
+    const typed = new MemoryOperationError("backend", "declined", "Declined.", false);
+    const memory = new Map([
+      [
+        "A",
+        new FakeMemory({
+          learnOutcomes: knownFailure === "learn" ? [typed] : [],
+          commitOutcomes: knownFailure === "commit" ? [typed] : [],
+        }),
+      ],
+      ["B", new FakeMemory()],
+    ]);
+    const originalAppend = built.log.append.bind(built.log);
+    const error = new Error("append unavailable");
+    const refused: RunRecord[] = [];
+    const forwardResult = built.state.result;
+    const forwardPool = encodePool(built.state.pool);
+    const append = spyOn(built.log, "append").mockImplementation((record) => {
+      if (record.constructor === recordType) {
+        refused.push(record);
+        throw error;
+      }
+      return originalAppend(record);
+    });
+    let caught: unknown;
+    try {
+      caught = await rejected(drive(built, memory));
+    } finally {
+      append.mockRestore();
+    }
+    expect(caught).toBe(error);
+    expect(refused).toHaveLength(1);
+    expect(built.state.result).toBe(forwardResult);
+    expect(encodePool(built.state.pool)).toEqual(forwardPool);
+    expect(built.state.nextSequence).toBe(built.state.trace!.nextSequence);
+    expect(built.state.nextSequence).toBe(built.log.nextSequence);
+    expect(built.state.backwardState.finished).toBeNull();
+    for (const backend of memory.values()) expect(backend.closeCount).toBe(1);
+    const current = built.state.backwardState;
+    if (recordType === BackwardStartedRecord) {
+      expect(current.started).toBeNull();
+      expect(node.calls).toEqual([]);
+      expect(memory.get("A")!.learnContexts).toEqual([]);
+    } else {
+      expect(current.started).not.toBeNull();
+      expect(node.calls).toHaveLength(1);
+    }
+    if (recordType === BackwardStartedRecord || recordType === BackwardReadyRecord || knownFailure === "learn") {
+      expect(current.ready).toBeNull();
+      expect(memory.get("A")!.commitCalls).toEqual([]);
+    } else if (recordType === MemoryCommitRequestedRecord) {
+      expect(current.ready).not.toBeNull();
+      expect(current.everRequested).toBe(false);
+      expect(memory.get("A")!.commitCalls).toEqual([]);
+    } else if (recordType === MemoryCommitSucceededRecord || recordType === MemoryCommitFailedRecord) {
+      expect(current.policyOutcomes[0]!.status).toBe("unknown");
+      expect(memory.get("A")!.commitCalls).toHaveLength(1);
+      expect(memory.get("B")!.commitCalls).toEqual([]);
+    } else {
+      expect(current.outcome!.failure!.code).toBe("backward.interrupted");
+      expect(current.policyOutcomes[0]!.status).toBe(knownFailure === "commit" ? "failed" : "succeeded");
+    }
+  }
+});
+
+test("a manual precommit retry reopens snapshots and recomputes every memory", async () => {
+  for (const failureRecord of [BackwardReadyRecord, MemoryCommitRequestedRecord] as unknown[]) {
+    const { engine: built, node } = await terminal(["A"]);
+    const visits: string[] = [];
+    const learn = (context: LearnContext) => {
+      visits.push(context.memory);
+      return [new MemoryMutation(String(visits.length), {})];
+    };
+    const memory = new FakeMemory({ learnOutcomes: [learn, learn] });
+    const originalAppend = built.log.append.bind(built.log);
+    const append = spyOn(built.log, "append").mockImplementation((record) => {
+      if (record.constructor === failureRecord) throw new Error("interrupted before request");
+      return originalAppend(record);
+    });
+    let caught: unknown;
+    try {
+      caught = await rejected(drive(built, new Map([["A", memory]]), "first"));
+    } finally {
+      append.mockRestore();
+    }
+    expect((caught as Error).message).toBe("interrupted before request");
+    const old = built.state.backwardState;
+    expect(old.finished).toBeNull();
+    expect(old.everRequested).toBe(false);
+    const before = records(built).length;
+    const invalid = await rejected(drive(built, new Map([["A", memory]]), []));
+    expect((invalid as Error).constructor).toBe(RangeError);
+    expect((invalid as Error).message).toBe("feedback requires a recorded list");
+    expect(built.state.backwardState).toBe(old);
+    expect(records(built)).toHaveLength(before);
+    expect(memory.openSnapshots).toEqual([{}]);
+    expect(node.calls).toHaveLength(1);
+
+    const outcome = await drive(built, new Map([["A", memory]]), "second");
+    expect(outcome.status).toBe("succeeded");
+    expect(outcome.feedback!.inputFeedback).toEqual({ topic: ["second"] });
+    expect(memory.openSnapshots).toEqual([{}, {}]);
+    expect(memory.closeCount).toBe(2);
+    const order = built.state.backwardState.memoryOrder;
+    expect(visits).toEqual([...order, ...order]);
+    expect(node.calls).toHaveLength(2);
+    expect(memory.commitCalls[0]![1].map((mutation) => mutation.mutationId)).toEqual(["2"]);
+    expect(built.state.backwardState.attempts).toHaveLength(2);
+    const first = built.state.backwardState.attempts[0]!.finished!.outcome;
+    expect(first.failure!.code).toBe("backward.interrupted");
+    expect(first.feedback).toEqual(old.ready !== null ? old.ready.rootResult : null);
+    expect(classes(records(built).slice(before, before + 2))).toEqual([BackwardFinishedRecord, BackwardStartedRecord]);
+    expect(built.state.backwardState.started!.attemptId).toBe(2);
+  }
+});
+
 test("a known precommit failure allows a fresh complete pass without prior proposals", async () => {
   const { engine: built, node } = await terminal(["A", "B"]);
   const proposal = (name: string) => () => [new MemoryMutation(name, {})];
@@ -581,6 +719,41 @@ test("a known precommit failure allows a fresh complete pass without prior propo
   }
   expect(memory.get("A")!.commitCalls[0]![1].map((mutation) => mutation.mutationId)).toEqual(["new-first"]);
   expect(memory.get("B")!.commitCalls[0]![1].map((mutation) => mutation.mutationId)).toEqual(["new-second"]);
+});
+
+test("a failed resource setup does not close an interrupted attempt", async () => {
+  const mismatch = "opened memory runtime does not match the recorded memory table and snapshots";
+  const rows: [string, new (...args: never[]) => Error, string][] = [
+    ["table", RangeError, mismatch],
+    ["snapshots", RangeError, mismatch],
+    ["opener", Error, "cannot reopen"],
+  ];
+  for (const [problem, cls, message] of rows) {
+    const { engine: built, node } = await terminal();
+    commitPrepared(built.log, built.state, prepareRecord(built.state, new BackwardStartedRecord(1, "first")));
+    const old = built.state.backwardState;
+    const sequence = built.state.nextSequence;
+    const memory = new FakeMemory();
+    const openMemory = () => {
+      if (problem === "opener") throw new Error("cannot reopen");
+      const memories = problem === "table" ? table("B") : built.state.memories!;
+      return MemoryRuntime.open({
+        memories,
+        origins: new Map(memories.map((spec) => [spec.key, null])),
+        memory: new Map(memories.map((spec) => [spec.key, memory])),
+        snapshots: [new MemorySnapshotEnvelope(memories[0]!.key, problem === "snapshots" ? { changed: true } : {})],
+      });
+    };
+    const error = await rejected(driveBackward(built.state, built.log, "second", { openMemory }));
+    expect((error as Error).constructor).toBe(cls);
+    expect((error as Error).message).toBe(message);
+    expect(built.state.backwardState).toBe(old);
+    expect(built.state.nextSequence).toBe(sequence);
+    expect(node.calls).toEqual([]);
+    expect(memory.learnContexts).toEqual([]);
+    expect(memory.commitCalls).toEqual([]);
+    expect(memory.closeCount).toBe(problem === "opener" ? 0 : 1);
+  }
 });
 
 test("a backend host or unexpected error escapes with the exact prefix", async () => {
@@ -710,6 +883,29 @@ test("repeated driven attempts request distinct commit ids for identical batches
   expect(requests[0]!.commitId.startsWith("ac-memory-v3:")).toBe(true);
 });
 
+test("a prepare failure is not sanitized as a learner failure", async () => {
+  const { engine: built } = await terminal();
+  const memory = new FakeMemory();
+  const error = new MemoryOperationError("host", "prepare.failed", "Prepare failed.", false);
+  // `prepareRecord` is a module function that can't be patched, so the Ready record's append throws.
+  const originalAppend = built.log.append.bind(built.log);
+  const append = spyOn(built.log, "append").mockImplementation((record) => {
+    if (record.constructor === BackwardReadyRecord) throw error;
+    return originalAppend(record);
+  });
+  let caught: unknown;
+  try {
+    caught = await rejected(drive(built, new Map([["A", memory]])));
+  } finally {
+    append.mockRestore();
+  }
+  expect(caught).toBe(error);
+  expect(built.state.backwardState.ready).toBeNull();
+  expect(built.state.backwardState.finished).toBeNull();
+  expect(memory.commitCalls).toEqual([]);
+  expect(memory.closeCount).toBe(1);
+});
+
 test("a learner's edits to its arguments and returned values cannot change authority", async () => {
   const { engine: built } = await terminal(["A", "B"]);
   const returned = new MemoryMutation("first", { items: ["saved"] });
@@ -777,4 +973,24 @@ test("submission gates reject before opening or appending", async () => {
     expect(node.calls).toEqual([]);
     expect(memory.openSnapshots).toEqual([]);
   }
+});
+
+test("a wrapped host error during partial setup closes prior sessions", async () => {
+  const { engine: built } = await terminal(["A", "B"]);
+  const memory = new Map([
+    ["A", new FakeMemory()],
+    ["B", new FakeMemory()],
+  ]);
+  const wrapped = new MemoryOperationError("open", "wrapped", "Open failed.", false);
+  memory.get("B")!.openRun = () => {
+    throw wrapped;
+  };
+  const before = records(built);
+  const error = await rejected(drive(built, memory));
+  expect((error as Error).constructor).toBe(MemorySetupError);
+  expect((error as Error).message).toBe("memory 'B' could not open its run session: Open failed.");
+  expect((error as Error).cause).toBe(wrapped);
+  expect(records(built)).toEqual(before);
+  expect(memory.get("A")!.closeCount).toBe(1);
+  expect(memory.get("B")!.closeCount).toBe(0);
 });

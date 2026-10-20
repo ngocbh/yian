@@ -13,13 +13,13 @@
  * `multi_select: true`, which reaches the handler as `multiSelect: true`. A string option, the
  * other non-site the sites skip, can't reach the handler: `parseQuestions` refuses it.
  *
- * Changed: a literal question that isn't a record is passed to `parseQuestions`, which refuses it
- * (`QuestionSpecError`), where Python's `dict(question)` raises; both are `node.execute`, and the
- * loader refuses such a list, so neither is reachable from YAML.
+ * Changed: none.
  *
  * TS-only: `validatePrompts` names the node and the site of an unparseable span, and names the
  * given path instead of the id; it accepts parseable templates; the node's kind, title, fields
- * and `needsTools` trait read on an instance; a non-record literal question is refused.
+ * and `needsTools` trait read on an instance; a literal question that isn't a record is passed to
+ * `parseQuestions`, which refuses it (`QuestionSpecError`), where Python's `dict(question)` raises;
+ * both are `node.execute`, and the loader refuses such a list, so neither is reachable from YAML.
  *
  * Not ported: none.
  */
@@ -200,4 +200,5 @@ test("a literal question that isn't a record is refused", async () => {
   const error = await rejected(node.run({}, { tools: new ToolSet({ ask_user: () => null }) }));
 
   expect(error).toBeInstanceOf(QuestionSpecError);
+  expect((error as Error).message).toBe(`question[0] is invalid: must be a record, got "Pick one"`);
 });

@@ -21,7 +21,8 @@
  * TS-only, through the engine: an answer `5` commits `5n`; a `Date` answer fails
  * `contract.output`; the handler's `ctx.signal` aborts when the run stops (and, directly, follows
  * the node's `caps.signal`). Directly: an upstream question holding `options: null` is refused
- * before the handler runs, as a composer reply holding `null` is.
+ * before the handler runs, as a composer reply holding `null` is; `questionsInput` reads only an
+ * own input key, so `constructor` with no such input is refused as `null` before the handler runs.
  */
 
 import { expect, test } from "bun:test";
@@ -285,5 +286,28 @@ test("an upstream question with options null is refused before the handler runs"
 
   expect(error).toBeInstanceOf(QuestionSpecError);
   expect((error as Error).message).toBe("question[0] is invalid: options must be a list, got null");
+  expect(calls).toEqual([]);
+});
+
+test("questionsInput reads only an own input key", async () => {
+  const calls: AskUserRequest[] = [];
+  const node = new HumanInputNode("ask", { questionsInput: "constructor" });
+
+  const error = await rejected(
+    node.run(
+      {},
+      {
+        tools: new ToolSet({
+          ask_user: (request) => {
+            calls.push(request);
+            return null;
+          },
+        }),
+      },
+    ),
+  );
+
+  expect(error).toBeInstanceOf(QuestionSpecError);
+  expect((error as Error).message).toBe("questions must be a list, got NoneType");
   expect(calls).toEqual([]);
 });

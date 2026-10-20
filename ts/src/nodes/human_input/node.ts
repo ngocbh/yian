@@ -95,8 +95,11 @@ export class HumanInputNode extends Node {
       // `header` is a key and `multi_select` a flag: both are left verbatim.
       questions = parseQuestions(this.questions.map((question) => this.renderQuestion(question, record)));
     } else if (this.questionsInput !== null) {
-      // An upstream-produced list, already resolved: taken as is, no templating.
-      questions = parseQuestions(inputs[this.questionsInput]);
+      // An upstream-produced list, already resolved: taken as is, no templating. Only an own key
+      // counts: an omitted optional input is absent, and a name like `constructor` must not read
+      // `Object.prototype`.
+      const name = this.questionsInput;
+      questions = parseQuestions(Object.hasOwn(inputs, name) ? inputs[name] : null);
     }
     const answer = await (caps.tools ?? new ToolSet()).invokeTrusted(
       "ask_user",

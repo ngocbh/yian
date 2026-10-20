@@ -10,8 +10,6 @@
  * returns a promise or a flow. Changed: CODE references are TS's form
  * (`./fixtures/compose_codefns.ts:echo`), which nothing checks at load; a list in a message is
  * in the text form (`["a"]`), where Python prints `['a']`.
- *
- * Later (T3-22): `test_defs_uses_collision`, which writes a `defs:` entry.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -194,6 +192,17 @@ describe("resolving a uses: alias", () => {
     expect(error.message).toBe(
       "callable 'm' (uses: 'git:q/f@1'): unknown scheme 'git': (recognized: a local ref, or hub:)",
     );
+  });
+
+  test("a name in both defs: and uses: is refused", async () => {
+    const text =
+      withCall("dup") +
+      "uses:\n  dup: child\n" +
+      "defs:\n  dup:\n    input:\n      x: !str\n" +
+      '    nodes:\n      c: {kind: code, code: ./fixtures/compose_codefns.ts:echo, input: {x: "${x}"}}\n' +
+      '    output: {y: "${c.output}"}\n';
+    const error = await loadErrorAsync(loadFlow(text, { childResolver: fakeResolver([]) }));
+    expect(error.message).toBe('name(s) ["dup"] declared in both defs: and uses: (a callable has one namespace)');
   });
 
   test("an alias colliding with a node id is refused", async () => {

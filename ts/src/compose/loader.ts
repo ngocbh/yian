@@ -2,16 +2,20 @@
  * The top-level loader: Compose YAML text to a runnable `ComposedFlow`.
  *
  * The file-I/O front door: own one source document, build the typedefs registry, compose the
- * call resolver, resolve every `uses:` import, and hand the parsed sections to the post-parse
- * conductor (`build/pipeline.ts`'s `assemble`) which returns the `ComposedFlow`. This module owns
- * the root's source projections and resolver composition (`makeFileResolver`, `CallableScope`),
- * not the assembly pipeline itself.
+ * call resolver, resolve every `uses:` import, load every `defs:` callable, and hand the parsed
+ * sections to the post-parse conductor (`build/pipeline.ts`'s `assemble`) which returns the
+ * `ComposedFlow`. This module owns the source projections of the root and of both definition forms
+ * (a single-node def projects onto its one synthesized node), resolver composition
+ * (`makeFileResolver`, `CallableScope`) and the defs loaders (`loadDef`, `loadSingleNodeDef`), not
+ * the assembly pipeline itself.
  *
- * A `call:` resolves a compiler-owned inline body, then a `uses:` alias resolved through the
- * injected `childResolver` (`(path, version) -> ComposedFlow`, sync or async). Every alias
- * resolves, in source order, before assembly starts, so assembly itself stays synchronous and
- * reads each import from the scope's memo. The loader derives the callable's signature and bakes
- * its compiled flow onto the built `CallNode` so `run` drives the embedded child.
+ * A `call:` resolves a compiler-owned inline body, then an in-file `defs:` callable (built by the
+ * same `assemble`), then a `uses:` alias resolved through the injected `childResolver`
+ * (`(path, version) -> ComposedFlow`, sync or async). Every alias resolves, in source order, before
+ * any def or the root assembles, so assembly itself stays synchronous and reads each import from
+ * the scope's memo. A recursive or mutually recursive def is refused. The loader derives the
+ * callable's signature and bakes its compiled flow onto the built `CallNode` so `run` drives the
+ * embedded child.
  *
  * Source resolution follows two cache boundaries. A physical-file cache entry is canonical and
  * complete. `CallableScope` validates it, copies and rebases its compiled origins once per lexical
@@ -46,9 +50,10 @@ import {
 } from "../diagnostics.ts";
 import { hostOnlyFieldError, LLMConfig } from "../llm_clients/config.ts";
 import { ValidationError } from "../llm_clients/provider_blocks.ts";
+import { DeclSite } from "../memory/contracts.ts";
 import { isMaxToolIterations } from "../nodes/agent/node.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
-import { readTypedefs, type TypeRegistry } from "../typesys/types.ts";
+import { pythonTypeName, readTypedefs, type TypeRegistry } from "../typesys/types.ts";
 import {
   isList,
   isRecord,
@@ -62,16 +67,17 @@ import {
 import { assemble, type CallableScope as AssemblyScope, ComposedFlow } from "./build/pipeline.ts";
 import { INLINE_FLOW_PREFIX } from "./desugar/inline_bodies.ts";
 import { LoadDiagnostics, LoadError } from "./helpers/errors.ts";
+import { parseMemoryDeclarations } from "./helpers/memory.ts";
 import { boundaryFieldRanges } from "./helpers/source.ts";
 import { rejectUnreadTags } from "./helpers/tags.ts";
 import { parseUsesRef } from "./helpers/uses.ts";
 import { checkEnvValues } from "./helpers/value_nesting.ts";
 import { checkLlmConfigValue, readLlmConfig } from "./nodes/agent.ts";
-import { notTextDetail, notTextError } from "./nodes/base.ts";
+import { notTextDetail, notTextError, rejectInfinityName } from "./nodes/base.ts";
 import { callNestingScope } from "./nodes/resolver.ts";
-import { flowNodesCursor, parseFile, parseSourceDocument } from "./parse/file.ts";
+import { flowNodesCursor, isEmptyValue, parseFile, parseSourceDocument } from "./parse/file.ts";
 import { scopeOrigin, SourceCatalog, SourceCatalogBuilder } from "./source/catalog.ts";
-import { SourceAccessError, type SourceCursor, type SourceDocument } from "./source/index.ts";
+import { SourceAccessError, SourceCursor, type SourceDocument } from "./source/index.ts";
 
 /**
  * Resolves a `uses:` ref to its flow: `path` is the ref's flow path and `version` its
@@ -104,6 +110,49 @@ function replaceFlow(
   });
 }
 
+/**
+ * Restore normalized node signatures to the singular authored keys.
+ *
+ * The normalized `ComposeFile` form uses `inputs`/`outputs`. A spanless def fallback must look
+ * like raw YAML before inline-body extraction, so only each direct node body's signature keys are
+ * restored. The walk follows an actual nested `nodes:` graph and never descends into other
+ * literal mappings or lists.
+ */
+function restoreNodeSurface(nodes: Value): Value {
+  if (!isRecord(nodes)) return nodes;
+  return Object.fromEntries(
+    Object.entries(nodes).map(([nodeId, rawBody]) => {
+      if (!isRecord(rawBody)) return [nodeId, rawBody];
+      // A spread defines a `__proto__` key as data.
+      const body: ValueRecord = { ...rawBody };
+      for (const [plural, singular] of [
+        ["inputs", "input"],
+        ["outputs", "output"],
+      ] as const) {
+        if (Object.hasOwn(body, plural)) {
+          const value = body[plural]!;
+          delete body[plural];
+          body[singular] = value;
+        }
+      }
+      if (isRecord(body["nodes"])) body["nodes"] = restoreNodeSurface(body["nodes"]);
+      return [nodeId, body];
+    }),
+  );
+}
+
+/** Return the authored def cursor's `nodes:`, or a surface-restored virtual fallback. */
+function defAssemblyCursor(defCursor: SourceCursor | null, normalizedNodes: Value): SourceCursor {
+  if (defCursor !== null) {
+    try {
+      return defCursor.child("nodes");
+    } catch (error) {
+      if (!(error instanceof SourceAccessError)) throw error;
+    }
+  }
+  return SourceCursor.virtual(restoreNodeSurface(normalizedNodes));
+}
+
 /** Return one existing child source, or `null` for a virtual fallback. */
 function sourceChild(cursor: SourceCursor | null, key: string): SourceCursor | null {
   if (cursor === null) return null;
@@ -114,6 +163,73 @@ function sourceChild(cursor: SourceCursor | null, key: string): SourceCursor | n
     throw error;
   }
 }
+
+/**
+ * Project a flat def into one source-aligned synthetic node mapping, `{<name>: <node body>}`.
+ *
+ * The node body is the def's body without its signature, plus one generated `p: ${input.p}`
+ * binding per parameter and the def's `output:` type. Each projected entry keeps the authored
+ * source it came from: a generated binding points at its parameter's declaration.
+ */
+function singleNodeDefCursor(name: string, body: ValueRecord, defCursor: SourceCursor | null): SourceCursor {
+  const paramTypes = isRecord(body["inputs"]) ? body["inputs"] : {};
+  const generatedInputs: ValueRecord = Object.fromEntries(
+    Object.keys(paramTypes).map((param) => [param, `\${input.${param}}`]),
+  );
+  const nodeBody: ValueRecord = Object.fromEntries(
+    Object.entries(body).filter(([key]) => key !== "inputs" && key !== "outputs"),
+  );
+  nodeBody["input"] = generatedInputs;
+  if (Object.hasOwn(body, "outputs")) nodeBody["output"] = body["outputs"]!;
+
+  if (defCursor === null) return SourceCursor.virtual(Object.fromEntries([[name, nodeBody]]));
+
+  const bodyEntries = new Map<string, readonly [Value, SourceCursor | null]>(
+    Object.entries(nodeBody)
+      .filter(([key]) => key !== "input" && key !== "output")
+      .map(([key, value]) => [key, [value, sourceChild(defCursor, key)]]),
+  );
+
+  const inputSource = sourceChild(defCursor, "input");
+  const inputCursor =
+    inputSource !== null && isRecord(inputSource._valueView())
+      ? inputSource.projectMapping(
+          new Map(
+            Object.entries(generatedInputs).map(([param, binding]) => [
+              param,
+              [binding, sourceChild(inputSource, param)],
+            ]),
+          ),
+        )
+      : null;
+  bodyEntries.set("input", [generatedInputs, inputCursor]);
+
+  if (Object.hasOwn(nodeBody, "output")) {
+    bodyEntries.set("output", [nodeBody["output"]!, sourceChild(defCursor, "output")]);
+  }
+
+  const bodyCursor = defCursor.projectMapping(bodyEntries);
+  return defCursor.projectMapping(new Map([[name, [nodeBody, bodyCursor]]]));
+}
+
+// A `defs:` child flow is either a multi-node body or a flat single-node `kind:` body. Both share
+// the file's metadata and typedefs rather than declaring `id`/`name`/`typedefs` themselves.
+// `asserts:` are allowed: the call and map child seam enforces a def's asserts against the child
+// pool (boundary before the child runs, post after it ends). `env:` is the def's own flow-level
+// default for its nodes; a parent's `env:` doesn't reach a called child.
+const DEF_ALLOWED: ReadonlySet<string> = new Set([
+  "inputs",
+  "nodes",
+  "outputs",
+  "asserts",
+  "llm_config",
+  "env",
+  "long_term_memory",
+]);
+// The authored spellings of `DEF_ALLOWED`, sorted, for error messages.
+const DEF_SURFACE_KEYS: readonly string[] = [...DEF_ALLOWED]
+  .map((key) => (key === "inputs" ? "input" : key === "outputs" ? "output" : key))
+  .sort(compareCodeUnits);
 
 /**
  * Validate the top-level `system:` section's shape. Only `paths:` (a list of strings) is allowed:
@@ -441,8 +557,9 @@ export function makeFileResolver(searchPaths: readonly string[], ctx: LoadCtx): 
 /**
  * Load Compose YAML text into a runnable `ComposedFlow`.
  *
- * Parses, compiles and validates the flow in one pass. A `call:` resolves an inline body or a
- * `uses:` alias (external, with the ref's `@<version>`); any other name throws. With neither
+ * Parses, compiles and validates the flow in one pass. A `call:` resolves an inline body, an
+ * in-file `defs:` callable, or a `uses:` alias (external, with the ref's `@<version>`); any other
+ * name throws. A flow whose calls all reach in-file defs loads without a resolver. With neither
  * `searchPaths` nor `childResolver`, a `uses:` alias throws: external resolution is additive.
  *
  * @param text The Compose-shaped YAML source of the flow.
@@ -588,7 +705,7 @@ function typedefErrorRange(root: SourceCursor, path: ValuePath): SourceRange | n
 }
 
 /**
- * Load one parsed flow file: its checks, its `uses:` imports, then its assembly.
+ * Load one parsed flow file: its checks, its `uses:` imports, its `defs:`, then its assembly.
  *
  * Every step before the imports is synchronous; each alias then resolves, in source order, and
  * the rest runs inside one synchronous call nesting scope, so the file counts its own calls.
@@ -710,10 +827,10 @@ class PrivateCallable {
 /**
  * The file-local namespace and cache for callable resolution.
  *
- * Compiler-owned callables resolve first, then authored `uses:` aliases. A bare name in no
- * authored mapping is rejected instead of reaching the external resolver. Private declarations
- * and external aliases share one memo table. The in-progress set makes recursive private
- * construction loud; cross-file recursion is outside this scope and belongs to the selected
+ * Compiler-owned callables resolve first, then authored `defs:` and `uses:`. A bare name in
+ * neither authored mapping is rejected instead of reaching the external resolver. Private
+ * declarations, local defs and external aliases share one memo table. The in-progress set makes
+ * recursive private and def construction loud; cross-file recursion is outside this scope and belongs to the selected
  * external resolver. A failed callable construction drops its new private declarations, nested
  * cache entries and source-catalog sites together, so a later retry can't see a stale partial
  * attempt.
@@ -898,7 +1015,8 @@ export class CallableScope implements AssemblyScope {
    *
    * A `uses:` alias is read from the memo `resolveAlias` filled; this never loads a file.
    *
-   * @param flowId The callable name: a compiler-generated callable or a `uses:` alias.
+   * @param flowId The callable name: a compiler-generated callable, a `defs:` entry or a `uses:`
+   *   alias.
    * @param _version Unused; a `uses:` alias takes its version from its own ref.
    * @returns The built callable, cached for later calls.
    * @throws LoadError when the callable is unknown, recursive, fails to build, or is an alias that
@@ -921,6 +1039,27 @@ export class CallableScope implements AssemblyScope {
       let loaded: ComposedFlow;
       try {
         loaded = this.#buildTransactionally(privateCallable.builder);
+      } finally {
+        this.#inProgress.delete(flowId);
+      }
+      this.#built.set(flowId, loaded);
+      return loaded;
+    }
+    if (Object.hasOwn(this.#defsSection, flowId)) {
+      const defCursor = sourceChild(this.#defsCursor, flowId);
+      if (this.#inProgress.has(flowId)) {
+        throw this.#diagnostics.error(
+          `recursive defs reference: callable ${reprText(flowId)} is defined in terms ` +
+            "of itself (the baked call graph must be finite)",
+          { range: defCursor?.range ?? null },
+        );
+      }
+      this.#inProgress.add(flowId);
+      let loaded: ComposedFlow;
+      try {
+        loaded = this.#buildTransactionally(() =>
+          loadDef(flowId, this.#defsSection[flowId]!, this.#registry, this, defCursor),
+        );
       } finally {
         this.#inProgress.delete(flowId);
       }
@@ -1028,5 +1167,227 @@ export class CallableScope implements AssemblyScope {
   /** Build every local def in authored order before the parent flow. */
   eagerLoadDefs(): void {
     for (const name of Object.keys(this.#defsSection)) this.resolve(name);
+  }
+}
+
+/**
+ * Reject a multi-node `defs:` entry's `asserts:` that isn't a list of strings.
+ *
+ * A def body isn't checked by the `ComposeFile` schema, so its `asserts:` is checked here, in the
+ * same words as a node's.
+ *
+ * @param name The `defs:` entry name, for the message.
+ * @param asserts The authored `asserts:` value; `null` means absent.
+ * @param defCursor The authored def body, when retained.
+ * @param diagnostics Factory for located load errors.
+ * @throws LoadError at the field when `asserts:` is set but isn't a list, and at the item for the
+ *   first item YAML read as non-text.
+ */
+function checkDefAsserts(
+  name: string,
+  asserts: Value,
+  defCursor: SourceCursor | null,
+  diagnostics: LoadDiagnostics,
+): void {
+  if (asserts === null) return;
+  const assertsCursor = sourceChild(defCursor, "asserts");
+  const fieldRange = assertsCursor?.range ?? null;
+  if (!isList(asserts)) {
+    throw diagnostics.error(`defs entry ${reprText(name)}: \`asserts:\` must be a list of strings`, {
+      range: fieldRange,
+    });
+  }
+  for (const [i, item] of asserts.entries()) {
+    if (typeof item === "string") continue;
+    let itemRange: SourceRange | null = null;
+    // `sourceChild` selects mapping keys only, so a sequence item is read through `child`.
+    if (assertsCursor !== null) {
+      try {
+        itemRange = assertsCursor.child(i).range;
+      } catch (error) {
+        if (!(error instanceof SourceAccessError)) throw error;
+      }
+    }
+    throw diagnostics.error(`defs entry ${reprText(name)}: ` + notTextError(`asserts[${i}]`, item), {
+      range: itemRange ?? fieldRange,
+    });
+  }
+}
+
+/**
+ * Build one in-file `defs:` entry into a `ComposedFlow`, an inline child flow.
+ *
+ * Takes a multi-node child flow (`{input?, nodes, output?, asserts?}`) or a flat single-node body
+ * (`{kind, ...}`). Both share the file's typedefs and callable scope. `defCursor` is the authored
+ * body of this occurrence: it keeps the absolute locations assembly and its diagnostics use.
+ *
+ * @param name The `defs:` entry name.
+ * @param body The entry's normalized body.
+ * @param registry The file's typedefs.
+ * @param scope The file's callable scope.
+ * @param defCursor The authored body, or `null` for a virtual fallback.
+ * @returns The built child flow.
+ * @throws LoadError, located and prefixed `defs entry '<name>': `, when the body isn't a mapping,
+ *   has no `nodes:` or `kind:`, sets an unknown or renamed field, a malformed `llm_config:`,
+ *   `env:` or `asserts:`, or fails to assemble.
+ */
+function loadDef(
+  name: string,
+  body: Value,
+  registry: TypeRegistry,
+  scope: CallableScope,
+  defCursor: SourceCursor | null = null,
+): ComposedFlow {
+  const diagnostics = scope.diagnostics;
+  const where = `defs entry ${reprText(name)}`;
+  if (!isRecord(body)) {
+    throw diagnostics.error(`${where}: body must be a mapping, got ${pythonTypeName(body)}`, {
+      range: defCursor?.range ?? null,
+    });
+  }
+  if (!Object.hasOwn(body, "nodes")) {
+    if (Object.hasOwn(body, "kind")) return loadSingleNodeDef(name, body, registry, scope, defCursor);
+    throw diagnostics.error(
+      `${where}: a child flow needs a \`nodes:\` body (input?/nodes/output?) OR a single-node \`kind:\` form`,
+      { range: defCursor?.range ?? null },
+    );
+  }
+  if (Object.hasOwn(body, "memory_policy")) {
+    throw diagnostics.error(`${where}: field \`memory_policy:\` was renamed to \`long_term_memory:\``, {
+      range: defCursor?.keyRangeOf("memory_policy") ?? null,
+    });
+  }
+  const extra = Object.keys(body)
+    .filter((key) => !DEF_ALLOWED.has(key))
+    .sort(compareCodeUnits);
+  if (extra.length > 0) {
+    throw diagnostics.error(
+      `${where}: unknown field(s) ${writeAsText(extra)} (allowed: ${DEF_SURFACE_KEYS.join(", ")})`,
+      { range: defCursor?.keyRangeOf(extra[0]!) ?? null },
+    );
+  }
+  const field = (key: string): Value => (Object.hasOwn(body, key) ? body[key]! : null);
+  const defLlmConfig = readAuthoredLlmConfig(field("llm_config"), where, {
+    registry,
+    sitePath: ["def", name, "llm_config"],
+    catalogBuilder: scope.catalogBuilder,
+    diagnostics,
+    cursor: defCursor,
+  });
+  const defEnv = field("env");
+  if (defEnv !== null && !isRecord(defEnv)) {
+    throw diagnostics.error(`${where}: \`env:\` must be a mapping with string keys`, {
+      range: defCursor?.rangeOf("env") ?? null,
+    });
+  }
+  if (defEnv !== null) checkEnvValues(defEnv, `${where}: `, defCursor?.child("env") ?? null, diagnostics);
+  checkDefAsserts(name, field("asserts"), defCursor, diagnostics);
+  const nodesCursor = defAssemblyCursor(defCursor, body["nodes"]!);
+  try {
+    const memories =
+      field("long_term_memory") !== null
+        ? parseMemoryDeclarations(body["long_term_memory"]!, {
+            diagnostics,
+            sourceRange: defCursor?.rangeOf("long_term_memory") ?? null,
+            site: new DeclSite([], ["def", name], null),
+          })
+        : [];
+    const inputs = field("inputs");
+    const asserts = field("asserts");
+    return assemble({
+      inputsSection: (isEmptyValue(inputs) ? {} : inputs) as ValueRecord,
+      inputsCursor: sourceChild(defCursor, "input") ?? sourceChild(defCursor, "inputs"),
+      nodesCursor,
+      outputsSection: field("outputs"),
+      // Enforced at the child seam.
+      assertsSection: isList(asserts) ? asserts : [],
+      registry,
+      scope,
+      owner: ["def", name],
+      flowLlmConfig: defLlmConfig,
+      flowEnv: defEnv ?? {},
+      boundaryFieldRanges: defCursor !== null ? boundaryFieldRanges(defCursor) : null,
+      assertsCursor: sourceChild(defCursor, "asserts"),
+      outputsCursor: sourceChild(defCursor, "output") ?? sourceChild(defCursor, "outputs"),
+      flowId: name,
+      memories,
+      memoriesCursor: sourceChild(defCursor, "long_term_memory"),
+    });
+  } catch (error) {
+    if (!(error instanceof LoadError)) throw error;
+    throw diagnostics.prepend(error, {
+      range: defCursor?.range ?? null,
+      message: `${where}: ${error.message}`,
+      note: `definition ${reprText(name)}`,
+      cause: error,
+    });
+  }
+}
+
+/**
+ * Build a single-node `defs:` callable: `let f params = <one node over params>`.
+ *
+ * The flat body is `{kind, <logic fields>, input?, output?}`. `input:` declares the def's
+ * parameters (name to type, like a flow signature), each bound by name into the single node
+ * (`p: ${input.p}`); `output:` is the node's output type, the codomain. Everything else is the
+ * node body (the kind, its logic fields and any node-local `asserts:`). It desugars to a one-node
+ * child flow assembled as the multi-node form is. The synthetic node projects its header, logic,
+ * generated bindings and output type onto the authored def cursor without changing that source.
+ *
+ * @param name The `defs:` entry name, which also names the node.
+ * @param body The entry's normalized body.
+ * @param registry The file's typedefs.
+ * @param scope The file's callable scope.
+ * @param defCursor The authored body, or `null` for a virtual fallback.
+ * @returns The built child flow.
+ * @throws LoadError, located and prefixed `defs entry '<name>': `, when `input:` isn't a param
+ *   map, a parameter is named `inf`, or the node fails to assemble.
+ */
+function loadSingleNodeDef(
+  name: string,
+  body: ValueRecord,
+  registry: TypeRegistry,
+  scope: CallableScope,
+  defCursor: SourceCursor | null = null,
+): ComposedFlow {
+  const diagnostics = scope.diagnostics;
+  const where = `defs entry ${reprText(name)}`;
+  const inputs = Object.hasOwn(body, "inputs") ? body["inputs"]! : null;
+  const inputCursor = sourceChild(defCursor, "input") ?? sourceChild(defCursor, "inputs");
+  if (!isRecord(inputs) && !isEmptyValue(inputs)) {
+    throw diagnostics.error(
+      `${where}: single-node \`input:\` must be a param map (\`name: !TYPE\`, e.g. \`topic: !str\`)`,
+      { range: inputCursor?.range ?? defCursor?.range ?? null },
+    );
+  }
+  const paramTypes: ValueRecord = isRecord(inputs) ? inputs : {};
+  // The node reads each parameter by bare name, so `inf` would read infinity instead.
+  if (Object.hasOwn(paramTypes, "inf")) {
+    rejectInfinityName(`${where}: input 'inf'`, "inf", inputCursor?.keyRangeOf("inf") ?? null, diagnostics);
+  }
+  const nodesCursor = singleNodeDefCursor(name, body, defCursor);
+  try {
+    return assemble({
+      inputsSection: paramTypes,
+      inputsCursor: inputCursor,
+      nodesCursor,
+      // A single value re-export, node first.
+      outputsSection: `\${${name}.output}`,
+      assertsSection: [],
+      registry,
+      scope,
+      owner: ["def", name],
+      boundaryFieldRanges: defCursor !== null ? boundaryFieldRanges(defCursor) : null,
+      outputsRange: sourceChild(defCursor, "output")?.range ?? null,
+      flowId: name,
+    });
+  } catch (error) {
+    if (!(error instanceof LoadError)) throw error;
+    throw diagnostics.prepend(error, {
+      range: defCursor?.range ?? null,
+      message: `${where}: ${error.message}`,
+      note: `definition ${reprText(name)}`,
+      cause: error,
+    });
   }
 }

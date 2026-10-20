@@ -27,16 +27,20 @@
  * counterpart. TS-only loader rows: a resolver returning a promise, a rejecting resolver, and two
  * concurrent loads that don't share the import count.
  *
- * Later (they need the loader's `defs:`): `test_chain_at_the_limit_loads_runs_and_resumes`,
+ * Ported through `loadFlow`, over chains of `defs:` entries:
  * `test_chain_past_the_limit_is_located_at_the_root_call`,
  * `test_long_chain_fails_at_the_first_call_past_the_limit`,
  * `test_chain_written_callee_first_is_caught_from_built_callables`,
  * `test_imports_load_before_defs`, `test_broken_import_is_reported_at_its_alias_before_defs`,
  * `test_alias_collision_wins_over_a_broken_target`,
- * `test_imports_and_a_calling_defs_chain_count_apart` and
- * `test_imports_at_the_limit_over_defs_at_the_limit_load` (T3-22); the run halves of
- * `test_inline_bodies_count` and `test_uses_files_count` (T4); `test_call_directive_counts` and
- * `test_map_and_loop_bodies_count` (T3-22 and T4, their chains of `defs:` loaded and run).
+ * `test_imports_and_a_calling_defs_chain_count_apart`,
+ * `test_imports_at_the_limit_over_defs_at_the_limit_load`, and the load halves of
+ * `test_chain_at_the_limit_loads_runs_and_resumes`, `test_call_directive_counts` and
+ * `test_map_and_loop_bodies_count`.
+ *
+ * Later (T4-8): the run halves of `test_chain_at_the_limit_loads_runs_and_resumes`,
+ * `test_inline_bodies_count`, `test_uses_files_count`, `test_call_directive_counts` and
+ * `test_map_and_loop_bodies_count`.
  *
  * Ported through `assembleText`: the load half of `test_inline_bodies_count`, pinning the whole
  * message (no recursion guard is needed: TS has no recursion limit to pin), and its case
@@ -656,5 +660,259 @@ describe("custom resolvers", () => {
       loadFlow(root, { childResolver: resolve }),
     ]);
     expect(flows.map((flow) => flow.importDepth)).toEqual([2, 2]);
+  });
+});
+
+// ---------- chains of defs: entries, through the loader ----------
+
+const PAST_51 = "nests calls 51 levels deep, past the call nesting limit of 50";
+const PAST_DEEP = "more than 50 levels deep, past the call nesting limit of 50";
+const LEAF =
+  "    input:\n" +
+  "      x: !str\n" +
+  "    nodes:\n" +
+  "      step:\n" +
+  "        kind: code\n" +
+  "        code: ./fixtures/compose_codefns.ts:echo\n" +
+  "        input:\n" +
+  "          topic: ${input.x}\n" +
+  "        output: str\n" +
+  "    output: ${step.output}\n";
+
+/** Return a def body whose one `step` node calls `target` with `x`. */
+function calling(target: string): string {
+  return (
+    "    input:\n      x: !str\n    nodes:\n      step:\n        kind: call\n" +
+    `        call: ${target}\n` +
+    "        input:\n          x: ${input.x}\n    output: ${step.output}\n"
+  );
+}
+
+/**
+ * Return a flow whose root `top` calls `c0` and each `ci` calls `c(i+1)`. The last def is a CODE
+ * leaf echoing `x`, or calls `lastCalls` when given; `reverse` writes the defs last-first.
+ */
+function defsChain(
+  n: number,
+  options: { reverse?: boolean; prefix?: string; lastCalls?: string | null; uses?: Record<string, string> } = {},
+): string {
+  const { reverse = false, prefix = "c", lastCalls = null, uses = {} } = options;
+  const entries: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const body = i < n - 1 ? calling(`${prefix}${i + 1}`) : lastCalls !== null ? calling(lastCalls) : LEAF;
+    entries.push(`  ${prefix}${i}:\n${body}`);
+  }
+  if (reverse) entries.reverse();
+  let head = `id: chain${n}\nname: chain${n}\ninput:\n  x: !str\n`;
+  const aliases = Object.entries(uses);
+  if (aliases.length > 0) head += "uses:\n" + aliases.map(([alias, ref]) => `  ${alias}: ${ref}\n`).join("");
+  return (
+    head +
+    "defs:\n" +
+    entries.join("") +
+    "nodes:\n  top:\n    kind: call\n" +
+    `    call: ${prefix}0\n` +
+    "    input:\n      x: ${input.x}\noutput: ${top.output}\n"
+  );
+}
+
+/**
+ * Return a flow whose defs reach one another by CALL, MAP and LOOP in turn: root `top` calls
+ * `c0`, each `ci` reaches `c(i+1)`, and the last def is a CODE leaf. A LOOP body returns the
+ * record it carries, so each def right under a LOOP outputs `{v: ...}`.
+ */
+function mixedChain(n: number): string {
+  const entries: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const underLoop = i > 0 && i % 3 === 0; // the CALL levels sit right under a LOOP
+    let node: string;
+    let result: string;
+    if (i === n - 1) {
+      node =
+        "        kind: code\n        code: ./fixtures/compose_codefns.ts:echo\n" +
+        "        input:\n          topic: ${input.v}\n        output: str\n";
+      result = "${step.output}";
+    } else {
+      const callee = `c${i + 1}`;
+      node = [
+        `        kind: call\n        call: ${callee}\n        input:\n          v: \${input.v}\n`,
+        `        kind: map\n        over: \${[input.v]}\n        call: ${callee}\n` +
+          "        input:\n          v: ${item}\n",
+        `        kind: loop\n        times: 1\n        call: ${callee}\n        input:\n          v: \${input.v}\n`,
+      ][i % 3]!;
+      result = underLoop ? "${input.v}" : "${step.output}";
+    }
+    const output = underLoop ? `\n      v: ${result}\n` : ` ${result}\n`;
+    entries.push(`  c${i}:\n    input:\n      v: !str\n    nodes:\n      step:\n${node}    output:${output}`);
+  }
+  return (
+    `id: mixed${n}\nname: mixed${n}\ninput:\n  v: !str\ndefs:\n` +
+    entries.join("") +
+    "nodes:\n  top:\n    kind: call\n    call: c0\n    input:\n      v: ${input.v}\noutput: ${top.output}\n"
+  );
+}
+
+/**
+ * Return a flow whose `call(...)` directives chain through every def: the root `step` echoes
+ * `call(c0, x=${input.x})`, each `ci` echoes `call(c(i+1), ...)`, and the last def is a CODE leaf.
+ */
+function directiveChain(n: number): string {
+  const echoCall = (target: string, indent: string) =>
+    `${indent}step:\n` +
+    `${indent}  kind: code\n` +
+    `${indent}  code: ./fixtures/compose_codefns.ts:echo\n` +
+    `${indent}  input:\n` +
+    `${indent}    topic: call(${target}, x=\${input.x})\n` +
+    `${indent}  output: str\n`;
+  const entries: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const body =
+      i < n - 1
+        ? "    input:\n      x: !str\n    nodes:\n" + echoCall(`c${i + 1}`, "      ") + "    output: ${step.output}\n"
+        : LEAF;
+    entries.push(`  c${i}:\n${body}`);
+  }
+  return (
+    `id: directive${n}\nname: directive${n}\ninput:\n  x: !str\ndefs:\n` +
+    entries.join("") +
+    "nodes:\n" +
+    echoCall("c0", "  ") +
+    "output: ${step.output}\n"
+  );
+}
+
+/** Return the start line of a load error's innermost frame. */
+const errorLine = (error: LoadError) => error.diagnostic.frames.at(-1)!.range.startLine;
+
+/** A 51-def chain whose defs nobody calls; its root node is a CODE leaf. */
+const UNCALLED_DEFS = defsChain(51, { prefix: "k" }).split("nodes:\n  top:\n")[0] + "nodes:\n" + ROOT_LEAF;
+
+describe("chains of defs: entries", () => {
+  test("a chain at the limit loads", async () => {
+    await loadFlow(defsChain(50));
+  });
+
+  test("a chain past the limit is located at the root call", async () => {
+    const text = defsChain(51);
+    const error = await loadErrorAsync(loadFlow(text));
+
+    expect(error.message).toContain(PAST_51);
+    expect(error.message).toContain("call node 'top': calling callable 'c0'");
+    expect(error.diagnostic.frames.length).toBe(1);
+    expect(errorLine(error)).toBe(lineOf(text, "call: c0"));
+  });
+
+  test.each([97, 1000])("a long chain of %p fails at the first call past the limit", async (n) => {
+    const text = defsChain(n);
+    const error = await loadErrorAsync(loadFlow(text));
+
+    expect(error.message).toContain(PAST_DEEP);
+    expect(error.message).toContain("call node 'step': calling callable 'c51'");
+    expect(errorLine(error)).toBe(lineOf(text, "call: c51"));
+  });
+
+  test("a chain written callee first is caught from the built callables", async () => {
+    const text = defsChain(51, { reverse: true });
+    const error = await loadErrorAsync(loadFlow(text));
+
+    expect(error.message).toContain(PAST_51);
+    expect(errorLine(error)).toBe(lineOf(text, "call: c0"));
+    await loadFlow(defsChain(50, { reverse: true }));
+  });
+
+  test("map and loop bodies count", async () => {
+    await loadFlow(mixedChain(50));
+
+    const text = mixedChain(51);
+    const error = await loadErrorAsync(loadFlow(text));
+    expect(error.message).toContain(PAST_51);
+    expect(errorLine(error)).toBe(lineOf(text, "call: c0"));
+  });
+
+  test("call directives count", async () => {
+    await loadFlow(directiveChain(50));
+
+    const error = await loadErrorAsync(loadFlow(directiveChain(51)));
+    expect(error.message).toContain("past the call nesting limit of 50");
+  });
+
+  test.each([
+    [
+      "a nodes: def",
+      "    nodes:\n      invoke:\n        kind: call\n        call: external\n    output: ${invoke.output}\n",
+    ],
+    ["a single-node def", "    kind: call\n    call: external\n"],
+  ])("a broken import is reported at its alias before defs (%s)", async (_form, definition) => {
+    const text =
+      "id: def-inner-line\nname: def_inner_line\nuses:\n  external: child.yaml\ndefs:\n  local:\n" +
+      definition +
+      "nodes:\n  invoke:\n    kind: call\n    call: local\noutput: ${invoke.output}\n";
+    const failResolver = (): ComposedFlow => {
+      throw new LoadDiagnostics().error("external failure");
+    };
+
+    const error = await loadErrorAsync(loadFlow(text, { childResolver: failResolver }));
+
+    expect(error.message).toBe("external failure");
+    const frames = error.diagnostic.frames;
+    expect(frames.length).toBe(1);
+    expect(frames[0]!.note).toBe("uses alias 'external'");
+    expect(frames[0]!.range.startLine).toBe(lineOf(text, "external: child.yaml"));
+  });
+
+  test("an alias colliding with a node id wins over its broken target", async () => {
+    const text = "id: f\nname: f\ninput:\n  x: !str\nuses:\n  step: hub:x/y@1\nnodes:\n" + ROOT_LEAF;
+    const error = await loadErrorAsync(loadFlow(text));
+    expect(error.message).toBe('uses: alias ["step"] collides with a node id');
+  });
+});
+
+describe("chains of uses: files over defs: entries", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "yian-defs-chain-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  /** Make and return the directory `<tmp>/<name>`. */
+  const dir = (name: string) => {
+    const path = join(tmp, name);
+    mkdirSync(path);
+    return path;
+  };
+
+  test("imports load before defs", async () => {
+    // A file at the limit called from 49 levels down is caught when the call returns.
+    const deep = dir("deep");
+    writeFileSync(join(deep, "lib.yaml"), defsChain(50, { prefix: "k" }));
+    const text = defsChain(49, { lastCalls: "lib", uses: { lib: "lib" } });
+    const error = await loadErrorAsync(loadFlow(text, { searchPaths: [deep] }));
+    expect(error.message).toContain("nests calls 99 levels deep, past the call nesting limit of 50");
+    expect(errorLine(error)).toBe(lineOf(text, "call: lib"));
+
+    // A one-level file's uncalled defs nest 50 on their own, not under the importer.
+    const legal = dir("legal");
+    writeFileSync(join(legal, "lib.yaml"), UNCALLED_DEFS);
+    await loadFlow(defsChain(49, { lastCalls: "lib", uses: { lib: "lib" } }), { searchPaths: [legal] });
+  });
+
+  test("imports and a calling defs chain count apart", async () => {
+    // The import chain and the call chain in its last file are each 30 deep, 60 together.
+    writeFiles(tmp, { ...chainTexts(30, { calls: false }), u29: defsChain(30) });
+    await loadFlow(importing("root", { first: "u0" }), { searchPaths: [tmp] });
+  });
+
+  // A last file that calls its chain is the deepest accepted load, since importing it rebases a
+  // compiled graph 50 levels deep.
+  test.each([
+    ["called", defsChain(50)],
+    ["uncalled", UNCALLED_DEFS],
+  ])("imports at the limit over defs at the limit load (%s)", async (_kind, last) => {
+    writeFiles(tmp, { ...chainTexts(50, { calls: false }), u49: last });
+    await loadFlow(importing("root", { first: "u0" }), { searchPaths: [tmp] });
   });
 });

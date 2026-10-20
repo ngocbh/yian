@@ -2,17 +2,15 @@
  * Installing the complete origin resolver at the Compose boundary: a port of
  * `tests/compose/test_origin_resolver.py`.
  *
- * Ported: every row but the two below. A Python resolver class is a plain object with `resolve`,
+ * Ported: every row but the one below. A Python resolver class is a plain object with `resolve`,
  * and its broken property a getter. Changed: `ResolverTable` has no `origins` list in TS, so the
  * table's exact keys are checked as its `size` plus `has` for each reachable origin; Python's
  * `deepcopy` of a loaded child is `copyGraph` of its compiled flow; Python's
- * `dataclasses.replace` is a new `ComposedFlow`.
+ * `dataclasses.replace` is a new `ComposedFlow`; the check that a loaded flow has no
+ * `_local_catalog` attribute is dropped, since a TS `ComposedFlow` has no private fields to probe.
  *
  * Not ported: `test_resolver_metadata_is_immutable_copy_reused_and_equality_neutral`, which
  * pins dataclass `deepcopy` and equality; a TS `ComposedFlow` has neither.
- *
- * Later (T3-22): `test_load_flow_installs_an_exact_resolver_and_filters_unused_defs`, which
- * needs `defs:`.
  */
 
 import { expect, test } from "bun:test";
@@ -111,6 +109,33 @@ function expectChildViewUsesFrame(error: LoadError): void {
 /** Load `ONE_ALIAS_PARENT` with a resolver returning `child`, expecting a `LoadError`. */
 const loadOneAlias = (child: unknown) =>
   loadErrorAsync(loadFlow(ONE_ALIAS_PARENT, { childResolver: () => child as ComposedFlow }));
+
+test("loadFlow installs an exact resolver and filters unused defs", async () => {
+  const text = `id: complete-local
+name: complete-local
+input:
+  n: !int
+defs:
+  unused:
+    kind: code
+    code: return 2
+    output: int
+nodes:
+  worker:
+    kind: code
+    code: return 1
+    output: int
+output: \${worker.output}
+asserts:
+  - input.n >= 0
+  - worker.output >= 0
+`;
+
+  const loaded = await loadFlow(text);
+
+  expectExactRoutes(loaded.originResolver, loaded.compiled);
+  for (const origin of origins(loaded.compiled).values()) expect(loaded.originResolver!.resolve(origin)).not.toBeNull();
+});
 
 test("a source-free load has no resolver", async () => {
   const loaded = await loadFlow("id: empty\nname: empty\nnodes: {}\n");

@@ -269,10 +269,10 @@ function backMapToPlural(body: Value, active: Set<ValueRecord> = new Set()): Val
 }
 
 /**
- * Whether `value` is null, false, zero, empty text or an empty container: a compact `input:` that
- * declares no params.
+ * Whether `value` is null, false, zero, empty text or an empty container: an `input:` that declares
+ * no params, in a compact flow or a single-node def.
  */
-function isEmptyValue(value: Value): boolean {
+export function isEmptyValue(value: Value): boolean {
   if (isList(value)) return value.length === 0;
   if (isRecord(value)) return Object.keys(value).length === 0;
   return value === null || value === false || value === 0n || value === 0 || value === "";

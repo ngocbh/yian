@@ -19,6 +19,7 @@
  * `test_untyped_seed_with_an_optional_typedef_field_is_rejected`,
  * `test_typed_seed_with_an_optional_typedef_field_loads`,
  * `test_a_returned_field_the_body_does_not_take_loads`,
+ * `test_a_loop_inside_a_called_body_is_rejected`,
  * `test_a_seed_that_misses_the_input_reports_the_binding` and `test_the_error_points_at_the_seed`;
  * the load halves of `test_typed_seed_leaves_a_returned_null_to_the_input_check`,
  * `test_typed_seed_with_an_optional_returned_field_runs`,
@@ -28,35 +29,26 @@
  * `test_optional_returned_into_an_optional_input_runs`, `test_null_seed_into_an_optional_input_runs`
  * and `test_a_partial_loop_runs`.
  *
- * Changed: the `step` def is built by hand (`handChild`: its input `n` read from the def's
- * `input:` text, its `bump` node a producer with the record contract `{n: <body output>}`, and
- * `${bump.output}` returned), since def bodies load in T3-22; `test_a_returned_field_the_body_does_not_take_loads`
- * and `test_a_partial_loop_runs` build theirs the same way. The error rows pin the whole message
- * where Python matches fragments.
+ * Changed: the error rows pin the whole message where Python matches fragments.
  *
- * Pinned at the end (`assembledWith`, the `step` def built by hand):
+ * Pinned at the end:
  * `load-loop/compose_named_loop_carried_types__{any_returned_into_an_int_input_is_rejected,
  * untyped_seed_rejects_an_optional_typedef_field}` and the `ok` cases
  * `load-loop/compose_named_loop_carried_types__{a_returned_field_the_body_does_not_take_loads,
- * int_returned_into_a_float_input_loads,typed_seed_with_an_optional_typedef_field_loads}`.
+ * int_returned_into_a_float_input_loads,typed_seed_with_an_optional_typedef_field_loads}`, and
+ * `load-loop/compose_named_loop_carried_types__a_loop_in_a_def_gets_the_carried_type_check` with
+ * every frame.
  *
- * Later (T3-22): `test_a_loop_inside_a_called_body_is_rejected` and its case
- * `load-loop/compose_named_loop_carried_types__a_loop_in_a_def_gets_the_carried_type_check` (the
- * `defs entry` prefix comes from the loader). Later (T4): the run halves of the load-half rows above.
+ * Later (T4): the run halves of the load-half rows above.
  */
 
 import { expect, test } from "bun:test";
 
-import { ValueContract } from "../../src/nodes/contracts.ts";
-import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import {
-  assembledWith,
+  assembled,
   assembleText,
   type CaseRow,
-  type ChildFlows,
-  handChild,
   loadError,
-  parametersFromYaml,
   runCase,
 } from "./declarations.ts";
 
@@ -110,34 +102,8 @@ output: \${repeat.output}
 
 const PAGINATE = 'inputs["n"] >= 2n ? null : inputs["n"] + 1n';
 const WHILE = "while: ${n != null}\n    max: 10";
-const P_TYPEDEFS = { P: { x: "int" } };
 
-/**
- * A `step` def built by hand: inputs `inputText` (the lines under its `input:` key), a `bump`
- * producer whose record contract has `fields` (each a required field), returned whole.
- *
- * @param typedefs The typedefs the types name (default none).
- */
-function stepOf(
-  inputText: string,
-  fields: Readonly<Record<string, string>>,
-  typedefs: Readonly<Record<string, unknown>> = {},
-): ChildFlows {
-  const registry = readTypedefs({ ...typedefs, Rec: fields });
-  return {
-    step: handChild({
-      inputs: parametersFromYaml(`input:\n${inputText}`, registry),
-      producers: { bump: new ValueContract(typeFor("Rec", registry)) },
-      output: "${bump.output}",
-    }),
-  };
-}
-
-/** The `step` def of `namedLoop`: input `n: !<bodyIn>`, a `bump: {n: <bodyOut>}` producer, returned whole. */
-const step = (bodyIn: string, bodyOut: string, typedefs: Readonly<Record<string, unknown>> = {}) =>
-  stepOf(`  n: !${bodyIn}\n`, { n: bodyOut }, typedefs);
-
-/** Assemble `namedLoop(bodyIn, bodyOut, ...)` with its `step` def built by hand. */
+/** Assemble `namedLoop(bodyIn, bodyOut, ...)`. */
 function load(
   bodyIn: string,
   bodyOut: string,
@@ -145,7 +111,7 @@ function load(
   options: { driver?: string; flowInput?: string; ret?: string } = {},
 ): void {
   const { ret = "null", ...loop } = options;
-  assembleText(namedLoop(bodyIn, bodyOut, ret, seed, loop), "flow.yaml", { children: step(bodyIn, bodyOut) });
+  assembleText(namedLoop(bodyIn, bodyOut, ret, seed, loop));
 }
 
 /** The message of the load error `load(...)` raises. */
@@ -177,23 +143,17 @@ test("a typed seed with an optional returned field loads", () => {
 test("a while loop ending on null over an untyped seed loads", () => {
   // Python's test_while_loop_ending_on_null_over_an_untyped_seed_runs: the `while:` null check
   // keeps the returned null out of the body's `n: int`. The run half is T4's.
-  assembleText(namedLoop("int", "Optional(int)", PAGINATE, "${input.z}", { driver: WHILE }), "flow.yaml", {
-    children: step("int", "Optional(int)"),
-  });
+  assembleText(namedLoop("int", "Optional(int)", PAGINATE, "${input.z}", { driver: WHILE }));
 });
 
 test("a while loop ending on null over a typed seed loads", () => {
   // Python's test_while_loop_ending_on_null_over_a_typed_seed_runs; the run half is T4's.
-  assembleText(namedLoop("int", "Optional(int)", PAGINATE, "!int ${input.z}", { driver: WHILE }), "flow.yaml", {
-    children: step("int", "Optional(int)"),
-  });
+  assembleText(namedLoop("int", "Optional(int)", PAGINATE, "!int ${input.z}", { driver: WHILE }));
 });
 
 test("a while loop ending on null into an optional input loads", () => {
   // Python's test_while_loop_ending_on_null_into_an_optional_input_runs; the run half is T4's.
-  assembleText(namedLoop("Optional(int)", "Optional(int)", PAGINATE, "${input.z}", { driver: WHILE }), "flow.yaml", {
-    children: step("Optional(int)", "Optional(int)"),
-  });
+  assembleText(namedLoop("Optional(int)", "Optional(int)", PAGINATE, "${input.z}", { driver: WHILE }));
 });
 
 test.each(["${input.z}", "!int ${input.z}"])("a float returned into an int input is rejected (%s)", (seed) => {
@@ -249,7 +209,7 @@ function recordLoop(seed: string): string {
 
 test("an untyped seed with an optional typedef field is rejected", () => {
   const error = loadError(() =>
-    assembleText(recordLoop("${input.p}"), "flow.yaml", { children: step("P", "Optional(P)", P_TYPEDEFS) }),
+    assembleText(recordLoop("${input.p}")),
   );
 
   expect(error.message).toBe(
@@ -259,7 +219,7 @@ test("an untyped seed with an optional typedef field is rejected", () => {
 });
 
 test("a typed seed with an optional typedef field loads", () => {
-  assembleText(recordLoop("!P ${input.p}"), "flow.yaml", { children: step("P", "Optional(P)", P_TYPEDEFS) });
+  assembleText(recordLoop("!P ${input.p}"));
 });
 
 test("a returned field the body does not take loads", () => {
@@ -294,8 +254,6 @@ nodes:
       m: 0
 output: \${repeat.output}
 `,
-    "flow.yaml",
-    { children: stepOf("  n: !int\n", { n: "int", m: "int" }) },
   );
 });
 
@@ -332,9 +290,53 @@ nodes:
       m: 5
 output: \${repeat.output}
 `,
-    "flow.yaml",
-    { children: stepOf("  n: !int\n  m: !int\n", { n: "int" }) },
   );
+});
+
+test("a loop inside a called body is rejected", () => {
+  const text = `
+id: nested
+name: nested
+input:
+  z: !int
+defs:
+  step:
+    input:
+      n: !int
+    nodes:
+      bump:
+        kind: code
+        input:
+          n: \${input.n}
+        output:
+          n: Optional(int)
+        code: |
+          return {"n": null}
+    output: \${bump.output}
+  outer:
+    input:
+      z: !int
+    nodes:
+      repeat:
+        kind: loop
+        times: 2
+        call: step
+        input:
+          n: \${input.z}
+    output: \${repeat.output}
+nodes:
+  run:
+    kind: call
+    call: outer
+    input:
+      z: \${input.z}
+output: \${run.output}
+`;
+
+  const error = loadError(() => assembleText(text)).message;
+
+  expect(error).toContain("defs entry 'outer': ");
+  expect(error).toContain(nullableMessage("${input.z}"));
 });
 
 test("a seed that misses the input reports the binding", () => {
@@ -349,7 +351,7 @@ test("the error points at the seed", () => {
   const line = text.split("\n").indexOf("      n: ${input.z}") + 1;
 
   const frames = loadError(() =>
-    assembleText(text, "flow.yaml", { children: step("int", "Optional(int)") }),
+    assembleText(text),
   ).diagnostic.frames;
 
   expect(frames).toHaveLength(1);
@@ -361,22 +363,23 @@ test("the error points at the seed", () => {
 test.each<CaseRow>([
   {
     id: "load-loop/compose_named_loop_carried_types__any_returned_into_an_int_input_is_rejected",
-    call: assembledWith(step("int", "Any")),
+    call: assembled,
   },
   {
     id: "load-loop/compose_named_loop_carried_types__untyped_seed_rejects_an_optional_typedef_field",
-    call: assembledWith(step("P", "Optional(P)", P_TYPEDEFS)),
+    call: assembled,
   },
   {
     id: "load-loop/compose_named_loop_carried_types__a_returned_field_the_body_does_not_take_loads",
-    call: assembledWith(stepOf("  n: !int\n", { n: "int", m: "int" })),
+    call: assembled,
   },
   {
     id: "load-loop/compose_named_loop_carried_types__int_returned_into_a_float_input_loads",
-    call: assembledWith(step("float", "int")),
+    call: assembled,
   },
   {
     id: "load-loop/compose_named_loop_carried_types__typed_seed_with_an_optional_typedef_field_loads",
-    call: assembledWith(step("P", "Optional(P)", P_TYPEDEFS)),
+    call: assembled,
   },
+  { id: "load-loop/compose_named_loop_carried_types__a_loop_in_a_def_gets_the_carried_type_check", call: assembled, full: true },
 ])("$id", runCase);

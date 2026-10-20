@@ -16,8 +16,8 @@
  * in a block, is named as `notTextError` names it, and a field taking more than text (`azure.stop`)
  * keeps the validation error.
  *
- * Held here until T3-22: the harvested cases at the end, whose error the AGENT parse or build
- * raises, each under a comment naming the Python file it comes from, and the flows that assemble.
+ * Pinned at the end: the harvested cases whose error the AGENT parse or build raises, each under a
+ * comment naming the Python file it comes from, and the flows that assemble.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -394,10 +394,6 @@ test.each<CaseRow>([
   { id: "load-agent/compose_agent_mode_removed__steerable_agent_without_tools_loads", call: assembled },
   // tests/compose/test_agent_output_nesting.py
   { id: "load-agent/compose_agent_output_nesting__a_written_out_record_at_the_limit_loads", call: assembled },
-  // tests/compose/test_llm_config_values_load.py
-  { id: "load-agent/compose_llm_config_values_load__a_field_value_loads_as_a_template", call: assembled },
-  { id: "load-agent/compose_llm_config_values_load__a_whole_record_value_loads_as_a_binding", call: assembled },
-  { id: "load-agent/compose_llm_config_values_load__literal_base_url_beside_literal_azure_loads", call: assembled },
   // tests/compose/test_llm_config_values_types.py
   { id: "load-agent/compose_llm_config_values_types__provider_with_a_known_member_loads", call: assembled },
   // examples/

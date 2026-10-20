@@ -11,6 +11,7 @@
  * `::test_null_literal_input_field_read`, `::test_field_read_inside_a_builtin_argument`,
  * `::test_agent_variable_field_read`, `::test_human_input_prompt_field_read`,
  * `::test_human_input_question_field_read`, `::test_prompt_field_error_is_reported_once_per_ref`,
+ * `::test_prompt_inside_a_def_reads_unknown_field`,
  * `::test_readable_fields_still_load` (6), `::test_narrowed_input_reads_the_branch_member`,
  * `::test_defaulted_union_binding_hint_names_the_bound_source` and
  * `::test_transformed_union_binding_hint_names_no_bound_source`.
@@ -64,11 +65,8 @@
  * (its builtins registered with `registerTemplateFn` and put back in a `finally`, as Python's
  * `monkeypatch.setitem` does).
  *
- * The flows assemble with `assembleText` where Python calls `load_flow`. Each `defs:` entry a CALL,
- * MAP or LOOP calls is built by hand (`handChild`, since def bodies load in T3-22): `child` with the
- * def's `v` parameter, the map `child` with its `x` parameter, `body` with `st: !Rec3` returning
- * `{st: Rec3}`, and the partial `child` with a typed `a` and an opaque `b`. Inline LOOP bodies
- * assemble through the harness's private-child registry.
+ * The flows assemble with `assembleText` where Python calls `load_flow`; the `defs:` entries a
+ * CALL, MAP or LOOP calls resolve through the loader's scope.
  *
  * Changed: the CODE bodies are TS's, as the harvested cases spell them. A compared tag and its
  * close match are spelled `"byu"` / `did you mean "buy"?` (Python `'byu'` / `did you mean 'buy'?`),
@@ -77,11 +75,8 @@
  *
  * TS-only: the harvested `load-core/compose_field_read_sites__*` cases the reference validator, the
  * node-assert check, the flow-assert lowering and the type-table pass decide, pinned at the end,
- * with `full` (every frame and the notes) for `loop_while_reads_a_field_on_a_builtin_result`.
- *
- * Later (T3-22): `test_prompt_inside_a_def_reads_unknown_field`, with its case
- * `load-core/compose_field_read_sites__prompt_inside_a_def_reads_unknown_field` (a def body's own
- * assembly).
+ * with `full` (every frame and the notes) for `loop_while_reads_a_field_on_a_builtin_result` and
+ * `prompt_inside_a_def_reads_unknown_field`.
  *
  * Later (T4): `test_guarded_node_assert_runs`, `test_guarded_flow_assert_runs`, and the run halves
  * of the rows above.
@@ -89,20 +84,12 @@
 
 import { expect, test } from "bun:test";
 
-import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { registerTemplateFn, TEMPLATE_FNS } from "../../src/expr/builtins.ts";
-import { ValueContract } from "../../src/nodes/contracts.ts";
-import { readTypedefs, type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
-import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
-  assembledWith,
   assembleText,
   type CaseRow,
-  type ChildFlows,
-  handChild,
   loadError,
-  parametersFromYaml,
   runCase,
 } from "./declarations.ts";
 
@@ -140,19 +127,6 @@ const UNION_TYPES =
   "  B: {y: str}\n" +
   "  AB: Union(A, B)\n";
 
-/** Every typedef the flows here declare, for the hand-built children's parameters. */
-const REGISTRY: TypeRegistry = readTypedefs({
-  Rec: { a: "str" },
-  Rec3: { a: "str", b: "Optional(str)" },
-  Buy: { action: "Literal(buy)", qty: "int" },
-  Sell: { action: "Literal(sell)" },
-  Order: "Union(Buy, Sell)",
-  A: { x: "int" },
-  B: { y: "str" },
-  AB: "Union(A, B)",
-  Out: { st: "Rec3" },
-});
-
 /**
  * Return a flow built from the shared preamble and the given sections: the shared typedefs plus
  * `typedefs` lines, `defs`, the inputs (plus `inputs` lines), node `step`, then `nodes`, `output`
@@ -183,11 +157,11 @@ function agent(
   return text + `    prompt: "${prompt}"\n` + extra;
 }
 
-/** Assemble `text`, its `defs:` entries standing in as `children`. */
-const load = (text: string, children: ChildFlows = {}) => assembleText(text, "flow.yaml", { children });
+/** Assemble `text`. */
+const load = (text: string) => assembleText(text);
 
 /** Return the message of the `LoadError` assembling `text` throws. */
-const loadMessage = (text: string, children: ChildFlows = {}) => loadError(() => load(text, children)).message;
+const loadMessage = (text: string) => loadError(() => load(text)).message;
 
 /** A CODE node typed `output` reading the flow input `s`. */
 function producer(nodeId: string, output: string): string {
@@ -226,15 +200,6 @@ const count = (text: string, needle: string) => text.split(needle).length - 1;
 
 /** The 1-based line of `text` holding `needle`. */
 const lineOf = (text: string, needle: string) => text.split("\n").findIndex((line) => line.includes(needle)) + 1;
-
-/** A hand-built `child` def taking `v: !<typ>`, whose CODE node `inner` returns `str`. */
-function childOf(typ: string): ComposedFlow {
-  return handChild({
-    inputs: parametersFromYaml(`input:\n  v: !${typ}\n`, REGISTRY),
-    producers: { inner: new ValueContract(Type.scalar(ValueKind.STRING)) },
-    output: "${inner.output}",
-  });
-}
 
 /** The `defs:` text of a `child` taking `v: !<typ>`, as Python's flows write it. */
 function childText(typ: string): string {
@@ -304,6 +269,24 @@ test("adaptive brief field read is reported on the gate", () => {
     '      prompt: "${v.b}"\n';
   expect(loadMessage(flow(gate, "${h.output}"))).toContain(
     "node 'h' adaptive_questions.prompt: reference ${v.b} reads unknown field 'b' on record",
+  );
+});
+
+test("prompt inside a def reads unknown field", () => {
+  const defs =
+    "defs:\n" +
+    "  child:\n" +
+    "    input:\n      x: !Rec\n" +
+    "    nodes:\n" +
+    "      inner:\n" +
+    "        kind: agent\n" +
+    "        input:\n          x: ${input.x}\n" +
+    '        prompt: "${x.b}"\n' +
+    "    output: ${inner.output}\n";
+  const nodes = "  c:\n    kind: call\n    call: child\n    input:\n      x: ${step.output}\n";
+
+  expect(loadMessage(flow(nodes, "${c.output}", { defs }))).toContain(
+    "reference ${x.b} reads unknown field 'b' on record",
   );
 });
 
@@ -417,7 +400,7 @@ test.each(["Rec", "Rec3"])("a call node assert reads a field its binding lacks: 
     "    input:\n      v: ${step.output}\n" +
     "    asserts:\n      - \"v.b == 'x'\"\n";
   const text = flow(nodes, "${c.output}", { defs: childText(childType) });
-  expect(loadMessage(text, { child: childOf(childType) })).toContain(
+  expect(loadMessage(text)).toContain(
     "node 'c' assert: reference ${v.b} reads unknown field 'b' on record",
   );
 });
@@ -433,15 +416,6 @@ const LOOP_NAMED_BODY =
   "        output:\n          st: Rec3\n" +
   '        code: "return ({st: {a: \\"x\\", b: \\"y\\"}})"\n' +
   "    output: ${bump.output}\n";
-
-/** The hand-built `body` def: `st: !Rec3` into `bump`, whose `{st: Rec3}` it returns. */
-const BODY = {
-  body: handChild({
-    inputs: parametersFromYaml("input:\n  st: !Rec3\n", REGISTRY),
-    producers: { bump: new ValueContract(typeFor("Out", REGISTRY)) },
-    output: "${bump.output}",
-  }),
-};
 
 /** A LOOP over the named `body` (carries `Rec3`), seeded with `step`'s `Rec`. */
 function namedLoop(assertion: string): string {
@@ -474,11 +448,11 @@ const LOOPS: [string, (assertion: string) => string][] = [
 ];
 
 test.each(LOOPS)("a loop assert reads the carried field (load half): %s", (_id, build) => {
-  load(build("st.b == null or st.b == 'y'"), BODY);
+  load(build("st.b == null or st.b == 'y'"));
 });
 
 test.each(LOOPS)("a loop assert reads a field neither seed nor carried has: %s", (_id, build) => {
-  expect(loadMessage(build("st.zz == 'x'"), BODY)).toContain(
+  expect(loadMessage(build("st.zz == 'x'"))).toContain(
     "node 'drive' assert: reference ${st.zz} reads unknown field 'zz'",
   );
 });
@@ -636,7 +610,7 @@ test("a call node assert's tag checks narrow its local", () => {
     "  c:\n    kind: call\n    call: child\n" +
     "    input:\n      v: ${d.output}\n" +
     "    asserts:\n      - \"v.action == 'buy' and v.qty > 0\"\n";
-  load(flow(nodes, "${c.output}", { defs: childText("Order") }), { child: childOf("Order") });
+  load(flow(nodes, "${c.output}", { defs: childText("Order") }));
 });
 
 test("an assert reading many typed inputs loads", () => {
@@ -761,7 +735,7 @@ test("a call node assert's member-only hint compares the tag", () => {
     "  c:\n    kind: call\n    call: child\n" +
     "    input:\n      v: ${d.output}\n" +
     '    asserts:\n      - "v.qty > 0"\n';
-  const message = loadMessage(flow(nodes, "${c.output}", { defs: childText("Order") }), { child: childOf("Order") });
+  const message = loadMessage(flow(nodes, "${c.output}", { defs: childText("Order") }));
   expect(message).toContain(
     "node 'c' assert: reference ${v.qty} reads field 'qty', which only union members with action buy " +
       'have; check the member first with `v.action == "buy" and ...`',
@@ -776,7 +750,7 @@ test("a call node assert's member-only hint on an untagged union names a case", 
     "    input:\n      v: ${d.output}\n" +
     '    asserts:\n      - "v.x > 0"\n';
   const text = flow(nodes, "${c.output}", { typedefs: UNION_TYPES, defs: childText("AB") });
-  expect(loadMessage(text, { child: childOf("AB") })).toContain(
+  expect(loadMessage(text)).toContain(
     "node 'c' assert: reference ${v.x} reads field 'x', which only 1 of 2 union members have; " +
       "check the member with isinstance(d.output, <Type>) in a case first",
   );
@@ -827,15 +801,6 @@ const PARTIAL_CHILD_TEXT =
   "      a: ${typed.output}\n" +
   "      b: ${untyped.output}\n";
 
-/** The hand-built partial `child`: a record of a typed `a` and an opaque `b`. */
-const PARTIAL_CHILD = {
-  child: handChild({
-    inputs: parametersFromYaml("input:\n  x: !str\n", REGISTRY),
-    producers: { typed: new ValueContract(Type.scalar(ValueKind.STRING)), untyped: null },
-    output: { a: "${typed.output}", b: "${untyped.output}" },
-  }),
-};
-
 /**
  * A CALL to `child` (a partial record: typed `a`, opaque `b`), and a CODE node asserting
  * `assertion` on it through the local name `v`.
@@ -849,10 +814,10 @@ function partialRead(assertion: string): string {
 }
 
 test("partial record local root reads (load half)", () => {
-  expect(loadMessage(partialRead("v.zz == 1"), PARTIAL_CHILD)).toContain(
+  expect(loadMessage(partialRead("v.zz == 1"))).toContain(
     "node 'c' assert: reference ${v.zz} reads unknown field 'zz' on record",
   );
-  load(partialRead("v.a == 'a' and v.b.deep.k == 1"), PARTIAL_CHILD);
+  load(partialRead("v.a == 'a' and v.b.deep.k == 1"));
 });
 
 // ---------- flow asserts ----------
@@ -1047,7 +1012,7 @@ test("a loop while reads a field on a builtin result", () => {
     "  drive:\n    kind: loop\n    call: body\n" +
     "    while: ${upper(st.a).f == 'x'}\n    max: 3\n" +
     "    input:\n      st: ${step.output}\n";
-  expect(loadMessage(flow(nodes, "${drive.output}", { defs: LOOP_NAMED_BODY }), BODY)).toContain(
+  expect(loadMessage(flow(nodes, "${drive.output}", { defs: LOOP_NAMED_BODY }))).toContain(
     `loop node 'drive' while: ${TEXT_FIELD("upper")}`,
   );
 });
@@ -1063,15 +1028,6 @@ const MAP_CHILD_TEXT =
   "        output: str\n" +
   "        code: return 'x'\n" +
   "    output: ${inner.output}\n";
-
-/** The hand-built map `child`: `x: !str` into `inner`, whose `str` it returns. */
-const MAP_CHILD = {
-  child: handChild({
-    inputs: parametersFromYaml("input:\n  x: !str\n", new Map()),
-    producers: { inner: new ValueContract(Type.scalar(ValueKind.STRING)) },
-    output: "${inner.output}",
-  }),
-};
 
 test.each([
   [
@@ -1095,7 +1051,7 @@ test.each([
     "node 'c' input 'v' call(child) argument 'x' from",
   ],
 ])("scanned sites read a field on a builtin result once: %s", (_id, nodes, output, site) => {
-  const message = loadMessage(flow(nodes, output, { defs: MAP_CHILD_TEXT }), MAP_CHILD);
+  const message = loadMessage(flow(nodes, output, { defs: MAP_CHILD_TEXT }));
   expect(message).toContain(site);
   expect(count(message, TEXT_FIELD("upper"))).toBe(1);
 });
@@ -1147,7 +1103,7 @@ test.each<CaseRow>([
     "transformed_union_binding_hint_names_no_bound_source",
     "union_member_field_read_outside_a_branch",
   ].map((name) => ({ id: `${CASES}${name}`, call: assembled })),
-  { id: `${CASES}call_node_assert_reads_a_field_its_binding_lacks`, call: assembledWith({ child: childOf("Rec") }) },
+  { id: `${CASES}call_node_assert_reads_a_field_its_binding_lacks`, call: assembled },
   { id: `${CASES}flow_assert_compares_with_a_non_tag`, call: assembled },
   { id: `${CASES}flow_assert_read_before_its_check`, call: assembled },
   { id: `${CASES}flow_assert_read_on_the_other_member`, call: assembled },
@@ -1158,7 +1114,7 @@ test.each<CaseRow>([
   { id: `${CASES}impossible_flow_assert_check`, call: assembled },
   { id: `${CASES}impossible_node_assert_check`, call: assembled },
   { id: `${CASES}loop_assert_reads_an_unknown_carried_field`, call: assembled },
-  { id: `${CASES}member_only_hint_on_an_untagged_union`, call: assembledWith({ child: childOf("AB") }) },
+  { id: `${CASES}member_only_hint_on_an_untagged_union`, call: assembled },
   { id: `${CASES}node_assert_check_no_value_fits`, call: assembled },
   { id: `${CASES}node_assert_compares_with_a_non_tag`, call: assembled },
   { id: `${CASES}node_assert_negated_check_always_true`, call: assembled },
@@ -1166,5 +1122,6 @@ test.each<CaseRow>([
   { id: `${CASES}node_assert_read_before_its_check`, call: assembled },
   { id: `${CASES}node_assert_read_on_the_other_member`, call: assembled },
   { id: `${CASES}node_assert_reads_unknown_input_field`, call: assembled },
-  { id: `${CASES}loop_while_reads_a_field_on_a_builtin_result`, call: assembledWith(BODY), full: true },
+  { id: `${CASES}prompt_inside_a_def_reads_unknown_field`, call: assembled, full: true },
+  { id: `${CASES}loop_while_reads_a_field_on_a_builtin_result`, call: assembled, full: true },
 ])("assemble: $id", runCase);

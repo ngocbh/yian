@@ -17,19 +17,13 @@
  * `test_node_assert_on_an_exact_record_output_checks_typed_fields`, `test_reads_the_type_allows_still_load`,
  * `test_untyped_output_reads_still_load`, `test_flow_input_field_reads_are_checked`,
  * `test_valid_flow_input_reads_still_load`, `test_inline_body_input_field_reads_are_checked`,
- * `test_map_item_field_reads_are_checked` and `test_map_item_reads_the_type_allows_still_load`.
- * The assert rows pin the whole message where Python matches a fragment.
- *
- * Changed: each `defs:` entry is a hand-built child (`handChild`) with the def's signature and
- * output contract.
+ * `test_map_item_field_reads_are_checked`, `test_map_item_reads_the_type_allows_still_load` and
+ * `test_defs_body_input_field_reads_are_checked`. The assert rows pin the whole message where
+ * Python matches a fragment.
  *
  * Pinned at the end, the harvested `load-core/compose_field_reads__*` cases the reference validator
- * decides, each def built by hand (`assembledWith`), and the assert checks'
- * `load-core/compose_field_reads__field_on_str_in_a_flow_assert` and
+ * decides, and the assert checks' `load-core/compose_field_reads__field_on_str_in_a_flow_assert` and
  * `load-core/compose_field_reads__node_assert_reads_a_field_of_a_str_field`.
- *
- * Later (T3-22): `test_defs_body_input_field_reads_are_checked` (a def body's own assembly; a
- * hand-built child has no bindings to check).
  *
  * Later (T4): `test_optional_record_field_reads_null_when_the_whole_value_is_null` and
  * `test_case_when_on_a_missing_optional_record_input_is_falsy` (flow runs), with their cases
@@ -39,25 +33,11 @@
 
 import { expect, test } from "bun:test";
 
-import { ValueContract } from "../../src/nodes/contracts.ts";
-import { typeFor } from "../../src/typesys/types.ts";
-import {
-  assembled,
-  assembledWith,
-  assembleText,
-  type CaseRow,
-  type ChildFlows,
-  handChild,
-  loadError,
-  parametersFromYaml,
-  runCase,
-} from "./declarations.ts";
-
-const STR = new ValueContract(typeFor("str", new Map()));
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
 
 /**
  * A flow with one CODE node `step` typed `stepOutput`, plus `rest` (YAML tail); `preamble` holds
- * top-level blocks placed before `input:`, such as `typedefs:`.
+ * top-level blocks placed before `input:`, such as `typedefs:` or `defs:`.
  */
 function flow(stepOutput: string, rest: string, preamble = ""): string {
   return (
@@ -75,11 +55,11 @@ function flow(stepOutput: string, rest: string, preamble = ""): string {
   );
 }
 
-/** Load `text` with `children` as its defs. */
-const load = (text: string, children: ChildFlows = {}) => assembleText(text, "flow.yaml", { children });
+/** Load `text`. */
+const load = (text: string) => assembleText(text);
 
-/** Return the message of the `LoadError` loading `text` with `children` as its defs raises. */
-const failure = (text: string, children: ChildFlows = {}) => loadError(() => load(text, children)).message;
+/** Return the message of the `LoadError` loading `text` raises. */
+const failure = (text: string) => loadError(() => load(text)).message;
 
 test.each([
   ["str", "str"],
@@ -167,14 +147,17 @@ test("an undeclared record field keeps its message", () => {
   );
 });
 
-/** The `each` def: input `v: !str` into `inner`, whose `str` it returns. */
-const each = (): ChildFlows => ({
-  each: handChild({
-    inputs: parametersFromYaml("input:\n  v: !str\n", new Map()),
-    producers: { inner: STR },
-    output: "${inner.output}",
-  }),
-});
+const EACH_DEFS =
+  "defs:\n" +
+  "  each:\n" +
+  "    input:\n      v: !str\n" +
+  "    nodes:\n" +
+  "      inner:\n" +
+  "        kind: code\n" +
+  "        input:\n          v: ${input.v}\n" +
+  "        output: str\n" +
+  "        code: return 'x'\n" +
+  "    output: ${inner.output}\n";
 
 test("a field on str in map over is a load error", () => {
   const text = flow(
@@ -185,8 +168,9 @@ test("a field on str in map over is a load error", () => {
       "    over: ${step.output.items}\n" +
       "    input:\n      v: ${item}\n" +
       "output: ${m.output}\n",
+    EACH_DEFS,
   );
-  expect(failure(text, each())).toContain(
+  expect(failure(text)).toContain(
     "node 'm' map over: reference ${step.output.items} reads field 'items' on type str",
   );
 });
@@ -196,22 +180,25 @@ test("a field on str in wait until is a load error", () => {
   expect(failure(text)).toContain("node 'settle' wait until: reference ${step.output.at} reads field 'at' on type str");
 });
 
-const BARE_CHILD = "id: p\nname: p\ninput:\n  s: !str\n  xs: !list(str)\n";
-
-/** The `child` def: input `s: !str` into `step`, whose `str` it returns. */
-const bareChild = (): ChildFlows => ({
-  child: handChild({
-    inputs: parametersFromYaml("input:\n  s: !str\n", new Map()),
-    producers: { step: STR },
-    output: "${step.output}",
-  }),
-});
+const BARE_CHILD =
+  "id: p\nname: p\n" +
+  "input:\n  s: !str\n  xs: !list(str)\n" +
+  "defs:\n" +
+  "  child:\n" +
+  "    input:\n      s: !str\n" +
+  "    nodes:\n" +
+  "      step:\n" +
+  "        kind: code\n" +
+  "        input:\n          v: ${input.s}\n" +
+  "        output: str\n" +
+  "        code: return 'x'\n" +
+  "    output: ${step.output}\n";
 
 test("a field on a bare call output is a load error", () => {
   const text =
     BARE_CHILD +
     "nodes:\n  c:\n    kind: call\n    call: child\n    input:\n      s: ${input.s}\noutput: ${c.output.order}\n";
-  expect(failure(text, bareChild())).toContain(
+  expect(failure(text)).toContain(
     "flow output from: reference ${c.output.order} reads field 'order' on type str, which has no fields",
   );
 });
@@ -221,7 +208,7 @@ test("a field on a map output is a load error", () => {
     BARE_CHILD +
     "nodes:\n  m:\n    kind: map\n    call: child\n    over: ${input.xs}\n    input:\n      s: ${item}\n" +
     "output: ${m.output.first}\n";
-  expect(failure(text, bareChild())).toContain("reference ${m.output.first} reads field 'first' on type list(str)");
+  expect(failure(text)).toContain("reference ${m.output.first} reads field 'first' on type list(str)");
 });
 
 test("a field on str in a flow assert is a load error", () => {
@@ -232,27 +219,38 @@ test("a field on str in a flow assert is a load error", () => {
   );
 });
 
+// A child whose output is a partial record: `a` is typed, `b` comes from an untyped CODE node.
 const PARTIAL_CHILD =
-  "id: p\nname: p\ninput:\n  s: !str\n" +
-  "nodes:\n  c:\n    kind: call\n    call: child\n    input:\n      s: ${input.s}\n";
-
-/** The `child` def whose output is a partial record: `a` from a `str` node, `b` from an untyped one. */
-const partialChild = (): ChildFlows => ({
-  child: handChild({
-    inputs: parametersFromYaml("input:\n  s: !str\n", new Map()),
-    producers: { typed: STR, untyped: null },
-    output: { a: "${typed.output}", b: "${untyped.output}" },
-  }),
-});
+  "id: p\nname: p\n" +
+  "input:\n  s: !str\n" +
+  "defs:\n" +
+  "  child:\n" +
+  "    input:\n      s: !str\n" +
+  "    nodes:\n" +
+  "      typed:\n" +
+  "        kind: code\n" +
+  "        input:\n          v: ${input.s}\n" +
+  "        output: str\n" +
+  "        code: return 'x'\n" +
+  "      untyped:\n" +
+  "        kind: code\n" +
+  "        input:\n          v: ${input.s}\n" +
+  '        code: "return {k: 1}"\n' +
+  "    output:\n      a: ${typed.output}\n      b: ${untyped.output}\n" +
+  "nodes:\n" +
+  "  c:\n" +
+  "    kind: call\n" +
+  "    call: child\n" +
+  "    input:\n      s: ${input.s}\n";
 
 test("a partial record output checks names and typed fields", () => {
-  expect(failure(PARTIAL_CHILD + "output: ${c.output.zzz}\n", partialChild())).toContain(
+  expect(failure(PARTIAL_CHILD + "output: ${c.output.zzz}\n")).toContain(
     "reads unknown field 'zzz' on record",
   );
-  expect(failure(PARTIAL_CHILD + "output: ${c.output.a.x}\n", partialChild())).toContain(
+  expect(failure(PARTIAL_CHILD + "output: ${c.output.a.x}\n")).toContain(
     "reference ${c.output.a.x} reads field 'x' on type str",
   );
-  load(PARTIAL_CHILD + "output: ${c.output.b.anything}\n", partialChild()); // opaque field
+  load(PARTIAL_CHILD + "output: ${c.output.b.anything}\n"); // opaque field
 });
 
 test("a node assert on a partial record output checks typed fields", () => {
@@ -261,7 +259,7 @@ test("a node assert on a partial record output checks typed fields", () => {
       "    input:\n      s: ${input.s}\n",
       "    input:\n      s: ${input.s}\n    asserts:\n      - output.a.x == 1\n",
     ) + "output: ${c.output.a}\n";
-  expect(failure(text, partialChild())).toBe(
+  expect(failure(text)).toBe(
     "flow has invalid node asserts:\n" +
       "  node 'c' assert: reference ${output.a.x} reads field 'x' on type str, which has no fields",
   );
@@ -332,6 +330,29 @@ test.each([["${input.r.a}"], ["${input.o.any.depth}"], ["${input.s}"], ["${input
   },
 );
 
+test("defs body input field reads are checked", () => {
+  // A named `defs:` body's own typed inputs are checked.
+  const text =
+    "id: p\nname: p\ninput:\n  s: !str\n" +
+    "defs:\n" +
+    "  child:\n" +
+    "    input:\n      s: !str\n" +
+    "    nodes:\n" +
+    "      step:\n" +
+    "        kind: code\n" +
+    "        input:\n          v: ${input.s.first}\n" +
+    "        output: str\n" +
+    "        code: return 'x'\n" +
+    "    output: ${step.output}\n" +
+    "nodes:\n" +
+    "  c:\n" +
+    "    kind: call\n" +
+    "    call: child\n" +
+    "    input:\n      s: ${input.s}\n" +
+    "output: ${c.output}\n";
+  expect(failure(text)).toContain("reference ${input.s.first} reads field 'first' on type str");
+});
+
 test("inline body input field reads are checked", () => {
   const text =
     "id: p\nname: p\ninput:\n  s: !str\n" +
@@ -356,6 +377,7 @@ function mapFlow(overInput: string, itemRef: string): string {
     "id: p\nname: p\n" +
     "typedefs:\n  Rec: {a: str}\n" +
     `input:\n  xs: !${overInput}\n` +
+    EACH_DEFS +
     "nodes:\n" +
     "  m:\n" +
     "    kind: map\n" +
@@ -371,7 +393,7 @@ test.each([
   ["list(Rec)", "${item.b}", "reads unknown field 'b' on record"],
   ["Optional(list(Rec))", "${item.b}", "reads unknown field 'b' on record"],
 ])("map item field reads are checked: %s %s", (overInput, itemRef, expected) => {
-  expect(failure(mapFlow(overInput, itemRef), each())).toContain(
+  expect(failure(mapFlow(overInput, itemRef))).toContain(
     `node 'm' map input 'v' from: reference ${itemRef} ${expected}`,
   );
 });
@@ -383,7 +405,7 @@ test.each([
   ["list(Any)", "${item.anything}"],
   ["Any", "${item.anything}"], // over: not a proven list
 ])("map item reads the type allows still load: %s %s", (overInput, itemRef) => {
-  load(mapFlow(overInput, itemRef), each());
+  load(mapFlow(overInput, itemRef));
 });
 
 // ---------- harvested conformance cases ----------
@@ -403,6 +425,6 @@ test.each<CaseRow>([
   ].map((name) => ({ id: `load-core/compose_field_reads__${name}`, call: assembled })),
   ...["field_on_str_in_a_map_over", "map_item_reads_an_unknown_field"].map((name) => ({
     id: `load-core/compose_field_reads__${name}`,
-    call: assembledWith(each()),
+    call: assembled,
   })),
 ])("assemble: $id", runCase);

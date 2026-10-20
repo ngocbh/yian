@@ -1,8 +1,9 @@
 /**
  * An `env:` value nested past the limit, holding itself through a recursive alias, or holding
- * a lone surrogate is a located load error: a port of the checker half of
- * `tests/compose/test_env_nesting.py`, through `checkEnvValues` over a parsed document's flow
- * `env:`, and the written-value check `checkWrittenValue`.
+ * a lone surrogate is a located load error: a port of `tests/compose/test_env_nesting.py`, through
+ * `loadFlow` at each site (flow, node, multi-node and single-node `defs:` entries, compact flow),
+ * and TS-only through `checkEnvValues` over a parsed document's flow `env:` and the written-value
+ * check `checkWrittenValue`.
  *
  * Each `env:` value is checked with the counting the run-time check applies to a value,
  * whether YAML text or aliases built it, so a 1000-link alias chain fails (under a raised
@@ -16,13 +17,23 @@
  * and before the cycle check (`K: &a ["\uD800", *a]` reports the surrogate at `[0]`, where
  * Python loads the text and reports the cycle at `[1]`).
  *
+ * Ported through `loadFlow`: `test_env_value_over_a_1000_link_alias_chain_is_a_located_load_error`,
+ * `test_flow_env_value_past_the_limit_as_text_is_a_located_load_error`,
+ * `test_env_value_follows_the_configured_limit`,
+ * `test_flow_env_nesting_is_checked_before_max_tool_iterations`,
+ * `test_env_value_holding_itself_is_a_located_load_error`,
+ * `test_env_mapping_holding_itself_is_a_located_load_error`, `test_env_scalar_value_loads`, and the
+ * load halves of `test_env_value_at_the_limit_loads_and_runs` and
+ * `test_env_value_repeating_an_alias_loads_and_runs`. The CODE reference is TS's
+ * (`./fixtures/compose_codefns.ts:echo`). The other rows are ported through `checkEnvValues`.
+ *
+ * Changed: Python's check that no `RecursionError` is in the error's chain is left out.
+ *
  * Not ported: the `!!pairs` row of `test_flow_env_cycle_names_the_entry_that_refers_back`
  * (TS refuses `!!pairs`).
  *
- * Later (T3-22): the per-site message prefixes (node, `defs:` entries, compact flow),
- * `test_flow_env_nesting_is_checked_before_max_tool_iterations`, and the run halves of
- * `test_env_value_at_the_limit_loads_and_runs` and
- * `test_env_value_repeating_an_alias_loads_and_runs` need the loader and the run.
+ * Later (T4-8): the run halves of `test_env_value_at_the_limit_loads_and_runs` and
+ * `test_env_value_repeating_an_alias_loads_and_runs`.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -33,6 +44,7 @@ import { SourceDocument } from "../../src/compose/source/index.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { TypeCheckError, type Value } from "../../src/typesys/values.ts";
+import { loadConformanceFlow, loadErrorAsync } from "./declarations.ts";
 
 const MAX_VALUE_NESTING = BUILTIN.maxValueNesting;
 const LIMIT = `value nests deeper than ${MAX_VALUE_NESTING} levels`;
@@ -272,5 +284,133 @@ describe("lone surrogates", () => {
 
   test("the surrogate check runs before the cycle check", () => {
     expectError(flowEnv(["", '&a ["\\uD800", *a]']), "flow env 'K' at [0]", SURROGATE);
+  });
+});
+
+// ---------- each site, through `loadFlow` ----------
+
+const ECHO = "    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n";
+
+/** A flow builder putting `value` at `env: {K: value}` on one site, `header` first. */
+type SiteFlow = (header: string, value: string) => string;
+
+/** Return a flow whose flow `env:` sets `K` to `value`, with a node. */
+const loadedFlowEnv: SiteFlow = (header, value) =>
+  `${header}id: f\nname: f\nenv:\n  K: ${value}\nnodes:\n  use:\n${ECHO}` +
+  "    input:\n      topic: x\noutput: ${use.output}\n";
+
+/** Return a flow whose node `use` has `env:` setting `K` to `value`. */
+const nodeEnv: SiteFlow = (header, value) =>
+  `${header}id: f\nname: f\nnodes:\n  use:\n${ECHO}    env:\n      K: ${value}\n` +
+  "    input:\n      topic: x\noutput: ${use.output}\n";
+
+/** Return a flow that calls multi-node def `d`, whose `env:` sets `K` to `value`. */
+const multiDefEnv: SiteFlow = (header, value) =>
+  `${header}id: f\nname: f\ndefs:\n  d:\n    env:\n      K: ${value}\n` +
+  "    nodes:\n      keep:\n        kind: code\n" +
+  "        code: ./fixtures/compose_codefns.ts:echo\n" +
+  "        input:\n          topic: x\n    output: ${keep.output}\n" +
+  "nodes:\n  use:\n    kind: call\n    call: d\noutput: ${use.output}\n";
+
+/** Return a flow that calls single-node def `d`, whose `env:` sets `K` to `value`. */
+const singleDefEnv: SiteFlow = (header, value) =>
+  `${header}id: f\nname: f\ndefs:\n  d:\n${ECHO}    env:\n      K: ${value}\n` +
+  "    input:\n      topic: !str\n" +
+  "nodes:\n  use:\n    kind: call\n    call: d\n    input:\n      topic: x\n" +
+  "output: ${use.output}\n";
+
+/** Return a compact (single-node) flow whose `env:` sets `K` to `value`. */
+const compactEnv: SiteFlow = (header, value) =>
+  `${header}id: f\nname: f\nenv:\n  K: ${value}\n` +
+  "kind: code\ncode: ./fixtures/compose_codefns.ts:echo\ninput:\n  topic: !str x\n";
+
+/** Site name to (flow builder, message prefix, located line). */
+const SITES: [string, SiteFlow, string, string][] = [
+  ["flow", loadedFlowEnv, "flow env 'K' at ", "  K:"],
+  ["node", nodeEnv, "node 'use' env 'K' at ", "      K:"],
+  ["multi-node-def", multiDefEnv, "defs entry 'd': env 'K' at ", "      K:"],
+  ["single-node-def", singleDefEnv, "defs entry 'd': node 'd' env 'K' at ", "      K:"],
+  ["compact", compactEnv, "node 'f' env 'K' at ", "  K:"],
+];
+
+/** Assert loading `text` fails with the limit error for `where` at the line `linePrefix`. */
+async function expectLoadLimitError(text: string, where: string, linePrefix: string): Promise<void> {
+  const { diagnostic } = await loadErrorAsync(loadConformanceFlow(text));
+  expect(diagnostic.message.startsWith(where)).toBe(true);
+  expect(diagnostic.message).toContain(LIMIT);
+  expect(diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, linePrefix));
+}
+
+/** Assert loading `text` fails with exactly `<start>: <cycle>` at the line `linePrefix`. */
+async function expectLoadCycleError(text: string, start: string, linePrefix: string): Promise<void> {
+  const { diagnostic } = await loadErrorAsync(loadConformanceFlow(text));
+  expect(diagnostic.message).toBe(`${start}: ${CYCLE}`);
+  expect(diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, linePrefix));
+}
+
+describe("loaded sites", () => {
+  describe.each(SITES)("%s", (_site, flow, where, line) => {
+    test.each([
+      ["list", listAlias],
+      ["record", recordAlias],
+    ])("an env value over a 1000-link %s alias chain is a located load error", async (_, form) => {
+      await expectLoadLimitError(flow(...form(1000)), where, line);
+    });
+
+    test.each([
+      ["text", list],
+      ["alias", listAlias],
+    ])("an env value at the limit as %s loads", async (_, form) => {
+      await loadConformanceFlow(flow(...form(MAX_VALUE_NESTING)));
+    });
+
+    test("an env value holding itself is a located load error", async () => {
+      await expectLoadCycleError(flow("", "&a [*a]"), `${where}[0]`, line);
+    });
+  });
+
+  test("a flow env value past the limit as text is a located load error", async () => {
+    await expectLoadLimitError(loadedFlowEnv(...list(MAX_VALUE_NESTING + 1)), "flow env 'K' at ", "  K:");
+  });
+
+  test("an env value follows the configured limit", async () => {
+    install({ ...BUILTIN, maxYamlNodes: 10_000_000, maxValueNesting: 5 });
+
+    await loadConformanceFlow(loadedFlowEnv(...list(5)));
+    const error = await loadErrorAsync(loadConformanceFlow(loadedFlowEnv(...list(6))));
+    expect(error.diagnostic.message).toContain("value nests deeper than 5 levels");
+  });
+
+  test("flow env nesting is checked before max_tool_iterations", async () => {
+    const [header, value] = listAlias(1000);
+    const text =
+      `${header}id: f\nname: f\nenv:\n  max_tool_iterations: ${value}\nnodes:\n` +
+      `  use:\n${ECHO}    input:\n      topic: x\noutput: \${use.output}\n`;
+
+    await expectLoadLimitError(text, "flow env 'max_tool_iterations' at ", "  max_tool_iterations:");
+  });
+
+  /** Return a flow whose node `use` has the one-line `env:` mapping `env`. */
+  const nodeEnvInline = (env: string) =>
+    `id: f\nname: f\nnodes:\n  use:\n${ECHO}    env: ${env}\n` + "    input:\n      topic: x\noutput: ${use.output}\n";
+
+  /** Return a flow whose flow `env:` is the one-line mapping `env`, with a node. */
+  const flowEnvInlineLoaded = (env: string) =>
+    `id: f\nname: f\nenv: ${env}\nnodes:\n  use:\n${ECHO}` + "    input:\n      topic: x\noutput: ${use.output}\n";
+
+  test.each([
+    ["flow", flowEnvInlineLoaded, "flow env 'K'", "env:"],
+    ["node", nodeEnvInline, "node 'use' env 'K'", "    env:"],
+  ] as const)("an env mapping holding itself is a located load error (%s)", async (_, flow, where, line) => {
+    await expectLoadCycleError(flow("&e {K: *e}"), `${where} at K`, line);
+    await expectLoadCycleError(flow("&e {K: [*e]}"), `${where} at [0].K`, line);
+  });
+
+  test("an env value repeating an alias loads", async () => {
+    await loadConformanceFlow("x-anchors: [&s [1, 2]]\n" + loadedFlowEnv("", "[*s, *s]"));
+  });
+
+  test("an env scalar value loads", async () => {
+    await loadConformanceFlow(loadedFlowEnv("", "1"));
   });
 });

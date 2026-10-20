@@ -6,14 +6,14 @@
  * document has no repeated key (Python's `repeated_key` is the int `17`); the non-text key still
  * fails first. The `x-meta` value of the `on`/`true` row has the text key `true`.
  *
- * Later (T3-22): the compiled-nodes check of `test_merged_keys_may_be_overridden`, which loads
- * the flow; its `parseFile` half is here.
+ * TS-only: the `parseFile` half of `test_merged_keys_may_be_overridden`, beside its loaded half.
  *
  * The harvested `yaml/compose_duplicate_keys__*` cases are pinned at the end.
  */
 
 import { afterEach, expect, test } from "bun:test";
 
+import { loadFlow } from "../../src/compose/loader.ts";
 import { parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
@@ -81,7 +81,7 @@ test.each([
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(line);
 });
 
-test("merged keys may be overridden", () => {
+test("merged keys may be overridden", async () => {
   const text = `id: f
 name: f
 x-base: &base
@@ -97,8 +97,10 @@ nodes:
 output: \${a.output}
 `;
 
-  const f = parseFile(parseSourceDocument(text, "<flow>"));
+  const loaded = await loadFlow(text);
 
+  expect(loaded.compiled.nodes.has("a")).toBe(true);
+  const f = parseFile(parseSourceDocument(text, "<flow>"));
   expect(f.nodes["a"]).toEqual({ kind: "code", code: "return 2", outputs: "int" });
 });
 

@@ -8,8 +8,8 @@
  * TS-only: a `retries:` past `Number.MAX_SAFE_INTEGER` is refused; `build` passes the title and
  * the retries to the node.
  *
- * Held here until T3-22: the harvested flows at the end that assemble, each under a comment naming
- * where it comes from.
+ * Pinned at the end: the harvested flows that assemble, each under a comment naming where it comes
+ * from.
  */
 
 import { describe, expect, test } from "bun:test";

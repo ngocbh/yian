@@ -37,10 +37,7 @@
  * `load-types/compose_any_flows__a_map_over_a_mixed_literal_list_checks_each_element` and
  * `load-types/compose_any_flows__an_untyped_seed_rejects_an_optional_any_body_field`.
  *
- * Changed: the `child` and `mk_any` defs are built by hand (`handChild`: the def's parameters read
- * from its `input:` text, its nodes as producers with their output contracts, `mk_any`'s output a
- * `Binding` declared `Any`), since def bodies load in T3-22. Rows asserting fragments pin the
- * whole message. CODE bodies are TS; load doesn't run them.
+ * Changed: rows asserting fragments pin the whole message. CODE bodies are TS; load doesn't run them.
  *
  * Not ported (not T3-19 rows): `test_a_typed_any_literal_loads_and_runs` (4) and
  * `test_a_null_any_literal_is_a_load_error`, decided by the tags reader (the null row's case is
@@ -65,23 +62,10 @@
 
 import { afterEach, expect, test } from "bun:test";
 
-import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { forget } from "../../src/defaults.ts";
-import { Binding, ValueContract } from "../../src/nodes/contracts.ts";
-import { Type, ValueKind } from "../../src/typesys/values.ts";
-import {
-  assembled,
-  assembledWith,
-  assembleText,
-  handChild,
-  loadError,
-  parametersFromYaml,
-  runCase,
-} from "./declarations.ts";
+import { assembled, assembleText, loadError, runCase } from "./declarations.ts";
 
 afterEach(() => forget());
-
-const STR = new ValueContract(Type.scalar(ValueKind.STRING));
 
 /**
  * A flow taking `s: !str` whose CODE node `mk` returns `code`, typed `output` (untyped when
@@ -106,20 +90,9 @@ const childDef = (name: string, inputType: string) =>
   "        input:\n          x: ${input.x}\n        output: str\n" +
   "        code: return JSON.stringify(inputs['x'])\n    output: ${n.output}\n";
 
-/** The `child` def built by hand: input `x: !<inputType>`, one `n: str` producer, returned. */
-const child = (inputType: string) =>
-  handChild({
-    inputs: parametersFromYaml(`input:\n  x: !${inputType}\n`, new Map()),
-    producers: { n: STR },
-    output: "${n.output}",
-  });
-
 /** A CALL node `nodeId` calling `callee` with `x: <binding>`. */
 const call = (binding: string, nodeId = "c", callee = "child") =>
   `  ${nodeId}:\n    kind: call\n    call: ${callee}\n    input:\n      x: ${binding}\n`;
-
-/** Assemble `text` with `children` as its defs. */
-const load = (text: string, children: Record<string, ComposedFlow>) => assembleText(text, "flow.yaml", { children });
 
 // ---------- field reads on Any ----------
 
@@ -171,7 +144,7 @@ test.each([
     head: `defs:\n${childDef("child", "str")}`,
   });
 
-  load(text, { child: child("str") });
+  assembleText(text);
 });
 
 test("a str output into a child Any input loads and runs (loads)", () => {
@@ -181,7 +154,7 @@ test("a str output into a child Any input loads and runs (loads)", () => {
     head: `defs:\n${childDef("child", "Any")}`,
   });
 
-  load(text, { child: child("Any") });
+  assembleText(text);
 });
 
 test("an optional str output into a child Any input is a load error", () => {
@@ -190,7 +163,7 @@ test("an optional str output into a child Any input is a load error", () => {
     head: `defs:\n${childDef("child", "Any")}`,
   });
 
-  const error = loadError(() => load(text, { child: child("Any") }));
+  const error = loadError(() => assembleText(text));
 
   expect(error.message).toBe("call node 'c': binding 'x' — child expects 'Any', source is 'Optional(str)'");
 });
@@ -213,13 +186,13 @@ function narrowed(bindingNode: string): string {
 }
 
 test("an untagged Any into a child str input loads inside an isinstance branch (loads)", () => {
-  load(narrowed(call("${mk.output}", "go")), { child: child("str") });
+  assembleText(narrowed(call("${mk.output}", "go")));
 });
 
 test("the same untagged wiring outside the branch is a load error", () => {
   const text = narrowed(call("${mk.output}", "go") + call("${mk.output}", "c2"));
 
-  const message = loadError(() => load(text, { child: child("str") })).message;
+  const message = loadError(() => assembleText(text)).message;
 
   // `go` is inside the branch, so only `c2` fails.
   expect(message).toBe(
@@ -247,17 +220,17 @@ test.each<[string, string | null, string, string, string | undefined]>([
   ],
   ["a mixed literal list into a child Any input runs", null, "Any", "null", "['a', 1]"],
 ])("a map over %s (loads)", (_name, overOutput, childType, code, over) => {
-  load(map(overOutput, childType, code, over), { child: child(childType) });
+  assembleText(map(overOutput, childType, code, over));
 });
 
 test("a map over a list of optional Any into a child Any input is a load error", () => {
-  const error = loadError(() => load(map("list(Optional(Any))", "Any", "[1n]"), { child: child("Any") }));
+  const error = loadError(() => assembleText(map("list(Optional(Any))", "Any", "[1n]")));
 
   expect(error.message).toBe("call node 'm': binding 'x' — child expects 'Any', source is 'Optional(Any)'");
 });
 
 test("a map over a mixed literal list still checks each element at load", () => {
-  const error = loadError(() => load(map(null, "str", "null", "['a', 1]"), { child: child("str") }));
+  const error = loadError(() => assembleText(map(null, "str", "null", "['a', 1]")));
 
   expect(error.message).toBe(
     "call node 'm': binding 'x' — child expects 'str', but the element 1 does not fit; " +
@@ -359,13 +332,6 @@ const ANY_CHILD_DEF =
   "      n:\n        kind: code\n        input:\n          x: ${input.x}\n" +
   "        code: return 3n\n    output: !Any ${n.output}\n";
 
-/** The `mk_any` def built by hand: input `x: !str`, an untyped `n`, output `!Any ${n.output}`. */
-const MK_ANY = handChild({
-  inputs: parametersFromYaml("input:\n  x: !str\n", new Map()),
-  producers: { n: null },
-  output: new Binding("${n.output}", { contract: new ValueContract(Type.scalar(ValueKind.ANY)) }),
-});
-
 /** A flow calling `mk_any`, then `child` (taking `consumerType`) on its output. */
 function fromAnyChild(consumerType: string): string {
   const rest = call("${input.s}", "g", "mk_any") + call("${g.output}");
@@ -373,11 +339,11 @@ function fromAnyChild(consumerType: string): string {
 }
 
 test("a child Any output into a parent Any consumer runs (loads)", () => {
-  load(fromAnyChild("Any"), { mk_any: MK_ANY, child: child("Any") });
+  assembleText(fromAnyChild("Any"));
 });
 
 test("a child Any output into a parent int input is a load error with the hint", () => {
-  const error = loadError(() => load(fromAnyChild("int"), { mk_any: MK_ANY, child: child("int") }));
+  const error = loadError(() => assembleText(fromAnyChild("int")));
 
   expect(error.message).toBe(
     "call node 'c': binding 'x' — child expects 'int', source is 'Any'; " +
@@ -387,11 +353,8 @@ test("a child Any output into a parent int input is a load error with the hint",
 
 // ---------- harvested conformance cases ----------
 
-test("assembledWith: load-types/compose_any_flows__a_map_over_a_mixed_literal_list_checks_each_element", () => {
-  runCase({
-    id: "load-types/compose_any_flows__a_map_over_a_mixed_literal_list_checks_each_element",
-    call: assembledWith({ child: child("str") }),
-  });
+test("assembled: load-types/compose_any_flows__a_map_over_a_mixed_literal_list_checks_each_element", () => {
+  runCase({ id: "load-types/compose_any_flows__a_map_over_a_mixed_literal_list_checks_each_element", call: assembled });
 });
 
 test("assembled: load-types/compose_any_flows__an_untyped_seed_rejects_an_optional_any_body_field", () => {

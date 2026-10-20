@@ -30,17 +30,14 @@
  * `test_a_value_lacking_a_field_fails_with_binding_type_naming_it`,
  * `test_a_bad_built_field_fails_with_binding_type` and `test_a_nested_constructor_failure_is_binding_type`
  * (each loads), and of `test_an_inline_body_parameter_takes_the_constructed_type` (the inline
- * child's START parameter type). The `one` def the map calls, the `sell` def the call calls and the
- * `check` def the CALL calls are hand-built children (`handChild`) with the def's signature.
- * `engine/inline_calls.test.ts` pins the cases of the binding sites the inline-call desugar raises.
+ * child's START parameter type), `test_a_caller_sees_a_childs_constructed_output_type` and
+ * `test_a_uses_child_resolves_constructors_against_its_own_typedefs` (loaded with `loadFlow`);
+ * and `test_a_parent_cannot_construct_a_childs_typedef`. `engine/inline_calls.test.ts` pins the
+ * cases of the binding sites the inline-call desugar raises.
  *
  * TS-only: one row per constructor message the type-table pass reports at a `case when` (a union,
  * a scalar type, an unknown field, a disjoint value, a disjoint field, a builtin field read); Python
  * reports them there too, but its tests pin them only at binding sites.
- *
- * Later (T3-22): `test_a_caller_sees_a_childs_constructed_output_type` (the child's own assembly),
- * `test_a_uses_child_resolves_constructors_against_its_own_typedefs` and
- * `test_a_parent_cannot_construct_a_childs_typedef` (`uses:`).
  *
  * Later (T4): the run halves of the rows above, `test_a_value_that_fits_passes_unchanged`,
  * `test_keywords_build_the_record`, `test_a_union_typedef_and_an_enum_alias_check` and
@@ -50,6 +47,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import type { CompiledFlow } from "../../src/compile/model.ts";
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
@@ -57,13 +56,10 @@ import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, typeEquals } from "../../src/typesys/values.ts";
 import {
   assembled,
-  assembledWith,
   assembleText,
   type CaseRow,
-  type ChildFlows,
-  handChild,
   loadError,
-  parametersFromYaml,
+  loadErrorAsync,
   runCase,
 } from "./declarations.ts";
 
@@ -126,9 +122,8 @@ function lineOf(text: string, marker: string): number {
 const errorLine = (error: { diagnostic: { frames: readonly { range: { startLine: number } }[] } }) =>
   error.diagnostic.frames.at(-1)!.range.startLine;
 
-/** Assemble `text` as the root flow, its `defs:` entries standing in as `children`; return its nodes. */
-const loadedNodes = (text: string, children: ChildFlows = {}) =>
-  assembleText(text, "flow.yaml", { children }).flow.compiled.nodes;
+/** Assemble `text` as the root flow; return its nodes. */
+const loadedNodes = (text: string) => assembleText(text).flow.compiled.nodes;
 
 /** Check that `node`'s type table holds exactly `expected`, in any order. */
 function expectTypes(node: Node | undefined, expected: Record<string, Type>): void {
@@ -228,13 +223,7 @@ nodes:
       x: \${Buy(item)}
 output: \${each.output}
 `;
-  const one = handChild({
-    inputs: parametersFromYaml("input:\n  x: !object\n", new Map()),
-    producers: { e: null },
-    output: "${e.output}",
-  });
-
-  expectTypes(loadedNodes(text, { one }).get("each"), { Buy: BUY });
+  expectTypes(loadedNodes(text).get("each"), { Buy: BUY });
 });
 
 // ---------- typed bindings and call types over a constructor ----------
@@ -276,14 +265,64 @@ test("a call argument is checked with the constructed type", () => {
     input:
       order: \${Buy(d.output)}
 output: \${run.output}
-`);
-  const sell = handChild({
-    inputs: parametersFromYaml("input:\n  order: !Sell\n", REG),
-    producers: { e: null },
-    output: "${e.output}",
-  });
+`).replace(
+    "nodes:\n",
+    `defs:
+  sell:
+    input:
+      order: !Sell
+    nodes:
+      e:
+        kind: code
+        input:
+          order: \${input.order}
+        code: |
+          return inputs["order"]
+    output: \${e.output}
+nodes:
+`,
+  );
 
-  expect(loadError(() => loadedNodes(text, { sell })).message).toContain("call node 'run': binding 'order'");
+  expect(loadError(() => loadedNodes(text)).message).toContain("call node 'run': binding 'order'");
+});
+
+const PARENT =
+  "id: p\nname: p\n" +
+  TYPEDEFS +
+  `input:
+  order: !object
+defs:
+  decide:
+    input:
+      order: !object
+    nodes:
+      e:
+        kind: code
+        input:
+          order: \${input.order}
+        code: |
+          return inputs["order"]
+    output: \${Buy(e.output)}
+nodes:
+  run:
+    kind: call
+    call: decide
+    input:
+      order: \${input.order}
+  use:
+    kind: code
+    input:
+      conviction: \${run.output.conviction}
+    code: |
+      return inputs["conviction"]
+output: \${use.output}
+`;
+
+test("a caller sees a child's constructed output type (load half)", async () => {
+  await loadFlow(PARENT);
+  const text = PARENT.replace("${run.output.conviction}", "${run.output.size}");
+
+  expect((await loadErrorAsync(loadFlow(text))).message).toContain("reads unknown field 'size' on record");
 });
 
 test("an inline body parameter takes the constructed type (load half)", () => {
@@ -307,6 +346,50 @@ output: \${inline.output}
   expect(typeEquals(child.nodes.get(child.startId)!.params![0]!.contract!.type, BUY)).toBe(true);
 });
 
+const USES_CHILD = `id: child
+name: child
+typedefs:
+  Hold: {action: Literal(hold)}
+input:
+  order: !object
+nodes:
+  c:
+    kind: code
+    input:
+      x: \${Hold(input.order)}
+    code: |
+      return inputs["x"]
+output: \${c.output}
+`;
+
+const USES_PARENT = `id: parent
+name: parent
+input:
+  order: !object
+uses:
+  child: child
+nodes:
+  run:
+    kind: call
+    call: child
+    input:
+      order: \${input.order}
+output: \${run.output}
+`;
+
+/** A resolver that hands back the loaded `USES_CHILD` for `child`. */
+async function usesResolver(): Promise<(flowId: string) => ComposedFlow> {
+  const loaded: Record<string, ComposedFlow> = { child: await loadFlow(USES_CHILD) };
+  return (flowId) => loaded[flowId]!;
+}
+
+test("a uses child resolves constructors against its own typedefs (load half)", async () => {
+  const loaded = await loadFlow(USES_PARENT, { childResolver: await usesResolver() });
+
+  const child = (loaded.compiled.nodes.get("run") as CallNode).child as CompiledFlow;
+  expect(child.nodes.get("c")!.types.has("Hold")).toBe(true);
+});
+
 test("a flow call with several arguments keeps the flow call message", () => {
   const error = loadError(() => loadedNodes(consumer("${review(d.output, d.output)}")));
 
@@ -320,6 +403,18 @@ test.each([
   expect(loadError(() => loadedNodes(text)).message).toContain(
     "Buy(...) takes keyword fields, as in Buy(name=value, ...), or one value to check, as in Buy(x)",
   );
+});
+
+test("a parent cannot construct a child's typedef", async () => {
+  const text = USES_PARENT.replace(
+    "      order: ${input.order}\n",
+    "      order: ${input.order}\n  probe:\n    kind: code\n    input:\n" +
+      "      x: ${Hold(input.order)}\n    code: |\n      return 1\n",
+  );
+
+  const error = await loadErrorAsync(loadFlow(text, { childResolver: await usesResolver() }));
+
+  expect(error.message).toContain("a flow call 'Hold' inside ${...} is not supported");
 });
 
 // ---------- names that are not constructors ----------
@@ -369,15 +464,6 @@ output: \${w.output}
   expect(errorLine(error)).toBe(lineOf(text, "until:"));
 });
 
-/** The hand-built `check` def: `order: !object` in, its untyped CODE node `e`'s result out. */
-const CHECK = {
-  check: handChild({
-    inputs: parametersFromYaml("input:\n  order: !object\n", new Map()),
-    producers: { e: null },
-    output: "${e.output}",
-  }),
-};
-
 test("a constructor in a call node's asserts is a located load error", () => {
   const text =
     "id: p\nname: p\n" +
@@ -407,7 +493,7 @@ nodes:
 output: \${run.output}
 `;
 
-  const error = loadError(() => loadedNodes(text, CHECK));
+  const error = loadError(() => loadedNodes(text));
 
   expect(error.message).toBe(
     "flow has invalid node asserts:\n" +
@@ -605,6 +691,6 @@ test.each<CaseRow>(
   ].map((name) => ({ id: `load-types/compose_constructor_load__${name}`, call: assembled })),
 )("assembled: $id", runCase);
 
-test("assembledWith: load-types/compose_constructor_load__a_constructor_in_a_call_nodes_asserts", () => {
-  runCase({ id: "load-types/compose_constructor_load__a_constructor_in_a_call_nodes_asserts", call: assembledWith(CHECK) });
+test("assembled: load-types/compose_constructor_load__a_constructor_in_a_call_nodes_asserts", () => {
+  runCase({ id: "load-types/compose_constructor_load__a_constructor_in_a_call_nodes_asserts", call: assembled });
 });

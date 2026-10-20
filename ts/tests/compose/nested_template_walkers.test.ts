@@ -3,19 +3,21 @@
  * `tests/compose/test_nested_template_walkers.py`, through `assembleText` where Python loads the
  * flow; the MAP row parses the flow's nodes (`nodesOf`), since the MAP parse raises its error.
  *
- * Later (T4): `test_nested_case_output_expands_in_inputs_and_outputs` (a run).
- * Later (T3-22, T4): `test_map_over_literal_list_without_spans_still_loads` and
- * `test_nested_references_in_a_map_child_run_after_growth` (loads and runs).
- * Later (T3-16 for the loop kind, T3-22, T4):
+ * Ported, loaded with `loadFlow`: the load halves of
+ * `test_map_over_literal_list_without_spans_still_loads`,
+ * `test_nested_references_in_a_map_child_run_after_growth` and
  * `test_nested_references_in_a_loop_body_run_after_growth`.
  *
- * Changed: `test_retired_inline_flow_call_in_a_nested_output_fails` assembles the flow without its
- * `defs:` entry, since the inline-call desugar raises before any callee resolves.
+ * Later (T4): `test_nested_case_output_expands_in_inputs_and_outputs` (a run).
+ * Later (T4-8): the run halves of `test_map_over_literal_list_without_spans_still_loads`,
+ * `test_nested_references_in_a_map_child_run_after_growth` and
+ * `test_nested_references_in_a_loop_body_run_after_growth`.
  */
 
 import { expect, test } from "bun:test";
 
 import { desugarInlineCalls } from "../../src/compose/desugar/inline_calls.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
@@ -220,7 +222,9 @@ test("nested case output in a default fails", () => {
 });
 
 test("retired inline flow call in a nested output fails", () => {
-  const text = codeFlow("${p.output}").replace("output: ${c.output}", "output:\n  r:\n    a: ${ sub(x=c.output) }");
+  const text = codeFlow("${p.output}")
+    .replace("output: ${c.output}", "output:\n  r:\n    a: ${ sub(x=c.output) }")
+    .replace("nodes:\n", "defs:\n  sub:\n    nodes: {}\nnodes:\n");
 
   const error = loadError(() => assembleText(text));
 
@@ -234,6 +238,102 @@ test("nested call directive is not lifted", () => {
   expect(() => desugarInlineCalls(descriptors, null)).toThrow(
     "c: a `call(...)` inside a value isn't supported; bind it at the top level",
   );
+});
+
+// ---------- loaded flows ----------
+
+test("map over literal list without spans still loads (load half)", async () => {
+  await loadFlow(`
+id: m
+name: m
+defs:
+  echo:
+    input:
+      v: !int
+    nodes: {}
+    output: \${input.v}
+nodes:
+  m:
+    kind: map
+    call: echo
+    over: [1, 2]
+    input:
+      v: \${item}
+output: \${m.output}
+`);
+});
+
+test("nested references in a map child run after growth (load half)", async () => {
+  await loadFlow(`
+id: nested_map
+name: nested_map
+defs:
+  wrap:
+    input:
+      v: !int
+    nodes:
+      e:
+        kind: code
+        input:
+          v: \${input.v}
+        code: return inputs["v"] * 10
+      w:
+        kind: code
+        input:
+          x:
+            v: \${input.v}
+            e: ['\${e.output}']
+            note: v=\${input.v}
+        code: return inputs["x"]
+    output: \${w.output}
+nodes:
+  m:
+    kind: map
+    call: wrap
+    over: [1, 2]
+    input:
+      v: \${item}
+output: \${m.output}
+`);
+});
+
+test("nested references in a loop body run after growth (load half)", async () => {
+  await loadFlow(`
+id: nested_loop
+name: nested_loop
+defs:
+  bump:
+    input:
+      n: !int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: \${input.n}
+        code: return inputs["n"] + 1
+      pack:
+        kind: code
+        input:
+          x:
+            n: \${step.output}
+            seen:
+              - \${input.n}
+        code: return inputs["x"]
+        output:
+          n: int
+          seen: list(int)
+    output:
+      n: \${pack.output.n}
+nodes:
+  loop:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+    while: n < 3
+    max: 10
+output: \${loop.output}
+`);
 });
 
 // ---------- harvested conformance cases ----------

@@ -29,16 +29,8 @@
  * `test_a_composer_excluded_field_from_a_value_names_the_gate`,
  * `test_a_composer_literal_block_field_beside_a_value_names_the_gate` and
  * `test_a_literal_composer_layer_is_unchanged`; and
- * `test_a_composer_tag_on_the_whole_mapping_names_the_gate` (the gate's layer read raises it).
- *
- * Changed: `LLMConfig` spells the provider choices in text form (`"openai"`) where pydantic writes
- * `'openai'`.
- *
- * TS-only: the `ownLlmConfig`/`llmConfig` split for an empty record, `null`, a `ValueTemplate`
- * and a `Binding`; the origin of a whole-record `Binding`; the harvested cases of the node layer
- * and the composer.
- *
- * Later (T3-22), the flow layer the loader reads: `test_a_flow_field_value_loads_as_a_template`,
+ * `test_a_composer_tag_on_the_whole_mapping_names_the_gate` (the gate's layer read raises it);
+ * and, loaded with `loadFlow`, the flow layer: `test_a_flow_field_value_loads_as_a_template`,
  * `test_a_flow_whole_record_value_loads_as_a_binding`, `test_a_flow_tag_is_read_and_consumed`,
  * `test_a_tag_on_a_typedef_still_fails_beside_a_flow_value`,
  * `test_a_flow_excluded_field_from_a_value_fails_at_the_field`, `test_inherit_at_flow_level_still_fails`,
@@ -48,14 +40,23 @@
  * `test_a_def_field_value_loads_as_a_template`, `test_a_def_whole_record_value_loads_as_a_binding`,
  * `test_a_def_excluded_field_from_a_value_fails_at_the_field`, `test_a_literal_def_layer_is_still_a_plain_dict`;
  * and the flow and def halves of the three split tests above.
+ *
+ * Changed: `LLMConfig` spells the provider choices in text form (`"openai"`) where pydantic writes
+ * `'openai'`.
+ *
+ * TS-only: the `ownLlmConfig`/`llmConfig` split for an empty record, `null`, a `ValueTemplate`
+ * and a `Binding`; the origin of a whole-record `Binding`; the harvested cases of the node layer
+ * and the composer.
  */
 
 import { expect, test } from "bun:test";
 
+import type { CompiledFlow } from "../../src/compile/model.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, loadErrorAsync, runCase } from "./declarations.ts";
 
 const INPUTS = `\
 input:
@@ -85,6 +86,129 @@ const lineOf = (error: LoadError) => error.diagnostic.frames.at(-1)!.range.start
 
 /** Return the 1-based line of the first line of `text` holding `needle`. */
 const lineHolding = (text: string, needle: string) => text.split("\n").findIndex((line) => line.includes(needle)) + 1;
+
+// ---------- the flow and def layers, through `loadFlow` ----------
+
+/** Return a flow with the flow-level lines `flowLines` and one agent `a`. */
+const flowLayer = (flowLines: string, options: { typedefs?: string } = {}) =>
+  `id: f\nname: f\n${options.typedefs ?? ""}${INPUTS}${flowLines}` +
+  "nodes:\n  a: {kind: agent, prompt: Go.}\noutput: ${a.output}\n";
+
+/** Return a flow calling `sub`, a def whose body has the lines `defLines` (indented 4). */
+const defLayer = (defLines: string) => `\
+id: f
+name: f
+defs:
+  sub:
+    input: {m: !str , cfg: !object }
+${defLines}    nodes:
+      a: {kind: agent, prompt: Go.}
+    output: \${a.output}
+nodes:
+  s: {kind: call, call: sub, input: {m: x, cfg: {}}}
+output: \${s.output}
+`;
+
+/** Load `text` and return the one child flow its CALL node `s` bakes in. */
+async function defChild(text: string): Promise<CompiledFlow> {
+  const children = (await loadFlow(text, { sourceLabel: "f.yaml" })).compiled.nodes.get("s")!.originChildren();
+  expect(children).toHaveLength(1);
+  return children[0] as CompiledFlow;
+}
+
+/** Return the `LoadError` loading flow `text` raises. */
+const loadFailsAsync = (text: string) => loadErrorAsync(loadFlow(text, { sourceLabel: "f.yaml" }));
+
+test("a flow field value loads as a template", async () => {
+  const loaded = await loadFlow(flowLayer("llm_config: {model: '${input.m}'}\n"));
+  const layer = loaded.compiled.flowLlmConfig;
+  expect(layer).toEqual(new ValueTemplate({ model: "${input.m}" }, (layer as ValueTemplate).origins));
+});
+
+test("a flow whole record value loads as a binding", async () => {
+  const text = flowLayer("llm_config: ${input.cfg}\n");
+  const loaded = await loadFlow(text, { sourceLabel: "f.yaml" });
+  const layer = loaded.compiled.flowLlmConfig;
+  expect(layer).toBeInstanceOf(Binding);
+  expect((layer as Binding).source).toBe("${input.cfg}");
+  const frame = loaded.originResolver!.resolve((layer as Binding).origin!);
+  expect(frame!.range.startLine).toBe(lineHolding(text, "llm_config:"));
+});
+
+test("a flow tag is read and consumed", async () => {
+  const loaded = await loadFlow(flowLayer("llm_config: {model: !str '${input.m}'}\n"));
+  const binding = ((loaded.compiled.flowLlmConfig as ValueTemplate).value as Record<string, unknown>)["model"];
+  expect(binding).toBeInstanceOf(Binding);
+  expect((binding as Binding).contract!.type.kind).toBe("str");
+});
+
+test("a tag on a typedef still fails beside a flow value", async () => {
+  const typedefs = "typedefs:\n  Cfg:\n    model: !str str\n";
+  const error = await loadFailsAsync(flowLayer("llm_config: {model: !str '${input.m}'}\n", { typedefs }));
+  expect(error.message).toContain("typedef 'Cfg': a type definition is written as a type");
+});
+
+test("a flow excluded field from a value fails at the field", async () => {
+  const text = flowLayer("llm_config:\n  provider: openai\n  api_key: ${input.u}\n");
+  const error = await loadFailsAsync(text);
+  expect(error.diagnostic.message).toStartWith("flow: llm_config.api_key is a host credential");
+  expect(lineOf(error)).toBe(lineHolding(text, "api_key:"));
+});
+
+test.each(["false", "${input.i}"])("inherit at flow level still fails: %p", async (value) => {
+  const error = await loadFailsAsync(flowLayer(`llm_config:\n  model: \${input.m}\n  inherit: ${value}\n`));
+  expect(error.message).toContain("flow: llm_config:");
+  expect(error.message).toContain("inherit");
+});
+
+test("a literal flow layer is still a plain dict", async () => {
+  const loaded = await loadFlow(flowLayer('llm_config: {provider: openai, model: "a$$b"}\n'));
+  expect(loaded.compiled.flowLlmConfig).toEqual({ provider: "openai", model: "a$b" });
+  expect(Object.getPrototypeOf(loaded.compiled.flowLlmConfig)).toBe(Object.prototype);
+});
+
+test("a def field value loads as a template", async () => {
+  const child = await defChild(defLayer("    llm_config: {model: '${input.m}'}\n"));
+  expect(child.flowLlmConfig).toBeInstanceOf(ValueTemplate);
+  expect((child.flowLlmConfig as ValueTemplate).value).toEqual({ model: "${input.m}" });
+});
+
+test("a def whole record value loads as a binding", async () => {
+  const child = await defChild(defLayer("    llm_config: !object ${input.cfg}\n"));
+  expect(child.flowLlmConfig).toBeInstanceOf(Binding);
+  expect((child.flowLlmConfig as Binding).contract!.type.kind).toBe("object");
+});
+
+test("a def excluded field from a value fails at the field", async () => {
+  const text = defLayer("    llm_config:\n      provider: openai\n      project: ${input.m}\n");
+  const error = await loadFailsAsync(text);
+  expect(error.message).toContain("defs entry 'sub': llm_config.project goes wherever");
+  expect(lineOf(error)).toBe(lineHolding(text, "project:"));
+});
+
+test("a literal def layer is still a plain dict", async () => {
+  const child = await defChild(defLayer("    llm_config: {model: m}\n"));
+  expect(child.flowLlmConfig).toEqual({ model: "m" });
+});
+
+test("a null flow layer loads as empty", async () => {
+  const loaded = await loadFlow(flowLayer("llm_config: null\n"));
+  expect(loaded.compiled.flowLlmConfig).toEqual({});
+});
+
+test.each(["gpt-4", "[a]"])("a flow layer that is not a mapping fails: %p", async (value) => {
+  const text = flowLayer(`llm_config: ${value}\n`);
+  const error = await loadFailsAsync(text);
+  expect(error.message).toContain("flow: llm_config must be a mapping");
+  expect(lineOf(error)).toBe(lineHolding(text, "llm_config:"));
+});
+
+test("a literal field error in a flow value layer points at the field", async () => {
+  const text = flowLayer("llm_config:\n  provider: ${input.p}\n  temparature: 1\n");
+  const error = await loadFailsAsync(text);
+  expect(error.message).toStartWith("flow: llm_config:");
+  expect(lineOf(error)).toBe(lineHolding(text, "temparature:"));
+});
 
 test("a python built agent keeps its literal config", () => {
   const config = { model: "m" };
@@ -339,10 +463,15 @@ test.each(["m", "${input.m}"])("a tagged literal inherit is accepted: %p", (mode
   expect(agentOf(flow(`    llm_config:\n      inherit: !bool false\n      model: ${model}\n`)).llmInherit).toBe(false);
 });
 
-test("a layer of only tagged literals is a literal layer (the node layer)", () => {
+test("a layer of only tagged literals is a literal layer", async () => {
   const agent = agentOf(flow("    llm_config: {provider: !str openai, model: !str 'a$$b'}\n"));
   expect(Object.getPrototypeOf(agent.ownLlmConfig)).toBe(Object.prototype);
   expect(agent.ownLlmConfig).toEqual({ provider: "openai", model: "a$b" });
+  const loaded = await loadFlow(flowLayer("llm_config: {model: !str m}\n"));
+  expect(Object.getPrototypeOf(loaded.compiled.flowLlmConfig)).toBe(Object.prototype);
+  expect(loaded.compiled.flowLlmConfig).toEqual({ model: "m" });
+  const child = await defChild(defLayer("    llm_config: {model: !str m}\n"));
+  expect(child.flowLlmConfig).toEqual({ model: "m" });
 });
 
 test("a call inside an llm config string fails", () => {
@@ -353,9 +482,16 @@ test("a call inside an llm config string fails", () => {
   expect(lineOf(error)).toBe(lineHolding(text, "model:"));
 });
 
-test("a tag with no value on the layer fails (the node layer)", () => {
+test("a tag with no value on the layer fails (node)", () => {
   const text = flow("    llm_config: !object\n");
   const error = loadFails(text);
+  expect(error.message).toContain("llm_config: a tag needs a value");
+  expect(lineOf(error)).toBe(lineHolding(text, "llm_config:"));
+});
+
+test("a tag with no value on the layer fails (flow)", async () => {
+  const text = flowLayer("llm_config: !object\n");
+  const error = await loadErrorAsync(loadFlow(text, { sourceLabel: "f.yaml" }));
   expect(error.message).toContain("llm_config: a tag needs a value");
   expect(lineOf(error)).toBe(lineHolding(text, "llm_config:"));
 });
@@ -446,6 +582,13 @@ test("a malformed span is a located load error (node)", () => {
   expect(lineOf(error)).toBe(lineHolding(text, "a${b"));
 });
 
+test("a malformed span is a located load error (flow)", async () => {
+  const text = flowLayer("llm_config:\n  model: 'a${b'\n");
+  const error = await loadErrorAsync(loadFlow(text, { sourceLabel: "f.yaml" }));
+  expect(error.message).toContain("llm_config");
+  expect(lineOf(error)).toBe(lineHolding(text, "a${b"));
+});
+
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
@@ -463,3 +606,9 @@ test.each<CaseRow>([
   { id: "load-agent/compose_llm_config_values_load__tag_with_no_value", call: assembled },
   { id: "load-agent/compose_llm_config_values_load__unknown_key_beside_a_value", call: assembled },
 ])("assemble: $id", runCase);
+
+test.each<CaseRow>([
+  { id: "load-agent/compose_llm_config_values_load__a_field_value_loads_as_a_template", call: assembled },
+  { id: "load-agent/compose_llm_config_values_load__a_whole_record_value_loads_as_a_binding", call: assembled },
+  { id: "load-agent/compose_llm_config_values_load__literal_base_url_beside_literal_azure_loads", call: assembled },
+])("assembles: $id", runCase);

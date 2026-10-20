@@ -153,8 +153,8 @@ function cycleNotes(
 }
 
 /**
- * Return the graph's cyclic strongly connected components, in finish order (no caller depends on
- * the order).
+ * Return the graph's cyclic strongly connected components, in the order the second pass finds them
+ * (no caller depends on the order).
  *
  * Two iterative depth-first passes implement Kosaraju's algorithm with no recursion. Components
  * with several nodes are cyclic; a singleton is cyclic only when it has a self-edge. Sentinel
@@ -176,8 +176,8 @@ function cyclicComponents(edges: readonly Edge[], nodeIds: ReadonlySet<string>):
 
   const visited = new Set<string>();
   const finishOrder: string[] = [];
-  // Starts are visited sorted and neighbours pushed reverse-sorted: the visiting order fixes which
-  // components come out and in what finish order, so results are deterministic and match Python's.
+  // Starts are visited sorted and neighbours pushed reverse-sorted so the finish order, and with it
+  // the order the components come out in, is deterministic.
   for (const start of [...nodeIds].sort(compareCodeUnits)) {
     if (visited.has(start)) continue;
     const stack: [string, boolean][] = [[start, false]];

@@ -418,7 +418,7 @@ function expectCaseResult(
     range: [range.startLine, range.startCol, range.endLine, range.endCol],
     note,
   }));
-  const expectedFrames = (diagnostic["frames"] as Case[]).map((frame) => ({
+  const expectedFrames = ((diagnostic["frames"] as Case[] | undefined) ?? []).map((frame) => ({
     label: frame["label"] as string,
     range: (frame["range"] as bigint[]).map(Number),
     note: (frame["note"] as string | undefined) ?? null,

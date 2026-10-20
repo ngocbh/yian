@@ -94,8 +94,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `until:` date or datetime as the text written, after checking it parses.
 - `src/compose/validate/` holds the validate phase, the cross-node checks over the assembled flow.
   Outside it only `src/compose/build/` imports it: the pipeline runs the passes, and `boundary.ts`
-  takes the `LoweredAsserts` type from `asserts.ts`. Inside it, passes import only the shared models
-  `narrowing.ts` and `typed_bindings.ts`.
+  takes the `LoweredAsserts` type from `asserts.ts`. Inside it, a pass imports another validate
+  module only for its shared helpers (such as `Narrowing` from `narrowing.ts` and `LocalInput` from
+  `typed_bindings.ts`).
 
 ## Skills
 

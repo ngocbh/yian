@@ -36,7 +36,7 @@
 import { expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
-import { assembled, assembleText, type CaseRow, caseText, loadError, runCase } from "../compose/declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "../compose/declarations.ts";
 
 const LLM_SITE = "node 'ask' adaptive_questions.llm_config";
 

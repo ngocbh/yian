@@ -29,6 +29,9 @@
  * `test_injected_grow_builder_fault_remains_exact_host_failure` (3 error classes, serial and
  * pooled), `test_invalid_grow_builder_return_remains_a_host_failure` (serial and pooled),
  * `test_parallel_outcomes_commit_in_completion_message_order`,
+ * `test_started_observer_failure_prevents_submission_of_that_node`,
+ * `test_node_failure_drains_sibling_and_discards_late_stream_chunks`,
+ * `test_stream_callback_failure_is_host_error_not_durable_node_failure` (serial and pooled),
  * `test_authority_mismatch_is_rejected_before_any_node_executes` and
  * `test_dispatcher_borrows_and_never_closes_its_log`.
  *
@@ -36,9 +39,11 @@
  * - `test_legal_kind_malformed_seed_constructs_contract_growth_failure` (2 rows): TS has no
  *   compile-owned CALL builder yet, so a test builder refuses the list seed with
  *   `GrowthRejected(TypeError)`, as Python's `build_grow` does.
- * - `test_grow_builder_fault_drains_pooled_sibling_and_preserves_identity`: the blocked sibling
- *   waits for its signal to abort, then rejects with the signal's reason; the spawner waits until
- *   the sibling has entered.
+ * - `test_grow_builder_fault_drains_pooled_sibling_and_preserves_identity`: the blocked sibling's
+ *   gate never settles, so it rejects with the signal's reason once the fault aborts the run; the
+ *   spawner waits until the sibling has entered.
+ * - `test_event_callback_failure_signals_drains_and_reraises_same_exception`: the blocked sibling
+ *   rejects with an error of its own during the drain, which never replaces the callback error.
  * - `test_positive_worker_count_never_exceeds_the_submission_bound`: the bound is read as the
  *   in-flight count at each start, with no timing.
  * - `test_nonfinite_output_at_the_root_uses_the_contract_default_origin`: the message is the value
@@ -59,24 +64,30 @@
  * - `test_growth_digest_fault_remains_exact_host_failure` and
  *   `test_growth_materialization_fault_remains_exact_host_failure`: covered by the grow builder
  *   fault rows, a host fault inside growth preparation.
+ * - `test_cleanup_failure_never_replaces_callback_error_and_drain_is_attempted`: TS has no executor
+ *   whose shutdown could fail; replaced by the event callback row, where a worker rejecting during
+ *   the drain never replaces the callback error.
  *
  * Not ported: `test_submit_failure_is_exact_and_leaves_the_started_node_recoverable`: TS has no
  * executor, so nothing can refuse a submission.
  *
- * Later (the engine's stop rule): `test_event_callback_failure_signals_drains_and_reraises_same_exception`,
- * `test_cleanup_failure_never_replaces_callback_error_and_drain_is_attempted` (replaced: a worker
- * rejecting during the drain never replaces the callback error),
- * `test_started_observer_failure_prevents_submission_of_that_node`,
- * `test_primary_host_interruption_is_preserved_after_full_sibling_drain`,
- * `test_node_failure_drains_sibling_and_discards_late_stream_chunks` and
- * `test_stream_callback_failure_is_host_error_not_durable_node_failure`.
+ * Later (the engine's stop rule): `test_primary_host_interruption_is_preserved_after_full_sibling_drain`.
  */
 
 import { describe, expect, test } from "bun:test";
 
 import { CompiledFlow, Edge, END_ID, Flow, GrowthRejected, START_ID } from "../../src/compile/model.ts";
 import { type Failure, OriginRef } from "../../src/diagnostics.ts";
-import { NodeExpanded, NodeFailed, NodeRouted, NodeStarted, NodeSucceeded, RunFailed, RunSucceeded } from "../../src/events.ts";
+import {
+  NodeExpanded,
+  NodeFailed,
+  NodeRouted,
+  NodeStarted,
+  NodeSucceeded,
+  RunFailed,
+  RunSucceeded,
+  StreamChunk,
+} from "../../src/events.ts";
 import { Grow, Node, type NodeCaps, NodeKind, type NodeResult, Output, Route } from "../../src/nodes/base.ts";
 import { ContractOrigins, type OutputContract, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
@@ -95,7 +106,7 @@ import {
 import { commitPrepared, type GrowBuilder, NodeDataError, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { fragment, fragmentBuilder, rejected } from "./run_state_fixtures.ts";
+import { BlockingNode, fragment, fragmentBuilder, rejected } from "./run_state_fixtures.ts";
 
 const RUN_ID = "recorded-dispatch";
 const FINGERPRINT = "d".repeat(64);
@@ -189,24 +200,55 @@ class GrowNode extends Node {
   }
 }
 
-/** Signals `entered`, waits for its signal to abort, signals `released`, then rejects with the reason. */
-class StopAwareNode extends Node {
-  readonly kind = NodeKind.CODE;
-  readonly entered: () => void;
-  readonly released: () => void;
+/** Resolve once `signal` aborts. */
+async function aborted(signal: AbortSignal): Promise<void> {
+  if (!signal.aborted) await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+}
 
-  constructor(nodeId: string, entered: () => void, released: () => void) {
+/**
+ * Resolves `entered` once it runs, waits for its signal to abort, then rejects with an error of its
+ * own rather than the signal's reason.
+ */
+class DrainFaultNode extends Node {
+  readonly kind = NodeKind.CODE;
+  /** Resolves once the node runs. */
+  readonly entered: Promise<void>;
+  /** Whether the node has stopped waiting. */
+  released = false;
+  readonly #enter: () => void;
+
+  constructor(nodeId: string) {
     super(nodeId);
-    this.entered = entered;
-    this.released = released;
+    const { promise, resolve } = Promise.withResolvers<void>();
+    this.entered = promise;
+    this.#enter = resolve;
   }
 
   override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
-    const signal = caps.signal!;
-    this.entered();
-    if (!signal.aborted) await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
-    this.released();
-    throw signal.reason;
+    this.#enter();
+    await aborted(caps.signal!);
+    this.released = true;
+    throw new Error("sibling failed during the drain");
+  }
+}
+
+/** Streams `early`, calls `streamed`, waits for its signal to abort, streams `late`, then returns. */
+class LateStreamNode extends Node {
+  readonly kind = NodeKind.CODE;
+  override readonly needsLiveEvents = true;
+  readonly streamed: () => void;
+
+  constructor(nodeId: string, streamed: () => void = () => {}) {
+    super(nodeId);
+    this.streamed = streamed;
+  }
+
+  override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
+    caps.emitStream?.(new StreamChunk({ nodeId: this.id, key: "output", chunk: "early" }));
+    this.streamed();
+    await aborted(caps.signal!);
+    caps.emitStream?.(new StreamChunk({ nodeId: this.id, key: "output", chunk: "late" }));
+    return new Output("discarded");
   }
 }
 
@@ -845,22 +887,15 @@ describe("growth", () => {
   });
 
   test("grow builder fault drains pooled sibling and preserves identity", async () => {
-    const entered = Promise.withResolvers<void>();
-    let released = false;
+    const blocked = new BlockingNode("blocked", new Promise(() => {}));
     const expected = new Error("builder programming fault");
-    const flow = fanFlow([
-      new GrowNode("spawn", { entered: entered.promise }),
-      new StopAwareNode("blocked", entered.resolve, () => {
-        released = true;
-      }),
-    ]);
-    const { state, log } = initialized(flow, 2);
+    const { state, log } = initialized(fanFlow([new GrowNode("spawn", { entered: blocked.entered }), blocked]), 2);
     const rejectBuilder: GrowBuilder = () => {
       throw expected;
     };
 
     expect(await rejected(dispatcher(state, log, 2, { growBuilder: rejectBuilder }).run())).toBe(expected);
-    expect(released).toBe(true);
+    expect(blocked.released).toBe(true);
     expect(inFlight(state)).toEqual(["spawn", "blocked"]);
     expect(anyFailure(log)).toBe(false);
   });
@@ -908,5 +943,74 @@ describe("pooled dispatch", () => {
       .filter((record) => record instanceof NodeSucceededRecord && ["slow", "fast"].includes(record.nodeId))
       .map((record) => (record as NodeSucceededRecord).nodeId);
     expect(completed).toEqual(["fast", "slow"]);
+  });
+});
+
+describe("host callbacks and drains", () => {
+  test("event callback failure signals drains and reraises same exception", async () => {
+    const expected = new Error("observer failed");
+    const blocked = new DrainFaultNode("blocked");
+    const { state, log } = initialized(
+      fanFlow([new BlockingNode("trigger", blocked.entered.then(() => "triggered")), blocked]),
+      2,
+    );
+    const onEvent = (event: unknown): void => {
+      if (event instanceof NodeSucceeded && event.nodeId === "trigger") throw expected;
+    };
+    const built = dispatcher(state, log, 2, { onEvent });
+
+    expect(await rejected(built.run())).toBe(expected);
+    expect(blocked.released).toBe(true);
+    expect(built.signal.reason).toBe(expected);
+    expect(inFlight(state)).toEqual(["blocked"]);
+    expect(state.result).toBeNull();
+    // Nothing is appended after the trigger's success, whose observer threw.
+    const last = log.records().at(-1)!.record;
+    expect(last).toBeInstanceOf(NodeSucceededRecord);
+    expect((last as NodeSucceededRecord).nodeId).toBe("trigger");
+  });
+
+  test("started observer failure prevents submission of that node", async () => {
+    const executed: string[] = [];
+    const expected = new Error("started observer failed");
+    const { state, log } = initialized(fanFlow([new ActionNode("work", () => executed.push("work") && "done")]), 1);
+    const onEvent = (event: unknown): void => {
+      if (event instanceof NodeStarted && event.nodeId === "work") throw expected;
+    };
+
+    expect(await rejected(dispatcher(state, log, 1, { onEvent }).run())).toBe(expected);
+    expect(executed).toEqual([]);
+    expect(inFlight(state)).toEqual(["work"]);
+  });
+
+  test("node failure drains sibling and discards late stream chunks", async () => {
+    const streamed = Promise.withResolvers<void>();
+    const chunks: string[] = [];
+    const fail = new ActionNode("fail", async () => {
+      await streamed.promise;
+      throw new Error("boom");
+    });
+    const { state, log } = initialized(fanFlow([new LateStreamNode("stream", streamed.resolve), fail]), 2);
+
+    const events = await dispatcher(state, log, 2, { onStream: (chunk) => chunks.push(chunk.chunk) }).run();
+
+    expect(chunks).toEqual(["early"]);
+    expect(events.at(-2)).toBeInstanceOf(NodeFailed);
+    expect((events.at(-2) as NodeFailed).failure.nodeId).toBe("fail");
+    expect(events.at(-1)).toBeInstanceOf(RunFailed);
+    expect(inFlight(state)).toEqual(["stream"]);
+    expect(hasRecord(log, NodeSucceededRecord, "stream")).toBe(false);
+  });
+
+  test.each(MODES)("stream callback failure is host error not durable node failure (%s)", async (_, numWorkers) => {
+    const expected = new Error("stream callback failed");
+    const { state, log } = initialized(fanFlow([new LateStreamNode("stream")]), numWorkers);
+    const onStream = (): void => {
+      throw expected;
+    };
+
+    expect(await rejected(dispatcher(state, log, numWorkers, { onStream }).run())).toBe(expected);
+    expect(inFlight(state)).toEqual(["stream"]);
+    expect(anyFailure(log)).toBe(false);
   });
 });

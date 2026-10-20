@@ -9,13 +9,11 @@
  * `test_end_output_under_workers` and `test_no_declared_outputs_yields_none_under_workers`.
  *
  * Ported (adapted): `test_pooled_late_sibling_publishes_persisted_causal_terminal_failure`: `slow`
- * awaits a promise `onEvent` resolves once `a` succeeded, and `onEvent` checks the state where
+ * blocks on a promise `onEvent` resolves once `a` succeeded, and `onEvent` checks the state where
  * Python checked it while iterating the run. `test_fan_out_actually_overlaps`: overlap is shown
- * with promises, not timing: each branch waits until all four have started.
+ * with promises, not timing: each branch blocks until all four have entered.
  *
- * TS-only: nothing ready and nothing in flight before a terminal result is nonterminal quiescence;
- * a host fault waits for every active worker, and a sibling rejecting during that drain doesn't
- * replace the fault.
+ * TS-only: nothing ready and nothing in flight before a terminal result is nonterminal quiescence.
  *
  * Later (AsyncLocalStorage isolation): `test_workers_inherit_host_context_without_leaking_node_changes`.
  */
@@ -24,29 +22,22 @@ import { expect, test } from "bun:test";
 
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import type { Failure } from "../../src/diagnostics.ts";
-import { NodeRouted, NodeSucceeded, type RunEvent, RunFailed, RunSucceeded } from "../../src/events.ts";
-import { ELSE_HANDLE, Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { NodeRouted, NodeSucceeded, RunFailed, RunSucceeded } from "../../src/events.ts";
+import { ELSE_HANDLE, type Node } from "../../src/nodes/base.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
-import { NodeRoutedRecord, NodeSucceededRecord } from "../../src/runtime/log.ts";
-import { BranchNode, engine, FailNode, FuncNode, graph, RecordNode, rejected } from "./run_state_fixtures.ts";
-
-/** A node whose value is what `fn()` resolves to, so a test decides when it settles. */
-class AsyncNode extends Node {
-  readonly kind = NodeKind.CODE;
-  /** The body. */
-  readonly fn: () => Promise<unknown>;
-
-  constructor(nodeId: string, fn: () => Promise<unknown>) {
-    super(nodeId);
-    this.fn = fn;
-  }
-
-  override async forward(): Promise<NodeResult> {
-    return new Output(await this.fn());
-  }
-}
+import { NodeRoutedRecord } from "../../src/runtime/log.ts";
+import {
+  BlockingNode,
+  BranchNode,
+  engine,
+  FailNode,
+  FuncNode,
+  graph,
+  RecordNode,
+  rejected,
+} from "./run_state_fixtures.ts";
 
 test("linear is deterministic under workers", async () => {
   const log: string[] = [];
@@ -144,10 +135,9 @@ test("pooled late sibling publishes persisted causal terminal failure", async ()
       new BranchNode("gate", "a"),
       new RecordNode("a", []),
       new RecordNode("t", []),
-      new AsyncNode("slow", async () => {
-        await release.promise;
-        return { output: "slow" };
-      }),
+      // Ends on its signal too, so a failing `expect` in `onEvent` rejects the run instead of
+      // leaving the drain waiting on it.
+      new BlockingNode("slow", release.promise.then(() => ({ output: "slow" }))),
     ],
     [
       [START_ID, "gate"],
@@ -187,34 +177,22 @@ test("pooled late sibling publishes persisted causal terminal failure", async ()
 });
 
 test("fan out actually overlaps", async () => {
-  // Each branch waits until all four have started: without four workers in flight at once, the
+  // Each branch blocks until all four have entered: without four workers in flight at once, the
   // run never settles and the test times out.
-  const started: string[] = [];
-  const finished: string[] = [];
-  const allStarted = Promise.withResolvers<void>();
-  const nodes: Node[] = [new FuncNode("a", () => ({}))];
+  const allEntered = Promise.withResolvers<void>();
+  const branches = [0, 1, 2, 3].map(
+    (index) => new BlockingNode(`s${index}`, allEntered.promise.then(() => ({ output: `s${index}` }))),
+  );
+  void Promise.all(branches.map((branch) => branch.entered)).then(() => allEntered.resolve());
+  const nodes: Node[] = [new FuncNode("a", () => ({})), ...branches, new FuncNode("join", () => ({ output: "ok" }))];
   const edges: [string, string][] = [[START_ID, "a"]];
-  for (let index = 0; index < 4; index += 1) {
-    const id = `s${index}`;
-    nodes.push(
-      new AsyncNode(id, async () => {
-        started.push(id);
-        if (started.length === 4) allStarted.resolve();
-        await allStarted.promise;
-        finished.push(id);
-        return { output: id };
-      }),
-    );
-    edges.push(["a", id], [id, "join"]);
-  }
-  nodes.push(new FuncNode("join", () => ({ output: "ok" })));
+  for (const branch of branches) edges.push(["a", branch.id], [branch.id, "join"]);
   edges.push(["join", END_ID]);
 
   const events = await engine(graph(nodes, edges), { numWorkers: 4 }).run();
 
   expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
-  expect(started).toEqual(["s0", "s1", "s2", "s3"]);
-  expect(finished.length).toBe(4);
+  expect(branches.every((branch) => branch.released)).toBe(true);
 });
 
 test("failure under workers", async () => {
@@ -264,41 +242,4 @@ test("nothing ready and nothing in flight before a terminal result is nontermina
   expect(error).toEqual(new Error("FlowEngine reached nonterminal quiescence"));
   expect(built.signal.aborted).toBe(true);
   expect(built.log.nextSequence).toBe(1);
-});
-
-test("a host fault drains every active worker and a sibling rejecting meanwhile doesn't replace it", async () => {
-  const fault = new Error("observer failed");
-  const blockedStarted = Promise.withResolvers<void>();
-  const drained: string[] = [];
-  const blocked = new AsyncNode("blocked", async () => {
-    blockedStarted.resolve();
-    const signal = built.signal;
-    await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
-    drained.push("blocked");
-    throw new Error("sibling failed during the drain");
-  });
-  const trigger = new AsyncNode("trigger", async () => {
-    await blockedStarted.promise;
-    return "triggered";
-  });
-  const flow = graph([trigger, blocked], [
-    [START_ID, "trigger"],
-    [START_ID, "blocked"],
-    ["trigger", END_ID],
-    ["blocked", END_ID],
-  ]);
-  const onEvent = (event: RunEvent): void => {
-    if (event instanceof NodeSucceeded && event.nodeId === "trigger") throw fault;
-  };
-  const built = engine(flow, { numWorkers: 2, onEvent });
-
-  expect(await rejected(built.run())).toBe(fault);
-  expect(drained).toEqual(["blocked"]);
-  expect(built.signal.reason).toBe(fault);
-  expect([...built.state.inFlight.keys()]).toEqual(["blocked"]);
-  expect(built.state.result).toBeNull();
-  // Nothing is appended after the trigger's success, whose observer threw.
-  const lastRecord = built.log.records().at(-1)!.record;
-  expect(lastRecord).toBeInstanceOf(NodeSucceededRecord);
-  expect((lastRecord as NodeSucceededRecord).nodeId).toBe("trigger");
 });

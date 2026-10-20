@@ -27,21 +27,19 @@
  * TS-only: a node that catches the recorder's fault and returns still rejects `evalNode`, and the
  * run, with the fault's original. A node's kept `NodeSteps` is closed once `evalNode` resolves.
  *
- * Later (the engine's stop rule): the replacement of
- * `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step` (after a sibling failure,
- * `record` throws and appends nothing).
+ * Changed: `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step`: no worker waits
+ * for its step, since `record` is synchronous; in its place, after a sibling's failure aborts the
+ * run, `record` throws the run signal's reason and appends nothing.
  *
  * Not ported: the `prior=[{}]` row, a list where Python wants a tuple: TS has only arrays.
- * `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step`: no worker waits for its
- * step, since `record` is synchronous; replaced as above.
- * `test_stop_releases_a_pooled_worker_waiting_for_its_step`: likewise; `test_serial_skips_a_step_once_stop_is_set`
- * covers a step after a stop.
+ * `test_stop_releases_a_pooled_worker_waiting_for_its_step`: no worker waits for its step either;
+ * `test_serial_skips_a_step_once_stop_is_set` covers a step after a stop.
  */
 
 import { describe, expect, test } from "bun:test";
 
 import { copyGraph, END_ID, START_ID } from "../../src/compile/model.ts";
-import { NodeStarted, NodeSucceeded, type RunEvent, RunSucceeded, StreamChunk } from "../../src/events.ts";
+import { NodeStarted, NodeSucceeded, type RunEvent, RunFailed, RunSucceeded, StreamChunk } from "../../src/events.ts";
 import { CapabilityFault, Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
@@ -422,6 +420,34 @@ test("serial skips a step once stop is set", async () => {
   expect(await rejected(built.run())).toBe(stop);
   expect(raised).toEqual([stop]);
   expect(logged(built, NodeStepRecord)).toBe(false);
+});
+
+test("a sibling failure stops a pooled node's steps", async () => {
+  const raised: unknown[] = [];
+  const work = new StepNode("work", async (caps) => {
+    // The sibling's failure aborts the run signal.
+    const signal = caps.signal!;
+    if (!signal.aborted) await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+    try {
+      caps.steps!.record({ event: "started", attempt: 2n });
+    } catch (error) {
+      raised.push(error);
+      throw error;
+    }
+    return new Output("done");
+  });
+  const boom = new PlainNode("boom", () => {
+    throw new Error("boom");
+  });
+  const built = pair(work, boom, { numWorkers: 2 });
+
+  await built.run();
+
+  expect(built.state.result).toBeInstanceOf(RunFailed);
+  expect((built.state.result as RunFailed).failure.nodeId).toBe("boom");
+  expect(raised.length).toBe(1);
+  expect(raised[0]).toBe(built.signal.reason);
+  expect(records(built, "work").some((record) => record instanceof NodeStepRecord)).toBe(false);
 });
 
 test.each(WORKERS)("a kept recorder is closed after its evaluation (numWorkers %p)", async (numWorkers) => {

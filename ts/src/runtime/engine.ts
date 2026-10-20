@@ -1,10 +1,12 @@
 /**
  * Append-only flow execution over one prepared run-state/log authority.
  *
- * `FlowEngine` is the sole ready-frontier consumer and state writer. Serial mode evaluates
- * durably started nodes inline, and every `prepare* -> commitPrepared` runs with no `await`
- * between. Every observer it returns follows its record's append and reducer application. Stream
- * chunks are transient callback-only messages and never enter the log.
+ * `FlowEngine` is the sole ready-frontier consumer and state writer. Serial mode (no workers)
+ * evaluates durably started nodes inline. Pooled mode keeps at most `numWorkers` evaluations in
+ * flight and commits their outcomes in settle order, read from a FIFO completion queue. In both,
+ * every `prepare* -> commitPrepared` runs with no `await` between. Every observer it returns
+ * follows its record's append and reducer application. Stream chunks are transient callback-only
+ * messages and never enter the log.
  *
  * Knows about:   compile/model, diagnostics, events, memory contracts, nodes, runtime eval_node,
  *                log, state and trace, skills, tools, typesys.
@@ -91,8 +93,14 @@ class CompletionQueue {
     waiter(entry);
   }
 
-  /** Return the oldest unread entry, or a promise of the next one to arrive. */
+  /**
+   * Return the oldest unread entry, or a promise of the next one to arrive. At most one `take` may
+   * be pending: the queue has a single reader, the dispatcher.
+   *
+   * @throws Error when another `take` is still pending.
+   */
   take(): Completion | Promise<Completion> {
+    if (this.#waiter !== null) throw new Error("CompletionQueue has a take pending already");
     if (this.#head === this.#entries.length) {
       return new Promise((resolve) => {
         this.#waiter = resolve;

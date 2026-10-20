@@ -640,10 +640,10 @@ export class NodeAssertFailed extends Error {
 }
 
 /**
- * Return a stage marker's message: an `Error`'s own message, else the thrown value as text, else
- * its type name when it has no text.
+ * @internal Return a stage marker's message: an `Error`'s own message, else the thrown value as
+ * text, else its type name when it has no text. The evaluator uses it for a failure's message.
  */
-function markerMessage(original: unknown): string {
+export function markerMessage(original: unknown): string {
   if (original instanceof Error) return original.message;
   // A body may throw a value with no text (a null-prototype object, a throwing `toString`); the
   // marker must still wrap it.

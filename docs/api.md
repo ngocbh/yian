@@ -1629,6 +1629,22 @@ memory = build_memories(
 )
 ```
 
+Changed (TS yian): `new ReflectiveMemory({ llmConfig, maxItems, recallLimit, storage,
+createParent, env, createModel, onRetry })` takes an options object. `env` is where
+the learner's model defaults and credentials are read (default `processEnv`).
+`createModel(config)` builds the learner's model from the pinned config (default
+`chatModelFromConfig`), and `onRetry` sees each transport retry. `recall` and `learn`
+are async. The learner makes one structured call through `callWithRetries`, so only
+transport errors retry, under the process's `YIAN_MODEL_RETRIES`. yian checks the
+reply itself (exactly `actions`); an invalid reply fails `reflective.contract` without
+a retry, and a model without native structured output fails
+`reflective.structured_output`. The reflection prompt shows its materials in the text
+form (`1.0` is `1`, bare `Infinity`, JS key order). Limits are integral `number`s or
+`bigint`s; snapshots are deep-frozen; `recall` awaits `rewriteQuery`, which may return a
+promise, and the default query uses `logJson`; blank checks use JS `trim()` whitespace.
+Messages keep Python's wording, with `null` for `None`, `array` for `tuple` and
+`rewriteQuery()` for `rewrite_query()`.
+
 ### Profile memory
 
 `ProfileMemory` recalls one markdown document into every AGENT whose stack holds
@@ -1676,10 +1692,10 @@ rejects every later `open_run()` with `<type>.closed`. A backend checks its
 process at every operation once a path is configured, so a forked child
 cannot use it even if the parent never opened it.
 
-Changed (TS yian): `EpisodicMemory` and `SessionMemory` take `{ storage, createParent }` in
-their options object; the file opens at the first operation (`openRun()`, `reset()`, or
-episodic's `rewriteQuery()`). There is no `with` form (call `close()` in `finally`) and no fork
-check.
+Changed (TS yian): `EpisodicMemory`, `ReflectiveMemory` and `SessionMemory` take
+`{ storage, createParent }` in their options object; the file opens at the first operation
+(`openRun()`, `reset()`, or episodic's and reflective's `rewriteQuery()`). There is no `with`
+form (call `close()` in `finally`) and no fork check.
 
 ```python
 from yian.memory.session import SessionMemory

@@ -2,13 +2,14 @@
 // `test_inputs_file_must_be_utf8` and `test_flag_overrides_json`, on the helpers those runs go
 // through (`parseKv`, `readInputsJson`, `mergeInputs`). Added here: the other `cli/run.ts` helpers
 // (`diagnosticJson`, `jsonValue`, `flowBanner`, `stopOnSignals`), `skillsCheck`, and `main`'s
-// command table: the defaults check, usage errors and unported commands. The CLI-run tests come
-// with `yian run`.
+// command table: the defaults check, usage errors and unported commands. `run`, `check` and
+// `status` are covered up to the loader and the run inspection, which aren't ported yet; from
+// tests/cli/test_run_log_options.py, the run-log checks running before the flow is read.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -386,6 +387,190 @@ describe("main", () => {
     const { io, stdout } = testIo();
     expect(await main(["skills", "check", "--help"], io)).toBe(0);
     expect(stdout()).toStartWith("Usage: yian skills check [OPTIONS] DIRS...\n");
+  });
+});
+
+// Bytes that aren't UTF-8: a flow holding them can't be read.
+const NOT_UTF8 = new Uint8Array([0x69, 0x64, 0x3a, 0x20, 0xff, 0x0a]);
+
+const FLOW = "id: f\nname: f\ninput:\n  n: !int\nnodes: {}\noutput: ${input.n}\n";
+
+/** Write `content` at `tmp/<name>`, creating its directory, and return its path. */
+function file(name: string, content: string | Uint8Array): string {
+  const path = join(tmp, name);
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, content);
+  return path;
+}
+
+describe("run", () => {
+  test("--resume with --input exits 2 naming the conflict, before the flow is read", async () => {
+    const flow = file("flow.yaml", NOT_UTF8);
+    const old = file("old.jsonl", "");
+    const { io, stdout, stderr } = testIo();
+    expect(await main(["run", flow, "--resume", old, "--input", "n=1"], io)).toBe(2);
+    expect(stdout()).toBe("");
+    expect(stderr()).toEndWith("Error: Invalid value: --resume cannot be combined with --input\n");
+  });
+
+  test("an existing --log exits 2, before the flow is read", async () => {
+    const flow = file("flow.yaml", NOT_UTF8);
+    const log = file("taken.jsonl", "keep");
+    const { io, stdout, stderr } = testIo();
+    expect(await main(["run", flow, "--log", log], io)).toBe(2);
+    expect(stdout()).toBe("");
+    expect(stderr()).toEndWith(`Error: Invalid value for --log: --log path already exists: ${log}\n`);
+  });
+
+  test("a flow that isn't UTF-8 exits 1, with a compose.load document under --json", async () => {
+    const flow = file("flow.yaml", NOT_UTF8);
+    const message = `can't read ${flow}: not UTF-8 text`;
+    const text = testIo();
+    expect(await main(["run", flow], text.io)).toBe(1);
+    expect(text.stdout()).toBe("");
+    expect(text.stderr()).toBe(`${message}\n`);
+
+    const json = testIo();
+    expect(await main(["run", flow, "--json"], json.io)).toBe(1);
+    expect(json.stderr()).toBe(`${message}\n`);
+    expect(JSON.parse(json.stdout())).toEqual({
+      format: "yian.cli.v1",
+      error: { code: "compose.load", message },
+    });
+  });
+
+  test("a readable flow reaches the loader", async () => {
+    const flow = file("flow.yaml", FLOW);
+    const { io, stdout, stderr } = testIo();
+    expect(await main(["run", flow], io)).toBe(1);
+    expect(stdout()).toBe("");
+    expect(stderr()).toContain("loadFlow is not ported to TypeScript yet");
+  });
+});
+
+/** Run `yian check --json` on `argv` and return the exit code and the document's `flows`. */
+async function checkJson(argv: string[]) {
+  const { io, stdout, stderr } = testIo();
+  const code = await main(["check", "--json", ...argv], io);
+  expect(stderr()).toBe("");
+  return { code, flows: JSON.parse(stdout()).flows };
+}
+
+describe("check", () => {
+  test("a missing or non-UTF-8 file is compose.load, without loading", async () => {
+    const missing = join(tmp, "missing.yaml");
+    const bad = file("bad.yaml", NOT_UTF8);
+    expect(await checkJson([missing, bad])).toEqual({
+      code: 1,
+      flows: [
+        {
+          path: missing,
+          ok: false,
+          diagnostics: [
+            { code: "compose.load", message: `can't read ${missing}: No such file or directory` },
+          ],
+        },
+        {
+          path: bad,
+          ok: false,
+          diagnostics: [{ code: "compose.load", message: `can't read ${bad}: not UTF-8 text` }],
+        },
+      ],
+    });
+  });
+
+  test("text: the path then the message on stderr", async () => {
+    const missing = join(tmp, "missing.yaml");
+    const { io, stdout, stderr } = testIo();
+    expect(await main(["check", missing], io)).toBe(1);
+    expect(stdout()).toBe("");
+    expect(stderr()).toBe(`${missing}:\ncan't read ${missing}: No such file or directory\n`);
+  });
+
+  test("a readable flow reaches the loader", async () => {
+    const flow = file("flow.yaml", FLOW);
+    const { io, stdout, stderr } = testIo();
+    expect(await main(["check", flow], io)).toBe(1);
+    expect(stdout()).toBe("");
+    expect(stderr()).toContain("loadFlow is not ported to TypeScript yet");
+  });
+
+  test("--root: a flow outside the root or setting system.paths fails, labelled from the root", async () => {
+    const root = join(tmp, "company");
+    const outside = file("other/flow.yaml", FLOW);
+    const paths = file("company/main.yaml", `system:\n  paths: [lib]\n${FLOW}`);
+    expect(await checkJson(["--root", root, outside, paths])).toEqual({
+      code: 1,
+      flows: [
+        {
+          path: outside,
+          ok: false,
+          diagnostics: [{ code: "compose.outside_root", message: "../other/flow.yaml is outside the root" }],
+        },
+        {
+          path: paths,
+          ok: false,
+          diagnostics: [
+            {
+              code: "compose.load",
+              message: "system.paths is not supported with --root; use a relative uses: path",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  test("--root: invalid YAML is located under its path relative to the root", async () => {
+    const root = join(tmp, "company");
+    const flow = file("company/sub/main.yaml", "id: [f\n");
+    const { code, flows } = await checkJson(["--root", root, flow]);
+    expect(code).toBe(1);
+    const [diagnostic] = flows[0].diagnostics;
+    expect(diagnostic.code).toBe("compose.load");
+    expect(diagnostic.message).toStartWith("invalid YAML: ");
+    expect(diagnostic.frames[0].label).toBe(join("sub", "main.yaml"));
+  });
+
+  test("--root: a missing flow can't be read, a symlink loop stays an OS error", async () => {
+    const root = join(tmp, "company");
+    mkdirSync(root);
+    const missing = join(root, "missing.yaml");
+    const loop = join(tmp, "loop.yaml");
+    symlinkSync(loop, loop);
+    const { code, flows } = await checkJson(["--root", root, missing, loop]);
+    expect(code).toBe(1);
+    expect(flows[0].diagnostics).toEqual([
+      { code: "compose.load", message: `can't read ${missing}: No such file or directory` },
+    ]);
+    expect(flows[1].diagnostics[0].code).toBe("compose.load");
+    expect(flows[1].diagnostics[0].message).toStartWith(`can't read ${loop}: Too many symbolic links`);
+  });
+
+  test("--root: a readable flow inside the root reaches the loader", async () => {
+    const root = join(tmp, "company");
+    const flow = file("company/main.yaml", FLOW);
+    const { io, stderr } = testIo();
+    expect(await main(["check", "--root", root, flow], io)).toBe(1);
+    expect(stderr()).toContain("loadFlow is not ported to TypeScript yet");
+  });
+});
+
+describe("status", () => {
+  test("a missing log exits 2", async () => {
+    const log = join(tmp, "missing.jsonl");
+    const { io, stdout, stderr } = testIo();
+    expect(await main(["status", log], io)).toBe(2);
+    expect(stdout()).toBe("");
+    expect(stderr()).toEndWith(`Error: Invalid value for 'LOG': File '${log}' does not exist.\n`);
+  });
+
+  test("an existing log reaches the run inspection", async () => {
+    const log = file("run.jsonl", "");
+    const { io, stdout, stderr } = testIo();
+    expect(await main(["status", log], io)).toBe(1);
+    expect(stdout()).toBe("");
+    expect(stderr()).toContain("inspectRun is not ported to TypeScript yet");
   });
 });
 

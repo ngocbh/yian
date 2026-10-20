@@ -3,6 +3,9 @@
  * run`'s helpers: what it prints on stderr, the inputs it reads from flags, its run-log options and
  * default log path, and the signals that stop a run.
  *
+ * - `run` checks the run-log options, reads the flow and loads it; `check` loads each flow, or
+ *   confined to `--root`, and reports each as text or one `--json` document; `status` inspects a
+ *   run log.
  * - `skillsCheck` loads skill directories and reports each as text or one `--json` document.
  * - `renderDiagnostic` boxes each source frame of a diagnostic, its marked lines numbered, the
  *   message below; `diagnosticJson` gives the same diagnostic as a `--json` document's part.
@@ -14,17 +17,19 @@
  * Output is raw ANSI on stderr, coloured only on a TTY without `NO_COLOR`.
  */
 
-import { chmodSync, lstatSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import { END_ID, START_ID } from "../compile/model.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
+import { LoadError } from "../compose/helpers/errors.ts";
+import { parseSourceDocument } from "../compose/parse/file.ts";
 import { loadSkillDir } from "../compose/skills.ts";
 import type { Env } from "../defaults.ts";
-import { type Diagnostic, reprText } from "../diagnostics.ts";
+import { Diagnostic, reprText } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
-import { isSystemError, SkillError } from "../skills/catalog.ts";
+import { isSystemError, resolvedPath, SkillError } from "../skills/catalog.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
 import { FileRef, type Value, writeAsText } from "../typesys/values.ts";
 import { type CliIo, printJson, UsageError, type Writer } from "./utils.ts";
@@ -537,20 +542,191 @@ export function stopOnSignals(
   return dispose;
 }
 
-/** Start or recover a durable run of the flow at `flow`; returns the exit code. */
-export async function run(flow: string): Promise<number> {
-  await loadFlow(readFileSync(flow, "utf8"), { sourceLabel: flow });
+/** A flow file holding bytes that aren't UTF-8. */
+class NotUtf8Error extends Error {
+  override name = "NotUtf8Error";
+}
+
+/**
+ * Read the flow at `path` as Python's `read_text(encoding="utf-8")` does: strict UTF-8, a BOM
+ * kept, `\r\n` and `\r` read as `\n`.
+ *
+ * @throws {NotUtf8Error} When the file isn't UTF-8 text.
+ * @throws {Error} A system error when the file can't be read.
+ */
+function readFlowText(path: string): string {
+  const bytes = readFileSync(path);
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    throw new NotUtf8Error(path);
+  }
+  return text.replace(/\r\n?/g, "\n");
+}
+
+/**
+ * Return a system error's reason as Python's `strerror` words it: Node's message without its
+ * `CODE: ` prefix and `, <syscall> '<path>'` suffix, first letter capitalised
+ * (`No such file or directory`).
+ */
+export function osReason(error: NodeJS.ErrnoException): string {
+  let reason = error.message;
+  const prefix = `${error.code}: `;
+  if (reason.startsWith(prefix)) reason = reason.slice(prefix.length);
+  const at = error.syscall === undefined ? -1 : reason.indexOf(`, ${error.syscall}`);
+  if (at !== -1) reason = reason.slice(0, at);
+  return reason.charAt(0).toUpperCase() + reason.slice(1);
+}
+
+/** The options `run` reads; an absent option is `undefined`, no `--input` an empty list. */
+export interface RunOptions {
+  inputValues: readonly string[];
+  inputs?: string | undefined;
+  log?: string | undefined;
+  resume?: string | undefined;
+  provider?: string | undefined;
+  model?: string | undefined;
+  json: boolean;
+}
+
+/**
+ * Start or recover a durable run of the flow at `flowPath`; returns the exit code.
+ *
+ * The run-log options are checked before the flow is read. A flow that isn't UTF-8 text is
+ * reported on stderr, and as a `compose.load` error document on stdout under `json`, and exits 1.
+ *
+ * @throws {UsageError} As `validateRunLogOptions` does.
+ */
+export async function run(flowPath: string, options: RunOptions, io: CliIo): Promise<number> {
+  validateRunLogOptions(options);
+  let text: string;
+  try {
+    text = readFlowText(flowPath);
+  } catch (error) {
+    if (!(error instanceof NotUtf8Error)) throw error;
+    const message = `can't read ${flowPath}: not UTF-8 text`;
+    await io.stderr.write(`${paint(message, "red", io.stderr, io.env)}\n`);
+    if (options.json) {
+      const diagnostic = new Diagnostic({ code: "compose.load", message });
+      await printJson({ error: diagnosticJson(diagnostic) }, io.stdout);
+    }
+    return 1;
+  }
+  await loadFlow(text, { searchPaths: [dirname(flowPath)], sourceLabel: basename(flowPath) });
   return 0;
 }
 
-/** Load each flow without running it and report whether it loads; returns the exit code. */
-export async function check(flows: readonly string[]): Promise<number> {
-  for (const flow of flows) await loadFlow(readFileSync(flow, "utf8"), { sourceLabel: flow });
-  return 0;
+/**
+ * Return `path` resolved as Python's non-strict `Path.resolve()` does, except that a symlink loop
+ * throws its `ELOOP` system error.
+ */
+function resolveFlowPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch (error) {
+    if (!isSystemError(error) || error.code === "ELOOP") throw error;
+    return resolvedPath(path);
+  }
+}
+
+/**
+ * Load the flow at `path` from inside `root`, labelled with its path relative to `root`.
+ *
+ * @param root The resolved root directory.
+ * @throws {LoadError} `compose.outside_root` for a flow outside `root`; `compose.load` for a flow
+ *   whose YAML doesn't parse or that sets `system.paths`.
+ * @throws {NotUtf8Error} When the flow isn't UTF-8 text.
+ * @throws {Error} A system error when the flow can't be read.
+ */
+async function loadConfined(root: string, path: string): Promise<ComposedFlow> {
+  // Resolved paths are compared, so a symlinked root (/var -> /private/var on macOS) works.
+  const resolved = resolveFlowPath(path);
+  const shown = relative(root, resolved) || ".";
+  if (shown === ".." || shown.startsWith(`..${sep}`) || isAbsolute(shown)) {
+    const message = `${shown} is outside the root`;
+    throw new LoadError(new Diagnostic({ code: "compose.outside_root", message }));
+  }
+  const text = readFlowText(resolved);
+  const doc = parseSourceDocument(text, shown).root.value;
+  // The loader doesn't search `system.paths` when given a child resolver, so such a flow would
+  // load differently from `yian run`.
+  if (isRecord(doc) && isRecord(doc["system"]) && Object.hasOwn(doc["system"], "paths")) {
+    throw new LoadError(
+      new Diagnostic({
+        code: "compose.load",
+        message: "system.paths is not supported with --root; use a relative uses: path",
+      }),
+    );
+  }
+  return loadFlow(text, { sourceLabel: shown });
+}
+
+/** One `yian check` result: the flow loaded, or the diagnostic saying why it didn't. */
+type CheckResult = { path: string; ok: true } | { path: string; ok: false; diagnostic: Diagnostic };
+
+/**
+ * Load the flow file `path` as `yian run` loads it, or confined to `root`, running nothing.
+ *
+ * A `LoadError`, a flow that isn't UTF-8 text, or one that can't be read is a failed result;
+ * another error is thrown.
+ */
+async function checkFlow(path: string, root: string | undefined): Promise<CheckResult> {
+  try {
+    if (root === undefined) {
+      await loadFlow(readFlowText(path), { searchPaths: [dirname(path)], sourceLabel: basename(path) });
+    } else {
+      await loadConfined(root, path);
+    }
+  } catch (error) {
+    if (error instanceof LoadError) return { path, ok: false, diagnostic: error.diagnostic };
+    let reason: string;
+    if (error instanceof NotUtf8Error) reason = "not UTF-8 text";
+    else if (isSystemError(error)) reason = osReason(error);
+    else throw error;
+    const diagnostic = new Diagnostic({ code: "compose.load", message: `can't read ${path}: ${reason}` });
+    return { path, ok: false, diagnostic };
+  }
+  return { path, ok: true };
+}
+
+/**
+ * Load each flow without running it and report whether it loads; returns the exit code, 1 when
+ * any fails.
+ *
+ * With `root`, each flow must be inside that directory and may not set `system.paths`, and its
+ * diagnostics are labelled with its path relative to the root. As text, a loaded flow is a
+ * `<path>: ok` line on stdout and a failure its `<path>:` line and diagnostic on stderr; with
+ * `json`, one document lists every result, each path as given.
+ */
+export async function check(
+  flows: readonly string[],
+  { root, json }: { root?: string | undefined; json: boolean },
+  io: CliIo,
+): Promise<number> {
+  const resolvedRoot = root === undefined ? undefined : realpathSync(root);
+  const results: CheckResult[] = [];
+  for (const path of flows) results.push(await checkFlow(path, resolvedRoot));
+  if (json) {
+    const documents = results.map((result) =>
+      result.ok ? result : { path: result.path, ok: false, diagnostics: [diagnosticJson(result.diagnostic)] },
+    );
+    await printJson({ flows: documents }, io.stdout);
+  } else {
+    for (const result of results) {
+      if (result.ok) {
+        await io.stdout.write(`${result.path}: ok\n`);
+      } else {
+        await io.stderr.write(`${paint(`${result.path}:`, "red", io.stderr, io.env)}\n`);
+        await renderDiagnostic(result.diagnostic, io.stderr, io.env);
+      }
+    }
+  }
+  return results.every((result) => result.ok) ? 0 : 1;
 }
 
 /** Report the run recorded in the run log `log`; returns the exit code. */
-export async function status(log: string): Promise<number> {
+export async function status(log: string, _options: { json: boolean }, _io: CliIo): Promise<number> {
   return inspectRun(log);
 }
 

@@ -129,7 +129,20 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     },
     load: async () => {
       const { run } = await import("./run.ts");
-      return ({ args }) => run(args["flow"] as string);
+      return ({ args, options: o }, io) =>
+        run(
+          args["flow"] as string,
+          {
+            inputValues: o["input"] as string[],
+            inputs: o["inputs"] as string | undefined,
+            log: o["log"] as string | undefined,
+            resume: o["resume"] as string | undefined,
+            provider: o["provider"] as string | undefined,
+            model: o["model"] as string | undefined,
+            json: o["json"] === true,
+          },
+          io,
+        );
     },
   },
   auth: {
@@ -220,7 +233,12 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     },
     load: async () => {
       const { check } = await import("./run.ts");
-      return ({ args }) => check(args["flows"] as string[]);
+      return ({ args, options }, io) =>
+        check(
+          args["flows"] as string[],
+          { root: options["root"] as string | undefined, json: options["json"] === true },
+          io,
+        );
     },
   },
   status: {
@@ -232,7 +250,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     },
     load: async () => {
       const { status } = await import("./run.ts");
-      return ({ args }) => status(args["log"] as string);
+      return ({ args, options }, io) => status(args["log"] as string, { json: options["json"] === true }, io);
     },
   },
   providers: {

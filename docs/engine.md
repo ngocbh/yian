@@ -382,24 +382,24 @@ run with the first error.
 Changed (TS yian): a run stops through an `AbortController` tree. `FlowEngine` takes the host's
 `signal`; each node gets its own child signal as `caps.signal`, linked to the run signal by one
 `{ once: true }` listener removed when the node settles, so listeners a node leaves behind die
-with it. Once the run signal is aborted (the host's signal, a failing host callback, a run-ending
-node failure, a host fault) nothing more starts, a step throws the node signal's reason and
-appends nothing, every outcome that settles afterwards is discarded, and every running node is
-awaited before `run()` settles; `run()` then rejects with the error that started the stop (the
-host's `signal.reason`, the callback's error), never a sibling's, while a node failure stays the
-run's `RunFailed`. A host stop and a host callback that throws or rejects (`onEvent`, `onStream`,
-steering) append one `RunStoppedRecord` (`signal` or `callback`) when the stop is requested,
-listing the nodes in flight, before anything winds down; other host faults append none, so their
-attempts count as interrupted on resume, and nothing is appended after a terminal result or a
-second time in one segment. Inside an AGENT turn a tool call that had already settled when the
-stop arrived still records its step (`record(step, { settled: true })`) and publishes its
-`ToolCallFinished`, as long as the run has no terminal result; other events after a stop are
-dropped. Each node's evaluation runs in a fresh
-`AsyncResource` created by the dispatcher, so it starts in the `AsyncLocalStorage` context of the
-`run()` call and a store a node sets stays in that node's async chain; callbacks the dispatcher
-calls (`onEvent` for durable observers) run in the dispatcher's context. A nested run started from a node with
-`signal: caps.signal` stops when its parent stops, and a child's failure doesn't stop the parent.
-A `RunLog`'s `append` must not call back into the run.
+with it. Once the run signal is aborted (the host's signal, a failing host callback, a
+run-ending node failure, a host fault) nothing more starts, a step throws the node signal's
+reason and appends nothing, every outcome that settles afterwards is discarded, and every
+running node is awaited before `run()` settles; `run()` then rejects with the error that started
+the stop (the host's `signal.reason`, the callback's error), never a sibling's, while a node
+failure stays the run's `RunFailed`. A host stop and a host callback that throws or rejects
+(`onEvent`, `onStream`, steering) append one `RunStoppedRecord` (`signal` or `callback`) when
+the stop is requested, listing the nodes in flight, before anything winds down; other host
+faults append none, so their attempts count as interrupted on resume, and nothing is appended
+after a terminal result or a second time in one segment. Inside an AGENT turn a tool call that
+had already settled when the stop arrived still records its step (`record(step, { settled: true
+})`) and publishes its `ToolCallFinished`, as long as the run has no terminal result; other
+events after a stop are dropped. Each node's evaluation runs in a fresh `AsyncResource` created
+by the dispatcher, so it starts in the `AsyncLocalStorage` context of the `run()` call and a
+store a node sets stays in that node's async chain; callbacks the dispatcher calls (`onEvent`
+for durable observers) run in the dispatcher's context. A nested run started from a node with
+`signal: caps.signal` stops when its parent stops, and a child's failure doesn't stop the
+parent. A `RunLog`'s `append` must not call back into the run.
 
 ## The core node interface
 

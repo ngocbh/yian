@@ -215,11 +215,12 @@ export class MemoryRuntime {
   /**
    * @internal Close keeping `primary.error` as the initiating failure (Python's
    * `_close_preserving`): every close failure is noted on it instead of thrown. `null` is `close()`.
-   * A later call waits for the first close, never rejects and adds no notes.
+   * A later call waits for the first close, never rejects and adds no notes; a session's `close`
+   * must not await it.
    */
   closePreserving(primary: { error: unknown } | null): Promise<void> {
     if (this.#closing !== null) return this.#closing.then(() => undefined, () => undefined);
-    // Mark the runtime closing before any session's close runs, so a reentrant close is a no-op.
+    // Set `#closing` before any session's close runs, so a reentrant call joins it instead of closing again.
     const { promise, resolve } = Promise.withResolvers<void>();
     this.#closing = promise;
     resolve(closeSessions(this.sessions, primary));
@@ -314,6 +315,6 @@ export class MemoryRuntime {
       throw error;
     }
 
-    return new MemoryRuntime({ memories, origins, sessions: opened, snapshots: Object.freeze(captured) });
+    return new this({ memories, origins, sessions: opened, snapshots: Object.freeze(captured) });
   }
 }

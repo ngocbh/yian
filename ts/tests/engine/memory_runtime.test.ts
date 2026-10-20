@@ -12,9 +12,10 @@
  * `_table`, `_origins` and `_open` helpers.
  *
  * Changed: Python's tuples are arrays and its dictionaries are `Map`s; each refusal pins its class
- * and full message (Python's `ValueError` is a `RangeError`, matched in part there); the missing
- * key's origin is the very `OriginRef` passed in (`toBe`); `open` and `close` return promises; a
- * wrapped setup failure's `cause` is the backend's error (Python's `raise ... from`).
+ * and full message (Python's `ValueError` is a `RangeError`, matched in part there); every origin
+ * checked, the missing key's included, is the very `OriginRef` passed in (`toBe`); the restore
+ * test also checks the captured snapshots; `open` and `close` return promises; a wrapped setup
+ * failure's `cause` is the backend's error (Python's `raise ... from`).
  *
  * TS-only: a plain-object table item; origins as a plain object, with a numeric key, or with a key
  * emptied after construction (`OriginRef`'s own `RangeError`); each registry name message (a
@@ -25,8 +26,9 @@
  * `MemoryOperationError`; a snapshot that is a `Promise` or holds a `Map`; a session lacking
  * `close` isn't closed; close failures without a primary (the first is thrown, later ones noted on
  * it), with an error primary (all noted on it) and with a primitive primary (notes lost); a
- * concurrent or later `close()` waits for the first, never throws and adds no notes; the caller's
- * array and `Map`s edited during `open` change nothing.
+ * concurrent or later `close()` waits for the first, never throws and adds no notes; a reentrant
+ * close from inside a session's close doesn't close again; the caller's array and `Map`s edited
+ * during `open` change nothing; a subclass's `open` returns the subclass.
  */
 
 import { expect, test } from "bun:test";
@@ -427,9 +429,11 @@ test("registry values must implement the Memory protocol", async () => {
 });
 
 test("registry must be a Map", async () => {
-  for (const memory of [{ alpha: new FakeMemory("alpha", []) }, null, []]) {
+  const events: Events = [];
+  for (const memory of [{ alpha: new FakeMemory("alpha", events) }, null, []]) {
     await expectError(() => open(memory as never), TypeError, "memory must be a Map of memory keys to backends");
   }
+  expect(events).toEqual([]);
 });
 
 test("snapshots must be an array of unique envelopes", async () => {
@@ -534,7 +538,10 @@ class AsyncCloseSession extends FakeSession {
   }
 }
 
-/** Open alpha and beta over async-closing sessions; `alpha`'s close fails with `alphaError`. */
+/**
+ * Return alpha and beta memories whose sessions close after a timer tick; alpha's close fails with
+ * `alphaError`.
+ */
 function asyncPair(events: Events, alphaError: Error | null = null): Map<string, Memory> {
   return new Map([
     ["alpha", memoryOf("alpha", events, new AsyncCloseSession("alpha", events, { closeError: alphaError }))],
@@ -641,6 +648,7 @@ test("a session lacking close is not closed on a later failure", async () => {
     "memory 'beta' returned an invalid run session",
   );
   expect((error as MemorySetupError).cause).toBeUndefined();
+  expect(Object.hasOwn(error as object, "notes")).toBe(false);
   expect(events).toEqual([
     ["open_run", "alpha", null],
     ["open_run", "beta", null],
@@ -750,6 +758,34 @@ test("after a rejected close, later closes resolve and add no notes", async () =
   ]);
 });
 
+test("a reentrant close from inside a session's close doesn't close again", async () => {
+  const events: Events = [];
+  let runtime!: MemoryRuntime;
+  let closes = 0;
+  // Beta closes first, synchronously inside the first close() call.
+  const session = {
+    snapshot: {},
+    recall() {},
+    learn() {},
+    commit() {},
+    close() {
+      closes++;
+      void runtime.close();
+    },
+  };
+  runtime = await open(
+    new Map([
+      ["alpha", new FakeMemory("alpha", events)],
+      ["beta", memoryOf("beta", events, session)],
+    ]),
+  );
+
+  await runtime.close();
+
+  expect(closes).toBe(1);
+  expect(events.filter((event) => event[0] === "close")).toEqual([["close", "alpha"]]);
+});
+
 test("the caller's array and Maps edited during open change nothing", async () => {
   const events: Events = [];
   const memories = table();
@@ -779,4 +815,11 @@ test("the caller's array and Maps edited during open change nothing", async () =
     ["close", "beta"],
     ["close", "alpha"],
   ]);
+});
+
+test("a subclass's open returns the subclass", async () => {
+  class Sub extends MemoryRuntime {}
+  const runtime = await Sub.open({ memories: table(), origins: origins(), memory: pair([]) });
+  expect(runtime).toBeInstanceOf(Sub);
+  await runtime.close();
 });

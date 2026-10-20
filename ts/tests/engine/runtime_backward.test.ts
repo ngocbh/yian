@@ -51,14 +51,13 @@
  * `test_causal_route_trace_latch_is_installed_only_after_append` (the log's `append` patched on
  * the instance, its error an `Error`, Python's `OSError`).
  *
- * Later (T4-6, with the engine): `test_terminal_trace_keeps_actual_root_writer_until_quiescence`.
+ * Ported, through the engine: `test_terminal_trace_keeps_actual_root_writer_until_quiescence`
+ * (2 rows).
  *
  * Later (T4-7, with `computeBackward`): the `compute_backward` half of
  * `test_explicitly_synthetic_source_free_failure_keeps_direct_root_text` and the file's other 24
  * tests, from `test_diamond_calls_shared_producer_once_with_two_ordered_messages` to
- * `test_loop_passthrough_field_routes_feedback_to_its_seed` (among them
- * `test_terminal_trace_latches_causal_route_and_later_failure_wins`, which also needs the engine
- * (T4-6)).
+ * `test_loop_passthrough_field_routes_feedback_to_its_seed`.
  */
 
 import { expect, test } from "bun:test";
@@ -82,6 +81,7 @@ import {
 } from "../../src/memory/contracts.ts";
 import { BackwardContext, BackwardResult, Node, NodeKind } from "../../src/nodes/base.ts";
 import { ExecutionPosition, ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import {
   AttributedBackwardResult,
@@ -139,7 +139,9 @@ import { VariablePool } from "../../src/typesys/index.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import {
   commitStartSuccess,
+  engine,
   forwardCapture,
+  FuncNode,
   graph,
   learnableStarted,
   terminalSkipRouteFlow,
@@ -1987,3 +1989,34 @@ test("a root fallback context that can't be built names no occurrence", () => {
   expect(error.original.constructor).toBe(RangeError);
   expect(error.original.message).toBe("run_id must be non-empty");
 });
+
+test.each<[string, { answer: string[] } | null]>([
+  ["null", null],
+  ["record", { answer: ["stable"] }],
+])(
+  "the terminal trace keeps the actual root writer until quiescence: %s",
+  async (_, value) => {
+    const observations: (TraceTerminal | null)[] = [];
+    const late = new FuncNode("late", () => {
+      observations.push(built.state.trace!.terminal);
+      return "last outcome";
+    });
+    const flow = graph([EndNode.value(END_ID, { outputName: "answer" }), late], [
+      [START_ID, END_ID],
+      [START_ID, "late"],
+    ], { wiring: { [END_ID]: { answer: value }, late: {} } });
+    const built = engine(flow, { learnable: true });
+
+    await built.run();
+
+    const trace = built.state.trace!;
+    const endOccurrence = trace.occurrences.find((item) => item.nodeId === END_ID)!;
+    expect(observations).toEqual([null]);
+    expect(trace.occurrences.at(-1)!.nodeId).toBe("late");
+    expect(trace.endId).toBe(END_ID);
+    expect(trace.terminal!.succeeded).toBe(true);
+    expect(trace.terminal!.source).toEqual(endOccurrence.source);
+    expect(trace.terminal!.output).toEqual(value);
+    expect(trace.terminal!.failure).toBeNull();
+  },
+);

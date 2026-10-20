@@ -15,9 +15,11 @@
  * `test_any_is_narrower_than_a_union_with_one_file_member_and_back` and
  * `test_any_is_narrower_than_a_record_whose_file_field_may_be_null`.
  *
- * Later (T3-17): the proof test
- * (`test_proof_rejects_an_unproven_list_and_accepts_list_of_optional_any`), which needs
- * `require_proven_type`. Later: the flow loading tests.
+ * It also ports the proof test
+ * (`test_proof_rejects_an_unproven_list_and_accepts_list_of_optional_any`) through
+ * `requireProvenType`.
+ *
+ * Later: the flow loading tests.
  *
  * Not ported: the tuple rows, `test_any_path_unwraps_a_str_subclass_key`, and the non-text key
  * rows (`test_object_rejects_a_non_text_key`,
@@ -29,6 +31,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { typeRelation, typesCompatible } from "../../src/compile/validation.ts";
+import { requireProvenType } from "../../src/compose/build/inline_inputs.ts";
 import { outputContractFieldError, ValueContract } from "../../src/nodes/contracts.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { parseType, readTypedefs, typeFor } from "../../src/typesys/types.ts";
@@ -49,6 +52,7 @@ import {
   type Value,
   ValueKind,
 } from "../../src/typesys/values.ts";
+import { loadError } from "../compose/declarations.ts";
 
 const ANY = Type.scalar(ValueKind.ANY);
 const OPTIONAL_ANY = new Type({ kind: ValueKind.ANY, nullable: true });
@@ -448,6 +452,18 @@ describe("compatibility with Any", () => {
     expect(typesCompatible(listStr, UNPROVEN_LIST)).toBe(true);
     expect(typesCompatible(listFile, UNPROVEN_LIST)).toBe(false);
     expect(typeRelation(UNPROVEN_LIST, listStr)).toBe("narrower");
+  });
+
+  test("proof rejects an unproven list and accepts list(Optional(Any))", () => {
+    const error = loadError(() => requireProvenType(UNPROVEN_LIST, { bindingLabel: "call.input.xs" }));
+    expect(error.message).toBe(
+      "cannot infer type for inline binding 'call.input.xs': list type 'list(Optional(Any))' has no " +
+        "proven element type; declare its type with a tag (`xs: !<type> ...`) or use an explicitly " +
+        "typed named `defs:` body",
+    );
+
+    const proven = typeFor("list(Optional(Any))", new Map());
+    expect(requireProvenType(proven, { bindingLabel: "call.input.xs" })).toBe(proven);
   });
 
   test.each([

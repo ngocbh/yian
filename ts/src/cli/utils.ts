@@ -1,6 +1,6 @@
 /**
- * CLI helpers: the command I/O, the argument parser, the `--json` writer, and provider credentials
- * and endpoints.
+ * CLI helpers: the command I/O, the argument parser, the `--json` writer, provider credentials
+ * and endpoints, and `osReason` (a system error's reason in Python's words).
  *
  * - `parseCommand` reads a command's arguments against its `CommandSpec` with `node:util`'s
  *   `parseArgs`, then converts int options and checks paths with Click's messages; `helpText` and
@@ -460,4 +460,18 @@ export async function confirmOllamaEndpoint({ env, terminal }: PromptContext): P
   const confirmed = (answer || endpoint).trim();
   env.set("OLLAMA_BASE_URL", confirmed);
   return confirmed;
+}
+
+/**
+ * Return a system error's reason as Python's `strerror` words it: Node's message without its
+ * `CODE: ` prefix and `, <syscall> '<path>'` suffix, first letter capitalised
+ * (`No such file or directory`).
+ */
+export function osReason(error: NodeJS.ErrnoException): string {
+  let reason = error.message;
+  const prefix = `${error.code}: `;
+  if (reason.startsWith(prefix)) reason = reason.slice(prefix.length);
+  const at = error.syscall === undefined ? -1 : reason.indexOf(`, ${error.syscall}`);
+  if (at !== -1) reason = reason.slice(0, at);
+  return reason.charAt(0).toUpperCase() + reason.slice(1);
 }

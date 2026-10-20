@@ -331,6 +331,9 @@ optional; when given it is `stdio`, `http`, or `streamable-http` and must agree 
 `"disabled": true` drops the server. Any other key is ignored with a warning on
 stderr. The server's name is its label in errors.
 
+Changed (TS yian): a file with a duplicate key or a `NaN` or `Infinity` token is
+not valid JSON, which Python yian's reader accepted.
+
 In `command`, each `args` item, `cwd`, `url`, and the values of `env` and `headers`,
 `${VAR}` expands to the environment variable `VAR`, `${VAR:-default}` to `default`
 when `VAR` is unset or empty, and `$$` to `$`. An unset `${VAR}` without a default

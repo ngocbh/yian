@@ -43,8 +43,10 @@
  * `test_bad_literal_into_a_call_reports_the_binding_not_the_child` and
  * `test_bad_literal_loop_seed_reports_the_binding_not_the_carried_type`.
  *
- * TS-only: `shownLiteral` rows (compact JSON, ints as digits); a typed binding nested in a value
- * template, named at its path; and the harvested cases these checks decide (`runCase`,
+ * Ported from `tests/compose/test_nested_template_types.py` (its mirror doesn't exist yet):
+ * `test_nested_typed_binding_is_checked_at_its_own_line`.
+ *
+ * TS-only: `shownLiteral` rows (compact JSON, ints as digits); and the harvested cases these checks decide (`runCase`,
  * `assembled`), in the "Pinned harvested cases" block, then those from test files whose mirrors
  * don't exist yet (`test_constructor_load.py`, `test_nested_template_types.py`,
  * `test_tagged_bindings.py`) in the "Pinned harvested cases (TS-only placement)" block.
@@ -235,7 +237,7 @@ test("a missing field is not named when another field mismatches", () => {
   expect(error.message).toBe("node 'use' input 'x': declared Buy, but the value is {\"conviction\":str}");
 });
 
-// TS-only: a typed binding nested in a value template is checked at its own path.
+// Ported from `test_nested_template_types.py::test_nested_typed_binding_is_checked_at_its_own_line`.
 test("a disjoint binding nested in a value template names its path", () => {
   const text = flow("{a: !int '${note.output}'}", { producers: producer("note", '"hi"', "str") });
 

@@ -369,9 +369,9 @@ function bindingError(
       ? templateLabel(binding.source.value, stringContract)
       : canonicalTypeLabel(inferred.type);
   let message = `declared ${label}, but the value is ${shown}`;
-  let found: [ValuePath, string[]] | null = null;
-  if (binding.source instanceof ValueTemplate) found = missingInTree(binding.source.value, declared, [], stringContract);
-  found ??= missingInType(inferred.type, declared, []);
+  const found =
+    (binding.source instanceof ValueTemplate ? missingInTree(binding.source.value, declared, [], stringContract) : null) ??
+    missingInType(inferred.type, declared, []);
   if (found !== null) {
     const [path, missing] = found;
     message += ` (missing required ${missing.map((name) => `\`${name}\``).join(", ")}`;
@@ -534,9 +534,10 @@ function missingInType(inferred: Type, declared: Type, path: ValuePath): [ValueP
  *   no longer be disjoint without them; otherwise empty, since another field is the real mismatch.
  */
 function missingRequiredFields(inferred: Type, declared: Type): string[] {
-  if (inferred.fields === undefined || declared.fields === undefined) return [];
+  const have = inferred.fields;
+  if (have === undefined || declared.fields === undefined) return [];
   const required = declared.required ?? new Set<string>();
-  const missing = [...declared.fields.keys()].filter((name) => required.has(name) && !inferred.fields!.has(name));
+  const missing = [...declared.fields.keys()].filter((name) => required.has(name) && !have.has(name));
   if (missing.length === 0) return [];
   const relaxed = declared.replace({
     fields: new Map([...declared.fields].filter(([name]) => !missing.includes(name))),
@@ -563,11 +564,8 @@ function itemReferenceContract(source: unknown, item: ValueContract | null): Out
 }
 
 /**
- * Render a literal as its text form: compact JSON (`true`, `null`, `"text"`).
- *
- * Lists and records are written compact (`[1,"a"]`, `{"k":2}`), the text form messages use for
- * values, where Python's `shown_literal` spaced its separators; like Python's, nothing is
- * truncated.
+ * Render a literal as its text form: compact JSON (`true`, `null`, `"text"`, `[1,"a"]`,
+ * `{"k":2}`), the form messages use for values; Python's `shown_literal` spaced its separators.
  *
  * @param value The literal to render.
  * @returns `writeAsJson`'s text; `valueRepr` for anything it can't write.
